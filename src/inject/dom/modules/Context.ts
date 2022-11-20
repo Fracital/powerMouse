@@ -8,7 +8,7 @@ import ProxyModule, {
 	usePrototype,
 } from '../../modules/Proxy';
 import { nativeFunction } from '../../nativeUtil';
-import DocumentClient, { onDocumentOpen } from '../Client';
+import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { urlLike } from '@tomphttp/bare-client';
 import domainNameParser from 'effective-domain-name-parser';
 
@@ -434,7 +434,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			),
 		});
 
-		onDocumentOpen.push(() => {
+		addDocumentOpenListener(this.client.global, () => {
 			this.client.global.addEventListener('message', (event) => {
 				/*console.error(
 					this.client.url.url.toString(),

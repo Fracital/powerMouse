@@ -6,7 +6,18 @@ import Client from '../Client';
 import cloneRawNode, { parseHTML } from './cloneNode';
 import { decode } from 'entities';
 
-export const onDocumentOpen: (() => void)[] = [];
+type OpenCallback = () => void;
+
+const onDocumentOpen = new WeakMap<typeof globalThis, OpenCallback[]>();
+
+export function addDocumentOpenListener(
+	global: typeof globalThis,
+	callback: OpenCallback
+) {
+	if (!onDocumentOpen.has(global)) onDocumentOpen.set(global, []);
+
+	return onDocumentOpen.get(global)!.push(callback);
+}
 
 type ParsingState = 'parsingBeforeWrite' | void;
 
@@ -97,7 +108,8 @@ export default class DocumentClient extends Client {
 		// jump out of the DOM "write stream" so we can start loading our own HTML
 		setTimeout(() => {
 			this.global.document.open();
-			for (const callback of onDocumentOpen) callback();
+			if (onDocumentOpen.has(this.global))
+				for (const callback of onDocumentOpen.get(this.global)!) callback();
 			this.write.call(this.global.document, newDocument);
 			this.global.document.close();
 		});
