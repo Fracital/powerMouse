@@ -67,7 +67,7 @@ const common = (config) => ({
 /**
  * @type {import('webpack').Configuration[]}
  */
-export default [
+const configs = [
 	...[
 		[
 			'./src/inject/worker/tsconfig.json',
@@ -165,3 +165,5 @@ export default [
 		})
 	),
 ];
+
+export default configs;

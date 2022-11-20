@@ -7,8 +7,8 @@
 	"type": "module",
 	"main": "lib/index.cjs",
 	"scripts": {
-		"build": "NODE_ENV=production webpack --config ./config/webpack.config.js",
-		"build:watch": "NODE_ENV=development webpack --watch --config ./config/webpack.config.js",
+		"build": "NODE_ENV=production webpack",
+		"build:watch": "NODE_ENV=development webpack --watch",
 		"prepare": "node scripts/prepare.js"
 	},
 	"dependencies": {
@@ -43,7 +43,6 @@
 		"eslint": "^7.32.0",
 		"eslint-config-prettier": "^8.5.0",
 		"eslint-loader": "^4.0.2",
-		"husky": "^8.0.1",
 		"prettier": "^2.6.2",
 		"resolve-typescript-plugin": "^1.2.0",
 		"source-map-loader": "^4.0.0",
