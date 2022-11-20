@@ -1,4 +1,5 @@
 import { encodeCookie } from '../encodeCookie';
+import { ProcessData, ProcessResult } from '../sync';
 import Router from './Router';
 
 const maxRedirects = 20;

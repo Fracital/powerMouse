@@ -1,6 +1,7 @@
 import { urlLike } from '../../../StompURL';
 import { decodeCookie } from '../../../encodeCookie';
 import { geckoXHR, queueXHR } from '../../../routeURL';
+import { ProcessData, SerializableRequestInit } from '../../../sync';
 import Module from '../../Module';
 import DocumentClient from '../Client';
 
