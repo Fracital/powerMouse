@@ -15,7 +15,7 @@ export interface ParsedConfig extends Omit<Config, 'codec'> {
 }
 
 export function parseConfig(config: Config, codecKey: string): ParsedConfig {
-	let codec;
+	let codec: GenericCodec;
 
 	switch (config.codec) {
 		case 'aes':
