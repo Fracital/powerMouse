@@ -60,6 +60,8 @@ function genericForward(
 			additionalRequestFilter
 		);
 
+		requestHeaders.set('user-agent', navigator.userAgent);
+
 		requestHeaders.set(
 			'cookie',
 			(await rewriter.cookies.get(url.url)).toString()
