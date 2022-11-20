@@ -510,7 +510,15 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						node.remove();
 					}
 
-					that.append(cloneRawNode(parseHTMLFragment(args[0])));
+					usePrototype(that, nativeElement, (element) => {
+						if (element.nodeName === 'SCRIPT') {
+							// allow the bad practice of setting the script's innerHTML
+							// scripts cannot support nodes as content
+							element.append(new Text(args[0]));
+						} else {
+							element.append(cloneRawNode(parseHTMLFragment(args[0])));
+						}
+					});
 				}
 			),
 		});
