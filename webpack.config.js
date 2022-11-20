@@ -1,12 +1,12 @@
 import ExcludeProvidePlugin from './ExcludeProvidePlugin.js';
+import ForkTsCheckerWebpackPlugin from 'fork-ts-checker-webpack-plugin';
 import { resolve } from 'path';
-import { cwd, env } from 'process';
+import { cwd } from 'process';
 import ResolveTypescriptPlugin from 'resolve-typescript-plugin';
 import TerserPlugin from 'terser-webpack-plugin';
 import webpack from 'webpack';
 
-const isEnvDevelopment = env.NODE_ENV === 'development';
-const isEnvProduction = env.NODE_ENV === 'production';
+const isDevelopment = process.env.NODE_ENV !== 'production';
 
 /**
  * @param {import('webpack').Configuration & {tsConfig:string}} config
@@ -18,19 +18,48 @@ const common = (config) => ({
 		...config.output,
 		path: resolve(cwd(), 'dist'),
 	},
-	devtool: isEnvProduction ? 'source-map' : 'eval-source-map',
-	mode: isEnvProduction ? 'production' : isEnvDevelopment && 'development',
+	devtool: isDevelopment ? 'eval-source-map' : 'source-map',
+	mode: isDevelopment ? 'development' : 'production',
 	module: {
 		...(config.module || {}),
 		rules: [
 			...(config.module?.rules || []),
 			{
-				test: /\.tsx?$/,
-				exclude: /node_modules/,
-				use: {
-					loader: 'ts-loader',
-					options: {
-						configFile: resolve(cwd(), config.tsConfig),
+				test: /\.[mc]?[jt]sx?$/,
+				include: resolve('src'),
+				loader: 'swc-loader',
+				options: {
+					sourceMaps: true,
+					minify: !isDevelopment,
+					jsc: {
+						parser: {
+							syntax: 'typescript',
+							tsx: true,
+							decorators: false,
+							dynamicImport: true,
+						},
+						transform: {
+							react: {
+								runtime: 'automatic',
+							},
+						},
+						target: 'es2015',
+						externalHelpers: true,
+					},
+				},
+			},
+			// Process any JS outside of the app with SWC.
+			// Unlike the application JS, we only compile the standard ES features.
+			{
+				test: /\.(js|mjs)$/,
+				exclude: /@swc(?:\/|\\{1,2})helpers/,
+				loader: 'swc-loader',
+				options: {
+					minify: !isDevelopment,
+					sourceMaps: true,
+					jsc: {
+						target: 'es2015',
+						externalHelpers: true,
 					},
 				},
 			},
@@ -58,10 +87,17 @@ const common = (config) => ({
 		plugins: [new ResolveTypescriptPlugin()],
 	},
 	optimization: {
-		minimize: isEnvProduction,
+		minimize: !isDevelopment,
 		minimizer: [new TerserPlugin()],
 	},
-	plugins: [...(config.plugins || [])].filter(Boolean),
+	plugins: [
+		...(config.plugins || []),
+		new ForkTsCheckerWebpackPlugin({
+			typescript: {
+				configFile: resolve(cwd(), config.tsConfig),
+			},
+		}),
+	].filter(Boolean),
 });
 
 /**
