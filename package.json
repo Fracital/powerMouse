@@ -8,7 +8,7 @@
 	"main": "lib/index.cjs",
 	"scripts": {
 		"build": "NODE_ENV=production webpack",
-		"build:watch": "NODE_ENV=development webpack --watch"
+		"dev": "NODE_ENV=development webpack --watch"
 	},
 	"dependencies": {
 		"@javascript-obfuscator/escodegen": "^2.3.0",
