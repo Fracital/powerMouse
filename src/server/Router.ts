@@ -1,5 +1,3 @@
-import createHttpError from 'http-errors';
-
 export function json(status: number, data: unknown): Response {
 	return new Response(JSON.stringify(data, null, '\t'), {
 		status,
@@ -7,6 +5,39 @@ export function json(status: number, data: unknown): Response {
 			'content-type': 'application/json',
 		},
 	});
+}
+
+class HttpError extends Error {
+	status: number;
+	title: string;
+	constructor(status: number, title: string, message?: string) {
+		super(message || title);
+		this.title = title || status.toString();
+		this.status = status;
+	}
+}
+
+class NotFound extends HttpError {
+	constructor(message?: string) {
+		super(404, 'Not Found', message);
+	}
+}
+
+class InternalServerError extends HttpError {
+	constructor(message?: string) {
+		super(500, 'Internal Server Error', message);
+	}
+}
+
+function isHttpError(err: unknown) {
+	if (!(err instanceof Error)) return false;
+	return (
+		typeof (
+			err as {
+				[K in keyof HttpError]: HttpError[K] | unknown;
+			}
+		).status === 'number'
+	);
 }
 
 export default class Router {
@@ -42,29 +73,27 @@ export default class Router {
 			}
 		}
 
-		throw new createHttpError.NotFound(
-			`${request.url} shouldn't have been routed`
-		);
+		throw new NotFound(`${request.url} shouldn't have been routed`);
 	}
 	async route(request: Request): Promise<Response> {
 		try {
 			return await this.tryRoute(request);
-		} catch (error) {
+		} catch (err) {
 			console.error(`At ${request.method} ${request.url}`);
-			console.error(error);
+			console.error(err);
 
-			let httpError;
-			let id;
+			let httpError: HttpError;
+			let id: string | void;
 
-			if (createHttpError.isHttpError(error)) {
-				httpError = error;
+			if (isHttpError(err)) {
+				httpError = err;
 			} else {
-				if (error instanceof Error) {
-					httpError = new createHttpError.InternalServerError(error.toString());
-					console.error(error.stack);
-					id = error.name;
+				if (err instanceof Error) {
+					httpError = new InternalServerError(err.toString());
+					console.error(err.stack);
+					id = err.name;
 				} else {
-					httpError = new createHttpError.InternalServerError(String(error));
+					httpError = new InternalServerError(String(err));
 					id = 'UNKNOWN';
 				}
 			}

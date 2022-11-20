@@ -1,4 +1,4 @@
-import ExcludeProvidePlugin from './ExcludeProvidePlugin.js';
+import EslintWebpackPlugin from 'eslint-webpack-plugin';
 import ForkTsCheckerWebpackPlugin from 'fork-ts-checker-webpack-plugin';
 import { resolve } from 'path';
 import { cwd } from 'process';
@@ -63,17 +63,6 @@ const common = (config) => ({
 				},
 			},
 			{
-				test: /\.(ts|js)x?$/,
-				enforce: 'pre',
-				use: {
-					options: {
-						eslintPath: 'eslint',
-					},
-					loader: 'eslint-loader',
-				},
-				exclude: /node_modules/,
-			},
-			{
 				test: /\.js$/,
 				enforce: 'pre',
 				use: 'source-map-loader',
@@ -91,6 +80,7 @@ const common = (config) => ({
 	},
 	plugins: [
 		...(config.plugins || []),
+		new EslintWebpackPlugin(),
 		new ForkTsCheckerWebpackPlugin({
 			typescript: {
 				configFile: resolve(cwd(), config.tsConfig),
@@ -158,14 +148,6 @@ const configs = [
 	),
 	common({
 		tsConfig: './src/server/tsconfig.json',
-		plugins: [
-			new ExcludeProvidePlugin({
-				definitions: {
-					'Error.captureStackTrace': 'capture-stack-trace',
-				},
-				exclude: [/capture-stack-trace/],
-			}),
-		],
 		entry: {
 			serviceWorker: './src/server/serviceWorker.ts',
 		},

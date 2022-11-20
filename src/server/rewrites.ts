@@ -1,4 +1,3 @@
-// import createHttpError from 'http-errors';
 import GenericCodec from '../Codecs';
 import StompURL from '../StompURL';
 import { codecType, Config, ParsedConfig } from '../config';
