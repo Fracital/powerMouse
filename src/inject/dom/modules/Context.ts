@@ -32,7 +32,7 @@ export function sameOrigin(first: string, second: string): boolean {
 	);
 }
 
-function findTop(): Context {
+function findTop(global: typeof globalThis): Context {
 	const stack: Context[] = [global];
 
 	while (true) {
@@ -244,7 +244,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				origin: this.client.url.url.origin,
 			},
 			{
-				targetOrigin: location.origin,
+				targetOrigin: this.client.global.location.origin,
 				transfer: message.transfer,
 			},
 		];
@@ -283,9 +283,9 @@ export default class ContextModule extends Module<DocumentClient> {
 			},
 		});
 
-		return <any>this.restrictObject({
+		const res = <any>this.restrictObject({
 			0: {
-				value: global,
+				value: this.client.global,
 			},
 			top: {
 				get: () => this.newRestricted(<Context>(<unknown>context.top!)),
@@ -297,13 +297,13 @@ export default class ContextModule extends Module<DocumentClient> {
 				get: () => this.newRestricted(<Context>(<unknown>context.opener!)),
 			},
 			self: {
-				get: () => this.newRestricted(<Context>(<unknown>context.self!)),
+				get: () => res,
 			},
 			frames: {
-				get: () => this.newRestricted(<Context>(<unknown>context.frames!)),
+				get: () => res,
 			},
 			window: {
-				get: () => this.newRestricted(context.window!),
+				get: () => res,
 			},
 			blur: {
 				value: () => context.blur(),
@@ -342,11 +342,13 @@ export default class ContextModule extends Module<DocumentClient> {
 				}),
 			},
 		});
+
+		return res;
 	}
 	newRestricted(context: Context): RestrictedContext {
 		if (!(CLIENT_KEY in context)) {
 			if (context === this.client.top) {
-				return findTop();
+				return findTop(this.client.global);
 			} else {
 				return context;
 			}
@@ -373,11 +375,11 @@ export default class ContextModule extends Module<DocumentClient> {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
 		const parentDescriptor = Reflect.getOwnPropertyDescriptor(
-			global,
+			this.client.global,
 			'parent'
 		)!;
 
-		Reflect.defineProperty(global, 'parent', {
+		Reflect.defineProperty(this.client.global, 'parent', {
 			get: proxyModule.wrapFunction(
 				parentDescriptor.get!,
 				(target, that, args) => {
@@ -392,27 +394,36 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		const messageData = new WeakMap<MessageEvent, MessageData>();
 
-		Reflect.defineProperty(MessageEvent.prototype, 'origin', {
-			configurable: true,
-			enumerable: true,
-			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(MessageEvent.prototype, 'origin')!
-					.get!,
-				(target, that: MessageEvent, args) => {
-					if (messageData.has(that)) {
-						return messageData.get(that)!.origin;
+		Reflect.defineProperty(
+			this.client.global.MessageEvent.prototype,
+			'origin',
+			{
+				configurable: true,
+				enumerable: true,
+				get: proxyModule.wrapFunction(
+					Reflect.getOwnPropertyDescriptor(
+						this.client.global.MessageEvent.prototype,
+						'origin'
+					)!.get!,
+					(target, that: MessageEvent, args) => {
+						if (messageData.has(that)) {
+							return messageData.get(that)!.origin;
+						}
+
+						return Reflect.apply(target, that, args);
 					}
+				),
+			}
+		);
 
-					return Reflect.apply(target, that, args);
-				}
-			),
-		});
-
-		Reflect.defineProperty(MessageEvent.prototype, 'data', {
+		Reflect.defineProperty(this.client.global.MessageEvent.prototype, 'data', {
 			configurable: true,
 			enumerable: true,
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(MessageEvent.prototype, 'data')!.get!,
+				Reflect.getOwnPropertyDescriptor(
+					this.client.global.MessageEvent.prototype,
+					'data'
+				)!.get!,
 				(target, that: MessageEvent, args) => {
 					if (messageData.has(that)) {
 						return messageData.get(that)!.data;
@@ -424,7 +435,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		});
 
 		onDocumentOpen.push(() => {
-			global.addEventListener('message', (event) => {
+			this.client.global.addEventListener('message', (event) => {
 				/*console.error(
 					this.client.url.url.toString(),
 					event.data,
@@ -442,11 +453,15 @@ export default class ContextModule extends Module<DocumentClient> {
 			});
 		});
 
-		global.postMessage = proxyModule.wrapFunction(
-			global.postMessage,
+		this.client.global.postMessage = proxyModule.wrapFunction(
+			this.client.global.postMessage,
 			(target, that, args) => {
 				catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
-				return Reflect.apply(target, global, this.postMessage(<any>args));
+				return Reflect.apply(
+					target,
+					this.client.global,
+					this.postMessage(<any>args)
+				);
 			}
 		);
 	}

@@ -59,12 +59,12 @@ export default class LocationModule extends Module<DocumentClient> {
 			'hash',
 		]) {
 			const urlDescriptor = Reflect.getOwnPropertyDescriptor(
-				URL.prototype,
+				this.client.global.URL.prototype,
 				common
 			);
 
 			const locationDescriptor = Reflect.getOwnPropertyDescriptor(
-				location,
+				this.client.global.location,
 				common
 			);
 

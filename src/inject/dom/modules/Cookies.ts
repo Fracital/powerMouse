@@ -4,30 +4,43 @@ import ProxyModule, { invokeGlobal } from '../../modules/Proxy';
 import DocumentClient from '../Client';
 import SyncModule from './Sync';
 
-const cookieDescriptor = Reflect.getOwnPropertyDescriptor(
-	Document.prototype,
-	'cookie'
-)!;
-
 export class CookiesModule extends Module<DocumentClient> {
+	private cookieDescriptor: PropertyDescriptor;
+	constructor(client: DocumentClient) {
+		super(client);
+
+		this.cookieDescriptor = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Document.prototype,
+			'cookie'
+		)!;
+	}
+	get cookie() {
+		return this.cookieDescriptor.get!.call(this.client.global.document);
+	}
+	set cookie(value: string) {
+		this.cookieDescriptor.set!.call(this.client.global.document, value);
+	}
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const syncModule = this.client.getModule(SyncModule)!;
 
-		Reflect.defineProperty(Document.prototype, 'cookie', {
+		Reflect.defineProperty(this.client.global.Document.prototype, 'cookie', {
 			configurable: true,
 			enumerable: true,
-			get: proxyModule.wrapFunction(cookieDescriptor.get!, (target, that) => {
-				invokeGlobal(that, document);
-				return new BrowserCookieArray(
-					...syncModule.jsonAPI(
-						`${this.client.directory}cookies/get`,
-						this.client.url.toString()
-					)
-				).toString();
-			}),
+			get: proxyModule.wrapFunction(
+				this.cookieDescriptor.get!,
+				(target, that) => {
+					invokeGlobal(that, document);
+					return new BrowserCookieArray(
+						...syncModule.jsonAPI(
+							`${this.client.directory}cookies/get`,
+							this.client.url.toString()
+						)
+					).toString();
+				}
+			),
 			set: proxyModule.wrapFunction(
-				cookieDescriptor.set!,
+				this.cookieDescriptor.set!,
 				(target, that, args) => {
 					invokeGlobal(that, document);
 					const value = String(args[0]);

@@ -161,7 +161,7 @@ export function catchRequiredArguments(
 	}
 }
 
-export function contextThis(that: unknown): unknown {
+export function contextThis(that: unknown, global: typeof globalThis): unknown {
 	if (that === undefined || that === null) {
 		return global;
 	} else {
@@ -172,8 +172,8 @@ export function contextThis(that: unknown): unknown {
 export default class ProxyModule extends Module<Client> {
 	functionStrings = new WeakMap<Function, string>();
 	apply() {
-		Function.prototype.toString = this.wrapFunction(
-			Function.prototype.toString,
+		this.client.global.Function.prototype.toString = this.wrapFunction(
+			this.client.global.Function.prototype.toString,
 			(target, that, args) => {
 				if (this.functionStrings.has(that))
 					return this.functionStrings.get(that);

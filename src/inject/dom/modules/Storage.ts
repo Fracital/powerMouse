@@ -98,7 +98,11 @@ export default class StorageModule extends Module<DocumentClient> {
 		const natives = new WeakMap<object, StorageProxy>();
 
 		proxyModule.bindNatives(globalStorageProxy.prototype, natives);
-		proxyModule.mirrorClass(Storage, globalStorageProxy, instances);
+		proxyModule.mirrorClass(
+			this.client.global.Storage,
+			globalStorageProxy,
+			instances
+		);
 
 		function isStorageKey(
 			target: StorageProxy,
@@ -214,13 +218,14 @@ export default class StorageModule extends Module<DocumentClient> {
 		building = false;
 
 		// constructor becomes equivalent to constructor() when building = false
-		global.Storage = <{ new (): StorageProxy }>globalStorageProxy;
+		this.client.global.Storage = <{ new (): StorageProxy }>globalStorageProxy;
 
-		Reflect.defineProperty(global, 'localStorage', {
+		Reflect.defineProperty(this.client.global, 'localStorage', {
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(global, 'sessionStorage')!.get!,
+				Reflect.getOwnPropertyDescriptor(this.client.global, 'sessionStorage')!
+					.get!,
 				(target, that) => {
-					if (contextThis(that) !== global) {
+					if (contextThis(that, this.client.global) !== this.client.global) {
 						throw new TypeError('Illegal invocation');
 					}
 
@@ -231,11 +236,12 @@ export default class StorageModule extends Module<DocumentClient> {
 			configurable: true,
 		});
 
-		Reflect.defineProperty(global, 'sessionStorage', {
+		Reflect.defineProperty(this.client.global, 'sessionStorage', {
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(global, 'sessionStorage')!.get!,
+				Reflect.getOwnPropertyDescriptor(this.client.global, 'sessionStorage')!
+					.get!,
 				(target, that) => {
-					if (contextThis(that) !== global) {
+					if (contextThis(that, this.client.global) !== this.client.global) {
 						throw new TypeError('Illegal invocation');
 					}
 

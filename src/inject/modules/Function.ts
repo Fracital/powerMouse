@@ -53,18 +53,14 @@ export default class FunctionModule extends Module<Client> {
 			}
 		);
 
-		Reflect.defineProperty(
-			this.client.global.AsyncFunction.prototype,
-			'constructor',
-			{
-				configurable: true,
-				enumerable: false,
-				writable: true,
-				value: proxyAsyncFunction,
-			}
-		);
+		Reflect.defineProperty(AsyncFunction.prototype, 'constructor', {
+			configurable: true,
+			enumerable: false,
+			writable: true,
+			value: proxyAsyncFunction,
+		});
 
-		Function.prototype.constructor = proxyFunction;
+		this.client.global.Function.prototype.constructor = proxyFunction;
 		AsyncFunction.prototype.constructor = proxyAsyncFunction;
 
 		this.client.global.Function = proxyFunction;

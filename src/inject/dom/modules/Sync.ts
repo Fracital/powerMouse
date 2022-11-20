@@ -4,6 +4,7 @@ import { geckoXHR, queueXHR } from '../../../routeURL';
 import { ProcessData, SerializableRequestInit } from '../../../sync';
 import Module from '../../Module';
 import DocumentClient from '../Client';
+import { CookiesModule } from './Cookies';
 
 const statusEmpty: number[] = [101, 204, 205, 304];
 
@@ -49,19 +50,6 @@ function createResponse(init: SyncResponseInit): SyncResponse {
 	response.rawArrayBuffer = rawArrayBuffer;
 
 	return <SyncResponse>response;
-}
-
-const cookieDescriptor = Reflect.getOwnPropertyDescriptor(
-	Document.prototype,
-	'cookie'
-)!;
-
-function getCookie(): string {
-	return cookieDescriptor.get!.call(document);
-}
-
-function setCookie(value: string) {
-	cookieDescriptor.set!.call(document, value);
 }
 
 export default class SyncModule extends Module<DocumentClient> {
@@ -135,6 +123,7 @@ export default class SyncModule extends Module<DocumentClient> {
 			return createResponse(JSON.parse(http.responseText));
 		}
 
+		const cookies = this.client.getModule(CookiesModule)!;
 		const id = 'sync-request-' + Math.random().toString(16).slice(2);
 		const regex = new RegExp(`${id}=(\\d+),(.*?)(;|$)`);
 
@@ -151,7 +140,7 @@ export default class SyncModule extends Module<DocumentClient> {
 		for (let cycles = 0; cycles < sMaxCycles; cycles++) {
 			if (cycles % 3 !== 0) continue;
 
-			const cookie = getCookie();
+			const cookie = cookies.cookie;
 			const match = cookie.match(regex);
 
 			if (!match) continue;
@@ -180,7 +169,7 @@ export default class SyncModule extends Module<DocumentClient> {
 			}
 
 			for (const cookieName of clearCookies) {
-				setCookie(`${cookieName}=; path=/; expires=${new Date(0)}`);
+				cookies.cookie = `${cookieName}=; path=/; expires=${new Date(0)}`;
 			}
 
 			return createResponse(JSON.parse(decodeCookie(joinedValue)));

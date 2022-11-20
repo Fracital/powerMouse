@@ -94,7 +94,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		}
 
 		const rewriteStyle = (style: HTMLStyleElement) => {
-			if (getGlobalParsingState() === 'parsingBeforeWrite') {
+			if (getGlobalParsingState(this.client.global) === 'parsingBeforeWrite') {
 				// once everything is finalized and off the alternative parse stack
 
 				if (style.textContent) {
@@ -141,7 +141,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			if (
 				!shouldRewriteScript(script) ||
 				(!script.isConnected &&
-					getGlobalParsingState() !== 'parsingBeforeWrite')
+					getGlobalParsingState(this.client.global) !== 'parsingBeforeWrite')
 			) {
 				// eventually we'll catch a connected script
 				return;
@@ -171,9 +171,9 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		}
 
 		for (const triggersRender of ['replaceWith', 'replaceData', 'remove']) {
-			(CharacterData.prototype as any)[triggersRender] =
+			(this.client.global.CharacterData.prototype as any)[triggersRender] =
 				proxyModule.wrapFunction(
-					(CharacterData.prototype as any)[triggersRender],
+					(this.client.global.CharacterData.prototype as any)[triggersRender],
 					(target, that: CharacterData, args) => {
 						// will be null after remove()
 						const parent = usePrototype(
@@ -192,11 +192,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		}
 
 		const dataDescriptor = Reflect.getOwnPropertyDescriptor(
-			CharacterData.prototype,
+			this.client.global.CharacterData.prototype,
 			'data'
 		)!;
 
-		Reflect.defineProperty(CharacterData.prototype, 'data', {
+		Reflect.defineProperty(this.client.global.CharacterData.prototype, 'data', {
 			enumerable: true,
 			configurable: true,
 			get: dataDescriptor.get,
@@ -211,7 +211,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		});
 
 		for (const [prototype, property] of <[object, string][]>[
-			[Node.prototype, 'nodeValue'],
+			[this.client.global.Node.prototype, 'nodeValue'],
 		]) {
 			const descriptor = Reflect.getOwnPropertyDescriptor(prototype, property)!;
 
@@ -329,12 +329,20 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				insert(args[0], that, () => Reflect.apply(target, that, args))
 			);
 
-		Node.prototype.appendChild = willInsertNode(Node.prototype.appendChild);
-		Element.prototype.append = willInsertNode(Element.prototype.append);
-		Node.prototype.insertBefore = willInsertNode(Node.prototype.insertBefore);
-		Node.prototype.replaceChild = willInsertNode(Node.prototype.replaceChild);
-		Element.prototype.replaceWith = willInsertNode(
-			Element.prototype.replaceWith
+		this.client.global.Node.prototype.appendChild = willInsertNode(
+			this.client.global.Node.prototype.appendChild
+		);
+		this.client.global.Element.prototype.append = willInsertNode(
+			this.client.global.Element.prototype.append
+		);
+		this.client.global.Node.prototype.insertBefore = willInsertNode(
+			this.client.global.Node.prototype.insertBefore
+		);
+		this.client.global.Node.prototype.replaceChild = willInsertNode(
+			this.client.global.Node.prototype.replaceChild
+		);
+		this.client.global.Element.prototype.replaceWith = willInsertNode(
+			this.client.global.Element.prototype.replaceWith
 		);
 
 		function insertAdjacentTarget(
@@ -403,94 +411,107 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			}
 		}
 
-		Element.prototype.insertAdjacentText = proxyModule.wrapFunction(
-			Element.prototype.insertAdjacentText,
-			(target, that: Element, args) => {
-				catchRequiredArguments(args.length, 2, 'Element', 'insertAdjacentText');
+		this.client.global.Element.prototype.insertAdjacentText =
+			proxyModule.wrapFunction(
+				this.client.global.Element.prototype.insertAdjacentText,
+				(target, that: Element, args) => {
+					catchRequiredArguments(
+						args.length,
+						2,
+						'Element',
+						'insertAdjacentText'
+					);
 
-				const position = String(args[0]);
-				const insertNode: Node = new Text(args[1]);
-				const targetElement = insertAdjacentTarget(
-					position,
-					that,
-					'Element',
-					'insertAdjacentText'
-				);
+					const position = String(args[0]);
+					const insertNode: Node = new Text(args[1]);
+					const targetElement = insertAdjacentTarget(
+						position,
+						that,
+						'Element',
+						'insertAdjacentText'
+					);
 
-				if (!targetElement) return;
+					if (!targetElement) return;
 
-				insert(insertNode, targetElement, () =>
-					usePrototype(that, nativeElement, (element) =>
-						insertAdjacent(targetElement, position, element, insertNode)
-					)
-				);
-			}
-		);
-
-		Element.prototype.insertAdjacentElement = proxyModule.wrapFunction(
-			Element.prototype.insertAdjacentElement,
-			(target, that: Element, args) => {
-				catchRequiredArguments(
-					args.length,
-					2,
-					'Element',
-					'insertAdjacentElement'
-				);
-
-				if (!(args[1] instanceof Element)) {
-					throw new TypeError(
-						`Failed to execute 'insertAdjacentElement' on 'Element': parameter 2 is not of type 'Element'.`
+					insert(insertNode, targetElement, () =>
+						usePrototype(that, nativeElement, (element) =>
+							insertAdjacent(targetElement, position, element, insertNode)
+						)
 					);
 				}
+			);
 
-				const position = String(args[0]);
-				const insertElement = args[1];
-				const targetElement = insertAdjacentTarget(
-					position,
-					that,
-					'Element',
-					'insertAdjacentElement'
-				);
+		this.client.global.Element.prototype.insertAdjacentElement =
+			proxyModule.wrapFunction(
+				this.client.global.Element.prototype.insertAdjacentElement,
+				(target, that: Element, args) => {
+					catchRequiredArguments(
+						args.length,
+						2,
+						'Element',
+						'insertAdjacentElement'
+					);
 
-				if (!targetElement) return;
+					if (!(args[1] instanceof Element)) {
+						throw new TypeError(
+							`Failed to execute 'insertAdjacentElement' on 'Element': parameter 2 is not of type 'Element'.`
+						);
+					}
 
-				insert(insertElement, targetElement, () =>
-					usePrototype(that, nativeElement, (element) =>
-						insertAdjacent(targetElement, position, element, insertElement)
-					)
-				);
-			}
-		);
+					const position = String(args[0]);
+					const insertElement = args[1];
+					const targetElement = insertAdjacentTarget(
+						position,
+						that,
+						'Element',
+						'insertAdjacentElement'
+					);
 
-		Element.prototype.insertAdjacentHTML = proxyModule.wrapFunction(
-			Element.prototype.insertAdjacentHTML,
-			(target, that: Element, args) => {
-				catchRequiredArguments(args.length, 2, 'Element', 'insertAdjacentHTML');
+					if (!targetElement) return;
 
-				const position = String(args[0]);
-				const insertFragment: DocumentFragment = parseHTMLFragment(
-					String(args[1])
-				);
-				const targetElement = insertAdjacentTarget(
-					position,
-					that,
-					'Element',
-					'insertAdjacentHTML'
-				);
+					insert(insertElement, targetElement, () =>
+						usePrototype(that, nativeElement, (element) =>
+							insertAdjacent(targetElement, position, element, insertElement)
+						)
+					);
+				}
+			);
 
-				if (!targetElement) return;
+		this.client.global.Element.prototype.insertAdjacentHTML =
+			proxyModule.wrapFunction(
+				this.client.global.Element.prototype.insertAdjacentHTML,
+				(target, that: Element, args) => {
+					catchRequiredArguments(
+						args.length,
+						2,
+						'Element',
+						'insertAdjacentHTML'
+					);
 
-				insert(insertFragment, targetElement, () =>
-					usePrototype(that, nativeElement, (element) =>
-						insertAdjacent(targetElement, position, element, insertFragment)
-					)
-				);
-			}
-		);
+					const position = String(args[0]);
+					const insertFragment: DocumentFragment = parseHTMLFragment(
+						String(args[1])
+					);
+					const targetElement = insertAdjacentTarget(
+						position,
+						that,
+						'Element',
+						'insertAdjacentHTML'
+					);
+
+					if (!targetElement) return;
+
+					insert(insertFragment, targetElement, () =>
+						usePrototype(that, nativeElement, (element) =>
+							insertAdjacent(targetElement, position, element, insertFragment)
+						)
+					);
+				}
+			);
 
 		// does not insert element
-		Node.prototype.removeChild = proxyModule.wrapFunction(
-			Node.prototype.removeChild,
+		this.client.global.Node.prototype.removeChild = proxyModule.wrapFunction(
+			this.client.global.Node.prototype.removeChild,
 			(target, that, args) => {
 				const result = Reflect.apply(target, that, args);
 

@@ -360,7 +360,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			instances
 		);
 
-		(global as any).XMLHttpRequest = globalProxy;
-		(global as any).XMLHttpRequestEventTarget = globalTargetProxy;
+		(this.client.global as any).XMLHttpRequest = globalProxy;
+		(this.client.global as any).XMLHttpRequestEventTarget = globalTargetProxy;
 	}
 }

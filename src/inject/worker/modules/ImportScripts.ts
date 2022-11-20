@@ -8,8 +8,8 @@ export default class ImportScriptsModule extends Module<WorkerClient> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
-		global.importScripts = proxyModule.wrapFunction(
-			global.importScripts,
+		this.client.global.importScripts = proxyModule.wrapFunction(
+			this.client.global.importScripts,
 			(target, that, args) => {
 				for (let i = 0; i < args.length; i++)
 					args[i] = routeJS(

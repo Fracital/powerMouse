@@ -19,7 +19,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 
 			const client = new DocumentClient(
 				parseConfig(this.client.config, this.client.config.codec),
-				globalThis
+				context
 			);
 
 			addClientModules(client);
@@ -32,7 +32,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 		};
 
 		const getContentWindowDescriptor = Reflect.getOwnPropertyDescriptor(
-			HTMLIFrameElement.prototype,
+			this.client.global.HTMLIFrameElement.prototype,
 			'contentWindow'
 		)!;
 
@@ -56,36 +56,44 @@ export default class IFrameModule extends Module<DocumentClient> {
 			return null;
 		};
 
-		Reflect.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
-			configurable: true,
-			enumerable: true,
-			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(
-					HTMLIFrameElement.prototype,
-					'contentWindow'
-				)!.get!,
-				(target, that) => getContentWindow(that)
-			),
-		});
+		Reflect.defineProperty(
+			this.client.global.HTMLIFrameElement.prototype,
+			'contentWindow',
+			{
+				configurable: true,
+				enumerable: true,
+				get: proxyModule.wrapFunction(
+					Reflect.getOwnPropertyDescriptor(
+						this.client.global.HTMLIFrameElement.prototype,
+						'contentWindow'
+					)!.get!,
+					(target, that) => getContentWindow(that)
+				),
+			}
+		);
 
-		Reflect.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', {
-			configurable: true,
-			enumerable: true,
-			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(
-					HTMLIFrameElement.prototype,
-					'contentDocument'
-				)!.get!,
-				(target, that) => {
-					const context = getContentWindow(that);
+		Reflect.defineProperty(
+			this.client.global.HTMLIFrameElement.prototype,
+			'contentDocument',
+			{
+				configurable: true,
+				enumerable: true,
+				get: proxyModule.wrapFunction(
+					Reflect.getOwnPropertyDescriptor(
+						this.client.global.HTMLIFrameElement.prototype,
+						'contentDocument'
+					)!.get!,
+					(target, that) => {
+						const context = getContentWindow(that);
 
-					if (!context || windowModule.restrictedContexts.has(context)) {
-						return null;
+						if (!context || windowModule.restrictedContexts.has(context)) {
+							return null;
+						}
+
+						return context.document;
 					}
-
-					return context.document;
-				}
-			),
-		});
+				),
+			}
+		);
 	}
 }

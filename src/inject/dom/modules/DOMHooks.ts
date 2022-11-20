@@ -268,7 +268,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// all hooks are in, now apply them
 
 		// MutationObserver will leak a lot of values and is complex.. we cannot support this yet.
-		// delete (global as any).MutationObserver;
+		// delete (this.client.global as any).MutationObserver;
 
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
@@ -276,8 +276,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		 * Etc hooks are here
 		 */
 
-		window.open = proxyModule.wrapFunction(
-			window.open,
+		this.client.global.open = proxyModule.wrapFunction(
+			this.client.global.open,
 			(target, that, args) => {
 				if (args[0] !== undefined)
 					args[0] = routeHTML(
@@ -297,25 +297,32 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		const writeFactory = (target: Write): Write =>
 			proxyModule.wrapFunction(target, (target, that, args) => {
 				for (let i = 0; i < args.length; i++) {
-					const prevState = getGlobalParsingState();
-					setGlobalParsingState('parsingBeforeWrite');
+					const prevState = getGlobalParsingState(this.client.global);
+					setGlobalParsingState(this.client.global, 'parsingBeforeWrite');
 					const div = document.createElement('div');
 					div.append(cloneRawNode(parseHTMLFragment(String(args[i]))));
 					args[i] = div.innerHTML;
-					setGlobalParsingState(prevState);
+					setGlobalParsingState(this.client.global, prevState);
 				}
 
 				Reflect.apply(target, that, args);
 			});
 
-		document.write = writeFactory(document.write);
-		document.writeln = writeFactory(document.writeln);
+		this.client.global.document.write = writeFactory(
+			this.client.global.document.write
+		);
+		this.client.global.document.writeln = writeFactory(
+			this.client.global.document.writeln
+		);
 
-		Reflect.defineProperty(Node.prototype, 'baseURI', {
+		Reflect.defineProperty(this.client.global.Node.prototype, 'baseURI', {
 			enumerable: true,
 			configurable: true,
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(Node.prototype, 'baseURI')!.get!,
+				Reflect.getOwnPropertyDescriptor(
+					this.client.global.Node.prototype,
+					'baseURI'
+				)!.get!,
 				(target, that, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
@@ -324,11 +331,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			),
 		});
 
-		Reflect.defineProperty(Document.prototype, 'URL', {
+		Reflect.defineProperty(this.client.global.Document.prototype, 'URL', {
 			enumerable: true,
 			configurable: true,
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(Document.prototype, 'URL')!.get!,
+				Reflect.getOwnPropertyDescriptor(
+					this.client.global.Document.prototype,
+					'URL'
+				)!.get!,
 				(target, that, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
@@ -337,11 +347,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			),
 		});
 
-		Reflect.defineProperty(Document.prototype, 'domain', {
+		Reflect.defineProperty(this.client.global.Document.prototype, 'domain', {
 			enumerable: true,
 			configurable: true,
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(Document.prototype, 'domain')!.get!,
+				Reflect.getOwnPropertyDescriptor(
+					this.client.global.Document.prototype,
+					'domain'
+				)!.get!,
 				(target, that, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
@@ -366,32 +379,36 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		 */
 
 		const scriptTextDescriptor = Reflect.getOwnPropertyDescriptor(
-			HTMLScriptElement.prototype,
+			this.client.global.HTMLScriptElement.prototype,
 			'text'
 		)!;
 
-		Reflect.defineProperty(HTMLScriptElement.prototype, 'text', {
-			enumerable: true,
-			configurable: true,
-			get: scriptTextDescriptor.get,
-			set: proxyModule.wrapFunction(
-				scriptTextDescriptor.set!,
-				(target, that: HTMLScriptElement, args) => {
-					for (const node of that.childNodes) {
-						node.remove();
-					}
+		Reflect.defineProperty(
+			this.client.global.HTMLScriptElement.prototype,
+			'text',
+			{
+				enumerable: true,
+				configurable: true,
+				get: scriptTextDescriptor.get,
+				set: proxyModule.wrapFunction(
+					scriptTextDescriptor.set!,
+					(target, that: HTMLScriptElement, args) => {
+						for (const node of that.childNodes) {
+							node.remove();
+						}
 
-					that.append(new Text(args[0]));
-				}
-			),
-		});
+						that.append(new Text(args[0]));
+					}
+				),
+			}
+		);
 
 		const textContentDescriptor = Reflect.getOwnPropertyDescriptor(
-			Node.prototype,
+			this.client.global.Node.prototype,
 			'textContent'
 		)!;
 
-		Reflect.defineProperty(Node.prototype, 'textContent', {
+		Reflect.defineProperty(this.client.global.Node.prototype, 'textContent', {
 			enumerable: true,
 			configurable: true,
 			get: textContentDescriptor.get,
@@ -408,42 +425,50 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		});
 
 		const innerTextDescriptor = Reflect.getOwnPropertyDescriptor(
-			HTMLElement.prototype,
+			this.client.global.HTMLElement.prototype,
 			'innerText'
 		)!;
 
-		Reflect.defineProperty(HTMLElement.prototype, 'innerText', {
-			enumerable: true,
-			configurable: true,
-			get: innerTextDescriptor.get,
-			set: proxyModule.wrapFunction(
-				innerTextDescriptor.set!,
-				(target, that: Element, args) => {
-					for (const node of that.childNodes) {
-						node.remove();
-					}
+		Reflect.defineProperty(
+			this.client.global.HTMLElement.prototype,
+			'innerText',
+			{
+				enumerable: true,
+				configurable: true,
+				get: innerTextDescriptor.get,
+				set: proxyModule.wrapFunction(
+					innerTextDescriptor.set!,
+					(target, that: Element, args) => {
+						for (const node of that.childNodes) {
+							node.remove();
+						}
 
-					that.append(new Text(args[0]));
-				}
-			),
-		});
+						that.append(new Text(args[0]));
+					}
+				),
+			}
+		);
 
 		const outerTextDescriptor = Reflect.getOwnPropertyDescriptor(
-			HTMLElement.prototype,
+			this.client.global.HTMLElement.prototype,
 			'outerText'
 		)!;
 
-		Reflect.defineProperty(HTMLElement.prototype, 'outerText', {
-			enumerable: true,
-			configurable: true,
-			get: outerTextDescriptor.get,
-			set: proxyModule.wrapFunction(
-				outerTextDescriptor.set!,
-				(target, that: Element, args) => {
-					that.replaceWith(new Text(args[0]));
-				}
-			),
-		});
+		Reflect.defineProperty(
+			this.client.global.HTMLElement.prototype,
+			'outerText',
+			{
+				enumerable: true,
+				configurable: true,
+				get: outerTextDescriptor.get,
+				set: proxyModule.wrapFunction(
+					outerTextDescriptor.set!,
+					(target, that: Element, args) => {
+						that.replaceWith(new Text(args[0]));
+					}
+				),
+			}
+		);
 
 		/**
 		 * inner and outer HTML need to have their getters hooked
@@ -452,21 +477,23 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		 * Element.prototype.getInnerHTML
 		 */
 
-		if ('getInnerHTML' in Element.prototype) {
-			(Element.prototype as any).getInnerHTML = proxyModule.wrapFunction(
-				(Element.prototype as any).getInnerHTML as () => string,
-				(target, that) => {
-					return that.innerHTML;
-				}
-			);
+		if ('getInnerHTML' in this.client.global.Element.prototype) {
+			(this.client.global.Element.prototype as any).getInnerHTML =
+				proxyModule.wrapFunction(
+					(this.client.global.Element.prototype as any)
+						.getInnerHTML as () => string,
+					(target, that) => {
+						return that.innerHTML;
+					}
+				);
 		}
 
 		const innerHTMLDescriptor = Reflect.getOwnPropertyDescriptor(
-			Element.prototype,
+			this.client.global.Element.prototype,
 			'innerHTML'
 		)!;
 
-		Reflect.defineProperty(Element.prototype, 'innerHTML', {
+		Reflect.defineProperty(this.client.global.Element.prototype, 'innerHTML', {
 			enumerable: true,
 			configurable: true,
 			get: proxyModule.wrapFunction(
@@ -489,11 +516,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		});
 
 		const outerHTMLDescriptor = Reflect.getOwnPropertyDescriptor(
-			Element.prototype,
+			this.client.global.Element.prototype,
 			'outerHTML'
 		)!;
 
-		Reflect.defineProperty(Element.prototype, 'outerHTML', {
+		Reflect.defineProperty(this.client.global.Element.prototype, 'outerHTML', {
 			enumerable: true,
 			configurable: true,
 			get: proxyModule.wrapFunction(
@@ -511,57 +538,60 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			),
 		});
 
-		Element.prototype.getAttribute = proxyModule.wrapFunction(
-			Element.prototype.getAttribute,
-			(target, that: Element, args) => {
-				// only side effect this getter has is the potential to throw an illegal invocation error
-				Reflect.apply(target, that, args);
+		this.client.global.Element.prototype.getAttribute =
+			proxyModule.wrapFunction(
+				this.client.global.Element.prototype.getAttribute,
+				(target, that: Element, args) => {
+					// only side effect this getter has is the potential to throw an illegal invocation error
+					Reflect.apply(target, that, args);
 
-				const attribute: string = args[0];
+					const attribute: string = args[0];
 
-				return usePrototype(that, CustomElement.prototype, (element) => {
-					if (element.hasAttributeOG(attribute)) {
-						return element.getAttributeOG(attribute);
-					} else {
-						return element.getAttribute(attribute);
-					}
-				});
-			}
-		);
+					return usePrototype(that, CustomElement.prototype, (element) => {
+						if (element.hasAttributeOG(attribute)) {
+							return element.getAttributeOG(attribute);
+						} else {
+							return element.getAttribute(attribute);
+						}
+					});
+				}
+			);
 
-		Element.prototype.setAttribute = proxyModule.wrapFunction(
-			Element.prototype.setAttribute,
-			(target, that: Element, args) => {
-				// too many side effects
-				// illegal invocation error will throw by nature
-				// Reflect.apply(target, that, args);
+		this.client.global.Element.prototype.setAttribute =
+			proxyModule.wrapFunction(
+				this.client.global.Element.prototype.setAttribute,
+				(target, that: Element, args) => {
+					// too many side effects
+					// illegal invocation error will throw by nature
+					// Reflect.apply(target, that, args);
 
-				const [attribute, value] = args;
+					const [attribute, value] = args;
 
-				usePrototype(that, CustomElement.prototype, (element) => {
-					element.setAttribute(attribute, value);
+					usePrototype(that, CustomElement.prototype, (element) => {
+						element.setAttribute(attribute, value);
 
-					this.updateAttributeHooks(element, attribute);
-				});
-			}
-		);
+						this.updateAttributeHooks(element, attribute);
+					});
+				}
+			);
 
-		Element.prototype.removeAttribute = proxyModule.wrapFunction(
-			Element.prototype.removeAttribute,
-			(target, that: Element, args) => {
-				// too many side effects
-				// illegal invocation error will throw by nature
-				// Reflect.apply(target, that, args);
+		this.client.global.Element.prototype.removeAttribute =
+			proxyModule.wrapFunction(
+				this.client.global.Element.prototype.removeAttribute,
+				(target, that: Element, args) => {
+					// too many side effects
+					// illegal invocation error will throw by nature
+					// Reflect.apply(target, that, args);
 
-				const [attribute] = args;
+					const [attribute] = args;
 
-				usePrototype(that, CustomElement.prototype, (element) => {
-					element.removeAttribute(attribute);
-					element.removeAttributeOG(attribute);
-					this.updateAttributeHooks(element, attribute);
-				});
-			}
-		);
+					usePrototype(that, CustomElement.prototype, (element) => {
+						element.removeAttribute(attribute);
+						element.removeAttributeOG(attribute);
+						this.updateAttributeHooks(element, attribute);
+					});
+				}
+			);
 
 		const trackProperties = new Map<ElementCtor, Set<string>>();
 

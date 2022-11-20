@@ -27,14 +27,15 @@ export default class HistoryModule extends Module<DocumentClient> {
 			return Reflect.apply(target, that, args);
 		}
 
-		History.prototype.pushState = proxyModule.wrapFunction(
-			History.prototype.pushState,
+		this.client.global.History.prototype.pushState = proxyModule.wrapFunction(
+			this.client.global.History.prototype.pushState,
 			updateState.bind(this)
 		);
 
-		History.prototype.replaceState = proxyModule.wrapFunction(
-			History.prototype.replaceState,
-			updateState.bind(this)
-		);
+		this.client.global.History.prototype.replaceState =
+			proxyModule.wrapFunction(
+				this.client.global.History.prototype.replaceState,
+				updateState.bind(this)
+			);
 	}
 }

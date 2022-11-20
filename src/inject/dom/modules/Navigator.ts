@@ -6,25 +6,28 @@ import DocumentClient from '../Client';
 
 export default class NavigatorModule extends Module<DocumentClient> {
 	apply() {
-		delete (global as any).ServiceWorkerContainer;
-		delete (global as any).ServiceWorkerRegistration;
-
-		delete (Navigator.prototype as any).serviceWorker;
+		if ('serviceWorker' in this.client.global.Navigator.prototype) {
+			delete (this.client.global as any).ServiceWorkerContainer;
+			delete (this.client.global as any).ServiceWorkerRegistration;
+			delete (this.client.global.Navigator.prototype as any).serviceWorker;
+		}
 
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
-		Navigator.prototype.sendBeacon = proxyModule.wrapFunction(
-			Navigator.prototype.sendBeacon,
-			(target, that, args) => {
-				args[0] = routeXHR(
-					new StompURL(
-						new URL(args[0], this.client.url.toString()),
-						this.client.url
-					)
-				);
+		if (this.client.global.Navigator.prototype.sendBeacon)
+			this.client.global.Navigator.prototype.sendBeacon =
+				proxyModule.wrapFunction(
+					this.client.global.Navigator.prototype.sendBeacon,
+					(target, that, args) => {
+						args[0] = routeXHR(
+							new StompURL(
+								new URL(args[0], this.client.url.toString()),
+								this.client.url
+							)
+						);
 
-				return Reflect.apply(target, that, args);
-			}
-		);
+						return Reflect.apply(target, that, args);
+					}
+				);
 	}
 }

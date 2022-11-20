@@ -16,8 +16,8 @@ export default class FetchModule extends Module<Client> {
 		const eventSourceURLs = new WeakMap<EventSource, string>();
 		const responseURLs = new WeakMap<Response, string>();
 
-		global.EventSource = proxyModule.wrapFunction(
-			global.EventSource,
+		this.client.global.EventSource = proxyModule.wrapFunction(
+			this.client.global.EventSource,
 			(target, that, args) => {
 				catchRequiredArguments(args.length, 1, 'EventSource', 'constructor');
 
@@ -36,14 +36,16 @@ export default class FetchModule extends Module<Client> {
 			true
 		);
 
-		Reflect.defineProperty(global.EventSource.prototype, 'url', {
+		Reflect.defineProperty(this.client.global.EventSource.prototype, 'url', {
 			configurable: true,
 			enumerable: true,
 			get: this.client
 				.getModule(ProxyModule)!
 				.wrapFunction(
-					Reflect.getOwnPropertyDescriptor(global.EventSource.prototype, 'url')!
-						.get!,
+					Reflect.getOwnPropertyDescriptor(
+						this.client.global.EventSource.prototype,
+						'url'
+					)!.get!,
 					(target, that, args) => {
 						if (eventSourceURLs.has(that)) {
 							return eventSourceURLs.get(that);
@@ -54,12 +56,14 @@ export default class FetchModule extends Module<Client> {
 				),
 		});
 
-		Reflect.defineProperty(global.Response.prototype, 'url', {
+		Reflect.defineProperty(this.client.global.Response.prototype, 'url', {
 			configurable: true,
 			enumerable: true,
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(global.Response.prototype, 'url')!
-					.get!,
+				Reflect.getOwnPropertyDescriptor(
+					this.client.global.Response.prototype,
+					'url'
+				)!.get!,
 				(target, that, args) => {
 					if (responseURLs.has(that)) {
 						return responseURLs.get(that);
@@ -71,11 +75,11 @@ export default class FetchModule extends Module<Client> {
 			),
 		});
 
-		global.Request = proxyModule.wrapFunction(
-			global.Request,
+		this.client.global.Request = proxyModule.wrapFunction(
+			this.client.global.Request,
 			(target, _that, args, newTarget) => {
 				if (args.length === 0) {
-					throw new DOMException(
+					throw new this.client.global.DOMException(
 						"Failed to construct 'Request': 1 argument required, but only 0 present.'"
 					);
 				}
@@ -89,8 +93,8 @@ export default class FetchModule extends Module<Client> {
 			true
 		);
 
-		global.fetch = proxyModule.wrapFunction(
-			global.fetch,
+		this.client.global.fetch = proxyModule.wrapFunction(
+			this.client.global.fetch,
 			async (_target, _that, args) => {
 				let init: RequestInit;
 				let url: urlLike;

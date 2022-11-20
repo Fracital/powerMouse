@@ -8,8 +8,8 @@ export default class WorkerModule extends Module<Client> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
-		global.Worker = proxyModule.wrapFunction(
-			global.Worker,
+		this.client.global.Worker = proxyModule.wrapFunction(
+			this.client.global.Worker,
 			(target, that, args, newTarget) => {
 				if (!newTarget) {
 					throw new TypeError(

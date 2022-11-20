@@ -8,39 +8,47 @@ import { decode } from 'entities';
 
 export const onDocumentOpen: (() => void)[] = [];
 
-let globalParsingState: 'parsingBeforeWrite' | void = undefined;
+type ParsingState = 'parsingBeforeWrite' | void;
 
-export function getGlobalParsingState(): typeof globalParsingState {
-	return globalParsingState;
+const globalParsingState = new WeakMap<typeof globalThis, ParsingState>();
+
+export function getGlobalParsingState(global: typeof globalThis) {
+	return globalParsingState.get(global)!;
 }
 
-export function setGlobalParsingState(value: typeof globalParsingState) {
-	globalParsingState = value;
+export function setGlobalParsingState(
+	global: typeof globalThis,
+	value: ParsingState
+) {
+	globalParsingState.set(global, value);
 }
-
-const write = document.write;
-
-const baseURIDescriptor = Reflect.getOwnPropertyDescriptor(
-	Node.prototype,
-	'baseURI'
-)!;
-
-const parentDescriptor = Reflect.getOwnPropertyDescriptor(global, 'parent')!;
-
-const topDescriptor = Reflect.getOwnPropertyDescriptor(global, 'top')!;
 
 // runtime document !== document in 0.001 ms!?!?!?
 
 export default class DocumentClient extends Client {
-	get parent(): typeof globalThis {
-		return parentDescriptor.get!.call(global);
-	}
-	get top(): typeof globalThis {
-		return topDescriptor.get!.call(global);
-	}
+	private write: typeof document.write;
+	private baseURIDescriptor: PropertyDescriptor;
+	private parentDescriptor: PropertyDescriptor;
+	private topDescriptor: PropertyDescriptor;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
+		this.write = this.global.document.write;
+		this.baseURIDescriptor = Reflect.getOwnPropertyDescriptor(
+			this.global.Node.prototype,
+			'baseURI'
+		)!;
+		this.parentDescriptor = Reflect.getOwnPropertyDescriptor(
+			this.global,
+			'parent'
+		)!;
+		this.topDescriptor = Reflect.getOwnPropertyDescriptor(this.global, 'top')!;
 		this.isDOM = true;
+	}
+	get parent(): typeof globalThis {
+		return this.parentDescriptor.get!.call(this.global);
+	}
+	get top(): typeof globalThis {
+		return this.topDescriptor.get!.call(this.global);
 	}
 	get url(): StompURL {
 		if (ROUTE_PROTOCOLS.includes(this.baseURI.protocol)) {
@@ -58,10 +66,10 @@ export default class DocumentClient extends Client {
 		}
 	}
 	get baseURI(): URL {
-		return new URL(baseURIDescriptor.get!.call(document));
+		return new URL(this.baseURIDescriptor.get!.call(this.global.document));
 	}
 	loadHTML(script: string) {
-		setGlobalParsingState('parsingBeforeWrite');
+		setGlobalParsingState(this.global, 'parsingBeforeWrite');
 
 		const parsed = parseHTML(decode(script));
 
@@ -69,10 +77,10 @@ export default class DocumentClient extends Client {
 		// we cannot append any descendants of parsed into any element (whether it is attached or detached) because it will pre-fetch the images in parsed
 		// pass the entirety of parsed into cloneRawNode
 
-		const node = document.createElement('div');
+		const node = this.global.document.createElement('div');
 		node.append(cloneRawNode([parsed.documentElement]));
 
-		setGlobalParsingState();
+		setGlobalParsingState(this.global);
 
 		for (const script of node.querySelectorAll('script')) {
 			if (script.text) {
@@ -88,10 +96,10 @@ export default class DocumentClient extends Client {
 
 		// jump out of the DOM "write stream" so we can start loading our own HTML
 		setTimeout(() => {
-			document.open();
+			this.global.document.open();
 			for (const callback of onDocumentOpen) callback();
-			write.call(document, newDocument);
-			document.close();
+			this.write.call(this.global.document, newDocument);
+			this.global.document.close();
 		});
 	}
 }

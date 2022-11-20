@@ -29,12 +29,12 @@ export default class AnchorModule extends Module<DocumentClient> {
 			// 'href',
 		]) {
 			const urlDescriptor = Reflect.getOwnPropertyDescriptor(
-				URL.prototype,
+				this.client.global.URL.prototype,
 				common
 			);
 
 			const anchorDescriptor = Reflect.getOwnPropertyDescriptor(
-				HTMLAnchorElement.prototype,
+				this.client.global.HTMLAnchorElement.prototype,
 				common
 			);
 
@@ -45,45 +45,51 @@ export default class AnchorModule extends Module<DocumentClient> {
 				continue;
 			}
 
-			Reflect.defineProperty(HTMLAnchorElement.prototype, common, {
-				...anchorDescriptor,
-				get: anchorDescriptor.get
-					? proxyModule?.wrapFunction(
-							anchorDescriptor.get,
-							(target, that, args) => {
-								if (common === 'hash') return Reflect.apply(target, that, args);
+			Reflect.defineProperty(
+				this.client.global.HTMLAnchorElement.prototype,
+				common,
+				{
+					...anchorDescriptor,
+					get: anchorDescriptor.get
+						? proxyModule?.wrapFunction(
+								anchorDescriptor.get,
+								(target, that, args) => {
+									if (common === 'hash')
+										return Reflect.apply(target, that, args);
 
-								const temp = new URL(this.client.location.toString());
+									const temp = new URL(this.client.location.toString());
 
-								return Reflect.apply(urlDescriptor.get!, temp, args);
-							}
-					  )
-					: undefined,
-				set: anchorDescriptor.set
-					? proxyModule?.wrapFunction(
-							anchorDescriptor.set,
-							(target, that, args) => {
-								if (common === 'hash') return Reflect.apply(target, that, args);
-
-								const temp = new URL(this.client.location.toString());
-
-								if (common === 'href') {
-									args[0] = new URL(args[0], this.client.url.toString());
+									return Reflect.apply(urlDescriptor.get!, temp, args);
 								}
+						  )
+						: undefined,
+					set: anchorDescriptor.set
+						? proxyModule?.wrapFunction(
+								anchorDescriptor.set,
+								(target, that, args) => {
+									if (common === 'hash')
+										return Reflect.apply(target, that, args);
 
-								Reflect.apply(urlDescriptor.set!, temp, args);
+									const temp = new URL(this.client.location.toString());
 
-								Reflect.apply(anchorHrefDescriptor!.set!, that, [
-									routeHTML(
-										new StompURL(temp, this.client.url),
-										this.client.url,
-										this.client.config
-									),
-								]);
-							}
-					  )
-					: undefined,
-			});
+									if (common === 'href') {
+										args[0] = new URL(args[0], this.client.url.toString());
+									}
+
+									Reflect.apply(urlDescriptor.set!, temp, args);
+
+									Reflect.apply(anchorHrefDescriptor!.set!, that, [
+										routeHTML(
+											new StompURL(temp, this.client.url),
+											this.client.url,
+											this.client.config
+										),
+									]);
+								}
+						  )
+						: undefined,
+				}
+			);
 		}
 	}
 }

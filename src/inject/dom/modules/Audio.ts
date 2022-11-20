@@ -8,8 +8,8 @@ export default class AudioModule extends Module<DocumentClient> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
-		global.Audio = proxyModule.wrapFunction(
-			global.Audio,
+		this.client.global.Audio = proxyModule.wrapFunction(
+			this.client.global.Audio,
 			(target, that, args, newTarget) => {
 				if (!newTarget) {
 					throw new TypeError(

@@ -66,7 +66,16 @@ export default function cloneRawNode(
 						continue;
 					}
 
-					const target = document.createElement(d[0].nodeName);
+					let target = d[0];
+
+					try {
+						target = document.createElement(d[0].nodeName);
+					} catch (err) {
+						// d[0].nodeName may be HTMLUnknownElement
+						console.error(err);
+						// eslint-disable-next-line no-debugger
+						debugger;
+					}
 
 					if (d[0] instanceof Element) {
 						for (const attribute of d[0].getAttributeNames()) {

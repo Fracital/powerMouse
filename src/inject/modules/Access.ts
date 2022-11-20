@@ -31,7 +31,7 @@ export function setGlobalProxy(object: any, name: string, proxy: unknown) {
 
 export default class AccessModule extends Module<Client> {
 	apply() {
-		const evalSnapshot = global.eval;
+		const evalSnapshot = this.client.global.eval;
 
 		const proxyModule = this.client.getModule(ProxyModule);
 
@@ -171,6 +171,6 @@ export default class AccessModule extends Module<Client> {
 			evalSnapshot,
 		};
 
-		(global as { [key: string]: unknown })[ACCESS_KEY] = api;
+		(this.client.global as { [key: string]: unknown })[ACCESS_KEY] = api;
 	}
 }
