@@ -158,7 +158,7 @@ type PropertyHookGetter = (element: CustomElement) => string | false;
 
 type PropertyHook = [
 	ctor: ElementCtor,
-	Property: string,
+	property: string,
 	getter: PropertyHookGetter
 ];
 
@@ -632,7 +632,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						(target, that, args) => {
 							return usePrototype(that, CustomElement.prototype, (element) => {
 								for (const entry of this.hooks) {
-									if (isAttributeHook(entry.hook)) continue;
+									if (isAttributeHook(entry.hook) || entry.hook[1] !== property)
+										continue;
 
 									const result = entry.hook[2](element);
 
