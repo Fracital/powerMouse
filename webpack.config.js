@@ -48,8 +48,7 @@ const common = (config) => ({
 					},
 				},
 			},
-			// Process any JS outside of the app with SWC.
-			// Unlike the application JS, we only compile the standard ES features.
+			// Process any JS outside of the app with SWC
 			{
 				test: /\.(js|mjs)$/,
 				exclude: /@swc(?:\/|\\{1,2})helpers/,

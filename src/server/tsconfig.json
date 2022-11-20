@@ -1,8 +1,14 @@
 {
 	"compilerOptions": {
-		"lib": ["ES2020"],
-		"types": ["serviceworker"]
+		"target": "ESNext",
+		"module": "ESNext",
+		"lib": ["ESNext"],
+		"types": ["serviceworker"],
+		"sourceMap": true,
+		"strict": true,
+		"stripInternal": true,
+		"moduleResolution": "node",
+		"allowSyntheticDefaultImports": true
 	},
-	"extends": "../generic-tsconfig.json",
 	"include": ["../*.d.ts", "./*.d.ts"]
 }

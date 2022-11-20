@@ -1,10 +1,14 @@
 {
 	"compilerOptions": {
+		"target": "ESNext",
+		"module": "ESNext",
 		"lib": ["ES2022", "DOM", "DOM.Iterable"],
-		"types": []
+		"types": [],
+		"sourceMap": true,
+		"strict": true,
+		"stripInternal": true,
+		"moduleResolution": "node",
+		"allowSyntheticDefaultImports": true
 	},
-	"extends": "../generic-tsconfig.json",
-	"include": [
-		"../*.d.ts"
-	]
+	"include": ["../*.d.ts"]
 }

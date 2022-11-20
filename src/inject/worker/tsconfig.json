@@ -1,12 +1,19 @@
 {
 	"compilerOptions": {
-		"lib": ["ES2020", "WebWorker", "Webworker.Iterable", "WebWorker.ImportScripts"],
-		"types": []
+		"target": "ESNext",
+		"module": "ESNext",
+		"lib": [
+			"ESNext",
+			"WebWorker",
+			"Webworker.Iterable",
+			"WebWorker.ImportScripts"
+		],
+		"types": [],
+		"sourceMap": true,
+		"strict": true,
+		"stripInternal": true,
+		"moduleResolution": "node",
+		"allowSyntheticDefaultImports": true
 	},
-	"extends": "../../generic-tsconfig.json",
-	"include": [
-		"./*.d.ts",
-		"../*.d.ts",
-		"../../*.d.ts"
-	]
+	"include": ["./*.d.ts", "../*.d.ts", "../../*.d.ts"]
 }
