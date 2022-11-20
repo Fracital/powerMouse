@@ -37,10 +37,6 @@ export const WebSocket = global.WebSocket;
 
 export const Function = global.Function;
 
-export const AsyncFunction: FunctionConstructor = <FunctionConstructor>(
-	(async () => undefined).constructor
-);
-
 export function bindDescriptors<T extends object>(
 	to: object,
 	bind: T,

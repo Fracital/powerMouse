@@ -33,26 +33,40 @@ export default class FunctionModule extends Module<Client> {
 			);
 		};
 
+		const AsyncFunction = (
+			new this.client.global.Function(
+				'return async () => {}'
+			)() as () => Promise<void>
+		).constructor as FunctionConstructor;
+
 		const proxyAsyncFunction = functionFactory(AsyncFunction);
 		const proxyFunction = functionFactory(Function);
 
-		Reflect.defineProperty(Function.prototype, 'constructor', {
-			configurable: true,
-			enumerable: false,
-			writable: true,
-			value: proxyFunction,
-		});
+		Reflect.defineProperty(
+			this.client.global.Function.prototype,
+			'constructor',
+			{
+				configurable: true,
+				enumerable: false,
+				writable: true,
+				value: proxyFunction,
+			}
+		);
 
-		Reflect.defineProperty(AsyncFunction.prototype, 'constructor', {
-			configurable: true,
-			enumerable: false,
-			writable: true,
-			value: proxyAsyncFunction,
-		});
+		Reflect.defineProperty(
+			this.client.global.AsyncFunction.prototype,
+			'constructor',
+			{
+				configurable: true,
+				enumerable: false,
+				writable: true,
+				value: proxyAsyncFunction,
+			}
+		);
 
 		Function.prototype.constructor = proxyFunction;
 		AsyncFunction.prototype.constructor = proxyAsyncFunction;
 
-		global.Function = proxyFunction;
+		this.client.global.Function = proxyFunction;
 	}
 }

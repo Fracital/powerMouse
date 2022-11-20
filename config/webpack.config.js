@@ -111,7 +111,6 @@ export default [
 							'Reflect',
 							'EventSource',
 							'Function',
-							'AsyncFunction',
 						].map((name) => [
 							name,
 							[resolve(cwd(), './src/inject/snapshot.ts'), name],
