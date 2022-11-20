@@ -20,10 +20,6 @@ export function setGlobalParsingState(value: typeof globalParsingState) {
 
 const write = document.write;
 
-export function documentWrite(script: string) {
-	write.call(document, script);
-}
-
 const baseURIDescriptor = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
 	'baseURI'
@@ -42,8 +38,8 @@ export default class DocumentClient extends Client {
 	get top(): typeof globalThis {
 		return topDescriptor.get!.call(global);
 	}
-	constructor(init: ParsedConfig) {
-		super(init);
+	constructor(init: ParsedConfig, global: typeof globalThis) {
+		super(init, global);
 		this.isDOM = true;
 	}
 	get url(): StompURL {
@@ -94,7 +90,7 @@ export default class DocumentClient extends Client {
 		setTimeout(() => {
 			document.open();
 			for (const callback of onDocumentOpen) callback();
-			documentWrite(newDocument);
+			write.call(document, newDocument);
 			document.close();
 		});
 	}

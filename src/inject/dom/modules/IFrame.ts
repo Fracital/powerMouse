@@ -1,8 +1,9 @@
+import { parseConfig } from '../../../config';
 import { CLIENT_KEY } from '../../../rewriteJS';
-import { injectDocumentJS } from '../../../routeURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
+import { addClientModules } from '../document';
 import ContextModule from './Context';
 
 export default class IFrameModule extends Module<DocumentClient> {
@@ -16,12 +17,18 @@ export default class IFrameModule extends Module<DocumentClient> {
 		const injectContext = (context: typeof globalThis) => {
 			if (CLIENT_KEY in context) return;
 
-			const http = new XMLHttpRequest();
-			http.open('GET', injectDocumentJS(this.client.url), false);
-			http.send();
-			new context.Function(http.responseText!)();
+			const client = new DocumentClient(
+				parseConfig(this.client.config, this.client.config.codec),
+				globalThis
+			);
 
-			context.createClient(this.client.config, this.client.codec.key);
+			addClientModules(client);
+
+			Reflect.defineProperty(context, CLIENT_KEY, {
+				value: client,
+				configurable: false,
+				enumerable: false,
+			});
 		};
 
 		const getContentWindowDescriptor = Reflect.getOwnPropertyDescriptor(

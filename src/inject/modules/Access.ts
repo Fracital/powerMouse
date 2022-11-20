@@ -24,8 +24,6 @@ function normalizeKey(key: unknown): string|unknown {
 	}
 }*/
 
-const evalSnapshot = global.eval;
-
 export function setGlobalProxy(object: any, name: string, proxy: unknown) {
 	object[GLOBAL_PROXY] = proxy;
 	object[GLOBAL_NAME] = name;
@@ -33,6 +31,8 @@ export function setGlobalProxy(object: any, name: string, proxy: unknown) {
 
 export default class AccessModule extends Module<Client> {
 	apply() {
+		const evalSnapshot = global.eval;
+
 		const proxyModule = this.client.getModule(ProxyModule);
 
 		const globalEval = (x: string) => {

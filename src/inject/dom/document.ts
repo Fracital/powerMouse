@@ -16,7 +16,7 @@ import StorageModule from './modules/Storage';
 import SyncModule from './modules/Sync';
 import XMLHttpRequestModule from './modules/XMLHttpRequest';
 
-export default createClientFactory(DocumentClient, (client) => {
+export function addClientModules(client: DocumentClient) {
 	baseModules(client);
 	client.addModule(HistoryModule);
 	client.addModule(NavigatorModule);
@@ -32,4 +32,8 @@ export default createClientFactory(DocumentClient, (client) => {
 	client.addModule(XMLHttpRequestModule);
 	client.addModule(CookiesModule);
 	client.addModule(ContextModule);
-});
+}
+
+const createDOMClient = createClientFactory(DocumentClient, addClientModules);
+
+export default createDOMClient;

@@ -12,6 +12,7 @@ export interface ModuleCtor {
 
 export default class Client {
 	modules: Map<ModuleCtor, Module<any>>;
+	global: typeof globalThis;
 	bare: BareClient;
 	codec: GenericCodec;
 	directory: string;
@@ -45,7 +46,8 @@ export default class Client {
 			);
 		}
 	}
-	constructor(init: ParsedConfig) {
+	constructor(init: ParsedConfig, global: typeof globalThis) {
+		this.global = global;
 		this.applied = false;
 		this.modules = new Map();
 		this.codec = init.codec;
@@ -89,18 +91,18 @@ export default class Client {
 
 export function createClientFactory<T>(
 	Client: {
-		new (init: ParsedConfig): T;
+		new (init: ParsedConfig, global: typeof globalThis): T;
 	},
 	initClient: (client: T) => void
 ) {
 	return function (config: Config, codecKey: string) {
-		delete (global as any).createClient;
+		delete globalThis.createClient;
 
-		const client = new Client(parseConfig(config, codecKey));
+		const client = new Client(parseConfig(config, codecKey), globalThis);
 
 		initClient(client);
 
-		Reflect.defineProperty(global, CLIENT_KEY, {
+		Reflect.defineProperty(globalThis, CLIENT_KEY, {
 			value: client,
 			configurable: false,
 			enumerable: false,
