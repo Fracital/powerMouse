@@ -90,7 +90,8 @@ export default class AccessModule extends Module<Client> {
 					} else if (
 						((typeof target === 'object' && target !== null) ||
 							typeof target === 'function') &&
-						ACCESS_KEY in target
+						ACCESS_KEY in target &&
+						target[ACCESS_KEY]!.set2 !== api.set2
 					) {
 						return target[ACCESS_KEY]!.set2(target, key, operate);
 					}
