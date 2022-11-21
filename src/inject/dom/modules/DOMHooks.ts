@@ -117,11 +117,16 @@ export class CustomElement extends Element {
 
 export const nativeEventTarget: EventTarget = <any>{};
 export const nativeNode: Node = Object.create(nativeEventTarget);
-export const nativeElement: HTMLElement = Object.create(nativeNode);
+export const nativeElement: Element = Object.create(nativeNode);
+export const nativeHTMLElement: HTMLElement = Object.create(nativeElement);
+const nativeHTMLTemplateElement: HTMLTemplateElement =
+	Object.create(nativeHTMLElement);
 
 applyDescriptors(nativeNode, Node.prototype);
 applyDescriptors(nativeEventTarget, EventTarget.prototype);
 applyDescriptors(nativeElement, Element.prototype);
+applyDescriptors(nativeHTMLElement, HTMLElement.prototype);
+applyDescriptors(nativeHTMLTemplateElement, HTMLTemplateElement.prototype);
 
 Reflect.setPrototypeOf(CustomElement.prototype, nativeElement);
 
@@ -506,17 +511,25 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			set: proxyModule.wrapFunction(
 				innerHTMLDescriptor.set!,
 				(target, that: Element, args) => {
-					for (const node of that.childNodes) {
-						node.remove();
-					}
-
 					usePrototype(that, nativeElement, (element) => {
-						if (element.nodeName === 'SCRIPT') {
-							// allow the bad practice of setting the script's innerHTML
-							// scripts cannot support nodes as content
-							element.append(new Text(args[0]));
-						} else {
-							element.append(cloneRawNode(parseHTMLFragment(args[0])));
+						if (element.nodeName === 'TEMPLATE')
+							usePrototype(that, nativeHTMLTemplateElement, (element) => {
+								for (const node of element.content.childNodes) node.remove();
+
+								element.content.append(
+									cloneRawNode(parseHTMLFragment(args[0]))
+								);
+							});
+						else {
+							for (const node of element.childNodes) node.remove();
+
+							if (element.nodeName === 'SCRIPT') {
+								// allow the bad practice of setting the script's innerHTML
+								// scripts cannot support nodes as content
+								element.append(new Text(args[0]));
+							} else {
+								element.append(cloneRawNode(parseHTMLFragment(args[0])));
+							}
 						}
 					});
 				}
