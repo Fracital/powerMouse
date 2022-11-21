@@ -4,6 +4,7 @@ import { modifyJS } from '../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import Client from '../Client';
 import cloneRawNode, { parseHTML } from './cloneNode';
+import { shouldRewriteScript } from './modules/DOMAttributes';
 import { decode } from 'entities';
 
 type OpenCallback = () => void;
@@ -94,7 +95,7 @@ export default class DocumentClient extends Client {
 		setGlobalParsingState(this.global);
 
 		for (const script of node.querySelectorAll('script')) {
-			if (script.text) {
+			if (script.text && shouldRewriteScript(script)) {
 				script.text = `document.currentScript.textContent = ${JSON.stringify(
 					script.textContent
 				)};${modifyJS(script.text, this.url, this.config, 'generic')}`;
