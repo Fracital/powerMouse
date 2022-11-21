@@ -4,6 +4,7 @@ import FetchModule from './modules/Fetch';
 import FunctionModule from './modules/Function';
 import IndexedDBModule from './modules/IndexedDB';
 import ProxyModule from './modules/Proxy';
+import WebSocketModule from './modules/WebSocket';
 import WorkerModule from './modules/Worker';
 
 export default function baseModules(client: Client) {
@@ -13,4 +14,5 @@ export default function baseModules(client: Client) {
 	client.addModule(FunctionModule);
 	client.addModule(WorkerModule);
 	client.addModule(IndexedDBModule);
+	client.addModule(WebSocketModule);
 }

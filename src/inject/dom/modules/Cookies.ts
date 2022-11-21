@@ -20,9 +20,27 @@ export class CookiesModule extends Module<DocumentClient> {
 	set cookie(value: string) {
 		this.cookieDescriptor.set!.call(this.client.global.document, value);
 	}
+	get pageCookies() {
+		const syncModule = this.client.getModule(SyncModule)!;
+
+		return new BrowserCookieArray(
+			...syncModule.jsonAPI(
+				`${this.client.directory}cookies/get`,
+				this.client.url.toString()
+			)
+		).toString();
+	}
+	set pageCookies(value: string) {
+		const syncModule = this.client.getModule(SyncModule)!;
+
+		syncModule.jsonAPI(
+			`${this.client.directory}cookies/set`,
+			value,
+			this.client.url.toString()
+		);
+	}
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
-		const syncModule = this.client.getModule(SyncModule)!;
 
 		Reflect.defineProperty(this.client.global.Document.prototype, 'cookie', {
 			configurable: true,
@@ -31,25 +49,14 @@ export class CookiesModule extends Module<DocumentClient> {
 				this.cookieDescriptor.get!,
 				(target, that) => {
 					invokeGlobal(that, document);
-					return new BrowserCookieArray(
-						...syncModule.jsonAPI(
-							`${this.client.directory}cookies/get`,
-							this.client.url.toString()
-						)
-					).toString();
+					return this.pageCookies;
 				}
 			),
 			set: proxyModule.wrapFunction(
 				this.cookieDescriptor.set!,
 				(target, that, args) => {
 					invokeGlobal(that, document);
-					const value = String(args[0]);
-
-					syncModule.jsonAPI(
-						`${this.client.directory}cookies/set`,
-						value,
-						this.client.url.toString()
-					);
+					this.pageCookies = String(args[0]);
 				}
 			),
 		});
