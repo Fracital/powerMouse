@@ -5,7 +5,7 @@ import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import Client from '../Client';
 import cloneRawNode, { parseHTML } from './cloneNode';
 import { shouldRewriteScript } from './modules/DOMAttributes';
-import { decode } from 'entities';
+import { decode, escapeText } from 'entities';
 
 type OpenCallback = () => void;
 
@@ -96,8 +96,8 @@ export default class DocumentClient extends Client {
 
 		for (const script of node.querySelectorAll('script')) {
 			if (script.text && shouldRewriteScript(script)) {
-				script.text = `document.currentScript.textContent = ${JSON.stringify(
-					script.textContent
+				script.text = `document.currentScript.textContent = ${escapeText(
+					JSON.stringify(script.textContent)
 				)};${modifyJS(script.text, this.url, this.config, 'generic')}`;
 			}
 		}
