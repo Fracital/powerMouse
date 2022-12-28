@@ -29,7 +29,7 @@ class InternalServerError extends HttpError {
 	}
 }
 
-function isHttpError(err: unknown) {
+function isHttpError(err: unknown): err is HttpError {
 	if (!(err instanceof Error)) return false;
 	return (
 		typeof (

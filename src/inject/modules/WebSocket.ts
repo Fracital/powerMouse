@@ -7,7 +7,7 @@ import ProxyModule, {
 	newConstructor,
 	onEventTarget,
 } from './Proxy';
-import { BareWebSocket } from '@tomphttp/bare-client';
+import { BareHeaders, BareWebSocket } from '@tomphttp/bare-client';
 
 const wsProtocols = ['ws:', 'wss:'];
 
@@ -21,14 +21,14 @@ export default class WebSocketModule extends Module<Client> {
 		const { CONNECTING } = this.client.global.WebSocket;
 
 		class MockWebSocket extends EventTarget {
-			#socket: BareWebSocket | void;
+			#socket?: BareWebSocket;
 			#ready: Promise<void>;
 			#binaryType: BinaryType = 'blob';
 			#protocol = '';
 			#extensions = '';
 			#url = '';
 			async #open(url: URL, protocol?: string | string[]) {
-				const requestHeaders = {};
+				const requestHeaders: BareHeaders = {};
 				Reflect.setPrototypeOf(requestHeaders, null);
 
 				requestHeaders['Origin'] = origin;
