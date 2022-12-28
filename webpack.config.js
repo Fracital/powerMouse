@@ -9,7 +9,7 @@ import webpack from 'webpack';
 const isDevelopment = process.env.NODE_ENV !== 'production';
 
 /**
- * @param {import('webpack').Configuration & {tsConfig:string}} config
+ * @param {import('webpack').Configuration} config
  * @returns {import('webpack').Configuration}
  */
 const common = (config) => ({
@@ -81,11 +81,7 @@ const common = (config) => ({
 	plugins: [
 		...(config.plugins || []),
 		new EslintWebpackPlugin(),
-		new ForkTsCheckerWebpackPlugin({
-			typescript: {
-				configFile: resolve(cwd(), config.tsConfig),
-			},
-		}),
+		new ForkTsCheckerWebpackPlugin(),
 	].filter(Boolean),
 });
 
@@ -94,14 +90,8 @@ const common = (config) => ({
  */
 const configs = [
 	...[
+		['./src/inject/worker/worker.ts', 'injectWorker.js', {}],
 		[
-			'./src/inject/worker/tsconfig.json',
-			'./src/inject/worker/worker.ts',
-			'injectWorker.js',
-			{},
-		],
-		[
-			'./src/inject/dom/tsconfig.json',
 			'./src/inject/dom/document.ts',
 			'injectDocument.js',
 			Object.fromEntries(
@@ -111,9 +101,8 @@ const configs = [
 				])
 			),
 		],
-	].map(([tsConfig, entry, filename, additionalInjecions]) =>
+	].map(([entry, filename, additionalInjecions]) =>
 		common({
-			tsConfig,
 			entry,
 			output: {
 				library: {
@@ -147,7 +136,6 @@ const configs = [
 		})
 	),
 	common({
-		tsConfig: './src/server/tsconfig.json',
 		entry: {
 			serviceWorker: './src/server/serviceWorker.ts',
 		},
@@ -169,7 +157,6 @@ const configs = [
 		],
 	].map(([name, filename, entry]) =>
 		common({
-			tsConfig: './src/bootstrapper/tsconfig.json',
 			entry,
 			output: {
 				library: {

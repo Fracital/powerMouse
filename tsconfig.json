@@ -4,16 +4,18 @@
 		"module": "ESNext",
 		"lib": [
 			"ESNext",
+			"DOM",
+			"DOM.Iterable",
 			"WebWorker",
 			"Webworker.Iterable",
 			"WebWorker.ImportScripts"
 		],
-		"types": [],
+		"types": ["serviceworker"],
 		"sourceMap": true,
 		"strict": true,
 		"stripInternal": true,
 		"moduleResolution": "node",
 		"allowSyntheticDefaultImports": true
 	},
-	"include": ["./*.d.ts", "../*.d.ts", "../../*.d.ts"]
+	"include": ["./src/**/*.ts"]
 }
