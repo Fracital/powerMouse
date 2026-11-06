@@ -1,0 +1,20 @@
+<!doctype html><title>APIS</title>
+<script>
+	window.__apis = { reload: typeof location.reload === 'function' };
+	const req = indexedDB.open('mydb', 1);
+	req.onsuccess = () => {
+		__apis.idbName = req.result.name;
+		req.result.close();
+	};
+	req.onerror = () => {
+		__apis.idbName = 'error';
+	};
+	fetch(new Request('/pages/echo.json', { method: 'POST', body: 'payload' }))
+		.then((r) => r.json())
+		.then((j) => {
+			__apis.fetchRequest = j;
+		})
+		.catch((e) => {
+			__apis.fetchRequest = 'error ' + e.message;
+		});
+</script>

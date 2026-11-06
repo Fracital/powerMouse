@@ -24,9 +24,10 @@ export default class IndexedDBModule extends Module<Client> {
 					'name',
 				)!.get!,
 				(target, that, args) => {
-					return (Reflect.apply(target, that, args) as string).slice(
-						this.client.url.url.origin.length,
-					);
+					// `name@origin`: strip the suffix, not the prefix
+					const name = Reflect.apply(target, that, args) as string;
+					const suffix = `@${this.client.url.url.origin}`;
+					return name.endsWith(suffix) ? name.slice(0, -suffix.length) : name;
 				},
 			),
 		});

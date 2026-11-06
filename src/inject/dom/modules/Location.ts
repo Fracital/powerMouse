@@ -177,6 +177,17 @@ export default class LocationModule extends Module<DocumentClient> {
 			configurable: false,
 		});
 
+		// an own property of the real location, not of Location.prototype, so
+		// the proxy needs its own copy or `location.reload()` is undefined
+		Reflect.defineProperty(proxy, 'reload', {
+			value: proxyModule.wrapFunction(location.reload, (target) =>
+				Reflect.apply(target, location, []),
+			),
+			writable: false,
+			enumerable: true,
+			configurable: false,
+		});
+
 		Reflect.defineProperty(proxy, 'toString', {
 			value: proxyModule.wrapFunction(location.assign, (target, that) => {
 				invokeGlobal(that, proxy);
