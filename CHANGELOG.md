@@ -37,6 +37,13 @@ The first release after a four-year gap. Everything below is breaking.
   URL, a transport switch, and an early-Android style navigation bar with a
   tab manager. `demo/README.md` walks through how it uses the API.
 
+### CI
+
+- GitHub Actions workflow (lint, types, format, prose, build) on pushes and
+  pull requests with a read-only token, pinned actions, install scripts
+  disabled and no write-back; dependabot for actions and npm;
+  `npm run check:prose` enforces the no-em-dash and no-AI-attribution rules.
+
 ### Dependencies
 
 - meriyah 7, parse5 8, css-tree 3, entities 9, idb 8, set-cookie-parser 3,

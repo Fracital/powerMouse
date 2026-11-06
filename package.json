@@ -27,8 +27,9 @@
 		"build": "npm run check && node build.js && tsc -p tsconfig.types.json",
 		"dev": "node build.js --dev",
 		"check": "tsc --noEmit",
-		"lint": "eslint src build.js demo/server.js",
+		"lint": "eslint src build.js demo/server.js scripts",
 		"format": "prettier --write .",
+		"check:prose": "node scripts/check-prose.mjs",
 		"demo": "node demo/server.js",
 		"prepack": "npm run build"
 	},

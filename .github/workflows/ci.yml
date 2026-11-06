@@ -1,0 +1,82 @@
+# Lint, type-check, format-check and build on every push and pull request.
+#
+# Security posture (keep it this way):
+# - `pull_request`, never `pull_request_target`: a PR's code runs with a
+#   read-only token for the PR's own merge commit, with no secrets, and this
+#   workflow never writes anything back (no auto-format commits). PRs that
+#   fail formatting fail the check and the author runs `npm run format`.
+# - `permissions: contents: read` at the top level; no job raises it.
+# - Actions are pinned to commit SHAs, not tags. Dependabot keeps them fresh.
+# - `npm ci --ignore-scripts`: a PR cannot run code at install time.
+# - Untrusted values (titles, bodies, branch names) are never interpolated
+#   into `run:` scripts; only SHAs are, through `env`.
+# - The repository is configured to require approval before workflows run
+#   for first-time outside contributors (see AGENTS.md, "CI").
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_COLOR: 1
+
+jobs:
+  check:
+    name: lint, types, format, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install (no lifecycle scripts)
+        run: npm ci --ignore-scripts
+
+      - name: Type check
+        run: npm run check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npx prettier --check .
+
+      - name: Prose check (no em dashes, no AI attribution in docs)
+        run: npm run check:prose
+
+      - name: Build
+        run: node build.js && test -f dist/serviceWorker.js && test -f dist/controller.mjs
+
+  commits:
+    name: commit messages
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: No AI attribution in commit messages
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-prose.mjs --commits "$BASE_SHA" "$HEAD_SHA"

@@ -59,8 +59,9 @@ npm run demo      # http://localhost:8080 with wisp, epoxy and libcurl
 npm run format    # prettier --write .
 ```
 
-`npm run build`, `npm run lint` and `npx prettier --check .` must all pass
-before you call a change done. There is no unit test suite; see Verification.
+`npm run build`, `npm run lint`, `npx prettier --check .` and
+`npm run check:prose` must all pass before you call a change done. There is
+no unit test suite; see Verification.
 
 ## Things that will bite you
 
@@ -113,6 +114,30 @@ before you call a change done. There is no unit test suite; see Verification.
 When a site hangs or a socket goes quiet, suspect the transport before the
 rewriter: reproduce with a raw `controller.transport.request()` /
 `.connect()` loop from the controller page, with no Stomp in the path.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every push to `master` and every pull
+request: `npm ci --ignore-scripts`, `npm run check`, `npm run lint`,
+`npx prettier --check .`, `npm run check:prose` (no em dashes, no AI
+attribution; the same script checks a PR's commit messages) and the esbuild
+build. All of it must pass locally before you push.
+
+Rules for touching the workflow, because a PR from anyone runs it:
+
+- Keep the trigger `pull_request`. Never use `pull_request_target`, and never
+  check out a PR head inside a workflow that has secrets or write permission.
+- Keep `permissions: contents: read`. The workflow never commits, comments or
+  pushes; formatting is the author's job.
+- Pin every action to a full commit SHA with the version in a comment.
+  Dependabot (`.github/dependabot.yml`) proposes bumps.
+- Keep `--ignore-scripts` on install.
+- Never interpolate titles, bodies, branch names or other user-controlled
+  event fields into `run:` scripts. Pass them through `env` if you must.
+- Repository settings that back this up (set through the API, not files):
+  workflows get read-only tokens by default, first-time outside contributors
+  need approval before any workflow runs, and `master` requires the CI
+  checks to pass before a pull request merges.
 
 ## Verification
 
