@@ -129,13 +129,22 @@ export default class SyncModule extends Module<DocumentClient> {
 		const id = 'sync-request-' + Math.random().toString(16).slice(2);
 		const regex = new RegExp(`${id}=(\\d+),(.*?)(;|$)`);
 
-		navigator.sendBeacon(
-			queueXHR(this.client.url),
-			JSON.stringify({
-				id,
-				data,
-			}),
-		);
+		// a beacon is refused (and never sent) when the payload is over the
+		// browser's 64 KiB beacon quota, which a large localStorage value hits;
+		// spinning for an answer that cannot come would freeze the page
+		if (
+			!navigator.sendBeacon(
+				queueXHR(this.client.url),
+				JSON.stringify({
+					id,
+					data,
+				}),
+			)
+		)
+			throw new DOMException(
+				`The synchronous bridge cannot carry this request to ${url} (beacon refused, likely over the 64 KiB payload limit)`,
+				'QuotaExceededError',
+			);
 
 		const timeout = loopback ? LOOPBACK_TIMEOUT : TIMEOUT;
 		const deadline = Date.now() + timeout;

@@ -70,6 +70,11 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- The synchronous bridge throws a `QuotaExceededError` at once when the
+  browser refuses its beacon (payloads over 64 KiB, such as a large
+  `localStorage.setItem`), instead of spinning until the wall-clock limit
+  and freezing the page for seconds per call (Wikipedia's module cache
+  triggered this on every navigation).
 - The demo's Back button could walk the browser out of the demo page, or
   bounce between the home screen and the last page: the per-tab history list
   over-counted redirected and replaced URLs, so `history.back()` ran at the
