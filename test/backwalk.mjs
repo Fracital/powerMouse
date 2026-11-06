@@ -14,7 +14,7 @@ import {
 	sleep,
 	submitLanding,
 	submitOmni,
-} from '../lib.mjs';
+} from './lib.mjs';
 
 // a page visited before the demo, so browser Back has somewhere real to go
 const PRE = `${PROXY}api/status`;

@@ -3,7 +3,7 @@
 // the frame sandbox and the rewriter stand in the way) or isolated (host on
 // localhost). A vector "escapes" when the host page's URL changes. One suite
 // file per mode under suites/, so the two run at once.
-import { done, FIXTURE, HOST, launch, ok, PROXY, sleep } from '../lib.mjs';
+import { done, FIXTURE, HOST, launch, ok, PROXY, sleep } from './lib.mjs';
 
 let browser;
 
