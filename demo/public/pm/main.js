@@ -158,6 +158,9 @@ async function boot() {
 			directory: DIRECTORY,
 			transport: transports[name](),
 			codec: 'xor',
+			// a page's window.open / target=_blank becomes a tab here, never a
+			// bare proxied popup (the page sees null, like a popup blocker)
+			onOpen: (url) => navigate(url, { newTab: true }),
 		});
 	} else {
 		setStatus('Registering service worker…');
@@ -172,6 +175,9 @@ async function boot() {
 			transport: await instantiate(transports[name]()),
 			directory: DIRECTORY,
 			codec: 'xor',
+			// a page's window.open / target=_blank becomes a tab here, never a
+			// bare proxied popup (the page sees null, like a popup blocker)
+			onOpen: (url) => navigate(url, { newTab: true }),
 		});
 	}
 	window.controller = controller; // handy from devtools

@@ -13,6 +13,12 @@ export interface Config {
 	 * the proxy origin. Absent in same-origin mode.
 	 */
 	frameAncestors?: string[];
+	/**
+	 * The host application handles `window.open` and `target="_blank"`
+	 * (`onOpen` on the controller): pages post the URL to it instead of
+	 * opening a popup, and `window.open` returns null like a popup blocker.
+	 */
+	openTab?: boolean;
 }
 
 export interface ParsedConfig extends Omit<Config, 'codec'> {

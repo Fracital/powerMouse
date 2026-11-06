@@ -23,6 +23,8 @@ export default class Client {
 	global: typeof globalThis;
 	codec: GenericCodec;
 	directory: string;
+	/** the host handles window.open / target=_blank (config.openTab) */
+	openTab: boolean;
 	applied: boolean;
 	isDOM: boolean;
 	isWorker: boolean;
@@ -66,6 +68,7 @@ export default class Client {
 		this.modules = new Map();
 		this.codec = init.codec;
 		this.directory = init.directory;
+		this.openTab = !!init.openTab;
 		this.isDOM = false;
 		this.isWorker = false;
 		this.#serviceWorkerContainer = (
@@ -83,6 +86,7 @@ export default class Client {
 		return {
 			directory: this.directory,
 			codec: codecType(this.codec),
+			...(this.openTab ? { openTab: true } : {}),
 		};
 	}
 	/**

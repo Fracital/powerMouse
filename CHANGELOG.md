@@ -31,6 +31,14 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- `onOpen(url, frame)` on `StompController` and `RemoteController`: a proxied
+  page's `window.open`, `target="_blank"` and named-target or modifier clicks
+  become a callback to the host, which opens them in its own tab model; the
+  page's `window.open` returns `null`, like a popup blocker. The request is
+  posted through the top window's native `postMessage` captured before any
+  page code ran, and the host accepts it only from its own frames on the
+  proxy origin. Without `onOpen`, popups open natively as before. The demo
+  opens them as switcher tabs.
 - `Frame` gained `back()`, `forward()` and `reload()`. `back()` and
   `forward()` step the frame's own session history (Navigation API) and
   resolve to whether a step was possible; `canGoBack` / `canGoForward`
@@ -75,6 +83,12 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- Inline event handler attributes, `javascript:` URLs and string arguments
+  to `setTimeout` / `setInterval` are rewritten (they ran unrewritten and
+  could reach the real `top`); `<iframe srcdoc>` documents are injected and
+  rewritten like fetched ones; `target=_top` / `_parent` (and `formtarget`
+  and `window.open` targets) navigate the proxied frame itself, as a
+  top-level page would, instead of being refused by the sandbox.
 - Inline module scripts carried their original text next to the rewritten
   one (the `text` setter hook removed children while iterating the live
   list) and lost their `currentScript` preamble to a null, so any module
@@ -249,8 +263,8 @@ Fixed while testing real sites and a feature fixture:
   header on top of its 6 KB CSP report, a 20 KB block. This project installs
   the Fracital fork (256 KiB, Chrome parity) instead, so YouTube renders here;
   anything still on the npm package, Fracital included, hits it.
-- Import maps are not supported: bare specifiers (`import "react"`) are
-  resolved against the module URL.
+- Import maps are passed through untouched: bare specifiers are left to the
+  page's map, but the map's own URLs are not rewritten.
 - Synchronous XMLHttpRequest and the synchronous storage/cookie bridge spin
   the page's main thread while waiting on the service worker. With the
   transport hosted in the same renderer, a synchronous request that needs the
@@ -258,12 +272,9 @@ Fixed while testing real sites and a feature fixture:
   10 s, which covers the service worker rewriting a 10 MB script. The answer
   travels in `SameSite=None` cookies, so in origin-isolation mode the bridge
   needs third-party cookies allowed for the proxy origin.
-- Still unproxied or unspoofed: `self.location` inside workers, inline event
-  handler attributes (`onclick="..."`), string arguments to `setTimeout` /
-  `setInterval`, `javascript:` URLs, `<iframe srcdoc>`, scripts written into
-  a child frame with `document.write`, and `a.pathname` on anchors (reports
-  the page's path).
-- `target` attributes and the `window.open` target are not rewritten:
-  `_blank` and named targets open the proxied page in a bare new tab outside
-  the host application (the frame sandbox keeps `allow-popups`). `_top` and
-  `_parent` are stopped by the sandbox, not by the rewriter.
+- Still unproxied or unspoofed: `self.location` inside workers, scripts
+  written into a child frame with `document.write`, and `a.pathname` on
+  anchors (reports the page's path).
+- Without `onOpen`, `_blank` and named targets open the proxied page in a
+  bare new tab outside the host application (the frame sandbox keeps
+  `allow-popups`).

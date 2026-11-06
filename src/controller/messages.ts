@@ -12,6 +12,8 @@ export interface ControllerFrameInit {
 	codec?: ConfigCodec;
 	directory: string;
 	transport: TransportDescriptor;
+	/** the host handles `window.open` / `_blank` (RemoteControllerInit.onOpen) */
+	openTab?: boolean;
 }
 
 export interface FrameInfo {

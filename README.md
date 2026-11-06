@@ -50,14 +50,15 @@ changelog's known limitations before picking one.
 
 `StompController` (also `window.StompController` from `dist/Controller.js`):
 
-| Member                      | Description                                                           |
-| --------------------------- | --------------------------------------------------------------------- |
-| `new StompController(init)` | `init.serviceworker`, `init.transport`, optional `codec`, `directory` |
-| `wait()`                    | resolves when the service worker has a server for this controller     |
-| `createFrame(iframe?)`      | returns a `Frame`; creates an `<iframe>` when none is given           |
-| `setTransport(transport)`   | hot-swap the transport                                                |
-| `route(url)`                | the proxied URL for `url`, if you need it without a `Frame`           |
-| `transport`, `frames`       | current transport and the frames created so far                       |
+| Member                      | Description                                                                                                                                                                                                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `new StompController(init)` | `init.serviceworker`, `init.transport`, optional `codec`, `directory`                                                                                                                                                                                                            |
+| `init.onOpen`               | optional `onOpen(url, frame)`: called when a page wants a new tab (`window.open`, a link with `target="_blank"` or a name, a modifier or middle click); the page's `window.open` then returns `null`, like a popup blocker. Without it popups open natively as bare proxied tabs |
+| `wait()`                    | resolves when the service worker has a server for this controller                                                                                                                                                                                                                |
+| `createFrame(iframe?)`      | returns a `Frame`; creates an `<iframe>` when none is given                                                                                                                                                                                                                      |
+| `setTransport(transport)`   | hot-swap the transport                                                                                                                                                                                                                                                           |
+| `route(url)`                | the proxied URL for `url`, if you need it without a `Frame`                                                                                                                                                                                                                      |
+| `transport`, `frames`       | current transport and the frames created so far                                                                                                                                                                                                                                  |
 
 `Frame`:
 
@@ -78,14 +79,15 @@ through, everything else is substituted into `template` at `%s`.
 the same shape as `StompController` but runs the real controller in a hidden
 frame on the proxy origin:
 
-| Member                        | Description                                                                                                            |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `new RemoteController(init)`  | `init.proxyOrigin`, `init.transport` (`{ module, options }`), optional `directory`, `codec`, `sandbox`, `pollInterval` |
-| `wait()`                      | resolves once the controller frame has registered the service worker and loaded the transport                          |
-| `createFrame(iframe?)`        | returns a `RemoteFrame`; applies the sandbox attribute                                                                 |
-| `setTransport(descriptor)`    | hot-swap the transport (loaded inside the controller frame)                                                            |
-| `route(url)`                  | the proxied URL for `url` on the proxy origin                                                                          |
-| `frames`, `config`, `element` | frames created so far, the controller's config, the hidden controller iframe                                           |
+| Member                        | Description                                                                                                                        |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `new RemoteController(init)`  | `init.proxyOrigin`, `init.transport` (`{ module, options }`), optional `directory`, `codec`, `sandbox`, `pollInterval`             |
+| `init.onOpen`                 | as on `StompController`: the request reaches the host from the proxy origin and is accepted only from this controller's own frames |
+| `wait()`                      | resolves once the controller frame has registered the service worker and loaded the transport                                      |
+| `createFrame(iframe?)`        | returns a `RemoteFrame`; applies the sandbox attribute                                                                             |
+| `setTransport(descriptor)`    | hot-swap the transport (loaded inside the controller frame)                                                                        |
+| `route(url)`                  | the proxied URL for `url` on the proxy origin                                                                                      |
+| `frames`, `config`, `element` | frames created so far, the controller's config, the hidden controller iframe                                                       |
 
 `RemoteFrame`: `go(url)`, `back()`, `forward()`, `reload()` (the last three
 are relayed through the controller frame, which is same-origin with the

@@ -3,6 +3,7 @@ import { ParsedConfig } from '../../config';
 import { modifyJS } from '../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import StompURL from '../../StompURL';
+import { OPEN_TAB } from '../../transport/messages';
 import Client from '../Client';
 import cloneRawNode, { parseHTML } from './cloneNode';
 import { shouldRewriteScript } from './modules/DOMAttributes';
@@ -42,6 +43,9 @@ export default class DocumentClient extends Client {
 	private baseURIDescriptor: PropertyDescriptor;
 	private parentDescriptor: PropertyDescriptor;
 	private topDescriptor: PropertyDescriptor;
+	// the real top's postMessage, taken before any page code ran: open
+	// requests must not go through anything the page can replace
+	private topPostMessage: typeof postMessage | null;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		this.write = this.global.document.write;
@@ -54,6 +58,11 @@ export default class DocumentClient extends Client {
 			'parent',
 		)!;
 		this.topDescriptor = Reflect.getOwnPropertyDescriptor(this.global, 'top')!;
+		try {
+			this.topPostMessage = this.top.postMessage;
+		} catch (error) {
+			this.topPostMessage = null;
+		}
 		this.isDOM = true;
 	}
 	get parent(): typeof globalThis {
@@ -61,6 +70,19 @@ export default class DocumentClient extends Client {
 	}
 	get top(): typeof globalThis {
 		return this.topDescriptor.get!.call(this.global);
+	}
+	/**
+	 * Ask the host application to open `url` in a new tab. Only when the host
+	 * opted in (`config.openTab`); returns whether it was sent.
+	 */
+	openInHost(url: string): boolean {
+		if (!this.config.openTab || !this.topPostMessage) return false;
+		try {
+			Reflect.apply(this.topPostMessage, this.top, [{ [OPEN_TAB]: url }, '*']);
+			return true;
+		} catch (error) {
+			return false;
+		}
 	}
 	get url(): StompURL {
 		if (ROUTE_PROTOCOLS.includes(this.baseURI.protocol)) {

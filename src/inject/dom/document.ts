@@ -13,6 +13,7 @@ import HistoryModule from './modules/History';
 import IFrameModule from './modules/IFrame';
 import LocationModule from './modules/Location';
 import NavigatorModule from './modules/Navigator';
+import OpenModule from './modules/Open';
 import StorageModule from './modules/Storage';
 import SyncModule from './modules/Sync';
 import XMLHttpRequestModule from './modules/XMLHttpRequest';
@@ -35,6 +36,7 @@ export function addClientModules(client: DocumentClient) {
 	// Framing before Context: it needs the native MessageEvent.source getter
 	client.addModule(FramingModule);
 	client.addModule(ContextModule);
+	client.addModule(OpenModule);
 }
 
 const createDOMClient = createClientFactory(DocumentClient, addClientModules);

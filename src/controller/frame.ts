@@ -108,6 +108,7 @@ if (window === window.parent || !origins.length) {
 						directory: init.directory,
 						codec: init.codec,
 						frameAncestors: [hostOrigin],
+						openTab: !!init.openTab,
 					});
 					await controller.wait();
 					return [{ config: controller.config }, []];

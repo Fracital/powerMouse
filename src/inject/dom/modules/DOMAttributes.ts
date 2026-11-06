@@ -88,6 +88,37 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				[['*', name]],
 			);
 
+		// browsing context names that would leave the frame: a top-level page
+		// navigates itself for these, so does a proxied one. `_blank` and
+		// names stay native (popups) until a host opts into onOpen
+		const selfTargets = ['_top', '_parent', '_unfencedtop'];
+		const targetHook = (attribute: string) => (element: CustomElement) => {
+			element.restoreAttributesOG(attribute);
+			if (!element.hasAttribute(attribute)) return;
+			const value = element.getAttribute(attribute)!;
+			if (!selfTargets.includes(value.toLowerCase())) return;
+			element.setAttributeOG(attribute, value);
+			element.setAttribute(attribute, '_self');
+		};
+		const ogOrFalse = (attribute: string) => (element: CustomElement) =>
+			element.getAttributeOG(attribute) ?? false;
+		domHooksModule.useAttributes(targetHook('target'), [
+			['A', 'target'],
+			['AREA', 'target'],
+			['FORM', 'target'],
+			['BASE', 'target'],
+			[HTMLAnchorElement, 'target', ogOrFalse('target')],
+			[HTMLAreaElement, 'target', ogOrFalse('target')],
+			[HTMLFormElement, 'target', ogOrFalse('target')],
+			[HTMLBaseElement, 'target', ogOrFalse('target')],
+		]);
+		domHooksModule.useAttributes(targetHook('formtarget'), [
+			['BUTTON', 'formtarget'],
+			['INPUT', 'formtarget'],
+			[HTMLButtonElement, 'formTarget', ogOrFalse('formtarget')],
+			[HTMLInputElement, 'formTarget', ogOrFalse('formtarget')],
+		]);
+
 		// <iframe srcdoc>: the inline document gets the same shell a fetched
 		// one gets, with this page as its base
 		domHooksModule.useAttributes(

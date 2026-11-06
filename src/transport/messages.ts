@@ -15,6 +15,12 @@ export const INIT_REMOTE_TRANSPORT = '$stomp$initRemoteTransport';
 export const SW_REVIVE = '$stomp$swRevive';
 /** proxied page -> dedicated worker, with [port]: the worker's transport port */
 export const TRANSPORT_INIT = '$stomp$transportInit';
+/**
+ * a proxied page asking the host application to open a URL in a new tab
+ * (`window.open`, `target="_blank"`); posted to the real top window, only
+ * when the host opted in with `onOpen` (config `openTab`)
+ */
+export const OPEN_TAB = '$stomp$open';
 
 export interface ControllerInitMessage {
 	directory: string;

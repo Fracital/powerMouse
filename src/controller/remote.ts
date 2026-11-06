@@ -5,6 +5,7 @@
 // frames the host page can neither read nor be read by.
 import type { Config, ConfigCodec } from '../config';
 import { RpcHelper } from '../transport/rpc';
+import { openRequest } from './index';
 import {
 	FrameBound,
 	FrameCommand,
@@ -29,6 +30,13 @@ export interface RemoteControllerInit {
 	sandbox?: string;
 	/** how often (ms) to refresh url/title of frames; 0 disables */
 	pollInterval?: number;
+	/**
+	 * Called when a proxied page wants a new tab (`window.open`, a link with
+	 * `target="_blank"` or a name, a modifier click). The page's `window.open`
+	 * then returns null, like a popup blocker. Without it, popups open
+	 * natively as bare proxied tabs.
+	 */
+	onOpen?: (url: string, frame: RemoteFrame) => void;
 }
 
 export const DEFAULT_SANDBOX =
@@ -79,12 +87,19 @@ export class RemoteController {
 		);
 
 		window.addEventListener('message', (event) => {
-			if (
-				event.origin !== this.proxyOrigin ||
-				event.source !== this.element.contentWindow
-			)
+			if (event.origin !== this.proxyOrigin) return;
+			if (event.source === this.element.contentWindow) {
+				this.rpc.receive(event.data);
 				return;
-			this.rpc.receive(event.data);
+			}
+			// an open request from one of our proxied frames
+			if (!init.onOpen) return;
+			const url = openRequest(event.data);
+			if (url === null) return;
+			const frame = this.frames.find(
+				(frame) => frame.element.contentWindow === event.source,
+			);
+			if (frame) init.onOpen(url, frame);
 		});
 
 		(document.body || document.documentElement).append(this.element);
@@ -95,6 +110,7 @@ export class RemoteController {
 					codec: init.codec,
 					directory: this.directory,
 					transport: init.transport,
+					openTab: !!init.onOpen,
 				}),
 			)
 			.then(({ config }) => {

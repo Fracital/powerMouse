@@ -154,6 +154,7 @@ export function registerRewrites(
 				directory: this.directory,
 				codec: codecType(this.codec),
 				frameAncestors: init.frameAncestors,
+				...(init.openTab ? { openTab: true } : {}),
 			};
 		},
 		cookies,

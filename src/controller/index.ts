@@ -6,6 +6,7 @@ import {
 	CONTROLLER_RPC,
 	Controllerbound,
 	ControllerInitMessage,
+	OPEN_TAB,
 	postToPort,
 	SW_REVIVE,
 	SWbound,
@@ -38,12 +39,28 @@ export interface ControllerInit {
 	/** origins allowed to frame proxied documents (CSP frame-ancestors) */
 	frameAncestors?: string[];
 	/**
+	 * Called when a proxied page wants a new tab (`window.open`, a link with
+	 * `target="_blank"` or a name, a modifier click). The page's `window.open`
+	 * then returns null, like a popup blocker. Without it, popups open
+	 * natively as bare proxied tabs.
+	 */
+	onOpen?: (url: string, frame: Frame) => void;
+	/** @internal pages may post open requests; set by the controller frame */
+	openTab?: boolean;
+	/**
 	 * sandbox flags for proxied frames, default `DEFAULT_SANDBOX`. Same-origin
 	 * frames are not a security boundary, but without a sandbox the browser
 	 * lets `<a target="_top">`, `<form target="_parent">` and
 	 * `window.open(url, '_top')` navigate the host page. `null` disables it.
 	 */
 	sandbox?: string | null;
+}
+
+/** the URL of an open request posted by a proxied page, else null */
+export function openRequest(data: unknown): string | null {
+	if (typeof data !== 'object' || data === null) return null;
+	const url = (data as Record<string, unknown>)[OPEN_TAB];
+	return typeof url === 'string' ? url : null;
 }
 
 /** ignore the service worker's "revive" broadcast this soon after we registered */
@@ -92,7 +109,20 @@ export class StompController {
 			codec: init.codec ?? 'xor',
 			directory: this.directory.pathname,
 			...(init.frameAncestors ? { frameAncestors: init.frameAncestors } : {}),
+			...(init.onOpen || init.openTab ? { openTab: true } : {}),
 		};
+
+		if (init.onOpen)
+			window.addEventListener('message', (event) => {
+				// only our own frames, same origin as this page in this mode
+				if (event.origin !== location.origin) return;
+				const url = openRequest(event.data);
+				if (url === null) return;
+				const frame = this.frames.find(
+					(frame) => frame.element.contentWindow === event.source,
+				);
+				if (frame) init.onOpen!(url, frame);
+			});
 
 		this.ready = new Promise((resolve) => (this.readyResolve = resolve));
 

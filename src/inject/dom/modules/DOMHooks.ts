@@ -289,6 +289,20 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		this.client.global.open = proxyModule.wrapFunction(
 			this.client.global.open,
 			(target, that, args) => {
+				const name = args[1] === undefined ? '_blank' : String(args[1]);
+				// a new tab: the host's to open, when it said so (then the page
+				// sees null, as with a popup blocker)
+				if (
+					args[0] !== undefined &&
+					!['_self', '_top', '_parent', '_unfencedtop'].includes(
+						name.toLowerCase(),
+					) &&
+					this.client.openInHost(
+						new URL(String(args[0]), this.client.url.toString()).toString(),
+					)
+				)
+					return null;
+
 				if (args[0] !== undefined)
 					args[0] = routeHTML(
 						new StompURL(
@@ -298,6 +312,15 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						this.client.url,
 						this.client.config,
 					);
+
+				// a top-level page is its own top and parent: navigate the frame
+				if (
+					args[1] !== undefined &&
+					['_top', '_parent', '_unfencedtop'].includes(
+						String(args[1]).toLowerCase(),
+					)
+				)
+					args[1] = '_self';
 
 				return Reflect.apply(target, that, args);
 			},

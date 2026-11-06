@@ -46,7 +46,11 @@ const TARGETS = `<!doctype html><title>FIXTURE</title>
 <button id="open">open</button>
 <button id="toploc">toploc</button>
 <button id="bracket">bracket</button>
+<button id="openblank">openblank</button>
+<button id="docloc">docloc</button>
 <script>
+document.getElementById('docloc').onclick = () => { document.location = '/landed?docloc'; };
+document.getElementById('openblank').onclick = () => { window.__opened = window.open('/landed?openblank'); };
 document.getElementById('open').onclick = () => window.open('/landed?open', '_top');
 document.getElementById('toploc').onclick = () => { top.location = '/landed?toploc'; };
 document.getElementById('bracket').onclick = () => { const k = 'to' + 'p'; window[k].location.href = '/landed?bracket'; };
