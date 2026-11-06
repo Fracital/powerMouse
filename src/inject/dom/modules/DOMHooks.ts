@@ -403,9 +403,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				set: proxyModule.wrapFunction(
 					scriptTextDescriptor.set!,
 					(target, that: HTMLScriptElement, args) => {
-						for (const node of that.childNodes) {
-							node.remove();
-						}
+						// snapshot: removing while iterating the live list skips every
+						// other node and leaves half the old text in place
+						for (const node of [...that.childNodes]) node.remove();
 
 						that.append(new Text(args[0]));
 					},
@@ -430,9 +430,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					if (that.nodeType !== 1 && that.nodeType !== 11)
 						return Reflect.apply(target, that, args);
 
-					for (const node of that.childNodes) {
-						node.remove();
-					}
+					for (const node of [...that.childNodes]) node.remove();
 
 					(that as Element).append(new Text(args[0]));
 				},
@@ -454,9 +452,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				set: proxyModule.wrapFunction(
 					innerTextDescriptor.set!,
 					(target, that: Element, args) => {
-						for (const node of that.childNodes) {
-							node.remove();
-						}
+						// snapshot: removing while iterating the live list skips every
+						// other node and leaves half the old text in place
+						for (const node of [...that.childNodes]) node.remove();
 
 						that.append(new Text(args[0]));
 					},

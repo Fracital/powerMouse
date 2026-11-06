@@ -109,23 +109,23 @@ export function modifyJS(
 
 					break;
 				case 'ImportDeclaration':
-					ctx.replaceWith(
-						b.importDeclaration(
-							ctx.node.specifiers,
-							b.literal(
-								routeJS(
-									new StompURL(
-										new URL(ctx.node.source.value, url.toString()),
-										url,
-									),
+				case 'ExportAllDeclaration':
+				case 'ExportNamedDeclaration':
+					// a bare specifier (`import x from "react"`) is the import
+					// map's to resolve: leave it, or `new URL` throws and the whole
+					// module is lost
+					if (ctx.node.source && !isBareSpecifier(ctx.node.source.value))
+						ctx.node.source = b.literal(
+							routeJS(
+								new StompURL(
+									new URL(ctx.node.source.value, url.toString()),
 									url,
-									config,
-									'genericModule',
 								),
+								url,
+								config,
+								'genericModule',
 							),
-						),
-					);
-					// TODO : FIX..?
+						);
 					break;
 				case 'CallExpression':
 					{
@@ -173,16 +173,37 @@ export function modifyJS(
 					break;
 				case 'Identifier':
 					{
+						// binding positions and names: rewriting these turns a valid
+						// script into a SyntaxError (`class A { top = 1 }`,
+						// `catch (location)`, `break top`) or changes its meaning
+						// (`typeof top` must not throw in a worker)
 						switch (ctx.parent?.node.type) {
 							case 'ArrayPattern':
 							case 'ObjectPattern':
 							case 'LabeledStatement':
+							case 'BreakStatement':
+							case 'ContinueStatement':
 							case 'MethodDefinition':
 							case 'ClassDeclaration':
+							case 'ClassExpression':
+							case 'CatchClause':
 							case 'RestElement':
 							case 'ExportSpecifier':
 							case 'ImportSpecifier':
+							case 'ImportDefaultSpecifier':
+							case 'ImportNamespaceSpecifier':
 								break typeLoop;
+							case 'PropertyDefinition':
+								if (ctx.parentKey === 'key') break typeLoop;
+								break;
+							case 'UnaryExpression':
+								if (ctx.parent.node.operator === 'typeof') break typeLoop;
+								break;
+							case 'ForInStatement':
+							case 'ForOfStatement':
+								// an assignment target, not an expression
+								if (ctx.parentKey === 'left') break typeLoop;
+								break;
 							case 'MemberExpression':
 								if (ctx.parentKey === 'property') break typeLoop;
 								break;
@@ -191,6 +212,10 @@ export function modifyJS(
 								break;
 							case 'Property':
 								if (ctx.parentKey === 'key') break typeLoop;
+								// `const { g: location } = o` binds; `{ location }` in an
+								// object literal reads (handled below)
+								if (ctx.parent.parent?.node.type === 'ObjectPattern')
+									break typeLoop;
 								break;
 							case 'FunctionDeclaration':
 							case 'FunctionExpression':
@@ -263,6 +288,14 @@ export function modifyJS(
 								),
 							);
 						} else {
+							// `{ location }` prints from the key when shorthand, which
+							// would silently drop the rewrite of the value
+							if (
+								ctx.parent?.node.type === 'Property' &&
+								ctx.parentKey === 'value'
+							)
+								ctx.parent.node.shorthand = false;
+
 							ctx.replaceWith(
 								b.callExpression(
 									b.memberExpression(
@@ -464,8 +497,17 @@ if (!${CLIENT_KEY}.applied)
 			generate(tree)
 		);
 	} catch (error) {
-		return `throw new SyntaxError(${JSON.stringify(String(error))})`;
+		// a script the rewriter cannot handle runs as it was: the browser may
+		// still parse it (and rejects it the same way when it cannot), while a
+		// `throw` here would silently kill every script with that shape
+		console.warn(`Stomp could not rewrite ${url}: ${String(error)}`);
+		return script;
 	}
+}
+
+/** `react`, `#private`, `@scope/pkg`: not a URL, resolved by an import map */
+export function isBareSpecifier(specifier: string): boolean {
+	return !/^(\/|\.\.?\/|[a-z][a-z0-9+.-]*:)/i.test(specifier);
 }
 
 export function restoreJS(script: string, _url: StompURL) {

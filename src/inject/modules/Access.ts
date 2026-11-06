@@ -3,6 +3,7 @@ import {
 	ACCESS_KEY,
 	GLOBAL_NAME,
 	GLOBAL_PROXY,
+	isBareSpecifier,
 	modifyJS,
 	routeJS,
 	UNDEFINABLE,
@@ -178,6 +179,9 @@ export default class AccessModule extends Module<Client> {
 				);
 			},
 			import: (baseURL: string | undefined, url: string): Promise<unknown> => {
+				// bare specifiers belong to the page's import map
+				if (isBareSpecifier(String(url)))
+					return import(/* webpackIgnore: true */ url);
 				// @ts-ignore
 				return import(
 					/* webpackIgnore: true */

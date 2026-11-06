@@ -94,17 +94,27 @@ export default class DocumentClient extends Client {
 
 		setGlobalParsingState(this.global);
 
+		// inline scripts are rewritten here, once. A classic script gets a
+		// preamble that restores the source the page wrote for
+		// `document.currentScript.textContent`; a module has no currentScript.
+		// Nothing may produce `</script` in the markup.
 		for (const script of node.querySelectorAll('script')) {
-			if (script.text && shouldRewriteScript(script)) {
-				script.text = `document.currentScript.textContent = ${escapeText(
-					JSON.stringify(script.textContent),
-				)};${modifyJS(
-					script.text,
-					this.url,
-					this.config,
-					script.type === 'module' ? 'genericModule' : 'generic',
-				)}`.replace(/<\/script/gi, '<\\/script');
-			}
+			if (!script.text || !shouldRewriteScript(script)) continue;
+			const source = script.text;
+			const isModule = script.type === 'module';
+			const rewritten = modifyJS(
+				source,
+				this.url,
+				this.config,
+				isModule ? 'genericModule' : 'generic',
+			);
+			script.text = (
+				isModule
+					? rewritten
+					: `document.currentScript.textContent = ${escapeText(
+							JSON.stringify(source),
+						)};${rewritten}`
+			).replace(/<\/script/gi, '<\\/script');
 		}
 
 		const newDocument =

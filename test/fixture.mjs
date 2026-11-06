@@ -1,7 +1,20 @@
 // Fixture site for the suites: pages that try to notice or escape the frame.
 // Served on 127.0.0.1, so the demo server needs WISP_ALLOW_LOOPBACK=1 (the
 // runner sets it). `node test/fixture.mjs [port]` runs it on its own.
+import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { fileURLToPath } from 'node:url';
+
+// /pages/<file> serves test/pages/<file> as is; a `<file>.headers.json`
+// next to it adds response headers (Set-Cookie, a Content-Type charset).
+// New fixtures go there, so suites never need to touch this file.
+const pagesDir = fileURLToPath(new URL('./pages/', import.meta.url));
+const TYPES = {
+	html: 'text/html; charset=utf-8',
+	js: 'text/javascript; charset=utf-8',
+	css: 'text/css; charset=utf-8',
+	json: 'application/json',
+};
 
 // a hostile page that records every tell of being framed (isolation suite)
 const ESCAPE = `<!doctype html><html><head><title>escape fixture</title></head><body><pre id="result">pending</pre>
@@ -56,16 +69,59 @@ new Function(code('Function'))();
 setTimeout(code('stringTimer'), 0);
 </script>`;
 
+// JS shapes that the rewriter must leave valid and must still spoof: one
+// script per case, so a script the rewriter breaks fails alone (rewriter
+// suite). Each case records a boolean on window.__rw.
+const REWRITER = `<!doctype html><title>REWRITER</title>
+<script type="importmap">{"imports":{"bare":"data:text/javascript,window.__rw.bare = true","bare2":"data:text/javascript,export default 'B2'"}}</script>
+<script>window.__rw = {};</script>
+<script>class A { top = 1; location = 2; eval = 3 } const a = new A(); __rw.classField = a.top === 1 && a.location === 2 && a.eval === 3;</script>
+<script>try { throw 7; } catch (location) { __rw.catchParam = location === 7; }</script>
+<script>__rw.classExpr = (class top {}).name === 'top';</script>
+<script>top: for (let i = 0; i < 3; i++) { break top; } __rw.label = true;</script>
+<script>__rw.typeofTop = typeof top === 'object' && typeof location === 'object' && typeof eval === 'function';</script>
+<script>{ const { g: location } = { g: 5 }; __rw.aliasPattern = location === 5; }</script>
+<script>{ const { location, top } = window; __rw.shorthandPattern = location.href === window.location.href && top === window; }</script>
+<script>const o = { location, top }; __rw.shorthand = o.location.href === location.href && o.top === top;</script>
+<script type="module">import top from 'data:text/javascript,export default 42'; __rw.importName = top === 42;</script>
+<script type="module">import 'bare';</script>
+<script type="module">import { a, b } from './mod-re.js'; __rw.reexport = a === 'A' && b === 'A';</script>
+<script type="module">__rw.dynBare = (await import('bare2')).default === 'B2';</script>
+<script type="module">await new Promise((r) => setTimeout(r, 300)); __rw.done = true;</script>`;
+
+const MODULES = {
+	'/mod-a.js': "export const a = 'A';",
+	'/mod-re.js':
+		"export * from './mod-a.js'; export { a as b } from './mod-a.js';",
+};
+
 const PAGES = {
 	'/escape.html': ESCAPE,
 	'/': TARGETS,
 	'/dyn': DYN,
+	'/rewriter': REWRITER,
 };
 
 export function startFixture(port = 8084) {
 	const server = createServer((req, res) => {
-		res.setHeader('content-type', 'text/html; charset=utf-8');
 		const path = new URL(req.url, 'http://x').pathname;
+		const file = /^\/pages\/([\w.-]+)$/.exec(path)?.[1];
+		if (file && existsSync(`${pagesDir}${file}`)) {
+			const ext = file.slice(file.lastIndexOf('.') + 1);
+			res.setHeader('content-type', TYPES[ext] || 'application/octet-stream');
+			const sidecar = `${pagesDir}${file}.headers.json`;
+			if (existsSync(sidecar))
+				for (const [name, value] of Object.entries(
+					JSON.parse(readFileSync(sidecar, 'utf8')),
+				))
+					res.setHeader(name, value);
+			return res.end(readFileSync(`${pagesDir}${file}`));
+		}
+		if (path in MODULES) {
+			res.setHeader('content-type', 'text/javascript; charset=utf-8');
+			return res.end(MODULES[path]);
+		}
+		res.setHeader('content-type', 'text/html; charset=utf-8');
 		if (path.startsWith('/landed'))
 			return res.end('<title>LANDED</title><h1>landed</h1>');
 		res.end(PAGES[path] ?? '<title>other</title>other');
