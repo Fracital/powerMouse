@@ -139,18 +139,19 @@ export class RemoteController {
 	async frameInfo(element: HTMLIFrameElement): Promise<FrameInfo> {
 		await this.ready;
 		const index = this.frameIndex(element);
-		if (index === -1) return { url: null, title: null };
+		if (index === -1)
+			return { url: null, title: null, canGoBack: null, canGoForward: null };
 		return this.rpc.call('frameInfo', index);
 	}
 	/** @internal */
 	async frameCommand(
 		element: HTMLIFrameElement,
 		command: FrameCommand,
-	): Promise<void> {
+	): Promise<boolean> {
 		await this.ready;
 		const index = this.frameIndex(element);
-		if (index === -1) return;
-		await this.rpc.call('frameCommand', { index, command });
+		if (index === -1) return false;
+		return this.rpc.call('frameCommand', { index, command });
 	}
 }
 
@@ -159,6 +160,9 @@ export class RemoteFrame {
 	url: string | null = null;
 	/** last known document title */
 	title: string | null = null;
+	/** last known: whether the frame's own history has an entry before/after the current one; null when unknown */
+	canGoBack: boolean | null = null;
+	canGoForward: boolean | null = null;
 	private refreshing: Promise<void> | null = null;
 	constructor(
 		public controller: RemoteController,
@@ -172,13 +176,18 @@ export class RemoteFrame {
 		this.element.src = await this.controller.route(url);
 		this.url = url;
 	}
-	back() {
+	/**
+	 * Step the frame's own history, relayed through the controller frame.
+	 * Resolves false when there is no entry in that direction (the frame's
+	 * history is never allowed to walk the host page).
+	 */
+	back(): Promise<boolean> {
 		return this.controller.frameCommand(this.element, 'back');
 	}
-	forward() {
+	forward(): Promise<boolean> {
 		return this.controller.frameCommand(this.element, 'forward');
 	}
-	reload() {
+	reload(): Promise<boolean> {
 		return this.controller.frameCommand(this.element, 'reload');
 	}
 	/** fetch the current url/title from the controller frame */
@@ -189,6 +198,8 @@ export class RemoteFrame {
 				.then((info) => {
 					if (info.url) this.url = info.url;
 					if (info.title !== null) this.title = info.title;
+					this.canGoBack = info.canGoBack;
+					this.canGoForward = info.canGoForward;
 				})
 				.catch(() => {})
 				.finally(() => (this.refreshing = null));

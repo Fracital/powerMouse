@@ -31,7 +31,12 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
-- `Frame` gained `back()`, `forward()` and `reload()`.
+- `Frame` gained `back()`, `forward()` and `reload()`. `back()` and
+  `forward()` step the frame's own session history (Navigation API) and
+  resolve to whether a step was possible; `canGoBack` / `canGoForward`
+  report the same ahead of time. `history.back()` from a frame's first entry
+  traverses the joint session history, which navigates the host page (or a
+  sibling frame) out from under the application.
 - The demo is a Powermouse-styled host application: landing page with quick
   links, tabs (one `Frame` each) with an address bar that tracks the real
   URL, a transport switch, and an early-Android style navigation bar with a
@@ -65,6 +70,12 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- The demo's Back button could walk the browser out of the demo page, or
+  bounce between the home screen and the last page: the per-tab history list
+  over-counted redirected and replaced URLs, so `history.back()` ran at the
+  frame's first entry, and Back on the home screen re-entered the tab. The
+  frame is now the authority on whether it can step, presses queue up one
+  step at a time, and Back on the home screen does nothing.
 - Nested frames were given the codec _name_ instead of the codec key when
   their client was created. They now reuse the parent's key.
 

@@ -61,13 +61,14 @@ changelog's known limitations before picking one.
 
 `Frame`:
 
-| Member                 | Description                                         |
-| ---------------------- | --------------------------------------------------- |
-| `go(url)`              | navigate the frame to `url` through the proxy       |
-| `back()` / `forward()` | history navigation inside the frame                 |
-| `reload()`             | reload the proxied page                             |
-| `url`                  | the real URL of the page the frame shows, or `null` |
-| `element`              | the underlying `<iframe>`                           |
+| Member                       | Description                                                                                                                      |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `go(url)`                    | navigate the frame to `url` through the proxy                                                                                    |
+| `back()` / `forward()`       | step the frame's own history; resolves to `false` when there is no entry in that direction (never walks the host page's history) |
+| `canGoBack` / `canGoForward` | whether the frame's own history has an entry in that direction; `null` when the browser has no Navigation API                    |
+| `reload()`                   | reload the proxied page                                                                                                          |
+| `url`                        | the real URL of the page the frame shows, or `null`                                                                              |
+| `element`                    | the underlying `<iframe>`                                                                                                        |
 
 `SearchBuilder(template)` turns free text into a URL: hosts and URLs pass
 through, everything else is substituted into `template` at `%s`.
@@ -88,8 +89,8 @@ frame on the proxy origin:
 
 `RemoteFrame`: `go(url)`, `back()`, `forward()`, `reload()` (the last three
 are relayed through the controller frame, which is same-origin with the
-proxied page), `url` and `title` (last known, refreshed every
-`pollInterval` ms), `element`.
+proxied page), `url`, `title`, `canGoBack` and `canGoForward` (last known,
+refreshed every `pollInterval` ms), `element`.
 
 A transport descriptor is `{ module: '/epoxy/index.mjs', options: [{ wisp }] }`:
 the module URL must be on the proxy origin and its default export is the

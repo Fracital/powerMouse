@@ -169,18 +169,24 @@ function createTab() {
 	element.title = 'Proxied page';
 	framesContainer.append(element);
 	const frame = controller.createFrame(element);
-	// Each tab keeps its own history. The frame's history.back() walks the
-	// shared session history, so with nothing left to go back to it would back
-	// the whole demo page out of the site; the counters below stop that.
+	// Each tab keeps a list of the pages it reached, for browsers without the
+	// Navigation API. Where the frame can tell (frame.canGoBack) it is the
+	// authority: the list over-counts when a site redirects or replaces its
+	// URL, and a history.back() past the frame's first entry walks the shared
+	// session history, which backs the whole demo page out of the site.
 	const tab = {
 		frame,
 		element,
 		url: '',
 		history: [],
 		index: -1,
-		traversal: null,
+		traversal: null, // 'back' / 'forward' while a step we issued is in flight
+		pending: Promise.resolve(false), // queue of back/forward presses
 	};
-	element.addEventListener('load', () => {
+	element.addEventListener('load', async () => {
+		// a RemoteFrame's url is polled: refresh before recording, or a redirect
+		// leaves both the requested and the final URL in the list
+		if (frame.refresh) await frame.refresh();
 		recordUrl(tab);
 		if (tab === activeTab) {
 			setStatus(frame.url ? 'Ready' : 'Loaded');
@@ -204,39 +210,54 @@ function recordUrl(tab) {
 	// the requested URL and the one the frame reports can differ only by
 	// normalisation ("https://a.com" vs "https://a.com/"); that is not a new entry
 	const url = normalizeUrl(tab.frame.url);
-	if (!url || url === tab.history[tab.index]) return;
+	if (!url) return;
 	if (tab.traversal) {
+		// the frame still reports the page it is leaving until the step commits
+		const from = tab.history[tab.index + (tab.traversal === 'back' ? 1 : -1)];
+		if (url === from) return;
 		tab.traversal = null;
+		// landed somewhere else (the entry redirected or replaced its URL): that
+		// is what this entry really is, not a new one
+		tab.history[tab.index] = url;
 		return;
 	}
+	if (url === tab.history[tab.index]) return;
 	tab.history.length = tab.index + 1;
 	tab.history.push(url);
 	tab.index = tab.history.length - 1;
 }
 
-function canGoBack(tab) {
-	return !!tab && tab.index > 0;
+/**
+ * Step the tab's own history. Presses queue up per tab so each one is a
+ * single step even while the previous page is still loading. Resolves false
+ * when there was nothing to go to; the frame itself never walks the host page.
+ */
+function step(tab, direction) {
+	if (!tab) return Promise.resolve(false);
+	const run = async () => {
+		const back = direction === 'back';
+		// no Navigation API: our list is all there is, and history.back() from
+		// the first entry would leave the site
+		if (back ? tab.frame.canGoBack === null : tab.frame.canGoForward === null) {
+			const can = back ? tab.index > 0 : tab.index < tab.history.length - 1;
+			if (!can) return false;
+		}
+		tab.traversal = direction;
+		const went = await (back ? tab.frame.back() : tab.frame.forward());
+		if (!went) {
+			tab.traversal = null;
+			return false;
+		}
+		const next = tab.index + (back ? -1 : 1);
+		tab.index = Math.min(Math.max(next, 0), tab.history.length - 1);
+		return true;
+	};
+	tab.pending = tab.pending.then(run, run);
+	return tab.pending;
 }
 
-function canGoForward(tab) {
-	return !!tab && tab.index < tab.history.length - 1;
-}
-
-function goBack(tab) {
-	if (!canGoBack(tab)) return false;
-	tab.traversal = 'back';
-	tab.index--;
-	tab.frame.back();
-	return true;
-}
-
-function goForward(tab) {
-	if (!canGoForward(tab)) return false;
-	tab.traversal = 'forward';
-	tab.index++;
-	tab.frame.forward();
-	return true;
-}
+const goBack = (tab) => step(tab, 'back');
+const goForward = (tab) => step(tab, 'forward');
 
 function activateTab(tab) {
 	activeTab = tab;
@@ -844,12 +865,19 @@ omni.addEventListener('submit', (event) => {
 });
 
 // bottom navigation bar: back, home, recents (tab manager)
-$('back').addEventListener('click', () => {
+$('back').addEventListener('click', async () => {
 	if (!recentsPanel.classList.contains('hidden')) {
 		leaveRecents();
-	} else if (browser.classList.contains('hidden') && activeTab)
-		activateTab(activeTab);
-	else if (!goBack(activeTab)) showLanding(); // nothing to go back to: home, like Android
+		return;
+	}
+	// on the home screen Back does nothing: re-entering the tab from here made
+	// repeated presses bounce between home and the last page
+	if (browser.classList.contains('hidden')) return;
+	const tab = activeTab;
+	const went = await goBack(tab);
+	// nothing to go back to: home, like Android (unless the user moved on)
+	if (!went && tab === activeTab && !browser.classList.contains('hidden'))
+		showLanding();
 });
 $('home').addEventListener('click', showLanding);
 $('recents').addEventListener('click', toggleRecents);

@@ -12,6 +12,7 @@ import {
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import serveTransport from '../transport/serveTransport';
+import { canTraverse, traverse } from './history';
 
 export { default as SearchBuilder } from '../bootstrapper/SearchBuilder';
 export type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
@@ -172,12 +173,26 @@ export class Frame {
 	async go(url: string) {
 		this.element.src = await this.controller.route(url);
 	}
-	/** proxied pages are same-origin, so the frame's history is reachable */
-	back() {
-		this.element.contentWindow?.history.back();
+	/**
+	 * Step the frame's own history (proxied pages are same-origin, so it is
+	 * reachable). Resolves false when there is no entry in that direction, so
+	 * a host can show its own "nothing to go back to" state instead of
+	 * letting history.back() walk the page that embeds the frame.
+	 */
+	async back(): Promise<boolean> {
+		const win = this.element.contentWindow;
+		return win ? traverse(win, 'back') : false;
 	}
-	forward() {
-		this.element.contentWindow?.history.forward();
+	async forward(): Promise<boolean> {
+		const win = this.element.contentWindow;
+		return win ? traverse(win, 'forward') : false;
+	}
+	/** whether the frame's own history has an entry before/after the current one; null when the browser cannot tell */
+	get canGoBack(): boolean | null {
+		return canTraverse(this.element.contentWindow, 'back');
+	}
+	get canGoForward(): boolean | null {
+		return canTraverse(this.element.contentWindow, 'forward');
 	}
 	reload() {
 		this.element.contentWindow?.location.reload();

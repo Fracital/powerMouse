@@ -178,15 +178,27 @@ app.get('/api/status', (req, res) => {
 		node: process.version,
 	});
 });
-app.use(express.static(fileURLToPath(new URL('./public/', import.meta.url))));
-app.use('/stomp/', express.static(stompPath));
-app.use('/epoxy/', express.static(transportDir('epoxy-transport')));
-app.use('/libcurl/', express.static(transportDir('libcurl-transport')));
+// The page, its scripts and the Stomp bundles change with every deploy and
+// are fetched once per visit anyway: no-cache makes browsers revalidate and
+// keeps CDNs (Cloudflare caches .js by default) from serving a stale service
+// worker or shell against a new build. The transports and fonts are versioned
+// by npm and may be cached.
+const fresh = {
+	setHeaders: (res) => res.set('Cache-Control', 'no-cache'),
+};
+const cached = { maxAge: '1d', immutable: false };
+app.use(
+	express.static(fileURLToPath(new URL('./public/', import.meta.url)), fresh),
+);
+app.use('/stomp/', express.static(stompPath, fresh));
+app.use('/epoxy/', express.static(transportDir('epoxy-transport'), cached));
+app.use('/libcurl/', express.static(transportDir('libcurl-transport'), cached));
 // self-hosted font for the page (no Google Fonts round-trip)
 app.use(
 	'/fonts/montserrat/',
 	express.static(
 		dirname(require.resolve('@fontsource/montserrat/package.json')) + '/files',
+		cached,
 	),
 );
 

@@ -89,11 +89,11 @@ transport, which tunnels through `/wisp/`.
    there or clicking a quick link opens a new tab. Closing the last tab goes
    back to the landing page.
 8. **Navigation bar** at the bottom of the screen, styled after the early
-   Android bar: Back steps through the active tab's own history (the demo
-   records each page the frame reaches, including `pushState` changes, so
-   mashing Back can never walk the host page out of the site; at the start of
-   a tab's history Back goes home instead), Home shows the landing page,
-   Recents opens the tab manager.
+   Android bar: Back steps through the active tab's own history (the frame
+   reports whether it can step, from the browser's Navigation API, so mashing
+   Back can never walk the host page out of the site; at the start of a tab's
+   history Back goes home instead, and on the home screen it does nothing),
+   Home shows the landing page, Recents opens the tab manager.
 9. **Tab manager**, modelled on the One UI recent-apps screen. The cards are
    the real frames scaled down with CSS transforms (moving an iframe in the
    DOM would reload it), so each card is a live preview. Swipe or drag the
@@ -204,5 +204,7 @@ For your own deployment:
 - Keep `dist/`, the transports and the page on the same origin. The service
   worker scope and `directory` must match the path `dist/` is mounted at.
 - Run wisp with its default filters (the loopback opt-in is for local QA).
-- `Cache-Control: no-store` on `/stomp/serviceWorker.js` is a good idea so
-  updates are picked up; the demo relies on `updateViaCache: 'none'`.
+- The page, its scripts and `/stomp/` are served with `Cache-Control:
+no-cache` so browsers revalidate and CDNs do not pin a stale service worker
+  or shell to a new build; the transports and fonts may be cached for a day.
+  The demo also registers with `updateViaCache: 'none'`.

@@ -17,6 +17,9 @@ export interface ControllerFrameInit {
 export interface FrameInfo {
 	url: string | null;
 	title: string | null;
+	/** whether the frame's own history has an entry before/after the current one; null when the browser cannot tell */
+	canGoBack: boolean | null;
+	canGoForward: boolean | null;
 }
 
 export type FrameCommand = 'back' | 'forward' | 'reload';
@@ -31,7 +34,8 @@ export type FrameBound = {
 	setTransport: [TransportDescriptor];
 	/** frames are addressed by their index in the host window's `frames` list */
 	frameInfo: [number, FrameInfo];
-	frameCommand: [{ index: number; command: FrameCommand }];
+	/** resolves to whether the command was carried out (false: nothing to go back/forward to) */
+	frameCommand: [{ index: number; command: FrameCommand }, boolean];
 };
 
 /** implemented by the host, called by the controller frame */

@@ -6,6 +6,7 @@
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { CLIENT_KEY } from '../rewriteJS';
 import { RpcHelper } from '../transport/rpc';
+import { canTraverse, traverse } from './history';
 import { StompController } from './index';
 import {
 	ControllerFrameInit,
@@ -121,7 +122,11 @@ if (window === window.parent || !origins.length) {
 				},
 				frameInfo: async (index) => {
 					const win = proxiedWindow(index);
-					if (!win) return [{ url: null, title: null }, []];
+					if (!win)
+						return [
+							{ url: null, title: null, canGoBack: null, canGoForward: null },
+							[],
+						];
 					const client = (
 						win as unknown as Record<string, { url?: { toString(): string } }>
 					)[CLIENT_KEY];
@@ -129,16 +134,20 @@ if (window === window.parent || !origins.length) {
 						{
 							url: client?.url ? client.url.toString() : null,
 							title: win.document?.title ?? null,
+							canGoBack: canTraverse(win, 'back'),
+							canGoForward: canTraverse(win, 'forward'),
 						},
 						[],
 					];
 				},
 				frameCommand: async ({ index, command }) => {
 					const win = proxiedWindow(index);
-					if (!win) return;
-					if (command === 'back') win.history.back();
-					else if (command === 'forward') win.history.forward();
-					else if (command === 'reload') win.location.reload();
+					if (!win) return [false, []];
+					if (command === 'reload') {
+						win.location.reload();
+						return [true, []];
+					}
+					return [await traverse(win, command), []];
 				},
 			},
 			REMOTE_RPC,
