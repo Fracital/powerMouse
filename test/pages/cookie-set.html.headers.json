@@ -1,0 +1,3 @@
+{
+	"set-cookie": ["ma=1; Max-Age=3600; Path=/", "sess=1; Path=/"]
+}

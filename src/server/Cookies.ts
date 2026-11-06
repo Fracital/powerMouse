@@ -42,8 +42,10 @@ export interface FloatingCookie extends SessionCookie {
 const floatCookie = (cookie: Readonly<Cookie>): FloatingCookie => {
 	const result: Cookie & Partial<FloatingCookie> = { ...cookie };
 
-	if (cookie.maxAge) {
-		result.expires = new Date(Date.now() + cookie.maxAge);
+	// Max-Age is in seconds and wins over Expires; zero or negative means
+	// "delete", which floats as an already expired cookie
+	if (typeof cookie.maxAge === 'number') {
+		result.expires = new Date(Date.now() + cookie.maxAge * 1000);
 		delete result.maxAge;
 	}
 
@@ -143,10 +145,18 @@ export default class Cookies {
 			})) {
 				const floating = floatCookie(normalizeCookie(parsedCookie, url));
 				const id = floatingCookieID(floating);
-				this.db.put(floating.session ? 'sessionCookies' : 'cookies', {
-					...floating,
-					id,
-				});
+				// one cookie per name/domain/path: a re-set that changes from
+				// session to persistent (or back) must not leave the old copy
+				const [store, other] = floating.session
+					? ['sessionCookies', 'cookies']
+					: ['cookies', 'sessionCookies'];
+				await this.db.delete(other, id);
+				if (cookieExpired(floating)) {
+					// Max-Age=0 or a past Expires: the site is deleting it
+					await this.db.delete(store, id);
+					continue;
+				}
+				await this.db.put(store, { ...floating, id });
 			}
 	}
 }
