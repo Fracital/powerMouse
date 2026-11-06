@@ -87,10 +87,24 @@ The first release after a four-year gap. Everything below is breaking.
 - `data:` script URLs were rewritten without percent-decoding the body, so
   Reddit's `data:text/javascript,%7B...` scripts became `SyntaxError: Unexpected
 token '%'`. The body is decoded before rewriting and re-encoded after.
-- The synchronous cookie/storage bridge gave up after a fixed number of spin
-  cycles (about a second); a service worker busy rewriting a large script
-  (YouTube's main bundle takes over two seconds) made `document.cookie` throw.
-  The limit is now wall-clock, 10 s for loopback routes.
+- The synchronous cookie/storage bridge never worked in origin-isolation
+  mode: the service worker answers through `cookieStore.set`, whose default
+  `SameSite=Strict` is invisible to `document.cookie` in a proxied frame (a
+  cross-site embed of the proxy origin), so every `document.cookie` and
+  `localStorage` call spun until its limit and threw. The answer cookies are
+  now `SameSite=None`. The spin limit was also a fixed cycle count (about a
+  second) and is now wall-clock, 10 s for loopback routes, so a service worker
+  busy rewriting a large script (YouTube's main bundle takes over two seconds)
+  no longer makes `document.cookie` throw.
+- Inline styles: the `style` attribute hook re-wrote the browser's own
+  serialization of the text it had just written (Polymer assigns the changed
+  attribute back to `el.style` from `attributeChangedCallback`), flipping the
+  attribute between the original and the rewritten text until the stack
+  overflowed; YouTube froze a few seconds after rendering. The hook now
+  recognises the echo. The generic property setter also re-assigned
+  `el.style = el.style` after a write, which `PutForwards=cssText` turns into
+  `"[object CSSStyleDeclaration]"` and wipes the inline style; the re-assign
+  is skipped when the getter does not return a string.
 - Inline scripts that a page inserts at runtime (`script.textContent = ...`
   then `append`, `innerHTML` / `insertAdjacentHTML` with a `<script>`, a
   text node appended to a script) ran unrewritten: the insertion hook skipped
@@ -196,7 +210,9 @@ Fixed while testing real sites and a feature fixture:
   the page's main thread while waiting on the service worker. With the
   transport hosted in the same renderer, a synchronous request that needs the
   network deadlocks until the spin limit (30 s); loopback requests wait up to
-  10 s, which covers the service worker rewriting a 10 MB script.
+  10 s, which covers the service worker rewriting a 10 MB script. The answer
+  travels in `SameSite=None` cookies, so in origin-isolation mode the bridge
+  needs third-party cookies allowed for the proxy origin.
 - Still unproxied or unspoofed: `self.location` inside workers, inline event
   handler attributes (`onclick="..."`), string arguments to `setTimeout` /
   `setInterval`, `javascript:` URLs, `<iframe srcdoc>`, scripts written into

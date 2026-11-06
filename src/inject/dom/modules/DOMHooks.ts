@@ -683,11 +683,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 							// getter isn't stack based and we can use this to make the attribute immediately take effect
 
-							// equivalent to
-							// i.src = i.src
-							Reflect.apply(target, that, [
-								Reflect.apply(descriptor.get!, that, []),
-							]);
+							// equivalent to i.src = i.src. Not for `style`: its getter
+							// returns the declaration object, and assigning that back goes
+							// through PutForwards=cssText as "[object CSSStyleDeclaration]",
+							// which wipes the inline style
+							const value = Reflect.apply(descriptor.get!, that, []);
+
+							if (typeof value === 'string')
+								Reflect.apply(target, that, [value]);
 						},
 					),
 				});

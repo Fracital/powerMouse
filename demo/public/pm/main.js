@@ -97,7 +97,9 @@ const tabs = [];
 let activeTab = null;
 
 function setStatus(text, error = false) {
-	for (const node of [landingStatus, chromeStatus]) {
+	// the landing line, the live bar and every card's copy of the bar
+	const chips = document.querySelectorAll('.cardLabel .status');
+	for (const node of [landingStatus, chromeStatus, ...chips]) {
 		node.textContent = text;
 		node.classList.toggle('error', error);
 	}
@@ -449,7 +451,7 @@ function layoutRecents(animated = false) {
 		element.style.height = `${fh}px`;
 		// the frame is the lower part of the block: below the scaled bar
 		element.style.transform = `translate(${x}px, ${y + ch * k}px) scale(${k})`;
-		element.style.borderRadius = radius;
+		// square on top, where the bar copy meets it; rounded at the bottom
 		element.style.clipPath = `inset(0 round 0 0 ${radius} ${radius})`;
 		element.classList.toggle('shade', i !== recentsIndex);
 		element.classList.toggle(
@@ -498,14 +500,16 @@ function createLabel(tab) {
 
 	// a copy of the chrome bar, built from the same classes so it renders
 	// exactly like the real one it will land on: the address box shows the
-	// tab's URL, the status chip its title
+	// tab's URL, the chip the same service worker status as the live bar
 	const chrome = document.createElement('div');
 	chrome.className = 'cardChrome';
 	const url = document.createElement('div');
 	url.className = 'form-text omnibox url';
-	const title = document.createElement('span');
-	title.className = 'select title';
-	chrome.append(url, title);
+	const status = document.createElement('span');
+	status.className = 'select status';
+	status.textContent = chromeStatus.textContent;
+	status.classList.toggle('error', chromeStatus.classList.contains('error'));
+	chrome.append(url, status);
 
 	const close = document.createElement('button');
 	close.className = 'close';
@@ -545,10 +549,8 @@ function renderRecents(fromFullScreen = false) {
 			labelFor.set(tab, label);
 			recentsLabels.append(label);
 		}
-		const text = tabTitle(tab);
-		label.querySelector('.title').textContent = text;
 		label.querySelector('.url').textContent = tab.url || '';
-		label.querySelector('.hit').title = text;
+		label.querySelector('.hit').title = tabTitle(tab);
 	}
 
 	// nothing open: no cards, no Close all, just the message
@@ -578,12 +580,29 @@ function renderRecents(fromFullScreen = false) {
 			tab.element.style.width = `${vw}px`;
 			tab.element.style.height = `${fh}px`;
 			tab.element.style.transform = rest;
-			if (tab !== activeTab) tab.element.style.opacity = '0';
+			if (tab !== activeTab) {
+				tab.element.style.opacity = '0';
+				// the other tabs were never on screen: they appear in their slots
+				// and only fade in, instead of sliding out of the full-screen box
+				label.style.transition = 'opacity 0.25s ease';
+				tab.element.style.transition = 'opacity 0.25s ease';
+			}
 		}
 		void recentsLabels.offsetHeight; // flush, so the next layout transitions
 	}
 
 	layoutRecents();
+
+	if (fromFullScreen) {
+		// the slots are applied now, without a transform transition; later
+		// moves animate again
+		void recentsLabels.offsetHeight;
+		for (const tab of tabs) {
+			if (tab === activeTab) continue;
+			labelFor.get(tab).style.transition = '';
+			tab.element.style.transition = '';
+		}
+	}
 }
 
 function showRecents() {
@@ -614,6 +633,7 @@ function teardownRecents() {
 		'recents',
 		'recents-visible',
 		'recents-from-home',
+		'recents-closing',
 	);
 	recentsPanel.classList.add('hidden');
 	recentsLift = { index: -1, dy: 0 };
@@ -640,6 +660,9 @@ function hideRecents(expand = null) {
 	// was entered from home (it slid out of the tiles); unpin it here, or it
 	// stays put and vanishes when the stage goes instead of fading
 	document.body.classList.remove('recents-visible', 'recents-from-home');
+	// the labels container stays solid: the expanding card's bar copy is what
+	// the user sees until the real bar takes over at teardown
+	document.body.classList.add('recents-closing');
 	const label = labelFor.get(expand);
 	// a frame created while the stage is up (new tab from the dock) has no box
 	// yet: give it the resting one so it lands where the stage will leave it
@@ -649,13 +672,11 @@ function hideRecents(expand = null) {
 	expand.element.style.width = `${innerWidth}px`;
 	expand.element.style.height = `${innerHeight - 48 - chromeHeight()}px`;
 	expand.element.style.transform = rest;
-	expand.element.style.borderRadius = '0px';
 	expand.element.style.clipPath = 'inset(0 round 0px)';
 	if (label) {
 		label.classList.remove('dragging');
 		// the bar copy lands on the real bar: show what the real bar will show
 		label.querySelector('.url').textContent = omni.url.value;
-		label.querySelector('.title').textContent = chromeStatus.textContent;
 		label.style.transform = 'translate(0px, 0px) scale(1)';
 		label.style.borderRadius = '0px';
 		label.style.setProperty('--k', '1');
@@ -1105,26 +1126,37 @@ for (const [label, url, color] of QUICK_LINKS) {
 	homeTiles.push(button);
 }
 
-// server status line: uptime + version
+// server status line: uptime + version. The server is asked every 10 s;
+// between answers the counter keeps ticking from the last one, so it moves
+// every second like a clock instead of jumping on each poll.
 let loggedVersion = false;
+let uptimeAt = null; // [server uptime in s, Date.now() when it was fetched]
+function renderUptime() {
+	if (!uptimeAt) return;
+	const uptime = uptimeAt[0] + (Date.now() - uptimeAt[1]) / 1000;
+	const h = Math.floor(uptime / 3600);
+	const m = Math.floor((uptime % 3600) / 60);
+	const s = Math.floor(uptime % 60);
+	$('uptime').textContent = `${h} hours, ${m} minutes, ${s} seconds`;
+}
 async function pollStatus() {
 	try {
 		const { uptime, version } = await (await fetch('/api/status')).json();
-		const h = Math.floor(uptime / 3600);
-		const m = Math.floor((uptime % 3600) / 60);
-		const s = Math.floor(uptime % 60);
-		$('uptime').textContent = `${h} hours, ${m} minutes, ${s} seconds`;
+		uptimeAt = [uptime, Date.now()];
+		renderUptime();
 		$('version').textContent = `stomp ${version}`;
 		if (!loggedVersion) {
 			loggedVersion = true;
-			badge('Stomp', `${version}, up ${h}h ${m}m`);
+			badge('Stomp', `${version}, up ${Math.floor(uptime / 3600)}h`);
 		}
 	} catch {
+		uptimeAt = null;
 		$('uptime').textContent = 'unavailable';
 	}
 }
 pollStatus();
 setInterval(pollStatus, 10000);
+setInterval(renderUptime, 1000);
 
 const booted = boot();
 booted

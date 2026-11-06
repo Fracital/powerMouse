@@ -815,6 +815,13 @@ body.recents-visible .recents > * {
 	opacity: 1;
 }
 
+/* closing onto a card: the other labels fade one by one, the container (and
+   so the expanding card's bar copy) stays until the real bar covers it */
+body.recents.recents-closing .recents > .recentsLabels {
+	opacity: 1;
+	transition: none;
+}
+
 body.recents.recents-from-home .dock {
 	opacity: 1;
 	transition: none;
@@ -925,9 +932,7 @@ body.recents .frames .frame.shade {
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	padding: 6px 8px;
-	/* leave the top-right corner to the (unscaled) close button */
-	padding-right: calc(8px + 40px / var(--k, 1));
+	padding: 6px 8px; /* exactly .chrome: the close button overlaps, it takes no room */
 	background: #000 url('/pm/header-background.png');
 	border-bottom: 1px solid #b6b6b6;
 	pointer-events: none;
@@ -947,9 +952,10 @@ body.recents .frames .frame.shade {
 	text-overflow: ellipsis;
 }
 
-.cardLabel .title {
+/* the status chip, same box as .chrome .select on the live bar */
+.cardLabel .status {
 	flex: 0 1 auto;
-	max-width: 40%;
+	max-width: 50%;
 	height: 28px;
 	box-sizing: border-box;
 	white-space: nowrap;
@@ -957,9 +963,11 @@ body.recents .frames .frame.shade {
 	text-overflow: ellipsis;
 }
 
+/* just below the bar copy, over the page's top-right corner: the bar stays an
+   exact copy of the live one and the status chip stays readable */
 .cardLabel .close {
 	position: absolute;
-	top: calc(6px / var(--k, 1));
+	top: calc(var(--ch, 49px) + 6px / var(--k, 1));
 	right: calc(6px / var(--k, 1));
 	width: calc(30px / var(--k, 1));
 	height: calc(30px / var(--k, 1));

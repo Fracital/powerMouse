@@ -171,8 +171,13 @@ export default class SyncModule extends Module<DocumentClient> {
 				joinedValue += value;
 			}
 
+			// same attributes as the service worker set, or a cross-site frame
+			// cannot delete them and they pile up until the next request to the
+			// proxy origin fails with 431
 			for (const cookieName of clearCookies) {
-				cookies.cookie = `${cookieName}=; path=/; expires=${new Date(0)}`;
+				cookies.cookie = `${cookieName}=; path=/; expires=${new Date(
+					0,
+				)}; SameSite=None; Secure`;
 			}
 
 			return createResponse(JSON.parse(decodeCookie(joinedValue)));

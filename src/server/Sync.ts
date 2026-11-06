@@ -95,16 +95,21 @@ export function registerXhr(router: Router) {
 				value: part,
 				expires: expiration.getTime(),
 				path: '/',
+				sameSite: 'none',
 			});
 		}
 
 		encodeCookie(JSON.stringify(response));
 
+		// the answer is read with document.cookie from a proxied frame, which in
+		// origin-isolation mode is a cross-site embed: the CookieStore default
+		// (Strict) is invisible there and every bridge call would time out
 		await cookieStore.set({
 			name: id,
 			value: mainCookieValue,
 			expires: expiration.getTime(),
 			path: '/',
+			sameSite: 'none',
 		});
 
 		return new Response();

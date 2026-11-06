@@ -12,7 +12,7 @@ import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
-import DOMHooksModule, { CustomElement } from './DOMHooks';
+import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
 
 const jsTypes = ['text/javascript', 'application/javascript', 'module', ''];
 
@@ -28,6 +28,31 @@ export function scriptType(element: Element): ScriptType {
 
 export default class DOMAttributesModule extends Module<DocumentClient> {
 	formHook?: (element: CustomElement) => void;
+	// captured before the hooks replace them, for serializeStyle
+	#nativeStyle: PropertyDescriptor;
+	#nativeCssText: PropertyDescriptor;
+	#scratch?: HTMLElement;
+	constructor(client: DocumentClient) {
+		super(client);
+		this.#nativeStyle = Reflect.getOwnPropertyDescriptor(
+			client.global.HTMLElement.prototype,
+			'style',
+		)!;
+		this.#nativeCssText = Reflect.getOwnPropertyDescriptor(
+			client.global.CSSStyleDeclaration.prototype,
+			'cssText',
+		)!;
+	}
+	/** the style attribute the browser writes when `text` is assigned to el.style */
+	serializeStyle(text: string): string {
+		this.#scratch ??= this.client.global.document.createElement('div');
+		Reflect.apply(
+			this.#nativeCssText.set!,
+			Reflect.apply(this.#nativeStyle.get!, this.#scratch, []),
+			[text],
+		);
+		return nativeElement.getAttribute.call(this.#scratch, 'style') ?? '';
+	}
 	apply() {
 		const domHooksModule = this.client.getModule(DOMHooksModule)!;
 
@@ -460,6 +485,27 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 		domHooksModule.useAttributes(
 			(element) => {
+				// our rewritten text comes back serialized by the browser when the
+				// page assigns it to el.style (Polymer does, from
+				// attributeChangedCallback for the attribute we just wrote). Taken
+				// as a new value it would flip the attribute between the original
+				// and the rewritten text forever, which froze YouTube
+				const current = element.getAttribute('style');
+
+				if (current !== null && element.hasAttributeOG('style')) {
+					const rewritten = modifyCSS(
+						element.getAttributeOG('style')!,
+						this.client.url,
+						'declarationList',
+					);
+
+					if (
+						current === rewritten ||
+						current === this.serializeStyle(rewritten)
+					)
+						return;
+				}
+
 				element.restoreAttributesOG('style');
 
 				if (
