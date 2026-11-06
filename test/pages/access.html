@@ -1,0 +1,20 @@
+<!doctype html>
+<title>ACCESS</title>
+<script>
+	window.__acc = {};
+	{
+		const { top: t, location: l } = window;
+		__acc.alias = t === window && l.href === location.href;
+	}
+	{
+		let t;
+		({ top: t } = window);
+		__acc.assign = t === window;
+	}
+	{
+		const { top } = window;
+		__acc.shorthand = top === window;
+	}
+	__acc.opener = window.opener === null;
+	__acc.docLocation = document.location.href === location.href;
+</script>

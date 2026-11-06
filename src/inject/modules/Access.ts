@@ -92,18 +92,28 @@ export default class AccessModule extends Module<Client> {
 				// possibly a context
 
 				if (typeof key === 'string') {
-					if (target === this.client.global) {
+					// `document.location = url` is `window.location = url`
+					const isDocument =
+						typeof target === 'object' &&
+						target !== null &&
+						target === (this.client.global as any).document;
+					if (target === this.client.global || isDocument) {
 						if (key === 'location') {
 							target = (location as any)[GLOBAL_PROXY];
 							key = 'href';
 						}
-					} else if (
-						((typeof target === 'object' && target !== null) ||
-							typeof target === 'function') &&
-						ACCESS_KEY in target &&
-						target[ACCESS_KEY]!.set2 !== api.set2
-					) {
-						return target[ACCESS_KEY]!.set2(target, key, operate);
+					} else {
+						let foreign = false;
+						try {
+							foreign =
+								((typeof target === 'object' && target !== null) ||
+									typeof target === 'function') &&
+								ACCESS_KEY in target &&
+								target[ACCESS_KEY]!.set2 !== api.set2;
+						} catch (error) {
+							// a cross-origin window: nothing of ours to delegate to
+						}
+						if (foreign) return target[ACCESS_KEY]!.set2(target, key, operate);
 					}
 				}
 
@@ -195,6 +205,19 @@ export default class AccessModule extends Module<Client> {
 						'genericModule',
 					)
 				);
+			},
+			// `const { top: t } = o`: a pattern cannot be rewritten key by key,
+			// so the source is wrapped and every read of an unforgeable through
+			// it resolves like a member read would
+			pattern: (object: unknown): unknown => {
+				if (
+					(typeof object !== 'object' && typeof object !== 'function') ||
+					object === null
+				)
+					return object;
+				return new Proxy(object as object, {
+					get: (target, key) => api.get(Reflect.get(target, key), key),
+				});
 			},
 			evalSnapshot,
 		};

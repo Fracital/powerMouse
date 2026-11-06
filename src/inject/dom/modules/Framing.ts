@@ -3,6 +3,7 @@ import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../../routeURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import ContextModule from './Context';
 
 /**
  * Makes a proxied document believe it is a top-level page even though the
@@ -37,6 +38,29 @@ export default class FramingModule extends Module<DocumentClient> {
 				() => null,
 			),
 		});
+
+		// opener: a page opened by another Stomp page keeps it (restricted
+		// across origins by the Context module); anything else, the host
+		// included, is no opener a top-level page would have
+		const openerDescriptor = Reflect.getOwnPropertyDescriptor(global, 'opener');
+		if (openerDescriptor?.get)
+			Reflect.defineProperty(global, 'opener', {
+				configurable: true,
+				enumerable: true,
+				get: proxyModule.wrapFunction(openerDescriptor.get, (target, that) => {
+					const opener = Reflect.apply(target, that, []);
+					try {
+						if (opener && CLIENT_KEY in opener)
+							return this.client
+								.getModule(ContextModule)!
+								.newRestricted(opener);
+					} catch (error) {
+						// cross-origin
+					}
+					return null;
+				}),
+				set: openerDescriptor.set,
+			});
 
 		// window.name: shadow value, starts empty
 		let shadowName = '';

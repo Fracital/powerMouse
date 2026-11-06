@@ -108,6 +108,47 @@ export function modifyJS(
 					);
 
 					break;
+				case 'VariableDeclarator':
+					// `const { top: t } = o`: the pattern reads `o.top` without a
+					// member expression to rewrite, so the source is wrapped and the
+					// reads resolve through it (shallow: nested patterns read raw)
+					if (
+						ctx.node.id.type === 'ObjectPattern' &&
+						ctx.node.init &&
+						patternReadsUnforgeable(ctx.node.id)
+					)
+						ctx.replaceWith(
+							b.variableDeclarator(
+								ctx.node.id,
+								b.callExpression(
+									b.memberExpression(
+										b.identifier(ACCESS_KEY),
+										b.identifier('pattern'),
+									),
+									[result(ctx.node.init)],
+								),
+							),
+						);
+					break;
+				case 'AssignmentExpression':
+					if (
+						ctx.node.left.type === 'ObjectPattern' &&
+						patternReadsUnforgeable(ctx.node.left)
+					)
+						ctx.replaceWith(
+							b.assignmentExpression(
+								'=',
+								ctx.node.left,
+								b.callExpression(
+									b.memberExpression(
+										b.identifier(ACCESS_KEY),
+										b.identifier('pattern'),
+									),
+									[result(ctx.node.right)],
+								),
+							),
+						);
+					break;
 				case 'ImportDeclaration':
 				case 'ExportAllDeclaration':
 				case 'ExportNamedDeclaration':
@@ -503,6 +544,22 @@ if (!${CLIENT_KEY}.applied)
 		console.warn(`Stomp could not rewrite ${url}: ${String(error)}`);
 		return script;
 	}
+}
+
+/** whether an object pattern names an unforgeable (`{ top }`, `{ location: l }`) */
+function patternReadsUnforgeable(pattern: any): boolean {
+	for (const property of pattern.properties) {
+		if (property.type !== 'Property' || property.computed) continue;
+		const key = property.key;
+		const name =
+			key.type === 'Identifier'
+				? key.name
+				: key.type === 'Literal'
+					? String(key.value)
+					: '';
+		if (UNDEFINABLE.includes(name)) return true;
+	}
+	return false;
 }
 
 /** `react`, `#private`, `@scope/pkg`: not a URL, resolved by an import map */

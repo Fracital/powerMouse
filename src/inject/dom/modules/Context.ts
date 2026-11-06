@@ -347,12 +347,9 @@ export default class ContextModule extends Module<DocumentClient> {
 		}
 
 		if (!isStomp) {
-			if (context === this.client.top || context === this.client.parent) {
-				// the proxied world ends here: present ourselves as the top
-				return findTop(this.client.global);
-			} else {
-				return context;
-			}
+			// the proxied world ends here (the host, or anything it opened):
+			// present ourselves as the top
+			return findTop(this.client.global);
 		}
 
 		if (
