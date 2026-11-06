@@ -83,6 +83,16 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- Rules added with `insertRule`, constructable stylesheets (`replace` /
+  `replaceSync`, `adoptedStyleSheets`) and `FontFace` sources are rewritten;
+  CSS-in-JS and font loaders fetched from the proxy origin. The text of a
+  `<style>` element is rewritten before the browser parses it, so its
+  `@import` and fonts are never requested unrouted first.
+- Destructuring an unforgeable (`const { top: t } = window`,
+  `({ top: t } = window)`) resolves to the spoofed value; `document.location
+= url` is routed like `window.location`; `opener` is null unless another
+  proxied page opened the window, and `opener.top` can no longer reach the
+  host.
 - Inline event handler attributes, `javascript:` URLs and string arguments
   to `setTimeout` / `setInterval` are rewritten (they ran unrewritten and
   could reach the real `top`); `<iframe srcdoc>` documents are injected and
@@ -243,6 +253,10 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- `getComputedStyle` / `getPropertyValue` return routed `url()` values;
+  `CSSRule.cssText` assignment and the Typed OM are not rewritten.
+- Nested destructuring patterns (`{ a: { top } }`) and function parameter
+  patterns still read the real value.
 - A script the rewriter cannot parse runs unrewritten. In isolation mode the
   sandbox and the cross-origin boundary contain it; in same-origin mode it can
   reach the real `top`, which is one more reason that mode is not a security

@@ -5,6 +5,7 @@ import AnchorModule from './modules/Anchor';
 import AudioModule from './modules/Audio';
 import ContextModule from './modules/Context';
 import { CookiesModule } from './modules/Cookies';
+import CSSOMModule from './modules/CSSOM';
 import DOMAttributesModule from './modules/DOMAttributes';
 import DOMContentHooks from './modules/DOMContentHooks';
 import DOMHooksModule from './modules/DOMHooks';
@@ -26,6 +27,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(AnchorModule);
 	client.addModule(DOMAttributesModule);
 	client.addModule(DOMContentHooks);
+	client.addModule(CSSOMModule);
 	client.addModule(DOMHooksModule);
 	client.addModule(IFrameModule);
 	client.addModule(SyncModule);

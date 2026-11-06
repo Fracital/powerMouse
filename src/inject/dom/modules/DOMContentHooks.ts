@@ -1,4 +1,4 @@
-import { modifyCSS } from '../../../rewriteCSS';
+import { modifyCSS, rewriteCSSValueURLs } from '../../../rewriteCSS';
 import { modifyJS } from '../../../rewriteJS';
 import Module from '../../Module';
 import ProxyModule, {
@@ -93,11 +93,29 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			compositeElements.set(element, createComposite);
 		}
 
+		// styles whose text was rewritten before the browser parsed it; the
+		// CSSOM pass would only redo the same work (modifyCSS is idempotent)
+		const prewritten = new WeakSet<HTMLStyleElement>();
+		const rewriteStyleText = (style: HTMLStyleElement) => {
+			const text = style.textContent;
+			if (!text) return;
+			try {
+				style.textContent = modifyCSS(text, this.client.url);
+			} catch (error) {
+				// unparsable: route what the regex can find
+				style.textContent = rewriteCSSValueURLs(text, this.client.url);
+			}
+			prewritten.add(style);
+		};
+
 		const rewriteStyle = (style: HTMLStyleElement) => {
 			if (getGlobalParsingState(this.client.global) === 'parsingBeforeWrite') {
 				// once everything is finalized and off the alternative parse stack
 
 				if (style.textContent) {
+					// rewritten now, so the browser never fetches an @import or a
+					// font from the proxy origin while parsing the written page
+					rewriteStyleText(style);
 					compositeElement(style, () => {
 						const script = document.createElement('script');
 
@@ -117,6 +135,13 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// not in document
 			if (!style.sheet) {
 				// eventually we'll catch a connected style
+				return;
+			}
+
+			if (prewritten.has(style)) {
+				prewritten.delete(style);
+				for (const rule of style.sheet.cssRules)
+					(rule as any)[rewrittenRule] = true;
 				return;
 			}
 
@@ -295,6 +320,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					usePrototype(insert, nativeHTMLScriptElement, (script) =>
 						rewriteScript(script, willConnect),
 					);
+				} else if (node.nodeName === 'STYLE') {
+					// before it connects and the browser parses it
+					if (willConnect)
+						usePrototype(insert, nativeHTMLStyleElement, (style) =>
+							rewriteStyleText(style),
+						);
 				} else {
 					const queryInterface = getSupportedQueryInterface(node);
 
@@ -303,6 +334,10 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 							for (const style of (insert as Element).querySelectorAll(
 								'style',
 							)) {
+								if (willConnect)
+									usePrototype(style, nativeHTMLStyleElement, (style) =>
+										rewriteStyleText(style),
+									);
 								styles.push(style);
 							}
 

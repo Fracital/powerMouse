@@ -1,0 +1,44 @@
+<!doctype html>
+<title>CSS</title>
+<style>
+	@import url(/pages/imp.css);
+	#d {
+		background-image: url(/pages/echo.json);
+	}
+</style>
+<style id="s1"></style>
+<div id="a">a</div>
+<div id="b">b</div>
+<div id="c">c</div>
+<div id="d">d</div>
+<script>
+	window.__css = {};
+	const bg = (id) =>
+		getComputedStyle(document.getElementById(id)).backgroundImage;
+	document
+		.getElementById('s1')
+		.sheet.insertRule('#a { background-image: url(/pages/echo.json) }', 0);
+	const sheet = new CSSStyleSheet();
+	sheet.replaceSync('#b { background-image: url(/pages/echo.json) }');
+	document.adoptedStyleSheets = [sheet];
+	const sheet2 = new CSSStyleSheet();
+	const replaced = sheet2.replace(
+		'#c { background-image: url(/pages/echo.json) }',
+	);
+	document.adoptedStyleSheets = [sheet, sheet2];
+	const face = new FontFace('Fx', 'url(/pages/font.woff2)');
+	document.fonts.add(face);
+	face.load().catch(() => {});
+	replaced.then(() => {
+		setTimeout(() => {
+			__css.insertRule = bg('a');
+			__css.replaceSync = bg('b');
+			__css.replace = bg('c');
+			__css.styleText = bg('d');
+			__css.requests = performance
+				.getEntriesByType('resource')
+				.map((e) => e.name);
+			__css.done = true;
+		}, 1500);
+	});
+</script>
