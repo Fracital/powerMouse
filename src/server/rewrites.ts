@@ -11,6 +11,7 @@ import { modifyHTML, modifyRefresh, routeHTML } from '../rewriteHTML';
 import { modifyJS, routeJS, ScriptType } from '../rewriteJS';
 import { parseRoutedURL, routeBinary } from '../routeURL';
 import StompURL from '../StompURL';
+import { BUILD } from '../version';
 import { decodeDocument, utf8ContentType } from './charset';
 import Cookies from './Cookies';
 import {
@@ -213,6 +214,7 @@ export function registerRewrites(
 				codec: codecType(this.codec),
 				frameAncestors: init.frameAncestors,
 				...(init.openTab ? { openTab: true } : {}),
+				build: BUILD,
 			};
 		},
 		cookies,

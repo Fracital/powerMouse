@@ -15,6 +15,7 @@ import {
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import serveTransport from '../transport/serveTransport';
+import { BUILD } from '../version';
 import { canTraverse, traverse } from './history';
 import { DEFAULT_SANDBOX } from './remote';
 
@@ -114,6 +115,7 @@ export class StompController {
 	private stopServing?: () => void;
 	private ready: Promise<void>;
 	private readyResolve!: () => void;
+	private readyReject!: (error: Error) => void;
 	private lastHandshake = 0;
 	constructor(init: ControllerInit) {
 		if (!('serviceWorker' in navigator))
@@ -153,7 +155,12 @@ export class StompController {
 			if (url !== null && init.onOpen) init.onOpen(url, frame);
 		});
 
-		this.ready = new Promise((resolve) => (this.readyResolve = resolve));
+		this.ready = new Promise((resolve, reject) => {
+			this.readyResolve = resolve;
+			this.readyReject = reject;
+		});
+		// an unhandled rejection is noise when the host only reads isReady
+		this.ready.catch(() => {});
 
 		navigator.serviceWorker.addEventListener('message', (event) => {
 			if (
@@ -187,7 +194,18 @@ export class StompController {
 
 		this.rpc = new RpcHelper<Controllerbound, SWbound>(
 			{
-				ready: async () => {
+				ready: async (info) => {
+					const build = info?.build;
+					if (build !== undefined && build !== BUILD) {
+						const error = new Error(
+							`Stomp version mismatch: the controller is build ${BUILD}, the service worker is build ${build}; hard-reload the page or clear the old service worker`,
+						);
+						console.error(error.message);
+						this.readyReject(error);
+						return;
+					}
+					// the id both sides agreed on, visible to the host
+					if (build !== undefined) this.config = { ...this.config, build };
 					this.isReady = true;
 					this.readyResolve();
 				},
@@ -208,6 +226,7 @@ export class StompController {
 		const message: ControllerInitMessage = {
 			directory: this.config.directory,
 			config: this.config,
+			build: BUILD,
 		};
 
 		this.serviceworker.postMessage({ [CONTROLLER_INIT]: message }, [

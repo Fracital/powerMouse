@@ -10,6 +10,7 @@ import {
 	WORKER_BASE,
 } from '../transport/messages';
 import RemoteTransport from '../transport/RemoteTransport';
+import { BUILD } from '../version';
 import Module from './Module';
 
 export interface ModuleCtor {
@@ -29,6 +30,8 @@ export default class Client {
 	directory: string;
 	/** the host handles window.open / target=_blank (config.openTab) */
 	openTab: boolean;
+	/** the service worker's build id, from the shell */
+	build?: string;
 	applied: boolean;
 	isDOM: boolean;
 	isWorker: boolean;
@@ -76,6 +79,13 @@ export default class Client {
 		this.codec = init.codec;
 		this.directory = init.directory;
 		this.openTab = !!init.openTab;
+		this.build = init.build;
+		// a stale cached bundle next to a new service worker: say so once,
+		// the page still gets its best effort
+		if (init.build && init.build !== BUILD)
+			console.error(
+				`Stomp: this inject bundle is build ${BUILD} but the service worker is build ${init.build}; hard-reload the page`,
+			);
 		this.isDOM = false;
 		this.isWorker = false;
 		this.#serviceWorkerContainer = (
@@ -97,6 +107,7 @@ export default class Client {
 			directory: this.directory,
 			codec: codecType(this.codec),
 			...(this.openTab ? { openTab: true } : {}),
+			...(this.build ? { build: this.build } : {}),
 		};
 	}
 	/**

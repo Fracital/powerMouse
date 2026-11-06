@@ -19,6 +19,8 @@ export interface Config {
 	 * opening a popup, and `window.open` returns null like a popup blocker.
 	 */
 	openTab?: boolean;
+	/** @internal build id of the service worker that serves the page (src/version.ts) */
+	build?: string;
 }
 
 export interface ParsedConfig extends Omit<Config, 'codec'> {

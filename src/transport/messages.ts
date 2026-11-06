@@ -63,8 +63,8 @@ export interface StorageChange {
 export interface ControllerInitMessage {
 	directory: string;
 	config: Config;
-	/** the controller bundle's build id (src/version.ts); optional until every bundle sends it */
-	build?: string;
+	/** the controller bundle's build id (src/version.ts) */
+	build: string;
 }
 
 export interface InitRemoteTransportMessage {
@@ -86,7 +86,7 @@ export type SWbound = {
 
 /** implemented by the controller, called by the SW */
 export type Controllerbound = {
-	ready: [{ build?: string } | undefined];
+	ready: [{ build: string }];
 	initRemoteTransport: [MessagePort];
 };
 

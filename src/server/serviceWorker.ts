@@ -11,6 +11,7 @@ import {
 } from '../transport/messages';
 import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
+import { BUILD } from '../version';
 import createServer, { StompServer } from './createServer';
 
 interface ControllerRef {
@@ -54,7 +55,7 @@ function registerController(
 	controllers.set(directory, ref);
 
 	server.then(
-		() => rpc.call('ready', undefined),
+		() => rpc.call('ready', { build: BUILD }),
 		(error) => console.error('Stomp: failed to create server', error),
 	);
 }

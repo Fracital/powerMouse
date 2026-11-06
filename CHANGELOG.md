@@ -95,6 +95,10 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- The controller, the service worker and the inject bundles carry a build
+  id; a mismatch (a stale bundle next to a new service worker) rejects
+  `controller.wait()` with both ids and logs one error in the page, instead
+  of failing somewhere else later.
 - Response headers that would bind a page to the proxy origin (HSTS,
   `Clear-Site-Data`, COEP, reporting, `Permissions-Policy`, nosniff) and the
   already consumed `Set-Cookie` are stripped; `Link` preloads and
