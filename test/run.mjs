@@ -1,10 +1,13 @@
 // Browser test runner: builds nothing, gives every suite in test/suites/ its
 // own demo server and fixture site on free ports, runs the suites, prints a
-// summary and exits non-zero when any check failed. As many suites run at
-// once as the machine has cores (PARALLEL=n changes that; PARALLEL=1 streams
+// summary and exits non-zero when any check failed. Up to eight suites run at
+// once, fewer on small machines (PARALLEL=n changes that; PARALLEL=1 streams
 // each suite's lines as they come). Suites sharing one server starve each
 // other on its wisp and fail spuriously, so parallel runs never share a
-// server: with a server pair each, a run takes as long as its slowest suite.
+// server; and past eight at once the mouse-driven and real-site suites start
+// to miss their timing windows (measured: 21 at once flakes, 8 does not).
+// The slow suites are queued first, so a run takes about as long as the
+// slowest one.
 //
 //   npm test                   all suites
 //   npm test -- back escapes   only these (names without .mjs)
@@ -28,8 +31,17 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const suitesDir = `${root}test/suites/`;
 const PARALLEL = Math.max(
 	1,
-	Number(process.env.PARALLEL) || availableParallelism(),
+	Number(process.env.PARALLEL) || Math.min(8, availableParallelism()),
 );
+
+// the real-site walks and the per-vector escape matrices take minutes
+const SLOW = [
+	'backwalk-single',
+	'escapes-same-origin',
+	'escapes-isolated',
+	'backwalk-tabs',
+	'back',
+];
 const SUITE_TIMEOUT_MS = 10 * 60 * 1000;
 
 if (!existsSync(`${root}dist/serviceWorker.js`)) {
@@ -150,7 +162,11 @@ function runSuite(name, { port, fixturePort }) {
 }
 
 const results = [];
-const queue = [...suites];
+const queue = [...suites].sort(
+	(a, b) =>
+		(SLOW.includes(a) ? SLOW.indexOf(a) : SLOW.length) -
+		(SLOW.includes(b) ? SLOW.indexOf(b) : SLOW.length),
+);
 const workers = Array.from(
 	{ length: Math.min(PARALLEL, suites.length) },
 	async () => {
