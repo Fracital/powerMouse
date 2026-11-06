@@ -63,6 +63,9 @@ const PROXY_ORIGIN =
 			? location.origin.replace('localhost', '127.0.0.1')
 			: null;
 const ISOLATED = !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
+// HTTP cache in the service worker, off by default; ?cache turns it on for a
+// visit
+const CACHE = new URLSearchParams(location.search).has('cache');
 const proxyBase = ISOLATED ? PROXY_ORIGIN : '';
 // STOMP_WISP_URL points the transports at an external wisp server (in
 // production, the edge relay); otherwise the demo server's own /wisp/
@@ -171,9 +174,18 @@ async function boot() {
 			directory: DIRECTORY,
 			transport: transports[name](),
 			codec: 'xor',
+			cache: CACHE,
 			// a page's window.open / target=_blank becomes a tab here, never a
 			// bare proxied popup (the page sees null, like a popup blocker)
 			onOpen: (url) => navigate(url, { newTab: true }),
+			// the page reports its URL and title as they change
+			onNavigate: (info, frame) => {
+				const tab = tabs.find((t) => t.frame === frame);
+				if (!tab) return;
+				tab.url = info.url;
+				recordUrl(tab);
+				if (tab === activeTab) syncOmnibox();
+			},
 		});
 	} else {
 		setStatus('Registering service worker…');
@@ -188,9 +200,18 @@ async function boot() {
 			transport: await instantiate(transports[name]()),
 			directory: DIRECTORY,
 			codec: 'xor',
+			cache: CACHE,
 			// a page's window.open / target=_blank becomes a tab here, never a
 			// bare proxied popup (the page sees null, like a popup blocker)
 			onOpen: (url) => navigate(url, { newTab: true }),
+			// the page reports its URL and title as they change
+			onNavigate: (info, frame) => {
+				const tab = tabs.find((t) => t.frame === frame);
+				if (!tab) return;
+				tab.url = info.url;
+				recordUrl(tab);
+				if (tab === activeTab) syncOmnibox();
+			},
 		});
 	}
 	window.controller = controller; // handy from devtools
@@ -916,7 +937,8 @@ function syncOmnibox(force = false) {
 	const hash = `#${encodeURIComponent(url)}`;
 	if (location.hash !== hash) history.replaceState(null, '', hash);
 }
-setInterval(() => syncOmnibox(), 500);
+// pages report navigation through onNavigate; this is only a safety net
+setInterval(() => syncOmnibox(), 5000);
 
 // TLD autocomplete under the address bars, as in Powermouse: every keystroke
 // asks /suggestions for suffixes close to what was typed after the last dot,
