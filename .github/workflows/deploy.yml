@@ -1,0 +1,73 @@
+# Build every push to master, then deploy it to terp (5.188.124.62) as https://stomp.fracit.al/.
+#
+# TERP_DEPLOY_KEY is an SSH key that terp pins to /usr/local/sbin/stomp-deploy-gate (source:
+# deploy/terp-deploy-gate.sh, installed by hand, CI never updates it). The only command it accepts
+# is `deploy <sha>`: terp fetches that commit from GitHub, runs npm ci + build in /opt/stomp/stage,
+# swaps /opt/stomp/repo to it, restarts pm2 `stomp`, health-checks :8081 and rolls back on failure.
+# It refuses to deploy if the live checkout has commits or edits not on GitHub.
+#
+# Same posture as ci.yml: read-only token, pinned actions, no pull_request trigger, so a PR can
+# never reach the deploy key.
+
+name: Deploy
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch: {}
+
+concurrency:
+  group: terp-deploy
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  TERP_HOST: 5.188.124.62
+  TERP_HOST_KEY: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIObUWrM7CxDC8VuXpP9FGykhelefOxfFj+cthroe5/c8
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 26
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - run: npm run build
+
+      - run: test -f dist/serviceWorker.js
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        env:
+          TERP_DEPLOY_KEY: ${{ secrets.TERP_DEPLOY_KEY }}
+        run: |
+          if [[ -z "$TERP_DEPLOY_KEY" ]]; then
+            echo "::error::TERP_DEPLOY_KEY secret is not set"
+            exit 1
+          fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$TERP_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "$TERP_HOST $TERP_HOST_KEY" > ~/.ssh/known_hosts
+
+      - name: Deploy ${{ github.sha }} to terp
+        run: ssh -o BatchMode=yes "root@$TERP_HOST" deploy "$GITHUB_SHA"
+
+      # terp's :443 only admits the edge fleet; the gate already health-checked :8081 locally.
+      - name: Verify site responds
+        run: |
+          curl -fsS -m 20 -o /dev/null -w 'site %{http_code}\n' https://stomp.fracit.al/
+          curl -fsS -m 20 https://stomp.fracit.al/api/status

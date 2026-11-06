@@ -152,6 +152,7 @@ export function registerRewrites(
 			return {
 				directory: this.directory,
 				codec: codecType(this.codec),
+				frameAncestors: init.frameAncestors,
 			};
 		},
 		cookies,
@@ -238,6 +239,14 @@ export function registerRewrites(
 				if (headers.has('x-frame-options')) {
 					filteredHeaders.delete('x-frame-options');
 				}
+
+				// the page's own framing policy is gone (it would refuse our frame);
+				// ours only lets the host application embed the proxy origin
+				if (rewriter.config.frameAncestors?.length)
+					filteredHeaders.set(
+						'content-security-policy',
+						`frame-ancestors ${rewriter.config.frameAncestors.join(' ')}`,
+					);
 
 				if (headers.has('refresh')) {
 					filteredHeaders.set(

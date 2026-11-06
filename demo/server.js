@@ -6,7 +6,18 @@
 //   /epoxy/      epoxy transport module
 //   /libcurl/    libcurl transport module
 //   /fonts/      Montserrat from @fontsource
-//   /wisp/       wisp server the transports tunnel through
+//   /config.js   deployment config for the page (see the environment below)
+//   /wisp/       wisp server the transports tunnel through, unless
+//                STOMP_WISP_URL names an external one
+//
+// Environment (also read from a .env file next to package.json):
+//   PORT                listen port (default 8080)
+//   STOMP_WISP_URL      external wisp endpoint, e.g. wss://host/pipe/<key>/;
+//                       when set, the built-in /wisp/ is not served
+//   STOMP_PROXY_ORIGIN  origin that serves the proxy for isolation mode; empty
+//                       or unset runs the same-origin controller (README,
+//                       "Origin isolation")
+//   WISP_ALLOW_LOOPBACK let the built-in wisp reach loopback/private hosts
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { hostname } from 'node:os';
@@ -21,6 +32,16 @@ import pkg from '../package.json' with { type: 'json' };
 
 const require = createRequire(import.meta.url);
 const { stompPath } = require('../lib/index.cjs');
+
+// deployment settings live in an uncommitted .env next to package.json
+try {
+	process.loadEnvFile(fileURLToPath(new URL('../.env', import.meta.url)));
+} catch {
+	// no .env: everything comes from the environment or the defaults below
+}
+
+const externalWisp = process.env.STOMP_WISP_URL || '';
+const proxyOrigin = process.env.STOMP_PROXY_ORIGIN || '';
 
 // the transports only export their dist entry; serve its directory
 const transportDir = (name) =>
@@ -138,6 +159,18 @@ app.get('/suggestions', (req, res) => {
 	res.json([...prefixed, ...fuzzy].slice(0, 6));
 });
 
+// what the page needs to know about this deployment; keys are only present
+// when set so the page can keep its local-development defaults otherwise
+const pageConfig = {
+	...(externalWisp && { wisp: externalWisp }),
+	...(process.env.STOMP_PROXY_ORIGIN !== undefined && { proxyOrigin }),
+};
+app.get('/config.js', (req, res) => {
+	res.set('Cache-Control', 'no-store');
+	res.type('application/javascript');
+	res.send(`window.STOMP_CONFIG = ${JSON.stringify(pageConfig)};\n`);
+});
+
 app.get('/api/status', (req, res) => {
 	res.json({
 		uptime: (Date.now() - started) / 1000,
@@ -160,7 +193,8 @@ app.use(
 const server = createServer(app);
 
 server.on('upgrade', (req, socket, head) => {
-	if (req.url.startsWith('/wisp/')) wisp.routeRequest(req, socket, head);
+	if (!externalWisp && req.url.startsWith('/wisp/'))
+		wisp.routeRequest(req, socket, head);
 	else socket.end();
 });
 
@@ -172,6 +206,8 @@ server.on('listening', () => {
 	console.log('Listening on:');
 	console.log(`\thttp://localhost:${address.port}`);
 	console.log(`\thttp://${hostname()}:${address.port}`);
+	if (externalWisp) console.log(`Wisp: ${externalWisp}`);
+	if (proxyOrigin) console.log(`Proxy origin: ${proxyOrigin}`);
 });
 
 server.listen({ port });

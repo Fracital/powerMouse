@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { build, context } from 'esbuild';
 import { rimraf } from 'rimraf';
@@ -53,6 +53,10 @@ const builds = [
 		format: 'iife',
 	},
 	{
+		entryPoints: { controllerFrame: 'src/controller/frame.ts' },
+		format: 'iife',
+	},
+	{
 		entryPoints: { controller: 'src/controller/index.ts' },
 		format: 'esm',
 		outExtension: { '.js': '.mjs' },
@@ -64,6 +68,13 @@ const builds = [
 ].map((options) => ({ ...common, ...options }));
 
 await rimraf('dist');
+await mkdir('dist', { recursive: true });
+// the controller frame document is static; the deployer may edit its
+// allowed-origins meta tag
+await copyFile(
+	'src/controller/controllerFrame.html',
+	'dist/controllerFrame.html',
+);
 
 if (dev) {
 	const contexts = await Promise.all(builds.map((options) => context(options)));

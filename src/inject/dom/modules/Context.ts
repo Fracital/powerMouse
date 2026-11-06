@@ -337,8 +337,18 @@ export default class ContextModule extends Module<DocumentClient> {
 		return res;
 	}
 	newRestricted(context: Context): RestrictedContext {
-		if (!(CLIENT_KEY in context)) {
-			if (context === this.client.top) {
+		// a cross-origin window (the host application in isolation mode) throws
+		// on the `in` check; it is never a Stomp context
+		let isStomp: boolean;
+		try {
+			isStomp = CLIENT_KEY in context;
+		} catch {
+			isStomp = false;
+		}
+
+		if (!isStomp) {
+			if (context === this.client.top || context === this.client.parent) {
+				// the proxied world ends here: present ourselves as the top
 				return findTop(this.client.global);
 			} else {
 				return context;

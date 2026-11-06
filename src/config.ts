@@ -6,6 +6,13 @@ export interface Config {
 	codec: ConfigCodec;
 	/** pathname of the directory the service worker is scoped to, e.g. `/stomp/` */
 	directory: string;
+	/**
+	 * Origins allowed to embed proxied documents, emitted as a
+	 * `Content-Security-Policy: frame-ancestors` header. Set by the controller
+	 * frame in origin-isolation mode so only the host application can frame
+	 * the proxy origin. Absent in same-origin mode.
+	 */
+	frameAncestors?: string[];
 }
 
 export interface ParsedConfig extends Omit<Config, 'codec'> {

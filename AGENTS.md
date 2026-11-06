@@ -101,6 +101,19 @@ no unit test suite; see Verification.
   until the spin limit. Don't add new synchronous paths.
 - **One controller per `directory`.** Inject bundle URLs are built from the
   directory, so the scramjet-style random prefix per controller doesn't apply.
+- **Same-origin `StompController` is for development only.** It is not a
+  security boundary: a proxied page is same-origin with the host. Real
+  deployments use `RemoteController` with a separate proxy origin
+  (`src/controller/remote.ts` on the host, `src/controller/frame.ts` in the
+  controller frame). The "this page is top-level" spoof hooks live in
+  `src/inject/dom/modules/Framing.ts`; it must be added before `ContextModule`
+  because it captures the native `MessageEvent.source` getter, and anything
+  it registers on `window` must be re-registered through
+  `addDocumentOpenListener`, since `document.open()` drops window listeners.
+- **Cross-origin named frame access is blocked by Chrome.** The controller
+  frame reaches sibling proxied frames by index into the host's `frames`
+  list, which is in creation order, not document order; the host computes
+  the index by comparing window proxies.
 - **Prettier 3 formats with trailing commas and reflows strings.** If you
   patch files with scripts, read the current text first.
 
@@ -138,6 +151,18 @@ Rules for touching the workflow, because a PR from anyone runs it:
   workflows get read-only tokens by default, first-time outside contributors
   need approval before any workflow runs, and `master` requires the CI
   checks to pass before a pull request merges.
+
+`.github/workflows/deploy.yml` deploys every push to `master` to
+https://stomp.fracit.al (terp, pm2 app `stomp` on :8081, behind OpenResty and
+the abulxt edge fleet). Its only secret is `TERP_DEPLOY_KEY`, an SSH key that
+terp restricts to `/usr/local/sbin/stomp-deploy-gate` (source:
+`deploy/terp-deploy-gate.sh`, installed by hand). The gate accepts exactly
+`deploy <sha>` and refuses if the live checkout has work that is not on
+GitHub. It runs on `push` only, so pull requests never reach the key. Server
+settings live in `/opt/stomp/repo/.env` on terp (`PORT`, `STOMP_WISP_URL`
+pointing at the edges' keyed wisp relay); CI never touches it. The OpenResty
+vhost and the edge server names are managed by abulxt's ansible
+(`fracital_origin_apps`, `fracital_extra_hosts`), not by this repo.
 
 ## Verification
 

@@ -8,6 +8,7 @@ import { CookiesModule } from './modules/Cookies';
 import DOMAttributesModule from './modules/DOMAttributes';
 import DOMContentHooks from './modules/DOMContentHooks';
 import DOMHooksModule from './modules/DOMHooks';
+import FramingModule from './modules/Framing';
 import HistoryModule from './modules/History';
 import IFrameModule from './modules/IFrame';
 import LocationModule from './modules/Location';
@@ -31,6 +32,8 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(StorageModule);
 	client.addModule(XMLHttpRequestModule);
 	client.addModule(CookiesModule);
+	// Framing before Context: it needs the native MessageEvent.source getter
+	client.addModule(FramingModule);
 	client.addModule(ContextModule);
 }
 

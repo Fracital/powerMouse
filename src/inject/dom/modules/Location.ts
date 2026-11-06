@@ -116,6 +116,25 @@ export default class LocationModule extends Module<DocumentClient> {
 			});
 		}
 
+		// a top-level document has no ancestors; never reveal the host origin.
+		// DOMStringList.prototype.length is a getter, so define own properties
+		// rather than assigning.
+		const emptyAncestors = Object.freeze(
+			Object.create(this.client.global.DOMStringList.prototype, {
+				length: { value: 0, enumerable: true },
+				item: { value: () => null },
+				contains: { value: () => false },
+				[Symbol.iterator]: {
+					value: function* () {},
+				},
+			}),
+		);
+		Reflect.defineProperty(proxy, 'ancestorOrigins', {
+			configurable: true,
+			enumerable: true,
+			get: () => emptyAncestors,
+		});
+
 		Reflect.defineProperty(proxy, 'assign', {
 			value: proxyModule.wrapFunction(
 				location.assign,

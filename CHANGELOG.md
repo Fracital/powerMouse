@@ -44,6 +44,16 @@ The first release after a four-year gap. Everything below is breaking.
   disabled and no write-back; dependabot for actions and npm;
   `npm run check:prose` enforces the no-em-dash and no-AI-attribution rules.
 
+### Deployment
+
+- The demo is live at https://stomp.fracit.al: `.github/workflows/deploy.yml`
+  builds every push to `master` and has terp run `deploy/terp-deploy-gate.sh`
+  (stage build, swap, pm2 restart, health check, rollback). The demo server
+  reads `PORT`, `STOMP_WISP_URL` and `STOMP_PROXY_ORIGIN` from the environment
+  or a `.env` file and hands the page its settings through `/config.js`; with
+  an external wisp URL the built-in `/wisp/` is not served. See
+  `demo/README.md`, "Deploying somewhere real".
+
 ### Dependencies
 
 - meriyah 7, parse5 8, css-tree 3, entities 9, idb 8, set-cookie-parser 3,
@@ -57,6 +67,25 @@ The first release after a four-year gap. Everything below is breaking.
 
 - Nested frames were given the codec _name_ instead of the codec key when
   their client was created. They now reuse the parent's key.
+
+### Origin isolation
+
+- `RemoteController` / `RemoteFrame`: the host page embeds
+  `dist/controllerFrame.html` from a separate proxy origin; that frame
+  registers the service worker, loads the transport and runs the real
+  controller, driven over `postMessage` with origin checks.
+- Proxied content lives in sandboxed, cross-origin frames (no
+  `allow-top-navigation`), and the service worker emits
+  `Content-Security-Policy: frame-ancestors <host>` on proxied documents.
+- Framing spoof (`src/inject/dom/modules/Framing.ts`): `frameElement` is
+  null, `window.name` is a shadow value, outer size and screen position
+  match the inner size, `document.referrer` never reveals the host,
+  `location.ancestorOrigins` is empty, and `message` events from outside
+  the proxied world are dropped. `top` and `parent` resolve to the page
+  itself across a cross-origin parent.
+- Transports are described (`{ module, options }`) rather than passed as
+  instances in isolation mode. The demo runs isolated on
+  `localhost` (host) vs `127.0.0.1` (proxy).
 
 ### QA pass (headless Chrome against the demo)
 

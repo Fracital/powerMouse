@@ -1075,18 +1075,119 @@ body.recents .frames .frame.shade {
 	}
 }
 
-/* suggestion dropdown under the omnibox (the landing form already has .urlFill) */
+/* ---- suggestion dropdown (landing .urlFill and the omnibox form) --------- */
+/* .urlFill already positions itself (relative on phones, absolute on desktop
+   in Powermouse's rules); only the omnibox form needs to become a containing
+   block for the dropdown */
 .chrome form {
 	position: relative;
 }
 
-.chrome .auto-fill {
-	position: relative;
+.suggestions {
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 100%;
 	z-index: 30;
-	width: auto;
-	cursor: pointer;
+	display: none;
+	max-height: 50vh;
+	overflow: auto;
+	background: #fff;
+	border: 1px solid #ced4da;
+	border-top: 0;
+	border-radius: 0 0 0.25rem 0.25rem;
+	box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
 }
 
-.auto-fill {
+.suggestions:not(:empty) {
+	display: block;
+}
+
+.suggestions .auto-fill {
+	position: static;
+	display: block;
+	width: auto;
+	height: auto;
+	margin: 0;
+	padding: 0.45rem 0.75rem;
+	border: 0;
+	border-top: 1px solid #eee;
+	border-radius: 0;
+	box-shadow: none;
+	background: #fff;
+	color: #495057;
+	font-family: 'Roboto', sans-serif;
+	font-size: 15px;
+	line-height: 1.3;
 	cursor: pointer;
+	user-select: none;
+	transition: none;
+}
+
+.suggestions .auto-fill:first-child {
+	border-top: 0;
+}
+
+.suggestions .auto-fill:hover {
+	background: #e8f1fb;
+	color: #1a3d5c;
+	box-shadow: none;
+}
+
+/* the omnibox keeps its radius when the dropdown is open */
+.chrome .omnibox:focus {
+	border-radius: 0.25rem;
+}
+
+/* ---- the moving quick-link buttons render above cards and labels --------- */
+body.recents.recents-from-home .dock {
+	z-index: 40;
+}
+
+/* ---- home screen zooms in (Home button, Back at the start of history,
+   leaving the switcher); each piece scales around the viewport centre ----- */
+@keyframes landingZoom {
+	from {
+		opacity: 0;
+		transform: scale(1.08);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+#landing.entering .zoom {
+	animation: landingZoom 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* ---- no browser focus rings anywhere in the demo UI ----------------------- */
+.url:focus,
+.omnibox:focus,
+.form-text:focus,
+.btn:focus,
+.btn-blu:focus,
+.btn-grn:focus,
+.btn-red:focus,
+.btn-org:focus,
+.navbtn:focus,
+.navbtn:focus-visible,
+.dockButton:focus,
+.closeAll:focus,
+.recentsMore:focus,
+.newtab:focus,
+.select:focus,
+.cardLabel .close:focus,
+.btn-fancy:focus,
+a:focus,
+button:focus-visible,
+select:focus-visible,
+input:focus-visible {
+	outline: none;
+	box-shadow: none;
+}
+
+.url:focus,
+.omnibox:focus {
+	border-color: #80bdff; /* focus stays visible, quietly */
 }

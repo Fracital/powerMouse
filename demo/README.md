@@ -25,7 +25,12 @@ Environment variables:
 | Variable              | Default | Meaning                                                                           |
 | --------------------- | ------- | --------------------------------------------------------------------------------- |
 | `PORT`                | `8080`  | HTTP port                                                                         |
+| `STOMP_WISP_URL`      | unset   | External wisp endpoint for the transports; when set, `/wisp/` is not served       |
+| `STOMP_PROXY_ORIGIN`  | unset   | Origin serving the proxy for isolation mode; empty means same origin              |
 | `WISP_ALLOW_LOOPBACK` | unset   | Set to `1` to let the wisp server reach `127.0.0.1` / private networks (local QA) |
+
+They can also live in a `.env` file next to `package.json` (not committed);
+the server reads it at startup. The page gets what it needs from `/config.js`.
 
 ## What the server does
 
@@ -137,8 +142,63 @@ demo/
 └── README.md
 ```
 
+## Origin isolation
+
+Opened at `http://localhost:8080`, the page uses `http://127.0.0.1:8080` as
+the proxy origin. Same server, two origins, so proxied pages are cross-origin,
+sandboxed frames that can neither read the demo page nor navigate it. On any
+other hostname the proxy origin comes from `STOMP_PROXY_ORIGIN`; without it
+(and at `http://127.0.0.1:8080`) the origins coincide and the demo runs the
+same-origin `StompController`, which the version line says. That mode is not a
+security boundary: a proxied page that breaks out of the rewriter shares the
+origin of the host page. The live demo at https://stomp.fracit.al runs this
+way on purpose, with one hostname.
+
+What the isolated mode consists of:
+
+- `dist/controllerFrame.html`, embedded hidden by `RemoteController`. It
+  registers the service worker on the proxy origin, loads the transport
+  module (which must also live on the proxy origin) and runs the real
+  controller. Its `<meta name="stomp-allowed-origins">` lists the host
+  origins allowed to drive it, space separated; left empty, it trusts the
+  page that embedded it (taken from the referrer once, at load). Set it for
+  a real deployment.
+- Proxied frames get
+  `sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock"`.
+  `allow-same-origin` is required so the proxy origin's service worker
+  controls the frame; `allow-top-navigation` is deliberately absent so
+  `top.location = ...` throws instead of navigating the host.
+- The service worker adds `Content-Security-Policy: frame-ancestors <host>`
+  to every proxied document, so only the host application can frame the
+  proxy origin.
+- Navigation controls (back, forward, reload) and the address bar's URL and
+  title are relayed through the controller frame, which is same-origin with
+  the proxied pages; the host page never touches them directly.
+
 ## Deploying somewhere real
 
+https://stomp.fracit.al is this directory, deployed by
+`.github/workflows/deploy.yml` on every push to `master`: the workflow builds,
+then asks terp (the Fracital VPS) over SSH to run `deploy/terp-deploy-gate.sh`
+for that commit. The gate clones and builds in `/opt/stomp/stage`, swaps
+`/opt/stomp/repo` to it, restarts the pm2 app `stomp` on :8081 and rolls back
+if `/api/status` does not come up. terp's OpenResty routes the `stomp.fracit.al`
+host to that port (the vhost is in abulxt's `fracital_origin` ansible role,
+`fracital_origin_apps`); the abulxt edge fleet terminates TLS and relays to
+terp, and Cloudflare fronts the edges with a proxied CNAME. terp's
+`/opt/stomp/repo/.env` holds `PORT` and `STOMP_WISP_URL`, which points the
+transports at the edges' existing keyed wisp relay (`/pipe/<key>/`, served by
+each edge's own wispurr), so the demo server's built-in wisp is off there.
+
+For your own deployment:
+
+- For isolation, use two hostnames: one for the host application, one (the
+  proxy origin) for `dist/`, the transports, wisp and the proxied content.
+  One server can serve both; the demo server does. Set `STOMP_PROXY_ORIGIN`
+  to the second one and fill in `stomp-allowed-origins` in
+  `controllerFrame.html`. Cloudflare's universal certificate covers one
+  subdomain level, so prefer `name-proxy.example.com` over
+  `proxy.name.example.com`.
 - Serve the page over HTTPS; the script picks `wss://` for the wisp URL
   automatically from `location.protocol`.
 - Keep `dist/`, the transports and the page on the same origin. The service

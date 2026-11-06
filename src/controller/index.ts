@@ -17,6 +17,10 @@ export { default as SearchBuilder } from '../bootstrapper/SearchBuilder';
 export type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 export type { Config, ConfigCodec } from '../config';
 
+export { RemoteController, RemoteFrame, DEFAULT_SANDBOX } from './remote';
+export type { RemoteControllerInit } from './remote';
+export type { TransportDescriptor, FrameInfo } from './messages';
+
 export interface ControllerInit {
 	/** the registered (and ideally active) Stomp service worker */
 	serviceworker: ServiceWorker;
@@ -29,6 +33,8 @@ export interface ControllerInit {
 	 * when loaded as a module.
 	 */
 	directory?: urlLike;
+	/** origins allowed to frame proxied documents (CSP frame-ancestors) */
+	frameAncestors?: string[];
 }
 
 /** ignore the service worker's "revive" broadcast this soon after we registered */
@@ -74,6 +80,7 @@ export class StompController {
 		this.config = {
 			codec: init.codec ?? 'xor',
 			directory: this.directory.pathname,
+			...(init.frameAncestors ? { frameAncestors: init.frameAncestors } : {}),
 		};
 
 		this.ready = new Promise((resolve) => (this.readyResolve = resolve));

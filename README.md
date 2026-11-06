@@ -72,12 +72,60 @@ changelog's known limitations before picking one.
 `SearchBuilder(template)` turns free text into a URL: hosts and URLs pass
 through, everything else is substituted into `template` at `%s`.
 
+`RemoteController` (also `window.StompRemoteController` from
+`dist/Controller.js`) is the host-side controller for origin isolation; it has
+the same shape as `StompController` but runs the real controller in a hidden
+frame on the proxy origin:
+
+| Member                        | Description                                                                                                            |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `new RemoteController(init)`  | `init.proxyOrigin`, `init.transport` (`{ module, options }`), optional `directory`, `codec`, `sandbox`, `pollInterval` |
+| `wait()`                      | resolves once the controller frame has registered the service worker and loaded the transport                          |
+| `createFrame(iframe?)`        | returns a `RemoteFrame`; applies the sandbox attribute                                                                 |
+| `setTransport(descriptor)`    | hot-swap the transport (loaded inside the controller frame)                                                            |
+| `route(url)`                  | the proxied URL for `url` on the proxy origin                                                                          |
+| `frames`, `config`, `element` | frames created so far, the controller's config, the hidden controller iframe                                           |
+
+`RemoteFrame`: `go(url)`, `back()`, `forward()`, `reload()` (the last three
+are relayed through the controller frame, which is same-origin with the
+proxied page), `url` and `title` (last known, refreshed every
+`pollInterval` ms), `element`.
+
+A transport descriptor is `{ module: '/epoxy/index.mjs', options: [{ wisp }] }`:
+the module URL must be on the proxy origin and its default export is the
+transport class, constructed with `...options`.
+
+## Origin isolation
+
+`StompController` keeps everything on one origin, so a proxied page is
+same-origin with the page that embeds it. Browsers grant same-origin frames
+full access to each other: `parent.document`, `top.location = ...`,
+`frameElement`, cookies and storage of the host. Stomp's hooks hide most of
+that from the page's own (rewritten) JavaScript, but hooks are not a security
+boundary. **Same-origin mode is for development only.**
+
+Origin isolation serves `dist/` and all proxied content from a second origin
+(for example `app.example.com` hosting the UI and `proxy.example.com` serving
+the proxy). The host page creates a `RemoteController`, which embeds
+`dist/controllerFrame.html` from the proxy origin; that frame registers the
+service worker, loads the transport and runs the real `StompController`.
+Proxied pages live in sandboxed, cross-origin iframes (`allow-same-origin`
+so the service worker controls them, no `allow-top-navigation`), so the
+browser itself refuses them any access to the host, and the service worker
+sends `Content-Security-Policy: frame-ancestors <host origin>` so nothing
+else can embed the proxy origin. On top of that the inject bundle makes the
+page believe it is top-level: `top`, `parent`, `frameElement`, `window.name`,
+`outerWidth`/`outerHeight`, `screenX`/`screenY`, `document.referrer` and
+`location.ancestorOrigins` all answer as they would for a real top window,
+and `message` events from outside the proxied world never reach the page.
+
 ## Demo
 
 `npm run demo` serves a complete host application on http://localhost:8080,
 including a wisp server and both transports. It is documented in
 [`demo/README.md`](demo/README.md) and is the quickest way to see the API above
-in use.
+in use. It is live at https://stomp.fracit.al, deployed from `master` by
+`.github/workflows/deploy.yml`.
 
 ## Development
 

@@ -23,20 +23,49 @@ const transportSelect = $('transport');
 const omni = $('omni');
 const mainForm = $('mainForm');
 
-const wisp = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/wisp/`;
+// Deployment config comes from /config.js (demo/server.js renders it from the
+// environment); anything missing falls back to the local-development defaults.
+const CFG = window.STOMP_CONFIG || {};
 
+// Origin isolation: the proxy (dist/, transports, wisp, every proxied page)
+// can be served from a different origin than this page, so proxied content is
+// a cross-origin, sandboxed frame that can neither read this page nor navigate
+// it. STOMP_PROXY_ORIGIN selects that; locally, opening the demo as localhost
+// uses 127.0.0.1 (same server) as the proxy origin. Without either, the demo
+// runs the same-origin controller, which is NOT a security boundary.
+const PROXY_ORIGIN =
+	'proxyOrigin' in CFG
+		? CFG.proxyOrigin || null
+		: location.hostname === 'localhost'
+			? location.origin.replace('localhost', '127.0.0.1')
+			: null;
+const ISOLATED = !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
+const proxyBase = ISOLATED ? PROXY_ORIGIN : '';
+// STOMP_WISP_URL points the transports at an external wisp server (in
+// production, the edge relay); otherwise the demo server's own /wisp/
+const wisp =
+	CFG.wisp ||
+	`${(ISOLATED ? PROXY_ORIGIN : location.origin).replace(/^http/, 'ws')}/wisp/`;
+
+// transports are described, not constructed: in isolation mode the instance
+// has to be created inside the controller frame on the proxy origin
 const transports = {
-	async epoxy() {
-		const { default: EpoxyTransport } = await import('/epoxy/index.mjs');
-		return new EpoxyTransport({ wisp });
-	},
-	async libcurl() {
-		const { default: LibcurlTransport } = await import('/libcurl/index.mjs');
+	epoxy: () => ({
+		module: `${proxyBase}/epoxy/index.mjs`,
+		options: [{ wisp }],
+	}),
+	libcurl: () => ({
+		module: `${proxyBase}/libcurl/index.mjs`,
 		// libcurl.js 0.7's default pool (50 total, 6 per host) deadlocks once a
 		// page fans out more requests than that; see CHANGELOG known limitations
-		return new LibcurlTransport({ wisp, connections: [500, 400, 200] });
-	},
+		options: [{ wisp, connections: [500, 400, 200] }],
+	}),
 };
+
+async function instantiate(descriptor) {
+	const { default: Transport } = await import(descriptor.module);
+	return new Transport(...(descriptor.options || []));
+}
 
 let controller;
 
@@ -85,24 +114,32 @@ async function boot() {
 	if (!('serviceWorker' in navigator))
 		throw new Error('This browser does not support service workers.');
 
-	setStatus('Registering service worker…');
-	const registration = await navigator.serviceWorker.register(
-		`${DIRECTORY}serviceWorker.js`,
-		{ scope: DIRECTORY, updateViaCache: 'none' },
-	);
-	const serviceworker = await activated(registration);
-
 	const name = preferredTransport();
 	rememberTransport(name);
-	setStatus(`Loading ${name} transport…`);
-	const transport = await transports[name]();
 
-	controller = new StompController({
-		serviceworker,
-		transport,
-		directory: DIRECTORY,
-		codec: 'xor',
-	});
+	if (ISOLATED) {
+		setStatus('Starting controller frame…');
+		controller = new StompRemoteController({
+			proxyOrigin: PROXY_ORIGIN,
+			directory: DIRECTORY,
+			transport: transports[name](),
+			codec: 'xor',
+		});
+	} else {
+		setStatus('Registering service worker…');
+		const registration = await navigator.serviceWorker.register(
+			`${DIRECTORY}serviceWorker.js`,
+			{ scope: DIRECTORY, updateViaCache: 'none' },
+		);
+		const serviceworker = await activated(registration);
+		setStatus(`Loading ${name} transport…`);
+		controller = new StompController({
+			serviceworker,
+			transport: await instantiate(transports[name]()),
+			directory: DIRECTORY,
+			codec: 'xor',
+		});
+	}
 	window.controller = controller; // handy from devtools
 
 	setStatus('Waiting for the service worker…');
@@ -114,7 +151,10 @@ async function switchTransport(name) {
 	rememberTransport(name);
 	setStatus(`Switching to ${name}…`);
 	try {
-		controller.setTransport(await transports[name]());
+		const descriptor = transports[name]();
+		await controller.setTransport(
+			ISOLATED ? descriptor : await instantiate(descriptor),
+		);
 		setStatus('Ready');
 	} catch (error) {
 		setStatus(`Transport failed: ${error.message}`, true);
@@ -152,8 +192,18 @@ function createTab() {
 }
 
 /** note a URL the frame reached, unless it was our own back/forward */
+const normalizeUrl = (url) => {
+	try {
+		return new URL(url).href;
+	} catch {
+		return url;
+	}
+};
+
 function recordUrl(tab) {
-	const url = tab.frame.url;
+	// the requested URL and the one the frame reports can differ only by
+	// normalisation ("https://a.com" vs "https://a.com/"); that is not a new entry
+	const url = normalizeUrl(tab.frame.url);
 	if (!url || url === tab.history[tab.index]) return;
 	if (tab.traversal) {
 		tab.traversal = null;
@@ -204,6 +254,8 @@ function closeTab(tab, { stayInRecents = false } = {}) {
 	if (index === -1) return;
 	tabs.splice(index, 1);
 	tab.element.remove();
+	labelFor.get(tab)?.remove();
+	labelFor.delete(tab);
 	const frames = controller.frames.indexOf(tab.frame);
 	if (frames !== -1) controller.frames.splice(frames, 1);
 	if (tab === activeTab) activeTab = tabs[Math.max(0, index - 1)] || null;
@@ -218,6 +270,7 @@ function closeTab(tab, { stayInRecents = false } = {}) {
 }
 
 function tabTitle(tab) {
+	if (tab.frame.title) return tab.frame.title; // remote frames report it
 	try {
 		return tab.element.contentDocument?.title || tab.url || 'New tab';
 	} catch {
@@ -234,12 +287,54 @@ function showBrowser() {
 	hideRecents();
 }
 
+// Home screen entrance, like a launcher coming back into view: its pieces
+// fade in while scaling down from 1.08 to 1. Each piece animates on its own
+// but around the same point (the viewport centre), which reads as one zoom of
+// the whole screen. The tiles row is left out while it is FLIPping in from
+// the switcher's dock, so the two animations never fight.
+function zoomLanding(includeTiles) {
+	const pieces = [
+		...landing.querySelectorAll(
+			'.head, .inputWrapper > :not(#button-container), .lbottom, .rbottom',
+		),
+	];
+	if (includeTiles) pieces.push($('button-container'));
+	landing.classList.remove('entering');
+	for (const el of pieces) {
+		el.classList.remove('zoom');
+		el.style.transformOrigin = '';
+	}
+	void landing.offsetHeight; // restart cleanly if it was still playing
+	landing.classList.add('entering');
+	const cx = innerWidth / 2;
+	const cy = (innerHeight - 48) / 2;
+	for (const el of pieces) {
+		const r = el.getBoundingClientRect();
+		el.style.transformOrigin = `${cx - r.left}px ${cy - r.top}px`;
+		el.classList.add('zoom');
+	}
+	const finish = () => {
+		landing.classList.remove('entering');
+		for (const el of pieces) {
+			el.classList.remove('zoom');
+			el.style.transformOrigin = '';
+		}
+	};
+	setTimeout(finish, 260);
+}
+
 function showLanding() {
 	const dockRects = document.body.classList.contains('recents')
 		? rectsOf(dockButtons)
 		: null;
 	browser.classList.add('hidden');
+	// the landing is visible on first paint, so "was hidden" alone means
+	// "coming back into view": no animation on initial load
+	const wasHidden = landing.classList.contains('hidden');
 	landing.classList.remove('hidden');
+	// coming back from the browser view, or out of the switcher (where the
+	// landing was only visibility-hidden under the stage)
+	if (wasHidden || dockRects) zoomLanding(!dockRects);
 	document.body.classList.remove('browsing');
 	hideRecents();
 	if (dockRects) slideFrom(homeTiles, dockRects);
@@ -296,7 +391,7 @@ function layoutRecents(animated = false) {
 
 		// the label is a full-size overlay with the very same transform, so it
 		// can never fall out of step with the frame while animating
-		const label = recentsLabels.children[i];
+		const label = labelFor.get(tab);
 		if (label) {
 			label.style.width = `${vw}px`;
 			label.style.height = `${vh}px`;
@@ -316,45 +411,62 @@ function layoutRecents(animated = false) {
 	recentsCount.textContent = `${tabs.length} active tab${tabs.length === 1 ? '' : 's'}`;
 }
 
-function renderRecents(fromFullScreen = false) {
-	recentsLabels.textContent = '';
+// one label element per tab, kept across renders so it can transition in
+// step with its frame (rebuilding labels made them jump into place)
+const labelFor = new Map();
 
-	tabs.forEach((tab, i) => {
+function createLabel(tab) {
+	const label = document.createElement('div');
+	label.className = 'cardLabel';
+
+	const hit = document.createElement('div');
+	hit.className = 'hit';
+
+	const title = document.createElement('span');
+	title.className = 'title';
+
+	const close = document.createElement('button');
+	close.className = 'close';
+	close.title = 'Close tab';
+	close.setAttribute('aria-label', 'Close tab');
+	close.textContent = '×';
+	close.addEventListener('click', (event) => {
+		event.stopPropagation();
+		closeTab(tab, { stayInRecents: true });
+	});
+
+	label.append(hit, title, close);
+	label.addEventListener('click', () => {
+		if (recentsSwiped) return;
+		const i = tabs.indexOf(tab);
+		if (i === -1) return;
+		if (i === recentsIndex) activateTab(tab);
+		else {
+			recentsIndex = i;
+			layoutRecents();
+		}
+	});
+	return label;
+}
+
+function renderRecents(fromFullScreen = false) {
+	for (const empty of recentsLabels.querySelectorAll('.recentsEmpty'))
+		empty.remove();
+
+	for (const tab of tabs) {
 		// labels show where the frame actually is, redirects included
 		tab.url = tab.frame.url || tab.url;
 
-		const label = document.createElement('div');
-		label.className = 'cardLabel';
-
-		const hit = document.createElement('div');
-		hit.className = 'hit';
-		hit.title = tabTitle(tab);
-
-		const title = document.createElement('span');
-		title.className = 'title';
-		title.textContent = tabTitle(tab);
-
-		const close = document.createElement('button');
-		close.className = 'close';
-		close.title = 'Close tab';
-		close.setAttribute('aria-label', 'Close tab');
-		close.textContent = '×';
-		close.addEventListener('click', (event) => {
-			event.stopPropagation();
-			closeTab(tab, { stayInRecents: true });
-		});
-
-		label.append(hit, title, close);
-		label.addEventListener('click', () => {
-			if (recentsSwiped) return;
-			if (i === recentsIndex) activateTab(tab);
-			else {
-				recentsIndex = i;
-				layoutRecents();
-			}
-		});
-		recentsLabels.append(label);
-	});
+		let label = labelFor.get(tab);
+		if (!label) {
+			label = createLabel(tab);
+			labelFor.set(tab, label);
+			recentsLabels.append(label);
+		}
+		const text = tabTitle(tab);
+		label.querySelector('.title').textContent = text;
+		label.querySelector('.hit').title = text;
+	}
 
 	// nothing open: no cards, no Close all, just the message
 	recentsPanel.classList.toggle('empty', !tabs.length);
@@ -370,15 +482,15 @@ function renderRecents(fromFullScreen = false) {
 		// full screen, the others invisible) so both animate into place together
 		const vw = innerWidth;
 		const vh = innerHeight - 48;
-		tabs.forEach((tab, i) => {
-			const label = recentsLabels.children[i];
+		for (const tab of tabs) {
+			const label = labelFor.get(tab);
 			label.style.width = `${vw}px`;
 			label.style.height = `${vh}px`;
 			label.style.transform = 'translate(0px, 0px) scale(1)';
 			label.style.setProperty('--k', '1');
 			label.style.opacity = tab === activeTab ? '1' : '0';
 			if (tab !== activeTab) tab.element.style.opacity = '0';
-		});
+		}
 		void recentsLabels.offsetHeight; // flush, so the next layout transitions
 	}
 
@@ -436,8 +548,7 @@ function hideRecents(expand = null) {
 
 	recentsClosing = true;
 	document.body.classList.remove('recents-visible'); // controls fade with the card
-	const i = tabs.indexOf(expand);
-	const label = recentsLabels.children[i];
+	const label = labelFor.get(expand);
 	expand.element.classList.remove('shade', 'dragging');
 	expand.element.style.opacity = '1';
 	expand.element.style.transform = 'translate(0px, 0px) scale(1)';
@@ -452,7 +563,7 @@ function hideRecents(expand = null) {
 	}
 	// the other cards fade out underneath
 	for (const tab of tabs) if (tab !== expand) tab.element.style.opacity = '0';
-	for (const other of recentsLabels.children)
+	for (const other of labelFor.values())
 		if (other !== label) other.style.opacity = '0';
 
 	setTimeout(teardownRecents, 260);
@@ -557,7 +668,7 @@ let recentsSwiped = false;
 		recentsSwiped = false;
 		const label = event.target.closest('.cardLabel');
 		liftTab = label
-			? tabs[[...recentsLabels.children].indexOf(label)] || null
+			? [...labelFor.entries()].find(([, l]) => l === label)?.[0] || null
 			: null;
 	});
 	recentsLabels.addEventListener('pointermove', (event) => {
@@ -628,7 +739,7 @@ let recentsSwiped = false;
 
 async function navigate(input, { newTab = false } = {}) {
 	if (!controller) return;
-	const url = SEARCH.query(input.trim());
+	const url = normalizeUrl(SEARCH.query(input.trim()));
 	if (newTab || !activeTab) activateTab(createTab());
 	else showBrowser();
 	const tab = activeTab;
@@ -662,11 +773,14 @@ setInterval(() => syncOmnibox(), 500);
 // and clicking one swaps the typed suffix for it.
 function attachSuggestions(input) {
 	const container = input.parentElement;
+	const box = document.createElement('div');
+	box.className = 'suggestions';
+	container.append(box);
 	const TLD = /\.[^./?#\s]{1,16}(?:\.[^./?#\s]{1,16})?(?=$|\/)/i;
 	let request = 0;
 
 	const clear = () => {
-		for (const node of container.querySelectorAll('.auto-fill')) node.remove();
+		box.textContent = '';
 	};
 
 	const apply = (value, tld) => {
@@ -707,7 +821,7 @@ function attachSuggestions(input) {
 				input.focus();
 				clear();
 			});
-			container.append(suggestion);
+			box.append(suggestion);
 		}
 	});
 	input.addEventListener('blur', () => setTimeout(clear, 100));
@@ -758,27 +872,85 @@ for (const [label, url, color] of QUICK_LINKS) {
 const rectsOf = (elements) => elements.map((el) => el.getBoundingClientRect());
 
 function slideFrom(elements, fromRects) {
+	// measure every destination first, then take the movers out of the flow
+	// (absolute, at their destination) so animating one element's size never
+	// shifts its siblings; glyphs are never scaled, only the box animates
+	const targets = elements.map((el) => el.getBoundingClientRect());
+	const moving = [];
+	// the containers are bottom-anchored and sized by their children; freeze
+	// their boxes so taking the children out of the flow doesn't move them
+	const frozen = new Map();
+	for (const el of elements) {
+		const parent = el.offsetParent;
+		if (parent && !frozen.has(parent)) {
+			const r = parent.getBoundingClientRect();
+			frozen.set(parent, [parent.style.height, parent.style.minHeight]);
+			parent.style.height = `${r.height}px`;
+			parent.style.minHeight = `${r.height}px`;
+		}
+	}
+	let pending = 0;
+	const release = () => {
+		if (--pending > 0) return;
+		for (const [parent, [h, mh]] of frozen) {
+			parent.style.height = h;
+			parent.style.minHeight = mh;
+		}
+	};
 	elements.forEach((el, i) => {
 		const from = fromRects[i];
-		const to = el.getBoundingClientRect();
+		const to = targets[i];
 		if (!from || !from.width || !to.width) return;
+		const parent = el.offsetParent?.getBoundingClientRect() || {
+			left: 0,
+			top: 0,
+		};
+		moving.push([el, to]);
+		pending++;
 		el.style.transition = 'none';
-		el.style.transformOrigin = 'top left';
-		el.style.transform = `translate(${from.left - to.left}px, ${from.top - to.top}px) scale(${from.width / to.width}, ${from.height / to.height})`;
+		el.style.position = 'absolute';
+		el.style.left = `${to.left - parent.left}px`;
+		el.style.top = `${to.top - parent.top}px`;
+		el.style.margin = '0';
+		el.style.flex = 'none';
+		el.style.boxSizing = 'border-box';
+		el.style.width = `${from.width}px`;
+		el.style.height = `${from.height}px`;
+		el.style.lineHeight = `${from.height}px`;
+		el.style.transform = `translate(${from.left - to.left}px, ${from.top - to.top}px)`;
 	});
 	void document.body.offsetHeight; // flush the start state
-	for (const el of elements) {
-		if (!el.style.transform) continue;
-		el.style.transition = 'transform 0.25s ease';
+	for (const [el, to] of moving) {
+		el.style.transition =
+			'transform 0.25s ease, width 0.25s ease, height 0.25s ease, line-height 0.25s ease';
+		el.style.width = `${to.width}px`;
+		el.style.height = `${to.height}px`;
+		el.style.lineHeight = `${to.height}px`;
 		el.style.transform = '';
-		el.addEventListener(
-			'transitionend',
-			() => {
-				el.style.transition = '';
-				el.style.transformOrigin = '';
-			},
-			{ once: true },
-		);
+		let finished = false;
+		const done = (event) => {
+			if (event && event.propertyName !== 'transform') return;
+			if (finished) return;
+			finished = true;
+			el.removeEventListener('transitionend', done);
+			release();
+			for (const prop of [
+				'transition',
+				'position',
+				'left',
+				'top',
+				'margin',
+				'flex',
+				'boxSizing',
+				'width',
+				'height',
+				'lineHeight',
+				'transform',
+			])
+				el.style[prop] = '';
+		};
+		el.addEventListener('transitionend', done);
+		setTimeout(() => done(), 400); // safety net if the event never fires
 	}
 }
 
@@ -824,7 +996,8 @@ async function pollStatus() {
 		const m = Math.floor((uptime % 3600) / 60);
 		const s = Math.floor(uptime % 60);
 		$('uptime').textContent = `${h} hours, ${m} minutes, ${s} seconds`;
-		$('version').textContent = `stomp ${version}`;
+		$('version').textContent =
+			`stomp ${version} · ${ISOLATED ? 'isolated' : 'same origin'}`;
 	} catch {
 		$('uptime').textContent = 'unavailable';
 	}
