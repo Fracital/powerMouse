@@ -1,0 +1,9 @@
+<!doctype html>
+<title>SRCDOC</title>
+<script>
+	window.__sd = {};
+</script>
+<iframe
+	id="f"
+	srcdoc="<img id='i' src='/pages/echo.json'><script>parent.__sd.result = [top === parent, document.getElementById('i').outerHTML]</script>"
+></iframe>

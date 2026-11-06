@@ -1,0 +1,23 @@
+<!doctype html>
+<title>CARRIERS</title>
+<button
+	id="h"
+	onclick="window.__car.handler = top === window ? location.href : 'raw'"
+>
+	h
+</button>
+<a
+	id="j"
+	href="javascript:window.__car.jsurl = top === window ? location.href : 'raw'; void 0"
+	>j</a
+>
+<script>
+	window.__car = {};
+	setTimeout("window.__car.timer = top === window ? location.href : 'raw'", 0);
+	window.__car.iv = setInterval(
+		"window.__car.interval = top === window ? location.href : 'raw'; clearInterval(window.__car.iv)",
+		5,
+	);
+	document.getElementById('h').click();
+	document.getElementById('j').click();
+</script>

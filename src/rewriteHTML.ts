@@ -1,6 +1,6 @@
 import { escapeText } from 'entities';
 import { Config } from './config';
-import { CLIENT_KEY } from './rewriteJS';
+import { CLIENT_KEY, modifyJS } from './rewriteJS';
 import {
 	createDataURI,
 	injectDocumentJS,
@@ -22,6 +22,19 @@ export function routeHTML(
 			data: modifyHTML(data, url, config),
 			attributes,
 		});
+	}
+
+	// `href="javascript:..."` runs its body as a classic script in the page:
+	// rewrite it like one, or it sees the real top and the proxy's location
+	if (resource.url.protocol === 'javascript:') {
+		const source = resource.url.href.slice('javascript:'.length);
+		let body = source;
+		try {
+			body = decodeURIComponent(source);
+		} catch (error) {
+			// not percent-encoded
+		}
+		return `javascript:${modifyJS(body, url, config, 'generic')}`;
 	}
 
 	return routeURL(form ? 'html:form' : 'html', resource);

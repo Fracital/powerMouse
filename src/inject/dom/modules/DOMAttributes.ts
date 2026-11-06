@@ -5,8 +5,8 @@ import {
 	rewriteCSSValueURLs,
 	routeCSS,
 } from '../../../rewriteCSS';
-import { modifyRefresh, routeHTML } from '../../../rewriteHTML';
-import { routeJS, ScriptType } from '../../../rewriteJS';
+import { modifyHTML, modifyRefresh, routeHTML } from '../../../rewriteHTML';
+import { modifyJS, routeJS, ScriptType } from '../../../rewriteJS';
 import { routeBinary } from '../../../routeURL';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
@@ -55,6 +55,62 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 	}
 	apply() {
 		const domHooksModule = this.client.getModule(DOMHooksModule)!;
+
+		// inline event handler attributes are scripts too: `onclick="top.x()"`
+		// would reach the real top. Every `on*` the platform knows about, from
+		// the prototypes that carry them; a hook per name, like the URL hooks
+		const handlerNames = new Set<string>();
+		const g = this.client.global;
+		for (const owner of [
+			g,
+			g.Document.prototype,
+			g.HTMLElement.prototype,
+			g.SVGElement.prototype,
+			g.Element.prototype,
+			g.HTMLMediaElement.prototype,
+			g.HTMLBodyElement.prototype,
+		])
+			for (const name of Object.getOwnPropertyNames(owner))
+				if (/^on[a-z]+$/.test(name)) handlerNames.add(name);
+		for (const name of handlerNames)
+			domHooksModule.useAttributes(
+				(element) => {
+					element.restoreAttributesOG(name);
+					if (element.hasAttribute(name)) {
+						const source = element.getAttribute(name)!;
+						element.setAttributeOG(name, source);
+						element.setAttribute(
+							name,
+							modifyJS(source, this.client.url, this.client.config, 'generic'),
+						);
+					}
+				},
+				[['*', name]],
+			);
+
+		// <iframe srcdoc>: the inline document gets the same shell a fetched
+		// one gets, with this page as its base
+		domHooksModule.useAttributes(
+			(element) => {
+				element.restoreAttributesOG('srcdoc');
+				if (element.hasAttribute('srcdoc')) {
+					const source = element.getAttribute('srcdoc')!;
+					element.setAttributeOG('srcdoc', source);
+					element.setAttribute(
+						'srcdoc',
+						modifyHTML(source, this.client.url, this.client.config),
+					);
+				}
+			},
+			[
+				['IFRAME', 'srcdoc'],
+				[
+					HTMLIFrameElement,
+					'srcdoc',
+					(element) => element.getAttributeOG('srcdoc') ?? false,
+				],
+			],
+		);
 
 		domHooksModule.useAttributes(
 			(element) => {
