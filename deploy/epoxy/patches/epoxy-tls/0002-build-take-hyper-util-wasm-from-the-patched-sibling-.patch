@@ -1,0 +1,25 @@
+From 55efd537c6c7125e6af8dd88a36ba6cba4298e3a Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Fri, 6 Nov 2026 04:51:52 -0500
+Subject: [PATCH] build: take hyper-util-wasm from the patched sibling checkout
+
+---
+ Cargo.toml | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 15715bf..ed36f6c 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -13,6 +13,11 @@ opt-level = 3
+ [patch.crates-io]
+ h2 = { git = "https://github.com/r58Playz/h2-wasm" }
+ 
++# The sibling checkout carries deploy/epoxy/patches/hyper-util-wasm (exposes
++# http2_max_header_list_size on the legacy client builder).
++[patch."https://github.com/r58Playz/hyper-util-wasm"]
++hyper-util-wasm = { path = "../hyper-util-wasm" }
++
+ [workspace.lints.clippy]
+ pedantic = { level = "warn", priority = -1 }
+ must_use_candidate = "allow"

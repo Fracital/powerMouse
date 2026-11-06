@@ -1,0 +1,63 @@
+From a3aeb961cb32679a44ba354fec1b8eccd97d38d1 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Fri, 6 Nov 2026 04:51:52 -0500
+Subject: [PATCH] Build against the sibling epoxy-tls checkout; epoxy-tls is
+ bundled, not a dependency
+
+Version 3.0.2-fracital.1. dist/ is no longer ignored so a built tree can be
+published as-is. TypeScript 5 pinned for dts-bundle-generator.
+---
+ .gitignore   | 1 -
+ README.md    | 7 +++++++
+ package.json | 7 +++----
+ 3 files changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/.gitignore b/.gitignore
+index 3b6ad03..2176a72 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,3 +1,2 @@
+-dist/
+ libcurl.js/
+ node_modules/
+diff --git a/README.md b/README.md
+index 60db4dd..feb583a 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,10 @@
++> **Fracital build.** Built from the patch set in stomp-rewrite `deploy/epoxy/` against
++> the sibling epoxy-tls checkout, whose HTTP/2 client accepts response header blocks up to
++> 256 KiB like Chrome instead of hyper's 16 KiB default (which reset YouTube and other
++> header-heavy sites with `PROTOCOL_ERROR`). epoxy-tls is bundled into `dist/`, so it is a
++> devDependency and consumers fetch nothing else. TypeScript is pinned to 5 because
++> dts-bundle-generator does not run on TypeScript 7.
++
+ # epoxy-transport
+ 
+ epoxy-transport is a transport for bare-mux which allows you to use [epoxy-tls](https://github.com/MercuryWorkshop/epoxy-tls) in your bare client.
+diff --git a/package.json b/package.json
+index f61baf0..cf869f3 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+ 	"name": "@mercuryworkshop/epoxy-transport",
+-	"version": "3.0.2",
++	"version": "3.0.2-fracital.1",
+ 	"description": "a bare transport that implements end-to-end encryption with epoxy-tls and wisp",
+ 	"main": "./dist/index.mjs",
+ 	"keywords": [],
+@@ -15,11 +15,10 @@
+ 		"build": "node esbuild.bundle.mjs",
+ 		"prepack": "npm run build"
+ 	},
+-	"dependencies": {
+-		"@mercuryworkshop/epoxy-tls": "2.1.20-1"
+-	},
+ 	"devDependencies": {
++		"@mercuryworkshop/epoxy-tls": "file:../epoxy-tls/client",
+ 		"@mercuryworkshop/proxy-transports": "^1.0.2",
++		"typescript": "^5.9.0",
+ 		"esbuild": "^0.25.8",
+ 		"esbuild-plugin-d.ts": "^1.3.1",
+ 		"esbuild-plugin-umd-wrapper": "^3.0.0"

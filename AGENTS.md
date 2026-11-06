@@ -120,15 +120,14 @@ no unit test suite; see Verification.
 ## Transports (measured, see CHANGELOG known limitations)
 
 - epoxy 3.0.2: HTTP solid, incoming WebSocket frames stop after the first
-  round trip (against wisp-js 0.5). It is installed from the Fracital fork
-  (`package.json` points `@mercuryworkshop/epoxy-transport` at
-  `Fracital/EpoxyTransport`, built on `Fracital/epoxy-tls` and
-  `Fracital/hyper-util-wasm`), whose HTTP/2 client accepts 256 KiB header
-  blocks instead of hyper's 16 KiB; the npm package resets YouTube with
-  `PROTOCOL_ERROR`. To rebuild after a change: `Dockerfile.fracital` on the
-  epoxy-tls `fracital` branch produces the package, which goes on the `dist`
-  branch; EpoxyTransport's `fracital` branch pins that commit and commits its
-  own `dist/`. Reference forks by `git+https://` URL and a full commit sha.
+  round trip (against wisp-js 0.5). It is installed from our own build, not
+  npm: `deploy/epoxy/` pins the upstream revisions and carries the patches
+  (hyper-util-wasm exposes the HTTP/2 header-list limit, epoxy-tls sets it to
+  256 KiB like Chrome; the npm package's 16 KiB resets YouTube with
+  `PROTOCOL_ERROR`). `build.sh` builds it in a container, `publish.sh` pushes
+  the result to the `dist` branches of `Fracital/epoxy-tls` and
+  `Fracital/EpoxyTransport`, and `package.json` pins that commit by
+  `git+https://` URL. Read `deploy/epoxy/README.md` before touching any of it.
 - libcurl-transport 2.0.6: WebSockets fine, HTTP stops answering after ~70
   requests (default pool) or ~160 (`connections: [500, 400, 200]`).
 

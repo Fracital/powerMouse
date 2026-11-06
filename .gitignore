@@ -2,3 +2,5 @@
 /dist
 /build
 /.vscode
+# container build output of deploy/epoxy/build.sh
+deploy/epoxy/out/

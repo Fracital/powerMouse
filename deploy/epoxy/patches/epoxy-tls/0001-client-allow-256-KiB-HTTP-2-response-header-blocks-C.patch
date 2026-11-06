@@ -1,0 +1,31 @@
+From 8a35c91ef9bf8a7a327b2bcd9e038f8286a88c3e Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Fri, 6 Nov 2026 04:09:20 -0500
+Subject: [PATCH] client: allow 256 KiB HTTP/2 response header blocks (Chrome
+ parity)
+
+hyper's default max_header_list_size of 16 KiB makes the h2 client reset any
+response with a larger header block (Reset PROTOCOL_ERROR, Library). YouTube
+exceeds it for many clients, so every such page failed through epoxy while
+the same request over HTTP/1.1 or in a browser works. Chrome's limit is
+256 KiB; use that.
+---
+ client/src/lib.rs | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index 4f49e1c..4d824ee 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -448,6 +448,11 @@ impl EpoxyClient {
+ 
+ 		#[cfg(feature = "full")]
+ 		builder.http2_max_concurrent_reset_streams(10); // set back to default, on wasm it is 0
++		// hyper's HTTP/2 default caps a response header block at 16 KiB and resets the
++		// stream with PROTOCOL_ERROR past it; YouTube sends 12 to 20 KiB of headers
++		// (cookies, report-only policies). Chrome allows 256 KiB; match it.
++		#[cfg(feature = "full")]
++		builder.http2_max_header_list_size(256 * 1024);
+ 		let client = builder.build(service);
+ 
+ 		Ok(Self {

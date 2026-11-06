@@ -70,12 +70,13 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
-- epoxy comes from the Fracital forks (`Fracital/EpoxyTransport` built on
-  `Fracital/epoxy-tls` and `Fracital/hyper-util-wasm`): the HTTP/2 client
-  accepts response header blocks up to 256 KiB like Chrome instead of hyper's
-  16 KiB default, which reset YouTube and other header-heavy sites with
-  `PROTOCOL_ERROR`. Installed from git with a committed build, so no Rust
-  toolchain is needed.
+- epoxy comes from `deploy/epoxy/`: pinned upstream revisions plus patches
+  (hyper-util-wasm exposes the HTTP/2 header-list limit, epoxy-tls sets it to
+  256 KiB like Chrome instead of hyper's 16 KiB default, which reset YouTube
+  and other header-heavy sites with `PROTOCOL_ERROR`), built in a container
+  and published to the `dist` branches of `Fracital/epoxy-tls` and
+  `Fracital/EpoxyTransport`, from which `package.json` installs it. No Rust
+  toolchain is needed to install.
 - The synchronous bridge throws a `QuotaExceededError` at once when the
   browser refuses its beacon (payloads over 64 KiB, such as a large
   `localStorage.setItem`), instead of spinning until the wall-clock limit

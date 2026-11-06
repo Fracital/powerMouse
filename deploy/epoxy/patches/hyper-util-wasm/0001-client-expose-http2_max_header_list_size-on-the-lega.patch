@@ -1,0 +1,37 @@
+From 176854280f2ce79684b3293860e82cc370ab9e2f Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Fri, 6 Nov 2026 04:13:10 -0500
+Subject: [PATCH] client: expose http2_max_header_list_size on the legacy
+ Builder
+
+Forwards to hyper::client::conn::http2::Builder::max_header_list_size so a
+client can accept response header blocks larger than hyper's 16 KiB default.
+---
+ src/client/legacy/client.rs | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/src/client/legacy/client.rs b/src/client/legacy/client.rs
+index d32b407..9873143 100644
+--- a/src/client/legacy/client.rs
++++ b/src/client/legacy/client.rs
+@@ -1402,6 +1402,20 @@ impl Builder {
+         self
+     }
+ 
++    /// Sets the maximum size of received header frames.
++    ///
++    /// hyper's default is 16 KiB, which is smaller than what browsers accept
++    /// (Chrome allows 256 KiB); past it the stream is reset with PROTOCOL_ERROR.
++    ///
++    /// See the documentation of [`h2::client::Builder::max_header_list_size`] for more
++    /// details.
++    #[cfg(feature = "http2")]
++    #[cfg_attr(docsrs, doc(cfg(feature = "http2")))]
++    pub fn http2_max_header_list_size(&mut self, max: u32) -> &mut Self {
++        self.h2_builder.max_header_list_size(max);
++        self
++    }
++
+     /// Provide a timer to be used for h2
+     ///
+     /// See the documentation of [`h2::client::Builder::timer`] for more
