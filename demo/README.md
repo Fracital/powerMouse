@@ -187,8 +187,9 @@ host to that port (the vhost is in abulxt's `fracital_origin` ansible role,
 `fracital_origin_apps`); the abulxt edge fleet terminates TLS and relays to
 terp, and Cloudflare fronts the edges with a proxied CNAME. terp's
 `/opt/stomp/repo/.env` holds `PORT` and `STOMP_WISP_URL`, which points the
-transports at the edges' existing keyed wisp relay (`/pipe/<key>/`, served by
-each edge's own wispurr), so the demo server's built-in wisp is off there.
+transports at the edges' keyed wisp relay (`wss://holywisp.fracit.al/pipe/<key>/`,
+served by each edge's own holyWisp instance), so the demo server's built-in
+wisp is off there.
 
 For your own deployment:
 

@@ -160,7 +160,8 @@ terp restricts to `/usr/local/sbin/stomp-deploy-gate` (source:
 `deploy <sha>` and refuses if the live checkout has work that is not on
 GitHub. It runs on `push` only, so pull requests never reach the key. Server
 settings live in `/opt/stomp/repo/.env` on terp (`PORT`, `STOMP_WISP_URL`
-pointing at the edges' keyed wisp relay); CI never touches it. The OpenResty
+pointing at the edges' keyed holyWisp relay on holywisp.fracit.al); CI never
+touches it. The OpenResty
 vhost and the edge server names are managed by abulxt's ansible
 (`fracital_origin_apps`, `fracital_extra_hosts`), not by this repo.
 

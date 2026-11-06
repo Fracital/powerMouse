@@ -759,8 +759,18 @@ let recentsSwiped = false;
 // ---- navigation ----------------------------------------------------------
 
 async function navigate(input, { newTab = false } = {}) {
-	if (!controller) return;
 	const url = normalizeUrl(SEARCH.query(input.trim()));
+	if (!controller) {
+		// still booting (service worker, transport module): a press must switch
+		// to the browser view at once, not get dropped. Show the view now and
+		// open the tab once the controller is up; the frame loads in view.
+		showBrowser();
+		omni.url.value = url;
+		setStatus('Loading…');
+		await booted.catch(() => {});
+		if (!controller) return; // boot failed; the status line says why
+		if (browser.classList.contains('hidden')) return; // the user went home
+	}
 	if (newTab || !activeTab) activateTab(createTab());
 	else showBrowser();
 	const tab = activeTab;
@@ -1033,7 +1043,8 @@ async function pollStatus() {
 pollStatus();
 setInterval(pollStatus, 10000);
 
-boot()
+const booted = boot();
+booted
 	.then(() => {
 		// restore a proxied URL from the fragment after a refresh
 		const restore = decodeURIComponent(location.hash.slice(1));
