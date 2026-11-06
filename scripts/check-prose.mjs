@@ -7,7 +7,8 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-const EM_DASH = '—';
+// built at runtime so prettier can't turn an escape into the literal character
+const EM_DASH = String.fromCharCode(0x2014);
 const ATTRIBUTION =
 	/co-authored-by:.*\b(claude|anthropic|copilot|chatgpt|openai|gemini|codex|cursor)\b|generated with \[?claude|🤖 generated/i;
 const RULE_FILES = new Set([
@@ -50,7 +51,8 @@ if (mode === '--commits') {
 			continue;
 		}
 		text.split('\n').forEach((line, i) => {
-			if (line.includes(EM_DASH)) problems.push(`${file}:${i + 1}: em dash`);
+			if (file !== 'scripts/check-prose.mjs' && line.includes(EM_DASH))
+				problems.push(`${file}:${i + 1}: em dash`);
 			// the rule files and this script quote the forbidden trailer on purpose
 			if (!RULE_FILES.has(file) && ATTRIBUTION.test(line))
 				problems.push(`${file}:${i + 1}: AI attribution`);
