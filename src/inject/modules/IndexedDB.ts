@@ -14,20 +14,20 @@ export default class IndexedDBModule extends Module<Client> {
 				}
 
 				return Reflect.apply(target, that, args);
-			}
+			},
 		);
 
 		Reflect.defineProperty(this.client.global.IDBDatabase.prototype, 'name', {
 			get: proxyModule.wrapFunction(
 				Reflect.getOwnPropertyDescriptor(
 					this.client.global.IDBDatabase.prototype,
-					'name'
+					'name',
 				)!.get!,
 				(target, that, args) => {
 					return (Reflect.apply(target, that, args) as string).slice(
-						this.client.url.url.origin.length
+						this.client.url.url.origin.length,
 					);
-				}
+				},
 			),
 		});
 	}

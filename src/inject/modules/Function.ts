@@ -8,7 +8,7 @@ export default class FunctionModule extends Module<Client> {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
 		const functionFactory = (
-			ctor: FunctionConstructor
+			ctor: FunctionConstructor,
 		): FunctionConstructor => {
 			return proxyModule.wrapFunction(
 				ctor,
@@ -20,7 +20,7 @@ export default class FunctionModule extends Module<Client> {
 							code,
 							this.client.url,
 							this.client.config,
-							'generic'
+							'generic',
 						);
 						args.push(code);
 					}
@@ -29,13 +29,13 @@ export default class FunctionModule extends Module<Client> {
 						? Reflect.construct(target, args, newTarget)
 						: Reflect.apply(target, that, args);
 				},
-				true
+				true,
 			);
 		};
 
 		const AsyncFunction = (
 			new this.client.global.Function(
-				'return async () => {}'
+				'return async () => {}',
 			)() as () => Promise<void>
 		).constructor as FunctionConstructor;
 
@@ -50,7 +50,7 @@ export default class FunctionModule extends Module<Client> {
 				enumerable: false,
 				writable: true,
 				value: proxyFunction,
-			}
+			},
 		);
 
 		Reflect.defineProperty(AsyncFunction.prototype, 'constructor', {

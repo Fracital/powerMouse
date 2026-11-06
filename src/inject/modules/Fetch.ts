@@ -1,10 +1,10 @@
-import StompURL, { urlLike } from '../../StompURL';
 import {
 	parseRoutedURL,
-	routeXHR,
-	routeBinary,
 	ROUTE_PROTOCOLS,
+	routeBinary,
+	routeXHR,
 } from '../../routeURL';
+import StompURL, { urlLike } from '../../StompURL';
 import Client from '../Client';
 import Module from '../Module';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
@@ -18,7 +18,7 @@ export default class FetchModule extends Module<Client> {
 
 		this.client.global.EventSource = proxyModule.wrapFunction(
 			this.client.global.EventSource,
-			(target, that, args) => {
+			(target, that, args, newTarget) => {
 				catchRequiredArguments(args.length, 1, 'EventSource', 'constructor');
 
 				const url = new URL(args[0], this.client.url.toString());
@@ -26,14 +26,14 @@ export default class FetchModule extends Module<Client> {
 				const result = Reflect.construct(
 					target,
 					[routeBinary(new StompURL(url, this.client.url))],
-					that
+					newTarget || target,
 				);
 
 				eventSourceURLs.set(result, url.toString());
 
 				return result;
 			},
-			true
+			true,
 		);
 
 		Reflect.defineProperty(this.client.global.EventSource.prototype, 'url', {
@@ -44,7 +44,7 @@ export default class FetchModule extends Module<Client> {
 				.wrapFunction(
 					Reflect.getOwnPropertyDescriptor(
 						this.client.global.EventSource.prototype,
-						'url'
+						'url',
 					)!.get!,
 					(target, that, args) => {
 						if (eventSourceURLs.has(that)) {
@@ -52,7 +52,7 @@ export default class FetchModule extends Module<Client> {
 						} else {
 							return Reflect.apply(target, that, args);
 						}
-					}
+					},
 				),
 		});
 
@@ -62,16 +62,15 @@ export default class FetchModule extends Module<Client> {
 			get: proxyModule.wrapFunction(
 				Reflect.getOwnPropertyDescriptor(
 					this.client.global.Response.prototype,
-					'url'
+					'url',
 				)!.get!,
 				(target, that, args) => {
 					if (responseURLs.has(that)) {
 						return responseURLs.get(that);
 					} else {
-						// eslint-disable-next-line @typescript-eslint/ban-types
 						return Reflect.apply(<Function>target, that, args);
 					}
-				}
+				},
 			),
 		});
 
@@ -80,17 +79,17 @@ export default class FetchModule extends Module<Client> {
 			(target, _that, args, newTarget) => {
 				if (args.length === 0) {
 					throw new this.client.global.DOMException(
-						"Failed to construct 'Request': 1 argument required, but only 0 present.'"
+						"Failed to construct 'Request': 1 argument required, but only 0 present.'",
 					);
 				}
 
 				return Reflect.construct(
 					target,
 					[new URL(args[0], this.client.url.toString()), args[1]],
-					newTarget
+					newTarget,
 				);
 			},
-			true
+			true,
 		);
 
 		this.client.global.fetch = proxyModule.wrapFunction(
@@ -115,7 +114,7 @@ export default class FetchModule extends Module<Client> {
 				//TODO: COOKIES
 				const res = await fetch(
 					routeXHR(new StompURL(url, this.client.url)),
-					init
+					init,
 				);
 
 				responseURLs.set(
@@ -123,12 +122,12 @@ export default class FetchModule extends Module<Client> {
 					parseRoutedURL(
 						res.url,
 						this.client.codec,
-						`${location.origin}${this.client.directory}`
-					).url.toString()
+						`${location.origin}${this.client.directory}`,
+					).url.toString(),
 				);
 
 				return res;
-			}
+			},
 		);
 	}
 }

@@ -129,7 +129,7 @@ export class Base64Codec {
 	}
 	encode(input: string): string {
 		return encodeCodecURI(
-			CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(input))
+			CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(input)),
 		);
 	}
 	decode(input: string): string {

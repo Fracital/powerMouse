@@ -5,7 +5,7 @@ export function parseHTML(script: string) {
 export function parseHTMLFragment(script: string): DocumentFragment {
 	const parsed = new DOMParser().parseFromString(
 		`<fragment>${script}</fragment>`,
-		'text/html'
+		'text/html',
 	);
 	const simulatedFragment = parsed.body.children[0];
 	const fragment = document.createDocumentFragment();
@@ -28,7 +28,7 @@ type stackFinalizeData = [parent: ParentNode, node: Node];
  * @param node Node to clone
  */
 export default function cloneRawNode(
-	fragment: ParentNode | ParentNode[]
+	fragment: ParentNode | ParentNode[],
 ): DocumentFragment {
 	const tempTarget = new DocumentFragment();
 

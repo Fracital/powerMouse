@@ -1,4 +1,6 @@
-import StompURL from './StompURL';
+import { generate } from '@javascript-obfuscator/escodegen';
+import { builders as b } from 'ast-types';
+import { parse } from 'meriyah';
 import { AcornContext, AcornIterator, result } from './acornUtil';
 import { Config } from './config';
 import {
@@ -7,9 +9,7 @@ import {
 	parseDataURI,
 	routeURL,
 } from './routeURL';
-import { generate } from '@javascript-obfuscator/escodegen';
-import { builders as b } from 'ast-types';
-import { parse } from 'meriyah-loose';
+import StompURL from './StompURL';
 
 export const ACCESS_KEY = '$s$j';
 export const GLOBAL_PROXY = '$s$L';
@@ -42,16 +42,13 @@ function generatePartial(script: string, ctx: AcornContext) {
 }
 
 export type ScriptType =
-	| 'generic'
-	| 'genericModule'
-	| 'worker'
-	| 'workerModule';
+	'generic' | 'genericModule' | 'worker' | 'workerModule';
 
 export function routeJS(
 	resource: StompURL,
 	url: StompURL,
 	config: Config,
-	type: ScriptType = 'generic'
+	type: ScriptType = 'generic',
 ) {
 	if (resource.url.protocol === 'data:') {
 		const { mime, data, attributes } = parseDataURI(resource.url.pathname);
@@ -69,7 +66,7 @@ export function modifyJS(
 	script: string,
 	url: StompURL,
 	config: Config,
-	type: ScriptType = 'generic'
+	type: ScriptType = 'generic',
 ) {
 	try {
 		const isModule = type === 'genericModule' || type === 'workerModule';
@@ -78,7 +75,6 @@ export function modifyJS(
 		const tree = parse(script, {
 			module: isModule,
 			next: true,
-			specDeviation: true,
 			ranges: true,
 			globalReturn: true,
 			webcompat: true,
@@ -94,21 +90,21 @@ export function modifyJS(
 						b.callExpression(
 							b.memberExpression(
 								b.identifier(ACCESS_KEY),
-								b.identifier('import')
+								b.identifier('import'),
 							),
 							[
 								isModule
 									? b.memberExpression(
 											b.metaProperty(
 												b.identifier('import'),
-												b.identifier('meta')
+												b.identifier('meta'),
 											),
-											b.identifier('url')
-									  )
+											b.identifier('url'),
+										)
 									: b.identifier('undefined'),
 								ctx.node.source,
-							]
-						)
+							],
+						),
 					);
 
 					break;
@@ -120,14 +116,14 @@ export function modifyJS(
 								routeJS(
 									new StompURL(
 										new URL(ctx.node.source.value, url.toString()),
-										url
+										url,
 									),
 									url,
 									config,
-									'genericModule'
-								)
-							)
-						)
+									'genericModule',
+								),
+							),
+						),
 					);
 					// TODO : FIX..?
 					break;
@@ -154,23 +150,23 @@ export function modifyJS(
 										b.identifier('eval'),
 										b.memberExpression(
 											b.identifier(ACCESS_KEY),
-											b.identifier('evalSnapshot')
-										)
+											b.identifier('evalSnapshot'),
+										),
 									),
 									b.callExpression(b.identifier('eval'), [
 										b.callExpression(
 											b.memberExpression(
 												b.identifier(ACCESS_KEY),
-												b.identifier('evalScope')
+												b.identifier('evalScope'),
 											),
-											ctx.node.arguments.map((arg: unknown) => result(arg))
+											ctx.node.arguments.map((arg: unknown) => result(arg)),
 										),
 									]),
 									b.callExpression(
 										b.identifier('eval'),
-										ctx.node.arguments.map((arg: unknown) => result(arg))
-									)
-								)
+										ctx.node.arguments.map((arg: unknown) => result(arg)),
+									),
+								),
 							);
 						}
 					}
@@ -218,7 +214,7 @@ export function modifyJS(
 								b.callExpression(
 									b.memberExpression(
 										b.identifier(ACCESS_KEY),
-										b.identifier('set1')
+										b.identifier('set1'),
 									),
 									[
 										ctx.node,
@@ -236,19 +232,19 @@ export function modifyJS(
 														b.memberExpression(
 															b.identifier(cTarget),
 															b.identifier(cProp),
-															true
+															true,
 														),
-														ctx.parent.node.prefix
-												  )
+														ctx.parent.node.prefix,
+													)
 												: b.assignmentExpression(
 														ctx.parent.node.operator,
 														b.memberExpression(
 															b.identifier(cTarget),
 															b.identifier(cProp),
-															true
+															true,
 														),
-														b.identifier(cValue)
-												  )
+														b.identifier(cValue),
+													),
 										),
 										// set
 										b.arrowFunctionExpression(
@@ -256,25 +252,25 @@ export function modifyJS(
 											b.assignmentExpression(
 												'=',
 												ctx.node,
-												b.identifier(cValue)
-											)
+												b.identifier(cValue),
+											),
 										),
 										ctx.parent!.node.type === 'UpdateExpression'
 											? b.identifier('undefined')
 											: ctx.parent.node.right,
 										b.literal(generatePartial(script, ctx.parent)),
-									]
-								)
+									],
+								),
 							);
 						} else {
 							ctx.replaceWith(
 								b.callExpression(
 									b.memberExpression(
 										b.identifier(ACCESS_KEY),
-										b.identifier('get')
+										b.identifier('get'),
 									),
-									[ctx.node, b.literal(ctx.node.name)]
-								)
+									[ctx.node, b.literal(ctx.node.name)],
+								),
 							);
 						}
 					}
@@ -339,15 +335,15 @@ export function modifyJS(
 								b.callExpression(
 									b.memberExpression(
 										b.identifier(ACCESS_KEY),
-										b.identifier('new2')
+										b.identifier('new2'),
 									),
 									[
 										result(ctx.node.object),
 										propertyArgument,
 										result(b.arrayExpression(ctx.parent!.node.arguments)),
 										b.literal(generatePartial(script, ctx.parent!)),
-									]
-								)
+									],
+								),
 							);
 						} else if (
 							ctx.parent?.node.type === 'CallExpression' &&
@@ -357,15 +353,18 @@ export function modifyJS(
 								b.callExpression(
 									b.memberExpression(
 										b.identifier(ACCESS_KEY),
-										b.identifier('call2')
+										b.identifier('call2'),
 									),
 									[
 										result(ctx.node.object),
 										propertyArgument,
 										result(b.arrayExpression(ctx.parent!.node.arguments)),
 										b.literal(generatePartial(script, ctx.parent!)),
-									]
-								)
+										...(ctx.node.optional || ctx.parent!.node.optional
+											? [b.literal(true)]
+											: []),
+									],
+								),
 							);
 						} else if (
 							ctx.parent?.node.type === 'UpdateExpression' ||
@@ -376,7 +375,7 @@ export function modifyJS(
 								b.callExpression(
 									b.memberExpression(
 										b.identifier(ACCESS_KEY),
-										b.identifier('set2')
+										b.identifier('set2'),
 									),
 									[
 										ctx.node.object,
@@ -393,40 +392,54 @@ export function modifyJS(
 														b.memberExpression(
 															b.identifier(cTarget),
 															b.identifier(cProp),
-															true
+															true,
 														),
-														ctx.parent!.node.prefix
-												  )
+														ctx.parent!.node.prefix,
+													)
 												: b.assignmentExpression(
 														ctx.parent!.node.operator,
 														b.memberExpression(
 															b.identifier(cTarget),
 															b.identifier(cProp),
-															true
+															true,
 														),
-														b.identifier(cValue)
-												  )
+														b.identifier(cValue),
+													),
 										),
 										ctx.parent?.node.type === 'UpdateExpression'
 											? b.identifier('undefined')
 											: ctx.parent!.node.right,
 										b.literal(generatePartial(script, ctx.parent!)),
-									]
-								)
+									],
+								),
 							);
 						} else {
+							// a?.[k]: get2 short-circuits on a nullish object, and the
+							// rest of the chain must keep short-circuiting on undefined
+							if (ctx.node.optional && ctx.parent) {
+								const parent = ctx.parent.node;
+								if (
+									(parent.type === 'MemberExpression' &&
+										ctx.parentKey === 'object') ||
+									(parent.type === 'CallExpression' &&
+										ctx.parentKey === 'callee')
+								)
+									parent.optional = true;
+							}
+
 							ctx.replaceWith(
 								b.callExpression(
 									b.memberExpression(
 										b.identifier(ACCESS_KEY),
-										b.identifier('get2')
+										b.identifier('get2'),
 									),
 									[
 										result(ctx.node.object),
 										propertyArgument,
 										b.literal(generatePartial(script, ctx)),
-									]
-								)
+										...(ctx.node.optional ? [b.literal(true)] : []),
+									],
+								),
 							);
 						}
 					}
@@ -453,7 +466,6 @@ if (!${CLIENT_KEY}.applied)
 	}
 }
 
-export function restoreJS(script: string, url: StompURL) {
-	url.codec;
+export function restoreJS(script: string, _url: StompURL) {
 	return script;
 }

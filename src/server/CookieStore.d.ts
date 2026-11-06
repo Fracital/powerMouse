@@ -26,22 +26,22 @@ declare interface CookieStore extends EventTarget {
 	addEventListener<K extends keyof CookieStoreEventMap>(
 		type: K,
 		listener: (this: CookieStore, ev: CookieStoreEventMap[K]) => any,
-		options?: boolean | AddEventListenerOptions
+		options?: boolean | AddEventListenerOptions,
 	): void;
 	addEventListener(
 		type: string,
 		listener: EventListenerOrEventListenerObject,
-		options?: boolean | AddEventListenerOptions
+		options?: boolean | AddEventListenerOptions,
 	): void;
 	removeEventListener<K extends keyof CookieStoreEventMap>(
 		type: K,
 		listener: (this: CookieStore, ev: CookieStoreEventMap[K]) => any,
-		options?: boolean | EventListenerOptions
+		options?: boolean | EventListenerOptions,
 	): void;
 	removeEventListener(
 		type: string,
 		listener: EventListenerOrEventListenerObject,
-		options?: boolean | EventListenerOptions
+		options?: boolean | EventListenerOptions,
 	): void;
 
 	/**
@@ -54,7 +54,7 @@ declare interface CookieStore extends EventTarget {
 	 */
 	set(name: string, value: string): Promise<void>;
 	set(
-		options: Partial<Cookie> & { name: string; value: string }
+		options: Partial<Cookie> & { name: string; value: string },
 	): Promise<void>;
 	/**
 	 * Get multiple cookies.

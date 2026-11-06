@@ -2,40 +2,42 @@
 // exports automatically provided to modules in bundle
 
 export const Reflect: typeof globalThis.Reflect = {
-	apply: global.Reflect.apply.bind(global.Reflect),
-	construct: global.Reflect.construct.bind(global.Reflect),
-	defineProperty: global.Reflect.defineProperty.bind(global.Reflect),
-	deleteProperty: global.Reflect.deleteProperty.bind(global.Reflect),
-	get: global.Reflect.get.bind(global.Reflect),
-	has: global.Reflect.has.bind(global.Reflect),
-	getOwnPropertyDescriptor: global.Reflect.getOwnPropertyDescriptor.bind(
-		global.Reflect
+	apply: globalThis.Reflect.apply.bind(globalThis.Reflect),
+	construct: globalThis.Reflect.construct.bind(globalThis.Reflect),
+	defineProperty: globalThis.Reflect.defineProperty.bind(globalThis.Reflect),
+	deleteProperty: globalThis.Reflect.deleteProperty.bind(globalThis.Reflect),
+	get: globalThis.Reflect.get.bind(globalThis.Reflect),
+	has: globalThis.Reflect.has.bind(globalThis.Reflect),
+	getOwnPropertyDescriptor: globalThis.Reflect.getOwnPropertyDescriptor.bind(
+		globalThis.Reflect,
 	),
-	getPrototypeOf: global.Reflect.getPrototypeOf.bind(global.Reflect),
-	isExtensible: global.Reflect.isExtensible.bind(global.Reflect),
-	ownKeys: global.Reflect.ownKeys.bind(global.Reflect),
-	preventExtensions: global.Reflect.preventExtensions.bind(global.Reflect),
-	set: global.Reflect.set.bind(global.Reflect),
-	setPrototypeOf: global.Reflect.setPrototypeOf.bind(global.Reflect),
+	getPrototypeOf: globalThis.Reflect.getPrototypeOf.bind(globalThis.Reflect),
+	isExtensible: globalThis.Reflect.isExtensible.bind(globalThis.Reflect),
+	ownKeys: globalThis.Reflect.ownKeys.bind(globalThis.Reflect),
+	preventExtensions: globalThis.Reflect.preventExtensions.bind(
+		globalThis.Reflect,
+	),
+	set: globalThis.Reflect.set.bind(globalThis.Reflect),
+	setPrototypeOf: globalThis.Reflect.setPrototypeOf.bind(globalThis.Reflect),
 };
 
-export const fetch = global.fetch;
+export const fetch = globalThis.fetch;
 
-export const URL = global.URL;
+export const URL = globalThis.URL;
 
-export const Request = global.Request;
+export const Request = globalThis.Request;
 
-export const Response = global.Response;
+export const Response = globalThis.Response;
 
-export const XMLHttpRequest = global.XMLHttpRequest;
+export const XMLHttpRequest = globalThis.XMLHttpRequest;
 
-export const XMLHttpRequestEventTarget = global.XMLHttpRequestEventTarget;
+export const XMLHttpRequestEventTarget = globalThis.XMLHttpRequestEventTarget;
 
-export const EventSource = global.EventSource;
+export const EventSource = globalThis.EventSource;
 
-export const WebSocket = global.WebSocket;
+export const WebSocket = globalThis.WebSocket;
 
-export const Function = global.Function;
+export const Function = globalThis.Function;
 
 export function bindDescriptors<T extends object>(
 	to: object,

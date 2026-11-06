@@ -1,0 +1,136 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta name="description" content="Stomp web proxy demo" />
+		<link type="image/x-icon" rel="shortcut icon" href="/favicon.ico" />
+		<title>powerMouse</title>
+		<link rel="stylesheet" href="/pm/main.css" />
+		<script src="/stomp/Controller.js"></script>
+		<script src="/stomp/SearchBuilder.js"></script>
+	</head>
+	<body>
+		<div class="wrapper" id="landing">
+			<div class="head">
+				<h1><a class="noStyle ns" href="/">powerMouse</a></h1>
+				<a draggable="false" href="https://github.com/sysce/stomp"
+					><div class="ns git">Fork us on GitHub</div></a
+				>
+			</div>
+			<div class="listing">
+				<div class="inputWrapper">
+					<form id="mainForm" autocomplete="off">
+						<div class="urlFill">
+							<input
+								name="url"
+								class="form-text url"
+								type="text"
+								autocomplete="off"
+								placeholder="Search or enter a web address"
+								required
+							/>
+						</div>
+						<button type="submit" class="btn btn-blu visit">Go</button>
+					</form>
+					<div id="button-container"></div>
+					<p id="logMsg">Starting…</p>
+				</div>
+				<div class="lbottom">
+					Uptime: <span id="uptime">…</span><span id="version"></span>
+				</div>
+				<div class="rbottom">
+					<label
+						>Transport
+						<select id="transport" class="select">
+							<option value="epoxy">epoxy</option>
+							<option value="libcurl">libcurl</option>
+						</select></label
+					>
+				</div>
+			</div>
+		</div>
+		<div class="browser hidden" id="browser">
+			<div class="chrome">
+				<form id="omni" autocomplete="off">
+					<input
+						name="url"
+						class="form-text omnibox"
+						type="text"
+						placeholder="Search or enter a web address"
+					/>
+				</form>
+				<span id="chromeStatus" class="select">…</span>
+			</div>
+			<div id="frames" class="frames"></div>
+		</div>
+		<!-- tab manager, after the One UI recent-apps screen: live scaled previews -->
+		<div id="recentsPanel" class="recents hidden">
+			<div class="recentsTop">
+				<span class="recentsCount" id="recentsCount">0 active tabs</span>
+				<button
+					class="recentsMore"
+					id="newTab"
+					title="New tab"
+					aria-label="New tab"
+				>
+					+
+				</button>
+			</div>
+			<div class="recentsLabels" id="recentsLabels"></div>
+			<button class="closeAll" id="closeAll">Close all</button>
+			<div class="dock" id="dock"></div>
+		</div>
+
+		<!-- early-Android (Holo) style navigation bar -->
+		<nav class="navbar" aria-label="Navigation">
+			<button id="back" class="navbtn" title="Back" aria-label="Back">
+				<svg viewBox="0 0 48 48" aria-hidden="true">
+					<path
+						d="M30 10 L14 24 L30 38"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="4"
+						stroke-linejoin="round"
+						stroke-linecap="round"
+					/>
+				</svg>
+			</button>
+			<button id="home" class="navbtn" title="Home" aria-label="Home">
+				<svg viewBox="0 0 48 48" aria-hidden="true">
+					<path
+						d="M8 24 L24 10 L40 24 M12 21 V38 H21 V29 H27 V38 H36 V21"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="4"
+						stroke-linejoin="round"
+						stroke-linecap="round"
+					/>
+				</svg>
+			</button>
+			<button id="recents" class="navbtn" title="Tabs" aria-label="Tabs">
+				<svg viewBox="0 0 48 48" aria-hidden="true">
+					<rect
+						x="10"
+						y="14"
+						width="24"
+						height="22"
+						rx="2"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="4"
+					/>
+					<path
+						d="M18 10 H38 V30"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="4"
+						stroke-linejoin="round"
+					/>
+				</svg>
+			</button>
+		</nav>
+
+		<script src="/pm/main.js"></script>
+	</body>
+</html>

@@ -1,4 +1,6 @@
-import { Node as mNode } from 'meriyah/dist/src/estree';
+import type { ESTree } from 'meriyah';
+
+type mNode = ESTree.Node;
 
 // children of the node to replace a node must explicitly opt into being part of the result with
 // result(node)
@@ -12,13 +14,7 @@ export declare type Node =
 	| {
 			range?: NodeRange;
 			[key: string | symbol]:
-				| Node
-				| Node[]
-				| NodeRange
-				| string
-				| boolean
-				| undefined;
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				Node | Node[] | NodeRange | string | boolean | undefined;
 	  }
 	| mNode
 	| any;
@@ -41,7 +37,7 @@ export class AcornContext {
 		parent: AcornContext | undefined,
 		parentKey: string | undefined,
 		stack: AcornContext[],
-		root = false
+		root = false,
 	) {
 		this.node = node;
 		this.stack = stack;
@@ -120,7 +116,7 @@ export class AcornContext {
 			node,
 			this.parent!,
 			this.parentKey!,
-			this.stack
+			this.stack,
 		);
 
 		delete this.parent;
@@ -194,7 +190,7 @@ export class AcornIterator {
 	constructor(ast: Node) {
 		this.stack = [];
 		this.stack.push(
-			new AcornContext(ast, undefined, undefined, this.stack, true)
+			new AcornContext(ast, undefined, undefined, this.stack, true),
 		);
 	}
 	next() {

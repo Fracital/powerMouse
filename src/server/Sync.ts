@@ -7,7 +7,7 @@ const statusRedirect = [301, 302, 303, 307, 308];
 
 async function process(
 	router: Router,
-	data: ProcessData
+	data: ProcessData,
 ): Promise<ProcessResult> {
 	const init: RequestInit = <RequestInit>{ ...data.init };
 
@@ -63,7 +63,7 @@ const split = 4000;
 export function registerXhr(router: Router) {
 	router.routes.set(/\/gxhr/, async (request) => {
 		return new Response(
-			JSON.stringify(await process(router, await request.json()))
+			JSON.stringify(await process(router, await request.json())),
 		);
 	});
 

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/ban-types */
 import { restoreJS } from '../../rewriteJS';
 import Client from '../Client';
 import Module from '../Module';
@@ -14,7 +13,7 @@ export const preparePrototype = Symbol();
 export function usePrototype<Prototype extends object, CallbackResult>(
 	target: object,
 	usePrototype: Prototype,
-	callback: (object: Prototype) => CallbackResult
+	callback: (object: Prototype) => CallbackResult,
 ): CallbackResult {
 	const prototype = Reflect.getPrototypeOf(target);
 	Reflect.setPrototypeOf(target, usePrototype);
@@ -27,7 +26,7 @@ export function usePrototype<Prototype extends object, CallbackResult>(
 		uses[preparePrototype]();
 	}
 
-	let result: any[] = [];
+	let result: any[];
 
 	{
 		const set = <Prototype>target;
@@ -39,11 +38,16 @@ export function usePrototype<Prototype extends object, CallbackResult>(
 		}
 	}
 
-	if (uses[cleanupPrototype]) {
-		uses[cleanupPrototype]();
-	}
+	// restore the real prototype before cleanup: cleanup applies pending
+	// attributes, which synchronously runs custom element reactions that
+	// expect `this` to be the element, not our hook prototype
+	const cleanup = uses[cleanupPrototype];
 
 	Reflect.setPrototypeOf(target, prototype);
+
+	if (cleanup) {
+		cleanup.call(target);
+	}
 
 	if (result.length === 2) {
 		throw result[1];
@@ -124,7 +128,7 @@ export function domObjectConstructor<T extends Function>(target: T): T {
 			return Reflect.construct(target, args, new.target);
 		} else {
 			throw new TypeError(
-				`Failed to construct '${target.name}': Please use the 'new' operator, this DOM object constructor cannot be called as a function.`
+				`Failed to construct '${target.name}': Please use the 'new' operator, this DOM object constructor cannot be called as a function.`,
 			);
 		}
 	}
@@ -144,7 +148,7 @@ export function catchRequiredArguments(
 	args: number,
 	requiredArguments: number,
 	on: string,
-	api: string
+	api: string,
 ) {
 	if (args < requiredArguments) {
 		const message = `${
@@ -156,7 +160,7 @@ export function catchRequiredArguments(
 		throw new TypeError(
 			on === 'constructor'
 				? `Failed to construct ${api}: ${message}`
-				: `Failed to execute '${api}' on '${on}: ${message}`
+				: `Failed to execute '${api}' on '${on}: ${message}`,
 		);
 	}
 }
@@ -193,7 +197,7 @@ export default class ProxyModule extends Module<Client> {
 
 					return string;
 				}
-			}
+			},
 		);
 	}
 	bindNatives(target: object, natives: WeakMap<object, object>) {
@@ -202,8 +206,8 @@ export default class ProxyModule extends Module<Client> {
 				Reflect.apply(
 					target,
 					natives.has(that) ? natives.get(that) : that,
-					args
-				)
+					args,
+				),
 			);
 
 		for (const prop of Object.getOwnPropertyNames(target)) {
@@ -252,7 +256,7 @@ export default class ProxyModule extends Module<Client> {
 						}
 
 						return Reflect.apply(descriptor.value, that, args);
-					}
+					},
 				);
 			else if ('value' in descriptor) mirrorDescriptor.value = descriptor.value;
 
@@ -265,7 +269,7 @@ export default class ProxyModule extends Module<Client> {
 						}
 
 						return Reflect.apply(descriptor.get!, that, args);
-					}
+					},
 				);
 
 			if (typeof descriptor.set === 'function')
@@ -277,7 +281,7 @@ export default class ProxyModule extends Module<Client> {
 						}
 
 						return Reflect.apply(descriptor.set!, that, args);
-					}
+					},
 				);
 
 			Reflect.defineProperty(to.prototype, key, mirrorDescriptor);
@@ -305,7 +309,7 @@ export default class ProxyModule extends Module<Client> {
 	wrapFunction<T extends Function>(
 		fn: T,
 		wrap: (target: T, that: any, args: any[], newTarget?: any) => any,
-		construct = false
+		construct = false,
 	): T {
 		const wrapped =
 			'prototype' in fn
@@ -320,12 +324,12 @@ export default class ProxyModule extends Module<Client> {
 
 						// @ts-ignore
 						return wrap(fn, this, args, newTarget);
-				  }
+					}
 				: {
 						attach(this: any, ...args: any[]) {
 							return wrap(fn, this, args);
 						},
-				  }.attach;
+					}.attach;
 
 		this.mirrorAttributes(fn, wrapped);
 
@@ -334,7 +338,7 @@ export default class ProxyModule extends Module<Client> {
 
 			const descriptor = Reflect.getOwnPropertyDescriptor(
 				wrapped.prototype,
-				'constructor'
+				'constructor',
 			)!;
 
 			Reflect.defineProperty(wrapped.prototype, 'constructor', {

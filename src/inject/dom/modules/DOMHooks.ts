@@ -1,5 +1,5 @@
-import StompURL from '../../../StompURL';
 import { routeHTML } from '../../../rewriteHTML';
+import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule, {
 	applyDescriptors,
@@ -45,8 +45,12 @@ export class CustomElement extends Element {
 		return nativeElement.hasAttribute.call(this, attribute);
 	}
 	applyAttributes() {
-		for (const [attribute, value] of this.attributeTab) {
-			this.attributeTab.delete(attribute);
+		// called after the prototype is restored, so don't rely on `this.attributeTab`
+		const tab = attributeTab.get(this);
+		if (!tab) return;
+
+		for (const [attribute, value] of tab) {
+			tab.delete(attribute);
 
 			try {
 				if (value === null) {
@@ -76,7 +80,8 @@ export class CustomElement extends Element {
 		}
 	}
 	[cleanupPrototype]() {
-		this.applyAttributes();
+		// invoked after the real prototype is restored (see usePrototype)
+		CustomElement.prototype.applyAttributes.call(this);
 	}
 	getAttributeOG(attribute: string): string | null {
 		const og = `${ORIGINAL_ATTRIBUTE}${attribute}`;
@@ -164,11 +169,11 @@ type PropertyHookGetter = (element: CustomElement) => string | false;
 type PropertyHook = [
 	ctor: ElementCtor,
 	property: string,
-	getter: PropertyHookGetter
+	getter: PropertyHookGetter,
 ];
 
 function isAttributeHook(
-	hook: AttributeHook | PropertyHook
+	hook: AttributeHook | PropertyHook,
 ): hook is AttributeHook {
 	return typeof hook[0] === 'string';
 }
@@ -232,7 +237,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 	}*/
 	useAttributes(
 		callback: HookCallback,
-		hooks: (AttributeHook | PropertyHook)[]
+		hooks: (AttributeHook | PropertyHook)[],
 	) {
 		for (const hook of hooks) {
 			this.hooks.push({
@@ -245,7 +250,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		for (const entry of this.hooks) {
 			if (
 				!isAttributeHook(entry.hook) ||
-				entry.hook[0] !== element.nodeName ||
+				(entry.hook[0] !== '*' && entry.hook[0] !== element.nodeName) ||
 				entry.hook[1] !== attribute
 			)
 				continue;
@@ -256,7 +261,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 	private updatePropertyHooks(
 		element: CustomElement,
 		ctor: ElementCtor,
-		property: string
+		property: string,
 	) {
 		for (const entry of this.hooks) {
 			if (
@@ -288,14 +293,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					args[0] = routeHTML(
 						new StompURL(
 							new URL(String(args[0]), this.client.url.toString()),
-							this.client.url
+							this.client.url,
 						),
 						this.client.url,
-						this.client.config
+						this.client.config,
 					);
 
 				return Reflect.apply(target, that, args);
-			}
+			},
 		);
 
 		type Write = (...text: string[]) => void;
@@ -314,10 +319,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			});
 
 		this.client.global.document.write = writeFactory(
-			this.client.global.document.write
+			this.client.global.document.write,
 		);
 		this.client.global.document.writeln = writeFactory(
-			this.client.global.document.writeln
+			this.client.global.document.writeln,
 		);
 
 		Reflect.defineProperty(this.client.global.Node.prototype, 'baseURI', {
@@ -326,13 +331,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			get: proxyModule.wrapFunction(
 				Reflect.getOwnPropertyDescriptor(
 					this.client.global.Node.prototype,
-					'baseURI'
+					'baseURI',
 				)!.get!,
 				(target, that, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
 					return this.client.url.toString();
-				}
+				},
 			),
 		});
 
@@ -342,13 +347,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			get: proxyModule.wrapFunction(
 				Reflect.getOwnPropertyDescriptor(
 					this.client.global.Document.prototype,
-					'URL'
+					'URL',
 				)!.get!,
 				(target, that, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
 					return this.client.location.toString();
-				}
+				},
 			),
 		});
 
@@ -358,13 +363,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			get: proxyModule.wrapFunction(
 				Reflect.getOwnPropertyDescriptor(
 					this.client.global.Document.prototype,
-					'domain'
+					'domain',
 				)!.get!,
 				(target, that, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
 					return this.client.url.url.hostname;
-				}
+				},
 			),
 		});
 
@@ -385,7 +390,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 		const scriptTextDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global.HTMLScriptElement.prototype,
-			'text'
+			'text',
 		)!;
 
 		Reflect.defineProperty(
@@ -403,14 +408,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						}
 
 						that.append(new Text(args[0]));
-					}
+					},
 				),
-			}
+			},
 		);
 
 		const textContentDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global.Node.prototype,
-			'textContent'
+			'textContent',
 		)!;
 
 		Reflect.defineProperty(this.client.global.Node.prototype, 'textContent', {
@@ -425,13 +430,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					}
 
 					that.append(new Text(args[0]));
-				}
+				},
 			),
 		});
 
 		const innerTextDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global.HTMLElement.prototype,
-			'innerText'
+			'innerText',
 		)!;
 
 		Reflect.defineProperty(
@@ -449,14 +454,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						}
 
 						that.append(new Text(args[0]));
-					}
+					},
 				),
-			}
+			},
 		);
 
 		const outerTextDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global.HTMLElement.prototype,
-			'outerText'
+			'outerText',
 		)!;
 
 		Reflect.defineProperty(
@@ -470,9 +475,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					outerTextDescriptor.set!,
 					(target, that: Element, args) => {
 						that.replaceWith(new Text(args[0]));
-					}
+					},
 				),
-			}
+			},
 		);
 
 		/**
@@ -489,13 +494,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						.getInnerHTML as () => string,
 					(target, that) => {
 						return that.innerHTML;
-					}
+					},
 				);
 		}
 
 		const innerHTMLDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global.Element.prototype,
-			'innerHTML'
+			'innerHTML',
 		)!;
 
 		Reflect.defineProperty(this.client.global.Element.prototype, 'innerHTML', {
@@ -506,7 +511,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that, args) => {
 					// todo
 					return Reflect.apply(target, that, args);
-				}
+				},
 			),
 			set: proxyModule.wrapFunction(
 				innerHTMLDescriptor.set!,
@@ -517,7 +522,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								for (const node of element.content.childNodes) node.remove();
 
 								element.content.append(
-									cloneRawNode(parseHTMLFragment(args[0]))
+									cloneRawNode(parseHTMLFragment(args[0])),
 								);
 							});
 						else {
@@ -532,13 +537,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							}
 						}
 					});
-				}
+				},
 			),
 		});
 
 		const outerHTMLDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global.Element.prototype,
-			'outerHTML'
+			'outerHTML',
 		)!;
 
 		Reflect.defineProperty(this.client.global.Element.prototype, 'outerHTML', {
@@ -549,13 +554,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that, args) => {
 					// todo
 					return Reflect.apply(target, that, args);
-				}
+				},
 			),
 			set: proxyModule.wrapFunction(
 				outerHTMLDescriptor.set!,
 				(target, that: Element, args) => {
 					that.replaceWith(cloneRawNode(parseHTMLFragment(args[0])));
-				}
+				},
 			),
 		});
 
@@ -575,7 +580,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							return element.getAttribute(attribute);
 						}
 					});
-				}
+				},
 			);
 
 		this.client.global.Element.prototype.setAttribute =
@@ -593,7 +598,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 						this.updateAttributeHooks(element, attribute);
 					});
-				}
+				},
 			);
 
 		this.client.global.Element.prototype.removeAttribute =
@@ -611,7 +616,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						element.removeAttributeOG(attribute);
 						this.updateAttributeHooks(element, attribute);
 					});
-				}
+				},
 			);
 
 		const trackProperties = new Map<ElementCtor, Set<string>>();
@@ -630,7 +635,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			for (const property of properties) {
 				const descriptor = Reflect.getOwnPropertyDescriptor(
 					ctor.prototype,
-					property
+					property,
 				);
 
 				if (!descriptor) {
@@ -657,7 +662,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 								return Reflect.apply(target, that, args);
 							});
-						}
+						},
 					),
 					set: proxyModule.wrapFunction(
 						descriptor.set!,
@@ -678,7 +683,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							Reflect.apply(target, that, [
 								Reflect.apply(descriptor.get!, that, []),
 							]);
-						}
+						},
 					),
 				});
 			}

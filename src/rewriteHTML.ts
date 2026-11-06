@@ -1,4 +1,4 @@
-import StompURL from './StompURL';
+import { escapeText } from 'entities';
 import { Config } from './config';
 import { CLIENT_KEY } from './rewriteJS';
 import {
@@ -7,13 +7,13 @@ import {
 	parseDataURI,
 	routeURL,
 } from './routeURL';
-import { escapeText } from 'entities';
+import StompURL from './StompURL';
 
 export function routeHTML(
 	resource: StompURL,
 	url: StompURL,
 	config: Config,
-	form = false
+	form = false,
 ) {
 	if (resource.url.protocol === 'data:') {
 		const { mime, data, attributes } = parseDataURI(resource.url.pathname);
@@ -30,7 +30,7 @@ export function routeHTML(
 export function modifyHTML(
 	script: string,
 	url: StompURL,
-	config: Config
+	config: Config,
 ): string {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	const inject = `if (typeof globalThis.createClient !== 'function') {
@@ -55,7 +55,7 @@ export function modifyHTML(
 }`;
 
 	return `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body><script src="${injectDocumentJS(
-		url
+		url,
 	)}"></script><script>${inject}</script></body></html>`;
 }
 
@@ -72,8 +72,8 @@ export function modifyRefresh(script: string, url: StompURL, config: Config) {
 			return `${pre}url=${routeHTML(
 				new StompURL(new URL(resource, url.toString()), url),
 				url,
-				config
+				config,
 			)}`;
-		}
+		},
 	);
 }

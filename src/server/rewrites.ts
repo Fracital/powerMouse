@@ -1,21 +1,23 @@
+import {
+	BareCompatibleClient,
+	type ProxyTransport,
+} from '@mercuryworkshop/proxy-transports';
 import GenericCodec from '../Codecs';
-import StompURL from '../StompURL';
 import { codecType, Config, ParsedConfig } from '../config';
 import { capitalizeHeaders, trimNonStandardHeaders } from '../headers';
 import { modifyCSS, routeCSS } from '../rewriteCSS';
 import { modifyHTML, modifyRefresh, routeHTML } from '../rewriteHTML';
-import { modifyJS, routeJS } from '../rewriteJS';
-import { ScriptType } from '../rewriteJS';
+import { modifyJS, routeJS, ScriptType } from '../rewriteJS';
 import { parseRoutedURL, routeBinary } from '../routeURL';
+import StompURL from '../StompURL';
 import Cookies from './Cookies';
-import Router from './Router';
 import {
 	AdditionalFilter,
-	RouteTransform,
 	filterNativeRequestHeaders,
 	filterResponseHeaders,
+	RouteTransform,
 } from './filterHeaders';
-import BareClient from '@tomphttp/bare-client';
+import Router from './Router';
 
 export const statusEmpty = [101, 204, 205, 304];
 
@@ -26,14 +28,13 @@ const BODY_ILLEGAL = ['GET', 'HEAD'];
 type BodyTransform = (
 	url: StompURL,
 	response: Response,
-	responseHeaders: Headers
+	responseHeaders: Headers,
 ) => Promise<BodyInit | false>;
 
 interface Rewriter {
 	codec: GenericCodec;
 	directory: string;
-	bare: BareClient;
-	bareServer: string;
+	bare: BareCompatibleClient;
 	config: Config;
 	cookies: Cookies;
 }
@@ -43,34 +44,55 @@ function genericForward(
 	transformBody: BodyTransform | void,
 	transformRoute: RouteTransform,
 	additionalRequestFilter: AdditionalFilter | void,
-	additionalResponseFilter: AdditionalFilter | void
+	additionalResponseFilter: AdditionalFilter | void,
 ) {
 	return async function (serverRequest: Request): Promise<Response> {
 		const oURL = new URL(serverRequest.url);
 		const { url } = parseRoutedURL(
 			serverRequest.url,
 			rewriter.codec,
-			`${oURL.origin}${rewriter.directory}`
+			`${oURL.origin}${rewriter.directory}`,
 		);
 
 		const requestHeaders = filterNativeRequestHeaders(
 			serverRequest.headers,
 			url,
-			additionalRequestFilter
+			additionalRequestFilter,
 		);
 
 		requestHeaders.set('user-agent', navigator.userAgent);
 
 		requestHeaders.set(
 			'cookie',
-			(await rewriter.cookies.get(url.url)).toString()
+			(await rewriter.cookies.get(url.url)).toString(),
 		);
 
 		requestHeaders.set('sec-fetch-dest', serverRequest.destination);
 
+		// Referer and Origin are forbidden headers, so the service worker never
+		// sees them; rebuild them from the (proxied) referrer
+		requestHeaders.delete('referer');
+		requestHeaders.delete('origin');
+
+		if (serverRequest.referrer && serverRequest.referrer !== 'about:client') {
+			try {
+				const referrer = parseRoutedURL(
+					serverRequest.referrer,
+					rewriter.codec,
+					`${oURL.origin}${rewriter.directory}`,
+				).url.url;
+
+				requestHeaders.set('referer', referrer.toString());
+
+				if (!BODY_ILLEGAL.includes(serverRequest.method))
+					requestHeaders.set('origin', referrer.origin);
+			} catch (error) {
+				// referrer isn't a proxied URL (e.g. the controller page)
+			}
+		}
+
 		const response = await rewriter.bare.fetch(url.toString(), {
 			method: serverRequest.method,
-			cache: serverRequest.cache,
 			redirect: 'manual',
 			// redirect: serverRequest.redirect,
 			body:
@@ -84,12 +106,12 @@ function genericForward(
 			response.headers,
 			url,
 			transformRoute,
-			additionalResponseFilter
+			additionalResponseFilter,
 		);
 
-		for (const header in response.rawHeaders) {
+		for (const [header, value] of response.rawHeaders) {
 			if (header.toLowerCase() === 'set-cookie') {
-				await rewriter.cookies.set(response.rawHeaders[header], url.url);
+				await rewriter.cookies.set(value, url.url);
 			}
 		}
 
@@ -122,22 +144,20 @@ export function getMime(contentType: string): string {
 export function registerRewrites(
 	router: Router,
 	init: ParsedConfig,
-	cookies: Cookies
+	cookies: Cookies,
+	transport: ProxyTransport,
 ) {
 	const rewriter: Rewriter = {
 		get config() {
 			return {
 				directory: this.directory,
 				codec: codecType(this.codec),
-				bareServer: this.bareServer,
-				bareClientData: this.bare.data,
 			};
 		},
 		cookies,
 		codec: init.codec,
 		directory: init.directory,
-		bare: new BareClient(init.bareServer),
-		bareServer: init.bareServer,
+		bare: new BareCompatibleClient(transport),
 	};
 
 	router.routes.set(
@@ -149,23 +169,15 @@ export function registerRewrites(
 			undefined,
 			(headers, filteredHeaders) => {
 				trimNonStandardHeaders(filteredHeaders);
-			}
-		)
+			},
+		),
 	);
 
-	router.routes.set(/^\/process$/, async (request) => {
-		const surl = new StompURL(
-			await request.text(),
-			rewriter.codec,
-			rewriter.directory
-		);
-
-		return new Response(routeHTML(surl, surl, rewriter.config), {
-			headers: {
-				'content-type': 'text/plain',
-			},
-		});
-	});
+	// used by the controller (over RPC) to turn a URL into a frame destination
+	const route = (url: string) => {
+		const surl = new StompURL(url, rewriter.codec, rewriter.directory);
+		return routeHTML(surl, surl, rewriter.config);
+	};
 
 	const scriptTypeFactory = (type: ScriptType) =>
 		genericForward(
@@ -181,18 +193,16 @@ export function registerRewrites(
 				for (const header of integrityHeaders) {
 					filteredHeaders.delete(header);
 				}
-			}
+			},
 		);
 
 	router.routes.set(/^\/js:generic\//, scriptTypeFactory('generic'));
 	router.routes.set(
 		/^\/js:genericModule\//,
-		scriptTypeFactory('genericModule')
+		scriptTypeFactory('genericModule'),
 	);
 	router.routes.set(/^\/js:worker\//, scriptTypeFactory('worker'));
 	router.routes.set(/^\/js:workerModule\//, scriptTypeFactory('workerModule'));
-
-	router.routes.set(/^\/client$/, () => new Response());
 
 	router.routes.set(
 		/^\/css\//,
@@ -208,8 +218,8 @@ export function registerRewrites(
 				for (const header of integrityHeaders) {
 					filteredHeaders.delete(header);
 				}
-			}
-		)
+			},
+		),
 	);
 
 	router.routes.set(
@@ -218,7 +228,7 @@ export function registerRewrites(
 			rewriter,
 			async (url, response, responseHeaders) =>
 				htmlMimes.includes(
-					getMime(responseHeaders.get('content-type') || '')
+					getMime(responseHeaders.get('content-type') || ''),
 				) && modifyHTML(await response.text(), url, rewriter.config),
 			(resource, url) => routeHTML(resource, url, rewriter.config),
 			undefined,
@@ -232,15 +242,15 @@ export function registerRewrites(
 				if (headers.has('refresh')) {
 					filteredHeaders.set(
 						'refresh',
-						modifyRefresh(headers.get('refresh')!, url, rewriter.config)
+						modifyRefresh(headers.get('refresh')!, url, rewriter.config),
 					);
 				}
 
 				for (const header of integrityHeaders) {
 					filteredHeaders.delete(header);
 				}
-			}
-		)
+			},
+		),
 	);
 
 	router.routes.set(/^\/html:form\//, (serverRequest) => {
@@ -248,7 +258,7 @@ export function registerRewrites(
 		const { url } = parseRoutedURL(
 			`${oURL.origin}${oURL.pathname}${oURL.hash}`, // exclude query
 			rewriter.codec,
-			`${oURL.origin}${rewriter.directory}`
+			`${oURL.origin}${rewriter.directory}`,
 		);
 
 		url.url.search = oURL.search;
@@ -264,6 +274,8 @@ export function registerRewrites(
 	// todo: parse more request headers
 	router.routes.set(
 		/^\/xhr\//,
-		genericForward(rewriter, undefined, (resource) => routeBinary(resource))
+		genericForward(rewriter, undefined, (resource) => routeBinary(resource)),
 	);
+
+	return { route };
 }

@@ -9,7 +9,7 @@ export function routeURL(resourceType: string, url: StompURL) {
 		return url.toString();
 	}
 
-	return `${url.directory}${resourceType}/${url.encode()}${url.url.hash}`;
+	return `${url.directory}${resourceType}/${url.encode()}`;
 }
 
 /**
@@ -69,7 +69,7 @@ export interface ParsedRoutedURL {
 export function parseRoutedURL(
 	routed: string,
 	codec: GenericCodec,
-	directory: string
+	directory: string,
 ): ParsedRoutedURL {
 	if (!routed.startsWith(directory)) {
 		throw new Error('Outside directory');

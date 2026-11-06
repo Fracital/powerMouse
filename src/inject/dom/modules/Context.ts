@@ -1,6 +1,7 @@
-import StompURL from '../../../StompURL';
+import { getDomain } from 'tldts';
 import { routeHTML } from '../../../rewriteHTML';
 import { CLIENT_KEY, GLOBAL_NAME } from '../../../rewriteJS';
+import StompURL, { urlLike } from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule, {
 	applyDescriptors,
@@ -9,13 +10,12 @@ import ProxyModule, {
 } from '../../modules/Proxy';
 import { nativeFunction } from '../../nativeUtil';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
-import { urlLike } from '@tomphttp/bare-client';
-import domainNameParser from 'effective-domain-name-parser';
 
 export function sameHost(first: string, second: string): boolean {
-	return (
-		domainNameParser.parse(first).sld === domainNameParser.parse(second).sld
-	);
+	const a = getDomain(first);
+	const b = getDomain(second);
+	// tldts returns null for IPs / localhost; fall back to exact host match
+	return a !== null && b !== null ? a === b : first === second;
 }
 
 function removeBlob(protocol: string): string {
@@ -33,26 +33,17 @@ export function sameOrigin(first: string, second: string): boolean {
 }
 
 function findTop(global: typeof globalThis): Context {
-	const stack: Context[] = [global];
+	let context: Context = global;
 
+	// walk up while the parent is still a Stomp context; the controller page
+	// (or anything cross-origin) ends the proxied world
 	while (true) {
-		const context = stack.pop();
-
-		if (!context) {
-			return global;
-		}
-
 		try {
-			if (CLIENT_KEY in context) {
-				// only set if unique
-				const parent = (context[CLIENT_KEY] as DocumentClient).parent;
-
-				if (parent !== undefined) {
-					stack.unshift(parent);
-				}
-			}
+			const parent = (context[CLIENT_KEY] as DocumentClient).parent;
+			if (parent === context || !(CLIENT_KEY in parent)) return context;
+			context = parent;
 		} catch (error) {
-			//
+			return context;
 		}
 	}
 }
@@ -60,13 +51,13 @@ function findTop(global: typeof globalThis): Context {
 type PostMessageArgs = [
 	message: any,
 	targetOrigin: string,
-	transfer?: Transferable[]
+	transfer?: Transferable[],
 ];
 
 type PostMessageArgs2 = [message: any, options?: WindowPostMessageOptions];
 
 function isPostMessageArgs2(
-	args: PostMessageArgs | PostMessageArgs2
+	args: PostMessageArgs | PostMessageArgs2,
 ): args is PostMessageArgs2 {
 	return args.length === 2;
 }
@@ -126,7 +117,7 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		const accessError = () =>
 			new DOMException(
-				`Blocked a frame with "${this.client.url.url.origin}" from accessing a cross-origin frame.`
+				`Blocked a frame with "${this.client.url.url.origin}" from accessing a cross-origin frame.`,
 			);
 
 		for (const key in interfaces) {
@@ -187,7 +178,7 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		return proxy;
 	}
-	// eslint-disable-next-line @typescript-eslint/ban-types
+
 	restrictFunction<T extends Function>(target: T): T {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
@@ -200,7 +191,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		return wrapped;
 	}
 	postMessage(
-		args: PostMessageArgs | PostMessageArgs2
+		args: PostMessageArgs | PostMessageArgs2,
 	): PostMessageArgs | PostMessageArgs2 {
 		/*if (!this.RestrictedContexts.has(targetWindow)) {
 			throw new TypeError('Illegal invocation');
@@ -230,12 +221,12 @@ export default class ContextModule extends Module<DocumentClient> {
 					data: args[0],
 					transfer: Array.isArray(args[1]?.transfer) ? args[1]!.transfer : [],
 					targetOrigin: args[1] ? String(args[1]) : '*',
-			  }
+				}
 			: {
 					data: args[0],
 					transfer: Array.isArray(args[2]) ? args[2] : [],
 					targetOrigin: args[1] ? String(args[1]) : '*',
-			  };
+				};
 
 		return <PostMessageArgs2>[
 			<MessageData>{
@@ -259,11 +250,11 @@ export default class ContextModule extends Module<DocumentClient> {
 						routeHTML(
 							new StompURL(
 								new URL(url, this.client.url.toString()),
-								this.client.url
+								this.client.url,
 							),
 							this.client.url,
-							this.client.config
-						)
+							this.client.config,
+						),
 					);
 				},
 			},
@@ -273,11 +264,11 @@ export default class ContextModule extends Module<DocumentClient> {
 						routeHTML(
 							new StompURL(
 								new URL(value, this.client.url.toString()),
-								this.client.url
+								this.client.url,
 							),
 							this.client.url,
-							this.client.config
-						)
+							this.client.config,
+						),
 					);
 				},
 			},
@@ -327,11 +318,11 @@ export default class ContextModule extends Module<DocumentClient> {
 						routeHTML(
 							new StompURL(
 								new URL(value, this.client.url.toString()),
-								this.client.url
+								this.client.url,
 							),
 							this.client.url,
-							this.client.config
-						)
+							this.client.config,
+						),
 					);
 				},
 			},
@@ -357,7 +348,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		if (
 			sameOrigin(
 				this.client.url.toString(),
-				((context as any)[CLIENT_KEY] as DocumentClient).url.toString()
+				((context as any)[CLIENT_KEY] as DocumentClient).url.toString(),
 			)
 		)
 			return context;
@@ -376,7 +367,7 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		const parentDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global,
-			'parent'
+			'parent',
 		)!;
 
 		Reflect.defineProperty(this.client.global, 'parent', {
@@ -385,12 +376,42 @@ export default class ContextModule extends Module<DocumentClient> {
 				(target, that, args) => {
 					const got = Reflect.apply(target, that, args);
 					return this.newRestricted(got);
-				}
+				},
 			),
 			set: parentDescriptor.set!,
 			configurable: true,
 			enumerable: true,
 		});
+
+		// window.top is unforgeable, so the JS rewriter routes `top` reads here:
+		// the proxied world's top is the outermost Stomp context
+		// only windows qualify: set2 also routes `obj['top'] = v` through here
+		const isWindow = (value: unknown): value is Context => {
+			try {
+				return (
+					typeof value === 'object' &&
+					value !== null &&
+					(value as { window?: unknown }).window === value
+				);
+			} catch (error) {
+				// cross-origin WindowProxy still exposes .window; anything that
+				// throws here isn't a window we can reason about
+				return false;
+			}
+		};
+
+		this.client.resolveTop = (value) => {
+			if (!isWindow(value)) return value;
+
+			try {
+				if (value === this.client.top || !(CLIENT_KEY in value))
+					return this.newRestricted(findTop(this.client.global));
+			} catch (error) {
+				// cross-origin top
+			}
+
+			return this.newRestricted(value);
+		};
 
 		const messageData = new WeakMap<MessageEvent, MessageData>();
 
@@ -403,7 +424,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				get: proxyModule.wrapFunction(
 					Reflect.getOwnPropertyDescriptor(
 						this.client.global.MessageEvent.prototype,
-						'origin'
+						'origin',
 					)!.get!,
 					(target, that: MessageEvent, args) => {
 						if (messageData.has(that)) {
@@ -411,9 +432,9 @@ export default class ContextModule extends Module<DocumentClient> {
 						}
 
 						return Reflect.apply(target, that, args);
-					}
+					},
 				),
-			}
+			},
 		);
 
 		Reflect.defineProperty(this.client.global.MessageEvent.prototype, 'data', {
@@ -422,7 +443,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			get: proxyModule.wrapFunction(
 				Reflect.getOwnPropertyDescriptor(
 					this.client.global.MessageEvent.prototype,
-					'data'
+					'data',
 				)!.get!,
 				(target, that: MessageEvent, args) => {
 					if (messageData.has(that)) {
@@ -430,7 +451,7 @@ export default class ContextModule extends Module<DocumentClient> {
 					}
 
 					return Reflect.apply(target, that, args);
-				}
+				},
 			),
 		});
 
@@ -460,9 +481,9 @@ export default class ContextModule extends Module<DocumentClient> {
 				return Reflect.apply(
 					target,
 					this.client.global,
-					this.postMessage(<any>args)
+					this.postMessage(<any>args),
 				);
-			}
+			},
 		);
 	}
 }

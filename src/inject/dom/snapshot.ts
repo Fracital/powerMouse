@@ -1,16 +1,16 @@
 import { bindDescriptors } from '../snapshot';
 
-export class DOMParser extends global.DOMParser {}
+export class DOMParser extends globalThis.DOMParser {}
 
 Object.defineProperties(
 	DOMParser.prototype,
-	Object.getOwnPropertyDescriptors(global.DOMParser)
+	Object.getOwnPropertyDescriptors(globalThis.DOMParser),
 );
 
 export const navigator: Navigator = bindDescriptors(
 	{},
-	global.navigator,
-	Navigator.prototype
+	globalThis.navigator,
+	Navigator.prototype,
 );
 
-export const postMessage = global.postMessage;
+export const postMessage = globalThis.postMessage;

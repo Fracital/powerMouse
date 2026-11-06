@@ -1,6 +1,6 @@
-import StompURL from './StompURL';
+import { generate, parse, Url, walk } from 'css-tree';
 import { createDataURI, parseDataURI, routeBinary, routeURL } from './routeURL';
-import { generate, parse, StringNode, Url, walk } from 'css-tree';
+import StompURL from './StompURL';
 
 export function routeCSS(resource: StompURL, url: StompURL) {
 	if (resource.url.protocol === 'data:') {
@@ -36,16 +36,73 @@ function restoreValue(url: string) {
 	return url.slice(hashi + 1);
 }
 
+const RAW_URL = /url\(\s*(['"]?)(.*?)\1\s*\)/g;
+
+/**
+ * Route every url() in a raw CSS value (a single declaration value, a custom
+ * property, or anything css-tree can't parse) through the binary route.
+ */
+export function rewriteCSSValueURLs(value: string, url: StompURL): string {
+	return value.replace(RAW_URL, (match, quote, target) => {
+		try {
+			const resolved = new StompURL(new URL(target, url.toString()), url);
+			// keep the page's own token after '#', so reads can give it back
+			return `url(${JSON.stringify(
+				preserveValue(routeBinary(resolved), match),
+			)})`;
+		} catch (error) {
+			return match;
+		}
+	});
+}
+
+/** inverse of rewriteCSSValueURLs for values the page reads back */
+export function restoreCSSValueURLs(value: string): string {
+	return value.replace(RAW_URL, (match, quote, target) => {
+		try {
+			return restoreValue(target);
+		} catch (error) {
+			return match;
+		}
+	});
+}
+
 export function modifyCSS(
 	script: string,
 	url: StompURL,
-	context = 'stylesheet'
+	context = 'stylesheet',
 ) {
 	const tree = parse(script, { positions: true, context });
 	let offset = 0;
 
 	walk(tree, function (node) {
-		if (node.type === 'Url')
+		// css-tree leaves custom property values (--x: url(...)) unparsed
+		if (node.type === 'Raw' && this.declaration?.property.startsWith('--')) {
+			const generated = rewriteCSSValueURLs(node.value, url);
+
+			if (generated !== node.value) {
+				script =
+					script.slice(0, node.loc!.start.offset - offset) +
+					generated +
+					script.slice(node.loc!.end.offset - offset);
+				offset +=
+					node.loc!.end.offset - node.loc!.start.offset - generated.length;
+			}
+		} else if (node.type === 'String' && this.atrule?.name === 'import') {
+			try {
+				const resolved = new StompURL(new URL(node.value, url.toString()), url);
+				const generated = JSON.stringify(routeCSS(resolved, url));
+
+				script =
+					script.slice(0, node.loc!.start.offset - offset) +
+					generated +
+					script.slice(node.loc!.end.offset - offset);
+				offset +=
+					node.loc!.end.offset - node.loc!.start.offset - generated.length;
+			} catch (error) {
+				console.error(error);
+			}
+		} else if (node.type === 'Url')
 			try {
 				// @ts-ignore
 				const resolved = new StompURL(new URL(node.value, url), url);
@@ -54,22 +111,18 @@ export function modifyCSS(
 
 				const raw = script.slice(
 					node.loc!.start.offset - offset,
-					node.loc!.end.offset - offset
+					node.loc!.end.offset - offset,
 				);
 
 				if (this.atrule?.name === 'import') {
 					replace = {
 						type: 'Url',
-						value: <StringNode>(
-							(<unknown>preserveValue(routeCSS(resolved, url), raw))
-						),
+						value: preserveValue(routeCSS(resolved, url), raw),
 					};
 				} else {
 					replace = {
 						type: 'Url',
-						value: <StringNode>(
-							(<unknown>preserveValue(routeBinary(resolved), raw))
-						),
+						value: preserveValue(routeBinary(resolved), raw),
 					};
 				}
 

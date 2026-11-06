@@ -1,5 +1,7 @@
-export interface SerializableRequestInit
-	extends Omit<Omit<Omit<RequestInit, 'signal'>, 'headers'>, 'body'> {
+export interface SerializableRequestInit extends Omit<
+	Omit<Omit<RequestInit, 'signal'>, 'headers'>,
+	'body'
+> {
 	headers?: { [key: string]: string | string[] };
 }
 

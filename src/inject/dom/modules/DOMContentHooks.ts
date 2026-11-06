@@ -7,7 +7,7 @@ import ProxyModule, {
 	usePrototype,
 } from '../../modules/Proxy';
 import DocumentClient, { getGlobalParsingState } from '../Client';
-import { parseHTMLFragment } from '../cloneNode';
+import cloneRawNode, { parseHTMLFragment } from '../cloneNode';
 import DOMAttributesModule, {
 	scriptType,
 	shouldRewriteScript,
@@ -33,7 +33,7 @@ applyDescriptors(nativeHTMLScriptElement, HTMLScriptElement.prototype);
 applyDescriptors(nativeHTMLFormElement, HTMLFormElement.prototype);
 
 function getSupportedQueryInterface(
-	node: Node
+	node: Node,
 ): DocumentFragment | Element | undefined {
 	if (node.nodeName === '#document-fragment') {
 		return nativeDocumentFragment;
@@ -83,7 +83,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 		function compositeElement(
 			element: Element,
-			createComposite: () => Element
+			createComposite: () => Element,
 		) {
 			element.replaceWith(createComposite());
 			Reflect.defineProperty(element, Symbol.toStringTag, {
@@ -103,7 +103,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 						usePrototype(script, nativeHTMLScriptElement, (script) => {
 							script.textContent = `document.currentScript.outerHTML=${JSON.stringify(
-								style.outerHTML
+								style.outerHTML,
 							)}`;
 						});
 
@@ -121,7 +121,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			}
 
 			const rules = [...style.sheet!.cssRules].filter(
-				(rule) => !(rule as any)[rewrittenRule]
+				(rule) => !(rule as any)[rewrittenRule],
 			);
 
 			for (let i = 0; i < rules.length; i++) {
@@ -131,7 +131,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			for (let i = 0; i < rules.length; i++) {
 				const added = style.sheet!.insertRule(
 					modifyCSS(rules[i].cssText, this.client.url),
-					i
+					i,
 				);
 				(style.sheet!.cssRules[added] as any)[rewrittenRule] = true;
 			}
@@ -154,7 +154,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				script.text,
 				this.client.url,
 				this.client.config,
-				scriptType(script)
+				scriptType(script),
 			);
 		};
 
@@ -165,7 +165,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				if (element.nodeName !== 'STYLE') return;
 
 				usePrototype(element, nativeHTMLStyleElement, (style) =>
-					rewriteStyle(style)
+					rewriteStyle(style),
 				);
 			});
 		}
@@ -179,7 +179,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						const parent = usePrototype(
 							that,
 							nativeCharacterData,
-							(cd) => cd.parentElement
+							(cd) => cd.parentElement,
 						);
 
 						const result = Reflect.apply(target, that, args);
@@ -187,13 +187,13 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						cdUpdated(that, parent);
 
 						return result;
-					}
+					},
 				);
 		}
 
 		const dataDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global.CharacterData.prototype,
-			'data'
+			'data',
 		)!;
 
 		Reflect.defineProperty(this.client.global.CharacterData.prototype, 'data', {
@@ -206,7 +206,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					Reflect.apply(target, that, args);
 
 					cdUpdated(that);
-				}
+				},
 			),
 		});
 
@@ -239,7 +239,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						usePrototype(
 							target.parentElement!,
 							nativeHTMLStyleElement,
-							(style) => rewriteStyle(style)
+							(style) => rewriteStyle(style),
 						);
 					}
 
@@ -247,7 +247,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					if (element.nodeName === 'STYLE') {
 						// usePrototype(inserted, nativeHTMLElement, (element: HTMLElement) => {
 						usePrototype(element, nativeHTMLStyleElement, (style) =>
-							rewriteStyle(style)
+							rewriteStyle(style),
 						);
 					}
 				});
@@ -266,7 +266,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		const insert = <T>(
 			insert: Node,
 			that: Node | null,
-			insertElement: () => T
+			insertElement: () => T,
 		): T => {
 			// if insert is a DocumentFragment, its childNodes will be cleared upon insertion
 			// we need to snapshot the childNodes or run a query before its childNodes are cleared
@@ -276,7 +276,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			usePrototype(insert, nativeNode, (node) => {
 				if (node.nodeName === 'SCRIPT') {
 					usePrototype(insert, nativeHTMLScriptElement, (script) =>
-						rewriteScript(script)
+						rewriteScript(script),
 					);
 				} else {
 					const queryInterface = getSupportedQueryInterface(node);
@@ -284,14 +284,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					if (queryInterface)
 						usePrototype(node, queryInterface, (queryable) => {
 							for (const style of (insert as Element).querySelectorAll(
-								'style'
+								'style',
 							)) {
 								styles.push(style);
 							}
 
 							for (const script of queryable.querySelectorAll('script'))
 								usePrototype(script, nativeHTMLScriptElement, (script) =>
-									rewriteScript(script)
+									rewriteScript(script),
 								);
 						});
 				}
@@ -308,14 +308,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						break;
 					case 'STYLE':
 						usePrototype(insert, nativeHTMLStyleElement, (style) =>
-							rewriteStyle(style)
+							rewriteStyle(style),
 						);
 				}
 			});
 
 			for (const style of styles) {
 				usePrototype(style, nativeHTMLStyleElement, (style) =>
-					rewriteStyle(style)
+					rewriteStyle(style),
 				);
 			}
 
@@ -326,30 +326,30 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 		const willInsertNode = (x: (inserted: Node, ...args: any[]) => any) =>
 			proxyModule.wrapFunction(x, (target, that, args) =>
-				insert(args[0], that, () => Reflect.apply(target, that, args))
+				insert(args[0], that, () => Reflect.apply(target, that, args)),
 			);
 
 		this.client.global.Node.prototype.appendChild = willInsertNode(
-			this.client.global.Node.prototype.appendChild
+			this.client.global.Node.prototype.appendChild,
 		);
 		this.client.global.Element.prototype.append = willInsertNode(
-			this.client.global.Element.prototype.append
+			this.client.global.Element.prototype.append,
 		);
 		this.client.global.Node.prototype.insertBefore = willInsertNode(
-			this.client.global.Node.prototype.insertBefore
+			this.client.global.Node.prototype.insertBefore,
 		);
 		this.client.global.Node.prototype.replaceChild = willInsertNode(
-			this.client.global.Node.prototype.replaceChild
+			this.client.global.Node.prototype.replaceChild,
 		);
 		this.client.global.Element.prototype.replaceWith = willInsertNode(
-			this.client.global.Element.prototype.replaceWith
+			this.client.global.Element.prototype.replaceWith,
 		);
 
 		function insertAdjacentTarget(
 			position: string,
 			relative: Element,
 			on: string,
-			api: string
+			api: string,
 		): Element | null {
 			switch (position) {
 				case 'afterbegin':
@@ -360,7 +360,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					return relative.parentElement;
 				default:
 					throw new DOMException(
-						`Failed to execute '${api}' on '${on}': The value provided ('${position}') is not one of 'beforeBegin', 'afterBegin', 'beforeEnd', or 'afterEnd'.`
+						`Failed to execute '${api}' on '${on}': The value provided ('${position}') is not one of 'beforeBegin', 'afterBegin', 'beforeEnd', or 'afterEnd'.`,
 					);
 			}
 		}
@@ -369,7 +369,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			targetElement: Element,
 			position: string,
 			relative: Element,
-			node: Node
+			node: Node,
 		) {
 			if (!targetElement) {
 				return;
@@ -419,7 +419,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						args.length,
 						2,
 						'Element',
-						'insertAdjacentText'
+						'insertAdjacentText',
 					);
 
 					const position = String(args[0]);
@@ -428,17 +428,17 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						position,
 						that,
 						'Element',
-						'insertAdjacentText'
+						'insertAdjacentText',
 					);
 
 					if (!targetElement) return;
 
 					insert(insertNode, targetElement, () =>
 						usePrototype(that, nativeElement, (element) =>
-							insertAdjacent(targetElement, position, element, insertNode)
-						)
+							insertAdjacent(targetElement, position, element, insertNode),
+						),
 					);
-				}
+				},
 			);
 
 		this.client.global.Element.prototype.insertAdjacentElement =
@@ -449,12 +449,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						args.length,
 						2,
 						'Element',
-						'insertAdjacentElement'
+						'insertAdjacentElement',
 					);
 
 					if (!(args[1] instanceof Element)) {
 						throw new TypeError(
-							`Failed to execute 'insertAdjacentElement' on 'Element': parameter 2 is not of type 'Element'.`
+							`Failed to execute 'insertAdjacentElement' on 'Element': parameter 2 is not of type 'Element'.`,
 						);
 					}
 
@@ -464,17 +464,17 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						position,
 						that,
 						'Element',
-						'insertAdjacentElement'
+						'insertAdjacentElement',
 					);
 
 					if (!targetElement) return;
 
 					insert(insertElement, targetElement, () =>
 						usePrototype(that, nativeElement, (element) =>
-							insertAdjacent(targetElement, position, element, insertElement)
-						)
+							insertAdjacent(targetElement, position, element, insertElement),
+						),
 					);
-				}
+				},
 			);
 
 		this.client.global.Element.prototype.insertAdjacentHTML =
@@ -485,28 +485,28 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						args.length,
 						2,
 						'Element',
-						'insertAdjacentHTML'
+						'insertAdjacentHTML',
 					);
 
 					const position = String(args[0]);
-					const insertFragment: DocumentFragment = parseHTMLFragment(
-						String(args[1])
+					const insertFragment: DocumentFragment = cloneRawNode(
+						parseHTMLFragment(String(args[1])),
 					);
 					const targetElement = insertAdjacentTarget(
 						position,
 						that,
 						'Element',
-						'insertAdjacentHTML'
+						'insertAdjacentHTML',
 					);
 
 					if (!targetElement) return;
 
 					insert(insertFragment, targetElement, () =>
 						usePrototype(that, nativeElement, (element) =>
-							insertAdjacent(targetElement, position, element, insertFragment)
-						)
+							insertAdjacent(targetElement, position, element, insertFragment),
+						),
 					);
-				}
+				},
 			);
 
 		// does not insert element
@@ -518,7 +518,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				textUpdatesStyle(that);
 
 				return result;
-			}
+			},
 		);
 	}
 }

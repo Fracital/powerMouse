@@ -1,5 +1,5 @@
-import Router, { jsonAPI } from './Router';
 import { IDBPDatabase, openDB } from 'idb';
+import Router, { jsonAPI } from './Router';
 
 interface ItemEntry {
 	item: string;
@@ -22,7 +22,7 @@ export default class Storage {
 		const data: ItemEntry | undefined = await this.db.getFromIndex(
 			this.store,
 			'key',
-			this.resolveKey(origin, item)
+			this.resolveKey(origin, item),
 		);
 
 		if (data) {
@@ -47,7 +47,7 @@ export default class Storage {
 			await this.db.getAllFromIndex(
 				this.store,
 				'origin',
-				IDBKeyRange.only(origin)
+				IDBKeyRange.only(origin),
 			)
 		).map(({ item }: ItemEntry) => item);
 	}
@@ -92,7 +92,7 @@ export async function registerStorage(router: Router) {
 		]) {
 			router.routes.set(
 				new RegExp(`^\\/${name}\\/${api}$`),
-				jsonAPI(host[api as keyof Storage].bind(host))
+				jsonAPI(host[api as keyof Storage].bind(host)),
 			);
 		}
 	}

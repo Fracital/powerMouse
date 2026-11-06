@@ -1,12 +1,12 @@
-import StompURL from '../../../StompURL';
 import { routeHTML } from '../../../rewriteHTML';
+import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
 
 const anchorHrefDescriptor = Reflect.getOwnPropertyDescriptor(
 	HTMLAnchorElement.prototype,
-	'href'
+	'href',
 )!;
 
 export default class AnchorModule extends Module<DocumentClient> {
@@ -30,17 +30,17 @@ export default class AnchorModule extends Module<DocumentClient> {
 		]) {
 			const urlDescriptor = Reflect.getOwnPropertyDescriptor(
 				this.client.global.URL.prototype,
-				common
+				common,
 			);
 
 			const anchorDescriptor = Reflect.getOwnPropertyDescriptor(
 				this.client.global.HTMLAnchorElement.prototype,
-				common
+				common,
 			);
 
 			if (!urlDescriptor || !anchorDescriptor) {
 				console.error(
-					`Common property ${common} was missing on URL.prototype/HTMLAnchorElement.prototype`
+					`Common property ${common} was missing on URL.prototype/HTMLAnchorElement.prototype`,
 				);
 				continue;
 			}
@@ -60,8 +60,8 @@ export default class AnchorModule extends Module<DocumentClient> {
 									const temp = new URL(this.client.location.toString());
 
 									return Reflect.apply(urlDescriptor.get!, temp, args);
-								}
-						  )
+								},
+							)
 						: undefined,
 					set: anchorDescriptor.set
 						? proxyModule?.wrapFunction(
@@ -82,13 +82,13 @@ export default class AnchorModule extends Module<DocumentClient> {
 										routeHTML(
 											new StompURL(temp, this.client.url),
 											this.client.url,
-											this.client.config
+											this.client.config,
 										),
 									]);
-								}
-						  )
+								},
+							)
 						: undefined,
-				}
+				},
 			);
 		}
 	}

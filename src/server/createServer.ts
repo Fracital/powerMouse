@@ -1,12 +1,22 @@
+import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
+import { openDB } from 'idb';
 import { Config, generateConfigCodecKey, parseConfig } from '../config';
 import { registerCookies } from './Cookies';
+import { registerRewrites } from './rewrites';
 import Router from './Router';
 import { registerStorage } from './Storage';
 import { registerXhr } from './Sync';
-import { registerRewrites } from './rewrites';
-import { openDB } from 'idb';
 
-export default async function createServer(config: Config): Promise<Router> {
+export interface StompServer {
+	router: Router;
+	/** turn a URL into the proxied URL a frame should navigate to */
+	route(url: string): string;
+}
+
+export default async function createServer(
+	config: Config,
+	transport: ProxyTransport,
+): Promise<StompServer> {
 	const db = await openDB('stompConfig', 1, {
 		upgrade: (db) => {
 			db.createObjectStore('consts');
@@ -19,7 +29,7 @@ export default async function createServer(config: Config): Promise<Router> {
 	if (!(await store.get(`codecKey:${config.codec}`))) {
 		await store.put(
 			generateConfigCodecKey(config.codec),
-			`codecKey:${config.codec}`
+			`codecKey:${config.codec}`,
 		);
 	}
 
@@ -32,9 +42,9 @@ export default async function createServer(config: Config): Promise<Router> {
 	const router = new Router(init.directory);
 
 	const cookies = await registerCookies(router);
-	registerRewrites(router, init, cookies);
+	const { route } = registerRewrites(router, init, cookies, transport);
 	await registerStorage(router);
 	registerXhr(router);
 
-	return router;
+	return { router, route };
 }

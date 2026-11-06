@@ -1,12 +1,18 @@
-import StompURL from '../../../StompURL';
-import { modifyCSS, routeCSS } from '../../../rewriteCSS';
+import { parseSrcset, stringifySrcset } from 'srcset';
+import {
+	modifyCSS,
+	restoreCSSValueURLs,
+	rewriteCSSValueURLs,
+	routeCSS,
+} from '../../../rewriteCSS';
 import { modifyRefresh, routeHTML } from '../../../rewriteHTML';
 import { routeJS, ScriptType } from '../../../rewriteJS';
 import { routeBinary } from '../../../routeURL';
+import StompURL from '../../../StompURL';
 import Module from '../../Module';
+import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
 import DOMHooksModule, { CustomElement } from './DOMHooks';
-import { parseSrcset, stringifySrcset } from 'srcset';
 
 const jsTypes = ['text/javascript', 'application/javascript', 'module', ''];
 
@@ -40,13 +46,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							new StompURL(
 								new URL(
 									element.getAttribute('href')!,
-									this.client.url.toString()
+									this.client.url.toString(),
 								),
-								this.client.url
+								this.client.url,
 							),
 							this.client.url,
-							this.client.config
-						)
+							this.client.config,
+						),
 					);
 				}
 			},
@@ -60,10 +66,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('href') !== '' &&
 						new URL(
 							element.getAttributeOG('href')!,
-							this.client.url.toString()
+							this.client.url.toString(),
 						).toString(),
 				],
-			]
+			],
 			// URL attributes do not mixin with element attributes
 		);
 
@@ -83,19 +89,21 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							new StompURL(
 								new URL(
 									element.getAttribute('src')!,
-									this.client.url.toString()
+									this.client.url.toString(),
 								),
-								this.client.url
+								this.client.url,
 							),
 							this.client.url,
 							this.client.config,
-							scriptType(element)
-						)
+							scriptType(element),
+						),
 					);
 				}
 			},
 			[
 				['SCRIPT', 'src'],
+				// the route depends on type=module, which pages may set after src
+				['SCRIPT', 'type'],
 				[
 					HTMLScriptElement,
 					'src',
@@ -104,10 +112,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							element.getAttributeOG('src')!,
-							this.client.url.toString()
+							this.client.url.toString(),
 						).toString(),
 				],
-			]
+			],
 		);
 
 		domHooksModule.useAttributes(
@@ -117,7 +125,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				if (element.hasAttribute('integrity')) {
 					element.setAttributeOG(
 						'integrity',
-						element.getAttribute('integrity')!
+						element.getAttribute('integrity')!,
 					);
 					element.removeAttribute('integrity');
 				}
@@ -141,7 +149,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('integrity') !== '' &&
 						element.getAttributeOG('integrity')!,
 				],
-			]
+			],
 		);
 
 		domHooksModule.useAttributes(
@@ -162,12 +170,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 									new StompURL(
 										new URL(
 											element.getAttribute('href')!,
-											this.client.url.toString()
+											this.client.url.toString(),
 										),
-										this.client.url
+										this.client.url,
 									),
-									this.client.url
-								)
+									this.client.url,
+								),
 							);
 							break;
 						case 'manifest':
@@ -182,11 +190,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 									new StompURL(
 										new URL(
 											element.getAttribute('href')!,
-											this.client.url.toString()
+											this.client.url.toString(),
 										),
-										this.client.url
-									)
-								)
+										this.client.url,
+									),
+								),
 							);
 							break;
 					}
@@ -203,11 +211,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('href') !== '' &&
 						new URL(
 							element.getAttributeOG('href')!,
-							this.client.url.toString()
+							this.client.url.toString(),
 						).toString(),
 				],
 				[HTMLLinkElement, 'rel', () => false],
-			]
+			],
 		);
 
 		// todo: mimes...?
@@ -225,13 +233,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							new StompURL(
 								new URL(
 									element.getAttribute('src')!,
-									this.client.url.toString()
+									this.client.url.toString(),
 								),
-								this.client.url
+								this.client.url,
 							),
 							this.client.url,
-							this.client.config
-						)
+							this.client.config,
+						),
 					);
 				}
 			},
@@ -246,7 +254,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							element.getAttributeOG('src')!,
-							this.client.url.toString()
+							this.client.url.toString(),
 						).toString(),
 				],
 
@@ -258,10 +266,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							element.getAttributeOG('src')!,
-							this.client.url.toString()
+							this.client.url.toString(),
 						).toString(),
 				],
-			]
+			],
 		);
 
 		domHooksModule.useAttributes(
@@ -276,22 +284,22 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						case 'content-security-policy':
 							element.setAttributeOG(
 								'content',
-								element.getAttribute('content')!
+								element.getAttribute('content')!,
 							);
 							element.removeAttribute('content');
 							break;
 						case 'refresh':
 							element.setAttributeOG(
 								'content',
-								element.getAttribute('content')!
+								element.getAttribute('content')!,
 							);
 							element.setAttribute(
 								'content',
 								modifyRefresh(
 									element.getAttribute('content')!,
 									this.client.url,
-									this.client.config
-								)
+									this.client.config,
+								),
 							);
 							break;
 					}
@@ -307,11 +315,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('content') !== '' &&
 						new URL(
 							element.getAttributeOG('content')!,
-							this.client.url.toString()
+							this.client.url.toString(),
 						).toString(),
 				],
 				[HTMLMetaElement, 'httpEquiv', () => false],
-			]
+			],
 		);
 
 		domHooksModule.useAttributes(
@@ -326,11 +334,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							new StompURL(
 								new URL(
 									element.getAttribute('src')!,
-									this.client.url.toString()
+									this.client.url.toString(),
 								),
-								this.client.url
-							)
-						)
+								this.client.url,
+							),
+						),
 					);
 				}
 			},
@@ -344,10 +352,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							element.getAttributeOG('src')!,
-							this.client.url.toString()
+							this.client.url.toString(),
 						).toString(),
 				],
-			]
+			],
 		);
 
 		domHooksModule.useAttributes(
@@ -370,8 +378,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							url: routeBinary(
 								new StompURL(
 									new URL(src.url, this.client.url.toString()),
-									this.client.url
-								)
+									this.client.url,
+								),
 							),
 						});
 					}
@@ -398,7 +406,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('srcset') !== '' &&
 						element.getAttributeOG('srcset')!,
 				],
-			]
+			],
 		);
 
 		domHooksModule.useAttributes(
@@ -413,11 +421,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							new StompURL(
 								new URL(
 									element.getAttribute('src')!,
-									this.client.url.toString()
+									this.client.url.toString(),
 								),
-								this.client.url
-							)
-						)
+								this.client.url,
+							),
+						),
 					);
 				}
 			},
@@ -433,7 +441,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							element.getAttributeOG('src')!,
-							this.client.url.toString()
+							this.client.url.toString(),
 						).toString(),
 				],
 				[
@@ -444,10 +452,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							element.getAttributeOG('src')!,
-							this.client.url.toString()
+							this.client.url.toString(),
 						).toString(),
 				],
-			]
+			],
 		);
 
 		domHooksModule.useAttributes(
@@ -464,35 +472,158 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						modifyCSS(
 							element.getAttributeOG('style')!,
 							this.client.url,
-							'declarationList'
-						)
+							'declarationList',
+						),
 					);
 				}
 			},
-			// CSSStyleDeclaration: CSSStyleRule.prototype.style, HTMLElement.prototype.style( in hooks, getter)
-			// TODO: hook CSSStyleDeclaration
-			[[HTMLElement, 'style', () => false]]
+			[
+				['*', 'style'],
+				[HTMLElement, 'style', () => false],
+			],
 		);
+
+		// CSSStyleDeclaration: element.style.x = ..., setProperty(), cssText
+		{
+			const styleProto = this.client.global.CSSStyleDeclaration.prototype;
+			const proxyModule = this.client.getModule(ProxyModule)!;
+
+			const rewriteValue = (value: unknown) =>
+				typeof value === 'string' && value.includes('url(')
+					? rewriteCSSValueURLs(value, this.client.url)
+					: value;
+
+			const rewriteCssText = (value: unknown) => {
+				try {
+					return modifyCSS(String(value), this.client.url, 'declarationList');
+				} catch (error) {
+					return value;
+				}
+			};
+
+			// Chromium implements the named properties (style.backgroundImage = ...)
+			// as per-instance named setters, so the only way to see those writes
+			// is to hand the page a Proxy from the `style` getter.
+			const declarationProxies = new WeakMap<
+				CSSStyleDeclaration,
+				CSSStyleDeclaration
+			>();
+
+			const wrapDeclaration = (declaration: CSSStyleDeclaration) => {
+				if (!declaration || typeof declaration !== 'object') return declaration;
+
+				let proxy = declarationProxies.get(declaration);
+
+				if (!proxy) {
+					proxy = new Proxy(declaration, {
+						get: (target, key) => {
+							const value = Reflect.get(target, key);
+							if (typeof value === 'function') return value.bind(target);
+							return typeof value === 'string' && value.includes('url(')
+								? restoreCSSValueURLs(value)
+								: value;
+						},
+						set: (target, key, value) => {
+							if (typeof key === 'string')
+								value =
+									key === 'cssText'
+										? rewriteCssText(value)
+										: rewriteValue(value);
+							return Reflect.set(target, key, value);
+						},
+					});
+
+					declarationProxies.set(declaration, proxy);
+				}
+
+				return proxy;
+			};
+
+			for (const ctor of [
+				this.client.global.HTMLElement,
+				this.client.global.SVGElement,
+			]) {
+				const descriptor = Reflect.getOwnPropertyDescriptor(
+					ctor.prototype,
+					'style',
+				);
+				if (!descriptor?.get) continue;
+
+				Reflect.defineProperty(ctor.prototype, 'style', {
+					...descriptor,
+					get: proxyModule.wrapFunction(descriptor.get, (target, that, args) =>
+						wrapDeclaration(Reflect.apply(target, that, args)),
+					),
+				});
+			}
+
+			styleProto.setProperty = proxyModule.wrapFunction(
+				styleProto.setProperty,
+				(target, that, args) => {
+					if (args.length > 1) args[1] = rewriteValue(args[1]);
+					return Reflect.apply(target, that, args);
+				},
+			);
+
+			// newer Chromium moves the named properties (backgroundImage, ...)
+			// onto CSSStyleProperties; wrap setters on both prototypes
+			const protos = [
+				styleProto,
+				(
+					this.client.global as unknown as {
+						CSSStyleProperties?: typeof CSSStyleDeclaration;
+					}
+				).CSSStyleProperties?.prototype,
+			].filter((proto): proto is CSSStyleDeclaration => !!proto);
+
+			for (const proto of protos)
+				for (const name of Object.getOwnPropertyNames(proto)) {
+					const descriptor = Reflect.getOwnPropertyDescriptor(proto, name)!;
+					if (!descriptor.set || !descriptor.configurable) continue;
+
+					const rewrite =
+						name === 'cssText'
+							? (value: unknown) => {
+									try {
+										return modifyCSS(
+											String(value),
+											this.client.url,
+											'declarationList',
+										);
+									} catch (error) {
+										return value;
+									}
+								}
+							: rewriteValue;
+
+					Reflect.defineProperty(proto, name, {
+						...descriptor,
+						set: proxyModule.wrapFunction(
+							descriptor.set,
+							(target, that, args) =>
+								Reflect.apply(target, that, [rewrite(args[0])]),
+						),
+					});
+				}
+		}
 
 		const validMethods = ['GET', 'POST'];
 
 		this.formHook = (element) => {
 			element.restoreAttributesOG('action');
 
-			// this.formHook will always set 'action'
-			// 's_o:action' is intended to be set when 'action' is set
-			// need to determine if 'action' was set, but if the attribute isn't the hooked value
+			// this hook always sets a routed 'action', so on later runs (e.g. the
+			// method changing) the attribute may hold our own value rather than
+			// the page's; only record it as the original when it isn't ours
+			const current = element.getAttribute('action');
+			const routedPrefix = `${this.client.directory}html`;
 
-			// hack: always set the action attribute
-
-			// if (appendHook) {
 			if (
 				element.hasAttribute('action') &&
-				element.getAttribute('action') !== ''
+				current !== '' &&
+				!current!.startsWith(routedPrefix)
 			) {
-				element.setAttributeOG('action', element.getAttribute('action')!);
-			} else {
-				element.setAttributeOG('action', '');
+				element.setAttributeOG('action', current!);
 			}
 
 			/**
@@ -501,12 +632,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const action = element.hasAttributeOG('action')
 				? new URL(
 						element.getAttributeOG('action')!,
-						this.client.url.toString()
-				  ).toString()
+						this.client.url.toString(),
+					).toString()
 				: this.client.url.toString();
 
 			const methodIndex = validMethods.indexOf(
-				element.getAttribute('method')?.toUpperCase() || ''
+				element.getAttribute('method')?.toUpperCase() || '',
 			);
 			const method = validMethods[methodIndex === -1 ? 0 : methodIndex];
 
@@ -518,8 +649,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							new StompURL(action, this.client.url),
 							this.client.url,
 							this.client.config,
-							true
-						)
+							true,
+						),
 					);
 					break;
 				case 'POST':
@@ -528,8 +659,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						routeHTML(
 							new StompURL(action, this.client.url),
 							this.client.url,
-							this.client.config
-						)
+							this.client.config,
+						),
 					);
 
 					break;
@@ -547,7 +678,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.getAttribute('action') !== '' &&
 					new URL(
 						element.getAttributeOG('action')!,
-						this.client.url.toString()
+						this.client.url.toString(),
 					).toString(),
 			],
 			[HTMLFormElement, 'method', () => false],
@@ -568,13 +699,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							new StompURL(
 								new URL(
 									element.getAttribute('href')!,
-									this.client.url.toString()
+									this.client.url.toString(),
 								),
-								this.client.url
+								this.client.url,
 							),
 							this.client.url,
-							this.client.config
-						)
+							this.client.config,
+						),
 					);
 				}
 			},
@@ -588,10 +719,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('href') !== '' &&
 						new URL(
 							element.getAttributeOG('href')!,
-							this.client.url.toString()
+							this.client.url.toString(),
 						).toString(),
 				],
-			]
+			],
 		);
 	}
 }

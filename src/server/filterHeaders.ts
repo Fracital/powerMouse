@@ -33,20 +33,20 @@ const removeHeaders: string[] = [
 
 export declare type RouteTransform = (
 	resource: StompURL,
-	url: StompURL
+	url: StompURL,
 ) => string;
 
 export declare type AdditionalFilter = (
 	headers: Readonly<Headers>,
 	filteredHeaders: Headers,
-	url: StompURL
+	url: StompURL,
 ) => void;
 
 // native as in the browser requesting an image from /binary/ or document from /html/
 export function filterNativeRequestHeaders(
 	headers: Readonly<Headers>,
 	url: StompURL,
-	additionalFilter: AdditionalFilter | void
+	additionalFilter: AdditionalFilter | void,
 ): Headers {
 	const filteredHeaders = new Headers(headers);
 
@@ -61,7 +61,7 @@ export function filterResponseHeaders(
 	headers: Readonly<Headers>,
 	url: StompURL,
 	transformRoute: RouteTransform,
-	additionalFilter: AdditionalFilter | void
+	additionalFilter: AdditionalFilter | void,
 ): Headers {
 	const filteredHeaders = new Headers(headers);
 
@@ -71,10 +71,10 @@ export function filterResponseHeaders(
 			transformRoute(
 				new StompURL(
 					new URL(filteredHeaders.get('location')!, url.toString()),
-					url
+					url,
 				),
-				url
-			)
+				url,
+			),
 		);
 	}
 

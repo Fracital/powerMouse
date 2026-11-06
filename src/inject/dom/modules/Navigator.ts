@@ -1,5 +1,5 @@
-import StompURL from '../../../StompURL';
 import { routeXHR } from '../../../routeURL';
+import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
@@ -22,12 +22,12 @@ export default class NavigatorModule extends Module<DocumentClient> {
 						args[0] = routeXHR(
 							new StompURL(
 								new URL(args[0], this.client.url.toString()),
-								this.client.url
-							)
+								this.client.url,
+							),
 						);
 
 						return Reflect.apply(target, that, args);
-					}
+					},
 				);
 	}
 }

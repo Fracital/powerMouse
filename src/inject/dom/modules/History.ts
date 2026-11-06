@@ -1,5 +1,5 @@
-import StompURL from '../../../StompURL';
 import { routeHTML } from '../../../rewriteHTML';
+import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
@@ -12,16 +12,16 @@ export default class HistoryModule extends Module<DocumentClient> {
 			this: HistoryModule,
 			target: typeof history.pushState,
 			that: History,
-			args: any[]
+			args: any[],
 		) {
 			if (args[2] !== undefined)
 				args[2] = routeHTML(
 					new StompURL(
 						new URL(args[2], this.client.url.toString()),
-						this.client.url
+						this.client.url,
 					),
 					this.client.url,
-					this.client.config
+					this.client.config,
 				);
 
 			return Reflect.apply(target, that, args);
@@ -29,13 +29,13 @@ export default class HistoryModule extends Module<DocumentClient> {
 
 		this.client.global.History.prototype.pushState = proxyModule.wrapFunction(
 			this.client.global.History.prototype.pushState,
-			updateState.bind(this)
+			updateState.bind(this),
 		);
 
 		this.client.global.History.prototype.replaceState =
 			proxyModule.wrapFunction(
 				this.client.global.History.prototype.replaceState,
-				updateState.bind(this)
+				updateState.bind(this),
 			);
 	}
 }

@@ -1,15 +1,13 @@
-/* eslint-disable @typescript-eslint/ban-types */
-import StompURL from '../../StompURL';
-import { urlLike } from '../../StompURL';
 import { routeHTML } from '../../rewriteHTML';
 import {
+	ACCESS_KEY,
+	GLOBAL_NAME,
+	GLOBAL_PROXY,
 	modifyJS,
 	routeJS,
 	UNDEFINABLE,
-	GLOBAL_PROXY,
-	GLOBAL_NAME,
-	ACCESS_KEY,
 } from '../../rewriteJS';
+import StompURL, { urlLike } from '../../StompURL';
 import Client from '../Client';
 import Module from '../Module';
 import ProxyModule from './Proxy';
@@ -38,24 +36,35 @@ export default class AccessModule extends Module<Client> {
 		const globalEval = (x: string) => {
 			x = String(x);
 			return evalSnapshot(
-				modifyJS(x, this.client.url, this.client.config, 'generic')
+				modifyJS(x, this.client.url, this.client.config, 'generic'),
 			);
 		};
 
 		const globalEvalProxy = proxyModule?.wrapFunction(
 			evalSnapshot,
-			(target, that, [code]) => globalEval(code)
+			(target, that, [code]) => globalEval(code),
 		);
 
 		setGlobalProxy(evalSnapshot, 'eval', globalEvalProxy);
 
 		const api = {
-			get2: (target: any, key: any): unknown => {
-				// key = normalizeKey(key);
+			get2: (
+				target: any,
+				key: any,
+				_partial?: string,
+				optional?: boolean,
+			): unknown => {
+				// a?.[k]
+				if (optional && (target === null || target === undefined))
+					return undefined;
+
 				return api.get(target[key], key);
 			},
 			get: (object: any, key: any): any => {
 				try {
+					if (key === 'top' && this.client.resolveTop)
+						return this.client.resolveTop(object);
+
 					if (
 						typeof key === 'string' &&
 						UNDEFINABLE.includes(key) &&
@@ -76,13 +85,13 @@ export default class AccessModule extends Module<Client> {
 				target: any,
 				key: any,
 				operate: (target: any, property: any, value: any) => any,
-				righthand: any
+				righthand: any,
 			) => {
 				// key = this.normalize_key(key);
 				// possibly a context
 
 				if (typeof key === 'string') {
-					if (target === global) {
+					if (target === this.client.global) {
 						if (key === 'location') {
 							target = (location as any)[GLOBAL_PROXY];
 							key = 'href';
@@ -104,7 +113,7 @@ export default class AccessModule extends Module<Client> {
 				name: any,
 				operate: any,
 				set: any,
-				righthand: any
+				righthand: any,
 			) => {
 				// name = normalizeKey(name);
 				const proxy = api.get(target, name);
@@ -126,11 +135,11 @@ export default class AccessModule extends Module<Client> {
 						routeHTML(
 							new StompURL(
 								new URL(<urlLike>value, this.client.url.toString()),
-								this.client.url
+								this.client.url,
 							),
 							this.client.url,
-							this.client.config
-						)
+							this.client.config,
+						),
 					);
 				} else {
 					set(value);
@@ -142,16 +151,30 @@ export default class AccessModule extends Module<Client> {
 				// key = normalizeKey(key);
 				return Reflect.construct(api.get(target[key], key), args);
 			},
-			call2: (target: any, key: any, args: any): any => {
-				// key = normalizeKey(key);
-				return Reflect.apply(api.get(target[key], key), target, args);
+			call2: (
+				target: any,
+				key: any,
+				args: any,
+				_partial?: string,
+				optional?: boolean,
+			): any => {
+				// a?.[k](...) / a[k]?.(...)
+				if (optional && (target === null || target === undefined))
+					return undefined;
+
+				const method = api.get(target[key], key);
+
+				if (optional && (method === null || method === undefined))
+					return undefined;
+
+				return Reflect.apply(method, target, args);
 			},
 			evalScope: (code: unknown) => {
 				return modifyJS(
 					String(code),
 					this.client.url,
 					this.client.config,
-					'generic'
+					'generic',
 				);
 			},
 			import: (baseURL: string | undefined, url: string): Promise<unknown> => {
@@ -161,11 +184,11 @@ export default class AccessModule extends Module<Client> {
 					routeJS(
 						new StompURL(
 							new URL(url, baseURL || this.client.url.toString()),
-							this.client.url
+							this.client.url,
 						),
 						this.client.url,
 						this.client.config,
-						'genericModule'
+						'genericModule',
 					)
 				);
 			},

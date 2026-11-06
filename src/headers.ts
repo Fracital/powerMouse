@@ -1,3 +1,5 @@
+import type { RawHeaders } from '@mercuryworkshop/proxy-transports';
+
 // ripped from https://quiche.googlesource.com/quiche/+/refs/heads/main/quiche/balsa/standard_header_map.cc
 export const standardHeaderNames: string[] = [
 	'Accept',
@@ -130,10 +132,10 @@ export const standardHeaderNames: string[] = [
 ];
 
 export const lowercaseStandardHeaderNames = standardHeaderNames.map((header) =>
-	header.toLowerCase()
+	header.toLowerCase(),
 );
 
-export type RawHeaders = { [key: string]: string | string[] };
+export type { RawHeaders } from '@mercuryworkshop/proxy-transports';
 
 export function capitalizeHeader(header: string) {
 	const index = lowercaseStandardHeaderNames.indexOf(header);
@@ -147,10 +149,10 @@ export function capitalizeHeader(header: string) {
 }
 
 export function capitalizeHeaders(headers: Headers): RawHeaders {
-	const rawHeaders: RawHeaders = {};
+	const rawHeaders: RawHeaders = [];
 
 	for (const [header, value] of headers) {
-		rawHeaders[capitalizeHeader(header)] = value;
+		rawHeaders.push([capitalizeHeader(header), value]);
 	}
 
 	return rawHeaders;

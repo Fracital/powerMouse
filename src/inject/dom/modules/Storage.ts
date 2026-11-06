@@ -22,7 +22,7 @@ export default class StorageModule extends Module<DocumentClient> {
 		const storageKeys = (directory: string): string[] => {
 			return syncModule.jsonAPI(
 				`${directory}getKeys`,
-				this.client.url.url.origin
+				this.client.url.url.origin,
 			);
 		};
 
@@ -46,7 +46,7 @@ export default class StorageModule extends Module<DocumentClient> {
 				const result: null | string = syncModule.jsonAPI(
 					`${this.#directory}getItem`,
 					getOrigin(),
-					String(key)
+					String(key),
 				);
 
 				return result;
@@ -58,7 +58,7 @@ export default class StorageModule extends Module<DocumentClient> {
 
 				const result: string[] = syncModule.jsonAPI(
 					`${this.#directory}getKeys`,
-					getOrigin()
+					getOrigin(),
 				);
 
 				return index >= result.length ? null : result[index];
@@ -66,7 +66,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			get length(): number {
 				const result: string[] = syncModule.jsonAPI(
 					`${this.#directory}getKeys`,
-					getOrigin()
+					getOrigin(),
 				);
 
 				return result.length;
@@ -88,7 +88,7 @@ export default class StorageModule extends Module<DocumentClient> {
 					`${this.#directory}setItem`,
 					getOrigin(),
 					item,
-					value
+					value,
 				);
 			}
 		}
@@ -101,12 +101,12 @@ export default class StorageModule extends Module<DocumentClient> {
 		proxyModule.mirrorClass(
 			this.client.global.Storage,
 			globalStorageProxy,
-			instances
+			instances,
 		);
 
 		function isStorageKey(
 			target: StorageProxy,
-			prop: string | symbol
+			prop: string | symbol,
 		): prop is string {
 			if (typeof prop === 'symbol') {
 				return false;
@@ -209,10 +209,10 @@ export default class StorageModule extends Module<DocumentClient> {
 		};
 
 		const localStorage = storageFactory(
-			`${this.client.directory}localStorage/`
+			`${this.client.directory}localStorage/`,
 		);
 		const sessionStorage = storageFactory(
-			`${this.client.directory}sessionStorage/`
+			`${this.client.directory}sessionStorage/`,
 		);
 
 		building = false;
@@ -230,7 +230,7 @@ export default class StorageModule extends Module<DocumentClient> {
 					}
 
 					return localStorage;
-				}
+				},
 			),
 			enumerable: true,
 			configurable: true,
@@ -246,7 +246,7 @@ export default class StorageModule extends Module<DocumentClient> {
 					}
 
 					return sessionStorage;
-				}
+				},
 			),
 			enumerable: true,
 			configurable: true,

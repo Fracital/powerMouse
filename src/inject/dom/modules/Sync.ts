@@ -1,6 +1,6 @@
-import { urlLike } from '../../../StompURL';
 import { decodeCookie } from '../../../encodeCookie';
 import { geckoXHR, queueXHR } from '../../../routeURL';
+import { urlLike } from '../../../StompURL';
 import { ProcessData, SerializableRequestInit } from '../../../sync';
 import Module from '../../Module';
 import DocumentClient from '../Client';
@@ -63,7 +63,7 @@ export default class SyncModule extends Module<DocumentClient> {
 				},
 				body: JSON.stringify(args),
 			},
-			true
+			true,
 		);
 
 		const parsed = JSON.parse(decoder.decode(response.rawArrayBuffer));
@@ -83,7 +83,7 @@ export default class SyncModule extends Module<DocumentClient> {
 	fetch(
 		url: urlLike,
 		init: Omit<RequestInit, 'signal'> = {},
-		loopback = false
+		loopback = false,
 	): SyncResponse {
 		const processInit: SerializableRequestInit = {};
 
@@ -132,7 +132,7 @@ export default class SyncModule extends Module<DocumentClient> {
 			JSON.stringify({
 				id,
 				data,
-			})
+			}),
 		);
 
 		const sMaxCycles = loopback ? maxLoopbackCycles : maxCycles;
@@ -176,7 +176,7 @@ export default class SyncModule extends Module<DocumentClient> {
 		}
 
 		throw new RangeError(
-			`Reached max cycles (${sMaxCycles}) when requesting ${url}`
+			`Reached max cycles (${sMaxCycles}) when requesting ${url}`,
 		);
 	}
 }

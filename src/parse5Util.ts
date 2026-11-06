@@ -1,4 +1,6 @@
-import { Element } from 'parse5/dist/tree-adapters/default';
+import type { DefaultTreeAdapterTypes } from 'parse5';
+
+type Element = DefaultTreeAdapterTypes.Element;
 
 export class Parse5Context {
 	node: Element;
@@ -10,7 +12,7 @@ export class Parse5Context {
 		node: Element,
 		parent: Parse5Context | undefined,
 		stack: Parse5Context[],
-		root = false
+		root = false,
 	) {
 		this.node = node;
 		this.stack = stack;
@@ -65,7 +67,7 @@ export class Parse5Context {
 	attach(context: Parse5Context) {
 		if (this.attached)
 			throw new RangeError(
-				'Cannot attach an already attached node. Call .detach() first.'
+				'Cannot attach an already attached node. Call .detach() first.',
 			);
 
 		this.parent = context;
@@ -77,7 +79,7 @@ export class Parse5Context {
 		if (this.root) throw new RangeError('Cannot detach the root.');
 		if (!this.attached)
 			throw new RangeError(
-				'Cannot detach an already detached node. Call .attach(context) first.'
+				'Cannot detach an already detached node. Call .attach(context) first.',
 			);
 		const place = this.parent!.node.childNodes.indexOf(this.node);
 		if (place === -1) return false;
@@ -111,7 +113,7 @@ export default class Parse5Iterator {
 				this.stack[start + length--] = new Parse5Context(
 					<Element>node,
 					context,
-					this.stack
+					this.stack,
 				);
 			}
 		}

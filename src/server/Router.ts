@@ -83,7 +83,7 @@ export default class Router {
 			console.error(err);
 
 			let httpError: HttpError;
-			let id: string | void;
+			let id: string | undefined;
 
 			if (isHttpError(err)) {
 				httpError = err;
@@ -137,7 +137,7 @@ console.error(error);
 						headers: {
 							'content-type': 'text/html',
 						},
-					}
+					},
 				);
 			} else {
 				return json(httpError.status, {

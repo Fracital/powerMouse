@@ -10,16 +10,12 @@ export default class IFrameModule extends Module<DocumentClient> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
-		/*createClient(${JSON.stringify(
-		config
-	)}, ${JSON.stringify(url.codec.key)});*/
-
 		const injectContext = (context: typeof globalThis) => {
 			if (CLIENT_KEY in context) return;
 
 			const client = new DocumentClient(
-				parseConfig(this.client.config, this.client.config.codec),
-				context
+				parseConfig(this.client.config, this.client.codec.key),
+				context,
 			);
 
 			addClientModules(client);
@@ -33,14 +29,14 @@ export default class IFrameModule extends Module<DocumentClient> {
 
 		const getContentWindowDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global.HTMLIFrameElement.prototype,
-			'contentWindow'
+			'contentWindow',
 		)!;
 
 		const windowModule = this.client.getModule(ContextModule)!;
 
 		const getContentWindow = (iframe: HTMLIFrameElement) => {
-			const context: typeof globalThis | null =
-				getContentWindowDescriptor.get!.call(iframe);
+			const context = getContentWindowDescriptor.get!.call(iframe) as
+				typeof globalThis | null;
 
 			if (context) {
 				injectContext(context);
@@ -65,11 +61,11 @@ export default class IFrameModule extends Module<DocumentClient> {
 				get: proxyModule.wrapFunction(
 					Reflect.getOwnPropertyDescriptor(
 						this.client.global.HTMLIFrameElement.prototype,
-						'contentWindow'
+						'contentWindow',
 					)!.get!,
-					(target, that) => getContentWindow(that)
+					(target, that) => getContentWindow(that),
 				),
-			}
+			},
 		);
 
 		Reflect.defineProperty(
@@ -81,7 +77,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 				get: proxyModule.wrapFunction(
 					Reflect.getOwnPropertyDescriptor(
 						this.client.global.HTMLIFrameElement.prototype,
-						'contentDocument'
+						'contentDocument',
 					)!.get!,
 					(target, that) => {
 						const context = getContentWindow(that);
@@ -91,9 +87,9 @@ export default class IFrameModule extends Module<DocumentClient> {
 						}
 
 						return context.document;
-					}
+					},
 				),
-			}
+			},
 		);
 	}
 }

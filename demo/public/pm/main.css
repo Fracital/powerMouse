@@ -1,0 +1,1092 @@
+/* Visual style adapted from Powermouse (Titanium Network, GPL-3.0). */
+/* Powermouse's Google import only ever fetched Montserrat Regular; every
+   heavier weight on the page was synthesized by the browser, and 'Roboto'
+   fell through to the system sans. Serving a single self-hosted Regular face
+   reproduces that rendering exactly. */
+@font-face {
+	font-family: 'Montserrat';
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url('/fonts/montserrat/montserrat-latin-400-normal.woff2')
+		format('woff2');
+}
+
+body {
+	background: #000 url('/pm/noise.png');
+	color: white;
+	font-family: 'Montserrat', sans-serif;
+	font-weight: 500;
+}
+body > .wrapper {
+	position: relative;
+	display: block;
+	width: 96%;
+	margin: auto;
+}
+
+.noStyle {
+	color: inherit; /* blue colors for links too */
+	text-decoration: inherit; /* no underline */
+}
+
+a p,
+a span,
+#tempURL {
+	color: #4ca9fb;
+	text-decoration: underline #4ca9fb;
+}
+a p:hover,
+a span:hover,
+#tempURL:hover {
+	color: #438fd3;
+	text-decoration: underline #438fd3;
+}
+a p:hover:active,
+a span:active,
+#tempURL:active {
+	color: #255d8f;
+	text-decoration: underline #255d8f;
+}
+.head {
+	position: relative;
+	display: table;
+	width: calc(100% - 11px);
+	height: 60px;
+	border: 1px solid #b6b6b6;
+	border-radius: 5px;
+	background: #000 url('/pm/header-background.png');
+	padding: 5px;
+}
+.head > h1 {
+	vertical-align: middle;
+	display: block;
+}
+.material-icons {
+	user-select: none;
+	-moz-user-select: none;
+	-khtml-user-select: none;
+	-webkit-user-select: none;
+	-o-user-select: none;
+}
+.listing {
+	margin-top: 15px;
+	position: relative;
+	display: table;
+	width: calc(100% - 11px);
+	height: calc(100vh - 155px);
+	border: 1px solid #b6b6b6;
+	border-radius: 5px;
+	background: #000000;
+	padding: 5px;
+	line-height: 25px;
+	transition: none;
+}
+.lbottom {
+	position: absolute;
+	width: calc(100% - 10px);
+	padding: 10px;
+	bottom: 0;
+	left: 5px;
+	text-align: left;
+}
+
+#version {
+	position: absolute;
+	left: 0;
+	right: 0;
+	text-align: center;
+}
+@media only screen and (max-width: 767px) {
+	#version {
+		position: unset;
+		display: block;
+	}
+}
+
+.rbottom {
+	position: absolute;
+	width: calc(100% - 10px);
+	padding: 10px;
+	bottom: 0;
+	right: 5px;
+	text-align: right;
+}
+
+.romlink:hover {
+	color: #71cffe;
+	cursor: pointer;
+}
+.ns {
+	-webkit-touch-callout: none; /* iOS Safari */
+	-webkit-user-select: none; /* Safari */
+	-khtml-user-select: none; /* Konqueror HTML */
+	-moz-user-select: none; /* Old versions of Firefox */
+	-ms-user-select: none; /* Internet Explorer/Edge */
+	user-select: none; /* Non-prefixed version, currently supported by Chrome, Edge, Opera and Firefox */
+	-webkit-user-select: none; /* Safari 3.1+ */
+	-moz-user-select: none; /* Firefox 2+ */
+	-ms-user-select: none; /* IE 10+ */
+	user-select: none; /* Standard syntax */
+	user-drag: none;
+	-webkit-user-drag: none;
+}
+.back {
+	text-align: right;
+}
+.back:hover {
+	color: #71cffe;
+	cursor: pointer;
+}
+.git {
+	border: 2px solid black;
+	background: #e8ed58;
+	border-radius: 10px;
+	display: block;
+	width: 100px;
+	height: 65px;
+	text-align: center;
+	font-family: 'Montserrat', sans-serif;
+	font-weight: 600;
+	color: black;
+	user-drag: none;
+	line-height: 65px;
+	position: absolute;
+	margin: auto;
+	top: 0;
+	bottom: 0;
+	right: 20px;
+	font-size: 10px;
+}
+.git:hover {
+	background: #fbff96;
+}
+.git:hover:active {
+	background: #c1c55d;
+}
+.inputWrapper {
+	width: calc(100% - 40px);
+	height: 100%;
+	margin: 20px;
+}
+
+* {
+	transition: ease-in-out 0.2s;
+}
+
+.form-text {
+	display: block;
+	width: 100%;
+	height: 29px;
+	float: left;
+	font-family: 'Roboto', sans-serif;
+	padding-top: 0.375rem;
+	padding-left: 0.75rem;
+	padding-bottom: 0.375rem;
+	padding-right: 0px;
+	font-size: 1rem;
+	line-height: 1.5;
+	color: #495057;
+	background-color: #fff;
+	background-clip: padding-box;
+	border: 1px solid #ced4da;
+	border-radius: 0.25rem;
+	transition:
+		border-color 0.15s ease-in-out,
+		box-shadow 0.15s ease-in-out;
+}
+
+.form-text::placeholder {
+	color: #6c757d;
+	opacity: 1;
+}
+
+.form-text:focus {
+	color: #495057;
+	background-color: #fff;
+	border-color: #80bdff;
+	outline: 0;
+	box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+	border-bottom-left-radius: 0px;
+	border-bottom-right-radius: 0px;
+}
+
+.btn {
+	flex: 1;
+	cursor: pointer;
+	display: block;
+	height: 40px;
+	font-family: 'Roboto', sans-serif;
+	text-align: center;
+	white-space: nowrap;
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	-ms-user-select: none;
+	user-select: none;
+	border: 1px solid transparent;
+	line-height: 1.5;
+	border-radius: 0.25rem;
+	background: transparent;
+	margin-left: 2px;
+	margin-right: 2px;
+	font-size: 0.95rem;
+	text-decoration: none;
+	transition:
+		0.15s ease-in-out,
+		color 0.15s ease-in-out,
+		background-color 0.15s ease-in-out,
+		border-color 0.15s ease-in-out,
+		box-shadow 0.15s ease-in-out;
+}
+[type='button']::-moz-focus-inner,
+[type='reset']::-moz-focus-inner,
+[type='submit']::-moz-focus-inner,
+button::-moz-focus-inner {
+	padding: 0;
+	border-style: none;
+}
+.btn-blu {
+	border-color: #2a9fd6;
+	color: #2a9fd6;
+} /* colors */
+.btn-blu:hover {
+	background-color: #2a9fd6;
+	color: #fff;
+}
+.btn-grn {
+	border-color: #77b300;
+	color: #77b300;
+}
+.btn-grn:hover {
+	background-color: #77b300;
+	color: #fff;
+}
+.btn-org {
+	border-color: #ff8800;
+	color: #ff8800;
+}
+.btn-org:hover {
+	background-color: #ff8800;
+	color: #fff;
+}
+.btn-red {
+	border-color: #cc0000;
+	color: #cc0000;
+}
+.btn-red:hover {
+	background-color: #cc0000;
+	color: #fff;
+}
+.bge-blu {
+	background-color: #2a9fd6;
+	color: #fff;
+} /* badges */
+.bge-grn {
+	background-color: #77b300;
+	color: #fff;
+}
+.bge-org {
+	background-color: #ff8800;
+	color: #fff;
+}
+.bge-red {
+	background-color: #cc0000;
+	color: #fff;
+}
+
+.btn-blu:focus {
+	box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.5);
+	outline: 0;
+}
+.btn-grn:focus {
+	box-shadow: 0 0 0 0.2rem rgba(119, 179, 0, 0.5);
+	outline: 0;
+}
+.btn-red:focus {
+	box-shadow: 0 0 0 0.2rem rgba(204, 0, 0, 0.5);
+	outline: 0;
+}
+.btn-org:focus {
+	box-shadow: 0 0 0 0.2rem rgba(255, 136, 0, 0.5);
+	outline: 0;
+}
+
+.url {
+	width: calc(100% - 0.75rem);
+	height: 44px;
+	display: block;
+}
+
+.visit {
+	width: 100%;
+	height: 44px;
+	display: block;
+	top: 30px;
+	position: relative;
+}
+
+.auto-fill {
+	height: 22px;
+	border: 1px solid #ced4da;
+	background: #fff;
+	color: #495057;
+	width: calc(100% - 1.5rem);
+	padding: 0.375rem 0.75rem;
+	transition: ease-in-out 0.5s;
+}
+
+.auto-fill:hover {
+	border-color: #80bdff;
+	background: #80bdff;
+	outline: 0;
+	box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+	border-bottom-left-radius: 0px;
+	border-bottom-right-radius: 0px;
+	margin-bottom: 0px;
+}
+
+.urlFill {
+	display: grid;
+	width: 100%;
+	min-height: 44px;
+	position: relative;
+}
+
+#logMsg {
+	text-align: center;
+	font-size: 18px;
+	font-family: 'Source Sans Pro', sans-serif;
+	color: #f67;
+	text-shadow: 1px 1px 5px rgba(0, 0, 0, 0.5);
+	font-weight: bold;
+	position: absolute;
+	left: 10px;
+	bottom: 10px;
+}
+
+#button-container {
+	position: absolute;
+	display: flex;
+	width: calc(100% - 32px);
+	margin: 0 14px;
+	left: 0;
+	right: 0;
+	bottom: 50px;
+	height: 75px;
+}
+
+#button-container a {
+	color: inherit;
+	text-decoration: none;
+}
+
+.btn-fancy {
+	flex: 1 1 0;
+	margin: 0 10px;
+
+	display: block;
+	transition: none;
+
+	cursor: pointer;
+
+	background: rgb(42, 171, 210);
+	background: linear-gradient(
+			0deg,
+			rgba(42, 171, 210, 1) 0%,
+			rgba(91, 192, 222, 1) 100%
+		)
+		repeat-x;
+
+	-webkit-box-shadow:
+		inset 0 1px 0 rgba(255, 255, 255, 0.15),
+		0 1px 1px rgba(0, 0, 0, 0.075);
+	box-shadow:
+		inset 0 1px 0 rgba(255, 255, 255, 0.15),
+		0 1px 1px rgba(0, 0, 0, 0.075);
+
+	border-color: #28a4c9;
+	border-radius: 6px;
+
+	white-space: normal;
+	text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.2);
+
+	font-size: 18px;
+	color: white;
+
+	line-height: 75px;
+	text-align: center;
+}
+
+.btn-fancy:hover {
+	background-color: #2aabd2;
+	background-position: 0 -15px;
+}
+
+.btn-fancy:hover:active {
+	background-color: #2aabd2;
+	border-color: #28a4c9;
+	background-image: none;
+	box-shadow: inset 0 3px 5px rgba(0, 0, 0, 0.125);
+}
+
+.bnt-blue {
+	background-image: linear-gradient(
+		0deg,
+		rgb(42, 76, 210) 0%,
+		rgb(91, 154, 222) 100%
+	);
+	border-color: #2850c9;
+}
+.bnt-blue:hover {
+	background-color: #2a4cd2;
+}
+.bnt-blue:hover:active {
+	background-color: #2a5cd2;
+}
+
+.bnt-cyan {
+	background-image: linear-gradient(
+		0deg,
+		rgba(42, 171, 210, 1) 0%,
+		rgba(91, 192, 222, 1) 100%
+	);
+	border-color: #28a4c9;
+}
+.bnt-cyan:hover {
+	background-color: #2aabd;
+}
+.bnt-cyan:hover:active {
+	background-color: #2aabd2;
+}
+
+.bnt-red {
+	background-image: linear-gradient(
+		0deg,
+		rgb(210, 42, 42) 0%,
+		rgb(222, 91, 91) 100%
+	);
+	border-color: #c92828;
+}
+.bnt-red:hover {
+	background-color: #d22a2a;
+}
+.bnt-red:hover:active {
+	background-color: #d22a2a;
+}
+
+.bnt-orange {
+	background-image: linear-gradient(
+		0deg,
+		rgb(210, 97, 42) 0%,
+		rgb(222, 152, 91) 100%
+	);
+	border-color: #c95528;
+}
+.bnt-orange:hover {
+	background-color: #d2612a;
+}
+.bnt-orange:hover:active {
+	background-color: #d2692a;
+}
+
+.bnt-green {
+	background-image: linear-gradient(
+		0deg,
+		rgb(42, 210, 76) 0%,
+		rgb(91, 222, 118) 100%
+	);
+	border-color: #28c949;
+}
+.bnt-green:hover {
+	background-color: #2ad25c;
+}
+.bnt-green:hover:active {
+	background-color: #2ad24c;
+}
+
+@media only screen and (min-width: 768px) {
+	.git {
+		font-size: 16px;
+		width: 200px;
+		height: 65px;
+	}
+	.urlFill {
+		width: calc(100% - 122px);
+		position: absolute;
+	}
+	.url {
+		width: calc(100% - 0.85rem);
+		height: 44px;
+		display: block;
+	}
+	.visit {
+		width: 60px;
+		position: relative;
+		height: 58px;
+		float: right;
+		top: 0px;
+	}
+}
+
+/* ---- Stomp demo additions ------------------------------------------------ */
+
+.hidden {
+	display: none !important;
+}
+
+/* status line under the address bar instead of Powermouse's corner log */
+#logMsg {
+	position: static;
+	margin: 0;
+	padding-top: 72px; /* padding: a top margin would collapse into .inputWrapper */
+	font-family: 'Montserrat', sans-serif;
+	font-size: 14px;
+	font-weight: 500;
+	text-align: left;
+	text-shadow: none;
+	color: #9ad1f5;
+}
+
+@media only screen and (max-width: 767px) {
+	#logMsg {
+		padding-top: 44px;
+	}
+}
+
+#logMsg.error {
+	color: #f67;
+}
+
+.rbottom label {
+	cursor: pointer;
+}
+
+.select {
+	font-family: 'Montserrat', sans-serif;
+	font-size: 14px;
+	color: #4ca9fb;
+	background: #000;
+	border: 1px solid #4ca9fb;
+	border-radius: 0.25rem;
+	padding: 3px 6px;
+}
+
+.rbottom .select {
+	margin-left: 4px;
+}
+
+.chrome .select {
+	height: 28px;
+	box-sizing: border-box;
+}
+
+/* browser chrome shown once a page is open */
+html,
+body {
+	height: 100%;
+}
+
+/* The document never scrolls: the home screen scrolls inside its own region
+   above the navigation bar, so the bar never shifts with a body scrollbar. */
+html,
+body {
+	height: 100%;
+	margin: 0;
+	overflow: hidden;
+}
+
+#landing.wrapper {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 48px;
+	width: auto;
+	margin: 0;
+	padding: 8px 2%;
+	box-sizing: border-box;
+	overflow: auto;
+}
+
+.listing {
+	/* Powermouse's calc(100vh - 155px) minus the navigation bar. No minimum:
+	   the home screen must never need a scrollbar; short viewports shrink
+	   the tiles instead (below). */
+	height: calc(100vh - 203px);
+}
+
+#landing.wrapper {
+	overflow: hidden;
+}
+
+@media only screen and (max-height: 640px) {
+	.btn-fancy {
+		line-height: 48px;
+		font-size: 16px;
+	}
+	#button-container {
+		bottom: 44px;
+	}
+	.lbottom,
+	.rbottom {
+		padding: 6px 10px;
+		font-size: 13px;
+	}
+}
+
+@media only screen and (max-height: 520px) {
+	#button-container {
+		display: none;
+	}
+}
+
+.browser {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+}
+
+.frames {
+	flex: 1 1 auto;
+	position: relative;
+	min-height: 0;
+}
+
+.frames .frame {
+	position: absolute;
+	inset: 0;
+	height: 100%;
+}
+
+.chrome {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 8px;
+	background: #000 url('/pm/header-background.png');
+	border-bottom: 1px solid #b6b6b6;
+}
+
+.chrome form {
+	flex: 1 1 auto;
+	min-width: 120px;
+}
+
+.chrome .omnibox {
+	float: none;
+	width: 100%;
+	box-sizing: border-box;
+	height: 36px;
+	padding: 0 0.75rem;
+}
+
+.chrome .omnibox:focus {
+	border-radius: 0.25rem;
+}
+
+/*.pill {
+	flex: 0 0 auto;
+	font-size: 12px;
+	padding: 4px 10px;
+	border-radius: 999px;
+	border: 1px solid #b6b6b6;
+	color: #9ad1f5;
+	max-width: 30vw;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}*/
+
+.select.error {
+	color: #f67;
+	border-color: #cc0000;
+}
+
+.frame {
+	flex: 1 1 auto;
+	width: 100%;
+	border: 0;
+	background: #fff;
+}
+
+/* early-Android (Holo) navigation bar: black strip, white outline glyphs,
+   Holo-blue press highlight */
+.navbar {
+	position: fixed;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 48px;
+	z-index: 20;
+	display: flex;
+	justify-content: center;
+	align-items: stretch;
+	gap: 56px;
+	background: #000;
+}
+
+.navbtn {
+	width: 72px;
+	padding: 0;
+	margin: 0;
+	border: 0;
+	background: transparent;
+	color: #ddd;
+	cursor: pointer;
+	transition: none;
+	-webkit-tap-highlight-color: transparent;
+}
+
+.navbtn svg {
+	width: 28px;
+	height: 28px;
+	display: block;
+	margin: auto;
+}
+
+.navbtn:hover {
+	color: #fff;
+}
+
+.navbtn:active,
+.navbtn:focus-visible {
+	outline: 0;
+	background: rgba(51, 181, 229, 0.35);
+	color: #33b5e5;
+}
+
+/* tab manager, after the One UI recent-apps screen. The cards are the real
+   frames scaled down with transforms (reparenting an iframe would reload it);
+   the panel only draws the backdrop, labels, Close all and the dock. */
+body.recents .browser {
+	display: flex !important;
+}
+
+body.recents .wrapper,
+body.recents .chrome {
+	visibility: hidden;
+}
+
+/* visibility is inherited, and Powermouse's universal `transition: all`
+   rule makes every descendant animate the inherited change over 0.2s, which
+   left the tiles visible under the sliding dock buttons */
+/* keep the hover transitions, but never animate visibility (that is what
+   made the tiles linger for a frame or two on either side of the slide) */
+#landing,
+#landing *,
+.chrome,
+.chrome * {
+	transition-property: background-color, color, border-color, box-shadow;
+}
+
+body.recents .frames {
+	position: fixed;
+	inset: 0 0 48px 0;
+	z-index: 8;
+	overflow: hidden;
+}
+
+/* backdrop and controls fade in and out in step with the card animation */
+body.recents .frames::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	background:
+		radial-gradient(ellipse at 30% 20%, #3a1f4a 0%, transparent 60%),
+		radial-gradient(ellipse at 80% 80%, #241a3a 0%, transparent 55%), #120d1a;
+	opacity: 0;
+	transition: opacity 0.25s ease;
+}
+
+body.recents-visible .frames::before {
+	opacity: 1;
+}
+
+/* the switcher's parts fade individually, so the dock can stay solid while
+   its buttons slide out of the home tiles */
+body.recents .recents > * {
+	opacity: 0;
+	transition: opacity 0.25s ease;
+}
+
+body.recents-visible .recents > * {
+	opacity: 1;
+}
+
+body.recents.recents-from-home .dock {
+	opacity: 1;
+	transition: none;
+}
+
+body.recents .frames .frame {
+	display: block !important;
+	position: absolute;
+	top: 0;
+	left: 0;
+	transform-origin: top left;
+	pointer-events: none;
+	box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+	transition:
+		transform var(--recents-settle, 0.25s) cubic-bezier(0.2, 0.8, 0.2, 1),
+		opacity 0.25s ease,
+		border-radius 0.25s ease,
+		clip-path 0.25s ease;
+	background: #fff;
+}
+
+body.recents .frames .frame.shade {
+	opacity: 0.45;
+}
+
+.recents,
+.navbar {
+	user-select: none;
+	-webkit-user-select: none;
+	-webkit-touch-callout: none;
+}
+
+.recents {
+	position: fixed;
+	inset: 0 0 48px 0;
+	z-index: 10;
+	pointer-events: none;
+	font-family: 'Montserrat', sans-serif;
+}
+
+.recents > * {
+	pointer-events: auto;
+}
+
+.recentsTop {
+	position: absolute;
+	top: 18px;
+	left: 20px;
+	right: 20px;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+
+.recentsCount {
+	display: inline-block;
+	padding: 12px 20px;
+	border-radius: 999px;
+	border: 1px solid rgba(255, 255, 255, 0.35);
+	color: #fff;
+	font-size: 14px;
+	background: rgba(0, 0, 0, 0.25);
+}
+
+.recentsMore {
+	width: 44px;
+	height: 44px;
+	border: 0;
+	border-radius: 50%;
+	background: transparent;
+	color: #fff;
+	font-size: 28px;
+	line-height: 44px;
+	cursor: pointer;
+}
+
+.recentsMore:hover {
+	background: rgba(255, 255, 255, 0.12);
+}
+
+/* one label per card. It is the frame's size and carries the frame's
+   transform (set from JS), so sizes inside it are divided by the scale
+   factor --k to come out at normal size on screen. */
+.cardLabel {
+	position: absolute;
+	top: 0;
+	left: 0;
+	transform-origin: top left;
+	pointer-events: auto;
+	cursor: pointer;
+	overflow: hidden;
+	transition:
+		transform var(--recents-settle, 0.25s) cubic-bezier(0.2, 0.8, 0.2, 1),
+		opacity 0.25s ease,
+		border-radius 0.25s ease;
+}
+
+/* faint shade along the top edge so the title stays legible */
+.cardLabel::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 0;
+	height: calc(40px / var(--k, 1));
+	background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
+}
+
+.cardLabel .title {
+	position: absolute;
+	left: calc(14px / var(--k, 1));
+	top: calc(10px / var(--k, 1));
+	right: calc(48px / var(--k, 1));
+	color: #fff;
+	font-size: calc(14px / var(--k, 1));
+	line-height: 1.4;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	text-shadow: 0 1px 3px #000;
+}
+
+.cardLabel .close {
+	position: absolute;
+	top: calc(6px / var(--k, 1));
+	right: calc(6px / var(--k, 1));
+	width: calc(30px / var(--k, 1));
+	height: calc(30px / var(--k, 1));
+	border: 0;
+	border-radius: 50%;
+	background: rgba(0, 0, 0, 0.5);
+	color: #fff;
+	font-size: calc(18px / var(--k, 1));
+	line-height: 1;
+	cursor: pointer;
+	transition: none;
+}
+
+.cardLabel .close:hover {
+	background: rgba(0, 0, 0, 0.8);
+}
+
+.cardLabel .hit {
+	position: absolute;
+	inset: 0;
+}
+
+.closeAll {
+	position: absolute;
+	left: 50%;
+	bottom: 100px;
+	transform: translateX(-50%);
+	padding: 14px 44px;
+	border-radius: 999px;
+	border: 1px solid rgba(255, 255, 255, 0.35);
+	background: rgba(0, 0, 0, 0.25);
+	color: #fff;
+	font-family: 'Montserrat', sans-serif;
+	font-size: 15px;
+	cursor: pointer;
+}
+
+.closeAll:hover {
+	background: rgba(255, 255, 255, 0.12);
+}
+
+.dock {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	display: flex;
+	gap: 0;
+	border-top: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.dockButton {
+	flex: 1 1 0;
+	height: 72px;
+	border: 0;
+	border-right: 1px solid rgba(0, 0, 0, 0.35);
+	border-radius: 0;
+	color: #fff;
+	font-family: 'Montserrat', sans-serif;
+	font-size: 18px;
+	cursor: pointer;
+	text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.2);
+	transition: none;
+}
+
+.dockButton:last-child {
+	border-right: 0;
+}
+
+.dockButton:hover {
+	filter: brightness(1.15);
+}
+
+.dockButton:active {
+	filter: brightness(0.85);
+}
+
+.recentsEmpty {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: rgba(255, 255, 255, 0.75);
+	font-size: 16px;
+	pointer-events: none;
+}
+
+.recents.empty .closeAll {
+	display: none;
+}
+
+@media only screen and (max-width: 767px) {
+	.pill {
+		display: none;
+	}
+	.navbar {
+		gap: 32px;
+	}
+	.dockButton {
+		height: 60px;
+		font-size: 15px;
+	}
+	.closeAll {
+		bottom: 90px;
+	}
+	/* two tiles per row instead of four squeezed ones; footer stacked above */
+	#button-container {
+		flex-wrap: wrap;
+		height: auto;
+		bottom: 87px;
+	}
+	.ver {
+		display: none;
+	}
+	.btn-fancy {
+		flex: 1 1 40%;
+		margin: 5px;
+		line-height: 56px;
+		font-size: 16px;
+	}
+	.lbottom,
+	.rbottom {
+		position: absolute;
+		width: calc(100% - 20px);
+		text-align: center;
+		font-size: 13px;
+	}
+	.lbottom {
+		bottom: 30px;
+	}
+	.rbottom {
+		bottom: 0;
+	}
+}
+
+/* suggestion dropdown under the omnibox (the landing form already has .urlFill) */
+.chrome form {
+	position: relative;
+}
+
+.chrome .auto-fill {
+	position: relative;
+	z-index: 30;
+	width: auto;
+	cursor: pointer;
+}
+
+.auto-fill {
+	cursor: pointer;
+}

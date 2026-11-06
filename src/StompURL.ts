@@ -19,7 +19,7 @@ export default class StompURL {
 	constructor(
 		url: urlLike,
 		codec: GenericCodec | StompURL,
-		directory?: string
+		directory?: string,
 	) {
 		if (codec instanceof StompURL) {
 			const copy = codec;

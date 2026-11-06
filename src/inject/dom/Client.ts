@@ -1,11 +1,11 @@
-import StompURL from '../../StompURL';
+import { decode, escapeText } from 'entities';
 import { ParsedConfig } from '../../config';
 import { modifyJS } from '../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
+import StompURL from '../../StompURL';
 import Client from '../Client';
 import cloneRawNode, { parseHTML } from './cloneNode';
 import { shouldRewriteScript } from './modules/DOMAttributes';
-import { decode, escapeText } from 'entities';
 
 type OpenCallback = () => void;
 
@@ -13,7 +13,7 @@ const onDocumentOpen = new WeakMap<typeof globalThis, OpenCallback[]>();
 
 export function addDocumentOpenListener(
 	global: typeof globalThis,
-	callback: OpenCallback
+	callback: OpenCallback,
 ) {
 	if (!onDocumentOpen.has(global)) onDocumentOpen.set(global, []);
 
@@ -30,7 +30,7 @@ export function getGlobalParsingState(global: typeof globalThis) {
 
 export function setGlobalParsingState(
 	global: typeof globalThis,
-	value: ParsingState
+	value: ParsingState,
 ) {
 	globalParsingState.set(global, value);
 }
@@ -47,11 +47,11 @@ export default class DocumentClient extends Client {
 		this.write = this.global.document.write;
 		this.baseURIDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.global.Node.prototype,
-			'baseURI'
+			'baseURI',
 		)!;
 		this.parentDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.global,
-			'parent'
+			'parent',
 		)!;
 		this.topDescriptor = Reflect.getOwnPropertyDescriptor(this.global, 'top')!;
 		this.isDOM = true;
@@ -67,13 +67,13 @@ export default class DocumentClient extends Client {
 			return parseRoutedURL(
 				this.baseURI.href,
 				this.codec,
-				`${this.baseURI.origin}${this.directory}`
+				`${this.baseURI.origin}${this.directory}`,
 			).url;
 		} else {
 			return new StompURL(
 				this.baseURI.href,
 				this.codec,
-				`${this.baseURI.origin}${this.directory}`
+				`${this.baseURI.origin}${this.directory}`,
 			);
 		}
 	}
@@ -97,8 +97,13 @@ export default class DocumentClient extends Client {
 		for (const script of node.querySelectorAll('script')) {
 			if (script.text && shouldRewriteScript(script)) {
 				script.text = `document.currentScript.textContent = ${escapeText(
-					JSON.stringify(script.textContent)
-				)};${modifyJS(script.text, this.url, this.config, 'generic')}`;
+					JSON.stringify(script.textContent),
+				)};${modifyJS(
+					script.text,
+					this.url,
+					this.config,
+					script.type === 'module' ? 'genericModule' : 'generic',
+				)}`.replace(/<\/script/gi, '<\\/script');
 			}
 		}
 

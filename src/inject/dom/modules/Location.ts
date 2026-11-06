@@ -1,5 +1,5 @@
-import StompURL from '../../../StompURL';
 import { routeHTML } from '../../../rewriteHTML';
+import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import { setGlobalProxy } from '../../modules/Access';
 import ProxyModule, { invokeGlobal } from '../../modules/Proxy';
@@ -60,17 +60,17 @@ export default class LocationModule extends Module<DocumentClient> {
 		]) {
 			const urlDescriptor = Reflect.getOwnPropertyDescriptor(
 				this.client.global.URL.prototype,
-				common
+				common,
 			);
 
 			const locationDescriptor = Reflect.getOwnPropertyDescriptor(
 				this.client.global.location,
-				common
+				common,
 			);
 
 			if (!urlDescriptor || !locationDescriptor) {
 				console.error(
-					`Common property ${common} was missing on URL.prototype/location`
+					`Common property ${common} was missing on URL.prototype/location`,
 				);
 				continue;
 			}
@@ -87,8 +87,8 @@ export default class LocationModule extends Module<DocumentClient> {
 								const temp = new URL(this.client.location.toString());
 
 								return Reflect.apply(urlDescriptor.get!, temp, args);
-							}
-					  )
+							},
+						)
 					: undefined,
 				set: locationDescriptor.set
 					? proxyModule?.wrapFunction(
@@ -108,10 +108,10 @@ export default class LocationModule extends Module<DocumentClient> {
 								location.href = routeHTML(
 									new StompURL(temp, this.client.url),
 									this.client.url,
-									this.client.config
+									this.client.config,
 								);
-							}
-					  )
+							},
+						)
 					: undefined,
 			});
 		}
@@ -124,13 +124,13 @@ export default class LocationModule extends Module<DocumentClient> {
 						routeHTML(
 							new StompURL(
 								new URL(url, this.client.url.toString()),
-								this.client.url
+								this.client.url,
 							),
 							this.client.url,
-							this.client.config
+							this.client.config,
 						),
 					]);
-				}
+				},
 			),
 			writable: false,
 			enumerable: true,
@@ -145,13 +145,13 @@ export default class LocationModule extends Module<DocumentClient> {
 						routeHTML(
 							new StompURL(
 								new URL(url, this.client.url.toString()),
-								this.client.url
+								this.client.url,
 							),
 							this.client.url,
-							this.client.config
+							this.client.config,
 						),
 					]);
-				}
+				},
 			),
 			writable: false,
 			enumerable: true,

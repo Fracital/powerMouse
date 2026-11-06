@@ -1,5 +1,5 @@
-import StompURL from '../../../StompURL';
 import { parseRoutedURL, routeXHR } from '../../../routeURL';
+import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule, {
 	classConstant,
@@ -88,7 +88,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					throw new DOMException(
 						`Failed to read the 'responseText' property from 'XMLHttpRequest': The value is only accessible if the object's 'responseType' is '' or 'text' (was '${
 							this.#responseType
-						}').`
+						}').`,
 					);
 
 				return this.#responseText;
@@ -102,17 +102,17 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			set responseType(value) {
 				if (this.#loadingOrDone) {
 					throw new DOMException(
-						`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.`
+						`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.`,
 					);
 				} else if (!this.#async) {
 					throw new DOMException(
-						`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be changed for synchronous requests made from a document.`
+						`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be changed for synchronous requests made from a document.`,
 					);
 				}
 
 				if (!XMLHttpRequestResponseType.includes(value)) {
 					console.warn(
-						`The provided value '${value}' is not a valid enum value of type XMLHttpRequestResponseType.`
+						`The provided value '${value}' is not a valid enum value of type XMLHttpRequestResponseType.`,
 					);
 					return;
 				}
@@ -133,7 +133,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			#onHeaders(
 				error: Error | void,
 				response: Response | void,
-				url: string | void
+				url: string | void,
 			) {
 				if (error) {
 					console.error(error);
@@ -145,7 +145,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				const parsed = parseRoutedURL(
 					url!,
 					that.client.codec,
-					`${location.origin}${that.client.directory}`
+					`${location.origin}${that.client.directory}`,
 				);
 				this.#responseURL = parsed.url.toString();
 				this.#responseHeaders = response!.headers;
@@ -166,7 +166,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			#onDone(
 				error: unknown | void,
 				response: Response | void,
-				buffer: ArrayBuffer | void
+				buffer: ArrayBuffer | void,
 			) {
 				if (error !== undefined) {
 					if (this.#abort.signal.aborted) {
@@ -197,20 +197,20 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				this.#dispatchReadyState();
 
 				const parsedLen = parseInt(
-					response!.headers.get('content-length') || ''
+					response!.headers.get('content-length') || '',
 				);
 				const length = isNaN(parsedLen) ? 1000 : parsedLen;
 
 				this.dispatchEvent(
 					new ProgressEvent('load', {
 						total: length,
-					})
+					}),
 				);
 
 				this.dispatchEvent(
 					new ProgressEvent('loadend', {
 						total: length,
-					})
+					}),
 				);
 			}
 			#fetch(url: string | URL, init: RequestInit) {
@@ -226,11 +226,11 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 						.catch((error) => this.#onDone(error));
 				} else {
 					throw new Error(
-						'Synchronous requests are not supported in this context.'
+						'Synchronous requests are not supported in this context.',
 					);
 				}
 			}
-			// eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-empty-function
+			// eslint-disable-next-line @typescript-eslint/no-unused-vars
 			overrideMimeType(mime: string) {}
 			abort() {
 				if (!this.#async) {
@@ -245,7 +245,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				url: string,
 				async = true,
 				username: string | void,
-				password: string | void
+				password: string | void,
 			) {
 				this.#readyState = OPENED;
 				this.#method = String(method).toUpperCase();
@@ -275,7 +275,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			setRequestHeader(header: string, value: string) {
 				if (this.#readyState !== OPENED) {
 					throw new DOMException(
-						`Failed to execute 'setRequestHeader' on 'XMLHttpRequest': The object's state must be OPENED.`
+						`Failed to execute 'setRequestHeader' on 'XMLHttpRequest': The object's state must be OPENED.`,
 					);
 				}
 
@@ -302,10 +302,10 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					routeXHR(
 						new StompURL(
 							new URL(this.#url, that.client.url.toString()),
-							that.client.url
-						)
+							that.client.url,
+						),
 					),
-					options
+					options,
 				);
 			}
 			getResponseHeader(header: string) {
@@ -324,7 +324,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 
 		const globalProxy = domObjectConstructor(XMLHttpRequestProxy);
 		const globalTargetProxy = domObjectConstructor(
-			XMLHttpRequestEventTargetProxy
+			XMLHttpRequestEventTargetProxy,
 		);
 
 		onEventTarget(globalTargetProxy.prototype, 'abort');
@@ -346,7 +346,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 		proxyModule.mirrorClass(
 			XMLHttpRequestEventTarget,
 			globalTargetProxy,
-			instances
+			instances,
 		);
 
 		(this.client.global as any).XMLHttpRequest = globalProxy;

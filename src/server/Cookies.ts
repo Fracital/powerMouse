@@ -1,6 +1,6 @@
-import Router, { jsonAPI } from './Router';
 import { IDBPDatabase, openDB } from 'idb';
 import parseSetCookie, { Cookie as ParserCookie } from 'set-cookie-parser';
+import Router, { jsonAPI } from './Router';
 
 const sameSites = ['lax', 'strict', 'none'];
 
@@ -34,7 +34,7 @@ const normalizeCookie = (object: ParserCookie, url: URL): Cookie => ({
 	expires: object.expires,
 });
 
-interface FloatingCookie extends SessionCookie {
+export interface FloatingCookie extends SessionCookie {
 	session: boolean;
 	expires?: Date;
 }
@@ -104,13 +104,13 @@ export default class Cookies {
 				(cookie: SessionCookie): FloatingCookie => ({
 					...cookie,
 					session: true,
-				})
+				}),
 			),
 			...(await this.db.getAll('cookies')).map(
 				(cookie: SessionCookie): FloatingCookie => ({
 					...cookie,
 					session: false,
-				})
+				}),
 			),
 		];
 
@@ -120,7 +120,7 @@ export default class Cookies {
 			if (cookieExpired(cookie)) {
 				this.db.delete(
 					cookie.session ? 'sessionCookies' : 'cookies',
-					floatingCookieID(cookie)
+					floatingCookieID(cookie),
 				);
 			} else if (testCookieOwnership(cookie, url)) {
 				result.push(cookie);
@@ -171,7 +171,7 @@ export async function registerCookies(router: Router): Promise<Cookies> {
 	for (const api of ['get', 'set']) {
 		router.routes.set(
 			new RegExp(`^\\/cookies\\/${api}$`),
-			jsonAPI(cookies[api as keyof Cookies].bind(cookies))
+			jsonAPI(cookies[api as keyof Cookies].bind(cookies)),
 		);
 	}
 

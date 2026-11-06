@@ -1,25 +1,39 @@
+import { BareCompatibleClient } from '@mercuryworkshop/proxy-transports';
 import GenericCodec from '../Codecs';
-import StompURL from '../StompURL';
 import { codecType, Config, parseConfig, ParsedConfig } from '../config';
 import { CLIENT_KEY } from '../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../routeURL';
+import StompURL from '../StompURL';
+import { INIT_REMOTE_TRANSPORT, TRANSPORT_INIT } from '../transport/messages';
+import RemoteTransport from '../transport/RemoteTransport';
 import Module from './Module';
-import BareClient from '@tomphttp/bare-client';
 
 export interface ModuleCtor {
 	new (client: any): Module<any>;
 }
 
+type PostMessage = (
+	this: unknown,
+	message: unknown,
+	transfer: Transferable[],
+) => void;
+
 export default class Client {
 	modules: Map<ModuleCtor, Module<any>>;
 	global: typeof globalThis;
-	bare: BareClient;
 	codec: GenericCodec;
 	directory: string;
-	bareServer: string;
 	applied: boolean;
 	isDOM: boolean;
 	isWorker: boolean;
+	#bare?: BareCompatibleClient;
+	/** set by the Context module: maps the real `top` to the proxied world's top */
+	resolveTop?: (value: unknown) => unknown;
+	// pristine copies taken before modules hook them: the Navigator module
+	// removes navigator.serviceWorker from proxied pages
+	#serviceWorkerContainer?: ServiceWorkerContainer;
+	#serviceWorkerPostMessage?: PostMessage;
+	#workerPostMessage?: PostMessage;
 	/**
 	 * The location of the context (or page)
 	 * Will always return a URL that can be used to resolve urls
@@ -36,13 +50,13 @@ export default class Client {
 			return parseRoutedURL(
 				location.toString(),
 				this.codec,
-				`${location.origin}${this.directory}`
+				`${location.origin}${this.directory}`,
 			).url;
 		} else {
 			return new StompURL(
 				location.toString(),
 				this.codec,
-				`${location.origin}${this.directory}`
+				`${location.origin}${this.directory}`,
 			);
 		}
 	}
@@ -52,18 +66,81 @@ export default class Client {
 		this.modules = new Map();
 		this.codec = init.codec;
 		this.directory = init.directory;
-		this.bareServer = init.bareServer;
-		this.bare = new BareClient(init.bareServer, init.bareClientData);
 		this.isDOM = false;
 		this.isWorker = false;
+		this.#serviceWorkerContainer = (
+			global.navigator as Navigator & {
+				serviceWorker?: ServiceWorkerContainer;
+			}
+		)?.serviceWorker;
+		this.#serviceWorkerPostMessage = (
+			global.ServiceWorker as typeof ServiceWorker | undefined
+		)?.prototype.postMessage as PostMessage | undefined;
+		this.#workerPostMessage = (global.Worker as typeof Worker | undefined)
+			?.prototype.postMessage as PostMessage | undefined;
 	}
 	get config(): Config {
 		return {
 			directory: this.directory,
 			codec: codecType(this.codec),
-			bareServer: this.bareServer,
-			bareClientData: this.bare.data,
 		};
+	}
+	/**
+	 * Bare-compatible client for this context, backed by the controller's
+	 * transport. Created on first use so contexts that never open a WebSocket
+	 * don't hold a port.
+	 */
+	get bare(): BareCompatibleClient {
+		if (!this.#bare)
+			this.#bare = new BareCompatibleClient(
+				new RemoteTransport(this.ownTransportPort()),
+			);
+
+		return this.#bare;
+	}
+	/**
+	 * The port this context's own transport talks over.
+	 * Documents ask the service worker; workers are handed one by their creator.
+	 */
+	protected ownTransportPort(): MessagePort | Promise<MessagePort> {
+		return this.requestTransportPort();
+	}
+	/**
+	 * Ask the controller (through the service worker) to serve a transport on
+	 * a fresh port and return our end of it.
+	 */
+	requestTransportPort(): MessagePort {
+		const controller = this.#serviceWorkerContainer?.controller;
+
+		if (!controller || !this.#serviceWorkerPostMessage)
+			throw new Error(
+				'Stomp: no service worker controller available to obtain a transport',
+			);
+
+		const channel = new MessageChannel();
+
+		this.#serviceWorkerPostMessage.call(
+			controller,
+			{ [INIT_REMOTE_TRANSPORT]: { directory: this.directory } },
+			[channel.port2],
+		);
+
+		return channel.port1;
+	}
+	/**
+	 * Hand a freshly constructed dedicated worker its own transport port.
+	 * The worker's inject bundle resolves it from the TRANSPORT_INIT message.
+	 */
+	provisionWorkerTransport(worker: Worker) {
+		try {
+			const port = this.requestTransportPort();
+			this.#workerPostMessage!.call(worker, { [TRANSPORT_INIT]: true }, [port]);
+		} catch (error) {
+			console.warn(
+				'Stomp: could not provision a transport for a worker',
+				error,
+			);
+		}
 	}
 	/*
 	 called once all modules are created
@@ -93,7 +170,7 @@ export function createClientFactory<T>(
 	Client: {
 		new (init: ParsedConfig, global: typeof globalThis): T;
 	},
-	initClient: (client: T) => void
+	initClient: (client: T) => void,
 ) {
 	return function (config: Config, codecKey: string) {
 		delete globalThis.createClient;

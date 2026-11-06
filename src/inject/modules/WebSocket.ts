@@ -1,145 +1,175 @@
+import type {
+	BareCompatibleWebSocket,
+	RawHeaders,
+} from '@mercuryworkshop/proxy-transports';
 import { urlLike } from '../../StompURL';
 import Client from '../Client';
-import Module from '../Module';
 import { CookiesModule } from '../dom/modules/Cookies';
+import Module from '../Module';
 import ProxyModule, {
 	classConstant,
 	newConstructor,
 	onEventTarget,
 } from './Proxy';
-import { BareHeaders, BareWebSocket } from '@tomphttp/bare-client';
 
 const wsProtocols = ['ws:', 'wss:'];
 
 export default class WebSocketModule extends Module<Client> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
-		const cookiesModule = this.client.getModule(CookiesModule)!;
-		const { bare } = this.client;
+		const cookiesModule = this.client.getModule(CookiesModule);
+		const client = this.client;
 		const instances = new WeakSet();
 		const { origin } = this.client.url.url;
-		const { CONNECTING } = this.client.global.WebSocket;
+		const { CONNECTING, OPEN, CLOSING, CLOSED } = this.client.global.WebSocket;
 
 		class MockWebSocket extends EventTarget {
-			#socket?: BareWebSocket;
-			#ready: Promise<void>;
+			#socket: BareCompatibleWebSocket;
+			#opened: Promise<void>;
+			#closeRequest?: { code: number; reason: string };
 			#binaryType: BinaryType = 'blob';
-			#protocol = '';
-			#extensions = '';
 			#url = '';
-			async #open(url: URL, protocol?: string | string[]) {
-				const requestHeaders: BareHeaders = {};
-				Reflect.setPrototypeOf(requestHeaders, null);
-
-				requestHeaders['Origin'] = origin;
-				requestHeaders['User-Agent'] = navigator.userAgent;
-
-				const cookie = cookiesModule.pageCookies;
-				if (cookie !== '') requestHeaders['Cookie'] = cookie;
-
-				this.#socket = await bare.createWebSocket(
-					url,
-					requestHeaders,
-					protocol
-				);
-
-				this.#socket.binaryType = this.#binaryType;
-
-				this.#socket.addEventListener('message', (event) => {
-					this.dispatchEvent(
-						new MessageEvent('message', event as unknown as MessageEventInit)
-					);
-				});
-
-				this.#socket.addEventListener('open', async (event) => {
-					this.dispatchEvent(new Event('open', event));
-				});
-
-				this.#socket.addEventListener('error', (event) => {
-					this.dispatchEvent(new ErrorEvent('error', event));
-				});
-
-				this.#socket.addEventListener('close', (event) => {
-					this.dispatchEvent(new Event('close', event));
-				});
-
-				const meta = await this.#socket.meta;
-
-				if (meta.headers?.has('sec-websocket-protocol'))
-					this.#protocol = meta.headers.get('sec-websocket-protocol')!;
-
-				if (meta.headers?.has('sec-websocket-extensions'))
-					this.#extensions = meta.headers.get('sec-websocket-extensions')!;
-
-				let setCookie =
-					(meta.rawHeaders && meta.rawHeaders['set-cookie']) || [];
-				if (!Array.isArray(setCookie)) setCookie = [];
-				// trip the hook
-				for (const cookie of setCookie) document.cookie = cookie;
-			}
-			get url() {
-				return this.#url;
-			}
 			constructor(...args: [url: urlLike, protocol?: string | string[]]) {
 				super();
 
 				if (!args.length)
 					throw new DOMException(
-						`Failed to construct 'WebSocket': 1 argument required, but only 0 present.`
+						`Failed to construct 'WebSocket': 1 argument required, but only 0 present.`,
 					);
 
 				const [url, protocol] = args;
 
-				let parsed;
+				let parsed: URL;
 
 				try {
 					parsed = new URL(url);
-				} catch (err) {
+				} catch {
 					throw new DOMException(
-						`Faiiled to construct 'WebSocket': The URL '${url}' is invalid.`
+						`Failed to construct 'WebSocket': The URL '${url}' is invalid.`,
 					);
 				}
 
 				if (!wsProtocols.includes(parsed.protocol)) {
 					throw new DOMException(
-						`Failed to construct 'WebSocket': The URL's scheme must be either 'ws' or 'wss'. '${parsed.protocol}' is not allowed.`
+						`Failed to construct 'WebSocket': The URL's scheme must be either 'ws' or 'wss'. '${parsed.protocol}' is not allowed.`,
 					);
 				}
 
 				instances.add(this);
 
-				this.#ready = this.#open(parsed, protocol);
+				this.#url = parsed.toString();
+
+				const requestHeaders: RawHeaders = [
+					['Origin', origin],
+					['User-Agent', navigator.userAgent],
+				];
+
+				const cookie = cookiesModule?.pageCookies;
+				if (cookie) requestHeaders.push(['Cookie', cookie]);
+
+				// client.bare is created lazily; a failure there (no transport)
+				// surfaces as an error event like a refused connection would.
+				this.#socket = client.bare.createWebSocket(
+					parsed,
+					protocol,
+					requestHeaders,
+				);
+
+				this.#opened = new Promise<void>((resolve) => {
+					this.#socket.addEventListener('open', () => resolve(), {
+						once: true,
+					});
+					this.#socket.addEventListener('error', () => resolve(), {
+						once: true,
+					});
+				});
+
+				this.#socket.addEventListener('open', () => {
+					this.dispatchEvent(new Event('open'));
+				});
+
+				this.#socket.addEventListener('message', async (event) => {
+					let data = (event as MessageEvent).data;
+
+					// transports deliver binary frames as ArrayBuffer or Blob;
+					// present them according to binaryType
+					if (typeof data !== 'string') {
+						if (this.#binaryType === 'blob' && !(data instanceof Blob)) {
+							data = new Blob([data]);
+						} else if (
+							this.#binaryType === 'arraybuffer' &&
+							data instanceof Blob
+						) {
+							data = await data.arrayBuffer();
+						}
+					}
+
+					this.dispatchEvent(
+						new MessageEvent('message', { data, origin: this.#url }),
+					);
+				});
+
+				this.#socket.addEventListener('error', () => {
+					this.dispatchEvent(new Event('error'));
+				});
+
+				this.#socket.addEventListener('close', (event) => {
+					let { code, reason } = event as CloseEvent;
+
+					// transports don't relay the close handshake; when the page
+					// initiated the close, report what it asked for like a browser
+					if (this.#closeRequest && !code) {
+						({ code, reason } = this.#closeRequest);
+					}
+
+					this.dispatchEvent(
+						new CloseEvent('close', {
+							code,
+							reason,
+							wasClean: code === 1000 || !!this.#closeRequest,
+						}),
+					);
+				});
+			}
+			get url() {
+				return this.#url;
 			}
 			get protocol() {
-				return this.#protocol;
+				return this.#socket.protocol;
 			}
 			get extensions() {
-				return this.#extensions;
+				return this.#socket.extensions;
 			}
 			get readyState() {
-				if (this.#socket) {
-					return this.#socket.readyState;
-				} else {
-					return CONNECTING;
-				}
+				if (this.#closeRequest && this.#socket.readyState === OPEN)
+					return CLOSING;
+				return this.#socket.readyState;
+			}
+			get bufferedAmount() {
+				return 0;
 			}
 			get binaryType() {
 				return this.#binaryType;
 			}
 			set binaryType(value) {
-				this.#binaryType = value;
-
-				if (this.#socket) {
-					this.#socket.binaryType = value;
-				}
+				if (value === 'blob' || value === 'arraybuffer')
+					this.#binaryType = value;
 			}
 			send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
-				if (!this.#socket) {
+				if (this.#socket.readyState === CONNECTING) {
 					throw new DOMException(
-						`Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.`
+						`Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.`,
 					);
 				}
-				this.#socket.send(data);
+
+				// resolved by then; the transport may still reject, which the
+				// native API would surface as a close/error event
+				this.#socket
+					.send(data as string | ArrayBuffer | Blob)
+					.catch((error) => {
+						console.error(error);
+						this.dispatchEvent(new Event('error'));
+					});
 			}
 			close(code?: number, reason?: string) {
 				if (typeof code !== 'undefined') {
@@ -149,12 +179,22 @@ export default class WebSocketModule extends Module<Client> {
 
 					if (code !== 1000 && (code < 3000 || code > 4999)) {
 						throw new DOMException(
-							`Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. ${code} is neither.`
+							`Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. ${code} is neither.`,
 						);
 					}
 				}
 
-				this.#ready.then(() => this.#socket!.close(code, reason));
+				if (this.#closeRequest) return;
+				this.#closeRequest = { code: code ?? 1000, reason: reason ?? '' };
+
+				// the transport connection may not exist yet
+				this.#opened.then(() => {
+					if (this.#socket.readyState === OPEN)
+						this.#socket.close(
+							this.#closeRequest!.code,
+							this.#closeRequest!.reason,
+						);
+				});
 			}
 		}
 
@@ -163,30 +203,14 @@ export default class WebSocketModule extends Module<Client> {
 		onEventTarget(globalWebSocketProxy.prototype, 'open');
 		onEventTarget(globalWebSocketProxy.prototype, 'message');
 		onEventTarget(globalWebSocketProxy.prototype, 'error');
-		classConstant(
-			globalWebSocketProxy,
-			'CONNECTING',
-			this.client.global.WebSocket.CONNECTING
-		);
-		classConstant(
-			globalWebSocketProxy,
-			'OPEN',
-			this.client.global.WebSocket.OPEN
-		);
-		classConstant(
-			globalWebSocketProxy,
-			'CLOSING',
-			this.client.global.WebSocket.CLOSING
-		);
-		classConstant(
-			globalWebSocketProxy,
-			'CLOSED',
-			this.client.global.WebSocket.CLOSED
-		);
+		classConstant(globalWebSocketProxy, 'CONNECTING', CONNECTING);
+		classConstant(globalWebSocketProxy, 'OPEN', OPEN);
+		classConstant(globalWebSocketProxy, 'CLOSING', CLOSING);
+		classConstant(globalWebSocketProxy, 'CLOSED', CLOSED);
 		proxyModule.mirrorClass(
 			this.client.global.WebSocket,
 			globalWebSocketProxy,
-			instances
+			instances,
 		);
 
 		this.client.global.WebSocket =

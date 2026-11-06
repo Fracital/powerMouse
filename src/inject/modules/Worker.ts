@@ -1,5 +1,5 @@
-import StompURL from '../../StompURL';
 import { routeJS } from '../../rewriteJS';
+import StompURL from '../../StompURL';
 import Client from '../Client';
 import Module from '../Module';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
@@ -13,7 +13,7 @@ export default class WorkerModule extends Module<Client> {
 			(target, that, args, newTarget) => {
 				if (!newTarget) {
 					throw new TypeError(
-						`Failed to construct 'Worker': Please use the 'new' operator, this DOM object constructor cannot be called as a function.`
+						`Failed to construct 'Worker': Please use the 'new' operator, this DOM object constructor cannot be called as a function.`,
 					);
 				}
 
@@ -26,16 +26,20 @@ export default class WorkerModule extends Module<Client> {
 				args[0] = routeJS(
 					new StompURL(
 						new URL(String(args[0]), this.client.url.toString()),
-						this.client.url
+						this.client.url,
 					),
 					this.client.url,
 					this.client.config,
-					isModule ? 'workerModule' : 'worker'
+					isModule ? 'workerModule' : 'worker',
 				);
 
-				return Reflect.construct(target, args, newTarget);
+				const worker: Worker = Reflect.construct(target, args, newTarget);
+
+				this.client.provisionWorkerTransport(worker);
+
+				return worker;
 			},
-			true
+			true,
 		);
 	}
 }

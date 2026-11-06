@@ -1,4 +1,7 @@
-import { BrowserCookieArray } from '../../../server/Cookies';
+import {
+	BrowserCookieArray,
+	type FloatingCookie,
+} from '../../../server/Cookies';
 import Module from '../../Module';
 import ProxyModule, { invokeGlobal } from '../../modules/Proxy';
 import DocumentClient from '../Client';
@@ -11,7 +14,7 @@ export class CookiesModule extends Module<DocumentClient> {
 
 		this.cookieDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global.Document.prototype,
-			'cookie'
+			'cookie',
 		)!;
 	}
 	get cookie() {
@@ -23,11 +26,14 @@ export class CookiesModule extends Module<DocumentClient> {
 	get pageCookies() {
 		const syncModule = this.client.getModule(SyncModule)!;
 
+		const cookies: FloatingCookie[] = syncModule.jsonAPI(
+			`${this.client.directory}cookies/get`,
+			this.client.url.toString(),
+		);
+
+		// HttpOnly cookies still reach the server but never page script
 		return new BrowserCookieArray(
-			...syncModule.jsonAPI(
-				`${this.client.directory}cookies/get`,
-				this.client.url.toString()
-			)
+			...cookies.filter((cookie) => !cookie.httpOnly),
 		).toString();
 	}
 	set pageCookies(value: string) {
@@ -36,7 +42,7 @@ export class CookiesModule extends Module<DocumentClient> {
 		syncModule.jsonAPI(
 			`${this.client.directory}cookies/set`,
 			value,
-			this.client.url.toString()
+			this.client.url.toString(),
 		);
 	}
 	apply() {
@@ -50,14 +56,14 @@ export class CookiesModule extends Module<DocumentClient> {
 				(target, that) => {
 					invokeGlobal(that, document);
 					return this.pageCookies;
-				}
+				},
 			),
 			set: proxyModule.wrapFunction(
 				this.cookieDescriptor.set!,
 				(target, that, args) => {
 					invokeGlobal(that, document);
 					this.pageCookies = String(args[0]);
-				}
+				},
 			),
 		});
 	}

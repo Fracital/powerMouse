@@ -1,21 +1,25 @@
 {
 	"compilerOptions": {
-		"target": "ESNext",
+		"target": "ES2022",
 		"module": "ESNext",
+		"moduleResolution": "bundler",
 		"lib": [
 			"ESNext",
 			"DOM",
 			"DOM.Iterable",
 			"WebWorker",
-			"Webworker.Iterable",
+			"WebWorker.Iterable",
 			"WebWorker.ImportScripts"
 		],
 		"types": ["serviceworker"],
-		"sourceMap": true,
 		"strict": true,
+		"isolatedModules": true,
+		"allowSyntheticDefaultImports": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
 		"stripInternal": true,
-		"moduleResolution": "node",
-		"allowSyntheticDefaultImports": true
+		"sourceMap": true,
+		"noEmit": true
 	},
 	"include": ["./src/**/*.ts"]
 }
