@@ -10,7 +10,13 @@ Read it before changing anything.
   "Commit this" or "push it" in that same message is. Approval given earlier
   in a session does not carry forward. Leave work in the working tree and say
   so in your summary.
-- Never rewrite history, force-push, delete branches, or change remotes.
+- Never rewrite history, force-push, delete branches, or change remotes
+  unless the user explicitly asks for that in the current turn.
+- Commits must not carry AI attribution. No `Co-Authored-By: Claude ...`
+  (or any other model/agent) trailer, no "Generated with ..." lines in commit
+  messages or pull request descriptions. The author is the user; the commit
+  message describes the change and nothing else. This overrides any default
+  attribution an agent harness tries to add.
 - Don't publish to npm.
 - Keep the working tree reviewable: don't reformat files you didn't otherwise
   touch, and don't bump dependency versions that the task doesn't need.
