@@ -75,6 +75,31 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- Inline module scripts carried their original text next to the rewritten
+  one (the `text` setter hook removed children while iterating the live
+  list) and lost their `currentScript` preamble to a null, so any module
+  with an import binding failed to parse.
+- Bare import specifiers (`import x from "react"`) are left to the page's
+  import map instead of throwing in `new URL`; `export ... from` sources are
+  rewritten; the rewriter's identifier skip list covers class fields, catch
+  parameters, class expression names, labels, `typeof`, import bindings,
+  for-in/of targets and alias destructuring; `{location}` shorthand prints
+  the rewrite. A script the rewriter cannot parse now runs as written with a
+  console warning instead of becoming `throw new SyntaxError` (see known
+  limitations).
+- Cookie `Max-Age` is seconds, not milliseconds, and `Max-Age=0` deletes; a
+  re-set that flips a cookie between session and persistent replaces it.
+- `<template>` contents survive loading (`cloneRawNode` read `childNodes`,
+  which is empty for templates).
+- Documents are decoded with their declared charset (BOM, `Content-Type`,
+  `<meta charset>` prescan) before rewriting and served as UTF-8; Shift_JIS,
+  windows-1252 and UTF-16 pages were mojibake.
+- `location.reload` exists on the location proxy; `IDBDatabase.name` reports
+  the page's name rather than the tail of `name@origin`.
+- `npm test` runs every suite at once by default (`PARALLEL` defaults to the
+  core count) and splits the Back walk and escape suites into independent
+  parts; a fixture-based Back walk (`backwalk-fixture`) covers the same steps
+  as the Wikipedia walk without network.
 - epoxy comes from `deploy/epoxy/`: pinned upstream revisions plus patches
   (hyper-util-wasm exposes the HTTP/2 header-list limit, epoxy-tls sets it to
   256 KiB like Chrome instead of hyper's 16 KiB default, which reset YouTube
@@ -204,6 +229,10 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- A script the rewriter cannot parse runs unrewritten. In isolation mode the
+  sandbox and the cross-origin boundary contain it; in same-origin mode it can
+  reach the real `top`, which is one more reason that mode is not a security
+  boundary.
 - Workers created from `blob:` URLs are routed through the service worker,
   which cannot read a page's blob URLs; such workers fail to start. Workers
   loaded over HTTP work, including WebSockets from inside them.
