@@ -158,18 +158,38 @@ export function capitalizeHeaders(headers: Headers): RawHeaders {
 	return rawHeaders;
 }
 
-export function isStandardHeader(header: string) {
-	return lowercaseStandardHeaderNames.includes(header.toLowerCase());
+/**
+ * Rewrite the URLs of a `Link` header (`<url>; rel=preload; as=style, ...`)
+ * so preloads fetch through the proxy, by what each link is for.
+ */
+export function rewriteLinkHeader(
+	value: string,
+	route: (target: string, params: Record<string, string>) => string,
+): string {
+	return value
+		.split(/,(?=\s*<)/)
+		.map((link) => {
+			const match = /^\s*<([^>]*)>(.*)$/s.exec(link);
+			if (!match) return link;
+			const params: Record<string, string> = {};
+			for (const param of match[2].split(';')) {
+				const [name, ...rest] = param.split('=');
+				if (name.trim())
+					params[name.trim().toLowerCase()] = rest
+						.join('=')
+						.trim()
+						.replace(/^"|"$/g, '')
+						.toLowerCase();
+			}
+			try {
+				return `<${route(match[1], params)}>${match[2]}`;
+			} catch (error) {
+				return link;
+			}
+		})
+		.join(',');
 }
 
-export function trimNonStandardHeaders(headers: Headers): Headers {
-	const result = new Headers();
-
-	for (const [header] of headers) {
-		if (!isStandardHeader(header)) {
-			result.delete(header);
-		}
-	}
-
-	return result;
+export function isStandardHeader(header: string) {
+	return lowercaseStandardHeaderNames.includes(header.toLowerCase());
 }

@@ -1,0 +1,6 @@
+<!doctype html>
+<title>KEEP</title>
+<script>
+	if (location.hash === '#set') localStorage.setItem('keep', 'yes');
+	window.__keep = localStorage.getItem('keep');
+</script>

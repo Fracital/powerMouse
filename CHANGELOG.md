@@ -83,6 +83,12 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- Response headers that would bind a page to the proxy origin (HSTS,
+  `Clear-Site-Data`, COEP, reporting, `Permissions-Policy`, nosniff) and the
+  already consumed `Set-Cookie` are stripped; `Link` preloads and
+  `Content-Location` are rewritten; requests carry `Origin`, a
+  default-policy referrer and fetch metadata computed for the real origins;
+  EventSource responses get their MIME type.
 - `BroadcastChannel` names, Cache API caches and the origin private file
   system are partitioned by proxied origin.
 - `storage` events fire in the other documents of a proxied origin when
@@ -268,6 +274,8 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- The page's own `Referrer-Policy` is not applied; requests follow
+  `strict-origin-when-cross-origin`.
 - `href.baseVal` on SVG elements and `getSVGDocument()` are not spoofed;
   `script.textContent` returns the rewritten source for scripts the page
   inserted itself.

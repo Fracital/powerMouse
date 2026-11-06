@@ -1,0 +1,12 @@
+{
+	"strict-transport-security": "max-age=31536000",
+	"cross-origin-embedder-policy": "require-corp",
+	"report-to": "{\"group\":\"g\",\"endpoints\":[]}",
+	"nel": "{\"report_to\":\"g\"}",
+	"permissions-policy": "camera=()",
+	"x-content-type-options": "nosniff",
+	"set-cookie": "leak=1; Path=/",
+	"link": "</pages/imp.css>; rel=preload; as=style, </pages/modworker.js>; rel=modulepreload",
+	"content-location": "/pages/hdr.json",
+	"x-custom": "kept"
+}

@@ -25,10 +25,30 @@ const accessControlHeaders: string[] = [
 	'Access-Control-Request-Method',
 ];
 
+// headers that would bind the page to the proxy origin or reach past the
+// frame: HSTS pins the proxy host, Clear-Site-Data wipes every proxied
+// origin's state at once, COEP blocks the page's own subresources once CORP
+// is gone, the reporting headers would post proxy URLs to the site, and
+// Set-Cookie was consumed by the cookie jar (the browser must not store it
+// for the proxy origin too)
+const bindingHeaders: string[] = [
+	'Strict-Transport-Security',
+	'Clear-Site-Data',
+	'Cross-Origin-Embedder-Policy',
+	'Report-To',
+	'NEL',
+	'Reporting-Endpoints',
+	'Permissions-Policy',
+	'Feature-Policy',
+	'X-Content-Type-Options',
+	'Set-Cookie',
+];
+
 const removeHeaders: string[] = [
 	...cspHeaders,
 	...corsHeaders,
 	...accessControlHeaders,
+	...bindingHeaders,
 ];
 
 export declare type RouteTransform = (
@@ -65,18 +85,19 @@ export function filterResponseHeaders(
 ): Headers {
 	const filteredHeaders = new Headers(headers);
 
-	if (headers.has('location')) {
-		filteredHeaders.set(
-			'location',
-			transformRoute(
-				new StompURL(
-					new URL(filteredHeaders.get('location')!, url.toString()),
-					url,
-				),
-				url,
-			),
-		);
-	}
+	for (const name of ['location', 'content-location'])
+		if (headers.has(name))
+			try {
+				filteredHeaders.set(
+					name,
+					transformRoute(
+						new StompURL(new URL(headers.get(name)!, url.toString()), url),
+						url,
+					),
+				);
+			} catch (error) {
+				// not a URL: leave it
+			}
 
 	for (const header of removeHeaders) {
 		filteredHeaders.delete(header);

@@ -1,0 +1,20 @@
+<!doctype html>
+<title>HEADERS</title>
+<script>
+	window.__hdr = {};
+	const other = location.origin.includes('127.0.0.1')
+		? location.origin.replace('127.0.0.1', 'localhost')
+		: location.origin.replace('localhost', '127.0.0.1');
+	(async () => {
+		const r = await fetch('/pages/hdr.json');
+		__hdr.response = Object.fromEntries([...r.headers.entries()]);
+		__hdr.same = await (await fetch('/echo-headers')).json();
+		__hdr.cross = await (await fetch(other + '/echo-headers')).json();
+	})()
+		.catch((e) => {
+			__hdr.error = String(e);
+		})
+		.finally(() => {
+			__hdr.done = true;
+		});
+</script>

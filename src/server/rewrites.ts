@@ -2,9 +2,10 @@ import {
 	BareCompatibleClient,
 	type ProxyTransport,
 } from '@mercuryworkshop/proxy-transports';
+import { getDomain } from 'tldts';
 import GenericCodec from '../Codecs';
 import { codecType, Config, ParsedConfig } from '../config';
-import { capitalizeHeaders, trimNonStandardHeaders } from '../headers';
+import { capitalizeHeaders, rewriteLinkHeader } from '../headers';
 import { modifyCSS, routeCSS } from '../rewriteCSS';
 import { modifyHTML, modifyRefresh, routeHTML } from '../rewriteHTML';
 import { modifyJS, routeJS, ScriptType } from '../rewriteJS';
@@ -68,12 +69,25 @@ function genericForward(
 			(await rewriter.cookies.get(url.url)).toString(),
 		);
 
-		requestHeaders.set('sec-fetch-dest', serverRequest.destination);
-
-		// Referer and Origin are forbidden headers, so the service worker never
-		// sees them; rebuild them from the (proxied) referrer
+		// Referer, Origin and the fetch metadata are forbidden headers, so the
+		// service worker never sees the page's; rebuild them from the (proxied)
+		// referrer the way the browser would for the real origins. The referrer
+		// follows the default policy (strict-origin-when-cross-origin): the
+		// page's own Referrer-Policy is not known here.
 		requestHeaders.delete('referer');
 		requestHeaders.delete('origin');
+		const destination = serverRequest.destination || 'empty';
+		requestHeaders.set('sec-fetch-dest', destination);
+		requestHeaders.set(
+			'sec-fetch-mode',
+			destination === 'document' || destination === 'iframe'
+				? 'navigate'
+				: destination === 'empty'
+					? 'cors'
+					: 'no-cors',
+		);
+		requestHeaders.delete('sec-fetch-user');
+		let site = 'none';
 
 		if (serverRequest.referrer && serverRequest.referrer !== 'about:client') {
 			try {
@@ -82,15 +96,35 @@ function genericForward(
 					rewriter.codec,
 					`${oURL.origin}${rewriter.directory}`,
 				).url.url;
+				const sameOrigin = referrer.origin === url.url.origin;
+				const downgrade =
+					referrer.protocol === 'https:' && url.url.protocol !== 'https:';
 
-				requestHeaders.set('referer', referrer.toString());
+				if (sameOrigin) {
+					referrer.hash = '';
+					requestHeaders.set('referer', referrer.toString());
+				} else if (!downgrade)
+					requestHeaders.set('referer', `${referrer.origin}/`);
 
-				if (!BODY_ILLEGAL.includes(serverRequest.method))
+				// the browser sends Origin on cross-origin fetches and on every
+				// request with a body
+				if (
+					(!sameOrigin && destination === 'empty') ||
+					!BODY_ILLEGAL.includes(serverRequest.method)
+				)
 					requestHeaders.set('origin', referrer.origin);
+
+				site = sameOrigin
+					? 'same-origin'
+					: getDomain(referrer.hostname) !== null &&
+						  getDomain(referrer.hostname) === getDomain(url.url.hostname)
+						? 'same-site'
+						: 'cross-site';
 			} catch (error) {
 				// referrer isn't a proxied URL (e.g. the controller page)
 			}
 		}
+		requestHeaders.set('sec-fetch-site', site);
 
 		const response = await rewriter.bare.fetch(url.toString(), {
 			method: serverRequest.method,
@@ -109,6 +143,30 @@ function genericForward(
 			transformRoute,
 			additionalResponseFilter,
 		);
+
+		// preloads announced by the server fetch through the proxy too
+		if (responseHeaders.has('link'))
+			responseHeaders.set(
+				'link',
+				rewriteLinkHeader(responseHeaders.get('link')!, (target, params) => {
+					const resource = new StompURL(new URL(target, url.toString()), url);
+					if (params.as === 'style') return routeCSS(resource, url);
+					if (params.rel === 'modulepreload')
+						return routeJS(resource, url, rewriter.config, 'genericModule');
+					if (params.as === 'script')
+						return routeJS(resource, url, rewriter.config, 'generic');
+					if (params.as === 'document' || params.rel === 'prefetch')
+						return routeHTML(resource, url, rewriter.config);
+					return routeBinary(resource);
+				}),
+			);
+
+		// an EventSource must get its MIME type even from a server that
+		// forgot it, or the browser drops the stream
+		if (
+			(serverRequest.headers.get('accept') || '').includes('text/event-stream')
+		)
+			responseHeaders.set('content-type', 'text/event-stream');
 
 		for (const [header, value] of response.rawHeaders) {
 			if (header.toLowerCase() === 'set-cookie') {
@@ -170,9 +228,7 @@ export function registerRewrites(
 			undefined,
 			(resource) => routeBinary(resource),
 			undefined,
-			(headers, filteredHeaders) => {
-				trimNonStandardHeaders(filteredHeaders);
-			},
+			undefined,
 		),
 	);
 
@@ -191,8 +247,6 @@ export function registerRewrites(
 			(resource, url) => routeJS(resource, url, rewriter.config, type),
 			undefined,
 			(headers, filteredHeaders) => {
-				trimNonStandardHeaders(filteredHeaders);
-
 				for (const header of integrityHeaders) {
 					filteredHeaders.delete(header);
 				}
@@ -216,8 +270,6 @@ export function registerRewrites(
 			(resource, url) => routeCSS(resource, url),
 			undefined,
 			(headers, filteredHeaders) => {
-				trimNonStandardHeaders(filteredHeaders);
-
 				for (const header of integrityHeaders) {
 					filteredHeaders.delete(header);
 				}
@@ -245,8 +297,6 @@ export function registerRewrites(
 			(resource, url) => routeHTML(resource, url, rewriter.config),
 			undefined,
 			(headers, filteredHeaders, url) => {
-				trimNonStandardHeaders(filteredHeaders);
-
 				if (headers.has('x-frame-options')) {
 					filteredHeaders.delete('x-frame-options');
 				}
