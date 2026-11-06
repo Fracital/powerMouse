@@ -1,0 +1,41 @@
+<!doctype html>
+<title>DOM</title>
+<div id="wrap"><a id="a" href="/x">x</a></div>
+<svg id="svg" width="10" height="10">
+	<use id="use" href="/pages/sprite.svg#i"></use>
+</svg>
+<script>
+	window.__dom = {};
+	const a = document.getElementById('a');
+	__dom.names = a.getAttributeNames();
+	__dom.hasMarker = a.hasAttribute('s_o:href');
+	__dom.attributesLength = a.attributes.length;
+	__dom.attrValue = a.attributes[0] && a.attributes[0].value;
+	__dom.attrNode =
+		a.getAttributeNode('href') && a.getAttributeNode('href').value;
+	__dom.innerHTML = document.getElementById('wrap').innerHTML;
+	__dom.outerHTML = a.outerHTML;
+	__dom.selectorExact = document.querySelector('a[href="/x"]') === a;
+	__dom.selectorPrefix = document.querySelector('a[href^="/"]') === a;
+	__dom.matches = a.matches('[href="/x"]');
+	const img = document.createElement('img');
+	img.setAttributeNS(null, 'src', '/pages/echo.json?ns');
+	document.body.append(img);
+	__dom.nsView = img.getAttribute('src');
+	const parsed = new DOMParser().parseFromString(
+		'<img src="/pages/echo.json?parsed">',
+		'text/html',
+	);
+	document.body.append(parsed.body.firstChild);
+	document.body.append(
+		document
+			.createRange()
+			.createContextualFragment('<img src="/pages/echo.json?fragment">'),
+	);
+	setTimeout(() => {
+		__dom.requests = performance
+			.getEntriesByType('resource')
+			.map((e) => e.name);
+		__dom.done = true;
+	}, 1500);
+</script>

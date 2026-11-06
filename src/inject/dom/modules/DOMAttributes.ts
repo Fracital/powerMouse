@@ -88,6 +88,34 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				[['*', name]],
 			);
 
+		// SVG references (sprites, images, filters) by href or legacy
+		// xlink:href. SVG node names keep their case, and the fragment stays
+		const svgHook = (attribute: string) => (element: CustomElement) => {
+			element.restoreAttributesOG(attribute);
+			if (!element.hasAttribute(attribute)) return;
+			const value = element.getAttribute(attribute)!;
+			if (value === '' || value.startsWith('#')) return;
+			element.setAttributeOG(attribute, value);
+			element.setAttribute(
+				attribute,
+				routeBinary(
+					new StompURL(
+						new URL(value, this.client.url.toString()),
+						this.client.url,
+					),
+				),
+			);
+		};
+		for (const attribute of ['href', 'xlink:href'])
+			domHooksModule.useAttributes(
+				svgHook(attribute),
+				// live SVG elements keep their case; the page loader clones them as
+				// HTML elements first, whose nodeName is upper case
+				['use', 'image', 'feImage', 'mpath', 'textPath']
+					.flatMap((tag) => [tag, tag.toUpperCase()])
+					.map((tag): [string, string] => [tag, attribute]),
+			);
+
 		// browsing context names that would leave the frame: a top-level page
 		// navigates itself for these, so does a proxied one. `_blank` and
 		// names stay native (popups) until a host opts into onOpen

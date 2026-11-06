@@ -5,5 +5,5 @@
 </script>
 <iframe
 	id="f"
-	srcdoc="<img id='i' src='/pages/echo.json'><script>parent.__sd.result = [top === parent, document.getElementById('i').outerHTML]</script>"
+	srcdoc="<img id='i' src='/pages/echo.json'><script>setTimeout(() => { parent.__sd.result = [top === parent, performance.getEntriesByType('resource').map((e) => e.name).join(' ')]; }, 800)</script>"
 ></iframe>

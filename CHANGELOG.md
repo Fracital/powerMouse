@@ -83,6 +83,13 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- Frameworks that read the DOM back see what the page wrote:
+  `getAttributeNames`, `hasAttribute`, `Element.attributes` and `Attr.value`
+  hide the proxy's marker attributes, `innerHTML` / `outerHTML` serialise the
+  page's own URLs, and attribute selectors (`a[href^="/"]`) match the page's
+  values. `setAttributeNS`, `toggleAttribute`, `setAttributeNode`, SVG
+  `href` / `xlink:href` and nodes from `DOMParser` or
+  `createContextualFragment` are routed like everything else.
 - Rules added with `insertRule`, constructable stylesheets (`replace` /
   `replaceSync`, `adoptedStyleSheets`) and `FontFace` sources are rewritten;
   CSS-in-JS and font loaders fetched from the proxy origin. The text of a
@@ -253,6 +260,9 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- `href.baseVal` on SVG elements and `getSVGDocument()` are not spoofed;
+  `script.textContent` returns the rewritten source for scripts the page
+  inserted itself.
 - `getComputedStyle` / `getPropertyValue` return routed `url()` values;
   `CSSRule.cssText` assignment and the Typed OM are not rewritten.
 - Nested destructuring patterns (`{ a: { top } }`) and function parameter

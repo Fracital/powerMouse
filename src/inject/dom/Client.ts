@@ -40,6 +40,9 @@ export function setGlobalParsingState(
 
 export default class DocumentClient extends Client {
 	private write: typeof document.write;
+	// native innerHTML, taken before the hooks: the page-facing getter folds
+	// the markers back, which is the opposite of what the written page needs
+	private innerHTML: (element: Element) => string;
 	private baseURIDescriptor: PropertyDescriptor;
 	private parentDescriptor: PropertyDescriptor;
 	private topDescriptor: PropertyDescriptor;
@@ -49,6 +52,11 @@ export default class DocumentClient extends Client {
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		this.write = this.global.document.write;
+		const innerHTMLGet = Reflect.getOwnPropertyDescriptor(
+			this.global.Element.prototype,
+			'innerHTML',
+		)!.get!;
+		this.innerHTML = (element) => Reflect.apply(innerHTMLGet, element, []);
 		this.baseURIDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.global.Node.prototype,
 			'baseURI',
@@ -141,7 +149,7 @@ export default class DocumentClient extends Client {
 
 		const newDocument =
 			(parsed.doctype ? `<!DOCTYPE ${parsed.doctype.name}>` : '') +
-			node.innerHTML;
+			this.innerHTML(node);
 
 		// jump out of the DOM "write stream" so we can start loading our own HTML
 		setTimeout(() => {

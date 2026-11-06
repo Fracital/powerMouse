@@ -182,6 +182,8 @@ function isAttributeHook(
  * Provides a framework for hooking elements
  */
 export default class DOMHooksModule extends Module<DocumentClient> {
+	/** markup of an element as the page wrote it (markers folded back) */
+	serializeOriginal!: (element: Element, outer: boolean) => string;
 	private hooks: {
 		hook: AttributeHook | PropertyHook;
 		callback: HookCallback;
@@ -246,7 +248,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			});
 		}
 	}
-	private updateAttributeHooks(element: CustomElement, attribute: string) {
+	updateAttributeHooks(element: CustomElement, attribute: string) {
 		for (const entry of this.hooks) {
 			if (
 				!isAttributeHook(entry.hook) ||
@@ -534,10 +536,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			configurable: true,
 			get: proxyModule.wrapFunction(
 				innerHTMLDescriptor.get!,
-				(target, that, args) => {
-					// todo
-					return Reflect.apply(target, that, args);
-				},
+				(target, that: Element) => this.serializeOriginal(that, false),
 			),
 			set: proxyModule.wrapFunction(
 				innerHTMLDescriptor.set!,
@@ -577,10 +576,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			configurable: true,
 			get: proxyModule.wrapFunction(
 				outerHTMLDescriptor.get!,
-				(target, that, args) => {
-					// todo
-					return Reflect.apply(target, that, args);
-				},
+				(target, that: Element) => this.serializeOriginal(that, true),
 			),
 			set: proxyModule.wrapFunction(
 				outerHTMLDescriptor.set!,
@@ -606,6 +602,199 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							return element.getAttribute(attribute);
 						}
 					});
+				},
+			);
+
+		// What the page reads back must be what it wrote: the marker attributes
+		// (`s_o:*`) never show, values come from the markers, and markup is
+		// serialised from a copy with the markers folded back in.
+		const isMarker = (name: unknown) =>
+			typeof name === 'string' && name.startsWith(ORIGINAL_ATTRIBUTE);
+
+		this.client.global.Element.prototype.hasAttribute =
+			proxyModule.wrapFunction(
+				this.client.global.Element.prototype.hasAttribute,
+				(target, that, args) =>
+					isMarker(args[0]) ? false : Reflect.apply(target, that, args),
+			);
+
+		this.client.global.Element.prototype.getAttributeNames =
+			proxyModule.wrapFunction(
+				this.client.global.Element.prototype.getAttributeNames,
+				(target, that, args) =>
+					(Reflect.apply(target, that, args) as string[]).filter(
+						(name) => !isMarker(name),
+					),
+			);
+
+		// Attr.value: the page's value when the element keeps one for it
+		const attrValue = (attr: Attr, native: string | null) => {
+			const owner = attr.ownerElement;
+			if (!owner) return native;
+			return usePrototype(owner, CustomElement.prototype, (element) =>
+				element.hasAttributeOG(attr.name)
+					? element.getAttributeOG(attr.name)
+					: native,
+			);
+		};
+		for (const [proto, property] of [
+			[this.client.global.Attr.prototype, 'value'],
+			[this.client.global.Node.prototype, 'nodeValue'],
+		] as const) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(proto, property)!;
+			Reflect.defineProperty(proto, property, {
+				...descriptor,
+				get: proxyModule.wrapFunction(descriptor.get!, (target, that, args) => {
+					const native = Reflect.apply(target, that, args);
+					return that instanceof this.client.global.Attr
+						? attrValue(that, native)
+						: native;
+				}),
+			});
+		}
+
+		// Element.attributes: a view of the map without the markers
+		const attributeMaps = new WeakMap<NamedNodeMap, NamedNodeMap>();
+		const attributesDescriptor = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Element.prototype,
+			'attributes',
+		)!;
+		Reflect.defineProperty(this.client.global.Element.prototype, 'attributes', {
+			...attributesDescriptor,
+			get: proxyModule.wrapFunction(
+				attributesDescriptor.get!,
+				(target, that, args) => {
+					const map: NamedNodeMap = Reflect.apply(target, that, args);
+					if (!attributeMaps.has(map)) {
+						const visible = () =>
+							[...map].filter((attr) => !isMarker(attr.name));
+						attributeMaps.set(
+							map,
+							new Proxy(map, {
+								get: (map, key) => {
+									if (key === 'length') return visible().length;
+									if (typeof key === 'string' && /^\d+$/.test(key))
+										return visible()[Number(key)];
+									if (key === 'item')
+										return (index: number) => visible()[index] ?? null;
+									if (key === 'getNamedItem')
+										return (name: string) =>
+											isMarker(name) ? null : map.getNamedItem(name);
+									if (key === Symbol.iterator)
+										return function* () {
+											yield* visible();
+										};
+									const value = Reflect.get(map, key);
+									return typeof value === 'function' ? value.bind(map) : value;
+								},
+								has: (map, key) =>
+									typeof key === 'string' && /^\d+$/.test(key)
+										? Number(key) < visible().length
+										: Reflect.has(map, key),
+								ownKeys: (map) => [
+									...visible().map((_, i) => String(i)),
+									...Reflect.ownKeys(map).filter(
+										(key) => typeof key !== 'string' || !/^\d+$/.test(key),
+									),
+								],
+							}),
+						);
+					}
+					return attributeMaps.get(map)!;
+				},
+			),
+		});
+
+		// markup as the page wrote it: a copy with every marker folded back
+		const serializeOriginal = (element: Element, outer: boolean): string =>
+			usePrototype(element, nativeElement, (native) => {
+				const clone = native.cloneNode(true) as Element;
+				return usePrototype(clone, nativeElement, (clone) => {
+					for (const node of [clone, ...clone.querySelectorAll('*')])
+						usePrototype(node, nativeElement, (node) => {
+							for (const name of node.getAttributeNames())
+								if (isMarker(name)) {
+									node.setAttribute(
+										name.slice(ORIGINAL_ATTRIBUTE.length),
+										node.getAttribute(name)!,
+									);
+									node.removeAttribute(name);
+								}
+						});
+					return outer ? clone.outerHTML : clone.innerHTML;
+				});
+			});
+		this.serializeOriginal = serializeOriginal;
+
+		// attribute selectors match the page's values: `[href="/x"]` is
+		// `[s_o:href="/x"]` on a rewritten element, `[href="/x"]` on one that
+		// was never rewritten
+		const SELECTOR_ATTRIBUTE =
+			/\[\s*([A-Za-z_][\w-]*)\s*(?:([~|^$*]?=)\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\]\s]+)\s*([isIS])?)?\s*\]/g;
+		const marker = ORIGINAL_ATTRIBUTE.replace(':', '\\:');
+		const rewriteSelector = (selector: unknown): string =>
+			String(selector).replace(
+				SELECTOR_ATTRIBUTE,
+				(match, name, op = '', value = '', flag = '') => {
+					const rest = op ? `${op}${value}${flag ? ` ${flag}` : ''}` : '';
+					return `:is([${marker}${name}${rest}],[${name}${rest}]:not([${marker}${name}]))`;
+				},
+			);
+		for (const proto of [
+			this.client.global.Element.prototype,
+			this.client.global.Document.prototype,
+			this.client.global.DocumentFragment.prototype,
+		])
+			for (const method of [
+				'querySelector',
+				'querySelectorAll',
+				'matches',
+				'closest',
+			] as const) {
+				const native = (proto as any)[method];
+				if (typeof native !== 'function') continue;
+				(proto as any)[method] = proxyModule.wrapFunction(
+					native,
+					(target, that, args) => {
+						if (args.length) args[0] = rewriteSelector(args[0]);
+						return Reflect.apply(target, that, args);
+					},
+				);
+			}
+
+		// the other ways to set an attribute all end in the same hooks
+		this.client.global.Element.prototype.setAttributeNS =
+			proxyModule.wrapFunction(
+				this.client.global.Element.prototype.setAttributeNS,
+				(target, that: Element, args) => {
+					Reflect.apply(target, that, args);
+					usePrototype(that, CustomElement.prototype, (element) =>
+						this.updateAttributeHooks(element, String(args[1])),
+					);
+				},
+			);
+		this.client.global.Element.prototype.toggleAttribute =
+			proxyModule.wrapFunction(
+				this.client.global.Element.prototype.toggleAttribute,
+				(target, that: Element, args) => {
+					const result = Reflect.apply(target, that, args);
+					usePrototype(that, CustomElement.prototype, (element) =>
+						this.updateAttributeHooks(element, String(args[0])),
+					);
+					return result;
+				},
+			);
+		this.client.global.Element.prototype.setAttributeNode =
+			proxyModule.wrapFunction(
+				this.client.global.Element.prototype.setAttributeNode,
+				(target, that: Element, args) => {
+					const name = (args[0] as Attr)?.name;
+					const result = Reflect.apply(target, that, args);
+					if (name)
+						usePrototype(that, CustomElement.prototype, (element) =>
+							this.updateAttributeHooks(element, name),
+						);
+					return result;
 				},
 			);
 

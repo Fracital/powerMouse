@@ -12,7 +12,11 @@ import DOMAttributesModule, {
 	scriptType,
 	shouldRewriteScript,
 } from './DOMAttributes';
-import { CustomElement, nativeElement, nativeNode } from './DOMHooks';
+import DOMHooksModule, {
+	CustomElement,
+	nativeElement,
+	nativeNode,
+} from './DOMHooks';
 
 export const nativeHTMLElement: HTMLElement = Object.create(nativeElement);
 export const nativeHTMLStyleElement: HTMLStyleElement =
@@ -299,6 +303,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		}
 
 		const domAttributesModule = this.client.getModule(DOMAttributesModule)!;
+		const domHooksModule = this.client.getModule(DOMHooksModule)!;
 
 		const insert = <T>(
 			insert: Node,
@@ -313,6 +318,29 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			const willConnect = that
 				? usePrototype(that, nativeNode, (node) => node.isConnected)
 				: false;
+
+			// nodes the hooks never saw (DOMParser, createContextualFragment,
+			// importNode, another document): route their attributes now
+			if (willConnect)
+				usePrototype(insert, nativeNode, (node) => {
+					if (node.nodeType !== 1 && node.nodeType !== 11) return;
+					const elements: Element[] = [];
+					if (node.nodeType === 1) elements.push(insert as Element);
+					usePrototype(
+						insert,
+						getSupportedQueryInterface(node) ?? nativeNode,
+						(queryable) => {
+							if ('querySelectorAll' in queryable)
+								elements.push(...(queryable as Element).querySelectorAll('*'));
+						},
+					);
+					for (const element of elements)
+						usePrototype(element, CustomElement.prototype, (element) => {
+							for (const name of element.getAttributeNames())
+								if (!name.startsWith('s_o:') && !element.hasAttributeOG(name))
+									domHooksModule.updateAttributeHooks(element, name);
+						});
+				});
 
 			// we're about to render
 			usePrototype(insert, nativeNode, (node) => {
