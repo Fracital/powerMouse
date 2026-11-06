@@ -21,6 +21,29 @@ export const TRANSPORT_INIT = '$stomp$transportInit';
  * when the host opted in with `onOpen` (config `openTab`)
  */
 export const OPEN_TAB = '$stomp$open';
+/**
+ * the service worker telling every window that a proxied origin's storage
+ * changed, so the other documents of that origin can fire `storage` events
+ */
+export const STORAGE_EVENT = '$stomp$storageEvent';
+/**
+ * global set by the bootstrap of a worker started from a blob: URL: the
+ * URL of the page that made it, which is what its relative URLs mean
+ */
+export const WORKER_BASE = '$stomp$workerBase';
+
+export interface StorageChange {
+	store: string;
+	origin: string;
+	/** null when the store was cleared */
+	key: string | null;
+	oldValue: string | null;
+	newValue: string | null;
+	/** the document that made the change, which must not hear about it */
+	sender?: string;
+	/** that document's URL, for StorageEvent.url */
+	url?: string;
+}
 
 export interface ControllerInitMessage {
 	directory: string;

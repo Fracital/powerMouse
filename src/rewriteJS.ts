@@ -524,9 +524,15 @@ export function modifyJS(
 		}
 
 		return (
+			// a module worker has no importScripts: fetch the bundle and run it
+			// as the classic script it is (indirect eval, top-level await)
 			(isWorker
 				? `if (!globalThis.createClient)
-	importScripts(${JSON.stringify(injectWorkerJS(url))});
+	${
+		type === 'workerModule'
+			? `(0, eval)(await (await fetch(${JSON.stringify(injectWorkerJS(url))})).text());`
+			: `importScripts(${JSON.stringify(injectWorkerJS(url))});`
+	}
 
 if (!(${JSON.stringify(CLIENT_KEY)} in globalThis))
 	createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});

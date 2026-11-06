@@ -1,0 +1,21 @@
+<!doctype html>
+<title>STORAGE</title>
+<script>
+	window.__st = { events: [] };
+	addEventListener('storage', (event) => {
+		__st.events.push([
+			event.key,
+			event.oldValue,
+			event.newValue,
+			event.storageArea === localStorage,
+			event.url,
+		]);
+	});
+	if (location.hash === '#writer')
+		setTimeout(() => {
+			localStorage.setItem('k', 'v1');
+			localStorage.setItem('k', 'v2');
+			localStorage.removeItem('k');
+			__st.wrote = true;
+		}, 2000);
+</script>

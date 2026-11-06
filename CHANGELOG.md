@@ -83,6 +83,14 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- `BroadcastChannel` names, Cache API caches and the origin private file
+  system are partitioned by proxied origin.
+- `storage` events fire in the other documents of a proxied origin when
+  localStorage changes (never in the writer, never across origins).
+- Workers started from `blob:` URLs, module workers, `SharedWorker` and
+  `Worklet.addModule` work through the proxy; module workers lost their
+  inject to a missing `importScripts`, and blob workers could not be read by
+  the service worker.
 - Frameworks that read the DOM back see what the page wrote:
   `getAttributeNames`, `hasAttribute`, `Element.attributes` and `Attr.value`
   hide the proxy's marker attributes, `innerHTML` / `outerHTML` serialise the
@@ -271,9 +279,8 @@ Fixed while testing real sites and a feature fixture:
   sandbox and the cross-origin boundary contain it; in same-origin mode it can
   reach the real `top`, which is one more reason that mode is not a security
   boundary.
-- Workers created from `blob:` URLs are routed through the service worker,
-  which cannot read a page's blob URLs; such workers fail to start. Workers
-  loaded over HTTP work, including WebSockets from inside them.
+- The code of a `blob:` worker runs with the worker hooks but is not itself
+  rewritten; worklet modules get no inject.
 - Transports, as tested against `wisp-js` 0.5.2 with or without Stomp in the
   path: epoxy 3.0.2 handles HTTP well but stops delivering incoming WebSocket
   frames after the first round trip; libcurl 2.0.6 handles WebSockets but

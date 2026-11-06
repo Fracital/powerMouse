@@ -1,5 +1,18 @@
 import { IDBPDatabase, openDB } from 'idb';
+import { STORAGE_EVENT, StorageChange } from '../transport/messages';
 import Router, { jsonAPI } from './Router';
+
+declare const clients: Clients | undefined;
+
+/** tell every window about a change; each document decides if it cares */
+async function broadcast(change: StorageChange) {
+	if (typeof clients === 'undefined') return;
+	const windows = await clients.matchAll({
+		type: 'window',
+		includeUncontrolled: true,
+	});
+	for (const client of windows) client.postMessage({ [STORAGE_EVENT]: change });
+}
 
 interface ItemEntry {
 	item: string;
@@ -31,16 +44,49 @@ export default class Storage {
 			return undefined;
 		}
 	}
-	async setItem(origin: string, item: string, value: string): Promise<void> {
+	async setItem(
+		origin: string,
+		item: string,
+		value: string,
+		sender?: string,
+		url?: string,
+	): Promise<void> {
+		const oldValue = (await this.getItem(origin, item)) ?? null;
 		await this.db.put(this.store, {
 			item,
 			value,
 			origin,
 			key: this.resolveKey(origin, item),
 		} as ItemEntry);
+		if (oldValue !== value)
+			broadcast({
+				store: this.store,
+				origin,
+				key: item,
+				oldValue,
+				newValue: value,
+				sender,
+				url,
+			});
 	}
-	async removeItem(origin: string, item: string): Promise<void> {
+	async removeItem(
+		origin: string,
+		item: string,
+		sender?: string,
+		url?: string,
+	): Promise<void> {
+		const oldValue = (await this.getItem(origin, item)) ?? null;
 		await this.db.delete(this.store, this.resolveKey(origin, item));
+		if (oldValue !== null)
+			broadcast({
+				store: this.store,
+				origin,
+				key: item,
+				oldValue,
+				newValue: null,
+				sender,
+				url,
+			});
 	}
 	async getKeys(origin: string): Promise<string[]> {
 		return (
@@ -51,10 +97,20 @@ export default class Storage {
 			)
 		).map(({ item }: ItemEntry) => item);
 	}
-	async clear(origin: string): Promise<void> {
-		for (const key of await this.getKeys(origin)) {
-			this.removeItem(origin, key);
-		}
+	async clear(origin: string, sender?: string, url?: string): Promise<void> {
+		const keys = await this.getKeys(origin);
+		for (const key of keys)
+			await this.db.delete(this.store, this.resolveKey(origin, key));
+		if (keys.length)
+			broadcast({
+				store: this.store,
+				origin,
+				key: null,
+				oldValue: null,
+				newValue: null,
+				sender,
+				url,
+			});
 	}
 }
 

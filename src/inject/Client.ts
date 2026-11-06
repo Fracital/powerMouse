@@ -4,7 +4,11 @@ import { codecType, Config, parseConfig, ParsedConfig } from '../config';
 import { CLIENT_KEY } from '../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../routeURL';
 import StompURL from '../StompURL';
-import { INIT_REMOTE_TRANSPORT, TRANSPORT_INIT } from '../transport/messages';
+import {
+	INIT_REMOTE_TRANSPORT,
+	TRANSPORT_INIT,
+	WORKER_BASE,
+} from '../transport/messages';
 import RemoteTransport from '../transport/RemoteTransport';
 import Module from './Module';
 
@@ -34,6 +38,7 @@ export default class Client {
 	// pristine copies taken before modules hook them: the Navigator module
 	// removes navigator.serviceWorker from proxied pages
 	#serviceWorkerContainer?: ServiceWorkerContainer;
+	#portPostMessage?: PostMessage;
 	#serviceWorkerPostMessage?: PostMessage;
 	#workerPostMessage?: PostMessage;
 	/**
@@ -55,8 +60,10 @@ export default class Client {
 				`${location.origin}${this.directory}`,
 			).url;
 		} else {
+			// a worker started from a blob: URL belongs to the page that made it
+			const base = (this.global as Record<string, unknown>)[WORKER_BASE];
 			return new StompURL(
-				location.toString(),
+				typeof base === 'string' ? base : location.toString(),
 				this.codec,
 				`${location.origin}${this.directory}`,
 			);
@@ -78,6 +85,9 @@ export default class Client {
 		)?.serviceWorker;
 		this.#serviceWorkerPostMessage = (
 			global.ServiceWorker as typeof ServiceWorker | undefined
+		)?.prototype.postMessage as PostMessage | undefined;
+		this.#portPostMessage = (
+			global.MessagePort as typeof MessagePort | undefined
 		)?.prototype.postMessage as PostMessage | undefined;
 		this.#workerPostMessage = (global.Worker as typeof Worker | undefined)
 			?.prototype.postMessage as PostMessage | undefined;
@@ -132,9 +142,35 @@ export default class Client {
 		return channel.port1;
 	}
 	/**
+	 * Messages the service worker posts to this document (storage changes),
+	 * on the container kept from before the page lost `navigator.serviceWorker`.
+	 */
+	onServiceWorkerMessage(listener: (data: unknown) => void) {
+		const container = this.#serviceWorkerContainer;
+		if (!container) return;
+		container.addEventListener('message', (event) =>
+			listener((event as MessageEvent).data),
+		);
+		container.startMessages?.();
+	}
+	/**
 	 * Hand a freshly constructed dedicated worker its own transport port.
 	 * The worker's inject bundle resolves it from the TRANSPORT_INIT message.
 	 */
+	/** the same, for a SharedWorker's port (the worker hears it on connect) */
+	provisionPortTransport(port: MessagePort) {
+		try {
+			const transport = this.requestTransportPort();
+			this.#portPostMessage!.call(port, { [TRANSPORT_INIT]: true }, [
+				transport,
+			]);
+		} catch (error) {
+			console.warn(
+				'Stomp: could not provision a transport for a shared worker',
+				error,
+			);
+		}
+	}
 	provisionWorkerTransport(worker: Worker) {
 		try {
 			const port = this.requestTransportPort();

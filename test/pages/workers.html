@@ -1,0 +1,55 @@
+<!doctype html>
+<title>WORKERS</title>
+<script>
+	window.__wk = {};
+	const record = (event) => {
+		__wk[event.data[0]] = event.data[1];
+	};
+	try {
+		const blob = new Blob(
+			[
+				"fetch('/pages/echo.json').then((r) => r.json()).then((j) => postMessage(['blob', j.ok]));",
+			],
+			{ type: 'text/javascript' },
+		);
+		const w = new Worker(URL.createObjectURL(blob));
+		w.onmessage = record;
+		w.onerror = (e) => {
+			__wk.blob = 'error ' + e.message;
+		};
+	} catch (e) {
+		__wk.blob = 'threw ' + e.message;
+	}
+	try {
+		const m = new Worker('/pages/modworker.js', { type: 'module' });
+		m.onmessage = record;
+		m.onerror = (e) => {
+			__wk.module = 'error ' + e.message;
+		};
+	} catch (e) {
+		__wk.module = 'threw ' + e.message;
+	}
+	try {
+		const s = new SharedWorker('/pages/shared.js');
+		s.port.onmessage = record;
+		s.onerror = (e) => {
+			__wk.shared = 'error ' + e.message;
+		};
+	} catch (e) {
+		__wk.shared = 'threw ' + e.message;
+	}
+	(CSS.paintWorklet
+		? CSS.paintWorklet.addModule('/pages/paint.js')
+		: Promise.reject(new Error('no paint worklet'))
+	).then(
+		() => {
+			__wk.worklet = true;
+		},
+		(e) => {
+			__wk.worklet = 'error ' + e.message;
+		},
+	);
+	setTimeout(() => {
+		__wk.done = true;
+	}, 5000);
+</script>

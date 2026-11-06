@@ -1,3 +1,4 @@
+import { STORAGE_EVENT, StorageChange } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule, {
 	catchRequiredArguments,
@@ -18,6 +19,9 @@ export default class StorageModule extends Module<DocumentClient> {
 		let building = true;
 
 		const getOrigin = () => this.client.url.url.origin;
+		// this document, so it never hears its own changes
+		const sender = Math.random().toString(36).slice(2);
+		const here = () => this.client.url.toString();
 
 		const storageKeys = (directory: string): string[] => {
 			return syncModule.jsonAPI(
@@ -36,7 +40,12 @@ export default class StorageModule extends Module<DocumentClient> {
 				this.#directory = directory;
 			}
 			clear(): void {
-				syncModule.jsonAPI(`${this.#directory}clear`);
+				syncModule.jsonAPI(
+					`${this.#directory}clear`,
+					getOrigin(),
+					sender,
+					here(),
+				);
 			}
 			getItem(...args: [unknown]): string | null {
 				catchRequiredArguments(args.length, 1, 'Storage', 'getItem');
@@ -76,7 +85,13 @@ export default class StorageModule extends Module<DocumentClient> {
 
 				const item = String(args[0]);
 
-				syncModule.jsonAPI(`${this.#directory}removeItem`, getOrigin(), item);
+				syncModule.jsonAPI(
+					`${this.#directory}removeItem`,
+					getOrigin(),
+					item,
+					sender,
+					here(),
+				);
 			}
 			setItem(...args: [unknown, unknown]): void {
 				catchRequiredArguments(args.length, 2, 'Storage', 'setItem');
@@ -89,6 +104,8 @@ export default class StorageModule extends Module<DocumentClient> {
 					getOrigin(),
 					item,
 					value,
+					sender,
+					here(),
 				);
 			}
 		}
@@ -216,6 +233,33 @@ export default class StorageModule extends Module<DocumentClient> {
 		);
 
 		building = false;
+
+		// changes made by the other documents of this origin arrive from the
+		// service worker; the area must be our own object, which the event's
+		// dictionary would reject, so it is set on the event afterwards
+		this.client.onServiceWorkerMessage((data) => {
+			const change = (data as Record<string, StorageChange> | null)?.[
+				STORAGE_EVENT
+			];
+			if (
+				!change ||
+				change.sender === sender ||
+				change.origin !== getOrigin() ||
+				change.store !== 'localStorage'
+			)
+				return;
+			const event = new this.client.global.StorageEvent('storage', {
+				key: change.key,
+				oldValue: change.oldValue,
+				newValue: change.newValue,
+				url: change.url ?? here(),
+			});
+			Reflect.defineProperty(event, 'storageArea', {
+				value: localStorage,
+				configurable: true,
+			});
+			this.client.global.dispatchEvent(event);
+		});
 
 		// constructor becomes equivalent to constructor() when building = false
 		this.client.global.Storage = <{ new (): StorageProxy }>globalStorageProxy;
