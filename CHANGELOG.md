@@ -70,6 +70,12 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- epoxy comes from the Fracital forks (`Fracital/EpoxyTransport` built on
+  `Fracital/epoxy-tls` and `Fracital/hyper-util-wasm`): the HTTP/2 client
+  accepts response header blocks up to 256 KiB like Chrome instead of hyper's
+  16 KiB default, which reset YouTube and other header-heavy sites with
+  `PROTOCOL_ERROR`. Installed from git with a committed build, so no Rust
+  toolchain is needed.
 - The synchronous bridge throws a `QuotaExceededError` at once when the
   browser refuses its beacon (payloads over 64 KiB, such as a large
   `localStorage.setItem`), instead of spinning until the wall-clock limit
@@ -201,14 +207,13 @@ Fixed while testing real sites and a feature fixture:
   stops answering HTTP after roughly 70 requests with its default pool and
   roughly 160 with a larger one, which breaks any page that fans out that many
   assets. The demo defaults to epoxy and raises libcurl's pool when selected.
-- epoxy's HTTP/2 client (hyper) resets any response whose header block is
-  larger than 16 KiB with `PROTOCOL_ERROR`, and its `header_limit` option
-  does not change that. YouTube answers a `HeadlessChrome` user agent with a
-  7 KB `connection-allowlist-report-only` header on top of its 6 KB CSP
-  report, a 20 KB block, so https://www.youtube.com/ fails through epoxy from
-  headless Chrome (a regular Chrome user agent gets a 12 KB block and works,
-  locally and on stomp.fracit.al). libcurl is unaffected; a headless harness
-  can pass `--user-agent` with a regular Chrome string.
+- The published epoxy-transport (hyper's HTTP/2 client) resets any response
+  whose header block is larger than 16 KiB with `PROTOCOL_ERROR`, and its
+  `header_limit` option does not change that. YouTube answers a
+  `HeadlessChrome` user agent with a 7 KB `connection-allowlist-report-only`
+  header on top of its 6 KB CSP report, a 20 KB block. This project installs
+  the Fracital fork (256 KiB, Chrome parity) instead, so YouTube renders here;
+  anything still on the npm package, Fracital included, hits it.
 - Import maps are not supported: bare specifiers (`import "react"`) are
   resolved against the module URL.
 - Synchronous XMLHttpRequest and the synchronous storage/cookie bridge spin
