@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process';
 import { watch } from 'node:fs';
 import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -9,6 +10,20 @@ const dev = process.argv.includes('--dev');
 // where `npm run dev`'s demo server listens; each finished rebuild is reported
 // to it so the page can reload what changed (demo/public/pm/dev.js)
 const devPort = parseInt(process.env.PORT || '') || 8080;
+
+function buildId() {
+	try {
+		const sha = execSync('git rev-parse --short HEAD', {
+			stdio: ['ignore', 'pipe', 'ignore'],
+		})
+			.toString()
+			.trim();
+		if (sha) return `${pkg.version}+${sha}`;
+	} catch {
+		// not a git checkout (an npm tarball, a stage dir without .git)
+	}
+	return `${pkg.version}+${Date.now().toString(36)}`;
+}
 
 const snapshot = resolve('src/inject/snapshot.ts');
 const domSnapshot = resolve('src/inject/dom/snapshot.ts');
@@ -25,6 +40,10 @@ const common = {
 	outdir: 'dist',
 	define: {
 		'process.env.STOMP_VERSION': JSON.stringify(pkg.version),
+		// build id for the version pin between the service worker, the inject
+		// bundles and the controller: the version plus the commit, or the time
+		// when this is not a git checkout
+		'process.env.STOMP_BUILD': JSON.stringify(buildId()),
 		'process.env.NODE_ENV': JSON.stringify(dev ? 'development' : 'production'),
 	},
 };
