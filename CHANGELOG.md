@@ -31,6 +31,11 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- Frames dispatch a `navigate` event (and controllers take `onNavigate`)
+  whenever the proxied page loads, changes its URL through pushState /
+  hashchange or changes its title, with whether its own history can step;
+  the controller-frame poll is now a fallback (`pollInterval: 0` disables
+  it).
 - `onOpen(url, frame)` on `StompController` and `RemoteController`: a proxied
   page's `window.open`, `target="_blank"` and named-target or modifier clicks
   become a callback to the host, which opens them in its own tab model; the

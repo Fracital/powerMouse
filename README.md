@@ -53,6 +53,7 @@ changelog's known limitations before picking one.
 | Member                      | Description                                                                                                                                                                                                                                                                      |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `new StompController(init)` | `init.serviceworker`, `init.transport`, optional `codec`, `directory`                                                                                                                                                                                                            |
+| `init.onNavigate`           | optional `onNavigate(info, frame)`: the page reported where it is (`{ url, title, canGoBack, canGoForward }`); also dispatched as a `navigate` CustomEvent on the frame                                                                                                          |
 | `init.onOpen`               | optional `onOpen(url, frame)`: called when a page wants a new tab (`window.open`, a link with `target="_blank"` or a name, a modifier or middle click); the page's `window.open` then returns `null`, like a popup blocker. Without it popups open natively as bare proxied tabs |
 | `wait()`                    | resolves when the service worker has a server for this controller                                                                                                                                                                                                                |
 | `createFrame(iframe?)`      | returns a `Frame`; creates an `<iframe>` when none is given                                                                                                                                                                                                                      |
@@ -62,14 +63,15 @@ changelog's known limitations before picking one.
 
 `Frame`:
 
-| Member                       | Description                                                                                                                      |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `go(url)`                    | navigate the frame to `url` through the proxy                                                                                    |
-| `back()` / `forward()`       | step the frame's own history; resolves to `false` when there is no entry in that direction (never walks the host page's history) |
-| `canGoBack` / `canGoForward` | whether the frame's own history has an entry in that direction; `null` when the browser has no Navigation API                    |
-| `reload()`                   | reload the proxied page                                                                                                          |
-| `url`                        | the real URL of the page the frame shows, or `null`                                                                              |
-| `element`                    | the underlying `<iframe>`                                                                                                        |
+| Member                                    | Description                                                                                                                      |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `go(url)`                                 | navigate the frame to `url` through the proxy                                                                                    |
+| `back()` / `forward()`                    | step the frame's own history; resolves to `false` when there is no entry in that direction (never walks the host page's history) |
+| `canGoBack` / `canGoForward`              | whether the frame's own history has an entry in that direction; `null` when the browser has no Navigation API                    |
+| `reload()`                                | reload the proxied page                                                                                                          |
+| `url`                                     | the real URL of the page the frame shows, or `null`                                                                              |
+| `navigate` event, `title`, `lastNavigate` | the page's own reports (load, pushState, hashchange, title changes); no polling needed                                           |
+| `element`                                 | the underlying `<iframe>`                                                                                                        |
 
 `SearchBuilder(template)` turns free text into a URL: hosts and URLs pass
 through, everything else is substituted into `template` at `%s`.
@@ -82,6 +84,7 @@ frame on the proxy origin:
 | Member                        | Description                                                                                                                        |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `new RemoteController(init)`  | `init.proxyOrigin`, `init.transport` (`{ module, options }`), optional `directory`, `codec`, `sandbox`, `pollInterval`             |
+| `init.onNavigate`             | as on `StompController`; the reports arrive from the proxy origin and are accepted only from this controller's own frames          |
 | `init.onOpen`                 | as on `StompController`: the request reaches the host from the proxy origin and is accepted only from this controller's own frames |
 | `wait()`                      | resolves once the controller frame has registered the service worker and loaded the transport                                      |
 | `createFrame(iframe?)`        | returns a `RemoteFrame`; applies the sandbox attribute                                                                             |
