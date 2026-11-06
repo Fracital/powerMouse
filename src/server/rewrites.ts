@@ -10,6 +10,7 @@ import { modifyHTML, modifyRefresh, routeHTML } from '../rewriteHTML';
 import { modifyJS, routeJS, ScriptType } from '../rewriteJS';
 import { parseRoutedURL, routeBinary } from '../routeURL';
 import StompURL from '../StompURL';
+import { decodeDocument, utf8ContentType } from './charset';
 import Cookies from './Cookies';
 import {
 	AdditionalFilter,
@@ -227,10 +228,19 @@ export function registerRewrites(
 		/^\/html\//,
 		genericForward(
 			rewriter,
-			async (url, response, responseHeaders) =>
-				htmlMimes.includes(
-					getMime(responseHeaders.get('content-type') || ''),
-				) && modifyHTML(await response.text(), url, rewriter.config),
+			async (url, response, responseHeaders) => {
+				const contentType = responseHeaders.get('content-type');
+				if (!htmlMimes.includes(getMime(contentType || ''))) return false;
+				// decode the way the browser would have (BOM, header charset,
+				// <meta charset>), then serve the rewritten document as UTF-8
+				const bytes = new Uint8Array(await response.arrayBuffer());
+				responseHeaders.set('content-type', utf8ContentType(contentType));
+				return modifyHTML(
+					decodeDocument(bytes, contentType),
+					url,
+					rewriter.config,
+				);
+			},
 			(resource, url) => routeHTML(resource, url, rewriter.config),
 			undefined,
 			(headers, filteredHeaders, url) => {

@@ -83,11 +83,20 @@ export default function cloneRawNode(
 						}
 					}
 
-					const max = d[0].childNodes.length;
+					// a template's children live in its content fragment, not in
+					// childNodes; clone them into the new template's fragment
+					const isTemplate = d[0].nodeName === 'TEMPLATE';
+					const children = isTemplate
+						? (d[0] as HTMLTemplateElement).content.childNodes
+						: d[0].childNodes;
+					const parent = isTemplate
+						? (target as HTMLTemplateElement).content
+						: target;
+					const max = children.length;
 					for (let i = 0; i < max; i++) {
 						// append in reverse order
-						const child = d[0].childNodes[max - i - 1];
-						stack.push([STACK_ITERATE, child, target]);
+						const child = children[max - i - 1];
+						stack.push([STACK_ITERATE, child, parent]);
 					}
 
 					stack.push([STACK_FINALIZE, d[1], target]);

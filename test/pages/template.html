@@ -1,0 +1,17 @@
+<!doctype html><title>TEMPLATE</title>
+<template id="t"
+	><p class="x">one</p>
+	<p class="x">two</p></template
+>
+<div id="out"></div>
+<script>
+	const t = document.getElementById('t');
+	window.__tpl = {
+		contentChildren: t.content.querySelectorAll('.x').length,
+		cloned: (() => {
+			const c = document.importNode(t.content, true);
+			document.getElementById('out').append(c);
+			return document.querySelectorAll('#out .x').length;
+		})(),
+	};
+</script>
