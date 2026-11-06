@@ -4,8 +4,9 @@
 // over postMessage. Proxied content is shown in sandboxed, cross-origin
 // frames the host page can neither read nor be read by.
 import type { Config, ConfigCodec } from '../config';
+import type { NavigateInfo } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
-import { openRequest } from './index';
+import { navigateReport, openRequest } from './index';
 import {
 	FrameBound,
 	FrameCommand,
@@ -37,6 +38,13 @@ export interface RemoteControllerInit {
 	 * natively as bare proxied tabs.
 	 */
 	onOpen?: (url: string, frame: RemoteFrame) => void;
+	/**
+	 * Called whenever a proxied page reports where it is (load, pushState,
+	 * hashchange, title change); the same information arrives as a
+	 * `navigate` CustomEvent on the RemoteFrame (`event.detail`). The poll
+	 * (`pollInterval`) stays as a fallback and can be disabled with 0.
+	 */
+	onNavigate?: (info: NavigateInfo, frame: RemoteFrame) => void;
 }
 
 export const DEFAULT_SANDBOX =
@@ -92,14 +100,19 @@ export class RemoteController {
 				this.rpc.receive(event.data);
 				return;
 			}
-			// an open request from one of our proxied frames
-			if (!init.onOpen) return;
-			const url = openRequest(event.data);
-			if (url === null) return;
+			// a report or an open request from one of our proxied frames
 			const frame = this.frames.find(
 				(frame) => frame.element.contentWindow === event.source,
 			);
-			if (frame) init.onOpen(url, frame);
+			if (!frame) return;
+			const navigate = navigateReport(event.data);
+			if (navigate) {
+				frame.report(navigate);
+				init.onNavigate?.(navigate, frame);
+				return;
+			}
+			const url = openRequest(event.data);
+			if (url !== null && init.onOpen) init.onOpen(url, frame);
 		});
 
 		(document.body || document.documentElement).append(this.element);
@@ -171,8 +184,13 @@ export class RemoteController {
 	}
 }
 
-export class RemoteFrame {
-	/** last known real URL of the page, refreshed by the controller's poll */
+/**
+ * A proxied frame on the proxy origin. Dispatches `navigate` (CustomEvent,
+ * `detail` is a NavigateInfo) whenever the page reports a new URL, title or
+ * history state; the fields below follow the reports and the poll.
+ */
+export class RemoteFrame extends EventTarget {
+	/** last known real URL of the page, from the page's reports and the poll */
 	url: string | null = null;
 	/** last known document title */
 	title: string | null = null;
@@ -185,12 +203,21 @@ export class RemoteFrame {
 		public element: HTMLIFrameElement,
 		sandbox: string,
 	) {
+		super();
 		element.setAttribute('sandbox', sandbox);
 		element.setAttribute('referrerpolicy', 'no-referrer');
 	}
 	async go(url: string) {
 		this.element.src = await this.controller.route(url);
 		this.url = url;
+	}
+	/** @internal */
+	report(info: NavigateInfo) {
+		this.url = info.url;
+		this.title = info.title;
+		this.canGoBack = info.canGoBack;
+		this.canGoForward = info.canGoForward;
+		this.dispatchEvent(new CustomEvent('navigate', { detail: info }));
 	}
 	/**
 	 * Step the frame's own history, relayed through the controller frame.

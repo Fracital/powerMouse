@@ -6,6 +6,8 @@ import {
 	CONTROLLER_RPC,
 	Controllerbound,
 	ControllerInitMessage,
+	NAVIGATE,
+	NavigateInfo,
 	OPEN_TAB,
 	postToPort,
 	SW_REVIVE,
@@ -23,6 +25,7 @@ export type { Config, ConfigCodec } from '../config';
 export { RemoteController, RemoteFrame, DEFAULT_SANDBOX } from './remote';
 export type { RemoteControllerInit } from './remote';
 export type { TransportDescriptor, FrameInfo } from './messages';
+export type { NavigateInfo } from '../transport/messages';
 
 export interface ControllerInit {
 	/** the registered (and ideally active) Stomp service worker */
@@ -45,6 +48,12 @@ export interface ControllerInit {
 	 * natively as bare proxied tabs.
 	 */
 	onOpen?: (url: string, frame: Frame) => void;
+	/**
+	 * Called whenever a proxied page reports where it is (load, pushState,
+	 * hashchange, title change); the same information arrives as a
+	 * `navigate` CustomEvent on the Frame (`event.detail`).
+	 */
+	onNavigate?: (info: NavigateInfo, frame: Frame) => void;
 	/** @internal pages may post open requests; set by the controller frame */
 	openTab?: boolean;
 	/**
@@ -54,6 +63,21 @@ export interface ControllerInit {
 	 * `window.open(url, '_top')` navigate the host page. `null` disables it.
 	 */
 	sandbox?: string | null;
+}
+
+/** a navigate report posted by a proxied page, else null */
+export function navigateReport(data: unknown): NavigateInfo | null {
+	if (typeof data !== 'object' || data === null) return null;
+	const info = (data as Record<string, unknown>)[NAVIGATE];
+	if (typeof info !== 'object' || info === null) return null;
+	const { url, title, canGoBack, canGoForward } = info as NavigateInfo;
+	if (typeof url !== 'string' || typeof title !== 'string') return null;
+	return {
+		url,
+		title,
+		canGoBack: typeof canGoBack === 'boolean' ? canGoBack : null,
+		canGoForward: typeof canGoForward === 'boolean' ? canGoForward : null,
+	};
 }
 
 /** the URL of an open request posted by a proxied page, else null */
@@ -112,17 +136,22 @@ export class StompController {
 			...(init.onOpen || init.openTab ? { openTab: true } : {}),
 		};
 
-		if (init.onOpen)
-			window.addEventListener('message', (event) => {
-				// only our own frames, same origin as this page in this mode
-				if (event.origin !== location.origin) return;
-				const url = openRequest(event.data);
-				if (url === null) return;
-				const frame = this.frames.find(
-					(frame) => frame.element.contentWindow === event.source,
-				);
-				if (frame) init.onOpen!(url, frame);
-			});
+		window.addEventListener('message', (event) => {
+			// only our own frames, same origin as this page in this mode
+			if (event.origin !== location.origin) return;
+			const frame = this.frames.find(
+				(frame) => frame.element.contentWindow === event.source,
+			);
+			if (!frame) return;
+			const navigate = navigateReport(event.data);
+			if (navigate) {
+				frame.report(navigate);
+				init.onNavigate?.(navigate, frame);
+				return;
+			}
+			const url = openRequest(event.data);
+			if (url !== null && init.onOpen) init.onOpen(url, frame);
+		});
 
 		this.ready = new Promise((resolve) => (this.readyResolve = resolve));
 
@@ -205,13 +234,34 @@ export class StompController {
 	}
 }
 
-export class Frame {
+/**
+ * A proxied frame. Dispatches `navigate` (CustomEvent, `detail` is a
+ * NavigateInfo) whenever the page reports a new URL, title or history state.
+ */
+export class Frame extends EventTarget {
+	/** the last report from the page, if any */
+	lastNavigate: NavigateInfo | null = null;
 	constructor(
 		public controller: StompController,
 		public element: HTMLIFrameElement,
 		sandbox: string | null = DEFAULT_SANDBOX,
 	) {
+		super();
 		if (sandbox !== null) element.setAttribute('sandbox', sandbox);
+	}
+	/** @internal */
+	report(info: NavigateInfo) {
+		this.lastNavigate = info;
+		this.dispatchEvent(new CustomEvent('navigate', { detail: info }));
+	}
+	/** the last title the page reported, else the document's */
+	get title(): string | null {
+		if (this.lastNavigate) return this.lastNavigate.title;
+		try {
+			return this.element.contentDocument?.title ?? null;
+		} catch {
+			return null;
+		}
 	}
 	async go(url: string) {
 		this.element.src = await this.controller.route(url);

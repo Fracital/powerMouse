@@ -84,9 +84,17 @@ export default class DocumentClient extends Client {
 	 * opted in (`config.openTab`); returns whether it was sent.
 	 */
 	openInHost(url: string): boolean {
-		if (!this.config.openTab || !this.topPostMessage) return false;
+		if (!this.config.openTab) return false;
+		return this.postToHost({ [OPEN_TAB]: url });
+	}
+	/**
+	 * Post to the host application through the real top's postMessage taken
+	 * before any page code ran; returns whether it was sent.
+	 */
+	postToHost(message: object): boolean {
+		if (!this.topPostMessage) return false;
 		try {
-			Reflect.apply(this.topPostMessage, this.top, [{ [OPEN_TAB]: url }, '*']);
+			Reflect.apply(this.topPostMessage, this.top, [message, '*']);
 			return true;
 		} catch (error) {
 			return false;

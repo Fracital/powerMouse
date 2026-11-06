@@ -27,6 +27,21 @@ export const OPEN_TAB = '$stomp$open';
  */
 export const STORAGE_EVENT = '$stomp$storageEvent';
 /**
+ * a proxied page telling the host application where it is now (on load,
+ * pushState / replaceState, hashchange, popstate and title changes); posted
+ * to the real top window, the host matches the source to one of its frames
+ */
+export const NAVIGATE = '$stomp$navigate';
+
+export interface NavigateInfo {
+	/** the real URL the page shows */
+	url: string;
+	title: string;
+	/** whether the frame's own history has an entry in that direction; null without the Navigation API */
+	canGoBack: boolean | null;
+	canGoForward: boolean | null;
+}
+/**
  * global set by the bootstrap of a worker started from a blob: URL: the
  * URL of the page that made it, which is what its relative URLs mean
  */
@@ -48,6 +63,8 @@ export interface StorageChange {
 export interface ControllerInitMessage {
 	directory: string;
 	config: Config;
+	/** the controller bundle's build id (src/version.ts) */
+	build: string;
 }
 
 export interface InitRemoteTransportMessage {
@@ -69,7 +86,7 @@ export type SWbound = {
 
 /** implemented by the controller, called by the SW */
 export type Controllerbound = {
-	ready: [];
+	ready: [{ build: string }];
 	initRemoteTransport: [MessagePort];
 };
 

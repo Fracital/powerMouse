@@ -13,6 +13,7 @@ import FramingModule from './modules/Framing';
 import HistoryModule from './modules/History';
 import IFrameModule from './modules/IFrame';
 import LocationModule from './modules/Location';
+import NavigateModule from './modules/Navigate';
 import NavigatorModule from './modules/Navigator';
 import OpenModule from './modules/Open';
 import StorageModule from './modules/Storage';
@@ -39,6 +40,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(FramingModule);
 	client.addModule(ContextModule);
 	client.addModule(OpenModule);
+	client.addModule(NavigateModule);
 }
 
 const createDOMClient = createClientFactory(DocumentClient, addClientModules);
