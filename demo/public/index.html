@@ -8,6 +8,16 @@
 		<title>powerMouse</title>
 		<link rel="stylesheet" href="/pm/main.css" />
 		<script src="/config.js"></script>
+		<script>
+			// npm run dev only: live reload client (the server sets dev in config)
+			if (window.STOMP_CONFIG && window.STOMP_CONFIG.dev)
+				document.head.append(
+					Object.assign(document.createElement('script'), {
+						type: 'module',
+						src: '/pm/dev.js',
+					}),
+				);
+		</script>
 		<script src="/stomp/Controller.js"></script>
 		<script src="/stomp/SearchBuilder.js"></script>
 	</head>

@@ -31,6 +31,13 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- `npm run dev` is a live-reload development loop: esbuild watch plus the
+  demo server in one command, a `/__dev` WebSocket that reconnects forever,
+  stylesheets swapped in place, inject rebuilds reloading the proxied frames,
+  service worker rebuilds applied through `registration.update()` without a
+  page reload (same-origin mode), server restarts and host-page bundles
+  reloading the page, and an esbuild error overlay. Development only
+  (`STOMP_DEV`).
 - Frames dispatch a `navigate` event (and controllers take `onNavigate`)
   whenever the proxied page loads, changes its URL through pushState /
   hashchange or changes its title, with whether its own history can step;

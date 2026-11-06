@@ -32,6 +32,37 @@ Environment variables:
 They can also live in a `.env` file next to `package.json` (not committed);
 the server reads it at startup. The page gets what it needs from `/config.js`.
 
+## Developing
+
+```sh
+npm run dev            # esbuild watch + this server with live reload
+```
+
+`scripts/dev.mjs` runs `node build.js --dev` and the server under
+`node --watch` (`STOMP_DEV=1`, `WISP_ALLOW_LOOPBACK=1`, `PORT` as given) in
+one terminal. In this mode the server opens a WebSocket at `/__dev`, `build.js`
+POSTs every finished rebuild to `/__dev/changed` (loopback only), `demo/public`
+is watched, and `/config.js` carries `dev: true` plus the server's
+`startedAt`. `index.html` then loads `/pm/dev.js`, which reconnects forever
+(250 ms doubling to 5 s, with jitter) and applies what arrives:
+
+| Change                                    | What the page does                                                                                                                                                                    |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a stylesheet under `/pm/`                 | swaps the `<link>` in place, no navigation                                                                                                                                            |
+| any other file in `demo/public`           | reloads the page                                                                                                                                                                      |
+| `injectDocument.js`, `injectWorker.js`    | reloads every proxied frame                                                                                                                                                           |
+| `serviceWorker.js`                        | same origin: `registration.update()`, waits for the new worker to activate, points the controller at it and reloads the frames (identical bytes: nothing). Isolated: reloads the page |
+| `Controller.js`, `controllerFrame.*`, ... | reloads the page                                                                                                                                                                      |
+| the server restarted (new `startedAt`)    | reloads the page once it reconnects                                                                                                                                                   |
+| an esbuild error                          | fixed overlay with the message, cleared by the next clean build of that bundle                                                                                                        |
+
+Every step prints a `Dev` console badge ("css swapped main.css", "service
+worker updated, 2 frames reloaded", "reconnected after 2.0 s").
+`window.__stompDev.state` shows the connection, pending errors and the last
+event. Editing `demo/server.js` restarts the server. None of this exists in
+production: without `STOMP_DEV` the server serves no `/__dev`, `config.js`
+has no `dev`, and `dev.js` is never fetched.
+
 ## What the server does
 
 `demo/server.js` is an Express app plus a [wisp](https://github.com/MercuryWorkshop/wisp-protocol)
@@ -138,6 +169,7 @@ demo/
 │   └── pm/
 │       ├── main.css    Powermouse-derived styling
 │       ├── main.js     controller wiring and UI behaviour
+│       ├── dev.js      live reload client, npm run dev only
 │       ├── noise.png, header-background.png, logo.png
 └── README.md
 ```

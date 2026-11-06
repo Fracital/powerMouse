@@ -96,6 +96,19 @@ let controller;
 const tabs = [];
 let activeTab = null;
 
+// hooks for the live reload client (/pm/dev.js, loaded by index.html under
+// `npm run dev` only): it reloads the proxied frames when an inject bundle or
+// the service worker is rebuilt, and needs to know which controller runs
+if (CFG.dev)
+	window.__stompDev = Object.assign(window.__stompDev || {}, {
+		isolated: ISOLATED,
+		tabs: () => tabs,
+		reloadFrames: () => {
+			for (const tab of tabs) tab.frame.reload();
+			return tabs.length;
+		},
+	});
+
 function setStatus(text, error = false) {
 	// the landing line, the live bar and every card's copy of the bar
 	const chips = document.querySelectorAll('.cardLabel .status');

@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint';
 
 export default defineConfig([
 	{
-		ignores: ['dist/', 'lib/', 'node_modules/', 'demo/public/'],
+		ignores: ['dist/', 'lib/', 'node_modules/', 'demo/public/pm/main.js'],
 	},
 	js.configs.recommended,
 	...tseslint.configs.recommended,

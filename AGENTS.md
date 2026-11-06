@@ -63,6 +63,20 @@ npm run format    # prettier --write .
 `npm run check:prose` must all pass before you call a change done. There is
 no unit test suite; see Verification.
 
+### Dev loop
+
+`npm run dev` (`scripts/dev.mjs`) runs the esbuild watch and the demo server
+(`STOMP_DEV=1`, `node --watch`) together with live reload: `build.js` reports
+each rebuild to `POST /__dev/changed`, the server pushes it and `demo/public`
+edits over the `/__dev` WebSocket, and `demo/public/pm/dev.js` applies them
+(css swapped in place, inject bundles reload the proxied frames, the service
+worker is updated and the controller re-handshaked, anything the host page
+runs reloads the page, build errors show an overlay). Every step prints a
+`Dev` console badge and `window.__stompDev.state` holds the client state. All
+of it is gated on `STOMP_DEV`; production serves none of it. Never run the
+watcher against a checkout another process is testing: it rewrites `dist/`
+on every save (use a `git worktree`).
+
 ## Things that will bite you
 
 - **esbuild `inject` replaces free globals.** `src/inject/snapshot.ts` and

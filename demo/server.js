@@ -18,10 +18,15 @@
 //                       or unset runs the same-origin controller (README,
 //                       "Origin isolation")
 //   WISP_ALLOW_LOOPBACK let the built-in wisp reach loopback/private hosts
+//   STOMP_DEV           development mode (`npm run dev` sets it): /__dev is a
+//                       WebSocket that announces rebuilt bundles and edited
+//                       files to the page, which reloads what changed; see
+//                       demo/public/pm/dev.js
+import { watch } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { hostname } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { server as wisp } from '@mercuryworkshop/wisp-js/server';
 import express from 'express';
@@ -42,6 +47,7 @@ try {
 
 const externalWisp = process.env.STOMP_WISP_URL || '';
 const proxyOrigin = process.env.STOMP_PROXY_ORIGIN || '';
+const dev = !!process.env.STOMP_DEV;
 
 // the transports only export their dist entry; serve its directory
 const transportDir = (name) =>
@@ -164,6 +170,9 @@ app.get('/suggestions', (req, res) => {
 const pageConfig = {
 	...(externalWisp && { wisp: externalWisp }),
 	...(process.env.STOMP_PROXY_ORIGIN !== undefined && { proxyOrigin }),
+	// startedAt lets the dev client tell a restarted server from a dropped
+	// connection: a different value on reconnect means new server code
+	...(dev && { dev: true, startedAt: started }),
 };
 app.get('/config.js', (req, res) => {
 	res.set('Cache-Control', 'no-store');
@@ -202,11 +211,60 @@ app.use(
 	),
 );
 
+// Development only: a WebSocket that tells the page what changed. build.js
+// POSTs each finished rebuild here, and demo/public is watched for edits.
+// Nothing of this exists without STOMP_DEV; `ws` comes with wisp-js.
+let devSockets = null;
+if (dev) {
+	const { WebSocketServer } = await import('ws');
+	devSockets = new WebSocketServer({ noServer: true });
+	const broadcast = (event) => {
+		const data = JSON.stringify(event);
+		for (const socket of devSockets.clients)
+			if (socket.readyState === socket.OPEN) socket.send(data);
+	};
+	devSockets.on('connection', (socket) => {
+		socket.send(JSON.stringify({ type: 'hello', startedAt: started }));
+	});
+
+	const loopback = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+	app.post('/__dev/changed', express.json(), (req, res) => {
+		// only the build on this machine gets to reload the page
+		if (!loopback.has(req.socket.remoteAddress)) return res.sendStatus(403);
+		const { outputs = [], errors = 0, messages = [] } = req.body || {};
+		broadcast({ type: 'dist', outputs, errors, messages });
+		res.sendStatus(204);
+	});
+
+	// editors save in bursts (write, rename, chmod): one event per path per burst
+	const pending = new Map();
+	watch(
+		fileURLToPath(new URL('./public/', import.meta.url)),
+		{ recursive: true },
+		(_eventType, filename) => {
+			if (!filename) return;
+			const path = '/' + filename.split(sep).join('/');
+			clearTimeout(pending.get(path));
+			pending.set(
+				path,
+				setTimeout(() => {
+					pending.delete(path);
+					broadcast({ type: 'static', path });
+				}, 50),
+			);
+		},
+	);
+}
+
 const server = createServer(app);
 
 server.on('upgrade', (req, socket, head) => {
 	if (!externalWisp && req.url.startsWith('/wisp/'))
 		wisp.routeRequest(req, socket, head);
+	else if (devSockets && req.url === '/__dev')
+		devSockets.handleUpgrade(req, socket, head, (ws) =>
+			devSockets.emit('connection', ws, req),
+		);
 	else socket.end();
 });
 
@@ -220,6 +278,7 @@ server.on('listening', () => {
 	console.log(`\thttp://${hostname()}:${address.port}`);
 	if (externalWisp) console.log(`Wisp: ${externalWisp}`);
 	if (proxyOrigin) console.log(`Proxy origin: ${proxyOrigin}`);
+	if (dev) console.log('Development mode: live reload on /__dev');
 });
 
 server.listen({ port });
