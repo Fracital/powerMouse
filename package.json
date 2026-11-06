@@ -27,10 +27,11 @@
 		"build": "npm run check && node build.js && tsc -p tsconfig.types.json",
 		"dev": "node build.js --dev",
 		"check": "tsc --noEmit",
-		"lint": "eslint src build.js demo/server.js scripts",
+		"lint": "eslint src build.js demo/server.js scripts test",
 		"format": "prettier --write .",
 		"check:prose": "node scripts/check-prose.mjs",
 		"demo": "node demo/server.js",
+		"test": "node test/run.mjs",
 		"prepack": "npm run build"
 	},
 	"dependencies": {
@@ -62,6 +63,7 @@
 		"eslint-config-prettier": "^10.1.0",
 		"express": "^5.1.0",
 		"globals": "^16.0.0",
+		"playwright-core": "1.65.0",
 		"prettier": "^3.6.0",
 		"rimraf": "^6.0.1",
 		"typescript": "^5.9.0",

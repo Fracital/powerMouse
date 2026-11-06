@@ -174,14 +174,20 @@ vhost and the edge server names are managed by abulxt's ansible
 
 ## Verification
 
-There is no unit test suite. Verify changes against the real thing:
+There is no unit test suite; the browser suites in `test/` are the test
+suite, and they run against the real thing:
 
 1. `npm run build && npm run lint && npx prettier --check .`
-2. `npm run demo` (set `WISP_ALLOW_LOOPBACK=1` to reach fixture servers on
-   127.0.0.1) and drive it with headless Chrome. Playwright-core with the
-   system Chrome works; launch with
+2. `npm test`: every suite in `test/suites/` gets its own demo server
+   (`WISP_ALLOW_LOOPBACK=1`) and fixture site on free ports, so runs never
+   collide with a dev server; four suites run at once by default
+   (`PARALLEL=1` streams one at a time, `npm test -- back escapes` picks
+   suites). It drives the system Chrome through playwright-core with
    `--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost` so any request
-   that bypasses the proxy fails loudly.
+   that bypasses the proxy fails loudly. Suites sharing one server starve
+   each other on its wisp and fail spuriously; never point two at one server.
+   `backwalk` walks real Wikipedia pages and is timing sensitive. It is not in
+   CI (needs Chrome and network on the runner).
 3. Useful probes, in order of cost: a proxied frame's `document.title` and
    element count; `frame.url`; a WebSocket echo against a local `ws` server;
    a fixture site that exercises cookies, headers, redirects, XHR, history,

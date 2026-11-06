@@ -4,3 +4,5 @@
 /.vscode
 # container build output of deploy/epoxy/build.sh
 deploy/epoxy/out/
+# screenshots from SHOTS=1 npm test
+test/out/

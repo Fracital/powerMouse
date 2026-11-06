@@ -37,6 +37,11 @@ The first release after a four-year gap. Everything below is breaking.
   report the same ahead of time. `history.back()` from a frame's first entry
   traverses the joint session history, which navigates the host page (or a
   sibling frame) out from under the application.
+- `npm test` runs the browser suites in `test/` (Playwright on the system
+  Chrome): the demo end to end, Back and history walking, the tab switcher,
+  origin isolation, frame-escape vectors in both modes, and runtime-inserted
+  script rewriting. Each suite gets its own demo server and fixture on free
+  ports; four run at once by default.
 - The demo is a Powermouse-styled host application: landing page with quick
   links, tabs (one `Frame` each) with an address bar that tracks the real
   URL, a transport switch, and an early-Android style navigation bar with a
