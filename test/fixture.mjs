@@ -109,6 +109,12 @@ const PAGES = {
 export function startFixture(port = 8084) {
 	const server = createServer((req, res) => {
 		const path = new URL(req.url, 'http://x').pathname;
+		// the request headers the proxy sent, as JSON (headers suites)
+		if (path === '/echo-headers') {
+			res.setHeader('content-type', 'application/json');
+			res.setHeader('access-control-allow-origin', '*');
+			return res.end(JSON.stringify(req.headers));
+		}
 		const file = /^\/pages\/([\w.-]+)$/.exec(path)?.[1];
 		if (file && existsSync(`${pagesDir}${file}`)) {
 			const ext = file.slice(file.lastIndexOf('.') + 1);
@@ -131,7 +137,9 @@ export function startFixture(port = 8084) {
 		res.end(PAGES[path] ?? '<title>other</title>other');
 	});
 	return new Promise((resolve) => {
-		server.listen(port, '127.0.0.1', () => resolve(server));
+		// every interface, so http://localhost:PORT/ (a second proxied origin
+		// for the suites) answers over ::1 as well as 127.0.0.1
+		server.listen(port, () => resolve(server));
 	});
 }
 

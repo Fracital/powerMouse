@@ -1,0 +1,34 @@
+<!doctype html>
+<title>PARTITION</title>
+<script>
+	window.__part = { received: [] };
+	const me = location.origin;
+	const channel = new BroadcastChannel('shared');
+	channel.onmessage = (event) => __part.received.push(event.data);
+	__part.channelName = channel.name;
+	// keep announcing, so tabs opened later still hear this one
+	const announce = setInterval(() => channel.postMessage(`from ${me}`), 400);
+	setTimeout(() => clearInterval(announce), 12000);
+	(async () => {
+		const cache = await caches.open('shared');
+		await cache.put(`/entry-of-${encodeURIComponent(me)}`, new Response('x'));
+		__part.cacheHas = await caches.has('shared');
+		__part.cacheKeys = await caches.keys();
+		__part.cacheEntries = (await cache.keys()).map(
+			(r) => new URL(r.url).pathname,
+		);
+		const root = await navigator.storage.getDirectory();
+		await root.getFileHandle(`file-of-${encodeURIComponent(me)}`, {
+			create: true,
+		});
+		const entries = [];
+		for await (const name of root.keys()) entries.push(name);
+		__part.opfsEntries = entries;
+	})().catch((error) => {
+		__part.error = String(error);
+	});
+	setTimeout(() => {
+		__part.received = [...new Set(__part.received)];
+		__part.done = true;
+	}, 2500);
+</script>
