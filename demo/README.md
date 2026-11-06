@@ -208,4 +208,7 @@ For your own deployment:
 - The page, its scripts and `/stomp/` are served with `Cache-Control:
 no-cache` so browsers revalidate and CDNs do not pin a stale service worker
   or shell to a new build; the transports and fonts may be cached for a day.
-  The demo also registers with `updateViaCache: 'none'`.
+  The demo also registers with `updateViaCache: 'none'`. Behind Cloudflare,
+  check the zone's Browser Cache TTL: it overrides origin headers unless a
+  cache rule for the host says "respect origin" (stomp.fracit.al and
+  holywisp.fracit.al have one).

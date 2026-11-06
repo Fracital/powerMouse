@@ -378,7 +378,9 @@ export function modifyJS(
 										b.identifier('set2'),
 									),
 									[
-										ctx.node.object,
+										// the object may itself be an unforgeable (`top.location = x`):
+										// rewrite it like get2/call2 do, or set2 receives the real top
+										result(ctx.node.object),
 										propertyArgument,
 										b.arrowFunctionExpression(
 											[

@@ -115,6 +115,14 @@ export function parseDataURI(pathname: string): DataURI {
 
 	if (attributes.includes('base64')) {
 		data = atob(data);
+	} else {
+		// RFC 2397 bodies are percent-encoded (Reddit ships scripts as
+		// data:text/javascript,%7B...); the parser needs the real text
+		try {
+			data = decodeURIComponent(data);
+		} catch {
+			// not valid percent-encoding, keep the raw body
+		}
 	}
 
 	return {
@@ -126,6 +134,8 @@ export function parseDataURI(pathname: string): DataURI {
 
 export function createDataURI(data: DataURI) {
 	return `data:${[data.mime, ...data.attributes].join(';')},${
-		data.attributes.includes('base64') ? btoa(data.data) : data.data
+		data.attributes.includes('base64')
+			? btoa(data.data)
+			: encodeURIComponent(data.data)
 	}`;
 }

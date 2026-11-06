@@ -12,6 +12,29 @@ const QUICK_LINKS = [
 ];
 
 const $ = (id) => document.getElementById(id);
+
+// Console badges, after the two-tone "%c Browser %c ..." lines krunker's
+// dev console prints: a grey label cell and a coloured value cell. The
+// deployment facts (mode, origins, transport, version) go here, not on the
+// page.
+const BADGE_LEFT =
+	'padding: 1px 4px; border-radius: 3px 0 0 3px; color: #fff; background: #606060;';
+const BADGE_RIGHT =
+	'padding: 1px 4px; border-radius: 0 3px 3px 0; color: #fff; background: ';
+const BADGE = {
+	blue: '#1475b2',
+	green: '#2e9e4f',
+	orange: '#f2a20d',
+	red: '#c0392b',
+	grey: '#606060',
+};
+function badge(label, value, color = 'blue') {
+	console.info(
+		`%c ${label} %c ${value} `,
+		BADGE_LEFT,
+		BADGE_RIGHT + (BADGE[color] || color) + ';',
+	);
+}
 const landing = $('landing');
 const browser = $('browser');
 const framesContainer = $('frames');
@@ -117,6 +140,15 @@ async function boot() {
 	const name = preferredTransport();
 	rememberTransport(name);
 
+	badge(
+		'Mode',
+		ISOLATED
+			? `isolated: proxy on ${PROXY_ORIGIN}, host on ${location.origin}`
+			: `same origin (${location.origin}); not a security boundary`,
+		ISOLATED ? 'green' : 'orange',
+	);
+	badge('Transport', `${name} over ${wisp}`);
+
 	if (ISOLATED) {
 		setStatus('Starting controller frame…');
 		controller = new StompRemoteController({
@@ -145,6 +177,7 @@ async function boot() {
 	setStatus('Waiting for the service worker…');
 	await controller.wait();
 	setStatus('Ready');
+	badge('Controller', `ready, codec ${controller.config.codec}`, 'green');
 }
 
 async function switchTransport(name) {
@@ -156,6 +189,7 @@ async function switchTransport(name) {
 			ISOLATED ? descriptor : await instantiate(descriptor),
 		);
 		setStatus('Ready');
+		badge('Transport', `${name} over ${wisp}`);
 	} catch (error) {
 		setStatus(`Transport failed: ${error.message}`, true);
 	}
@@ -376,9 +410,24 @@ let recentsDrag = 0; // horizontal offset while swiping, in px
 let recentsLift = { index: -1, dy: 0 }; // card being swiped up to close
 let recentsCardWidth = 1; // card pitch from the last layout, for snapping
 
+// A card is a scaled preview of the whole browser view: the address bar and
+// the page as one block with the view's own aspect. The block is drawn by two
+// elements that share one transform, because moving an iframe into a wrapper
+// would reload it: the tab's label overlay is the block (its top is a copy of
+// the chrome bar, the rest is transparent) and the frame sits inside the
+// block at the bar's height, scaled along with it. Expanding a card is one
+// transform of the block back to translate(0,0) scale(1): the bar copy lands
+// exactly over the real bar and the frame on its resting box, so nothing
+// moves or resizes when the stage goes away.
+const chromeBar = browser.querySelector('.chrome');
+const chromeHeight = () => chromeBar.offsetHeight || 49;
+const restingTransform = () => `translate(0px, ${chromeHeight()}px) scale(1)`;
+
 function layoutRecents(animated = false) {
 	const vw = innerWidth;
-	const vh = innerHeight - 48; // navigation bar
+	const vh = innerHeight - 48; // the browser view: chrome bar + frame
+	const ch = chromeHeight();
+	const fh = vh - ch; // the frame's resting height
 	const availH = vh - 100 - 220; // top controls, Close all + dock
 	// scale by the available height so cards stay tall; cap the width
 	const k = Math.max(0.15, Math.min(availH / vh, 0.72));
@@ -391,15 +440,17 @@ function layoutRecents(animated = false) {
 	tabs.forEach((tab, i) => {
 		const x = x0 + (i - recentsIndex) * (w + gap) + recentsDrag;
 		const lift = i === recentsLift.index ? recentsLift.dy : 0;
-		const transform = `translate(${x}px, ${y0 + lift}px) scale(${k})`;
+		const y = y0 + lift;
+		const transform = `translate(${x}px, ${y}px) scale(${k})`;
 		// the radius is applied before the scale, so express it in page pixels
 		const radius = `${18 / k}px`;
 		const { element } = tab;
 		element.style.width = `${vw}px`;
-		element.style.height = `${vh}px`;
-		element.style.transform = transform;
+		element.style.height = `${fh}px`;
+		// the frame is the lower part of the block: below the scaled bar
+		element.style.transform = `translate(${x}px, ${y + ch * k}px) scale(${k})`;
 		element.style.borderRadius = radius;
-		element.style.clipPath = `inset(0 round ${radius})`;
+		element.style.clipPath = `inset(0 round 0 0 ${radius} ${radius})`;
 		element.classList.toggle('shade', i !== recentsIndex);
 		element.classList.toggle(
 			'dragging',
@@ -410,8 +461,9 @@ function layoutRecents(animated = false) {
 			? String(Math.max(0, 1 - Math.abs(lift) / h))
 			: '';
 
-		// the label is a full-size overlay with the very same transform, so it
-		// can never fall out of step with the frame while animating
+		// the label is the block itself (bar copy on top, transparent below)
+		// with the block's transform, so it can never fall out of step with the
+		// frame while animating
 		const label = labelFor.get(tab);
 		if (label) {
 			label.style.width = `${vw}px`;
@@ -419,6 +471,7 @@ function layoutRecents(animated = false) {
 			label.style.transform = transform;
 			label.style.borderRadius = radius;
 			label.style.setProperty('--k', String(k));
+			label.style.setProperty('--ch', `${ch}px`);
 			label.style.opacity = lift ? '0' : i === recentsIndex ? '1' : '0.6';
 			label.classList.toggle(
 				'dragging',
@@ -443,8 +496,16 @@ function createLabel(tab) {
 	const hit = document.createElement('div');
 	hit.className = 'hit';
 
+	// a copy of the chrome bar, built from the same classes so it renders
+	// exactly like the real one it will land on: the address box shows the
+	// tab's URL, the status chip its title
+	const chrome = document.createElement('div');
+	chrome.className = 'cardChrome';
+	const url = document.createElement('div');
+	url.className = 'form-text omnibox url';
 	const title = document.createElement('span');
-	title.className = 'title';
+	title.className = 'select title';
+	chrome.append(url, title);
 
 	const close = document.createElement('button');
 	close.className = 'close';
@@ -456,7 +517,7 @@ function createLabel(tab) {
 		closeTab(tab, { stayInRecents: true });
 	});
 
-	label.append(hit, title, close);
+	label.append(hit, chrome, close);
 	label.addEventListener('click', () => {
 		if (recentsSwiped) return;
 		const i = tabs.indexOf(tab);
@@ -486,6 +547,7 @@ function renderRecents(fromFullScreen = false) {
 		}
 		const text = tabTitle(tab);
 		label.querySelector('.title').textContent = text;
+		label.querySelector('.url').textContent = tab.url || '';
 		label.querySelector('.hit').title = text;
 	}
 
@@ -503,13 +565,19 @@ function renderRecents(fromFullScreen = false) {
 		// full screen, the others invisible) so both animate into place together
 		const vw = innerWidth;
 		const vh = innerHeight - 48;
+		const fh = vh - chromeHeight();
+		const rest = restingTransform();
 		for (const tab of tabs) {
 			const label = labelFor.get(tab);
 			label.style.width = `${vw}px`;
 			label.style.height = `${vh}px`;
 			label.style.transform = 'translate(0px, 0px) scale(1)';
 			label.style.setProperty('--k', '1');
+			label.style.setProperty('--ch', `${chromeHeight()}px`);
 			label.style.opacity = tab === activeTab ? '1' : '0';
+			tab.element.style.width = `${vw}px`;
+			tab.element.style.height = `${fh}px`;
+			tab.element.style.transform = rest;
 			if (tab !== activeTab) tab.element.style.opacity = '0';
 		}
 		void recentsLabels.offsetHeight; // flush, so the next layout transitions
@@ -568,19 +636,30 @@ function hideRecents(expand = null) {
 	if (!expand || !tabs.includes(expand)) return teardownRecents();
 
 	recentsClosing = true;
-	document.body.classList.remove('recents-visible'); // controls fade with the card
+	// controls fade with the card. The dock is pinned solid while the manager
+	// was entered from home (it slid out of the tiles); unpin it here, or it
+	// stays put and vanishes when the stage goes instead of fading
+	document.body.classList.remove('recents-visible', 'recents-from-home');
 	const label = labelFor.get(expand);
+	// a frame created while the stage is up (new tab from the dock) has no box
+	// yet: give it the resting one so it lands where the stage will leave it
+	const rest = restingTransform();
 	expand.element.classList.remove('shade', 'dragging');
 	expand.element.style.opacity = '1';
-	expand.element.style.transform = 'translate(0px, 0px) scale(1)';
+	expand.element.style.width = `${innerWidth}px`;
+	expand.element.style.height = `${innerHeight - 48 - chromeHeight()}px`;
+	expand.element.style.transform = rest;
 	expand.element.style.borderRadius = '0px';
 	expand.element.style.clipPath = 'inset(0 round 0px)';
 	if (label) {
 		label.classList.remove('dragging');
+		// the bar copy lands on the real bar: show what the real bar will show
+		label.querySelector('.url').textContent = omni.url.value;
+		label.querySelector('.title').textContent = chromeStatus.textContent;
 		label.style.transform = 'translate(0px, 0px) scale(1)';
 		label.style.borderRadius = '0px';
 		label.style.setProperty('--k', '1');
-		label.style.opacity = '0';
+		label.style.opacity = '1';
 	}
 	// the other cards fade out underneath
 	for (const tab of tabs) if (tab !== expand) tab.element.style.opacity = '0';
@@ -1027,6 +1106,7 @@ for (const [label, url, color] of QUICK_LINKS) {
 }
 
 // server status line: uptime + version
+let loggedVersion = false;
 async function pollStatus() {
 	try {
 		const { uptime, version } = await (await fetch('/api/status')).json();
@@ -1034,8 +1114,11 @@ async function pollStatus() {
 		const m = Math.floor((uptime % 3600) / 60);
 		const s = Math.floor(uptime % 60);
 		$('uptime').textContent = `${h} hours, ${m} minutes, ${s} seconds`;
-		$('version').textContent =
-			`stomp ${version} · ${ISOLATED ? 'isolated' : 'same origin'}`;
+		$('version').textContent = `stomp ${version}`;
+		if (!loggedVersion) {
+			loggedVersion = true;
+			badge('Stomp', `${version}, up ${h}h ${m}m`);
+		}
 	} catch {
 		$('uptime').textContent = 'unavailable';
 	}
@@ -1052,6 +1135,7 @@ booted
 		else mainForm.url.focus();
 	})
 	.catch((error) => {
+		badge('Error', error.message, 'red');
 		console.error(error);
 		setStatus(`Error: ${error.message}`, true);
 	});

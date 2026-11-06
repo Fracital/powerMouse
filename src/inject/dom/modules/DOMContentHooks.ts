@@ -137,15 +137,27 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			}
 		};
 
-		const rewriteScript = (script: HTMLScriptElement) => {
+		// a script element runs once, so rewrite its text once: a rewritten
+		// script that is moved to another parent must not be rewritten again
+		const rewrittenScripts = new WeakSet<HTMLScriptElement>();
+
+		// `willConnect`: the script is about to be inserted into a connected
+		// tree, which is the moment it runs. At that point it is not connected
+		// yet, so the connected check alone would skip every dynamically
+		// inserted inline script and leave it unrewritten.
+		const rewriteScript = (script: HTMLScriptElement, willConnect = false) => {
 			if (
 				!shouldRewriteScript(script) ||
+				rewrittenScripts.has(script) ||
 				(!script.isConnected &&
+					!willConnect &&
 					getGlobalParsingState(this.client.global) !== 'parsingBeforeWrite')
 			) {
 				// eventually we'll catch a connected script
 				return;
 			}
+
+			rewrittenScripts.add(script);
 
 			/*document.currentScript.textContent = ${JSON.stringify(
 				script.textContent
@@ -272,11 +284,16 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// we need to snapshot the childNodes or run a query before its childNodes are cleared
 			const styles: HTMLStyleElement[] = [];
 
+			// scripts inside `insert` run as soon as it lands in a connected tree
+			const willConnect = that
+				? usePrototype(that, nativeNode, (node) => node.isConnected)
+				: false;
+
 			// we're about to render
 			usePrototype(insert, nativeNode, (node) => {
 				if (node.nodeName === 'SCRIPT') {
 					usePrototype(insert, nativeHTMLScriptElement, (script) =>
-						rewriteScript(script),
+						rewriteScript(script, willConnect),
 					);
 				} else {
 					const queryInterface = getSupportedQueryInterface(node);
@@ -291,7 +308,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 							for (const script of queryable.querySelectorAll('script'))
 								usePrototype(script, nativeHTMLScriptElement, (script) =>
-									rewriteScript(script),
+									rewriteScript(script, willConnect),
 								);
 						});
 				}

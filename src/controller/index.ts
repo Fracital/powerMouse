@@ -13,6 +13,7 @@ import {
 import { RpcHelper } from '../transport/rpc';
 import serveTransport from '../transport/serveTransport';
 import { canTraverse, traverse } from './history';
+import { DEFAULT_SANDBOX } from './remote';
 
 export { default as SearchBuilder } from '../bootstrapper/SearchBuilder';
 export type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
@@ -36,6 +37,13 @@ export interface ControllerInit {
 	directory?: urlLike;
 	/** origins allowed to frame proxied documents (CSP frame-ancestors) */
 	frameAncestors?: string[];
+	/**
+	 * sandbox flags for proxied frames, default `DEFAULT_SANDBOX`. Same-origin
+	 * frames are not a security boundary, but without a sandbox the browser
+	 * lets `<a target="_top">`, `<form target="_parent">` and
+	 * `window.open(url, '_top')` navigate the host page. `null` disables it.
+	 */
+	sandbox?: string | null;
 }
 
 /** ignore the service worker's "revive" broadcast this soon after we registered */
@@ -59,6 +67,7 @@ export class StompController {
 	transport: ProxyTransport;
 	frames: Frame[] = [];
 	isReady = false;
+	private sandbox: string | null;
 	private port?: MessagePort;
 	private rpc?: RpcHelper<Controllerbound, SWbound>;
 	private stopServing?: () => void;
@@ -71,6 +80,7 @@ export class StompController {
 
 		this.serviceworker = init.serviceworker;
 		this.transport = init.transport;
+		this.sandbox = init.sandbox === undefined ? DEFAULT_SANDBOX : init.sandbox;
 		this.directory = isUrlLike(init.directory)
 			? new URL(init.directory, location.href)
 			: defaultDirectory();
@@ -159,7 +169,7 @@ export class StompController {
 		return new URL(await this.rpc!.call('route', url), this.directory).href;
 	}
 	createFrame(element: HTMLIFrameElement = document.createElement('iframe')) {
-		const frame = new Frame(this, element);
+		const frame = new Frame(this, element, this.sandbox);
 		this.frames.push(frame);
 		return frame;
 	}
@@ -169,7 +179,10 @@ export class Frame {
 	constructor(
 		public controller: StompController,
 		public element: HTMLIFrameElement,
-	) {}
+		sandbox: string | null = DEFAULT_SANDBOX,
+	) {
+		if (sandbox !== null) element.setAttribute('sandbox', sandbox);
+	}
 	async go(url: string) {
 		this.element.src = await this.controller.route(url);
 	}

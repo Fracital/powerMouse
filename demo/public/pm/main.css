@@ -643,7 +643,7 @@ body {
 .browser {
 	display: flex;
 	flex-direction: column;
-	height: 100%;
+	height: calc(100% - 48px); /* navigation bar, like #landing and the stage */
 }
 
 .frames {
@@ -656,6 +656,7 @@ body {
 	position: absolute;
 	inset: 0;
 	height: 100%;
+	transition: none; /* the universal transition would trail the stage teardown */
 }
 
 .chrome {
@@ -826,7 +827,6 @@ body.recents .frames .frame {
 	left: 0;
 	transform-origin: top left;
 	pointer-events: none;
-	box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
 	transition:
 		transform var(--recents-settle, 0.25s) cubic-bezier(0.2, 0.8, 0.2, 1),
 		opacity 0.25s ease,
@@ -894,9 +894,11 @@ body.recents .frames .frame.shade {
 	background: rgba(255, 255, 255, 0.12);
 }
 
-/* one label per card. It is the frame's size and carries the frame's
-   transform (set from JS), so sizes inside it are divided by the scale
-   factor --k to come out at normal size on screen. */
+/* one label per card. It is the whole browser view's size (chrome bar plus
+   frame) and carries the card's transform (set from JS): its top --ch pixels
+   are a copy of the chrome bar, scaled with the page like a real preview,
+   and the rest is transparent so the frame shows through. Controls that must
+   stay usable at any scale are divided by the scale factor --k. */
 .cardLabel {
 	position: absolute;
 	top: 0;
@@ -905,35 +907,54 @@ body.recents .frames .frame.shade {
 	pointer-events: auto;
 	cursor: pointer;
 	overflow: hidden;
+	box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
 	transition:
 		transform var(--recents-settle, 0.25s) cubic-bezier(0.2, 0.8, 0.2, 1),
 		opacity 0.25s ease,
 		border-radius 0.25s ease;
 }
 
-/* faint shade along the top edge so the title stays legible */
-.cardLabel::before {
-	content: '';
+/* the bar copy: same box, background, padding and controls as .chrome */
+.cardChrome {
 	position: absolute;
 	left: 0;
 	right: 0;
 	top: 0;
-	height: calc(40px / var(--k, 1));
-	background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
+	height: var(--ch, 49px);
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 8px;
+	/* leave the top-right corner to the (unscaled) close button */
+	padding-right: calc(8px + 40px / var(--k, 1));
+	background: #000 url('/pm/header-background.png');
+	border-bottom: 1px solid #b6b6b6;
+	pointer-events: none;
 }
 
-.cardLabel .title {
-	position: absolute;
-	left: calc(14px / var(--k, 1));
-	top: calc(10px / var(--k, 1));
-	right: calc(48px / var(--k, 1));
-	color: #fff;
-	font-size: calc(14px / var(--k, 1));
-	line-height: 1.4;
+.cardChrome .url {
+	flex: 1 1 auto;
+	float: none;
+	width: auto;
+	min-width: 0;
+	height: 36px;
+	box-sizing: border-box;
+	padding: 0 0.75rem;
+	line-height: 36px;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	text-shadow: 0 1px 3px #000;
+}
+
+.cardLabel .title {
+	flex: 0 1 auto;
+	max-width: 40%;
+	height: 28px;
+	box-sizing: border-box;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 .cardLabel .close {

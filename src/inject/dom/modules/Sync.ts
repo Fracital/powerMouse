@@ -8,9 +8,11 @@ import { CookiesModule } from './Cookies';
 
 const statusEmpty: number[] = [101, 204, 205, 304];
 
-// 10 seconds
-const maxCycles = 2e9;
-const maxLoopbackCycles = 2e5;
+// wall-clock limits: the service worker is single threaded, so even a
+// loopback route (cookies, storage) waits while it rewrites a multi-megabyte
+// script, which takes seconds for YouTube's main bundle
+const TIMEOUT = 30e3;
+const LOOPBACK_TIMEOUT = 10e3;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -135,9 +137,10 @@ export default class SyncModule extends Module<DocumentClient> {
 			}),
 		);
 
-		const sMaxCycles = loopback ? maxLoopbackCycles : maxCycles;
+		const timeout = loopback ? LOOPBACK_TIMEOUT : TIMEOUT;
+		const deadline = Date.now() + timeout;
 
-		for (let cycles = 0; cycles < sMaxCycles; cycles++) {
+		for (let cycles = 0; Date.now() < deadline; cycles++) {
 			if (cycles % 3 !== 0) continue;
 
 			const cookie = cookies.cookie;
@@ -176,7 +179,7 @@ export default class SyncModule extends Module<DocumentClient> {
 		}
 
 		throw new RangeError(
-			`Reached max cycles (${sMaxCycles}) when requesting ${url}`,
+			`Reached the ${timeout} ms limit when requesting ${url}`,
 		);
 	}
 }

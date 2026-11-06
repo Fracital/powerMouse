@@ -241,11 +241,14 @@ export function registerRewrites(
 				}
 
 				// the page's own framing policy is gone (it would refuse our frame);
-				// ours only lets the host application embed the proxy origin
+				// ours lets the host application embed the proxy origin, and the
+				// proxy origin embed itself: a proxied page's iframes are proxied
+				// pages too, and every ancestor has to match (YouTube's sign-in
+				// frame was blocked without 'self')
 				if (rewriter.config.frameAncestors?.length)
 					filteredHeaders.set(
 						'content-security-policy',
-						`frame-ancestors ${rewriter.config.frameAncestors.join(' ')}`,
+						`frame-ancestors 'self' ${rewriter.config.frameAncestors.join(' ')}`,
 					);
 
 				if (headers.has('refresh')) {

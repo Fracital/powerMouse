@@ -78,6 +78,52 @@ The first release after a four-year gap. Everything below is breaking.
   step at a time, and Back on the home screen does nothing.
 - Nested frames were given the codec _name_ instead of the codec key when
   their client was created. They now reuse the parent's key.
+- In origin-isolation mode the `frame-ancestors` policy only named the host,
+  so a proxied page's own iframes (also on the proxy origin) were blocked.
+  The policy now includes `'self'`.
+- Setting `textContent` on a Text or Comment node threw
+  `append is not a function` (the hook assumed an element); the native setter
+  now handles nodes without children. Seen on YouTube.
+- `data:` script URLs were rewritten without percent-decoding the body, so
+  Reddit's `data:text/javascript,%7B...` scripts became `SyntaxError: Unexpected
+token '%'`. The body is decoded before rewriting and re-encoded after.
+- The synchronous cookie/storage bridge gave up after a fixed number of spin
+  cycles (about a second); a service worker busy rewriting a large script
+  (YouTube's main bundle takes over two seconds) made `document.cookie` throw.
+  The limit is now wall-clock, 10 s for loopback routes.
+- Inline scripts that a page inserts at runtime (`script.textContent = ...`
+  then `append`, `innerHTML` / `insertAdjacentHTML` with a `<script>`, a
+  text node appended to a script) ran unrewritten: the insertion hook skipped
+  scripts that were not connected yet, which at insertion time is every one
+  of them. They saw the proxy URL in `location` and reached the real `top`.
+  Scripts are now rewritten when the tree they land in is connected, once per
+  element.
+- `top.location = x` (and `top[k] = x`, `top.location ||= x`) handed the
+  rewriter's `set2` the real `top` instead of the spoofed one, so in
+  same-origin mode it navigated the host page to the unproxied URL. The
+  assignment target is now rewritten like reads and calls are.
+- Same-origin `Frame`s had no `sandbox`, so `<a target="_top">`,
+  `<a target="_parent">`, `<form target="_top">` and
+  `window.open(url, '_top')` on a proxied page replaced the host page with
+  the proxied one (reproduced on the demo). `StompController` now applies
+  `DEFAULT_SANDBOX` to every frame it creates; `sandbox: null` in
+  `ControllerInit` opts out. This is hardening, not a security boundary:
+  same-origin frames can still reach the host DOM, and Chrome warns that a
+  sandbox with both `allow-scripts` and `allow-same-origin` can be escaped.
+- The demo's tab switcher expanded a card to the full stage (top of the
+  viewport, above the navigation bar) while the frame rests below the
+  address bar, so the page jumped down by the bar's height and the iframe was
+  resized when the stage went away. A card is now a scaled preview of the
+  whole browser view, address bar included (the tab's URL and title in the
+  bar's own styles), and expanding it is one transform of that block: the
+  bar copy lands on the real bar and the frame on its resting box. The
+  browser view also leaves room for the navigation bar instead of hiding the
+  bottom of every page under it, and the dock buttons fade out when a tab is
+  opened from a switcher that was entered from the home screen (they used to
+  stay put and vanish).
+- The demo prints its deployment facts (mode and origins, transport and wisp
+  endpoint, version, controller state, boot errors) as styled console badges
+  instead of showing the isolation mode on the landing page.
 
 ### Origin isolation
 
@@ -136,14 +182,27 @@ Fixed while testing real sites and a feature fixture:
   stops answering HTTP after roughly 70 requests with its default pool and
   roughly 160 with a larger one, which breaks any page that fans out that many
   assets. The demo defaults to epoxy and raises libcurl's pool when selected.
+- epoxy's HTTP/2 client (hyper) resets any response whose header block is
+  larger than 16 KiB with `PROTOCOL_ERROR`, and its `header_limit` option
+  does not change that. YouTube answers a `HeadlessChrome` user agent with a
+  7 KB `connection-allowlist-report-only` header on top of its 6 KB CSP
+  report, a 20 KB block, so https://www.youtube.com/ fails through epoxy from
+  headless Chrome (a regular Chrome user agent gets a 12 KB block and works,
+  locally and on stomp.fracit.al). libcurl is unaffected; a headless harness
+  can pass `--user-agent` with a regular Chrome string.
 - Import maps are not supported: bare specifiers (`import "react"`) are
   resolved against the module URL.
 - Synchronous XMLHttpRequest and the synchronous storage/cookie bridge spin
   the page's main thread while waiting on the service worker. With the
   transport hosted in the same renderer, a synchronous request that needs the
-  network deadlocks until the spin limit; loopback requests still work but
-  can time out when the service worker is busy rewriting.
+  network deadlocks until the spin limit (30 s); loopback requests wait up to
+  10 s, which covers the service worker rewriting a 10 MB script.
 - Still unproxied or unspoofed: `self.location` inside workers, inline event
-  handler attributes (`onclick="..."`), scripts written into a child frame
-  with `document.write`, `document.referrer` (reports the host page), and
-  `a.pathname` on anchors (reports the page's path).
+  handler attributes (`onclick="..."`), string arguments to `setTimeout` /
+  `setInterval`, `javascript:` URLs, `<iframe srcdoc>`, scripts written into
+  a child frame with `document.write`, and `a.pathname` on anchors (reports
+  the page's path).
+- `target` attributes and the `window.open` target are not rewritten:
+  `_blank` and named targets open the proxied page in a bare new tab outside
+  the host application (the frame sandbox keeps `allow-popups`). `_top` and
+  `_parent` are stopped by the sandbox, not by the rewriter.

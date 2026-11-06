@@ -424,12 +424,17 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			get: textContentDescriptor.get,
 			set: proxyModule.wrapFunction(
 				textContentDescriptor.set!,
-				(target, that: Element, args) => {
+				(target, that: Node, args) => {
+					// only elements and fragments have children to hook (and an
+					// `append`); YouTube sets textContent on Text nodes
+					if (that.nodeType !== 1 && that.nodeType !== 11)
+						return Reflect.apply(target, that, args);
+
 					for (const node of that.childNodes) {
 						node.remove();
 					}
 
-					that.append(new Text(args[0]));
+					(that as Element).append(new Text(args[0]));
 				},
 			),
 		});
