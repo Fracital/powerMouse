@@ -50,58 +50,63 @@ export default class IFrameModule extends Module<DocumentClient> {
 			},
 		);
 
-		const getContentWindowDescriptor = Reflect.getOwnPropertyDescriptor(
-			this.client.global.HTMLIFrameElement.prototype,
-			'contentWindow',
-		)!;
-
 		const windowModule = this.client.getModule(ContextModule)!;
 
-		const getContentWindow = (iframe: HTMLIFrameElement) => {
-			const context = getContentWindowDescriptor.get!.call(iframe) as
-				typeof globalThis | null;
+		// the three elements that embed a document the page can reach: iframe,
+		// the frameset's frame, and object with an HTML or SVG document (embed
+		// exposes none of this)
+		const embedders = [
+			this.client.global.HTMLIFrameElement,
+			this.client.global.HTMLFrameElement,
+			this.client.global.HTMLObjectElement,
+		].filter((ctor) => typeof ctor === 'function');
+		for (const ctor of embedders) {
+			const getContentWindowDescriptor = Reflect.getOwnPropertyDescriptor(
+				ctor.prototype,
+				'contentWindow',
+			);
+			const getContentDocumentDescriptor = Reflect.getOwnPropertyDescriptor(
+				ctor.prototype,
+				'contentDocument',
+			);
+			if (
+				!getContentWindowDescriptor?.get ||
+				!getContentDocumentDescriptor?.get
+			)
+				continue;
 
-			if (context) {
-				injectContext(context);
+			const getContentWindow = (element: Element) => {
+				const context = getContentWindowDescriptor.get!.call(element) as
+					typeof globalThis | null;
 
-				const restricted = windowModule.newRestricted(context);
-				if (!context[CLIENT_KEY]!.applied) {
-					context[CLIENT_KEY]!.apply();
+				if (context) {
+					injectContext(context);
+
+					const restricted = windowModule.newRestricted(context);
+					if (!context[CLIENT_KEY]!.applied) {
+						context[CLIENT_KEY]!.apply();
+					}
+
+					return restricted;
 				}
 
-				return restricted;
-			}
+				return null;
+			};
 
-			return null;
-		};
-
-		Reflect.defineProperty(
-			this.client.global.HTMLIFrameElement.prototype,
-			'contentWindow',
-			{
+			Reflect.defineProperty(ctor.prototype, 'contentWindow', {
 				configurable: true,
 				enumerable: true,
 				get: proxyModule.wrapFunction(
-					Reflect.getOwnPropertyDescriptor(
-						this.client.global.HTMLIFrameElement.prototype,
-						'contentWindow',
-					)!.get!,
+					getContentWindowDescriptor.get,
 					(target, that) => getContentWindow(that),
 				),
-			},
-		);
+			});
 
-		Reflect.defineProperty(
-			this.client.global.HTMLIFrameElement.prototype,
-			'contentDocument',
-			{
+			Reflect.defineProperty(ctor.prototype, 'contentDocument', {
 				configurable: true,
 				enumerable: true,
 				get: proxyModule.wrapFunction(
-					Reflect.getOwnPropertyDescriptor(
-						this.client.global.HTMLIFrameElement.prototype,
-						'contentDocument',
-					)!.get!,
+					getContentDocumentDescriptor.get,
 					(target, that) => {
 						const context = getContentWindow(that);
 
@@ -112,7 +117,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 						return context.document;
 					},
 				),
-			},
-		);
+			});
+		}
 	}
 }

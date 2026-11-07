@@ -1121,7 +1121,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			),
 			[
 				['OBJECT', 'data'],
-				[HTMLObjectElement, 'data', originalURL('data')],
+				[this.client.global.HTMLObjectElement, 'data', originalURL('data')],
 			],
 		);
 

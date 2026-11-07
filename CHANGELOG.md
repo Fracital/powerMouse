@@ -313,6 +313,12 @@ url`) carries its value and targets that window. An about:blank child of
   URL, like the browser; before this the URL was routed and accepted (every
   proxied URL looks same-origin to the browser, so the check is made on the
   real origins).
+- A frameset's `<frame>` and an `<object>` hand the page an injected
+  `contentWindow` / `contentDocument` like an `<iframe>` does (an about:blank
+  frame the page writes into gets the child hooks). An HTML document in an
+  `<object>` or `<embed>` still cannot be proxied: Chrome never routes their
+  loads through a service worker (measured: no request reaches the worker),
+  so the browser fetches the routed URL from the proxy origin directly.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,
