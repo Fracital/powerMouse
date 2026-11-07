@@ -41,7 +41,8 @@ The first release after a four-year gap. Everything below is breaking.
   is not an identifier, a reserved or special word, a global a plain window
   has, used twice, or an unknown key is a `TypeError` from the constructor.
   `DEFAULT_NAMES` and the `HelperNames` type are exported (helper-names
-  suite; the tells fixture takes the names to look for).
+  suite, a StompController and a RemoteController built with random names;
+  the tells fixture takes the names to look for).
 - The transport can run off the host page's thread. `StompController` takes
   a `TransportDescriptor` (`{ module, options }`, what `RemoteController`
   already took) in place of a ProxyTransport instance and starts it in a
