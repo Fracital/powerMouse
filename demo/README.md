@@ -98,12 +98,16 @@ transport, which tunnels through `/wisp/`.
    	transport,
    	directory: '/stomp/',
    	codec: 'xor',
+   	cache: CACHE,
+   	onRequest: recordRequest,
    });
    await controller.wait();
    frame = controller.createFrame(document.getElementById('frame'));
    ```
    `wait()` resolves once the service worker has built a server for this
    controller. The controller is exposed as `window.controller` for devtools.
+   The service worker's HTTP cache is on; `?nocache` on the demo URL turns it
+   off for that visit. `onRequest` feeds the request viewer (below).
 4. **Autocomplete.** Each keystroke in an address bar asks
    `/suggestions?input=...` for public suffixes matching what was typed after
    the last dot (the server loads the public suffix list at startup, with a
@@ -141,6 +145,22 @@ transport, which tunnels through `/wisp/`.
    `frame.forward()`.
 10. **Switching transports** calls `controller.setTransport(...)`. Requests in
     flight finish on the old transport; the next navigation uses the new one.
+11. **Request viewer.** The controller's `onRequest(info)` reports every
+    proxied request; the page keeps the last 300 per tab (matched on
+    `info.frame`, dropped with the tab) and nothing else while the panel is
+    closed. Long-press Recents (500 ms) or press Ctrl+Shift+R in the demo page
+    (not inside a proxied frame) and a panel slides up from above the
+    navigation bar, in the switcher's style, with the active tab's requests,
+    newest first: method, status (0 and the error in red on a transport
+    failure), the real URL (host bold, path dimmed and ellipsised in the
+    middle), destination, time, size and a `cached` tag when the service
+    worker's cache answered. The header names the tab, counts requests, cached
+    and failed, and has Clear. Rows that arrive while the panel is open land
+    on top without moving a list the reader has scrolled. Only the URLs are
+    selectable; clicking one copies it. Back, Escape, the same long press or
+    shortcut close the panel; Home or a short Recents press take it down on
+    their way. The page load itself is reported before the page has a client
+    id (`frame` is null), so it is not attributed to a tab.
 
 Errors from any step land in the status line (`Error: ...`) rather than the
 console only.

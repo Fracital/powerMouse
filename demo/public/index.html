@@ -93,6 +93,26 @@
 			<div class="dock" id="dock"></div>
 		</div>
 
+		<!-- request viewer: the active tab's proxied requests (controller
+		     onRequest), slides up from above the navigation bar. Long-press
+		     Recents or Ctrl+Shift+R; Back or Escape closes it -->
+		<section
+			id="requests"
+			class="requests"
+			aria-label="Requests"
+			aria-hidden="true"
+		>
+			<div class="requestsTop">
+				<span class="requestsTitle" id="requestsTitle">No tab</span>
+				<span class="requestsCount" id="requestsCount"
+					>0 requests · 0 cached · 0 failed</span
+				>
+				<button class="requestsClear" id="requestsClear">Clear</button>
+			</div>
+			<div class="requestsList" id="requestsList"></div>
+			<div class="requestsEmpty" id="requestsEmpty">No requests yet</div>
+		</section>
+
 		<!-- early-Android (Holo) style navigation bar -->
 		<nav class="navbar" aria-label="Navigation">
 			<button id="back" class="navbtn" title="Back" aria-label="Back">

@@ -175,6 +175,8 @@ async function boot() {
 			transport: transports[name](),
 			codec: 'xor',
 			cache: CACHE,
+			// every proxied request, for the request viewer
+			onRequest: recordRequest,
 			// a page's window.open / target=_blank becomes a tab here, never a
 			// bare proxied popup (the page sees null, like a popup blocker)
 			onOpen: (url) => navigate(url, { newTab: true }),
@@ -201,6 +203,8 @@ async function boot() {
 			directory: DIRECTORY,
 			codec: 'xor',
 			cache: CACHE,
+			// every proxied request, for the request viewer
+			onRequest: recordRequest,
 			// a page's window.open / target=_blank becomes a tab here, never a
 			// bare proxied popup (the page sees null, like a popup blocker)
 			onOpen: (url) => navigate(url, { newTab: true }),
@@ -353,6 +357,7 @@ function closeTab(tab, { stayInRecents = false } = {}) {
 	tab.element.remove();
 	labelFor.get(tab)?.remove();
 	labelFor.delete(tab);
+	requestLogs.delete(tab.frame);
 	const frames = controller.frames.indexOf(tab.frame);
 	if (frames !== -1) controller.frames.splice(frames, 1);
 	if (tab === activeTab) activeTab = tabs[Math.max(0, index - 1)] || null;
@@ -1198,6 +1203,265 @@ async function pollStatus() {
 pollStatus();
 setInterval(pollStatus, 10000);
 setInterval(renderUptime, 1000);
+
+// ---- request viewer ---------------------------------------------------------
+// The controller reports every proxied request (onRequest). Closed, the viewer
+// costs one ring buffer push per request: rows are only built while the panel
+// is up, and dropped when it goes down. It shows the active tab's requests,
+// newest first, and slides up from above the navigation bar like the switcher.
+
+const REQUEST_LOG_SIZE = 300;
+const requestsPanel = $('requests');
+const requestsList = $('requestsList');
+const requestsTitle = $('requestsTitle');
+const requestsCount = $('requestsCount');
+const requestsEmpty = $('requestsEmpty');
+
+/** @type {Map<Frame, { entries: object[], total: number, cached: number, failed: number }>} */
+const requestLogs = new Map();
+let requestsTab = null; // the tab whose rows are on screen
+let pendingRequests = []; // reports that arrived while open, rendered next frame
+let requestsFlush = 0;
+
+const requestsOpen = () => requestsPanel.classList.contains('open');
+
+function recordRequest(info) {
+	// the document request itself arrives before the page has a client id
+	// (frame null): nothing to attribute it to
+	if (!info.frame) return;
+	let log = requestLogs.get(info.frame);
+	if (!log) {
+		log = { entries: [], total: 0, cached: 0, failed: 0 };
+		requestLogs.set(info.frame, log);
+	}
+	log.entries.push(info);
+	if (log.entries.length > REQUEST_LOG_SIZE) log.entries.shift();
+	log.total++;
+	if (info.cached) log.cached++;
+	if (info.status === 0) log.failed++;
+	if (!requestsOpen() || !activeTab || activeTab.frame !== info.frame) return;
+	// bursts (a page fanning out its assets) become one DOM update per frame
+	pendingRequests.push(info);
+	if (!requestsFlush) requestsFlush = requestAnimationFrame(flushRequests);
+}
+
+function formatBytes(bytes) {
+	if (bytes === null || bytes === undefined) return '';
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
+	return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function requestRow(info) {
+	const row = document.createElement('div');
+	row.className = info.status === 0 ? 'req failed' : 'req';
+	const cell = (className, text) => {
+		const span = document.createElement('span');
+		span.className = className;
+		span.textContent = text;
+		row.append(span);
+		return span;
+	};
+	cell('method', info.method);
+	cell(`status s${Math.floor(info.status / 100)}`, String(info.status));
+	const url = cell('url', '');
+	url.title = info.url;
+	let parsed = null;
+	try {
+		parsed = new URL(info.url);
+	} catch {}
+	if (parsed) {
+		const host = document.createElement('b');
+		host.className = 'host';
+		host.textContent = parsed.host;
+		// the path is two spans: the head gives way (text-overflow) and the
+		// tail keeps its last characters, so the ellipsis lands in the middle
+		const path = document.createElement('span');
+		path.className = 'path';
+		const rest = parsed.pathname + parsed.search;
+		const cut = Math.max(0, rest.length - 18);
+		const head = document.createElement('span');
+		head.className = 'head';
+		head.textContent = rest.slice(0, cut);
+		const tail = document.createElement('span');
+		tail.className = 'tail';
+		tail.textContent = rest.slice(cut);
+		path.append(head, tail);
+		url.append(host, path);
+	} else url.textContent = info.url;
+	if (info.error) {
+		const error = document.createElement('span');
+		error.className = 'error';
+		error.textContent = info.error;
+		url.append(error);
+	}
+	cell('dest', info.destination || 'fetch');
+	cell('ms', `${Math.round(info.ms)} ms`);
+	cell('size', formatBytes(info.bytes));
+	cell('tag', info.cached ? 'cached' : '');
+	return row;
+}
+
+function renderRequestCounts(log) {
+	const total = log ? log.total : 0;
+	requestsCount.textContent = `${total} request${total === 1 ? '' : 's'} · ${
+		log ? log.cached : 0
+	} cached · ${log ? log.failed : 0} failed`;
+	requestsEmpty.classList.toggle('hidden', !!log && log.entries.length > 0);
+}
+
+function renderRequests() {
+	const tab = activeTab;
+	requestsTab = tab;
+	pendingRequests = [];
+	requestsTitle.textContent = tab ? tabTitle(tab) : 'No tab';
+	requestsList.textContent = '';
+	const log = tab ? requestLogs.get(tab.frame) : null;
+	if (log) {
+		const fragment = document.createDocumentFragment();
+		for (let i = log.entries.length - 1; i >= 0; i--)
+			fragment.append(requestRow(log.entries[i]));
+		requestsList.append(fragment);
+	}
+	requestsList.scrollTop = 0;
+	renderRequestCounts(log);
+}
+
+function flushRequests() {
+	requestsFlush = 0;
+	if (!requestsOpen()) return;
+	// the active tab changed under the panel (a page opened a tab): start over
+	if (requestsTab !== activeTab) return renderRequests();
+	const infos = pendingRequests;
+	pendingRequests = [];
+	if (infos.length) {
+		const fragment = document.createDocumentFragment();
+		for (let i = infos.length - 1; i >= 0; i--)
+			fragment.append(requestRow(infos[i]));
+		const scrolled = requestsList.scrollTop > 0;
+		const height = requestsList.scrollHeight;
+		requestsList.prepend(fragment);
+		// the reader has scrolled down: keep what they are looking at in place
+		if (scrolled) requestsList.scrollTop += requestsList.scrollHeight - height;
+		while (requestsList.childElementCount > REQUEST_LOG_SIZE)
+			requestsList.lastElementChild.remove();
+	}
+	requestsTitle.textContent = requestsTab ? tabTitle(requestsTab) : 'No tab';
+	renderRequestCounts(requestsTab ? requestLogs.get(requestsTab.frame) : null);
+}
+
+function showRequests() {
+	renderRequests();
+	requestsPanel.classList.add('open');
+	requestsPanel.setAttribute('aria-hidden', 'false');
+}
+
+function hideRequests() {
+	if (!requestsOpen()) return;
+	requestsPanel.classList.remove('open');
+	requestsPanel.setAttribute('aria-hidden', 'true');
+	requestsTab = null;
+	pendingRequests = [];
+	// the rows go once the panel has slid away; nothing is kept up to date
+	// while it is closed
+	setTimeout(() => {
+		if (!requestsOpen()) requestsList.textContent = '';
+	}, 300);
+}
+
+const toggleRequests = () => (requestsOpen() ? hideRequests() : showRequests());
+
+$('requestsClear').addEventListener('click', () => {
+	if (requestsTab) requestLogs.delete(requestsTab.frame);
+	pendingRequests = [];
+	requestsList.textContent = '';
+	renderRequestCounts(null);
+});
+
+// nothing in the panel is selectable but the URLs; a click on one copies it
+requestsList.addEventListener('click', (event) => {
+	const url = event.target.closest('.url');
+	if (!url || getSelection().toString()) return; // a drag-select, not a click
+	const flash = () => {
+		url.classList.add('copied');
+		setTimeout(() => url.classList.remove('copied'), 900);
+	};
+	if (navigator.clipboard) {
+		navigator.clipboard.writeText(url.title).then(flash, () => {});
+		return;
+	}
+	// http://192.168.x.x: no clipboard API outside a secure context
+	const range = document.createRange();
+	range.selectNodeContents(url);
+	getSelection().removeAllRanges();
+	getSelection().addRange(range);
+	if (document.execCommand('copy')) flash();
+	getSelection().removeAllRanges();
+});
+
+// A long press on Recents (500 ms) toggles the viewer. Clicks are handled in
+// the capture phase at the document, ahead of the buttons' own handlers: the
+// release after a long press is not a Recents click, Back closes the panel
+// instead of stepping, and Home or a short Recents press take it down on
+// their way to what they do.
+{
+	const recentsButton = $('recents');
+	let timer = 0;
+	let longPressed = false;
+	recentsButton.addEventListener('pointerdown', (event) => {
+		if (event.button !== 0) return;
+		longPressed = false;
+		clearTimeout(timer);
+		timer = setTimeout(() => {
+			longPressed = true;
+			toggleRequests();
+		}, 500);
+	});
+	const cancel = () => clearTimeout(timer);
+	for (const type of ['pointerup', 'pointerleave', 'pointercancel'])
+		recentsButton.addEventListener(type, cancel);
+	// a touch long press would open the context menu
+	recentsButton.addEventListener('contextmenu', (event) =>
+		event.preventDefault(),
+	);
+	document.addEventListener(
+		'click',
+		(event) => {
+			const button = event.target.closest('.navbar .navbtn');
+			if (!button) return;
+			if (button === recentsButton && longPressed) {
+				longPressed = false;
+				event.stopImmediatePropagation();
+				return;
+			}
+			if (!requestsOpen()) return;
+			hideRequests();
+			if (button.id === 'back') event.stopImmediatePropagation();
+		},
+		true,
+	);
+}
+
+// Ctrl+Shift+R toggles the viewer (key events inside a proxied frame never
+// reach this window); Escape closes it before anything else sees the key
+addEventListener(
+	'keydown',
+	(event) => {
+		if (
+			event.ctrlKey &&
+			event.shiftKey &&
+			!event.altKey &&
+			event.code === 'KeyR'
+		) {
+			event.preventDefault(); // Chrome's hard reload
+			toggleRequests();
+		} else if (event.key === 'Escape' && requestsOpen()) {
+			hideRequests();
+			event.stopImmediatePropagation();
+		}
+	},
+	true,
+);
 
 const booted = boot();
 booted
