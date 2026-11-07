@@ -8,6 +8,7 @@ import ProxyModule, {
 } from '../../modules/Proxy';
 import DocumentClient, {
 	getGlobalParsingState,
+	runDocumentOpenListeners,
 	setGlobalParsingState,
 } from '../Client';
 import cloneRawNode, { parseHTMLFragment } from '../cloneNode';
@@ -287,6 +288,27 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		/**
 		 * Etc hooks are here
 		 */
+
+		// document.open() drops every listener on the window: the modules that
+		// listen there (message filter and tagger, link and navigate hooks)
+		// register again. With three arguments it is window.open, which the
+		// hook below handles.
+		const documentOpen = this.client.global.Document.prototype.open;
+		this.client.global.Document.prototype.open = proxyModule.wrapFunction(
+			documentOpen,
+			(target, that, args) => {
+				if (args.length >= 3)
+					return Reflect.apply(
+						this.client.global.open,
+						this.client.global,
+						args,
+					);
+				const result = Reflect.apply(target, that, args);
+				if (that === this.client.global.document)
+					runDocumentOpenListeners(this.client.global);
+				return result;
+			},
+		);
 
 		this.client.global.open = proxyModule.wrapFunction(
 			this.client.global.open,

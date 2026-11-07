@@ -40,7 +40,7 @@ Fixed and covered by a suite unless marked open.
 | Anchor URL parts (`a.pathname`, `a.hostname`) return the page's values                                                                                           | open (CHANGELOG known limitations)                                                                          |
 | XHR `responseType` `json` / `blob` / `document`; `open()` stores the password into `#username`                                                                   | open                                                                                                        |
 | `MockWebSocket` rejects relative URLs, no `http(s)` to `ws(s)` mapping, no HttpOnly cookies on handshakes                                                        | open                                                                                                        |
-| Context's `message` tagger only registered on `document.open()` (about:blank children see the envelope)                                                          | open                                                                                                        |
+| Context's `message` tagger only registered on `document.open()`; a page's own `document.open()` dropped every window hook                                        | fixed (history suite)                                                                                       |
 
 ## 2. Isolation and the "I am the top window" spoof
 
@@ -87,15 +87,15 @@ that is accurate and expected.
 | Dynamically inserted inline scripts, string timers, `on*` handlers, `javascript:` URLs, `srcdoc`       | rewritten (measured)                                                                | rewritten (measured)                 |
 | `const {top: t} = window`, `({top: t} = window)`, `document.location = x`                              | spoofed (measured)                                                                  | spoofed (measured)                   |
 | `opener.top.location = x` from a popup                                                                 | `opener` is null unless a Stomp page opened it                                      | same                                 |
-| `history.back()` at the frame's first entry                                                            | walks the host out                                                                  | browser dependent, not measured      |
-| Page calls `document.open()`                                                                           | drops the message filter and tagger                                                 | same                                 |
+| `history.back()` / `go(-n)` at the frame's first entry, `history.length`                               | stays put, own count (measured)                                                     | same (measured)                      |
+| Page calls `document.open()`                                                                           | window hooks registered again (measured)                                            | same (measured)                      |
+| Host `postMessage` into the frame                                                                      | arrives, unwrapped, as if the page sent it (measured)                               | dropped (measured)                   |
 | `<area href>`                                                                                          | never rewritten; raw URL in the frame                                               | same                                 |
 | `blob:` navigations, `about:blank` popups written with `document.write`                                | unrewritten documents                                                               | same                                 |
 | Nested destructuring (`{ a: { top } }`), function parameter patterns, `Reflect.get(window,'top')`      | raw `top`, stopped only by sandbox                                                  | stopped by sandbox                   |
 
-Open, in order of leverage: hook `History.prototype.back/forward/go` to the
-frame's own entries; `Document.prototype.open` re-registering listeners;
-`area[href]`; `blob:` and `about:blank` documents; nested patterns.
+Open, in order of leverage: `area[href]`; `blob:` and `about:blank`
+documents; nested patterns.
 
 ## 3. JS rewriter
 
@@ -232,8 +232,9 @@ Suites: partition, storage-events, workers, access.
 | Per-worker transport ports (WebSockets inside workers)                                                                             | ahead   |                                                                                          |
 | `self.location` / `self.origin` in workers                                                                                         | missing | known limitation                                                                         |
 | `MessageEvent.source` returns a restricted window                                                                                  | partial |                                                                                          |
-| Message tagger registered in `apply()` not only on `document.open`                                                                 | missing | about:blank frames see the envelope                                                      |
-| `Document.prototype.open` re-registers window listeners                                                                            | missing |                                                                                          |
+| Message tagger registered in `apply()` not only on `document.open`                                                                 | ok      | history suite                                                                            |
+| `Document.prototype.open` re-registers window listeners                                                                            | ok      | three-argument `document.open` goes through the hooked `window.open`                     |
+| `history.length`, `back`, `forward`, `go` scoped to the frame's own entries                                                        | ahead   | Navigation API; scramjet leaves the joint history                                        |
 | `window.open` return value hooked, about:blank popups injected                                                                     | missing |                                                                                          |
 | `opener`                                                                                                                           | ok      | null unless a Stomp page opened the window                                               |
 | `frameElement` returns the real element for nested proxied frames                                                                  | partial | always null                                                                              |
@@ -288,28 +289,25 @@ Suites: navigate-events, request-log, version, cookie-jar, cache, isolation.
 
 ## 10. What is left, by payoff
 
-1. The two remaining isolation holes: `history.back()` bounded to the frame's
-   own entries, and `Document.prototype.open` re-registering the window
-   listeners and the message tagger.
-2. Rewriter gaps: nested and parameter destructuring patterns; an
+1. Rewriter gaps: nested and parameter destructuring patterns; an
    `allowInvalidJs` flag with scramjet's semantics (fail the script by
    default, pass it raw only when asked); `import()` and `import.meta.resolve`
    against the script URL; `debugger` removal.
-3. Documents that escape the rewrite: `area[href]`, `blob:` and `about:blank`
+2. Documents that escape the rewrite: `area[href]`, `blob:` and `about:blank`
    documents, `window.open` return values, import map URLs,
    `iframe[sandbox|csp|credentialless]`.
-4. Missing URL attributes (`frame`, `input`, `track`, `object`, `poster`,
+3. Missing URL attributes (`frame`, `input`, `track`, `object`, `poster`,
    `formaction`, `imagesrcset`, the other SVG `href` carriers),
    `link[rel]` tokenising, `script[type]` recognition.
-5. Reading back: `getComputedStyle` and `getPropertyValue` un-rewrite, Typed
+4. Reading back: `getComputedStyle` and `getPropertyValue` un-rewrite, Typed
    OM, `SVGAnimatedString.baseVal`, `script.textContent`,
    `PerformanceEntry.name`, `Error.prepareStackTrace`, `hashchange` URLs.
-6. Cookies: domain and path boundaries, SameSite, prefixes, HttpOnly on
+5. Cookies: domain and path boundaries, SameSite, prefixes, HttpOnly on
    WebSockets, `cookieStore` removal, seeding `document.cookie` into the page.
-7. The page's own `Referrer-Policy` (needs the document's headers per client).
-8. Cache: heuristic freshness from `Last-Modified`, stale-while-revalidate,
+6. The page's own `Referrer-Policy` (needs the document's headers per client).
+7. Cache: heuristic freshness from `Last-Modified`, stale-while-revalidate,
    stale-if-error.
-9. The Tap: a request hook chain (intercept, request, response) once a second
+8. The Tap: a request hook chain (intercept, request, response) once a second
    consumer beyond `onRequest` exists, and `Frame.hooks.error.request`.
-10. A demo request viewer on `onRequest`; browser suites in CI; scramjet's
-    adversarial corpus ported one file at a time.
+9. A demo request viewer on `onRequest`; browser suites in CI; scramjet's
+   adversarial corpus ported one file at a time.

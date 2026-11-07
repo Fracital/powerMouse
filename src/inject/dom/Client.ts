@@ -12,6 +12,12 @@ type OpenCallback = () => void;
 
 const onDocumentOpen = new WeakMap<typeof globalThis, OpenCallback[]>();
 
+/**
+ * Run `callback` after every `document.open()` on `global`: the one loadHTML
+ * does to write the real page, and any the page does later. Opening a
+ * document removes every listener on the window, so a module that listens
+ * on the window registers through this (and once at install).
+ */
 export function addDocumentOpenListener(
 	global: typeof globalThis,
 	callback: OpenCallback,
@@ -19,6 +25,12 @@ export function addDocumentOpenListener(
 	if (!onDocumentOpen.has(global)) onDocumentOpen.set(global, []);
 
 	return onDocumentOpen.get(global)!.push(callback);
+}
+
+/** @internal the document on `global` was just opened */
+export function runDocumentOpenListeners(global: typeof globalThis) {
+	if (onDocumentOpen.has(global))
+		for (const callback of onDocumentOpen.get(global)!) callback();
 }
 
 type ParsingState = 'parsingBeforeWrite' | void;
@@ -40,6 +52,9 @@ export function setGlobalParsingState(
 
 export default class DocumentClient extends Client {
 	private write: typeof document.write;
+	// native document.open: the hooked one runs the open listeners, which
+	// loadHTML does itself
+	private open: typeof document.open;
 	// native innerHTML, taken before the hooks: the page-facing getter folds
 	// the markers back, which is the opposite of what the written page needs
 	private innerHTML: (element: Element) => string;
@@ -52,6 +67,7 @@ export default class DocumentClient extends Client {
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		this.write = this.global.document.write;
+		this.open = this.global.document.open;
 		const innerHTMLGet = Reflect.getOwnPropertyDescriptor(
 			this.global.Element.prototype,
 			'innerHTML',
@@ -161,9 +177,8 @@ export default class DocumentClient extends Client {
 
 		// jump out of the DOM "write stream" so we can start loading our own HTML
 		setTimeout(() => {
-			this.global.document.open();
-			if (onDocumentOpen.has(this.global))
-				for (const callback of onDocumentOpen.get(this.global)!) callback();
+			Reflect.apply(this.open, this.global.document, []);
+			runDocumentOpenListeners(this.global);
 			this.write.call(this.global.document, newDocument);
 			this.global.document.close();
 		});

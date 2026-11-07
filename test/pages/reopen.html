@@ -1,0 +1,14 @@
+<!doctype html>
+<title>REOPEN</title>
+<script>
+	// a page that replaces itself with document.open() once it has loaded (the
+	// call is a no-op while the parser is still running); the written page
+	// records every message it receives
+	setTimeout(() => {
+		document.open();
+		document.write(
+			'<title>REOPENED</title><script>window.__msgs = []; addEventListener("message", (e) => __msgs.push(String(e.data)));<\/script>',
+		);
+		document.close();
+	}, 200);
+</script>

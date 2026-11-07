@@ -67,9 +67,7 @@ The first release after a four-year gap. Everything below is breaking.
 - `Frame` gained `back()`, `forward()` and `reload()`. `back()` and
   `forward()` step the frame's own session history (Navigation API) and
   resolve to whether a step was possible; `canGoBack` / `canGoForward`
-  report the same ahead of time. `history.back()` from a frame's first entry
-  traverses the joint session history, which navigates the host page (or a
-  sibling frame) out from under the application.
+  report the same ahead of time.
 - `npm test` runs the browser suites in `test/` (Playwright on the system
   Chrome): the demo end to end, Back and history walking, the tab switcher,
   origin isolation, frame-escape vectors in both modes, and runtime-inserted
@@ -108,6 +106,15 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- A page's own `history` is scoped to its frame: `length` counts the frame's
+  entries instead of the joint session history of the host page and every
+  frame in it, and `back()`, `forward()` and `go()` step those entries only
+  (Navigation API); a step past either end does nothing, as on a top-level
+  page, instead of handing the traversal to the host or a sibling frame.
+- A page that calls `document.open()` keeps the window hooks: the message
+  filter and tagger, the link and navigate listeners are registered again,
+  as they already were after the open that writes the page. The tagger that
+  unwraps messages from other Stomp windows is also registered at install.
 - Request bodies stream to the transport instead of being buffered in the
   service worker.
 - The controller, the service worker and the inject bundles carry a build
@@ -318,6 +325,9 @@ Fixed while testing real sites and a feature fixture:
   `CSSRule.cssText` assignment and the Typed OM are not rewritten.
 - Nested destructuring patterns (`{ a: { top } }`) and function parameter
   patterns still read the real value.
+- In same-origin mode a `postMessage` from the host into a frame runs the
+  frame's own hooked `postMessage`, so it arrives as if the page had sent it;
+  only the cross-origin boundary of isolation mode lets the filter drop it.
 - A script the rewriter cannot parse runs unrewritten. In isolation mode the
   sandbox and the cross-origin boundary contain it; in same-origin mode it can
   reach the real `top`, which is one more reason that mode is not a security

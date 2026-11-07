@@ -462,7 +462,11 @@ export default class ContextModule extends Module<DocumentClient> {
 			),
 		});
 
-		addDocumentOpenListener(this.client.global, () => {
+		// the tagger: messages from other Stomp windows arrive in an envelope
+		// (see postMessage below) which the data and origin getters unwrap.
+		// Registered now and again after every document.open(), which drops
+		// window listeners.
+		const tagMessages = () => {
 			this.client.global.addEventListener('message', (event) => {
 				/*console.error(
 					this.client.url.url.toString(),
@@ -479,7 +483,9 @@ export default class ContextModule extends Module<DocumentClient> {
 					}*/
 				});
 			});
-		});
+		};
+		tagMessages();
+		addDocumentOpenListener(this.client.global, tagMessages);
 
 		this.client.global.postMessage = proxyModule.wrapFunction(
 			this.client.global.postMessage,
