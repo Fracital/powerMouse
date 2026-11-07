@@ -1,8 +1,9 @@
 // SameSite follows the request: the cookie-rules page on 127.0.0.1 sets
 // Strict, Lax and None cookies (its Set-Cookie sidecar); a page on localhost,
-// another site, then fetches 127.0.0.1 as a subresource (None only) and
-// embeds it as a nested frame (None only: a browser judges it by the
-// top-level page), while 127.0.0.1's own request carries all three.
+// another site, then fetches 127.0.0.1 with credentials (None only; a default
+// fetch gets nothing) and embeds it as a nested frame (None only: a browser
+// judges it by the top-level page), while 127.0.0.1's own request carries all
+// three.
 import {
 	done,
 	FIXTURE,
@@ -50,17 +51,24 @@ ok(
 	JSON.stringify(own.sent),
 );
 
-// the other site
+// the other site: a credentialed subresource (credentials include, as an
+// <img> or <script> is) gets the None cookies; a default fetch() (credentials
+// same-origin) gets none, as the browser's own jar would give it
 const other = FIXTURE.replace('127.0.0.1', 'localhost');
 await submitLanding(page, `${other}pages/samesite.html`);
 const cross = await result('__ss');
 ok(
-	'a cross-site subresource carries SameSite=None only',
+	'a cross-site credentialed subresource carries SameSite=None only',
 	cross.done === true &&
 		has(cross.subresource, 'none') &&
 		!has(cross.subresource, 'lax') &&
 		!has(cross.subresource, 'strict'),
 	JSON.stringify(cross),
+);
+ok(
+	'a default fetch() to another site carries no cookie at all',
+	cross.done === true && cross.plain === '',
+	JSON.stringify(cross.plain),
 );
 // the embedded frame's document is the echoed headers
 let framed = null;

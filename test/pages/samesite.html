@@ -9,10 +9,18 @@
 	const frame = document.createElement('iframe');
 	frame.src = target + '/echo-headers';
 	document.documentElement.append(frame);
-	fetch(target + '/echo-headers')
-		.then((r) => r.json())
-		.then((h) => {
-			__ss.subresource = h.cookie || '';
+	// a credentialed subresource (what an <img> or <script> is to the
+	// browser: credentials include) carries the cookies the SameSite rules
+	// allow across sites, None only; a default fetch() (credentials
+	// same-origin) carries none at all to another site
+	const cookie = (init) =>
+		fetch(target + '/echo-headers', init)
+			.then((r) => r.json())
+			.then((h) => h.cookie || '');
+	Promise.all([cookie({ credentials: 'include' }), cookie()])
+		.then(([subresource, plain]) => {
+			__ss.subresource = subresource;
+			__ss.plain = plain;
 		})
 		.catch((e) => {
 			__ss.error = String(e);
