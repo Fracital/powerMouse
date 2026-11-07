@@ -60,6 +60,10 @@ const NETWORK_SUITES = new Set([
 	'backwalk-browser',
 ]);
 const SKIP_NETWORK = process.env.SKIP_NETWORK === '1';
+// suites whose checks depend on pointer timing (a flick's measured velocity)
+// and misfire on a two-core runner; SKIP_TIMING=1 leaves them out
+const TIMING_SUITES = new Set(['switcher-momentum']);
+const SKIP_TIMING = process.env.SKIP_TIMING === '1';
 
 const wanted = process.argv.slice(2);
 const suites = readdirSync(suitesDir)
@@ -67,9 +71,15 @@ const suites = readdirSync(suitesDir)
 	.map((name) => name.slice(0, -4))
 	.filter((name) => !wanted.length || wanted.includes(name))
 	.filter((name) => {
-		if (!SKIP_NETWORK || !NETWORK_SUITES.has(name)) return true;
-		console.log(`SKIP ${name} (needs the internet; SKIP_NETWORK=1)`);
-		return false;
+		if (SKIP_NETWORK && NETWORK_SUITES.has(name)) {
+			console.log(`SKIP ${name} (needs the internet; SKIP_NETWORK=1)`);
+			return false;
+		}
+		if (SKIP_TIMING && TIMING_SUITES.has(name)) {
+			console.log(`SKIP ${name} (pointer timing; SKIP_TIMING=1)`);
+			return false;
+		}
+		return true;
 	});
 
 if (!suites.length) {
