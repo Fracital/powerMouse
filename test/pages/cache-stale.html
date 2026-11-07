@@ -1,0 +1,40 @@
+<!doctype html>
+<title>CACHE STALE</title>
+<script>
+	// stale-while-revalidate: a stale entry within its window is served at
+	// once and revalidated behind the page; stale-if-error: a stale entry
+	// within its window answers for a 5xx; past the window the entry is not
+	// used
+	window.__stale = {};
+	const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+	const get = async (path) => {
+		const started = performance.now();
+		const response = await fetch(path);
+		const body = await response.json();
+		return {
+			status: response.status,
+			body,
+			ms: Math.round(performance.now() - started),
+		};
+	};
+	(async () => {
+		__stale.swr1 = await get('/stale/swr');
+		__stale.short1 = await get('/stale/swr-short');
+		__stale.sie1 = await get('/stale/sie');
+		await sleep(2200);
+		__stale.swr2 = await get('/stale/swr');
+		// the revalidation behind the page has landed; the entry it stored
+		// (max-age=1 again) is still fresh for this read
+		await sleep(400);
+		__stale.swr3 = await get('/stale/swr');
+		__stale.short2 = await get('/stale/swr-short');
+		__stale.sie2 = await get('/stale/sie');
+		__stale.hits = await (await fetch('/hits')).json();
+	})()
+		.catch((e) => {
+			__stale.error = String(e);
+		})
+		.finally(() => {
+			__stale.done = true;
+		});
+</script>

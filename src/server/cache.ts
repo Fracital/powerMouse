@@ -83,6 +83,20 @@ export interface CacheHit {
 	mustRevalidate: boolean;
 	etag: string | null;
 	lastModified: string | null;
+	/** seconds since the entry was stored */
+	age: number;
+	/** seconds past its freshness lifetime (0 while fresh) */
+	staleFor: number;
+	/** the window the origin allowed for serving stale while revalidating, in seconds */
+	staleWhileRevalidate: number | null;
+	/** the window the origin allowed for serving stale on an error, in seconds */
+	staleIfError: number | null;
+}
+
+/** a directive's seconds, or null when absent or not a number */
+function seconds(control: Map<string, string>, name: string): number | null {
+	const value = control.get(name);
+	return value !== undefined && /^\d+$/.test(value) ? Number(value) : null;
 }
 
 export class HttpCache {
@@ -121,6 +135,8 @@ export class HttpCache {
 		const age = (Date.now() - storedAt) / 1000;
 		const control = parseCacheControl(headers.get('cache-control'));
 		for (const name of [STORED_AT, SIZE, VARY]) headers.delete(name);
+		// what a cache says about an entry it serves
+		headers.set('age', String(Math.max(0, Math.round(age))));
 		return {
 			response: new Response(stored.body, {
 				status: stored.status,
@@ -132,7 +148,30 @@ export class HttpCache {
 				control.has('must-revalidate') || control.has('proxy-revalidate'),
 			etag: headers.get('etag'),
 			lastModified: headers.get('last-modified'),
+			age,
+			staleFor: Math.max(0, age - lifetime),
+			staleWhileRevalidate: seconds(control, 'stale-while-revalidate'),
+			staleIfError: seconds(control, 'stale-if-error'),
 		};
+	}
+	/** background revalidations in flight, by URL: one per key however many stale hits arrive */
+	private revalidating = new Map<string, Promise<void>>();
+	/**
+	 * Run `task` (a revalidation of `url`) unless one is already running for
+	 * it; failures are swallowed, the stale entry simply stays.
+	 */
+	revalidateOnce(url: string, task: () => Promise<void>): Promise<void> {
+		let pending = this.revalidating.get(url);
+		if (!pending) {
+			pending = task()
+				.catch(() => {})
+				.finally(() => {
+					if (this.revalidating.get(url) === pending)
+						this.revalidating.delete(url);
+				});
+			this.revalidating.set(url, pending);
+		}
+		return pending;
 	}
 	/** store the upstream response (its body stream is consumed) */
 	put(

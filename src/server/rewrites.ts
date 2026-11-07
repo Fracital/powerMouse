@@ -217,7 +217,11 @@ function genericForward(
 		// the HTTP cache, unless the host turned it off: a fresh entry answers
 		// without the transport; a stale one with validators is revalidated
 		// and a 304 refreshes it; what comes back cacheable is stored (its
-		// body split in two, one copy for the store)
+		// body split in two, one copy for the store). Stale entries are used
+		// only as far as the origin allowed: within stale-while-revalidate
+		// they answer at once and one revalidation runs behind the page; within
+		// stale-if-error they answer for a 5xx or a failed request. Never any
+		// freshness the origin did not state.
 		const cache = rewriter.cache;
 		const hit =
 			cache &&
@@ -226,58 +230,93 @@ function genericForward(
 				: null;
 		let response: Response & { rawHeaders?: [string, string][] };
 		let cached = false;
+		const within = (window: number | null) =>
+			!!hit && !hit.mustRevalidate && window !== null && hit.staleFor <= window;
+		const fetchUpstream = (headers: Headers) =>
+			rewriter.bare.fetch(url.toString(), {
+				method: serverRequest.method,
+				redirect: 'manual',
+				// redirect: serverRequest.redirect,
+				// the body goes through as the stream it is (the port transfers
+				// it, the transport accepts it): an upload is never held in the
+				// service worker's memory
+				body:
+					(!BODY_ILLEGAL.includes(serverRequest.method) &&
+						serverRequest.body) ||
+					undefined,
+				headers: capitalizeHeaders(headers),
+			});
+		const withValidators = (headers: Headers) => {
+			const conditional = new Headers(headers);
+			if (hit?.etag) conditional.set('if-none-match', hit.etag);
+			if (hit?.lastModified)
+				conditional.set('if-modified-since', hit.lastModified);
+			return conditional;
+		};
+		const storable = (status: number, responseHeaders: Headers) =>
+			!!cache &&
+			isCacheable({
+				method: serverRequest.method,
+				requestHeaders,
+				status,
+				responseHeaders,
+			});
+
 		if (hit && hit.fresh && !hit.mustRevalidate) {
 			response = hit.response;
 			cached = true;
+		} else if (hit && within(hit.staleWhileRevalidate)) {
+			response = hit.response;
+			cached = true;
+			// one revalidation per URL, however many stale hits arrive together
+			cache!.revalidateOnce(url.toString(), async () => {
+				const upstream = await fetchUpstream(withValidators(requestHeaders));
+				if (upstream.status === 304)
+					await cache!.refresh(url.toString(), hit, upstream.headers);
+				else if (upstream.body && storable(upstream.status, upstream.headers))
+					await cache!.put(
+						url.toString(),
+						requestHeaders,
+						upstream,
+						upstream.body,
+					);
+				else await upstream.body?.cancel();
+			});
 		} else {
-			if (hit) {
-				if (hit.etag) requestHeaders.set('if-none-match', hit.etag);
-				if (hit.lastModified)
-					requestHeaders.set('if-modified-since', hit.lastModified);
-			}
-			let upstream: Awaited<ReturnType<typeof rewriter.bare.fetch>>;
+			let upstream: Awaited<ReturnType<typeof rewriter.bare.fetch>> | null =
+				null;
 			try {
-				upstream = await rewriter.bare.fetch(url.toString(), {
-					method: serverRequest.method,
-					redirect: 'manual',
-					// redirect: serverRequest.redirect,
-					// the body goes through as the stream it is (the port transfers
-					// it, the transport accepts it): an upload is never held in the
-					// service worker's memory
-					body:
-						(!BODY_ILLEGAL.includes(serverRequest.method) &&
-							serverRequest.body) ||
-						undefined,
-					headers: capitalizeHeaders(requestHeaders),
-				});
+				upstream = await fetchUpstream(withValidators(requestHeaders));
 			} catch (error) {
-				rewriter.log?.({
-					url: url.toString(),
-					method: serverRequest.method,
-					destination: serverRequest.destination,
-					status: 0,
-					ms: Date.now() - started,
-					cached: false,
-					bytes: null,
-					error: String(error),
-					client: context?.clientId,
-				});
-				throw error;
+				if (!within(hit?.staleIfError ?? null)) {
+					rewriter.log?.({
+						url: url.toString(),
+						method: serverRequest.method,
+						destination: serverRequest.destination,
+						status: 0,
+						ms: Date.now() - started,
+						cached: false,
+						bytes: null,
+						error: String(error),
+						client: context?.clientId,
+					});
+					throw error;
+				}
 			}
-			if (hit && upstream.status === 304) {
-				response = await cache!.refresh(url.toString(), hit, upstream.headers);
-			} else if (
-				cache &&
-				upstream.body &&
-				isCacheable({
-					method: serverRequest.method,
-					requestHeaders,
-					status: upstream.status,
-					responseHeaders: upstream.headers,
-				})
+			if (
+				upstream === null ||
+				(upstream.status >= 500 && within(hit?.staleIfError ?? null))
 			) {
+				// the origin failed (or could not be reached) and allowed a stale
+				// answer for that: the entry, marked by its Age
+				await upstream?.body?.cancel();
+				response = hit!.response;
+				cached = true;
+			} else if (hit && upstream.status === 304) {
+				response = await cache!.refresh(url.toString(), hit, upstream.headers);
+			} else if (upstream.body && storable(upstream.status, upstream.headers)) {
 				const [forStore, forPage] = upstream.body.tee();
-				cache.put(url.toString(), requestHeaders, upstream, forStore);
+				cache!.put(url.toString(), requestHeaders, upstream, forStore);
 				response = new Response(forPage, {
 					status: upstream.status,
 					statusText: upstream.statusText,

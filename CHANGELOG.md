@@ -110,6 +110,15 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- The HTTP cache serves stale entries exactly as far as the origin allowed:
+  within `stale-while-revalidate` a stale entry answers at once and one
+  revalidation per URL runs behind the page (however many stale hits arrive
+  together); within `stale-if-error` a stale entry answers for a 5xx or a
+  request the transport could not complete. Past either window, and under
+  `must-revalidate`, nothing changes. A cache-served response carries an
+  `Age` header (the standard marker; `Warning` is deprecated) and the request
+  log says `cached: true`. Still no heuristic freshness: an entry without
+  explicit freshness is never stored.
 - A document the page builds itself and shows from a `blob:` URL (a
   `text/html` Blob or File in a frame or a window) is injected and rewritten
   like a fetched one: its string contents are wrapped in the shell at
@@ -475,8 +484,9 @@ Fixed while testing real sites and a feature fixture:
   rewritten.
 - Aborting a fetch does not cancel the request on the transport (epoxy
   ignores the signal); the response is discarded.
-- The HTTP cache never serves stale on a failed revalidation and uses no
-  heuristic freshness.
+- The HTTP cache uses no heuristic freshness (`Last-Modified` alone stores
+  nothing); stale entries are served only within the origin's
+  `stale-while-revalidate` and `stale-if-error` windows.
 - `getSVGDocument()` is not spoofed.
 - `CSSRule.cssText` assignment is not rewritten (a no-op for style rules).
   Un-rewritten `url()` values read back as the page wrote them (relative

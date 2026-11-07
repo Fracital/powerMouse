@@ -145,6 +145,31 @@ export function startFixture(port = 8084) {
 			setTimeout(() => res.end('slow'), 5000);
 			return;
 		}
+		// /stale/<name>: cache-control with stale directives and a counting
+		// body; `sie` answers 500 after its first response (cache-stale suite)
+		const stale = /^\/stale\/(swr|swr-short|sie)$/.exec(path)?.[1];
+		if (stale) {
+			const count = hits.get(`stale/${stale}`) || {
+				requests: 0,
+				notModified: 0,
+			};
+			count.requests++;
+			hits.set(`stale/${stale}`, count);
+			res.setHeader('content-type', 'application/json');
+			res.setHeader(
+				'cache-control',
+				stale === 'swr'
+					? 'max-age=1, stale-while-revalidate=60'
+					: stale === 'swr-short'
+						? 'max-age=1, stale-while-revalidate=1'
+						: 'max-age=1, stale-if-error=60',
+			);
+			if (stale === 'sie' && count.requests > 1) {
+				res.statusCode = 500;
+				return res.end(JSON.stringify({ error: 'down' }));
+			}
+			return res.end(JSON.stringify({ n: count.requests }));
+		}
 		if (path === '/hits') {
 			res.setHeader('content-type', 'application/json');
 			return res.end(JSON.stringify(Object.fromEntries(hits)));
