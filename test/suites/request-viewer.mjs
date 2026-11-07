@@ -276,8 +276,10 @@ await page.keyboard.press('Control+Shift+R');
 await sleep(300);
 ok('shortcut reopens', await isOpen());
 ok(
+	// the tab's fetch, plus the page load itself once the document request is
+	// attributed to its frame
 	'the ring buffer survives closing: rows are back',
-	(await rowCount()) === 1,
+	(await rowCount()) >= 1,
 	String(await rowCount()),
 );
 await page.keyboard.press('Escape');
@@ -346,7 +348,7 @@ await sleep(300);
 ok(
 	'and the viewer shows its log again',
 	(await page.textContent('#requestsTitle')) === 'CACHE' &&
-		(await rowCount()) === 1,
+		(await rowCount()) >= 1,
 	JSON.stringify({
 		title: await page.textContent('#requestsTitle'),
 		rows: await rowCount(),
