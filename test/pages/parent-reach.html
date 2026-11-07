@@ -1,0 +1,77 @@
+<!doctype html>
+<title>REACH</title>
+<script>
+	// a nested document reads its way up: everything `parent` and `top` can
+	// reach is named by the title of the document it lands on, or by what the
+	// read threw. The outermost proxied page is the end of the world a nested
+	// frame can see; the host never appears.
+	const result = {};
+	const who = (win) => {
+		if (win === window) return 'self';
+		if (win === null || win === undefined) return String(win);
+		try {
+			return `title:${win.document.title}`;
+		} catch (error) {
+			return `opaque ${error.name}`;
+		}
+	};
+	const read = (name, fn) => {
+		try {
+			result[name] = fn();
+		} catch (error) {
+			result[name] = `threw ${error.name}`;
+		}
+	};
+	read('parent', () => who(parent));
+	read('windowParent', () => who(window.parent));
+	read('selfParent', () => who(self.parent));
+	read('globalThisParent', () => who(globalThis.parent));
+	read('defaultViewParent', () => who(document.defaultView.parent));
+	read('computedParent', () => who(window['par' + 'ent']));
+	read('reflectParent', () => who(Reflect.get(window, 'parent')));
+	read('destructuredParent', () => {
+		const { parent: p } = window;
+		return who(p);
+	});
+	read('descriptorParent', () => {
+		const descriptor = Object.getOwnPropertyDescriptor(window, 'parent');
+		return who(descriptor.get.call(window));
+	});
+	read('parentParent', () => who(parent.parent));
+	read('parentTop', () => who(parent.top));
+	read('top', () => who(top));
+	read('windowTop', () => who(window.top));
+	read('topParent', () => who(top.parent));
+	read('topIsParent', () => top === parent);
+	read('parentParentIsParent', () => parent.parent === parent);
+	read('parentFrameElement', () => String(parent.frameElement));
+	read('parentLocation', () => parent.location.href);
+	read(
+		'parentFramesHasSelf',
+		() => parent.frames[0] === window || parent.frames[1] === window,
+	);
+	read('parentLength', () => parent.length);
+	read('topLength', () => top.length);
+	read('frameElement', () =>
+		frameElement
+			? `${frameElement.tagName}#${frameElement.id}`
+			: String(frameElement),
+	);
+	read('ancestorOrigins', () => Array.from(location.ancestorOrigins));
+	// an about:blank child of this nested document: its parent is this
+	// document, its top the outermost proxied page
+	read('blankParent', () => {
+		const blank = document.createElement('iframe');
+		document.documentElement.append(blank);
+		const win = blank.contentWindow;
+		const r = {
+			parentIsSelf: win.parent === window,
+			topIsTop: win.top === top,
+			topIsParent: win.top === parent,
+		};
+		blank.remove();
+		return r;
+	});
+	result.who = location.hostname === 'localhost' ? 'cross' : 'same';
+	window.__reach = result;
+</script>

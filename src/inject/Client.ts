@@ -53,6 +53,8 @@ export default class Client {
 	#bare?: BareCompatibleClient;
 	/** set by the Context module: maps the real `top` to the proxied world's top */
 	resolveTop?: (value: unknown) => unknown;
+	/** set by the Context module: a window of another proxied origin, read through the access API (`frames[i]`, `window[name]`), becomes its restricted stand-in */
+	restrictForeign?: (value: unknown) => unknown;
 	/** @internal this context's native window.postMessage, taken before the Context module wraps it: another context posting here calls it from its own realm */
 	nativePostMessage?: PostMessage;
 	/** @internal the Context module's wrapper over window.postMessage: a page that replaced it is called as written */

@@ -100,6 +100,9 @@ export default class AccessModule extends Module<Client> {
 					// should not be introduced into normal execution
 				}
 
+				if (this.client.restrictForeign)
+					return this.client.restrictForeign(object);
+
 				return object;
 			},
 			set2: (

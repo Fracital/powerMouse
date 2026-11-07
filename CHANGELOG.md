@@ -390,6 +390,23 @@ url`) carries its value and targets that window. An about:blank child of
   status 0 and `error: "aborted"`, and cancels the origin's answer unread
   when it arrives, so the transport stops reading. Before, the worker waited
   for the origin and reported the request as completed.
+- The value of a computed member assignment is rewritten. `o[k] = v` becomes
+  a `set2` call and `v` was passed to it as written, so `cache[key] = top`
+  stored the real top window, `data[name] = location.href` the routed URL, and
+  a function literal assigned that way kept every `top`, `location` and
+  `postMessage` inside it raw. The value now goes through the rewriter like
+  any other expression (rewriter-unit shape).
+- A frame nested in a proxied page sees the proxied world and nothing above
+  it, measured against the same pages framed natively (parent-read suite,
+  both modes). `parent` was right in every form already; around it:
+  `location.ancestorOrigins` lists the proxied ancestors' real origins
+  (nearest first) instead of nothing; `frames[i]` and `window[i]` landing on
+  a frame of another proxied origin give its restricted window, not the raw
+  one (every proxied site shares the real origin); the restricted window
+  reports `length` (it reported `closed`), serves its frames by index, and
+  throws a `SecurityError` DOMException of the page's realm (the name was
+  `Error`); and `otherWindow.top` resolves to the top of that window's world
+  instead of the window itself.
 - Standalone SVG documents and XHTML pages are proxied as what they are. An
   XML document got the HTML shell under its XML mime (the browser parsed the
   shell as XML and showed nothing) or, for XHTML, nothing at all (raw, with

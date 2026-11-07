@@ -1,0 +1,43 @@
+<!doctype html>
+<title>PARENT FRAMES</title>
+<body></body>
+<script>
+	// a proxied page framing two nested documents: one of its own origin, one
+	// of the fixture's other host name. Each child records what `parent` and
+	// `top` reach (parent-reach.html); this page records what it reads of
+	// its children's framing from the outside.
+	window.__parentView = {};
+	const view = window.__parentView;
+	const same = document.createElement('iframe');
+	same.id = 'same';
+	same.src = '/pages/parent-reach.html';
+	const cross = document.createElement('iframe');
+	cross.id = 'cross';
+	cross.src = `${location.origin.replace('127.0.0.1', 'localhost')}/pages/parent-reach.html`;
+	const probe = (frame, key) => {
+		const win = frame.contentWindow;
+		const index = key === 'same' ? 0 : 1;
+		const read = (fn) => {
+			try {
+				return fn();
+			} catch (error) {
+				return `threw ${error.name}`;
+			}
+		};
+		view[key] = {
+			parentIsSelf: read(() => win.parent === window),
+			topIsSelf: read(() => win.top === window),
+			framesParentIsSelf: read(() => frames[index].parent === window),
+			length: read(() => win.length),
+			framesIsContentWindow: read(() => frames[index] === win),
+			framesHasObject: read(() => 'Object' in frames[index]),
+		};
+		if (view.same && view.cross) view.done = true;
+	};
+	same.onload = () => probe(same, 'same');
+	cross.onload = () => probe(cross, 'cross');
+	document.body.append(same, cross);
+	setTimeout(() => {
+		view.done = true;
+	}, 8000);
+</script>

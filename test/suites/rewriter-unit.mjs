@@ -356,4 +356,20 @@ const parses = (code) => {
 	);
 }
 console.warn = warn;
+
+// `o[k] = v` becomes set2(o, k, operate, v): the value is an expression like
+// any other, so `top`, `location` and the rest inside it are rewritten too
+// (they were handed to set2 raw: `cache[key] = top` stored the real top)
+{
+	const value = rewrite('o[k] = top');
+	const nested = rewrite('o[k] = { a: () => location.href }');
+	const compound = rewrite('o[k] += location.href');
+	ok(
+		'a computed member assignment rewrites the value it assigns',
+		value.includes("$s$j.get(top, 'top')") &&
+			nested.includes("$s$j.get(location, 'location')") &&
+			compound.includes("$s$j.get(location, 'location')"),
+		[value, nested, compound].join('\n'),
+	);
+}
 await done();

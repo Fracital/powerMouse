@@ -689,9 +689,11 @@ export function modifyJS(
 														b.identifier(cValue),
 													),
 										),
+										// the value is rewritten like any expression: `o[k] = top`
+										// or `o[k] = location.href` must not hand set2 the real one
 										ctx.parent?.node.type === 'UpdateExpression'
 											? b.identifier('undefined')
-											: ctx.parent!.node.right,
+											: result(ctx.parent!.node.right),
 										b.literal(generatePartial(script, ctx.parent!)),
 									],
 								),

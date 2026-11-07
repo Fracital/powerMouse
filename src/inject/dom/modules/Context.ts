@@ -112,7 +112,11 @@ export default class ContextModule extends Module<DocumentClient> {
 		this.restricted = new WeakMap();
 		this.restrictedContexts = new WeakMap();
 	}
-	restrictObject(interfaces: PropertyDescriptorMap) {
+	restrictObject(
+		interfaces: PropertyDescriptorMap,
+		// a cross-origin window's child browsing contexts by index
+		indexed?: (index: number) => unknown,
+	) {
 		const restricted = {};
 
 		Reflect.setPrototypeOf(restricted, null);
@@ -131,9 +135,14 @@ export default class ContextModule extends Module<DocumentClient> {
 			});
 
 		const accessError = () =>
-			new DOMException(
+			new this.client.global.DOMException(
 				`Blocked a frame with "${this.client.url.url.origin}" from accessing a cross-origin frame.`,
+				'SecurityError',
 			);
+		const indexOf = (prop: string | symbol): number | undefined =>
+			indexed && typeof prop === 'string' && /^(0|[1-9]\d*)$/.test(prop)
+				? Number(prop)
+				: undefined;
 
 		for (const key in interfaces) {
 			const descriptor = interfaces[key];
@@ -161,8 +170,14 @@ export default class ContextModule extends Module<DocumentClient> {
 				if (
 					!descriptor ||
 					(!('value' in descriptor) && typeof descriptor.get !== 'function')
-				)
+				) {
+					const index = indexOf(prop);
+					if (index !== undefined) {
+						const child = indexed!(index);
+						if (child !== undefined) return child;
+					}
 					throw accessError();
+				}
 
 				return Reflect.get(target, prop, receiver);
 			},
@@ -186,7 +201,11 @@ export default class ContextModule extends Module<DocumentClient> {
 				throw accessError();
 			},
 			has: (target, prop) => {
-				if (!(prop in target)) throw accessError();
+				if (!(prop in target)) {
+					const index = indexOf(prop);
+					if (index !== undefined && indexed!(index) !== undefined) return true;
+					throw accessError();
+				}
 				return true;
 			},
 		});
@@ -293,67 +312,74 @@ export default class ContextModule extends Module<DocumentClient> {
 			},
 		});
 
-		const res = <any>this.restrictObject({
-			0: {
-				value: this.client.global,
-			},
-			top: {
-				get: () => this.newRestricted(<Context>(<unknown>context.top!)),
-			},
-			parent: {
-				get: () => this.newRestricted(<Context>(<unknown>context.parent!)),
-			},
-			opener: {
-				get: () => this.newRestricted(<Context>(<unknown>context.opener!)),
-			},
-			self: {
-				get: () => res,
-			},
-			frames: {
-				get: () => res,
-			},
-			window: {
-				get: () => res,
-			},
-			blur: {
-				value: () => context.blur(),
-			},
-			focus: {
-				value: () => context.focus(),
-			},
-			close: {
-				value: () => context.close(),
-			},
-			closed: {
-				get: () => context.closed,
-			},
-			length: {
-				get: () => context.closed,
-			},
-			location: {
-				get: () => restrictedLocation,
-				set: (value: urlLike) => {
-					context.location.replace(
-						routeHTML(
-							new StompURL(
-								new URL(value, this.client.url.toString()),
+		const res = <any>this.restrictObject(
+			{
+				top: {
+					get: () => this.newRestricted(<Context>(<unknown>context.top!)),
+				},
+				parent: {
+					get: () => this.newRestricted(<Context>(<unknown>context.parent!)),
+				},
+				opener: {
+					get: () => this.newRestricted(<Context>(<unknown>context.opener!)),
+				},
+				self: {
+					get: () => res,
+				},
+				frames: {
+					get: () => res,
+				},
+				window: {
+					get: () => res,
+				},
+				blur: {
+					value: () => context.blur(),
+				},
+				focus: {
+					value: () => context.focus(),
+				},
+				close: {
+					value: () => context.close(),
+				},
+				closed: {
+					get: () => context.closed,
+				},
+				length: {
+					get: () => context.length,
+				},
+				location: {
+					get: () => restrictedLocation,
+					set: (value: urlLike) => {
+						context.location.replace(
+							routeHTML(
+								new StompURL(
+									new URL(value, this.client.url.toString()),
+									this.client.url,
+								),
 								this.client.url,
+								this.client.config,
+								false,
+								nestedRouteOf(context),
 							),
-							this.client.url,
-							this.client.config,
-							false,
-							nestedRouteOf(context),
-						),
-					);
+						);
+					},
+				},
+				postMessage: {
+					value: proxyModule.wrapFunction(postMessage, (target, that, args) => {
+						catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
+						return Reflect.apply(target, context, this.postMessage(<any>args));
+					}),
 				},
 			},
-			postMessage: {
-				value: proxyModule.wrapFunction(postMessage, (target, that, args) => {
-					catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
-					return Reflect.apply(target, context, this.postMessage(<any>args));
-				}),
+			// its frames, by index: cross-origin reads of them are allowed,
+			// and each is another window of this world or outside it
+			(index) => {
+				const child = (
+					context as unknown as Record<number, Context | undefined>
+				)[index];
+				return child ? this.newRestricted(child) : undefined;
 			},
-		});
+		);
 
 		return res;
 	}
@@ -438,7 +464,28 @@ export default class ContextModule extends Module<DocumentClient> {
 				// cross-origin top
 			}
 
-			return this.newRestricted(value);
+			// another proxied window's top is the top of *its* world, which is
+			// this one's for a frame of this page
+			return this.newRestricted(findTop(value));
+		};
+
+		// a window of another proxied origin that a computed read lands on
+		// (`frames[i]`, `window[name]`): the browser would hand the page a
+		// cross-origin WindowProxy, so the page gets the restricted stand-in
+		// (a same-origin one is returned as it is)
+		this.client.restrictForeign = (value) => {
+			if (typeof value !== 'object' || value === null) return value;
+			try {
+				if (
+					!(CLIENT_KEY in value) ||
+					(value as { window?: unknown }).window !== value
+				)
+					return value;
+			} catch (error) {
+				// a real cross-origin window: the `in` check throws
+				return value;
+			}
+			return this.newRestricted(value as Context);
 		};
 
 		const messageData = new WeakMap<MessageEvent, MessageData>();

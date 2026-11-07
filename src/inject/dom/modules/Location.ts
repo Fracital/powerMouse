@@ -1,4 +1,5 @@
 import { routeHTML } from '../../../rewriteHTML';
+import { CLIENT_KEY } from '../../../rewriteJS';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import { setGlobalProxy } from '../../modules/Access';
@@ -126,23 +127,50 @@ export default class LocationModule extends Module<DocumentClient> {
 			});
 		}
 
-		// a top-level document has no ancestors; never reveal the host origin.
-		// DOMStringList.prototype.length is a getter, so define own properties
-		// rather than assigning.
-		const emptyAncestors = Object.freeze(
-			Object.create(this.client.global.DOMStringList.prototype, {
-				length: { value: 0, enumerable: true },
-				item: { value: () => null },
-				contains: { value: () => false },
+		// The real origins of the proxied documents above this one, nearest
+		// first like the browser's list; the host (not a Stomp context) ends
+		// the walk and is never revealed. DOMStringList.prototype.length is a
+		// getter, so define own properties rather than assigning.
+		const ancestorOrigins = (): string[] => {
+			const origins: string[] = [];
+			let context: typeof globalThis = this.client.global;
+			while (true) {
+				try {
+					const parent = (context as any)[CLIENT_KEY]
+						.parent as typeof globalThis;
+					if (parent === context || !(CLIENT_KEY in parent)) break;
+					origins.push((parent as any)[CLIENT_KEY].url.url.origin as string);
+					context = parent;
+				} catch (error) {
+					// a cross-origin parent
+					break;
+				}
+			}
+			return origins;
+		};
+		const ancestorList = () => {
+			const origins = ancestorOrigins();
+			const descriptors: PropertyDescriptorMap = {
+				length: { value: origins.length, enumerable: true },
+				item: { value: (index: number) => origins[index] ?? null },
+				contains: { value: (origin: string) => origins.includes(origin) },
 				[Symbol.iterator]: {
-					value: function* () {},
+					value: function* () {
+						yield* origins;
+					},
 				},
-			}),
-		);
+			};
+			origins.forEach((origin, index) => {
+				descriptors[index] = { value: origin, enumerable: true };
+			});
+			return Object.freeze(
+				Object.create(this.client.global.DOMStringList.prototype, descriptors),
+			);
+		};
 		Reflect.defineProperty(proxy, 'ancestorOrigins', {
 			configurable: true,
 			enumerable: true,
-			get: () => emptyAncestors,
+			get: ancestorList,
 		});
 
 		Reflect.defineProperty(proxy, 'assign', {
