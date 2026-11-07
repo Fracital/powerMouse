@@ -30,6 +30,67 @@ export const UNDEFINABLE = ['eval', 'location', 'top'];
  * to the chain's start. A nested ChainExpression is a parenthesised chain,
  * which ends the short-circuit (`(a?.b).location` throws on null).
  */
+/**
+ * A call that posts a message: `x.postMessage(...)`, `x.postMessage.call(w,
+ * ...)`, `x.postMessage.apply(w, args)` and `Reflect.apply(x.postMessage, w,
+ * args)`. The receiver, the arguments (an array expression or the array
+ * given) and whether the chain is optional; null for any other call.
+ */
+function postMessageCall(
+	node: any,
+): { target: any; args: any; optional: boolean } | null {
+	const isPostMessage = (member: any) =>
+		member?.type === 'MemberExpression' &&
+		(member.computed
+			? member.property.type === 'Literal' &&
+				member.property.value === 'postMessage'
+			: member.property.type === 'Identifier' &&
+				member.property.name === 'postMessage');
+	const { callee } = node;
+	if (isPostMessage(callee))
+		return {
+			target: callee.object,
+			args: b.arrayExpression(node.arguments),
+			optional:
+				!!node.optional || !!callee.optional || inOptionalChain(callee.object),
+		};
+	if (
+		callee?.type === 'MemberExpression' &&
+		!callee.computed &&
+		callee.property.type === 'Identifier' &&
+		(callee.property.name === 'call' || callee.property.name === 'apply') &&
+		isPostMessage(callee.object) &&
+		!node.arguments.some((argument: any) => argument.type === 'SpreadElement')
+	) {
+		const [target = b.identifier('undefined'), ...rest] = node.arguments;
+		return {
+			target,
+			args:
+				callee.property.name === 'call'
+					? b.arrayExpression(rest)
+					: (rest[0] ?? b.arrayExpression([])),
+			optional: false,
+		};
+	}
+	if (
+		callee?.type === 'MemberExpression' &&
+		!callee.computed &&
+		callee.object.type === 'Identifier' &&
+		callee.object.name === 'Reflect' &&
+		callee.property.type === 'Identifier' &&
+		callee.property.name === 'apply' &&
+		node.arguments.length >= 2 &&
+		isPostMessage(node.arguments[0]) &&
+		!node.arguments.some((argument: any) => argument.type === 'SpreadElement')
+	)
+		return {
+			target: node.arguments[1],
+			args: node.arguments[2] ?? b.arrayExpression([]),
+			optional: false,
+		};
+	return null;
+}
+
 function inOptionalChain(node: any): boolean {
 	for (let current = node; current;) {
 		if (current.optional) return true;
@@ -238,6 +299,27 @@ export function modifyJS(
 				case 'CallExpression':
 					{
 						const { callee } = ctx.node;
+
+						// a message posted to a window goes out from the caller's
+						// realm (access API `post`), or the receiver's wrapper would
+						// be the incumbent the browser names as the source
+						const post = postMessageCall(ctx.node);
+						if (post) {
+							ctx.replaceWith(
+								b.callExpression(
+									b.memberExpression(
+										b.identifier(ACCESS_KEY),
+										b.identifier('post'),
+									),
+									[
+										result(post.target),
+										result(post.args),
+										...(post.optional ? [b.literal(true)] : []),
+									],
+								),
+							);
+							break typeLoop;
+						}
 
 						if (
 							callee.type === 'Identifier' &&

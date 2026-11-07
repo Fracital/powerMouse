@@ -1,6 +1,7 @@
 import { routeHTML } from '../../rewriteHTML';
 import {
 	ACCESS_KEY,
+	CLIENT_KEY,
 	GLOBAL_NAME,
 	GLOBAL_PROXY,
 	isBareSpecifier,
@@ -177,6 +178,43 @@ export default class AccessModule extends Module<Client> {
 			new2: (target: any, key: any, args: any): any => {
 				// key = normalizeKey(key);
 				return Reflect.construct(api.get(target[key], key), args);
+			},
+			/**
+			 * `x.postMessage(...)` (the rewriter routes every such call here, and
+			 * the .call / .apply / Reflect.apply forms): a Stomp window gets the
+			 * message through its own native postMessage called from this realm,
+			 * so this context is the incumbent the browser reports as the
+			 * source, with an envelope carrying this context's real origin;
+			 * anything else (a port, a worker, a plain object, a restricted
+			 * window) is called as written.
+			 */
+			post: (target: any, args: any[], optional?: boolean): any => {
+				if (optional && (target === null || target === undefined))
+					return undefined;
+				const method = target?.postMessage;
+				if (optional && (method === null || method === undefined))
+					return undefined;
+				if (this.client.postToWindow) {
+					let receiver: Client | undefined;
+					try {
+						if (
+							typeof target === 'object' &&
+							target !== null &&
+							target.window === target
+						)
+							receiver = target[CLIENT_KEY];
+					} catch (error) {
+						// a cross-origin window: called as written
+					}
+					// only while the receiver's postMessage is still the hook: a
+					// page that assigned its own function gets that function
+					if (
+						receiver?.nativePostMessage &&
+						method === receiver.hookedPostMessage
+					)
+						return this.client.postToWindow(target, args);
+				}
+				return Reflect.apply(method, target, args);
 			},
 			call2: (
 				target: any,

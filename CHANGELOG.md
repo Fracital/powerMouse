@@ -346,6 +346,17 @@ url`) carries its value and targets that window. An about:blank child of
   reports the body sent; `withCredentials` is kept and reaches the jar as
   the credentials mode. Measured against the browser on one page before the
   fix: of eleven shapes none matched; after: all eleven.
+- A message posted to another proxied window names its real sender. Every
+  `x.postMessage(...)` call (and the `.call`, `.apply` and `Reflect.apply`
+  forms) is rewritten to go through the caller's access API, which calls the
+  receiver's native `postMessage` from the caller's realm, so the browser
+  takes the caller as the incumbent: `event.source` is the sender's window
+  and the envelope carries the sender's real origin. Before, a same-origin
+  child posting to its parent went through the parent's own wrapper and the
+  parent was reported as its own source. Ports, workers, plain objects, a
+  restricted window and a `postMessage` the page replaced are called as
+  written. Cost: a 10.8 MB YouTube bundle rewrites to 19,269,309 bytes
+  instead of 19,268,215 (25 call sites), in the same time.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

@@ -52,6 +52,12 @@ export default class Client {
 	#bare?: BareCompatibleClient;
 	/** set by the Context module: maps the real `top` to the proxied world's top */
 	resolveTop?: (value: unknown) => unknown;
+	/** @internal this context's native window.postMessage, taken before the Context module wraps it: another context posting here calls it from its own realm */
+	nativePostMessage?: PostMessage;
+	/** @internal the Context module's wrapper over window.postMessage: a page that replaced it is called as written */
+	hookedPostMessage?: unknown;
+	/** @internal set by the Context module: post `args` to a Stomp window from this realm, so this context is the incumbent (source and origin are its own) */
+	postToWindow?: (target: object, args: unknown[]) => unknown;
 	// pristine copies taken before modules hook them: the Navigator module
 	// removes navigator.serviceWorker from proxied pages
 	#serviceWorkerContainer?: ServiceWorkerContainer;

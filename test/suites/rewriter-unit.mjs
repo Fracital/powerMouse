@@ -214,6 +214,23 @@ const parses = (code) => {
 	);
 }
 {
+	// every way of posting a message goes through the caller's access API
+	const out = rewrite(
+		"w.postMessage(m, '*'); w?.postMessage(m); w.postMessage.call(w2, m, o); w.postMessage.apply(w2, list); Reflect.apply(w.postMessage, w2, list); port.postMessage(m); x.postmessage(m)",
+	);
+	ok(
+		'postMessage calls in every shape go through the access API',
+		/\$s\$j\.post\(w,\s*\[\s*m,\s*'\*'\s*\]\)/.test(out) &&
+			/\$s\$j\.post\(w,\s*\[\s*m\s*\],\s*true\)/.test(out) &&
+			/\$s\$j\.post\(w2,\s*\[\s*m,\s*o\s*\]\)/.test(out) &&
+			(out.match(/\$s\$j\.post\(w2,\s*list\)/g) || []).length === 2 &&
+			/\$s\$j\.post\(port,\s*\[\s*m\s*\]\)/.test(out) &&
+			/x\.postmessage\(m\)/.test(out) &&
+			parses(out),
+		out,
+	);
+}
+{
 	const out = rewrite('debugger; if (a) debugger; x: debugger; { debugger }');
 	ok(
 		'debugger statements are removed',

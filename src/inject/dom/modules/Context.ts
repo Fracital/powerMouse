@@ -2,6 +2,7 @@ import { getDomain } from 'tldts';
 import { routeHTML } from '../../../rewriteHTML';
 import { CLIENT_KEY, GLOBAL_NAME } from '../../../rewriteJS';
 import StompURL, { urlLike } from '../../../StompURL';
+import Client from '../../Client';
 import Module from '../../Module';
 import ProxyModule, {
 	applyDescriptors,
@@ -551,6 +552,30 @@ export default class ContextModule extends Module<DocumentClient> {
 		tagMessages();
 		addDocumentOpenListener(this.client.global, tagMessages);
 
+		// another context posting to this window calls this native from its
+		// own realm (access API `post`), so it is the incumbent the browser
+		// reports as the source
+		this.client.nativePostMessage = this.client.global.postMessage;
+		this.client.postToWindow = (target, args) => {
+			const receiver = (target as Record<string, any>)[CLIENT_KEY] as Client;
+			const [data, options] = this.postMessage(
+				args as PostMessageArgs,
+			) as PostMessageArgs2;
+			// the browser checks the target origin against the receiver's real
+			// one (the proxy origin, shared by every proxied window); an
+			// about:srcdoc caller reads its own as "null", so the receiver's
+			// is used, or any
+			const receiverOrigin = (receiver as DocumentClient).global.location
+				.origin;
+			return Reflect.apply(receiver.nativePostMessage!, target, [
+				data,
+				{
+					...options,
+					targetOrigin:
+						receiverOrigin && receiverOrigin !== 'null' ? receiverOrigin : '*',
+				},
+			]);
+		};
 		this.client.global.postMessage = proxyModule.wrapFunction(
 			this.client.global.postMessage,
 			(target, that, args) => {
@@ -562,5 +587,6 @@ export default class ContextModule extends Module<DocumentClient> {
 				);
 			},
 		);
+		this.client.hookedPostMessage = this.client.global.postMessage;
 	}
 }

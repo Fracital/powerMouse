@@ -1,7 +1,7 @@
 // What a frame nested in a proxied page learns about its framing, and what the
 // parent learns about the frame from its messages, follow the real origins:
 // a same-origin child sees its own iframe element in `frameElement` and the
-// parent gets a real window as `event.source`; a cross-origin child
+// parent gets the child's real window as `event.source`; a cross-origin child
 // (the fixture's other host name) sees `frameElement` null and the parent gets
 // a restricted window that can be posted to but not read. The host's own
 // frame stays invisible (isolation suite).
@@ -32,17 +32,11 @@ for (let i = 0; i < 60; i++) {
 const same = nest.messages?.same;
 const cross = nest.messages?.cross;
 ok(
-	'a same-origin nested frame sees its iframe element and its source is a real window',
-	same?.frameElement === 'IFRAME#same' && same?.document === 'reachable',
+	'a same-origin nested frame sees its iframe element and is the real source of its message',
+	same?.frameElement === 'IFRAME#same' &&
+		same?.document === 'reachable' &&
+		same?.sourceIsFrame === true,
 	JSON.stringify(same),
-);
-// documented gap: a same-origin child posting through the parent's own
-// postMessage wrapper makes the parent the incumbent, so the browser reports
-// the parent as the source (cross-origin children post through their own
-// realm's restricted wrapper and are reported right)
-console.log(
-	'same-origin source is the child frame:',
-	JSON.stringify(same?.sourceIsFrame),
 );
 ok(
 	'a cross-origin nested frame sees no frameElement and is a restricted source',
