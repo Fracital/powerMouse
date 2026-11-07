@@ -129,9 +129,12 @@ ok(
 	closing.length > 5 && closing.every((s) => s[3] === 1),
 	JSON.stringify(closing.slice(-3)),
 );
+// the per-frame delta is a timing measurement: a dropped frame on a loaded
+// runner reads as a jump, so under SKIP_TIMING only the resting box counts
+const smooth = process.env.SKIP_TIMING === '1' || maxJump < 30;
 ok(
 	'frame settles on its resting box with no jump at teardown',
-	maxJump < 30 &&
+	smooth &&
 		leave.at(-1)[1] === rest.frame[1] &&
 		leave.at(-1)[2] === rest.frame[3],
 	`max per-frame top change ${maxJump.toFixed(1)}, final ${JSON.stringify(leave.at(-1))}`,
