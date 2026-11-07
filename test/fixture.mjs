@@ -87,14 +87,30 @@ const REWRITER = `<!doctype html><title>REWRITER</title>
 <script>{ const { g: location } = { g: 5 }; __rw.aliasPattern = location === 5; }</script>
 <script>{ const { location, top } = window; __rw.shorthandPattern = location.href === window.location.href && top === window; }</script>
 <script>const o = { location, top }; __rw.shorthand = o.location.href === location.href && o.top === top;</script>
+<script>{ const { a: { top: t } } = { a: window }; __rw.nestedPattern = t === window; }</script>
+<script>{ let t; ({ a: { top: t } } = { a: window }); __rw.nestedAssign = t === window; }</script>
+<script>{ const { a: { b: { location: l } } } = { a: { b: window } }; __rw.deepPattern = l === location; }</script>
+<script>(function ({ top: t }) { __rw.paramPattern = t === window; })(window);</script>
+<script>(({ a: { location: l } }) => { __rw.arrowParam = l === location; })({ a: window });</script>
+<script>__rw.arrowExprParam = (({ top: t }) => t === window)(window);</script>
+<script>(function ({ top: t } = window) { __rw.defaultParam = t === window; })();</script>
+<script>({ m({ top: t }, n) { __rw.methodParam = t === window && n === 2; } }).m(window, 2);</script>
+<script>(function () { 'use strict'; (function (a, { top: t }, ...rest) { __rw.strictParam = t === window && a === 1 && rest.length === 1 && (function () { return this; })() === undefined; })(1, window, 3); })();</script>
 <script type="module">import top from 'data:text/javascript,export default 42'; __rw.importName = top === 42;</script>
 <script type="module">import 'bare';</script>
 <script type="module">import { a, b } from './mod-re.js'; __rw.reexport = a === 'A' && b === 'A';</script>
 <script type="module">__rw.dynBare = (await import('bare2')).default === 'B2';</script>
+<script src="/sub/dyn.js"></script>
+<script type="module">__rw.metaResolve = import.meta.resolve('./mod-a.js') === new URL('./mod-a.js', location.href).href && import.meta.resolve('bare') === 'bare';</script>
 <script type="module">await new Promise((r) => setTimeout(r, 300)); __rw.done = true;</script>`;
 
 const MODULES = {
 	'/mod-a.js': "export const a = 'A';",
+	// a classic script's dynamic import resolves against the script, not the
+	// document (rewriter suite)
+	'/sub/mod-a.js': "export const a = 'SUB';",
+	'/sub/dyn.js':
+		"import('./mod-a.js').then((m) => { __rw.classicImportBase = m.a === 'SUB'; });",
 	'/mod-re.js':
 		"export * from './mod-a.js'; export { a as b } from './mod-a.js';",
 };

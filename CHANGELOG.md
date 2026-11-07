@@ -106,6 +106,13 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- Destructuring reaches the spoof at every depth: `const { a: { top } } = o`
+  and `({ a: { location: l } } = o)` resolve through the wrapped source like
+  the shallow form did, and a destructured parameter
+  (`function f({ top: t }) {}`, arrows, methods, with or without a default)
+  becomes a plain parameter whose pattern is declared at the top of the body
+  and wrapped the same way. Array patterns (`const [{ top }] = [w]`) and a
+  nested default (`{ a: { top } = w }`) still read the real value.
 - A page's own `history` is scoped to its frame: `length` counts the frame's
   entries instead of the joint session history of the host page and every
   frame in it, and `back()`, `forward()` and `go()` step those entries only
@@ -323,8 +330,8 @@ Fixed while testing real sites and a feature fixture:
   inserted itself.
 - `getComputedStyle` / `getPropertyValue` return routed `url()` values;
   `CSSRule.cssText` assignment and the Typed OM are not rewritten.
-- Nested destructuring patterns (`{ a: { top } }`) and function parameter
-  patterns still read the real value.
+- Array destructuring patterns (`const [{ top }] = [w]`) and a nested
+  pattern's default value (`{ a: { top } = w }`) still read the real value.
 - In same-origin mode a `postMessage` from the host into a frame runs the
   frame's own hooked `postMessage`, so it arrives as if the page had sent it;
   only the cross-origin boundary of isolation mode lets the filter drop it.

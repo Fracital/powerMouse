@@ -92,10 +92,11 @@ that is accurate and expected.
 | Host `postMessage` into the frame                                                                      | arrives, unwrapped, as if the page sent it (measured)                               | dropped (measured)                   |
 | `<area href>`                                                                                          | never rewritten; raw URL in the frame                                               | same                                 |
 | `blob:` navigations, `about:blank` popups written with `document.write`                                | unrewritten documents                                                               | same                                 |
-| Nested destructuring (`{ a: { top } }`), function parameter patterns, `Reflect.get(window,'top')`      | raw `top`, stopped only by sandbox                                                  | stopped by sandbox                   |
+| Nested destructuring (`{ a: { top } }`), parameter patterns (`({ top: t }) => t`)                      | spoofed (measured)                                                                  | spoofed (measured)                   |
+| Array patterns (`[{ top }] = [w]`), nested pattern defaults, `Reflect.get(window,'top')`               | raw `top`, stopped only by sandbox                                                  | stopped by sandbox                   |
 
 Open, in order of leverage: `area[href]`; `blob:` and `about:blank`
-documents; nested patterns.
+documents; array patterns.
 
 ## 3. JS rewriter
 
@@ -104,32 +105,32 @@ configurable. Stomp: meriyah parse, AST mutation, full regeneration with
 escodegen (all comments lost, literals normalised). The rewriter suite covers
 every "ok" row below.
 
-| Feature                                                                                     | Status  | Notes                                                                                                 |
-| ------------------------------------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------- |
-| Reads, member reads, computed reads of `top`/`location`/`eval`                              | ok      | value-tagged (`$s$L`) so aliases via rest/spread work; scramjet's `$scramjet$clean` is a stub         |
-| `parent` read                                                                               | partial | runtime getter only; fine for a single frame                                                          |
-| `location = v`, `location op= v`, `location++`                                              | ahead   |                                                                                                       |
-| `x.location = v` for `document`, `top`, other windows                                       | ok      | `set2` resolves the target like a read                                                                |
-| Shorthand `{location}`                                                                      | ok      | printed from the value again                                                                          |
-| Alias / assignment destructuring `const {location: x} = o`, `({top: t} = o)`                | ok      | the source is wrapped in `$s$j.pattern(o)`; nested patterns and parameter patterns still read raw     |
-| `var {location} = o` (sloppy), `for (location of ...)`                                      | partial | `for ... of` with an unforgeable target is skipped; a sloppy `var` pattern still hits the real setter |
-| `typeof top`                                                                                | ok      | left alone                                                                                            |
-| Skip list: class fields, class expression names, catch params, labels, import binding names | ok      | most were already harmless through value tagging; guarded by the suite                                |
-| On parse failure return the original source (`allowInvalidJs`)                              | partial | always on, one console.warn, no flag; scramjet's default is to fail the script instead                |
-| Bare import specifiers pass through to import maps                                          | ok      | static and dynamic; the map's own URLs are not rewritten (section 4)                                  |
-| `export * from` / `export {a} from` source rewriting                                        | ok      |                                                                                                       |
-| `import()` base is the script URL, not the document                                         | partial | bake the script URL in at rewrite time                                                                |
-| `import.meta.resolve`                                                                       | partial | only `import.meta.url` is set                                                                         |
-| Module workers                                                                              | ok      | the inject is fetched and run with indirect eval under top-level await (workers suite)                |
-| Preamble before `'use strict'` in classic workers                                           | partial | workers lose strict mode                                                                              |
-| `eval(nonString)` returns a string                                                          | partial | `evalScope` does `String(code)`                                                                       |
-| `GeneratorFunction`, `AsyncGeneratorFunction` constructors                                  | partial | only `Function` and `AsyncFunction` are proxied                                                       |
-| Optional chain through a non-optional member (`a?.b.location.c`)                            | partial | the `optional` flag is lost after the first link                                                      |
-| `debugger` removal                                                                          | missing | anti-debug sites                                                                                      |
-| Edit-map sourcemaps so `Function.prototype.toString` returns original code                  | missing | `restoreJS` is identity                                                                               |
-| `//# sourceURL` / `sourceMappingURL` kept                                                   | missing | all comments dropped                                                                                  |
-| Configurable helper names (`$s$j`, `$s$L`, `$P$s` are fixed)                                | missing | fingerprintable                                                                                       |
-| Debug flags: `captureErrors`, `scramitize`, `rewriterLogs`, `debugTrampolines`, `siteFlags` | missing |                                                                                                       |
+| Feature                                                                                          | Status  | Notes                                                                                                                                         |
+| ------------------------------------------------------------------------------------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reads, member reads, computed reads of `top`/`location`/`eval`                                   | ok      | value-tagged (`$s$L`) so aliases via rest/spread work; scramjet's `$scramjet$clean` is a stub                                                 |
+| `parent` read                                                                                    | partial | runtime getter only; fine for a single frame                                                                                                  |
+| `location = v`, `location op= v`, `location++`                                                   | ahead   |                                                                                                                                               |
+| `x.location = v` for `document`, `top`, other windows                                            | ok      | `set2` resolves the target like a read                                                                                                        |
+| Shorthand `{location}`                                                                           | ok      | printed from the value again                                                                                                                  |
+| Alias / assignment destructuring `const {location: x} = o`, `({top: t} = o)`, nested, parameters | ok      | the source is wrapped in `$s$j.pattern(o, spec)`; parameter patterns move into the body as `var`; array patterns and nested defaults read raw |
+| `var {location} = o` (sloppy), `for (location of ...)`                                           | partial | `for ... of` with an unforgeable target is skipped; a sloppy `var` pattern still hits the real setter                                         |
+| `typeof top`                                                                                     | ok      | left alone                                                                                                                                    |
+| Skip list: class fields, class expression names, catch params, labels, import binding names      | ok      | most were already harmless through value tagging; guarded by the suite                                                                        |
+| On parse failure return the original source (`allowInvalidJs`)                                   | partial | always on, one console.warn, no flag; scramjet defaults to the same and turns it off in its dev preset so a broken rewrite fails loudly       |
+| Bare import specifiers pass through to import maps                                               | ok      | static and dynamic; the map's own URLs are not rewritten (section 4)                                                                          |
+| `export * from` / `export {a} from` source rewriting                                             | ok      |                                                                                                                                               |
+| `import()` base is the script URL, not the document                                              | partial | bake the script URL in at rewrite time                                                                                                        |
+| `import.meta.resolve`                                                                            | partial | only `import.meta.url` is set                                                                                                                 |
+| Module workers                                                                                   | ok      | the inject is fetched and run with indirect eval under top-level await (workers suite)                                                        |
+| Preamble before `'use strict'` in classic workers                                                | partial | workers lose strict mode                                                                                                                      |
+| `eval(nonString)` returns a string                                                               | partial | `evalScope` does `String(code)`                                                                                                               |
+| `GeneratorFunction`, `AsyncGeneratorFunction` constructors                                       | partial | only `Function` and `AsyncFunction` are proxied                                                                                               |
+| Optional chain through a non-optional member (`a?.b.location.c`)                                 | partial | the `optional` flag is lost after the first link                                                                                              |
+| `debugger` removal                                                                               | missing | anti-debug sites                                                                                                                              |
+| Edit-map sourcemaps so `Function.prototype.toString` returns original code                       | missing | `restoreJS` is identity                                                                                                                       |
+| `//# sourceURL` / `sourceMappingURL` kept                                                        | missing | all comments dropped                                                                                                                          |
+| Configurable helper names (`$s$j`, `$s$L`, `$P$s` are fixed)                                     | missing | fingerprintable                                                                                                                               |
+| Debug flags: `captureErrors`, `scramitize`, `rewriterLogs`, `debugTrampolines`, `siteFlags`      | missing |                                                                                                                                               |
 
 ## 4. HTML and element attributes
 
@@ -289,9 +290,8 @@ Suites: navigate-events, request-log, version, cookie-jar, cache, isolation.
 
 ## 10. What is left, by payoff
 
-1. Rewriter gaps: nested and parameter destructuring patterns; an
-   `allowInvalidJs` flag with scramjet's semantics (fail the script by
-   default, pass it raw only when asked); `import()` and `import.meta.resolve`
+1. Rewriter gaps: an `allowInvalidJs` flag (off: a script the rewriter
+   cannot parse fails instead of running raw); `import()` and `import.meta.resolve`
    against the script URL; `debugger` removal.
 2. Documents that escape the rewrite: `area[href]`, `blob:` and `about:blank`
    documents, `window.open` return values, import map URLs,

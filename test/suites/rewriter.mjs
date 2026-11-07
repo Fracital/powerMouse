@@ -22,10 +22,21 @@ const CASES = [
 	'aliasPattern',
 	'shorthandPattern',
 	'shorthand',
+	'nestedPattern',
+	'nestedAssign',
+	'deepPattern',
+	'paramPattern',
+	'arrowParam',
+	'arrowExprParam',
+	'defaultParam',
+	'methodParam',
+	'strictParam',
 	'importName',
 	'bare',
 	'reexport',
 	'dynBare',
+	'classicImportBase',
+	'metaResolve',
 ];
 
 const browser = await launch();

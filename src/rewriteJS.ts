@@ -80,7 +80,9 @@ export function modifyJS(
 			webcompat: true,
 		});
 
-		// const catchLoop = 0;
+		// destructured parameters become plain ones with the pattern moved into
+		// the body, where the main pass wraps its source like any declaration
+		hoistParamPatterns(tree);
 
 		for (const ctx of new AcornIterator(tree)) {
 			typeLoop: switch (ctx.node.type) {
@@ -109,45 +111,36 @@ export function modifyJS(
 
 					break;
 				case 'VariableDeclarator':
-					// `const { top: t } = o`: the pattern reads `o.top` without a
-					// member expression to rewrite, so the source is wrapped and the
-					// reads resolve through it (shallow: nested patterns read raw)
-					if (
-						ctx.node.id.type === 'ObjectPattern' &&
-						ctx.node.init &&
-						patternReadsUnforgeable(ctx.node.id)
-					)
-						ctx.replaceWith(
-							b.variableDeclarator(
-								ctx.node.id,
-								b.callExpression(
-									b.memberExpression(
-										b.identifier(ACCESS_KEY),
-										b.identifier('pattern'),
-									),
-									[result(ctx.node.init)],
+					// `const { top: t } = o`, `const { a: { top } } = o`: the pattern
+					// reads `o.top` without a member expression to rewrite, so the
+					// source is wrapped and the reads resolve through it, at every
+					// depth the pattern names an unforgeable
+					{
+						const spec =
+							ctx.node.init && !isPatternCall(ctx.node.init)
+								? patternSpec(ctx.node.id)
+								: null;
+						if (spec)
+							ctx.replaceWith(
+								b.variableDeclarator(
+									ctx.node.id,
+									patternCall(result(ctx.node.init), spec),
 								),
-							),
-						);
+							);
+					}
 					break;
 				case 'AssignmentExpression':
-					if (
-						ctx.node.left.type === 'ObjectPattern' &&
-						patternReadsUnforgeable(ctx.node.left)
-					)
-						ctx.replaceWith(
-							b.assignmentExpression(
-								'=',
-								ctx.node.left,
-								b.callExpression(
-									b.memberExpression(
-										b.identifier(ACCESS_KEY),
-										b.identifier('pattern'),
-									),
-									[result(ctx.node.right)],
+					{
+						const spec = patternSpec(ctx.node.left);
+						if (spec)
+							ctx.replaceWith(
+								b.assignmentExpression(
+									'=',
+									ctx.node.left,
+									patternCall(result(ctx.node.right), spec),
 								),
-							),
-						);
+							);
+					}
 					break;
 				case 'ImportDeclaration':
 				case 'ExportAllDeclaration':
@@ -552,8 +545,20 @@ if (!${CLIENT_KEY}.applied)
 	}
 }
 
-/** whether an object pattern names an unforgeable (`{ top }`, `{ location: l }`) */
-function patternReadsUnforgeable(pattern: any): boolean {
+/**
+ * Which keys of an object pattern read an unforgeable, at any depth:
+ * `{ top }` gives `{ top: true }`, `{ a: { location: l } }` gives
+ * `{ a: { location: true } }`. The runtime `pattern()` wraps the source so
+ * those reads resolve like member reads. Null when the pattern reads none
+ * (or is not an object pattern: array patterns read through the iterator,
+ * which a proxy cannot redirect).
+ */
+type PatternSpec = { [key: string]: true | PatternSpec };
+
+function patternSpec(pattern: any): PatternSpec | null {
+	if (!pattern || pattern.type !== 'ObjectPattern') return null;
+	const spec: PatternSpec = {};
+	let any = false;
 	for (const property of pattern.properties) {
 		if (property.type !== 'Property' || property.computed) continue;
 		const key = property.key;
@@ -563,9 +568,149 @@ function patternReadsUnforgeable(pattern: any): boolean {
 				: key.type === 'Literal'
 					? String(key.value)
 					: '';
-		if (UNDEFINABLE.includes(name)) return true;
+		const value =
+			property.value.type === 'AssignmentPattern'
+				? property.value.left
+				: property.value;
+		const nested = patternSpec(value);
+		if (nested) {
+			spec[name] = nested;
+			any = true;
+		} else if (UNDEFINABLE.includes(name)) {
+			spec[name] = true;
+			any = true;
+		}
 	}
+	return any ? spec : null;
+}
+
+function specLiteral(spec: PatternSpec): any {
+	return b.objectExpression(
+		Object.entries(spec).map(([key, value]) =>
+			b.property(
+				'init',
+				b.literal(key),
+				value === true ? b.literal(true) : specLiteral(value),
+			),
+		),
+	);
+}
+
+/** `$s$j.pattern(source, spec)` */
+function patternCall(source: any, spec: PatternSpec): any {
+	return b.callExpression(
+		b.memberExpression(b.identifier(ACCESS_KEY), b.identifier('pattern')),
+		[source, specLiteral(spec)],
+	);
+}
+
+function isPatternCall(node: any): boolean {
+	return (
+		node.type === 'CallExpression' &&
+		node.callee.type === 'MemberExpression' &&
+		node.callee.object.type === 'Identifier' &&
+		node.callee.object.name === ACCESS_KEY &&
+		node.callee.property.type === 'Identifier' &&
+		node.callee.property.name === 'pattern'
+	);
+}
+
+/** every child node of an ESTree node, in source order */
+function* children(node: any): Generator<any> {
+	for (const key in node) {
+		if (key === 'range' || key === 'loc') continue;
+		const value = node[key];
+		if (typeof value !== 'object' || value === null) continue;
+		if (Array.isArray(value)) {
+			for (const item of value)
+				if (item && typeof item.type === 'string') yield item;
+		} else if (typeof value.type === 'string') yield value;
+	}
+}
+
+/** the names a binding pattern introduces */
+function boundNames(pattern: any, names: string[] = []): string[] {
+	switch (pattern?.type) {
+		case 'Identifier':
+			names.push(pattern.name);
+			break;
+		case 'ObjectPattern':
+			for (const property of pattern.properties)
+				boundNames(
+					property.type === 'RestElement' ? property.argument : property.value,
+					names,
+				);
+			break;
+		case 'ArrayPattern':
+			for (const element of pattern.elements) boundNames(element, names);
+			break;
+		case 'AssignmentPattern':
+			boundNames(pattern.left, names);
+			break;
+		case 'RestElement':
+			boundNames(pattern.argument, names);
+			break;
+	}
+	return names;
+}
+
+function mentions(node: any, names: string[]): boolean {
+	if (node.type === 'Identifier' && names.includes(node.name)) return true;
+	for (const child of children(node)) if (mentions(child, names)) return true;
 	return false;
+}
+
+const PARAM_TEMP = `${ACCESS_KEY}a`;
+
+/**
+ * `function f({ top: t }) {}`: a parameter pattern has no source expression
+ * to wrap, so the parameter becomes a plain one and the pattern a `var`
+ * declaration at the top of the body (after the directive prologue), whose
+ * source the main pass wraps. `var` matches a parameter's scoping; the
+ * default value stays on the parameter. Left alone when a later parameter
+ * refers to a name the pattern binds. (`'use strict'` cannot appear in such
+ * a function, but other directives can, so the prologue is skipped.)
+ */
+function hoistParamPatterns(node: any) {
+	for (const child of children(node)) hoistParamPatterns(child);
+
+	if (
+		node.type !== 'FunctionDeclaration' &&
+		node.type !== 'FunctionExpression' &&
+		node.type !== 'ArrowFunctionExpression'
+	)
+		return;
+
+	const hoisted: any[] = [];
+	node.params = node.params.map((param: any, index: number) => {
+		const isDefault = param.type === 'AssignmentPattern';
+		const target = isDefault ? param.left : param;
+		if (!patternSpec(target)) return param;
+		const names = boundNames(target);
+		if (node.params.slice(index + 1).some((p: any) => mentions(p, names)))
+			return param;
+		const temp = b.identifier(`${PARAM_TEMP}${index}`);
+		hoisted.push(b.variableDeclarator(target, b.identifier(temp.name)));
+		return isDefault ? b.assignmentPattern(temp, param.right) : temp;
+	});
+	if (!hoisted.length) return;
+
+	if (node.body.type !== 'BlockStatement') {
+		node.body = b.blockStatement([b.returnStatement(node.body)]);
+		// meriyah's flag for an expression-bodied arrow; the generator prints
+		// a block in parentheses while it is set
+		node.expression = false;
+	}
+	const body = node.body.body;
+	let at = 0;
+	while (
+		at < body.length &&
+		body[at].type === 'ExpressionStatement' &&
+		body[at].expression.type === 'Literal' &&
+		typeof body[at].expression.value === 'string'
+	)
+		at++;
+	body.splice(at, 0, b.variableDeclaration('var', hoisted));
 }
 
 /** `react`, `#private`, `@scope/pkg`: not a URL, resolved by an import map */

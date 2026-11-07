@@ -28,6 +28,8 @@ export function setGlobalProxy(object: any, name: string, proxy: unknown) {
 	object[GLOBAL_NAME] = name;
 }
 
+type PatternSpec = { [key: string]: true | PatternSpec };
+
 export default class AccessModule extends Module<Client> {
 	apply() {
 		const evalSnapshot = this.client.global.eval;
@@ -208,15 +210,24 @@ export default class AccessModule extends Module<Client> {
 			},
 			// `const { top: t } = o`: a pattern cannot be rewritten key by key,
 			// so the source is wrapped and every read of an unforgeable through
-			// it resolves like a member read would
-			pattern: (object: unknown): unknown => {
+			// it resolves like a member read would. `spec` names the keys whose
+			// values are destructured further (`{ a: { top } }`): those are
+			// wrapped again, everything else is handed out as it is
+			pattern: (object: unknown, spec?: PatternSpec): unknown => {
 				if (
 					(typeof object !== 'object' && typeof object !== 'function') ||
 					object === null
 				)
 					return object;
 				return new Proxy(object as object, {
-					get: (target, key) => api.get(Reflect.get(target, key), key),
+					get: (target, key) => {
+						const value = api.get(Reflect.get(target, key), key);
+						const nested =
+							spec && typeof key === 'string' ? spec[key] : undefined;
+						return nested && nested !== true
+							? api.pattern(value, nested)
+							: value;
+					},
 				});
 			},
 			evalSnapshot,
