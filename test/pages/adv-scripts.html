@@ -1,0 +1,608 @@
+<!doctype html>
+<title>ADV SCRIPTS</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// document.write during parsing is a route of its own
+	document.write(
+		'<script>' + __advPayload('document.write script') + '<\/script>',
+	);
+	document.writeln(
+		'<script>' + __advPayload('document.writeln script') + '<\/script>',
+	);
+	document.write(
+		'<img src="x:" onerror=\'' +
+			__advPayload('document.write img onerror') +
+			"'>",
+	);
+</script>
+<script>
+	// Every route by which text becomes running script: script element text
+	// setters and text-node mutations, script src from data:/blob:, inline
+	// event handler attributes set through every attribute API, markup parsed
+	// into shadow roots and foreign documents then adopted, XSLT output, SVG
+	// script, srcdoc frames, and javascript: URLs (scramjet: llm/escapes.ts,
+	// documentwrite.ts, foreigncontext.ts). A route is contained when its
+	// payload saw the spoofed top and the page's URL; 'did-not-run' means the
+	// browser itself never executed it.
+	const R = __advRecord;
+	const C = __advPayload;
+	const CC = __advChildPayload;
+	const route = (name, fn) => {
+		R(name, 'did-not-run');
+		try {
+			fn(C(name));
+		} catch (error) {
+			R(name, undefined, error);
+		}
+	};
+	const childRoute = (name, fn) => {
+		R(name, 'did-not-run');
+		try {
+			fn(CC(name));
+		} catch (error) {
+			R(name, undefined, error);
+		}
+	};
+	const script = (fn) => {
+		const s = document.createElement('script');
+		fn(s);
+		document.body.append(s);
+	};
+	route('script.text', (p) => script((s) => (s.text = p)));
+	route('script.innerText', (p) => script((s) => (s.innerText = p)));
+	route('script.textContent', (p) => script((s) => (s.textContent = p)));
+	route('script.innerHTML', (p) => script((s) => (s.innerHTML = p)));
+	route('script.append(string)', (p) => script((s) => s.append(p)));
+	route('script.appendChild(textNode)', (p) =>
+		script((s) => s.appendChild(document.createTextNode(p))),
+	);
+	route('script.prepend(string)', (p) => script((s) => s.prepend(p)));
+	route('script.replaceChildren(string)', (p) =>
+		script((s) => s.replaceChildren(p)),
+	);
+	route('script.insertAdjacentText', (p) =>
+		script((s) => s.insertAdjacentText('beforeend', p)),
+	);
+	route('script.before text then move', (p) => {
+		const s = document.createElement('script');
+		const t = document.createTextNode(p);
+		document.body.append(t);
+		s.append(t);
+		document.body.append(s);
+	});
+	route('textNode.data', (p) =>
+		script((s) => {
+			const t = document.createTextNode('');
+			s.appendChild(t);
+			t.data = p;
+		}),
+	);
+	route('textNode.nodeValue', (p) =>
+		script((s) => {
+			const t = document.createTextNode('');
+			s.appendChild(t);
+			t.nodeValue = p;
+		}),
+	);
+	route('textNode.textContent', (p) =>
+		script((s) => {
+			const t = document.createTextNode('');
+			s.appendChild(t);
+			t.textContent = p;
+		}),
+	);
+	route('textNode.appendData', (p) =>
+		script((s) => {
+			const t = document.createTextNode(p.slice(0, 5));
+			s.appendChild(t);
+			t.appendData(p.slice(5));
+		}),
+	);
+	route('textNode.insertData', (p) =>
+		script((s) => {
+			const t = document.createTextNode(p.slice(0, 5) + p.slice(10));
+			s.appendChild(t);
+			t.insertData(5, p.slice(5, 10));
+		}),
+	);
+	route('textNode.replaceData', (p) =>
+		script((s) => {
+			const t = document.createTextNode(p.slice(0, 5) + 'XXXXX' + p.slice(10));
+			s.appendChild(t);
+			t.replaceData(5, 5, p.slice(5, 10));
+		}),
+	);
+	route('script.text after insertion', (p) => {
+		const s = document.createElement('script');
+		document.body.append(s);
+		s.text = p;
+	});
+	route('script.src = data:', (p) =>
+		script((s) => (s.src = 'data:text/javascript,' + encodeURIComponent(p))),
+	);
+	route('script.setAttribute(src, data:)', (p) =>
+		script((s) =>
+			s.setAttribute('src', 'data:text/javascript,' + encodeURIComponent(p)),
+		),
+	);
+	route('script.setAttributeNS(src, data:)', (p) =>
+		script((s) =>
+			s.setAttributeNS(
+				null,
+				'src',
+				'data:text/javascript,' + encodeURIComponent(p),
+			),
+		),
+	);
+	route('script.setAttributeNode(src, data:)', (p) =>
+		script((s) => {
+			const a = document.createAttribute('src');
+			a.value = 'data:text/javascript,' + encodeURIComponent(p);
+			s.setAttributeNode(a);
+		}),
+	);
+	route('script.attributes.setNamedItem(src, data:)', (p) =>
+		script((s) => {
+			const a = document.createAttribute('src');
+			a.value = 'data:text/javascript,' + encodeURIComponent(p);
+			s.attributes.setNamedItem(a);
+		}),
+	);
+	route('script src attr node value change', (p) =>
+		script((s) => {
+			s.setAttribute('src', 'data:text/javascript,');
+			s.getAttributeNode('src').value =
+				'data:text/javascript,' + encodeURIComponent(p);
+		}),
+	);
+	route('script.src = blob:', (p) =>
+		script(
+			(s) =>
+				(s.src = URL.createObjectURL(
+					new Blob([p], { type: 'text/javascript' }),
+				)),
+		),
+	);
+	route('module script.textContent', (p) =>
+		script((s) => {
+			s.type = 'module';
+			s.textContent = p;
+		}),
+	);
+	route('module script.src = data:', (p) =>
+		script((s) => {
+			s.type = 'module';
+			s.src = 'data:text/javascript,' + encodeURIComponent(p);
+		}),
+	);
+	route('script type set after text', (p) =>
+		script((s) => {
+			s.textContent = p;
+			s.type = 'text/javascript';
+		}),
+	);
+	route('script cloneNode of parsed script', (p) => {
+		const tpl = document.createElement('template');
+		tpl.innerHTML = '<script>' + p + '<\/script>';
+		document.body.append(tpl.content.firstChild.cloneNode(true));
+	});
+	route('template content script adopted', (p) => {
+		const tpl = document.createElement('template');
+		tpl.innerHTML = '<script>' + p + '<\/script>';
+		document.body.append(document.importNode(tpl.content, true));
+	});
+	route('div.innerHTML script', (p) => {
+		const d = document.createElement('div');
+		d.innerHTML = '<script>' + p + '<\/script>';
+		document.body.append(d);
+	});
+	route('insertAdjacentHTML script', (p) =>
+		document.body.insertAdjacentHTML(
+			'beforeend',
+			'<script>' + p + '<\/script>',
+		),
+	);
+	route('createContextualFragment script', (p) => {
+		const range = document.createRange();
+		range.selectNodeContents(document.body);
+		document.body.append(
+			range.createContextualFragment('<script>' + p + '<\/script>'),
+		);
+	});
+	route('DOMParser html script adopted', (p) => {
+		const doc = new DOMParser().parseFromString(
+			'<script>' + p + '<\/script>',
+			'text/html',
+		);
+		document.body.append(document.adoptNode(doc.querySelector('script')));
+	});
+	route('createHTMLDocument script adopted', (p) => {
+		const doc = document.implementation.createHTMLDocument('');
+		const s = doc.createElement('script');
+		s.textContent = p;
+		document.body.append(document.adoptNode(s));
+	});
+	// inline handlers through every attribute API
+	const click = (fn) => {
+		const b = document.createElement('button');
+		fn(b);
+		document.body.append(b);
+		b.click();
+	};
+	route('setAttribute onclick', (p) =>
+		click((b) => b.setAttribute('onclick', p)),
+	);
+	route('setAttributeNS onclick', (p) =>
+		click((b) => b.setAttributeNS(null, 'onclick', p)),
+	);
+	route('setAttributeNode onclick', (p) =>
+		click((b) => {
+			const a = document.createAttribute('onclick');
+			a.value = p;
+			b.setAttributeNode(a);
+		}),
+	);
+	route('attributes.setNamedItem onclick', (p) =>
+		click((b) => {
+			const a = document.createAttribute('onclick');
+			a.value = p;
+			b.attributes.setNamedItem(a);
+		}),
+	);
+	route('onclick attr node value change', (p) =>
+		click((b) => {
+			b.setAttribute('onclick', '');
+			b.getAttributeNode('onclick').value = p;
+		}),
+	);
+	route('onclick attr node nodeValue change', (p) =>
+		click((b) => {
+			b.setAttribute('onclick', '');
+			b.getAttributeNode('onclick').nodeValue = p;
+		}),
+	);
+	route('setAttributeNodeNS onclick', (p) =>
+		click((b) => {
+			const a = document.createAttributeNS(null, 'onclick');
+			a.value = p;
+			b.setAttributeNodeNS(a);
+		}),
+	);
+	route('toggleAttribute then value', (p) =>
+		click((b) => {
+			b.toggleAttribute('onclick', true);
+			b.attributes.onclick.value = p;
+		}),
+	);
+	route('div.innerHTML img onerror', (p) => {
+		const d = document.createElement('div');
+		d.innerHTML = '<img src="x:" onerror=\'' + p + "'>";
+		document.body.append(d);
+	});
+	route('outerHTML img onerror', (p) => {
+		const d = document.createElement('div');
+		document.body.append(d);
+		d.outerHTML = '<img src="x:" onerror=\'' + p + "'>";
+	});
+	route('insertAdjacentHTML img onerror', (p) =>
+		document.body.insertAdjacentHTML(
+			'beforeend',
+			'<img src="x:" onerror=\'' + p + "'>",
+		),
+	);
+	route('setHTMLUnsafe img onerror', (p) => {
+		const d = document.createElement('div');
+		document.body.append(d);
+		if (!d.setHTMLUnsafe) throw new Error('no setHTMLUnsafe');
+		d.setHTMLUnsafe('<img src="x:" onerror=\'' + p + "'>");
+	});
+	route('shadowRoot.innerHTML img onerror', (p) => {
+		const host = document.createElement('div');
+		const root = host.attachShadow({ mode: 'open' });
+		document.body.append(host);
+		root.innerHTML = '<img src="x:" onerror=\'' + p + "'>";
+	});
+	route('shadowRoot.setHTMLUnsafe img onerror', (p) => {
+		const host = document.createElement('div');
+		const root = host.attachShadow({ mode: 'open' });
+		document.body.append(host);
+		if (!root.setHTMLUnsafe) throw new Error('no setHTMLUnsafe');
+		root.setHTMLUnsafe('<img src="x:" onerror=\'' + p + "'>");
+	});
+	route('shadowRoot script', (p) => {
+		const host = document.createElement('div');
+		const root = host.attachShadow({ mode: 'open' });
+		document.body.append(host);
+		const s = document.createElement('script');
+		s.textContent = p;
+		root.append(s);
+	});
+	route('declarative shadow DOM img onerror', (p) => {
+		const d = document.createElement('div');
+		if (!d.setHTMLUnsafe) throw new Error('no setHTMLUnsafe');
+		d.setHTMLUnsafe(
+			'<span><template shadowrootmode="open"><img src="x:" onerror=\'' +
+				p +
+				"'></template></span>",
+		);
+		document.body.append(d);
+	});
+	route('createContextualFragment img onerror', (p) => {
+		const range = document.createRange();
+		range.selectNodeContents(document.body);
+		document.body.append(
+			range.createContextualFragment('<img src="x:" onerror=\'' + p + "'>"),
+		);
+	});
+	route('template img onerror adopted', (p) => {
+		const tpl = document.createElement('template');
+		tpl.innerHTML = '<img src="x:" onerror=\'' + p + "'>";
+		document.body.append(document.importNode(tpl.content, true));
+	});
+	route('Document.parseHTMLUnsafe img onerror adopted', (p) => {
+		if (!Document.parseHTMLUnsafe) throw new Error('no parseHTMLUnsafe');
+		const doc = Document.parseHTMLUnsafe('<img src="x:" onerror=\'' + p + "'>");
+		document.body.append(doc.querySelector('img'));
+	});
+	route('DOMParser html img onerror adopted', (p) => {
+		const doc = new DOMParser().parseFromString(
+			'<img src="x:" onerror=\'' + p + "'>",
+			'text/html',
+		);
+		document.body.append(doc.querySelector('img'));
+	});
+	route('DOMParser xhtml img onerror adopted', (p) => {
+		const doc = new DOMParser().parseFromString(
+			'<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><img src="x:" onerror=\'' +
+				p +
+				"'/></body></html>",
+			'application/xhtml+xml',
+		);
+		document.body.append(doc.querySelector('img'));
+	});
+	route('DOMParser svg img onerror adopted', (p) => {
+		const doc = new DOMParser().parseFromString(
+			'<svg xmlns="http://www.w3.org/2000/svg"><image href="x:" onerror=\'' +
+				p +
+				"'/></svg>",
+			'image/svg+xml',
+		);
+		document.body.append(doc.documentElement);
+	});
+	route('createHTMLDocument img onerror adopted', (p) => {
+		const doc = document.implementation.createHTMLDocument('');
+		doc.body.innerHTML = '<img src="x:" onerror=\'' + p + "'>";
+		document.body.append(doc.querySelector('img'));
+	});
+	route('XSLT transformToFragment img onerror', (p) => {
+		const xml = new DOMParser().parseFromString('<root/>', 'text/xml');
+		const xsl = new DOMParser().parseFromString(
+			'<?xml version="1.0"?><xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:output method="html" omit-xml-declaration="yes"/><xsl:template match="/"><img xmlns="http://www.w3.org/1999/xhtml" src="x:" onerror=\'' +
+				p +
+				"'/></xsl:template></xsl:stylesheet>",
+			'application/xml',
+		);
+		const processor = new XSLTProcessor();
+		processor.importStylesheet(xsl);
+		document.body.append(processor.transformToFragment(xml, document));
+	});
+	route('XSLT transformToDocument img onerror', (p) => {
+		const xml = new DOMParser().parseFromString('<root/>', 'text/xml');
+		const xsl = new DOMParser().parseFromString(
+			'<?xml version="1.0"?><xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:output method="xml" omit-xml-declaration="yes"/><xsl:template match="/"><html xmlns="http://www.w3.org/1999/xhtml"><body><img src="x:" onerror=\'' +
+				p +
+				"'/></body></html></xsl:template></xsl:stylesheet>",
+			'application/xml',
+		);
+		const processor = new XSLTProcessor();
+		processor.importStylesheet(xsl);
+		document.body.append(
+			processor.transformToDocument(xml).querySelector('img'),
+		);
+	});
+	const SVG = 'http://www.w3.org/2000/svg';
+	const XLINK = 'http://www.w3.org/1999/xlink';
+	route('svg script textContent', (p) => {
+		const svg = document.createElementNS(SVG, 'svg');
+		const s = document.createElementNS(SVG, 'script');
+		s.textContent = p;
+		svg.appendChild(s);
+		document.body.append(svg);
+	});
+	route('svg script xlink:href data:', (p) => {
+		const svg = document.createElementNS(SVG, 'svg');
+		const s = document.createElementNS(SVG, 'script');
+		s.setAttributeNS(
+			XLINK,
+			'href',
+			'data:text/javascript,' + encodeURIComponent(p),
+		);
+		svg.appendChild(s);
+		document.body.append(svg);
+	});
+	route('svg script href data:', (p) => {
+		const svg = document.createElementNS(SVG, 'svg');
+		const s = document.createElementNS(SVG, 'script');
+		s.setAttribute('href', 'data:text/javascript,' + encodeURIComponent(p));
+		svg.appendChild(s);
+		document.body.append(svg);
+	});
+	route('svg image onerror', (p) => {
+		const svg = document.createElementNS(SVG, 'svg');
+		const i = document.createElementNS(SVG, 'image');
+		i.setAttribute('href', 'x:');
+		i.setAttribute('onerror', p);
+		svg.appendChild(i);
+		document.body.append(svg);
+	});
+	route('svg innerHTML script', (p) => {
+		const svg = document.createElementNS(SVG, 'svg');
+		document.body.append(svg);
+		svg.innerHTML = '<script>' + p + '<\/script>';
+	});
+	route('math annotation-xml script', (p) => {
+		const d = document.createElement('div');
+		d.innerHTML =
+			'<math><annotation-xml encoding="text/html"><img src="x:" onerror=\'' +
+			p +
+			"'></annotation-xml></math>";
+		document.body.append(d);
+	});
+	// srcdoc frames through every attribute API
+	const frame = (fn) => {
+		const f = document.createElement('iframe');
+		fn(f);
+		document.body.append(f);
+	};
+	childRoute('iframe.srcdoc', (p) =>
+		frame((f) => (f.srcdoc = '<script>' + p + '<\/script>')),
+	);
+	childRoute('iframe.setAttribute(srcdoc)', (p) =>
+		frame((f) => f.setAttribute('srcdoc', '<script>' + p + '<\/script>')),
+	);
+	childRoute('iframe.setAttributeNode(srcdoc)', (p) =>
+		frame((f) => {
+			const a = document.createAttribute('srcdoc');
+			a.value = '<script>' + p + '<\/script>';
+			f.setAttributeNode(a);
+		}),
+	);
+	childRoute('iframe.attributes.setNamedItem(srcdoc)', (p) =>
+		frame((f) => {
+			const a = document.createAttribute('srcdoc');
+			a.value = '<script>' + p + '<\/script>';
+			f.attributes.setNamedItem(a);
+		}),
+	);
+	childRoute('iframe srcdoc attr node value change', (p) =>
+		frame((f) => {
+			f.setAttribute('srcdoc', '');
+			f.getAttributeNode('srcdoc').value = '<script>' + p + '<\/script>';
+		}),
+	);
+	childRoute('iframe srcdoc img onerror', (p) =>
+		frame((f) => (f.srcdoc = '<img src="x:" onerror=\'' + p + "'>")),
+	);
+	childRoute('iframe srcdoc via innerHTML', (p) => {
+		const d = document.createElement('div');
+		d.innerHTML =
+			"<iframe srcdoc='<script>" +
+			p.replace(/'/g, '&#39;') +
+			"<\/script>'></iframe>";
+		document.body.append(d);
+	});
+	childRoute('iframe.src = data:text/html', (p) =>
+		frame((f) => {
+			// a data: frame is cross-origin to us and has to post instead
+			const post =
+				'parent.postMessage({__adv:"iframe.src = data:text/html", top: top === parent ? "parent" : "OTHER-WINDOW", href: location.href, referrer: document.referrer}, "*")';
+			f.src =
+				'data:text/html,' +
+				encodeURIComponent('<script>' + post + '<\/script>');
+		}),
+	);
+	childRoute('iframe.src = blob:', (p) =>
+		frame(
+			(f) =>
+				(f.src = URL.createObjectURL(
+					new Blob(['<script>' + p + '<\/script>'], { type: 'text/html' }),
+				)),
+		),
+	);
+	childRoute('about:blank document.write', (p) => {
+		const f = document.createElement('iframe');
+		document.body.append(f);
+		f.contentDocument.open();
+		f.contentDocument.write('<script>' + p + '<\/script>');
+		f.contentDocument.close();
+	});
+	childRoute('about:blank body.innerHTML img onerror', (p) => {
+		const f = document.createElement('iframe');
+		document.body.append(f);
+		f.contentDocument.body.innerHTML = '<img src="x:" onerror=\'' + p + "'>";
+	});
+	childRoute('about:blank script appended', (p) => {
+		const f = document.createElement('iframe');
+		document.body.append(f);
+		const s = f.contentDocument.createElement('script');
+		s.textContent = p;
+		f.contentDocument.body.append(s);
+	});
+	childRoute('about:blank contentWindow.eval', (p) => {
+		const f = document.createElement('iframe');
+		document.body.append(f);
+		f.contentWindow.eval(p);
+	});
+	childRoute('about:blank contentWindow.Function', (p) => {
+		const f = document.createElement('iframe');
+		document.body.append(f);
+		f.contentWindow.Function(p)();
+	});
+	childRoute('about:blank setTimeout string', (p) => {
+		const f = document.createElement('iframe');
+		document.body.append(f);
+		f.contentWindow.setTimeout(p, 0);
+	});
+	// javascript: URLs on a window. Any of these may navigate the window away
+	// through the proxy, which would end this page, so each runs in a child
+	// frame of its own (adv-child.html?nav=<route>, same inject as this page)
+	// that reports back; afterwards the parent reads where the child frame
+	// ended up.
+	const NAV_ROUTES = [
+		'iframe.src = javascript:',
+		'iframe.setAttribute(src, javascript:)',
+		'about:blank location = javascript:',
+		'object data=javascript:',
+		'embed src=javascript:',
+		'a href=javascript: click',
+		'a setAttribute(href, javascript:) click',
+		'a setAttributeNode(href, javascript:) click',
+		'area href=javascript: click',
+		'form action=javascript: submit',
+		'form button formaction=javascript:',
+		'location.assign(javascript:)',
+		'location.replace(javascript:)',
+		'location.href = javascript:',
+		'location = javascript:',
+		'window.location = javascript:',
+		'document.location = javascript:',
+		'Reflect.set(window, location, javascript:)',
+		'Reflect.set(document, location, javascript:)',
+		'Object.assign(window, {location})',
+		'Object.assign(document, {location})',
+		'gOPD(window, location).set.call',
+		'history.pushState then javascript:',
+		'window.open(javascript:)',
+		'window.open(javascript:, _self)',
+		'meta refresh javascript:',
+	];
+	const startNav = (i) => {
+		if (i >= NAV_ROUTES.length) return __advFinish(3500);
+		const name = NAV_ROUTES[i];
+		R(name, 'child frame did not load');
+		const f = document.createElement('iframe');
+		f.src = 'adv-child.html?nav=' + encodeURIComponent(name);
+		f.addEventListener(
+			'load',
+			() =>
+				setTimeout(() => {
+					try {
+						const u = f.contentWindow.location.href;
+						R(
+							name + ' [frame url after]',
+							new URL(u).searchParams.get('nav') === name
+								? 'unchanged'
+								: 'TELL:navigated to ' + u,
+						);
+					} catch (error) {
+						R(name + ' [frame url after]', 'threw ' + error.name);
+					}
+				}, 1500),
+			{ once: true },
+		);
+		document.body.append(f);
+		setTimeout(() => startNav(i + 1), 300);
+	};
+	startNav(0);
+</script>

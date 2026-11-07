@@ -1,0 +1,158 @@
+<!doctype html>
+<title>ADV WORKERS</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// The worker's view: self.location, self.origin, stacks, fetch and XHR
+	// URLs, import.meta in a module worker, blob: and data: workers, a
+	// SharedWorker, and the ErrorEvent a failing worker raises (scramjet:
+	// workers.ts, eval.ts worker).
+	const A = __advAsync;
+	const P = __advProbe;
+	const R = __advRecord;
+	const ask = (w, msg = 'go', ms = 8000) =>
+		new Promise((resolve, reject) => {
+			const errors = [];
+			w.onerror = (e) =>
+				errors.push(
+					(e.message || '(no message)') +
+						' @ ' +
+						(e.filename || '(no filename)'),
+				);
+			w.onmessage = (e) => resolve(e.data);
+			setTimeout(
+				() => reject(new Error('no reply; errors=' + JSON.stringify(errors))),
+				ms,
+			);
+			w.postMessage(msg);
+		});
+	A('classic worker', async () => {
+		const w = new Worker('adv-worker.js', { name: 'advworker' });
+		const d = await ask(w, { hello: 'world' });
+		w.terminate();
+		return d;
+	});
+	A('worker from URL object', async () => {
+		const w = new Worker(new URL('adv-worker.js', location.href));
+		const d = await ask(w);
+		w.terminate();
+		return { href: d.href, origin: d.origin };
+	});
+	A('module worker', async () => {
+		const w = new Worker('adv-worker-mod.js', { type: 'module' });
+		const d = await ask(w);
+		w.terminate();
+		return d;
+	});
+	const inline = `
+		self.onmessage = () => {
+			let evalHref, fnHref;
+			try { evalHref = (0, eval)('self.location.href'); } catch (e) { evalHref = 'threw ' + e.name; }
+			try { fnHref = new Function('return location.href')(); } catch (e) { fnHref = 'threw ' + e.name; }
+			postMessage({ href: self.location.href, origin: self.origin, stack: new Error('b').stack, evalHref, fnHref,
+				requestUrl: new Request('/x').url, name: self.name });
+		};`;
+	A('blob: worker', async () => {
+		const w = new Worker(
+			URL.createObjectURL(new Blob([inline], { type: 'text/javascript' })),
+			{ name: 'blobworker' },
+		);
+		const d = await ask(w);
+		w.terminate();
+		return d;
+	});
+	A('data: worker', async () => {
+		const w = new Worker('data:text/javascript,' + encodeURIComponent(inline));
+		const d = await ask(w);
+		w.terminate();
+		return d;
+	});
+	A('blob: module worker', async () => {
+		const src =
+			'self.onmessage = () => postMessage({ metaUrl: import.meta.url, href: self.location.href, origin: self.origin });';
+		const w = new Worker(
+			URL.createObjectURL(new Blob([src], { type: 'text/javascript' })),
+			{ type: 'module' },
+		);
+		const d = await ask(w);
+		w.terminate();
+		return d;
+	});
+	A(
+		'worker error event',
+		() =>
+			new Promise((resolve, reject) => {
+				const w = new Worker('adv-worker-throw.js');
+				w.onerror = (e) => {
+					e.preventDefault();
+					resolve({
+						message: e.message,
+						filename: e.filename,
+						lineno: e.lineno,
+					});
+					w.terminate();
+				};
+				setTimeout(() => reject(new Error('no error event')), 8000);
+			}),
+	);
+	A('shared worker', () => {
+		if (typeof SharedWorker === 'undefined') return 'no SharedWorker';
+		const w = new SharedWorker('adv-worker-shared.js', 'advshared');
+		w.port.start();
+		return new Promise((resolve, reject) => {
+			w.port.onmessage = (e) => resolve(e.data);
+			w.onerror = (e) => reject(new Error('shared worker error: ' + e.message));
+			setTimeout(
+				() => reject(new Error('no reply from the SharedWorker')),
+				8000,
+			);
+			w.port.postMessage('go');
+		});
+	});
+	A('worker postMessage transfer', async () => {
+		const src =
+			'self.onmessage = (e) => postMessage({ len: e.data.buf.byteLength, tag: e.data.tag });';
+		const w = new Worker(
+			URL.createObjectURL(new Blob([src], { type: 'text/javascript' })),
+		);
+		const buf = new ArrayBuffer(8);
+		const d = await new Promise((resolve, reject) => {
+			w.onmessage = (e) => resolve(e.data);
+			w.onerror = (e) => reject(new Error(e.message));
+			setTimeout(() => reject(new Error('timeout')), 8000);
+			w.postMessage({ buf, tag: 't' }, [buf]);
+		});
+		w.terminate();
+		return {
+			...d,
+			detached: buf.byteLength === 0 ? 'detached' : 'TELL:buffer not detached',
+		};
+	});
+	P('Worker toString', () => {
+		const s = Function.prototype.toString.call(Worker);
+		return /\[native code\]/.test(s) ? 'native' : 'TELL:' + s.slice(0, 80);
+	});
+	P('Worker.name/length', () =>
+		Worker.name === 'Worker' && Worker.length === 1
+			? 'Worker/1'
+			: 'TELL:' + Worker.name + '/' + Worker.length,
+	);
+	P('worklet surfaces', () => ({
+		paintWorklet:
+			typeof CSS !== 'undefined' && CSS.paintWorklet ? 'present' : 'absent',
+		audioWorklet: typeof AudioWorklet,
+	}));
+	A('paintWorklet.addModule(data:)', () =>
+		typeof CSS !== 'undefined' && CSS.paintWorklet
+			? CSS.paintWorklet
+					.addModule(
+						'data:text/javascript,registerPaint("adv", class { paint() {} })',
+					)
+					.then(
+						() => 'resolved (no way to observe the worklet scope)',
+						(e) => 'rejected ' + e.name,
+					)
+			: 'no paintWorklet',
+	);
+	__advFinish(3000);
+</script>

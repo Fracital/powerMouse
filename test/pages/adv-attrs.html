@@ -1,0 +1,438 @@
+<!doctype html>
+<title>ADV ATTRS</title>
+<link id="l" rel="stylesheet" href="adv-attrs.css" />
+<style id="st">
+	#bg2 {
+		background-image: url(/pages/sprite.svg);
+	}
+</style>
+<pre id="result">pending</pre>
+<a id="a" href="/x?q=1#h">a</a>
+<img id="i" src="/i.png" srcset="/i2.png 2x" />
+<form id="f" action="/post"></form>
+<div id="bg"></div>
+<div id="bg2"></div>
+<video id="v" poster="/p.png"></video>
+<svg id="svg">
+	<use id="use" href="/pages/sprite.svg#x" />
+	<image id="simg" href="/s.png" />
+</svg>
+<script id="s" src="adv-harness.js"></script>
+<script>
+	// Every way a URL-bearing attribute or style can be read back: attribute
+	// getters, the Attr nodes, NamedNodeMap, serializers, prototype getters
+	// applied to the live element, selectors, MutationObserver records, the
+	// CSSOM and computed style (scramjet: dom-attributes.ts, element-urls.ts,
+	// serialization.ts, css-urls.ts, stylesheets.ts). The real attribute value
+	// is the routed one; the page must read its own.
+	const P = __advProbe;
+	const A = __advAsync;
+	const a = document.getElementById('a');
+	const img = document.getElementById('i');
+	const form = document.getElementById('f');
+	const link = document.getElementById('l');
+	const script = document.getElementById('s');
+	const video = document.getElementById('v');
+	const use = document.getElementById('use');
+	const simg = document.getElementById('simg');
+	const get = (proto, key) => Object.getOwnPropertyDescriptor(proto, key).get;
+	P("a.getAttribute('href')", () => a.getAttribute('href'));
+	P('a.href', () => a.href);
+	P('a.origin', () => a.origin);
+	P('a.host', () => a.host);
+	P('a.pathname', () => a.pathname);
+	P('a.search', () => a.search);
+	P('a.hash', () => a.hash);
+	P('a.toString()', () => a.toString());
+	P("a + ''", () => a + '');
+	P('String(a)', () => String(a));
+	P('a.attributes[0].value', () => a.attributes[0].value);
+	P('a.attributes.href.value', () => a.attributes.href.value);
+	P(
+		"a.attributes.getNamedItem('href').value",
+		() => a.attributes.getNamedItem('href').value,
+	);
+	P('a.attributes.item(0).value', () => a.attributes.item(0).value);
+	P("a.getAttributeNode('href').value", () => a.getAttributeNode('href').value);
+	P(
+		"a.getAttributeNode('href').nodeValue",
+		() => a.getAttributeNode('href').nodeValue,
+	);
+	P(
+		"a.getAttributeNode('href').textContent",
+		() => a.getAttributeNode('href').textContent,
+	);
+	P('Attr.prototype value getter', () =>
+		get(Attr.prototype, 'value').call(a.getAttributeNode('href')),
+	);
+	P('Node.prototype nodeValue getter on Attr', () =>
+		get(Node.prototype, 'nodeValue').call(a.getAttributeNode('href')),
+	);
+	P('Node.prototype textContent getter on Attr', () =>
+		get(Node.prototype, 'textContent').call(a.getAttributeNode('href')),
+	);
+	P('[...a.attributes] names', () => [...a.attributes].map((x) => x.name));
+	P('[...a.attributes] values', () => [...a.attributes].map((x) => x.value));
+	P('a.attributes.length', () => a.attributes.length);
+	P('a.getAttributeNames()', () => a.getAttributeNames());
+	P('Element.prototype.getAttributeNames.call', () =>
+		Element.prototype.getAttributeNames.call(a),
+	);
+	P("a.hasAttribute('href')", () => a.hasAttribute('href'));
+	P('a.outerHTML', () => a.outerHTML);
+	P('a.cloneNode().outerHTML', () => a.cloneNode().outerHTML);
+	P('a.cloneNode().href', () => a.cloneNode().href);
+	P("a.cloneNode().getAttribute('href')", () =>
+		a.cloneNode().getAttribute('href'),
+	);
+	P('XMLSerializer a', () => new XMLSerializer().serializeToString(a));
+	P('XMLSerializer svg image', () =>
+		new XMLSerializer().serializeToString(simg),
+	);
+	P('XMLSerializer body', () =>
+		new XMLSerializer().serializeToString(document.body).slice(0, 400),
+	);
+	P('Element.prototype.getAttribute.call(a)', () =>
+		Element.prototype.getAttribute.call(a, 'href'),
+	);
+	P('Reflect.apply(getAttribute)', () =>
+		Reflect.apply(Element.prototype.getAttribute, a, ['href']),
+	);
+	P('Element.prototype.getAttributeNS.call(a)', () =>
+		Element.prototype.getAttributeNS.call(a, null, 'href'),
+	);
+	P('HTMLAnchorElement href getter', () =>
+		get(HTMLAnchorElement.prototype, 'href').call(a),
+	);
+	P('HTMLAnchorElement __lookupGetter__ href', () =>
+		HTMLAnchorElement.prototype.__lookupGetter__('href').call(a),
+	);
+	P('Element.prototype attributes getter', () =>
+		[...get(Element.prototype, 'attributes').call(a)].map((x) => x.value),
+	);
+	P('Element.prototype outerHTML getter', () =>
+		get(Element.prototype, 'outerHTML').call(a),
+	);
+	P('Element.prototype innerHTML getter on body', () =>
+		get(Element.prototype, 'innerHTML').call(document.body).slice(0, 400),
+	);
+	P('Element.prototype getHTML', () =>
+		a.getHTML ? a.getHTML() : 'no getHTML',
+	);
+	P('a.matches(\'[href="/x?q=1#h"]\')', () =>
+		a.matches('[href="/x?q=1#h"]')
+			? 'matches'
+			: 'TELL:selector by literal value misses',
+	);
+	P('querySelector(\'[href^="/x"]\')', () =>
+		document.querySelector('[href^="/x"]') === a ? 'found' : 'TELL:not found',
+	);
+	P('querySelector(\'[href*="stomp"]\')', () => {
+		const el = document.querySelector('[href*="stomp"], [src*="stomp"]');
+		return el ? 'TELL:' + el.tagName + ' matches a stomp URL' : 'none';
+	});
+	P('img.src', () => img.src);
+	P('img.currentSrc', () => img.currentSrc);
+	P("img.getAttribute('src')", () => img.getAttribute('src'));
+	P('img.srcset', () => img.srcset);
+	P("img.getAttribute('srcset')", () => img.getAttribute('srcset'));
+	P('img.attributes.src.value', () => img.attributes.src.value);
+	P('HTMLImageElement src getter', () =>
+		get(HTMLImageElement.prototype, 'src').call(img),
+	);
+	P('HTMLImageElement currentSrc getter', () =>
+		get(HTMLImageElement.prototype, 'currentSrc').call(img),
+	);
+	P('img.outerHTML', () => img.outerHTML);
+	P('form.action', () => form.action);
+	P("form.getAttribute('action')", () => form.getAttribute('action'));
+	P('HTMLFormElement action getter', () =>
+		get(HTMLFormElement.prototype, 'action').call(form),
+	);
+	P('video.poster', () => video.poster);
+	P('HTMLVideoElement poster getter', () =>
+		get(HTMLVideoElement.prototype, 'poster').call(video),
+	);
+	P('script.src', () => script.src);
+	P("script.getAttribute('src')", () => script.getAttribute('src'));
+	P('HTMLScriptElement src getter', () =>
+		get(HTMLScriptElement.prototype, 'src').call(script),
+	);
+	P('document.scripts srcs', () => [...document.scripts].map((s) => s.src));
+	P('document.scripts.length', () => document.scripts.length);
+	P('document.currentScript', () =>
+		document.currentScript ? document.currentScript.src || 'inline' : 'null',
+	);
+	P('link.href', () => link.href);
+	P("link.getAttribute('href')", () => link.getAttribute('href'));
+	P('HTMLLinkElement href getter', () =>
+		get(HTMLLinkElement.prototype, 'href').call(link),
+	);
+	P('use.href.baseVal', () => use.href.baseVal);
+	P('use.href.animVal', () => use.href.animVal);
+	P("use.getAttribute('href')", () => use.getAttribute('href'));
+	P('svg image href.baseVal', () => simg.href.baseVal);
+	P('document.documentElement.outerHTML stomp hits', () =>
+		(
+			document.documentElement.outerHTML.match(
+				/[^"' ]*(stomp|\$s\$)[^"' ]*/gi,
+			) || []
+		).slice(0, 5),
+	);
+	P('document.documentElement attribute names', () =>
+		document.documentElement.getAttributeNames(),
+	);
+	P('document.head.children', () =>
+		[...document.head.children].map(
+			(e) => e.tagName + (e.src || e.href ? ':' + (e.src || e.href) : ''),
+		),
+	);
+	P('document.body.children count', () => document.body.children.length);
+	P(
+		'document.querySelectorAll(script).length',
+		() => document.querySelectorAll('script').length,
+	);
+	// writes then readbacks
+	P('setAttribute then getAttribute', () => {
+		const x = document.createElement('a');
+		x.setAttribute('href', '/w');
+		return [x.getAttribute('href'), x.href, x.outerHTML];
+	});
+	P('setAttributeNS then getAttribute', () => {
+		const x = document.createElement('img');
+		x.setAttributeNS(null, 'src', '/w.png');
+		return [x.getAttribute('src'), x.src];
+	});
+	P('setAttributeNode then value', () => {
+		const x = document.createElement('img');
+		const at = document.createAttribute('src');
+		at.value = '/n.png';
+		x.setAttributeNode(at);
+		return [x.getAttribute('src'), at.value, x.src];
+	});
+	P('attr value after property set', () => {
+		const x = document.createElement('img');
+		x.src = '/p.png';
+		return [x.getAttribute('src'), x.attributes.src.value, x.outerHTML];
+	});
+	P('a.href component setters', () => {
+		const x = document.createElement('a');
+		x.href = '/base';
+		x.pathname = '/changed';
+		x.search = '?s=1';
+		x.hash = 'frag';
+		return [x.href, x.getAttribute('href')];
+	});
+	A('MutationObserver records', () => {
+		const x = document.createElement('img');
+		x.setAttribute('src', '/m1.png');
+		document.body.append(x);
+		return new Promise((resolve) => {
+			const records = [];
+			const mo = new MutationObserver((list) => {
+				for (const r of list) records.push([r.attributeName, r.oldValue]);
+			});
+			mo.observe(x, { attributes: true, attributeOldValue: true });
+			x.src = '/m2.png';
+			setTimeout(() => {
+				mo.disconnect();
+				resolve(records);
+			}, 200);
+		});
+	});
+	A('MutationObserver childList addedNodes', () => {
+		return new Promise((resolve) => {
+			const seen = [];
+			const mo = new MutationObserver((list) => {
+				for (const r of list)
+					for (const n of r.addedNodes)
+						seen.push(n.nodeName + ':' + (n.outerHTML || '').slice(0, 120));
+			});
+			mo.observe(document.body, { childList: true });
+			const x = document.createElement('img');
+			x.src = '/mo.png';
+			document.body.append(x);
+			setTimeout(() => {
+				mo.disconnect();
+				resolve(seen);
+			}, 200);
+		});
+	});
+	// the CSSOM
+	P('document.styleSheets hrefs', () =>
+		[...document.styleSheets].map((s) => s.href),
+	);
+	P('link.sheet.href', () => link.sheet && link.sheet.href);
+	P(
+		'inline style sheet rule cssText',
+		() => document.getElementById('st').sheet.cssRules[0].cssText,
+	);
+	P(
+		'inline style sheet rule backgroundImage',
+		() => document.getElementById('st').sheet.cssRules[0].style.backgroundImage,
+	);
+	P('inline style textContent', () =>
+		document.getElementById('st').textContent.trim(),
+	);
+	P(
+		'getComputedStyle(#bg2).backgroundImage',
+		() => getComputedStyle(document.getElementById('bg2')).backgroundImage,
+	);
+	P(
+		'getComputedStyle(#bg).backgroundImage',
+		() => getComputedStyle(document.getElementById('bg')).backgroundImage,
+	);
+	P('CSSStyleDeclaration getPropertyValue', () =>
+		getComputedStyle(document.getElementById('bg2')).getPropertyValue(
+			'background-image',
+		),
+	);
+	P('el.style.backgroundImage round trip', () => {
+		const d = document.createElement('div');
+		d.style.backgroundImage = 'url(/pages/sprite.svg)';
+		return [
+			d.style.backgroundImage,
+			d.style.cssText,
+			d.getAttribute('style'),
+			d.outerHTML,
+		];
+	});
+	P('el.style.cssText write', () => {
+		const d = document.createElement('div');
+		d.style.cssText = 'background-image: url(/pages/sprite.svg)';
+		return [d.style.backgroundImage, d.getAttribute('style')];
+	});
+	P('setProperty background-image', () => {
+		const d = document.createElement('div');
+		d.style.setProperty('background-image', 'url(/pages/sprite.svg)');
+		return [
+			d.style.getPropertyValue('background-image'),
+			d.getAttribute('style'),
+		];
+	});
+	P('style attribute set then readback', () => {
+		const d = document.createElement('div');
+		d.setAttribute('style', 'background-image:url(/pages/sprite.svg)');
+		return [d.getAttribute('style'), d.style.backgroundImage, d.outerHTML];
+	});
+	P('CSSStyleDeclaration prototype getter', () => {
+		const d = document.createElement('div');
+		d.style.backgroundImage = 'url(/pages/sprite.svg)';
+		return Object.getOwnPropertyDescriptor(
+			CSSStyleDeclaration.prototype,
+			'cssText',
+		).get.call(d.style);
+	});
+	P('constructable stylesheet readback', () => {
+		const sheet = new CSSStyleSheet();
+		sheet.replaceSync('#bg3 { background-image: url(/pages/sprite.svg) }');
+		const d = document.createElement('div');
+		d.id = 'bg3';
+		document.body.append(d);
+		document.adoptedStyleSheets = [sheet];
+		return [
+			sheet.cssRules[0].cssText,
+			sheet.cssRules[0].style.backgroundImage,
+			getComputedStyle(d).backgroundImage,
+		];
+	});
+	P('insertRule readback', () => {
+		const st = document.createElement('style');
+		document.head.append(st);
+		st.sheet.insertRule('#bg4 { background: url(/pages/sprite.svg) }');
+		return st.sheet.cssRules[0].cssText;
+	});
+	P('@import rule href', () => {
+		const rules = link.sheet ? [...link.sheet.cssRules] : [];
+		const imp = rules.find((r) => r instanceof CSSImportRule);
+		return imp
+			? [imp.href, imp.styleSheet && imp.styleSheet.href, imp.cssText]
+			: 'no import rule yet';
+	});
+	P('typed OM background-image', () => {
+		const d = document.getElementById('bg2');
+		if (!d.computedStyleMap) return 'no typed OM';
+		return String(d.computedStyleMap().get('background-image'));
+	});
+	P('attributeStyleMap', () => {
+		const d = document.createElement('div');
+		if (!d.attributeStyleMap) return 'no typed OM';
+		d.style.backgroundImage = 'url(/pages/sprite.svg)';
+		return String(d.attributeStyleMap.get('background-image'));
+	});
+	// parsed and templated markup
+	P('template innerHTML round trip', () => {
+		const t = document.createElement('template');
+		t.innerHTML = '<img src="/t.png"><a href="/l">y</a>';
+		return [
+			t.innerHTML,
+			t.content.querySelector('img').src,
+			t.content.querySelector('img').getAttribute('src'),
+		];
+	});
+	P('DOMParser innerHTML round trip', () => {
+		const doc = new DOMParser().parseFromString(
+			'<a href="/x">y</a><img src="/i.png">',
+			'text/html',
+		);
+		return [
+			doc.body.innerHTML,
+			doc.querySelector('a').href,
+			doc.querySelector('a').getAttribute('href'),
+		];
+	});
+	P('shadowRoot innerHTML round trip', () => {
+		const host = document.createElement('div');
+		const root = host.attachShadow({ mode: 'open' });
+		document.body.append(host);
+		root.innerHTML = '<img src="/sh.png"><a href="/sh">x</a>';
+		return [
+			root.innerHTML,
+			root.querySelector('img').src,
+			root.querySelector('a').href,
+			root.querySelector('a').getAttribute('href'),
+		];
+	});
+	P('createContextualFragment round trip', () => {
+		const range = document.createRange();
+		range.selectNodeContents(document.body);
+		const frag = range.createContextualFragment('<img src="/cf.png">');
+		const d = document.createElement('div');
+		d.append(frag);
+		return [d.innerHTML, d.querySelector('img').src];
+	});
+	P('innerHTML write then read', () => {
+		const d = document.createElement('div');
+		d.innerHTML = '<a href="/x"><img src="/i.png"></a>';
+		document.body.append(d);
+		return [d.innerHTML, d.outerHTML, d.firstChild.href];
+	});
+	P('insertAdjacentHTML then read', () => {
+		const d = document.createElement('div');
+		document.body.append(d);
+		d.insertAdjacentHTML('beforeend', '<img src="/ia.png">');
+		return [d.innerHTML, d.firstChild.src];
+	});
+	P('base href resolution', () => {
+		const b = document.createElement('base');
+		b.href = '/basedir/';
+		document.head.append(b);
+		const x = document.createElement('a');
+		x.href = 'rel';
+		const r = [x.href, b.href, b.getAttribute('href'), document.baseURI];
+		b.remove();
+		return r;
+	});
+	P('integrity attribute', () => {
+		const x = document.createElement('script');
+		x.setAttribute('integrity', 'sha256-abc');
+		return [x.integrity, x.getAttribute('integrity')];
+	});
+	P('dataset and class untouched', () => {
+		const d = document.createElement('div');
+		d.dataset.fooBar = '1';
+		d.className = 'c';
+		return d.outerHTML;
+	});
+	__advFinish(1200);
+</script>

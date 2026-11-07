@@ -1,0 +1,132 @@
+<!doctype html>
+<title>ADV GLOBALS</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// Every spelling of top / parent / location a page can read directly
+	// (scramjet: location.ts, window-document.ts, frames.ts, llm/escapes.ts).
+	const P = __advProbe;
+	const W = __advWho;
+	const D = __advDoc;
+	P('top', () => W(top));
+	P('window.top', () => W(window.top));
+	P('self.top', () => W(self.top));
+	P('globalThis.top', () => W(globalThis.top));
+	P('frames.top', () => W(frames.top));
+	P('window.window.top', () => W(window.window.top));
+	P('window.self.top', () => W(window.self.top));
+	P('document.defaultView.top', () => W(document.defaultView.top));
+	P("window['top']", () => W(window['top']));
+	P("window['to'+'p']", () => W(window['to' + 'p']));
+	P('window[fromCharCode]', () =>
+		W(window[String.fromCharCode(116, 111, 112)]),
+	);
+	P('window[variable]', () => {
+		const k = 'top';
+		return W(window[k]);
+	});
+	P('destructure {top: t}', () => {
+		const { top: t } = window;
+		return W(t);
+	});
+	P('destructure {top}', () => {
+		const { top } = window;
+		return W(top);
+	});
+	P('destructuring assignment', () => {
+		let t;
+		({ top: t } = window);
+		return W(t);
+	});
+	P('window?.top', () => W(window?.top));
+	P('window.top?.window', () => W(window.top?.window));
+	P('(window).top', () => W(window.top));
+	P('(0, window).top', () => W((0, window).top));
+	P('[window][0].top', () => W([window][0].top));
+	P('top.top', () => W(top.top));
+	P('top.parent', () => W(top.parent));
+	P('parent', () => W(parent));
+	P('window.parent', () => W(window.parent));
+	P('parent.parent', () => W(parent.parent));
+	P("window['par'+'ent']", () => W(window['par' + 'ent']));
+	P('parent.top', () => W(parent.top));
+	P('self.parent', () => W(self.parent));
+	P('globalThis.parent', () => W(globalThis.parent));
+	P('destructure {parent: p}', () => {
+		const { parent: p } = window;
+		return W(p);
+	});
+	P('frameElement', () =>
+		frameElement === null
+			? 'null'
+			: 'OTHER-ELEMENT(' + frameElement.tagName + ')',
+	);
+	P('window.frameElement', () =>
+		window.frameElement === null ? 'null' : 'OTHER-ELEMENT',
+	);
+	P('location.ancestorOrigins', () =>
+		location.ancestorOrigins === undefined
+			? 'undefined'
+			: Array.from(location.ancestorOrigins),
+	);
+	P('document.referrer', () => document.referrer);
+	P('window.name', () => window.name);
+	P('opener', () => W(opener));
+	P('top.document', () => D(top.document));
+	P('parent.document', () => D(parent.document));
+	P('top.document.title', () => top.document.title);
+	P('parent.document.title', () => parent.document.title);
+	P('top.location.href', () => top.location.href);
+	P('parent.location.href', () => parent.location.href);
+	P("top.location + ''", () => top.location + '');
+	P('top.document.URL', () => top.document.URL);
+	P('top.origin', () => top.origin);
+	P('parent.frames.length', () => parent.frames.length);
+	P('top.length', () => top.length);
+	// writes through top/parent: the suite checks the host did not change
+	P('top.__advLeak = 1', () => {
+		top.__advLeak = 'top';
+		return 'wrote';
+	});
+	P('parent.__advLeak = 1', () => {
+		parent.__advLeak = 'parent';
+		return 'wrote';
+	});
+	P('top.document.__advLeak = 1', () => {
+		top.document.__advLeak = 'top.document';
+		return 'wrote';
+	});
+	// the location surface
+	P('location.href', () => location.href);
+	P("location + ''", () => location + '');
+	P('String(location)', () => String(location));
+	P('template ${location}', () => `${location}`);
+	P('[location].join()', () => [location].join());
+	P('JSON.stringify(location)', () => JSON.stringify(location));
+	P('location.toString()', () => location.toString());
+	P('location.valueOf() === location', () => location.valueOf() === location);
+	P('location.origin', () => location.origin);
+	P('location.host', () => location.host);
+	P('location.pathname', () => location.pathname);
+	P('document.location.href', () => document.location.href);
+	P('document.location === location', () => document.location === location);
+	P('window.location === location', () => window.location === location);
+	P('document.URL', () => document.URL);
+	P('document.documentURI', () => document.documentURI);
+	P('document.baseURI', () => document.baseURI);
+	P('window.origin', () => window.origin);
+	P('self.origin', () => self.origin);
+	P('document.domain', () => document.domain);
+	P(
+		"new URL('/x', document.baseURI)",
+		() => new URL('/x', document.baseURI).href,
+	);
+	P("new URL('x', location)", () => new URL('x', location).href);
+	P('new URL(location.href).origin', () => new URL(location.href).origin);
+	P('history.length', () => history.length);
+	P('history.state', () => history.state);
+	P('document.scripts srcs', () => [...document.scripts].map((s) => s.src));
+	P('document.scripts.length', () => document.scripts.length);
+	P('document.title', () => document.title);
+	__advFinish();
+</script>

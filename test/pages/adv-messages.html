@@ -1,0 +1,348 @@
+<!doctype html>
+<title>ADV MESSAGES</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// postMessage in both directions: what a message from the host looks like
+	// to the page (source, origin, and the native getters behind them), where
+	// a message to parent/top goes (the suite listens on the host), targetOrigin
+	// against the spoofed origin, BroadcastChannel origins, and the shape of
+	// the postMessage property itself (scramjet: postmessage.ts,
+	// postmessage-wrap.ts, llm/escapes.ts postmessage-source-eval).
+	const P = __advProbe;
+	const A = __advAsync;
+	const R = __advRecord;
+	const W = __advWho;
+	const nativeSource = Object.getOwnPropertyDescriptor(
+		MessageEvent.prototype,
+		'source',
+	).get;
+	const nativeOrigin = Object.getOwnPropertyDescriptor(
+		MessageEvent.prototype,
+		'origin',
+	).get;
+	const describe = (e) => {
+		const out = {
+			source: W(e.source),
+			origin: e.origin,
+			data:
+				typeof e.data === 'object'
+					? JSON.stringify(e.data).slice(0, 80)
+					: String(e.data),
+		};
+		try {
+			out.nativeSource = W(nativeSource.call(e));
+		} catch (error) {
+			out.nativeSource = 'threw ' + error.name;
+		}
+		try {
+			out.nativeOrigin = nativeOrigin.call(e);
+		} catch (error) {
+			out.nativeOrigin = 'threw ' + error.name;
+		}
+		try {
+			out.sourceEval = typeof Reflect.get(e.source, 'eval');
+		} catch (error) {
+			out.sourceEval = 'threw ' + error.name;
+		}
+		try {
+			out.sourceHref = e.source.location.href;
+		} catch (error) {
+			out.sourceHref = 'threw ' + error.name;
+		}
+		try {
+			out.sourceTop = W(e.source.top);
+		} catch (error) {
+			out.sourceTop = 'threw ' + error.name;
+		}
+		try {
+			out.sourceIsTop =
+				e.source === top
+					? 'is top'
+					: e.source === parent
+						? 'is parent'
+						: 'neither';
+		} catch (error) {
+			out.sourceIsTop = 'threw ' + error.name;
+		}
+		return out;
+	};
+	// the host posts {__advHost: 'host-message'} once the page is up
+	const waiting = new Map();
+	const expect = (tag, ms = 2500) =>
+		new Promise((resolve) => {
+			waiting.set(tag, resolve);
+			setTimeout(() => {
+				if (waiting.delete(tag)) resolve('did-not-arrive');
+			}, ms);
+		});
+	addEventListener('message', (e) => {
+		const d = e.data;
+		if (d && typeof d === 'object' && typeof d.__advHost === 'string') {
+			const r = describe(e);
+			if (d.__advHost === 'host-message') {
+				R('host message', r);
+				try {
+					const realEval = Reflect.get(e.source, 'eval');
+					if (typeof realEval === 'function') {
+						realEval(__advPayload('host message source eval'));
+					} else R('host message source eval', 'no eval on source');
+				} catch (error) {
+					R('host message source eval', undefined, error);
+				}
+				try {
+					e.source.postMessage({ __advReply: true }, '*');
+					R('reply to host source', 'posted');
+				} catch (error) {
+					R('reply to host source', undefined, error);
+				}
+			}
+			return;
+		}
+		if (d && typeof d === 'object' && typeof d.__advTag === 'string') {
+			const resolve = waiting.get(d.__advTag);
+			if (resolve) {
+				waiting.delete(d.__advTag);
+				resolve(describe(e));
+			}
+		}
+	});
+	A(
+		'host message',
+		() =>
+			expect('never', 6000).then((v) =>
+				window.__adv.probes['host message']
+					? window.__adv.probes['host message'].value
+					: v,
+			),
+		7000,
+	);
+	const post = (tag, fn) =>
+		A(tag, () => {
+			const p = expect(tag);
+			fn({ __advTag: tag });
+			return p;
+		});
+	post('self postMessage *', (m) => postMessage(m, '*'));
+	post('window.postMessage *', (m) => window.postMessage(m, '*'));
+	post('self postMessage location.origin', (m) =>
+		postMessage(m, location.origin),
+	);
+	post('self postMessage own origin string', (m) =>
+		postMessage(m, new URL(location.href).origin),
+	);
+	post('self postMessage options', (m) =>
+		postMessage(m, { targetOrigin: location.origin }),
+	);
+	post('detached postMessage', (m) => {
+		const pm = window.postMessage;
+		pm(m, '*');
+	});
+	post('postMessage.call(window)', (m) => postMessage.call(window, m, '*'));
+	post('Reflect.apply(postMessage, window)', (m) =>
+		Reflect.apply(postMessage, window, [m, '*']),
+	);
+	post('parent.postMessage *', (m) => parent.postMessage(m, '*'));
+	post('top.postMessage *', (m) => top.postMessage(m, '*'));
+	post('window.top.postMessage *', (m) => window.top.postMessage(m, '*'));
+	post("window['to'+'p'].postMessage *", (m) =>
+		window['to' + 'p'].postMessage(m, '*'),
+	);
+	post('postMessage.call(top)', (m) => postMessage.call(top, m, '*'));
+	post('postMessage.call(parent)', (m) => postMessage.call(parent, m, '*'));
+	post('Function.prototype.call.call(postMessage, top)', (m) =>
+		Function.prototype.call.call(postMessage, top, m, '*'),
+	);
+	post('Reflect.apply(postMessage, parent)', (m) =>
+		Reflect.apply(postMessage, parent, [m, '*']),
+	);
+	post('frames.top.postMessage', (m) => frames.top.postMessage(m, '*'));
+	post('eval(top).postMessage', (m) => eval('top').postMessage(m, '*'));
+	post('new Function(return top)().postMessage', (m) =>
+		new Function('return top')().postMessage(m, '*'),
+	);
+	post('parent.postMessage to location.origin', (m) =>
+		parent.postMessage(m, location.origin),
+	);
+	post('top.postMessage to spoofed origin', (m) =>
+		top.postMessage(m, location.origin),
+	);
+	post('opener?.postMessage', (m) => {
+		if (!opener) throw new Error('no opener');
+		opener.postMessage(m, '*');
+	});
+	post('frames[0].parent.postMessage', (m) => {
+		const f = document.createElement('iframe');
+		document.body.append(f);
+		f.contentWindow.parent.postMessage(m, '*');
+	});
+	post('child frame top.postMessage', (m) => {
+		const f = document.createElement('iframe');
+		document.body.append(f);
+		f.contentWindow.top.postMessage(m, '*');
+	});
+	post('child frame eval(top).postMessage', (m) => {
+		const f = document.createElement('iframe');
+		document.body.append(f);
+		f.contentWindow.eval('top').postMessage(m, '*');
+	});
+	A(
+		'MessageChannel event',
+		() =>
+			new Promise((resolve) => {
+				const mc = new MessageChannel();
+				mc.port2.onmessage = (e) =>
+					resolve({ source: W(e.source), origin: e.origin, data: e.data });
+				mc.port1.postMessage('x');
+			}),
+	);
+	A(
+		'BroadcastChannel event',
+		() =>
+			new Promise((resolve) => {
+				const a = new BroadcastChannel('adv-msg');
+				const b = new BroadcastChannel('adv-msg');
+				b.onmessage = (e) => {
+					resolve({
+						origin: e.origin,
+						source: W(e.source),
+						nativeOrigin: nativeOrigin.call(e),
+					});
+					a.close();
+					b.close();
+				};
+				a.postMessage('x');
+			}),
+	);
+	A(
+		'onmessage property handler',
+		() =>
+			new Promise((resolve) => {
+				const prev = window.onmessage;
+				window.onmessage = (e) => {
+					if (e.data && e.data.__advTag === 'onmessage') {
+						window.onmessage = prev;
+						resolve(describe(e));
+					}
+				};
+				postMessage({ __advTag: 'onmessage' }, '*');
+			}),
+	);
+	A(
+		'message event via a child frame to parent',
+		() =>
+			new Promise((resolve) => {
+				const f = document.createElement('iframe');
+				f.srcdoc =
+					'<script>parent.postMessage({__advTag: "from-child"}, "*")<\/script>';
+				waiting.set('from-child', (r) =>
+					resolve({
+						...r,
+						isChild:
+							r.source === 'OTHER-WINDOW'
+								? 'child window (expected other)'
+								: r.source,
+					}),
+				);
+				document.body.append(f);
+				setTimeout(() => resolve('did-not-arrive'), 3000);
+			}),
+	);
+	// the shape of the postMessage property
+	P('o.postMessage identity', () => {
+		const o = { postMessage() {} };
+		return o.postMessage === o.postMessage
+			? 'stable'
+			: 'TELL:unstable identity';
+	});
+	P('window.postMessage identity', () =>
+		window.postMessage === window.postMessage
+			? 'stable'
+			: 'TELL:unstable identity',
+	);
+	P('MessagePort.postMessage identity', () => {
+		const mc = new MessageChannel();
+		return mc.port1.postMessage === mc.port1.postMessage
+			? 'stable'
+			: 'TELL:unstable identity';
+	});
+	P('postMessage name/length', () => {
+		const o = { postMessage(a, b) {} };
+		return o.postMessage.name === 'postMessage' && o.postMessage.length === 2
+			? 'postMessage/2'
+			: 'TELL:' + o.postMessage.name + '/' + o.postMessage.length;
+	});
+	P('window.postMessage name/length', () =>
+		postMessage.name === 'postMessage' && postMessage.length === 1
+			? 'postMessage/1'
+			: 'TELL:' + postMessage.name + '/' + postMessage.length,
+	);
+	P('postMessage getter invoked once', () => {
+		let gets = 0;
+		const o = {
+			get postMessage() {
+				gets++;
+				return () => 1;
+			},
+		};
+		o.postMessage();
+		return gets === 1 ? 'once' : 'TELL:' + gets;
+	});
+	P('postMessage assignment sticks', () => {
+		const o = { postMessage: () => 'orig' };
+		o.postMessage = () => 'patched';
+		return o.postMessage() === 'patched' ? 'sticks' : 'TELL:' + o.postMessage();
+	});
+	P('window.postMessage assignment sticks', () => {
+		const orig = window.postMessage;
+		try {
+			window.postMessage = () => 'patched';
+			return window.postMessage() === 'patched'
+				? 'sticks'
+				: 'TELL:not honoured';
+		} finally {
+			window.postMessage = orig;
+		}
+	});
+	P('delete o.postMessage', () => {
+		const o = { postMessage() {} };
+		delete o.postMessage;
+		return 'postMessage' in o ? 'TELL:still present' : 'deleted';
+	});
+	A(
+		'MessagePort.prototype.postMessage.call',
+		() =>
+			new Promise((resolve) => {
+				const mc = new MessageChannel();
+				mc.port2.onmessage = (e) => resolve(e.data);
+				mc.port1.start();
+				MessagePort.prototype.postMessage.call(mc.port1, 'viaproto');
+			}),
+	);
+	P('detached postMessage loses receiver', () => {
+		const o = {
+			tag: 'T',
+			postMessage(x) {
+				return this.tag + x;
+			},
+		};
+		const detached = o.postMessage;
+		try {
+			detached('1');
+			return 'TELL:no TypeError';
+		} catch (error) {
+			return error.name;
+		}
+	});
+	P('Window.prototype.postMessage', () => {
+		const d =
+			Object.getOwnPropertyDescriptor(Window.prototype, 'postMessage') ||
+			Object.getOwnPropertyDescriptor(window, 'postMessage');
+		return d
+			? Function.prototype.toString.call(d.value).includes('[native code]')
+				? 'native'
+				: 'TELL:' + Function.prototype.toString.call(d.value).slice(0, 60)
+			: 'none';
+	});
+	__advFinish(4000);
+</script>

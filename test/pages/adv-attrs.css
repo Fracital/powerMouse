@@ -1,0 +1,4 @@
+#bg {
+	background-image: url(/pages/sprite.svg);
+}
+@import url(/pages/imp.css);

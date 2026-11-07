@@ -1,0 +1,217 @@
+<!doctype html>
+<title>ADV FRAMES</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// What a page learns from its own child frames: the child's view of its
+	// ancestry (adv-child.html), what the parent reads back through
+	// contentWindow / contentDocument, the frames collection, about:blank and
+	// srcdoc children, a nested grandchild posting to `top`, and a cross-site
+	// child that a real browser would keep opaque (scramjet: frames.ts,
+	// origin-isolation.ts, eval.ts iframe realm).
+	const P = __advProbe;
+	const A = __advAsync;
+	const W = __advWho;
+	const D = __advDoc;
+	const load = (f, ms = 6000) =>
+		new Promise((resolve) => {
+			f.addEventListener('load', () => resolve('loaded'), { once: true });
+			setTimeout(() => resolve('timeout'), ms);
+		});
+	const same = document.createElement('iframe');
+	same.name = 'advchild';
+	same.src = 'adv-child.html?name=child-same-origin&nested&storage';
+	document.body.append(same);
+	A('same-origin child read from parent', async () => {
+		await load(same);
+		const w = same.contentWindow;
+		const d = same.contentDocument;
+		return {
+			top: W(w.top),
+			parent: W(w.parent),
+			frameElement: w.frameElement === same ? 'same element' : 'other',
+			href: w.location.href,
+			docURL: d.URL,
+			baseURI: d.baseURI,
+			referrer: d.referrer,
+			evalTop: W(w.eval('top')),
+			evalParent: W(w.eval('parent')),
+			evalHref: w.eval('location.href'),
+			FunctionTop: W(w.Function('return top')()),
+			FunctionHref: w.Function('return location.href')(),
+			childWindowEval:
+				w.eval('window') === w ? 'child window' : W(w.eval('window')),
+			sameGlobalThis:
+				w.eval('globalThis') === w ? 'same' : W(w.eval('globalThis')),
+			topDocument: D(w.top.document),
+			ancestors: Array.from(w.location.ancestorOrigins || []),
+			childName: w.name,
+			anchorHref: (() => {
+				const a = d.createElement('a');
+				a.href = '/from-parent';
+				d.body.append(a);
+				return [a.href, a.getAttribute('href')];
+			})(),
+			innerHTMLWrite: (() => {
+				d.body.innerHTML += '<img id="pi" src="/parent-written.png">';
+				const i = d.getElementById('pi');
+				return [i.src, i.getAttribute('src'), d.body.innerHTML.slice(0, 200)];
+			})(),
+		};
+	});
+	A('frames collection', async () => {
+		await load(same);
+		return {
+			length: window.length,
+			framesLength: frames.length,
+			frames0: frames[0] === same.contentWindow ? 'child' : W(frames[0]),
+			byName:
+				frames.advchild === same.contentWindow ? 'child' : W(frames.advchild),
+			windowByName:
+				window.advchild === same.contentWindow ? 'child' : W(window.advchild),
+			topFrames: W(top.frames),
+			topLength: top.length,
+			parentLength: parent.length,
+		};
+	});
+	A(
+		'storage event from child',
+		() =>
+			new Promise((resolve) => {
+				addEventListener(
+					'storage',
+					(e) =>
+						resolve({
+							key: e.key,
+							url: e.url,
+							area: e.storageArea === localStorage,
+						}),
+					{
+						once: true,
+					},
+				);
+				setTimeout(() => resolve('no storage event'), 5000);
+			}),
+	);
+	const blank = document.createElement('iframe');
+	document.body.append(blank);
+	P('about:blank child', () => {
+		const w = blank.contentWindow;
+		return {
+			top: W(w.top),
+			parent: W(w.parent),
+			href: w.location.href,
+			docURL: w.document.URL,
+			baseURI: w.document.baseURI,
+			referrer: w.document.referrer,
+			evalTop: W(w.eval('top')),
+			evalParentTop: W(w.eval('parent.top')),
+			evalLocation: w.eval('location.href'),
+			evalParentLocation: w.eval('parent.location.href'),
+			evalTopLocation: w.eval('top.location.href'),
+			FunctionTop: W(w.Function('return top')()),
+			FunctionTopDoc: D(w.Function('return top.document')()),
+			timerTop: (() => {
+				w.setTimeout(
+					'parent.__advRecord("about:blank timer top", {top: top === parent ? "parent" : "OTHER-WINDOW", href: location.href})',
+					0,
+				);
+				return 'scheduled';
+			})(),
+			ancestors: Array.from(w.location.ancestorOrigins || []),
+			frameElement: w.frameElement === blank ? 'same element' : 'other',
+			origin: w.origin,
+		};
+	});
+	P('about:blank document.write script', () => {
+		const f = document.createElement('iframe');
+		document.body.append(f);
+		f.contentDocument.open();
+		f.contentDocument.write(
+			'<a id="l" href="/ab">x</a><script>parent.__advRecord("about:blank written script", {top: top === parent ? "parent" : "OTHER-WINDOW", href: location.href, anchor: document.getElementById("l").href})<\/script>',
+		);
+		f.contentDocument.close();
+		const l = f.contentDocument.getElementById('l');
+		return {
+			href: l.href,
+			attr: l.getAttribute('href'),
+			baseURI: f.contentDocument.baseURI,
+			innerHTML: f.contentDocument.body.innerHTML,
+		};
+	});
+	const srcdoc = document.createElement('iframe');
+	srcdoc.srcdoc =
+		'<a id="l" href="/sd">x</a><script>parent.__advRecord("srcdoc child script", {top: top === parent ? "parent" : "OTHER-WINDOW", href: location.href, referrer: document.referrer, ancestors: Array.from(location.ancestorOrigins || [])})<\/script>';
+	document.body.append(srcdoc);
+	A('srcdoc child read from parent', async () => {
+		await load(srcdoc);
+		const d = srcdoc.contentDocument;
+		return {
+			href: srcdoc.contentWindow.location.href,
+			docURL: d.URL,
+			baseURI: d.baseURI,
+			anchor: d.getElementById('l').href,
+			attr: d.getElementById('l').getAttribute('href'),
+			srcdocAttr: srcdoc.getAttribute('srcdoc').slice(0, 80),
+			top: W(srcdoc.contentWindow.top),
+		};
+	});
+	const cross = document.createElement('iframe');
+	cross.src = location.href
+		.replace('127.0.0.1', 'localhost')
+		.replace(
+			/\/pages\/.*$/,
+			'/pages/adv-child.html?name=cross-site child&post',
+		);
+	document.body.append(cross);
+	A('cross-site child read from parent', async () => {
+		await load(cross);
+		const probe = (fn) => {
+			try {
+				const v = fn();
+				return 'LEAK:readable ' + String(v).slice(0, 80);
+			} catch (error) {
+				return 'blocked ' + error.name;
+			}
+		};
+		return {
+			contentDocument: probe(
+				() => cross.contentDocument && cross.contentDocument.title,
+			),
+			cookie: probe(() => cross.contentDocument.cookie),
+			locationHref: probe(() => cross.contentWindow.location.href),
+			origin: probe(() => cross.contentWindow.origin),
+			eval: probe(() => typeof cross.contentWindow.eval),
+			documentTitle: probe(() => cross.contentWindow.document.title),
+			localStorage: probe(() => cross.contentWindow.localStorage.length),
+			name: cross.contentWindow.name,
+			srcAttr: cross.getAttribute('src'),
+			src: cross.src,
+		};
+	});
+	P('window.open(about:blank)', () => {
+		const w = window.open('about:blank');
+		const r = W(w);
+		if (w) w.close();
+		return r;
+	});
+	P('window.open(child, _blank)', () => {
+		const w = window.open('adv-child.html?name=popup', '_blank');
+		const r = W(w);
+		if (w) w.close();
+		return r;
+	});
+	P('frameElement', () =>
+		frameElement === null
+			? 'null'
+			: 'OTHER-ELEMENT(' + frameElement.tagName + ')',
+	);
+	P('iframe sandbox round trip', () => {
+		const f = document.createElement('iframe');
+		f.sandbox = 'allow-scripts allow-same-origin';
+		f.src = 'adv-child.html?name=sandboxed';
+		document.body.append(f);
+		return [f.getAttribute('sandbox'), [...f.sandbox].sort().join(' ')];
+	});
+	__advFinish(5000);
+</script>

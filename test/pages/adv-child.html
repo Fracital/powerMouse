@@ -1,0 +1,199 @@
+<!doctype html>
+<title>ADV CHILD</title>
+<body></body>
+<script>
+	// A child frame of an adv-* page: reports what it sees of its ancestry.
+	// Same-origin children call into the parent; the cross-site copy (served
+	// as localhost) posts, since a real browser would not let it call.
+	const name = new URLSearchParams(location.search).get('name') || 'child';
+	const who = (x) => {
+		try {
+			if (x === window) return 'self';
+			if (x === parent) return 'parent';
+			if (x === null) return 'null';
+			if (x && x.window === x) return 'OTHER-WINDOW';
+			return String(x);
+		} catch (error) {
+			return 'OTHER-WINDOW(' + error.name + ')';
+		}
+	};
+	const safe = (fn) => {
+		try {
+			return fn();
+		} catch (error) {
+			return 'threw ' + error.name;
+		}
+	};
+	// ?nav=<route>: run one javascript:-URL route in this frame, so a route
+	// that navigates the window away takes only this frame with it. Nested
+	// frames created here report two levels up.
+	const nav = new URLSearchParams(location.search).get('nav');
+	if (nav !== null) {
+		const R = (value, error) => parent.__advRecord(nav, value, error);
+		const payload =
+			'parent.__advChild(' +
+			JSON.stringify(nav) +
+			', top === parent ? "parent" : top === window ? "self" : "OTHER-WINDOW", location.href)';
+		// for a frame created inside this frame: its top should be our parent
+		const nested =
+			'parent.parent.__advChild(' +
+			JSON.stringify(nav) +
+			', top === parent.parent ? "parent" : top === window ? "self" : "OTHER-WINDOW", location.href)';
+		const frame = (fn) => {
+			const f = document.createElement('iframe');
+			fn(f);
+			document.body.append(f);
+		};
+		const ROUTES = {
+			'iframe.src = javascript:': () =>
+				frame((f) => (f.src = 'javascript:' + nested)),
+			'iframe.setAttribute(src, javascript:)': () =>
+				frame((f) => f.setAttribute('src', 'javascript:' + nested)),
+			'about:blank location = javascript:': () => {
+				const f = document.createElement('iframe');
+				document.body.append(f);
+				f.contentWindow.location = 'javascript:' + nested;
+			},
+			'object data=javascript:': () => {
+				const o = document.createElement('object');
+				o.data = 'javascript:' + nested;
+				document.body.append(o);
+			},
+			'embed src=javascript:': () => {
+				const e = document.createElement('embed');
+				e.src = 'javascript:' + nested;
+				document.body.append(e);
+			},
+			'a href=javascript: click': (p) => {
+				const a = document.createElement('a');
+				a.href = 'javascript:' + p;
+				document.body.append(a);
+				a.click();
+			},
+			'a setAttribute(href, javascript:) click': (p) => {
+				const a = document.createElement('a');
+				a.setAttribute('href', 'javascript:' + p);
+				document.body.append(a);
+				a.click();
+			},
+			'a setAttributeNode(href, javascript:) click': (p) => {
+				const a = document.createElement('a');
+				const attr = document.createAttribute('href');
+				attr.value = 'javascript:' + p;
+				a.setAttributeNode(attr);
+				document.body.append(a);
+				a.click();
+			},
+			'area href=javascript: click': (p) => {
+				const m = document.createElement('map');
+				const a = document.createElement('area');
+				a.href = 'javascript:' + p;
+				m.append(a);
+				document.body.append(m);
+				a.click();
+			},
+			'form action=javascript: submit': (p) => {
+				const f = document.createElement('form');
+				f.action = 'javascript:' + p;
+				document.body.append(f);
+				f.submit();
+			},
+			'form button formaction=javascript:': (p) => {
+				const f = document.createElement('form');
+				const b = document.createElement('button');
+				b.setAttribute('formaction', 'javascript:' + p);
+				f.append(b);
+				document.body.append(f);
+				b.click();
+			},
+			'location.assign(javascript:)': (p) => location.assign('javascript:' + p),
+			'location.replace(javascript:)': (p) =>
+				location.replace('javascript:' + p),
+			'location.href = javascript:': (p) => {
+				location.href = 'javascript:' + p;
+			},
+			'location = javascript:': (p) => {
+				location = 'javascript:' + p;
+			},
+			'window.location = javascript:': (p) => {
+				window.location = 'javascript:' + p;
+			},
+			'document.location = javascript:': (p) => {
+				document.location = 'javascript:' + p;
+			},
+			'Reflect.set(window, location, javascript:)': (p) =>
+				Reflect.set(window, 'location', 'javascript:' + p),
+			'Reflect.set(document, location, javascript:)': (p) =>
+				Reflect.set(document, 'location', 'javascript:' + p),
+			'Object.assign(window, {location})': (p) =>
+				Object.assign(window, { location: 'javascript:' + p }),
+			'Object.assign(document, {location})': (p) =>
+				Object.assign(document, { location: 'javascript:' + p }),
+			'gOPD(window, location).set.call': (p) =>
+				Object.getOwnPropertyDescriptor(window, 'location').set.call(
+					window,
+					'javascript:' + p,
+				),
+			'history.pushState then javascript:': (p) => {
+				const a = document.createElement('a');
+				a.href = 'javascript:' + p;
+				document.body.append(a);
+				history.pushState(null, '', '#adv');
+				a.click();
+			},
+			'window.open(javascript:)': (p) => {
+				const w = window.open('javascript:' + p);
+				parent.__advRecord(
+					nav + ' [returned]',
+					w === null ? 'null' : w === window ? 'self' : 'OTHER-WINDOW',
+				);
+			},
+			'window.open(javascript:, _self)': (p) =>
+				window.open('javascript:' + p, '_self'),
+			'meta refresh javascript:': (p) => {
+				const m = document.createElement('meta');
+				m.httpEquiv = 'refresh';
+				m.content = '0;url=javascript:' + p;
+				document.head.append(m);
+			},
+		};
+		R('did-not-run');
+		try {
+			ROUTES[nav](payload);
+		} catch (error) {
+			R(undefined, error);
+		}
+	} else {
+		const report = {
+			__adv: name,
+			top: who(top),
+			parentIsSelf: parent === window,
+			topLocation: safe(() => top.location.href),
+			parentLocation: safe(() => parent.location.href),
+			topTitle: safe(() => top.document.title),
+			href: location.href,
+			origin: location.origin,
+			referrer: document.referrer,
+			ancestors: safe(() => Array.from(location.ancestorOrigins || [])),
+			frameElement: safe(() => (frameElement ? 'ELEMENT' : 'null')),
+			windowName: window.name,
+			topFramesLength: safe(() => top.frames.length),
+		};
+		if (new URLSearchParams(location.search).has('post')) {
+			parent.postMessage(report, '*');
+		} else {
+			parent.__advRecord(name, report);
+		}
+		// a grandchild that posts to `top`: spoofed, that is our parent page;
+		// real, that is the host
+		if (new URLSearchParams(location.search).has('nested')) {
+			const f = document.createElement('iframe');
+			f.srcdoc =
+				'<script>top.postMessage({__adv: "grandchild top.postMessage", top: top === parent.parent ? "grandparent" : top === parent ? "parent" : "OTHER-WINDOW", href: location.href}, "*"); parent.parent.__advRecord && parent.parent.__advRecord("grandchild direct", {top: top === parent.parent ? "grandparent" : "OTHER-WINDOW", href: location.href, ancestors: Array.from(location.ancestorOrigins || [])});<\/script>';
+			document.body.append(f);
+		}
+		if (new URLSearchParams(location.search).has('storage')) {
+			localStorage.setItem('adv-storage-' + Date.now(), 'child');
+		}
+	}
+</script>

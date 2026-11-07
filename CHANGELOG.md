@@ -38,6 +38,11 @@ The first release after a four-year gap. Everything below is breaking.
   page reload (same-origin mode), server restarts and host-page bundles
   reloading the page, and an esbuild error overlay. Development only
   (`STOMP_DEV`).
+- test: scramjet's adversarial corpus ported as a measurement (`adversarial-*`
+  suites over `test/pages/adv-*.html`): 682 probes per mode across nine
+  groups run inside a proxied page in both demo modes; 93 reach the host
+  window, a proxy URL or a proxy fingerprint and are recorded, not fixed (see
+  the parity doc's corpus row).
 - `examples/minimal-host.html` is the smallest host application (same-origin
   `StompController` on epoxy, one frame, the three callbacks), served by the
   demo at `/examples/`; README "Embedding" walks through it, and the new
@@ -114,6 +119,10 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
+  `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
+  default) and wrapped like one built from strings; bytes that do not decode,
+  and blobs built from other blobs, are left as they are.
 - Relocatable asset names: `assets` on both controllers names the served
   files (`serviceWorker`, `injectDocument`, `injectWorker`, `controllerFrame`,
   `controllerFrameScript`), each defaulting to the file's own name. The
@@ -546,8 +555,8 @@ Fixed while testing real sites and a feature fixture:
   reach the real `top`, which is one more reason that mode is not a security
   boundary.
 - The code of a `blob:` worker runs with the worker hooks but is not itself
-  rewritten; worklet modules get no inject; an HTML blob built from binary
-  parts (an ArrayBuffer, another Blob) is shown as it is.
+  rewritten; worklet modules get no inject; an HTML blob built from another
+  Blob is shown as it is.
 - Transports, as tested against `wisp-js` 0.5.2 with or without Stomp in the
   path: epoxy 3.0.2 handles HTTP well but stops delivering incoming WebSocket
   frames after the first round trip; libcurl 2.0.6 handles WebSockets but

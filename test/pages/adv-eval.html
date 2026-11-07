@@ -1,0 +1,373 @@
+<!doctype html>
+<title>ADV EVAL</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// Every way to run source text: direct and indirect eval in all its
+	// spellings, the Function constructor family, with, string timers and
+	// data:/blob: modules (scramjet: eval.ts, function-ctor.ts, llm/escapes.ts).
+	// A route is contained when the payload saw the spoofed top and the page's
+	// URL. Risky syntax gets its own <script> below so a rewriter failure on
+	// one form never hides the others.
+	const P = __advProbe;
+	const A = __advAsync;
+	const C = __advPayload;
+	const R = __advRecord;
+	P('eval direct', () => eval(C('eval direct')));
+	P('(0, eval)', () => (0, eval)(C('(0, eval)')));
+	P('(1, 2, eval)', () => (1, 2, eval)(C('(1, 2, eval)')));
+	P('window.eval', () => window.eval(C('window.eval')));
+	P('globalThis.eval', () => globalThis.eval(C('globalThis.eval')));
+	P('self.eval', () => self.eval(C('self.eval')));
+	P("window['eval']", () => window['eval'](C("window['eval']")));
+	P("window['ev'+'al']", () => window['ev' + 'al'](C("window['ev'+'al']")));
+	P('[eval][0]', () => [eval][0](C('[eval][0]')));
+	P('void eval', () => void eval(C('void eval')));
+	P('eval.call', () => eval.call(null, C('eval.call')));
+	P('eval.apply', () => eval.apply(null, [C('eval.apply')]));
+	P('eval.bind', () => eval.bind(null)(C('eval.bind')));
+	P('Reflect.apply(eval)', () =>
+		Reflect.apply(eval, null, [C('Reflect.apply(eval)')]),
+	);
+	P('returned eval', () =>
+		(function () {
+			return eval;
+		})()(C('returned eval')),
+	);
+	P('destructured eval', () => {
+		const { eval: e } = window;
+		return e(C('destructured eval'));
+	});
+	P('eval?.()', () => eval?.(C('eval?.()')));
+	P('top.eval', () => top.eval(C('top.eval')));
+	P('parent.eval', () => parent.eval(C('parent.eval')));
+	P('document.defaultView.eval', () =>
+		document.defaultView.eval(C('document.defaultView.eval')),
+	);
+	P('frames.eval', () => frames.eval(C('frames.eval')));
+	P('Reflect.get(window, eval)', () =>
+		Reflect.get(window, 'eval')(C('Reflect.get(window, eval)')),
+	);
+	P('gOPD(window, eval).value', () =>
+		Object.getOwnPropertyDescriptor(window, 'eval').value(
+			C('gOPD(window, eval).value'),
+		),
+	);
+	P('eval(eval())', () =>
+		eval('eval(' + JSON.stringify(C('eval(eval())')) + ')'),
+	);
+	P('eval((0,eval)())', () =>
+		eval('(0,eval)(' + JSON.stringify(C('eval((0,eval)())')) + ')'),
+	);
+	P('(0,eval)(eval())', () =>
+		(0, eval)('eval(' + JSON.stringify(C('(0,eval)(eval())')) + ')'),
+	);
+	P('eval(window.eval())', () =>
+		eval('window.eval(' + JSON.stringify(C('eval(window.eval())')) + ')'),
+	);
+	P('eval(new Function()())', () =>
+		eval('new Function(' + JSON.stringify(C('eval(new Function()())')) + ')()'),
+	);
+	P('eval(Function()())', () =>
+		eval('Function(' + JSON.stringify(C('eval(Function()())')) + ')()'),
+	);
+	P('new Function(return eval)()', () =>
+		new Function('return eval')()(C('new Function(return eval)()')),
+	);
+	P('eval escaped \\u0074op', () => {
+		const bs = String.fromCharCode(92);
+		return eval(
+			'__advHit("eval escaped \\\\u0074op", ' +
+				bs +
+				'u0074op === window ? "self" : "OTHER-WINDOW", ' +
+				bs +
+				'u006cocation.href)',
+		);
+	});
+	P('eval(window.\\u0065val())', () => {
+		const bs = String.fromCharCode(92);
+		return eval(
+			'window.' +
+				bs +
+				'u0065val(' +
+				JSON.stringify(C('eval(window.\\u0065val())')) +
+				')',
+		);
+	});
+	P('eval(window["\\u0065val"]())', () => {
+		const bs = String.fromCharCode(92);
+		return eval(
+			'window["' +
+				bs +
+				'u0065val"](' +
+				JSON.stringify(C('eval(window["\\u0065val"]())')) +
+				')',
+		);
+	});
+	// the Function family
+	P('new Function', () => new Function(C('new Function'))());
+	P('Function()', () => Function(C('Function()'))());
+	P('new Function(a, body)', () =>
+		new Function('a', C('new Function(a, body)'))(1),
+	);
+	P('new Function(...spread)', () =>
+		new Function(...['a', C('new Function(...spread)')])(1),
+	);
+	P('(function(){}).constructor', () =>
+		function () {}.constructor(C('(function(){}).constructor'))(),
+	);
+	P('(()=>{}).constructor', () =>
+		(() => {}).constructor(C('(()=>{}).constructor'))(),
+	);
+	P('Function.prototype.constructor', () =>
+		Function.prototype.constructor(C('Function.prototype.constructor'))(),
+	);
+	P('Object.getPrototypeOf(fn).constructor', () =>
+		Object.getPrototypeOf(function () {}).constructor(
+			C('Object.getPrototypeOf(fn).constructor'),
+		)(),
+	);
+	P('Reflect.construct(Function)', () =>
+		Reflect.construct(Function, [C('Reflect.construct(Function)')])(),
+	);
+	P('new (Function.bind())', () =>
+		new (Function.bind())(C('new (Function.bind())'))(),
+	);
+	P('new top.Function', () => new top.Function(C('new top.Function'))());
+	P('new parent.Function', () =>
+		new parent.Function(C('new parent.Function'))(),
+	);
+	P('Function.call', () => Function.call(null, C('Function.call'))());
+	P('Function.apply', () => Function.apply(null, [C('Function.apply')])());
+	P('Reflect.get(window, Function)', () =>
+		Reflect.get(window, 'Function')(C('Reflect.get(window, Function)'))(),
+	);
+	A('AsyncFunction', async () => {
+		const AsyncFunction = async function () {}.constructor;
+		const f = new AsyncFunction(C('AsyncFunction'));
+		R(
+			'AsyncFunction returns a function',
+			typeof f === 'function' ? 'function' : 'TELL:' + typeof f,
+		);
+		await f();
+		return 'ran';
+	});
+	P('GeneratorFunction', () => {
+		const GeneratorFunction = function* () {}.constructor;
+		const f = new GeneratorFunction(C('GeneratorFunction'));
+		R(
+			'GeneratorFunction returns a function',
+			typeof f === 'function' ? 'function' : 'TELL:' + typeof f,
+		);
+		return [...f()].length;
+	});
+	A('AsyncGeneratorFunction', async () => {
+		const AsyncGeneratorFunction = async function* () {}.constructor;
+		const f = new AsyncGeneratorFunction(C('AsyncGeneratorFunction'));
+		R(
+			'AsyncGeneratorFunction returns a function',
+			typeof f === 'function' ? 'function' : 'TELL:' + typeof f,
+		);
+		await f().next();
+		return 'ran';
+	});
+	P('Function.prototype.constructor === Function', () =>
+		Function.prototype.constructor === Function
+			? 'same'
+			: 'TELL:Function.prototype.constructor !== Function',
+	);
+	P('(function(){}).constructor === Function', () =>
+		function () {}.constructor === Function
+			? 'same'
+			: 'TELL:fn.constructor !== Function',
+	);
+	P('new Function toString', () => {
+		const s = new Function('a', 'return a + 1').toString();
+		return /^function anonymous\(a\s*\n?\)\s*\{\s*\n?return a \+ 1\s*\n?\}$/.test(
+			s,
+		)
+			? 'native shape'
+			: 'TELL:' + s.slice(0, 120);
+	});
+	P(
+		'new Function(return this)() === window',
+		() => new Function('return this')() === window,
+	);
+	P('new Function(return location.href)', () =>
+		new Function('return location.href')(),
+	);
+	P('new Function(location, return location)', () =>
+		new Function('location', 'return location')(5),
+	);
+	P('with-compiler data key location', () =>
+		new Function('$data', 'with ($data) { return (location); }')({
+			location: 'paris',
+		}),
+	);
+	P('with-compiler data key top', () =>
+		new Function('$data', 'with ($data) { return (top); }')({ top: 10 }),
+	);
+	// string timers
+	setTimeout(C('setTimeout string'), 0);
+	R('setTimeout string', 'did-not-run');
+	const iv = setInterval(C('setInterval string'), 0);
+	R('setInterval string', 'did-not-run');
+	setTimeout(() => clearInterval(iv), 300);
+	// shadowing divergences scramjet marks as failures
+	P('shadowed eval receives source unmodified', () => {
+		let got = null;
+		const shadow = (s) => {
+			got = s;
+			return 'shadowed';
+		};
+		function withParam(eval) {
+			return eval('location = 1');
+		}
+		const r = withParam(shadow);
+		return r === 'shadowed' && got === 'location = 1'
+			? 'unmodified'
+			: 'TELL:' + got;
+	});
+	P('overwritten window.eval honoured', () => {
+		const orig = window.eval;
+		try {
+			window.eval = (s) => 'custom:' + s;
+			const r = window.eval('1+1');
+			return r === 'custom:1+1' ? 'honoured' : 'TELL:' + r;
+		} finally {
+			window.eval = orig;
+		}
+	});
+	// modules from data: and blob: URLs run in this realm
+	A('import(data:)', () =>
+		import(
+			'data:text/javascript,' + encodeURIComponent(C('import(data:)'))
+		).then(() => 'imported'),
+	);
+	A('import(blob:)', () =>
+		import(
+			URL.createObjectURL(
+				new Blob([C('import(blob:)')], { type: 'text/javascript' }),
+			)
+		).then(() => 'imported'),
+	);
+	if (window.trustedTypes) {
+		P('eval(TrustedScript)', () => {
+			const policy = trustedTypes.createPolicy('adv-eval', {
+				createScript: (s) => s,
+			});
+			return eval(policy.createScript(C('eval(TrustedScript)')));
+		});
+		P('(0,eval)(TrustedScript)', () => {
+			const policy = trustedTypes.createPolicy('adv-eval-2', {
+				createScript: (s) => s,
+			});
+			return (0, eval)(policy.createScript(C('(0,eval)(TrustedScript)')));
+		});
+	}
+</script>
+<script>
+	__advProbe('with (window)', () => {
+		with (window) {
+			__advHit(
+				'with (window)',
+				top === window ? 'self' : 'OTHER-WINDOW',
+				location.href,
+			);
+		}
+		return 'ran';
+	});
+</script>
+<script>
+	__advProbe('with (document)', () => {
+		with (document) {
+			__advHit('with (document)', 'n/a', location.href);
+		}
+		return 'ran';
+	});
+</script>
+<script>
+	__advProbe('with ({})', () => {
+		with ({}) {
+			__advHit(
+				'with ({})',
+				top === window ? 'self' : 'OTHER-WINDOW',
+				location.href,
+			);
+		}
+		return 'ran';
+	});
+</script>
+<script>
+	__advProbe('with (new Proxy(window))', () => {
+		with (new Proxy(window, {})) {
+			__advHit(
+				'with (new Proxy(window))',
+				top === window ? 'self' : 'OTHER-WINDOW',
+				location.href,
+			);
+		}
+		return 'ran';
+	});
+</script>
+<!-- prettier-ignore -->
+<script>
+	__advProbe('(eval)()', () => (eval)(__advPayload('(eval)()')));
+</script>
+<!-- prettier-ignore -->
+<script>
+	__advProbe('((eval))()', () => ((eval))(__advPayload('((eval))()')));
+</script>
+<!-- prettier-ignore -->
+<script>
+	__advProbe('eval ()', () => eval (__advPayload('eval ()')));
+</script>
+<!-- prettier-ignore -->
+<script>
+	__advProbe('eval/*c*/()', () => eval/* c */(__advPayload('eval/*c*/()')));
+</script>
+<!-- prettier-ignore -->
+<script>
+	__advProbe('eval\\n()', () => eval
+		(__advPayload('eval\\n()')));
+</script>
+<script>
+	__advProbe('class extends Function', () => {
+		class F extends Function {}
+		return new F(__advPayload('class extends Function'))();
+	});
+</script>
+<script>
+	__advProbe('eval tagged template', () => {
+		const tag = (parts) => eval(parts.raw[0]);
+		return tag`__advHit("eval tagged template", top === window ? "self" : "OTHER-WINDOW", location.href)`;
+	});
+</script>
+<script>
+	__advProbe('eval in arrow default param', () =>
+		((x = eval(__advPayload('eval in arrow default param'))) => x)(),
+	);
+</script>
+<script>
+	__advProbe('eval in class static block', () => {
+		class K {
+			static {
+				eval(__advPayload('eval in class static block'));
+			}
+		}
+		return K.name;
+	});
+</script>
+<script>
+	__advProbe('eval inside getter', () => {
+		const o = {
+			get g() {
+				return eval(__advPayload('eval inside getter'));
+			},
+		};
+		return o.g;
+	});
+</script>
+<script>
+	__advFinish();
+</script>

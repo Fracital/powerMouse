@@ -1,0 +1,504 @@
+<!doctype html>
+<title>ADV PROTOS</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// Reaching the natives around the hooks: property descriptors, Reflect,
+	// Proxy receivers, prototype getters applied to the live objects, own-key
+	// enumeration, and the fingerprints a hooked native leaves (toString, extra
+	// globals, extra Object.prototype keys, symbols). A value starting with
+	// TELL: is a fingerprint the page itself noticed (scramjet: eval.ts
+	// reflect-get/gopd leaks, rewriter-unsafe-props.ts, location.ts brand and
+	// own-property tests, function-ctor.ts identity).
+	const P = __advProbe;
+	const W = __advWho;
+	const D = __advDoc;
+	const R = __advRecord;
+	const desc = (obj, key) => Object.getOwnPropertyDescriptor(obj, key);
+	const viaDesc = (obj, key, who) =>
+		P(
+			'gOPD(' + (obj === window ? 'window' : 'document') + ', ' + key + ')',
+			() => {
+				const d = desc(obj, key);
+				if (!d) return 'no own descriptor';
+				return who(d.get ? d.get.call(obj) : d.value);
+			},
+		);
+	viaDesc(window, 'top', W);
+	viaDesc(window, 'parent', W);
+	viaDesc(window, 'frameElement', (v) =>
+		v === null ? 'null' : 'OTHER-ELEMENT',
+	);
+	viaDesc(window, 'opener', W);
+	viaDesc(window, 'location', (l) => l.href);
+	viaDesc(window, 'origin', String);
+	viaDesc(window, 'document', D);
+	viaDesc(document, 'location', (l) => (l ? l.href : String(l)));
+	P('gOPD(window, location).configurable', () =>
+		desc(window, 'location').configurable === false
+			? 'unforgeable'
+			: 'TELL:location is configurable',
+	);
+	P('gOPD(window, top).configurable', () =>
+		desc(window, 'top').configurable === false
+			? 'unforgeable'
+			: 'TELL:top is configurable',
+	);
+	P(
+		'gOPD(window, eval).value === eval',
+		() => desc(window, 'eval').value === eval,
+	);
+	P('__lookupGetter__ top', () =>
+		W(window.__lookupGetter__('top').call(window)),
+	);
+	P('__lookupGetter__ parent', () =>
+		W(window.__lookupGetter__('parent').call(window)),
+	);
+	P(
+		'__lookupGetter__ location',
+		() => window.__lookupGetter__('location').call(window).href,
+	);
+	P('__lookupGetter__ frameElement', () => {
+		const v = window.__lookupGetter__('frameElement').call(window);
+		return v === null ? 'null' : 'OTHER-ELEMENT';
+	});
+	P('Reflect.get(window, top)', () => W(Reflect.get(window, 'top')));
+	P('Reflect.get(window, parent)', () => W(Reflect.get(window, 'parent')));
+	P(
+		'Reflect.get(window, location).href',
+		() => Reflect.get(window, 'location').href,
+	);
+	P('Reflect.get(window, frameElement)', () => {
+		const v = Reflect.get(window, 'frameElement');
+		return v === null ? 'null' : 'OTHER-ELEMENT';
+	});
+	P(
+		'Reflect.get(document, location).href',
+		() => Reflect.get(document, 'location').href,
+	);
+	P('Reflect.get(document, URL)', () => Reflect.get(document, 'URL'));
+	P('Reflect.get(document, baseURI)', () => Reflect.get(document, 'baseURI'));
+	P('Reflect.get(document, referrer)', () => Reflect.get(document, 'referrer'));
+	P('Reflect.get(document, cookie)', () => Reflect.get(document, 'cookie'));
+	P('Reflect.get(location, href)', () => Reflect.get(location, 'href'));
+	P('Reflect.getOwnPropertyDescriptor(window, location)', () => {
+		const d = Reflect.getOwnPropertyDescriptor(window, 'location');
+		return d.get ? d.get.call(window).href : d.value.href;
+	});
+	// prototype getters applied to the live document
+	const protoGet = (proto, key, name) =>
+		P(name, () => desc(proto, key).get.call(document));
+	protoGet(Document.prototype, 'URL', 'Document.prototype URL getter');
+	protoGet(
+		Document.prototype,
+		'documentURI',
+		'Document.prototype documentURI getter',
+	);
+	protoGet(Node.prototype, 'baseURI', 'Node.prototype baseURI getter');
+	protoGet(
+		Document.prototype,
+		'referrer',
+		'Document.prototype referrer getter',
+	);
+	protoGet(Document.prototype, 'cookie', 'Document.prototype cookie getter');
+	protoGet(Document.prototype, 'domain', 'Document.prototype domain getter');
+	P('Document.prototype location descriptor', () => {
+		const d = desc(Document.prototype, 'location');
+		return d
+			? d.get
+				? d.get.call(document).href
+				: 'value'
+			: 'no descriptor on Document.prototype';
+	});
+	P('Document.prototype defaultView getter', () =>
+		W(desc(Document.prototype, 'defaultView').get.call(document)),
+	);
+	P('Window.prototype parent descriptor', () => {
+		const d = desc(Window.prototype, 'parent');
+		return d ? W(d.get.call(window)) : 'not on Window.prototype';
+	});
+	P('Window.prototype top descriptor', () => {
+		const d = desc(Window.prototype, 'top');
+		return d ? W(d.get.call(window)) : 'not on Window.prototype';
+	});
+	P('Function.prototype.call.call(gOPD top getter)', () =>
+		W(Function.prototype.call.call(desc(window, 'top').get, window)),
+	);
+	P('Reflect.apply(gOPD top getter)', () =>
+		W(Reflect.apply(desc(window, 'top').get, window, [])),
+	);
+	P('Object.getOwnPropertyDescriptors(window).top', () =>
+		W(Object.getOwnPropertyDescriptors(window).top.get.call(window)),
+	);
+	// Proxy receivers and inherited lookups
+	P('new Proxy(window).top', () => W(new Proxy(window, {}).top));
+	P('new Proxy(window).parent', () => W(new Proxy(window, {}).parent));
+	P(
+		'new Proxy(window).location.href',
+		() => new Proxy(window, {}).location.href,
+	);
+	P('Reflect.get(Proxy(window), top, window)', () =>
+		W(Reflect.get(new Proxy(window, {}), 'top', window)),
+	);
+	P('Object.create(window).top', () => W(Object.create(window).top));
+	P(
+		'Object.create(window).location',
+		() => Object.create(window).location.href,
+	);
+	P('({...window}).top', () => W({ ...window }.top));
+	P('Object.assign({}, window).top', () => W(Object.assign({}, window).top));
+	P('Object.entries(window) top', () => {
+		const e = Object.entries(window).find(([k]) => k === 'top');
+		return e ? W(e[1]) : 'not enumerable';
+	});
+	P('for-in window top', () => {
+		for (const k in window) if (k === 'top') return W(window[k]);
+		return 'not enumerated';
+	});
+	P('Object.values(window) has other window', () => {
+		const others = Object.values(window).filter((v) => {
+			try {
+				return v && v.window === v && v !== window;
+			} catch (error) {
+				return true;
+			}
+		});
+		return others.length ? 'OTHER-WINDOW x' + others.length : 'none';
+	});
+	P('delete window.top', () => delete window.top);
+	P('delete window.location', () => delete window.location);
+	P("'top' in window", () => 'top' in window);
+	P("window.hasOwnProperty('top')", () => window.hasOwnProperty('top'));
+	// brand and shape of what the page is handed
+	P('toString.call(location)', () => {
+		const s = Object.prototype.toString.call(location);
+		return s === '[object Location]' ? s : 'TELL:' + s;
+	});
+	P('location instanceof Location', () =>
+		location instanceof Location ? 'yes' : 'TELL:not a Location',
+	);
+	P('location.constructor === Location', () =>
+		location.constructor === Location ? 'yes' : 'TELL:constructor differs',
+	);
+	P('getOwnPropertyNames(location)', () => {
+		const names = Object.getOwnPropertyNames(location).sort();
+		const expected = [
+			'ancestorOrigins',
+			'assign',
+			'hash',
+			'host',
+			'hostname',
+			'href',
+			'origin',
+			'pathname',
+			'port',
+			'protocol',
+			'reload',
+			'replace',
+			'search',
+			'toString',
+			'valueOf',
+		];
+		return names.join(',') === expected.join(',')
+			? 'real shape'
+			: 'TELL:' + names.join(',');
+	});
+	P('getOwnPropertySymbols(location)', () =>
+		Object.getOwnPropertySymbols(location).map(String),
+	);
+	P('Object.getPrototypeOf(location) === Location.prototype', () =>
+		Object.getPrototypeOf(location) === Location.prototype
+			? 'yes'
+			: 'TELL:prototype differs',
+	);
+	P('toString.call(top)', () => {
+		const s = Object.prototype.toString.call(top);
+		return s === '[object Window]' ? s : 'TELL:' + s;
+	});
+	P('top instanceof Window', () =>
+		top instanceof Window ? 'yes' : 'TELL:not a Window',
+	);
+	P('eval.name/length', () => {
+		const ok = eval.name === 'eval' && eval.length === 1;
+		return ok ? 'eval/1' : 'TELL:' + eval.name + '/' + eval.length;
+	});
+	P('eval has no prototype', () =>
+		eval.prototype === undefined ? 'none' : 'TELL:has prototype',
+	);
+	P('getOwnPropertyNames(eval)', () => {
+		const n = Object.getOwnPropertyNames(eval).sort().join(',');
+		return n === 'length,name' ? n : 'TELL:' + n;
+	});
+	P('Function.name/length', () => {
+		const ok = Function.name === 'Function' && Function.length === 1;
+		return ok ? 'Function/1' : 'TELL:' + Function.name + '/' + Function.length;
+	});
+	P('window.eval === (0,eval)', () =>
+		window.eval === (0, eval) ? 'same' : 'TELL:differs',
+	);
+	P('window.eval === eval(eval)', () =>
+		window.eval === eval('eval') ? 'same' : 'TELL:differs',
+	);
+	P('window.Function === Function', () =>
+		window.Function === Function ? 'same' : 'TELL:differs',
+	);
+	P('setTimeout === window.setTimeout', () =>
+		setTimeout === window.setTimeout ? 'same' : 'TELL:differs',
+	);
+	P('fetch === window.fetch', () =>
+		fetch === window.fetch ? 'same' : 'TELL:differs',
+	);
+	// toString of the natives a proxy has to hook
+	const natives = {
+		eval: () => eval,
+		Function: () => Function,
+		fetch: () => fetch,
+		XMLHttpRequest: () => XMLHttpRequest,
+		'XMLHttpRequest.prototype.open': () => XMLHttpRequest.prototype.open,
+		Worker: () => Worker,
+		WebSocket: () => WebSocket,
+		setTimeout: () => setTimeout,
+		postMessage: () => postMessage,
+		'window.open': () => window.open,
+		'history.pushState': () => history.pushState,
+		'history.replaceState': () => history.replaceState,
+		'Element.prototype.getAttribute': () => Element.prototype.getAttribute,
+		'Element.prototype.setAttribute': () => Element.prototype.setAttribute,
+		'Element.prototype.hasAttribute': () => Element.prototype.hasAttribute,
+		'Element.prototype.getAttributeNames': () =>
+			Element.prototype.getAttributeNames,
+		'Node.prototype.appendChild': () => Node.prototype.appendChild,
+		'document.createElement': () => document.createElement,
+		'document.write': () => document.write,
+		'document.open': () => document.open,
+		'Element.prototype innerHTML getter': () =>
+			desc(Element.prototype, 'innerHTML').get,
+		'Element.prototype innerHTML setter': () =>
+			desc(Element.prototype, 'innerHTML').set,
+		'Element.prototype outerHTML getter': () =>
+			desc(Element.prototype, 'outerHTML').get,
+		'Element.prototype attributes getter': () =>
+			desc(Element.prototype, 'attributes').get,
+		'HTMLAnchorElement href getter': () =>
+			desc(HTMLAnchorElement.prototype, 'href').get,
+		'HTMLImageElement src getter': () =>
+			desc(HTMLImageElement.prototype, 'src').get,
+		'HTMLScriptElement src getter': () =>
+			desc(HTMLScriptElement.prototype, 'src').get,
+		'HTMLScriptElement text setter': () =>
+			desc(HTMLScriptElement.prototype, 'text').set,
+		'Document cookie getter': () => desc(Document.prototype, 'cookie').get,
+		'Document URL getter': () => desc(Document.prototype, 'URL').get,
+		'Node baseURI getter': () => desc(Node.prototype, 'baseURI').get,
+		'Node textContent setter': () => desc(Node.prototype, 'textContent').set,
+		'Storage.prototype.getItem': () => Storage.prototype.getItem,
+		'Storage.prototype.setItem': () => Storage.prototype.setItem,
+		'MessageEvent source getter': () =>
+			desc(MessageEvent.prototype, 'source').get,
+		'MessageEvent origin getter': () =>
+			desc(MessageEvent.prototype, 'origin').get,
+		'window location getter': () => desc(window, 'location').get,
+		'window top getter': () => desc(window, 'top').get,
+		'window parent getter': () => desc(window, 'parent').get,
+		'window frameElement getter': () => desc(window, 'frameElement').get,
+		'Function.prototype.toString': () => Function.prototype.toString,
+		'Location.prototype.assign': () => Location.prototype.assign,
+		'URL.createObjectURL': () => URL.createObjectURL,
+		'navigator.sendBeacon': () => navigator.sendBeacon,
+		'Navigator serviceWorker getter': () =>
+			desc(Navigator.prototype, 'serviceWorker').get,
+	};
+	for (const [name, get] of Object.entries(natives)) {
+		P('toString ' + name, () => {
+			const f = get();
+			if (typeof f !== 'function') return 'not a function: ' + typeof f;
+			const s = Function.prototype.toString.call(f);
+			return /\{\s*\[native code\]\s*\}$/.test(s)
+				? 'native'
+				: 'TELL:' + s.replace(/\s+/g, ' ').slice(0, 100);
+		});
+	}
+	P('String(eval)', () => {
+		const s = String(eval);
+		return s === 'function eval() { [native code] }'
+			? 'native'
+			: 'TELL:' + s.slice(0, 100);
+	});
+	// what the inject bundle leaves on the globals
+	P('extra window names', () =>
+		Object.getOwnPropertyNames(window).filter(
+			(k) => /stomp|\$s\$|createClient|__adv/i.test(k) && !/^__adv/.test(k),
+		),
+	);
+	P('window symbols', () => Object.getOwnPropertySymbols(window).map(String));
+	P('document symbols', () =>
+		Object.getOwnPropertySymbols(document).map(String),
+	);
+	P('Object.prototype extra names', () =>
+		Object.getOwnPropertyNames(Object.prototype).filter(
+			(n) =>
+				![
+					'constructor',
+					'__defineGetter__',
+					'__defineSetter__',
+					'hasOwnProperty',
+					'__lookupGetter__',
+					'__lookupSetter__',
+					'isPrototypeOf',
+					'propertyIsEnumerable',
+					'toString',
+					'valueOf',
+					'__proto__',
+					'toLocaleString',
+				].includes(n),
+		),
+	);
+	P('Object.prototype symbols', () =>
+		Object.getOwnPropertySymbols(Object.prototype).map(String),
+	);
+	P('Function.prototype symbols', () =>
+		Object.getOwnPropertySymbols(Function.prototype).map(String),
+	);
+	P('Element.prototype symbols', () =>
+		Object.getOwnPropertySymbols(Element.prototype).map(String),
+	);
+	P('document.documentElement symbols', () =>
+		Object.getOwnPropertySymbols(document.documentElement).map(String),
+	);
+	P('Window.prototype extra names', () =>
+		Object.getOwnPropertyNames(Window.prototype).filter((n) =>
+			/stomp|\$s\$|adv/i.test(n),
+		),
+	);
+	P('globalThis keys with $', () =>
+		Object.keys(globalThis).filter((k) => k.includes('$')),
+	);
+	// plain objects carrying the unsafe keys (rewriter-unsafe-props)
+	P('plain object location/top/parent/eval', () => {
+		const o = { location: 'paris', top: 1, parent: 2, eval: 3 };
+		o.location = 'london';
+		o.top++;
+		const ok =
+			o.location === 'london' &&
+			o.top === 2 &&
+			o.parent === 2 &&
+			o.eval === 3 &&
+			Object.keys(o).join() === 'location,top,parent,eval' &&
+			JSON.stringify(o) === '{"location":"london","top":2,"parent":2,"eval":3}';
+		return ok ? 'transparent' : 'TELL:' + JSON.stringify(o);
+	});
+	P('proxy get trap sees real keys', () => {
+		const log = [];
+		const p = new Proxy(
+			{ location: 'x', top: 1, other: 3 },
+			{
+				get(t, k, r) {
+					log.push(String(k));
+					return Reflect.get(t, k, r);
+				},
+			},
+		);
+		void p.other;
+		void p.location;
+		void p.top;
+		return log.join() === 'other,location,top'
+			? 'real keys'
+			: 'TELL:' + log.join();
+	});
+	P('proxy set trap sees real keys', () => {
+		const log = [];
+		const p = new Proxy(
+			{},
+			{
+				set(t, k, v, r) {
+					log.push(String(k));
+					return Reflect.set(t, k, v, r);
+				},
+			},
+		);
+		p.other = 1;
+		p.location = 2;
+		p.top = 3;
+		return log.join() === 'other,location,top'
+			? 'real keys'
+			: 'TELL:' + log.join();
+	});
+	P('null-prototype object keys', () => {
+		const o = Object.create(null);
+		o.location = 'x';
+		o.top = 'y';
+		const k = Object.keys(o).join();
+		return k === 'location,top' ? 'real keys' : 'TELL:' + k;
+	});
+	P('delete o.location', () => {
+		const o = { location: 1, top: 2, parent: 3, eval: 4, keep: 5 };
+		delete o.location;
+		delete o.top;
+		delete o.parent;
+		delete o.eval;
+		const k = Object.keys(o).join();
+		return k === 'keep' ? 'deleted' : 'TELL:' + k;
+	});
+	P('frozen strict assign throws', () => {
+		'use strict';
+		const o = Object.freeze({ location: 1 });
+		try {
+			o.location = 2;
+			return 'TELL:no TypeError';
+		} catch (error) {
+			return error.name;
+		}
+	});
+	// super.location gets its own <script> below: a rewriter that mangles it
+	// takes the whole block down with a SyntaxError
+	R(
+		'super.location skips own property',
+		'TELL:script block did not run (SyntaxError in the rewritten script?)',
+	);
+	P('accessor invoked once', () => {
+		let gets = 0;
+		const o = {
+			get location() {
+				gets++;
+				return 'g';
+			},
+		};
+		void o.location;
+		return gets === 1 ? 'once' : 'TELL:' + gets;
+	});
+	P('DOMRect.top', () => {
+		const d = document.createElement('div');
+		d.style.cssText = 'position:absolute;top:10px;left:0;width:1px;height:1px';
+		document.body.appendChild(d);
+		const r = d.getBoundingClientRect().top;
+		d.remove();
+		return r === 10 ? 'number' : 'TELL:' + String(r);
+	});
+</script>
+<script>
+	__advProbe('super.location skips own property', () => {
+		class B {
+			constructor() {
+				this.location = 'own';
+			}
+			get top() {
+				return 'protoTop';
+			}
+		}
+		class Dd extends B {
+			readLoc() {
+				return super.location;
+			}
+			readTop() {
+				return super.top;
+			}
+		}
+		const d = new Dd();
+		return d.readTop() === 'protoTop' && d.readLoc() === undefined
+			? 'spec'
+			: 'TELL:' + d.readLoc();
+	});
+</script>
+<script>
+	__advFinish();
+</script>

@@ -1,0 +1,387 @@
+<!doctype html>
+<title>ADV URLS</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script src="adv-urls.js"></script>
+<script>
+	// Runtime APIs that hand back a URL: resource and navigation timing, error
+	// stacks and ErrorEvent.filename, import.meta, the Navigation API,
+	// Request/Response/XHR/WebSocket/EventSource URLs, object URLs, the service
+	// worker registration, CacheStorage and IndexedDB names, storage keys and
+	// cookies (scramjet: platform-apis.ts, long-tail-apis.ts, modules.ts,
+	// cache-storage.ts, storage.ts, url-fidelity.ts).
+	const P = __advProbe;
+	const A = __advAsync;
+	const R = __advRecord;
+	P('navigation entry name', () =>
+		performance.getEntriesByType('navigation').map((e) => e.name),
+	);
+	P('navigation entry toJSON name', () =>
+		performance.getEntriesByType('navigation').map((e) => e.toJSON().name),
+	);
+	P('resource entry names', () =>
+		performance.getEntriesByType('resource').map((e) => e.name),
+	);
+	P('performance.getEntries names', () =>
+		performance.getEntries().map((e) => e.entryType + ':' + e.name),
+	);
+	P(
+		'getEntriesByName(location.href)',
+		() => performance.getEntriesByName(location.href).length,
+	);
+	P('performance.mark name', () => {
+		performance.mark('adv-mark');
+		return performance.getEntriesByName('adv-mark').map((e) => e.name);
+	});
+	A(
+		'PerformanceObserver buffered',
+		() =>
+			new Promise((resolve) => {
+				const names = [];
+				const po = new PerformanceObserver((list) => {
+					for (const e of list.getEntries()) names.push(e.name);
+				});
+				po.observe({ type: 'resource', buffered: true });
+				fetch('/pages/echo.json').then(() =>
+					setTimeout(() => resolve(names), 300),
+				);
+			}),
+	);
+	P('inline Error().stack', () => new Error('adv').stack);
+	P('inline caught stack', () => {
+		try {
+			null.x;
+		} catch (error) {
+			return error.stack;
+		}
+	});
+	P('new Function error stack', () => {
+		try {
+			new Function('null.x')();
+		} catch (error) {
+			return error.stack;
+		}
+	});
+	P('eval error stack', () => {
+		try {
+			eval('null.x');
+		} catch (error) {
+			return error.stack;
+		}
+	});
+	P('Error.captureStackTrace', () => {
+		const o = {};
+		Error.captureStackTrace(o);
+		return o.stack;
+	});
+	P('Error.prepareStackTrace callsites', () => {
+		const orig = Error.prepareStackTrace;
+		try {
+			Error.prepareStackTrace = (_, sites) => sites.map((s) => s.getFileName());
+			return new Error('x').stack;
+		} finally {
+			Error.prepareStackTrace = orig;
+		}
+	});
+	A(
+		'window.onerror filename',
+		() =>
+			new Promise((resolve) => {
+				const prev = window.onerror;
+				window.onerror = (message, filename, line, col, error) => {
+					window.onerror = prev;
+					resolve({ message, filename, stack: error && error.stack });
+					return true;
+				};
+				__advThrowLater();
+			}),
+	);
+	A(
+		'error event filename',
+		() =>
+			new Promise((resolve) => {
+				addEventListener(
+					'error',
+					(e) => {
+						e.preventDefault();
+						resolve({ filename: e.filename, message: e.message });
+					},
+					{ once: true },
+				);
+				setTimeout(() => {
+					throw new Error('adv-event');
+				}, 0);
+			}),
+	);
+	A(
+		'unhandledrejection stack',
+		() =>
+			new Promise((resolve) => {
+				addEventListener(
+					'unhandledrejection',
+					(e) => {
+						e.preventDefault();
+						resolve(e.reason && e.reason.stack);
+					},
+					{ once: true },
+				);
+				Promise.reject(new Error('adv-reject'));
+			}),
+	);
+	A('fetched module import.meta', () =>
+		import('./adv-urls-mod.js').then((m) => ({
+			metaUrl: m.metaUrl,
+			sibling: m.sibling,
+			resolved: m.resolved,
+			stack: m.stack,
+		})),
+	);
+	P('navigation.currentEntry.url', () =>
+		typeof navigation === 'undefined'
+			? 'no Navigation API'
+			: navigation.currentEntry.url,
+	);
+	P('navigation.entries urls', () =>
+		typeof navigation === 'undefined'
+			? 'no Navigation API'
+			: navigation.entries().map((e) => e.url),
+	);
+	P('pushState then location/currentEntry', () => {
+		history.pushState({ a: 1 }, '', '/pages/adv-urls.html?pushed=1#h');
+		const r = [
+			location.href,
+			typeof navigation === 'undefined' ? null : navigation.currentEntry.url,
+			history.state,
+		];
+		history.replaceState(null, '', '/pages/adv-urls.html');
+		return r;
+	});
+	A(
+		'hashchange URLs',
+		() =>
+			new Promise((resolve) => {
+				addEventListener(
+					'hashchange',
+					(e) => resolve({ oldURL: e.oldURL, newURL: e.newURL }),
+					{ once: true },
+				);
+				location.hash = 'adv';
+			}),
+	);
+	P("new Request('/x').url", () => new Request('/x').url);
+	P('new Request(location.href).url', () => new Request(location.href).url);
+	P('new Request(adv-urls.js).url', () => new Request('adv-urls.js').url);
+	A('fetch Response.url', () => fetch('/pages/echo.json').then((r) => r.url));
+	A('fetch(Request).url', () =>
+		fetch(new Request('/pages/echo.json')).then((r) => r.url),
+	);
+	A('fetch redirected Response.url', () =>
+		fetch('/pages/echo.json', { redirect: 'follow' }).then((r) => [
+			r.url,
+			r.redirected,
+			r.type,
+		]),
+	);
+	A(
+		'xhr.responseURL',
+		() =>
+			new Promise((resolve, reject) => {
+				const xhr = new XMLHttpRequest();
+				xhr.open('GET', '/pages/echo.json');
+				xhr.onload = () => resolve(xhr.responseURL);
+				xhr.onerror = () => reject(new Error('xhr error'));
+				xhr.send();
+			}),
+	);
+	P('WebSocket.url', () => {
+		const ws = new WebSocket(
+			location.origin.replace(/^http/, 'ws') + '/ws-echo',
+		);
+		const u = ws.url;
+		ws.onerror = () => {};
+		ws.close();
+		return u;
+	});
+	P('EventSource.url', () => {
+		const es = new EventSource('/pages/echo.json');
+		const u = es.url;
+		es.onerror = () => {};
+		es.close();
+		return u;
+	});
+	P('URL.createObjectURL(Blob)', () => URL.createObjectURL(new Blob(['x'])));
+	P(
+		'new URL(objectURL).origin',
+		() => new URL(URL.createObjectURL(new Blob(['x']))).origin,
+	);
+	P('URL.createObjectURL(File)', () =>
+		URL.createObjectURL(new File(['x'], 'f.txt')),
+	);
+	A('fetch(objectURL).url', () =>
+		fetch(URL.createObjectURL(new Blob(['x']))).then((r) => r.url),
+	);
+	A('revoked objectURL still fetchable', () => {
+		const u = URL.createObjectURL(new Blob(['x']));
+		URL.revokeObjectURL(u);
+		return fetch(u).then(
+			() => 'TELL:revoked object URL still resolves',
+			() => 'rejected',
+		);
+	});
+	P('navigator.serviceWorker', () =>
+		navigator.serviceWorker ? 'present' : 'TELL:absent',
+	);
+	P('navigator.serviceWorker.controller.scriptURL', () =>
+		navigator.serviceWorker && navigator.serviceWorker.controller
+			? navigator.serviceWorker.controller.scriptURL
+			: 'no controller',
+	);
+	A('serviceWorker.getRegistration', () =>
+		navigator.serviceWorker
+			? navigator.serviceWorker
+					.getRegistration()
+					.then((r) =>
+						r
+							? { scope: r.scope, script: r.active && r.active.scriptURL }
+							: 'none',
+					)
+			: 'no serviceWorker',
+	);
+	A('serviceWorker.getRegistrations', () =>
+		navigator.serviceWorker
+			? navigator.serviceWorker
+					.getRegistrations()
+					.then((rs) => rs.map((r) => r.scope))
+			: 'no serviceWorker',
+	);
+	A('caches.keys', async () => {
+		const c = await caches.open('adv-cache');
+		await c.put('/pages/adv-cached', new Response('y'));
+		const keys = await caches.keys();
+		const reqs = (await c.keys()).map((r) => r.url);
+		const match = await c.match('/pages/adv-cached');
+		return { keys, reqs, matchUrl: match && match.url };
+	});
+	A('caches.put fetched response', async () => {
+		const c = await caches.open('adv-cache');
+		const r = await fetch('/pages/echo.json');
+		await c.put(r.url, r.clone());
+		const m = await c.match('/pages/echo.json');
+		return m ? m.url : 'no match for the page URL';
+	});
+	A('indexedDB.databases', async () => {
+		await new Promise((resolve) => {
+			const req = indexedDB.open('adv-db', 1);
+			req.onsuccess = () => {
+				const name = req.result.name;
+				req.result.close();
+				R('IDBDatabase.name', name);
+				resolve();
+			};
+			req.onerror = resolve;
+		});
+		return indexedDB.databases
+			? (await indexedDB.databases()).map((d) => d.name)
+			: 'no databases()';
+	});
+	P('localStorage keys', () => {
+		localStorage.setItem('adv-key', '1');
+		return {
+			keys: Object.keys(localStorage),
+			names: Object.getOwnPropertyNames(localStorage),
+			key0: localStorage.key(0),
+			length: localStorage.length,
+			json: JSON.stringify(localStorage),
+			forIn: (() => {
+				const out = [];
+				for (const k in localStorage) out.push(k);
+				return out;
+			})(),
+			direct: localStorage['adv-key'],
+			missing:
+				localStorage.missing === undefined
+					? 'undefined'
+					: 'TELL:' + String(localStorage.missing),
+		};
+	});
+	P('localStorage.getItem via prototype', () =>
+		Storage.prototype.getItem.call(localStorage, 'adv-key'),
+	);
+	P('sessionStorage keys', () => {
+		sessionStorage.setItem('adv-session', '1');
+		return { keys: Object.keys(sessionStorage), key0: sessionStorage.key(0) };
+	});
+	P('localStorage delete and clear', () => {
+		localStorage.setItem('adv-del', '1');
+		delete localStorage['adv-del'];
+		const afterDelete = localStorage.getItem('adv-del');
+		localStorage.setItem('adv-clear', '1');
+		localStorage.clear();
+		return {
+			afterDelete,
+			afterClear: localStorage.getItem('adv-clear'),
+			length: localStorage.length,
+		};
+	});
+	P('document.cookie', () => {
+		document.cookie = 'adv=1; path=/';
+		return document.cookie;
+	});
+	A('cookieStore.getAll', () =>
+		window.cookieStore
+			? cookieStore
+					.getAll()
+					.then((cs) =>
+						cs.map((c) => c.name + '=' + c.value + '@' + c.domain + c.path),
+					)
+			: 'no cookieStore',
+	);
+	P('document.referrer', () => document.referrer);
+	P('document.domain', () => document.domain);
+	P('BroadcastChannel name', () => new BroadcastChannel('adv').name);
+	A(
+		'BroadcastChannel event origin',
+		() =>
+			new Promise((resolve) => {
+				const a = new BroadcastChannel('adv-origin');
+				const b = new BroadcastChannel('adv-origin');
+				b.onmessage = (e) => {
+					resolve({ origin: e.origin, source: __advWho(e.source) });
+					a.close();
+					b.close();
+				};
+				a.postMessage('x');
+			}),
+	);
+	P('Notification permission', () =>
+		typeof Notification === 'undefined' ? 'none' : Notification.permission,
+	);
+	P('crossOriginIsolated / isSecureContext', () => [
+		window.crossOriginIsolated,
+		window.isSecureContext,
+	]);
+	P('a.ping', () => {
+		const a = document.createElement('a');
+		a.ping = '/ping';
+		return [a.ping, a.getAttribute('ping')];
+	});
+	A(
+		'Response.url of a blob: iframe',
+		() =>
+			new Promise((resolve) => {
+				const u = URL.createObjectURL(
+					new Blob(
+						[
+							'<script>parent.postMessage({__adv: "blob frame location", href: location.href, origin: location.origin, referrer: document.referrer}, "*")<\/script>',
+						],
+						{ type: 'text/html' },
+					),
+				);
+				const f = document.createElement('iframe');
+				f.src = u;
+				document.body.append(f);
+				setTimeout(() => resolve(u), 1500);
+			}),
+	);
+	__advFinish(2000);
+</script>
