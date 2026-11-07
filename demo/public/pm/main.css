@@ -1364,8 +1364,10 @@ input:focus-visible {
 /* the URL is the one selectable thing; clicking it copies */
 .req .url {
 	display: flex;
+	align-items: center;
 	min-width: 0;
 	overflow: hidden;
+	white-space: nowrap;
 	cursor: copy;
 	user-select: text;
 	-webkit-user-select: text;
@@ -1377,20 +1379,23 @@ input:focus-visible {
 }
 
 /* the path ellipsises in the middle: the head gives way, the tail stays */
+/* (pathHead, not head: .head is the landing page's header) */
 .req .path {
 	display: flex;
+	align-items: center;
 	min-width: 0;
 	color: rgba(255, 255, 255, 0.55);
 }
 
-.req .path .head {
+.req .path .pathHead {
 	flex: 0 1 auto;
 	min-width: 0;
 	overflow: hidden;
+	white-space: nowrap;
 	text-overflow: ellipsis;
 }
 
-.req .path .tail {
+.req .path .pathTail {
 	flex: 0 0 auto;
 }
 
@@ -1402,16 +1407,21 @@ input:focus-visible {
 	text-overflow: ellipsis;
 }
 
+/* a small chip beside the URL for the 900 ms after a copy */
 .req .url.copied::after {
 	content: 'copied';
 	flex: 0 0 auto;
-	margin-left: 10px;
-	padding: 0 7px;
-	border-radius: 999px;
+	align-self: center;
+	height: 16px;
+	margin-left: 8px;
+	padding: 0 6px;
+	border-radius: 8px;
 	background: #4ca9fb;
 	color: #000;
 	font-size: 10px;
-	line-height: 18px;
+	font-weight: 400;
+	line-height: 16px;
+	letter-spacing: 0.02em;
 }
 
 .req .dest,

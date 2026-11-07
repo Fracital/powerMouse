@@ -1287,10 +1287,10 @@ function requestRow(info) {
 		const rest = parsed.pathname + parsed.search;
 		const cut = Math.max(0, rest.length - 18);
 		const head = document.createElement('span');
-		head.className = 'head';
+		head.className = 'pathHead';
 		head.textContent = rest.slice(0, cut);
 		const tail = document.createElement('span');
-		tail.className = 'tail';
+		tail.className = 'pathTail';
 		tail.textContent = rest.slice(cut);
 		path.append(head, tail);
 		url.append(host, path);

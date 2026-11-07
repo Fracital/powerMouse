@@ -131,8 +131,8 @@ ok(
 	'a long path keeps its tail and ellipsises in the middle',
 	await page.evaluate(() => {
 		const row = document.querySelector('#requestsList .req');
-		const head = row.querySelector('.path .head');
-		const tail = row.querySelector('.path .tail');
+		const head = row.querySelector('.path .pathHead');
+		const tail = row.querySelector('.path .pathTail');
 		return (
 			head &&
 			tail &&
