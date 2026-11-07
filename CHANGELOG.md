@@ -106,6 +106,10 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- A dynamic `import()` in a classic external script resolves against the
+  script's URL instead of the document's, and modules get
+  `import.meta.resolve()` (the page's URLs; a bare specifier comes back as it
+  is).
 - Destructuring reaches the spoof at every depth: `const { a: { top } } = o`
   and `({ a: { location: l } } = o)` resolve through the wrapped source like
   the shallow form did, and a destructured parameter

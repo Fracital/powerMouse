@@ -119,8 +119,8 @@ every "ok" row below.
 | On parse failure return the original source (`allowInvalidJs`)                                   | partial | always on, one console.warn, no flag; scramjet defaults to the same and turns it off in its dev preset so a broken rewrite fails loudly       |
 | Bare import specifiers pass through to import maps                                               | ok      | static and dynamic; the map's own URLs are not rewritten (section 4)                                                                          |
 | `export * from` / `export {a} from` source rewriting                                             | ok      |                                                                                                                                               |
-| `import()` base is the script URL, not the document                                              | partial | bake the script URL in at rewrite time                                                                                                        |
-| `import.meta.resolve`                                                                            | partial | only `import.meta.url` is set                                                                                                                 |
+| `import()` base is the script URL, not the document                                              | ok      | baked in at rewrite time (rewriter suite)                                                                                                     |
+| `import.meta.resolve`                                                                            | ok      | the page's URLs; bare specifiers pass through unresolved                                                                                      |
 | Module workers                                                                                   | ok      | the inject is fetched and run with indirect eval under top-level await (workers suite)                                                        |
 | Preamble before `'use strict'` in classic workers                                                | partial | workers lose strict mode                                                                                                                      |
 | `eval(nonString)` returns a string                                                               | partial | `evalScope` does `String(code)`                                                                                                               |
@@ -291,8 +291,7 @@ Suites: navigate-events, request-log, version, cookie-jar, cache, isolation.
 ## 10. What is left, by payoff
 
 1. Rewriter gaps: an `allowInvalidJs` flag (off: a script the rewriter
-   cannot parse fails instead of running raw); `import()` and `import.meta.resolve`
-   against the script URL; `debugger` removal.
+   cannot parse fails instead of running raw); `debugger` removal.
 2. Documents that escape the rewrite: `area[href]`, `blob:` and `about:blank`
    documents, `window.open` return values, import map URLs,
    `iframe[sandbox|csp|credentialless]`.

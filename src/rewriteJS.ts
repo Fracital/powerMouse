@@ -103,7 +103,9 @@ export function modifyJS(
 											),
 											b.identifier('url'),
 										)
-									: b.identifier('undefined'),
+									: // a classic script resolves against its own URL, which
+										// only the rewriter knows
+										b.literal(url.toString()),
 								ctx.node.source,
 							],
 						),
@@ -533,7 +535,11 @@ if (!(${JSON.stringify(CLIENT_KEY)} in globalThis))
 if (!${CLIENT_KEY}.applied) 
 	${CLIENT_KEY}.apply();`
 				: '') +
-			(isModule ? `import.meta.url = ${JSON.stringify(url.toString())};` : '') +
+			// import.meta.resolve answers with the page's URLs; a bare specifier
+			// belongs to the import map and comes back as it is
+			(isModule
+				? `import.meta.url = ${JSON.stringify(url.toString())};import.meta.resolve = (s) => ${BARE_SPECIFIER}.test(s = String(s)) ? s : new URL(s, import.meta.url).href;`
+				: '') +
 			generate(tree)
 		);
 	} catch (error) {
@@ -713,9 +719,12 @@ function hoistParamPatterns(node: any) {
 	body.splice(at, 0, b.variableDeclaration('var', hoisted));
 }
 
+/** a URL-like specifier: absolute, scheme-relative, or starting with `/`, `./`, `../` */
+const BARE_SPECIFIER = /^(?!\/|\.\.?\/|[a-z][a-z0-9+.-]*:)/i;
+
 /** `react`, `#private`, `@scope/pkg`: not a URL, resolved by an import map */
 export function isBareSpecifier(specifier: string): boolean {
-	return !/^(\/|\.\.?\/|[a-z][a-z0-9+.-]*:)/i.test(specifier);
+	return BARE_SPECIFIER.test(specifier);
 }
 
 export function restoreJS(script: string, _url: StompURL) {
