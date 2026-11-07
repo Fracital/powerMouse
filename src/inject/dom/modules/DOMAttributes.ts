@@ -14,16 +14,50 @@ import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
 import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
 
-const jsTypes = ['text/javascript', 'application/javascript', 'module', ''];
+/** the JavaScript MIME type essences (HTML "JavaScript MIME type") */
+const JS_MIME_TYPES = new Set([
+	'application/ecmascript',
+	'application/javascript',
+	'application/x-ecmascript',
+	'application/x-javascript',
+	'text/ecmascript',
+	'text/javascript',
+	'text/javascript1.0',
+	'text/javascript1.1',
+	'text/javascript1.2',
+	'text/javascript1.3',
+	'text/javascript1.4',
+	'text/javascript1.5',
+	'text/jscript',
+	'text/livescript',
+	'text/x-ecmascript',
+	'text/x-javascript',
+]);
+
+/**
+ * What the browser makes of a script element's type, as Chrome does it: a
+ * classic script (no type, a JavaScript MIME type in any case or spacing,
+ * or the legacy `language` attribute), a module (`module` in any case, no
+ * surrounding whitespace), or something that does not run.
+ */
+export function scriptKind(element: Element): 'classic' | 'module' | null {
+	let type = element.getAttribute('type');
+	if (type === null) {
+		const language = element.getAttribute('language');
+		type = language ? `text/${language}` : '';
+	}
+	if (type.toLowerCase() === 'module') return 'module';
+	type = type.trim().toLowerCase();
+	if (type === '') return 'classic';
+	return JS_MIME_TYPES.has(type) ? 'classic' : null;
+}
 
 export function shouldRewriteScript(element: Element) {
-	return jsTypes.includes(element.getAttribute('type') || '');
+	return scriptKind(element) !== null;
 }
 
 export function scriptType(element: Element): ScriptType {
-	return element.getAttribute('type') === 'module'
-		? 'genericModule'
-		: 'generic';
+	return scriptKind(element) === 'module' ? 'genericModule' : 'generic';
 }
 
 export default class DOMAttributesModule extends Module<DocumentClient> {
@@ -111,10 +145,52 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				svgHook(attribute),
 				// live SVG elements keep their case; the page loader clones them as
 				// HTML elements first, whose nodeName is upper case
-				['use', 'image', 'feImage', 'mpath', 'textPath']
+				[
+					'use',
+					'image',
+					'feImage',
+					'mpath',
+					'textPath',
+					'linearGradient',
+					'radialGradient',
+					'pattern',
+					'filter',
+					'animate',
+					'animateMotion',
+					'animateTransform',
+					'set',
+					'cursor',
+					'tref',
+				]
 					.flatMap((tag) => [tag, tag.toUpperCase()])
 					.map((tag): [string, string] => [tag, attribute]),
 			);
+
+		// an SVG script loads its source by href (or xlink:href), like src
+		const svgScriptHook = (attribute: string) => (element: CustomElement) => {
+			element.restoreAttributesOG(attribute);
+			if (!element.hasAttribute(attribute)) return;
+			const value = element.getAttribute(attribute)!;
+			if (value === '') return;
+			element.setAttributeOG(attribute, value);
+			element.setAttribute(
+				attribute,
+				routeJS(
+					new StompURL(
+						new URL(value, this.client.url.toString()),
+						this.client.url,
+					),
+					this.client.url,
+					this.client.config,
+					'generic',
+				),
+			);
+		};
+		for (const attribute of ['href', 'xlink:href'])
+			domHooksModule.useAttributes(svgScriptHook(attribute), [
+				['script', attribute],
+				['SCRIPT', attribute],
+			]);
 
 		// browsing context names that would leave the frame: a top-level page
 		// navigates itself for these, so does a proxied one. `_blank` and
@@ -198,6 +274,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			},
 			[
 				['A', 'href'],
+				['a', 'href'],
 				['AREA', 'href'],
 				[
 					HTMLAnchorElement,
@@ -314,48 +391,48 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.hasAttribute('rel') &&
 					element.getAttribute('href') !== ''
 				) {
-					switch (element.getAttribute('rel')) {
-						case 'stylesheet':
-							element.setAttributeOG('href', element.getAttribute('href')!);
-							element.setAttribute(
-								'href',
-								routeCSS(
-									new StompURL(
-										new URL(
-											element.getAttribute('href')!,
-											this.client.url.toString(),
-										),
-										this.client.url,
-									),
-									this.client.url,
-								),
-							);
-							break;
-						case 'manifest':
-							element.setAttributeOG('href', element.getAttribute('href')!);
-							element.removeAttribute('href');
-							break;
-						default:
-							element.setAttributeOG('href', element.getAttribute('href')!);
-							element.setAttribute(
-								'href',
-								routeBinary(
-									new StompURL(
-										new URL(
-											element.getAttribute('href')!,
-											this.client.url.toString(),
-										),
-										this.client.url,
-									),
-								),
-							);
-							break;
-					}
+					// rel is a token list; a preload's route follows `as`
+					const rel = new Set(
+						element.getAttribute('rel')!.trim().toLowerCase().split(/\s+/),
+					);
+					const as = (element.getAttribute('as') || '').trim().toLowerCase();
+					const resource = new StompURL(
+						new URL(element.getAttribute('href')!, this.client.url.toString()),
+						this.client.url,
+					);
+					element.setAttributeOG('href', element.getAttribute('href')!);
+					if (rel.has('manifest')) element.removeAttribute('href');
+					else if (
+						rel.has('stylesheet') ||
+						((rel.has('preload') || rel.has('prefetch')) && as === 'style')
+					)
+						element.setAttribute('href', routeCSS(resource, this.client.url));
+					else if (rel.has('modulepreload'))
+						element.setAttribute(
+							'href',
+							routeJS(
+								resource,
+								this.client.url,
+								this.client.config,
+								'genericModule',
+							),
+						);
+					else if (
+						(rel.has('preload') || rel.has('prefetch')) &&
+						as === 'script'
+					)
+						element.setAttribute(
+							'href',
+							routeJS(resource, this.client.url, this.client.config, 'generic'),
+						);
+					else element.setAttribute('href', routeBinary(resource));
 				}
 			},
 			[
 				['LINK', 'href'],
 				['LINK', 'rel'],
+				['LINK', 'as'],
+				[HTMLLinkElement, 'as', () => false],
 				[
 					HTMLLinkElement,
 					'href',

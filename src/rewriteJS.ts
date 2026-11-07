@@ -765,8 +765,8 @@ export function rewriteImportMap(
 				typeof target !== 'string' ||
 				specifier.endsWith('/') ||
 				target.endsWith('/') ||
-				// already routed (a second pass)
-				target.includes(`${url.directory}js/`)
+				// already routed (a second pass): the JS route is `js:<type>/`
+				target.includes(`${url.directory}js:`)
 			)
 				continue;
 			try {

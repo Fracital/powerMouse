@@ -176,7 +176,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// inserted inline script and leave it unrewritten.
 		const rewriteScript = (script: HTMLScriptElement, willConnect = false) => {
 			// an import map's targets are routed once, before it connects
-			if (script.type === 'importmap') {
+			if (script.type.trim().toLowerCase() === 'importmap') {
 				if (rewrittenScripts.has(script)) return;
 				rewrittenScripts.add(script);
 				script.text = rewriteImportMap(

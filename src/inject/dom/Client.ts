@@ -6,7 +6,7 @@ import StompURL from '../../StompURL';
 import { OPEN_TAB } from '../../transport/messages';
 import Client from '../Client';
 import cloneRawNode, { parseHTML } from './cloneNode';
-import { shouldRewriteScript } from './modules/DOMAttributes';
+import { scriptKind, shouldRewriteScript } from './modules/DOMAttributes';
 
 type OpenCallback = () => void;
 
@@ -154,13 +154,15 @@ export default class DocumentClient extends Client {
 		// Nothing may produce `</script` in the markup.
 		for (const script of node.querySelectorAll('script')) {
 			if (!script.text) continue;
-			if ((script.getAttribute('type') || '') === 'importmap') {
+			if (
+				(script.getAttribute('type') || '').trim().toLowerCase() === 'importmap'
+			) {
 				script.text = rewriteImportMap(script.text, this.url, this.config);
 				continue;
 			}
 			if (!shouldRewriteScript(script)) continue;
 			const source = script.text;
-			const isModule = script.type === 'module';
+			const isModule = scriptKind(script) === 'module';
 			const rewritten = modifyJS(
 				source,
 				this.url,

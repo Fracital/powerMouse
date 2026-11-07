@@ -110,6 +110,15 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- Markup is read the way the browser reads it: a script runs rewritten
+  whatever the case, spacing or legacy spelling of its JavaScript MIME type
+  (and the `language` attribute), with `module` matched as Chrome does; a
+  link's `rel` is a token list and a preload's `as` decides its route
+  (`stylesheet` or `as=style` to the CSS route, `modulepreload` and
+  `as=script` to the script route, the rest binary); SVG gradients,
+  patterns, filters, animations, cursors and `tref` route their `href` or
+  `xlink:href`, an SVG `<script>` as a script, and an SVG `<a>` made with
+  `createElementNS` like an HTML link.
 - The Cookie header follows SameSite: the service worker asks the jar with
   the request's site (from the fetch metadata it computes), whether it is a
   navigation and its method, so a cross-site subresource carries
