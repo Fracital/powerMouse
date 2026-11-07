@@ -157,6 +157,16 @@ and `message` events from outside the proxied world never reach the page.
 
 ## Embedding
 
+Depend on the built package through the repository's `dist` branch, which
+holds what `npm pack` would ship and nothing to build:
+
+```json
+"stomp-rewrite": "git+https://github.com/Fracital/powerMouse.git#<sha of the dist branch>"
+```
+
+`deploy/publish-dist.sh` publishes master's build there and prints the sha to
+pin (`stompPath` from `stomp-rewrite/path` is the directory to serve).
+
 [`examples/minimal-host.html`](examples/minimal-host.html) is the smallest
 host application: plain HTML and one module script, with a comment per step.
 The demo server serves it at `/examples/minimal-host.html`

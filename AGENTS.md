@@ -166,6 +166,10 @@ on every save (use a `git worktree`).
   the result to the `dist` branches of `Fracital/epoxy-tls` and
   `Fracital/EpoxyTransport`, and `package.json` pins that commit by
   `git+https://` URL. Read `deploy/epoxy/README.md` before touching any of it.
+- Hosts depend on stomp the same way: `deploy/publish-dist.sh` builds master
+  and pushes the package files to this repository's `dist` branch (run by
+  hand from a clean checkout that is on GitHub; CI never pushes), and the
+  host pins the printed sha as a `git+https://` dependency.
 - libcurl-transport 2.0.6: WebSockets fine, HTTP stops answering after ~70
   requests (default pool) or ~160 (`connections: [500, 400, 200]`).
 
