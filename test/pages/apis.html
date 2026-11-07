@@ -1,6 +1,18 @@
 <!doctype html><title>APIS</title>
 <script>
 	window.__apis = { reload: typeof location.reload === 'function' };
+	// an asynchronous XHR completes and names the real URL
+	{
+		const x = new XMLHttpRequest();
+		x.open('GET', '/pages/fresh.json');
+		x.onloadend = () => {
+			__apis.xhrAsync = [x.status, x.responseURL, x.responseText.length > 0];
+		};
+		x.onerror = () => {
+			__apis.xhrAsync = 'error';
+		};
+		x.send();
+	}
 	// history URLs: the page's own origin only, like the browser
 	try {
 		history.pushState(null, '', 'https://other.example/x');

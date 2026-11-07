@@ -1,4 +1,4 @@
-import { parseRoutedURL, routeXHR } from '../../../routeURL';
+import { routeXHR } from '../../../routeURL';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule, {
@@ -6,6 +6,7 @@ import ProxyModule, {
 	domObjectConstructor,
 	onEventTarget,
 } from '../../modules/Proxy';
+import { unrouteURL } from '../../modules/Unroute';
 import WorkerClient from '../Client';
 
 export default class XMLHttpRequestModule extends Module<WorkerClient> {
@@ -142,12 +143,9 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				this.#readyState = HEADERS_RECEIVED;
 				this.#status = response!.status;
 				this.#statusText = response!.statusText;
-				const parsed = parseRoutedURL(
-					url!,
-					that.client.codec,
-					`${location.origin}${that.client.directory}`,
-				);
-				this.#responseURL = parsed.url.toString();
+				// the fetch hook already reads a Response's URL as the page's; a
+				// routed one (the sync bridge's) is decoded, a real one kept
+				this.#responseURL = unrouteURL(that.client, url!) ?? url!;
 				this.#responseHeaders = response!.headers;
 				this.#dispatchReadyState();
 

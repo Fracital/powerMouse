@@ -59,6 +59,13 @@ ok(
 	JSON.stringify([apis.pushCross, apis.pushSame]),
 );
 
+ok(
+	'an asynchronous XHR completes with its real URL',
+	JSON.stringify(apis.xhrAsync) ===
+		JSON.stringify([200, `${FIXTURE}pages/fresh.json`, true]),
+	JSON.stringify(apis.xhrAsync),
+);
+
 await done(
 	browser,
 	page.errors.filter((e) => !/max cycles/.test(e)),
