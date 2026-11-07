@@ -182,6 +182,44 @@ export default class Client {
 	protected ownTransportPort(): MessagePort | Promise<MessagePort> {
 		return this.requestTransportPort();
 	}
+	/** whether a service worker controls this realm (its routed requests reach the worker) */
+	get controlled(): boolean {
+		try {
+			return !!this.#serviceWorkerContainer?.controller;
+		} catch (error) {
+			return false;
+		}
+	}
+	/** @internal this bundle's native fetch, which runs in this client's realm */
+	nativeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+		return fetch(input, init);
+	}
+	/**
+	 * The fetch a routed request goes through: this realm's own when a service
+	 * worker controls it, else the nearest controlled same-origin ancestor's.
+	 * A document a javascript: URL produced is not controlled, so its routed
+	 * requests would miss the worker and reach the proxy origin's server.
+	 */
+	routedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+		if (this.controlled || !this.isDOM) return fetch(input, init);
+		let context: typeof globalThis = this.global;
+		for (let depth = 0; depth < 16; depth++) {
+			let parent: typeof globalThis;
+			try {
+				parent = context.parent as unknown as typeof globalThis;
+				if (!parent || parent === context) break;
+				const client = (
+					parent as unknown as Record<string, Client | undefined>
+				)[this.names.client];
+				if (client?.controlled) return client.nativeFetch(input, init);
+			} catch (error) {
+				// a cross-origin ancestor ends the walk
+				break;
+			}
+			context = parent;
+		}
+		return fetch(input, init);
+	}
 	/**
 	 * Tell the service worker the page aborted the request it sent with this
 	 * id (the browser does not relay a fetch's abort to the worker): the

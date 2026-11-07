@@ -468,4 +468,32 @@ console.warn = warn;
 		body,
 	);
 }
+
+// a javascript: URL whose body is one expression passes a string value
+// through the client (the shell); statements keep their own completion value
+{
+	const page = new StompURL(
+		'https://example.com/p.html',
+		parsed.codec,
+		'/stomp/',
+	);
+	const expression = routeHTML(
+		new StompURL("javascript:'<p>x</p>'", page),
+		page,
+		config,
+	);
+	const statements = routeHTML(
+		new StompURL('javascript:var a = 1; a', page),
+		page,
+		config,
+	);
+	ok(
+		'a single-expression javascript: URL hands a string value to the client; statements are left as they are',
+		expression.startsWith('javascript:((r,c)=>') &&
+			expression.includes('.javascriptDocument(r)') &&
+			expression.includes('("<p>x</p>")') &&
+			!statements.includes('javascriptDocument'),
+		[expression, statements].join('\n'),
+	);
+}
 await done();

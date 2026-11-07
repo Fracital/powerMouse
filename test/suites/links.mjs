@@ -231,4 +231,31 @@ ok(
 	JSON.stringify(named),
 );
 
+// a frame whose document a javascript: URL's string makes: it runs injected,
+// so it sees this page as its top, fetches through the proxy (from a document
+// no service worker controls) and posts to this page rather than the host
+const jsurl = await page.evaluate(async (fixture) => {
+	const hostMessages = [];
+	addEventListener('message', (event) => {
+		if (event.data && event.data.jsurl !== undefined)
+			hostMessages.push(event.data);
+	});
+	const element = document.createElement('iframe');
+	document.body.append(element);
+	const frame = window.controller.createFrame(element);
+	await frame.go(`${fixture}pages/jsurl-frame.html`);
+	for (let i = 0; i < 40; i++) {
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		if (element.contentWindow?.__jsurl?.done) break;
+	}
+	return { page: element.contentWindow?.__jsurl ?? null, hostMessages };
+}, FIXTURE);
+ok(
+	'a javascript: URL frame runs injected: its top is the page, its fetch goes through, its message reaches the page',
+	jsurl.page?.message?.jsurl === true &&
+		jsurl.page?.message?.ok === true &&
+		jsurl.hostMessages.length === 0,
+	JSON.stringify(jsurl),
+);
+
 await done(browser);

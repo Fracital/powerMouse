@@ -1,0 +1,20 @@
+<!doctype html>
+<title>JSURL FRAME</title>
+<script>
+	// a frame whose document is the string a javascript: URL evaluates to: its
+	// script runs injected (it sees this page as top, its fetch reaches the
+	// proxy) and it tells this page, not the host
+	window.__jsurl = {};
+	addEventListener('message', (event) => {
+		if (!event.data || event.data.jsurl === undefined) return;
+		__jsurl.message = event.data;
+		__jsurl.done = true;
+	});
+	const frame = document.createElement('iframe');
+	frame.src =
+		'javascript:\'<script>fetch("/pages/echo.json").then((r) => r.json()).then((j) => top.postMessage({ jsurl: top === parent, ok: j.ok === true }, "*"), (e) => top.postMessage({ jsurl: top === parent, ok: String(e) }, "*"));<\\/script>\'';
+	document.documentElement.append(frame);
+	setTimeout(() => {
+		__jsurl.done = true;
+	}, 6000);
+</script>

@@ -1,4 +1,5 @@
 import { escapeText } from 'entities';
+import { parse } from 'meriyah';
 import { Config } from './config';
 import { helperNames } from './helperNames';
 import type { ReferrerInfo } from './referrerPolicy';
@@ -23,6 +24,29 @@ import { WORKER_BASE } from './transport/messages';
  * hostile embedder holding the codec key could route a child as `html`: the
  * same trust boundary as every rewriting decision.
  */
+/**
+ * The rewritten expression of a javascript: URL body that is one expression
+ * (`'<p>markup'`, `void 0`, `f()`), or null for statements, several
+ * expressions or anything that does not parse: those keep their own
+ * completion value as written.
+ */
+function javascriptExpression(body: string, rewritten: string): string | null {
+	const single = (code: string) => {
+		try {
+			const program = parse(code, { next: true });
+			return (
+				program.body.length === 1 &&
+				program.body[0].type === 'ExpressionStatement'
+			);
+		} catch (error) {
+			return false;
+		}
+	};
+	if (!single(body)) return null;
+	const expression = rewritten.trim().replace(/;$/, '');
+	return single(`(${expression})`) ? expression : null;
+}
+
 export function routeHTML(
 	resource: StompURL,
 	url: StompURL,
@@ -53,7 +77,16 @@ export function routeHTML(
 		} catch (error) {
 			// not percent-encoded
 		}
-		return `javascript:${modifyJS(body, url, config, 'generic')}`;
+		const rewritten = modifyJS(body, url, config, 'generic');
+		// A javascript: URL whose value is a string replaces the document with
+		// that markup, which nothing would inject: the frame or page would run
+		// its scripts raw. For a single-expression body the string goes through
+		// the client (the frame's own, else its parent's), which wraps it in
+		// the shell like a blob document; other values pass through untouched.
+		const expression = javascriptExpression(body, rewritten);
+		if (expression === null) return `javascript:${rewritten}`;
+		const client = JSON.stringify(helperNames(config).client);
+		return `javascript:((r,c)=>typeof r==='string'&&c?c.javascriptDocument(r):r)((${expression}),self[${client}]||(()=>{try{return parent[${client}]}catch(e){}})())`;
 	}
 
 	return routeURL(

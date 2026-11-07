@@ -8,30 +8,20 @@
 		"iframes with data url uses no referrer": "NOTRUN: "
 	},
 	"/referrer-policy/generic/inheritance/iframe-inheritance-document-write.html": {
-		"(harness)": "TIMEOUT: timeout: no report within 30 s",
 		"document.open() should not change the referrer policy of the opened document.": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
-	"/referrer-policy/generic/inheritance/iframe-inheritance-history-about-blank.html": {
-		"(harness)": "TIMEOUT: timeout: no report within 30 s"
-	},
 	"/referrer-policy/generic/inheritance/iframe-inheritance-history-about-srcdoc.html": {
-		"History navigation reuses original policy.": "FAIL: assert_equals: First navigation uses correct policy. expected (undefined) undefined but got (string) \"FAILURE\"",
 		"New srcdoc iframe uses new policy.": "FAIL: assert_equals: expected \"http://localhost:PORT/custom\" but got \"FAILURE\""
 	},
 	"/referrer-policy/generic/inheritance/iframe-inheritance-javascript-child.html": {
-		"(harness)": "TIMEOUT: ",
 		"Referrer Policy: iframes with javascript url reuse referrer policy": "TIMEOUT: Test timed out",
-		"Referrer Policy: iframes with javascript url reuse referrer policy 1": "NOTRUN: ",
-		"Referrer Policy: iframes with javascript url reuse referrer policy 2": "NOTRUN: ",
 		"Referrer Policy: iframes with javascript url reuse referrer policy 3": "NOTRUN: "
 	},
 	"/referrer-policy/generic/inheritance/iframe-inheritance-javascript.html": {
-		"(harness)": "TIMEOUT: timeout: no report within 30 s",
 		"Referrer Policy: iframes with javascript url reuse referrer policy": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: iframes with javascript url reuse referrer policy 1": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
 	"/referrer-policy/generic/inheritance/iframe-inheritance-srcdoc-child.html": {
-		"(harness)": "TIMEOUT: timeout: no report within 30 s",
 		"iframes srcdoc child correctly inherit the ancestor's referrer policy": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
 	"/referrer-policy/generic/inheritance/iframe-inheritance-srcdoc.html": {

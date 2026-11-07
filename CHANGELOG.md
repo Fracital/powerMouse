@@ -291,6 +291,18 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A frame whose document a `javascript:` URL's string makes runs proxied.
+  `<iframe src="javascript:'<p>...'">` (and a link or `location` set to such
+  a URL) replaces the document with the string's markup, which nothing
+  injected: its scripts ran raw, saw the host as `top` and posted to it. A
+  single-expression `javascript:` body now hands a string value to the
+  client, which wraps it in the shell like a blob document; statements and
+  other values are left as they are. Such a document is not controlled by the
+  service worker, so the inject sends its routed fetches through the nearest
+  controlled ancestor, and a fetch's response URL is read back through the
+  client rather than the bundle's own `location` (links suite, rewriter-unit
+  shape; wpt-referrer-policy: the two `javascript:` inheritance pages report
+  instead of timing out).
 - The cookie jar parses a line the way Chrome does. A control character
   anywhere in it (an attribute value included, `Domain=localhost\x01`) drops
   the whole cookie; only the name and value were checked, so the cookie was

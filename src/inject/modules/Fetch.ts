@@ -1,5 +1,4 @@
 import {
-	parseRoutedURL,
 	proxyBlobURL,
 	ROUTE_PROTOCOLS,
 	routeBinary,
@@ -148,21 +147,19 @@ export default class FetchModule extends Module<Client> {
 				}
 				// [input, init]
 				//TODO: COOKIES
-				const res = await fetch(
+				// through a controlled realm (this one, or an ancestor when this
+				// document is one no service worker controls)
+				const res = await this.client.routedFetch(
 					routeXHR(new StompURL(url, this.client.url)),
 					init,
 				);
 				// the response may have set cookies: document.cookie reads fresh
 				this.client.notifyResponse();
 
-				responseURLs.set(
-					res,
-					parseRoutedURL(
-						Reflect.apply(nativeResponseURL, res, []) as string,
-						this.client.codec,
-						`${location.origin}${this.client.directory}`,
-					).url.toString(),
-				);
+				// the page's URL for the routed one (unrouteURL reads the routed
+				// prefix off the client, not this bundle's free `location`)
+				const routedURL = Reflect.apply(nativeResponseURL, res, []) as string;
+				responseURLs.set(res, unrouteURL(this.client, routedURL) ?? routedURL);
 
 				return res;
 			},

@@ -2,6 +2,7 @@ import { decode } from 'entities';
 import { ParsedConfig } from '../../config';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
 import { refererFor, type ReferrerInfo } from '../../referrerPolicy';
+import { modifyHTML } from '../../rewriteHTML';
 import { modifyJS, rewriteImportMap } from '../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import StompURL from '../../StompURL';
@@ -213,6 +214,14 @@ export default class DocumentClient extends Client {
 	}
 	protected override reportHookError(info: HookErrorInfo): void {
 		this.postToHost({ [HOOK_ERROR]: info });
+	}
+	/**
+	 * The document a javascript: URL's string value becomes, in the shell
+	 * with this page as its URL (as a blob document gets it), so its scripts
+	 * run injected; routeHTML's javascript: wrapper calls this.
+	 */
+	javascriptDocument(markup: string): string {
+		return modifyHTML(markup, this.url, this.config, true);
 	}
 	postToHost(message: object): boolean {
 		if (!this.topPostMessage) return false;
