@@ -157,6 +157,16 @@ url`) carries its value and targets that window. An about:blank child of
   reads the document's own `location` for the same reason. Corpus: scripts
   51 leaks to 2 in both modes; the 2 are one probe that reports the window
   `window.open('javascript:')` returns, which is the browser's own result.
+- A document a proxied page writes into an about:blank child or popup runs
+  its creator's bundle: the attribute hooks now install on that document's
+  own element constructors (`HTMLAnchorElement` and twenty others were the
+  creator's, so an anchor's `href` in a written child read back routed), and
+  its location proxy takes that document's `Location.prototype`. A
+  BroadcastChannel message's `origin` is the page's origin, not the proxy's.
+  Corpus: frames 8 failing checks to 4 and messages 5 to 2 in both modes;
+  the remaining ones report the browser's own results (a window returned by
+  `window.open('about:blank')`, a probe's own source text serialised by
+  `innerHTML`, a sloppy-mode detached method call that does not throw).
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

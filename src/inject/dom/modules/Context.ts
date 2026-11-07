@@ -442,6 +442,23 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		const messageData = new WeakMap<MessageEvent, MessageData>();
 
+		// a BroadcastChannel message carries the sender's origin, which is the
+		// proxy's for every document of this site: the page's own is the real one
+		const eventTarget = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Event.prototype,
+			'target',
+		)!.get!;
+		const fromBroadcastChannel = (event: MessageEvent): boolean => {
+			try {
+				return (
+					Reflect.apply(eventTarget, event, []) instanceof
+					this.client.global.BroadcastChannel
+				);
+			} catch (error) {
+				return false;
+			}
+		};
+
 		Reflect.defineProperty(
 			this.client.global.MessageEvent.prototype,
 			'origin',
@@ -458,7 +475,10 @@ export default class ContextModule extends Module<DocumentClient> {
 							return messageData.get(that)!.origin;
 						}
 
-						return Reflect.apply(target, that, args);
+						const origin = Reflect.apply(target, that, args);
+						if (origin !== '' && fromBroadcastChannel(that))
+							return this.client.url.url.origin;
+						return origin;
 					},
 				),
 			},

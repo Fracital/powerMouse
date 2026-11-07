@@ -229,7 +229,7 @@ export default class LocationModule extends Module<DocumentClient> {
 			configurable: false,
 		});
 
-		Reflect.setPrototypeOf(proxy, Location.prototype);
+		Reflect.setPrototypeOf(proxy, this.client.global.Location.prototype);
 
 		setGlobalProxy(this.client.global.location, 'location', proxy);
 	}

@@ -301,7 +301,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[
 				['IFRAME', 'srcdoc'],
 				[
-					HTMLIFrameElement,
+					this.client.global.HTMLIFrameElement,
 					'srcdoc',
 					(element) => element.getAttributeOG('srcdoc') ?? false,
 				],
@@ -340,7 +340,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['a', 'href'],
 				['AREA', 'href'],
 				[
-					HTMLAnchorElement,
+					this.client.global.HTMLAnchorElement,
 					'href',
 					(element) =>
 						element.hasAttribute('href') &&
@@ -352,7 +352,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				],
 				// an image map's areas are links too
 				[
-					HTMLAreaElement,
+					this.client.global.HTMLAreaElement,
 					'href',
 					(element) =>
 						element.hasAttribute('href') &&
@@ -398,7 +398,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				// the route depends on type=module, which pages may set after src
 				['SCRIPT', 'type'],
 				[
-					HTMLScriptElement,
+					this.client.global.HTMLScriptElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -427,7 +427,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['LINK', 'integrity'],
 				['SCRIPT', 'integrity'],
 				[
-					HTMLLinkElement,
+					this.client.global.HTMLLinkElement,
 					'integrity',
 					(element) =>
 						element.hasAttribute('integrity') &&
@@ -435,7 +435,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttributeOG('integrity')!,
 				],
 				[
-					HTMLScriptElement,
+					this.client.global.HTMLScriptElement,
 					'integrity',
 					(element) =>
 						element.hasAttribute('integrity') &&
@@ -497,7 +497,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['LINK', 'as'],
 				[HTMLLinkElement, 'as', () => false],
 				[
-					HTMLLinkElement,
+					this.client.global.HTMLLinkElement,
 					'href',
 					(element) =>
 						element.hasAttribute('href') &&
@@ -543,7 +543,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['EMBED', 'src'],
 				['FRAME', 'src'],
 				[
-					HTMLFrameElement,
+					this.client.global.HTMLFrameElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -554,7 +554,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						).toString(),
 				],
 				[
-					HTMLIFrameElement,
+					this.client.global.HTMLIFrameElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -566,7 +566,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				],
 
 				[
-					HTMLEmbedElement,
+					this.client.global.HTMLEmbedElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -616,7 +616,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['META', 'content'],
 				['META', 'http-equiv'],
 				[
-					HTMLMetaElement,
+					this.client.global.HTMLMetaElement,
 					'content',
 					(element) =>
 						element.hasAttribute('content') &&
@@ -654,7 +654,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['IMG', 'src'],
 				['INPUT', 'src'],
 				[
-					HTMLInputElement,
+					this.client.global.HTMLInputElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -665,7 +665,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						).toString(),
 				],
 				[
-					HTMLImageElement,
+					this.client.global.HTMLImageElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -711,7 +711,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['IMG', 'srcset'],
 				['SOURCE', 'srcset'],
 				[
-					HTMLImageElement,
+					this.client.global.HTMLImageElement,
 					'srcset',
 					(element) =>
 						element.hasAttribute('srcset') &&
@@ -719,7 +719,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttributeOG('srcset')!,
 				],
 				[
-					HTMLSourceElement,
+					this.client.global.HTMLSourceElement,
 					'srcset',
 					(element) =>
 						element.hasAttribute('srcset') &&
@@ -755,7 +755,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['SOURCE', 'src'],
 				['TRACK', 'src'],
 				[
-					HTMLTrackElement,
+					this.client.global.HTMLTrackElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -766,7 +766,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						).toString(),
 				],
 				[
-					HTMLMediaElement,
+					this.client.global.HTMLMediaElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -777,7 +777,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						).toString(),
 				],
 				[
-					HTMLSourceElement,
+					this.client.global.HTMLSourceElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -1182,7 +1182,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[
 				['LINK', 'imagesrcset'],
 				[
-					HTMLLinkElement,
+					this.client.global.HTMLLinkElement,
 					'imageSrcset',
 					(element) =>
 						element.hasAttribute('imagesrcset') &&
@@ -1211,7 +1211,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			['FORM', 'action'],
 			['FORM', 'method'],
 			[
-				HTMLFormElement,
+				this.client.global.HTMLFormElement,
 				'action',
 				(element) =>
 					element.hasAttribute('action') &&
@@ -1254,7 +1254,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[
 				['BASE', 'href'],
 				[
-					HTMLBaseElement,
+					this.client.global.HTMLBaseElement,
 					'href',
 					(element) =>
 						element.hasAttribute('href') &&
