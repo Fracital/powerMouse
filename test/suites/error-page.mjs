@@ -51,6 +51,36 @@ const result = await page.evaluate(
 			};
 		};
 		const out = {};
+		// a deployment that renames the global (names.error): the page reads it
+		// under that name and nothing is written under the default
+		{
+			const renamed = new window.StompController({
+				serviceworker: window.controller.serviceworker,
+				transport: window.controller.transport,
+				directory: window.controller.directory.pathname,
+				codec: 'xor',
+				errorPage: '/examples/error.html',
+				names: { error: 'proxyFailure' },
+				rules: [
+					{ match: { url: 'http://*:*/pages/hist-1.html' }, action: 'block' },
+				],
+			});
+			await renamed.wait();
+			const element = document.createElement('iframe');
+			document.body.append(element);
+			const frame = renamed.createFrame(element);
+			const loaded = new Promise((resolve) =>
+				element.addEventListener('load', resolve, { once: true }),
+			);
+			await frame.go(`${fixture}pages/hist-1.html`);
+			await loaded;
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			const win = element.contentDocument?.defaultView;
+			out.renamed = {
+				renamed: win?.proxyFailure ?? null,
+				defaultName: win?.stompError ?? null,
+			};
+		}
 		const blocked = await show(`${fixture}pages/hist-1.html`);
 		out.blocked = { ...blocked, element: undefined };
 		out.refused = { ...(await show(`${proxy}/`)), element: undefined };
@@ -115,4 +145,12 @@ ok(
 	result.afterRetry === 'HIST 1',
 	JSON.stringify(result.afterRetry),
 );
+ok(
+	'names.error renames the global the worker writes into the error page',
+	result.renamed?.renamed?.kind === 'blocked' &&
+		result.renamed?.renamed?.url === `${FIXTURE}pages/hist-1.html` &&
+		result.renamed?.defaultName === null,
+	JSON.stringify(result.renamed),
+);
+
 await done(browser);

@@ -228,13 +228,15 @@ export function navigateReport(data: unknown): NavigateInfo | null {
 	if (typeof data !== 'object' || data === null) return null;
 	const info = (data as Record<string, unknown>)[NAVIGATE];
 	if (typeof info !== 'object' || info === null) return null;
-	const { url, title, canGoBack, canGoForward, client } = info as NavigateInfo;
+	const { url, title, canGoBack, canGoForward, icon, client } =
+		info as NavigateInfo;
 	if (typeof url !== 'string' || typeof title !== 'string') return null;
 	return {
 		url,
 		title,
 		canGoBack: typeof canGoBack === 'boolean' ? canGoBack : null,
 		canGoForward: typeof canGoForward === 'boolean' ? canGoForward : null,
+		icon: typeof icon === 'string' ? icon : null,
 		...(typeof client === 'string' ? { client } : {}),
 	};
 }
@@ -1044,6 +1046,16 @@ export class StompController extends EventTarget {
 	async route(url: string): Promise<string> {
 		await this.#ready;
 		return new URL(await this.#rpc!.call('route', url), this.directory).href;
+	}
+	/**
+	 * The real URL a routed one stands for (the inverse of `route()`, with
+	 * this controller's codec), or null for anything that is not a route: a
+	 * host reading a routed URL off a frame or a report never has to parse
+	 * one itself.
+	 */
+	async unroute(url: string): Promise<string | null> {
+		await this.#ready;
+		return this.#rpc!.call('unroute', new URL(url, this.directory).href);
 	}
 	createFrame(element: HTMLIFrameElement = document.createElement('iframe')) {
 		const frame = new Frame(this, element, this.#sandbox);

@@ -122,6 +122,50 @@ for (const [mode, base] of [
 		opened.includes(`${FIXTURE}pages/walk-3.html`),
 		JSON.stringify(opened),
 	);
+
+	// the icon: as the page declared it, resolved against the real URL, and
+	// again when the page swaps it; null without one. And unroute(): the
+	// inverse of route() for a host that holds a routed URL
+	const icons = await page.evaluate(async (fixture) => {
+		const out = {};
+		const element = document.createElement('iframe');
+		document.body.append(element);
+		const frame = window.controller.createFrame(element);
+		const seen = [];
+		frame.addEventListener('navigate', (event) => seen.push(event.detail.icon));
+		await frame.go(`${fixture}pages/icon-1.html`);
+		await new Promise((resolve) => setTimeout(resolve, 1200));
+		out.seen = [...seen];
+		await frame.go(`${fixture}pages/icon-none.html`);
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		out.none = seen.at(-1);
+		const routed = await window.controller.route(`${fixture}pages/icon-1.html`);
+		out.roundTrip = await window.controller.unroute(routed);
+		out.notARoute = await window.controller.unroute('https://example.com/x');
+		out.garbage = await window.controller.unroute(
+			routed.replace(/html\/.*$/, 'html/not-a-route'),
+		);
+		return out;
+	}, FIXTURE);
+	ok(
+		`${mode}: the navigate report carries the icon the page declared, resolved, and the change`,
+		icons.seen?.includes(`${FIXTURE}pages/sprite.svg`) &&
+			icons.seen?.at(-1) === `${FIXTURE}pages/sprite.svg?2` &&
+			!icons.seen?.includes(`${FIXTURE}pages/sprite.svg?touch`),
+		JSON.stringify(icons.seen),
+	);
+	ok(
+		`${mode}: a page without an icon reports null`,
+		icons.none === null,
+		JSON.stringify(icons.none),
+	);
+	ok(
+		`${mode}: unroute() inverts route() and answers null for anything that is not a route`,
+		icons.roundTrip === `${FIXTURE}pages/icon-1.html` &&
+			icons.notARoute === null &&
+			icons.garbage === null,
+		JSON.stringify([icons.roundTrip, icons.notARoute, icons.garbage]),
+	);
 	await page.close();
 }
 

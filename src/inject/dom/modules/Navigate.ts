@@ -33,6 +33,27 @@ export default class NavigateModule extends Module<DocumentClient> {
 				})
 				.catch(() => {});
 
+		// the icon as the page declared it: the attribute the page wrote
+		// (getAttribute hands back the original), resolved against the real URL
+		const icon = (): string | null => {
+			const links = global.document.querySelectorAll('link[rel]');
+			let touch: string | null = null;
+			for (const link of links) {
+				const rel = (link.getAttribute('rel') ?? '').toLowerCase().split(/\s+/);
+				const href = link.getAttribute('href');
+				if (!href) continue;
+				let resolved: string;
+				try {
+					resolved = new URL(href, this.client.url.toString()).href;
+				} catch (error) {
+					continue;
+				}
+				if (rel.includes('icon')) return resolved;
+				if (!touch && rel.includes('apple-touch-icon')) touch = resolved;
+			}
+			return touch;
+		};
+
 		let last = '';
 		const post = () => {
 			const info: NavigateInfo = {
@@ -40,6 +61,7 @@ export default class NavigateModule extends Module<DocumentClient> {
 				title: global.document.title,
 				canGoBack: navigation ? !!navigation.canGoBack : null,
 				canGoForward: navigation ? !!navigation.canGoForward : null,
+				icon: icon(),
 				...(client ? { client } : {}),
 			};
 			const key = JSON.stringify(info);
@@ -89,6 +111,9 @@ export default class NavigateModule extends Module<DocumentClient> {
 				subtree: true,
 				childList: true,
 				characterData: true,
+				// an icon the page swaps in place
+				attributes: true,
+				attributeFilter: ['href', 'rel'],
 			});
 		observe();
 		addDocumentOpenListener(global, observe);

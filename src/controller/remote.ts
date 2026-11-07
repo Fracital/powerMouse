@@ -295,6 +295,11 @@ export class RemoteController extends EventTarget {
 		await this.#ready;
 		return this.#rpc.call('route', url);
 	}
+	/** the real URL a routed one stands for, null for a non-route (see StompController.unroute) */
+	async unroute(url: string): Promise<string | null> {
+		await this.#ready;
+		return this.#rpc.call('unroute', url);
+	}
 	/** replace the request rules (see StompController.setRules) */
 	async setRules(rules: RequestRule[]): Promise<void> {
 		await this.#ready;

@@ -72,6 +72,8 @@ export const REMOTE_RPC = 'stomp-remote';
 export type FrameBound = {
 	init: [ControllerFrameInit, { config: Config; stale: StaleInfo | null }];
 	route: [string, string];
+	/** the real URL a routed one stands for, null for a non-route (see StompController.unroute) */
+	unroute: [string, string | null];
 	setTransport: [TransportDescriptor];
 	/** frames are addressed by their index in the host window's `frames` list */
 	frameInfo: [number, FrameInfo];

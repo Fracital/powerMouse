@@ -2,7 +2,8 @@
  * The four global names the rewriter and the inject bundles rendezvous on:
  * the access API object every rewritten script calls (`$s$j.get(...)`), the
  * client on the window (`$P$s.apply()`), and the two marker keys on the
- * `location` and `eval` stand-ins. A deployment can choose its own (see
+ * `location` and `eval` stand-ins, plus the global the worker writes into
+ * the host's error page. A deployment can choose its own (see
  * ControllerInit.names); the rewriter reads them from the config every
  * request carries, and the inject bundle from the config the shell hands
  * `createClient`, so one document and its scripts always agree. The
@@ -18,6 +19,13 @@ export interface HelperNames {
 	globalName: string;
 	/** the client on the window and on workers (default `$P$s`) */
 	client: string;
+	/**
+	 * the global the worker writes into the host's error page (`errorPage`)
+	 * with the failure (`{ url, status, error, kind }`); default `stompError`.
+	 * A host whose build renames identifiers in its vendored pages sets it to
+	 * what its page reads
+	 */
+	error: string;
 }
 
 export const DEFAULT_NAMES: Readonly<HelperNames> = Object.freeze({
@@ -25,6 +33,7 @@ export const DEFAULT_NAMES: Readonly<HelperNames> = Object.freeze({
 	globalProxy: '$s$L',
 	globalName: '$s$N',
 	client: '$P$s',
+	error: 'stompError',
 });
 
 /** the names a config asks for, the defaults for the rest */

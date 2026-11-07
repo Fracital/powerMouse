@@ -1,0 +1,12 @@
+<!doctype html>
+<title>ICON 1</title>
+<link rel="shortcut icon" href="sprite.svg" />
+<link rel="apple-touch-icon" href="sprite.svg?touch" />
+<script>
+	// the page swaps its icon a moment later: the host hears again
+	setTimeout(() => {
+		document
+			.querySelector('link[rel~="icon"]')
+			.setAttribute('href', 'sprite.svg?2');
+	}, 300);
+</script>

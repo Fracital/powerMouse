@@ -125,6 +125,8 @@ interface Rewriter {
 	config: Config;
 	/** the host's error page, worker-only (never in the page's config) */
 	errorPage?: string;
+	/** the deployment's helper names (the error page global among them) */
+	names?: Config['names'];
 	cookies: Cookies;
 	/** the HTTP cache, unless the host turned it off */
 	cache?: HttpCache;
@@ -774,6 +776,7 @@ export function registerRewrites(
 		codec: init.codec,
 		directory: init.directory,
 		errorPage: init.errorPage,
+		names: init.names,
 		bare: new BareCompatibleClient(transport),
 	};
 

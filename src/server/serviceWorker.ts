@@ -115,6 +115,11 @@ function registerController(
 	const rpc = new RpcHelper<SWbound, Controllerbound>(
 		{
 			route: async (url) => [(await server).route(url), []],
+			unroute: async (url) => {
+				const ready = await server;
+				const real = ready.realURL(url);
+				return [real === url ? null : real, []];
+			},
 			rules: async (rules) => {
 				(await server).setRules(rules);
 			},

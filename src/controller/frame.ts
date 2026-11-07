@@ -159,6 +159,10 @@ if (window === window.parent || !origins.length) {
 					if (!controller) throw new Error('Controller is not initialised');
 					return [await controller.route(url), []];
 				},
+				unroute: async (url) => {
+					if (!controller) throw new Error('Controller is not initialised');
+					return [await controller.unroute(url), []];
+				},
 				setTransport: async (descriptor) => {
 					if (!controller) throw new Error('Controller is not initialised');
 					// the worker swaps by descriptor; a page-hosted transport (the
