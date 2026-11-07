@@ -276,6 +276,22 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A host page controlled by the host's own service worker boots. Our
+  worker's startup revive (or any message carrying the `$stomp$swRevive`
+  key) that arrived before the first handshake, which a descriptor transport
+  delays while its worker imports the module, made the controller adopt
+  `navigator.serviceWorker.controller`; on a page the host's root worker
+  controls that is the foreign worker, and the handshake went there forever:
+  `wait()` never resolved on live Fracital with a fresh profile. The revive
+  handler now ignores a revive before the first handshake, acts only on one
+  whose source is a worker served from the directory, adopts the page's
+  controller only when it is one of ours and otherwise keeps the
+  registration's active worker; the `controllerchange` handler already
+  applied that test, and the registration lookups are scoped to the
+  directory (foreign-sw suite: a host page under a foreign root worker, a
+  fresh registration and a descriptor transport, broadcasts during startup
+  and later; the controller stays on its worker, `wait()` resolves, a frame
+  loads).
 - A large `localStorage` value stores. The synchronous bridge carries a
   page's `localStorage` calls to the worker in a beacon, which the browser
   refuses over 64 KiB (and the quota is per document while the page's thread
