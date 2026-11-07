@@ -1,6 +1,7 @@
 import { escapeText } from 'entities';
 import { Config } from './config';
-import { CLIENT_KEY, modifyJS } from './rewriteJS';
+import { helperNames } from './helperNames';
+import { modifyJS } from './rewriteJS';
 import {
 	createDataURI,
 	injectDocumentJS,
@@ -91,21 +92,22 @@ export function modifyHTML(
 	base = false,
 ): string {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
+	const names = helperNames(config);
 	const inject = `if (typeof globalThis.createClient !== 'function') {
 	document.write("Stomp bundle did not load. See devtools output for more information.");
 } else {
-	if (!(${JSON.stringify(CLIENT_KEY)} in globalThis))
+	if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 
-	if (!${CLIENT_KEY}.applied) try {
-		${CLIENT_KEY}.apply();
+	if (!${names.client}.applied) try {
+		${names.client}.apply();
 	} catch(error) {
 		document.write("Failure applying Stomp hooks. See devtools output for more information.");
 		throw error;
 	}
 
 	try {
-		${CLIENT_KEY}.loadHTML(${escapeText(JSON.stringify(script))});
+		${names.client}.loadHTML(${escapeText(JSON.stringify(script))});
 	} catch(error) {
 		document.write("Failure loading Stomp HTML. See devtools output for more information.");
 		throw error;
@@ -152,13 +154,14 @@ export function modifyXML(
 		root = `<html xmlns="http://www.w3.org/1999/xhtml">`;
 	const cdata = (text: string) =>
 		`<![CDATA[${text.split(']]>').join(']]]]><![CDATA[>')}]]>`;
+	const names = helperNames(config);
 	const inject = `if (typeof globalThis.createClient !== 'function') {
 	document.documentElement.textContent = "Stomp bundle did not load. See devtools output for more information.";
 } else {
-	if (!(${JSON.stringify(CLIENT_KEY)} in globalThis))
+	if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
-	if (!${CLIENT_KEY}.applied) ${CLIENT_KEY}.apply();
-	${CLIENT_KEY}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});
+	if (!${names.client}.applied) ${names.client}.apply();
+	${names.client}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});
 }`;
 	const xhtml = 'http://www.w3.org/1999/xhtml';
 	return `<?xml version="1.0" encoding="UTF-8"?>${root}<script xmlns="${xhtml}" src="${injectDocumentJS(url, config)}"></script><script xmlns="${xhtml}">${cdata(inject)}</script></${name}>`;

@@ -1,5 +1,4 @@
 import { parseConfig } from '../../../config';
-import { CLIENT_KEY } from '../../../rewriteJS';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
@@ -11,7 +10,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
 		const injectContext = (context: typeof globalThis) => {
-			if (CLIENT_KEY in context) return;
+			if (this.client.names.client in context) return;
 
 			const client = new DocumentClient(
 				parseConfig(this.client.config, this.client.codec.key),
@@ -20,7 +19,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 
 			addClientModules(client);
 
-			Reflect.defineProperty(context, CLIENT_KEY, {
+			Reflect.defineProperty(context, this.client.names.client, {
 				value: client,
 				configurable: false,
 				enumerable: false,
@@ -41,7 +40,13 @@ export default class IFrameModule extends Module<DocumentClient> {
 				try {
 					if (opened.location.href === 'about:blank') {
 						injectContext(opened);
-						if (!opened[CLIENT_KEY]!.applied) opened[CLIENT_KEY]!.apply();
+						if (
+							!(opened as Record<string, any>)[this.client.names.client]!
+								.applied
+						)
+							(opened as Record<string, any>)[
+								this.client.names.client
+							]!.apply();
 					}
 				} catch (error) {
 					// cross-origin: not ours to inject
@@ -83,8 +88,10 @@ export default class IFrameModule extends Module<DocumentClient> {
 					injectContext(context);
 
 					const restricted = windowModule.newRestricted(context);
-					if (!context[CLIENT_KEY]!.applied) {
-						context[CLIENT_KEY]!.apply();
+					if (
+						!(context as Record<string, any>)[this.client.names.client]!.applied
+					) {
+						(context as Record<string, any>)[this.client.names.client]!.apply();
 					}
 
 					return restricted;

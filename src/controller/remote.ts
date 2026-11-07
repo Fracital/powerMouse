@@ -5,6 +5,7 @@ import { assetName } from '../config';
 // over postMessage. Proxied content is shown in sandboxed, cross-origin
 // frames the host page can neither read nor be read by.
 import type { Assets, Config, ConfigCodec } from '../config';
+import { validateNames, type HelperNames } from '../helperNames';
 import type {
 	NavigateInfo,
 	RequestInfo,
@@ -70,6 +71,8 @@ export interface RemoteControllerInit {
 	rules?: RequestRule[];
 	/** the served file names, when the host renamed them (see StompController) */
 	assets?: Assets;
+	/** the deployment's helper names (see StompController.names) */
+	names?: Partial<HelperNames>;
 	/**
 	 * The host's own page for a document the proxy failed to produce (see
 	 * StompController): a path on the proxy origin, where the worker runs,
@@ -112,6 +115,7 @@ export class RemoteController extends EventTarget {
 
 	constructor(init: RemoteControllerInit) {
 		super();
+		validateNames(init.names, Object.getOwnPropertyNames(globalThis));
 		this.#init = init;
 		this.proxyOrigin = new URL(init.proxyOrigin).origin;
 		this.directory = init.directory ?? '/stomp/';
@@ -229,6 +233,7 @@ export class RemoteController extends EventTarget {
 					...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 					...(init.rules ? { rules: init.rules } : {}),
 					...(init.assets ? { assets: init.assets } : {}),
+					...(init.names ? { names: init.names } : {}),
 					...(init.errorPage ? { errorPage: init.errorPage } : {}),
 				}),
 			)

@@ -1,6 +1,6 @@
 import { decode } from 'entities';
 import { ParsedConfig } from '../../config';
-import { CLIENT_KEY, modifyJS, rewriteImportMap } from '../../rewriteJS';
+import { modifyJS, rewriteImportMap } from '../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import StompURL from '../../StompURL';
 import { OPEN_TAB, WORKER_BASE } from '../../transport/messages';
@@ -114,7 +114,7 @@ export default class DocumentClient extends Client {
 	get nested(): boolean {
 		try {
 			const parent = this.parent;
-			return parent !== this.global && CLIENT_KEY in parent;
+			return parent !== this.global && this.names.client in parent;
 		} catch (error) {
 			return false;
 		}
@@ -124,16 +124,17 @@ export default class DocumentClient extends Client {
 		let context: typeof globalThis = this.global;
 		for (;;) {
 			try {
-				const parent = (context as Record<string, any>)[CLIENT_KEY]
+				const parent = (context as Record<string, any>)[this.names.client]
 					.parent as typeof globalThis;
-				if (parent === context || !(CLIENT_KEY in parent)) break;
+				if (parent === context || !(this.names.client in parent)) break;
 				context = parent;
 			} catch (error) {
 				break;
 			}
 		}
-		return ((context as Record<string, any>)[CLIENT_KEY] as DocumentClient).url
-			.url.origin;
+		return (
+			(context as Record<string, any>)[this.names.client] as DocumentClient
+		).url.url.origin;
 	}
 	/** what a navigation from this context routes as: the top origin when nested, else a top-level document */
 	get nestedRoute(): string | false {

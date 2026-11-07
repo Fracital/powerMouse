@@ -1,4 +1,5 @@
 import type { Assets, Config, ConfigCodec } from '../config';
+import type { HelperNames } from '../helperNames';
 import type {
 	CookieCommand,
 	CookieResult,
@@ -42,6 +43,8 @@ export interface ControllerFrameInit {
 	rules?: RequestRule[];
 	/** the served file names (RemoteControllerInit.assets) */
 	assets?: Assets;
+	/** the deployment's helper names (RemoteControllerInit.names) */
+	names?: Partial<HelperNames>;
 	/** the host's error page, a path on the proxy origin (RemoteControllerInit.errorPage) */
 	errorPage?: string;
 }

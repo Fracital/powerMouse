@@ -77,7 +77,7 @@ export default class WorkerLocationModule extends Module<WorkerClient> {
 				() => spoofed().href,
 			),
 		});
-		setGlobalProxy(nativeLocation, 'location', proxy);
+		setGlobalProxy(nativeLocation, 'location', proxy, this.client.names);
 
 		// `origin` and `name` live on the global itself ([Global] interfaces
 		// put their attributes there) or on a prototype of the scope

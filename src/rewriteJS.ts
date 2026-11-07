@@ -4,6 +4,7 @@ import { parse } from 'meriyah';
 import type { ESTree } from 'meriyah';
 import { AcornContext, AcornIterator, result } from './acornUtil';
 import { Config } from './config';
+import { DEFAULT_NAMES, helperNames } from './helperNames';
 import {
 	createDataURI,
 	injectWorkerJS,
@@ -13,10 +14,12 @@ import {
 } from './routeURL';
 import StompURL from './StompURL';
 
-export const ACCESS_KEY = '$s$j';
-export const GLOBAL_PROXY = '$s$L';
-export const GLOBAL_NAME = '$s$N';
-export const CLIENT_KEY = '$P$s';
+// the default helper names; the rewriter and the inject read a config's own
+// (src/helperNames.ts), these are for code that has none to hand (tests)
+export const ACCESS_KEY = DEFAULT_NAMES.access;
+export const GLOBAL_PROXY = DEFAULT_NAMES.globalProxy;
+export const GLOBAL_NAME = DEFAULT_NAMES.globalName;
+export const CLIENT_KEY = DEFAULT_NAMES.client;
 
 // smaller range inside larger range = invalidates larger range
 // smaller modifications called later in script
@@ -149,6 +152,7 @@ export function modifyJS(
 	/** code the caller needs to run first (an inline script's currentScript restore): placed after the directive prologue */
 	preamble = '',
 ) {
+	const names = helperNames(config);
 	try {
 		const isModule = type === 'genericModule' || type === 'workerModule';
 		const isWorker = type === 'workerModule' || type === 'worker';
@@ -211,7 +215,7 @@ export function modifyJS(
 
 		// destructured parameters become plain ones with the pattern moved into
 		// the body, where the main pass wraps its source like any declaration
-		hoistParamPatterns(tree);
+		hoistParamPatterns(tree, names.access);
 
 		for (const ctx of new AcornIterator(tree)) {
 			typeLoop: switch (ctx.node.type) {
@@ -224,7 +228,7 @@ export function modifyJS(
 					ctx.replaceWith(
 						b.callExpression(
 							b.memberExpression(
-								b.identifier(ACCESS_KEY),
+								b.identifier(names.access),
 								b.identifier('import'),
 							),
 							[
@@ -252,14 +256,14 @@ export function modifyJS(
 					// depth the pattern names an unforgeable
 					{
 						const spec =
-							ctx.node.init && !isPatternCall(ctx.node.init)
+							ctx.node.init && !isPatternCall(ctx.node.init, names.access)
 								? patternSpec(ctx.node.id)
 								: null;
 						if (spec)
 							ctx.replaceWith(
 								b.variableDeclarator(
 									ctx.node.id,
-									patternCall(result(ctx.node.init), spec),
+									patternCall(result(ctx.node.init), spec, names.access),
 								),
 							);
 					}
@@ -272,7 +276,7 @@ export function modifyJS(
 								b.assignmentExpression(
 									'=',
 									ctx.node.left,
-									patternCall(result(ctx.node.right), spec),
+									patternCall(result(ctx.node.right), spec, names.access),
 								),
 							);
 					}
@@ -310,7 +314,7 @@ export function modifyJS(
 							break;
 						const assignments: any[] = [];
 						const temp = () =>
-							b.identifier(`${ACCESS_KEY}l${assignments.length}`);
+							b.identifier(`${names.access}l${assignments.length}`);
 						const rebind = (node: any): any => {
 							if (node?.type === 'Identifier' && node.name === 'location') {
 								const id = temp();
@@ -360,7 +364,7 @@ export function modifyJS(
 							ctx.replaceWith(
 								b.callExpression(
 									b.memberExpression(
-										b.identifier(ACCESS_KEY),
+										b.identifier(names.access),
 										b.identifier('post'),
 									),
 									[
@@ -391,14 +395,14 @@ export function modifyJS(
 										'===',
 										b.identifier('eval'),
 										b.memberExpression(
-											b.identifier(ACCESS_KEY),
+											b.identifier(names.access),
 											b.identifier('evalSnapshot'),
 										),
 									),
 									b.callExpression(b.identifier('eval'), [
 										b.callExpression(
 											b.memberExpression(
-												b.identifier(ACCESS_KEY),
+												b.identifier(names.access),
 												b.identifier('evalScope'),
 											),
 											ctx.node.arguments.map((arg: unknown) => result(arg)),
@@ -480,7 +484,7 @@ export function modifyJS(
 							ctx.parent.replaceWith(
 								b.callExpression(
 									b.memberExpression(
-										b.identifier(ACCESS_KEY),
+										b.identifier(names.access),
 										b.identifier('set1'),
 									),
 									[
@@ -541,7 +545,7 @@ export function modifyJS(
 							ctx.replaceWith(
 								b.callExpression(
 									b.memberExpression(
-										b.identifier(ACCESS_KEY),
+										b.identifier(names.access),
 										b.identifier('get'),
 									),
 									[ctx.node, b.literal(ctx.node.name)],
@@ -615,7 +619,7 @@ export function modifyJS(
 							ctx.parent!.replaceWith(
 								b.callExpression(
 									b.memberExpression(
-										b.identifier(ACCESS_KEY),
+										b.identifier(names.access),
 										b.identifier('new2'),
 									),
 									[
@@ -633,7 +637,7 @@ export function modifyJS(
 							ctx.parent!.replaceWith(
 								b.callExpression(
 									b.memberExpression(
-										b.identifier(ACCESS_KEY),
+										b.identifier(names.access),
 										b.identifier('call2'),
 									),
 									[
@@ -655,7 +659,7 @@ export function modifyJS(
 							ctx.parent!.replaceWith(
 								b.callExpression(
 									b.memberExpression(
-										b.identifier(ACCESS_KEY),
+										b.identifier(names.access),
 										b.identifier('set2'),
 									),
 									[
@@ -716,7 +720,7 @@ export function modifyJS(
 							ctx.replaceWith(
 								b.callExpression(
 									b.memberExpression(
-										b.identifier(ACCESS_KEY),
+										b.identifier(names.access),
 										b.identifier('get2'),
 									),
 									[
@@ -745,11 +749,11 @@ export function modifyJS(
 			: `importScripts(${JSON.stringify(injectWorkerJS(url, config))});`
 	}
 
-if (!(${JSON.stringify(CLIENT_KEY)} in globalThis))
+if (!(${JSON.stringify(names.client)} in globalThis))
 	createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 
-if (!${CLIENT_KEY}.applied) 
-	${CLIENT_KEY}.apply();`
+if (!${names.client}.applied) 
+	${names.client}.apply();`
 				: '') +
 			// import.meta.resolve answers with the page's URLs; a bare specifier
 			// belongs to the import map and comes back as it is
@@ -825,19 +829,19 @@ function specLiteral(spec: PatternSpec): any {
 }
 
 /** `$s$j.pattern(source, spec)` */
-function patternCall(source: any, spec: PatternSpec): any {
+function patternCall(source: any, spec: PatternSpec, access: string): any {
 	return b.callExpression(
-		b.memberExpression(b.identifier(ACCESS_KEY), b.identifier('pattern')),
+		b.memberExpression(b.identifier(access), b.identifier('pattern')),
 		[source, specLiteral(spec)],
 	);
 }
 
-function isPatternCall(node: any): boolean {
+function isPatternCall(node: any, access: string): boolean {
 	return (
 		node.type === 'CallExpression' &&
 		node.callee.type === 'MemberExpression' &&
 		node.callee.object.type === 'Identifier' &&
-		node.callee.object.name === ACCESS_KEY &&
+		node.callee.object.name === access &&
 		node.callee.property.type === 'Identifier' &&
 		node.callee.property.name === 'pattern'
 	);
@@ -888,8 +892,6 @@ function mentions(node: any, names: string[]): boolean {
 	return false;
 }
 
-const PARAM_TEMP = `${ACCESS_KEY}a`;
-
 /**
  * `function f({ top: t }) {}`: a parameter pattern has no source expression
  * to wrap, so the parameter becomes a plain one and the pattern a `var`
@@ -899,8 +901,9 @@ const PARAM_TEMP = `${ACCESS_KEY}a`;
  * refers to a name the pattern binds. (`'use strict'` cannot appear in such
  * a function, but other directives can, so the prologue is skipped.)
  */
-function hoistParamPatterns(node: any) {
-	for (const child of children(node)) hoistParamPatterns(child);
+function hoistParamPatterns(node: any, access: string) {
+	const PARAM_TEMP = `${access}a`;
+	for (const child of children(node)) hoistParamPatterns(child, access);
 
 	if (
 		node.type !== 'FunctionDeclaration' &&

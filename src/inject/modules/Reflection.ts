@@ -1,10 +1,4 @@
-import {
-	ACCESS_KEY,
-	CLIENT_KEY,
-	GLOBAL_NAME,
-	GLOBAL_PROXY,
-	UNDEFINABLE,
-} from '../../rewriteJS';
+import { UNDEFINABLE } from '../../rewriteJS';
 import Client from '../Client';
 import Module from '../Module';
 import ProxyModule from './Proxy';
@@ -34,7 +28,7 @@ export default class ReflectionModule extends Module<Client> {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const global = this.client.global as typeof globalThis &
 			Record<string, unknown>;
-		const api = () => global[ACCESS_KEY] as Api;
+		const api = () => global[this.client.names.access] as Api;
 		const document = (global as { document?: unknown }).document;
 
 		const unforgeable = (key: unknown): key is string =>
@@ -193,10 +187,10 @@ export default class ReflectionModule extends Module<Client> {
 		// those objects and are not "own" to any reflective question; the bare
 		// `in` operator remains a tell (rewriting every `in` would cost more)
 		const hidden = new Set<PropertyKey>([
-			ACCESS_KEY,
-			CLIENT_KEY,
-			GLOBAL_PROXY,
-			GLOBAL_NAME,
+			this.client.names.access,
+			this.client.names.client,
+			this.client.names.globalProxy,
+			this.client.names.globalName,
 		]);
 		const nativeHasOwn = global.Object.prototype.hasOwnProperty;
 		const tagged = (target: unknown): boolean => {
@@ -206,7 +200,9 @@ export default class ReflectionModule extends Module<Client> {
 			)
 				return false;
 			try {
-				return Reflect.apply(nativeHasOwn, target, [GLOBAL_NAME]) as boolean;
+				return Reflect.apply(nativeHasOwn, target, [
+					this.client.names.globalName,
+				]) as boolean;
 			} catch (error) {
 				return false;
 			}

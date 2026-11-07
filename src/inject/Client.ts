@@ -7,7 +7,7 @@ import {
 	parseConfig,
 	ParsedConfig,
 } from '../config';
-import { CLIENT_KEY } from '../rewriteJS';
+import { HelperNames, helperNames } from '../helperNames';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../routeURL';
 import StompURL from '../StompURL';
 import {
@@ -95,7 +95,13 @@ export default class Client {
 			);
 		}
 	}
+	/** the helper names this deployment uses (src/helperNames.ts) */
+	readonly names: HelperNames;
+	/** the host set its own helper names: pass them on to every shell this client writes */
+	readonly #customNames: boolean;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
+		this.names = helperNames(init);
+		this.#customNames = !!(init as { names?: unknown }).names;
 		this.global = global;
 		this.applied = false;
 		this.modules = new Map();
@@ -135,6 +141,7 @@ export default class Client {
 			...(this.build ? { build: this.build } : {}),
 			...(this.allowInvalidJs ? {} : { allowInvalidJs: false }),
 			...(this.assets ? { assets: this.assets } : {}),
+			...(this.#customNames ? { names: this.names } : {}),
 		};
 	}
 	/**
@@ -287,7 +294,7 @@ export function createClientFactory<T>(
 
 		initClient(client);
 
-		Reflect.defineProperty(globalThis, CLIENT_KEY, {
+		Reflect.defineProperty(globalThis, helperNames(config).client, {
 			value: client,
 			configurable: false,
 			enumerable: false,

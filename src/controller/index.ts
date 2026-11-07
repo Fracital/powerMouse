@@ -9,6 +9,7 @@ import {
 	ConfigCodec,
 	DEFAULT_ASSETS,
 } from '../config';
+import { helperNames, validateNames, type HelperNames } from '../helperNames';
 import { isUrlLike, urlLike } from '../StompURL';
 import type { RequestRule } from '../transport/messages';
 import {
@@ -128,6 +129,13 @@ export interface ControllerInit {
 	 * registers the worker itself, so `serviceWorker` only documents its choice.
 	 */
 	assets?: Assets;
+	/**
+	 * The four global names the rewriter and the inject bundles use (see
+	 * HelperNames): a deployment's own, when the host set them. Each must be
+	 * an identifier no plain window has; the controller throws a TypeError
+	 * otherwise. Defaults: `$s$j`, `$s$L`, `$s$N`, `$P$s`.
+	 */
+	names?: Partial<HelperNames>;
 	/**
 	 * The host's own page for a document the proxy failed to produce (the
 	 * transport could not reach the origin, the worker's timeout, a routing
@@ -263,6 +271,8 @@ function registrationWorker(
 export type { StaleInfo };
 export type { Assets } from '../config';
 export { DEFAULT_ASSETS } from '../config';
+export type { HelperNames } from '../helperNames';
+export { DEFAULT_NAMES } from '../helperNames';
 export type {
 	RequestRule,
 	RequestRuleAction,
@@ -431,6 +441,8 @@ export class StompController extends EventTarget {
 	#registration?: ServiceWorkerRegistration;
 	constructor(init: ControllerInit) {
 		super();
+		// before anything async: a bad name is a programming error
+		validateNames(init.names, Object.getOwnPropertyNames(globalThis));
 		if (!('serviceWorker' in navigator))
 			throw new Error('Your browser does not support service workers.');
 
@@ -474,6 +486,7 @@ export class StompController extends EventTarget {
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 			...(init.fetchTimeout ? { fetchTimeout: init.fetchTimeout } : {}),
 			...(init.assets ? { assets: init.assets } : {}),
+			...(init.names ? { names: init.names } : {}),
 			...(errorPage ? { errorPage } : {}),
 		};
 
@@ -1020,8 +1033,11 @@ export class Frame extends EventTarget {
 		// proxied pages are same-origin; their inject client exposes the real location
 		try {
 			const win = this.element.contentWindow as
-				(Window & { $P$s?: { url: { toString(): string } } }) | null;
-			return win?.$P$s?.url.toString() ?? null;
+				(Window & Record<string, { url?: { toString(): string } }>) | null;
+			return (
+				win?.[helperNames(this.controller.config).client]?.url?.toString() ??
+				null
+			);
 		} catch {
 			return null;
 		}

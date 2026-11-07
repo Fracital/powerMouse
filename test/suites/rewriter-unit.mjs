@@ -20,7 +20,7 @@ const entry = `${OUT}rewriter-unit-entry.mjs`;
 writeFileSync(
 	entry,
 	`export { modifyJS, routeJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
-export { routeHTML, modifyRefresh, parseRefresh } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
+export { routeHTML, modifyHTML, modifyRefresh, parseRefresh } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
 export { parseDataURI, createDataURI } from ${JSON.stringify(`${root}src/routeURL.ts`)};
 export { modifyCSS } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
@@ -42,6 +42,7 @@ const {
 	modifyJS,
 	routeJS,
 	routeHTML,
+	modifyHTML,
 	modifyRefresh,
 	parseRefresh,
 	parseDataURI,
@@ -370,6 +371,39 @@ console.warn = warn;
 			nested.includes("$s$j.get(location, 'location')") &&
 			compound.includes("$s$j.get(location, 'location')"),
 		[value, nested, compound].join('\n'),
+	);
+}
+
+// helper names: a config's own names replace the four defaults everywhere the
+// rewriter emits them (the access API, the worker preamble, the HTML shell)
+{
+	const names = {
+		access: 'qA',
+		globalProxy: 'qB',
+		globalName: 'qC',
+		client: 'qD',
+	};
+	const generic = rewrite(
+		'o[k] = location.href; top.postMessage(1)',
+		'generic',
+		{ names },
+	);
+	const worker = rewrite('self.onmessage = () => location.href', 'worker', {
+		names,
+	});
+	const shell = modifyHTML('<p>x</p>', url, { ...config, names }, false);
+	ok(
+		'a config with its own helper names is rewritten with them',
+		generic.includes("qA.get(location, 'location')") &&
+			generic.includes('qA.post(') &&
+			!generic.includes('$s$j') &&
+			worker.includes('qD.apply()') &&
+			worker.includes('"qD" in globalThis') &&
+			!worker.includes('$P$s') &&
+			shell.includes('qD.loadHTML(') &&
+			shell.includes('"qD" in globalThis') &&
+			!shell.includes('$P$s'),
+		[generic, worker, shell].join('\n'),
 	);
 }
 await done();

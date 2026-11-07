@@ -1,4 +1,3 @@
-import { CLIENT_KEY } from '../../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../../routeURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
@@ -42,7 +41,7 @@ export default class FramingModule extends Module<DocumentClient> {
 				if (!this.client.nested) return null;
 				try {
 					const parentClient = (this.client.parent as Record<string, any>)[
-						CLIENT_KEY
+						this.client.names.client
 					] as DocumentClient;
 					if (
 						!sameOrigin(this.client.url.toString(), parentClient.url.toString())
@@ -66,7 +65,7 @@ export default class FramingModule extends Module<DocumentClient> {
 				get: proxyModule.wrapFunction(openerDescriptor.get, (target, that) => {
 					const opener = Reflect.apply(target, that, []);
 					try {
-						if (opener && CLIENT_KEY in opener)
+						if (opener && this.client.names.client in opener)
 							return this.client
 								.getModule(ContextModule)!
 								.newRestricted(opener);
@@ -155,7 +154,7 @@ export default class FramingModule extends Module<DocumentClient> {
 		const isStompWindow = (source: unknown) => {
 			if (!source) return true; // MessagePorts, workers: not a window
 			try {
-				return CLIENT_KEY in (source as unknown as object);
+				return this.client.names.client in (source as unknown as object);
 			} catch (error) {
 				return false; // cross-origin: the host
 			}

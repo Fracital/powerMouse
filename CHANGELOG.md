@@ -31,6 +31,17 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- `names` on `StompController` and `RemoteController`: the four global names
+  the rewriter and the inject bundles use (`access` for the API every
+  rewritten script calls, `client` for the client on the window, `globalProxy`
+  and `globalName` for the markers on the `location` and `eval` stand-ins;
+  defaults `$s$j`, `$P$s`, `$s$L`, `$s$N`) can be a deployment's own. They
+  travel in the config: the worker rewrites with them, the shell hands them to
+  the inject, and about:blank children and workers inherit them. A name that
+  is not an identifier, a reserved or special word, a global a plain window
+  has, used twice, or an unknown key is a `TypeError` from the constructor.
+  `DEFAULT_NAMES` and the `HelperNames` type are exported (helper-names
+  suite; the tells fixture takes the names to look for).
 - The transport can run off the host page's thread. `StompController` takes
   a `TransportDescriptor` (`{ module, options }`, what `RemoteController`
   already took) in place of a ProxyTransport instance and starts it in a

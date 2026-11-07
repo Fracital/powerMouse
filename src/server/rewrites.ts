@@ -746,6 +746,9 @@ export function registerRewrites(
 				...(init.openTab ? { openTab: true } : {}),
 				...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 				...(init.assets ? { assets: init.assets } : {}),
+				// the deployment's helper names: the shell and every rewritten
+				// script use them, and the inject reads them from this config
+				...(init.names ? { names: init.names } : {}),
 				build: BUILD,
 			};
 		},

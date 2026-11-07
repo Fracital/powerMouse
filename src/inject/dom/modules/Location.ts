@@ -1,5 +1,4 @@
 import { routeHTML } from '../../../rewriteHTML';
-import { CLIENT_KEY } from '../../../rewriteJS';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import { setGlobalProxy } from '../../modules/Access';
@@ -136,10 +135,13 @@ export default class LocationModule extends Module<DocumentClient> {
 			let context: typeof globalThis = this.client.global;
 			while (true) {
 				try {
-					const parent = (context as any)[CLIENT_KEY]
+					const parent = (context as any)[this.client.names.client]
 						.parent as typeof globalThis;
-					if (parent === context || !(CLIENT_KEY in parent)) break;
-					origins.push((parent as any)[CLIENT_KEY].url.url.origin as string);
+					if (parent === context || !(this.client.names.client in parent))
+						break;
+					origins.push(
+						(parent as any)[this.client.names.client].url.url.origin as string,
+					);
 					context = parent;
 				} catch (error) {
 					// a cross-origin parent
@@ -259,6 +261,11 @@ export default class LocationModule extends Module<DocumentClient> {
 
 		Reflect.setPrototypeOf(proxy, this.client.global.Location.prototype);
 
-		setGlobalProxy(this.client.global.location, 'location', proxy);
+		setGlobalProxy(
+			this.client.global.location,
+			'location',
+			proxy,
+			this.client.names,
+		);
 	}
 }

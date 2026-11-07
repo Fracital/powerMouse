@@ -1,9 +1,6 @@
+import { HelperNames } from '../../helperNames';
 import { routeHTML } from '../../rewriteHTML';
 import {
-	ACCESS_KEY,
-	CLIENT_KEY,
-	GLOBAL_NAME,
-	GLOBAL_PROXY,
 	isBareSpecifier,
 	modifyJS,
 	routeJS,
@@ -24,11 +21,16 @@ function normalizeKey(key: unknown): string|unknown {
 	}
 }*/
 
-export function setGlobalProxy(object: any, name: string, proxy: unknown) {
+export function setGlobalProxy(
+	object: any,
+	name: string,
+	proxy: unknown,
+	names: HelperNames,
+) {
 	// the tags never show in the page's own enumeration
 	for (const [key, value] of [
-		[GLOBAL_PROXY, proxy],
-		[GLOBAL_NAME, name],
+		[names.globalProxy, proxy],
+		[names.globalName, name],
 	] as const)
 		Reflect.defineProperty(object, key, {
 			value,
@@ -66,7 +68,7 @@ export default class AccessModule extends Module<Client> {
 			(target, that, [code]) => globalEval(code),
 		);
 
-		setGlobalProxy(evalSnapshot, 'eval', globalEvalProxy);
+		setGlobalProxy(evalSnapshot, 'eval', globalEvalProxy, this.client.names);
 
 		const api = {
 			get2: (
@@ -91,9 +93,9 @@ export default class AccessModule extends Module<Client> {
 						UNDEFINABLE.includes(key) &&
 						((typeof object === 'object' && object !== null) ||
 							typeof object === 'function') &&
-						GLOBAL_PROXY in object
+						this.client.names.globalProxy in object
 					) {
-						return object[GLOBAL_PROXY];
+						return object[this.client.names.globalProxy];
 					}
 				} catch (error) {
 					// error was thrown during an accessor
@@ -124,7 +126,9 @@ export default class AccessModule extends Module<Client> {
 						if (key === 'location') {
 							// this client's location: an about:blank child runs its
 							// creator's bundle, whose free `location` is the creator's
-							target = (this.client.global.location as any)[GLOBAL_PROXY];
+							target = (this.client.global.location as any)[
+								this.client.names.globalProxy
+							];
 							key = 'href';
 						}
 					} else {
@@ -133,13 +137,18 @@ export default class AccessModule extends Module<Client> {
 							foreign =
 								((typeof target === 'object' && target !== null) ||
 									typeof target === 'function') &&
-								ACCESS_KEY in target &&
-								target[ACCESS_KEY]!.set2 !== api.set2;
+								this.client.names.access in target &&
+								target[this.client.names.access]!.set2 !== api.set2;
 						} catch (error) {
 							// a cross-origin window: nothing of ours to delegate to
 						}
 						if (foreign)
-							return target[ACCESS_KEY]!.set2(target, key, operate, righthand);
+							return target[this.client.names.access]!.set2(
+								target,
+								key,
+								operate,
+								righthand,
+							);
 					}
 				}
 
@@ -166,7 +175,7 @@ export default class AccessModule extends Module<Client> {
 				if (
 					typeof target === 'object' &&
 					target !== null &&
-					target[GLOBAL_NAME] === 'location'
+					target[this.client.names.globalName] === 'location'
 				) {
 					set(
 						routeHTML(
@@ -213,7 +222,7 @@ export default class AccessModule extends Module<Client> {
 							target !== null &&
 							target.window === target
 						)
-							receiver = target[CLIENT_KEY];
+							receiver = target[this.client.names.client];
 					} catch (error) {
 						// a cross-origin window: called as written
 					}
@@ -300,7 +309,7 @@ export default class AccessModule extends Module<Client> {
 		};
 
 		// not enumerable: Object.keys(window) must not name it
-		Reflect.defineProperty(this.client.global, ACCESS_KEY, {
+		Reflect.defineProperty(this.client.global, this.client.names.access, {
 			value: api,
 			configurable: true,
 			writable: true,

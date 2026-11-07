@@ -5,7 +5,7 @@
 // it can read their location and drive their history on the host's behalf.
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { assetName } from '../config';
-import { CLIENT_KEY } from '../rewriteJS';
+import { helperNames } from '../helperNames';
 import type { RequestInfo } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import { canTraverse, traverse } from './history';
@@ -85,6 +85,9 @@ if (window === window.parent || !origins.length) {
 		 * addresses it by index into its `frames` list (indexed access on a
 		 * cross-origin parent is allowed; named access is not).
 		 */
+		// the client's name on a proxied window: the controller's config's, once
+		// the controller exists (the defaults until then)
+		const clientName = () => helperNames(controller?.config).client;
 		function proxiedWindow(index: number): (Window & typeof globalThis) | null {
 			if (!Number.isInteger(index) || index < 0) return null;
 			try {
@@ -94,7 +97,7 @@ if (window === window.parent || !origins.length) {
 				// same-origin with us, and one of ours (it has the client), or
 				// still blank before its first navigation
 				if (
-					CLIENT_KEY in (win as object) ||
+					clientName() in (win as object) ||
 					win.location.href === 'about:blank'
 				)
 					return win;
@@ -125,6 +128,7 @@ if (window === window.parent || !origins.length) {
 						...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 						...(init.rules ? { rules: init.rules } : {}),
 						...(init.assets ? { assets: init.assets } : {}),
+						...(init.names ? { names: init.names } : {}),
 						...(init.errorPage ? { errorPage: init.errorPage } : {}),
 						// the host's request log travels SW -> here -> host
 						...(init.requestLog
@@ -166,7 +170,7 @@ if (window === window.parent || !origins.length) {
 						];
 					const client = (
 						win as unknown as Record<string, { url?: { toString(): string } }>
-					)[CLIENT_KEY];
+					)[clientName()];
 					return [
 						{
 							url: client?.url ? client.url.toString() : null,

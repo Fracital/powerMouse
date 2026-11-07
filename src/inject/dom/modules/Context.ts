@@ -1,6 +1,5 @@
 import { getDomain } from 'tldts';
 import { routeHTML } from '../../../rewriteHTML';
-import { CLIENT_KEY, GLOBAL_NAME } from '../../../rewriteJS';
 import StompURL, { urlLike } from '../../../StompURL';
 import Client from '../../Client';
 import Module from '../../Module';
@@ -33,15 +32,17 @@ export function sameOrigin(first: string, second: string): boolean {
 	);
 }
 
-function findTop(global: typeof globalThis): Context {
+function findTop(global: typeof globalThis, client: string): Context {
 	let context: Context = global;
 
 	// walk up while the parent is still a Stomp context; the controller page
 	// (or anything cross-origin) ends the proxied world
 	while (true) {
 		try {
-			const parent = (context[CLIENT_KEY] as DocumentClient).parent;
-			if (parent === context || !(CLIENT_KEY in parent)) return context;
+			const parent = (
+				(context as Record<string, any>)[client] as DocumentClient
+			).parent;
+			if (parent === context || !(client in parent)) return context;
 			context = parent;
 		} catch (error) {
 			return context;
@@ -66,13 +67,11 @@ function isPostMessageArgs2(
 type Context = typeof globalThis;
 
 /** the nested route marker of a Stomp window (its top origin when it is a child of a proxied page) */
-function nestedRouteOf(context: Context): string | false {
+function nestedRouteOf(context: Context, client: string): string | false {
 	try {
 		return (
-			(
-				(context as Record<string, any>)[CLIENT_KEY] as
-					DocumentClient | undefined
-			)?.nestedRoute ?? false
+			((context as Record<string, any>)[client] as DocumentClient | undefined)
+				?.nestedRoute ?? false
 		);
 	} catch (error) {
 		return false;
@@ -84,17 +83,18 @@ const nativeMessageEvent: MessageEvent = Object.create({});
 
 applyDescriptors(nativeMessageEvent, MessageEvent.prototype);
 
+/** a message between Stomp contexts: the envelope key is the deployment's globalName helper */
 interface MessageData {
-	[GLOBAL_NAME]: 'stompMessage';
 	data: any;
 	origin: string;
+	[marker: string]: unknown;
 }
 
-function isMessageData(data: any): data is MessageData {
+function isMessageData(data: any, globalName: string): data is MessageData {
 	return (
 		typeof data === 'object' &&
 		data !== null &&
-		data[GLOBAL_NAME] === 'stompMessage'
+		data[globalName] === 'stompMessage'
 	);
 }
 
@@ -243,7 +243,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			const { origin } = new URL(targetOrigin, this.client.url.toString());
 
 			console.assert(
-				window[CLIENT_KEY].url.url.toOrigin() === origin,
+				(window as Record<string, any>)[this.client.names.client].url.url.toOrigin() === origin,
 				'Bad origin',
 				window[global_client].base.toOrigin(),
 				origin
@@ -264,7 +264,7 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		return <PostMessageArgs2>[
 			<MessageData>{
-				[GLOBAL_NAME]: 'stompMessage',
+				[this.client.names.globalName]: 'stompMessage',
 				data: message.data,
 				origin: this.client.url.url.origin,
 			},
@@ -289,7 +289,7 @@ export default class ContextModule extends Module<DocumentClient> {
 							this.client.url,
 							this.client.config,
 							false,
-							nestedRouteOf(context),
+							nestedRouteOf(context, this.client.names.client),
 						),
 					);
 				},
@@ -305,7 +305,7 @@ export default class ContextModule extends Module<DocumentClient> {
 							this.client.url,
 							this.client.config,
 							false,
-							nestedRouteOf(context),
+							nestedRouteOf(context, this.client.names.client),
 						),
 					);
 				},
@@ -359,7 +359,7 @@ export default class ContextModule extends Module<DocumentClient> {
 								this.client.url,
 								this.client.config,
 								false,
-								nestedRouteOf(context),
+								nestedRouteOf(context, this.client.names.client),
 							),
 						);
 					},
@@ -388,7 +388,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		// on the `in` check; it is never a Stomp context
 		let isStomp: boolean;
 		try {
-			isStomp = CLIENT_KEY in context;
+			isStomp = this.client.names.client in context;
 		} catch {
 			isStomp = false;
 		}
@@ -396,13 +396,15 @@ export default class ContextModule extends Module<DocumentClient> {
 		if (!isStomp) {
 			// the proxied world ends here (the host, or anything it opened):
 			// present ourselves as the top
-			return findTop(this.client.global);
+			return findTop(this.client.global, this.client.names.client);
 		}
 
 		if (
 			sameOrigin(
 				this.client.url.toString(),
-				((context as any)[CLIENT_KEY] as DocumentClient).url.toString(),
+				(
+					(context as any)[this.client.names.client] as DocumentClient
+				).url.toString(),
 			)
 		)
 			return context;
@@ -458,15 +460,17 @@ export default class ContextModule extends Module<DocumentClient> {
 			if (!isWindow(value)) return value;
 
 			try {
-				if (value === this.client.top || !(CLIENT_KEY in value))
-					return this.newRestricted(findTop(this.client.global));
+				if (value === this.client.top || !(this.client.names.client in value))
+					return this.newRestricted(
+						findTop(this.client.global, this.client.names.client),
+					);
 			} catch (error) {
 				// cross-origin top
 			}
 
 			// another proxied window's top is the top of *its* world, which is
 			// this one's for a frame of this page
-			return this.newRestricted(findTop(value));
+			return this.newRestricted(findTop(value, this.client.names.client));
 		};
 
 		// a window of another proxied origin that a computed read lands on
@@ -477,7 +481,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			if (typeof value !== 'object' || value === null) return value;
 			try {
 				if (
-					!(CLIENT_KEY in value) ||
+					!(this.client.names.client in value) ||
 					(value as { window?: unknown }).window !== value
 				)
 					return value;
@@ -583,10 +587,10 @@ export default class ContextModule extends Module<DocumentClient> {
 				/*console.error(
 					this.client.url.url.toString(),
 					event.data,
-					isMessageData(event.data)
+					isMessageData(event.data, this.client.names.globalName)
 				);*/
 				usePrototype(event, nativeMessageEvent, (event) => {
-					if (!isMessageData(event.data)) return;
+					if (!isMessageData(event.data, this.client.names.globalName)) return;
 
 					messageData.set(event, event.data);
 
@@ -604,7 +608,9 @@ export default class ContextModule extends Module<DocumentClient> {
 		// reports as the source
 		this.client.nativePostMessage = this.client.global.postMessage;
 		this.client.postToWindow = (target, args) => {
-			const receiver = (target as Record<string, any>)[CLIENT_KEY] as Client;
+			const receiver = (target as Record<string, any>)[
+				this.client.names.client
+			] as Client;
 			const [data, options] = this.postMessage(
 				args as PostMessageArgs,
 			) as PostMessageArgs2;

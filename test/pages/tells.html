@@ -1,7 +1,11 @@
 <!doctype html>
 <title>TELLS</title>
 <script>
-	const helpers = ['$s$j', '$P$s', '$s$L', '$s$N'];
+	// the deployment's helper names: the defaults, or the four the suite
+	// passed (`?names=access,client,globalProxy,globalName`)
+	const helpers = (
+		new URLSearchParams(location.search).get('names') || '$s$j,$P$s,$s$L,$s$N'
+	).split(',');
 	const names = (object) =>
 		[...Object.getOwnPropertyNames(object), ...Reflect.ownKeys(object)]
 			.filter((key) => typeof key === 'string')
@@ -25,8 +29,12 @@
 		// documented tells, recorded, not asserted
 		inOperator: helpers.filter((key) => key in window),
 		prepare: typeof Error.prepareStackTrace,
+		// the source of a rewritten function names the access helper
+		functionSource: (() => location.href).toString(),
 		// a page's own object answers natively
-		plainHasOwn: Object.hasOwn({ $s$j: 1 }, '$s$j'),
-		plainNames: Object.getOwnPropertyNames({ $P$s: 1 }),
+		plainHasOwn: Object.hasOwn({ [helpers[0]]: 1 }, helpers[0]),
+		plainNames: Object.getOwnPropertyNames({ [helpers[1]]: 1 }),
+		// the rewrite ran under these names: the real URL, the page as top
+		rewritten: top === window && location.href,
 	};
 </script>

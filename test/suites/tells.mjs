@@ -54,6 +54,7 @@ console.log(
 	JSON.stringify({
 		inOperator: tells.inOperator,
 		prepareStackTrace: tells.prepare,
+		functionSource: tells.functionSource,
 	}),
 );
 await done(browser, page.errors);

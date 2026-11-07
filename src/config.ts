@@ -1,4 +1,5 @@
 import GenericCodec, { AESCodec, Base64Codec, XORCodec } from './Codecs';
+import type { HelperNames } from './helperNames';
 
 export declare type ConfigCodec = 'generic' | 'xor' | 'aes' | 'base64';
 
@@ -39,6 +40,13 @@ export interface Config {
 	fetchTimeout?: number;
 	/** the served file names, when the host renamed them (see Assets) */
 	assets?: Assets;
+	/**
+	 * The four global names the rewriter and the inject bundles use (see
+	 * HelperNames): a deployment's own, when the host set them. Each must be
+	 * an identifier no plain window has; the controller throws a TypeError
+	 * otherwise. Defaults: `$s$j`, `$s$L`, `$s$N`, `$P$s`.
+	 */
+	names?: Partial<HelperNames>;
 	/**
 	 * The host's own page for a document the proxy failed to produce (a
 	 * transport failure, the timeout, a routing error, a blocked rule, the
