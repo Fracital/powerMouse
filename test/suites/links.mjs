@@ -73,12 +73,20 @@ const attributes = await page.evaluate(() => {
 });
 const routed = (value) =>
 	typeof value === 'string' && value.includes('/stomp/');
+// an object's real data is a blob: URL of the proxied copy, or absent while
+// it loads (Chrome never routes an object's load through the worker)
+const proxiedObject = (value) =>
+	value === null || (typeof value === 'string' && value.startsWith('blob:'));
 ok(
 	'formaction, input[src], poster, track, object[data] and imagesrcset are routed',
-	Object.values(attributes).every(routed),
+	Object.entries(attributes).every(([name, value]) =>
+		name === 'object' ? proxiedObject(value) : routed(value),
+	),
 	JSON.stringify(
 		Object.fromEntries(
-			Object.entries(attributes).filter(([, v]) => !routed(v)),
+			Object.entries(attributes).filter(([name, v]) =>
+				name === 'object' ? !proxiedObject(v) : !routed(v),
+			),
 		),
 	),
 );

@@ -43,11 +43,5 @@
 		"Sandboxed iframe with opaque origin doesn't send referrers to subresources": "FAIL: assert_equals: expected (undefined) undefined but got (string) \"FAILURE\"",
 		"Sandboxed iframe with tuple origin sends referrers to subresources": "FAIL: assert_equals: expected \"http://localhost:PORT/referrer-policy/generic/sandboxed-iframe-with-opaque-origin.html\" but got \"FAILURE\"",
 		"Sandboxed iframe with opaque origin doesn't send referrers on navigation": "FAIL: assert_equals: expected \"\" but got \"http://localhost:PORT/referrer-policy/generic/sandboxed-iframe-with-opaque-origin.html\""
-	},
-	"/referrer-policy/generic/unsupported-elements.html": {
-		"(harness)": "TIMEOUT: ",
-		"Referrerpolicy attribute on <object> is ignored and falls back to document policy": "TIMEOUT: Test timed out",
-		"Referrerpolicy attribute on <embed> is ignored and falls back to document policy": "NOTRUN: ",
-		"Referrerpolicy attribute on <frame> is ignored and falls back to document policy": "NOTRUN: "
 	}
 }

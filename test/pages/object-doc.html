@@ -1,0 +1,14 @@
+<!doctype html>
+<title>OBJECT DOC</title>
+<script>
+	parent.postMessage(
+		{
+			objectDoc: {
+				id: location.search.slice(1),
+				top: top === parent,
+				href: location.href,
+			},
+		},
+		'*',
+	);
+</script>

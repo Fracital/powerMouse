@@ -46,7 +46,42 @@ ok(
 		JSON.stringify(fs.bNames) === JSON.stringify(['id', 'href']),
 	JSON.stringify([fs.bAttr, fs.bHref, fs.bNames, fs.error]),
 );
-// <object data="page.html"> is not proxied: Chrome never routes an object's
-// (or embed's) load through a service worker, so the document would be fetched
-// from the proxy origin directly; the hooks are in place for a browser that does
+// <object data> and <embed src>: Chrome never routes their loads through a
+// service worker, so the inject fetches them through the proxy and hands the
+// element a blob: URL; their documents run injected (top is the page) and
+// post back, an object made while the page parses as well as one made after
+// load, and the attribute reads back as written
+await page.evaluate(async (fixture) => {
+	const element = document.createElement('iframe');
+	document.body.append(element);
+	await window.controller
+		.createFrame(element)
+		.go(`${fixture}pages/object-load.html`);
+}, FIXTURE);
+let objects = null;
+for (let i = 0; i < 30 && !objects?.done; i++) {
+	await sleep(250);
+	for (const frame of page.frames()) {
+		const value = await frame
+			.evaluate(() => window.__objects)
+			.catch(() => null);
+		if (value?.done) objects = value;
+	}
+}
+const seen = (id) =>
+	objects?.messages?.find((message) => message.id === id) ?? null;
+ok(
+	'<object> and <embed> documents load through the proxy and run injected',
+	['early', 'late', 'embed'].every(
+		(id) =>
+			seen(id)?.top === true &&
+			seen(id)?.href === `${FIXTURE}pages/object-doc.html?${id}`,
+	) &&
+		JSON.stringify(objects?.readback) ===
+			JSON.stringify([
+				`${FIXTURE}pages/object-doc.html?early`,
+				'object-doc.html?early',
+			]),
+	JSON.stringify(objects),
+);
 await done(browser, page.errors);

@@ -7,10 +7,15 @@ import {
 } from '../../../rewriteCSS';
 import { modifyHTML, modifyRefresh, routeHTML } from '../../../rewriteHTML';
 import { modifyJS, routeJS, ScriptType } from '../../../rewriteJS';
-import { routeBinary } from '../../../routeURL';
+import {
+	proxyBlobURL,
+	ROUTE_PROTOCOLS,
+	routeBinary,
+	routeXHR,
+} from '../../../routeURL';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
-import ProxyModule from '../../modules/Proxy';
+import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import DocumentClient from '../Client';
 import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
 
@@ -542,7 +547,6 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			},
 			[
 				['IFRAME', 'src'],
-				['EMBED', 'src'],
 				['FRAME', 'src'],
 				[
 					this.client.global.HTMLFrameElement,
@@ -557,18 +561,6 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				],
 				[
 					this.client.global.HTMLIFrameElement,
-					'src',
-					(element) =>
-						element.hasAttribute('src') &&
-						element.getAttribute('src') !== '' &&
-						new URL(
-							element.getAttributeOG('src')!,
-							this.client.url.toString(),
-						).toString(),
-				],
-
-				[
-					this.client.global.HTMLEmbedElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -1108,22 +1100,114 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				}
 			};
 
-		// <object data>: a document or a plugin resource, like <embed src>
-		domHooksModule.useAttributes(
-			routeAttribute('data', (resource) =>
-				routeHTML(
-					resource,
-					this.client.url,
-					this.client.config,
-					false,
-					this.client.topOrigin,
-				),
-			),
-			[
-				['OBJECT', 'data'],
-				[this.client.global.HTMLObjectElement, 'data', originalURL('data')],
-			],
-		);
+		// <object data> and <embed src>: Chrome never routes their loads through
+		// a service worker, so a routed URL would reach the proxy origin's own
+		// server. The inject fetches the resource through the proxy instead and
+		// hands the element a blob: URL of it: HTML wrapped in the shell (as a
+		// blob document, its real URL as base), anything else as it came. The
+		// element loads nothing until then; a later value wins over a load
+		// still in flight, and a failed fetch falls back to the routed URL.
+		// The attribute and the property read back as the page wrote them.
+		const NativeBlob = this.client.global.Blob;
+		// per element: the URL the page wrote, the load for it, and the blob:
+		// URL once it is in. A hook that runs again for the same value (the
+		// insertion hooks re-run every attribute hook) keeps the load and its
+		// blob instead of starting over, which would reset a document the
+		// element is already showing
+		const loads = new WeakMap<
+			Element,
+			{ written: string; generation: number; url?: string }
+		>();
+		let generations = 0;
+		const proxiedLoad = (attribute: string) => (element: CustomElement) => {
+			element.restoreAttributesOG(attribute);
+			if (
+				!element.hasAttribute(attribute) ||
+				element.getAttribute(attribute) === ''
+			)
+				return;
+			const written = element.getAttribute(attribute)!;
+			element.setAttributeOG(attribute, written);
+			const resource = new StompURL(
+				new URL(written, this.client.url.toString()),
+				this.client.url,
+			);
+			const routed = routeHTML(
+				resource,
+				this.client.url,
+				this.client.config,
+				false,
+				this.client.topOrigin,
+			);
+			if (!ROUTE_PROTOCOLS.includes(resource.url.protocol)) {
+				// data:, blob: and the like: as routeHTML leaves them
+				element.setAttribute(attribute, routed);
+				return;
+			}
+			const current = loads.get(element);
+			if (current?.written === resource.url.href) {
+				if (current.url) element.setAttribute(attribute, current.url);
+				else element.removeAttribute(attribute);
+				return;
+			}
+			const generation = ++generations;
+			const state: { written: string; generation: number; url?: string } = {
+				written: resource.url.href,
+				generation,
+			};
+			loads.set(element, state);
+			// no URL at all until the proxied copy is in (an empty one makes an
+			// object show its fallback and not load again)
+			element.removeAttribute(attribute);
+			const settle = (value: string) => {
+				if (loads.get(element) !== state) return;
+				state.url = value;
+				usePrototype(element, CustomElement.prototype, (element) =>
+					element.setAttribute(attribute, value),
+				);
+			};
+			this.client
+				.routedFetch(routeXHR(resource))
+				.then(async (response) => {
+					if (!response.ok && response.status !== 0)
+						throw new Error(String(response.status));
+					const type = response.headers.get('content-type') ?? '';
+					const blob = /^\s*(text\/html|application\/xhtml\+xml)/i.test(type)
+						? new NativeBlob(
+								[
+									modifyHTML(
+										await response.text(),
+										resource,
+										this.client.config,
+										true,
+									),
+								],
+								{ type: 'text/html' },
+							)
+						: await response.blob();
+					if (loads.get(element) !== state) return;
+					if (current?.url?.startsWith('blob:'))
+						this.client.global.URL.revokeObjectURL(current.url);
+					settle(proxyBlobURL(this.client.global.URL.createObjectURL(blob)));
+				})
+				.catch(() => settle(routed));
+		};
+		// the property reads the page's URL from the original alone: the real
+		// attribute is absent while the proxied copy loads, then a blob: URL
+		const writtenURL = (attribute: string) => (element: CustomElement) => {
+			const written = element.getAttributeOG(attribute);
+			return written !== null && written !== ''
+				? new URL(written, this.client.url.toString()).toString()
+				: false;
+		};
+		domHooksModule.useAttributes(proxiedLoad('data'), [
+			['OBJECT', 'data'],
+			[this.client.global.HTMLObjectElement, 'data', writtenURL('data')],
+		]);
+		domHooksModule.useAttributes(proxiedLoad('src'), [
+			['EMBED', 'src'],
+			[this.client.global.HTMLEmbedElement, 'src', writtenURL('src')],
+		]);
 
 		// <video poster>
 		domHooksModule.useAttributes(routeAttribute('poster', routeBinary), [

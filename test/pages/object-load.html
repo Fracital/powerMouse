@@ -1,0 +1,36 @@
+<!doctype html>
+<title>OBJECT LOAD</title>
+<body>
+	<script>
+		// <object data> and <embed src> load through the proxy (Chrome never
+		// routes their loads through a service worker): one created while the
+		// page is still parsing, one after load, and an embed; each document
+		// posts its URL back
+		window.__objects = { messages: [] };
+		addEventListener('message', (event) => {
+			if (event.data && event.data.objectDoc)
+				__objects.messages.push(event.data.objectDoc);
+		});
+		const make = (tag, id) => {
+			const element = document.createElement(tag);
+			element.id = id;
+			if (tag === 'object') element.data = `object-doc.html?${id}`;
+			else {
+				element.type = 'text/html';
+				element.src = `object-doc.html?${id}`;
+			}
+			document.body.appendChild(element);
+			return element;
+		};
+		make('object', 'early');
+		addEventListener('load', () => {
+			make('object', 'late');
+			make('embed', 'embed');
+			setTimeout(() => {
+				const early = document.getElementById('early');
+				__objects.readback = [early.data, early.getAttribute('data')];
+				__objects.done = true;
+			}, 3000);
+		});
+	</script>
+</body>

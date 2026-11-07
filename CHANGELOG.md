@@ -291,6 +291,17 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- `<object data>` and `<embed src>` load through the proxy. Chrome never
+  routes their loads through a service worker, so the routed URL reached the
+  proxy origin's own server and the element showed nothing (a page, a PDF or
+  an image alike). The inject now fetches the resource through the proxy and
+  hands the element a blob: URL of it: HTML wrapped in the shell like a blob
+  document (its real URL as base), anything else as it came. The element has
+  no URL until then (an empty one makes an object show its fallback and stop
+  loading), a value set again keeps the load in flight, a later value wins,
+  and a failed fetch falls back to the routed URL. `data` and `src` read back
+  as written (frames-objects suite; wpt-referrer-policy:
+  `unsupported-elements`, 4 subtests from timeout to pass).
 - A transport is initialised once at a time. Every port served from one
   transport (the service worker's, each page's) called `init()` for every
   request that found it not ready, so a burst at start-up initialised it
