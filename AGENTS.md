@@ -117,6 +117,11 @@ on every save (use a `git worktree`).
   network waits out the spin limit. A descriptor (the default) runs the
   transport in the transport worker (`src/transport/worker.ts`), off that
   thread, and the request completes. Don't add new synchronous paths.
+  The beacon that carries a request is capped at 64 KiB per document and per
+  synchronous call, and a beacon's completion is a main-thread task the
+  spinning page never runs, so a request over the cap cannot be split across
+  beacons; the storage module shadows a large `localStorage` write for the
+  writer and sends it with the async fetch instead.
 - **One controller per address, many per scope.** `config.directory` is a
   controller's address: the directory the host gave plus `controller.id`
   (`/stomp/k7qx2m/`). Every routed URL starts with it and the service worker

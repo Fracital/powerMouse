@@ -64,6 +64,40 @@ ok(
 	JSON.stringify(foreign?.events),
 );
 
+// a value far over the beacon quota: the writer sees it at once, the worker
+// stores it asynchronously, and another document reads it whole
+const show = async (url) => {
+	await page.click('#home');
+	await submitLanding(page, url);
+	let value = null;
+	for (let i = 0; i < 60 && !value?.done; i++) {
+		await sleep(500);
+		const frame = page
+			.frames()
+			.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
+		value = await frame?.evaluate(() => window.__big).catch(() => null);
+	}
+	return value ?? {};
+};
+const big = await show(`${FIXTURE}pages/big-storage.html`);
+await sleep(1500);
+const bigReader = await show(`${FIXTURE}pages/big-storage.html#reader`);
+ok(
+	'a 200 KiB localStorage value is accepted, read back and listed by its writer at once',
+	big.stored === true && big.readBack === true && big.listed === true,
+	JSON.stringify(big),
+);
+ok(
+	'the value is stored for another document, whole',
+	bigReader.readerLength === 200 * 1024 + 4 && bigReader.readerEnd === '-end',
+	JSON.stringify(bigReader),
+);
+ok(
+	'a 2 MiB value stores too, and a removal right after it keeps the order',
+	big.huge === 'stored' && big.hugeGone === true,
+	JSON.stringify([big.huge, big.hugeGone]),
+);
+
 await done(
 	browser,
 	page.errors.filter((e) => !/max cycles/.test(e)),

@@ -9,6 +9,9 @@ import ProxyModule, {
 import DocumentClient from '../Client';
 import SyncModule from './Sync';
 
+/** a value this long (bytes) does not fit the synchronous bridge's beacon with the rest of the request */
+const LARGE_WRITE_BYTES = 48 * 1024;
+
 export default class StorageModule extends Module<DocumentClient> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
@@ -23,11 +26,73 @@ export default class StorageModule extends Module<DocumentClient> {
 		const sender = Math.random().toString(36).slice(2);
 		const here = () => this.client.url.toString();
 
+		// A write the synchronous bridge cannot carry (its beacon is refused
+		// over 64 KiB, and the quota is per document while this thread spins,
+		// so no number of beacons helps) is kept here as this document's view
+		// of the key and sent to the worker asynchronously, in order; a later
+		// operation on a key with a write in flight is queued behind it, so
+		// the worker sees them in the page's order. Reads of such a key answer
+		// from here until the write landed, which is what the page expects of
+		// its own writes; other documents see the value once it is stored.
+		const shadows = new Map<string, Map<string, string | null>>();
+		const shadowOf = (directory: string) => {
+			let shadow = shadows.get(directory);
+			if (!shadow) {
+				shadow = new Map();
+				shadows.set(directory, shadow);
+			}
+			return shadow;
+		};
+		let queue: Promise<unknown> = Promise.resolve();
+		const post = (directory: string, name: string, args: unknown[]) =>
+			fetch(new URL(`${directory}${name}`, this.client.global.location.href), {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(args),
+			}).then((response) => {
+				if (!response.ok)
+					throw new Error(`${name}: ${response.status} ${response.statusText}`);
+			});
+		const later = (
+			directory: string,
+			name: string,
+			args: unknown[],
+			key: string,
+			value: string | null,
+		) => {
+			const shadow = shadowOf(directory);
+			shadow.set(key, value);
+			queue = queue.then(
+				() => post(directory, name, args),
+				() => post(directory, name, args),
+			);
+			queue.then(
+				() => {
+					if (shadow.get(key) === value) shadow.delete(key);
+				},
+				(error) => {
+					console.error(`Stomp: a storage write could not be stored: ${error}`);
+					if (shadow.get(key) === value) shadow.delete(key);
+				},
+			);
+		};
+		const encoder = new TextEncoder();
+		const tooLargeForSync = (value: string) =>
+			value.length > LARGE_WRITE_BYTES ||
+			(value.length * 3 > LARGE_WRITE_BYTES &&
+				encoder.encode(value).length > LARGE_WRITE_BYTES);
+
 		const storageKeys = (directory: string): string[] => {
-			return syncModule.jsonAPI(
+			const keys: string[] = syncModule.jsonAPI(
 				`${directory}getKeys`,
 				this.client.url.url.origin,
 			);
+			const shadow = shadows.get(directory);
+			if (!shadow?.size) return keys;
+			const merged = keys.filter((key) => shadow.get(key) !== null);
+			for (const [key, value] of shadow)
+				if (value !== null && !merged.includes(key)) merged.push(key);
+			return merged;
 		};
 
 		class StorageProxy {
@@ -40,6 +105,23 @@ export default class StorageModule extends Module<DocumentClient> {
 				this.#directory = directory;
 			}
 			clear(): void {
+				const shadow = shadows.get(this.#directory);
+				if (shadow?.size) {
+					// behind the writes in flight, so none of them lands after it
+					for (const key of shadow.keys()) shadow.set(key, null);
+					queue = queue.then(
+						() => post(this.#directory, 'clear', [getOrigin(), sender, here()]),
+						() => post(this.#directory, 'clear', [getOrigin(), sender, here()]),
+					);
+					queue.then(
+						() => {
+							for (const [key, value] of shadow)
+								if (value === null) shadow.delete(key);
+						},
+						() => {},
+					);
+					return;
+				}
 				syncModule.jsonAPI(
 					`${this.#directory}clear`,
 					getOrigin(),
@@ -51,6 +133,9 @@ export default class StorageModule extends Module<DocumentClient> {
 				catchRequiredArguments(args.length, 1, 'Storage', 'getItem');
 
 				const key = String(args[0]);
+
+				const shadow = shadows.get(this.#directory);
+				if (shadow?.has(key)) return shadow.get(key)!;
 
 				const result: null | string = syncModule.jsonAPI(
 					`${this.#directory}getItem`,
@@ -65,26 +150,28 @@ export default class StorageModule extends Module<DocumentClient> {
 
 				const index = Number(args[0]);
 
-				const result: string[] = syncModule.jsonAPI(
-					`${this.#directory}getKeys`,
-					getOrigin(),
-				);
+				const result = storageKeys(this.#directory);
 
 				return index >= result.length ? null : result[index];
 			}
 			get length(): number {
-				const result: string[] = syncModule.jsonAPI(
-					`${this.#directory}getKeys`,
-					getOrigin(),
-				);
-
-				return result.length;
+				return storageKeys(this.#directory).length;
 			}
 			removeItem(...args: [unknown]): void {
 				catchRequiredArguments(args.length, 1, 'Storage', 'removeItem');
 
 				const item = String(args[0]);
 
+				if (shadows.get(this.#directory)?.has(item)) {
+					later(
+						this.#directory,
+						'removeItem',
+						[getOrigin(), item, sender, here()],
+						item,
+						null,
+					);
+					return;
+				}
 				syncModule.jsonAPI(
 					`${this.#directory}removeItem`,
 					getOrigin(),
@@ -99,6 +186,16 @@ export default class StorageModule extends Module<DocumentClient> {
 				const item = String(args[0]);
 				const value = String(args[1]);
 
+				if (tooLargeForSync(value) || shadows.get(this.#directory)?.has(item)) {
+					later(
+						this.#directory,
+						'setItem',
+						[getOrigin(), item, value, sender, here()],
+						item,
+						value,
+					);
+					return;
+				}
 				syncModule.jsonAPI(
 					`${this.#directory}setItem`,
 					getOrigin(),

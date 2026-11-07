@@ -1,0 +1,35 @@
+<!doctype html>
+<title>BIG STORAGE</title>
+<script>
+	// a localStorage value far over the 64 KiB beacon quota: the writer sees
+	// it at once and it is stored for other documents (the #reader hash);
+	// one of 2 MiB stores too, and removing it right after keeps the order
+	window.__big = {};
+	const out = __big;
+	if (location.hash === '#reader') {
+		const back = localStorage.getItem('big');
+		out.readerLength = back ? back.length : null;
+		out.readerEnd = back ? back.slice(-4) : null;
+		localStorage.removeItem('big');
+		out.done = true;
+	} else {
+		const value = 'v'.repeat(200 * 1024) + '-end';
+		try {
+			localStorage.setItem('big', value);
+			out.stored = true;
+			out.readBack = localStorage.getItem('big') === value;
+			out.listed = Object.keys(localStorage).includes('big');
+		} catch (error) {
+			out.stored = `${error.name}: ${error.message}`;
+		}
+		try {
+			localStorage.setItem('huge', 'h'.repeat(2 * 1024 * 1024));
+			out.huge = 'stored';
+			localStorage.removeItem('huge');
+			out.hugeGone = localStorage.getItem('huge') === null;
+		} catch (error) {
+			out.huge = error.name;
+		}
+		out.done = true;
+	}
+</script>
