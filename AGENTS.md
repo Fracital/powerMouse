@@ -191,8 +191,9 @@ attribution; the same script checks a PR's commit messages) and the esbuild
 build. All of it must pass locally before you push. A `browser suites` job
 runs `npm test` on the runner's Chrome with `SKIP_NETWORK=1` (the suites
 that drive Wikipedia stay out), `SKIP_TIMING=1` (the flick-velocity suite)
-and `SKIP_MEASUREMENT=1` (the adversarial corpus, which reports every known
-leak as a failure on purpose) and `PARALLEL=2`; since 2026-11-07 it is
+and `SKIP_MEASUREMENT=1` (the adversarial corpus and the vendored
+web-platform-tests, which report every known leak and expected failure on
+purpose) and `PARALLEL=2`; since 2026-11-07 it is
 required by branch protection, so a suite that cannot pass on the runner
 goes behind one of those flags rather than staying red (a per-frame animation
 measurement reads `SKIP_TIMING` itself and keeps only its final-position
@@ -243,6 +244,15 @@ suite, and they run against the real thing:
    each other on its wisp and fail spuriously; never point two at one server.
    `backwalk` walks real Wikipedia pages and is timing sensitive. It is not in
    CI (needs Chrome and network on the runner).
+   The `wpt-cookies`, `wpt-fetch-metadata` and `wpt-referrer-policy` suites
+   run the web-platform-tests vendored under `test/wpt/` (see its README)
+   natively and through the proxy and compare the two verdicts per subtest
+   against `test/wpt/expected/<suite>.json`. They are measurements: a
+   proxied failure not on the list fails the suite, and so does a listed
+   failure that now passes. After a fix, run the suite with
+   `UPDATE_EXPECTED=1` to rewrite its list and commit the trimmed file with
+   the fix; `node test/wpt/refresh.mjs <checkout>` refreshes the vendored
+   tree from a sparse upstream clone.
 3. Useful probes, in order of cost: a proxied frame's `document.title` and
    element count; `frame.url`; a WebSocket echo against a local `ws` server;
    a fixture site that exercises cookies, headers, redirects, XHR, history,

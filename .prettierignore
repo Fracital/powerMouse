@@ -3,3 +3,11 @@
 /package-lock.json
 /test/out
 /.claude
+# vendored web-platform-tests (test/wpt/README.md); our own files stay checked
+/test/wpt/*
+!/test/wpt/README.md
+!/test/wpt/refresh.mjs
+!/test/wpt/expected
+!/test/wpt/resources
+/test/wpt/resources/testharness.js
+/test/wpt/resources/testdriver.js

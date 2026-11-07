@@ -154,6 +154,21 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   groups run inside a proxied page in both demo modes; 93 reach the host
   window, a proxy URL or a proxy fingerprint and are recorded, not fixed (see
   the parity doc's corpus row).
+- test: a bounded set of web-platform-tests is vendored under `test/wpt/`
+  (456 files, 3.4 MB, upstream `cbd1ca1e`: cookies, fetch/metadata and the
+  referrer-policy top-level and attribute matrix, with testharness.js and a
+  report script of ours) and run as the `wpt-cookies`, `wpt-fetch-metadata`
+  and `wpt-referrer-policy` measurement suites: every page runs natively from
+  the fixture and again in a proxied frame, and the verdicts are compared per
+  subtest against `test/wpt/expected/<suite>.json` (a new proxied failure
+  fails the suite, so does a listed failure that now passes;
+  `UPDATE_EXPECTED=1` rewrites the list). `test/wpt-server.mjs` ports what the
+  tests need from wptserve: `.sub.` substitutions over the fixture's two host
+  names, `.headers` sidecars, `.any.html` wrappers and the python handlers.
+  First measurement (subtests passing natively, then proxied): cookies 764
+  to 306 of 942, fetch-metadata 517 to 255 of 855, referrer-policy 2418 to
+  1315 of 2522; the causes are in the parity doc's WPT row. Nothing is fixed
+  here.
 - `examples/minimal-host.html` is the smallest host application (same-origin
   `StompController` on epoxy, one frame, the three callbacks), served by the
   demo at `/examples/`; README "Embedding" walks through it, and the new

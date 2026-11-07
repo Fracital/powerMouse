@@ -58,7 +58,8 @@ export async function waitForServer(url, tries = 60) {
 /**
  * Headless Chrome. Every hostname except the loopback ones fails to resolve,
  * so a request that bypasses the proxy fails loudly instead of silently
- * reaching the real site.
+ * reaching the real site. `*.localhost` stays resolvable too: the WPT suites
+ * use www.localhost as a same-site, cross-origin host for the fixture.
  */
 export async function launch() {
 	return chromium.launch({
@@ -66,7 +67,7 @@ export async function launch() {
 		headless: true,
 		args: [
 			'--no-sandbox',
-			'--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1',
+			'--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE *.localhost, EXCLUDE 127.0.0.1',
 		],
 	});
 }

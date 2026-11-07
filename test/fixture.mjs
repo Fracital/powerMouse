@@ -5,10 +5,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { wpt } from './wpt-server.mjs';
 
 // /pages/<file> serves test/pages/<file> as is; a `<file>.headers.json`
 // next to it adds response headers (Set-Cookie, a Content-Type charset).
-// New fixtures go there, so suites never need to touch this file.
+// New fixtures go there, so suites never need to touch this file. The
+// web-platform-tests paths (/resources/, /common/, /cookies/, /fetch/,
+// /referrer-policy/ and /_wpt/) are served by test/wpt-server.mjs.
 const pagesDir = fileURLToPath(new URL('./pages/', import.meta.url));
 const TYPES = {
 	html: 'text/html; charset=utf-8',
@@ -155,8 +158,9 @@ const transportFile = (name) =>
 	);
 
 export function startFixture(port = 8084) {
-	const server = createServer((req, res) => {
+	const server = createServer(async (req, res) => {
 		const path = new URL(req.url, 'http://x').pathname;
+		if (await wpt(req, res, port)) return;
 		served.push(path);
 		if (path === '/requests') {
 			res.setHeader('content-type', 'application/json');

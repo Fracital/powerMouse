@@ -16,6 +16,10 @@ export default defineConfig([
 			// fixture pages and their scripts run inside proxied pages with their
 			// own globals; they are test data, not project code
 			'test/pages/',
+			// vendored web-platform-tests (test/wpt/README.md); the harness
+			// scripts of ours in test/wpt/resources/ run in a page too
+			'test/wpt/**/*.html',
+			'test/wpt/**/*.js',
 		],
 	},
 	js.configs.recommended,
