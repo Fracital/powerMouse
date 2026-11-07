@@ -621,7 +621,6 @@ body {
 
 @media only screen and (max-height: 640px) {
 	.btn-fancy {
-		line-height: 48px;
 		font-size: 16px;
 	}
 	#button-container {
