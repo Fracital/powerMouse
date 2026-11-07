@@ -8,6 +8,11 @@
 	};
 	(async () => {
 		await twice('fresh.json');
+		// the second request fires as soon as the first's headers arrive, while
+		// its body is still being written to the store
+		const first = await fetch('/pages/burst.json');
+		const second = await fetch('/pages/burst.json');
+		await Promise.all([first.json(), second.json()]);
 		await twice('nostore.json');
 		await twice('revalidate.json');
 		await twice('auth.json', { headers: { authorization: 'Bearer x' } });

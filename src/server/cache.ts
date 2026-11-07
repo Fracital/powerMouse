@@ -100,7 +100,12 @@ export class HttpCache {
 			.sort();
 		return JSON.stringify(names.map((name) => [name, headers.get(name)]));
 	}
+	/** writes in flight, by URL: a request for the same URL waits for them */
+	private pending = new Map<string, Promise<void>>();
 	async match(url: string, requestHeaders: Headers): Promise<CacheHit | null> {
+		// the entry a previous request is still writing (its body streams in)
+		// counts as stored: a follow-up request must not race it upstream
+		await this.pending.get(url);
 		const cache = await this.open();
 		const stored = await cache.match(url);
 		if (!stored) return null;
@@ -130,7 +135,21 @@ export class HttpCache {
 		};
 	}
 	/** store the upstream response (its body stream is consumed) */
-	async put(
+	put(
+		url: string,
+		requestHeaders: Headers,
+		response: Response,
+		body: ReadableStream<Uint8Array> | null,
+	): Promise<void> {
+		const write = this.write(url, requestHeaders, response, body).finally(
+			() => {
+				if (this.pending.get(url) === write) this.pending.delete(url);
+			},
+		);
+		this.pending.set(url, write);
+		return write;
+	}
+	private async write(
 		url: string,
 		requestHeaders: Headers,
 		response: Response,

@@ -110,6 +110,12 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- The HTTP cache serves a request that arrives while the same URL's entry is
+  still being written (its body streaming into the store) from that entry,
+  instead of racing it upstream; on a slow machine the second of two fetches
+  in a row could miss. A controller handed a worker other than the
+  registration's active one now moves to the active one at once, before
+  waiting on an update.
 - Documents that escaped the rewrite: a child frame's `sandbox`, `csp` and
   `credentialless` attributes are dropped (an opaque origin or a policy would
   put its document outside the service worker; the page reads them back as

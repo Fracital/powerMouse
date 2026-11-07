@@ -50,6 +50,11 @@ async function run(base) {
 		JSON.stringify(hits['fresh.json']),
 	);
 	ok(
+		'a request that arrives while the entry is still being stored is served from it',
+		hits['burst.json']?.requests === 1,
+		JSON.stringify(hits['burst.json']),
+	);
+	ok(
 		'no-store is fetched every time',
 		hits['nostore.json']?.requests === 2,
 		JSON.stringify(hits['nostore.json']),

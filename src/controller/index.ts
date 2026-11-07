@@ -387,6 +387,10 @@ export class StompController extends EventTarget {
 			this.directory.href,
 		);
 		if (!registration) return null;
+		// the registration's active worker is not the one we were handed (the
+		// host picked while a newer one was installing): that one, now
+		const active = registration.active;
+		if (active && active !== this.serviceworker) return active;
 		let worker: ServiceWorker | null =
 			registration.installing || registration.waiting;
 		if (!worker) {
@@ -406,10 +410,7 @@ export class StompController extends EventTarget {
 			]);
 		}
 		if (worker) return activated(worker);
-		// nothing to install, but the active worker may not be the one we
-		// were handed (it was waiting when the host picked)
-		const active = registration.active;
-		return active && active !== this.serviceworker ? active : null;
+		return null;
 	}
 	/**
 	 * Talk to another service worker from now on (default: the registration's
