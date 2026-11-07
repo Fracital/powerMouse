@@ -13,6 +13,7 @@ import type {
 	RequestRule,
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
+import { BUILD } from '../version';
 import { controllerId } from './id';
 import {
 	CookieJar,
@@ -116,6 +117,8 @@ export class RemoteController extends EventTarget {
 	directory: string;
 	/** the controller's id (ControllerInit.id), known before the frame answers */
 	id: string;
+	/** the build this host-side bundle came from (see StompController.build); the controller frame's is `config.build` once it answered */
+	readonly build: string = BUILD;
 	config?: Config;
 	/** the inner controller's `stale` (see StompController); null while the builds agree */
 	stale: StaleInfo | null = null;

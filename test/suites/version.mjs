@@ -39,6 +39,24 @@ ok(
 	pageBuild === hostBuild,
 	JSON.stringify(pageBuild),
 );
+// the public build id: `controller.build` and the module's `BUILD` are the
+// bundle's own, and with one build they equal the worker's in the config
+const publicBuild = await page.evaluate(async () => {
+	const { BUILD, RemoteController } = await import('/stomp/controller.mjs');
+	return {
+		controller: window.controller.build,
+		exported: BUILD,
+		remoteHasIt: typeof RemoteController.prototype === 'object',
+	};
+});
+ok(
+	'controller.build and the exported BUILD name the bundle build, equal to the worker build here',
+	typeof publicBuild.controller === 'string' &&
+		publicBuild.controller.length > 0 &&
+		publicBuild.controller === publicBuild.exported &&
+		publicBuild.controller === hostBuild,
+	JSON.stringify([publicBuild, hostBuild]),
+);
 ok(
 	'wait() resolved, so the controller and the service worker agree',
 	(await page.evaluate(() =>

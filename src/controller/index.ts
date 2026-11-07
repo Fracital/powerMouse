@@ -324,6 +324,8 @@ function registrationWorker(
 }
 
 export type { StaleInfo };
+/** the build this controller bundle came from (version plus commit, or the package version); `controller.build` carries it too */
+export { BUILD } from '../version';
 export type { Assets } from '../config';
 export { DEFAULT_ASSETS } from '../config';
 export type { HelperNames } from '../helperNames';
@@ -431,6 +433,8 @@ export class StompController extends EventTarget {
 	directory: URL;
 	/** this controller's id; its address is `config.directory` (`directory` + id + `/`) */
 	id: string;
+	/** the build this controller bundle came from (STOMP_BUILD: version plus commit, or the package version); the worker's build is `config.build`, and `stale` says when the two differ */
+	readonly build: string = BUILD;
 	serviceworker: ServiceWorker;
 	/**
 	 * The transport the proxy uses. With a worker-hosted descriptor this is a

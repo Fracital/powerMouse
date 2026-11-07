@@ -31,6 +31,11 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- `controller.build` on both controllers and `BUILD` exported from the
+  controller module: the build identifier baked into the bundle (version plus
+  commit, or the package version), which only the `stale` event exposed. The
+  worker's build stays `config.build`; `stale` says when they differ (version
+  suite).
 - `hooks` on `StompController` and `RemoteController`: host code run inside
   every proxied realm, scramjet's `Frame.hooks.init.pre` and `post` by name,
   as scripts that travel rather than closures (a realm on the proxy origin
