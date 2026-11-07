@@ -85,6 +85,8 @@ export function modifyJS(
 	url: StompURL,
 	config: Config,
 	type: ScriptType = 'generic',
+	/** code the caller needs to run first (an inline script's currentScript restore): placed after the directive prologue */
+	preamble = '',
 ) {
 	try {
 		const isModule = type === 'genericModule' || type === 'workerModule';
@@ -104,6 +106,30 @@ export function modifyJS(
 			webcompat: true,
 			onComment: comments,
 		});
+		// the directive prologue (`'use strict'`) must stay the first thing the
+		// engine sees: anything before it (the worker bootstrap, a caller's
+		// preamble) would make it a plain expression and lose strict mode. A
+		// module is strict regardless, so its body is left as it is.
+		let prologue = '';
+		if (!isModule) {
+			const body = tree.body as any[];
+			let count = 0;
+			while (
+				count < body.length &&
+				body[count].type === 'ExpressionStatement' &&
+				body[count].expression?.type === 'Literal' &&
+				typeof body[count].expression.value === 'string' &&
+				!body[count].expression.regex
+			)
+				count++;
+			prologue = body
+				.splice(0, count)
+				.map(
+					(statement) =>
+						`${statement.expression.raw ?? JSON.stringify(statement.expression.value)};`,
+				)
+				.join('');
+		}
 		const trailer = comments
 			.map((comment) =>
 				/^[#@]\s*(sourceURL|sourceMappingURL)=(\S+)/.exec(comment.value.trim()),
@@ -572,6 +598,7 @@ export function modifyJS(
 		}
 
 		return (
+			prologue +
 			// a module worker has no importScripts: fetch the bundle and run it
 			// as the classic script it is (indirect eval, top-level await)
 			(isWorker
@@ -593,6 +620,7 @@ if (!${CLIENT_KEY}.applied)
 			(isModule
 				? `import.meta.url = ${JSON.stringify(url.toString())};import.meta.resolve = (s) => ${BARE_SPECIFIER}.test(s = String(s)) ? s : new URL(s, import.meta.url).href;`
 				: '') +
+			preamble +
 			generate(tree) +
 			trailer
 		);

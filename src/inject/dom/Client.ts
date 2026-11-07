@@ -204,19 +204,18 @@ export default class DocumentClient extends Client {
 			if (!shouldRewriteScript(script)) continue;
 			const source = script.text;
 			const isModule = scriptKind(script) === 'module';
+			// the restore runs after the script's directive prologue, so a strict
+			// script stays strict
 			const rewritten = modifyJS(
 				source,
 				this.url,
 				this.config,
 				isModule ? 'genericModule' : 'generic',
+				isModule
+					? ''
+					: `document.currentScript.textContent = ${JSON.stringify(source)};`,
 			);
-			this.scriptText(
-				script,
-				(isModule
-					? rewritten
-					: `document.currentScript.textContent = ${JSON.stringify(source)};${rewritten}`
-				).replace(/<\/script/gi, '<\\/script'),
-			);
+			this.scriptText(script, rewritten.replace(/<\/script/gi, '<\\/script'));
 		}
 	}
 	/** @internal the rewritten text each script element carries (DOMContentHooks, DOMHooks) */

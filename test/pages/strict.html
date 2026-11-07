@@ -1,0 +1,36 @@
+<!doctype html>
+<title>STRICT</title>
+<script>
+	'use strict';
+	window.__strict = {};
+	try {
+		undeclaredVariable1 = 1;
+		__strict.inline = 'sloppy';
+	} catch (error) {
+		__strict.inline = error.name;
+	}
+	__strict.thisInFunction = (function () {
+		return this === undefined ? 'strict' : 'sloppy';
+	})();
+</script>
+<script src="/pages/strict-ext.js"></script>
+<script>
+	try {
+		eval("'use strict'; undeclaredVariable4 = 1;");
+		__strict.eval = 'sloppy';
+	} catch (error) {
+		__strict.eval = error.name;
+	}
+	try {
+		new Function("'use strict'; undeclaredVariable5 = 1;")();
+		__strict.fn = 'sloppy';
+	} catch (error) {
+		__strict.fn = error.name;
+	}
+	const w = new Worker('/pages/strict-worker.js');
+	w.onmessage = (e) => {
+		__strict.worker = e.data;
+		__strict.done = true;
+	};
+	w.postMessage('go');
+</script>

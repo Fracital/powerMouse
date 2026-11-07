@@ -150,6 +150,35 @@ const parses = (code) => {
 	);
 }
 {
+	// the directive prologue stays first: before the worker bootstrap and
+	// before a caller's preamble; a module keeps its body as it is
+	const worker = rewrite("'use strict';\n'other';\nx = top;", 'worker');
+	const inline = modifyJS(
+		"'use strict';\nx = top;",
+		url,
+		{ ...config, ...parsed },
+		'generic',
+		'document.currentScript.textContent = "x";',
+	);
+	const mod = rewrite("'use strict';\nexport const a = top;", 'genericModule');
+	ok(
+		'the directive prologue comes before the worker bootstrap and a preamble',
+		/^["']use strict["'];["']other["'];if \(!globalThis\.createClient\)/.test(
+			worker,
+		) &&
+			/^["']use strict["'];document\.currentScript\.textContent = "x";/.test(
+				inline,
+			) &&
+			/^import\.meta\.url/.test(mod) &&
+			parses(inline),
+		JSON.stringify([
+			worker.slice(0, 80),
+			inline.slice(0, 80),
+			mod.slice(0, 40),
+		]),
+	);
+}
+{
 	const out = rewrite('debugger; if (a) debugger; x: debugger; { debugger }');
 	ok(
 		'debugger statements are removed',

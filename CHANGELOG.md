@@ -291,6 +291,13 @@ url`) carries its value and targets that window. An about:blank child of
   settles with the close code and reason, `close()` and an aborted `signal`
   close the socket. Only where the browser has the class, so feature
   detection stays truthful; before this a page using it bypassed the proxy.
+- A script that opens with `'use strict'` stays strict: the rewriter keeps
+  the directive prologue first and places the worker bootstrap and an inline
+  script's `currentScript` restore after it. Both came before it, which made
+  the directive a plain expression, so inline scripts and classic workers ran
+  sloppy (`this` in a plain call was the window, undeclared assignments
+  passed). Measured before the fix: inline sloppy, external strict, worker
+  sloppy, eval strict.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,
