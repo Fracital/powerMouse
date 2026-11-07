@@ -42,6 +42,13 @@
 			.createRange()
 			.createContextualFragment('<img src="/pages/echo.json?fragment">'),
 	);
+	// the candidate the browser picked reads back as the page wrote it
+	const picked = document.createElement('img');
+	picked.onload = picked.onerror = () => {
+		__dom.currentSrc = picked.currentSrc;
+	};
+	picked.src = '/pages/sprite.svg';
+	document.body.append(picked);
 	setTimeout(() => {
 		__dom.requests = performance
 			.getEntriesByType('resource')

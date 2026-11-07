@@ -22,6 +22,22 @@ export const CLIENT_KEY = '$P$s';
 export const PROVIDERS = ['window', 'document'];
 export const UNDEFINABLE = ['eval', 'location', 'top'];
 
+/**
+ * Whether a member access short-circuits because an earlier link of its
+ * chain is optional (`a?.b.location`): the spine of objects and callees down
+ * to the chain's start. A nested ChainExpression is a parenthesised chain,
+ * which ends the short-circuit (`(a?.b).location` throws on null).
+ */
+function inOptionalChain(node: any): boolean {
+	for (let current = node; current;) {
+		if (current.optional) return true;
+		if (current.type === 'MemberExpression') current = current.object;
+		else if (current.type === 'CallExpression') current = current.callee;
+		else return false;
+	}
+	return false;
+}
+
 const cTarget = 't$t';
 const cProp = 't$p';
 const cValue = 't$v';
@@ -392,6 +408,9 @@ export function modifyJS(
 						// computed is object[property]
 
 						let propertyArgument;
+						// this link, or an earlier one of the same chain, is optional
+						const chained =
+							ctx.node.optional || inOptionalChain(ctx.node.object);
 
 						// TODO: run property_argument through rewriter
 						// object[location[location]]
@@ -436,7 +455,7 @@ export function modifyJS(
 										propertyArgument,
 										result(b.arrayExpression(ctx.parent!.node.arguments)),
 										b.literal(generatePartial(script, ctx.parent!)),
-										...(ctx.node.optional || ctx.parent!.node.optional
+										...(chained || ctx.parent!.node.optional
 											? [b.literal(true)]
 											: []),
 									],
@@ -492,9 +511,10 @@ export function modifyJS(
 								),
 							);
 						} else {
-							// a?.[k]: get2 short-circuits on a nullish object, and the
-							// rest of the chain must keep short-circuiting on undefined
-							if (ctx.node.optional && ctx.parent) {
+							// a?.[k] or a?.b.location: get2 short-circuits on a nullish
+							// object, and the rest of the chain must keep
+							// short-circuiting on undefined
+							if (chained && ctx.parent) {
 								const parent = ctx.parent.node;
 								if (
 									(parent.type === 'MemberExpression' &&
@@ -515,7 +535,7 @@ export function modifyJS(
 										result(ctx.node.object),
 										propertyArgument,
 										b.literal(generatePartial(script, ctx)),
-										...(ctx.node.optional ? [b.literal(true)] : []),
+										...(chained ? [b.literal(true)] : []),
 									],
 								),
 							);

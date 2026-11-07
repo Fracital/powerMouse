@@ -247,6 +247,12 @@ url`) carries its value and targets that window. An about:blank child of
   operator (rewriting every `in` would cost more than it hides) and
   `Error.prepareStackTrace` being a function (stack cleaning needs it;
   scramjet carries the same).
+- An optional chain stays optional past an unforgeable link: `a?.b.location.c`
+  rewrote to an access-API read that threw on a nullish `a` where the page's
+  code short-circuited to undefined. The rewriter now looks down the chain's
+  spine for an earlier optional link (a parenthesised chain ends it, as in
+  the language) and keeps the rest of the chain optional. `img.currentSrc`
+  reads back the candidate the browser picked as the page wrote it.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

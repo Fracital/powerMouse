@@ -75,6 +75,8 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		unrouteGetter(global.HashChangeEvent?.prototype, 'newURL');
 		unrouteGetter(global.NavigationHistoryEntry?.prototype, 'url');
 		unrouteGetter(global.NavigationDestination?.prototype, 'url');
+		// the candidate the browser picked from src / srcset, as the page wrote it
+		unrouteGetter(global.HTMLImageElement?.prototype, 'currentSrc');
 	}
 	applyScriptSource() {
 		const proxyModule = this.client.getModule(ProxyModule)!;

@@ -55,6 +55,19 @@ const parses = (code) => {
 };
 
 {
+	// an unforgeable reached through an earlier optional link keeps the
+	// chain's short-circuit: get2 gets the flag and the rest stays optional
+	const out = rewrite('a?.b.location.c; a?.b().top.x; (a?.b).location.c');
+	ok(
+		'an optional chain stays optional past an unforgeable link',
+		/get2\(a\?\.b, 'location', '\(a\?\.b\.location\)', true\)\?\.c/.test(out) &&
+			/get2\(a\?\.b\(\), 'top', '\(a\?\.b\(\)\.top\)', true\)\?\.x/.test(out) &&
+			/get2\(a\?\.b, 'location', '\(\(a\?\.b\)\.location\)'\)\.c/.test(out) &&
+			parses(out),
+		out,
+	);
+}
+{
 	const out = rewrite('debugger; if (a) debugger; x: debugger; { debugger }');
 	ok(
 		'debugger statements are removed',

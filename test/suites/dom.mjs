@@ -102,6 +102,12 @@ ok(
 	JSON.stringify([dom.metaPayload, dom.metaRefresh]),
 );
 
+ok(
+	'img.currentSrc is the URL the page wrote',
+	dom.currentSrc === `${FIXTURE}pages/sprite.svg`,
+	JSON.stringify(dom.currentSrc),
+);
+
 await done(
 	browser,
 	page.errors.filter((e) => !/max cycles/.test(e)),
