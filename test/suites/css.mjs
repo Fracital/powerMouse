@@ -58,19 +58,17 @@ ok(
 	raw.length === 0,
 	raw.join(' '),
 );
+// the page reads its own URLs back from performance entries (readback
+// suite): a routed fetch resolves to the fixture origin, a raw one would have
+// hit the proxy origin, checked above
 ok(
 	'@import in <style> went through the proxy',
-	requests.some((name) => name.includes('/stomp/css/')),
-	requests.filter((n) => n.includes('/stomp/')).join(' '),
-);
-const fontRequests = requests.filter(
-	(name) =>
-		name.includes('/stomp/binary/') &&
-		decodeURIComponent(name).includes('font.woff2'),
+	requests.some((name) => name.startsWith(`${FIXTURE}pages/imp.css`)),
+	requests.filter((n) => n.includes('/pages/')).join(' '),
 );
 ok(
 	'FontFace source went through the proxy',
-	fontRequests.length > 0,
+	requests.some((name) => name.startsWith(`${FIXTURE}pages/font.woff2`)),
 	requests.filter((n) => /font/.test(decodeURIComponent(n))).join(' '),
 );
 
