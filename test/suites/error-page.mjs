@@ -58,9 +58,9 @@ const result = await page.evaluate(
 			...(await show('http://127.0.0.1:9/down.html')),
 			element: undefined,
 		};
-		// a document nothing injected never reports its client: the controller
-		// holds its request report for the attribution wait before giving up
-		await new Promise((resolve) => setTimeout(resolve, 3500));
+		// the host's page never reports a client id, so the worker reports the
+		// failure without one and the controller does not hold it
+		await new Promise((resolve) => setTimeout(resolve, 500));
 		out.kinds = log
 			.filter((info) => info.kind)
 			.map((info) => [info.kind, info.status, info.url.split('/').pop()]);

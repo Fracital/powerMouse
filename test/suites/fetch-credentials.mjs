@@ -66,8 +66,10 @@ const nestedText = nested
 	: 'no frame';
 ok(
 	'a frame navigated to the proxy origin shows the refusal, not the host page',
+	// the built-in plain refusal, or the host's error page when the demo
+	// configures one (errorPage): both name the refusal
 	Array.isArray(nestedText) &&
-		nestedText[0] === 'text/plain' &&
+		/^text\/(plain|html)$/.test(nestedText[0]) &&
 		/own origin/.test(nestedText[1] || '') &&
 		cred.selfFrame === 'unreadable',
 	JSON.stringify([nestedText, cred.selfFrame]),

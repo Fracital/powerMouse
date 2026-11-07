@@ -108,6 +108,14 @@ ok(
 	JSON.stringify(dom.currentSrc),
 );
 
+ok(
+	'markup written into an about:blank child makes nodes of the child realm',
+	dom.childRealm === true &&
+		dom.childHref === '/child-x' &&
+		JSON.stringify(dom.childNames) === JSON.stringify(['id', 'href']),
+	JSON.stringify([dom.childRealm, dom.childHref, dom.childNames]),
+);
+
 await done(
 	browser,
 	page.errors.filter((e) => !/max cycles/.test(e)),

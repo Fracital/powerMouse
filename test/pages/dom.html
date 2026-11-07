@@ -42,6 +42,17 @@
 			.createRange()
 			.createContextualFragment('<img src="/pages/echo.json?fragment">'),
 	);
+	// an about:blank child runs this page's bundle: markup written into it
+	// must still produce nodes of the child's own realm and document
+	const child = document.createElement('iframe');
+	document.body.append(child);
+	child.contentDocument.body.innerHTML = '<a id="ca" href="/child-x">c</a>';
+	const childAnchor = child.contentDocument.getElementById('ca');
+	__dom.childRealm =
+		childAnchor instanceof child.contentWindow.HTMLAnchorElement &&
+		childAnchor.ownerDocument === child.contentDocument;
+	__dom.childHref = childAnchor.getAttribute('href');
+	__dom.childNames = childAnchor.getAttributeNames();
 	// the candidate the browser picked reads back as the page wrote it
 	const picked = document.createElement('img');
 	picked.onload = picked.onerror = () => {

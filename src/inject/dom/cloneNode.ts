@@ -1,5 +1,16 @@
-export function parseHTML(script: string) {
-	return new DOMParser().parseFromString(script, 'text/html');
+/** the DOMParser of the document's own realm (a child frame runs its creator's bundle) */
+function parserFor(document: Document): DOMParser {
+	const Parser =
+		(document.defaultView as { DOMParser?: typeof DOMParser } | null)
+			?.DOMParser ?? DOMParser;
+	return new Parser();
+}
+
+export function parseHTML(
+	script: string,
+	document: Document = globalThis.document,
+) {
+	return parserFor(document).parseFromString(script, 'text/html');
 }
 
 /**
@@ -8,8 +19,11 @@ export function parseHTML(script: string) {
  * fires `error` with its raw `onerror` the moment it is adopted), so the
  * page only ever sees the re-created copies cloneRawNode makes from them.
  */
-export function parseHTMLFragment(script: string): Node[] {
-	const parsed = new DOMParser().parseFromString(
+export function parseHTMLFragment(
+	script: string,
+	document: Document = globalThis.document,
+): Node[] {
+	const parsed = parserFor(document).parseFromString(
 		`<fragment>${script}</fragment>`,
 		'text/html',
 	);
@@ -56,13 +70,16 @@ export default function cloneRawNode(
 				{
 					const d = data as stackIterateData;
 
-					if (d[0] instanceof Text) {
-						d[1].append(new Text(d[0].nodeValue!));
+					// node types, not realm constructors: the parsed nodes and the
+					// client's document may each belong to another realm than this
+					// bundle's
+					if (d[0].nodeType === 3) {
+						d[1].append(document.createTextNode(d[0].nodeValue!));
 						continue;
-					} else if (d[0] instanceof Comment) {
-						d[1].append(new Comment(d[0].nodeValue!));
+					} else if (d[0].nodeType === 8) {
+						d[1].append(document.createComment(d[0].nodeValue!));
 						continue;
-					} else if (!(d[0] instanceof Element)) {
+					} else if (d[0].nodeType !== 1) {
 						// may be a document-fragment or CharacterData
 						console.error('skip', d[0]);
 						continue;
@@ -76,7 +93,7 @@ export default function cloneRawNode(
 					// hooks expect HTMLScriptElement)
 					if (
 						d[0].nodeName === 'SCRIPT' &&
-						d[0].namespaceURI === 'http://www.w3.org/1999/xhtml'
+						(d[0] as Element).namespaceURI === 'http://www.w3.org/1999/xhtml'
 					) {
 						const script = document.adoptNode(d[0]) as Element;
 						// attributes first, on an empty element (the type hook reads the
@@ -90,7 +107,7 @@ export default function cloneRawNode(
 						continue;
 					}
 
-					let target = d[0];
+					let target = d[0] as Element;
 
 					try {
 						target = document.createElement(d[0].nodeName);
@@ -101,10 +118,11 @@ export default function cloneRawNode(
 						debugger;
 					}
 
-					if (d[0] instanceof Element) {
-						for (const attribute of d[0].getAttributeNames()) {
-							target.setAttribute(attribute, d[0].getAttribute(attribute)!);
-						}
+					for (const attribute of (d[0] as Element).getAttributeNames()) {
+						target.setAttribute(
+							attribute,
+							(d[0] as Element).getAttribute(attribute)!,
+						);
 					}
 
 					// a template's children live in its content fragment, not in

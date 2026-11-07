@@ -155,6 +155,14 @@ function genericForward(
 		// fetch itself (its host page, its worker): a loop and an exposure
 		// of the host, so it is refused, like a blocked request
 		if (url.url.origin === oURL.origin) {
+			const page = DOCUMENT_DESTINATIONS.has(serverRequest.destination)
+				? await hostErrorPage(rewriter, {
+						url: reportURL(url),
+						status: 403,
+						error: 'refused: the proxy does not proxy its own origin',
+						kind: 'refused',
+					})
+				: null;
 			rewriter.log?.({
 				url: reportURL(url),
 				method: serverRequest.method,
@@ -165,17 +173,11 @@ function genericForward(
 				bytes: 0,
 				error: 'refused: the proxy does not proxy its own origin',
 				kind: 'refused',
-				client: context?.clientId,
+				// the host's page never reports a client id: no attribution to wait for
+				...(page ? {} : { client: context?.clientId }),
 			});
 			return (
-				(DOCUMENT_DESTINATIONS.has(serverRequest.destination)
-					? await hostErrorPage(rewriter, {
-							url: reportURL(url),
-							status: 403,
-							error: 'refused: the proxy does not proxy its own origin',
-							kind: 'refused',
-						})
-					: null) ??
+				page ??
 				new Response('Stomp does not proxy its own origin', {
 					status: 403,
 					headers: { 'content-type': 'text/plain; charset=utf-8' },
@@ -332,6 +334,7 @@ function genericForward(
 				headers?: Record<string, string>,
 				error?: string,
 				kind?: RequestErrorKind,
+				hostPage = false,
 			) => {
 				rewriter.log?.({
 					url: reportURL(url),
@@ -343,23 +346,29 @@ function genericForward(
 					bytes: 0,
 					...(error ? { error } : {}),
 					...(kind ? { kind } : {}),
-					client: context?.clientId,
+					// the host's page never reports a client id: no attribution to wait for
+					...(hostPage ? {} : { client: context?.clientId }),
 					rule: rule.index,
 				});
 				return new Response(null, { status, headers });
 			};
 			if (rule.action === 'block') {
-				const built = answer(403, undefined, 'blocked by a rule', 'blocked');
-				return (
-					(DOCUMENT_DESTINATIONS.has(serverRequest.destination)
-						? await hostErrorPage(rewriter, {
-								url: reportURL(url),
-								status: 403,
-								error: 'blocked by a rule',
-								kind: 'blocked',
-							})
-						: null) ?? built
+				const page = DOCUMENT_DESTINATIONS.has(serverRequest.destination)
+					? await hostErrorPage(rewriter, {
+							url: reportURL(url),
+							status: 403,
+							error: 'blocked by a rule',
+							kind: 'blocked',
+						})
+					: null;
+				const built = answer(
+					403,
+					undefined,
+					'blocked by a rule',
+					'blocked',
+					!!page,
 				);
+				return page ?? built;
 			}
 			if (rule.action.status !== undefined)
 				return answer(rule.action.status, undefined, 'answered by a rule');
@@ -455,20 +464,23 @@ function genericForward(
 				upstream = await fetchUpstream(withValidators(requestHeaders));
 			} catch (error) {
 				if (!within(hit?.staleIfError ?? null)) {
-					rewriter.log?.({
-						url: reportURL(url),
-						method: serverRequest.method,
-						destination: serverRequest.destination || 'fetch',
-						status: 0,
-						ms: Date.now() - started,
-						cached: false,
-						kind: 'transport',
-						bytes: null,
-						error: String(error),
-						client: context?.clientId,
-					});
-					// reported here; the wrapper serves the page without a second report
-					(error as { stompReported?: boolean }).stompReported = true;
+					// a document is reported by the wrapper, once it knows whether
+					// the host's page answers (then no client id is to be waited for)
+					if (!DOCUMENT_DESTINATIONS.has(serverRequest.destination)) {
+						rewriter.log?.({
+							url: reportURL(url),
+							method: serverRequest.method,
+							destination: serverRequest.destination || 'fetch',
+							status: 0,
+							ms: Date.now() - started,
+							cached: false,
+							kind: 'transport',
+							bytes: null,
+							error: String(error),
+							client: context?.clientId,
+						});
+						(error as { stompReported?: boolean }).stompReported = true;
+					}
 					throw error;
 				}
 			}
@@ -615,6 +627,13 @@ function genericForward(
 			} catch (parseError) {
 				// not a routed URL after all: reported as it came
 			}
+			// the report says 0 (no response); the document needs a status: 502
+			const page = await hostErrorPage(rewriter, {
+				url: real,
+				status: 502,
+				error: String(error),
+				kind: 'transport',
+			});
 			if (!(error as { stompReported?: boolean }).stompReported)
 				rewriter.log?.({
 					url: real,
@@ -626,15 +645,9 @@ function genericForward(
 					kind: 'transport',
 					bytes: null,
 					error: String(error),
-					client: context?.clientId,
+					// the host's page never reports a client id: no attribution to wait for
+					...(page ? {} : { client: context?.clientId }),
 				});
-			// the report says 0 (no response); the document needs a status: 502
-			const page = await hostErrorPage(rewriter, {
-				url: real,
-				status: 502,
-				error: String(error),
-				kind: 'transport',
-			});
 			if (page) return page;
 			throw error;
 		}

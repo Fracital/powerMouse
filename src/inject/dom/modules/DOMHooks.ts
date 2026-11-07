@@ -384,7 +384,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// parent injected); scripts in the markup run when the parser
 					// sees them, so they are rewritten here like the written page's
 					const div = this.client.global.document.createElement('div');
-					div.append(cloneRawNode(parseHTMLFragment(String(args[i]))));
+					div.append(
+						cloneRawNode(
+							parseHTMLFragment(String(args[i]), this.client.global.document),
+							this.client.global.document,
+						),
+					);
 					this.client.rewriteInlineScripts(div);
 					args[i] = this.client.innerHTMLOf(div);
 					setGlobalParsingState(this.client.global, prevState);
@@ -623,7 +628,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								for (const node of element.content.childNodes) node.remove();
 
 								element.content.append(
-									cloneRawNode(parseHTMLFragment(args[0])),
+									cloneRawNode(
+										parseHTMLFragment(args[0], this.client.global.document),
+										this.client.global.document,
+									),
 								);
 							});
 						else {
@@ -634,7 +642,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								// scripts cannot support nodes as content
 								element.append(new Text(args[0]));
 							} else {
-								element.append(cloneRawNode(parseHTMLFragment(args[0])));
+								element.append(
+									cloneRawNode(
+										parseHTMLFragment(args[0], this.client.global.document),
+										this.client.global.document,
+									),
+								);
 							}
 						}
 					});
@@ -657,7 +670,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			set: proxyModule.wrapFunction(
 				outerHTMLDescriptor.set!,
 				(target, that: Element, args) => {
-					that.replaceWith(cloneRawNode(parseHTMLFragment(args[0])));
+					that.replaceWith(
+						cloneRawNode(
+							parseHTMLFragment(args[0], this.client.global.document),
+							this.client.global.document,
+						),
+					);
 				},
 			),
 		});
@@ -669,7 +687,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// never runs a script, so none is rewritten here.
 		const rewriteMarkup = (markup: unknown): string => {
 			const div = this.client.global.document.createElement('div');
-			div.append(cloneRawNode(parseHTMLFragment(String(markup))));
+			div.append(
+				cloneRawNode(
+					parseHTMLFragment(String(markup), this.client.global.document),
+					this.client.global.document,
+				),
+			);
 			return this.client.innerHTMLOf(div);
 		};
 		const shadowRootPrototype = (

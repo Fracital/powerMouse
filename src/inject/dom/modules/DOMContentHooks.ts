@@ -608,7 +608,8 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 					const position = String(args[0]);
 					const insertFragment: DocumentFragment = cloneRawNode(
-						parseHTMLFragment(String(args[1])),
+						parseHTMLFragment(String(args[1]), this.client.global.document),
+						this.client.global.document,
 					);
 					const targetElement = insertAdjacentTarget(
 						position,

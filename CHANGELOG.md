@@ -300,6 +300,14 @@ url`) carries its value and targets that window. An about:blank child of
   sloppy (`this` in a plain call was the window, undeclared assignments
   passed). Measured before the fix: inline sloppy, external strict, worker
   sloppy, eval strict.
+- Markup written into an about:blank child frame or popup (which runs its
+  creator's bundle) produces nodes of the child's own realm and document: the
+  clone helper used the bundle's `document`, `DOMParser`, `Text`, `Comment`
+  and `Element`, so the child's elements were the creator's and its own
+  hooks never saw them. It now works in the client's document and decides by
+  node type. The request report for a failure the host's error page answers
+  carries no client id (the page never reports one), so the host gets it at
+  once instead of after the attribution wait.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,
