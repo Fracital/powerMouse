@@ -136,21 +136,6 @@ function rememberTransport(name) {
 	transportSelect.value = name;
 }
 
-/** resolve once the registration has an activated worker */
-function activated(registration) {
-	const worker =
-		registration.active || registration.waiting || registration.installing;
-	if (!worker) throw new Error('No service worker in registration');
-	if (worker.state === 'activated') return Promise.resolve(worker);
-	return new Promise((resolve, reject) => {
-		worker.addEventListener('statechange', () => {
-			if (worker.state === 'activated') resolve(worker);
-			else if (worker.state === 'redundant')
-				reject(new Error('Service worker became redundant'));
-		});
-	});
-}
-
 async function boot() {
 	if (!('serviceWorker' in navigator))
 		throw new Error('This browser does not support service workers.');
@@ -191,14 +176,12 @@ async function boot() {
 		});
 	} else {
 		setStatus('Registering service worker…');
-		const registration = await navigator.serviceWorker.register(
-			`${DIRECTORY}serviceWorker.js`,
-			{ scope: DIRECTORY, updateViaCache: 'none' },
-		);
-		const serviceworker = await activated(registration);
+		// registers serviceWorker.js from the directory with that scope and
+		// resolves once the worker is activated (30 s at the most)
+		const registration = await StompController.register(DIRECTORY);
 		setStatus(`Loading ${name} transport…`);
 		controller = new StompController({
-			serviceworker,
+			serviceworker: registration,
 			transport: await instantiate(transports[name]()),
 			directory: DIRECTORY,
 			codec: 'xor',

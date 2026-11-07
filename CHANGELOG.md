@@ -98,6 +98,7 @@ The first release after a four-year gap. Everything below is breaking.
   is gone from `examples/minimal-host.html`. Both controllers and both frame
   classes keep their state in `#fields`: nothing a page could reach is an own
   property any more (`lastHandshake` stays, the dev loop sets it).
+  The demo boots through `register()` too.
 - `onOpen(url, frame)` on `StompController` and `RemoteController`: a proxied
   page's `window.open`, `target="_blank"` and named-target or modifier clicks
   become a callback to the host, which opens them in its own tab model; the
