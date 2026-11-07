@@ -1,11 +1,15 @@
 # Scramjet parity: where Stomp stands
 
-**Status as of 2026-11-06.** Everything the first version of this document
-planned (its section 10, items 1 to 8) has landed on master, each change
-measured failing-first in the checked-in browser suite: `npm test` runs 35
-suites (about 290 checks) against a demo server and a fixture server per
-suite, in about two and a half minutes on eight workers. The rows below are
-re-scored against that tip. What remains is section 10.
+**Status as of 2026-11-07.** Everything the first version of this document
+planned (its section 10, items 1 to 8) has landed on master, and so has the
+work list that followed it (the corpus groups, the postMessage rewrite, the
+transport worker, helper names, no-cache rewritten bodies, page-origin blob:
+URLs), each change measured failing-first in the checked-in browser suite:
+`npm test` runs 83 suites (about 2,100 checks) against a demo server and a
+fixture server per suite. The 14 checks that fail are the adversarial
+corpus's documented remainder (section 10). The rows below are re-scored
+against that tip; the multi-controller change is on a branch awaiting its
+second review pass.
 
 Comparison of `stomp-rewrite` against `~/src/scramjet` (39k lines including
 the Rust rewriter and the runway test suite), first written 2026-11-06 from
@@ -302,15 +306,48 @@ Suites: navigate-events, request-log, version, register, cookie-jar, cache, isol
 
 ## 10. What is left, by payoff
 
-1. Import map package prefixes and scope keys: URL prefixes the browser
-   matches against module URLs, which a codec-encoded route cannot keep (the
-   codecs transform the whole string), so they stay as written.
-2. The remaining corpus leaks (the corpus row above): MutationObserver
-   records of the marker writes, and the absent `navigator.serviceWorker`,
-   which is the design. The proxy origin in blob: URLs is gone: the page
-   gets its own origin from `createObjectURL` and every consumer maps the
-   URL back (`routeURL` for blob:, the fetch bypass, the worker bootstrap,
-   `revokeObjectURL`; blob-origin suite). Every other group is at zero or at
-   probes that report the browser's own result. Outside the corpus:
-   `'$s$j' in window`, `typeof Error.prepareStackTrace` and the source of a
-   rewritten function are the tells left (tells suite logs them).
+State as of 2026-11-07, the corpus first (both demo modes together, failing
+checks per group out of 180 at the start): protos 0, eval 0, globals 0,
+workers 0, scripts 2, attrs 2, urls 2, frames 4, messages 4; 14 in all, down
+from 22 when this section was last written.
+
+1. Stays out by design, documented as such:
+   - `navigator.serviceWorker` is absent in proxied pages (urls, 2 checks):
+     a page that could register a worker on the proxy origin could serve
+     itself.
+   - Eight probes report the browser's own result, not a leak: the window
+     `window.open('javascript:')` returns (scripts 2), the window from
+     `window.open('about:blank')` and a probe's own source text in
+     `innerHTML` (frames 4), a sloppy-mode detached call that cannot throw
+     and the child window a parent sees as `event.source` since the
+     postMessage rewrite (messages 4).
+   - MutationObserver records of the marker attribute writes (attrs 2): the
+     hooks write `s_o:` originals next to routed attributes and an observer
+     sees both.
+   - Same-origin mode is hardening, not a boundary (section 3); the
+     RemoteController mode is the boundary.
+   - Literal frame indices (`frames[0]`) and named frame access
+     (`frames.child`) are not routed, so they reach the raw window of another
+     proxied origin (parent-read suite documents the routed forms); routing
+     every literal index read would tax every array access.
+   - Import map package prefixes and scope keys stay as written: URL
+     prefixes the browser matches against module URLs, which a codec-encoded
+     route cannot keep.
+   - A synchronous XHR that needs the network deadlocks only with an in-page
+     transport; the transport worker (the default for a descriptor) is the
+     answer, not a change to the sync bridge.
+2. The three tells left, logged by the tells suite, not asserted: the bare
+   `in` operator finds the two window-level helper names (`names.access`,
+   `names.client`; a deployment's own names since `init.names`),
+   `typeof Error.prepareStackTrace` is `function`, and the source of a
+   rewritten function (`Function.prototype.toString`) shows the access
+   helper's calls.
+3. Pending on a branch (review/multi-controller, second pass): several
+   controllers per directory, with the cookie jar, HTTP cache and storage
+   shared per scope and a redirect for a stale address.
+4. Closed since the last edit of this section: the proxy origin in blob:
+   URLs (the ObjectURL module hands the page its own origin and every
+   consumer maps the URL back; blob-origin suite), the computed-assignment
+   value the rewriter left raw, the restricted window's `length` and
+   `SecurityError`, `ancestorOrigins`, standalone SVG and XHTML documents,
+   abort propagation, rewritten bodies kept by the browser's HTTP cache.

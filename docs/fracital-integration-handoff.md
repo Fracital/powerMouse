@@ -6,13 +6,17 @@ the settings row) is tracked in the Fracital repo, not here.
 
 ## Status (kept current)
 
-| Workstream                           | State                                                                                                                                                                                                                                                                                                                                                                  | Where                         |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| WS1 request-header policy            | done: `rules` / `setRules` on both controllers (URLPattern match, header set and delete, block, redirect, status), applied after stomp rebuilds Origin and Referer so a host rule wins, `onRequest` reports `rule`; acceptance checks in `test/suites/rules.mjs`                                                                                                       | shipped                       |
-| WS2 epoxy as the supported transport | done: `examples/minimal-host.html` boots a same-origin `StompController` on epoxy and proxies Wikipedia; README "Embedding" carries the transport guidance                                                                                                                                                                                                             | shipped                       |
-| WS3 relocatable asset paths          | done: `assets` on both controllers names every served file (defaults to today's names), the controller frame learns its script name from `?script=`; the assets suite boots a fully renamed bundle under `/neutral/` and sees no URL with the package name                                                                                                             | parity session                |
-| WS4 same-origin hook coverage        | measured: scramjet's adversarial corpus runs as nine measurement suites (`test/suites/adversarial-*.mjs`); 22 failing checks left from 180, all documented in the parity doc's corpus row (eight probes reporting the browser's own result, MutationObserver records of the marker writes, blob: URLs on the proxy origin, `navigator.serviceWorker` absent by design) | shipped; still not a boundary |
-| WS5 host-embedding API parity        | checklist green (`test/suites/host-api.mjs`, 41 checks against the example host); gap list shipped in full                                                                                                                                                                                                                                                             | shipped, gaps in progress     |
+| Workstream                           | State                                                                                                                                                                                                                                                                                                                                                                                                             | Where                         |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| WS1 request-header policy            | done: `rules` / `setRules` on both controllers (URLPattern match, header set and delete, block, redirect, status), applied after stomp rebuilds Origin and Referer so a host rule wins, `onRequest` reports `rule`; acceptance checks in `test/suites/rules.mjs`                                                                                                                                                  | shipped                       |
+| WS2 epoxy as the supported transport | done: `examples/minimal-host.html` boots a same-origin `StompController` on epoxy and proxies Wikipedia; README "Embedding" carries the transport guidance                                                                                                                                                                                                                                                        | shipped                       |
+| WS3 relocatable asset paths          | done: `assets` on both controllers names every served file (defaults to today's names), the controller frame learns its script name from `?script=`; the assets suite boots a fully renamed bundle under `/neutral/` and sees no URL with the package name                                                                                                                                                        | parity session                |
+| WS4 same-origin hook coverage        | measured: scramjet's adversarial corpus runs as nine measurement suites (`test/suites/adversarial-*.mjs`); 14 failing checks left from 180, all documented in the parity doc's corpus row (eight probes reporting the browser's own result, MutationObserver records of the marker writes, `navigator.serviceWorker` absent by design); the blob: URL leak is closed (page-origin object URLs, blob-origin suite) | shipped; still not a boundary |
+| WS5 host-embedding API parity        | checklist green (`test/suites/host-api.mjs`, 41 checks against the example host); gap list shipped in full                                                                                                                                                                                                                                                                                                        | shipped, gaps in progress     |
+| Transport off the host thread        | done: `init.transport` takes a `TransportDescriptor` (`{ module, options, host? }`) and runs it in a dedicated Worker (`transportWorker.js`); a frame's synchronous XHR that needs the network completes (it stalled 30 s with an in-page transport); `setTransport`, `transportHost`, the `transporthost` fallback event; transport-worker suite                                                                 | shipped                       |
+| Deployment-specific helper names     | done: `init.names` on both controllers renames the four globals the rewriter and the inject use (`$s$j`, `$P$s`, `$s$L`, `$s$N`), validated at construction; helper-names suite, both modes                                                                                                                                                                                                                       | shipped                       |
+| No stale rewrites in the browser     | done: every rewritten response leaves the worker `cache-control: no-cache` with the origin's validators, so the browser revalidates against the worker (which answers from its own cache, no network) and a rewriter upgrade or a names change never leaves old output in the browser's cache; no-cache suite                                                                                                     | shipped                       |
+| Several host tabs on one directory   | in review: a controller `id` names its address under the directory (`/stomp/<id>/`), two tabs no longer replace each other in the worker; cookie jar, HTTP cache and storage shared per directory like tabs of one profile; a stale address redirects to the newest live controller of its codec; multi-controller suite                                                                                          | branch, merge pending         |
 
 ## Goal and shape
 
@@ -103,13 +107,16 @@ every filename renamed, and the string `stomp` appears in no requested URL.
 **Shipped.** `assets` on `Config`, `ControllerInit` and `RemoteControllerInit`
 (`serviceWorker`, `injectDocument`, `injectWorker`, `controllerFrame`,
 `controllerFrameScript`, `transportWorker`). Inventory of what a host renames:
-the six files above, plus `Controller.js` / `controller.mjs` which the host
+the six files above (`transportWorker.js` is the dedicated Worker the
+controller starts for a transport descriptor; it imports the transport module
+the descriptor names), plus `Controller.js` / `controller.mjs` which the host
 loads itself.
 Not URLs, left as they are: the `$stomp$` postMessage keys and the `stomp`
 RPC id (same-origin messages between the controller, the worker and the
 pages), the `stomp-allowed-origins` meta in `controllerFrame.html`, the
-IndexedDB name `stompCookies` and the Cache API store `stomp-http-cache`, the
-default `directory` `/stomp/`. Checked by `test/suites/assets.mjs`.
+IndexedDB names `stompCookies`, `stompStorage` and `stompConfig`, the Cache
+API store `stomp-http-cache`, the default `directory` `/stomp/`. Checked by
+`test/suites/assets.mjs`.
 
 ## WS4: same-origin hook coverage (best-effort, not a boundary)
 
@@ -161,12 +168,81 @@ documented behaviour.
 8. Shipped: both controllers and both frame classes keep their state in
    `#fields`; `lastHandshake` stays public for the dev loop.
 
+## Since the gap list (as of 2026-11-07)
+
+What changed on master that a host embedding stomp should know, newest
+first; each item has its suite and its CHANGELOG bullet.
+
+- **Transport in a worker.** `init.transport` accepts a `TransportDescriptor`
+  (`{ module, options, host? }`): the controller starts a dedicated Worker
+  from `transportWorker.js`, imports the module there and serves it to the
+  service worker and the pages over ports, so nothing on the host's main
+  thread sits between the worker and the network. A ProxyTransport instance
+  still works and is served from the page. `controller.transportHost` says
+  which; when the Worker cannot start or import, the page imports the module
+  and a `transporthost` event fires. `setTransport()` hot-swaps (a descriptor
+  on a worker host, an instance on a page host).
+- **Synchronous XHR.** A proxied frame's synchronous `XMLHttpRequest` that
+  needs the network completes only with a worker-hosted transport. With an
+  in-page transport (an instance, or `host: 'page'`) the frame spins the main
+  thread it shares with the transport and the request fails with status 0
+  after the 30 s limit (measured). Use the descriptor.
+- **Error page.** `init.errorPage`: the host's own page, a path on the service
+  worker's origin, for a document the proxy failed to produce (unreachable
+  origin, timeout, routing error, blocked rule, the refusal to proxy its own
+  origin, and soon a gone controller). Served with the failure's status and
+  `globalThis.stompError` (`{ url, status, error, kind }`), never cached.
+- **Helper names.** `init.names` replaces the four globals the rewriter and
+  the inject bundles rendezvous on (`access`, `client`, `globalProxy`,
+  `globalName`; defaults `$s$j`, `$P$s`, `$s$L`, `$s$N`). Each must be an
+  identifier no plain window has; a bad one is a `TypeError` from the
+  constructor. The names travel in the config, so a build is not needed.
+- **No stale rewrites.** Rewritten responses (documents, scripts, stylesheets,
+  XHR bodies, the inject shells) leave the worker `cache-control: no-cache`
+  with the origin's validators kept; bodies the worker did not rewrite keep
+  the origin's headers. The browser revalidates against the worker, which
+  answers from its own cache of the upstream bytes (one upstream fetch across
+  a load and a reload, measured), so a rewriter upgrade or a names change
+  never leaves old output in the browser's HTTP cache.
+- **Object URLs.** `URL.createObjectURL` answers with the page's origin in
+  pages and workers; every consumer maps it back. The last proxy-origin leak
+  the adversarial corpus could see is closed.
+- **Frames.** A frame nested in a proxied page sees the proxied world and
+  nothing above it (`parent`, `top`, `ancestorOrigins`, `frames[i]` of another
+  proxied origin); standalone SVG and XHTML documents are proxied as what
+  they are; a request the page aborts is dropped in the worker.
+- **Pending (branch, merge after its second review pass).** Several
+  controllers on one directory: `init.id` (1 to 32 characters of
+  `[A-Za-z0-9_-]`, random by default) names the controller's address
+  `/stomp/<id>/`, so two host tabs no longer replace each other in the
+  worker; `config.directory` becomes the address and `config.scope` the
+  directory the bundles are served from. The cookie jar, the HTTP cache and
+  the storage partitions are shared by every controller of a scope (a
+  controller is a tab, not a browser). A routed URL whose controller is gone
+  redirects to the newest live controller of the same codec, or gets the
+  error page with kind `controller`. A host that keeps tabs stores one id per
+  tab and passes it back, so the tab's history entries keep resolving.
+
 ## Config stomp will receive from Fracital (reference)
 
 - `codec`: `aes` (or `xor`) for routed-URL encoding
-- `directory`: a renamed neutral path (WS3)
-- `transport`: `new EpoxyTransport({ wisp })`, same-origin
-- `cache`: default on
+- `directory`: a renamed neutral path (WS3); the service worker's scope and
+  where the bundles are served from. With the pending multi-controller change
+  a controller's routes live under `directory` plus `id`.
+- `id` (pending): a stable id per host tab, from the tab's sessionStorage, so
+  reloads and history keep their addresses; random when omitted
+- `transport`: `{ module: <epoxy module URL on this origin>, options: [{ wisp }] }`,
+  a descriptor, so the transport runs in the transport worker (same-origin
+  mode; a `new EpoxyTransport({ wisp })` instance still works but keeps the
+  transport on the main thread and stalls synchronous XHR)
+- `cache`: default on; the worker's HTTP cache, shared by the controllers of a
+  directory once the multi-controller change lands. Rewritten responses leave
+  the worker `no-cache` with validators (see above); the host's own cache
+  headers for the bundles are its business.
+- `errorPage`: a path on the host origin for failed documents (see above)
+- `names`: optional, the four helper names a deployment chooses
+- `assets`: the renamed file names (WS3), including `transportWorker`
+- `rules` / `setRules()`: WS1, to present the host's first-party origin on
+  configured hosts (the earlier `requestHeaders` name in this document is
+  that option)
 - `onNavigate` / `onRequest` / `onOpen`: wired to the host tab store
-- `requestHeaders`: WS1 rules, to present the host's first-party origin on
-  configured hosts
