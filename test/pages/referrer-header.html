@@ -1,0 +1,24 @@
+<!doctype html>
+<title>REFERRER HEADER</title>
+<script>
+	// this document arrives with Referrer-Policy: same-origin (its sidecar)
+	window.__ref = {};
+	const other = location.origin.includes('127.0.0.1')
+		? location.origin.replace('127.0.0.1', 'localhost')
+		: location.origin.replace('localhost', '127.0.0.1');
+	const referer = async (url) =>
+		(await (await fetch(url)).json()).referer ?? null;
+	(async () => {
+		__ref.same = await referer('/echo-headers');
+		__ref.cross = await referer(other + '/echo-headers');
+		// the header itself reaches the browser (the page fetching its own URL
+		// sees the same response headers the document did)
+		__ref.header = (await fetch(location.href)).headers.get('referrer-policy');
+	})()
+		.catch((e) => {
+			__ref.error = String(e);
+		})
+		.finally(() => {
+			__ref.done = true;
+		});
+</script>

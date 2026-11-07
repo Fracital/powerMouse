@@ -189,7 +189,7 @@ Suites: headers, cookies, cookie-jar, cache, page-apis.
 
 | Feature                                                                                                                                                 | Status  | Notes                                                                                                                                                                                                       |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Referer: full URL same-origin, origin only cross-origin, none on https to http                                                                          | partial | the browser default policy; the page's own `Referrer-Policy` header and meta are not applied (the router never sees them)                                                                                   |
+| Referer: full URL same-origin, origin only cross-origin, none on https to http                                                                          | ok      | all eight policies from request.referrerPolicy, applied to the real origins (referrer suite); downgrade branches from the spec, not measured                                                                |
 | `Origin` on cross-origin fetches and on every request with a body                                                                                       | ok      |                                                                                                                                                                                                             |
 | `Sec-Fetch-Site/Mode/Dest` from the real origins                                                                                                        | ok      | `same-site` by registrable domain                                                                                                                                                                           |
 | `fetch` `mode` / `credentials` forwarded                                                                                                                | missing |                                                                                                                                                                                                             |
@@ -294,10 +294,9 @@ Suites: navigate-events, request-log, version, cookie-jar, cache, isolation.
    prefixes and scope keys.
 2. Cookies: a nested cross-site iframe should not get Lax cookies (needs the
    host to mark its top documents).
-3. The page's own `Referrer-Policy` (needs the document's headers per client).
-4. Cache: heuristic freshness from `Last-Modified`, stale-while-revalidate,
+3. Cache: heuristic freshness from `Last-Modified`, stale-while-revalidate,
    stale-if-error.
-5. The Tap: a request hook chain (intercept, request, response) once a second
+4. The Tap: a request hook chain (intercept, request, response) once a second
    consumer beyond `onRequest` exists, and `Frame.hooks.error.request`.
-6. A demo request viewer on `onRequest`; browser suites in CI; scramjet's
+5. A demo request viewer on `onRequest`; browser suites in CI; scramjet's
    adversarial corpus ported one file at a time.

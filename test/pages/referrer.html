@@ -1,0 +1,34 @@
+<!doctype html>
+<title>REFERRER</title>
+<script>
+	// ?policy=<name> sets the document's referrer policy with a meta tag, then
+	// a same-origin and a cross-site fetch record the Referer the fixture saw;
+	// with no-referrer, a third fetch overrides the policy in its init
+	window.__ref = {};
+	const policy = new URLSearchParams(location.search).get('policy');
+	if (policy) {
+		const meta = document.createElement('meta');
+		meta.name = 'referrer';
+		meta.content = policy;
+		document.head.append(meta);
+	}
+	const other = location.origin.includes('127.0.0.1')
+		? location.origin.replace('127.0.0.1', 'localhost')
+		: location.origin.replace('localhost', '127.0.0.1');
+	const referer = async (url, init) =>
+		(await (await fetch(url, init)).json()).referer ?? null;
+	(async () => {
+		__ref.same = await referer('/echo-headers');
+		__ref.cross = await referer(other + '/echo-headers');
+		if (policy === 'no-referrer')
+			__ref.override = await referer(other + '/echo-headers', {
+				referrerPolicy: 'unsafe-url',
+			});
+	})()
+		.catch((e) => {
+			__ref.error = String(e);
+		})
+		.finally(() => {
+			__ref.done = true;
+		});
+</script>

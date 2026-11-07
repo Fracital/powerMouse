@@ -28,6 +28,48 @@ export const statusEmpty = [101, 204, 205, 304];
 
 const integrityHeaders: string[] = ['Content-MD5'];
 
+declare const clients: Clients | undefined;
+
+const DEFAULT_REFERRER_POLICY = 'strict-origin-when-cross-origin';
+
+/**
+ * The Referer a browser sends from `source` to `target` under `policy`
+ * (Referrer Policy, "determine request's referrer"), for the real origins.
+ * Null means no header.
+ */
+function refererFor(source: URL, target: URL, policy: string): string | null {
+	const sameOrigin = source.origin === target.origin;
+	const downgrade =
+		source.protocol === 'https:' && target.protocol !== 'https:';
+	const full = () => {
+		const stripped = new URL(source);
+		stripped.hash = '';
+		stripped.username = '';
+		stripped.password = '';
+		return stripped.toString();
+	};
+	const origin = () => `${source.origin}/`;
+	switch (policy) {
+		case 'no-referrer':
+			return null;
+		case 'unsafe-url':
+			return full();
+		case 'origin':
+			return origin();
+		case 'same-origin':
+			return sameOrigin ? full() : null;
+		case 'strict-origin':
+			return downgrade ? null : origin();
+		case 'no-referrer-when-downgrade':
+			return downgrade ? null : full();
+		case 'origin-when-cross-origin':
+			return sameOrigin ? full() : origin();
+		default:
+			// strict-origin-when-cross-origin
+			return sameOrigin ? full() : downgrade ? null : origin();
+	}
+}
+
 const BODY_ILLEGAL = ['GET', 'HEAD'];
 
 type BodyTransform = (
@@ -77,10 +119,13 @@ function genericForward(
 		requestHeaders.set('user-agent', navigator.userAgent);
 
 		// Referer, Origin and the fetch metadata are forbidden headers, so the
-		// service worker never sees the page's; rebuild them from the (proxied)
-		// referrer the way the browser would for the real origins. The referrer
-		// follows the default policy (strict-origin-when-cross-origin): the
-		// page's own Referrer-Policy is not known here.
+		// service worker never sees the page's; rebuild them from the initiator
+		// the way the browser would for the real origins, under the request's
+		// own referrer policy (request.referrerPolicy: the browser derived it
+		// from the document's Referrer-Policy header, its meta tag, the
+		// element's attribute or fetch's init). The browser's own Referer is a
+		// source of truth for the initiator only, never for the reduction: in
+		// proxy URL space every proxied request looks same-origin to it.
 		requestHeaders.delete('referer');
 		requestHeaders.delete('origin');
 		const destination = serverRequest.destination || 'empty';
@@ -95,41 +140,61 @@ function genericForward(
 		);
 		requestHeaders.delete('sec-fetch-user');
 		let site = 'none';
+		const policy = serverRequest.referrerPolicy || DEFAULT_REFERRER_POLICY;
 
+		// the initiator: the browser's routed Referer decoded, when it kept the
+		// full URL; when the policy made it send the proxy origin only (origin,
+		// strict-origin) the document is the request's client
+		let initiator: URL | null = null;
+		const routedPrefix = `${oURL.origin}${rewriter.directory}`;
 		if (serverRequest.referrer && serverRequest.referrer !== 'about:client') {
 			try {
-				const referrer = parseRoutedURL(
+				initiator = parseRoutedURL(
 					serverRequest.referrer,
 					rewriter.codec,
-					`${oURL.origin}${rewriter.directory}`,
+					routedPrefix,
 				).url.url;
-				const sameOrigin = referrer.origin === url.url.origin;
-				const downgrade =
-					referrer.protocol === 'https:' && url.url.protocol !== 'https:';
-
-				if (sameOrigin) {
-					referrer.hash = '';
-					requestHeaders.set('referer', referrer.toString());
-				} else if (!downgrade)
-					requestHeaders.set('referer', `${referrer.origin}/`);
-
-				// the browser sends Origin on cross-origin fetches and on every
-				// request with a body
-				if (
-					(!sameOrigin && destination === 'empty') ||
-					!BODY_ILLEGAL.includes(serverRequest.method)
-				)
-					requestHeaders.set('origin', referrer.origin);
-
-				site = sameOrigin
-					? 'same-origin'
-					: getDomain(referrer.hostname) !== null &&
-						  getDomain(referrer.hostname) === getDomain(url.url.hostname)
-						? 'same-site'
-						: 'cross-site';
 			} catch (error) {
-				// referrer isn't a proxied URL (e.g. the controller page)
+				// not a routed URL: the proxy origin alone, or the controller page
 			}
+			// never for a navigation: its client id is the document being created,
+			// and asking for it would wait on this very response
+			if (
+				!initiator &&
+				serverRequest.mode !== 'navigate' &&
+				serverRequest.referrer === `${oURL.origin}/` &&
+				context?.clientId &&
+				typeof clients !== 'undefined'
+			)
+				try {
+					const client = await clients.get(context.clientId);
+					if (client)
+						initiator = parseRoutedURL(client.url, rewriter.codec, routedPrefix)
+							.url.url;
+				} catch (error) {
+					// the client is gone or not a proxied page
+				}
+		}
+
+		if (initiator) {
+			const sameOrigin = initiator.origin === url.url.origin;
+			const referer = refererFor(initiator, url.url, policy);
+			if (referer) requestHeaders.set('referer', referer);
+
+			// the browser sends Origin on cross-origin fetches and on every
+			// request with a body
+			if (
+				(!sameOrigin && destination === 'empty') ||
+				!BODY_ILLEGAL.includes(serverRequest.method)
+			)
+				requestHeaders.set('origin', initiator.origin);
+
+			site = sameOrigin
+				? 'same-origin'
+				: getDomain(initiator.hostname) !== null &&
+					  getDomain(initiator.hostname) === getDomain(url.url.hostname)
+					? 'same-site'
+					: 'cross-site';
 		}
 		requestHeaders.set('sec-fetch-site', site);
 

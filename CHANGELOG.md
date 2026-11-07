@@ -110,6 +110,15 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- The Referer follows the page's own referrer policy. The browser derives
+  every request's policy natively (the document's `Referrer-Policy` header,
+  which now reaches the browser; `<meta name="referrer">`; an element's
+  `referrerpolicy`; fetch's `referrerPolicy` init), and the service worker
+  applies all eight policies to the real origins. In proxy URL space every
+  proxied request looks same-origin to the browser, so its own Referer is
+  used only to learn the initiator; when a policy made it send the proxy
+  origin alone, the initiator is the request's client document. An empty
+  policy is `strict-origin-when-cross-origin`, as before.
 - `document.cookie` no longer costs a synchronous round trip per read: the
   page caches the string and drops it when the jar may have changed, on its
   own write, on a write by another document of the site (a version the
@@ -462,8 +471,6 @@ Fixed while testing real sites and a feature fixture:
   ignores the signal); the response is discarded.
 - The HTTP cache never serves stale on a failed revalidation and uses no
   heuristic freshness.
-- The page's own `Referrer-Policy` is not applied; requests follow
-  `strict-origin-when-cross-origin`.
 - `getSVGDocument()` is not spoofed.
 - `CSSRule.cssText` assignment is not rewritten (a no-op for style rules).
   Un-rewritten `url()` values read back as the page wrote them (relative
