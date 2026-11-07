@@ -83,25 +83,32 @@ ok(
 
 await submitLanding(page, 'https://example.com');
 await waitActive(page, () => document.title === 'Example Domain');
-const opacity = await page.evaluate(
+// the dock's opacity on every frame for a second after the click: a fade
+// has values strictly between 0 and 1 and ends at 1. Sampling one instant is
+// a timing measurement (a loaded runner may not have drawn the first frame
+// yet), so under SKIP_TIMING it is enough that the dock went from hidden to
+// fully shown
+const fade = await page.evaluate(
 	() =>
 		new Promise((resolve) => {
+			const dock = document.querySelector('.dock');
+			const samples = [];
 			document.getElementById('recents').click();
-			setTimeout(
-				() =>
-					resolve(
-						parseFloat(
-							getComputedStyle(document.querySelector('.dock')).opacity,
-						),
-					),
-				80,
-			);
+			const start = performance.now();
+			const tick = () => {
+				samples.push(parseFloat(getComputedStyle(dock).opacity));
+				if (performance.now() - start < 1000) requestAnimationFrame(tick);
+				else resolve(samples);
+			};
+			requestAnimationFrame(tick);
 		}),
 );
+const between = fade.some((o) => o > 0 && o < 1);
 ok(
 	'from the browser view the dock fades in',
-	opacity > 0 && opacity < 1,
-	String(opacity),
+	fade.at(-1) === 1 &&
+		(between || (process.env.SKIP_TIMING === '1' && fade[0] < 1)),
+	JSON.stringify([fade[0], fade.find((o) => o > 0 && o < 1), fade.at(-1)]),
 );
 
 await done(browser, page.errors);
