@@ -37,6 +37,8 @@ export interface Config {
 	build?: string;
 	/** @internal ms a routed request may take before the service worker answers 504 (tests; default by destination) */
 	fetchTimeout?: number;
+	/** the served file names, when the host renamed them (see Assets) */
+	assets?: Assets;
 }
 
 export interface ParsedConfig extends Omit<Config, 'codec'> {
@@ -92,4 +94,35 @@ export function codecType(codec: GenericCodec): ConfigCodec {
 	} else {
 		return 'generic';
 	}
+}
+
+/**
+ * The files `dist/` ships, by the names the host serves them under in its
+ * `directory`. Every name defaults to the file's own; a host that renames
+ * them (so no served URL carries the package name) says so here, and the
+ * worker, the controllers and the shell build their URLs from these.
+ */
+export interface Assets {
+	serviceWorker?: string;
+	injectDocument?: string;
+	injectWorker?: string;
+	controllerFrame?: string;
+	/** the script controllerFrame.html loads; told to the frame through `?script=` */
+	controllerFrameScript?: string;
+}
+
+export const DEFAULT_ASSETS: Required<Assets> = {
+	serviceWorker: 'serviceWorker.js',
+	injectDocument: 'injectDocument.js',
+	injectWorker: 'injectWorker.js',
+	controllerFrame: 'controllerFrame.html',
+	controllerFrameScript: 'controllerFrame.js',
+};
+
+/** a served file's name: the host's, else the default */
+export function assetName(
+	assets: Assets | undefined,
+	key: keyof Assets,
+): string {
+	return assets?.[key] || DEFAULT_ASSETS[key];
 }

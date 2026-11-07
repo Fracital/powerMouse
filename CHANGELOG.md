@@ -110,6 +110,21 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- Relocatable asset names: `assets` on both controllers names the served
+  files (`serviceWorker`, `injectDocument`, `injectWorker`, `controllerFrame`,
+  `controllerFrameScript`), each defaulting to the file's own name. The
+  worker's shell and the worker bootstrap build the inject URLs from them, the
+  controller frame registers the worker by its name, `RemoteController` loads
+  the frame by its name and tells it its script with `?script=<name>`, which
+  the frame's inline loader accepts as a bare file name only (anything else
+  falls back to the default). A host can therefore serve the bundle from any
+  directory with every file renamed so that no requested URL carries the
+  package name (assets suite: a renamed bundle boots, proxies a page and a
+  worker, and the fixture saw no URL with "stomp" in it). Not URLs, so
+  unchanged: the `$stomp$` postMessage keys and the `stomp` RPC id (same-origin
+  messages), the `stomp-allowed-origins` meta in the controller frame, the
+  `stompCookies` and `stomp-http-cache` storage names, and the default
+  directory `/stomp/`.
 - Request rules: `rules` on both controllers and `setRules(rules)` to replace
   them, run in the service worker on the real URL after it has rebuilt
   Referer, Origin and cookies and before the cache. A rule matches by URL

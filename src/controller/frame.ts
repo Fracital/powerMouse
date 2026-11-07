@@ -4,6 +4,7 @@
 // RemoteController. Proxied frames are same-origin siblings of this frame, so
 // it can read their location and drive their history on the host's behalf.
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
+import { assetName } from '../config';
 import { CLIENT_KEY } from '../rewriteJS';
 import type { RequestInfo } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
@@ -99,7 +100,7 @@ if (window === window.parent || !origins.length) {
 			{
 				init: async (init: ControllerFrameInit) => {
 					const registration = await navigator.serviceWorker.register(
-						`${init.directory}serviceWorker.js`,
+						`${init.directory}${assetName(init.assets, 'serviceWorker')}`,
 						{ scope: init.directory, updateViaCache: 'none' },
 					);
 					const serviceworker = await activated(registration);
@@ -114,6 +115,7 @@ if (window === window.parent || !origins.length) {
 						...(init.cache === false ? { cache: false } : {}),
 						...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 						...(init.rules ? { rules: init.rules } : {}),
+						...(init.assets ? { assets: init.assets } : {}),
 						// the host's request log travels SW -> here -> host
 						...(init.requestLog
 							? {

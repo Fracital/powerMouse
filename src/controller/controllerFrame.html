@@ -12,6 +12,24 @@
 		<meta name="stomp-allowed-origins" content="" />
 	</head>
 	<body>
-		<script src="controllerFrame.js"></script>
+		<script>
+			// The host may serve this frame's script under another name and says
+			// so with ?script=<name> (RemoteControllerInit.assets). A name is a
+			// bare file name only: nothing else is accepted, and without one the
+			// default applies.
+			(function () {
+				var name = new URLSearchParams(location.search).get('script');
+				var safe =
+					name !== null &&
+					/^[\w.-]+$/.test(name) &&
+					name.indexOf('/') === -1 &&
+					name.indexOf('..') === -1
+						? name
+						: 'controllerFrame.js';
+				var script = document.createElement('script');
+				script.src = safe;
+				document.body.appendChild(script);
+			})();
+		</script>
 	</body>
 </html>

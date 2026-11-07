@@ -530,6 +530,7 @@ export function registerRewrites(
 				frameAncestors: init.frameAncestors,
 				...(init.openTab ? { openTab: true } : {}),
 				...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
+				...(init.assets ? { assets: init.assets } : {}),
 				build: BUILD,
 			};
 		},

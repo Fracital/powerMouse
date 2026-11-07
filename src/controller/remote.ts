@@ -1,9 +1,10 @@
+import { assetName } from '../config';
 // Host-side controller for origin isolation. The real StompController runs in
 // a hidden controller frame on the proxy origin (dist/controllerFrame.html);
 // this class embeds that frame and mirrors the StompController / Frame API
 // over postMessage. Proxied content is shown in sandboxed, cross-origin
 // frames the host page can neither read nor be read by.
-import type { Config, ConfigCodec } from '../config';
+import type { Assets, Config, ConfigCodec } from '../config';
 import type {
 	NavigateInfo,
 	RequestInfo,
@@ -56,6 +57,8 @@ export interface RemoteControllerInit {
 	allowInvalidJs?: boolean;
 	/** request rules run in the service worker (see StompController) */
 	rules?: RequestRule[];
+	/** the served file names, when the host renamed them (see StompController) */
+	assets?: Assets;
 	/** one report per proxied request, with the RemoteFrame when known (see StompController.onRequest) */
 	onRequest?: (info: RemoteRequestEvent) => void;
 }
@@ -102,7 +105,12 @@ export class RemoteController extends EventTarget {
 			);
 
 		this.element = document.createElement('iframe');
-		this.element.src = `${this.proxyOrigin}${this.directory}controllerFrame.html`;
+		// the frame learns its own script's name from the query (sanitised there)
+		const script = init.assets?.controllerFrameScript;
+		this.element.src = `${this.proxyOrigin}${this.directory}${assetName(
+			init.assets,
+			'controllerFrame',
+		)}${script ? `?script=${encodeURIComponent(script)}` : ''}`;
 		this.element.style.display = 'none';
 		this.element.setAttribute('aria-hidden', 'true');
 		this.element.title = 'Stomp controller';
@@ -180,6 +188,7 @@ export class RemoteController extends EventTarget {
 					requestLog: !!init.onRequest,
 					...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 					...(init.rules ? { rules: init.rules } : {}),
+					...(init.assets ? { assets: init.assets } : {}),
 				}),
 			)
 			.then(({ config, stale }) => {

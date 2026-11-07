@@ -529,8 +529,8 @@ export function modifyJS(
 				? `if (!globalThis.createClient)
 	${
 		type === 'workerModule'
-			? `(0, eval)(await (await fetch(${JSON.stringify(injectWorkerJS(url))})).text());`
-			: `importScripts(${JSON.stringify(injectWorkerJS(url))});`
+			? `(0, eval)(await (await fetch(${JSON.stringify(injectWorkerJS(url, config))})).text());`
+			: `importScripts(${JSON.stringify(injectWorkerJS(url, config))});`
 	}
 
 if (!(${JSON.stringify(CLIENT_KEY)} in globalThis))

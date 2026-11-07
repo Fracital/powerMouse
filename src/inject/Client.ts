@@ -1,6 +1,12 @@
 import { BareCompatibleClient } from '@mercuryworkshop/proxy-transports';
 import GenericCodec from '../Codecs';
-import { codecType, Config, parseConfig, ParsedConfig } from '../config';
+import {
+	Assets,
+	codecType,
+	Config,
+	parseConfig,
+	ParsedConfig,
+} from '../config';
 import { CLIENT_KEY } from '../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../routeURL';
 import StompURL from '../StompURL';
@@ -34,6 +40,8 @@ export default class Client {
 	build?: string;
 	/** unparseable scripts fail instead of running raw when false (config.allowInvalidJs) */
 	allowInvalidJs: boolean;
+	/** the host's served file names (config.assets) */
+	assets?: Assets;
 	applied: boolean;
 	/** @internal called after a response reached this context (fetch, XHR): caches that depend on the jar drop */
 	readonly responseListeners = new Set<() => void>();
@@ -87,6 +95,7 @@ export default class Client {
 		this.openTab = !!init.openTab;
 		this.build = init.build;
 		this.allowInvalidJs = init.allowInvalidJs !== false;
+		this.assets = init.assets;
 		// a stale cached bundle next to a new service worker: say so once,
 		// the page still gets its best effort
 		if (init.build && init.build !== BUILD)
@@ -116,6 +125,7 @@ export default class Client {
 			...(this.openTab ? { openTab: true } : {}),
 			...(this.build ? { build: this.build } : {}),
 			...(this.allowInvalidJs ? {} : { allowInvalidJs: false }),
+			...(this.assets ? { assets: this.assets } : {}),
 		};
 	}
 	/**

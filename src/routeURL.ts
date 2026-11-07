@@ -1,4 +1,5 @@
 import GenericCodec from './Codecs';
+import { assetName, type Config } from './config';
 import StompURL from './StompURL';
 
 export const ROUTE_PROTOCOLS = ['http:', 'https:'];
@@ -34,12 +35,12 @@ export function routeXHR(resource: StompURL) {
 	return routeURL('xhr', resource);
 }
 
-export function injectDocumentJS(url: StompURL) {
-	return `${url.directory}injectDocument.js`;
+export function injectDocumentJS(url: StompURL, config?: Config) {
+	return `${url.directory}${assetName(config?.assets, 'injectDocument')}`;
 }
 
-export function injectWorkerJS(url: StompURL) {
-	return `${url.directory}injectWorker.js`;
+export function injectWorkerJS(url: StompURL, config?: Config) {
+	return `${url.directory}${assetName(config?.assets, 'injectWorker')}`;
 }
 
 export function geckoXHR(url: StompURL) {

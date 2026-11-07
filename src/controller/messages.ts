@@ -1,4 +1,4 @@
-import type { Config, ConfigCodec } from '../config';
+import type { Assets, Config, ConfigCodec } from '../config';
 import type {
 	CookieCommand,
 	CookieResult,
@@ -28,6 +28,8 @@ export interface ControllerFrameInit {
 	allowInvalidJs?: boolean;
 	/** request rules (RemoteControllerInit.rules) */
 	rules?: RequestRule[];
+	/** the served file names (RemoteControllerInit.assets) */
+	assets?: Assets;
 }
 
 export interface FrameInfo {

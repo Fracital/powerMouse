@@ -2,7 +2,7 @@ import type {
 	ProxyTransport,
 	RawHeaders,
 } from '@mercuryworkshop/proxy-transports';
-import { Config, ConfigCodec } from '../config';
+import { Assets, Config, ConfigCodec } from '../config';
 import { isUrlLike, urlLike } from '../StompURL';
 import type { RequestRule } from '../transport/messages';
 import {
@@ -101,6 +101,12 @@ export interface ControllerInit {
 	 * first matching rule wins. `setRules()` replaces them later.
 	 */
 	rules?: RequestRule[];
+	/**
+	 * The served file names, when the host renamed them (see Assets): the
+	 * inject bundles the worker names in its shell. A same-origin host
+	 * registers the worker itself, so `serviceWorker` only documents its choice.
+	 */
+	assets?: Assets;
 	/**
 	 * sandbox flags for proxied frames, default `DEFAULT_SANDBOX`. Same-origin
 	 * frames are not a security boundary, but without a sandbox the browser
@@ -203,6 +209,8 @@ export function activated(worker: ServiceWorker): Promise<ServiceWorker> {
 }
 
 export type { StaleInfo };
+export type { Assets } from '../config';
+export { DEFAULT_ASSETS } from '../config';
 export type {
 	RequestRule,
 	RequestRuleAction,
@@ -277,6 +285,7 @@ export class StompController extends EventTarget {
 			...(init.onRequest || init.requestLog ? { requestLog: true } : {}),
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 			...(init.fetchTimeout ? { fetchTimeout: init.fetchTimeout } : {}),
+			...(init.assets ? { assets: init.assets } : {}),
 		};
 
 		window.addEventListener('message', (event) => {

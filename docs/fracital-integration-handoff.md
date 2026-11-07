@@ -10,7 +10,7 @@ the settings row) is tracked in the Fracital repo, not here.
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
 | WS1 request-header policy            | done: `rules` / `setRules` on both controllers (URLPattern match, header set and delete, block, redirect, status), applied after stomp rebuilds Origin and Referer so a host rule wins, `onRequest` reports `rule`; acceptance checks in `test/suites/rules.mjs` | shipped                           |
 | WS2 epoxy as the supported transport | in progress: `examples/minimal-host.html` boots a same-origin `StompController` on epoxy; README "Embedding"                                                                                                                                                     | host example agent                |
-| WS3 relocatable asset paths          | queued behind WS1: `assets` option naming every served file, inventory of literals in docs                                                                                                                                                                       | parity session                    |
+| WS3 relocatable asset paths          | done: `assets` on both controllers names every served file (defaults to today's names), the controller frame learns its script name from `?script=`; the assets suite boots a fully renamed bundle under `/neutral/` and sees no URL with the package name       | parity session                    |
 | WS4 same-origin hook coverage        | in progress: scramjet's adversarial corpus ported as measurement suites; leaks become parity rows and fixes                                                                                                                                                      | corpus agent, then parity session |
 | WS5 host-embedding API parity        | in progress: `test/suites/host-api.mjs` runs the checklist against the example host                                                                                                                                                                              | host example agent                |
 
@@ -99,6 +99,16 @@ L99), and the inject bundle names.
 
 **Acceptance.** The bundle boots when served from an arbitrary directory with
 every filename renamed, and the string `stomp` appears in no requested URL.
+
+**Shipped.** `assets` on `Config`, `ControllerInit` and `RemoteControllerInit`
+(`serviceWorker`, `injectDocument`, `injectWorker`, `controllerFrame`,
+`controllerFrameScript`). Inventory of what a host renames: the five files
+above, plus `Controller.js` / `controller.mjs` which the host loads itself.
+Not URLs, left as they are: the `$stomp$` postMessage keys and the `stomp`
+RPC id (same-origin messages between the controller, the worker and the
+pages), the `stomp-allowed-origins` meta in `controllerFrame.html`, the
+IndexedDB name `stompCookies` and the Cache API store `stomp-http-cache`, the
+default `directory` `/stomp/`. Checked by `test/suites/assets.mjs`.
 
 ## WS4: same-origin hook coverage (best-effort, not a boundary)
 

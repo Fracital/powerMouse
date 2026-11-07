@@ -1,0 +1,74 @@
+<!doctype html>
+<title>NEUTRAL HOST</title>
+<!--
+	A host page on the fixture origin that boots a same-origin StompController
+	from the bundle served under /neutral/ with every file renamed (assets
+	suite). ?wisp= names the wisp server (the demo's).
+-->
+<script src="/neutral/ctl.js"></script>
+<script type="module">
+	window.__neutral = {};
+	(async () => {
+		const wisp = new URLSearchParams(location.search).get('wisp');
+		const registration = await navigator.serviceWorker.register(
+			'/neutral/sw.js',
+			{ scope: '/neutral/', updateViaCache: 'none' },
+		);
+		const worker =
+			registration.active || registration.waiting || registration.installing;
+		if (worker.state !== 'activated')
+			await new Promise((resolve) =>
+				worker.addEventListener('statechange', () => {
+					if (worker.state === 'activated') resolve();
+				}),
+			);
+		const { default: Transport } = await import('/neutral/transport.mjs');
+		const controller = new StompController({
+			serviceworker: worker,
+			transport: new Transport({ wisp }),
+			directory: '/neutral/',
+			codec: 'xor',
+			assets: {
+				serviceWorker: 'sw.js',
+				injectDocument: 'doc.js',
+				injectWorker: 'wk.js',
+				controllerFrame: 'frame.html',
+				controllerFrameScript: 'frame.js',
+			},
+		});
+		await controller.wait();
+		window.controller = controller;
+		const element = document.createElement('iframe');
+		document.body.append(element);
+		const loaded = new Promise((resolve) =>
+			element.addEventListener('load', resolve, { once: true }),
+		);
+		await controller
+			.createFrame(element)
+			.go(`${location.origin}/pages/hist-1.html`);
+		await loaded;
+		__neutral.title = element.contentDocument?.title;
+		__neutral.fetched = await element.contentWindow
+			.fetch('/pages/hdr.json')
+			.then((r) => r.status);
+		// a worker too: its inject bundle is the renamed one
+		__neutral.worker = await new Promise((resolve) => {
+			const w = new element.contentWindow.Worker(
+				URL.createObjectURL(
+					new Blob(['postMessage(1)'], { type: 'text/javascript' }),
+				),
+			);
+			w.onmessage = () => resolve('ran');
+			w.onerror = (e) => resolve(`error ${e.message}`);
+			setTimeout(() => resolve('timeout'), 5000);
+		});
+		__neutral.scriptURL = worker.scriptURL;
+		__neutral.resources = performance
+			.getEntriesByType('resource')
+			.map((e) => e.name);
+		__neutral.done = true;
+	})().catch((error) => {
+		__neutral.error = String(error);
+		__neutral.done = true;
+	});
+</script>

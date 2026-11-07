@@ -126,10 +126,53 @@ const PAGES = {
 // how often each /pages/ file was requested, and how many of those were
 // answered 304 (cache suite); /hits returns the counters
 const hits = new Map();
+// every path served, in order (/requests returns it; the assets suite checks
+// that no served URL carries the package name)
+const served = [];
+// the dist bundle under neutral names (assets suite): /neutral/<name>
+const distDir = fileURLToPath(new URL('../dist/', import.meta.url));
+const NEUTRAL = {
+	'sw.js': 'serviceWorker.js',
+	'doc.js': 'injectDocument.js',
+	'wk.js': 'injectWorker.js',
+	'ctl.js': 'Controller.js',
+	'frame.html': 'controllerFrame.html',
+	'frame.js': 'controllerFrame.js',
+};
+const transportFile = fileURLToPath(
+	new URL(
+		'../node_modules/@mercuryworkshop/epoxy-transport/dist/index.mjs',
+		import.meta.url,
+	),
+);
 
 export function startFixture(port = 8084) {
 	const server = createServer((req, res) => {
 		const path = new URL(req.url, 'http://x').pathname;
+		served.push(path);
+		if (path === '/requests') {
+			res.setHeader('content-type', 'application/json');
+			return res.end(JSON.stringify(served));
+		}
+		const neutral = /^\/neutral\/([\w.-]+)$/.exec(path)?.[1];
+		if (neutral) {
+			const file =
+				neutral === 'transport.mjs'
+					? transportFile
+					: NEUTRAL[neutral] && `${distDir}${NEUTRAL[neutral]}`;
+			if (!file || !existsSync(file)) {
+				res.statusCode = 404;
+				return res.end('no such neutral asset');
+			}
+			res.setHeader(
+				'content-type',
+				neutral.endsWith('.html')
+					? 'text/html; charset=utf-8'
+					: 'text/javascript; charset=utf-8',
+			);
+			res.setHeader('cache-control', 'no-cache');
+			return res.end(readFileSync(file));
+		}
 		// how many request bytes arrived (streamed-body measurement)
 		if (path === '/echo-body') {
 			let bytes = 0;
