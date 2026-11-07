@@ -1,4 +1,4 @@
-// The demo's request viewer: Ctrl+Shift+R slides it up with the active tab's
+// The demo's request viewer: Ctrl+Shift+X slides it up with the active tab's
 // proxied requests (real URLs, statuses, a cached tag on a cache hit), new
 // rows land on top without moving a scrolled list, a URL copies itself when
 // clicked, Clear empties it, Back and Escape close it, a long press on
@@ -66,9 +66,9 @@ await sleep(500);
 
 ok('viewer starts closed', !(await isOpen()));
 await page.evaluate(() => (window.__marker = 1));
-await page.keyboard.press('Control+Shift+R');
+await page.keyboard.press('Control+Shift+X');
 await sleep(400);
-ok('Ctrl+Shift+R opens the viewer', await isOpen());
+ok('Ctrl+Shift+X opens the viewer', await isOpen());
 ok(
 	'the shortcut did not reload the page',
 	(await page.evaluate(() => window.__marker)) === 1,
@@ -288,7 +288,7 @@ ok(
 );
 
 // Escape closes it too
-await page.keyboard.press('Control+Shift+R');
+await page.keyboard.press('Control+Shift+X');
 await sleep(300);
 ok('shortcut reopens', await isOpen());
 ok(
@@ -335,7 +335,7 @@ await page.click('#home');
 await submitLanding(page, `${FIXTURE}pages/dom.html`);
 await waitActive(page, () => document.readyState === 'complete');
 await sleep(500);
-await page.keyboard.press('Control+Shift+R');
+await page.keyboard.press('Control+Shift+X');
 await sleep(300);
 ok(
 	'the viewer shows the new tab',
@@ -359,7 +359,7 @@ ok(
 	!(await inRecents()) && (await omni(page)).endsWith('/pages/cache.html'),
 	await omni(page),
 );
-await page.keyboard.press('Control+Shift+R');
+await page.keyboard.press('Control+Shift+X');
 await sleep(300);
 ok(
 	'and the viewer shows its log again',

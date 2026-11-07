@@ -1434,8 +1434,9 @@ requestsList.addEventListener('click', (event) => {
 	);
 }
 
-// Ctrl+Shift+R toggles the viewer (key events inside a proxied frame never
-// reach this window); Escape closes it before anything else sees the key
+// Ctrl+Shift+X toggles the viewer (key events inside a proxied frame never
+// reach this window; Ctrl+Shift+R was the browser's hard reload); Escape
+// closes it before anything else sees the key
 addEventListener(
 	'keydown',
 	(event) => {
@@ -1443,9 +1444,9 @@ addEventListener(
 			event.ctrlKey &&
 			event.shiftKey &&
 			!event.altKey &&
-			event.code === 'KeyR'
+			event.code === 'KeyX'
 		) {
-			event.preventDefault(); // Chrome's hard reload
+			event.preventDefault();
 			toggleRequests();
 		} else if (event.key === 'Escape' && requestsOpen()) {
 			hideRequests();

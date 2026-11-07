@@ -173,7 +173,7 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   `StompController` on epoxy, one frame, the three callbacks), served by the
   demo at `/examples/`; README "Embedding" walks through it, and the new
   `host-api` suite runs the host API checklist against it.
-- The demo has a request viewer: long-press Recents or Ctrl+Shift+R slides
+- The demo has a request viewer: long-press Recents or Ctrl+Shift+X slides
   up a panel with the active tab's proxied requests (method, status, real
   URL, destination, time, size, a `cached` tag), built from the controller's
   `onRequest`; the HTTP cache is on in the demo and `?nocache` turns it off.
