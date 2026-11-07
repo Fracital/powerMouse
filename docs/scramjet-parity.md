@@ -2,8 +2,8 @@
 
 **Status as of 2026-11-06.** Everything the first version of this document
 planned (its section 10, items 1 to 8) has landed on master, each change
-measured failing-first in the checked-in browser suite: `npm test` runs 33
-suites (257 checks) against a demo server and a fixture server per
+measured failing-first in the checked-in browser suite: `npm test` runs 35
+suites (about 290 checks) against a demo server and a fixture server per
 suite, in about two and a half minutes on eight workers. The rows below are
 re-scored against that tip. What remains is section 10.
 
@@ -116,7 +116,7 @@ every "ok" row below.
 | `var {location} = o` (sloppy), `for (location of ...)`                                           | partial | `for ... of` with an unforgeable target is skipped; a sloppy `var` pattern still hits the real setter                                         |
 | `typeof top`                                                                                     | ok      | left alone                                                                                                                                    |
 | Skip list: class fields, class expression names, catch params, labels, import binding names      | ok      | most were already harmless through value tagging; guarded by the suite                                                                        |
-| On parse failure return the original source (`allowInvalidJs`)                                   | partial | always on, one console.warn, no flag; scramjet defaults to the same and turns it off in its dev preset so a broken rewrite fails loudly       |
+| On parse failure return the original source (`allowInvalidJs`)                                   | ok      | default true with one console.warn, like scramjet; `false` fails the script, like its dev preset                                              |
 | Bare import specifiers pass through to import maps                                               | ok      | static and dynamic; the map's own URLs are not rewritten (section 4)                                                                          |
 | `export * from` / `export {a} from` source rewriting                                             | ok      |                                                                                                                                               |
 | `import()` base is the script URL, not the document                                              | ok      | baked in at rewrite time (rewriter suite)                                                                                                     |
@@ -126,7 +126,7 @@ every "ok" row below.
 | `eval(nonString)` returns a string                                                               | partial | `evalScope` does `String(code)`                                                                                                               |
 | `GeneratorFunction`, `AsyncGeneratorFunction` constructors                                       | partial | only `Function` and `AsyncFunction` are proxied                                                                                               |
 | Optional chain through a non-optional member (`a?.b.location.c`)                                 | partial | the `optional` flag is lost after the first link                                                                                              |
-| `debugger` removal                                                                               | missing | anti-debug sites                                                                                                                              |
+| `debugger` removal                                                                               | ok      | unconditional (rewriter-unit suite)                                                                                                           |
 | Edit-map sourcemaps so `Function.prototype.toString` returns original code                       | missing | `restoreJS` is identity                                                                                                                       |
 | `//# sourceURL` / `sourceMappingURL` kept                                                        | missing | all comments dropped                                                                                                                          |
 | Configurable helper names (`$s$j`, `$s$L`, `$P$s` are fixed)                                     | missing | fingerprintable                                                                                                                               |
@@ -251,62 +251,60 @@ Suites: partition, storage-events, workers, access.
 
 Suites: navigate-events, request-log, version, cookie-jar, cache, isolation.
 
-| Feature                                                                                                                                                 | Status  | Notes                                                                                                                                                     |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Multiple controllers per origin (random id prefix)                                                                                                      | missing | one controller per `directory`; a second host tab replaces the first in the SW                                                                            |
-| Per-frame prefix / identity                                                                                                                             | partial | requests are attributed to frames through the page's reported client id                                                                                   |
-| `Frame.hooks.init.pre/post` (run host code inside a proxied realm)                                                                                      | missing |                                                                                                                                                           |
-| `Frame.hooks.fetch.*` (request taps)                                                                                                                    | partial | `onRequest` summary events (url, method, destination, status, ms, cached, bytes, error, frame); no interception; a hook chain waits for a second consumer |
-| `Frame.hooks.error.request` (host replaces the error page)                                                                                              | missing |                                                                                                                                                           |
-| Lifecycle events pushed to the host                                                                                                                     | ahead   | `navigate` CustomEvent and `onNavigate` on load, pushState, hashchange, title changes; the poll is a fallback                                             |
-| Cookie jar reachable from the host                                                                                                                      | ok      | `controller.cookies`                                                                                                                                      |
-| Version pin between `serviceWorker.js`, inject bundles and controller                                                                                   | ok      | build id (`STOMP_BUILD`) checked at the handshake and at inject time                                                                                      |
-| Popup policy                                                                                                                                            | ok      | `onOpen` routes `window.open` / `_blank` / named targets to the host's tab model                                                                          |
-| HTTP cache                                                                                                                                              | partial | `cache: true`, `clearCache()`; explicit freshness only (section 6)                                                                                        |
-| Pluggable codec functions                                                                                                                               | partial | four keyed codecs instead                                                                                                                                 |
-| Configurable paths for bundles                                                                                                                          | partial |                                                                                                                                                           |
-| Flags: `syncxhr`, `cleanErrors`, `sourcemaps`, `allowInvalidJs`, `allowFailedIntercepts`, `destructureRewrites`, `siteFlags`, `maskedfiles`, dev preset | missing | `allowInvalidJs` behaviour is always on and cannot be turned off                                                                                          |
-| Plugins: `UrlWatcherPlugin`, `CatchEscapedLinksPlugin`, `HttpCachePlugin`                                                                               | ok      | built in: navigate events, `onOpen`, the cache                                                                                                            |
-| Plugins: `LinkHandlerPlugin`, `EventHandlerPlugin`                                                                                                      | missing |                                                                                                                                                           |
-| SW as a composable library (`shouldRoute` / `route` for an existing PWA SW)                                                                             | partial | Stomp's worker is standalone                                                                                                                              |
-| `back()` / `forward()` bounded to the frame's own history, `canGoBack`, `title`, `url`                                                                  | ahead   |                                                                                                                                                           |
-| `RemoteController`, sandbox option, `frameAncestors`, `pollInterval`                                                                                    | ahead   |                                                                                                                                                           |
+| Feature                                                                                                                               | Status  | Notes                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Multiple controllers per origin (random id prefix)                                                                                    | missing | one controller per `directory`; a second host tab replaces the first in the SW                                                                            |
+| Per-frame prefix / identity                                                                                                           | partial | requests are attributed to frames through the page's reported client id                                                                                   |
+| `Frame.hooks.init.pre/post` (run host code inside a proxied realm)                                                                    | missing |                                                                                                                                                           |
+| `Frame.hooks.fetch.*` (request taps)                                                                                                  | partial | `onRequest` summary events (url, method, destination, status, ms, cached, bytes, error, frame); no interception; a hook chain waits for a second consumer |
+| `Frame.hooks.error.request` (host replaces the error page)                                                                            | missing |                                                                                                                                                           |
+| Lifecycle events pushed to the host                                                                                                   | ahead   | `navigate` CustomEvent and `onNavigate` on load, pushState, hashchange, title changes; the poll is a fallback                                             |
+| Cookie jar reachable from the host                                                                                                    | ok      | `controller.cookies`                                                                                                                                      |
+| Version pin between `serviceWorker.js`, inject bundles and controller                                                                 | ok      | build id (`STOMP_BUILD`) checked at the handshake and at inject time                                                                                      |
+| Popup policy                                                                                                                          | ok      | `onOpen` routes `window.open` / `_blank` / named targets to the host's tab model                                                                          |
+| HTTP cache                                                                                                                            | partial | `cache: true`, `clearCache()`; explicit freshness only (section 6)                                                                                        |
+| Pluggable codec functions                                                                                                             | partial | four keyed codecs instead                                                                                                                                 |
+| Configurable paths for bundles                                                                                                        | partial |                                                                                                                                                           |
+| Flags: `syncxhr`, `cleanErrors`, `sourcemaps`, `allowFailedIntercepts`, `destructureRewrites`, `siteFlags`, `maskedfiles`, dev preset | missing | `allowInvalidJs` exists; destructuring rewrites are always on                                                                                             |
+| Plugins: `UrlWatcherPlugin`, `CatchEscapedLinksPlugin`, `HttpCachePlugin`                                                             | ok      | built in: navigate events, `onOpen`, the cache                                                                                                            |
+| Plugins: `LinkHandlerPlugin`, `EventHandlerPlugin`                                                                                    | missing |                                                                                                                                                           |
+| SW as a composable library (`shouldRoute` / `route` for an existing PWA SW)                                                           | partial | Stomp's worker is standalone                                                                                                                              |
+| `back()` / `forward()` bounded to the frame's own history, `canGoBack`, `title`, `url`                                                | ahead   |                                                                                                                                                           |
+| `RemoteController`, sandbox option, `frameAncestors`, `pollInterval`                                                                  | ahead   |                                                                                                                                                           |
 
 ## 9. Tooling, tests, scaffolding
 
-| Feature                                                                                              | Status  | Notes                                                                                                            |
-| ---------------------------------------------------------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------- |
-| Playwright test runner with per-suite servers, parallel workers, summary                             | ok      | `npm test`: 33 suites, each on its own demo server and fixture, up to eight at once, about 2.5 minutes           |
-| Test corpus                                                                                          | partial | 33 suites covering the rows marked ok above; scramjet's adversarial and WPT corpora are broader                  |
-| Differential "bare" harness, in-page assert helpers, expected-failure list, coverage, `inspect` mode | missing |                                                                                                                  |
-| WPT vendoring (cookies, fetch-metadata, referrer-policy)                                             | missing |                                                                                                                  |
-| Rewriter unit tests                                                                                  | partial | the rewriter suite runs shapes in a page; scramjet's native test files not ported                                |
-| Dev loop                                                                                             | ok      | `npm run dev` with live reload (built by the other session)                                                      |
-| `create-proxy-app` scaffolding, `proxy-bootstrap` server, static bootstrap                           | missing | `demo/` is the reference integration                                                                             |
-| Demo: flag editor, playground with a virtual origin                                                  | missing |                                                                                                                  |
-| Demo: request viewer                                                                                 | missing | `onRequest` now provides the data                                                                                |
-| Demo: multiple tabs with live previews, TLD autocomplete, isolation toggle, console badges, `?cache` | ahead   |                                                                                                                  |
-| CI: package validation, release pipeline, browser suites in CI                                       | partial | lint, types, format, prose, build, pinned actions, deploy gate; the suites need Chrome and network on the runner |
+| Feature                                                                                              | Status  | Notes                                                                                                             |
+| ---------------------------------------------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------- |
+| Playwright test runner with per-suite servers, parallel workers, summary                             | ok      | `npm test`: 33 suites, each on its own demo server and fixture, up to eight at once, about 2.5 minutes            |
+| Test corpus                                                                                          | partial | 33 suites covering the rows marked ok above; scramjet's adversarial and WPT corpora are broader                   |
+| Differential "bare" harness, in-page assert helpers, expected-failure list, coverage, `inspect` mode | missing |                                                                                                                   |
+| WPT vendoring (cookies, fetch-metadata, referrer-policy)                                             | missing |                                                                                                                   |
+| Rewriter unit tests                                                                                  | ok      | `rewriter-unit` asserts generated code in node (esbuild bundle); the browser rewriter suite runs shapes in a page |
+| Dev loop                                                                                             | ok      | `npm run dev` with live reload (built by the other session)                                                       |
+| `create-proxy-app` scaffolding, `proxy-bootstrap` server, static bootstrap                           | missing | `demo/` is the reference integration                                                                              |
+| Demo: flag editor, playground with a virtual origin                                                  | missing |                                                                                                                   |
+| Demo: request viewer                                                                                 | missing | `onRequest` now provides the data                                                                                 |
+| Demo: multiple tabs with live previews, TLD autocomplete, isolation toggle, console badges, `?cache` | ahead   |                                                                                                                   |
+| CI: package validation, release pipeline, browser suites in CI                                       | partial | lint, types, format, prose, build, pinned actions, deploy gate; the suites need Chrome and network on the runner  |
 
 ## 10. What is left, by payoff
 
-1. Rewriter gaps: an `allowInvalidJs` flag (off: a script the rewriter
-   cannot parse fails instead of running raw); `debugger` removal.
-2. Documents that escape the rewrite: `area[href]`, `blob:` and `about:blank`
+1. Documents that escape the rewrite: `area[href]`, `blob:` and `about:blank`
    documents, `window.open` return values, import map URLs,
    `iframe[sandbox|csp|credentialless]`.
-3. Missing URL attributes (`frame`, `input`, `track`, `object`, `poster`,
+2. Missing URL attributes (`frame`, `input`, `track`, `object`, `poster`,
    `formaction`, `imagesrcset`, the other SVG `href` carriers),
    `link[rel]` tokenising, `script[type]` recognition.
-4. Reading back: `getComputedStyle` and `getPropertyValue` un-rewrite, Typed
+3. Reading back: `getComputedStyle` and `getPropertyValue` un-rewrite, Typed
    OM, `SVGAnimatedString.baseVal`, `script.textContent`,
    `PerformanceEntry.name`, `Error.prepareStackTrace`, `hashchange` URLs.
-5. Cookies: domain and path boundaries, SameSite, prefixes, HttpOnly on
+4. Cookies: domain and path boundaries, SameSite, prefixes, HttpOnly on
    WebSockets, `cookieStore` removal, seeding `document.cookie` into the page.
-6. The page's own `Referrer-Policy` (needs the document's headers per client).
-7. Cache: heuristic freshness from `Last-Modified`, stale-while-revalidate,
+5. The page's own `Referrer-Policy` (needs the document's headers per client).
+6. Cache: heuristic freshness from `Last-Modified`, stale-while-revalidate,
    stale-if-error.
-8. The Tap: a request hook chain (intercept, request, response) once a second
+7. The Tap: a request hook chain (intercept, request, response) once a second
    consumer beyond `onRequest` exists, and `Frame.hooks.error.request`.
-9. A demo request viewer on `onRequest`; browser suites in CI; scramjet's
+8. A demo request viewer on `onRequest`; browser suites in CI; scramjet's
    adversarial corpus ported one file at a time.

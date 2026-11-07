@@ -106,6 +106,15 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- `allowInvalidJs` on both controllers (default `true`, today's behaviour): a
+  script the rewriter cannot parse runs as it was. With `false` it fails with
+  a `SyntaxError` naming the rewriter error instead, so a broken rewrite is
+  loud while developing (scramjet's dev preset does the same).
+- `debugger` statements are removed from proxied scripts: on a proxied site
+  they are an anti-debugging trap, not the user's breakpoint.
+- `npm test` includes a node-side suite (`rewriter-unit`) that bundles the
+  JS rewriter with esbuild and asserts the generated code itself; it skips
+  with a message where esbuild is not installed.
 - A dynamic `import()` in a classic external script resolves against the
   script's URL instead of the document's, and modules get
   `import.meta.resolve()` (the page's URLs; a bare specifier comes back as it
@@ -339,7 +348,8 @@ Fixed while testing real sites and a feature fixture:
 - In same-origin mode a `postMessage` from the host into a frame runs the
   frame's own hooked `postMessage`, so it arrives as if the page had sent it;
   only the cross-origin boundary of isolation mode lets the filter drop it.
-- A script the rewriter cannot parse runs unrewritten. In isolation mode the
+- A script the rewriter cannot parse runs unrewritten (unless
+  `allowInvalidJs: false`). In isolation mode the
   sandbox and the cross-origin boundary contain it; in same-origin mode it can
   reach the real `top`, which is one more reason that mode is not a security
   boundary.

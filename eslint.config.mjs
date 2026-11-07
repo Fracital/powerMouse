@@ -6,7 +6,14 @@ import tseslint from 'typescript-eslint';
 
 export default defineConfig([
 	{
-		ignores: ['dist/', 'lib/', 'node_modules/', 'demo/public/pm/main.js'],
+		ignores: [
+			'dist/',
+			'lib/',
+			'node_modules/',
+			'demo/public/pm/main.js',
+			// esbuild bundles written by the rewriter-unit suite
+			'test/out/',
+		],
 	},
 	js.configs.recommended,
 	...tseslint.configs.recommended,

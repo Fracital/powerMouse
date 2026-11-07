@@ -86,6 +86,10 @@ export function modifyJS(
 
 		for (const ctx of new AcornIterator(tree)) {
 			typeLoop: switch (ctx.node.type) {
+				case 'DebuggerStatement':
+					// a proxied site's anti-debugging trap, not the user's breakpoint
+					ctx.replaceWith(b.emptyStatement());
+					break;
 				case 'ImportExpression':
 					// todo: add tompc$.import(meta, url)
 					ctx.replaceWith(
@@ -546,7 +550,11 @@ if (!${CLIENT_KEY}.applied)
 		// a script the rewriter cannot handle runs as it was: the browser may
 		// still parse it (and rejects it the same way when it cannot), while a
 		// `throw` here would silently kill every script with that shape
-		console.warn(`Stomp could not rewrite ${url}: ${String(error)}`);
+		const message = `Stomp could not rewrite ${url}: ${String(error)}`;
+		console.warn(message);
+		// unless the host asked for a loud failure (allowInvalidJs: false)
+		if (config.allowInvalidJs === false)
+			return `throw new SyntaxError(${JSON.stringify(message)});`;
 		return script;
 	}
 }
