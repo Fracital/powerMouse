@@ -1,0 +1,17 @@
+{
+	"set-cookie": [
+		"hdr=1; Path=/",
+		"hdrdp=1",
+		"http=1; HttpOnly; Path=/",
+		"__Host-hdr=1; Secure; Path=/",
+		"__Host-nosecure=1; Path=/",
+		"__Secure-hdr=1; Secure; Path=/",
+		"__Secure-nosecure=1; Path=/",
+		"nonenosecure=1; SameSite=None; Path=/",
+		"strict=1; SameSite=Strict; Path=/",
+		"lax=1; SameSite=Lax; Path=/",
+		"none=1; SameSite=None; Secure; Path=/",
+		"otherdom=1; Domain=localhost; Path=/",
+		"ipsuffix=1; Domain=0.0.1; Path=/"
+	]
+}

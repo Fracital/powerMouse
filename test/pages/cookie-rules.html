@@ -1,0 +1,29 @@
+<!doctype html>
+<title>COOKIERULES</title>
+<script>
+	window.__cr = {};
+	// through document.cookie: plain cookies, one at the default path, and
+	// the shapes the jar must refuse (oversize, a control character, a bad
+	// prefix); a tab is the one control character a value may carry
+	document.cookie = 'js=1; path=/';
+	document.cookie = 'jsdp=1';
+	document.cookie = 'big=' + 'x'.repeat(4093);
+	document.cookie = 'huge=' + 'x'.repeat(4094);
+	document.cookie = 'ctl=a\u0001b; path=/';
+	document.cookie = 'tab=a\tb; path=/';
+	document.cookie = '__Host-js=1; Secure; Path=/';
+	document.cookie = '__Host-jsbad=1; Path=/';
+	document.cookie = 'novalue; path=/';
+	__cr.document = document.cookie;
+	fetch('/echo-headers')
+		.then((r) => r.json())
+		.then((h) => {
+			__cr.sent = h.cookie || '';
+		})
+		.catch((e) => {
+			__cr.error = String(e);
+		})
+		.finally(() => {
+			__cr.done = true;
+		});
+</script>

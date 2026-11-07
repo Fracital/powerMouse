@@ -39,10 +39,12 @@ export class CookiesModule extends Module<DocumentClient> {
 	set pageCookies(value: string) {
 		const syncModule = this.client.getModule(SyncModule)!;
 
+		// a script-set cookie can neither create nor replace an HttpOnly one
 		syncModule.jsonAPI(
 			`${this.client.directory}cookies/set`,
 			value,
 			this.client.url.toString(),
+			'script',
 		);
 	}
 	apply() {

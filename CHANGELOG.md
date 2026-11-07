@@ -110,6 +110,16 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- The cookie jar follows RFC 6265bis: cookies set without `Domain` are
+  host-only, `Domain` matches by label and never a public suffix, paths match
+  on a boundary from the request's default path, `Secure` cookies go to secure
+  URLs only and an insecure origin cannot replace them, `__Host-` /
+  `__Secure-` prefixes, the 4096-byte cap and control characters are enforced,
+  `SameSite=None` needs `Secure`, `Max-Age` beats `Expires` with a 400-day
+  cap, the Cookie header lists longer paths first then earlier creations, and
+  a page's script can neither set nor replace an HttpOnly cookie. Session
+  cookies survive a service worker restart (they were wiped every time the
+  idle worker was restarted, which logged users out).
 - A build mismatch at the handshake never blocks the page. After a deploy the
   page loads the new controller bundle while the old service worker is still
   the active one, so the controller updates the registration and, when the
