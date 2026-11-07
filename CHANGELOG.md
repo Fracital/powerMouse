@@ -300,6 +300,22 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   frame of the page now stays with the browser, which navigates that frame
   (links suite; wpt-referrer-policy: 111 `a-tag` subtests from timeout to
   pass).
+- A proxied document's `document.referrer` follows the referring page's
+  referrer policy. The browser applies the policy in proxy URL space, where
+  every page shares the proxy origin, so it keeps the full routed URL, and the
+  inject decoded that: a frame on another origin saw the full referring URL
+  where its header, meta tag, `referrerpolicy` attribute or the default
+  (`strict-origin-when-cross-origin`) said origin only or nothing. The
+  service worker now hands each document it serves the referrer it computed
+  for the real origins (the function the Referer header already used, moved
+  to `src/referrerPolicy.ts`), and when the browser sent only the proxy
+  origin (`origin`, `strict-origin`) a nested document applies the policy to
+  its parent. The worker also remembers what each redirect it answered sent,
+  so a chain through another origin stays narrowed on the next hop for the
+  header too (wpt-referrer-policy at concurrency 1, iframe-tag, script-tag,
+  xhr, img-tag and fetch: 196 proxied failures to 0; referrer suite:
+  no-referrer, origin, cross-origin strict-origin-when-cross-origin and
+  unsafe-url frames match native ones).
 - `new Request(request)` keeps the request's URL. The Request constructor
   hook resolved its first argument as a URL string against the page, so a
   Request given a Request (what `fetch(new Request(req, init))` and libraries

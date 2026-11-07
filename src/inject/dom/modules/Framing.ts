@@ -15,8 +15,10 @@ import ContextModule, { sameOrigin } from './Context';
  *   storage, so writes go to a shadow value)
  * - outer size / screen position match the inner size, like a maximised
  *   window
- * - `document.referrer` never reveals the host; a routed referrer decodes to
- *   the real page URL
+ * - `document.referrer` never reveals the host; a document the service
+ *   worker served shows the referrer it computed under the referring
+ *   document's policy for the real origins, and anything else (srcdoc,
+ *   blob: documents) decodes a routed referrer to the real page URL
  * - `message` events from windows outside the proxied world never reach the
  *   page (the host must not be able to talk to it, and it must not learn
  *   the host exists)
@@ -120,6 +122,10 @@ export default class FramingModule extends Module<DocumentClient> {
 			get: proxyModule.wrapFunction(
 				referrerDescriptor.get!,
 				(target, that, args) => {
+					// the browser judged the policy in proxy URL space, where every
+					// page is same-origin and the full routed URL is kept
+					const decided = this.client.referrerOf(that);
+					if (decided !== undefined) return decided;
 					const referrer = String(Reflect.apply(target, that, args));
 					if (!referrer) return '';
 					try {

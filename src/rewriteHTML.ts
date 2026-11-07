@@ -1,6 +1,7 @@
 import { escapeText } from 'entities';
 import { Config } from './config';
 import { helperNames } from './helperNames';
+import type { ReferrerInfo } from './referrerPolicy';
 import { modifyJS } from './rewriteJS';
 import {
 	createDataURI,
@@ -83,17 +84,28 @@ export function nestedTopOf(
 	}
 }
 
+/** the shell's statement that hands the client its document's referrer (none without one) */
+function referred(client: string, referrer: ReferrerInfo | undefined): string {
+	if (!referrer) return '';
+	// a URL's query may hold `<`: never let it close the shell's script
+	const info = JSON.stringify(referrer).replace(/</g, '\\u003c');
+	return `\t${client}.setReferrer(document, ${info});`;
+}
+
 /**
  * The shell that stands in for a document: loads the inject bundle, creates
  * the client and hands it the real markup. A document whose own URL cannot
  * carry the page URL (a blob: document the page built) gets `base`: the
- * shell names the page URL for the client first.
+ * shell names the page URL for the client first. `referrer` is what the
+ * service worker decided the document's referrer is (a document it served);
+ * a shell the page realm builds has none and keeps the browser's.
  */
 export function modifyHTML(
 	script: string,
 	url: StompURL,
 	config: Config,
 	base = false,
+	referrer?: ReferrerInfo,
 ): string {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	const names = helperNames(config);
@@ -103,6 +115,7 @@ export function modifyHTML(
 	if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 
+${referred(names.client, referrer)}
 	if (!${names.client}.applied) try {
 		${names.client}.apply(true);
 	} catch(error) {
@@ -140,6 +153,7 @@ export function modifyXML(
 	url: StompURL,
 	config: Config,
 	mime: string,
+	referrer?: ReferrerInfo,
 ): string {
 	// the root start tag, after the prolog, comments and doctype
 	const tags =
@@ -164,6 +178,7 @@ export function modifyXML(
 } else {
 	if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
+${referred(names.client, referrer)}
 	if (!${names.client}.applied) ${names.client}.apply();
 	${names.client}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});
 }`;

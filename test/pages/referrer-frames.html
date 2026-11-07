@@ -1,0 +1,21 @@
+<!doctype html>
+<title>REFERRER FRAMES</title>
+<script>
+	// ?policy=<name>[&cross=1] opens referrer-child.html in an iframe with that
+	// referrerpolicy attribute (on the fixture's other host name with cross)
+	// and records the document.referrer the child reports
+	window.__ref = {};
+	const params = new URLSearchParams(location.search);
+	const other = location.origin.includes('127.0.0.1')
+		? location.origin.replace('127.0.0.1', 'localhost')
+		: location.origin.replace('localhost', '127.0.0.1');
+	addEventListener('message', (event) => {
+		if (typeof event.data?.referrer !== 'string') return;
+		__ref.referrer = event.data.referrer;
+		__ref.done = true;
+	});
+	const frame = document.createElement('iframe');
+	frame.referrerPolicy = params.get('policy');
+	frame.src = `${params.get('cross') ? other : location.origin}/pages/referrer-child.html`;
+	document.documentElement.append(frame);
+</script>

@@ -6,6 +6,11 @@ import { getDomain } from 'tldts';
 import GenericCodec from '../Codecs';
 import { codecType, Config, ParsedConfig } from '../config';
 import { capitalizeHeaders, rewriteLinkHeader } from '../headers';
+import {
+	DEFAULT_REFERRER_POLICY,
+	refererFor,
+	type ReferrerInfo,
+} from '../referrerPolicy';
 import { modifyCSS, rewriteCSSValueURLs, routeCSS } from '../rewriteCSS';
 import {
 	modifyHTML,
@@ -45,8 +50,6 @@ const integrityHeaders: string[] = ['Content-MD5'];
 
 declare const clients: Clients | undefined;
 
-const DEFAULT_REFERRER_POLICY = 'strict-origin-when-cross-origin';
-
 /** the real URL a request is reported as: without the `#url(...)` fragment the CSS rewriter keeps for idempotence */
 function reportURL(url: StompURL): string {
 	const text = url.toString();
@@ -73,41 +76,55 @@ function widestSite(a: string, b: Site): Site {
 }
 
 /**
- * The Referer a browser sends from `source` to `target` under `policy`
- * (Referrer Policy, "determine request's referrer"), for the real origins.
- * Null means no header.
+ * The referrer each redirect answered by this worker sent, by the request's
+ * own (proxy space) referrer and the URL it redirected to: the hop the
+ * browser makes next is a new fetch event, and only this says the chain
+ * already went through another origin. Taken once; kept a minute at most.
  */
-function refererFor(source: URL, target: URL, policy: string): string | null {
-	const sameOrigin = source.origin === target.origin;
-	const downgrade =
-		source.protocol === 'https:' && target.protocol !== 'https:';
-	const full = () => {
-		const stripped = new URL(source);
-		stripped.hash = '';
-		stripped.username = '';
-		stripped.password = '';
-		return stripped.toString();
-	};
-	const origin = () => `${source.origin}/`;
-	switch (policy) {
-		case 'no-referrer':
-			return null;
-		case 'unsafe-url':
-			return full();
-		case 'origin':
-			return origin();
-		case 'same-origin':
-			return sameOrigin ? full() : null;
-		case 'strict-origin':
-			return downgrade ? null : origin();
-		case 'no-referrer-when-downgrade':
-			return downgrade ? null : full();
-		case 'origin-when-cross-origin':
-			return sameOrigin ? full() : origin();
-		default:
-			// strict-origin-when-cross-origin
-			return sameOrigin ? full() : downgrade ? null : origin();
+const redirectReferrers = new Map<
+	string,
+	{ referer: string | null; at: number }
+>();
+const REDIRECT_REFERRER_TTL = 60_000;
+
+function redirectKey(referrer: string, target: string): string {
+	const url = new URL(target);
+	url.hash = '';
+	return `${referrer}\n${url.href}`;
+}
+
+function rememberRedirectReferrer(
+	referrer: string,
+	location: string,
+	base: string,
+	referer: string | null,
+) {
+	const now = Date.now();
+	for (const [key, entry] of redirectReferrers)
+		if (now - entry.at > REDIRECT_REFERRER_TTL) redirectReferrers.delete(key);
+	try {
+		redirectReferrers.set(redirectKey(referrer, new URL(location, base).href), {
+			referer,
+			at: now,
+		});
+	} catch (error) {
+		// a Location that is no URL: the browser will not follow it either
 	}
+}
+
+/** the referrer the previous hop sent (null: none), or undefined when this request is not a remembered redirect */
+function takeRedirectReferrer(
+	referrer: string,
+	url: string,
+): string | null | undefined {
+	if (!referrer || referrer === 'about:client') return undefined;
+	const key = redirectKey(referrer, url);
+	const entry = redirectReferrers.get(key);
+	if (!entry) return undefined;
+	redirectReferrers.delete(key);
+	return Date.now() - entry.at > REDIRECT_REFERRER_TTL
+		? undefined
+		: entry.referer;
 }
 
 const BODY_ILLEGAL = ['GET', 'HEAD'];
@@ -116,6 +133,7 @@ type BodyTransform = (
 	url: StompURL,
 	response: Response,
 	responseHeaders: Headers,
+	referrer: ReferrerInfo,
 ) => Promise<BodyInit | false>;
 
 interface Rewriter {
@@ -293,10 +311,27 @@ function genericForward(
 				}
 		}
 
+		// a redirect this worker answered earlier in the same chain decided the
+		// referrer already: the next hop starts from that (stripped) value
+		const carried = takeRedirectReferrer(
+			serverRequest.referrer,
+			serverRequest.url,
+		);
+		const referer =
+			carried !== undefined
+				? carried && refererFor(new URL(carried), url.url, policy)
+				: initiator && refererFor(initiator, url.url, policy);
+		if (referer) requestHeaders.set('referer', referer);
+		// what the document this request creates shows as document.referrer
+		const referrerInfo: ReferrerInfo =
+			carried !== undefined || initiator
+				? { referrer: referer ?? '' }
+				: serverRequest.referrer === `${oURL.origin}/`
+					? { policy }
+					: { referrer: '' };
+
 		if (initiator) {
 			const sameOrigin = initiator.origin === url.url.origin;
-			const referer = refererFor(initiator, url.url, policy);
-			if (referer) requestHeaders.set('referer', referer);
 
 			// the browser sends Origin on cross-origin fetches and on every
 			// request with a body
@@ -610,6 +645,22 @@ function genericForward(
 			additionalResponseFilter,
 		);
 
+		// the browser follows the redirect in proxy URL space, where every hop
+		// is same-origin and the referrer never narrows: remember what this hop
+		// sent, so a chain through another origin keeps the reduction it got
+		if (
+			response.status >= 300 &&
+			response.status < 400 &&
+			responseHeaders.has('location') &&
+			(carried !== undefined || initiator)
+		)
+			rememberRedirectReferrer(
+				serverRequest.referrer,
+				responseHeaders.get('location')!,
+				serverRequest.url,
+				referer,
+			);
+
 		// preloads announced by the server fetch through the proxy too
 		if (responseHeaders.has('link'))
 			responseHeaders.set(
@@ -647,7 +698,7 @@ function genericForward(
 			body = undefined;
 		} else {
 			const transformed = transformBody
-				? await transformBody(url, response, responseHeaders)
+				? await transformBody(url, response, responseHeaders, referrerInfo)
 				: false;
 
 			body = transformed !== false ? transformed : response.body!;
@@ -850,7 +901,7 @@ export function registerRewrites(
 		/^\/html(:nested:[^/]*)?\//,
 		genericForward(
 			rewriter,
-			async (url, response, responseHeaders) => {
+			async (url, response, responseHeaders, referrer) => {
 				const contentType = responseHeaders.get('content-type');
 				const mime = getMime(contentType || '');
 				if (!htmlMimes.includes(mime)) return false;
@@ -866,11 +917,14 @@ export function registerRewrites(
 						url,
 						rewriter.config,
 						mime,
+						referrer,
 					);
 				return modifyHTML(
 					decodeDocument(bytes, contentType),
 					url,
 					rewriter.config,
+					false,
+					referrer,
 				);
 			},
 			(resource, url) => routeHTML(resource, url, rewriter.config),

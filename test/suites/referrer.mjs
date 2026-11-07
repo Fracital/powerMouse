@@ -2,7 +2,9 @@
 // eight policies set by a meta tag, a policy that arrives as a response
 // header, and a fetch whose init overrides the document's policy. The
 // fixture's /echo-headers answers with the request headers it saw; the
-// cross-site target is the fixture's other host name. Same-origin mode.
+// cross-site target is the fixture's other host name. Then the
+// document.referrer an iframe's document sees under the iframe's
+// referrerpolicy, against the same pages loaded natively. Same-origin mode.
 import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
@@ -88,4 +90,32 @@ ok(
 	header.header === 'same-origin',
 	JSON.stringify(header.header),
 );
+
+// document.referrer of a framed document: what a native frame sees (the same
+// pages loaded straight from the fixture) is what the proxied one must see
+const native = await browser.newPage();
+const nativeRun = async (file) => {
+	await native.goto(`${FIXTURE}pages/${file}`);
+	await native.waitForFunction(() => window.__ref?.done, null, {
+		timeout: 15000,
+	});
+	return native.evaluate(() => window.__ref);
+};
+const FRAMED = [
+	['no-referrer', '', ''],
+	['origin', '', `${origin}/`],
+	['strict-origin-when-cross-origin', '&cross=1', `${origin}/`],
+	['unsafe-url', '&cross=1', 'full'],
+];
+for (const [policy, cross, expected] of FRAMED) {
+	const file = `referrer-frames.html?policy=${policy}${cross}`;
+	const seen = await nativeRun(file);
+	const proxied = await run(file);
+	const want = expected === 'full' ? full(file) : expected;
+	ok(
+		`document.referrer under ${policy}${cross ? ' (cross-origin)' : ''} is the native frame's`,
+		seen.referrer === want && proxied.referrer === seen.referrer,
+		JSON.stringify({ native: seen.referrer, proxied: proxied.referrer }),
+	);
+}
 await done(browser);

@@ -1,6 +1,7 @@
 import { decode } from 'entities';
 import { ParsedConfig } from '../../config';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
+import { refererFor, type ReferrerInfo } from '../../referrerPolicy';
 import { modifyJS, rewriteImportMap } from '../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import StompURL from '../../StompURL';
@@ -69,6 +70,9 @@ export default class DocumentClient extends Client {
 	// the real top's postMessage, taken before any page code ran: open
 	// requests must not go through anything the page can replace
 	private topPostMessage: typeof postMessage | null;
+	// each document's referrer as the service worker decided it for the real
+	// origins (the browser's own is judged in proxy URL space)
+	#referrers = new WeakMap<Document, string>();
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		this.write = this.global.document.write;
@@ -140,6 +144,33 @@ export default class DocumentClient extends Client {
 	/** what a navigation from this context routes as: the top origin when nested, else a top-level document */
 	get nestedRoute(): string | false {
 		return this.nested ? this.topOrigin : false;
+	}
+	/**
+	 * Called by the shell the service worker served with `document`, before
+	 * the page runs. When the worker saw only the proxy origin (the policy
+	 * stripped the routed URL the browser had), a nested document's
+	 * initiator is taken to be its parent, the one proxied page it can see.
+	 */
+	setReferrer(document: Document, info: ReferrerInfo) {
+		if ('referrer' in info) {
+			this.#referrers.set(document, info.referrer);
+			return;
+		}
+		let referrer = '';
+		if (this.nested)
+			try {
+				const parent = (this.parent as Record<string, any>)[
+					this.names.client
+				] as DocumentClient;
+				referrer = refererFor(parent.url.url, this.url.url, info.policy) ?? '';
+			} catch (error) {
+				// the parent went away: no referrer, as for an unknown initiator
+			}
+		this.#referrers.set(document, referrer);
+	}
+	/** the referrer the service worker decided for `document`, if it served it */
+	referrerOf(document: Document): string | undefined {
+		return this.#referrers.get(document);
 	}
 	get top(): typeof globalThis {
 		return this.topDescriptor.get!.call(this.global);
