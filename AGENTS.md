@@ -165,7 +165,9 @@ request: `npm ci --ignore-scripts`, `npm run check`, `npm run lint`,
 attribution; the same script checks a PR's commit messages) and the esbuild
 build. All of it must pass locally before you push. A `browser suites` job
 runs `npm test` on the runner's Chrome with `SKIP_NETWORK=1` (the suites
-that drive Wikipedia stay out) and `PARALLEL=2`; it is informational until it
+that drive Wikipedia stay out), `SKIP_TIMING=1` (the flick-velocity suite)
+and `SKIP_MEASUREMENT=1` (the adversarial corpus, which reports every known
+leak as a failure on purpose) and `PARALLEL=2`; it is informational until it
 has proven stable and is not required by branch protection.
 
 Rules for touching the workflow, because a PR from anyone runs it:

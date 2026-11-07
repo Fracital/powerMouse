@@ -92,6 +92,7 @@ jobs:
           CHROME: /usr/bin/google-chrome
           SKIP_NETWORK: '1'
           SKIP_TIMING: '1'
+          SKIP_MEASUREMENT: '1'
           PARALLEL: '2'
           NO_COLOR: '1'
         run: npm test
