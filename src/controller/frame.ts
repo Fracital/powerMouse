@@ -113,6 +113,7 @@ if (window === window.parent || !origins.length) {
 						openTab: !!init.openTab,
 						...(init.cache === false ? { cache: false } : {}),
 						...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
+						...(init.rules ? { rules: init.rules } : {}),
 						// the host's request log travels SW -> here -> host
 						...(init.requestLog
 							? {
@@ -163,6 +164,10 @@ if (window === window.parent || !origins.length) {
 				clearCache: async () => {
 					if (!controller) throw new Error('Controller is not initialised');
 					await controller.clearCache();
+				},
+				rules: async (rules) => {
+					if (!controller) throw new Error('Controller is not initialised');
+					await controller.setRules(rules);
 				},
 				cookies: async (command) => {
 					if (!controller) throw new Error('Controller is not initialised');

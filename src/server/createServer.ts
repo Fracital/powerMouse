@@ -1,7 +1,7 @@
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { openDB } from 'idb';
 import { Config, generateConfigCodecKey, parseConfig } from '../config';
-import type { RequestInfo } from '../transport/messages';
+import type { RequestInfo, RequestRule } from '../transport/messages';
 import { HttpCache } from './cache';
 import Cookies, { registerCookies } from './Cookies';
 import { registerRewrites } from './rewrites';
@@ -17,6 +17,8 @@ export interface StompServer {
 	clearCache(): Promise<void>;
 	/** the cookie jar, for the host's cookies API */
 	cookies: Cookies;
+	/** replace the host's request rules */
+	setRules(rules: RequestRule[]): void;
 }
 
 export default async function createServer(
@@ -62,7 +64,7 @@ export default async function createServer(
 	router.routes.set(/^\/whoami$/, (request, url, context) =>
 		json(200, context?.clientId ?? null),
 	);
-	const { route } = registerRewrites(
+	const { route, setRules } = registerRewrites(
 		router,
 		init,
 		cookies,
@@ -80,5 +82,6 @@ export default async function createServer(
 		clearCache: async () => {
 			await cache?.clear();
 		},
+		setRules,
 	};
 }

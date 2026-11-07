@@ -4,6 +4,7 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import { Config, ConfigCodec } from '../config';
 import { isUrlLike, urlLike } from '../StompURL';
+import type { RequestRule } from '../transport/messages';
 import {
 	CONTROLLER_INIT,
 	CONTROLLER_RPC,
@@ -94,6 +95,12 @@ export interface ControllerInit {
 	allowInvalidJs?: boolean;
 	/** @internal ms before the service worker answers a routed request with 504 (tests) */
 	fetchTimeout?: number;
+	/**
+	 * Request rules, run in the service worker on the real URL: block, answer
+	 * with a status, redirect, or edit request and response headers; the
+	 * first matching rule wins. `setRules()` replaces them later.
+	 */
+	rules?: RequestRule[];
 	/**
 	 * sandbox flags for proxied frames, default `DEFAULT_SANDBOX`. Same-origin
 	 * frames are not a security boundary, but without a sandbox the browser
@@ -196,6 +203,11 @@ export function activated(worker: ServiceWorker): Promise<ServiceWorker> {
 }
 
 export type { StaleInfo };
+export type {
+	RequestRule,
+	RequestRuleAction,
+	RequestRuleMatch,
+} from '../transport/messages';
 
 function defaultDirectory(): URL {
 	const script =
@@ -238,6 +250,7 @@ export class StompController extends EventTarget {
 	private lastHandshake = 0;
 	/** a build mismatch is being healed: the next ready answer must agree */
 	private healing = false;
+	private rules: RequestRule[];
 	constructor(init: ControllerInit) {
 		super();
 		if (!('serviceWorker' in navigator))
@@ -247,6 +260,7 @@ export class StompController extends EventTarget {
 		this.transport = init.transport;
 		this.sandbox = init.sandbox === undefined ? DEFAULT_SANDBOX : init.sandbox;
 		this.onRequest = init.onRequest;
+		this.rules = init.rules ?? [];
 		this.directory = isUrlLike(init.directory)
 			? new URL(init.directory, location.href)
 			: defaultDirectory();
@@ -465,6 +479,8 @@ export class StompController extends EventTarget {
 					this.healing = false;
 					// the id both sides agreed on, visible to the host
 					if (build !== undefined) this.config = { ...this.config, build };
+					// the rules travel with every handshake (a new worker starts empty)
+					if (this.rules.length) await this.rpc!.call('rules', this.rules);
 					if (this.stale && build === BUILD) {
 						this.stale = null;
 						this.dispatchEvent(
@@ -554,6 +570,12 @@ export class StompController extends EventTarget {
 	/** hot-swap the transport; in-flight requests finish on the old one */
 	setTransport(transport: ProxyTransport) {
 		this.transport = transport;
+	}
+	/** replace the request rules the service worker applies (see ControllerInit.rules) */
+	async setRules(rules: RequestRule[]): Promise<void> {
+		this.rules = rules;
+		await this.ready;
+		await this.rpc!.call('rules', rules);
 	}
 	/** drop every entry of the service worker's HTTP cache */
 	async clearCache(): Promise<void> {

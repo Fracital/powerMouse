@@ -80,6 +80,9 @@ function registerController(
 	const rpc = new RpcHelper<SWbound, Controllerbound>(
 		{
 			route: async (url) => [(await server).route(url), []],
+			rules: async (rules) => {
+				(await server).setRules(rules);
+			},
 			clearCache: async () => {
 				await (await server).clearCache();
 			},

@@ -110,6 +110,19 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- Request rules: `rules` on both controllers and `setRules(rules)` to replace
+  them, run in the service worker on the real URL after it has rebuilt
+  Referer, Origin and cookies and before the cache. A rule matches by URL
+  (a URLPattern string, so `http://*:*/ads/*` includes any port), method,
+  destination and site, and the first match wins: `block` answers 403 with
+  an empty body, `status` answers without going upstream, `redirect` answers
+  307 to a real URL (routed, nested kind kept), `requestHeaders` and
+  `responseHeaders` set or delete (`null`) headers. A rule whose pattern
+  cannot be compiled (URLPattern is Chrome-only today) is skipped with one
+  console warning naming it. Blocked, answered and redirected requests show
+  in `onRequest` with their status and the reason as `error`; every report
+  of a request a rule touched carries `rule`, the rule's index. Bodies and
+  functions are out of scope by design.
 - A nested cross-site frame is judged by the top-level page, as a browser
   does. The page routes a child document's URL (an iframe's src, and every
   navigation from inside a nested frame: links, forms, location, history,

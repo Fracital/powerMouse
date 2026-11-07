@@ -86,7 +86,36 @@ export const CONTROLLER_RPC = 'stomp';
 export const TRANSPORT_RPC = 'transport';
 
 /** implemented by the SW, called by the controller */
+/**
+ * A request rule, run in the service worker on the real URL after the
+ * worker rebuilt Referer, Origin and cookies, before the cache. `url` is a
+ * URLPattern string (`https://*.example.com/ads/*`); a rule whose pattern
+ * cannot be compiled is skipped with one console warning. The first matching
+ * rule wins. `null` deletes a header.
+ */
+export interface RequestRuleMatch {
+	url?: string;
+	method?: string[];
+	destination?: string[];
+	site?: ('same-origin' | 'same-site' | 'cross-site' | 'none')[];
+}
+export interface RequestRuleAction {
+	requestHeaders?: Record<string, string | null>;
+	responseHeaders?: Record<string, string | null>;
+	/** answer with a 307 to this real URL (routed) */
+	redirect?: string;
+	/** answer with this status and an empty body, never going upstream */
+	status?: number;
+}
+export interface RequestRule {
+	match: RequestRuleMatch;
+	/** `block`: a 403 with an empty body */
+	action: 'block' | RequestRuleAction;
+}
+
 export type SWbound = {
+	/** replace the request rules */
+	rules: [RequestRule[]];
 	/** resolve a URL against the controller's config into a routed (proxied) URL */
 	route: [string, string];
 	/** drop every entry of the HTTP cache */
@@ -136,6 +165,8 @@ export interface RequestInfo {
 	error?: string;
 	/** the service worker client that made it; the controller maps it to a frame */
 	client?: string;
+	/** the index, in the host's `rules`, of the rule that applied */
+	rule?: number;
 }
 
 /** what the service worker knows about the client that made a request */

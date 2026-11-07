@@ -3,6 +3,7 @@ import type {
 	CookieCommand,
 	CookieResult,
 	RequestInfo,
+	RequestRule,
 } from '../transport/messages';
 
 /** how a transport is described across the host/controller-frame boundary */
@@ -25,6 +26,8 @@ export interface ControllerFrameInit {
 	requestLog?: boolean;
 	/** unparseable scripts fail instead of running raw (RemoteControllerInit.allowInvalidJs) */
 	allowInvalidJs?: boolean;
+	/** request rules (RemoteControllerInit.rules) */
+	rules?: RequestRule[];
 }
 
 export interface FrameInfo {
@@ -51,6 +54,8 @@ export type FrameBound = {
 	frameCommand: [{ index: number; command: FrameCommand }, boolean];
 	clearCache: [];
 	cookies: [CookieCommand, CookieResult];
+	/** replace the request rules */
+	rules: [RequestRule[]];
 };
 
 /** the two builds in a mismatch, as the host sees them on `controller.stale` */

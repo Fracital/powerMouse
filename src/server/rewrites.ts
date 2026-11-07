@@ -16,7 +16,11 @@ import {
 import { modifyJS, routeJS, ScriptType } from '../rewriteJS';
 import { parseRoutedURL, routeBinary } from '../routeURL';
 import StompURL from '../StompURL';
-import type { RequestInfo, RouteContext } from '../transport/messages';
+import type {
+	RequestInfo,
+	RequestRule,
+	RouteContext,
+} from '../transport/messages';
 import { BUILD } from '../version';
 import { HttpCache, isCacheable } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
@@ -28,6 +32,7 @@ import {
 	RouteTransform,
 } from './filterHeaders';
 import Router from './Router';
+import { applyHeaderRule, CompiledRule, compileRules } from './rules';
 
 export const statusEmpty = [101, 204, 205, 304];
 
@@ -111,6 +116,8 @@ interface Rewriter {
 	cache?: HttpCache;
 	/** the host's request log, when it asked for one */
 	log?: (info: RequestInfo) => void;
+	/** the host's request rules, compiled */
+	rules: CompiledRule[];
 }
 
 function genericForward(
@@ -256,6 +263,53 @@ function genericForward(
 			).toString(),
 		);
 
+		// the host's rules, on the real request as it would go out: the first
+		// match blocks, answers, redirects or edits headers. Before the cache
+		// (a blocked or redirected request never touches it) and logged as such
+		const rule = rewriter.rules.find((candidate) =>
+			candidate.matches(url.url, serverRequest.method, destination, site),
+		);
+		if (rule) {
+			const answer = (
+				status: number,
+				headers?: Record<string, string>,
+				error?: string,
+			) => {
+				rewriter.log?.({
+					url: url.toString(),
+					method: serverRequest.method,
+					destination: serverRequest.destination,
+					status,
+					ms: Date.now() - started,
+					cached: false,
+					bytes: 0,
+					...(error ? { error } : {}),
+					client: context?.clientId,
+					rule: rule.index,
+				});
+				return new Response(null, { status, headers });
+			};
+			if (rule.action === 'block')
+				return answer(403, undefined, 'blocked by a rule');
+			if (rule.action.status !== undefined)
+				return answer(rule.action.status, undefined, 'answered by a rule');
+			if (rule.action.redirect !== undefined)
+				return answer(
+					307,
+					{
+						location: routeHTML(
+							new StompURL(new URL(rule.action.redirect, url.toString()), url),
+							url,
+							rewriter.config,
+							false,
+							nestedTopOf(oURL.pathname, rewriter.directory) ?? false,
+						),
+					},
+					'redirected by a rule',
+				);
+			applyHeaderRule(requestHeaders, rule.action.requestHeaders);
+		}
+
 		// the HTTP cache, unless the host turned it off: a fresh entry answers
 		// without the transport; a stale one with validators is revalidated
 		// and a 304 refreshes it; what comes back cacheable is stored (its
@@ -370,6 +424,18 @@ function genericForward(
 			}
 		}
 
+		if (rule && rule.action !== 'block' && rule.action.responseHeaders) {
+			const headers = new Headers(response.headers);
+			applyHeaderRule(headers, rule.action.responseHeaders);
+			const edited: typeof response = new Response(response.body, {
+				status: response.status,
+				statusText: response.statusText,
+				headers,
+			});
+			edited.rawHeaders = response.rawHeaders;
+			response = edited;
+		}
+
 		if (rewriter.log) {
 			const length = Number(response.headers.get('content-length'));
 			rewriter.log({
@@ -381,6 +447,7 @@ function genericForward(
 				cached,
 				bytes: Number.isFinite(length) ? length : null,
 				client: context?.clientId,
+				...(rule ? { rule: rule.index } : {}),
 			});
 		}
 
@@ -469,6 +536,7 @@ export function registerRewrites(
 		cookies,
 		cache,
 		log,
+		rules: [],
 		codec: init.codec,
 		directory: init.directory,
 		bare: new BareCompatibleClient(transport),
@@ -609,5 +677,10 @@ export function registerRewrites(
 		genericForward(rewriter, undefined, (resource) => routeBinary(resource)),
 	);
 
-	return { route };
+	return {
+		route,
+		setRules(rules: RequestRule[]) {
+			rewriter.rules = compileRules(rules);
+		},
+	};
 }

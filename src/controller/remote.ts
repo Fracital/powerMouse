@@ -4,7 +4,11 @@
 // over postMessage. Proxied content is shown in sandboxed, cross-origin
 // frames the host page can neither read nor be read by.
 import type { Config, ConfigCodec } from '../config';
-import type { NavigateInfo, RequestInfo } from '../transport/messages';
+import type {
+	NavigateInfo,
+	RequestInfo,
+	RequestRule,
+} from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import { cookieJar, CookieJar, navigateReport, openRequest } from './index';
 import {
@@ -50,6 +54,8 @@ export interface RemoteControllerInit {
 	cache?: boolean;
 	/** a script the rewriter cannot parse fails instead of running raw when `false` (see StompController) */
 	allowInvalidJs?: boolean;
+	/** request rules run in the service worker (see StompController) */
+	rules?: RequestRule[];
 	/** one report per proxied request, with the RemoteFrame when known (see StompController.onRequest) */
 	onRequest?: (info: RemoteRequestEvent) => void;
 }
@@ -173,6 +179,7 @@ export class RemoteController extends EventTarget {
 					...(init.cache === false ? { cache: false } : {}),
 					requestLog: !!init.onRequest,
 					...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
+					...(init.rules ? { rules: init.rules } : {}),
 				}),
 			)
 			.then(({ config, stale }) => {
@@ -193,6 +200,11 @@ export class RemoteController extends EventTarget {
 	async route(url: string): Promise<string> {
 		await this.ready;
 		return this.rpc.call('route', url);
+	}
+	/** replace the request rules (see StompController.setRules) */
+	async setRules(rules: RequestRule[]): Promise<void> {
+		await this.ready;
+		await this.rpc.call('rules', rules);
 	}
 	/** drop every entry of the service worker's HTTP cache */
 	async clearCache(): Promise<void> {
