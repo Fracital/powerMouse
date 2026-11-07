@@ -21,6 +21,7 @@ import SyncModule from './Sync';
  */
 export class CookiesModule extends Module<DocumentClient> {
 	private cookieDescriptor: PropertyDescriptor;
+	#defaultView?: () => Window | null;
 	#cache: string | null = null;
 	#cacheVersion = '';
 	// the proxy origin's real localStorage, taken before the Storage module
@@ -35,6 +36,10 @@ export class CookiesModule extends Module<DocumentClient> {
 			this.client.global.Document.prototype,
 			'cookie',
 		)!;
+		this.#defaultView = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Document.prototype,
+			'defaultView',
+		)?.get as (() => Window | null) | undefined;
 		try {
 			const global = this.client.global;
 			const descriptor = Reflect.getOwnPropertyDescriptor(
@@ -72,6 +77,21 @@ export class CookiesModule extends Module<DocumentClient> {
 			);
 		} catch (error) {
 			// no storage: this document's cache is dropped at least
+		}
+	}
+	/**
+	 * A document without a browsing context (one a navigation replaced, one
+	 * from createHTMLDocument): its cookie is "" and a write does nothing, so
+	 * the native accessor answers for it. Anything that is not a document
+	 * stays an illegal invocation.
+	 */
+	#cookieAverse(that: unknown): boolean {
+		if (that === this.client.global.document || !this.#defaultView)
+			return false;
+		try {
+			return Reflect.apply(this.#defaultView, that, []) === null;
+		} catch (error) {
+			return false;
 		}
 	}
 	/** this document's next read goes to the jar */
@@ -148,6 +168,7 @@ export class CookiesModule extends Module<DocumentClient> {
 			get: proxyModule.wrapFunction(
 				this.cookieDescriptor.get!,
 				(target, that) => {
+					if (this.#cookieAverse(that)) return Reflect.apply(target, that, []);
 					invokeGlobal(that, this.client.global.document);
 					return this.pageCookies;
 				},
@@ -155,6 +176,7 @@ export class CookiesModule extends Module<DocumentClient> {
 			set: proxyModule.wrapFunction(
 				this.cookieDescriptor.set!,
 				(target, that, args) => {
+					if (this.#cookieAverse(that)) return;
 					invokeGlobal(that, this.client.global.document);
 					this.pageCookies = String(args[0]);
 				},
