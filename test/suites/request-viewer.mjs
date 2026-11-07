@@ -86,8 +86,19 @@ ok(
 	}),
 );
 
-const list = await rows();
+// the page load itself is a row too (destination iframe, logged by the
+// worker after it served the body, so its place among the first fetches
+// varies); the fetch checks below look at the fetches
+const all = await rows();
+const list = all.filter((r) => r.dest !== 'iframe');
 ok('rows appear', list.length >= 9, String(list.length));
+ok(
+	'the page load is a row with destination iframe',
+	all.some(
+		(r) => r.dest === 'iframe' && r.url === `${FIXTURE}pages/cache.html`,
+	),
+	JSON.stringify(all.filter((r) => r.dest === 'iframe').map((r) => r.url)),
+);
 ok(
 	'rows carry the real URL, not the proxied one',
 	list.every((r) => r.url.startsWith(FIXTURE)),
@@ -163,7 +174,11 @@ await page.evaluate(() => {
 		return Promise.resolve();
 	};
 });
-await page.click('#requestsList .req .url');
+await page.evaluate((url) => {
+	[...document.querySelectorAll('#requestsList .req .url')]
+		.find((el) => el.title === url)
+		.click();
+}, `${FIXTURE}hits`);
 await sleep(150);
 ok(
 	'clicking a URL copies it',

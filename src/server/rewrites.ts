@@ -42,6 +42,13 @@ declare const clients: Clients | undefined;
 
 const DEFAULT_REFERRER_POLICY = 'strict-origin-when-cross-origin';
 
+/** the real URL a request is reported as: without the `#url(...)` fragment the CSS rewriter keeps for idempotence */
+function reportURL(url: StompURL): string {
+	const text = url.toString();
+	const marker = text.indexOf('#url(');
+	return marker === -1 ? text : text.slice(0, marker);
+}
+
 type Site = 'none' | 'same-origin' | 'same-site' | 'cross-site';
 
 /** the fetch-metadata site between two real URLs */
@@ -276,9 +283,9 @@ function genericForward(
 				error?: string,
 			) => {
 				rewriter.log?.({
-					url: url.toString(),
+					url: reportURL(url),
 					method: serverRequest.method,
-					destination: serverRequest.destination,
+					destination: serverRequest.destination || 'fetch',
 					status,
 					ms: Date.now() - started,
 					cached: false,
@@ -386,9 +393,9 @@ function genericForward(
 			} catch (error) {
 				if (!within(hit?.staleIfError ?? null)) {
 					rewriter.log?.({
-						url: url.toString(),
+						url: reportURL(url),
 						method: serverRequest.method,
-						destination: serverRequest.destination,
+						destination: serverRequest.destination || 'fetch',
 						status: 0,
 						ms: Date.now() - started,
 						cached: false,
@@ -439,9 +446,9 @@ function genericForward(
 		if (rewriter.log) {
 			const length = Number(response.headers.get('content-length'));
 			rewriter.log({
-				url: url.toString(),
+				url: reportURL(url),
 				method: serverRequest.method,
-				destination: serverRequest.destination,
+				destination: serverRequest.destination || 'fetch',
 				status: response.status,
 				ms: Date.now() - started,
 				cached,

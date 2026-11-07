@@ -12,7 +12,7 @@ the settings row) is tracked in the Fracital repo, not here.
 | WS2 epoxy as the supported transport | done: `examples/minimal-host.html` boots a same-origin `StompController` on epoxy and proxies Wikipedia; README "Embedding" carries the transport guidance                                                                                                       | shipped                   |
 | WS3 relocatable asset paths          | done: `assets` on both controllers names every served file (defaults to today's names), the controller frame learns its script name from `?script=`; the assets suite boots a fully renamed bundle under `/neutral/` and sees no URL with the package name       | parity session            |
 | WS4 same-origin hook coverage        | in progress: scramjet's adversarial corpus runs as nine measurement suites (`test/suites/adversarial-*.mjs`); protos, eval, scripts, frames and messages groups closed (the checks left report the browser's own results), attrs, urls and workers groups next   | parity session            |
-| WS5 host-embedding API parity        | checklist green (`test/suites/host-api.mjs`, 41 checks against the example host); gap list below is being worked                                                                                                                                                 | shipped, gaps in progress |
+| WS5 host-embedding API parity        | checklist green (`test/suites/host-api.mjs`, 41 checks against the example host); gap list items 1 to 6 shipped, 7 and 8 in progress                                                                                                                             | shipped, gaps in progress |
 
 ## Goal and shape
 
@@ -133,20 +133,25 @@ treat as a checklist plus gap fixes, mirroring `docs/scramjet-parity.md`.
 
 ## WS5 gap list (from writing the example host)
 
-1. `frame.go()` resolves when the iframe src is set, not when the page has
-   loaded, and `frame.reload()` returns void; a host waits on the `navigate`
-   event itself. `go` and `reload` should resolve on the first report.
-2. The first `navigate` report fires at document start, before the body is
-   parsed; right for an address bar, too early for anything reading the DOM.
-3. `onRequest` reports `frame: null` for head subresources fetched before the
-   page has reported its client id (the document itself is held and
-   attributed).
-4. `onRequest` URLs for CSS `url()` images carry the `#url(...)` fragment the
-   CSS rewriter appends for idempotence; the report should strip it.
-5. `destination` is empty for keepalive POST beacons.
-6. `onNavigate`, `onOpen` and `onRequest` are constructor-only; the controller
-   should also dispatch `open` and `request` events so handlers can be added
-   later.
+Items 1 and 3 to 6 shipped (navigate-events and request-log suites); item 2
+is documented behaviour; 7 and 8 are in progress.
+
+1. Shipped: `frame.go()` and `frame.reload()` resolve when the new document
+   has reported (a second after the frame's `load` event for a document that
+   never reports, 30 s at the most); `reload()` resolves `false` when there
+   was nothing to reload.
+2. Documented: the first `navigate` report fires at document start, before
+   the body is parsed; right for an address bar, too early for anything
+   reading the DOM. Listen for the frame's `load` event, attached before
+   `go()`.
+3. Shipped: head subresources fetched before the page has reported its client
+   id wait up to 1.5 s for it and carry their frame like the document does.
+4. Shipped: `onRequest` URLs for CSS `url()` images are reported without the
+   `#url(...)` fragment the CSS rewriter appends.
+5. Shipped: `destination` is `fetch` for keepalive POST beacons (the browser
+   gives an empty string).
+6. Shipped: both controllers dispatch `navigate`, `open` and `request`
+   CustomEvents next to the constructor callbacks.
 7. The controller wants an activated `ServiceWorker`; every host copies the
    demo's activation helper. Accept a `ServiceWorkerRegistration` or offer a
    `register(directory)` helper.

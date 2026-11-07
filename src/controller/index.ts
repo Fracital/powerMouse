@@ -188,6 +188,12 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** how long a document's request report waits for its page to say which frame it is in */
 const ATTRIBUTION_WAIT_MS = 3000;
+/** the same for a subresource fetched before the page reported (head scripts, styles) */
+const SUBRESOURCE_WAIT_MS = 1500;
+/** how long go() and reload() wait for the new document's first report before resolving anyway */
+export const NAVIGATION_WAIT_MS = 30000;
+/** how long after the frame's load event they wait for a report that may never come (a document nothing injected) */
+export const REPORT_GRACE_MS = 1000;
 const DOCUMENT_DESTINATIONS = new Set([
 	'document',
 	'iframe',
@@ -300,10 +306,16 @@ export class StompController extends EventTarget {
 				if (navigate.client) this.clientFrames.set(navigate.client, frame);
 				frame.report(navigate);
 				init.onNavigate?.(navigate, frame);
+				this.dispatchEvent(
+					new CustomEvent('navigate', { detail: { info: navigate, frame } }),
+				);
 				return;
 			}
 			const url = openRequest(event.data);
-			if (url !== null && init.onOpen) init.onOpen(url, frame);
+			if (url !== null) {
+				init.onOpen?.(url, frame);
+				this.dispatchEvent(new CustomEvent('open', { detail: { url, frame } }));
+			}
 		});
 
 		this.ready = new Promise((resolve) => {
@@ -503,23 +515,26 @@ export class StompController extends EventTarget {
 					serveTransport(port, () => this.transport, this.handshakeHeaders);
 				},
 				request: async (info) => {
-					if (!this.onRequest) return;
 					let frame =
 						(info.client && this.clientFrames.get(info.client)) || null;
-					// a document's own request is reported before its page has told
-					// us which frame it is in: give that report a moment to arrive
-					if (
-						!frame &&
-						info.client &&
-						DOCUMENT_DESTINATIONS.has(info.destination)
-					) {
-						const deadline = Date.now() + ATTRIBUTION_WAIT_MS;
+					// a document's own request, and the subresources its head fetches,
+					// are reported before the page has told us which frame it is in:
+					// give that report a moment to arrive. Not without frames: the
+					// controller frame relays every report to a host that owns them
+					if (!frame && info.client && this.frames.length) {
+						const deadline =
+							Date.now() +
+							(DOCUMENT_DESTINATIONS.has(info.destination)
+								? ATTRIBUTION_WAIT_MS
+								: SUBRESOURCE_WAIT_MS);
 						while (!frame && Date.now() < deadline) {
 							await sleep(50);
 							frame = this.clientFrames.get(info.client) || null;
 						}
 					}
-					this.onRequest({ ...info, frame });
+					const event: RequestEvent = { ...info, frame };
+					this.onRequest?.(event);
+					this.dispatchEvent(new CustomEvent('request', { detail: event }));
 				},
 			},
 			CONTROLLER_RPC,
@@ -634,7 +649,34 @@ export class Frame extends EventTarget {
 	/** @internal */
 	report(info: NavigateInfo) {
 		this.lastNavigate = info;
+		for (const resolve of this.awaitingReport) resolve();
+		this.awaitingReport.clear();
 		this.dispatchEvent(new CustomEvent('navigate', { detail: info }));
+	}
+	/** hosts waiting for the next report (go, reload) */
+	private awaitingReport = new Set<() => void>();
+	/** resolves on the next report, REPORT_GRACE_MS after the frame's load event without one, or after NAVIGATION_WAIT_MS */
+	private nextReport(): Promise<void> {
+		return new Promise((resolve) => {
+			let grace: ReturnType<typeof setTimeout> | undefined;
+			const done = () => {
+				clearTimeout(timer);
+				clearTimeout(grace);
+				this.awaitingReport.delete(done);
+				this.element.removeEventListener('load', onLoad);
+				resolve();
+			};
+			// the report crosses message ports and usually lands a few
+			// milliseconds after the frame's load event; a document that never
+			// reports (an image, a download, a blocked response) resolves
+			// REPORT_GRACE_MS after that event
+			const onLoad = () => {
+				if (grace === undefined) grace = setTimeout(done, REPORT_GRACE_MS);
+			};
+			const timer = setTimeout(done, NAVIGATION_WAIT_MS);
+			this.element.addEventListener('load', onLoad);
+			this.awaitingReport.add(done);
+		});
 	}
 	/** the last title the page reported, else the document's */
 	get title(): string | null {
@@ -645,8 +687,16 @@ export class Frame extends EventTarget {
 			return null;
 		}
 	}
-	async go(url: string) {
+	/**
+	 * Navigate the frame. Resolves when the new document first reports (url,
+	 * title, history state), REPORT_GRACE_MS after the frame's load event when
+	 * the document is one that never reports, NAVIGATION_WAIT_MS at the most.
+	 * Listen for the frame's `load` before calling when you need that event.
+	 */
+	async go(url: string): Promise<void> {
+		const reported = this.nextReport();
 		this.element.src = await this.controller.route(url);
+		await reported;
 	}
 	/**
 	 * Step the frame's own history (proxied pages are same-origin, so it is
@@ -669,8 +719,14 @@ export class Frame extends EventTarget {
 	get canGoForward(): boolean | null {
 		return canTraverse(this.element.contentWindow, 'forward');
 	}
-	reload() {
-		this.element.contentWindow?.location.reload();
+	/** reload the frame; resolves when the reloaded document first reports (false when there was no document to reload) */
+	async reload(): Promise<boolean> {
+		const win = this.element.contentWindow;
+		if (!win) return false;
+		const reported = this.nextReport();
+		win.location.reload();
+		await reported;
+		return true;
 	}
 	/** the URL the frame is currently showing, if it is a proxied page */
 	get url(): string | null {

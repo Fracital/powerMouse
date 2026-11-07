@@ -153,6 +153,7 @@ export interface RequestInfo {
 	/** the real URL */
 	url: string;
 	method: string;
+	/** the request's destination; `fetch` for fetch, XHR and beacons (the browser's empty string) */
 	destination: string;
 	/** 0 when the transport failed; see `error` */
 	status: number;

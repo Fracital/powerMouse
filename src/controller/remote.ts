@@ -11,7 +11,14 @@ import type {
 	RequestRule,
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
-import { cookieJar, CookieJar, navigateReport, openRequest } from './index';
+import {
+	cookieJar,
+	CookieJar,
+	navigateReport,
+	NAVIGATION_WAIT_MS,
+	openRequest,
+	REPORT_GRACE_MS,
+} from './index';
 import {
 	FrameBound,
 	FrameCommand,
@@ -72,7 +79,8 @@ export const DEFAULT_SANDBOX =
 	'allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock';
 
 /**
- * Events, as on StompController: `stale` (detail: StaleInfo) when the
+ * Events, as on StompController: `navigate`, `open`, `request` alongside the
+ * callbacks; `stale` (detail: StaleInfo) when the
  * controller frame's service worker is another build than its controller
  * and could not be replaced in time, `rebind` once the builds agree again.
  */
@@ -126,10 +134,26 @@ export class RemoteController extends EventTarget {
 					frameReady();
 				},
 				request: async (info) => {
-					init.onRequest?.({
-						...info,
-						frame: (info.client && this.clientFrames.get(info.client)) || null,
-					});
+					let frame =
+						(info.client && this.clientFrames.get(info.client)) || null;
+					// the document and its head's subresources are reported before the
+					// page has said which frame it is in: give that a moment
+					if (!frame && info.client) {
+						const deadline =
+							Date.now() +
+							(['document', 'iframe', 'frame', 'embed', 'object'].includes(
+								info.destination,
+							)
+								? 3000
+								: 1500);
+						while (!frame && Date.now() < deadline) {
+							await new Promise((resolve) => setTimeout(resolve, 50));
+							frame = this.clientFrames.get(info.client) || null;
+						}
+					}
+					const event: RemoteRequestEvent = { ...info, frame };
+					init.onRequest?.(event);
+					this.dispatchEvent(new CustomEvent('request', { detail: event }));
 				},
 				stale: async (info) => {
 					const was = this.stale;
@@ -169,10 +193,16 @@ export class RemoteController extends EventTarget {
 				if (navigate.client) this.clientFrames.set(navigate.client, frame);
 				frame.report(navigate);
 				init.onNavigate?.(navigate, frame);
+				this.dispatchEvent(
+					new CustomEvent('navigate', { detail: { info: navigate, frame } }),
+				);
 				return;
 			}
 			const url = openRequest(event.data);
-			if (url !== null && init.onOpen) init.onOpen(url, frame);
+			if (url !== null) {
+				init.onOpen?.(url, frame);
+				this.dispatchEvent(new CustomEvent('open', { detail: { url, frame } }));
+			}
 		});
 
 		(document.body || document.documentElement).append(this.element);
@@ -288,9 +318,37 @@ export class RemoteFrame extends EventTarget {
 		element.setAttribute('sandbox', sandbox);
 		element.setAttribute('referrerpolicy', 'no-referrer');
 	}
-	async go(url: string) {
+	/** hosts waiting for the next report (go, reload) */
+	private awaitingReport = new Set<() => void>();
+	/** resolves on the next report, REPORT_GRACE_MS after the frame's load event without one, or after NAVIGATION_WAIT_MS */
+	private nextReport(): Promise<void> {
+		return new Promise((resolve) => {
+			let grace: ReturnType<typeof setTimeout> | undefined;
+			const done = () => {
+				clearTimeout(timer);
+				clearTimeout(grace);
+				this.awaitingReport.delete(done);
+				this.element.removeEventListener('load', onLoad);
+				resolve();
+			};
+			// the report crosses message ports and usually lands a few
+			// milliseconds after the frame's load event; a document that never
+			// reports (an image, a download, a blocked response) resolves
+			// REPORT_GRACE_MS after that event
+			const onLoad = () => {
+				if (grace === undefined) grace = setTimeout(done, REPORT_GRACE_MS);
+			};
+			const timer = setTimeout(done, NAVIGATION_WAIT_MS);
+			this.element.addEventListener('load', onLoad);
+			this.awaitingReport.add(done);
+		});
+	}
+	/** navigate the frame; resolves when the new document first reports (see Frame.go) */
+	async go(url: string): Promise<void> {
+		const reported = this.nextReport();
 		this.element.src = await this.controller.route(url);
 		this.url = url;
+		await reported;
 	}
 	/** @internal */
 	report(info: NavigateInfo) {
@@ -298,6 +356,8 @@ export class RemoteFrame extends EventTarget {
 		this.title = info.title;
 		this.canGoBack = info.canGoBack;
 		this.canGoForward = info.canGoForward;
+		for (const resolve of this.awaitingReport) resolve();
+		this.awaitingReport.clear();
 		this.dispatchEvent(new CustomEvent('navigate', { detail: info }));
 	}
 	/**
@@ -311,8 +371,12 @@ export class RemoteFrame extends EventTarget {
 	forward(): Promise<boolean> {
 		return this.controller.frameCommand(this.element, 'forward');
 	}
-	reload(): Promise<boolean> {
-		return this.controller.frameCommand(this.element, 'reload');
+	/** reload the frame; resolves when the reloaded document first reports (false when there was nothing to reload) */
+	async reload(): Promise<boolean> {
+		const reported = this.nextReport();
+		const done = await this.controller.frameCommand(this.element, 'reload');
+		if (done) await reported;
+		return done;
 	}
 	/** fetch the current url/title from the controller frame */
 	refresh(): Promise<void> {

@@ -69,6 +69,24 @@ The first release after a four-year gap. Everything below is breaking.
   hashchange or changes its title, with whether its own history can step;
   the controller-frame poll is now a fallback (`pollInterval: 0` disables
   it).
+- `frame.go()` and `frame.reload()` on both controllers resolve when the new
+  document has reported (its URL, title and history state are in), a second
+  after the frame's `load` event for a document that never reports (an
+  image, a download, a blocked response), 30 seconds at the most; `reload()`
+  resolves false when there was nothing to reload. The first report comes at
+  document start, before the body is parsed: right for an address bar, too
+  early for reading the page's DOM (use the frame's `load` event, listened
+  for before `go()`). Both controllers also dispatch `navigate`
+  (`detail: { info, frame }`), `open` (`detail: { url, frame }`) and
+  `request` (`detail`: the `onRequest` report) as CustomEvents, so handlers
+  can be added after construction.
+- `onRequest` reports: a subresource fetched before its page has said which
+  frame it is in (a head stylesheet or script) waits up to 1.5 s for that
+  and carries its frame like the document does; a CSS image is reported
+  without the `#url(...)` fragment the CSS rewriter keeps; `destination` is
+  `fetch` for fetch, XHR and keepalive beacons (the browser's empty string).
+  The document's own report lands after its body was served, often after
+  the first fetches of the page.
 - `onOpen(url, frame)` on `StompController` and `RemoteController`: a proxied
   page's `window.open`, `target="_blank"` and named-target or modifier clicks
   become a callback to the host, which opens them in its own tab model; the

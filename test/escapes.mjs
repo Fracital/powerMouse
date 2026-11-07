@@ -46,10 +46,13 @@ export async function runMode(mode) {
 			document.getElementById('landing').classList.add('hidden');
 			document.body.append(element);
 			const frame = window.controller.createFrame(element);
-			await frame.go(fixture);
-			await new Promise((resolve) =>
+			// listen before go(): it resolves when the document reported, which
+			// can be after the frame's load event
+			const loaded = new Promise((resolve) =>
 				element.addEventListener('load', resolve, { once: true }),
 			);
+			await frame.go(fixture);
+			await loaded;
 		}, FIXTURE);
 		await sleep(800);
 		const frame = page

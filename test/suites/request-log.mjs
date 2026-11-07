@@ -23,14 +23,23 @@ const result = await page.evaluate(async (fixture) => {
 		onRequest: (info) =>
 			window.__log.push({ ...info, frame: info.frame ? 'frame' : null }),
 	});
+	// the same reports as `request` events, for handlers added later
+	window.__events = [];
+	controller.addEventListener('request', (event) =>
+		window.__events.push(event.detail.url),
+	);
 	await controller.wait();
 	const element = document.createElement('iframe');
 	document.body.append(element);
 	const frame = controller.createFrame(element);
 	await frame.go(`${fixture}pages/cache.html`);
 	await new Promise((resolve) => setTimeout(resolve, 6000));
+	// a head stylesheet, a CSS image and a keepalive POST
+	await frame.go(`${fixture}pages/reqlog.html`);
+	await new Promise((resolve) => setTimeout(resolve, 3000));
 	return {
 		log: window.__log,
+		events: window.__events,
 		config: controller.config,
 		sameFrame: window.__log.every(
 			(e) => e.frame === null || e.frame === 'frame',
@@ -73,6 +82,31 @@ ok(
 	'requests carry the frame once the page reported its client id',
 	byFile('nostore.json').some((e) => e.frame === 'frame'),
 	JSON.stringify(log.map((e) => e.frame)),
+);
+ok(
+	'a head stylesheet fetched before the page reported carries its frame',
+	byFile('reqlog.css').length === 1 &&
+		byFile('reqlog.css')[0].frame === 'frame',
+	JSON.stringify(byFile('reqlog.css')),
+);
+ok(
+	'a CSS image is reported without the #url() fragment',
+	byFile('sprite.svg').length === 1 &&
+		!log.some((e) => e.url.includes('#url(')),
+	JSON.stringify(log.filter((e) => /sprite/.test(e.url)).map((e) => e.url)),
+);
+const beacon = log.find(
+	(e) => e.method === 'POST' && e.url.endsWith('/echo-headers'),
+);
+ok(
+	'a keepalive POST is reported with destination fetch',
+	beacon?.destination === 'fetch',
+	JSON.stringify(beacon),
+);
+ok(
+	'every report is also a request event',
+	JSON.stringify(result.events) === JSON.stringify(log.map((e) => e.url)),
+	JSON.stringify([result.events?.length, log.length]),
 );
 ok(
 	'the controller config asks the service worker for the log',
