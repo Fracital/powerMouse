@@ -2,7 +2,8 @@
 <title>NESTED CHILD</title>
 <a id="go" href="/echo-headers">follow inside the frame</a>
 <script>
-	// a subresource of the nested document: judged by the top-level page too
+	// a subresource of the nested document: its cookies are judged by the
+	// top-level page too
 	window.__child = {};
 	fetch('/echo-headers')
 		.then((r) => r.json())

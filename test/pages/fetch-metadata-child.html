@@ -1,0 +1,7 @@
+<!doctype html>
+<title>FETCH METADATA CHILD</title>
+<script>
+	// a cross-site frame's request to its own origin (headers suite)
+	const run = new URLSearchParams(location.search).get('run');
+	fetch(`/echo-headers?k=${run}-nested-fetch`);
+</script>

@@ -1,0 +1,62 @@
+<!doctype html>
+<title>FETCH METADATA</title>
+<script>
+	// One request of each kind, every one recorded by the fixture under
+	// `<run>-<case>` (headers suite): loaded natively and through the proxy,
+	// the two runs' Sec-Fetch-* headers are compared. `lan` is an http origin
+	// that is not potentially trustworthy, which gets no fetch metadata.
+	const params = new URLSearchParams(location.search);
+	const run = params.get('run');
+	const lan = params.get('lan');
+	const other = location.origin.includes('127.0.0.1')
+		? location.origin.replace('127.0.0.1', 'localhost')
+		: location.origin.replace('localhost', '127.0.0.1');
+	const echo = (origin, key, js = false) =>
+		`${origin}/echo-headers?k=${run}-${key}${js ? '&js' : ''}`;
+	const element = (tag, attributes) =>
+		new Promise((resolve) => {
+			const node = document.createElement(tag);
+			node.onload = node.onerror = () => resolve();
+			for (const [name, value] of Object.entries(attributes))
+				node.setAttribute(name, value);
+			document.body.append(node);
+		});
+	window.__fm = {};
+	addEventListener('load', async () => {
+		const steps = [
+			() => fetch(echo(location.origin, 'fetch-same')),
+			() => fetch(echo(other, 'fetch-cross-cors')),
+			() => fetch(echo(other, 'fetch-cross-no-cors'), { mode: 'no-cors' }),
+			() =>
+				fetch(
+					`${other}/fetch/api/resources/redirect.py?location=${encodeURIComponent(
+						echo(location.origin, 'fetch-redirect'),
+					)}`,
+					{ mode: 'no-cors' },
+				),
+			() => element('img', { src: echo(other, 'img') }),
+			() => element('script', { src: echo(other, 'script', true) }),
+			() =>
+				element('script', {
+					src: echo(other, 'script-cors', true),
+					crossorigin: 'anonymous',
+				}),
+			() => element('iframe', { src: echo(location.origin, 'iframe') }),
+			() => element('iframe', { src: echo(other, 'iframe-cross') }),
+			() =>
+				element('iframe', {
+					src: `${other}/pages/fetch-metadata-child.html?run=${run}`,
+				}),
+			() => lan && fetch(echo(lan, 'lan')),
+		];
+		for (const step of steps)
+			try {
+				await step();
+			} catch (error) {
+				__fm.errors = [...(__fm.errors || []), String(error)];
+			}
+		// the nested frame's own fetch reports through the fixture as well
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		__fm.done = true;
+	});
+</script>

@@ -33,7 +33,7 @@ import { ABORT_HEADER } from '../transport/messages';
 import { BUILD } from '../version';
 import { HttpCache, isCacheable } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
-import Cookies, { CookieRequestContext } from './Cookies';
+import Cookies from './Cookies';
 import { DOCUMENT_DESTINATIONS, hostErrorPage } from './errorPage';
 import {
 	AdditionalFilter,
@@ -59,11 +59,18 @@ function reportURL(url: StompURL): string {
 
 type Site = 'none' | 'same-origin' | 'same-site' | 'cross-site';
 
-/** the fetch-metadata site between two real URLs */
+/**
+ * The fetch-metadata site between two real URLs, as Chrome decides it:
+ * schemeful (http and https of one domain are cross-site), by registrable
+ * domain with the private registries (two github.io pages are cross-site);
+ * an IP or localhost has no registrable domain, so the host is the site.
+ */
 function siteBetween(from: URL, to: URL): Site {
 	if (from.origin === to.origin) return 'same-origin';
-	const domain = getDomain(from.hostname);
-	return (domain !== null && domain === getDomain(to.hostname)) ||
+	if (from.protocol !== to.protocol) return 'cross-site';
+	const domain = getDomain(from.hostname, { allowPrivateDomains: true });
+	return (domain !== null &&
+		domain === getDomain(to.hostname, { allowPrivateDomains: true })) ||
 		from.hostname === to.hostname
 		? 'same-site'
 		: 'cross-site';
@@ -75,56 +82,96 @@ function widestSite(a: string, b: Site): Site {
 	return order[Math.max(order.indexOf(a as Site), order.indexOf(b))];
 }
 
-/**
- * The referrer each redirect answered by this worker sent, by the request's
- * own (proxy space) referrer and the URL it redirected to: the hop the
- * browser makes next is a new fetch event, and only this says the chain
- * already went through another origin. Taken once; kept a minute at most.
- */
-const redirectReferrers = new Map<
-	string,
-	{ referer: string | null; at: number }
->();
-const REDIRECT_REFERRER_TTL = 60_000;
+const FETCH_METADATA = [
+	'sec-fetch-dest',
+	'sec-fetch-mode',
+	'sec-fetch-site',
+	'sec-fetch-user',
+];
 
-function redirectKey(referrer: string, target: string): string {
-	const url = new URL(target);
-	url.hash = '';
-	return `${referrer}\n${url.href}`;
+/**
+ * Chrome sends fetch metadata to potentially trustworthy URLs only: https
+ * (and wss), and the loopback hosts it treats as secure. A plain http
+ * origin anywhere else gets none.
+ */
+function potentiallyTrustworthy(url: URL): boolean {
+	if (url.protocol === 'https:' || url.protocol === 'wss:') return true;
+	const host = url.hostname;
+	return (
+		host === 'localhost' ||
+		host.endsWith('.localhost') ||
+		host === '[::1]' ||
+		/^127(\.\d{1,3}){3}$/.test(host)
+	);
 }
 
-function rememberRedirectReferrer(
+/**
+ * The real URL of each service worker client, by id: a request's origin is
+ * its client's (a stylesheet's font, a module's import and a worker's fetch
+ * all come from the document or worker that started them), while the
+ * Referer names the stylesheet or module. A client keeps its origin for
+ * life (pushState cannot change it), so one lookup per client is enough.
+ */
+const clientURLs = new Map<string, URL>();
+const CLIENT_URLS_KEPT = 256;
+
+/**
+ * Redirects in flight. The browser follows a redirect this worker answered
+ * as a new fetch event in proxy URL space, where every hop is same-origin
+ * and the referrer never narrows: only this says the chain already went
+ * through another origin. Each redirect leaves what it decided under its
+ * client (none for a navigation), the request's own (proxy space) referrer
+ * and the URL the browser asks for next: the referrer it sent, when it
+ * knew one (the next hop narrows from it, in the Referer header and in
+ * document.referrer), and its Sec-Fetch-Site (the widest site of the chain
+ * carries on). Taken once; kept a minute at most.
+ */
+interface RedirectHop {
+	/** the Referer this hop sent (null: none); absent when it was unknown */
+	referer?: string | null;
+	site: Site;
+}
+const redirectHops = new Map<string, RedirectHop & { at: number }>();
+const REDIRECT_HOP_TTL = 60_000;
+const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
+
+function redirectKey(client: string, referrer: string, target: string): string {
+	const url = new URL(target);
+	url.hash = '';
+	return `${client}\n${referrer}\n${url.href}`;
+}
+
+function rememberRedirect(
+	client: string,
 	referrer: string,
 	location: string,
 	base: string,
-	referer: string | null,
+	hop: RedirectHop,
 ) {
 	const now = Date.now();
-	for (const [key, entry] of redirectReferrers)
-		if (now - entry.at > REDIRECT_REFERRER_TTL) redirectReferrers.delete(key);
+	for (const [key, entry] of redirectHops)
+		if (now - entry.at > REDIRECT_HOP_TTL) redirectHops.delete(key);
 	try {
-		redirectReferrers.set(redirectKey(referrer, new URL(location, base).href), {
-			referer,
-			at: now,
-		});
+		redirectHops.set(
+			redirectKey(client, referrer, new URL(location, base).href),
+			{ ...hop, at: now },
+		);
 	} catch (error) {
 		// a Location that is no URL: the browser will not follow it either
 	}
 }
 
-/** the referrer the previous hop sent (null: none), or undefined when this request is not a remembered redirect */
-function takeRedirectReferrer(
+/** what the previous hop of this request's redirect chain decided, if it was one */
+function takeRedirect(
+	client: string,
 	referrer: string,
 	url: string,
-): string | null | undefined {
-	if (!referrer || referrer === 'about:client') return undefined;
-	const key = redirectKey(referrer, url);
-	const entry = redirectReferrers.get(key);
+): RedirectHop | undefined {
+	const key = redirectKey(client, referrer, url);
+	const entry = redirectHops.get(key);
 	if (!entry) return undefined;
-	redirectReferrers.delete(key);
-	return Date.now() - entry.at > REDIRECT_REFERRER_TTL
-		? undefined
-		: entry.referer;
+	redirectHops.delete(key);
+	return Date.now() - entry.at > REDIRECT_HOP_TTL ? undefined : entry;
 }
 
 const BODY_ILLEGAL = ['GET', 'HEAD'];
@@ -260,119 +307,161 @@ function genericForward(
 		// from the document's Referrer-Policy header, its meta tag, the
 		// element's attribute or fetch's init). The browser's own Referer is a
 		// source of truth for the initiator only, never for the reduction: in
-		// proxy URL space every proxied request looks same-origin to it.
+		// proxy URL space every proxied request looks same-origin to it, and
+		// the worker's own fetch would be described, not the page's.
 		requestHeaders.delete('referer');
 		requestHeaders.delete('origin');
+		// the browser adds its own fetch metadata after the worker, for the
+		// proxy URL; the fetch event carries none (nor the page's user
+		// activation)
+		for (const name of FETCH_METADATA) requestHeaders.delete(name);
 		const destination = serverRequest.destination || 'empty';
-		requestHeaders.set('sec-fetch-dest', destination);
-		requestHeaders.set(
-			'sec-fetch-mode',
-			destination === 'document' || destination === 'iframe'
-				? 'navigate'
-				: destination === 'empty'
-					? 'cors'
-					: 'no-cors',
-		);
-		requestHeaders.delete('sec-fetch-user');
-		let site = 'none';
+		const navigation = serverRequest.mode === 'navigate';
+		const nestedRoute = nestedTopOf(oURL.pathname, rewriter.directory);
+		// every proxied page arrives here as an iframe (the host's frame): a
+		// document the page did not route as nested (an iframe of its own, or
+		// a navigation from inside one) is a top-level one
+		const topLevel =
+			destination === 'document' ||
+			(destination === 'iframe' && nestedRoute === null);
 		const policy = serverRequest.referrerPolicy || DEFAULT_REFERRER_POLICY;
 
-		// the initiator: the browser's routed Referer decoded, when it kept the
-		// full URL; when the policy made it send the proxy origin only (origin,
-		// strict-origin) the document is the request's client
-		let initiator: URL | null = null;
 		const routedPrefix = `${oURL.origin}${rewriter.directory}`;
-		if (serverRequest.referrer && serverRequest.referrer !== 'about:client') {
+		const decode = (routed: string): URL | null => {
 			try {
-				initiator = parseRoutedURL(
-					serverRequest.referrer,
-					rewriter.codec,
-					routedPrefix,
-				).url.url;
+				return parseRoutedURL(routed, rewriter.codec, routedPrefix).url.url;
 			} catch (error) {
-				// not a routed URL: the proxy origin alone, or the controller page
+				// not a routed URL: the proxy origin alone, the controller page,
+				// a blob: worker, about:blank
+				return null;
 			}
-			// never for a navigation: its client id is the document being created,
-			// and asking for it would wait on this very response
-			if (
-				!initiator &&
-				serverRequest.mode !== 'navigate' &&
-				serverRequest.referrer === `${oURL.origin}/` &&
-				context?.clientId &&
-				typeof clients !== 'undefined'
-			)
+		};
+		const referrer =
+			serverRequest.referrer && serverRequest.referrer !== 'about:client'
+				? serverRequest.referrer
+				: null;
+
+		// the request's client, by its real URL. Never for a navigation: its
+		// client id is the document being created, and asking for it would
+		// wait on this very response
+		let client: URL | null = null;
+		if (!navigation && context?.clientId && typeof clients !== 'undefined') {
+			const id = context.clientId;
+			client = clientURLs.get(id) ?? null;
+			if (!client)
 				try {
-					const client = await clients.get(context.clientId);
-					if (client)
-						initiator = parseRoutedURL(client.url, rewriter.codec, routedPrefix)
-							.url.url;
+					const found = await clients.get(id);
+					client = found ? decode(found.url) : null;
 				} catch (error) {
-					// the client is gone or not a proxied page
+					// the client is gone
 				}
+			if (client && !clientURLs.has(id)) {
+				if (clientURLs.size >= CLIENT_URLS_KEPT)
+					clientURLs.delete(clientURLs.keys().next().value!);
+				clientURLs.set(id, client);
+			}
 		}
 
-		// a redirect this worker answered earlier in the same chain decided the
-		// referrer already: the next hop starts from that (stripped) value
-		const carried = takeRedirectReferrer(
+		// the Referer's source: the browser's routed Referer decoded, when it
+		// kept the full URL; when the policy made it send the proxy origin
+		// only (origin, strict-origin) the client stands in, since only its
+		// origin is sent then
+		let refererSource = referrer ? decode(referrer) : null;
+		if (!refererSource && referrer === `${oURL.origin}/`)
+			refererSource = client;
+
+		// a redirect this worker answered earlier in the same chain decided
+		// the referrer already: the next hop starts from that (stripped) value
+		const hopClient = navigation ? '' : (context?.clientId ?? '');
+		const previousHop = takeRedirect(
+			hopClient,
 			serverRequest.referrer,
 			serverRequest.url,
 		);
+		const carried = previousHop?.referer;
 		const referer =
 			carried !== undefined
 				? carried && refererFor(new URL(carried), url.url, policy)
-				: initiator && refererFor(initiator, url.url, policy);
+				: refererSource && refererFor(refererSource, url.url, policy);
 		if (referer) requestHeaders.set('referer', referer);
-		// what the document this request creates shows as document.referrer
+		// what the document this request creates shows as document.referrer;
+		// when the browser sent only the proxy origin for a navigation the
+		// initiator is unknown here, and the inject applies the policy to the
+		// parent document it can see
 		const referrerInfo: ReferrerInfo =
-			carried !== undefined || initiator
+			carried !== undefined || refererSource
 				? { referrer: referer ?? '' }
-				: serverRequest.referrer === `${oURL.origin}/`
+				: referrer === `${oURL.origin}/`
 					? { policy }
 					: { referrer: '' };
 
-		if (initiator) {
-			const sameOrigin = initiator.origin === url.url.origin;
+		// the request's origin: its client's; a navigation has none to ask, so
+		// the document that started it (its Referer), or for a nested document
+		// whose referrer was withheld the top-level page that routed it
+		const initiator =
+			client ??
+			refererSource ??
+			(navigation && nestedRoute ? new URL(nestedRoute) : null);
+		const sameOrigin =
+			initiator !== null && initiator.origin === url.url.origin;
 
-			// the browser sends Origin on cross-origin fetches and on every
-			// request with a body
-			if (
-				(!sameOrigin && destination === 'empty') ||
-				!BODY_ILLEGAL.includes(serverRequest.method)
-			)
-				requestHeaders.set('origin', initiator.origin);
+		// the browser sends Origin on cross-origin CORS requests and on every
+		// request with a body
+		if (
+			initiator &&
+			((!sameOrigin && serverRequest.mode === 'cors') ||
+				!BODY_ILLEGAL.includes(serverRequest.method))
+		)
+			requestHeaders.set('origin', initiator.origin);
 
-			site = sameOrigin
-				? 'same-origin'
-				: getDomain(initiator.hostname) !== null &&
-					  getDomain(initiator.hostname) === getDomain(url.url.hostname)
-					? 'same-site'
-					: 'cross-site';
-		}
-		requestHeaders.set('sec-fetch-site', site);
+		// Sec-Fetch-Site: `none` for a navigation nobody in a page started (the
+		// host's, which the user typed or picked); a subresource whose client
+		// is not a proxied page (a blob: worker) is taken as its target's own,
+		// the benefit the credentials mode gives it too
+		let site: Site = initiator
+			? siteBetween(initiator, url.url)
+			: navigation
+				? 'none'
+				: 'same-origin';
 
-		// the jar applies SameSite against the request's site. Every proxied
-		// page arrives here as an iframe (the host's frame), so an iframe
-		// destination counts as a top-level navigation unless the page routed
-		// it as a nested document (an iframe of its own, or a navigation from
-		// inside one): a cross-site link into a site that keeps its login in
-		// Lax cookies still works, a nested cross-site frame gets None only
-		// a nested document's requests are judged by the top-level page as
-		// well (the browser's site for cookies and Sec-Fetch-Site walk the
-		// ancestors): the route kind of the navigation, or of the referrer
-		// when a nested document is the initiator, names that top origin
+		// the jar applies SameSite against the request's site; a nested
+		// document's requests are judged by the top-level page as well (the
+		// browser's site for cookies walks the ancestors, Sec-Fetch-Site does
+		// not): the route kind of the navigation, or of the referrer when a
+		// nested document is the initiator, names that top origin. A
+		// cross-site link into a site that keeps its login in Lax cookies
+		// still works, a nested cross-site frame gets None only
 		const nestedTop =
-			nestedTopOf(oURL.pathname, rewriter.directory) ??
-			(serverRequest.referrer && serverRequest.referrer !== 'about:client'
-				? nestedTopOf(
-						new URL(serverRequest.referrer).pathname,
-						rewriter.directory,
-					)
+			nestedRoute ??
+			(referrer
+				? nestedTopOf(new URL(referrer).pathname, rewriter.directory)
 				: null);
-		if (nestedTop) {
-			site = widestSite(site, siteBetween(new URL(nestedTop), url.url));
+		const cookieSite = nestedTop
+			? widestSite(site, siteBetween(new URL(nestedTop), url.url))
+			: site;
+
+		// the chain's earlier hops count for the site (Sec-Fetch-Site only:
+		// the browser's site for cookies does not follow redirects)
+		if (previousHop && site !== 'none')
+			site = widestSite(previousHop.site, site);
+
+		if (potentiallyTrustworthy(url.url)) {
 			requestHeaders.set('sec-fetch-site', site);
+			requestHeaders.set(
+				'sec-fetch-mode',
+				serverRequest.mode || (destination === 'empty' ? 'cors' : 'no-cors'),
+			);
+			requestHeaders.set(
+				'sec-fetch-dest',
+				navigation && topLevel ? 'document' : destination,
+			);
+			// only a navigation the user started: the host's (typed, picked).
+			// One a page started under user activation would carry it too,
+			// but the worker cannot see the page's activation
+			if (navigation && topLevel && site === 'none')
+				requestHeaders.set('sec-fetch-user', '?1');
 		}
-		const nested = nestedTopOf(oURL.pathname, rewriter.directory) !== null;
+
 		// the request's credentials mode, as the browser would apply it to its
 		// own jar: `omit` sends and stores no cookies, `same-origin` only when
 		// the initiator's real origin is the target's (every proxied request
@@ -382,17 +471,15 @@ function genericForward(
 			serverRequest.credentials === 'omit'
 				? false
 				: serverRequest.credentials === 'same-origin'
-					? initiator === null || initiator.origin === url.url.origin
+					? initiator === null || sameOrigin
 					: true;
 		if (credentials)
 			requestHeaders.set(
 				'cookie',
 				(
 					await rewriter.cookies.get(url.url, {
-						site: site as CookieRequestContext['site'],
-						navigation:
-							destination === 'document' ||
-							(destination === 'iframe' && !nested),
+						site: cookieSite,
+						navigation: topLevel,
 						method: serverRequest.method,
 					})
 				).toString(),
@@ -647,18 +734,17 @@ function genericForward(
 
 		// the browser follows the redirect in proxy URL space, where every hop
 		// is same-origin and the referrer never narrows: remember what this hop
-		// sent, so a chain through another origin keeps the reduction it got
+		// sent and its site, so a chain through another origin keeps both
 		if (
-			response.status >= 300 &&
-			response.status < 400 &&
-			responseHeaders.has('location') &&
-			(carried !== undefined || initiator)
+			REDIRECT_STATUSES.includes(response.status) &&
+			responseHeaders.has('location')
 		)
-			rememberRedirectReferrer(
+			rememberRedirect(
+				hopClient,
 				serverRequest.referrer,
 				responseHeaders.get('location')!,
 				serverRequest.url,
-				referer,
+				carried !== undefined || refererSource ? { referer, site } : { site },
 			);
 
 		// preloads announced by the server fetch through the proxy too

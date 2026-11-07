@@ -132,6 +132,9 @@ const hits = new Map();
 // every path served, in order (/requests returns it; the assets suite checks
 // that no served URL carries the package name)
 const served = [];
+// request headers kept by key (/echo-headers?k=<key>), for the requests whose
+// response a page cannot read back: images, scripts, navigations
+const recorded = new Map();
 // the dist bundle under neutral names (assets suite): /neutral/<name>
 const distDir = fileURLToPath(new URL('../dist/', import.meta.url));
 const NEUTRAL = {
@@ -228,11 +231,25 @@ export function startFixture(port = 8084) {
 			res.setHeader('content-type', 'application/json');
 			return res.end(JSON.stringify(Object.fromEntries(hits)));
 		}
-		// the request headers the proxy sent, as JSON (headers suites)
+		// the request headers the proxy sent, as JSON (headers suites); with
+		// `?k=<key>` they are kept for /echo-headers/recorded?k=<key> too, and
+		// `&js` answers an empty script instead (a script element's request)
 		if (path === '/echo-headers') {
+			const query = new URL(req.url, 'http://x').searchParams;
+			if (query.get('k')) recorded.set(query.get('k'), req.headers);
+			if (query.has('js')) {
+				res.setHeader('content-type', 'text/javascript');
+				res.setHeader('access-control-allow-origin', '*');
+				return res.end('');
+			}
 			res.setHeader('content-type', 'application/json');
 			res.setHeader('access-control-allow-origin', '*');
 			return res.end(JSON.stringify(req.headers));
+		}
+		if (path === '/echo-headers/recorded') {
+			const key = new URL(req.url, 'http://x').searchParams.get('k');
+			res.setHeader('content-type', 'application/json');
+			return res.end(JSON.stringify(recorded.get(key) ?? null));
 		}
 		const file = /^\/pages\/([\w.-]+)$/.exec(path)?.[1];
 		if (file && existsSync(`${pagesDir}${file}`)) {

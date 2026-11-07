@@ -110,12 +110,14 @@ if (child)
 		}
 	}
 ok(
-	"a nested cross-site frame's own fetch is cross-site: None only, Sec-Fetch-Site cross-site",
+	// the cookie's site walks the ancestors; Sec-Fetch-Site does not, so the
+	// frame's fetch to its own origin is same-origin, as Chrome sends it
+	"a nested cross-site frame's own fetch is cross-site for cookies: None only, Sec-Fetch-Site same-origin",
 	inside.done === true &&
 		has(inside.cookie, 'none') &&
 		!has(inside.cookie, 'lax') &&
 		!has(inside.cookie, 'strict') &&
-		inside.site === 'cross-site',
+		inside.site === 'same-origin',
 	JSON.stringify(inside),
 );
 let followed = null;

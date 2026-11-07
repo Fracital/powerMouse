@@ -96,7 +96,9 @@ export default class SyncModule extends Module<DocumentClient> {
 		processInit.method = init.method;
 		processInit.mode = init.mode;
 		processInit.redirect = init.redirect;
-		processInit.referrer = init.referrer;
+		// the worker builds this request itself, so its referrer would be the
+		// worker's: the document's routed URL names the initiator instead
+		processInit.referrer = init.referrer ?? location.href;
 		processInit.referrerPolicy = init.referrerPolicy;
 
 		if (init.headers instanceof Headers) {

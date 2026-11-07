@@ -1,11 +1,4 @@
 {
-	"/fetch/metadata/fetch.https.sub.any.html": {
-		"Same-origin mode: sec-fetch-mode": "FAIL: assert_equals: expected \"same-origin\" but got \"cors\"",
-		"no-CORS mode: sec-fetch-mode": "FAIL: assert_equals: expected \"no-cors\" but got \"cors\""
-	},
-	"/fetch/metadata/generated/css-font-face.https.sub.tentative.html": {
-		"sec-fetch-mode": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])"
-	},
 	"/fetch/metadata/generated/css-images.https.sub.tentative.html": {
 		"border-image sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect": "FAIL: assert_unreached: Reached unreachable code",
 		"content sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect": "FAIL: assert_unreached: Reached unreachable code",
@@ -50,13 +43,6 @@
 		"sec-fetch-storage-access - Cross-site - no attributes": "NOTRUN: ",
 		"sec-fetch-storage-access - Same site - no attributes": "NOTRUN: "
 	},
-	"/fetch/metadata/generated/element-audio.https.sub.html": {
-		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect, no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Cross-Site -> Same Origin, no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-mode - attributes: crossorigin": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - attributes: crossorigin=anonymous": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - attributes: crossorigin=use-credentials": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])"
-	},
 	"/fetch/metadata/generated/element-embed.https.sub.html": {
 		"sec-fetch-site - Same origin": "FAIL: promise_test: Unhandled rejection with value: object \"Error: Failed to query for recorded headers.\"",
 		"sec-fetch-site - Cross-site": "FAIL: promise_test: Unhandled rejection with value: object \"Error: Failed to query for recorded headers.\"",
@@ -71,13 +57,10 @@
 		"sec-fetch-user": "FAIL: promise_test: Unhandled rejection with value: object \"Error: Failed to query for recorded headers.\""
 	},
 	"/fetch/metadata/generated/element-frame.https.sub.html": {
-		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Cross-Site -> Same Origin": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-mode": "FAIL: assert_array_equals: expected property 0 to be \"navigate\" but got \"no-cors\" (expected array [\"navigate\"] got [\"no-cors\"])"
+		"sec-fetch-user with user activation": "FAIL: assert_own_property: expected property \"sec-fetch-user\" missing"
 	},
 	"/fetch/metadata/generated/element-iframe.https.sub.html": {
-		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Cross-Site -> Same Origin": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])"
+		"sec-fetch-user with user activation": "FAIL: assert_own_property: expected property \"sec-fetch-user\" missing"
 	},
 	"/fetch/metadata/generated/element-img-environment-change.https.sub.html": {
 		"(harness)": "TIMEOUT: ",
@@ -97,43 +80,6 @@
 		"sec-fetch-dest - no attributes": "NOTRUN: ",
 		"sec-fetch-user - no attributes": "NOTRUN: "
 	},
-	"/fetch/metadata/generated/element-img.https.sub.html": {
-		"(harness)": "TIMEOUT: the harness never reported",
-		"sec-fetch-site - src - Same origin, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - srcset - Same origin, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - src - Cross-site, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - srcset - Cross-site, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - src - Same-Origin -> Cross-Site -> Same-Origin redirect, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - srcset - Same-Origin -> Cross-Site -> Same-Origin redirect, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - src - Cross-Site -> Same Origin, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - srcset - Cross-Site -> Same Origin, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - src - Cross-Site -> Same-Site, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - srcset - Cross-Site -> Same-Site, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - src - Cross-Site -> Cross-Site, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - srcset - Cross-Site -> Cross-Site, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - src - Same-Origin -> Same Origin, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - srcset - Same-Origin -> Same Origin, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - src - Same-Origin -> Cross-Site, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - srcset - Same-Origin -> Cross-Site, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - src - Same-Site -> Cross-Site, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - srcset - Same-Site -> Cross-Site, no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-mode - src - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-mode - src - attributes: crossorigin": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-mode - src - attributes: crossorigin=anonymous": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-mode - src - attributes: crossorigin=use-credentials": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-mode - srcset - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-mode - srcset - attributes: crossorigin": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-mode - srcset - attributes: crossorigin=anonymous": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-mode - srcset - attributes: crossorigin=use-credentials": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-dest - src - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-dest - srcset - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-user - src - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-user - srcset - no attributes": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/fetch/metadata/generated/element-input-image.https.sub.html": {
-		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect, no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Cross-Site -> Same Origin, no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])"
-	},
 	"/fetch/metadata/generated/element-link-icon.https.sub.html": {
 		"(harness)": "TIMEOUT: ",
 		"sec-fetch-site - Same origin no attributes": "TIMEOUT: Test timed out",
@@ -147,48 +93,6 @@
 		"sec-fetch-site - Same-Site -> Cross-Site no attributes": "NOTRUN: ",
 		"sec-fetch-mode no attributes": "NOTRUN: ",
 		"sec-fetch-user no attributes": "NOTRUN: "
-	},
-	"/fetch/metadata/generated/element-picture.https.sub.html": {
-		"sec-fetch-site - img[src] - Same-Origin -> Cross-Site -> Same-Origin redirect, no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - img[srcset] - Same-Origin -> Cross-Site -> Same-Origin redirect, no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - source[srcset] - Same-Origin -> Cross-Site -> Same-Origin redirect, no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - img[src] - Cross-Site -> Same Origin, no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - img[srcset] - Cross-Site -> Same Origin, no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - source[srcset] - Cross-Site -> Same Origin, no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-mode - img[src] - attributes: crossorigin": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - img[srcset] - attributes: crossorigin": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - source[srcset] - attributes: crossorigin": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - img[src] - attributes: crossorigin=anonymous": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - img[srcset] - attributes: crossorigin=anonymous": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - source[srcset] - attributes: crossorigin=anonymous": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - img[src] - attributes: crossorigin=use-credentials": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - img[srcset] - attributes: crossorigin=use-credentials": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - source[srcset] - attributes: crossorigin=use-credentials": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])"
-	},
-	"/fetch/metadata/generated/element-script.https.sub.html": {
-		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect, no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Cross-Site -> Same Origin, no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-mode - attributes: type=module": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - attributes: crossorigin": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - attributes: crossorigin=anonymous": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - attributes: crossorigin=use-credentials": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])"
-	},
-	"/fetch/metadata/generated/element-video-poster.https.sub.html": {
-		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Cross-Site -> Same Origin": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])"
-	},
-	"/fetch/metadata/generated/element-video.https.sub.html": {
-		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect, no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Cross-Site -> Same Origin, no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-mode - attributes: crossorigin": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - attributes: crossorigin=anonymous": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode - attributes: crossorigin=use-credentials": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])"
-	},
-	"/fetch/metadata/generated/fetch.https.sub.html": {
-		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect, init: mode=no-cors": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Cross-Site -> Same Origin, init: mode=no-cors": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-mode - init: mode=no-cors": "FAIL: assert_array_equals: expected property 0 to be \"no-cors\" but got \"cors\" (expected array [\"no-cors\"] got [\"cors\"])",
-		"sec-fetch-mode - init: mode=same-origin": "FAIL: assert_array_equals: expected property 0 to be \"same-origin\" but got \"cors\" (expected array [\"same-origin\"] got [\"cors\"])"
 	},
 	"/fetch/metadata/generated/form-submission.https.sub.html": {
 		"(harness)": "TIMEOUT: ",
@@ -220,25 +124,7 @@
 		"sec-fetch-storage-access - Same site - POST": "NOTRUN: "
 	},
 	"/fetch/metadata/generated/script-json-module-import-static.https.sub.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Unexpected token 'i', \"import.met\"... is not valid JSON",
-		"sec-fetch-mode": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])"
-	},
-	"/fetch/metadata/generated/script-module-import-dynamic.https.sub.html": {
-		"sec-fetch-site - Same origin": "FAIL: assert_array_equals: expected property 0 to be \"same-origin\" but got \"none\" (expected array [\"same-origin\"] got [\"none\"])",
-		"sec-fetch-site - Cross-site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"none\" (expected array [\"cross-site\"] got [\"none\"])",
-		"sec-fetch-site - Same-Origin -> Same Origin": "FAIL: assert_array_equals: expected property 0 to be \"same-origin\" but got \"none\" (expected array [\"same-origin\"] got [\"none\"])",
-		"sec-fetch-site - Same-Origin -> Cross-Site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"none\" (expected array [\"cross-site\"] got [\"none\"])",
-		"sec-fetch-mode": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])"
-	},
-	"/fetch/metadata/generated/script-module-import-static.https.sub.html": {
-		"sec-fetch-mode": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])"
-	},
-	"/fetch/metadata/generated/svg-image.https.sub.html": {
-		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Cross-Site -> Same Origin no attributes": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-mode attributes: crossorigin": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode attributes: crossorigin=anonymous": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])",
-		"sec-fetch-mode attributes: crossorigin=use-credentials": "FAIL: assert_array_equals: expected property 0 to be \"cors\" but got \"no-cors\" (expected array [\"cors\"] got [\"no-cors\"])"
+		"(harness)": "ERROR: Uncaught SyntaxError: Unexpected token 'i', \"import.met\"... is not valid JSON"
 	},
 	"/fetch/metadata/generated/window-location.https.sub.html": {
 		"(harness)": "TIMEOUT: the harness never reported",
@@ -303,14 +189,12 @@
 		"sec-fetch-mode - options: type=module": "FAIL: assert_array_equals: expected property 0 to be \"same-origin\" but got \"no-cors\" (expected array [\"same-origin\"] got [\"no-cors\"])"
 	},
 	"/fetch/metadata/generated/worker-dedicated-importscripts.https.sub.html": {
-		"sec-fetch-site - Same origin": "FAIL: assert_array_equals: expected property 0 to be \"same-origin\" but got \"none\" (expected array [\"same-origin\"] got [\"none\"])",
-		"sec-fetch-site - Cross-site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"none\" (expected array [\"cross-site\"] got [\"none\"])",
-		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"none\" (expected array [\"cross-site\"] got [\"none\"])",
-		"sec-fetch-site - Cross-Site -> Same Origin": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"none\" (expected array [\"cross-site\"] got [\"none\"])",
-		"sec-fetch-site - Cross-Site -> Same-Site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"none\" (expected array [\"cross-site\"] got [\"none\"])",
-		"sec-fetch-site - Cross-Site -> Cross-Site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"none\" (expected array [\"cross-site\"] got [\"none\"])",
-		"sec-fetch-site - Same-Origin -> Same Origin": "FAIL: assert_array_equals: expected property 0 to be \"same-origin\" but got \"none\" (expected array [\"same-origin\"] got [\"none\"])",
-		"sec-fetch-site - Same-Origin -> Cross-Site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"none\" (expected array [\"cross-site\"] got [\"none\"])",
-		"sec-fetch-site - Same-Site -> Cross-Site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"none\" (expected array [\"cross-site\"] got [\"none\"])"
+		"sec-fetch-site - Cross-site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
+		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
+		"sec-fetch-site - Cross-Site -> Same Origin": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
+		"sec-fetch-site - Cross-Site -> Same-Site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
+		"sec-fetch-site - Cross-Site -> Cross-Site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
+		"sec-fetch-site - Same-Origin -> Cross-Site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
+		"sec-fetch-site - Same-Site -> Cross-Site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])"
 	}
 }

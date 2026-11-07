@@ -291,6 +291,29 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- Upstream servers saw Fetch Metadata describing the service worker's own
+  fetch rather than the page's request. Sec-Fetch-Mode was guessed from the
+  destination (`no-cors` for a crossorigin image or script, a module import,
+  a font; `cors` for a `same-origin` or `no-cors` fetch), and Sec-Fetch-Site
+  was `none` whenever the referrer did not name the page (a dynamic import,
+  whose referrer is the inject bundle; a fetch under `no-referrer`) and
+  `same-origin` at the end of a redirect that had left the site. The worker
+  now rebuilds the four headers as Chrome does for the real origins: the
+  mode is the request's own, the site compares the request's client (the
+  document or worker, not the stylesheet or module that named the URL) with
+  the target, schemefully and by registrable domain with the private
+  registries, widened over every redirect of the chain (the redirect memo
+  that carries the Referer to the next hop carries the site too); the
+  destination is `document` for the page's top-level navigation, and `none`
+  with Sec-Fetch-User is left to the navigation the user starts from the host.
+  Sec-Fetch-Site no longer walks a nested frame's ancestors (the cookie
+  jar's site still does), Origin follows the request's mode, an http origin
+  that is not potentially trustworthy gets no fetch metadata, and a
+  synchronous XHR names its document as the initiator. The headers suite
+  compares each request kind with the native page's; wpt-fetch-metadata
+  drops 92 expected failures. A blob: worker's requests are still taken as
+  same-origin, and a navigation a page starts under user activation still
+  lacks Sec-Fetch-User (the worker sees neither).
 - A link or `window.open` aimed at a frame of the page by name navigates that
   frame. With a host that handles new tabs (`onOpen`), every target outside
   `_self`, `_top`, `_parent` went to the host as a new tab, including the
@@ -677,9 +700,9 @@ url`) carries its value and targets that window. An about:blank child of
   meta refresh, window.open) with a route kind that names the top-level
   proxied origin, and the service worker widens the request's site by it,
   for the navigation itself and for every request whose referrer is such a
-  document: a nested cross-site frame gets `SameSite=None` cookies only and
-  `Sec-Fetch-Site: cross-site`, while a top-level cross-site navigation of the
-  page still carries Lax. The kind is decided in the page realm, so a page
+  document: a nested cross-site frame gets `SameSite=None` cookies only,
+  while a top-level cross-site navigation of the page still carries Lax
+  (Sec-Fetch-Site does not walk the ancestors, see the fetch metadata fix). The kind is decided in the page realm, so a page
   holding the codec key could route a child as top-level; that is the same
   trust boundary as every rewriting decision.
 - The HTTP cache serves stale entries exactly as far as the origin allowed:
