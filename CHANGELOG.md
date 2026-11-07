@@ -341,6 +341,13 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   drops 92 expected failures. A blob: worker's requests are still taken as
   same-origin, and a navigation a page starts under user activation still
   lacks Sec-Fetch-User (the worker sees neither).
+- A `Refresh` response header refreshes the page. The browser schedules a
+  header refresh on the document it creates for the response, and the shell
+  re-opens that document to write the page, which drops it: the page stayed
+  where it was. The worker now carries the header into the markup as a meta
+  refresh right after the doctype, which the inject routes like any meta
+  refresh the page wrote (refresh suite; wpt-referrer-policy: the three
+  `refresh-*` pages, 46 subtests from timeout or not run to pass).
 - A link or `window.open` aimed at a frame of the page by name navigates that
   frame. With a host that handles new tabs (`onOpen`), every target outside
   `_self`, `_top`, `_parent` went to the host as a new tab, including the

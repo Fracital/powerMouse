@@ -880,6 +880,21 @@ export function getMime(contentType: string): string {
 	return contentType.split(';')[0];
 }
 
+/**
+ * `markup` with a `<meta http-equiv="refresh">` carrying `value` as the first
+ * thing after its doctype (before it, the page would lose standards mode).
+ */
+export function withRefreshMeta(markup: string, value: string): string {
+	const meta = `<meta http-equiv="refresh" content="${value
+		.replace(/&/g, '&amp;')
+		.replace(/"/g, '&quot;')
+		.replace(/</g, '&lt;')}">`;
+	const doctype = /^(\uFEFF?\s*<!doctype[^>]*>)/i.exec(markup);
+	return doctype
+		? `${doctype[1]}${meta}${markup.slice(doctype[1].length)}`
+		: `${meta}${markup}`;
+}
+
 export function registerRewrites(
 	router: Router,
 	init: ParsedConfig,
@@ -1005,13 +1020,18 @@ export function registerRewrites(
 						mime,
 						referrer,
 					);
-				return modifyHTML(
-					decodeDocument(bytes, contentType),
-					url,
-					rewriter.config,
-					false,
-					referrer,
-				);
+				// A Refresh header schedules its navigation on the document the
+				// browser creates for this response, which the shell re-opens to
+				// write the page: the re-open drops it. The same value as a meta
+				// refresh in the markup lands in the written document instead, and
+				// the inject routes it like any meta refresh the page wrote.
+				let markup = decodeDocument(bytes, contentType);
+				const refresh = response.headers.get('refresh');
+				if (refresh !== null) {
+					responseHeaders.delete('refresh');
+					markup = withRefreshMeta(markup, refresh);
+				}
+				return modifyHTML(markup, url, rewriter.config, false, referrer);
 			},
 			(resource, url) => routeHTML(resource, url, rewriter.config),
 			undefined,
