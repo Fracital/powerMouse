@@ -291,6 +291,15 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A link or `window.open` aimed at a frame of the page by name navigates that
+  frame. With a host that handles new tabs (`onOpen`), every target outside
+  `_self`, `_top`, `_parent` went to the host as a new tab, including the
+  name of an iframe the page owns, so the frame never loaded and the host
+  opened a tab instead (the WPT referrer-policy `a-tag` pages, whose links
+  target a named iframe, never reported). A target that names an iframe or
+  frame of the page now stays with the browser, which navigates that frame
+  (links suite; wpt-referrer-policy: 111 `a-tag` subtests from timeout to
+  pass).
 - `new Request(request)` keeps the request's URL. The Request constructor
   hook resolved its first argument as a URL string against the page, so a
   Request given a Request (what `fetch(new Request(req, init))` and libraries

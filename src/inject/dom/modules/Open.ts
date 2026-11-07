@@ -4,8 +4,8 @@ import DocumentClient, { addDocumentOpenListener } from '../Client';
 const SAME_FRAME = ['', '_self', '_top', '_parent', '_unfencedtop'];
 
 /**
- * Links that would open a new browsing context (`target="_blank"`, a named
- * target, a modifier or middle click) are handed to the host application
+ * Links that would open a new browsing context (`target="_blank"`, a name
+ * no frame of the page has, a modifier or middle click) are handed to the host application
  * when it opted in (`config.openTab`); the browser never opens the bare
  * proxied popup. Window hooks go through addDocumentOpenListener because
  * `document.open()` drops them.
@@ -40,6 +40,9 @@ export default class OpenModule extends Module<DocumentClient> {
 				event.metaKey ||
 				event.shiftKey;
 			if (!modifier && SAME_FRAME.includes(target)) return;
+			// a frame of this page by that name: the browser navigates it
+			if (!modifier && this.client.hasFrameNamed(link.getAttribute('target')!))
+				return;
 			const url = new URL(
 				link.getAttribute('href')!,
 				this.client.url.toString(),

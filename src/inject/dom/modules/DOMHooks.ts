@@ -364,6 +364,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					!['_self', '_top', '_parent', '_unfencedtop'].includes(
 						name.toLowerCase(),
 					) &&
+					// a frame of this page by that name: the browser navigates it
+					!this.client.hasFrameNamed(name) &&
 					this.client.openInHost(destination!.toString())
 				)
 					return null;

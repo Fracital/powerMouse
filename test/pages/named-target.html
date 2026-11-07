@@ -1,0 +1,21 @@
+<!doctype html>
+<title>NAMED TARGET</title>
+<iframe name="slot" id="slot"></iframe>
+<a id="link" href="hist-1.html" target="slot">into the frame</a>
+<script>
+	// a link and window.open aimed at a frame this page owns by name: the
+	// browser navigates that frame, nothing is a new tab
+	window.__named = {};
+	const slot = document.getElementById('slot');
+	slot.addEventListener('load', () => {
+		__named.loads = (__named.loads || 0) + 1;
+		if (__named.loads === 1) {
+			__named.linkLoaded = true;
+			window.open('hist-2.html', 'slot');
+		} else if (__named.loads === 2) {
+			__named.openLoaded = true;
+			__named.done = true;
+		}
+	});
+	document.getElementById('link').click();
+</script>

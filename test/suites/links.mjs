@@ -200,4 +200,35 @@ ok(
 	page.url().split('#')[0] === PROXY && title === 'HIST 2',
 	`host ${page.url()} frame ${title} url ${after?.url().slice(0, 60)}`,
 );
+// a target that names a frame of the page: the browser navigates that frame,
+// a link and window.open alike; the host hears no `open`
+const named = await page.evaluate(async (fixture) => {
+	const opens = [];
+	window.controller.addEventListener('open', (event) =>
+		opens.push(event.detail.url),
+	);
+	const element = document.createElement('iframe');
+	document.body.append(element);
+	const frame = window.controller.createFrame(element);
+	await frame.go(`${fixture}pages/named-target.html`);
+	for (let i = 0; i < 40; i++) {
+		await new Promise((resolve) => setTimeout(resolve, 250));
+		if (element.contentWindow?.__named?.done) break;
+	}
+	const inner = element.contentDocument?.getElementById('slot');
+	return {
+		state: element.contentWindow?.__named ?? null,
+		innerTitle: inner?.contentDocument?.title ?? 'unreadable',
+		opens,
+	};
+}, FIXTURE);
+ok(
+	'a link and window.open aimed at a named frame of the page navigate that frame, not a new tab',
+	named.state?.linkLoaded === true &&
+		named.state?.openLoaded === true &&
+		named.innerTitle === 'HIST 2' &&
+		named.opens.length === 0,
+	JSON.stringify(named),
+);
+
 await done(browser);

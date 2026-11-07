@@ -145,6 +145,21 @@ export default class DocumentClient extends Client {
 		return this.topDescriptor.get!.call(this.global);
 	}
 	/**
+	 * Whether a `target` names a browsing context this page already has (an
+	 * iframe or frame with that name, as the page wrote it): the browser
+	 * navigates that frame, so it is not a new tab for the host to open.
+	 * Browsing context names are case-sensitive; the `_` keywords are not
+	 * names.
+	 */
+	hasFrameNamed(name: string): boolean {
+		if (!name || name.startsWith('_')) return false;
+		for (const frame of this.global.document.querySelectorAll(
+			'iframe[name], frame[name]',
+		))
+			if (frame.getAttribute('name') === name) return true;
+		return false;
+	}
+	/**
 	 * Ask the host application to open `url` in a new tab. Only when the host
 	 * opted in (`config.openTab`); returns whether it was sent.
 	 */
