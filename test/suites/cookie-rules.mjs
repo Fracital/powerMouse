@@ -194,9 +194,16 @@ async function unit() {
 	ok(
 		'control characters are refused, a tab is not',
 		parse('a=b\u0001c') === null &&
-			parse('a\u0000=b') === null &&
+			parse('a\u0000=b', page, 'script') === null &&
 			parse('a=b\u007fc') === null &&
+			parse('a=b; Path=/\u0002') === null &&
 			parse('a=b\tc')?.value === 'b\tc',
+	);
+	ok(
+		'a response header reads a NUL as a space and ends at CR or LF',
+		parse('a\u0000b=1')?.name === 'a b' &&
+			parse('a=1\nb=2')?.value === '1' &&
+			parse('a=1\r') !== null,
 	);
 	ok(
 		'a nameless cookie keeps its value; an empty one is refused',
@@ -548,9 +555,10 @@ await set('https://o.example/', 'b=1; Path=/');
 await set('https://o.example/', 'a=1; Path=/');
 await set('https://o.example/', 'c=1; Path=/dir');
 await set('https://o.example/', 'b=2; Path=/');
+await set('https://o.example/', 'a=1; Path=/');
 ok(
-	'Cookie header: longer paths first, then creation order (kept on re-set)',
-	(await get('https://o.example/dir/x')) === 'c=1; b=2; a=1',
+	'Cookie header: longer paths first, then creation order (a new value is a new creation, as in Chrome; the same value keeps it)',
+	(await get('https://o.example/dir/x')) === 'c=1; a=1; b=2',
 	await get('https://o.example/dir/x'),
 );
 

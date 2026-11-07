@@ -3,9 +3,10 @@
 // matches by label and never a public suffix, paths match on a boundary,
 // Secure cookies go to secure URLs only and an insecure origin cannot touch
 // them, the __Host- and __Secure- prefixes are enforced, oversize cookies and
-// control characters are refused, SameSite is evaluated against the request's
-// site when the caller says what it is, and the Cookie header lists longer
-// paths first, then earlier creations. The matching functions are exported
+// lines with a control character are refused, SameSite is evaluated against
+// the request's site when the caller says what it is, and the Cookie header
+// lists longer paths first, then earlier creations (a re-set with a new value
+// is a new creation, as in Chrome). The matching functions are exported
 // on their own so they can be checked in node (cookie-rules suite).
 import { IDBPDatabase, openDB } from 'idb';
 import parseSetCookie, { Cookie as ParserCookie } from 'set-cookie-parser';
@@ -74,12 +75,14 @@ const SAME_SITES: SameSite[] = ['lax', 'strict', 'none'];
 const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS', 'TRACE'];
 /** RFC 6265bis 5.6 step 3: name plus value */
 const MAX_COOKIE_BYTES = 4096;
+/** RFC 6265bis 5.6: a longer attribute value is ignored, not the cookie */
+const MAX_ATTRIBUTE_BYTES = 1024;
 /** RFC 6265bis 5.5: cookies live at most 400 days */
 const MAX_AGE_MS = 400 * 24 * 60 * 60 * 1000;
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
 const encoder = new TextEncoder();
 
-/** a CTL character other than HTAB (RFC 6265bis 5.6 step 3) */
+/** a CTL character other than HTAB (RFC 6265bis 5.6 step 1) */
 function hasControlCharacter(text: string): boolean {
 	for (let i = 0; i < text.length; i++) {
 		const code = text.charCodeAt(i);
@@ -192,14 +195,37 @@ export function parseCookie(
 	publicSuffix: PublicSuffix,
 	{ source = 'http', now = Date.now() }: ParseOptions = {},
 ): JarCookie | null {
+	// Chrome's HTTP parser ends a header at a bare CR or LF and reads a NUL
+	// as a space (a transport hands the raw value over); anywhere else in the
+	// line, a control character (in the name, the value or any attribute)
+	// drops the whole cookie, not just the attribute
+	if (source === 'http')
+		header = header.split(/[\r\n]/, 1)[0].replaceAll('\0', ' ');
+	if (hasControlCharacter(header)) return null;
+	// an oversize attribute is skipped as if it were absent, so an earlier
+	// Path or Domain of the same name still counts
+	const [pair, ...attributes] = header.split(';');
+	header = [
+		pair,
+		...attributes.filter((attribute) => {
+			const eq = attribute.indexOf('=');
+			return (
+				eq < 0 ||
+				encoder.encode(attribute.slice(eq + 1).trim()).length <=
+					MAX_ATTRIBUTE_BYTES
+			);
+		}),
+	].join(';');
+	// one Set-Cookie value (or one document.cookie write) is one cookie: a
+	// comma belongs to the value, it does not start another cookie
 	const [parsed]: ParserCookie[] = parseSetCookie(header, {
 		decodeValues: false,
 		silent: true,
+		split: false,
 	});
 	if (!parsed) return null;
 	const { name, value } = parsed;
 	if (name === '' && value === '') return null;
-	if (hasControlCharacter(name) || hasControlCharacter(value)) return null;
 	if (
 		encoder.encode(name).length + encoder.encode(value).length >
 		MAX_COOKIE_BYTES
@@ -234,6 +260,9 @@ export function parseCookie(
 			: defaultPath(url.pathname);
 
 	const lowerName = name.toLowerCase();
+	// a nameless cookie travels as its bare value, so one whose value starts
+	// like a prefixed name would pass for that cookie (RFC 6265bis 5.7)
+	if (name === '' && /^__(secure|host)-/i.test(value)) return null;
 	if (lowerName.startsWith('__secure-') && !secure) return null;
 	if (
 		lowerName.startsWith('__host-') &&
@@ -424,7 +453,10 @@ export default class Cookies {
 				this.onChange?.(cookie.domain);
 				continue;
 			}
-			if (existing) cookie.created = existing.created;
+			// Chrome keeps the old creation time only when the value is
+			// unchanged; a new value moves the cookie to the end of its path's
+			// group in the Cookie header (RFC 6265bis 5.7 would always keep it)
+			if (existing?.value === cookie.value) cookie.created = existing.created;
 			else {
 				cookie.created = Math.max(now, this.#lastCreated + 1);
 				this.#lastCreated = cookie.created;
