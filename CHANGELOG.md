@@ -105,6 +105,8 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- Request bodies stream to the transport instead of being buffered in the
+  service worker.
 - The controller, the service worker and the inject bundles carry a build
   id; a mismatch (a stale bundle next to a new service worker) rejects
   `controller.wait()` with both ids and logs one error in the page, instead
@@ -300,6 +302,8 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- Aborting a fetch does not cancel the request on the transport (epoxy
+  ignores the signal); the response is discarded.
 - The HTTP cache never serves stale on a failed revalidation and uses no
   heuristic freshness.
 - The page's own `Referrer-Policy` is not applied; requests follow

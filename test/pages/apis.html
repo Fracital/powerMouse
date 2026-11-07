@@ -9,6 +9,28 @@
 	req.onerror = () => {
 		__apis.idbName = 'error';
 	};
+	// a 3 MB upload, streamed from the page: every byte must reach the server
+	let sent = 0;
+	const total = 3 * 1024 * 1024;
+	fetch('/echo-body', {
+		method: 'POST',
+		duplex: 'half',
+		body: new ReadableStream({
+			pull(controller) {
+				if (sent >= total) return controller.close();
+				const n = Math.min(65536, total - sent);
+				controller.enqueue(new Uint8Array(n));
+				sent += n;
+			},
+		}),
+	})
+		.then((r) => r.json())
+		.then((j) => {
+			__apis.upload = j.bytes;
+		})
+		.catch((e) => {
+			__apis.upload = 'error ' + e.message;
+		});
 	fetch(new Request('/pages/echo.json', { method: 'POST', body: 'payload' }))
 		.then((r) => r.json())
 		.then((j) => {

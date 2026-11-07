@@ -153,9 +153,12 @@ function genericForward(
 				method: serverRequest.method,
 				redirect: 'manual',
 				// redirect: serverRequest.redirect,
+				// the body goes through as the stream it is (the port transfers
+				// it, the transport accepts it): an upload is never held in the
+				// service worker's memory
 				body:
 					(!BODY_ILLEGAL.includes(serverRequest.method) &&
-						(await serverRequest.blob())) ||
+						serverRequest.body) ||
 					undefined,
 				headers: capitalizeHeaders(requestHeaders),
 			});

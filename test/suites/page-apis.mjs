@@ -24,7 +24,12 @@ for (let i = 0; i < 40; i++) {
 	} catch (error) {
 		apis = {};
 	}
-	if (apis.idbName !== undefined && apis.fetchRequest !== undefined) break;
+	if (
+		apis.idbName !== undefined &&
+		apis.fetchRequest !== undefined &&
+		apis.upload !== undefined
+	)
+		break;
 }
 ok(
 	'location.reload is a function',
@@ -40,6 +45,12 @@ ok(
 	'fetch(Request) with a body works',
 	apis.fetchRequest?.ok === true,
 	JSON.stringify(apis.fetchRequest),
+);
+
+ok(
+	'a 3 MB streamed upload arrives whole',
+	apis.upload === 3 * 1024 * 1024,
+	JSON.stringify(apis.upload),
 );
 
 await done(

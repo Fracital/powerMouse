@@ -113,6 +113,21 @@ const hits = new Map();
 export function startFixture(port = 8084) {
 	const server = createServer((req, res) => {
 		const path = new URL(req.url, 'http://x').pathname;
+		// how many request bytes arrived (streamed-body measurement)
+		if (path === '/echo-body') {
+			let bytes = 0;
+			req.on('data', (chunk) => (bytes += chunk.length));
+			req.on('end', () => {
+				res.setHeader('content-type', 'application/json');
+				res.end(JSON.stringify({ bytes }));
+			});
+			return;
+		}
+		// a response that takes five seconds (abort measurement)
+		if (path === '/slow') {
+			setTimeout(() => res.end('slow'), 5000);
+			return;
+		}
 		if (path === '/hits') {
 			res.setHeader('content-type', 'application/json');
 			return res.end(JSON.stringify(Object.fromEntries(hits)));
