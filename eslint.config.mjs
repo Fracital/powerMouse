@@ -13,6 +13,9 @@ export default defineConfig([
 			'demo/public/pm/main.js',
 			// esbuild bundles written by the rewriter-unit suite
 			'test/out/',
+			// fixture pages and their scripts run inside proxied pages with their
+			// own globals; they are test data, not project code
+			'test/pages/',
 		],
 	},
 	js.configs.recommended,
