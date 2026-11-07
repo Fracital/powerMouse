@@ -5,6 +5,7 @@
 // it can read their location and drive their history on the host's behalf.
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { CLIENT_KEY } from '../rewriteJS';
+import type { RequestInfo } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import { canTraverse, traverse } from './history';
 import { StompController } from './index';
@@ -110,6 +111,14 @@ if (window === window.parent || !origins.length) {
 						frameAncestors: [hostOrigin],
 						openTab: !!init.openTab,
 						cache: !!init.cache,
+						// the host's request log travels SW -> here -> host
+						...(init.requestLog
+							? {
+									onRequest: (info: RequestInfo) => {
+										rpc.call('request', info);
+									},
+								}
+							: {}),
 					});
 					await controller.wait();
 					return [{ config: controller.config }, []];

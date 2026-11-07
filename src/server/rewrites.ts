@@ -11,6 +11,7 @@ import { modifyHTML, modifyRefresh, routeHTML } from '../rewriteHTML';
 import { modifyJS, routeJS, ScriptType } from '../rewriteJS';
 import { parseRoutedURL, routeBinary } from '../routeURL';
 import StompURL from '../StompURL';
+import type { RequestInfo, RouteContext } from '../transport/messages';
 import { BUILD } from '../version';
 import { HttpCache, isCacheable } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
@@ -43,6 +44,8 @@ interface Rewriter {
 	cookies: Cookies;
 	/** the HTTP cache, when the host turned it on */
 	cache?: HttpCache;
+	/** the host's request log, when it asked for one */
+	log?: (info: RequestInfo) => void;
 }
 
 function genericForward(
@@ -52,7 +55,12 @@ function genericForward(
 	additionalRequestFilter: AdditionalFilter | void,
 	additionalResponseFilter: AdditionalFilter | void,
 ) {
-	return async function (serverRequest: Request): Promise<Response> {
+	return async function (
+		serverRequest: Request,
+		_resolved?: string,
+		context?: RouteContext,
+	): Promise<Response> {
+		const started = Date.now();
 		const oURL = new URL(serverRequest.url);
 		const { url } = parseRoutedURL(
 			serverRequest.url,
@@ -141,27 +149,45 @@ function genericForward(
 				? await cache.match(url.toString(), requestHeaders)
 				: null;
 		let response: Response & { rawHeaders?: [string, string][] };
+		let cached = false;
 		if (hit && hit.fresh && !hit.mustRevalidate) {
 			response = hit.response;
+			cached = true;
 		} else {
 			if (hit) {
 				if (hit.etag) requestHeaders.set('if-none-match', hit.etag);
 				if (hit.lastModified)
 					requestHeaders.set('if-modified-since', hit.lastModified);
 			}
-			const upstream = await rewriter.bare.fetch(url.toString(), {
-				method: serverRequest.method,
-				redirect: 'manual',
-				// redirect: serverRequest.redirect,
-				// the body goes through as the stream it is (the port transfers
-				// it, the transport accepts it): an upload is never held in the
-				// service worker's memory
-				body:
-					(!BODY_ILLEGAL.includes(serverRequest.method) &&
-						serverRequest.body) ||
-					undefined,
-				headers: capitalizeHeaders(requestHeaders),
-			});
+			let upstream: Awaited<ReturnType<typeof rewriter.bare.fetch>>;
+			try {
+				upstream = await rewriter.bare.fetch(url.toString(), {
+					method: serverRequest.method,
+					redirect: 'manual',
+					// redirect: serverRequest.redirect,
+					// the body goes through as the stream it is (the port transfers
+					// it, the transport accepts it): an upload is never held in the
+					// service worker's memory
+					body:
+						(!BODY_ILLEGAL.includes(serverRequest.method) &&
+							serverRequest.body) ||
+						undefined,
+					headers: capitalizeHeaders(requestHeaders),
+				});
+			} catch (error) {
+				rewriter.log?.({
+					url: url.toString(),
+					method: serverRequest.method,
+					destination: serverRequest.destination,
+					status: 0,
+					ms: Date.now() - started,
+					cached: false,
+					bytes: null,
+					error: String(error),
+					client: context?.clientId,
+				});
+				throw error;
+			}
 			if (hit && upstream.status === 304) {
 				response = await cache!.refresh(url.toString(), hit, upstream.headers);
 			} else if (
@@ -185,6 +211,20 @@ function genericForward(
 			} else {
 				response = upstream;
 			}
+		}
+
+		if (rewriter.log) {
+			const length = Number(response.headers.get('content-length'));
+			rewriter.log({
+				url: url.toString(),
+				method: serverRequest.method,
+				destination: serverRequest.destination,
+				status: response.status,
+				ms: Date.now() - started,
+				cached,
+				bytes: Number.isFinite(length) ? length : null,
+				client: context?.clientId,
+			});
 		}
 
 		const responseHeaders = filterResponseHeaders(
@@ -256,6 +296,7 @@ export function registerRewrites(
 	cookies: Cookies,
 	transport: ProxyTransport,
 	cache?: HttpCache,
+	log?: (info: RequestInfo) => void,
 ) {
 	const rewriter: Rewriter = {
 		get config() {
@@ -269,6 +310,7 @@ export function registerRewrites(
 		},
 		cookies,
 		cache,
+		log,
 		codec: init.codec,
 		directory: init.directory,
 		bare: new BareCompatibleClient(transport),

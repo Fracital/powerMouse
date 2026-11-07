@@ -1,10 +1,11 @@
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { openDB } from 'idb';
 import { Config, generateConfigCodecKey, parseConfig } from '../config';
+import type { RequestInfo } from '../transport/messages';
 import { HttpCache } from './cache';
 import Cookies, { registerCookies } from './Cookies';
 import { registerRewrites } from './rewrites';
-import Router from './Router';
+import Router, { json } from './Router';
 import { registerStorage } from './Storage';
 import { registerXhr } from './Sync';
 
@@ -21,6 +22,7 @@ export interface StompServer {
 export default async function createServer(
 	config: Config,
 	transport: ProxyTransport,
+	log?: (info: RequestInfo) => void,
 ): Promise<StompServer> {
 	const db = await openDB('stompConfig', 1, {
 		upgrade: (db) => {
@@ -55,7 +57,19 @@ export default async function createServer(
 
 	const cookies = await registerCookies(router);
 	const cache = config.cache ? new HttpCache() : undefined;
-	const { route } = registerRewrites(router, init, cookies, transport, cache);
+	// a page asks who it is (its service worker client id) and reports it to
+	// the host, so the host can attribute requests to frames
+	router.routes.set(/^\/whoami$/, (request, url, context) =>
+		json(200, context?.clientId ?? null),
+	);
+	const { route } = registerRewrites(
+		router,
+		init,
+		cookies,
+		transport,
+		cache,
+		log,
+	);
 	await registerStorage(router);
 	registerXhr(router);
 

@@ -1,3 +1,5 @@
+import { RouteContext } from '../transport/messages';
+
 export function json(status: number, data: unknown): Response {
 	return new Response(JSON.stringify(data, null, '\t'), {
 		status,
@@ -44,7 +46,11 @@ export default class Router {
 	private directory: string;
 	routes: Map<
 		RegExp,
-		(request: Request, url: string) => Promise<Response> | Response
+		(
+			request: Request,
+			url: string,
+			context?: RouteContext,
+		) => Promise<Response> | Response
 	>;
 	constructor(directory: string) {
 		this.directory = directory;
@@ -64,20 +70,20 @@ export default class Router {
 
 		return false;
 	}
-	async tryRoute(request: Request): Promise<Response> {
+	async tryRoute(request: Request, context?: RouteContext): Promise<Response> {
 		const url = this.resolveURL(request.url);
 
 		for (const [regex, value] of this.routes) {
 			if (regex.test(url)) {
-				return value(request, url);
+				return value(request, url, context);
 			}
 		}
 
 		throw new NotFound(`${request.url} shouldn't have been routed`);
 	}
-	async route(request: Request): Promise<Response> {
+	async route(request: Request, context?: RouteContext): Promise<Response> {
 		try {
-			return await this.tryRoute(request);
+			return await this.tryRoute(request, context);
 		} catch (err) {
 			console.error(`At ${request.method} ${request.url}`);
 			console.error(err);

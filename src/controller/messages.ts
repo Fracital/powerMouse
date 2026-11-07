@@ -1,5 +1,9 @@
 import type { Config, ConfigCodec } from '../config';
-import type { CookieCommand, CookieResult } from '../transport/messages';
+import type {
+	CookieCommand,
+	CookieResult,
+	RequestInfo,
+} from '../transport/messages';
 
 /** how a transport is described across the host/controller-frame boundary */
 export interface TransportDescriptor {
@@ -17,6 +21,8 @@ export interface ControllerFrameInit {
 	openTab?: boolean;
 	/** HTTP cache in the service worker (RemoteControllerInit.cache) */
 	cache?: boolean;
+	/** the host wants a RequestInfo per request (RemoteControllerInit.onRequest) */
+	requestLog?: boolean;
 }
 
 export interface FrameInfo {
@@ -48,4 +54,6 @@ export type FrameBound = {
 /** implemented by the host, called by the controller frame */
 export type HostBound = {
 	ready: [];
+	/** a proxied request completed (only when the host asked for the log) */
+	request: [RequestInfo];
 };

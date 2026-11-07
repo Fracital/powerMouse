@@ -38,6 +38,9 @@ The first release after a four-year gap. Everything below is breaking.
   page reload (same-origin mode), server restarts and host-page bundles
   reloading the page, and an esbuild error overlay. Development only
   (`STOMP_DEV`).
+- `onRequest` on both controllers reports every proxied request (real URL,
+  method, destination, status, time, cache hit, size, error) with the frame
+  it belongs to, for request viewers; costs nothing when unset.
 - `controller.cookies` lets the host read the Cookie header the proxy would
   send, import Set-Cookie values, export cookies as records and wipe an
   origin or everything; host-only by construction.

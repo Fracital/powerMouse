@@ -18,6 +18,21 @@ export default class NavigateModule extends Module<DocumentClient> {
 			global as { navigation?: { canGoBack: boolean; canGoForward: boolean } }
 		).navigation;
 
+		// this document's service worker client id, from the service worker
+		// itself (a page cannot read it); the host attributes requests with it
+		let client: string | undefined;
+		// about:srcdoc and blob: documents have no proxy-origin URL to ask
+		if (/^https?:$/.test(global.location.protocol))
+			fetch(`${global.location.origin}${this.client.directory}whoami`)
+				.then((response) => response.json())
+				.then((id) => {
+					if (typeof id === 'string') {
+						client = id;
+						post();
+					}
+				})
+				.catch(() => {});
+
 		let last = '';
 		const post = () => {
 			const info: NavigateInfo = {
@@ -25,6 +40,7 @@ export default class NavigateModule extends Module<DocumentClient> {
 				title: global.document.title,
 				canGoBack: navigation ? !!navigation.canGoBack : null,
 				canGoForward: navigation ? !!navigation.canGoForward : null,
+				...(client ? { client } : {}),
 			};
 			const key = JSON.stringify(info);
 			if (key === last) return;

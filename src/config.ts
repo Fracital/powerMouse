@@ -25,6 +25,8 @@ export interface Config {
 	 * revalidated with ETag / Last-Modified when stale.
 	 */
 	cache?: boolean;
+	/** @internal the host wants a RequestInfo per request (ControllerInit.onRequest) */
+	requestLog?: boolean;
 	/** @internal build id of the service worker that serves the page (src/version.ts) */
 	build?: string;
 }

@@ -6,6 +6,7 @@ import {
 	INIT_REMOTE_TRANSPORT,
 	InitRemoteTransportMessage,
 	postToPort,
+	RequestInfo,
 	SW_REVIVE,
 	SWbound,
 } from '../transport/messages';
@@ -37,7 +38,16 @@ function registerController(
 	}
 
 	const transport = new RemoteTransport(port);
-	const server = createServer(config, transport);
+	// the host's request log, only when it asked: one RPC per request. The
+	// rpc is created below; requests only arrive once it exists
+	function report(info: RequestInfo) {
+		rpc.call('request', info);
+	}
+	const server = createServer(
+		config,
+		transport,
+		config.requestLog ? report : undefined,
+	);
 
 	const rpc = new RpcHelper<SWbound, Controllerbound>(
 		{
@@ -120,13 +130,15 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 
 	if (ref.ready) {
 		if (ref.ready.router.willRoute(event.request.url))
-			event.respondWith(ref.ready.router.route(event.request));
+			event.respondWith(
+				ref.ready.router.route(event.request, { clientId: event.clientId }),
+			);
 	} else {
 		// the server is still opening its databases; decide once it's up
 		event.respondWith(
 			ref.server.then(({ router }) =>
 				router.willRoute(event.request.url)
-					? router.route(event.request)
+					? router.route(event.request, { clientId: event.clientId })
 					: fetch(event.request),
 			),
 		);

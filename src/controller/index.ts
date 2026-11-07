@@ -13,6 +13,7 @@ import {
 	NavigateInfo,
 	OPEN_TAB,
 	postToPort,
+	RequestInfo,
 	SW_REVIVE,
 	SWbound,
 } from '../transport/messages';
@@ -29,7 +30,11 @@ export type { Config, ConfigCodec } from '../config';
 export { RemoteController, RemoteFrame, DEFAULT_SANDBOX } from './remote';
 export type { RemoteControllerInit } from './remote';
 export type { TransportDescriptor, FrameInfo } from './messages';
-export type { NavigateInfo, CookieRecord } from '../transport/messages';
+export type {
+	NavigateInfo,
+	CookieRecord,
+	RequestInfo,
+} from '../transport/messages';
 
 export interface ControllerInit {
 	/** the registered (and ideally active) Stomp service worker */
@@ -61,6 +66,15 @@ export interface ControllerInit {
 	/** @internal pages may post open requests; set by the controller frame */
 	openTab?: boolean;
 	/**
+	 * Called once per proxied request with what the service worker saw: real
+	 * URL, method, destination, status, time, whether the cache answered, the
+	 * size, an error, and the Frame it belongs to when known. Nothing is
+	 * built or sent when unset.
+	 */
+	onRequest?: (info: RequestEvent) => void;
+	/** @internal the service worker sends request reports; set by the controller frame */
+	requestLog?: boolean;
+	/**
 	 * HTTP cache in the service worker, off by default: GET/HEAD responses
 	 * with explicit freshness (max-age, Expires) are kept in a Cache API
 	 * store and revalidated when stale; `clearCache()` drops it.
@@ -73,6 +87,11 @@ export interface ControllerInit {
 	 * `window.open(url, '_top')` navigate the host page. `null` disables it.
 	 */
 	sandbox?: string | null;
+}
+
+/** a RequestInfo with the frame it belongs to, when the page reported its client id */
+export interface RequestEvent extends RequestInfo {
+	frame: Frame | null;
 }
 
 /** the host's view of the cookie jar (see StompController.cookies) */
@@ -109,13 +128,14 @@ export function navigateReport(data: unknown): NavigateInfo | null {
 	if (typeof data !== 'object' || data === null) return null;
 	const info = (data as Record<string, unknown>)[NAVIGATE];
 	if (typeof info !== 'object' || info === null) return null;
-	const { url, title, canGoBack, canGoForward } = info as NavigateInfo;
+	const { url, title, canGoBack, canGoForward, client } = info as NavigateInfo;
 	if (typeof url !== 'string' || typeof title !== 'string') return null;
 	return {
 		url,
 		title,
 		canGoBack: typeof canGoBack === 'boolean' ? canGoBack : null,
 		canGoForward: typeof canGoForward === 'boolean' ? canGoForward : null,
+		...(typeof client === 'string' ? { client } : {}),
 	};
 }
 
@@ -147,6 +167,9 @@ export class StompController {
 	transport: ProxyTransport;
 	frames: Frame[] = [];
 	isReady = false;
+	/** service worker client ids the pages reported, by frame */
+	private clientFrames = new Map<string, Frame>();
+	private onRequest?: (info: RequestEvent) => void;
 	private sandbox: string | null;
 	private port?: MessagePort;
 	private rpc?: RpcHelper<Controllerbound, SWbound>;
@@ -162,6 +185,7 @@ export class StompController {
 		this.serviceworker = init.serviceworker;
 		this.transport = init.transport;
 		this.sandbox = init.sandbox === undefined ? DEFAULT_SANDBOX : init.sandbox;
+		this.onRequest = init.onRequest;
 		this.directory = isUrlLike(init.directory)
 			? new URL(init.directory, location.href)
 			: defaultDirectory();
@@ -175,6 +199,7 @@ export class StompController {
 			...(init.frameAncestors ? { frameAncestors: init.frameAncestors } : {}),
 			...(init.onOpen || init.openTab ? { openTab: true } : {}),
 			...(init.cache ? { cache: true } : {}),
+			...(init.onRequest || init.requestLog ? { requestLog: true } : {}),
 		};
 
 		window.addEventListener('message', (event) => {
@@ -186,6 +211,7 @@ export class StompController {
 			if (!frame) return;
 			const navigate = navigateReport(event.data);
 			if (navigate) {
+				if (navigate.client) this.clientFrames.set(navigate.client, frame);
 				frame.report(navigate);
 				init.onNavigate?.(navigate, frame);
 				return;
@@ -250,6 +276,12 @@ export class StompController {
 				},
 				initRemoteTransport: async (port) => {
 					serveTransport(port, () => this.transport);
+				},
+				request: async (info) => {
+					this.onRequest?.({
+						...info,
+						frame: (info.client && this.clientFrames.get(info.client)) || null,
+					});
 				},
 			},
 			CONTROLLER_RPC,

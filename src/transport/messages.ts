@@ -40,6 +40,8 @@ export interface NavigateInfo {
 	/** whether the frame's own history has an entry in that direction; null without the Navigation API */
 	canGoBack: boolean | null;
 	canGoForward: boolean | null;
+	/** the page's service worker client id, once it learned it (`whoami`) */
+	client?: string;
 }
 /**
  * global set by the bootstrap of a worker started from a blob: URL: the
@@ -109,10 +111,36 @@ export type CookieCommand =
 
 export type CookieResult = string | CookieRecord[] | undefined;
 
+/** one completed (or failed) proxied request, for the host's request log */
+export interface RequestInfo {
+	/** the real URL */
+	url: string;
+	method: string;
+	destination: string;
+	/** 0 when the transport failed; see `error` */
+	status: number;
+	/** wall time in the service worker, from routing to the response headers */
+	ms: number;
+	/** answered from the HTTP cache without a request */
+	cached: boolean;
+	/** Content-Length of the response, when known */
+	bytes: number | null;
+	error?: string;
+	/** the service worker client that made it; the controller maps it to a frame */
+	client?: string;
+}
+
+/** what the service worker knows about the client that made a request */
+export interface RouteContext {
+	clientId?: string;
+}
+
 /** implemented by the controller, called by the SW */
 export type Controllerbound = {
 	ready: [{ build: string }];
 	initRemoteTransport: [MessagePort];
+	/** a proxied request completed; only sent when the host asked (config.requestLog) */
+	request: [RequestInfo];
 };
 
 /** implemented by the transport host, called by RemoteTransport */

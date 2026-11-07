@@ -4,7 +4,7 @@
 // over postMessage. Proxied content is shown in sandboxed, cross-origin
 // frames the host page can neither read nor be read by.
 import type { Config, ConfigCodec } from '../config';
-import type { NavigateInfo } from '../transport/messages';
+import type { NavigateInfo, RequestInfo } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import { cookieJar, CookieJar, navigateReport, openRequest } from './index';
 import {
@@ -47,6 +47,13 @@ export interface RemoteControllerInit {
 	onNavigate?: (info: NavigateInfo, frame: RemoteFrame) => void;
 	/** HTTP cache in the service worker, off by default (see StompController) */
 	cache?: boolean;
+	/** one report per proxied request, with the RemoteFrame when known (see StompController.onRequest) */
+	onRequest?: (info: RemoteRequestEvent) => void;
+}
+
+/** a RequestInfo with the frame it belongs to, when the page reported its client id */
+export interface RemoteRequestEvent extends RequestInfo {
+	frame: RemoteFrame | null;
 }
 
 export const DEFAULT_SANDBOX =
@@ -58,6 +65,8 @@ export class RemoteController {
 	config?: Config;
 	frames: RemoteFrame[] = [];
 	isReady = false;
+	/** service worker client ids the pages reported, by frame */
+	private clientFrames = new Map<string, RemoteFrame>();
 	readonly element: HTMLIFrameElement;
 	private rpc: RpcHelper<HostBound, FrameBound>;
 	private ready: Promise<void>;
@@ -91,6 +100,12 @@ export class RemoteController {
 				ready: async () => {
 					frameReady();
 				},
+				request: async (info) => {
+					init.onRequest?.({
+						...info,
+						frame: (info.client && this.clientFrames.get(info.client)) || null,
+					});
+				},
 			},
 			REMOTE_RPC,
 			(data) => this.element.contentWindow?.postMessage(data, this.proxyOrigin),
@@ -109,6 +124,7 @@ export class RemoteController {
 			if (!frame) return;
 			const navigate = navigateReport(event.data);
 			if (navigate) {
+				if (navigate.client) this.clientFrames.set(navigate.client, frame);
 				frame.report(navigate);
 				init.onNavigate?.(navigate, frame);
 				return;
@@ -127,6 +143,7 @@ export class RemoteController {
 					transport: init.transport,
 					openTab: !!init.onOpen,
 					cache: !!init.cache,
+					requestLog: !!init.onRequest,
 				}),
 			)
 			.then(({ config }) => {
