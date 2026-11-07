@@ -82,11 +82,15 @@ iframe-data-inherit,worker-classic,worker-module}.*` and every
 
 Measured 2026-11-07 (same-origin mode). `expected/wpt-cookies.json` and
 `expected/wpt-fetch-metadata.json` come from complete runs.
-`expected/wpt-referrer-policy.json` is partial in effect: its run finished,
-but 72 of the 276 pages reported nothing within 30 s through the proxy under
-three concurrent controller pages, and the same pages reported in a second
-when loaded alone, so those entries record a stall under load, not a verdict.
-The second pass re-measures it with `WPT_CONCURRENCY=1`.
+`expected/wpt-referrer-policy.json` was re-measured with `WPT_CONCURRENCY=1`,
+twice, the two runs identical (276 pages, 2522 subtests, 87 proxied failures
+listed). The earlier measurement under three concurrent controller pages
+recorded stalls, not verdicts: epoxy loses one of two requests to the same
+origin started in the same tick (README "Embedding"), so pages that reported
+in a second alone timed out there. Twelve pages still time out with one page
+at a time, the `inheritance/` ones for about:blank, `javascript:`, srcdoc,
+data: and `document.write` children among them; those are proxy failures,
+not load.
 
 ## Running and refreshing
 
@@ -103,7 +107,7 @@ report; a page that does not is a failure with the cause `timeout`.
 `WPT_ONLY=<regex>` runs a few pages for a look, `WPT_CONCURRENCY=<n>` sets how
 many load at once (the cookie pages share the jar and run one at a time).
 The runner gives `wpt-referrer-policy` 25 minutes instead of the usual ten
-(the matrix at `WPT_CONCURRENCY=1`, the honest setting, takes about twelve;
+(the matrix at `WPT_CONCURRENCY=1`, the honest setting, takes about sixteen;
 a run the runner kills writes no list); `SUITE_TIMEOUT=<minutes>` overrides
 it for every suite of a run.
 
