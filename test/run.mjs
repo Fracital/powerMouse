@@ -131,13 +131,13 @@ process.on('SIGINT', () => {
  * localhost:PORT is the isolated host (proxy on 127.0.0.1) and 127.0.0.1:PORT
  * the same-origin controller.
  */
-async function startServers() {
+async function startServers(name) {
 	// free ports are picked before they are bound, so two runs starting at once
 	// can race for the same one (EADDRINUSE); start over on a fresh pair
 	let lastError;
 	for (let attempt = 0; attempt < 3; attempt++) {
 		try {
-			return await startServersOnce();
+			return await startServersOnce(name);
 		} catch (error) {
 			lastError = error;
 			if (!/EADDRINUSE|no server at/.test(String(error))) throw error;
@@ -146,13 +146,20 @@ async function startServers() {
 	throw lastError;
 }
 
-async function startServersOnce() {
+async function startServersOnce(name) {
 	const pinned = PARALLEL === 1;
 	const port = String((pinned && process.env.PORT) || (await freePort()));
 	const fixturePort = Number(
 		(pinned && process.env.FIXTURE_PORT) || (await freePort()),
 	);
 	const fixture = await startFixture(fixturePort);
+	// the epoxy transport sends a request over a pooled connection the server
+	// already closed for idling (node closes them after 5 s) and the request
+	// hangs (CHANGELOG known limitations). The web-platform-tests pages are a
+	// measurement of cookie and header behaviour, and a page that stalls on it
+	// or not depending on how long the page before it took is noise there; the
+	// other suites keep node's default
+	if (name.startsWith('wpt-')) fixture.keepAliveTimeout = 10 * 60 * 1000;
 	const env = { ...process.env, PORT: port, WISP_ALLOW_LOOPBACK: '1' };
 	delete env.STOMP_PROXY_ORIGIN;
 	delete env.STOMP_WISP_URL;
@@ -238,7 +245,7 @@ const workers = Array.from(
 			const started = Date.now();
 			let servers;
 			try {
-				servers = await startServers();
+				servers = await startServers(name);
 			} catch (error) {
 				console.log(`FAIL ${name}: ${error.message}`);
 				results.push({ name, pass: 0, fail: 1, code: 2, seconds: 0 });

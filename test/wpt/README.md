@@ -42,7 +42,11 @@ Ours, not upstream:
   results to the fixture's `/_wpt/report`, keeping a copy on
   `window.__wptResults`.
 - `resources/testdriver-vendor.js` has no WebDriver: `delete_all_cookies`
-  expires what `document.cookie` can see (own path, ancestors, root), `click`
+  expires what `document.cookie` can see (own path, ancestors, root; a
+  nameless cookie with a placeholder value, since `=` alone is ignored) and
+  settles in a later task like WebDriver, spreading its writes over tasks
+  (each proxied `document.cookie` write is a beacon, and Chrome refuses a
+  document's beacons past 64 KiB in flight), `click`
   is a synthetic click, so `test_driver.bless()` runs its action without user
   activation and the "user activated" cases fail natively instead of waiting.
 
@@ -103,7 +107,10 @@ The suites are measurements (`SKIP_MEASUREMENT=1` leaves them out, as CI
 does). A proxied failure not on the list fails the suite; so does a listed
 failure that now passes, so a fix comes with its expected list trimmed.
 Every page starts with an empty cookie jar in both modes and has 30 s to
-report; a page that does not is a failure with the cause `timeout`.
+report; a page that does not is a failure with the cause `timeout`. The
+fixture of a `wpt-*` suite keeps idle connections for ten minutes: epoxy
+hangs on a pooled connection the server closed (CHANGELOG known
+limitations), which stalled whichever page came after a slow one.
 `WPT_ONLY=<regex>` runs a few pages for a look, `WPT_CONCURRENCY=<n>` sets how
 many load at once (the cookie pages share the jar and run one at a time).
 The runner gives `wpt-referrer-policy` 25 minutes instead of the usual ten

@@ -291,6 +291,33 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- The cookie jar parses a line the way Chrome does. A control character
+  anywhere in it (an attribute value included, `Domain=localhost\x01`) drops
+  the whole cookie; only the name and value were checked, so the cookie was
+  stored without that attribute. A response header reads a NUL as a space and
+  ends at a bare CR or LF, as Chrome's HTTP parser reads it. An attribute
+  value over 1024 bytes is skipped, so an earlier Path or Domain still counts
+  (the oversize one won). A nameless cookie whose value starts with
+  `__Secure-` or `__Host-` is refused, since it would pass for that cookie.
+  One Set-Cookie value (or one `document.cookie` write) is one cookie: the
+  parser split it at commas, so `test=1, baz=qux` lost everything after the
+  comma. A cookie set again with a new value is a new creation and moves
+  behind the other cookies of its path, as in Chrome (the same value keeps
+  its place); a nameless cookie set again stayed first (cookie-jar and
+  cookie-rules suites; wpt-cookies, with the test-driver shim fixed too:
+  `attributes-ctl.sub.html` from 4 to all 423 natively passing subtests,
+  the whole suite from 305 of 764 to 851 of 860).
+- `document.cookie` on a document without a browsing context (one a
+  navigation replaced, one from `createHTMLDocument`) reads `""` and ignores
+  writes, as in a browser; it threw "Illegal invocation" because the hook
+  accepted only the window's current document (wpt-cookies:
+  `navigated-away.html`).
+- A rewritten `x.postMessage(...)` on a null or undefined `x` throws the
+  TypeError the original call throws ("Cannot read properties of null
+  (reading 'postMessage')"), not "Function.prototype.apply was called on
+  undefined" from inside the access API. testharness's
+  `fetch_tests_from_window(window.open(...))` hits it when the host hands
+  popups to its own tabs and the page gets null (rewriter-unit shape).
 - Upstream servers saw Fetch Metadata describing the service worker's own
   fetch rather than the page's request. Sec-Fetch-Mode was guessed from the
   destination (`no-cors` for a crossorigin image or script, a module import,
@@ -1106,6 +1133,19 @@ Fixed while testing real sites and a feature fixture:
   stops answering HTTP after roughly 70 requests with its default pool and
   roughly 160 with a larger one, which breaks any page that fans out that many
   assets. The demo defaults to epoxy and raises libcurl's pool when selected.
+- epoxy sends a request over a pooled HTTP/1.1 connection the server has
+  already closed for idling, and the request hangs instead of failing or
+  being retried on a new connection (a bare `transport.request()` against a
+  node server with a 2 s keep-alive: 200, then a hang 3.5 s later, then 200).
+  Any server that closes idle connections (node after 5 s, nginx after 75 s)
+  can stall a page's next subresource. The vendored web-platform-tests pages
+  stalled on it depending on how long the page before them took, so the
+  `wpt-*` suites' fixture keeps connections for ten minutes.
+- epoxy (hyper) refuses a whole response whose header holds a NUL, CR or LF,
+  where Chrome reads a NUL as a space and a bare CR or LF as the end of the
+  header, and the service worker answers that fetch with a 500 rather than
+  a network error (wpt-cookies: the `%x0 in name (HTTP)` and `value after
+LF` cases).
 - The published epoxy-transport (hyper's HTTP/2 client) resets any response
   whose header block is larger than 16 KiB with `PROTOCOL_ERROR`, and its
   `header_limit` option does not change that. YouTube answers a
