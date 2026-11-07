@@ -1,0 +1,9 @@
+/* a malformed at-rule prelude: the parser keeps its block as raw text */
+@media screen and (min-width: 1px {
+	#badbg {
+		background-image: url(/pages/sprite.svg?bad);
+	}
+}
+#badbg2 {
+	background-image: url(/pages/sprite.svg?bad2);
+}

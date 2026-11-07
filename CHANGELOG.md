@@ -365,6 +365,12 @@ url`) carries its value and targets that window. An about:blank child of
   top-level `var location = url` or `var { location } = o` in a classic
   script, which assigns the window's location, is bound to a temporary and
   routed like `location = url` (it navigated to the proxy origin's path).
+- A stylesheet the CSS parser cannot fully shape still reaches the page with
+  its url()s routed: a block under a malformed at-rule prelude (raw text to
+  the parser) is routed by the url() regex inside the parse, and a stylesheet
+  the parser rejects outright is routed by the regex alone instead of being
+  refused. Measured: css-tree accepted every malformed input tried, but left
+  such blocks unrouted.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

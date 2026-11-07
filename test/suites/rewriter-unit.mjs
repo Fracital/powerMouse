@@ -22,6 +22,7 @@ writeFileSync(
 	`export { modifyJS, routeJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
 export { routeHTML, modifyRefresh, parseRefresh } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
 export { parseDataURI, createDataURI } from ${JSON.stringify(`${root}src/routeURL.ts`)};
+export { modifyCSS } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 `,
@@ -32,6 +33,8 @@ await esbuild.build({
 	bundle: true,
 	platform: 'node',
 	format: 'esm',
+	// css-tree reads a data file next to itself: resolved from node_modules
+	external: ['css-tree'],
 	outfile: bundle,
 	logLevel: 'silent',
 });
@@ -43,6 +46,7 @@ const {
 	parseRefresh,
 	parseDataURI,
 	createDataURI,
+	modifyCSS,
 	StompURL,
 	parseConfig,
 } = await import(`${bundle}?${Date.now()}`);
@@ -264,6 +268,20 @@ const parses = (code) => {
 		parseDataURI(uri.slice('data:'.length)).data ===
 			'a::after { content: "é ✓" }' && /^data:text\/css;base64,/.test(uri),
 		JSON.stringify([uri, parseDataURI(uri.slice(5)).data]),
+	);
+}
+{
+	// a block under a malformed at-rule prelude is raw text to the parser:
+	// its url()s are routed all the same
+	const css = modifyCSS(
+		'@media screen and (min-width: 100px { a { background: url(/z) } } b { background: url(/w) }',
+		url,
+	);
+	ok(
+		'url()s inside a raw block the parser could not shape are routed',
+		(css.match(/\/stomp\/binary\//g) || []).length === 2 &&
+			!/background: url\(\/z\)/.test(css),
+		css,
 	);
 }
 {

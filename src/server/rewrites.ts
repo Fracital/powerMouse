@@ -6,7 +6,7 @@ import { getDomain } from 'tldts';
 import GenericCodec from '../Codecs';
 import { codecType, Config, ParsedConfig } from '../config';
 import { capitalizeHeaders, rewriteLinkHeader } from '../headers';
-import { modifyCSS, routeCSS } from '../rewriteCSS';
+import { modifyCSS, rewriteCSSValueURLs, routeCSS } from '../rewriteCSS';
 import {
 	modifyHTML,
 	modifyRefresh,
@@ -734,8 +734,18 @@ export function registerRewrites(
 		/^\/css\//,
 		genericForward(
 			rewriter,
-			async (url, response) =>
-				response.ok && modifyCSS(await response.text(), url),
+			async (url, response) => {
+				if (!response.ok) return false;
+				const text = await response.text();
+				try {
+					return modifyCSS(text, url);
+				} catch (error) {
+					// a stylesheet the parser rejects still reaches the page, its
+					// url()s routed by the regex (as the CSSOM path does)
+					console.warn(`Stomp could not parse ${url}: ${String(error)}`);
+					return rewriteCSSValueURLs(text, url);
+				}
+			},
 			(resource, url) => routeCSS(resource, url),
 			undefined,
 			(headers, filteredHeaders) => {

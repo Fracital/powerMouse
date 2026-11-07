@@ -46,8 +46,11 @@ ok(
 ok(
 	'stylesheet hrefs are the real URLs',
 	JSON.stringify(css.sheetHrefs) ===
-		JSON.stringify([`${FIXTURE}pages/imp.css`, null]) &&
-		css.linkSheetHref === `${FIXTURE}pages/imp.css`,
+		JSON.stringify([
+			`${FIXTURE}pages/imp.css`,
+			`${FIXTURE}pages/bad.css.bin`,
+			null,
+		]) && css.linkSheetHref === `${FIXTURE}pages/imp.css`,
 	JSON.stringify([css.sheetHrefs, css.linkSheetHref]),
 );
 ok(
@@ -71,4 +74,5 @@ ok(
 	plain(css.computed) === 'url(/pages/sprite.svg)',
 	JSON.stringify(css.computed),
 );
+
 await done(browser, page.errors);

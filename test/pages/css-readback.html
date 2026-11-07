@@ -1,39 +1,46 @@
 <!doctype html>
 <title>CSS READBACK</title>
 <link id="lnk" rel="stylesheet" href="/pages/imp.css" />
+<!-- a stylesheet the parser cannot fully shape: served, never refused (its block is one the browser drops too) -->
+<!-- a stylesheet the parser cannot fully shape: served, never refused (the browser drops its block too) -->
+<link rel="stylesheet" href="/pages/bad.css.bin" />
 <style id="st">
 	#bg {
 		background-image: url(/pages/sprite.svg);
 	}
 </style>
 <div id="bg">x</div>
+<div id="badbg2">y</div>
 <script>
 	window.__css = {};
-	const st = document.getElementById('st');
-	__css.ruleText = st.sheet.cssRules[0].cssText;
-	__css.ruleStyle = st.sheet.cssRules[0].style.backgroundImage;
-	__css.styleText = st.textContent;
-	__css.styleOuter = st.outerHTML;
-	__css.sheetHrefs = [...document.styleSheets].map((s) => s.href);
-	__css.linkSheetHref = document.getElementById('lnk').sheet?.href ?? 'nosheet';
-	const added = document.createElement('style');
-	document.head.append(added);
-	added.sheet.insertRule('#ins { background: url(/pages/sprite.svg) }');
-	__css.inserted = added.sheet.cssRules[0].cssText;
-	const sheet = new CSSStyleSheet();
-	sheet.replaceSync('#con { background-image: url(/pages/sprite.svg) }');
-	document.adoptedStyleSheets = [sheet];
-	__css.constructed = [
-		sheet.cssRules[0].cssText,
-		sheet.cssRules[0].style.backgroundImage,
-	];
-	const d = document.createElement('div');
-	d.style.backgroundImage = 'url(/pages/sprite.svg)';
-	__css.inline = [d.getAttribute('style'), d.outerHTML];
-	// a routed url() still fetches through the proxy: the computed value is
-	// the page's, the image the fixture's
-	__css.computed = getComputedStyle(
-		document.getElementById('bg'),
-	).backgroundImage;
-	__css.done = true;
+	(async () => {
+		const st = document.getElementById('st');
+		__css.ruleText = st.sheet.cssRules[0].cssText;
+		__css.ruleStyle = st.sheet.cssRules[0].style.backgroundImage;
+		__css.styleText = st.textContent;
+		__css.styleOuter = st.outerHTML;
+		__css.sheetHrefs = [...document.styleSheets].map((s) => s.href);
+		__css.linkSheetHref =
+			document.getElementById('lnk').sheet?.href ?? 'nosheet';
+		const added = document.createElement('style');
+		document.head.append(added);
+		added.sheet.insertRule('#ins { background: url(/pages/sprite.svg) }');
+		__css.inserted = added.sheet.cssRules[0].cssText;
+		const sheet = new CSSStyleSheet();
+		sheet.replaceSync('#con { background-image: url(/pages/sprite.svg) }');
+		document.adoptedStyleSheets = [sheet];
+		__css.constructed = [
+			sheet.cssRules[0].cssText,
+			sheet.cssRules[0].style.backgroundImage,
+		];
+		const d = document.createElement('div');
+		d.style.backgroundImage = 'url(/pages/sprite.svg)';
+		__css.inline = [d.getAttribute('style'), d.outerHTML];
+		// a routed url() still fetches through the proxy: the computed value is
+		// the page's, the image the fixture's
+		__css.computed = getComputedStyle(
+			document.getElementById('bg'),
+		).backgroundImage;
+		__css.done = true;
+	})();
 </script>

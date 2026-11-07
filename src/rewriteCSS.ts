@@ -103,8 +103,10 @@ export function modifyCSS(
 	let offset = 0;
 
 	walk(tree, function (node) {
-		// css-tree leaves custom property values (--x: url(...)) unparsed
-		if (node.type === 'Raw' && this.declaration?.property.startsWith('--')) {
+		// css-tree leaves custom property values (--x: url(...)) unparsed, and
+		// anything it could not shape (a block under a malformed at-rule
+		// prelude) comes as raw text too: its url()s are routed by the regex
+		if (node.type === 'Raw' && node.value.includes('url(')) {
 			const generated = rewriteCSSValueURLs(node.value, url);
 
 			if (generated !== node.value) {
