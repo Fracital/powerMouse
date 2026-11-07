@@ -4,7 +4,6 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import { urlLike } from '../../StompURL';
 import Client from '../Client';
-import { CookiesModule } from '../dom/modules/Cookies';
 import Module from '../Module';
 import ProxyModule, {
 	classConstant,
@@ -17,7 +16,6 @@ const wsProtocols = ['ws:', 'wss:'];
 export default class WebSocketModule extends Module<Client> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
-		const cookiesModule = this.client.getModule(CookiesModule);
 		const client = this.client;
 		const instances = new WeakSet();
 		const { origin } = this.client.url.url;
@@ -41,13 +39,16 @@ export default class WebSocketModule extends Module<Client> {
 
 				let parsed: URL;
 
+				// relative URLs resolve against the page, http(s) means ws(s)
 				try {
-					parsed = new URL(url);
+					parsed = new URL(String(url), client.url.toString());
 				} catch {
 					throw new DOMException(
 						`Failed to construct 'WebSocket': The URL '${url}' is invalid.`,
 					);
 				}
+				if (parsed.protocol === 'http:') parsed.protocol = 'ws:';
+				else if (parsed.protocol === 'https:') parsed.protocol = 'wss:';
 
 				if (!wsProtocols.includes(parsed.protocol)) {
 					throw new DOMException(
@@ -59,13 +60,12 @@ export default class WebSocketModule extends Module<Client> {
 
 				this.#url = parsed.toString();
 
+				// no Cookie here: the controller adds the jar's (HttpOnly included)
+				// to the handshake, so the page never holds it
 				const requestHeaders: RawHeaders = [
 					['Origin', origin],
 					['User-Agent', navigator.userAgent],
 				];
-
-				const cookie = cookiesModule?.pageCookies;
-				if (cookie) requestHeaders.push(['Cookie', cookie]);
 
 				// client.bare is created lazily; a failure there (no transport)
 				// surfaces as an error event like a refused connection would.

@@ -110,6 +110,18 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- Leak fix: the sync route behind `document.cookie` (`/cookies/get`) handed
+  page script the whole jar, HttpOnly cookies included, and relied on the
+  page's own module to filter them out. The route now answers without them.
+- WebSocket handshakes carry the jar's cookies, HttpOnly ones included, under
+  the SameSite rules for the page's origin (its Origin header; `ws` counts as
+  `http` for the site). The controller adds the Cookie header to the
+  handshake in its own realm (the page's module no longer sends one, and one
+  the page sends is dropped), so the value never enters the page; without an
+  answer from the worker the handshake goes out without cookies. A
+  WebSocket URL may be relative or `http(s)`, as in a browser. The Cookie
+  Store API is removed from pages, so feature detection falls back to
+  `document.cookie`, which the jar serves.
 - Styles and references read back as the page wrote them: computed styles
   (`getComputedStyle`, property and `getPropertyValue`), an inline style's
   `getPropertyValue`, and the Typed OM's values stringify with the page's

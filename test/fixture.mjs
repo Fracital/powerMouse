@@ -4,6 +4,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { WebSocketServer } from 'ws';
 
 // /pages/<file> serves test/pages/<file> as is; a `<file>.headers.json`
 // next to it adds response headers (Set-Cookie, a Content-Type charset).
@@ -183,6 +184,22 @@ export function startFixture(port = 8084) {
 		if (path.startsWith('/landed'))
 			return res.end('<title>LANDED</title><h1>landed</h1>');
 		res.end(PAGES[path] ?? '<title>other</title>other');
+	});
+	// /ws-echo: a WebSocket that sends its handshake's Cookie and Origin
+	// headers as one message, then closes (ws-cookies suite)
+	const sockets = new WebSocketServer({ noServer: true });
+	server.on('upgrade', (req, socket, head) => {
+		if (new URL(req.url, 'http://x').pathname !== '/ws-echo')
+			return socket.destroy();
+		sockets.handleUpgrade(req, socket, head, (ws) => {
+			ws.send(
+				JSON.stringify({
+					cookie: req.headers.cookie || '',
+					origin: req.headers.origin || '',
+				}),
+			);
+			ws.close();
+		});
 	});
 	return new Promise((resolve, reject) => {
 		// every interface, so http://localhost:PORT/ (a second proxied origin

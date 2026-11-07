@@ -1,4 +1,7 @@
-import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
+import type {
+	ProxyTransport,
+	RawHeaders,
+} from '@mercuryworkshop/proxy-transports';
 import { Config, ConfigCodec } from '../config';
 import { isUrlLike, urlLike } from '../StompURL';
 import {
@@ -472,7 +475,7 @@ export class StompController extends EventTarget {
 					this.readyResolve();
 				},
 				initRemoteTransport: async (port) => {
-					serveTransport(port, () => this.transport);
+					serveTransport(port, () => this.transport, this.handshakeHeaders);
 				},
 				request: async (info) => {
 					if (!this.onRequest) return;
@@ -502,7 +505,11 @@ export class StompController extends EventTarget {
 		port.start();
 
 		// the service worker's own transport shares this port with the rpc above
-		this.stopServing = serveTransport(port, () => this.transport);
+		this.stopServing = serveTransport(
+			port,
+			() => this.transport,
+			this.handshakeHeaders,
+		);
 
 		const message: ControllerInitMessage = {
 			directory: this.config.directory,
@@ -514,6 +521,32 @@ export class StompController extends EventTarget {
 			channel.port2,
 		]);
 	}
+	/**
+	 * A page's WebSocket handshake carries the jar's Cookie header for the
+	 * socket's URL, HttpOnly cookies included, under the SameSite rules for
+	 * the page's origin (its Origin header). The header is added here, in
+	 * the controller's realm, so the page never holds it; without a worker
+	 * to ask (not ready, an error) the handshake goes out without one.
+	 */
+	private handshakeHeaders = async (
+		url: URL,
+		headers: RawHeaders,
+	): Promise<RawHeaders> => {
+		if (!this.isReady || !this.rpc) return headers;
+		const origin = headers.find(([name]) => name.toLowerCase() === 'origin');
+		try {
+			const cookie = await this.rpc.call('cookies', {
+				op: 'get',
+				url: url.href,
+				...(origin ? { initiator: origin[1] } : {}),
+			});
+			if (typeof cookie === 'string' && cookie)
+				return [...headers, ['Cookie', cookie]];
+		} catch (error) {
+			// no jar answer: a handshake without cookies
+		}
+		return headers;
+	};
 	/** resolves once the service worker has created a server for this controller */
 	async wait(): Promise<void> {
 		await this.ready;

@@ -1,4 +1,7 @@
-import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
+import type {
+	ProxyTransport,
+	RawHeaders,
+} from '@mercuryworkshop/proxy-transports';
 import {
 	HostToTransport,
 	postToPort,
@@ -9,14 +12,28 @@ import {
 } from './messages';
 import { RpcHelper } from './rpc';
 
+/** the headers a WebSocket handshake goes out with, given the page's */
+export type DecorateHandshake = (
+	url: URL,
+	headers: RawHeaders,
+) => Promise<RawHeaders>;
+
+/** how long a decorate hook may take before the handshake goes out without it */
+const DECORATE_TIMEOUT_MS = 2000;
+
 /**
  * Serve a ProxyTransport to a `RemoteTransport` on the other end of `port`.
- * `getTransport` is a getter so the host can hot-swap transports.
+ * `getTransport` is a getter so the host can hot-swap transports. `decorate`
+ * may add headers to a WebSocket handshake (the controller adds the cookie
+ * jar's Cookie, HttpOnly included, which the page must never hold); a
+ * Cookie the page sent itself is dropped first, and a hook that fails or
+ * stalls leaves the handshake as it was.
  * Returns a function that closes the port.
  */
 export default function serveTransport(
 	port: MessagePort,
 	getTransport: () => ProxyTransport,
+	decorate?: DecorateHandshake,
 ): () => void {
 	const post = (data: unknown, transfer: Transferable[] = []) =>
 		postToPort(port, data, transfer);
@@ -42,6 +59,21 @@ export default function serveTransport(
 			},
 			connect: async ({ url, protocols, requestHeaders, port: socket }) => {
 				const transport = await readyTransport();
+				requestHeaders = requestHeaders.filter(
+					([name]) => name.toLowerCase() !== 'cookie',
+				);
+				if (decorate)
+					try {
+						const decorated = await Promise.race([
+							decorate(new URL(url), requestHeaders),
+							new Promise<null>((resolve) =>
+								setTimeout(() => resolve(null), DECORATE_TIMEOUT_MS),
+							),
+						]);
+						if (decorated) requestHeaders = decorated;
+					} catch (error) {
+						// the handshake goes out without the extra headers
+					}
 
 				let resolve!: (result: TransportToHost['connect'][1]) => void;
 				const result = new Promise<TransportToHost['connect'][1]>(

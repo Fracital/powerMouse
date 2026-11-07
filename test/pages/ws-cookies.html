@@ -1,0 +1,40 @@
+<!doctype html>
+<title>WS COOKIES</title>
+<script>
+	// opens the fixture's /ws-echo three ways and records what the handshake
+	// carried; ?cross targets the fixture's other host name (another site)
+	// its own record name per mode: the suite scans every frame for it
+	const cross = location.search.includes('cross');
+	const record = (window[cross ? '__wsx' : '__ws'] = {
+		document: document.cookie,
+		cookieStore: 'cookieStore' in window,
+	});
+	const target = cross
+		? location.origin.replace('localhost', '127.0.0.1')
+		: location.origin;
+	const open = (url, key) =>
+		new Promise((resolve) => {
+			try {
+				const socket = new WebSocket(url);
+				socket.onmessage = (event) => {
+					record[key] = JSON.parse(event.data);
+					resolve();
+				};
+				socket.onerror = () => {
+					record[key] = 'error';
+					resolve();
+				};
+				socket.onclose = () => resolve();
+			} catch (error) {
+				record[key] = String(error);
+				resolve();
+			}
+		});
+	Promise.all([
+		open(target.replace(/^http/, 'ws') + '/ws-echo', 'absolute'),
+		open('/ws-echo', 'relative'),
+		open(target + '/ws-echo', 'http'),
+	]).finally(() => {
+		record.done = true;
+	});
+</script>

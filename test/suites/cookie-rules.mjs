@@ -44,7 +44,7 @@ async function unit() {
 	const entry = `${OUT}cookie-rules-entry.mjs`;
 	writeFileSync(
 		entry,
-		`export { parseCookie, cookieMatches, defaultPath, pathMatches, domainMatches, isSecureURL, compareCookies } from ${JSON.stringify(`${root}src/server/Cookies.ts`)};\n`,
+		`export { parseCookie, cookieMatches, defaultPath, pathMatches, domainMatches, isSecureURL, compareCookies, forScript } from ${JSON.stringify(`${root}src/server/Cookies.ts`)};\n`,
 	);
 	const bundle = `${OUT}cookie-rules.mjs`;
 	let rules;
@@ -273,6 +273,16 @@ async function unit() {
 					method: 'GET',
 				}).join() === 'n',
 			JSON.stringify(sent({ site: 'cross-site' })),
+		);
+		ok(
+			'page script is handed the jar without its HttpOnly cookies',
+			rules
+				.forScript([
+					{ name: 'a', httpOnly: true },
+					{ name: 'b', httpOnly: false },
+				])
+				.map((c) => c.name)
+				.join() === 'b',
 		);
 		ok(
 			'a cross-site GET navigation adds Lax; a POST navigation does not',

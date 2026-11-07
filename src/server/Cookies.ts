@@ -496,12 +496,20 @@ export async function registerCookies(router: Router): Promise<Cookies> {
 		getPublicSuffix(host, { allowPrivateDomains: true }),
 	);
 
-	for (const api of ['get', 'set']) {
-		router.routes.set(
-			new RegExp(`^\\/cookies\\/${api}$`),
-			jsonAPI(cookies[api as keyof Cookies].bind(cookies)),
-		);
-	}
+	// what page script may see: the jar without its HttpOnly cookies (the
+	// request path and the host's cookies API get the whole jar)
+	router.routes.set(
+		/^\/cookies\/get$/,
+		jsonAPI(async (url: string, context?: CookieRequestContext) =>
+			forScript(await cookies.get(url, context)),
+		),
+	);
+	router.routes.set(/^\/cookies\/set$/, jsonAPI(cookies.set.bind(cookies)));
 
 	return cookies;
+}
+
+/** the cookies page script may see: HttpOnly ones never reach it */
+export function forScript<T extends { httpOnly: boolean }>(cookies: T[]): T[] {
+	return cookies.filter((cookie) => !cookie.httpOnly);
 }

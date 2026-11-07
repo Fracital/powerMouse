@@ -48,6 +48,14 @@ export class CookiesModule extends Module<DocumentClient> {
 		);
 	}
 	apply() {
+		// the Cookie Store API would bypass the jar: pages see document.cookie
+		// only, like a browser without it
+		const global = this.client.global as unknown as Record<string, unknown>;
+		Reflect.deleteProperty(global, 'cookieStore');
+		const windowPrototype = (global.Window as { prototype?: object })
+			?.prototype;
+		if (windowPrototype) Reflect.deleteProperty(windowPrototype, 'cookieStore');
+
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
 		Reflect.defineProperty(this.client.global.Document.prototype, 'cookie', {

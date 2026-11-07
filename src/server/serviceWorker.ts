@@ -1,3 +1,4 @@
+import { getDomain } from 'tldts';
 import { Config } from '../config';
 import {
 	CONTROLLER_INIT,
@@ -23,6 +24,31 @@ interface ControllerRef {
 	rpc: RpcHelper<SWbound, Controllerbound>;
 	server: Promise<StompServer>;
 	ready?: StompServer;
+}
+
+/** the fetch-metadata site of a request from `initiator` to `url` */
+function siteOf(
+	initiator: string,
+	url: string,
+): 'same-origin' | 'same-site' | 'cross-site' {
+	try {
+		const from = new URL(initiator);
+		const to = new URL(url);
+		// schemeful same-site: ws is http, wss is https
+		for (const u of [from, to])
+			if (u.protocol === 'ws:') u.protocol = 'http:';
+			else if (u.protocol === 'wss:') u.protocol = 'https:';
+		if (from.origin === to.origin) return 'same-origin';
+		if (from.protocol !== to.protocol) return 'cross-site';
+		const domain = getDomain(from.hostname);
+		// an IP or localhost has no registrable domain: the host itself is the site
+		return (domain !== null && domain === getDomain(to.hostname)) ||
+			from.hostname === to.hostname
+			? 'same-site'
+			: 'cross-site';
+	} catch (error) {
+		return 'cross-site';
+	}
 }
 
 /** one controller per directory (scope) */
@@ -61,7 +87,17 @@ function registerController(
 				const { cookies } = await server;
 				switch (command.op) {
 					case 'get':
-						return [(await cookies.get(command.url)).toString(), []];
+						return [
+							(
+								await cookies.get(
+									command.url,
+									command.initiator
+										? { site: siteOf(command.initiator, command.url) }
+										: {},
+								)
+							).toString(),
+							[],
+						];
 					case 'set':
 						await cookies.set(command.setCookie, command.url);
 						return [undefined, []];

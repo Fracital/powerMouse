@@ -106,7 +106,8 @@ export interface CookieRecord {
 }
 
 export type CookieCommand =
-	| { op: 'get'; url: string }
+	/** `initiator`: the origin asking (a WebSocket handshake), so SameSite applies; absent means the host, which gets everything */
+	| { op: 'get'; url: string; initiator?: string }
 	| { op: 'set'; url: string; setCookie: string | string[] }
 	| { op: 'list'; origin?: string }
 	| { op: 'clear'; origin?: string };
