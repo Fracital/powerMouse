@@ -7,6 +7,7 @@ import BlobDocumentsModule from './modules/BlobDocuments';
 import ContextModule from './modules/Context';
 import { CookiesModule } from './modules/Cookies';
 import CSSOMModule from './modules/CSSOM';
+import CSSReadbackModule from './modules/CSSReadback';
 import DOMAttributesModule from './modules/DOMAttributes';
 import DOMContentHooks from './modules/DOMContentHooks';
 import DOMHooksModule from './modules/DOMHooks';
@@ -45,6 +46,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(OpenModule);
 	client.addModule(NavigateModule);
 	client.addModule(ReadbackModule);
+	client.addModule(CSSReadbackModule);
 }
 
 const createDOMClient = createClientFactory(DocumentClient, addClientModules);

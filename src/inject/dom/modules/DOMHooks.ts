@@ -6,6 +6,7 @@ import ProxyModule, {
 	cleanupPrototype,
 	usePrototype,
 } from '../../modules/Proxy';
+import { unrouteCSS } from '../../modules/Unroute';
 import DocumentClient, {
 	getGlobalParsingState,
 	runDocumentOpenListeners,
@@ -714,6 +715,17 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				),
 			});
 
+		// the null namespace is the attribute itself: the page's value
+		this.client.global.Element.prototype.getAttributeNS =
+			proxyModule.wrapFunction(
+				this.client.global.Element.prototype.getAttributeNS,
+				(target, that: Element, args) => {
+					if (args.length >= 2 && (args[0] === null || args[0] === ''))
+						return that.getAttribute(String(args[1]));
+					return Reflect.apply(target, that, args);
+				},
+			);
+
 		this.client.global.Element.prototype.getAttribute =
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.getAttribute,
@@ -726,9 +738,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					return usePrototype(that, CustomElement.prototype, (element) => {
 						if (element.hasAttributeOG(attribute)) {
 							return element.getAttributeOG(attribute);
-						} else {
-							return element.getAttribute(attribute);
 						}
+						const value = element.getAttribute(attribute);
+						// a style the browser serialised from a CSSOM write carries no
+						// marker: its routed url()s keep the page's token
+						return attribute === 'style' && typeof value === 'string'
+							? unrouteCSS(this.client, value)
+							: value;
 					});
 				},
 			);
@@ -775,6 +791,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		for (const [proto, property] of [
 			[this.client.global.Attr.prototype, 'value'],
 			[this.client.global.Node.prototype, 'nodeValue'],
+			[this.client.global.Node.prototype, 'textContent'],
 		] as const) {
 			const descriptor = Reflect.getOwnPropertyDescriptor(proto, property)!;
 			Reflect.defineProperty(proto, property, {
@@ -849,26 +866,82 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			),
 		});
 
-		// markup as the page wrote it: a copy with every marker folded back
+		// markup as the page wrote it: a copy with every marker folded back,
+		// template contents included (their elements are not descendants)
+		const nativeCloneNode = this.client.global.Node.prototype.cloneNode;
+		const nativeQueryAll = {
+			element: nativeElement.querySelectorAll,
+			document: this.client.global.Document.prototype.querySelectorAll,
+			fragment: this.client.global.DocumentFragment.prototype.querySelectorAll,
+		};
+		const querySelectorAllOf = (root: Node): Element[] => {
+			const native =
+				root.nodeType === 1
+					? nativeQueryAll.element
+					: root.nodeType === 9
+						? nativeQueryAll.document
+						: root.nodeType === 11
+							? nativeQueryAll.fragment
+							: null;
+			if (!native) return [];
+			try {
+				return [...(Reflect.apply(native, root, ['*']) as NodeListOf<Element>)];
+			} catch (error) {
+				return [];
+			}
+		};
+		const templateContent = Reflect.getOwnPropertyDescriptor(
+			this.client.global.HTMLTemplateElement.prototype,
+			'content',
+		)!.get!;
+		const foldMarkers = (root: Node) => {
+			const queue: Node[] = [root];
+			while (queue.length) {
+				const current = queue.pop()!;
+				const elements =
+					current.nodeType === 1
+						? [current as Element, ...querySelectorAllOf(current)]
+						: querySelectorAllOf(current);
+				for (const node of elements)
+					usePrototype(node, nativeElement, (node) => {
+						for (const name of node.getAttributeNames())
+							if (isMarker(name)) {
+								node.setAttribute(
+									name.slice(ORIGINAL_ATTRIBUTE.length),
+									node.getAttribute(name)!,
+								);
+								node.removeAttribute(name);
+							}
+						if (node.nodeName === 'TEMPLATE')
+							queue.push(Reflect.apply(templateContent, node, []));
+					});
+			}
+		};
 		const serializeOriginal = (element: Element, outer: boolean): string =>
 			usePrototype(element, nativeElement, (native) => {
-				const clone = native.cloneNode(true) as Element;
-				return usePrototype(clone, nativeElement, (clone) => {
-					for (const node of [clone, ...clone.querySelectorAll('*')])
-						usePrototype(node, nativeElement, (node) => {
-							for (const name of node.getAttributeNames())
-								if (isMarker(name)) {
-									node.setAttribute(
-										name.slice(ORIGINAL_ATTRIBUTE.length),
-										node.getAttribute(name)!,
-									);
-									node.removeAttribute(name);
-								}
-						});
-					return outer ? clone.outerHTML : clone.innerHTML;
-				});
+				const clone = Reflect.apply(nativeCloneNode, native, [true]) as Element;
+				foldMarkers(clone);
+				return usePrototype(clone, nativeElement, (clone) =>
+					outer ? clone.outerHTML : clone.innerHTML,
+				);
 			});
 		this.serializeOriginal = serializeOriginal;
+
+		// XMLSerializer: the same folded copy, serialised as XML
+		const serializeToString =
+			this.client.global.XMLSerializer.prototype.serializeToString;
+		this.client.global.XMLSerializer.prototype.serializeToString =
+			proxyModule.wrapFunction(serializeToString, (target, that, args) => {
+				const node = args[0];
+				if (!(node instanceof this.client.global.Node))
+					return Reflect.apply(target, that, args);
+				const clone = Reflect.apply(nativeCloneNode, node, [true]) as Node;
+				foldMarkers(clone);
+				return unrouteCSS(
+					this.client,
+					Reflect.apply(target, that, [clone]) as string,
+				);
+			});
 
 		// attribute selectors match the page's values: `[href="/x"]` is
 		// `[s_o:href="/x"]` on a rewritten element, `[href="/x"]` on one that

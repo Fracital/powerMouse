@@ -57,6 +57,35 @@ export function unrouteText(client: Client, text: string): string {
 	});
 }
 
+// a url() token whose target is routed and keeps the page's token after
+// `#url(`: quoted (cssText), with `&quot;` (markup), or unquoted with escaped
+// parentheses (the rewriter's own text)
+const ROUTED_CSS_URL =
+	/url\((&quot;|["']|)([^"')\s]*?)#url(\\?)\(((?:\\.|&quot;|[^\\)])*?)\3\)\1\)/g;
+
+/**
+ * CSS text (a rule's cssText, a style element's text, serialised markup) with
+ * every routed url() replaced by the url() the page wrote, which the rewriter
+ * keeps after `#url(` for idempotence.
+ */
+export function unrouteCSS(client: Client, text: string): string {
+	if (!text.includes('#url')) return text;
+	const prefix = routedPrefix(client);
+	return text.replace(
+		ROUTED_CSS_URL,
+		(match, quote: string, target: string, escape: string, inner: string) => {
+			if (!target.startsWith(prefix)) return match;
+			let token = inner.replace(/&quot;/g, '"').replace(/\\(.)/g, '$1');
+			try {
+				token = decodeURIComponent(token);
+			} catch (error) {
+				// not percent-encoded
+			}
+			return `url(${token})`;
+		},
+	);
+}
+
 /** V8's structured stack frame, the argument of Error.prepareStackTrace */
 interface CallSite {
 	getFileName(): string | null | undefined;

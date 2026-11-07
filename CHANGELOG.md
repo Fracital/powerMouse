@@ -202,6 +202,18 @@ url`) carries its value and targets that window. An about:blank child of
   for a meta the proxy never rewrote, which broke pages decoding a base64
   payload from one (GitHub's `visitor-payload`, three atob errors per load).
   A rewritten refresh reads back as written too.
+- What a page reads back from its stylesheets and markup is what it wrote.
+  A rule's `cssText` and `style`, a sheet's `href` (and an `@import`'s), a
+  style element's text, rules inserted or constructed at runtime, a style
+  attribute the browser serialised from a CSSOM write, and serialised markup
+  (`innerHTML`, `outerHTML`, `XMLSerializer`) show the page's url()s and
+  attribute values, never the routed ones: the rewriter keeps the written
+  url() token after `#url(` and the readback restores it. A template's
+  `innerHTML` folds the markers inside its content, `XMLSerializer`
+  serialises a folded copy, `getAttributeNS(null, name)` and an attribute
+  node's `textContent` answer like `getAttribute`. Corpus: attrs 36 failing
+  checks to 2 (MutationObserver records, which show the marker writes;
+  scramjet fails that one too).
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

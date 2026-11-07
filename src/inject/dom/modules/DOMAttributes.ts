@@ -62,6 +62,8 @@ export function scriptType(element: Element): ScriptType {
 
 export default class DOMAttributesModule extends Module<DocumentClient> {
 	formHook?: (element: CustomElement) => void;
+	/** @internal the page's view of a CSSStyleDeclaration: reads unrouted, writes routed (CSSReadback) */
+	wrapDeclaration?: (declaration: CSSStyleDeclaration) => CSSStyleDeclaration;
 	// captured before the hooks replace them, for serializeStyle
 	#nativeStyle: PropertyDescriptor;
 	#nativeCssText: PropertyDescriptor;
@@ -897,6 +899,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 				return proxy;
 			};
+			this.wrapDeclaration = wrapDeclaration;
 
 			for (const ctor of [
 				this.client.global.HTMLElement,
