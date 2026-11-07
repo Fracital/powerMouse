@@ -131,6 +131,14 @@ on every save (use a `git worktree`).
 - **Prettier 3 formats with trailing commas and reflows strings.** If you
   patch files with scripts, read the current text first.
 
+- **An IndexedDB transaction commits during any foreign `await`.** In
+  `createServer` (and anywhere a transaction is open) nothing but the store's
+  own requests may be awaited before `tx.done`; awaiting `caches.delete`,
+  `fetch` or a timer in between makes the next store call throw
+  `TransactionInactiveError`, and because that happens while the service
+  worker builds its server, the page sits on "Waiting for the service worker"
+  forever with nothing in its console.
+
 ## Transports (measured, see CHANGELOG known limitations)
 
 - epoxy 3.0.2: HTTP solid, incoming WebSocket frames stop after the first
