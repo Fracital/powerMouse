@@ -285,6 +285,12 @@ url`) carries its value and targets that window. An about:blank child of
   does nothing in pages and workers: the console is shared with the host and
   carries the rewriter's warnings. The Navigation API is kept, with its URLs
   read back unrouted, rather than removed.
+- `WebSocketStream` (Chrome) goes through the proxied WebSocket like
+  `WebSocket` does: the URL resolves against the page, `opened` hands the
+  page its readable (strings and ArrayBuffers) and writable, `closed`
+  settles with the close code and reason, `close()` and an aborted `signal`
+  close the socket. Only where the browser has the class, so feature
+  detection stays truthful; before this a page using it bypassed the proxy.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

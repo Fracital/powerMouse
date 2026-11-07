@@ -1,0 +1,34 @@
+<!doctype html>
+<title>WEBSOCKET STREAM</title>
+<script>
+	window.__wss = {};
+	(async () => {
+		if (typeof WebSocketStream !== 'function') {
+			__wss.absent = true;
+			return;
+		}
+		__wss.native = /\[native code\]/.test(
+			Function.prototype.toString.call(WebSocketStream),
+		);
+		const stream = new WebSocketStream(`ws://${location.host}/ws-echo`);
+		__wss.url = stream.url;
+		const { readable, writable, protocol } = await stream.opened;
+		__wss.protocol = protocol;
+		const reader = readable.getReader();
+		const first = await reader.read();
+		__wss.first = JSON.parse(first.value);
+		const writer = writable.getWriter();
+		await writer.write('hello').catch((error) => {
+			__wss.writeError = error.name;
+		});
+		stream.close({ closeCode: 1000, reason: 'done' });
+		__wss.closed = await stream.closed;
+		__wss.end = await reader.read();
+	})()
+		.catch((error) => {
+			__wss.error = String(error);
+		})
+		.finally(() => {
+			__wss.done = true;
+		});
+</script>

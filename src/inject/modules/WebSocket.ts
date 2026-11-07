@@ -213,6 +213,145 @@ export default class WebSocketModule extends Module<Client> {
 			instances,
 		);
 
+		// WebSocketStream (Chrome): the same connection through the proxied
+		// WebSocket, with the streams API the page expects. Only where the
+		// browser has it, so feature detection stays truthful.
+		const nativeStream = (
+			this.client.global as { WebSocketStream?: new (...args: any[]) => any }
+		).WebSocketStream;
+		if (typeof nativeStream === 'function') {
+			const streamInstances = new WeakSet();
+			const networkError = (message: string) =>
+				new DOMException(message, 'NetworkError');
+			class MockWebSocketStream {
+				#socket: MockWebSocket;
+				#url: string;
+				#opened: Promise<{
+					readable: ReadableStream;
+					writable: WritableStream;
+					extensions: string;
+					protocol: string;
+				}>;
+				#closed: Promise<{ closeCode: number; reason: string }>;
+				constructor(
+					...args: [
+						url: urlLike,
+						options?: { protocols?: string | string[]; signal?: AbortSignal },
+					]
+				) {
+					if (!args.length)
+						throw new TypeError(
+							"Failed to construct 'WebSocketStream': 1 argument required, but only 0 present.",
+						);
+					const [url, options = {}] = args;
+					const socket = new globalWebSocketProxy(
+						url,
+						options.protocols,
+					) as unknown as MockWebSocket;
+					socket.binaryType = 'arraybuffer';
+					this.#socket = socket;
+					this.#url = socket.url;
+					streamInstances.add(this);
+
+					let resolveClosed!: (value: {
+						closeCode: number;
+						reason: string;
+					}) => void;
+					let rejectClosed!: (reason: unknown) => void;
+					this.#closed = new Promise((resolve, reject) => {
+						resolveClosed = resolve;
+						rejectClosed = reject;
+					});
+					this.#opened = new Promise((resolve, reject) => {
+						socket.addEventListener(
+							'open',
+							() => {
+								const readable = new ReadableStream({
+									start(controller) {
+										socket.addEventListener('message', (event) =>
+											controller.enqueue((event as MessageEvent).data),
+										);
+										socket.addEventListener('close', () => {
+											try {
+												controller.close();
+											} catch (error) {
+												// already closed or errored
+											}
+										});
+										socket.addEventListener('error', () =>
+											controller.error(
+												networkError('The WebSocket connection failed.'),
+											),
+										);
+									},
+									cancel() {
+										socket.close();
+									},
+								});
+								const writable = new WritableStream({
+									write(chunk) {
+										socket.send(chunk);
+									},
+									close() {
+										socket.close();
+									},
+									abort() {
+										socket.close();
+									},
+								});
+								resolve({
+									readable,
+									writable,
+									extensions: socket.extensions,
+									protocol: socket.protocol,
+								});
+							},
+							{ once: true },
+						);
+						socket.addEventListener(
+							'error',
+							() => {
+								const error = networkError(
+									'WebSocketStream: the connection failed.',
+								);
+								reject(error);
+								rejectClosed(error);
+							},
+							{ once: true },
+						);
+					});
+					socket.addEventListener('close', (event) =>
+						resolveClosed({
+							closeCode: (event as CloseEvent).code,
+							reason: (event as CloseEvent).reason,
+						}),
+					);
+					// a rejection nobody awaits is not an unhandled one
+					this.#opened.catch(() => {});
+					this.#closed.catch(() => {});
+					options.signal?.addEventListener('abort', () => socket.close(), {
+						once: true,
+					});
+				}
+				get url() {
+					return this.#url;
+				}
+				get opened() {
+					return this.#opened;
+				}
+				get closed() {
+					return this.#closed;
+				}
+				close(options: { closeCode?: number; reason?: string } = {}) {
+					this.#socket.close(options.closeCode, options.reason);
+				}
+			}
+			const streamProxy = newConstructor(MockWebSocketStream);
+			proxyModule.mirrorClass(nativeStream, streamProxy, streamInstances);
+			(this.client.global as { WebSocketStream?: unknown }).WebSocketStream =
+				streamProxy;
+		}
+
 		this.client.global.WebSocket =
 			globalWebSocketProxy as unknown as typeof WebSocket;
 	}
