@@ -260,6 +260,11 @@ url`) carries its value and targets that window. An about:blank child of
   own: `omit` sends no cookies and stores none from the response,
   `same-origin` sends them only when the initiator's real origin is the
   target's, `include` and the default send them.
+- The rewriter keeps the two comments DevTools reads: `//# sourceURL=` as
+  written (eval'd code and stack frames carry the name the page gave) and
+  `//# sourceMappingURL=` routed against the real script URL (a `data:` map
+  as it is), appended after the rewritten code; every other comment is still
+  dropped with the formatting.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

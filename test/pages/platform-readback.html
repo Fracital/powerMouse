@@ -18,6 +18,11 @@
 		} catch (error) {
 			__pr.stack = error.stack;
 		}
+		try {
+			eval('throw new Error("named")\n//# sourceURL=named-by-comment.js');
+		} catch (error) {
+			__pr.sourceURL = error.stack;
+		}
 		const cache = await caches.open('pr-cache');
 		await cache.put('/pages/fresh.json', new Response('y'));
 		await cache.add('/pages/echo.json');

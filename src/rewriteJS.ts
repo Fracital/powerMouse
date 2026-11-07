@@ -1,12 +1,14 @@
 import { generate } from '@javascript-obfuscator/escodegen';
 import { builders as b } from 'ast-types';
 import { parse } from 'meriyah';
+import type { ESTree } from 'meriyah';
 import { AcornContext, AcornIterator, result } from './acornUtil';
 import { Config } from './config';
 import {
 	createDataURI,
 	injectWorkerJS,
 	parseDataURI,
+	routeBinary,
 	routeURL,
 } from './routeURL';
 import StompURL from './StompURL';
@@ -88,13 +90,37 @@ export function modifyJS(
 		const isModule = type === 'genericModule' || type === 'workerModule';
 		const isWorker = type === 'workerModule' || type === 'worker';
 
+		// comments are dropped with the rest of the formatting, except the two
+		// DevTools reads: `//# sourceURL=` names the script (eval'd code, stack
+		// frames), `//# sourceMappingURL=` points at its map, which resolves
+		// against the routed script URL, so it is routed too (a data: map is
+		// kept as it is)
+		const comments: ESTree.Comment[] = [];
 		const tree = parse(script, {
 			module: isModule,
 			next: true,
 			ranges: true,
 			globalReturn: true,
 			webcompat: true,
+			onComment: comments,
 		});
+		const trailer = comments
+			.map((comment) =>
+				/^[#@]\s*(sourceURL|sourceMappingURL)=(\S+)/.exec(comment.value.trim()),
+			)
+			.filter((match): match is RegExpExecArray => match !== null)
+			.map(([, name, value]) => {
+				if (name === 'sourceMappingURL' && !/^data:/i.test(value))
+					try {
+						value = routeBinary(
+							new StompURL(new URL(value, url.toString()), url),
+						);
+					} catch (error) {
+						// not a URL: left as written
+					}
+				return `\n//# ${name}=${value}`;
+			})
+			.join('');
 
 		// destructured parameters become plain ones with the pattern moved into
 		// the body, where the main pass wraps its source like any declaration
@@ -567,7 +593,8 @@ if (!${CLIENT_KEY}.applied)
 			(isModule
 				? `import.meta.url = ${JSON.stringify(url.toString())};import.meta.resolve = (s) => ${BARE_SPECIFIER}.test(s = String(s)) ? s : new URL(s, import.meta.url).href;`
 				: '') +
-			generate(tree)
+			generate(tree) +
+			trailer
 		);
 	} catch (error) {
 		// a script the rewriter cannot handle runs as it was: the browser may

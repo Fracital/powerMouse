@@ -68,6 +68,39 @@ const parses = (code) => {
 	);
 }
 {
+	// the two comments DevTools reads survive: the name as written, the map
+	// routed against the script (a data: map as it is); other comments go
+	const out = rewrite(
+		'x; // note\n/* block */\n//# sourceURL=named.js\n//# sourceMappingURL=app.js.map',
+	);
+	const inline = rewrite(
+		'y;\n//# sourceMappingURL=data:application/json;base64,e30=',
+	);
+	ok(
+		'sourceURL is kept and sourceMappingURL is routed',
+		/\n\/\/# sourceURL=named\.js/.test(out) &&
+			/\n\/\/# sourceMappingURL=\/stomp\/binary\/\S+$/.test(out) &&
+			!/note|block/.test(out) &&
+			/sourceMappingURL=data:application\/json;base64,e30=$/.test(inline) &&
+			parses(out),
+		JSON.stringify([out, inline]),
+	);
+	// V8 names the script after the comment, so a stack shows it
+	let stack = '';
+	try {
+		(0, eval)(
+			rewrite('throw new Error("named")\n//# sourceURL=named-by-comment.js'),
+		);
+	} catch (error) {
+		stack = error.stack;
+	}
+	ok(
+		'a stack names the script after its sourceURL comment',
+		/named-by-comment\.js/.test(stack),
+		stack,
+	);
+}
+{
 	const out = rewrite('debugger; if (a) debugger; x: debugger; { debugger }');
 	ok(
 		'debugger statements are removed',

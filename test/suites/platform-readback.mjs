@@ -61,6 +61,13 @@ ok(
 		JSON.stringify(pr.afterDelete) === JSON.stringify([]),
 	JSON.stringify([pr.databases, pr.afterDelete]),
 );
+ok(
+	'eval code named by a sourceURL comment keeps the name in its stack',
+	typeof pr.sourceURL === 'string' &&
+		/named-by-comment\.js/.test(pr.sourceURL) &&
+		!leaks(pr.sourceURL),
+	JSON.stringify(pr.sourceURL),
+);
 ok('the fixture ran to completion', pr.done === true && !pr.error, pr.error);
 await done(
 	browser,
