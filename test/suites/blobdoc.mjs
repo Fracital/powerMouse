@@ -66,14 +66,22 @@ ok(
 		blob.json === '{"a":1}' &&
 		blob.image === 4 &&
 		blob.untyped === '<b>x</b>' &&
-		blob.binaryHTML === '<b>x</b>',
+		blob.badBytes === 3,
 	JSON.stringify([
 		blob.plain,
 		blob.json,
 		blob.image,
 		blob.untyped,
-		blob.binaryHTML,
+		blob.badBytes,
 	]),
+);
+ok(
+	'an HTML blob built from bytes is wrapped like one from strings',
+	typeof blob.binaryHTML === 'string' &&
+		blob.binaryHTML.startsWith('<!DOCTYPE HTML>') &&
+		blob.binaryHTML.includes('loadHTML(') &&
+		blob.binaryHTML.includes('&lt;b&gt;x&lt;/b&gt;'),
+	JSON.stringify((blob.binaryHTML || '').slice(0, 40)),
 );
 ok(
 	'a File keeps its name and type',

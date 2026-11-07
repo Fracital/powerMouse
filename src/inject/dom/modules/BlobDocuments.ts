@@ -10,8 +10,10 @@ const HTML_TYPE = /^\s*text\/html\s*(;|$)/i;
  * shown from a blob: URL in a frame or a window) is one nothing fetched, so
  * the service worker never sees it. Its contents are wrapped in the shell at
  * construction, with the page as its URL, so the document runs injected and
- * rewritten like a fetched one. Only string parts are wrapped: binary parts
- * are left as they are (a known limitation).
+ * rewritten like a fetched one. Binary parts (an ArrayBuffer, a typed array)
+ * are decoded with the type's charset (UTF-8 by default) first; a blob whose
+ * bytes do not decode, or one built from another Blob (its bytes are not
+ * readable synchronously), is left as it is.
  */
 export default class BlobDocumentsModule extends Module<DocumentClient> {
 	apply() {
@@ -31,9 +33,34 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 			} catch (error) {
 				return parts;
 			}
-			if (!list.every((part) => typeof part === 'string')) return parts;
+			const charset =
+				/;\s*charset=([\w-]+)/i.exec(
+					String((options as BlobPropertyBag).type),
+				)?.[1] ?? 'utf-8';
+			let decoder: TextDecoder;
+			try {
+				decoder = new TextDecoder(charset, { fatal: true });
+			} catch (error) {
+				return parts;
+			}
+			const text: string[] = [];
+			for (const part of list) {
+				if (typeof part === 'string') text.push(part);
+				else if (part instanceof ArrayBuffer || ArrayBuffer.isView(part)) {
+					try {
+						text.push(decoder.decode(part as BufferSource, { stream: true }));
+					} catch (error) {
+						return parts;
+					}
+				} else return parts;
+			}
+			try {
+				text.push(decoder.decode());
+			} catch (error) {
+				return parts;
+			}
 			return [
-				modifyHTML(list.join(''), this.client.url, this.client.config, true),
+				modifyHTML(text.join(''), this.client.url, this.client.config, true),
 			];
 		};
 

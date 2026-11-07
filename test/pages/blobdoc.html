@@ -37,9 +37,14 @@
 		}).text();
 		__blob.image = new Blob([new Uint8Array(4)], { type: 'image/png' }).size;
 		__blob.untyped = await new Blob(['<b>x</b>']).text();
+		// an HTML blob from bytes is wrapped like one from strings; bytes that
+		// do not decode are left alone
 		__blob.binaryHTML = await new Blob([new TextEncoder().encode('<b>x</b>')], {
 			type: 'text/html',
 		}).text();
+		__blob.badBytes = new Blob([new Uint8Array([0xff, 0xfe, 0x3c])], {
+			type: 'text/html',
+		}).size;
 		__blob.others = true;
 	})();
 </script>
