@@ -649,6 +649,18 @@ function genericForward(
 				: false;
 
 			body = transformed !== false ? transformed : response.body!;
+
+			// A rewritten body is this worker's output, not the origin's: the
+			// browser's HTTP cache must not keep it for as long as the origin
+			// allowed (a rewriter upgrade or new helper names would leave old
+			// output in it for a year). no-cache makes the browser ask again;
+			// the validators stay, and the worker answers from its own cache
+			// of the upstream bytes, so the revalidation costs no network.
+			if (transformed !== false) {
+				responseHeaders.set('cache-control', 'no-cache');
+				responseHeaders.delete('expires');
+				responseHeaders.delete('age');
+			}
 		}
 
 		return new Response(body, {

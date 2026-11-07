@@ -201,6 +201,17 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- A rewritten body no longer outlives the worker that made it. Rewritten
+  responses (documents, scripts, stylesheets, XHR bodies, the inject shells)
+  went out with the origin's caching headers, so the browser's HTTP cache
+  could keep a rewritten script for as long as the origin allowed (a year for
+  an immutable asset) with an old rewriter's output or old helper names in it;
+  a rewriter upgrade did not reach it. They now go out `cache-control:
+no-cache` with the origin's validators kept and `expires`/`age` dropped: the
+  browser asks the worker again and the worker answers from its own cache of
+  the upstream bytes, so a reload revalidates without an upstream request
+  (measured: one upstream fetch across a load and a reload). Bodies the worker
+  did not rewrite keep the origin's headers (no-cache suite).
 - Reflection reaches the same spoof as a member read: `Object.getOwnPropertyDescriptor`
   and `Reflect.getOwnPropertyDescriptor` (and `getOwnPropertyDescriptors`,
   `__lookupGetter__`, `__lookupSetter__`) on a window or the document answer
