@@ -20,7 +20,7 @@ const entry = `${OUT}rewriter-unit-entry.mjs`;
 writeFileSync(
 	entry,
 	`export { modifyJS, routeJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
-export { routeHTML } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
+export { routeHTML, modifyRefresh, parseRefresh } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 `,
@@ -34,9 +34,15 @@ await esbuild.build({
 	outfile: bundle,
 	logLevel: 'silent',
 });
-const { modifyJS, routeJS, routeHTML, StompURL, parseConfig } = await import(
-	`${bundle}?${Date.now()}`
-);
+const {
+	modifyJS,
+	routeJS,
+	routeHTML,
+	modifyRefresh,
+	parseRefresh,
+	StompURL,
+	parseConfig,
+} = await import(`${bundle}?${Date.now()}`);
 
 const config = { directory: '/stomp/', codec: 'xor' };
 const parsed = parseConfig(config, 'k');
@@ -176,6 +182,35 @@ const parses = (code) => {
 			inline.slice(0, 80),
 			mod.slice(0, 40),
 		]),
+	);
+}
+{
+	// the refresh value is parsed like the browser does: any case for `url`,
+	// quotes dropped, a comma separator, a URL without `url=`, a bare time
+	const cases = {
+		'5; url=/a': ['5', '/a'],
+		'5;URL=/a': ['5', '/a'],
+		"0; url='/a b'": ['0', '/a b'],
+		'3 , url = "/a"': ['3', '/a'],
+		'4; /plain': ['4', '/plain'],
+		7: ['7', null],
+		'  2;url=https://other.example/x': ['2', 'https://other.example/x'],
+	};
+	const got = Object.fromEntries(
+		Object.entries(cases).map(([value]) => {
+			const parsed = parseRefresh(value);
+			return [value, [parsed.time, parsed.url]];
+		}),
+	);
+	const full = { ...config, ...parsed };
+	const routed = modifyRefresh('5;URL="/a"', url, full);
+	ok(
+		'refresh values are parsed like the browser and the URL routed',
+		JSON.stringify(got) === JSON.stringify(cases) &&
+			/^5; url=\/stomp\/html\//.test(routed) &&
+			modifyRefresh('7', url, full) === '7' &&
+			modifyRefresh('1; url=javascript:x', url, full) === '1; url=javascript:x',
+		JSON.stringify([got, routed]),
 	);
 }
 {

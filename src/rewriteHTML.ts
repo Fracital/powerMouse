@@ -118,7 +118,51 @@ export function modifyHTML(
 	return `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${baseScript}<script src="${injectDocumentJS(url, config)}"></script><script>${inject}</script></body></html>`;
 }
 
-const REFRESH = /(;\s*?|^)url=(?:(['"])(((?!\2).)*)\2?|(.*);?)/i;
+/**
+ * The HTML spec's parse of a refresh value (`<meta http-equiv=refresh>`, the
+ * `Refresh` header): whitespace, the time (digits, then anything up to the
+ * separator), an optional `;` or `,`, whitespace, an optional `url`
+ * (any case) with `=`, whitespace, then the URL, which drops a matching pair
+ * of quotes around it. Null when there is no URL (a reload after `time`).
+ */
+export function parseRefresh(value: string): {
+	time: string;
+	url: string | null;
+} {
+	let i = 0;
+	const space = () => {
+		while (i < value.length && /[\t\n\f\r ]/.test(value[i])) i++;
+	};
+	space();
+	const timeStart = i;
+	while (i < value.length && /[0-9]/.test(value[i])) i++;
+	// anything else before the separator belongs to the time (the browser
+	// ignores it; "5.5" or "5abc" are both 5 seconds)
+	while (i < value.length && !/[;,\t\n\f\r ]/.test(value[i])) i++;
+	const time = value.slice(timeStart, i);
+	space();
+	if (i >= value.length) return { time, url: null };
+	if (value[i] === ';' || value[i] === ',') i++;
+	space();
+	if (i >= value.length) return { time, url: null };
+	if (/^url/i.test(value.slice(i, i + 3))) {
+		let j = i + 3;
+		while (j < value.length && /[\t\n\f\r ]/.test(value[j])) j++;
+		if (value[j] === '=') {
+			i = j + 1;
+			space();
+		}
+		// `url` without `=`: the browser takes what follows as the URL
+	}
+	let url = value.slice(i);
+	const quote = url[0];
+	if (quote === '"' || quote === "'") {
+		const close = url.indexOf(quote, 1);
+		url = close === -1 ? url.slice(1) : url.slice(1, close);
+	}
+	url = url.trim();
+	return { time, url: url === '' ? null : url };
+}
 
 // excellent resource
 // https://web.archive.org/web/20210514140514/https://www.otsukare.info/2015/03/26/refresh-http-header
@@ -128,18 +172,20 @@ export function modifyRefresh(
 	config: Config,
 	nested: string | false = false,
 ) {
-	return script.replace(
-		REFRESH,
-		(_match, pre, _1, resource1, _3, resource2) => {
-			const resource: string = resource1 || resource2;
-
-			return `${pre}url=${routeHTML(
-				new StompURL(new URL(resource, url.toString()), url),
-				url,
-				config,
-				false,
-				nested,
-			)}`;
-		},
-	);
+	const { time, url: target } = parseRefresh(script);
+	if (target === null) return script;
+	let resolved: URL;
+	try {
+		resolved = new URL(target, url.toString());
+	} catch (error) {
+		return script;
+	}
+	if (!/^https?:$/.test(resolved.protocol)) return script;
+	return `${time}; url=${routeHTML(
+		new StompURL(resolved, url),
+		url,
+		config,
+		false,
+		nested,
+	)}`;
 }

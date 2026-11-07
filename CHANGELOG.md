@@ -330,6 +330,11 @@ url`) carries its value and targets that window. An about:blank child of
   incumbent, so the browser reports the parent as the source (and the
   envelope the parent's origin); a cross-origin child posts through its own
   realm's wrapper and is reported right.
+- `<meta http-equiv="refresh">` and the `Refresh` header are parsed the way
+  the browser parses them (whitespace, the time, `;` or `,`, `url` in any
+  case with or without `=`, a URL without `url=`, matching quotes dropped)
+  instead of a regex that needed a literal `url=`; a bare time or a URL that
+  is not http(s) is left alone.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,
