@@ -3,7 +3,7 @@
 // StompController / Frame API from dist/Controller.js.
 
 const DIRECTORY = '/stomp/';
-const SEARCH = new SearchBuilder('https://www.google.com/search?q=%s');
+const SEARCH = new SearchBuilder('https://search.brave.com/search?q=%s');
 const QUICK_LINKS = [
 	['Reddit', 'https://old.reddit.com/', 'orange'],
 	['Google', 'https://www.google.com/', 'green'],
