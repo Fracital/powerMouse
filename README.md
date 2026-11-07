@@ -208,6 +208,12 @@ wisp-js 0.5, see the changelog's known limitations and the transports note
 in `AGENTS.md`); the demo's transport selector switches to libcurl for
 those, which in turn stops answering HTTP after some tens of requests.
 
+Epoxy currently loses one of two requests to the same origin started in the
+same tick: the first never gets an answer (measured: two frames of one page
+navigating at once, the first never loads; libcurl does not do this). A host
+that restores several tabs at once, or opens frames together, should prefer
+libcurl, or stagger the first navigations, until a patched epoxy is pinned.
+
 ## Demo
 
 `npm run demo` serves a complete host application on http://localhost:8080,
