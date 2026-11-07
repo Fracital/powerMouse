@@ -46,7 +46,7 @@ await submitLanding(page, `${FIXTURE}rewriter`);
 let frame;
 let results = {};
 for (let i = 0; i < 60; i++) {
-	frame = page.frames().find((f) => f.url().includes('/stomp/html/'));
+	frame = page.frames().find((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	try {
 		results = (await frame?.evaluate(() => window.__rw)) || {};
 	} catch (error) {

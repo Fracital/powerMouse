@@ -5,8 +5,18 @@ export declare type ConfigCodec = 'generic' | 'xor' | 'aes' | 'base64';
 
 export interface Config {
 	codec: ConfigCodec;
-	/** pathname of the directory the service worker is scoped to, e.g. `/stomp/` */
+	/**
+	 * pathname this controller's routes live under: the scope plus the
+	 * controller's id, e.g. `/stomp/k7qx2m/` (its address in the service
+	 * worker; every routed URL starts with it)
+	 */
 	directory: string;
+	/**
+	 * pathname of the directory the service worker is scoped to and the
+	 * bundles are served from, e.g. `/stomp/`; shared by every controller of
+	 * that scope, and the only thing the asset URLs are built from
+	 */
+	scope: string;
 	/**
 	 * Origins allowed to embed proxied documents, emitted as a
 	 * `Content-Security-Policy: frame-ancestors` header. Set by the controller

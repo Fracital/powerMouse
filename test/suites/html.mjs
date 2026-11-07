@@ -22,7 +22,7 @@ async function load(file, key) {
 		// every load opens a new tab: the newest proxied frame is the one
 		const frame = page
 			.frames()
-			.findLast((f) => f.url().includes('/stomp/html/'));
+			.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 		try {
 			const value = await frame.evaluate((k) => window[k], key);
 			if (value) return value;
@@ -52,7 +52,7 @@ async function text(file) {
 		// every load opens a new tab: the newest proxied frame is the one
 		const frame = page
 			.frames()
-			.findLast((f) => f.url().includes('/stomp/html/'));
+			.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 		try {
 			const value = await frame.evaluate(
 				() => document.getElementById('t')?.textContent,

@@ -24,7 +24,7 @@ await page.evaluate(async (fixture) => {
 }, FIXTURE);
 await sleep(2000);
 const newest = () =>
-	page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	page.frames().findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 
 // the real attribute, read from the host realm (the frame's own getAttribute
 // answers with what the page wrote)
@@ -36,7 +36,8 @@ const real = await page.evaluate(() => {
 });
 ok(
 	'area[href] is routed like a[href]',
-	real.area.includes('/stomp/html/') && real.a.includes('/stomp/html/'),
+	/\/stomp\/[\w-]+\/html\//.test(real.area) &&
+		/\/stomp\/[\w-]+\/html\//.test(real.a),
 	JSON.stringify(real),
 );
 const seen = await newest().evaluate(() => {
@@ -174,7 +175,7 @@ ok(
 		updated.viaAttribute[1] === `${fixture.origin}/pages/hist-2.html?set=1` &&
 		updated.viaProperty[0] === '/pages/hist-2.html?prop=1' &&
 		updated.viaProperty[1] === `${fixture.origin}/pages/hist-2.html?prop=1` &&
-		realAfter.includes('/stomp/html/') &&
+		/\/stomp\/[\w-]+\/html\//.test(realAfter) &&
 		realAfter !== realBefore,
 	JSON.stringify({ ...updated, realAfter: realAfter.slice(0, 50) }),
 );

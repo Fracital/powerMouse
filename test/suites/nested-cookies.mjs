@@ -26,7 +26,7 @@ const settled = async (key, timeout = 20000) => {
 	const until = Date.now() + timeout;
 	while (Date.now() < until) {
 		for (const f of page.frames()) {
-			if (!f.url().includes('/stomp/html/')) continue;
+			if (!/\/stomp\/[\w-]+\/html\//.test(f.url())) continue;
 			try {
 				const value = await f.evaluate((k) => window[k], key);
 				if (value?.done) return value;
@@ -43,7 +43,7 @@ const echoed = async (predicate, timeout = 15000) => {
 	const until = Date.now() + timeout;
 	while (Date.now() < until) {
 		for (const f of page.frames()) {
-			if (!f.url().includes('/stomp/html')) continue;
+			if (!/\/stomp\/[\w-]+\/html/.test(f.url())) continue;
 			try {
 				const text = await f.evaluate(() =>
 					(document.body?.textContent || '').trim(),
@@ -88,7 +88,8 @@ ok(
 // navigates to the echo, a second echo at depth two
 const byTitle = async (title, wantDepth) => {
 	for (const f of page.frames()) {
-		if (depth(f) !== wantDepth || !f.url().includes('/stomp/html')) continue;
+		if (depth(f) !== wantDepth || !/\/stomp\/[\w-]+\/html/.test(f.url()))
+			continue;
 		try {
 			if ((await f.evaluate(() => document.title)) === title) return f;
 		} catch (error) {

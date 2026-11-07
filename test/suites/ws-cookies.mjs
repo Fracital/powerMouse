@@ -20,7 +20,7 @@ const record = async (key, timeout = 20000) => {
 	const until = Date.now() + timeout;
 	while (Date.now() < until) {
 		for (const f of page.frames()) {
-			if (!f.url().includes('/stomp/html/')) continue;
+			if (!/\/stomp\/[\w-]+\/html\//.test(f.url())) continue;
 			try {
 				const value = await f.evaluate((k) => window[k], key);
 				if (value?.done) return value;

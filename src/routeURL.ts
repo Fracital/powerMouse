@@ -63,12 +63,30 @@ export function routeXHR(resource: StompURL) {
 	return routeURL('xhr', resource);
 }
 
+/**
+ * Where the bundles live for a routed URL: its directory is the controller's
+ * address (`/stomp/<id>/`, with or without the origin in front), the assets
+ * are served from the scope (`/stomp/`), so the address is swapped for the
+ * scope and whatever preceded it is kept. Without a scope (an old config)
+ * the directory is the scope.
+ */
+function assetBase(url: StompURL, config?: Config): string {
+	const { directory } = url;
+	if (
+		!config?.scope ||
+		!config.directory ||
+		!directory.endsWith(config.directory)
+	)
+		return directory;
+	return `${directory.slice(0, -config.directory.length)}${config.scope}`;
+}
+
 export function injectDocumentJS(url: StompURL, config?: Config) {
-	return `${url.directory}${assetName(config?.assets, 'injectDocument')}`;
+	return `${assetBase(url, config)}${assetName(config?.assets, 'injectDocument')}`;
 }
 
 export function injectWorkerJS(url: StompURL, config?: Config) {
-	return `${url.directory}${assetName(config?.assets, 'injectWorker')}`;
+	return `${assetBase(url, config)}${assetName(config?.assets, 'injectWorker')}`;
 }
 
 export function geckoXHR(url: StompURL) {

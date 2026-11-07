@@ -37,7 +37,7 @@ for (const [mode, base] of [
 	}, FIXTURE);
 	await sleep(2000);
 	const newest = () =>
-		page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+		page.frames().findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	const hostStays = () => page.url().split('#')[0] === base;
 	const title = async () => {
 		try {

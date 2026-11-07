@@ -38,7 +38,9 @@ for (const [mode, base] of [
 		window.__goReports = window.__nav.length;
 	}, FIXTURE);
 	await sleep(2000);
-	let frame = page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	let frame = page
+		.frames()
+		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	await frame.evaluate(() => document.getElementById('next').click());
 	await sleep(2000);
 	const reloaded = await page.evaluate(async () => {
@@ -48,7 +50,9 @@ for (const [mode, base] of [
 		return { result, reported: window.__nav.length > before };
 	});
 	await sleep(500);
-	frame = page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	frame = page
+		.frames()
+		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	await frame.evaluate(() => {
 		history.pushState(null, '', 'walk-9.html');
 		document.title = 'PUSHED';
@@ -104,7 +108,9 @@ for (const [mode, base] of [
 	);
 	// a new tab asked of the host: the controller dispatches `open` too (the
 	// demo's onOpen then opens its own tab, so this comes last)
-	frame = page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	frame = page
+		.frames()
+		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	await frame.evaluate(
 		(fixture) => window.open(`${fixture}pages/walk-3.html`),
 		FIXTURE,

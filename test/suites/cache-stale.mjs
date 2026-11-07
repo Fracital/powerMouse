@@ -19,7 +19,9 @@ await submitLanding(page, `${FIXTURE}pages/cache-stale.html`);
 let result = {};
 for (let i = 0; i < 60 && !result.done; i++) {
 	await sleep(500);
-	const frame = page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	const frame = page
+		.frames()
+		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	try {
 		result = (await frame?.evaluate(() => window.__stale)) || {};
 	} catch (error) {

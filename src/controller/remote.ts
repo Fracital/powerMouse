@@ -12,6 +12,7 @@ import type {
 	RequestRule,
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
+import { controllerId } from './id';
 import {
 	cookieJar,
 	CookieJar,
@@ -35,6 +36,12 @@ export interface RemoteControllerInit {
 	proxyOrigin: string;
 	/** pathname of dist/ on that origin, default `/stomp/` */
 	directory?: string;
+	/**
+	 * the controller's id (see ControllerInit.id): minted here when omitted and
+	 * handed to the controller frame, so the host knows the address its frames
+	 * load from and can store it per tab
+	 */
+	id?: string;
 	/**
 	 * the transport, described: the controller frame instantiates it on the
 	 * proxy origin, in its transport worker unless `host: 'page'`
@@ -99,7 +106,10 @@ export const DEFAULT_SANDBOX =
  */
 export class RemoteController extends EventTarget {
 	proxyOrigin: string;
+	/** the scope on the proxy origin; the controller's address is `config.directory` */
 	directory: string;
+	/** the controller's id (ControllerInit.id), known before the frame answers */
+	id: string;
 	config?: Config;
 	/** the inner controller's `stale` (see StompController); null while the builds agree */
 	stale: StaleInfo | null = null;
@@ -119,6 +129,7 @@ export class RemoteController extends EventTarget {
 		this.#init = init;
 		this.proxyOrigin = new URL(init.proxyOrigin).origin;
 		this.directory = init.directory ?? '/stomp/';
+		this.id = controllerId(init.id);
 		this.#sandbox = init.sandbox ?? DEFAULT_SANDBOX;
 
 		if (this.proxyOrigin === location.origin)
@@ -226,6 +237,7 @@ export class RemoteController extends EventTarget {
 				this.#rpc.call('init', {
 					codec: init.codec,
 					directory: this.directory,
+					id: this.id,
 					transport: init.transport,
 					openTab: !!init.onOpen,
 					...(init.cache === false ? { cache: false } : {}),

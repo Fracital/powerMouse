@@ -34,7 +34,10 @@ export default class Client {
 	modules: Map<ModuleCtor, Module<any>>;
 	global: typeof globalThis;
 	codec: GenericCodec;
+	/** this controller's address, what every route of this context starts with (config.directory) */
 	directory: string;
+	/** the scope the bundles are served from (config.scope) */
+	scope: string;
 	/** the host handles window.open / target=_blank (config.openTab) */
 	openTab: boolean;
 	/** the service worker's build id, from the shell */
@@ -107,6 +110,7 @@ export default class Client {
 		this.modules = new Map();
 		this.codec = init.codec;
 		this.directory = init.directory;
+		this.scope = init.scope || init.directory;
 		this.openTab = !!init.openTab;
 		this.build = init.build;
 		this.allowInvalidJs = init.allowInvalidJs !== false;
@@ -136,6 +140,7 @@ export default class Client {
 	get config(): Config {
 		return {
 			directory: this.directory,
+			scope: this.scope,
 			codec: codecType(this.codec),
 			...(this.openTab ? { openTab: true } : {}),
 			...(this.build ? { build: this.build } : {}),

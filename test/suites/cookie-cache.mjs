@@ -28,7 +28,7 @@ for (let i = 0; i < 60 && !cc.done; i++) {
 		.find(
 			(f) =>
 				f.parentFrame() === page.mainFrame() &&
-				f.url().includes('/stomp/html/'),
+				/\/stomp\/[\w-]+\/html\//.test(f.url()),
 		);
 	try {
 		cc = (await frame?.evaluate(() => window.__cc)) || {};

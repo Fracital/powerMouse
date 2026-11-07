@@ -49,8 +49,8 @@ ok(
 	)) === true,
 );
 
-// last: a second controller for the same directory replaces the demo's in
-// the service worker
+// last: a second controller next to the demo's (its own address under the
+// directory), handed a worker of another build
 const healed = await page.evaluate(async () => {
 	const INIT = '$stomp$controllerInit';
 	const RPC = 'stomp';

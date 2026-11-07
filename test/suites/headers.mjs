@@ -26,7 +26,7 @@ async function load(url, key) {
 		await sleep(250);
 		const frame = page
 			.frames()
-			.findLast((f) => f.url().includes('/stomp/html/'));
+			.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 		try {
 			const value = await frame.evaluate((k) => window[k], key);
 			if (value && (value.done || typeof value === 'string')) return value;
@@ -61,8 +61,8 @@ ok(
 );
 ok(
 	'Link header URLs are rewritten',
-	/\/stomp\/css\//.test(response.link || '') &&
-		/\/stomp\/js:genericModule\//.test(response.link || ''),
+	/\/stomp\/[\w-]+\/css\//.test(response.link || '') &&
+		/\/stomp\/[\w-]+\/js:genericModule\//.test(response.link || ''),
 	JSON.stringify(response.link),
 );
 ok(

@@ -19,7 +19,7 @@ const browser = await launch();
 const page = await openDemo(browser);
 
 const frame = () =>
-	page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	page.frames().findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 const waitOmni = (pred) =>
 	page.waitForFunction(
 		(src) =>

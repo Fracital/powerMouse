@@ -27,7 +27,8 @@ const frame = page
 	.frames()
 	.find(
 		(f) =>
-			f.parentFrame() === page.mainFrame() && f.url().includes('/stomp/html/'),
+			f.parentFrame() === page.mainFrame() &&
+			/\/stomp\/[\w-]+\/html\//.test(f.url()),
 	);
 
 const sandbox = await page.evaluate(() => {
@@ -50,7 +51,7 @@ ok(
 	sandbox.sandbox === null &&
 		sandbox.csp === null &&
 		typeof sandbox.child === 'string' &&
-		sandbox.child.includes('/stomp/html'),
+		/\/stomp\/[\w-]+\/html/.test(sandbox.child),
 	JSON.stringify(sandbox),
 );
 const seen = await frame.evaluate(() => {
@@ -87,7 +88,7 @@ ok(
 	opened === 'opened' &&
 		popup !== null &&
 		typeof written === 'string' &&
-		written.includes('/stomp/binary/'),
+		/\/stomp\/[\w-]+\/binary\//.test(written),
 	JSON.stringify({ opened, popup: popup?.url(), written }),
 );
 await done(browser);

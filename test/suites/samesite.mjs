@@ -23,7 +23,7 @@ const result = async (key, timeout = 20000) => {
 	const until = Date.now() + timeout;
 	while (Date.now() < until) {
 		for (const f of page.frames()) {
-			if (!f.url().includes('/stomp/html')) continue;
+			if (!/\/stomp\/[\w-]+\/html/.test(f.url())) continue;
 			try {
 				const value = await f.evaluate((k) => window[k], key);
 				if (value?.done) return value;
@@ -74,7 +74,7 @@ ok(
 let framed = null;
 for (let i = 0; i < 30 && framed === null; i++) {
 	for (const f of page.frames()) {
-		if (!f.url().includes('/stomp/html')) continue;
+		if (!/\/stomp\/[\w-]+\/html/.test(f.url())) continue;
 		try {
 			const text = await f.evaluate(() => document.body?.textContent || '');
 			if (text.startsWith('{')) framed = JSON.parse(text).cookie || '';

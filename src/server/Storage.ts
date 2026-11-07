@@ -114,7 +114,18 @@ export default class Storage {
 	}
 }
 
-export async function registerStorage(router: Router) {
+/** the two stores a scope's controllers share */
+export interface StorageHosts {
+	localStorage: Storage;
+	sessionStorage: Storage;
+}
+
+/**
+ * The storage partitions, opened once per scope (createServer shares them
+ * between the controllers of a scope). sessionStorage is wiped on open: the
+ * worker's lifetime stands in for the session.
+ */
+export async function openStorage(): Promise<StorageHosts> {
 	const db = await openDB('stompStorage', 1, {
 		upgrade: (db: IDBPDatabase) => {
 			for (const name of ['localStorage', 'sessionStorage']) {
@@ -130,12 +141,17 @@ export async function registerStorage(router: Router) {
 
 	db.clear('sessionStorage');
 
-	const localStorage = new Storage(db, 'localStorage');
-	const sessionStorage = new Storage(db, 'sessionStorage');
+	return {
+		localStorage: new Storage(db, 'localStorage'),
+		sessionStorage: new Storage(db, 'sessionStorage'),
+	};
+}
 
+/** the page-facing routes of a server, over the scope's stores */
+export function registerStorage(router: Router, hosts: StorageHosts) {
 	const register: [name: string, host: Storage][] = [
-		['sessionStorage', sessionStorage],
-		['localStorage', localStorage],
+		['sessionStorage', hosts.sessionStorage],
+		['localStorage', hosts.localStorage],
 	];
 
 	for (const [name, host] of register) {

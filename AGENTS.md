@@ -117,8 +117,20 @@ on every save (use a `git worktree`).
   network waits out the spin limit. A descriptor (the default) runs the
   transport in the transport worker (`src/transport/worker.ts`), off that
   thread, and the request completes. Don't add new synchronous paths.
-- **One controller per `directory`.** Inject bundle URLs are built from the
-  directory, so the scramjet-style random prefix per controller doesn't apply.
+- **One controller per address, many per scope.** `config.directory` is a
+  controller's address: the directory the host gave plus `controller.id`
+  (`/stomp/k7qx2m/`). Every routed URL starts with it and the service worker
+  finds the controller by it (longest prefix), so two host tabs on one
+  directory are two controllers; the same id again replaces. `config.scope`
+  (`/stomp/`) is the service worker's scope and the only thing the asset URLs
+  (inject bundles, the transport worker, the controller frame) are built
+  from (`assetBase` in `src/routeURL.ts`). A controller is a tab, not a
+  browser: the cookie jar, the HTTP cache and the storage partitions are
+  opened once per scope and shared (`sharedStores` in `createServer`). An
+  address whose controller is gone is redirected to the newest live
+  controller of the scope with the same codec (the worker keeps each
+  address's codec in `stompConfig`); with none, the host's error page
+  answers with kind `controller`.
 - **Same-origin `StompController` is for development only.** It is not a
   security boundary: a proxied page is same-origin with the host. Real
   deployments use `RemoteController` with a separate proxy origin

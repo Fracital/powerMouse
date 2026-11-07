@@ -24,7 +24,7 @@ async function run(base) {
 		await sleep(250);
 		const frame = page
 			.frames()
-			.findLast((f) => f.url().includes('/stomp/html/'));
+			.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 		try {
 			result = (await frame.evaluate(() => window.__cache)) || {};
 		} catch (error) {

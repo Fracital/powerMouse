@@ -24,7 +24,9 @@ await submitLanding(
 let cred = {};
 for (let i = 0; i < 60; i++) {
 	await sleep(250);
-	const frame = page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	const frame = page
+		.frames()
+		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	try {
 		cred = (await frame.evaluate(() => window.__cred)) || {};
 	} catch (error) {

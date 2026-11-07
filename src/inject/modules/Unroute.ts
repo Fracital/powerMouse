@@ -17,15 +17,28 @@ export function routedPrefix(client: Client): string {
 }
 
 /**
- * The page's URL for a routed one. A string that is not under the directory
+ * The proxy-origin prefix of the scope the routed prefix lives under: where
+ * the proxy's own files (the inject bundles) are served from.
+ */
+export function scopePrefix(client: Client): string {
+	const base = client.isDOM
+		? (client as DocumentClient).baseURI
+		: client.global.location;
+	return `${base.origin}${client.scope}`;
+}
+
+/**
+ * The page's URL for a routed one. A string that is not under the scope
  * comes back as it is; `null` means the proxy's own machinery (an inject
- * bundle, `whoami`), which no page URL corresponds to.
+ * bundle under the scope, `whoami` under the address), which no page URL
+ * corresponds to.
  */
 export function unrouteURL(client: Client, url: string): string | null {
 	// a blob: URL the page made carries the proxy origin: the page's is shown
 	url = pageBlobURL(url);
 	const prefix = routedPrefix(client);
-	if (!url.startsWith(prefix)) return url;
+	if (!url.startsWith(prefix))
+		return url.startsWith(scopePrefix(client)) ? null : url;
 	try {
 		return parseRoutedURL(url, client.codec, prefix).url.toString();
 	} catch (error) {
@@ -293,8 +306,9 @@ export default class UnrouteModule extends Module<Client> {
 		// code the page handed to `new Function` or `eval` runs through the
 		// inject bundle, so V8 names the bundle as the eval origin of its
 		// frames; the page would see its own call site there (the next frame
-		// of the page's), or nothing
-		const prefix = routedPrefix(this.client);
+		// of the page's), or nothing. The bundle lives under the scope, the
+		// routes under the address below it: one prefix covers both
+		const prefix = scopePrefix(this.client);
 		const internalURL = new RegExp(
 			`${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\s()'"<>,]*`,
 			'g',

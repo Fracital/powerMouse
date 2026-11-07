@@ -145,7 +145,7 @@ const proxiedFrame = (page) =>
 		.find(
 			(f) =>
 				f.parentFrame() === page.mainFrame() &&
-				f.url().includes('/stomp/html/'),
+				/\/stomp\/[\w-]+\/html\//.test(f.url()),
 		);
 
 /**

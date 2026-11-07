@@ -9,11 +9,12 @@ import type { Config } from '../config';
 
 /**
  * controller -> SW, with [port] or [port, transportPort]: register a
- * controller for `directory`; the transport is served on the second port when
- * the controller's transport worker hosts it, else on the rpc port itself
+ * controller at `directory` (its address, the scope plus its id); the
+ * transport is served on the second port when the controller's transport
+ * worker hosts it, else on the rpc port itself
  */
 export const CONTROLLER_INIT = '$stomp$controllerInit';
-/** proxied page -> SW, with [port]: ask the controller for `directory` to serve a transport on this port */
+/** proxied page -> SW, with [port]: ask the controller at `directory` (the page's address) to serve a transport on this port */
 export const INIT_REMOTE_TRANSPORT = '$stomp$initRemoteTransport';
 /** SW -> every client: SW (re)started, controllers must re-send CONTROLLER_INIT */
 export const SW_REVIVE = '$stomp$swRevive';
@@ -157,8 +158,9 @@ export type CookieCommand =
 export type CookieResult = string | CookieRecord[] | undefined;
 
 /** a failure the proxy produced: the transport could not reach the origin, the worker's timeout, a routing error, a blocked rule, the refusal to proxy its own origin */
+/** `controller`: the address names a controller that is gone and no live one of its codec can take over */
 export type RequestErrorKind =
-	'transport' | 'timeout' | 'routing' | 'blocked' | 'refused';
+	'transport' | 'timeout' | 'routing' | 'blocked' | 'refused' | 'controller';
 
 /** one completed (or failed) proxied request, for the host's request log */
 export interface RequestInfo {

@@ -15,12 +15,16 @@ import {
 } from '../lib.mjs';
 
 const browser = await launch();
+/** a routed document URL on the proxy origin: the scope, the controller id, the html route */
+const ROUTED = new RegExp(
+	`^${PROXY.replace(/[.]/g, '\\.')}stomp/[\\w-]+/html/`,
+);
 const page = await openDemo(browser);
 const docHeaders = [];
 page.on('response', (r) => {
 	if (
 		r.request().resourceType() === 'document' &&
-		r.url().includes('/stomp/html/')
+		/\/stomp\/[\w-]+\/html\//.test(r.url())
 	)
 		docHeaders.push(r.headers());
 });
@@ -53,7 +57,7 @@ ok(
 const proxied = () =>
 	page
 		.frames()
-		.filter((f) => f.url().startsWith(`${PROXY}stomp/html/`))
+		.filter((f) => ROUTED.test(f.url()))
 		.at(-1);
 const waitFrame = async (pred, timeout = 40000) => {
 	const start = Date.now();
@@ -75,7 +79,7 @@ await submitLanding(page, 'https://example.com');
 const f1 = await waitFrame(() => document.title === 'Example Domain');
 ok(
 	'proxied page renders in a cross-origin frame',
-	f1.url().startsWith(`${PROXY}stomp/html/`),
+	ROUTED.test(f1.url()),
 	f1.url().slice(0, 60),
 );
 ok(

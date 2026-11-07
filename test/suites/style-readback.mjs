@@ -27,7 +27,8 @@ const frame = page
 	.frames()
 	.find(
 		(f) =>
-			f.parentFrame() === page.mainFrame() && f.url().includes('/stomp/html/'),
+			f.parentFrame() === page.mainFrame() &&
+			/\/stomp\/[\w-]+\/html\//.test(f.url()),
 	);
 const rb = await frame.evaluate(() => window.__rb);
 const own = (value) =>
@@ -64,7 +65,7 @@ ok(
 	rb.baseVal === 'sprite.svg#icon' &&
 		rb.animVal === 'sprite.svg#icon' &&
 		rb.baseValSet === 'sprite.svg#other' &&
-		realUse.includes('/stomp/binary/') &&
+		/\/stomp\/[\w-]+\/binary\//.test(realUse) &&
 		realUse.endsWith('#other'),
 	JSON.stringify([rb.baseVal, rb.animVal, rb.baseValSet, realUse]),
 );

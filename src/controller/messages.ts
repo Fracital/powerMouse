@@ -29,7 +29,10 @@ export interface TransportDescriptor {
 
 export interface ControllerFrameInit {
 	codec?: ConfigCodec;
+	/** the scope (RemoteControllerInit.directory); the controller's address is this plus `id` */
 	directory: string;
+	/** the controller's id, minted or checked by the host-side RemoteController */
+	id: string;
 	transport: TransportDescriptor;
 	/** the host handles `window.open` / `_blank` (RemoteControllerInit.onOpen) */
 	openTab?: boolean;

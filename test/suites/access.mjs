@@ -19,7 +19,9 @@ await submitLanding(page, `${FIXTURE}pages/access.html`);
 let acc = {};
 for (let i = 0; i < 40; i++) {
 	await sleep(250);
-	const frame = page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	const frame = page
+		.frames()
+		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	try {
 		acc = (await frame.evaluate(() => window.__acc)) || {};
 	} catch (error) {

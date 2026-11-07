@@ -17,7 +17,9 @@ const page = await openDemo(browser, HOST);
 await submitLanding(page, `${FIXTURE}dyn`);
 await sleep(2500);
 
-const frame = page.frames().find((f) => f.url().includes('/stomp/html/'));
+const frame = page
+	.frames()
+	.find((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 const results = await frame.evaluate(() =>
 	Object.fromEntries(
 		Object.keys(window)

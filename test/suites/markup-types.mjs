@@ -25,7 +25,8 @@ const frame = page
 	.frames()
 	.find(
 		(f) =>
-			f.parentFrame() === page.mainFrame() && f.url().includes('/stomp/html/'),
+			f.parentFrame() === page.mainFrame() &&
+			/\/stomp\/[\w-]+\/html\//.test(f.url()),
 	);
 
 const scripts = await frame.evaluate(() => window.__t);
@@ -61,9 +62,9 @@ const real = await page.evaluate(() => {
 		ss: get('ss', 'href'),
 	};
 });
-// the JS route carries the script type: /stomp/js:generic/, /stomp/js:genericModule/
+// the JS route carries the script type: /stomp/<id>/js:generic/, /stomp/<id>/js:genericModule/
 const route = (value, kind) =>
-	typeof value === 'string' && value.includes(`/stomp/${kind}`);
+	typeof value === 'string' && new RegExp(`/stomp/[\\w-]+/${kind}`).test(value);
 ok(
 	'link rel tokens and as decide the route',
 	route(real.l1, 'css/') &&

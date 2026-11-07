@@ -753,6 +753,7 @@ export function registerRewrites(
 		get config() {
 			return {
 				directory: this.directory,
+				scope: init.scope,
 				codec: codecType(this.codec),
 				frameAncestors: init.frameAncestors,
 				...(init.openTab ? { openTab: true } : {}),

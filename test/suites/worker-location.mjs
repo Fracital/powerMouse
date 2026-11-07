@@ -19,7 +19,9 @@ await submitLanding(page, `${FIXTURE}pages/worker-location.html`);
 let wl = {};
 for (let i = 0; i < 80; i++) {
 	await sleep(250);
-	const frame = page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	const frame = page
+		.frames()
+		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	try {
 		wl = (await frame.evaluate(() => window.__wl)) || {};
 	} catch (error) {

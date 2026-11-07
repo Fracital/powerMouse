@@ -21,7 +21,9 @@ await submitLanding(page, `${FIXTURE}pages/noops.html`);
 let noops = null;
 for (let i = 0; i < 40 && !noops?.done; i++) {
 	await sleep(250);
-	const frame = page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	const frame = page
+		.frames()
+		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	noops = await frame.evaluate(() => window.__noops).catch(() => null);
 }
 noops ||= {};

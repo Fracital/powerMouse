@@ -39,7 +39,7 @@ async function visit(base) {
 		await sleep(250);
 		const frame = page
 			.frames()
-			.findLast((f) => f.url().includes('/stomp/html/'));
+			.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 		try {
 			const value = await frame.evaluate(() => window.__cp);
 			if (value?.done) return value;

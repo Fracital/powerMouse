@@ -19,7 +19,9 @@ await submitLanding(page, `${FIXTURE}pages/strict.html`);
 let strict = {};
 for (let i = 0; i < 40; i++) {
 	await sleep(250);
-	const frame = page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	const frame = page
+		.frames()
+		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	try {
 		strict = (await frame.evaluate(() => window.__strict)) || {};
 	} catch (error) {

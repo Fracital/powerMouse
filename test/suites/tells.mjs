@@ -20,7 +20,9 @@ await submitLanding(page, `${FIXTURE}pages/tells.html`);
 let tells = null;
 for (let i = 0; i < 40 && !tells; i++) {
 	await sleep(250);
-	const frame = page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	const frame = page
+		.frames()
+		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	tells = await frame.evaluate(() => window.__tells).catch(() => null);
 }
 tells ||= {};

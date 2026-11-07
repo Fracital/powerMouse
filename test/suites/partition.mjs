@@ -28,7 +28,9 @@ for (const base of [FIXTURE, other, FIXTURE]) {
 await sleep(6000);
 // received lists are deduplicated by the page only at its own `done`; dedupe here too
 
-const frames = page.frames().filter((f) => f.url().includes('/stomp/html/'));
+const frames = page
+	.frames()
+	.filter((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 const results = [];
 for (const frame of frames) {
 	try {

@@ -578,7 +578,7 @@ async function visit(url, probe) {
 		await sleep(250);
 		const frame = page
 			.frames()
-			.findLast((f) => f.url().includes('/stomp/html/'));
+			.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 		try {
 			const value = await frame.evaluate(probe);
 			if (value !== null && value !== undefined) return { frame, value };

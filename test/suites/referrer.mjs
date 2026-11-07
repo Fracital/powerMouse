@@ -31,7 +31,7 @@ const run = async (file) => {
 			.find(
 				(f) =>
 					f.parentFrame() === page.mainFrame() &&
-					f.url().includes('/stomp/html/'),
+					/\/stomp\/[\w-]+\/html\//.test(f.url()),
 			);
 		try {
 			const ref = await frame?.evaluate(() => window.__ref);

@@ -28,7 +28,7 @@ for (let i = 0; i < 40 && !blob.done; i++) {
 		.find(
 			(f) =>
 				f.parentFrame() === page.mainFrame() &&
-				f.url().includes('/stomp/html/'),
+				/\/stomp\/[\w-]+\/html\//.test(f.url()),
 		);
 	try {
 		blob = (await frame?.evaluate(() => window.__blob)) || {};
@@ -56,7 +56,7 @@ const real = await page.evaluate(() => {
 });
 ok(
 	'markup in a blob: document is routed',
-	typeof real === 'string' && real.includes('/stomp/binary/'),
+	typeof real === 'string' && /\/stomp\/[\w-]+\/binary\//.test(real),
 	JSON.stringify(real),
 );
 ok(

@@ -43,6 +43,26 @@ The first release after a four-year gap. Everything below is breaking.
   `DEFAULT_NAMES` and the `HelperNames` type are exported (helper-names
   suite, a StompController and a RemoteController built with random names;
   the tells fixture takes the names to look for).
+  suite; the tells fixture takes the names to look for).
+- Several controllers share one directory: two host tabs on `/stomp/` no
+  longer replace each other in the service worker. Every `StompController`
+  (and `RemoteController`) has an id (`init.id`, 1 to 32 characters of
+  `[A-Za-z0-9_-]`, 8 random ones by default, read back as `controller.id`)
+  and its routed URLs carry it: `/stomp/<id>/html/<encoded>` where they were
+  `/stomp/html/<encoded>`. `config.directory` is that address and the new
+  `config.scope` the directory the host gave (`controller.directory` still
+  means that); only the asset URLs (the inject bundles, the transport
+  worker, the controller frame) are built from the scope. The same id passed
+  again replaces, as before; a host that keeps tabs stores one id per tab
+  (sessionStorage) and passes it back, so the tab's history entries,
+  reloads and copied links keep resolving. A controller is a tab, not a
+  browser: the cookie jar, the HTTP cache and the storage partitions are
+  per scope and shared by its controllers. A routed URL whose controller is
+  gone (a closed tab, a stale link) is redirected to the newest live
+  controller of the scope with the same codec; with none, the host's error
+  page answers with kind `controller` (a new value of the request log's
+  `kind`). The multi-controller suite covers it, including the first
+  controller still navigating after the second registered.
 - The transport can run off the host page's thread. `StompController` takes
   a `TransportDescriptor` (`{ module, options }`, what `RemoteController`
   already took) in place of a ProxyTransport instance and starts it in a

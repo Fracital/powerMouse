@@ -21,7 +21,9 @@ await submitLanding(page, `${FIXTURE}pages/xhr.html`);
 let xhr = {};
 for (let i = 0; i < 120; i++) {
 	await sleep(250);
-	const frame = page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	const frame = page
+		.frames()
+		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	try {
 		xhr = (await frame.evaluate(() => window.__xhr)) || {};
 	} catch (error) {

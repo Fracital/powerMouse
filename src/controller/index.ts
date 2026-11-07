@@ -34,6 +34,7 @@ import serveTransport from '../transport/serveTransport';
 import TransportWorker from '../transport/TransportWorker';
 import { BUILD } from '../version';
 import { canTraverse, traverse } from './history';
+import { controllerId } from './id';
 import type { StaleInfo, TransportDescriptor } from './messages';
 import { DEFAULT_SANDBOX } from './remote';
 
@@ -75,6 +76,16 @@ export interface ControllerInit {
 	 * when loaded as a module.
 	 */
 	directory?: urlLike;
+	/**
+	 * This controller's id, 1 to 32 characters of `[A-Za-z0-9_-]` (a TypeError
+	 * otherwise); 8 random characters by default. It names the controller's
+	 * address under the directory (`/stomp/<id>/`, `config.directory`), so two
+	 * host tabs on one directory run two controllers side by side; the same id
+	 * passed again replaces the earlier controller. A host that keeps tabs
+	 * stores one id per tab (sessionStorage) and passes it back, so the tab's
+	 * history entries, reloads and copied links keep resolving.
+	 */
+	id?: string;
 	/** origins allowed to frame proxied documents (CSP frame-ancestors) */
 	frameAncestors?: string[];
 	/**
@@ -366,7 +377,10 @@ export class StompController extends EventTarget {
 	 * null once the builds agree
 	 */
 	stale: StaleInfo | null = null;
+	/** the directory the host gave: the service worker's scope and the asset base (`config.scope`) */
 	directory: URL;
+	/** this controller's id; its address is `config.directory` (`directory` + id + `/`) */
+	id: string;
 	serviceworker: ServiceWorker;
 	/**
 	 * The transport the proxy uses. With a worker-hosted descriptor this is a
@@ -468,6 +482,7 @@ export class StompController extends EventTarget {
 
 		if (this.directory.origin !== location.origin)
 			throw new Error('Stomp directory must be same-origin');
+		this.id = controllerId(init.id);
 		let errorPage: string | undefined;
 		if (init.errorPage !== undefined) {
 			const page = new URL(init.errorPage, location.href);
@@ -478,7 +493,10 @@ export class StompController extends EventTarget {
 
 		this.config = {
 			codec: init.codec ?? 'xor',
-			directory: this.directory.pathname,
+			// the address: the scope plus the id, so controllers of one scope
+			// are told apart in the worker; the assets stay at the scope
+			directory: `${this.directory.pathname}${this.id}/`,
+			scope: this.directory.pathname,
 			...(init.frameAncestors ? { frameAncestors: init.frameAncestors } : {}),
 			...(init.onOpen || init.openTab ? { openTab: true } : {}),
 			...(init.cache === false ? { cache: false } : {}),

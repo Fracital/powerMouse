@@ -488,7 +488,11 @@ function migrateLegacy(
 	};
 }
 
-export async function registerCookies(router: Router): Promise<Cookies> {
+/**
+ * The jar, opened once per scope (createServer shares it between the
+ * controllers of a scope: a controller is a tab, and tabs share cookies).
+ */
+export async function openCookies(): Promise<Cookies> {
 	// loaded here, not at the top: see PublicSuffix
 	const { getPublicSuffix } = await import('tldts');
 	const db = await openDB('stompCookies', 2, {
@@ -527,6 +531,11 @@ export async function registerCookies(router: Router): Promise<Cookies> {
 		broadcastChange(domain);
 	};
 
+	return cookies;
+}
+
+/** the page-facing routes of a server, over the scope's jar */
+export function registerCookies(router: Router, cookies: Cookies): Cookies {
 	// what page script may see: the jar without its HttpOnly cookies (the
 	// request path and the host's cookies API get the whole jar)
 	router.routes.set(

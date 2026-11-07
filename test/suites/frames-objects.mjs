@@ -21,7 +21,7 @@ const result = async (key, marker) => {
 		await sleep(250);
 		for (const frame of page
 			.frames()
-			.filter((f) => f.url().includes('/stomp/html/'))) {
+			.filter((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()))) {
 			const value = await frame
 				.evaluate((key) => window[key], key)
 				.catch(() => null);

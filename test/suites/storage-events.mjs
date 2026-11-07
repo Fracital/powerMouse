@@ -24,7 +24,9 @@ for (const url of [
 	await sleep(1500);
 }
 await sleep(4000);
-const frames = page.frames().filter((f) => f.url().includes('/stomp/html/'));
+const frames = page
+	.frames()
+	.filter((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 const results = [];
 for (const frame of frames) {
 	try {

@@ -22,7 +22,9 @@ const PAGE = `${FIXTURE}pages/docwrite.html`;
 let dw = {};
 for (let i = 0; i < 60; i++) {
 	await sleep(250);
-	const frame = page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	const frame = page
+		.frames()
+		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	try {
 		dw = (await frame.evaluate(() => window.__dw)) || {};
 	} catch (error) {

@@ -54,7 +54,7 @@ for (const [mode, base] of [
 		await sleep(250);
 		const frame = page
 			.frames()
-			.findLast((f) => f.url().includes('/stomp/html/'));
+			.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 		try {
 			rb = (await frame.evaluate(() => window.__rb)) || {};
 		} catch (error) {

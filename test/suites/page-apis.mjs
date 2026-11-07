@@ -18,7 +18,9 @@ await submitLanding(page, `${FIXTURE}pages/apis.html`);
 let apis = {};
 for (let i = 0; i < 40; i++) {
 	await sleep(250);
-	const frame = page.frames().find((f) => f.url().includes('/stomp/html/'));
+	const frame = page
+		.frames()
+		.find((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	try {
 		apis = (await frame.evaluate(() => window.__apis)) || {};
 	} catch (error) {

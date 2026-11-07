@@ -60,7 +60,7 @@ export async function runMode(mode) {
 			.find(
 				(f) =>
 					f.parentFrame() === page.mainFrame() &&
-					f.url().includes('/stomp/html/'),
+					/\/stomp\/[\w-]+\/html\//.test(f.url()),
 			);
 		const tabs = () =>
 			page.evaluate(() => document.querySelectorAll('.frame').length);
@@ -83,7 +83,7 @@ export async function runMode(mode) {
 				.find(
 					(f) =>
 						f.parentFrame() === page.mainFrame() &&
-						f.url().includes('/stomp/html/'),
+						/\/stomp\/[\w-]+\/html\//.test(f.url()),
 				);
 			title = after ? await after.title() : 'gone';
 		} catch (error) {

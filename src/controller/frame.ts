@@ -121,6 +121,7 @@ if (window === window.parent || !origins.length) {
 						serviceworker,
 						transport: onProxyOrigin(init.transport),
 						directory: init.directory,
+						id: init.id,
 						codec: init.codec,
 						frameAncestors: [hostOrigin],
 						openTab: !!init.openTab,

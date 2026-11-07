@@ -49,7 +49,7 @@ for (const [mode, base] of [
 		await sleep(250);
 		for (const frame of page
 			.frames()
-			.filter((f) => f.url().includes('/stomp/html'))) {
+			.filter((f) => /\/stomp\/[\w-]+\/html/.test(f.url()))) {
 			const value = await frame
 				.evaluate(() => ({ reach: window.__reach, view: window.__parentView }))
 				.catch(() => null);
