@@ -283,9 +283,8 @@ async function updateServiceWorker() {
 	// This page is outside the worker's scope, so it has no `controller` and
 	// the StompController keeps talking to the now redundant worker. Point it
 	// at the new one and redo the handshake.
-	if (controller && 'serviceworker' in controller) {
-		controller.serviceworker = worker;
-		controller.handshake();
+	if (controller && 'rebind' in controller) {
+		await controller.rebind(worker);
 		const until = Date.now() + 5000;
 		while (!controller.isReady) {
 			if (Date.now() > until)

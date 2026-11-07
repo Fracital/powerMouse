@@ -155,6 +155,27 @@ export function openRequest(data: unknown): string | null {
 
 /** ignore the service worker's "revive" broadcast this soon after we registered */
 const REVIVE_GUARD_MS = 2000;
+/** how long a service worker of another build gets to update before wait() rejects */
+const UPDATE_TIMEOUT_MS = 15000;
+/** how long after registration.update() to wait for `updatefound` before concluding nothing changed */
+const UPDATE_FOUND_MS = 3000;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** resolves once the worker is activated; rejects when it becomes redundant */
+export function activated(worker: ServiceWorker): Promise<ServiceWorker> {
+	if (worker.state === 'activated') return Promise.resolve(worker);
+	return new Promise((resolve, reject) => {
+		worker.addEventListener('statechange', () => {
+			if (worker.state === 'activated') resolve(worker);
+			else if (worker.state === 'redundant')
+				reject(new Error('Service worker became redundant'));
+		});
+	});
+}
+
+const mismatch = (build: string) =>
+	`Stomp version mismatch: the controller is build ${BUILD}, the service worker is build ${build}; hard-reload the page or clear the old service worker`;
 
 function defaultDirectory(): URL {
 	const script =
@@ -185,6 +206,8 @@ export class StompController {
 	private readyResolve!: () => void;
 	private readyReject!: (error: Error) => void;
 	private lastHandshake = 0;
+	/** a build mismatch is being healed: the next ready answer must agree */
+	private healing = false;
 	constructor(init: ControllerInit) {
 		if (!('serviceWorker' in navigator))
 			throw new Error('Your browser does not support service workers.');
@@ -249,6 +272,127 @@ export class StompController {
 		});
 
 		this.handshake();
+		// a worker that activates after this handshake (a deploy the browser
+		// installs while the page is open) is adopted without a reload
+		this.watchRegistration();
+		navigator.serviceWorker.addEventListener('controllerchange', () => {
+			const controller = navigator.serviceWorker.controller;
+			if (
+				controller &&
+				controller !== this.serviceworker &&
+				controller.scriptURL.startsWith(this.directory.href)
+			)
+				this.rebind(controller).catch(() => {});
+		});
+	}
+	private async watchRegistration() {
+		try {
+			const registration = await navigator.serviceWorker.getRegistration(
+				this.directory.href,
+			);
+			if (!registration) return;
+			const adopt = (worker: ServiceWorker | null) => {
+				if (!worker) return;
+				activated(worker).then(
+					() => {
+						// heal() rebinds on its own once its worker is activated
+						if (worker !== this.serviceworker && !this.healing)
+							this.rebind(worker).catch(() => {});
+					},
+					() => {},
+				);
+			};
+			registration.addEventListener('updatefound', () =>
+				adopt(registration.installing),
+			);
+			adopt(registration.installing || registration.waiting);
+		} catch (error) {
+			// no registration to watch
+		}
+	}
+	/**
+	 * The service worker answered the handshake with another build: the page
+	 * loaded a newer bundle than the worker still active (a deploy the browser
+	 * has not finished installing), or the other way round. Update the
+	 * registration, wait for the new worker to activate, bind to it and shake
+	 * hands again. wait() rejects only when the builds still differ after that
+	 * or no new worker arrives in time.
+	 */
+	private async heal(build: string) {
+		const fail = () => {
+			const error = new Error(mismatch(build));
+			console.error(error.message);
+			this.isReady = false;
+			this.readyReject(error);
+		};
+		// the second mismatch in a row: the update did not help
+		if (this.healing) return fail();
+		this.healing = true;
+		console.warn(
+			`Stomp: the controller is build ${BUILD}, the service worker is build ${build}; updating the service worker`,
+		);
+		try {
+			const worker = await Promise.race([
+				this.updatedWorker(),
+				sleep(UPDATE_TIMEOUT_MS).then(() => null),
+			]);
+			if (!worker) return fail();
+			await this.rebind(worker);
+		} catch (error) {
+			fail();
+		}
+	}
+	/**
+	 * The registration's newer worker, activated: one the browser already
+	 * found, or one an update finds now. Null when there is nothing newer
+	 * than the worker this controller talks to.
+	 */
+	private async updatedWorker(): Promise<ServiceWorker | null> {
+		const registration = await navigator.serviceWorker.getRegistration(
+			this.directory.href,
+		);
+		if (!registration) return null;
+		let worker: ServiceWorker | null =
+			registration.installing || registration.waiting;
+		if (!worker) {
+			const found = new Promise<ServiceWorker | null>((resolve) =>
+				registration.addEventListener(
+					'updatefound',
+					() => resolve(registration.installing),
+					{ once: true },
+				),
+			);
+			await registration.update().catch(() => {});
+			worker = await Promise.race([
+				found,
+				sleep(UPDATE_FOUND_MS).then(
+					() => registration.installing || registration.waiting,
+				),
+			]);
+		}
+		if (worker) return activated(worker);
+		// nothing to install, but the active worker may not be the one we
+		// were handed (it was waiting when the host picked)
+		const active = registration.active;
+		return active && active !== this.serviceworker ? active : null;
+	}
+	/**
+	 * Talk to another service worker from now on (default: the registration's
+	 * active worker) and shake hands again; the next ready answer settles
+	 * `wait()` as usual. Hosts that update the worker themselves call this
+	 * instead of reaching into the controller.
+	 */
+	async rebind(worker?: ServiceWorker): Promise<void> {
+		if (!worker) {
+			const registration = await navigator.serviceWorker.getRegistration(
+				this.directory.href,
+			);
+			worker = registration?.active ?? undefined;
+			if (!worker)
+				throw new Error(`No active service worker for ${this.directory.href}`);
+		}
+		this.serviceworker = worker;
+		this.handshake();
 	}
 	/** (re)register with the service worker over a fresh MessageChannel */
 	private handshake() {
@@ -270,13 +414,10 @@ export class StompController {
 				ready: async (info) => {
 					const build = info?.build;
 					if (build !== undefined && build !== BUILD) {
-						const error = new Error(
-							`Stomp version mismatch: the controller is build ${BUILD}, the service worker is build ${build}; hard-reload the page or clear the old service worker`,
-						);
-						console.error(error.message);
-						this.readyReject(error);
+						this.heal(build);
 						return;
 					}
+					this.healing = false;
 					// the id both sides agreed on, visible to the host
 					if (build !== undefined) this.config = { ...this.config, build };
 					this.isReady = true;

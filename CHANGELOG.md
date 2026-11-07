@@ -106,6 +106,15 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- A build mismatch at the handshake heals itself instead of rejecting
+  `wait()`: after a deploy the page loads the new controller bundle while the
+  old service worker is still the active one, so the controller now updates
+  the registration, waits for the new worker to activate, binds to it
+  (`controller.rebind(worker?)`, public) and shakes hands again; `wait()`
+  rejects with the mismatch message only when the builds still differ after
+  that or no new worker arrives within 15 seconds. A worker that activates
+  later while the page is open is adopted the same way (`updatefound`,
+  `controllerchange`), so a deploy no longer needs a hard reload.
 - `allowInvalidJs` on both controllers (default `true`, today's behaviour): a
   script the rewriter cannot parse runs as it was. With `false` it fails with
   a `SyntaxError` naming the rewriter error instead, so a broken rewrite is
