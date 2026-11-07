@@ -2,7 +2,7 @@
 
 A rewrite of the Stomp proxy.
 
-Original implementation of https://github.com/tomphttp/implementations.
+Original implementation of https://github.com/tomphttp/specifications.
 
 Stomp rewrites HTML, CSS and JavaScript inside a service worker and tunnels the
 actual HTTP and WebSocket traffic through a
@@ -54,7 +54,7 @@ changelog's known limitations before picking one.
 | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `new StompController(init)`                                                        | `init.serviceworker`, `init.transport`, optional `codec`, `directory`                                                                                                                                                                                                            |
 | `init.allowInvalidJs`                                                              | a script the rewriter cannot parse runs as it was (default); `false` makes it fail with a `SyntaxError` naming the rewriter error, so a broken rewrite is loud                                                                                                                   |
-| `init.cache`                                                                       | `cache` (default `false`): HTTP cache in the service worker, explicit freshness only, revalidated when stale                                                                                                                                                                     |
+| `init.cache`                                                                       | `cache` (default `true`): HTTP cache in the service worker, explicit freshness only, revalidated when stale; `false` turns it off                                                                                                                                                |
 | `init.onRequest`                                                                   | optional `onRequest(info)`: one report per proxied request: real `url`, `method`, `destination`, `status` (0 with `error` on a transport failure), `ms`, `cached`, `bytes`, and `frame` when the page has reported its client id; nothing is sent when unset                     |
 | `init.onNavigate`                                                                  | optional `onNavigate(info, frame)`: the page reported where it is (`{ url, title, canGoBack, canGoForward }`); also dispatched as a `navigate` CustomEvent on the frame                                                                                                          |
 | `init.onOpen`                                                                      | optional `onOpen(url, frame)`: called when a page wants a new tab (`window.open`, a link with `target="_blank"` or a name, a modifier or middle click); the page's `window.open` then returns `null`, like a popup blocker. Without it popups open natively as bare proxied tabs |
