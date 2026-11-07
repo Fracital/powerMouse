@@ -2,7 +2,7 @@ import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { openDB } from 'idb';
 import { Config, generateConfigCodecKey, parseConfig } from '../config';
 import { HttpCache } from './cache';
-import { registerCookies } from './Cookies';
+import Cookies, { registerCookies } from './Cookies';
 import { registerRewrites } from './rewrites';
 import Router from './Router';
 import { registerStorage } from './Storage';
@@ -14,6 +14,8 @@ export interface StompServer {
 	route(url: string): string;
 	/** drop every entry of the HTTP cache (a no-op when it is off) */
 	clearCache(): Promise<void>;
+	/** the cookie jar, for the host's cookies API */
+	cookies: Cookies;
 }
 
 export default async function createServer(
@@ -60,6 +62,7 @@ export default async function createServer(
 	return {
 		router,
 		route,
+		cookies,
 		clearCache: async () => {
 			await cache?.clear();
 		},

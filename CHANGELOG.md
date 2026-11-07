@@ -38,6 +38,9 @@ The first release after a four-year gap. Everything below is breaking.
   page reload (same-origin mode), server restarts and host-page bundles
   reloading the page, and an esbuild error overlay. Development only
   (`STOMP_DEV`).
+- `controller.cookies` lets the host read the Cookie header the proxy would
+  send, import Set-Cookie values, export cookies as records and wipe an
+  origin or everything; host-only by construction.
 - An opt-in HTTP cache in the service worker (`cache: true`, `?cache` in the
   demo): GET/HEAD responses with explicit freshness (max-age, s-maxage,
   Expires) are served from a Cache API store, revalidated with ETag /

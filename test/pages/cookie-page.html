@@ -1,0 +1,11 @@
+<!doctype html>
+<title>COOKIEPAGE</title>
+<script>
+	window.__cp = { document: document.cookie };
+	fetch('/echo-headers')
+		.then((r) => r.json())
+		.then((h) => {
+			__cp.sent = h.cookie || '';
+			__cp.done = true;
+		});
+</script>

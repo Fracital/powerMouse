@@ -84,7 +84,30 @@ export type SWbound = {
 	route: [string, string];
 	/** drop every entry of the HTTP cache */
 	clearCache: [];
+	/** the host reading, importing or wiping the cookie jar */
+	cookies: [CookieCommand, CookieResult];
 };
+
+/** a cookie as the jar stores it, for export and import by the host */
+export interface CookieRecord {
+	name: string;
+	value: string;
+	domain: string;
+	path: string;
+	/** ISO date, or null for a session cookie */
+	expires: string | null;
+	secure: boolean;
+	httpOnly: boolean;
+	sameSite: 'lax' | 'strict' | 'none';
+}
+
+export type CookieCommand =
+	| { op: 'get'; url: string }
+	| { op: 'set'; url: string; setCookie: string | string[] }
+	| { op: 'list'; origin?: string }
+	| { op: 'clear'; origin?: string };
+
+export type CookieResult = string | CookieRecord[] | undefined;
 
 /** implemented by the controller, called by the SW */
 export type Controllerbound = {

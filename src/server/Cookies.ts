@@ -1,5 +1,6 @@
 import { IDBPDatabase, openDB } from 'idb';
 import parseSetCookie, { Cookie as ParserCookie } from 'set-cookie-parser';
+import { CookieRecord } from '../transport/messages';
 import Router, { jsonAPI } from './Router';
 
 const sameSites = ['lax', 'strict', 'none'];
@@ -130,6 +131,45 @@ export default class Cookies {
 		}
 
 		return result;
+	}
+	/** every stored cookie, or those a page of `origin` could receive */
+	async list(origin?: string): Promise<CookieRecord[]> {
+		const host = origin ? new URL(origin).hostname : null;
+		const records: CookieRecord[] = [];
+		for (const [store, session] of [
+			['sessionCookies', true],
+			['cookies', false],
+		] as const)
+			for (const cookie of (await this.db.getAll(store)) as FloatingCookie[]) {
+				if (host !== null && !`.${host}`.endsWith(cookie.domain)) continue;
+				records.push({
+					name: cookie.name,
+					value: cookie.value,
+					domain: cookie.domain,
+					path: cookie.path,
+					expires:
+						session || !cookie.expires
+							? null
+							: new Date(cookie.expires).toISOString(),
+					secure: cookie.secure,
+					httpOnly: cookie.httpOnly,
+					sameSite: cookie.sameSite,
+				});
+			}
+		return records;
+	}
+	/** forget every cookie, or those a page of `origin` could receive */
+	async clear(origin?: string): Promise<void> {
+		const host = origin ? new URL(origin).hostname : null;
+		for (const store of ['sessionCookies', 'cookies'] as const) {
+			if (host === null) {
+				await this.db.clear(store);
+				continue;
+			}
+			for (const cookie of (await this.db.getAll(store)) as FloatingCookie[])
+				if (`.${host}`.endsWith(cookie.domain))
+					await this.db.delete(store, floatingCookieID(cookie));
+		}
 	}
 	async set(cookies: string | string[], url: URL | string): Promise<void> {
 		url = new URL(url);

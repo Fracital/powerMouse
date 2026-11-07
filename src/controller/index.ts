@@ -6,6 +6,9 @@ import {
 	CONTROLLER_RPC,
 	Controllerbound,
 	ControllerInitMessage,
+	CookieCommand,
+	CookieRecord,
+	CookieResult,
 	NAVIGATE,
 	NavigateInfo,
 	OPEN_TAB,
@@ -26,7 +29,7 @@ export type { Config, ConfigCodec } from '../config';
 export { RemoteController, RemoteFrame, DEFAULT_SANDBOX } from './remote';
 export type { RemoteControllerInit } from './remote';
 export type { TransportDescriptor, FrameInfo } from './messages';
-export type { NavigateInfo } from '../transport/messages';
+export type { NavigateInfo, CookieRecord } from '../transport/messages';
 
 export interface ControllerInit {
 	/** the registered (and ideally active) Stomp service worker */
@@ -70,6 +73,35 @@ export interface ControllerInit {
 	 * `window.open(url, '_top')` navigate the host page. `null` disables it.
 	 */
 	sandbox?: string | null;
+}
+
+/** the host's view of the cookie jar (see StompController.cookies) */
+export interface CookieJar {
+	/** the Cookie header value the proxy would send to `url` */
+	get(url: string): Promise<string>;
+	/** apply Set-Cookie header values as if `url` had sent them */
+	set(url: string, setCookie: string | string[]): Promise<void>;
+	/** every stored cookie, or those a page of `origin` could receive */
+	list(origin?: string): Promise<CookieRecord[]>;
+	/** forget every cookie, or those of `origin` */
+	clear(origin?: string): Promise<void>;
+}
+
+/** @internal a CookieJar over a command function */
+export function cookieJar(
+	run: (command: CookieCommand) => Promise<CookieResult>,
+): CookieJar {
+	return {
+		get: async (url) => String((await run({ op: 'get', url })) ?? ''),
+		set: async (url, setCookie) => {
+			await run({ op: 'set', url, setCookie });
+		},
+		list: async (origin) =>
+			((await run({ op: 'list', origin })) as CookieRecord[] | undefined) ?? [],
+		clear: async (origin) => {
+			await run({ op: 'clear', origin });
+		},
+	};
 }
 
 /** a navigate report posted by a proxied page, else null */
@@ -253,6 +285,19 @@ export class StompController {
 		await this.ready;
 		await this.rpc!.call('clearCache', undefined);
 	}
+	/** @internal */
+	async cookieCommand(command: CookieCommand): Promise<CookieResult> {
+		await this.ready;
+		return this.rpc!.call('cookies', command);
+	}
+	/**
+	 * The cookie jar, for the host application only (pages never reach this
+	 * port): read what the proxy would send, import Set-Cookie headers,
+	 * export records, or wipe an origin.
+	 */
+	readonly cookies: CookieJar = cookieJar((command) =>
+		this.cookieCommand(command),
+	);
 	/** the proxied URL a frame should navigate to in order to load `url` */
 	async route(url: string): Promise<string> {
 		await this.ready;

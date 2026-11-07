@@ -146,6 +146,10 @@ if (window === window.parent || !origins.length) {
 					if (!controller) throw new Error('Controller is not initialised');
 					await controller.clearCache();
 				},
+				cookies: async (command) => {
+					if (!controller) throw new Error('Controller is not initialised');
+					return [await controller.cookieCommand(command), []];
+				},
 				frameCommand: async ({ index, command }) => {
 					const win = proxiedWindow(index);
 					if (!win) return [false, []];

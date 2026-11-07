@@ -6,7 +6,7 @@
 import type { Config, ConfigCodec } from '../config';
 import type { NavigateInfo } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
-import { navigateReport, openRequest } from './index';
+import { cookieJar, CookieJar, navigateReport, openRequest } from './index';
 import {
 	FrameBound,
 	FrameCommand,
@@ -152,6 +152,11 @@ export class RemoteController {
 		await this.ready;
 		await this.rpc.call('clearCache', undefined);
 	}
+	/** the cookie jar, for the host application only (see StompController.cookies) */
+	readonly cookies: CookieJar = cookieJar(async (command) => {
+		await this.ready;
+		return this.rpc.call('cookies', command);
+	});
 	async setTransport(transport: TransportDescriptor): Promise<void> {
 		await this.ready;
 		await this.rpc.call('setTransport', transport);

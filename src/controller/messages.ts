@@ -1,4 +1,5 @@
 import type { Config, ConfigCodec } from '../config';
+import type { CookieCommand, CookieResult } from '../transport/messages';
 
 /** how a transport is described across the host/controller-frame boundary */
 export interface TransportDescriptor {
@@ -41,6 +42,7 @@ export type FrameBound = {
 	/** resolves to whether the command was carried out (false: nothing to go back/forward to) */
 	frameCommand: [{ index: number; command: FrameCommand }, boolean];
 	clearCache: [];
+	cookies: [CookieCommand, CookieResult];
 };
 
 /** implemented by the host, called by the controller frame */

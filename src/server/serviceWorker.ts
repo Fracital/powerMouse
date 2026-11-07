@@ -45,6 +45,21 @@ function registerController(
 			clearCache: async () => {
 				await (await server).clearCache();
 			},
+			cookies: async (command) => {
+				const { cookies } = await server;
+				switch (command.op) {
+					case 'get':
+						return [(await cookies.get(command.url)).toString(), []];
+					case 'set':
+						await cookies.set(command.setCookie, command.url);
+						return [undefined, []];
+					case 'list':
+						return [await cookies.list(command.origin), []];
+					case 'clear':
+						await cookies.clear(command.origin);
+						return [undefined, []];
+				}
+			},
 		},
 		CONTROLLER_RPC,
 		(data, transfer) => postToPort(port, data, transfer),
