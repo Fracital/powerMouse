@@ -53,6 +53,9 @@ The first release after a four-year gap. Everything below is breaking.
   `RemoteController` gets it for free. The `transport-worker` suite covers
   the boot, the sync XHR, a swap from epoxy to libcurl, both fallbacks and a
   page WebSocket served from the worker.
+  The demo and the example host pass a descriptor, so their proxied pages
+  get the worker-hosted transport; the dev loop reloads the page when
+  `transportWorker.js` rebuilds.
 - `npm run dev` is a live-reload development loop: esbuild watch plus the
   demo server in one command, a `/__dev` WebSocket that reconnects forever,
   stylesheets swapped in place, inject rebuilds reloading the proxied frames,

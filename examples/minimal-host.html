@@ -99,12 +99,16 @@
 			);
 			const registration = await StompController.register(config.directory);
 
-			// Step 2: load the transport module and construct it. The transport
-			// lives in this page; the service worker and every proxied page reach
-			// it through the controller, so no proxied page ever loads it.
+			// Step 2: describe the transport. The controller imports and
+			// constructs it in a dedicated worker, off this page's thread, so a
+			// proxied page's synchronous XHR can be answered while it waits; the
+			// service worker and every proxied page reach it through the
+			// controller, so no proxied page ever loads it.
 			status('Loading transport');
-			const { default: EpoxyTransport } = await import(config.transport);
-			const transport = new EpoxyTransport({ wisp: config.wisp });
+			const transport = {
+				module: config.transport,
+				options: [{ wisp: config.wisp }],
+			};
 
 			// Step 3: the controller. It owns the transport, talks to the service
 			// worker, and hands the three callbacks below what the pages report.

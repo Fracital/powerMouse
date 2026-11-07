@@ -13,6 +13,8 @@
 //                               proxied frames (isolated mode: reload the
 //                               page, the worker lives in the controller frame)
 //   dist/inject*.js             reload every proxied frame
+//   dist/transportWorker.js     reload the page (the running worker keeps
+//                               the old code)
 //   any other bundle            reload the page
 //   a server with a new         reload the page (its code changed, or
 //   startedAt on reconnect      /config.js did)
@@ -24,13 +26,15 @@ const DIRECTORY = '/stomp/';
 const STEP_MS = 250;
 const MAX_WAIT_MS = 5000;
 const JITTER_MS = 250;
-/** bundles the host page itself runs: nothing short of a reload picks them up */
+/** bundles the host page itself runs, or starts as a worker it cannot restart
+ * in place: nothing short of a reload picks them up */
 const PAGE_BUNDLES = new Set([
 	'Controller.js',
 	'controller.mjs',
 	'controllerFrame.js',
 	'controllerFrame.html',
 	'SearchBuilder.js',
+	'transportWorker.js',
 ]);
 
 // same badge as main.js, labelled Dev, so the console tells the two apart

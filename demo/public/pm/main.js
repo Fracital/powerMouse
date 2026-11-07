@@ -73,8 +73,10 @@ const wisp =
 	CFG.wisp ||
 	`${(ISOLATED ? PROXY_ORIGIN : location.origin).replace(/^http/, 'ws')}/wisp/`;
 
-// transports are described, not constructed: in isolation mode the instance
-// has to be created inside the controller frame on the proxy origin
+// transports are described, not constructed: the controller imports and
+// constructs the module in a dedicated worker (in isolation mode inside the
+// controller frame on the proxy origin), off this page's thread, so a
+// proxied page's synchronous XHR can be answered while it spins
 const transports = {
 	epoxy: () => ({
 		module: `${proxyBase}/epoxy/index.mjs`,
@@ -87,11 +89,6 @@ const transports = {
 		options: [{ wisp, connections: [500, 400, 200] }],
 	}),
 };
-
-async function instantiate(descriptor) {
-	const { default: Transport } = await import(descriptor.module);
-	return new Transport(...(descriptor.options || []));
-}
 
 let controller;
 
@@ -184,7 +181,7 @@ async function boot() {
 		setStatus(`Loading ${name} transport…`);
 		controller = new StompController({
 			serviceworker: registration,
-			transport: await instantiate(transports[name]()),
+			transport: transports[name](),
 			directory: DIRECTORY,
 			codec: 'xor',
 			cache: CACHE,
@@ -223,10 +220,7 @@ async function switchTransport(name) {
 	rememberTransport(name);
 	setStatus(`Switching to ${name}…`);
 	try {
-		const descriptor = transports[name]();
-		await controller.setTransport(
-			ISOLATED ? descriptor : await instantiate(descriptor),
-		);
+		await controller.setTransport(transports[name]());
 		setStatus('Ready');
 		badge('Transport', `${name} over ${wisp}`);
 	} catch (error) {
