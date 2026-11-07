@@ -350,6 +350,9 @@ export function modifyJS(
 					break;
 				case 'MemberExpression':
 					{
+						// `super.location` reads the prototype chain, never the window,
+						// and `super` is not a value a helper could take
+						if (ctx.node.object.type === 'Super') break typeLoop;
 						switch (ctx.parent?.node.type) {
 							case 'ArrayPattern':
 							case 'ObjectPattern':

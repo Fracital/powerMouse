@@ -9,13 +9,16 @@ export default class FunctionModule extends Module<Client> {
 
 		const functionFactory = (
 			ctor: FunctionConstructor,
+			prefix = 'function',
 		): FunctionConstructor => {
 			return proxyModule.wrapFunction(
 				ctor,
 				(target, that, args, newTarget) => {
+					let written: string | null = null;
 					if (args.length !== 0) {
 						let [code] = args.splice(-1, 1);
 						code = String(code);
+						written = `${prefix} anonymous(${args.map(String).join(',')}\n) {\n${code}\n}`;
 						code = modifyJS(
 							code,
 							this.client.url,
@@ -25,9 +28,14 @@ export default class FunctionModule extends Module<Client> {
 						args.push(code);
 					}
 
-					return newTarget
+					const made = newTarget
 						? Reflect.construct(target, args, newTarget)
 						: Reflect.apply(target, that, args);
+					// toString shows the source the page gave, in the browser's shape,
+					// not the rewritten body
+					if (written !== null && typeof made === 'function')
+						proxyModule.functionStrings.set(made, written);
+					return made;
 				},
 				true,
 			);
@@ -39,7 +47,7 @@ export default class FunctionModule extends Module<Client> {
 			)() as () => Promise<void>
 		).constructor as FunctionConstructor;
 
-		const proxyAsyncFunction = functionFactory(AsyncFunction);
+		const proxyAsyncFunction = functionFactory(AsyncFunction, 'async function');
 		const proxyFunction = functionFactory(Function);
 
 		Reflect.defineProperty(

@@ -119,6 +119,18 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- Reflection reaches the same spoof as a member read: `Object.getOwnPropertyDescriptor`
+  and `Reflect.getOwnPropertyDescriptor` (and `getOwnPropertyDescriptors`,
+  `__lookupGetter__`, `__lookupSetter__`) on a window or the document answer
+  descriptors for `top`, `location` and `eval` whose accessors resolve through
+  the access API (a location write routes), `Reflect.get` and
+  `Object.entries` / `Object.values` resolve those values by what they are
+  (so a Proxy over the window is covered), and the access API's own name is
+  not enumerable and is left out of `getOwnPropertyNames` / `Reflect.ownKeys`
+  of a window. `super.location` is left alone by the rewriter (it was a
+  SyntaxError), and a function made with `new Function` reads back the source
+  the page gave in the browser's shape. Corpus: protos 36 leaks to 0, eval 6
+  to 0, in both modes.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

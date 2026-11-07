@@ -24,8 +24,17 @@ function normalizeKey(key: unknown): string|unknown {
 }*/
 
 export function setGlobalProxy(object: any, name: string, proxy: unknown) {
-	object[GLOBAL_PROXY] = proxy;
-	object[GLOBAL_NAME] = name;
+	// the tags never show in the page's own enumeration
+	for (const [key, value] of [
+		[GLOBAL_PROXY, proxy],
+		[GLOBAL_NAME, name],
+	] as const)
+		Reflect.defineProperty(object, key, {
+			value,
+			configurable: true,
+			writable: true,
+			enumerable: false,
+		});
 }
 
 type PatternSpec = { [key: string]: true | PatternSpec };
@@ -235,6 +244,12 @@ export default class AccessModule extends Module<Client> {
 			evalSnapshot,
 		};
 
-		(this.client.global as { [key: string]: unknown })[ACCESS_KEY] = api;
+		// not enumerable: Object.keys(window) must not name it
+		Reflect.defineProperty(this.client.global, ACCESS_KEY, {
+			value: api,
+			configurable: true,
+			writable: true,
+			enumerable: false,
+		});
 	}
 }
