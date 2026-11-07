@@ -112,7 +112,9 @@ The first release after a four-year gap. Everything below is breaking.
   Upstream error pages (a site's own 404) are untouched. In origin-isolation
   mode the path is on the proxy host, where the worker runs. Request reports
   carry the same `kind` next to `error`. `examples/minimal-host.html` uses
-  `examples/error.html`.
+  `examples/error.html`. The demo's is `demo/public/error.html`,
+  and its request viewer shows a failed document under the tab that asked
+  for it, with the failure's kind.
 - `onOpen(url, frame)` on `StompController` and `RemoteController`: a proxied
   page's `window.open`, `target="_blank"` and named-target or modifier clicks
   become a callback to the host, which opens them in its own tab model; the

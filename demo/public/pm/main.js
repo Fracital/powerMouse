@@ -160,6 +160,8 @@ async function boot() {
 			transport: transports[name](),
 			codec: 'xor',
 			cache: CACHE,
+			// the demo's own page for a document the proxy could not produce
+			errorPage: '/error.html',
 			// every proxied request, for the request viewer
 			onRequest: recordRequest,
 			// a page's window.open / target=_blank becomes a tab here, never a
@@ -186,6 +188,8 @@ async function boot() {
 			directory: DIRECTORY,
 			codec: 'xor',
 			cache: CACHE,
+			// the demo's own page for a document the proxy could not produce
+			errorPage: '/error.html',
 			// every proxied request, for the request viewer
 			onRequest: recordRequest,
 			// a page's window.open / target=_blank becomes a tab here, never a
@@ -1215,8 +1219,13 @@ let requestsFlush = 0;
 const requestsOpen = () => requestsPanel.classList.contains('open');
 
 function recordRequest(info) {
-	// the document request itself arrives before the page has a client id
-	// (frame null): nothing to attribute it to
+	// a document the proxy failed to produce (the error page) never reports a
+	// client id, so its report carries no frame: it belongs to the tab that
+	// asked for that URL. Anything else without a frame has nothing to go to.
+	if (!info.frame && info.kind) {
+		const tab = tabs.find((t) => t.url === info.url);
+		if (tab) info = { ...info, frame: tab.frame };
+	}
 	if (!info.frame) return;
 	let log = requestLogs.get(info.frame);
 	if (!log) {
@@ -1281,7 +1290,7 @@ function requestRow(info) {
 	if (info.error) {
 		const error = document.createElement('span');
 		error.className = 'error';
-		error.textContent = info.error;
+		error.textContent = info.kind ? `${info.kind}: ${info.error}` : info.error;
 		url.append(error);
 	}
 	cell('dest', info.destination || 'fetch');

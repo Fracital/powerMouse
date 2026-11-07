@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Page unavailable</title>
+		<link rel="stylesheet" href="/pm/main.css" />
+		<style>
+			/* The demo's own error page (ControllerInit.errorPage): served by the
+			   service worker under the frame's URL when it could not produce the
+			   document, with globalThis.stompError = { url, status, error, kind }
+			   in the head. Styled like the landing page, since it shows inside the
+			   same browser view. */
+			html,
+			body {
+				height: 100%;
+				margin: 0;
+				overflow: auto;
+			}
+			body {
+				display: grid;
+				place-items: center;
+			}
+			main {
+				max-width: 34rem;
+				padding: 24px 28px;
+				border: 1px solid #b6b6b6;
+				border-radius: 5px;
+				background: #000 url('/pm/header-background.png');
+			}
+			h1 {
+				margin: 0 0 8px;
+				font-size: 22px;
+				color: #71cffe;
+			}
+			p {
+				margin: 6px 0;
+				line-height: 1.5;
+			}
+			code {
+				word-break: break-all;
+				color: #4ca9fb;
+			}
+			.detail {
+				color: #f67;
+			}
+			button {
+				margin-top: 14px;
+				padding: 8px 18px;
+				border: 0;
+				border-radius: 5px;
+				background: #e8ed58;
+				color: #000;
+				font: inherit;
+				font-weight: 600;
+				cursor: pointer;
+			}
+			button:hover {
+				background: #fbff96;
+			}
+			button:active {
+				background: #c1c55d;
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<h1 id="title">Page unavailable</h1>
+			<p>Stomp could not load <code id="url"></code>.</p>
+			<p id="detail" class="detail"></p>
+			<button id="retry" type="button">Retry</button>
+		</main>
+		<script>
+			const info = globalThis.stompError || {};
+			const titles = {
+				transport: 'Could not reach the site',
+				timeout: 'The site took too long',
+				routing: 'Something went wrong',
+				blocked: 'Blocked by this host',
+				refused: 'Not available through the proxy',
+			};
+			document.getElementById('title').textContent =
+				titles[info.kind] || 'Page unavailable';
+			document.getElementById('url').textContent = info.url || location.href;
+			document.getElementById('detail').textContent = info.error
+				? `${info.kind || 'error'}${info.status ? ` (${info.status})` : ''}: ${info.error}`
+				: '';
+			document
+				.getElementById('retry')
+				.addEventListener('click', () => location.reload());
+		</script>
+	</body>
+</html>
