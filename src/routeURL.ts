@@ -115,7 +115,13 @@ export function parseDataURI(pathname: string): DataURI {
 	const [mime, ...attributes] = type.split(';');
 
 	if (attributes.includes('base64')) {
-		data = atob(data);
+		// the bytes are text (a script, a document, a stylesheet) in UTF-8;
+		// atob alone gives one character per byte and mangles anything beyond
+		// Latin-1
+		const binary = atob(data);
+		const bytes = new Uint8Array(binary.length);
+		for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+		data = new TextDecoder().decode(bytes);
 	} else {
 		// RFC 2397 bodies are percent-encoded (Reddit ships scripts as
 		// data:text/javascript,%7B...); the parser needs the real text
@@ -136,7 +142,11 @@ export function parseDataURI(pathname: string): DataURI {
 export function createDataURI(data: DataURI) {
 	return `data:${[data.mime, ...data.attributes].join(';')},${
 		data.attributes.includes('base64')
-			? btoa(data.data)
+			? btoa(
+					Array.from(new TextEncoder().encode(data.data), (byte) =>
+						String.fromCharCode(byte),
+					).join(''),
+				)
 			: encodeURIComponent(data.data)
 	}`;
 }

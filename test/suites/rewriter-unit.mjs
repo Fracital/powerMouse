@@ -21,6 +21,7 @@ writeFileSync(
 	entry,
 	`export { modifyJS, routeJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
 export { routeHTML, modifyRefresh, parseRefresh } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
+export { parseDataURI, createDataURI } from ${JSON.stringify(`${root}src/routeURL.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 `,
@@ -40,6 +41,8 @@ const {
 	routeHTML,
 	modifyRefresh,
 	parseRefresh,
+	parseDataURI,
+	createDataURI,
 	StompURL,
 	parseConfig,
 } = await import(`${bundle}?${Date.now()}`);
@@ -228,6 +231,39 @@ const parses = (code) => {
 			/x\.postmessage\(m\)/.test(out) &&
 			parses(out),
 		out,
+	);
+}
+{
+	// a top-level `var` binding location in a classic script assigns the
+	// window's location: bound to a temporary and routed like `location = v`;
+	// inside a function, or in a module, left alone
+	const top = rewrite(
+		"var location = 'x'; var {a, location} = o; var [location] = l;",
+	);
+	const inner = rewrite('function f() { var location = 1; }');
+	const mod = rewrite("var location = 'x';", 'genericModule');
+	ok(
+		'a top-level var binding of location routes the assignment',
+		(top.match(/\$s\$j\.set1\(location, 'location'/g) || []).length === 3 &&
+			/var \$s\$jl0 = 'x'/.test(top) &&
+			/location: \$s\$jl0/.test(top) &&
+			/var \[\$s\$jl0\] = l/.test(top) &&
+			!/set1/.test(inner) &&
+			/var location = 'x';$/.test(mod) &&
+			parses(top),
+		JSON.stringify([top, inner]),
+	);
+	// a base64 data: body is UTF-8 text
+	const uri = createDataURI({
+		mime: 'text/css',
+		attributes: ['base64'],
+		data: 'a::after { content: "é ✓" }',
+	});
+	ok(
+		'a base64 data: body round-trips as UTF-8',
+		parseDataURI(uri.slice('data:'.length)).data ===
+			'a::after { content: "é ✓" }' && /^data:text\/css;base64,/.test(uri),
+		JSON.stringify([uri, parseDataURI(uri.slice(5)).data]),
 	);
 }
 {

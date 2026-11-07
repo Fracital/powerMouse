@@ -7,6 +7,9 @@ export default class FunctionModule extends Module<Client> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
+		// the realm's own eval, as it is before any page code (Access tags it
+		// but leaves it in place)
+		const nativeEval = this.client.global.eval;
 		const functionFactory = (
 			ctor: FunctionConstructor,
 			prefix = 'function',
@@ -14,26 +17,26 @@ export default class FunctionModule extends Module<Client> {
 			return proxyModule.wrapFunction(
 				ctor,
 				(target, that, args, newTarget) => {
-					let written: string | null = null;
-					if (args.length !== 0) {
-						let [code] = args.splice(-1, 1);
-						code = String(code);
-						written = `${prefix} anonymous(${args.map(String).join(',')}\n) {\n${code}\n}`;
-						code = modifyJS(
-							code,
+					if (args.length === 0)
+						return newTarget
+							? Reflect.construct(target, args, newTarget)
+							: Reflect.apply(target, that, args);
+					const [code] = args.splice(-1, 1);
+					// the browser's shape of the source the page gave: rewritten as
+					// a whole function expression, so `yield` and `await` parse in
+					// their own function, and made by the realm's eval at global
+					// scope, as the constructor would
+					const written = `${prefix} anonymous(${args.map(String).join(',')}\n) {\n${String(code)}\n}`;
+					const made = nativeEval(
+						modifyJS(
+							`(${written})`,
 							this.client.url,
 							this.client.config,
 							'generic',
-						);
-						args.push(code);
-					}
-
-					const made = newTarget
-						? Reflect.construct(target, args, newTarget)
-						: Reflect.apply(target, that, args);
-					// toString shows the source the page gave, in the browser's shape,
-					// not the rewritten body
-					if (written !== null && typeof made === 'function')
+						),
+					);
+					// toString shows the source the page gave, not the rewritten body
+					if (typeof made === 'function')
 						proxyModule.functionStrings.set(made, written);
 					return made;
 				},
@@ -49,6 +52,29 @@ export default class FunctionModule extends Module<Client> {
 
 		const proxyAsyncFunction = functionFactory(AsyncFunction, 'async function');
 		const proxyFunction = functionFactory(Function);
+		// the generator constructors are reachable the same way
+		const GeneratorFunction = (
+			new this.client.global.Function(
+				'return function* () {}',
+			)() as () => unknown
+		).constructor as FunctionConstructor;
+		const AsyncGeneratorFunction = (
+			new this.client.global.Function(
+				'return async function* () {}',
+			)() as () => unknown
+		).constructor as FunctionConstructor;
+		for (const [ctor, prefix] of [
+			[GeneratorFunction, 'function*'],
+			[AsyncGeneratorFunction, 'async function*'],
+		] as const) {
+			const proxy = functionFactory(ctor, prefix);
+			Reflect.defineProperty(ctor.prototype, 'constructor', {
+				configurable: true,
+				enumerable: false,
+				writable: true,
+				value: proxy,
+			});
+		}
 
 		Reflect.defineProperty(
 			this.client.global.Function.prototype,

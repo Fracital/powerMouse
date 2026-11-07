@@ -66,6 +66,15 @@ ok(
 	JSON.stringify(apis.xhrAsync),
 );
 
+ok(
+	'eval returns a non-string unchanged and the generator constructors run rewritten',
+	JSON.stringify(apis.evalNonString) ===
+		JSON.stringify([true, true, true, true]) &&
+		JSON.stringify(apis.generator) ===
+			JSON.stringify([true, true, true, 'function']),
+	JSON.stringify([apis.evalNonString, apis.generator]),
+);
+
 await done(
 	browser,
 	page.errors.filter((e) => !/max cycles/.test(e)),

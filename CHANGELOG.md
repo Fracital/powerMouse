@@ -357,6 +357,14 @@ url`) carries its value and targets that window. An about:blank child of
   restricted window and a `postMessage` the page replaced are called as
   written. Cost: a 10.8 MB YouTube bundle rewrites to 19,269,309 bytes
   instead of 19,268,215 (25 call sites), in the same time.
+- Four small corrections of rewritten code: `eval(x)` returns anything that
+  is not a string unchanged (it was stringified); the generator and async
+  generator function constructors run rewritten code and read back like
+  `Function` does; a base64 `data:` body is decoded and encoded as UTF-8 (a
+  stylesheet or script with characters beyond Latin-1 was mangled); a
+  top-level `var location = url` or `var { location } = o` in a classic
+  script, which assigns the window's location, is bound to a temporary and
+  routed like `location = url` (it navigated to the proxy origin's path).
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

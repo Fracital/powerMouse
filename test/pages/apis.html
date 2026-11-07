@@ -13,6 +13,29 @@
 		};
 		x.send();
 	}
+	// eval returns anything that is not a string unchanged; the generator
+	// constructors run rewritten code like Function does
+	{
+		const object = { x: 1 };
+		__apis.evalNonString = [
+			eval(42) === 42,
+			eval(object) === object,
+			(0, eval)(object) === object,
+			eval('6 * 7') === 42,
+		];
+		const Gen = Object.getPrototypeOf(function* () {}).constructor;
+		const AsyncGen = Object.getPrototypeOf(async function* () {}).constructor;
+		const gen = Gen('yield top === window; yield location.href');
+		const made = [...gen()];
+		__apis.generator = [
+			made[0] === true,
+			made[1] === location.href,
+			Function.prototype.toString
+				.call(Gen('yield 1'))
+				.startsWith('function* anonymous('),
+			typeof AsyncGen,
+		];
+	}
 	// history URLs: the page's own origin only, like the browser
 	try {
 		history.pushState(null, '', 'https://other.example/x');

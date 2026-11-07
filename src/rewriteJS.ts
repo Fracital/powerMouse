@@ -296,6 +296,58 @@ export function modifyJS(
 							),
 						);
 					break;
+				case 'VariableDeclaration':
+					{
+						// `var location = v` and `var { location } = o` at the top of
+						// a classic script assign the window's location (the var
+						// declares nothing new there): bound to a temporary and
+						// assigned, so the assignment routes like `location = v`
+						if (
+							isModule ||
+							ctx.node.kind !== 'var' ||
+							ctx.parent?.node.type !== 'Program'
+						)
+							break;
+						const assignments: any[] = [];
+						const temp = () =>
+							b.identifier(`${ACCESS_KEY}l${assignments.length}`);
+						const rebind = (node: any): any => {
+							if (node?.type === 'Identifier' && node.name === 'location') {
+								const id = temp();
+								// the identifier is marked a result so the Identifier case
+								// turns this assignment into the routed set like any other
+								assignments.push(
+									b.expressionStatement(
+										b.assignmentExpression(
+											'=',
+											result(b.identifier('location')),
+											b.identifier(id.name),
+										),
+									),
+								);
+								return id;
+							}
+							if (node?.type === 'ObjectPattern')
+								for (const property of node.properties)
+									if (property.type === 'Property') {
+										const value = rebind(property.value);
+										if (value !== property.value) property.shorthand = false;
+										property.value = value;
+									}
+							if (node?.type === 'ArrayPattern')
+								node.elements = node.elements.map((element: any) =>
+									element ? rebind(element) : element,
+								);
+							if (node?.type === 'AssignmentPattern')
+								node.left = rebind(node.left);
+							return node;
+						};
+						for (const declarator of ctx.node.declarations)
+							if (declarator.init) declarator.id = rebind(declarator.id);
+						if (assignments.length)
+							ctx.replaceWith(b.blockStatement([ctx.node, ...assignments]));
+					}
+					break;
 				case 'CallExpression':
 					{
 						const { callee } = ctx.node;

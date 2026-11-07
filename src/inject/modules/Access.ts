@@ -46,10 +46,18 @@ export default class AccessModule extends Module<Client> {
 
 		const proxyModule = this.client.getModule(ProxyModule);
 
-		const globalEval = (x: string) => {
-			x = String(x);
+		// eval returns anything that is not a string unchanged; a TrustedScript
+		// (Trusted Types) is code, as for the browser
+		const isCode = (x: unknown): x is string | object => {
+			if (typeof x === 'string') return true;
+			const Trusted = (this.client.global as { TrustedScript?: unknown })
+				.TrustedScript;
+			return typeof Trusted === 'function' && x instanceof Trusted;
+		};
+		const globalEval = (x: unknown) => {
+			if (!isCode(x)) return x;
 			return evalSnapshot(
-				modifyJS(x, this.client.url, this.client.config, 'generic'),
+				modifyJS(String(x), this.client.url, this.client.config, 'generic'),
 			);
 		};
 
@@ -235,6 +243,9 @@ export default class AccessModule extends Module<Client> {
 				return Reflect.apply(method, target, args);
 			},
 			evalScope: (code: unknown) => {
+				// `eval(x)` with anything but a string returns x: handed back as it
+				// is, the direct eval then returns it
+				if (!isCode(code)) return code;
 				return modifyJS(
 					String(code),
 					this.client.url,
