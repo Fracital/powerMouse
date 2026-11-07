@@ -5,10 +5,17 @@ import {
 	routeXHR,
 } from '../../routeURL';
 import StompURL, { urlLike } from '../../StompURL';
+import { ABORT_HEADER } from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
 import { unrouteURL } from './Unroute';
+
+/** an id for a request the page may abort */
+const abortId = () =>
+	typeof crypto !== 'undefined' && 'randomUUID' in crypto
+		? crypto.randomUUID()
+		: `${Date.now()}-${Math.random()}`;
 
 export default class FetchModule extends Module<Client> {
 	apply() {
@@ -113,6 +120,27 @@ export default class FetchModule extends Module<Client> {
 					return await fetch(url, init);
 				}
 
+				// an abort never reaches the worker on its own: the request carries
+				// an id and the abort is posted to the worker under it
+				const signal = init?.signal;
+				if (signal) {
+					const id = abortId();
+					const headers = new Headers(init.headers ?? undefined);
+					headers.set(ABORT_HEADER, id);
+					init =
+						init instanceof Request
+							? new Request(init, { headers })
+							: { ...init, headers };
+					if (signal.aborted) this.client.abortRequest(id);
+					else
+						signal.addEventListener(
+							'abort',
+							() => this.client.abortRequest(id),
+							{
+								once: true,
+							},
+						);
+				}
 				// [input, init]
 				//TODO: COOKIES
 				const res = await fetch(

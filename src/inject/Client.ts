@@ -11,6 +11,7 @@ import { CLIENT_KEY } from '../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../routeURL';
 import StompURL from '../StompURL';
 import {
+	ABORT_REQUEST,
 	INIT_REMOTE_TRANSPORT,
 	TRANSPORT_INIT,
 	WORKER_BASE,
@@ -153,6 +154,24 @@ export default class Client {
 	 */
 	protected ownTransportPort(): MessagePort | Promise<MessagePort> {
 		return this.requestTransportPort();
+	}
+	/**
+	 * Tell the service worker the page aborted the request it sent with this
+	 * id (the browser does not relay a fetch's abort to the worker): the
+	 * worker stops waiting for the origin and reports the request as aborted.
+	 */
+	abortRequest(id: string) {
+		const controller = this.#serviceWorkerContainer?.controller;
+		if (!controller || !this.#serviceWorkerPostMessage) return;
+		try {
+			this.#serviceWorkerPostMessage.call(
+				controller,
+				{ [ABORT_REQUEST]: id },
+				[],
+			);
+		} catch (error) {
+			// the worker is gone: nothing to tell
+		}
 	}
 	/**
 	 * Ask the controller (through the service worker) to serve a transport on

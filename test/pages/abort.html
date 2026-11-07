@@ -1,0 +1,19 @@
+<!doctype html>
+<title>ABORT</title>
+<script>
+	window.__abort = {};
+	(async () => {
+		const controller = new AbortController();
+		const started = performance.now();
+		setTimeout(() => controller.abort(), 200);
+		try {
+			await fetch('/slow', { signal: controller.signal });
+			__abort.result = 'resolved';
+		} catch (error) {
+			__abort.result = error.name;
+		}
+		__abort.ms = Math.round(performance.now() - started);
+	})().finally(() => {
+		__abort.done = true;
+	});
+</script>

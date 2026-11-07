@@ -371,6 +371,14 @@ url`) carries its value and targets that window. An about:blank child of
   the parser rejects outright is routed by the regex alone instead of being
   refused. Measured: css-tree accepted every malformed input tried, but left
   such blocks unrouted.
+- A fetch or XMLHttpRequest the page aborts is dropped by the worker too.
+  The browser does not relay an abort to a service worker (the request's
+  signal in the fetch event never fires in Chrome, measured), so the page
+  puts an id on the request and posts the abort to the worker under it; the
+  worker stops waiting for the origin, reports the request at once with
+  status 0 and `error: "aborted"`, and cancels the origin's answer unread
+  when it arrives, so the transport stops reading. Before, the worker waited
+  for the origin and reported the request as completed.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

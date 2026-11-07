@@ -1,5 +1,6 @@
 import { routeXHR } from '../../../routeURL';
 import StompURL from '../../../StompURL';
+import { ABORT_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule, {
 	classConstant,
@@ -306,6 +307,14 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			#fetch(url: string | URL, init: RequestInit) {
 				if (this.#async) {
 					init.signal = this.#abort.signal;
+					// abort() and a timeout reach the worker under this id
+					const id = `${Date.now()}-${Math.random()}`;
+					(init.headers as Headers).set(ABORT_HEADER, id);
+					this.#abort.signal.addEventListener(
+						'abort',
+						() => that.client.abortRequest(id),
+						{ once: true },
+					);
 
 					fetch(url, init)
 						.then(async (response) => {

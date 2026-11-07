@@ -1,6 +1,7 @@
 import { getDomain } from 'tldts';
 import { Config } from '../config';
 import {
+	ABORT_REQUEST,
 	CONTROLLER_INIT,
 	CONTROLLER_RPC,
 	Controllerbound,
@@ -17,6 +18,7 @@ import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
 import createServer, { StompServer } from './createServer';
 import { hostErrorPage } from './errorPage';
+import { abortRequest } from './rewrites';
 
 interface ControllerRef {
 	directory: string;
@@ -149,6 +151,8 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 
 	if (CONTROLLER_INIT in data) {
 		registerController(data[CONTROLLER_INIT], event.ports[0]);
+	} else if (ABORT_REQUEST in data) {
+		abortRequest((data as Record<string, unknown>)[ABORT_REQUEST]);
 	} else if (INIT_REMOTE_TRANSPORT in data) {
 		const { directory } = data[
 			INIT_REMOTE_TRANSPORT

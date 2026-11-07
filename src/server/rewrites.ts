@@ -22,6 +22,7 @@ import type {
 	RequestRule,
 	RouteContext,
 } from '../transport/messages';
+import { ABORT_HEADER } from '../transport/messages';
 import { BUILD } from '../version';
 import { HttpCache, isCacheable } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
@@ -131,6 +132,16 @@ interface Rewriter {
 	rules: CompiledRule[];
 }
 
+/** the page aborted the request (its signal fired) */
+const ABORTED = Symbol('aborted');
+
+/** requests in flight the page may still abort, by the id it sent (ABORT_HEADER) */
+const pendingAborts = new Map<string, () => void>();
+/** the page posted that it aborted the request with this id */
+export function abortRequest(id: unknown) {
+	if (typeof id === 'string') pendingAborts.get(id)?.();
+}
+
 function genericForward(
 	rewriter: Rewriter,
 	transformBody: BodyTransform | void,
@@ -144,6 +155,31 @@ function genericForward(
 		context?: RouteContext,
 	): Promise<Response> {
 		const started = Date.now();
+		// the page's abort reaches the worker as a message under the id the
+		// page put in the request (Chrome does not fire the request's own
+		// signal in a fetch event); the signal is honoured too where it fires
+		const signal = (serverRequest as { signal?: AbortSignal }).signal;
+		const abortId = serverRequest.headers.get(ABORT_HEADER);
+		const abortedSoon = new Promise<never>((_, reject) => {
+			if (abortId) pendingAborts.set(abortId, () => reject(ABORTED));
+			if (!signal) return;
+			if (signal.aborted) reject(ABORTED);
+			else
+				signal.addEventListener('abort', () => reject(ABORTED), { once: true });
+		});
+		abortedSoon.catch(() => {});
+		const reportAborted = () =>
+			rewriter.log?.({
+				url: reportURL(url),
+				method: serverRequest.method,
+				destination: serverRequest.destination || 'fetch',
+				status: 0,
+				ms: Date.now() - started,
+				cached: false,
+				bytes: null,
+				error: 'aborted',
+				client: context?.clientId,
+			});
 		const oURL = new URL(serverRequest.url);
 		const { url } = parseRoutedURL(
 			serverRequest.url,
@@ -190,6 +226,8 @@ function genericForward(
 			url,
 			additionalRequestFilter,
 		);
+		// ours, never the origin's (nor a cache key's)
+		requestHeaders.delete(ABORT_HEADER);
 
 		requestHeaders.set('user-agent', navigator.userAgent);
 
@@ -407,8 +445,8 @@ function genericForward(
 		let cached = false;
 		const within = (window: number | null) =>
 			!!hit && !hit.mustRevalidate && window !== null && hit.staleFor <= window;
-		const fetchUpstream = (headers: Headers) =>
-			rewriter.bare.fetch(url.toString(), {
+		const fetchUpstream = (headers: Headers) => {
+			const upstream = rewriter.bare.fetch(url.toString(), {
 				method: serverRequest.method,
 				redirect: 'manual',
 				// redirect: serverRequest.redirect,
@@ -421,6 +459,16 @@ function genericForward(
 					undefined,
 				headers: capitalizeHeaders(headers),
 			});
+			// an answer that arrives after the page gave up is dropped unread, so
+			// the transport stops reading it
+			upstream.then(
+				(response) => {
+					if (signal?.aborted) response.body?.cancel().catch(() => {});
+				},
+				() => {},
+			);
+			return Promise.race([upstream, abortedSoon]);
+		};
 		const withValidators = (headers: Headers) => {
 			const conditional = new Headers(headers);
 			if (hit?.etag) conditional.set('if-none-match', hit.etag);
@@ -463,6 +511,10 @@ function genericForward(
 			try {
 				upstream = await fetchUpstream(withValidators(requestHeaders));
 			} catch (error) {
+				if (error === ABORTED) {
+					reportAborted();
+					return Response.error();
+				}
 				if (!within(hit?.staleIfError ?? null)) {
 					// a document is reported by the wrapper, once it knows whether
 					// the host's page answers (then no client id is to be waited for)
@@ -519,6 +571,17 @@ function genericForward(
 			});
 			edited.rawHeaders = response.rawHeaders;
 			response = edited;
+		}
+
+		// the page gave up on this request while the origin was answering: the
+		// body is cancelled (the transport stops reading) and the request is
+		// reported as aborted; an abort after the headers went out cancels the
+		// response stream the browser holds, which reaches the transport the
+		// same way
+		if (signal?.aborted) {
+			await response.body?.cancel().catch(() => {});
+			reportAborted();
+			return Response.error();
 		}
 
 		if (rewriter.log) {
@@ -602,9 +665,11 @@ function genericForward(
 		context?: RouteContext,
 	): Promise<Response> {
 		const started = Date.now();
+		const abortId = serverRequest.headers.get(ABORT_HEADER);
 		try {
 			return await forward(serverRequest, resolved, context);
 		} catch (error) {
+			if (error === ABORTED) return Response.error();
 			if (
 				!DOCUMENT_DESTINATIONS.has(serverRequest.destination) ||
 				!(error instanceof Error) ||
@@ -650,6 +715,8 @@ function genericForward(
 				});
 			if (page) return page;
 			throw error;
+		} finally {
+			if (abortId) pendingAborts.delete(abortId);
 		}
 	};
 }

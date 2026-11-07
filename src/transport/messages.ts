@@ -13,6 +13,10 @@ export const CONTROLLER_INIT = '$stomp$controllerInit';
 export const INIT_REMOTE_TRANSPORT = '$stomp$initRemoteTransport';
 /** SW -> every client: SW (re)started, controllers must re-send CONTROLLER_INIT */
 export const SW_REVIVE = '$stomp$swRevive';
+/** a page tells the worker it aborted a request (the id it sent in ABORT_HEADER) */
+export const ABORT_REQUEST = '$stomp$abort';
+/** the request header a page adds so the worker can match an abort to the request; never forwarded */
+export const ABORT_HEADER = 'x-stomp-abort';
 /** SW -> every window: the cookie jar changed for `domain` (every host when empty); pages drop their document.cookie cache */
 export const COOKIES_CHANGED = '$stomp$cookiesChanged';
 export interface CookiesChange {
