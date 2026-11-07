@@ -1,0 +1,32 @@
+<!doctype html>
+<title>LINKS</title>
+<img src="sprite.svg" usemap="#m" width="100" height="100" alt="" />
+<map name="m">
+	<area
+		id="area"
+		shape="rect"
+		coords="0,0,100,100"
+		href="hist-2.html?from=area#f"
+	/>
+</map>
+<a id="a" href="/pages/hist-2.html?q=1#frag">a</a>
+<form id="form" action="/pages/hist-2.html">
+	<button id="formaction" formaction="/landed?formaction">go</button>
+	<input
+		id="inputformaction"
+		type="submit"
+		formaction="/landed?inputformaction"
+	/>
+</form>
+<input id="inputsrc" type="image" src="sprite.svg" alt="" />
+<video id="video" poster="sprite.svg" src="nolength.json">
+	<track id="track" src="hdr.json" kind="subtitles" srclang="en" />
+</video>
+<object id="object" data="keep.html" type="text/html"></object>
+<link
+	id="preload"
+	rel="preload"
+	as="image"
+	imagesrcset="sprite.svg 1x, sprite.svg 2x"
+	href="sprite.svg"
+/>

@@ -37,7 +37,7 @@ Fixed and covered by a suite unless marked open.
 | Sync bridge beacons over 64 KiB were silently refused and spun to the timeout                                                                                    | fixed by the other session (QuotaExceededError at once)                                                     |
 | Demo tab switcher snapped on expand and hid the bottom 48px of every page (measured)                                                                             | fixed                                                                                                       |
 | `fetch(request)` passing the `Request` as `init`                                                                                                                 | not a bug: Chrome accepts it (page-apis suite guards it)                                                    |
-| Anchor URL parts (`a.pathname`, `a.hostname`) return the page's values                                                                                           | open (CHANGELOG known limitations)                                                                          |
+| Anchor URL parts (`a.pathname`, `a.hostname`) return the page's values                                                                                           | fixed (links suite)                                                                                         |
 | XHR `responseType` `json` / `blob` / `document`; `open()` stores the password into `#username`                                                                   | open                                                                                                        |
 | `MockWebSocket` rejects relative URLs, no `http(s)` to `ws(s)` mapping, no HttpOnly cookies on handshakes                                                        | open                                                                                                        |
 | Context's `message` tagger only registered on `document.open()`; a page's own `document.open()` dropped every window hook                                        | fixed (history suite)                                                                                       |
@@ -90,13 +90,13 @@ that is accurate and expected.
 | `history.back()` / `go(-n)` at the frame's first entry, `history.length`                               | stays put, own count (measured)                                                     | same (measured)                      |
 | Page calls `document.open()`                                                                           | window hooks registered again (measured)                                            | same (measured)                      |
 | Host `postMessage` into the frame                                                                      | arrives, unwrapped, as if the page sent it (measured)                               | dropped (measured)                   |
-| `<area href>`                                                                                          | never rewritten; raw URL in the frame                                               | same                                 |
+| `<area href>`                                                                                          | routed, navigates through the proxy (measured)                                      | same                                 |
 | `blob:` navigations, `about:blank` popups written with `document.write`                                | unrewritten documents                                                               | same                                 |
 | Nested destructuring (`{ a: { top } }`), parameter patterns (`({ top: t }) => t`)                      | spoofed (measured)                                                                  | spoofed (measured)                   |
 | Array patterns (`[{ top }] = [w]`), nested pattern defaults, `Reflect.get(window,'top')`               | raw `top`, stopped only by sandbox                                                  | stopped by sandbox                   |
 
-Open, in order of leverage: `area[href]`; `blob:` and `about:blank`
-documents; array patterns.
+Open, in order of leverage: `blob:` and `about:blank` documents; array
+patterns.
 
 ## 3. JS rewriter
 
@@ -154,8 +154,8 @@ before the inject bundle runs (no-JS user agents, crawlers) sees raw markup.
 | `innerHTML` / `outerHTML` getters un-rewrite                                                                                                                               | ok           | serialised from a clone with the markers folded back                                             |
 | `querySelector` / `querySelectorAll` / `matches` / `closest` attribute selectors                                                                                           | ok           | `[name op value]` becomes `:is([s_o:name ...],[name ...]:not([s_o:name]))`                       |
 | `Range.createContextualFragment`, `DOMParser.parseFromString`, `importNode`, foreign documents                                                                             | ok           | attribute hooks run on insertion into a connected tree                                           |
-| `area[href]`                                                                                                                                                               | missing      | image maps navigate raw                                                                          |
-| `frame[src]`, `input[src]`, `track[src]`, `object[data]`, `video[poster]`, `button/input[formaction]`, `link[imagesrcset]`                                                 | missing      |                                                                                                  |
+| `area[href]`                                                                                                                                                               | ok           | links suite                                                                                      |
+| `frame[src]`, `input[src]`, `track[src]`, `object[data]`, `video[poster]`, `button/input[formaction]`, `link[imagesrcset]`                                                 | ok           | links suite (`frame[src]` hooked, not measured: needs a frameset document)                       |
 | `link[rel]` tokenising and `as=` mapping                                                                                                                                   | partial      | exact `switch(rel)`; preloads get the binary route                                               |
 | `script[type]` recognition (`text/ecmascript`, uppercase, whitespace)                                                                                                      | partial      | exact-match list                                                                                 |
 | `iframe[sandbox]`, `iframe[csp]`, `iframe[credentialless]` removal                                                                                                         | missing      | an opaque-origin or policy-bound child frame escapes the service worker                          |
@@ -164,7 +164,7 @@ before the inject bundle runs (no-JS user agents, crawlers) sees raw markup.
 | Standalone SVG / XHTML documents                                                                                                                                           | partial      | both weak                                                                                        |
 | `setHTMLUnsafe`, `getHTML`, `Document.parseHTMLUnsafe`                                                                                                                     | missing      | declarative shadow DOM                                                                           |
 | `script.textContent` getter returns the original source                                                                                                                    | partial      | only `document.currentScript.textContent` for parser-inserted scripts                            |
-| `HTMLImageElement.currentSrc`, `HTMLAnchorElement.toString`, `SVGAnimatedString.baseVal`, `getSVGDocument`                                                                 | missing      |                                                                                                  |
+| `HTMLImageElement.currentSrc`, `SVGAnimatedString.baseVal`, `getSVGDocument`                                                                                               | missing      | `HTMLAnchorElement.toString` and the URL parts are the link's own now                            |
 | `contentWindow` / `contentDocument` injection on `frame`, `object`, `embed`                                                                                                | partial      | only `iframe`                                                                                    |
 | `document.documentURI`, `document.domain` setter, `window.origin` / `self.origin`                                                                                          | missing      |                                                                                                  |
 | `document.write` incremental tokenizer (tags split across calls)                                                                                                           | partial      | each call parsed as a complete fragment                                                          |
@@ -290,12 +290,11 @@ Suites: navigate-events, request-log, version, cookie-jar, cache, isolation.
 
 ## 10. What is left, by payoff
 
-1. Documents that escape the rewrite: `area[href]`, `blob:` and `about:blank`
-   documents, `window.open` return values, import map URLs,
+1. Documents that escape the rewrite: `blob:` and `about:blank` documents,
+   `window.open` return values, import map URLs,
    `iframe[sandbox|csp|credentialless]`.
-2. Missing URL attributes (`frame`, `input`, `track`, `object`, `poster`,
-   `formaction`, `imagesrcset`, the other SVG `href` carriers),
-   `link[rel]` tokenising, `script[type]` recognition.
+2. The other SVG `href` carriers, `link[rel]` tokenising, `script[type]`
+   recognition.
 3. Reading back: `getComputedStyle` and `getPropertyValue` un-rewrite, Typed
    OM, `SVGAnimatedString.baseVal`, `script.textContent`,
    `PerformanceEntry.name`, `Error.prepareStackTrace`, `hashchange` URLs.

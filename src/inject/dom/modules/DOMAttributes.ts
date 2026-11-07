@@ -198,8 +198,21 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			},
 			[
 				['A', 'href'],
+				['AREA', 'href'],
 				[
 					HTMLAnchorElement,
+					'href',
+					(element) =>
+						element.hasAttribute('href') &&
+						element.getAttribute('href') !== '' &&
+						new URL(
+							element.getAttributeOG('href')!,
+							this.client.url.toString(),
+						).toString(),
+				],
+				// an image map's areas are links too
+				[
+					HTMLAreaElement,
 					'href',
 					(element) =>
 						element.hasAttribute('href') &&
@@ -386,6 +399,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[
 				['IFRAME', 'src'],
 				['EMBED', 'src'],
+				['FRAME', 'src'],
+				[
+					HTMLFrameElement,
+					'src',
+					(element) =>
+						element.hasAttribute('src') &&
+						element.getAttribute('src') !== '' &&
+						new URL(
+							element.getAttributeOG('src')!,
+							this.client.url.toString(),
+						).toString(),
+				],
 				[
 					HTMLIFrameElement,
 					'src',
@@ -484,6 +509,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			},
 			[
 				['IMG', 'src'],
+				['INPUT', 'src'],
+				[
+					HTMLInputElement,
+					'src',
+					(element) =>
+						element.hasAttribute('src') &&
+						element.getAttribute('src') !== '' &&
+						new URL(
+							element.getAttributeOG('src')!,
+							this.client.url.toString(),
+						).toString(),
+				],
 				[
 					HTMLImageElement,
 					'src',
@@ -573,6 +610,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['AUDIO', 'src'],
 				['VIDEO', 'src'],
 				['SOURCE', 'src'],
+				['TRACK', 'src'],
+				[
+					HTMLTrackElement,
+					'src',
+					(element) =>
+						element.hasAttribute('src') &&
+						element.getAttribute('src') !== '' &&
+						new URL(
+							element.getAttributeOG('src')!,
+							this.client.url.toString(),
+						).toString(),
+				],
 				[
 					HTMLMediaElement,
 					'src',
@@ -827,6 +876,112 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					break;
 			}
 		};
+
+		/** the page's absolute URL for a routed URL attribute, or false without one */
+		const originalURL = (attribute: string) => (element: CustomElement) =>
+			element.hasAttribute(attribute) &&
+			element.getAttribute(attribute) !== '' &&
+			new URL(
+				element.getAttributeOG(attribute)!,
+				this.client.url.toString(),
+			).toString();
+
+		/** route one URL attribute, keeping the page's value as the original */
+		const routeAttribute =
+			(attribute: string, route: (resource: StompURL) => string) =>
+			(element: CustomElement) => {
+				element.restoreAttributesOG(attribute);
+				if (
+					element.hasAttribute(attribute) &&
+					element.getAttribute(attribute) !== ''
+				) {
+					element.setAttributeOG(attribute, element.getAttribute(attribute)!);
+					element.setAttribute(
+						attribute,
+						route(
+							new StompURL(
+								new URL(
+									element.getAttribute(attribute)!,
+									this.client.url.toString(),
+								),
+								this.client.url,
+							),
+						),
+					);
+				}
+			};
+
+		// <object data>: a document or a plugin resource, like <embed src>
+		domHooksModule.useAttributes(
+			routeAttribute('data', (resource) =>
+				routeHTML(resource, this.client.url, this.client.config),
+			),
+			[
+				['OBJECT', 'data'],
+				[HTMLObjectElement, 'data', originalURL('data')],
+			],
+		);
+
+		// <video poster>
+		domHooksModule.useAttributes(routeAttribute('poster', routeBinary), [
+			['VIDEO', 'poster'],
+			[HTMLVideoElement, 'poster', originalURL('poster')],
+		]);
+
+		// <button formaction>, <input formaction>: the form's method decides how
+		// the query travels, as for <form action>
+		domHooksModule.useAttributes(
+			routeAttribute('formaction', (resource) =>
+				routeHTML(resource, this.client.url, this.client.config, true),
+			),
+			[
+				['BUTTON', 'formaction'],
+				['INPUT', 'formaction'],
+				[HTMLButtonElement, 'formAction', originalURL('formaction')],
+				[HTMLInputElement, 'formAction', originalURL('formaction')],
+			],
+		);
+
+		// <link imagesrcset>: a preload's candidates, like <img srcset>
+		domHooksModule.useAttributes(
+			(element) => {
+				element.restoreAttributesOG('imagesrcset');
+				if (
+					element.hasAttribute('imagesrcset') &&
+					element.getAttribute('imagesrcset') !== ''
+				) {
+					element.setAttributeOG(
+						'imagesrcset',
+						element.getAttribute('imagesrcset')!,
+					);
+					element.setAttribute(
+						'imagesrcset',
+						stringifySrcset(
+							parseSrcset(element.getAttribute('imagesrcset')!).map((src) => ({
+								...src,
+								url: routeBinary(
+									new StompURL(
+										new URL(src.url, this.client.url.toString()),
+										this.client.url,
+									),
+								),
+							})),
+						),
+					);
+				}
+			},
+			[
+				['LINK', 'imagesrcset'],
+				[
+					HTMLLinkElement,
+					'imageSrcset',
+					(element) =>
+						element.hasAttribute('imagesrcset') &&
+						element.getAttribute('imagesrcset') !== '' &&
+						element.getAttributeOG('imagesrcset')!,
+				],
+			],
+		);
 
 		domHooksModule.useAttributes(this.formHook, [
 			['FORM', 'action'],

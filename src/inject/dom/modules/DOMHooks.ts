@@ -14,6 +14,9 @@ import DocumentClient, {
 import cloneRawNode, { parseHTMLFragment } from '../cloneNode';
 
 const attributeTab = new WeakMap<CustomElement, Map<string, string | null>>();
+// the value last applied to each hooked attribute (the routed one), so a
+// hook can tell an attribute it wrote from one the page changed since
+const appliedTab = new WeakMap<Element, Map<string, string | null>>();
 
 const ORIGINAL_ATTRIBUTE = `s_o:`;
 
@@ -59,6 +62,8 @@ export class CustomElement extends Element {
 				} else {
 					nativeElement.setAttribute.call(this, attribute, value);
 				}
+				if (!appliedTab.has(this)) appliedTab.set(this, new Map());
+				appliedTab.get(this)!.set(attribute, value);
 			} catch (error) {
 				console.warn('bad attribute', attribute, value, error);
 			}
@@ -67,16 +72,20 @@ export class CustomElement extends Element {
 		attributeTab.delete(this);
 	}
 	/**
-	 * Wipes conflicting attributes and replaces them with original values.
+	 * Before a hook recomputes an attribute: when the attribute still holds
+	 * the value the hook last wrote, start again from the page's original;
+	 * when the page has set a new value since (setAttribute, the property),
+	 * that value stands and the stale original goes.
 	 */
 	restoreAttributesOG(...names: string[]) {
-		// this.getAttributeNamesOG()
 		for (const name of names) {
 			if (!this.hasAttributeOG(name)) {
 				continue;
 			}
 
-			this.setAttribute(name, this.getAttributeOG(name)!);
+			const applied = appliedTab.get(this)?.get(name);
+			if (applied !== undefined && this.getAttribute(name) === applied)
+				this.setAttribute(name, this.getAttributeOG(name)!);
 			this.removeAttributeOG(name);
 		}
 	}

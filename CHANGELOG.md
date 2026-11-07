@@ -110,6 +110,17 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- A URL attribute changed after it was routed takes effect. Once the hooks had
+  routed an element's `href` or `src`, every later `setAttribute` or property
+  assignment was discarded in favour of the stored original, so links and
+  images never updated after their first routing; the hooks now tell their
+  own value from one the page changed.
+- Links and the URL attributes around them: `<area href>` is routed like
+  `<a href>`; `formaction`, `input[src]`, `video[poster]`, `track[src]`,
+  `object[data]`, `frame[src]` and `link[imagesrcset]` are routed and read
+  back as written; the URL parts of a link (`a.pathname`, `a.host`,
+  `String(a)`, also on `<area>`) are the link's own instead of the page's,
+  and setting one updates the link, routed.
 - The cookie jar follows RFC 6265bis: cookies set without `Domain` are
   host-only, `Domain` matches by label and never a public suffix, paths match
   on a boundary from the request's default path, `Secure` cookies go to secure
