@@ -1,0 +1,127 @@
+<!doctype html>
+<title>DOCWRITE</title>
+<body>
+	<div id="outer">
+		<script>
+			// Old ad and analytics loaders split one piece of markup over several
+			// document.write calls (document-write suite). Each shape records what the
+			// browser made of it; a script that ran unrewritten would see the host's
+			// top and the proxy's URL.
+			window.__dw = { errors: [] };
+			window.addEventListener('error', (e) =>
+				__dw.errors.push(String(e.message)),
+			);
+			const w = (s) => document.write(s);
+			const seen = (k) =>
+				'window.__dw.' + k + ' = [top === window, location.href];';
+
+			// a tag name split across calls, with an external script
+			w('<scr');
+			w('ipt src="/pages/dw-ext.js"></scr');
+			w('ipt>');
+
+			// an attribute value split mid-string
+			w('<a id="splitAttr" href="/pa');
+			w('ges/x.html">x</a>');
+			w('<img id="splitImg" src="/pages/spri');
+			w('te.svg" alt="">');
+
+			// an inline script whose body and end tag come later
+			w('<script>');
+			w(seen('body').slice(0, 20));
+			w(seen('body').slice(20) + '</scr' + 'ipt>');
+			w('<script>' + seen('bodyEnd'));
+			w('</scr' + 'ipt>');
+
+			// a style block over several calls
+			w('<style>');
+			w('#styled { color: rgb(1, 2, 3); background-image: url("/pages/spri');
+			w('te.svg"); }');
+			w('</style><div id="styled">s</div>');
+
+			// a complete write after a partial one
+			w('<div id="wrap" class="c');
+			w(
+				'"><a id="inner" href="/pages/y.html">y</a></div><p id="after">after</p>',
+			);
+
+			// a comment and a raw text element over several calls
+			w('<!-- a ');
+			w('comment --><span id="afterComment">c</span>');
+			w('<textarea id="ta">');
+			w('<a href="/x">not a link</a>');
+			w('</textarea>');
+
+			// writeln while a tag is open, text split in the data state
+			document.writeln('<p id="ln"');
+			w('>ln</p>');
+			w('<p id="p1">hel');
+			w('lo</p>');
+
+			// an element left open across calls, closed by a later one
+			w('<div id="open" class="ad">');
+			w('<a id="openInner" href="/pages/z.html">z</a>');
+			w('</div><p id="afterOpen">after</p>');
+
+			// document.close() with a pending tail in an about:blank child: its
+			// buffer is its own, and the parent's open tag survives it
+			w('<scr');
+			const child = document.createElement('iframe');
+			document.body.append(child);
+			const cd = child.contentDocument;
+			cd.open();
+			cd.write('<p id="tail">x</p><b');
+			cd.close();
+			__dw.childTail = cd.getElementById('tail') !== null;
+			__dw.childBody = cd.body.innerHTML;
+			w('ipt>' + seen('inter') + '</scr' + 'ipt>');
+
+			// an end tag for the element the script itself is in (#outer)
+			w('</div><p id="outside">o</p>');
+
+			window.addEventListener('load', () => {
+				const open = document.getElementById('open');
+				const openInner = document.getElementById('openInner');
+				__dw.open = [
+					open && open.className,
+					openInner && openInner.parentNode === open,
+					openInner && openInner.getAttribute('href'),
+					document.getElementById('afterOpen') !== null,
+				];
+				const outer = document.getElementById('outer');
+				const outside = document.getElementById('outside');
+				__dw.outside = [
+					outer.contains(
+						document.currentScript || outer.querySelector('script'),
+					),
+					outside && outside.parentNode === document.body,
+				];
+				const a = document.getElementById('splitAttr');
+				__dw.splitAttr = a && a.getAttribute('href');
+				const wrap = document.getElementById('wrap');
+				__dw.wrap = wrap && wrap.className;
+				const inner = document.getElementById('inner');
+				__dw.inner = inner && inner.getAttribute('href');
+				__dw.after = document.getElementById('after') !== null;
+				__dw.styled = getComputedStyle(document.getElementById('styled')).color;
+				__dw.afterComment = document.getElementById('afterComment') !== null;
+				const ta = document.getElementById('ta');
+				__dw.textarea = ta && ta.value;
+				__dw.ln = document.getElementById('ln') !== null;
+				const p1 = document.getElementById('p1');
+				__dw.p1 = p1 && p1.textContent;
+				// the text the page shows, without this script's own source
+				const copy = document.body.cloneNode(true);
+				for (const node of copy.querySelectorAll('script, style, textarea'))
+					node.remove();
+				__dw.bodyText = copy.textContent.replace(/\s+/g, ' ').trim();
+				setTimeout(() => {
+					__dw.requests = performance
+						.getEntriesByType('resource')
+						.map((e) => e.name);
+					__dw.done = true;
+				}, 1500);
+			});
+		</script>
+	</div>
+</body>

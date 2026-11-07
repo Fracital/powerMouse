@@ -189,6 +189,17 @@ The first release after a four-year gap. Everything below is breaking.
   and `nodeValue` writes reach the attribute hooks, a `javascript:`
   destination of `window.open` is rewritten, and `Reflect.set` /
   `Object.assign` with `location` route like an assignment.
+- `document.write` / `writeln` markup is tokenized across calls, the way the
+  browser's own parser reads it: a tag name, an attribute value, a script or
+  style body, a comment or a textarea that one call leaves unfinished waits
+  for the call that finishes it (`write('<scr'); write('ipt src=...')`, the
+  shape old ad and analytics loaders use), and an element a call leaves open
+  holds what the next call writes (`write('<div>'); write('x</div>')` made a
+  closed div, loose text and a dropped end tag; an end tag for the element
+  the script sits in closes it). Each call used to be parsed as a complete
+  fragment, so a split script ran as text or threw, a split URL was lost and
+  a split style never applied. `document.close()` hands the parser whatever
+  is still pending, as the end of its input would.
 - Markup the browser parses itself goes through our parser first:
   `setHTMLUnsafe` on an element or a shadow root (so a declarative
   `<template shadowrootmode>` gets rewritten contents) and a shadow root's

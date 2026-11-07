@@ -8,11 +8,13 @@ import ProxyModule, {
 } from '../../modules/Proxy';
 import { unrouteCSS } from '../../modules/Unroute';
 import DocumentClient, {
+	addDocumentOpenListener,
 	getGlobalParsingState,
 	runDocumentOpenListeners,
 	setGlobalParsingState,
 } from '../Client';
 import cloneRawNode, { parseHTMLFragment } from '../cloneNode';
+import WriteStream from '../WriteStream';
 
 const attributeTab = new WeakMap<CustomElement, Map<string, string | null>>();
 // the value last applied to each hooked attribute (the routed one), so a
@@ -305,6 +307,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		 * Etc hooks are here
 		 */
 
+		// native write, taken before the own property below replaces it: the
+		// stream's output and a pending tail go through it
+		const nativeWrite = this.client.global.document.write;
+		const stream = new WriteStream(this.client);
+
 		// document.open() drops every listener on the window: the modules that
 		// listen there (message filter and tagger, link and navigate hooks)
 		// register again. With three arguments it is window.open, which the
@@ -319,6 +326,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						this.client.global,
 						args,
 					);
+				// a fresh parser with an empty input stream: whatever an earlier
+				// write left unfinished went with the old one
+				if (typeof that === 'object' && that !== null) stream.reset(that);
 				const result = Reflect.apply(target, that, args);
 				if (that === this.client.global.document)
 					runDocumentOpenListeners(this.client.global);
@@ -380,36 +390,71 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			},
 		);
 
+		// the written markup is tokenized across calls (WriteStream): a tag,
+		// comment or script a call leaves unfinished waits for the call that
+		// finishes it, as it does in the browser's own parser, and the whole
+		// prefix is rewritten and written now. The arguments are joined first,
+		// the way the browser does before it tokenizes (writeln's newline
+		// included, so a tag left open by writeln sees it inside).
 		type Write = (...text: string[]) => void;
-		const writeFactory = (target: Write): Write =>
+		const writeFactory = (target: Write, newline: boolean): Write =>
 			proxyModule.wrapFunction(target, (target, that, args) => {
-				for (let i = 0; i < args.length; i++) {
-					const prevState = getGlobalParsingState(this.client.global);
-					setGlobalParsingState(this.client.global, 'parsingBeforeWrite');
-					// the client's document (this hook also serves a child frame the
-					// parent injected); scripts in the markup run when the parser
-					// sees them, so they are rewritten here like the written page's
-					const div = this.client.global.document.createElement('div');
-					div.append(
-						cloneRawNode(
-							parseHTMLFragment(String(args[i]), this.client.global.document),
-							this.client.global.document,
-						),
-					);
-					this.client.rewriteInlineScripts(div);
-					args[i] = this.client.innerHTMLOf(div);
+				let text = '';
+				for (const arg of args) text += String(arg);
+				if (newline) text += '\n';
+				const document =
+					typeof that === 'object' && that !== null
+						? that
+						: this.client.global.document;
+				const prevState = getGlobalParsingState(this.client.global);
+				setGlobalParsingState(this.client.global, 'parsingBeforeWrite');
+				let markup: string;
+				try {
+					markup = stream.write(document, text);
+				} finally {
 					setGlobalParsingState(this.client.global, prevState);
 				}
-
-				Reflect.apply(target, that, args);
+				// an empty write still reaches the parser: after the document
+				// has loaded it opens a new one, as the page's own call would
+				Reflect.apply(nativeWrite, that, [markup]);
 			});
 
 		this.client.global.document.write = writeFactory(
 			this.client.global.document.write,
+			false,
 		);
 		this.client.global.document.writeln = writeFactory(
 			this.client.global.document.writeln,
+			true,
 		);
+
+		// document.close() ends the input: the unfinished tail goes to the
+		// parser as it is, which meets it at the end of its input the way the
+		// browser's would
+		this.client.global.Document.prototype.close = proxyModule.wrapFunction(
+			this.client.global.Document.prototype.close,
+			(target, that, args) => {
+				const tail = stream.take(that);
+				if (tail) Reflect.apply(nativeWrite, that, [tail]);
+				return Reflect.apply(target, that, args);
+			},
+		);
+
+		// when the parser stops on its own (the end of the real page's markup
+		// after a blocking script, a frame's srcdoc) nothing can be written
+		// into it any more: a write now would open a new document. A tail
+		// left behind is stale, like the browser's at its end of input.
+		const dropAtParserEnd = () => {
+			if (this.client.global.document.readyState !== 'loading')
+				stream.reset(this.client.global.document);
+		};
+		const listen = () =>
+			this.client.global.document.addEventListener(
+				'readystatechange',
+				dropAtParserEnd,
+			);
+		listen();
+		addDocumentOpenListener(this.client.global, listen);
 
 		Reflect.defineProperty(this.client.global.Node.prototype, 'baseURI', {
 			enumerable: true,

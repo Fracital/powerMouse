@@ -24,11 +24,19 @@ export function parseHTMLFragment(
 	script: string,
 	document: Document = globalThis.document,
 ): Node[] {
+	return [...parseHTMLContainer(script, document).childNodes];
+}
+
+/** the inert element the fragment was parsed into (its children are the nodes) */
+export function parseHTMLContainer(
+	script: string,
+	document: Document = globalThis.document,
+): Element {
 	const parsed = parserFor(document).parseFromString(
 		`<fragment>${script}</fragment>`,
 		'text/html',
 	);
-	return [...parsed.body.children[0].childNodes];
+	return parsed.body.children[0];
 }
 
 // taken before the DOM hooks replace the getter
