@@ -36,9 +36,19 @@ export function scopePrefix(client: Client): string {
 export function unrouteURL(client: Client, url: string): string | null {
 	// a blob: URL the page made carries the proxy origin: the page's is shown
 	url = pageBlobURL(url);
-	const prefix = routedPrefix(client);
-	if (!url.startsWith(prefix))
-		return url.startsWith(scopePrefix(client)) ? null : url;
+	let prefix = routedPrefix(client);
+	if (!url.startsWith(prefix)) {
+		const scope = scopePrefix(client);
+		if (!url.startsWith(scope)) return url;
+		// another controller's address (a sibling tab's, or the one an
+		// orphaned URL was redirected to): a route all the same, read with
+		// this page's codec, which is the one a host uses in practice
+		const other = /^([A-Za-z0-9_-]{1,32})\/[^/]+\//.exec(
+			url.slice(scope.length),
+		);
+		if (!other) return null;
+		prefix = `${scope}${other[1]}/`;
+	}
 	try {
 		return parseRoutedURL(url, client.codec, prefix).url.toString();
 	} catch (error) {

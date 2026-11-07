@@ -1,6 +1,8 @@
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { IDBPDatabase, openDB } from 'idb';
 import {
+	assetName,
+	Assets,
 	Config,
 	ConfigCodec,
 	generateConfigCodecKey,
@@ -70,18 +72,56 @@ export function openConfigDB(): Promise<IDBPDatabase> {
 
 const CODECS: ConfigCodec[] = ['generic', 'xor', 'aes', 'base64'];
 
+/** what the worker remembers about an address: `controller:<address>` rows */
+interface AddressRecord {
+	codec: ConfigCodec;
+	/** when the row was written, so the oldest go first */
+	at: number;
+}
+/** how many addresses a scope remembers (a host that passes no id adds one per load) */
+const ADDRESS_ROWS = 64;
+/** the segment an address adds to its scope */
+const ADDRESS_SEGMENT = /^[A-Za-z0-9_-]{1,32}\/$/;
+
 /**
  * The codec of the controller that was (or is) registered at `directory`,
  * remembered when its server was created, so a routed URL whose controller
  * is gone can be handed to a live controller of the same codec. Undefined
- * for an address this worker never served.
+ * for an address this worker never served (or has since forgotten).
  */
 export async function addressCodec(
 	directory: string,
 ): Promise<ConfigCodec | undefined> {
 	const db = await openConfigDB();
-	const codec = await db.get('consts', `controller:${directory}`);
-	return CODECS.includes(codec) ? codec : undefined;
+	const record: AddressRecord | undefined = await db.get(
+		'consts',
+		`controller:${directory}`,
+	);
+	return record && CODECS.includes(record.codec) ? record.codec : undefined;
+}
+
+/** a regexp source matching exactly `text` */
+const exact = (text: string) =>
+	`^\\/${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`;
+
+/**
+ * The bundles a page or worker loads, answered under the address as well:
+ * a worker of the build before addresses built them under the controller's
+ * directory, so a shell it produced for a new controller asks for
+ * `/stomp/<id>/injectDocument.js`; this worker sends that to the scope's
+ * file instead of letting it fall to the host's 404.
+ */
+function registerAssets(router: Router, scope: string, assets?: Assets) {
+	for (const key of [
+		'injectDocument',
+		'injectWorker',
+		'transportWorker',
+	] as const) {
+		const name = assetName(assets, key);
+		router.routes.set(new RegExp(exact(name)), () =>
+			Response.redirect(`${location.origin}${scope}${name}`, 307),
+		);
+	}
 }
 
 export default async function createServer(
@@ -106,8 +146,26 @@ export default async function createServer(
 	}
 
 	const codecKey = await store.get(`codecKey:${config.codec}`);
-	// the address's codec outlives the controller (see addressCodec)
-	await store.put(config.codec, `controller:${config.directory}`);
+	// the address's codec outlives the controller (see addressCodec); the
+	// scope keeps the newest ADDRESS_ROWS of them
+	await store.put(
+		{ codec: config.codec, at: Date.now() } satisfies AddressRecord,
+		`controller:${config.directory}`,
+	);
+	const scopeKey = `controller:${config.scope}`;
+	// every key under the scope's prefix (U+FFFF sorts after any id character)
+	const range = IDBKeyRange.bound(
+		scopeKey,
+		`${scopeKey}${String.fromCharCode(0xffff)}`,
+	);
+	const keys = (await store.getAllKeys(range)) as string[];
+	const records = (await store.getAll(range)) as AddressRecord[];
+	const rows = keys
+		.map((key, i) => ({ key, at: records[i]?.at ?? 0 }))
+		.filter(({ key }) => ADDRESS_SEGMENT.test(key.slice(scopeKey.length)))
+		.sort((a, b) => a.at - b.at);
+	for (const { key } of rows.slice(0, Math.max(0, rows.length - ADDRESS_ROWS)))
+		await store.delete(key);
 
 	await tx.done;
 
@@ -145,6 +203,7 @@ export default async function createServer(
 	router.routes.set(/^\/whoami$/, (request, url, context) =>
 		json(200, context?.clientId ?? null),
 	);
+	registerAssets(router, init.scope, init.assets);
 	const { route, setRules } = registerRewrites(
 		router,
 		init,

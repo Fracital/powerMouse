@@ -2,12 +2,20 @@
 // side in the service worker: each has an address of its own under the
 // scope (`/stomp/<id>/`), sees only its own requests, and the one that
 // registered first keeps navigating after the second arrived. The same id
-// passed twice still replaces (a reload that kept its id). The cookie jar is
-// per scope, so a cookie one controller's frame set travels on the other's
-// requests. A routed URL whose controller is gone (a closed tab) is answered
-// by the newest live controller of the scope with the same codec; when none
-// has that codec the host's error page shows kind `controller`. Same-origin
-// mode on the demo origin, controllers of our own next to the demo's.
+// passed twice still replaces (a reload that kept its id): the replaced
+// controller's calls reject with "Controller replaced" and a request in
+// flight on its transport fails at once. The cookie jar is per scope, so a
+// cookie one controller's frame set travels on the other's requests. A
+// routed URL whose controller is gone (a closed tab) is answered by the
+// newest live controller of the scope with the same codec; when none has
+// that codec the host's error page shows kind `controller`; a URL of the
+// shape before addresses (`/stomp/html/...`) goes to the newest controller.
+// A controller whose tab is not fully active (the back/forward cache; stood
+// in for by re-pointing the client the worker checks, since Playwright
+// cannot drive the cache) has its documents answered elsewhere but keeps its
+// registration and serves again when the tab is back. The inject bundles
+// answer under an address too, for a worker of the previous build. Same-
+// origin mode on the demo origin, controllers of our own next to the demo's.
 import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
@@ -24,7 +32,7 @@ await page.waitForFunction(
 	{ timeout: 45000 },
 );
 
-/** go(url) bounded: the first controller's route() never settles when the worker dropped it */
+/** shared page-side helpers; go(url) is bounded so a dead controller cannot hang the suite */
 const GO = `
 	const go = (frame, url, ms = 15000) =>
 		Promise.race([
@@ -37,6 +45,29 @@ const GO = `
 		return controller.createFrame(element);
 	};
 	const title = (frame) => frame.element.contentDocument?.title ?? 'unreadable';
+	// a bare (unmanaged) frame at a routed URL: where the worker sends it
+	const load = async (url, ms = 20000) => {
+		const element = document.createElement('iframe');
+		document.body.append(element);
+		const loaded = new Promise((resolve) =>
+			element.addEventListener('load', resolve, { once: true }),
+		);
+		element.src = url;
+		await Promise.race([loaded, new Promise((resolve) => setTimeout(resolve, ms))]);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		const win = element.contentWindow;
+		try {
+			return {
+				title: win?.document?.title ?? 'unreadable',
+				path: win?.location?.pathname ?? null,
+				type: win?.document?.contentType ?? null,
+				error: win?.stompError ?? null,
+			};
+		} catch (error) {
+			// the frame left this origin: nothing of it can be read
+			return { crossOrigin: String(error), src: element.src };
+		}
+	};
 	const { StompController } = await import('/stomp/controller.mjs');
 	const make = (extra = {}) =>
 		new StompController({
@@ -95,6 +126,9 @@ const two = await page.evaluate(
 	} catch (error) {
 		out.badId = error.constructor.name;
 	}
+	// the inject bundle asked for under an address (a shell from a worker
+	// of the build before addresses) is the scope's file
+	out.asset = await load(second.config.directory + 'injectDocument.js');
 	return out;
 })(${JSON.stringify(FIXTURE)})`,
 );
@@ -154,6 +188,12 @@ ok(
 	two.badId === 'TypeError',
 	String(two.badId),
 );
+ok(
+	"the inject bundle under an address is served from the scope (a previous build's shell)",
+	two.asset?.path === '/stomp/injectDocument.js' &&
+		two.asset?.type === 'text/javascript',
+	JSON.stringify(two.asset),
+);
 
 // ---- the same id twice replaces ---------------------------------------------
 
@@ -165,33 +205,60 @@ const twin = await page.evaluate(
 	const logB = [];
 	const a = make({ id: 'twin', onRequest: (info) => logA.push(info.url) });
 	await a.wait();
+	const fa = show(a);
+	out.a = await go(fa, fixture + 'pages/hist-1.html');
+	// a request in flight on a's transport when b takes the id: the fixture
+	// answers /slow after five seconds, the worker's bound is a minute
+	const started = Date.now();
+	const slow = fa.element.contentWindow
+		.fetch('/slow')
+		.then((response) => ({ status: response.status }), (error) => ({ error: String(error) }))
+		.then((result) => ({ ...result, ms: Date.now() - started }));
 	const b = make({ id: 'twin', onRequest: (info) => logB.push(info.url) });
 	await b.wait();
 	out.ids = [a.id, b.id];
-	// the worker dropped a: its calls never settle
 	out.aRoute = await Promise.race([
 		a.route(fixture + 'pages/hist-1.html').then(() => 'answered', (e) => String(e)),
-		new Promise((resolve) => setTimeout(() => resolve('unanswered'), 2000)),
+		new Promise((resolve) => setTimeout(() => resolve('unanswered'), 5000)),
 	]);
+	out.aCookies = await a.cookies.get(fixture).then(() => 'answered', (e) => String(e));
+	out.slow = await slow;
 	const fb = show(b);
 	out.b = await go(fb, fixture + 'pages/hist-1.html');
 	out.bTitle = title(fb);
-	await new Promise((resolve) => setTimeout(resolve, 500));
-	out.logA = logA.length;
+	// a's frame lives at the address b now owns: b serves and logs it
+	const aLogged = logA.length;
+	out.afterReplaced = await fa.element.contentWindow
+		.fetch('/echo-headers')
+		.then((response) => response.status, (error) => String(error));
+	// b does not know a's frame: its report waits the attribution grace first
+	await new Promise((resolve) => setTimeout(resolve, 2500));
+	out.aLoggedMore = logA.length - aLogged;
 	out.logB = logB.map((url) => url.split('/').pop());
 	return out;
 })(${JSON.stringify(FIXTURE)})`,
 );
 ok(
-	'the same id passed twice replaces the first controller',
+	'the same id passed twice replaces the first controller, whose calls reject with "Controller replaced"',
 	twin.ids?.[0] === 'twin' &&
 		twin.ids?.[1] === 'twin' &&
-		twin.aRoute === 'unanswered' &&
+		twin.aRoute === 'Error: Controller replaced' &&
+		twin.aCookies === 'Error: Controller replaced' &&
 		twin.b === 'went' &&
 		twin.bTitle === 'HIST 1' &&
-		twin.logA === 0 &&
+		twin.afterReplaced === 200 &&
+		twin.aLoggedMore === 0 &&
+		twin.logB?.includes('echo-headers') &&
 		twin.logB?.includes('hist-1.html'),
 	JSON.stringify(twin),
+);
+ok(
+	"a request in flight on the replaced controller's transport fails at once",
+	twin.a === 'went' &&
+		twin.slow &&
+		twin.slow.status !== 200 &&
+		twin.slow.ms < 4000,
+	JSON.stringify(twin.slow),
 );
 
 // ---- the cookie jar is shared by the scope ----------------------------------
@@ -229,6 +296,56 @@ ok(
 		jar.jar1 === jar.jar2 &&
 		/\bma=1\b/.test(jar.jar1 ?? ''),
 	JSON.stringify(jar),
+);
+
+// ---- a controller whose tab is not fully active --------------------------------
+
+// The worker serves a document at an address only while the client that
+// registered the controller is fully active; a tab in the back/forward
+// cache is not. Playwright cannot park a page there, so the suite re-points
+// the client the worker checks (an internal message) to one that does not
+// exist, then back to this page.
+const parked = await page.evaluate(
+	`(async (fixture) => {
+	${GO}
+	const CLIENT = '$stomp$controllerClient';
+	const out = {};
+	const c = make({ id: 'parked' });
+	await c.wait();
+	const fc = show(c);
+	out.before = await go(fc, fixture + 'pages/hist-1.html');
+	const url = await c.route(fixture + 'pages/hist-2.html');
+	c.serviceworker.postMessage({
+		[CLIENT]: { directory: c.config.directory, client: 'no-such-client' },
+	});
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	out.away = await load(url);
+	// the tab is back: the sender's own client again
+	c.serviceworker.postMessage({ [CLIENT]: { directory: c.config.directory } });
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	out.back = await load(url);
+	out.route = await c.route(fixture + 'pages/hist-1.html').then(() => 'answered', (e) => String(e));
+	out.again = await go(fc, fixture + 'pages/hist-2.html');
+	out.againPath = fc.element.contentWindow.location.pathname;
+	return out;
+})(${JSON.stringify(FIXTURE)})`,
+);
+ok(
+	'a document for a controller whose tab is not active is answered by another live controller',
+	parked.before === 'went' &&
+		parked.away?.title === 'HIST 2' &&
+		typeof parked.away?.path === 'string' &&
+		!parked.away.path.startsWith('/stomp/parked/'),
+	JSON.stringify(parked.away),
+);
+ok(
+	'the controller keeps its registration and serves again once its tab is back',
+	parked.back?.title === 'HIST 2' &&
+		parked.back?.path?.startsWith('/stomp/parked/html/') &&
+		parked.route === 'answered' &&
+		parked.again === 'went' &&
+		parked.againPath?.startsWith('/stomp/parked/html/'),
+	JSON.stringify([parked.back, parked.route, parked.again, parked.againPath]),
 );
 
 // ---- an address whose controller is gone ------------------------------------
@@ -273,31 +390,17 @@ ok(
 );
 
 const stale = await page.evaluate(
-	async ({ xor, b64 }) => {
-		const load = async (url) => {
-			const element = document.createElement('iframe');
-			document.body.append(element);
-			const loaded = new Promise((resolve) =>
-				element.addEventListener('load', resolve, { once: true }),
-			);
-			element.src = url;
-			await Promise.race([
-				loaded,
-				new Promise((resolve) => setTimeout(resolve, 20000)),
-			]);
-			await new Promise((resolve) => setTimeout(resolve, 300));
-			const win = element.contentWindow;
-			return {
-				title: win?.document?.title ?? 'unreadable',
-				path: win?.location?.pathname ?? null,
-				error: win?.stompError ?? null,
-			};
-		};
-		return { xor: await load(xor), b64: await load(b64) };
-	},
-	{ xor: gone.xor, b64: gone.b64 },
+	`(async ({ xor, b64 }) => {
+	${GO}
+	return {
+		xor: await load(xor),
+		b64: await load(b64),
+		// the shape before addresses: /stomp/html/<encoded>
+		legacy: await load(xor.replace('/stomp/gone-xor/', '/stomp/')),
+	};
+})(${JSON.stringify({ xor: gone.xor, b64: gone.b64 })})`,
 );
-const liveIds = [...(two.ids ?? []), 'twin'];
+const liveIds = [...(two.ids ?? []), 'twin', 'parked'];
 ok(
 	'a routed URL with an unknown id loads through a live controller of the same codec',
 	stale.xor?.title === 'HIST 2' &&
@@ -311,8 +414,11 @@ ok(
 		stale.b64?.path?.startsWith('/stomp/gone-b64/html/'),
 	JSON.stringify(stale.b64),
 );
-
-await done(
-	browser,
-	errors.filter((e) => !/404|Controller replaced/.test(e)).slice(0, 5),
+ok(
+	'a URL of the shape before addresses loads through the newest live controller',
+	stale.legacy?.title === 'HIST 2' &&
+		liveIds.some((id) => stale.legacy?.path?.startsWith(`/stomp/${id}/html/`)),
+	JSON.stringify(stale.legacy),
 );
+
+await done(browser, errors.slice(0, 5));

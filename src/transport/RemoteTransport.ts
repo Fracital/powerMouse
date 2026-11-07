@@ -44,9 +44,20 @@ export default class RemoteTransport implements ProxyTransport {
 			port.addEventListener('messageerror', (event) =>
 				console.error('RemoteTransport port messageerror', event),
 			);
+			// the serving side is gone (its tab closed, its worker died): a
+			// request on this port would never be answered, so every pending
+			// and later one fails at once instead of waiting out the timeout
+			port.addEventListener('close', () =>
+				this.rpc.abort('Stomp: the transport port closed'),
+			);
 			port.start();
 			return port;
 		});
+	}
+	/** fail every pending and later call with `reason` and close the port (the host side replaced it) */
+	close(reason: string) {
+		this.rpc.abort(reason);
+		this.port.then((port) => port.close());
 	}
 	async init() {
 		await this.readyPromise;

@@ -24,6 +24,8 @@ export class RpcHelper<
 		number,
 		{ resolve: (value: any) => void; reject: (reason?: unknown) => void }
 	>();
+	/** set by abort(): the channel is dead and every later call fails with this at once */
+	private aborted?: string;
 	constructor(
 		private methods: MethodsDefinition<Local>,
 		private id: string,
@@ -82,6 +84,8 @@ export class RpcHelper<
 		args: Remote[Method][0],
 		transfer: Transferable[] = [],
 	): Promise<Remote[Method][1]> {
+		if (this.aborted !== undefined)
+			return Promise.reject(new Error(this.aborted));
 		const token = this.counter++;
 		return new Promise((resolve, reject) => {
 			this.pending.set(token, { resolve, reject });
@@ -98,8 +102,13 @@ export class RpcHelper<
 			);
 		});
 	}
-	/** Reject every outstanding call; used when the underlying port dies. */
+	/**
+	 * Reject every outstanding call, and every later one at once; used when
+	 * the underlying port dies (a closed port swallows messages silently, so a
+	 * call on it would otherwise wait forever).
+	 */
 	abort(reason: string) {
+		this.aborted = reason;
 		for (const { reject } of this.pending.values()) reject(new Error(reason));
 		this.pending.clear();
 	}

@@ -57,12 +57,22 @@ The first release after a four-year gap. Everything below is breaking.
   (sessionStorage) and passes it back, so the tab's history entries,
   reloads and copied links keep resolving. A controller is a tab, not a
   browser: the cookie jar, the HTTP cache and the storage partitions are
-  per scope and shared by its controllers. A routed URL whose controller is
-  gone (a closed tab, a stale link) is redirected to the newest live
-  controller of the scope with the same codec; with none, the host's error
-  page answers with kind `controller` (a new value of the request log's
-  `kind`). The multi-controller suite covers it, including the first
-  controller still navigating after the second registered.
+  per scope and shared by its controllers, and sessionStorage is cleared
+  once per scope per worker lifetime, where every new server cleared it
+  before. A routed URL whose controller is gone (a closed tab, a stale
+  link) is redirected to the newest live controller of the scope with the
+  same codec; with none, the host's error page answers with kind
+  `controller` (a new value of the request log's `kind`). A URL of the
+  old shape (`/stomp/html/<encoded>`, a tab or bookmark from before this
+  change) is redirected to the newest live controller too. The worker also
+  answers the inject bundles and the transport worker under an address
+  (`/stomp/<id>/injectDocument.js`, a redirect to the scope's file), so a
+  worker of the previous build serving a page for a new controller still
+  gets its page a working inject. A replaced controller's calls reject with
+  "Controller replaced", and a request on a transport port whose other side
+  is gone fails at once instead of waiting out the worker's timeout. The
+  multi-controller suite covers it, including the first controller still
+  navigating after the second registered.
 - The transport can run off the host page's thread. `StompController` takes
   a `TransportDescriptor` (`{ module, options }`, what `RemoteController`
   already took) in place of a ProxyTransport instance and starts it in a

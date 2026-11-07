@@ -13,6 +13,7 @@ import { helperNames, validateNames, type HelperNames } from '../helperNames';
 import { isUrlLike, urlLike } from '../StompURL';
 import type { RequestRule } from '../transport/messages';
 import {
+	CONTROLLER_CLOSE,
 	CONTROLLER_INIT,
 	CONTROLLER_RPC,
 	Controllerbound,
@@ -557,6 +558,20 @@ export class StompController extends EventTarget {
 			}
 		});
 
+		// the tab is going away for good (not into the back/forward cache):
+		// the worker forgets this controller now, so a link copied from it goes
+		// to a live controller at once rather than to a dead port
+		window.addEventListener('pagehide', (event) => {
+			if (event.persisted) return;
+			try {
+				this.serviceworker.postMessage({
+					[CONTROLLER_CLOSE]: { directory: this.config.directory },
+				});
+			} catch (error) {
+				// a worker that is already gone has nothing to forget
+			}
+		});
+
 		// a worker still installing (a registration just made) is spoken to
 		// once it is activated, or after REGISTER_WAIT_MS with whatever the
 		// registration has by then; anything else (a test double included)
@@ -768,9 +783,18 @@ export class StompController extends EventTarget {
 		const channel = new MessageChannel();
 		const port = channel.port1;
 		this.#port = port;
+		// the worker dropped this controller (another took its id) or went
+		// away: a call on the dead port would wait forever, so every pending
+		// and later one fails at once
+		port.addEventListener('close', () => {
+			if (this.#port === port) this.#rpc?.abort('Service worker port closed');
+		});
 
 		this.#rpc = new RpcHelper<Controllerbound, SWbound>(
 			{
+				replaced: async () => {
+					if (this.#port === port) this.#rpc?.abort('Controller replaced');
+				},
 				ready: async (info) => {
 					const build = info?.build;
 					// the worker we already settled on as stale answers again

@@ -2,9 +2,13 @@ import { getDomain } from 'tldts';
 import { Config, ConfigCodec } from '../config';
 import {
 	ABORT_REQUEST,
+	CONTROLLER_CLIENT,
+	CONTROLLER_CLOSE,
 	CONTROLLER_INIT,
 	CONTROLLER_RPC,
 	Controllerbound,
+	ControllerClientMessage,
+	ControllerCloseMessage,
 	ControllerInitMessage,
 	INIT_REMOTE_TRANSPORT,
 	InitRemoteTransportMessage,
@@ -26,9 +30,16 @@ interface ControllerRef {
 	config: Config;
 	port: MessagePort;
 	rpc: RpcHelper<SWbound, Controllerbound>;
+	/** the controller's transport, over the second port or the rpc port */
+	transport: RemoteTransport;
 	server: Promise<StompServer>;
 	ready?: StompServer;
-	/** the client that registered it (the host page, or the controller frame); it goes with its tab */
+	/**
+	 * the client that registered it (the host page, or the controller frame).
+	 * A document request at the address is served only while that client is
+	 * fully active (not in the back/forward cache, not prerendering); the ref
+	 * itself goes only when the port closes
+	 */
 	client?: string;
 	/** registration order: the newest live controller of a scope takes over an address whose controller is gone */
 	serial: number;
@@ -76,8 +87,9 @@ function registerController(
 	const existing = controllers.get(directory);
 
 	if (existing) {
-		existing.rpc.abort('Controller replaced');
-		existing.port.close();
+		// the controller hears why its calls fail before the port goes
+		existing.rpc.call('replaced', undefined).catch(() => {});
+		forget(existing, 'Controller replaced');
 	}
 
 	// a controller bundle from before addresses sends no scope: its directory
@@ -145,18 +157,18 @@ function registerController(
 		config,
 		port,
 		rpc,
+		transport,
 		server,
 		client,
 		serial: ++serials,
 	};
 	server.then((ready) => (ref.ready = ready));
 	controllers.set(directory, ref);
-	// the controller's side of the port went away (its tab closed, or it
-	// shook hands again over a new channel): forget it, unless the address
-	// has already been taken over
-	port.addEventListener('close', () => {
-		if (controllers.get(directory) === ref) controllers.delete(directory);
-	});
+	// the controller's side of the port went away (it shook hands again over
+	// a new channel; Chrome does not fire this when the tab itself goes, the
+	// controller's close message covers that): forget it, unless the address
+	// has already been taken over. Only this and the close message remove a ref
+	port.addEventListener('close', () => forget(ref, 'Controller port closed'));
 
 	server.then(
 		() => rpc.call('ready', { build: BUILD }),
@@ -178,18 +190,40 @@ function controllerFor(pathname: string): ControllerRef | undefined {
 }
 
 /**
- * Whether the tab that registered `ref` is still there. A port is not told
- * when its other side's document is gone (the `close` event above is
- * recent), so a document request asks the clients list before trusting a
- * controller; a controller that registered without a client is trusted.
+ * Whether the tab that registered `ref` is fully active right now. The
+ * clients list leaves out a tab in the back/forward cache or prerendering,
+ * whose port still works and which may come back, so a miss only decides
+ * the document request at hand (an orphan answer), never the ref's fate;
+ * a controller that registered without a client is trusted.
  */
 async function alive(ref: ControllerRef): Promise<boolean> {
 	if (!ref.client) return true;
 	return (await self.clients.get(ref.client)) !== undefined;
 }
 
-/** the segment an address adds to its scope, and the route under it */
-const ADDRESS = /^([A-Za-z0-9_-]{1,32})\/(.+)$/;
+/** the newest of `refs` whose tab is fully active, else undefined */
+async function newestAlive(
+	refs: ControllerRef[],
+): Promise<ControllerRef | undefined> {
+	for (const ref of refs) if (await alive(ref)) return ref;
+	return undefined;
+}
+
+/**
+ * Drop a controller: its calls and its transport's fail at once, and its
+ * address is free (unless a later registration already took it over).
+ */
+function forget(ref: ControllerRef, reason: string) {
+	ref.rpc.abort(reason);
+	ref.transport.close(reason);
+	ref.port.close();
+	if (controllers.get(ref.directory) === ref) controllers.delete(ref.directory);
+}
+
+/** the first segment under the scope, and the rest of the path */
+const SEGMENT = /^([^/]+)\/(.+)$/;
+/** the segment an address adds to its scope: a controller id */
+const ID = /^[A-Za-z0-9_-]{1,32}$/;
 
 /** the ready controllers of a scope, newest first */
 function scopeControllers(scope: string): ControllerRef[] {
@@ -200,35 +234,50 @@ function scopeControllers(scope: string): ControllerRef[] {
 
 /** a routed URL whose address names no live controller, under a scope that has some */
 interface Orphan {
-	/** the gone controller's address */
+	/** the gone controller's address; the scope itself for a URL of the shape before addresses */
 	directory: string;
 	/** the route under the address (`html/...`) */
 	rest: string;
 	/** the scope's live controllers that would route `rest`, newest first */
 	candidates: ControllerRef[];
+	/** a URL from before addresses (`/stomp/html/...`): no codec to match, the newest controller takes it */
+	legacy?: boolean;
 }
 
 /**
  * A routed URL under a scope with live controllers, at an address that is
- * none of theirs: the address of a controller that is gone (a closed tab, a
- * history entry or a link from one). Null for anything else under the
- * scope, such as its assets or the host's own files, which no controller
- * would route.
+ * none of theirs (or is `except`'s, whose tab is not active right now): the
+ * address of a controller that is gone (a closed tab, a history entry or a
+ * link from one). A URL of the shape before addresses, `/stomp/html/...`,
+ * is an orphan of the scope itself. Null for anything else under the scope,
+ * such as its assets or the host's own files, which no controller would
+ * route.
  */
-function orphanOf(pathname: string): Orphan | null {
+function orphanOf(pathname: string, except?: ControllerRef): Orphan | null {
 	const scopes = [
 		...new Set([...controllers.values()].map((ref) => ref.config.scope)),
 	].sort((a, b) => b.length - a.length);
 	for (const scope of scopes) {
 		if (!pathname.startsWith(scope)) continue;
-		const match = ADDRESS.exec(pathname.slice(scope.length));
+		const match = SEGMENT.exec(pathname.slice(scope.length));
 		if (!match) continue;
 		const [, id, rest] = match;
-		const candidates = scopeControllers(scope).filter((ref) =>
-			ref.ready!.router.willRoute(`${location.origin}${ref.directory}${rest}`),
-		);
-		if (candidates.length)
-			return { directory: `${scope}${id}/`, rest, candidates };
+		const live = scopeControllers(scope).filter((ref) => ref !== except);
+		const routes = (ref: ControllerRef, path: string) =>
+			ref.ready!.router.willRoute(`${location.origin}${ref.directory}${path}`);
+		if (ID.test(id)) {
+			const candidates = live.filter((ref) => routes(ref, rest));
+			if (candidates.length)
+				return { directory: `${scope}${id}/`, rest, candidates };
+		}
+		const legacy = live.filter((ref) => routes(ref, `${id}/${rest}`));
+		if (legacy.length)
+			return {
+				directory: scope,
+				rest: `${id}/${rest}`,
+				candidates: legacy,
+				legacy: true,
+			};
 	}
 	return null;
 }
@@ -238,20 +287,30 @@ function orphanOf(pathname: string): Orphan | null {
  * takes the request: a redirect to the same route at its address, so the
  * document and everything it loads run under a live address. Without one
  * (the codec is another, or this worker never served the address) the
- * host's error page answers with kind `controller`.
+ * host's error page answers with kind `controller`. A URL from before
+ * addresses names no controller to match a codec against: the newest takes
+ * it (a host has one codec in practice; another fails on decode as any bad
+ * URL does).
  */
 async function answerOrphan(
 	request: Request,
-	{ directory, rest, candidates }: Orphan,
+	{ directory, rest, candidates, legacy }: Orphan,
 ): Promise<Response> {
-	const codec = await addressCodec(directory);
-	const taker = codec && candidates.find((ref) => ref.config.codec === codec);
+	const codec = legacy ? undefined : await addressCodec(directory);
+	// a controller still in the table whose tab is gone or parked cannot take
+	// anything (and would send the request round in circles)
+	const taker = await newestAlive(
+		legacy
+			? candidates
+			: candidates.filter((ref) => codec && ref.config.codec === codec),
+	);
 	if (taker) {
 		const url = new URL(request.url);
 		url.pathname = `${taker.directory}${rest}`;
 		return Response.redirect(url.href, 307);
 	}
-	return orphanError(request, candidates[0].config, directory, codec);
+	const page = (await newestAlive(candidates)) ?? candidates[0];
+	return orphanError(request, page.config, directory, codec);
 }
 
 /**
@@ -293,15 +352,29 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 	const { data } = event;
 	if (typeof data !== 'object' || data === null) return;
 
+	const sender = event.source instanceof Client ? event.source.id : undefined;
+
 	if (CONTROLLER_INIT in data) {
 		registerController(
 			data[CONTROLLER_INIT],
 			event.ports[0],
 			event.ports[1],
-			event.source instanceof Client ? event.source.id : undefined,
+			sender,
 		);
 	} else if (ABORT_REQUEST in data) {
 		abortRequest((data as Record<string, unknown>)[ABORT_REQUEST]);
+	} else if (CONTROLLER_CLOSE in data) {
+		// only the tab that registered the controller may close it (a proxied
+		// page is a client too, and must not be able to kill its host's)
+		const { directory } = data[CONTROLLER_CLOSE] as ControllerCloseMessage;
+		const ref = controllers.get(directory);
+		if (ref && ref.client === sender) forget(ref, 'Controller closed');
+	} else if (CONTROLLER_CLIENT in data) {
+		const { directory, client } = data[
+			CONTROLLER_CLIENT
+		] as ControllerClientMessage;
+		const ref = controllers.get(directory);
+		if (ref) ref.client = typeof client === 'string' ? client : sender;
 	} else if (INIT_REMOTE_TRANSPORT in data) {
 		const { directory } = data[
 			INIT_REMOTE_TRANSPORT
@@ -391,8 +464,9 @@ function bounded(
 
 /**
  * The request through its controller. A document for a controller whose tab
- * is gone (the port said nothing) is dropped from the table and answered
- * as an orphan, so an old tab's history entry lands on a live controller.
+ * is not active right now (in the back/forward cache, or gone without its
+ * port closing yet) is answered as an orphan, so a link copied from it lands
+ * on a live controller; the ref stays, since the tab may come back.
  */
 async function serve(event: FetchEvent, ref: ControllerRef): Promise<Response> {
 	const { request } = event;
@@ -403,11 +477,9 @@ async function serve(event: FetchEvent, ref: ControllerRef): Promise<Response> {
 			? event.resultingClientId || event.clientId
 			: event.clientId;
 	if (DOCUMENT_DESTINATIONS.has(request.destination) && !(await alive(ref))) {
-		if (controllers.get(ref.directory) === ref)
-			controllers.delete(ref.directory);
-		const orphan = orphanOf(new URL(request.url).pathname);
+		const orphan = orphanOf(new URL(request.url).pathname, ref);
 		if (orphan) return answerOrphan(request, orphan);
-		// nothing live under the scope at all: the gone controller's own error page
+		// nothing else live under the scope: the controller's own error page
 		return orphanError(request, ref.config, ref.directory, ref.config.codec);
 	}
 	const server = ref.ready ?? (await ref.server);

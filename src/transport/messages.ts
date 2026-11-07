@@ -18,6 +18,29 @@ export const CONTROLLER_INIT = '$stomp$controllerInit';
 export const INIT_REMOTE_TRANSPORT = '$stomp$initRemoteTransport';
 /** SW -> every client: SW (re)started, controllers must re-send CONTROLLER_INIT */
 export const SW_REVIVE = '$stomp$swRevive';
+/**
+ * @internal page -> SW: re-point the client the worker checks a controller
+ * against before serving a document at its address (the suites stand in
+ * for a host tab in the back/forward cache with it; nothing else sends it)
+ */
+/**
+ * controller -> SW: the controller's tab is going away (a `pagehide` that is
+ * not into the back/forward cache), so the worker forgets the controller now;
+ * Chrome does not fire the port's `close` event for a document that is gone.
+ * Honoured only from the client that registered the controller.
+ */
+export const CONTROLLER_CLOSE = '$stomp$controllerClose';
+export interface ControllerCloseMessage {
+	/** the controller's address */
+	directory: string;
+}
+export const CONTROLLER_CLIENT = '$stomp$controllerClient';
+export interface ControllerClientMessage {
+	/** the controller's address */
+	directory: string;
+	/** the service worker client id to check from now on; the sender's own when omitted */
+	client?: string;
+}
 /** a page tells the worker it aborted a request (the id it sent in ABORT_HEADER) */
 export const ABORT_REQUEST = '$stomp$abort';
 /** the request header a page adds so the worker can match an abort to the request; never forwarded */
@@ -194,6 +217,8 @@ export interface RouteContext {
 /** implemented by the controller, called by the SW */
 export type Controllerbound = {
 	ready: [{ build: string }];
+	/** another controller registered with this one's id; the worker closes the port right after */
+	replaced: [];
 	initRemoteTransport: [MessagePort];
 	/** a proxied request completed; only sent when the host asked (config.requestLog) */
 	request: [RequestInfo];
