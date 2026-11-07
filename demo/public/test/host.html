@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Foreign worker host</title>
+<!--
+  Test-only host page (foreign-sw suite): controlled by root-sw.js, the stand-in
+  for a host application's own service worker, before a StompController boots
+  next to it. Nothing here is part of the demo.
+-->
+<script type="module">
+	const registration = await navigator.serviceWorker.register('./root-sw.js');
+	// claimed on activation: wait until this page is controlled by it
+	await new Promise((resolve) => {
+		const check = () => {
+			if (
+				navigator.serviceWorker.controller?.scriptURL.endsWith(
+					'/test/root-sw.js',
+				)
+			)
+				resolve();
+		};
+		navigator.serviceWorker.addEventListener('controllerchange', check);
+		check();
+	});
+	window.__foreignReady = registration.active?.scriptURL ?? null;
+</script>

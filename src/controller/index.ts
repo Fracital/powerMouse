@@ -618,17 +618,32 @@ export class StompController extends EventTarget {
 			this.#readyResolve = resolve;
 		});
 
+		// Our worker (re)started and asks its controllers to shake hands again.
+		// A revive before the first handshake is nothing to act on (that
+		// handshake is pending; our worker's own startup broadcast lands here
+		// while a transport worker is still importing its module). The host
+		// page is often controlled by the host's own service worker (an app
+		// with a root worker): only a revive from one of our workers counts,
+		// and only a controller of ours is adopted; a foreign worker in
+		// control changes nothing about which worker we talk to (the
+		// controllerchange handler below applies the same test).
 		navigator.serviceWorker.addEventListener('message', (event) => {
 			if (
-				typeof event.data === 'object' &&
-				event.data !== null &&
-				SW_REVIVE in event.data &&
-				Date.now() - this.lastHandshake > REVIVE_GUARD_MS
-			) {
-				const active = navigator.serviceWorker.controller;
-				if (active) this.serviceworker = active;
-				this.#handshake();
-			}
+				typeof event.data !== 'object' ||
+				event.data === null ||
+				!(SW_REVIVE in event.data) ||
+				!this.lastHandshake ||
+				Date.now() - this.lastHandshake <= REVIVE_GUARD_MS
+			)
+				return;
+			const source = event.source;
+			if (!(source instanceof ServiceWorker) || !this.#ours(source)) return;
+			const active = navigator.serviceWorker.controller;
+			this.serviceworker =
+				active && this.#ours(active)
+					? active
+					: (this.#registration?.active ?? source);
+			this.#handshake();
 		});
 
 		// the tab is going away for good (not into the back/forward cache):
@@ -672,10 +687,14 @@ export class StompController extends EventTarget {
 			if (
 				controller &&
 				controller !== this.serviceworker &&
-				controller.scriptURL.startsWith(this.directory.href)
+				this.#ours(controller)
 			)
 				this.rebind(controller).catch(() => {});
 		});
+	}
+	/** a worker served from our directory (the host's own service worker is not) */
+	#ours(worker: ServiceWorker): boolean {
+		return worker.scriptURL.startsWith(this.directory.href);
 	}
 	/** the registration the host gave, else the one for the directory */
 	#findRegistration(): Promise<ServiceWorkerRegistration | undefined> {
