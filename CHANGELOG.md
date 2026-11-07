@@ -87,6 +87,17 @@ The first release after a four-year gap. Everything below is breaking.
   `fetch` for fetch, XHR and keepalive beacons (the browser's empty string).
   The document's own report lands after its body was served, often after
   the first fetches of the page.
+- `StompController.register(directory?, { assets, updateViaCache })`
+  registers the service worker served from the directory (the constructor's
+  default when omitted) with `updateViaCache: 'none'` and resolves with the
+  registration once its worker is activated, 30 seconds at the most (a worker
+  stuck installing never hangs the host). The constructor's `serviceworker`
+  accepts that registration (or any `ServiceWorkerRegistration`) in place of
+  a worker: it takes the active, waiting or installing one and shakes hands
+  once it is activated. The activation helper every host copied from the demo
+  is gone from `examples/minimal-host.html`. Both controllers and both frame
+  classes keep their state in `#fields`: nothing a page could reach is an own
+  property any more (`lastHandshake` stays, the dev loop sets it).
 - `onOpen(url, frame)` on `StompController` and `RemoteController`: a proxied
   page's `window.open`, `target="_blank"` and named-target or modifier clicks
   become a callback to the host, which opens them in its own tab model; the

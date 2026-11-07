@@ -14,20 +14,18 @@ the page that owns the proxy. Proxied content is shown in frames.
 ## Usage
 
 Serve `dist/` (its path is exported from `stomp-rewrite/path` as `stompPath`)
-from a directory of your site, register the service worker with that directory
-as its scope, and hand it to a controller together with a transport:
+from a directory of your site, register the service worker from that directory
+(`register()` uses it as the scope and resolves once the worker is activated),
+and hand the registration to a controller together with a transport:
 
 ```js
 import EpoxyTransport from '@mercuryworkshop/epoxy-transport';
 import { StompController } from 'stomp-rewrite';
 
-const registration = await navigator.serviceWorker.register(
-	'/stomp/serviceWorker.js',
-	{ scope: '/stomp/' },
-);
+const registration = await StompController.register('/stomp/');
 
 const controller = new StompController({
-	serviceworker: registration.active,
+	serviceworker: registration,
 	transport: new EpoxyTransport({ wisp: 'wss://example.com/wisp/' }),
 	directory: '/stomp/',
 	codec: 'xor',
@@ -52,7 +50,8 @@ changelog's known limitations before picking one.
 
 | Member                                                                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `new StompController(init)`                                                        | `init.serviceworker`, `init.transport`, optional `codec`, `directory`                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `StompController.register(directory?, { assets, updateViaCache })`                 | static: registers the service worker served from `directory` (the constructor's default when omitted; `assets.serviceWorker` names the file) with that scope and `updateViaCache: 'none'` (overridable), resolves with the registration once its worker is activated, 30 s at the most; a worker stuck installing never hangs the host                                                                                                                                                                                                        |
+| `new StompController(init)`                                                        | `init.serviceworker` (a `ServiceWorker`, or a `ServiceWorkerRegistration` whose active, waiting or installing worker is taken and the handshake made once it is activated), `init.transport`, optional `codec`, `directory`                                                                                                                                                                                                                                                                                                                   |
 | `init.allowInvalidJs`                                                              | a script the rewriter cannot parse runs as it was (default); `false` makes it fail with a `SyntaxError` naming the rewriter error, so a broken rewrite is loud                                                                                                                                                                                                                                                                                                                                                                                |
 | `init.assets`                                                                      | optional names of the served files (`serviceWorker`, `injectDocument`, `injectWorker`, `controllerFrame`, `controllerFrameScript`), default the dist names; a host that vendors the bundle under neutral names tells stomp what it called them, and no requested URL then carries the package name                                                                                                                                                                                                                                            |
 | `init.rules`                                                                       | optional `RequestRule[]`: declarative request rules applied in the service worker to the real URL, first match wins: `match` (URLPattern `url`, `method`, `destination`, `site`), `action` `'block'` or `{ requestHeaders, responseHeaders, redirect, status }` (`null` deletes a header); applied after stomp rebuilds Origin, Referer and cookies, so a host rule wins. URLPattern is Chrome-only; a missing constructor or an invalid pattern skips that rule with one console warning                                                     |
@@ -153,12 +152,11 @@ The demo server serves it at `/examples/minimal-host.html`
 against it. The deployment settings sit in one object at the top of the
 script (`directory`, the transport module, the wisp URL, `codec`).
 
-The boot sequence it shows: register `serviceWorker.js` from the directory
-`dist/` is served from, with that directory as the scope and
-`updateViaCache: 'none'`, and wait for the worker to be activated; import the
-transport module and construct it with the wisp URL; create the
-`StompController` with the service worker, the transport, the directory, the
-codec and the callbacks; `await controller.wait()`; then `createFrame()` and
+The boot sequence it shows: `StompController.register(directory)` for the
+directory `dist/` is served from (that scope, `updateViaCache: 'none'`,
+resolves once the worker is activated); import the transport module and
+construct it with the wisp URL; create the `StompController` with the
+registration, the transport, the directory, the codec and the callbacks; `await controller.wait()`; then `createFrame()` and
 place its `<iframe>`. From there `frame.go(url)`, `back()`, `forward()` and
 `reload()` drive the frame, and `canGoBack` / `canGoForward` tell the host
 what to enable. `controller.stale` and the `stale` / `rebind` events say

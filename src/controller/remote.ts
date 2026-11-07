@@ -93,19 +93,19 @@ export class RemoteController extends EventTarget {
 	frames: RemoteFrame[] = [];
 	isReady = false;
 	/** service worker client ids the pages reported, by frame */
-	private clientFrames = new Map<string, RemoteFrame>();
+	#clientFrames = new Map<string, RemoteFrame>();
 	readonly element: HTMLIFrameElement;
-	private rpc: RpcHelper<HostBound, FrameBound>;
-	private ready: Promise<void>;
-	private init: RemoteControllerInit;
-	private sandbox: string;
+	#rpc: RpcHelper<HostBound, FrameBound>;
+	#ready: Promise<void>;
+	#init: RemoteControllerInit;
+	#sandbox: string;
 
 	constructor(init: RemoteControllerInit) {
 		super();
-		this.init = init;
+		this.#init = init;
 		this.proxyOrigin = new URL(init.proxyOrigin).origin;
 		this.directory = init.directory ?? '/stomp/';
-		this.sandbox = init.sandbox ?? DEFAULT_SANDBOX;
+		this.#sandbox = init.sandbox ?? DEFAULT_SANDBOX;
 
 		if (this.proxyOrigin === location.origin)
 			throw new Error(
@@ -128,14 +128,14 @@ export class RemoteController extends EventTarget {
 			(resolve) => (frameReady = resolve),
 		);
 
-		this.rpc = new RpcHelper<HostBound, FrameBound>(
+		this.#rpc = new RpcHelper<HostBound, FrameBound>(
 			{
 				ready: async () => {
 					frameReady();
 				},
 				request: async (info) => {
 					let frame =
-						(info.client && this.clientFrames.get(info.client)) || null;
+						(info.client && this.#clientFrames.get(info.client)) || null;
 					// the document and its head's subresources are reported before the
 					// page has said which frame it is in: give that a moment
 					if (!frame && info.client) {
@@ -148,7 +148,7 @@ export class RemoteController extends EventTarget {
 								: 1500);
 						while (!frame && Date.now() < deadline) {
 							await new Promise((resolve) => setTimeout(resolve, 50));
-							frame = this.clientFrames.get(info.client) || null;
+							frame = this.#clientFrames.get(info.client) || null;
 						}
 					}
 					const event: RemoteRequestEvent = { ...info, frame };
@@ -180,7 +180,7 @@ export class RemoteController extends EventTarget {
 		window.addEventListener('message', (event) => {
 			if (event.origin !== this.proxyOrigin) return;
 			if (event.source === this.element.contentWindow) {
-				this.rpc.receive(event.data);
+				this.#rpc.receive(event.data);
 				return;
 			}
 			// a report or an open request from one of our proxied frames
@@ -190,7 +190,7 @@ export class RemoteController extends EventTarget {
 			if (!frame) return;
 			const navigate = navigateReport(event.data);
 			if (navigate) {
-				if (navigate.client) this.clientFrames.set(navigate.client, frame);
+				if (navigate.client) this.#clientFrames.set(navigate.client, frame);
 				frame.report(navigate);
 				init.onNavigate?.(navigate, frame);
 				this.dispatchEvent(
@@ -207,9 +207,9 @@ export class RemoteController extends EventTarget {
 
 		(document.body || document.documentElement).append(this.element);
 
-		this.ready = frameReadyPromise
+		this.#ready = frameReadyPromise
 			.then(() =>
-				this.rpc.call('init', {
+				this.#rpc.call('init', {
 					codec: init.codec,
 					directory: this.directory,
 					transport: init.transport,
@@ -234,33 +234,33 @@ export class RemoteController extends EventTarget {
 			}, every);
 	}
 	async wait(): Promise<void> {
-		await this.ready;
+		await this.#ready;
 	}
 	async route(url: string): Promise<string> {
-		await this.ready;
-		return this.rpc.call('route', url);
+		await this.#ready;
+		return this.#rpc.call('route', url);
 	}
 	/** replace the request rules (see StompController.setRules) */
 	async setRules(rules: RequestRule[]): Promise<void> {
-		await this.ready;
-		await this.rpc.call('rules', rules);
+		await this.#ready;
+		await this.#rpc.call('rules', rules);
 	}
 	/** drop every entry of the service worker's HTTP cache */
 	async clearCache(): Promise<void> {
-		await this.ready;
-		await this.rpc.call('clearCache', undefined);
+		await this.#ready;
+		await this.#rpc.call('clearCache', undefined);
 	}
 	/** the cookie jar, for the host application only (see StompController.cookies) */
 	readonly cookies: CookieJar = cookieJar(async (command) => {
-		await this.ready;
-		return this.rpc.call('cookies', command);
+		await this.#ready;
+		return this.#rpc.call('cookies', command);
 	});
 	async setTransport(transport: TransportDescriptor): Promise<void> {
-		await this.ready;
-		await this.rpc.call('setTransport', transport);
+		await this.#ready;
+		await this.#rpc.call('setTransport', transport);
 	}
 	createFrame(element: HTMLIFrameElement = document.createElement('iframe')) {
-		const frame = new RemoteFrame(this, element, this.sandbox);
+		const frame = new RemoteFrame(this, element, this.#sandbox);
 		this.frames.push(frame);
 		return frame;
 	}
@@ -269,7 +269,7 @@ export class RemoteController extends EventTarget {
 	 * creation order, not document order, so compare window proxies (identity
 	 * comparison works across origins).
 	 */
-	private frameIndex(element: HTMLIFrameElement): number {
+	#frameIndex(element: HTMLIFrameElement): number {
 		const target = element.contentWindow;
 		if (!target) return -1;
 		for (let i = 0; i < window.length; i++) if (window[i] === target) return i;
@@ -277,21 +277,21 @@ export class RemoteController extends EventTarget {
 	}
 	/** @internal */
 	async frameInfo(element: HTMLIFrameElement): Promise<FrameInfo> {
-		await this.ready;
-		const index = this.frameIndex(element);
+		await this.#ready;
+		const index = this.#frameIndex(element);
 		if (index === -1)
 			return { url: null, title: null, canGoBack: null, canGoForward: null };
-		return this.rpc.call('frameInfo', index);
+		return this.#rpc.call('frameInfo', index);
 	}
 	/** @internal */
 	async frameCommand(
 		element: HTMLIFrameElement,
 		command: FrameCommand,
 	): Promise<boolean> {
-		await this.ready;
-		const index = this.frameIndex(element);
+		await this.#ready;
+		const index = this.#frameIndex(element);
 		if (index === -1) return false;
-		return this.rpc.call('frameCommand', { index, command });
+		return this.#rpc.call('frameCommand', { index, command });
 	}
 }
 
@@ -308,7 +308,7 @@ export class RemoteFrame extends EventTarget {
 	/** last known: whether the frame's own history has an entry before/after the current one; null when unknown */
 	canGoBack: boolean | null = null;
 	canGoForward: boolean | null = null;
-	private refreshing: Promise<void> | null = null;
+	#refreshing: Promise<void> | null = null;
 	constructor(
 		public controller: RemoteController,
 		public element: HTMLIFrameElement,
@@ -319,15 +319,15 @@ export class RemoteFrame extends EventTarget {
 		element.setAttribute('referrerpolicy', 'no-referrer');
 	}
 	/** hosts waiting for the next report (go, reload) */
-	private awaitingReport = new Set<() => void>();
+	#awaitingReport = new Set<() => void>();
 	/** resolves on the next report, REPORT_GRACE_MS after the frame's load event without one, or after NAVIGATION_WAIT_MS */
-	private nextReport(): Promise<void> {
+	#nextReport(): Promise<void> {
 		return new Promise((resolve) => {
 			let grace: ReturnType<typeof setTimeout> | undefined;
 			const done = () => {
 				clearTimeout(timer);
 				clearTimeout(grace);
-				this.awaitingReport.delete(done);
+				this.#awaitingReport.delete(done);
 				this.element.removeEventListener('load', onLoad);
 				resolve();
 			};
@@ -340,12 +340,12 @@ export class RemoteFrame extends EventTarget {
 			};
 			const timer = setTimeout(done, NAVIGATION_WAIT_MS);
 			this.element.addEventListener('load', onLoad);
-			this.awaitingReport.add(done);
+			this.#awaitingReport.add(done);
 		});
 	}
 	/** navigate the frame; resolves when the new document first reports (see Frame.go) */
 	async go(url: string): Promise<void> {
-		const reported = this.nextReport();
+		const reported = this.#nextReport();
 		this.element.src = await this.controller.route(url);
 		this.url = url;
 		await reported;
@@ -356,8 +356,8 @@ export class RemoteFrame extends EventTarget {
 		this.title = info.title;
 		this.canGoBack = info.canGoBack;
 		this.canGoForward = info.canGoForward;
-		for (const resolve of this.awaitingReport) resolve();
-		this.awaitingReport.clear();
+		for (const resolve of this.#awaitingReport) resolve();
+		this.#awaitingReport.clear();
 		this.dispatchEvent(new CustomEvent('navigate', { detail: info }));
 	}
 	/**
@@ -373,15 +373,15 @@ export class RemoteFrame extends EventTarget {
 	}
 	/** reload the frame; resolves when the reloaded document first reports (false when there was nothing to reload) */
 	async reload(): Promise<boolean> {
-		const reported = this.nextReport();
+		const reported = this.#nextReport();
 		const done = await this.controller.frameCommand(this.element, 'reload');
 		if (done) await reported;
 		return done;
 	}
 	/** fetch the current url/title from the controller frame */
 	refresh(): Promise<void> {
-		if (!this.refreshing)
-			this.refreshing = this.controller
+		if (!this.#refreshing)
+			this.#refreshing = this.controller
 				.frameInfo(this.element)
 				.then((info) => {
 					if (info.url) this.url = info.url;
@@ -390,7 +390,7 @@ export class RemoteFrame extends EventTarget {
 					this.canGoForward = info.canGoForward;
 				})
 				.catch(() => {})
-				.finally(() => (this.refreshing = null));
-		return this.refreshing;
+				.finally(() => (this.#refreshing = null));
+		return this.#refreshing;
 	}
 }

@@ -12,7 +12,7 @@ the settings row) is tracked in the Fracital repo, not here.
 | WS2 epoxy as the supported transport | done: `examples/minimal-host.html` boots a same-origin `StompController` on epoxy and proxies Wikipedia; README "Embedding" carries the transport guidance                                                                                                       | shipped                   |
 | WS3 relocatable asset paths          | done: `assets` on both controllers names every served file (defaults to today's names), the controller frame learns its script name from `?script=`; the assets suite boots a fully renamed bundle under `/neutral/` and sees no URL with the package name       | parity session            |
 | WS4 same-origin hook coverage        | in progress: scramjet's adversarial corpus runs as nine measurement suites (`test/suites/adversarial-*.mjs`); protos, eval, scripts, frames and messages groups closed (the checks left report the browser's own results), attrs, urls and workers groups next   | parity session            |
-| WS5 host-embedding API parity        | checklist green (`test/suites/host-api.mjs`, 41 checks against the example host); gap list items 1 to 6 shipped, 7 and 8 in progress                                                                                                                             | shipped, gaps in progress |
+| WS5 host-embedding API parity        | checklist green (`test/suites/host-api.mjs`, 41 checks against the example host); gap list shipped in full                                                                                                                                                       | shipped, gaps in progress |
 
 ## Goal and shape
 
@@ -133,8 +133,8 @@ treat as a checklist plus gap fixes, mirroring `docs/scramjet-parity.md`.
 
 ## WS5 gap list (from writing the example host)
 
-Items 1 and 3 to 6 shipped (navigate-events and request-log suites); item 2
-is documented behaviour; 7 and 8 are in progress.
+All shipped (navigate-events, request-log and register suites); item 2 is
+documented behaviour.
 
 1. Shipped: `frame.go()` and `frame.reload()` resolve when the new document
    has reported (a second after the frame's `load` event for a document that
@@ -152,11 +152,13 @@ is documented behaviour; 7 and 8 are in progress.
    gives an empty string).
 6. Shipped: both controllers dispatch `navigate`, `open` and `request`
    CustomEvents next to the constructor callbacks.
-7. The controller wants an activated `ServiceWorker`; every host copies the
-   demo's activation helper. Accept a `ServiceWorkerRegistration` or offer a
-   `register(directory)` helper.
-8. TypeScript-private controller members are reachable at run time; AGENTS
-   asks for `#fields` for anything a page could reach.
+7. Shipped: `StompController.register(directory?)` registers the worker from
+   the directory with that scope and resolves with the registration once it
+   is activated (30 s cap, never hangs); the constructor's `serviceworker`
+   accepts the registration. The example host lost its copied activation
+   helper.
+8. Shipped: both controllers and both frame classes keep their state in
+   `#fields`; `lastHandshake` stays public for the dev loop.
 
 ## Config stomp will receive from Fracital (reference)
 

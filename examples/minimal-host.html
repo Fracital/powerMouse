@@ -90,14 +90,14 @@
 			const status = (text) => ($('status').textContent = text);
 
 			// Step 1: register the service worker with the directory as its scope.
-			// updateViaCache: 'none' makes the browser revalidate the worker script
-			// on every check, so a deploy is picked up instead of a cached copy.
+			// register() revalidates the worker script on every check
+			// (updateViaCache: 'none'), so a deploy is picked up instead of a
+			// cached copy, and resolves once the worker is activated.
 			status('Registering service worker');
-			const registration = await navigator.serviceWorker.register(
-				`${config.directory}serviceWorker.js`,
-				{ scope: config.directory, updateViaCache: 'none' },
+			const { StompController } = await import(
+				`${config.directory}controller.mjs`
 			);
-			const serviceworker = await activated(registration);
+			const registration = await StompController.register(config.directory);
 
 			// Step 2: load the transport module and construct it. The transport
 			// lives in this page; the service worker and every proxied page reach
@@ -108,11 +108,8 @@
 
 			// Step 3: the controller. It owns the transport, talks to the service
 			// worker, and hands the three callbacks below what the pages report.
-			const { StompController } = await import(
-				`${config.directory}controller.mjs`
-			);
 			const controller = new StompController({
-				serviceworker,
+				serviceworker: registration,
 				transport,
 				directory: config.directory,
 				codec: config.codec,
@@ -195,24 +192,6 @@
 
 			// for the console and for test/suites/host-api.mjs
 			window.host = { controller, frame };
-
-			// The registration's worker may still be installing on the first visit;
-			// the controller needs an activated one.
-			function activated(registration) {
-				const worker =
-					registration.active ||
-					registration.waiting ||
-					registration.installing;
-				if (!worker) throw new Error('No service worker in registration');
-				if (worker.state === 'activated') return Promise.resolve(worker);
-				return new Promise((resolve, reject) => {
-					worker.addEventListener('statechange', () => {
-						if (worker.state === 'activated') resolve(worker);
-						else if (worker.state === 'redundant')
-							reject(new Error('Service worker became redundant'));
-					});
-				});
-			}
 		</script>
 	</body>
 </html>

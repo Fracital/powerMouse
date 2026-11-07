@@ -257,7 +257,7 @@ Suites: partition, storage-events, workers, access.
 
 ## 8. Controller, config, plugins
 
-Suites: navigate-events, request-log, version, cookie-jar, cache, isolation.
+Suites: navigate-events, request-log, version, register, cookie-jar, cache, isolation.
 
 | Feature                                                                                                                               | Status  | Notes                                                                                                                                                                                                                              |
 | ------------------------------------------------------------------------------------------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -279,6 +279,7 @@ Suites: navigate-events, request-log, version, cookie-jar, cache, isolation.
 | SW as a composable library (`shouldRoute` / `route` for an existing PWA SW)                                                           | partial | Stomp's worker is standalone                                                                                                                                                                                                       |
 | `back()` / `forward()` bounded to the frame's own history, `canGoBack`, `title`, `url`                                                | ahead   |                                                                                                                                                                                                                                    |
 | `RemoteController`, sandbox option, `frameAncestors`, `pollInterval`                                                                  | ahead   |                                                                                                                                                                                                                                    |
+| Service worker registration done by the host (scramjet: `ScramjetController.init()` registers)                                        | ok      | `StompController.register(directory)` resolves with the activated registration (30 s cap, never blocks); the constructor accepts a registration; controller and frame state in `#fields` (register suite)                          |
 
 ## 9. Tooling, tests, scaffolding
 
