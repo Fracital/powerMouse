@@ -1,8 +1,8 @@
-// The service worker's HTTP cache, off by default and on with `?cache` in
+// The service worker's HTTP cache, on by default and off with `?nocache` in
 // the demo: a fresh entry (max-age) serves the second fetch without an
 // upstream request, no-store never caches, a stale entry with an ETag
 // revalidates and a 304 refreshes it, a request with Authorization bypasses,
-// clearCache() forces a refetch, and without the flag nothing is cached.
+// clearCache() forces a refetch, and with the opt-out nothing is cached.
 import {
 	done,
 	FIXTURE,
@@ -35,9 +35,9 @@ async function run(base) {
 	return { page, result };
 }
 
-// cache on
+// cache on by default
 {
-	const { page, result } = await run(`${HOST}?cache`);
+	const { page, result } = await run(HOST);
 	const hits = result.hits || {};
 	ok(
 		'page fetched everything',
@@ -78,13 +78,13 @@ async function run(base) {
 	await page.close();
 }
 
-// cache off by default
+// cache: false refetches
 {
 	const before = await (await fetch(`${FIXTURE}hits`)).json();
-	const { page, result } = await run(HOST);
+	const { page, result } = await run(`${HOST}?nocache`);
 	const hits = result.hits || {};
 	ok(
-		'without the flag a fresh entry is fetched every time',
+		'with cache: false a fresh entry is fetched every time',
 		(hits['fresh.json']?.requests || 0) -
 			(before['fresh.json']?.requests || 0) ===
 			2,

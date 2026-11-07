@@ -56,7 +56,7 @@ export default async function createServer(
 	const router = new Router(init.directory);
 
 	const cookies = await registerCookies(router);
-	const cache = config.cache ? new HttpCache() : undefined;
+	const cache = config.cache === false ? undefined : new HttpCache();
 	// a page asks who it is (its service worker client id) and reports it to
 	// the host, so the host can attribute requests to frames
 	router.routes.set(/^\/whoami$/, (request, url, context) =>

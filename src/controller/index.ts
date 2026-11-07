@@ -75,9 +75,10 @@ export interface ControllerInit {
 	/** @internal the service worker sends request reports; set by the controller frame */
 	requestLog?: boolean;
 	/**
-	 * HTTP cache in the service worker, off by default: GET/HEAD responses
+	 * HTTP cache in the service worker, on by default: GET/HEAD responses
 	 * with explicit freshness (max-age, Expires) are kept in a Cache API
-	 * store and revalidated when stale; `clearCache()` drops it.
+	 * store and revalidated when stale; `clearCache()` drops it. `false`
+	 * turns it off.
 	 */
 	cache?: boolean;
 	/**
@@ -228,7 +229,7 @@ export class StompController {
 			directory: this.directory.pathname,
 			...(init.frameAncestors ? { frameAncestors: init.frameAncestors } : {}),
 			...(init.onOpen || init.openTab ? { openTab: true } : {}),
-			...(init.cache ? { cache: true } : {}),
+			...(init.cache === false ? { cache: false } : {}),
 			...(init.onRequest || init.requestLog ? { requestLog: true } : {}),
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 		};

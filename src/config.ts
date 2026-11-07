@@ -20,7 +20,7 @@ export interface Config {
 	 */
 	openTab?: boolean;
 	/**
-	 * HTTP cache in the service worker (off by default): GET/HEAD responses
+	 * HTTP cache in the service worker, on unless `false`: GET/HEAD responses
 	 * with explicit freshness are served from a Cache API store and
 	 * revalidated with ETag / Last-Modified when stale.
 	 */

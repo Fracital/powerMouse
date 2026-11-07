@@ -45,7 +45,7 @@ export interface RemoteControllerInit {
 	 * (`pollInterval`) stays as a fallback and can be disabled with 0.
 	 */
 	onNavigate?: (info: NavigateInfo, frame: RemoteFrame) => void;
-	/** HTTP cache in the service worker, off by default (see StompController) */
+	/** HTTP cache in the service worker, on by default; `false` turns it off (see StompController) */
 	cache?: boolean;
 	/** a script the rewriter cannot parse fails instead of running raw when `false` (see StompController) */
 	allowInvalidJs?: boolean;
@@ -144,7 +144,7 @@ export class RemoteController {
 					directory: this.directory,
 					transport: init.transport,
 					openTab: !!init.onOpen,
-					cache: !!init.cache,
+					...(init.cache === false ? { cache: false } : {}),
 					requestLog: !!init.onRequest,
 					...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 				}),

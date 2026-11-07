@@ -19,7 +19,7 @@ export interface ControllerFrameInit {
 	transport: TransportDescriptor;
 	/** the host handles `window.open` / `_blank` (RemoteControllerInit.onOpen) */
 	openTab?: boolean;
-	/** HTTP cache in the service worker (RemoteControllerInit.cache) */
+	/** HTTP cache in the service worker, off when false (RemoteControllerInit.cache) */
 	cache?: boolean;
 	/** the host wants a RequestInfo per request (RemoteControllerInit.onRequest) */
 	requestLog?: boolean;

@@ -110,7 +110,7 @@ if (window === window.parent || !origins.length) {
 						codec: init.codec,
 						frameAncestors: [hostOrigin],
 						openTab: !!init.openTab,
-						cache: !!init.cache,
+						...(init.cache === false ? { cache: false } : {}),
 						...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 						// the host's request log travels SW -> here -> host
 						...(init.requestLog

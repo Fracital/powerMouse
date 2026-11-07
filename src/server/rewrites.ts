@@ -42,7 +42,7 @@ interface Rewriter {
 	bare: BareCompatibleClient;
 	config: Config;
 	cookies: Cookies;
-	/** the HTTP cache, when the host turned it on */
+	/** the HTTP cache, unless the host turned it off */
 	cache?: HttpCache;
 	/** the host's request log, when it asked for one */
 	log?: (info: RequestInfo) => void;
@@ -138,7 +138,7 @@ function genericForward(
 		}
 		requestHeaders.set('sec-fetch-site', site);
 
-		// the HTTP cache, when the host turned it on: a fresh entry answers
+		// the HTTP cache, unless the host turned it off: a fresh entry answers
 		// without the transport; a stale one with validators is revalidated
 		// and a 304 refreshes it; what comes back cacheable is stored (its
 		// body split in two, one copy for the store)

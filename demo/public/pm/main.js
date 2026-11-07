@@ -63,9 +63,9 @@ const PROXY_ORIGIN =
 			? location.origin.replace('localhost', '127.0.0.1')
 			: null;
 const ISOLATED = !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
-// HTTP cache in the service worker, off by default; ?cache turns it on for a
+// HTTP cache in the service worker, on by default; ?nocache turns it off for a
 // visit
-const CACHE = new URLSearchParams(location.search).has('cache');
+const CACHE = !new URLSearchParams(location.search).has('nocache');
 const proxyBase = ISOLATED ? PROXY_ORIGIN : '';
 // STOMP_WISP_URL points the transports at an external wisp server (in
 // production, the edge relay); otherwise the demo server's own /wisp/

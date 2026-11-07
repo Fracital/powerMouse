@@ -44,8 +44,8 @@ The first release after a four-year gap. Everything below is breaking.
 - `controller.cookies` lets the host read the Cookie header the proxy would
   send, import Set-Cookie values, export cookies as records and wipe an
   origin or everything; host-only by construction.
-- An opt-in HTTP cache in the service worker (`cache: true`, `?cache` in the
-  demo): GET/HEAD responses with explicit freshness (max-age, s-maxage,
+- An HTTP cache in the service worker, on by default (`cache: false` turns
+  it off, `?nocache` in the demo): GET/HEAD responses with explicit freshness (max-age, s-maxage,
   Expires) are served from a Cache API store, revalidated with ETag /
   Last-Modified when stale, never stored for requests with Authorization or
   cookies (unless `public`), no-store / private / no-cache or Vary: *, and
