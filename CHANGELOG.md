@@ -38,6 +38,10 @@ The first release after a four-year gap. Everything below is breaking.
   page reload (same-origin mode), server restarts and host-page bundles
   reloading the page, and an esbuild error overlay. Development only
   (`STOMP_DEV`).
+- The demo has a request viewer: long-press Recents or Ctrl+Shift+R slides
+  up a panel with the active tab's proxied requests (method, status, real
+  URL, destination, time, size, a `cached` tag), built from the controller's
+  `onRequest`; the HTTP cache is on in the demo and `?nocache` turns it off.
 - `onRequest` on both controllers reports every proxied request (real URL,
   method, destination, status, time, cache hit, size, error) with the frame
   it belongs to, for request viewers; costs nothing when unset.
@@ -106,15 +110,21 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
-- A build mismatch at the handshake heals itself instead of rejecting
-  `wait()`: after a deploy the page loads the new controller bundle while the
-  old service worker is still the active one, so the controller now updates
-  the registration, waits for the new worker to activate, binds to it
-  (`controller.rebind(worker?)`, public) and shakes hands again; `wait()`
-  rejects with the mismatch message only when the builds still differ after
-  that or no new worker arrives within 15 seconds. A worker that activates
-  later while the page is open is adopted the same way (`updatefound`,
-  `controllerchange`), so a deploy no longer needs a hard reload.
+- A build mismatch at the handshake never blocks the page. After a deploy the
+  page loads the new controller bundle while the old service worker is still
+  the active one, so the controller updates the registration and, when the
+  new worker activates within five seconds, binds to it
+  (`controller.rebind(worker?)`, public) and shakes hands again. When it does
+  not (the old worker is pinned by a request that never settles), `wait()`
+  resolves on the old worker, `controller.stale` records both builds with a
+  `stale` event for the host's notice, and the new worker is adopted the
+  moment it activates (`updatefound`, `controllerchange`; a `rebind` event
+  follows). `wait()` no longer rejects over a version mismatch.
+- The service worker bounds every routed request: a response that has not
+  started after 60 seconds (120 for documents and media) is answered 504
+  with a short error page or an empty body, so a transport request that
+  never settles cannot keep the worker alive and block a waiting worker of a
+  newer build from activating.
 - `allowInvalidJs` on both controllers (default `true`, today's behaviour): a
   script the rewriter cannot parse runs as it was. With `false` it fails with
   a `SyntaxError` naming the rewriter error instead, so a broken rewrite is
