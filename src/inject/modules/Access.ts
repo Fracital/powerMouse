@@ -152,6 +152,8 @@ export default class AccessModule extends Module<Client> {
 							),
 							this.client.url,
 							this.client.config,
+							false,
+							this.client.nestedRoute,
 						),
 					);
 				} else {

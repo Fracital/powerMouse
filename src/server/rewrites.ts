@@ -7,7 +7,12 @@ import GenericCodec from '../Codecs';
 import { codecType, Config, ParsedConfig } from '../config';
 import { capitalizeHeaders, rewriteLinkHeader } from '../headers';
 import { modifyCSS, routeCSS } from '../rewriteCSS';
-import { modifyHTML, modifyRefresh, routeHTML } from '../rewriteHTML';
+import {
+	modifyHTML,
+	modifyRefresh,
+	nestedTopOf,
+	routeHTML,
+} from '../rewriteHTML';
 import { modifyJS, routeJS, ScriptType } from '../rewriteJS';
 import { parseRoutedURL, routeBinary } from '../routeURL';
 import StompURL from '../StompURL';
@@ -31,6 +36,24 @@ const integrityHeaders: string[] = ['Content-MD5'];
 declare const clients: Clients | undefined;
 
 const DEFAULT_REFERRER_POLICY = 'strict-origin-when-cross-origin';
+
+type Site = 'none' | 'same-origin' | 'same-site' | 'cross-site';
+
+/** the fetch-metadata site between two real URLs */
+function siteBetween(from: URL, to: URL): Site {
+	if (from.origin === to.origin) return 'same-origin';
+	const domain = getDomain(from.hostname);
+	return (domain !== null && domain === getDomain(to.hostname)) ||
+		from.hostname === to.hostname
+		? 'same-site'
+		: 'cross-site';
+}
+
+/** the more distant of two sites ('none' counts as the closest) */
+function widestSite(a: string, b: Site): Site {
+	const order: Site[] = ['none', 'same-origin', 'same-site', 'cross-site'];
+	return order[Math.max(order.indexOf(a as Site), order.indexOf(b))];
+}
 
 /**
  * The Referer a browser sends from `source` to `target` under `policy`
@@ -200,15 +223,34 @@ function genericForward(
 
 		// the jar applies SameSite against the request's site. Every proxied
 		// page arrives here as an iframe (the host's frame), so an iframe
-		// destination counts as a navigation: a cross-site link into a site
-		// that keeps its login in Lax cookies still works, at the price of
-		// nested cross-site iframes getting Lax cookies a browser would withhold
+		// destination counts as a top-level navigation unless the page routed
+		// it as a nested document (an iframe of its own, or a navigation from
+		// inside one): a cross-site link into a site that keeps its login in
+		// Lax cookies still works, a nested cross-site frame gets None only
+		// a nested document's requests are judged by the top-level page as
+		// well (the browser's site for cookies and Sec-Fetch-Site walk the
+		// ancestors): the route kind of the navigation, or of the referrer
+		// when a nested document is the initiator, names that top origin
+		const nestedTop =
+			nestedTopOf(oURL.pathname, rewriter.directory) ??
+			(serverRequest.referrer && serverRequest.referrer !== 'about:client'
+				? nestedTopOf(
+						new URL(serverRequest.referrer).pathname,
+						rewriter.directory,
+					)
+				: null);
+		if (nestedTop) {
+			site = widestSite(site, siteBetween(new URL(nestedTop), url.url));
+			requestHeaders.set('sec-fetch-site', site);
+		}
+		const nested = nestedTopOf(oURL.pathname, rewriter.directory) !== null;
 		requestHeaders.set(
 			'cookie',
 			(
 				await rewriter.cookies.get(url.url, {
 					site: site as CookieRequestContext['site'],
-					navigation: destination === 'document' || destination === 'iframe',
+					navigation:
+						destination === 'document' || (destination === 'iframe' && !nested),
 					method: serverRequest.method,
 				})
 			).toString(),
@@ -489,7 +531,7 @@ export function registerRewrites(
 	);
 
 	router.routes.set(
-		/^\/html\//,
+		/^\/html(:nested:[^/]*)?\//,
 		genericForward(
 			rewriter,
 			async (url, response, responseHeaders) => {
@@ -537,7 +579,7 @@ export function registerRewrites(
 		),
 	);
 
-	router.routes.set(/^\/html:form\//, (serverRequest) => {
+	router.routes.set(/^\/html:form(:nested:[^/]*)?\//, (serverRequest) => {
 		const oURL = new URL(serverRequest.url);
 		const { url } = parseRoutedURL(
 			`${oURL.origin}${oURL.pathname}${oURL.hash}`, // exclude query
@@ -549,7 +591,13 @@ export function registerRewrites(
 
 		return new Response(undefined, {
 			headers: {
-				location: routeHTML(url, url, rewriter.config),
+				location: routeHTML(
+					url,
+					url,
+					rewriter.config,
+					false,
+					nestedTopOf(oURL.pathname, rewriter.directory) ?? false,
+				),
 			},
 			status: 307,
 		});

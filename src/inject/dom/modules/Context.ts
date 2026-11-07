@@ -63,6 +63,20 @@ function isPostMessageArgs2(
 }
 
 type Context = typeof globalThis;
+
+/** the nested route marker of a Stomp window (its top origin when it is a child of a proxied page) */
+function nestedRouteOf(context: Context): string | false {
+	try {
+		return (
+			(
+				(context as Record<string, any>)[CLIENT_KEY] as
+					DocumentClient | undefined
+			)?.nestedRoute ?? false
+		);
+	} catch (error) {
+		return false;
+	}
+}
 type RestrictedContext = typeof globalThis;
 
 const nativeMessageEvent: MessageEvent = Object.create({});
@@ -254,6 +268,8 @@ export default class ContextModule extends Module<DocumentClient> {
 							),
 							this.client.url,
 							this.client.config,
+							false,
+							nestedRouteOf(context),
 						),
 					);
 				},
@@ -268,6 +284,8 @@ export default class ContextModule extends Module<DocumentClient> {
 							),
 							this.client.url,
 							this.client.config,
+							false,
+							nestedRouteOf(context),
 						),
 					);
 				},
@@ -322,6 +340,8 @@ export default class ContextModule extends Module<DocumentClient> {
 							),
 							this.client.url,
 							this.client.config,
+							false,
+							nestedRouteOf(context),
 						),
 					);
 				},

@@ -1,0 +1,19 @@
+<!doctype html>
+<title>NESTED</title>
+<script>
+	// loaded on the fixture's other host name (localhost): the frames below
+	// embed the 127.0.0.1 site, another site, as nested documents
+	const target = location.origin.replace('localhost', '127.0.0.1');
+	const echo = document.createElement('iframe');
+	echo.id = 'echo';
+	echo.src = target + '/echo-headers';
+	const child = document.createElement('iframe');
+	child.id = 'child';
+	child.src = target + '/pages/nested-child.html';
+	document.documentElement.append(echo, child);
+	const toplink = document.createElement('a');
+	toplink.id = 'toplink';
+	toplink.href = target + '/echo-headers';
+	toplink.textContent = 'top-level navigation';
+	document.documentElement.append(toplink);
+</script>

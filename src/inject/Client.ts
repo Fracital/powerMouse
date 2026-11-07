@@ -164,6 +164,14 @@ export default class Client {
 	 * Messages the service worker posts to this document (storage changes),
 	 * on the container kept from before the page lost `navigator.serviceWorker`.
 	 */
+	/** whether this context is a child of a proxied document (a document client decides) */
+	get nested(): boolean {
+		return false;
+	}
+	/** the nested route marker for a navigation from this context (a document client decides) */
+	get nestedRoute(): string | false {
+		return false;
+	}
 	/** @internal a response reached this context */
 	notifyResponse() {
 		for (const listener of this.responseListeners) listener();

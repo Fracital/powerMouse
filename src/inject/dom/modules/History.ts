@@ -52,6 +52,8 @@ export default class HistoryModule extends Module<DocumentClient> {
 					),
 					this.client.url,
 					this.client.config,
+					false,
+					this.client.nestedRoute,
 				);
 
 			return Reflect.apply(target, that, args);

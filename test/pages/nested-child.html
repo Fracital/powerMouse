@@ -1,0 +1,16 @@
+<!doctype html>
+<title>NESTED CHILD</title>
+<a id="go" href="/echo-headers">follow inside the frame</a>
+<script>
+	// a subresource of the nested document: judged by the top-level page too
+	window.__child = {};
+	fetch('/echo-headers')
+		.then((r) => r.json())
+		.then((h) => {
+			__child.cookie = h.cookie || '';
+			__child.site = h['sec-fetch-site'] || '';
+		})
+		.finally(() => {
+			__child.done = true;
+		});
+</script>

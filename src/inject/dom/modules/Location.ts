@@ -109,6 +109,8 @@ export default class LocationModule extends Module<DocumentClient> {
 									new StompURL(temp, this.client.url),
 									this.client.url,
 									this.client.config,
+									false,
+									this.client.nestedRoute,
 								);
 							},
 						)
@@ -147,6 +149,8 @@ export default class LocationModule extends Module<DocumentClient> {
 							),
 							this.client.url,
 							this.client.config,
+							false,
+							this.client.nestedRoute,
 						),
 					]);
 				},
@@ -168,6 +172,8 @@ export default class LocationModule extends Module<DocumentClient> {
 							),
 							this.client.url,
 							this.client.config,
+							false,
+							this.client.nestedRoute,
 						),
 					]);
 				},

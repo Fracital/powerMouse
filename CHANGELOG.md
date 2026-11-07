@@ -110,6 +110,17 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- A nested cross-site frame is judged by the top-level page, as a browser
+  does. The page routes a child document's URL (an iframe's src, and every
+  navigation from inside a nested frame: links, forms, location, history,
+  meta refresh, window.open) with a route kind that names the top-level
+  proxied origin, and the service worker widens the request's site by it,
+  for the navigation itself and for every request whose referrer is such a
+  document: a nested cross-site frame gets `SameSite=None` cookies only and
+  `Sec-Fetch-Site: cross-site`, while a top-level cross-site navigation of the
+  page still carries Lax. The kind is decided in the page realm, so a page
+  holding the codec key could route a child as top-level; that is the same
+  trust boundary as every rewriting decision.
 - The HTTP cache serves stale entries exactly as far as the origin allowed:
   within `stale-while-revalidate` a stale entry answers at once and one
   revalidation per URL runs behind the page (however many stale hits arrive
@@ -189,7 +200,8 @@ The first release after a four-year gap. Everything below is breaking.
   destination, so iframe navigations count as top-level: a cross-site link
   into a site that keeps its login in Lax cookies works, and a nested
   cross-site iframe gets Lax cookies a browser would withhold.
-  `controller.cookies.list()` records carry `hostOnly`.
+  `controller.cookies.list()` records carry `hostOnly`. (Nested frames are
+  judged by the top-level page since the nested route kind.)
 - The HTTP cache serves a request that arrives while the same URL's entry is
   still being written (its body streaming into the store) from that entry,
   instead of racing it upstream; on a slow machine the second of two fetches

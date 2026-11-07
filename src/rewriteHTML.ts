@@ -10,11 +10,23 @@ import {
 import StompURL from './StompURL';
 import { WORKER_BASE } from './transport/messages';
 
+/**
+ * The route of a document. `form`: a GET form's action, whose query the
+ * browser appends (the route redirects). `nested`: the document will be a
+ * child frame of a proxied page (an iframe's src, or anything a nested
+ * context navigates to): the origin of the top-level proxied page, which the
+ * service worker uses as the site for cookies and fetch metadata, the way a
+ * browser judges a nested frame's requests by its top, and never treats the
+ * navigation as top-level. The kind is decided here, in the page realm, so a
+ * hostile embedder holding the codec key could route a child as `html`: the
+ * same trust boundary as every rewriting decision.
+ */
 export function routeHTML(
 	resource: StompURL,
 	url: StompURL,
 	config: Config,
 	form = false,
+	nested: string | false = false,
 ) {
 	if (resource.url.protocol === 'data:') {
 		const { mime, data, attributes } = parseDataURI(resource.url.pathname);
@@ -38,7 +50,32 @@ export function routeHTML(
 		return `javascript:${modifyJS(body, url, config, 'generic')}`;
 	}
 
-	return routeURL(form ? 'html:form' : 'html', resource);
+	return routeURL(
+		`html${form ? ':form' : ''}${
+			nested ? `:nested:${encodeURIComponent(nested)}` : ''
+		}`,
+		resource,
+	);
+}
+
+/**
+ * The top-level origin a routed document URL's kind names when it is a
+ * nested document, else null. Works on any routed path (a request's own, or
+ * its referrer's).
+ */
+export function nestedTopOf(
+	pathname: string,
+	directory: string,
+): string | null {
+	if (!pathname.startsWith(directory)) return null;
+	const kind = pathname.slice(directory.length).split('/')[0];
+	const match = /^html(?::form)?:nested:(.*)$/.exec(kind);
+	if (!match) return null;
+	try {
+		return new URL(decodeURIComponent(match[1])).origin;
+	} catch (error) {
+		return null;
+	}
 }
 
 /**
@@ -87,7 +124,12 @@ const REFRESH = /(;\s*?|^)url=(?:(['"])(((?!\2).)*)\2?|(.*);?)/i;
 
 // excellent resource
 // https://web.archive.org/web/20210514140514/https://www.otsukare.info/2015/03/26/refresh-http-header
-export function modifyRefresh(script: string, url: StompURL, config: Config) {
+export function modifyRefresh(
+	script: string,
+	url: StompURL,
+	config: Config,
+	nested: string | false = false,
+) {
 	return script.replace(
 		REFRESH,
 		(_match, pre, _1, resource1, _3, resource2) => {
@@ -97,6 +139,8 @@ export function modifyRefresh(script: string, url: StompURL, config: Config) {
 				new StompURL(new URL(resource, url.toString()), url),
 				url,
 				config,
+				false,
+				nested,
 			)}`;
 		},
 	);

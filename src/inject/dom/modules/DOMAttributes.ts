@@ -329,6 +329,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							),
 							this.client.url,
 							this.client.config,
+							false,
+							this.client.nestedRoute,
 						),
 					);
 				}
@@ -530,6 +532,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							),
 							this.client.url,
 							this.client.config,
+							false,
+							this.client.topOrigin,
 						),
 					);
 				}
@@ -602,6 +606,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 									element.getAttribute('content')!,
 									this.client.url,
 									this.client.config,
+									this.client.nestedRoute,
 								),
 							);
 							break;
@@ -1049,6 +1054,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							this.client.url,
 							this.client.config,
 							true,
+							this.client.nestedRoute,
 						),
 					);
 					break;
@@ -1059,6 +1065,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							new StompURL(action, this.client.url),
 							this.client.url,
 							this.client.config,
+							false,
+							this.client.nestedRoute,
 						),
 					);
 
@@ -1103,7 +1111,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// <object data>: a document or a plugin resource, like <embed src>
 		domHooksModule.useAttributes(
 			routeAttribute('data', (resource) =>
-				routeHTML(resource, this.client.url, this.client.config),
+				routeHTML(
+					resource,
+					this.client.url,
+					this.client.config,
+					false,
+					this.client.topOrigin,
+				),
 			),
 			[
 				['OBJECT', 'data'],
@@ -1121,7 +1135,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// the query travels, as for <form action>
 		domHooksModule.useAttributes(
 			routeAttribute('formaction', (resource) =>
-				routeHTML(resource, this.client.url, this.client.config, true),
+				routeHTML(
+					resource,
+					this.client.url,
+					this.client.config,
+					true,
+					this.client.nestedRoute,
+				),
 			),
 			[
 				['BUTTON', 'formaction'],
@@ -1225,6 +1245,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							),
 							this.client.url,
 							this.client.config,
+							false,
+							this.client.nestedRoute,
 						),
 					);
 				}

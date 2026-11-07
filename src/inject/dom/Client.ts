@@ -1,6 +1,6 @@
 import { decode } from 'entities';
 import { ParsedConfig } from '../../config';
-import { modifyJS, rewriteImportMap } from '../../rewriteJS';
+import { CLIENT_KEY, modifyJS, rewriteImportMap } from '../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import StompURL from '../../StompURL';
 import { OPEN_TAB, WORKER_BASE } from '../../transport/messages';
@@ -91,6 +91,39 @@ export default class DocumentClient extends Client {
 	}
 	get parent(): typeof globalThis {
 		return this.parentDescriptor.get!.call(this.global);
+	}
+	/**
+	 * A child frame of a proxied page: its navigations are routed as nested
+	 * documents, which the service worker never treats as top-level. A
+	 * cross-origin parent (the host in isolation mode) means not nested.
+	 */
+	get nested(): boolean {
+		try {
+			const parent = this.parent;
+			return parent !== this.global && CLIENT_KEY in parent;
+		} catch (error) {
+			return false;
+		}
+	}
+	/** the origin of the outermost proxied document above this one (its own when it is the top) */
+	get topOrigin(): string {
+		let context: typeof globalThis = this.global;
+		for (;;) {
+			try {
+				const parent = (context as Record<string, any>)[CLIENT_KEY]
+					.parent as typeof globalThis;
+				if (parent === context || !(CLIENT_KEY in parent)) break;
+				context = parent;
+			} catch (error) {
+				break;
+			}
+		}
+		return ((context as Record<string, any>)[CLIENT_KEY] as DocumentClient).url
+			.url.origin;
+	}
+	/** what a navigation from this context routes as: the top origin when nested, else a top-level document */
+	get nestedRoute(): string | false {
+		return this.nested ? this.topOrigin : false;
 	}
 	get top(): typeof globalThis {
 		return this.topDescriptor.get!.call(this.global);

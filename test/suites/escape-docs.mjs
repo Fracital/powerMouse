@@ -50,7 +50,7 @@ ok(
 	sandbox.sandbox === null &&
 		sandbox.csp === null &&
 		typeof sandbox.child === 'string' &&
-		sandbox.child.includes('/stomp/html/'),
+		sandbox.child.includes('/stomp/html'),
 	JSON.stringify(sandbox),
 );
 const seen = await frame.evaluate(() => {

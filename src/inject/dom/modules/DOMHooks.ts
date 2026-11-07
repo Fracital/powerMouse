@@ -346,6 +346,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						new StompURL(destination!, this.client.url),
 						this.client.url,
 						this.client.config,
+						false,
+						this.client.nestedRoute,
 					);
 
 				// a top-level page is its own top and parent: navigate the frame

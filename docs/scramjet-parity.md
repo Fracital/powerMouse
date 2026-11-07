@@ -77,6 +77,13 @@ same-origin with the host and can read its DOM. Chrome logs a warning that a
 sandbox with both `allow-scripts` and `allow-same-origin` can be escaped;
 that is accurate and expected.
 
+Trust notes. Everything the rewriter decides is decided in the page realm
+with the codec key in hand: a page can hand-route a URL as any kind, for
+example route a child frame as a top-level document to obtain Lax cookies for
+a cross-site frame (the nested route kind is a page-side decision). Isolated
+mode contains the embedder's page, not its routing choices; same-origin mode
+is not a security boundary at all.
+
 ### 2b. Escape vectors (escapes-same-origin and escapes-isolated suites)
 
 | Vector                                                                                                 | Same-origin mode                                                                    | Isolated mode                        |
@@ -201,7 +208,7 @@ Suites: headers, cookies, cookie-jar, cache, page-apis.
 | Rewrite `Link` and `Content-Location`                                                                                                                   | ok      | per link by `rel` / `as`                                                                                                                                                                                                                                  |
 | Force `text/event-stream` when SSE is requested                                                                                                         | ok      |                                                                                                                                                                                                                                                           |
 | `Refresh` header, route-preserving `Location`, `Content-MD5` removal, `frame-ancestors`, HTML/JSON error pages, request queueing while the server boots | ahead   |                                                                                                                                                                                                                                                           |
-| Cookie matching: label-boundary domain walk, hostOnly, path boundary, SameSite                                                                          | ok      | the jar evaluates all of it with the forward's site, navigation and method; iframe navigations count as top-level (cookie-rules and samesite suites)                                                                                                      |
+| Cookie matching: label-boundary domain walk, hostOnly, path boundary, SameSite                                                                          | ok      | the jar evaluates all of it with the forward's site, navigation and method; a nested frame is judged by its top-level page through the nested route kind (cookie-rules, samesite and nested-cookies suites)                                               |
 | `Max-Age` in seconds, `Max-Age<=0` deletes, re-sets replace                                                                                             | ok      |                                                                                                                                                                                                                                                           |
 | `__Host-` / `__Secure-` prefixes, 4096-byte cap, CTL rejection                                                                                          | ok      | cookie-rules suite                                                                                                                                                                                                                                        |
 | HttpOnly cookies on WebSocket handshakes                                                                                                                | ok      | the controller adds the jar's Cookie header to the handshake; the page never holds it (ws-cookies suite)                                                                                                                                                  |
@@ -292,9 +299,7 @@ Suites: navigate-events, request-log, version, cookie-jar, cache, isolation.
 
 1. Documents that escape the rewrite: HTML blobs built from binary parts;
    import map package prefixes and scope keys.
-2. Cookies: a nested cross-site iframe should not get Lax cookies (needs the
-   host to mark its top documents).
-3. The Tap: a request hook chain (intercept, request, response) once a second
+2. The Tap: a request hook chain (intercept, request, response) once a second
    consumer beyond `onRequest` exists, and `Frame.hooks.error.request`.
-4. A demo request viewer on `onRequest`; browser suites in CI; scramjet's
+3. A demo request viewer on `onRequest`; browser suites in CI; scramjet's
    adversarial corpus ported one file at a time.

@@ -1,8 +1,8 @@
 // SameSite follows the request: the cookie-rules page on 127.0.0.1 sets
 // Strict, Lax and None cookies (its Set-Cookie sidecar); a page on localhost,
 // another site, then fetches 127.0.0.1 as a subresource (None only) and
-// embeds it as a frame navigation (Lax and None, never Strict), while
-// 127.0.0.1's own request carries all three.
+// embeds it as a nested frame (None only: a browser judges it by the
+// top-level page), while 127.0.0.1's own request carries all three.
 import {
 	done,
 	FIXTURE,
@@ -22,7 +22,7 @@ const result = async (key, timeout = 20000) => {
 	const until = Date.now() + timeout;
 	while (Date.now() < until) {
 		for (const f of page.frames()) {
-			if (!f.url().includes('/stomp/html/')) continue;
+			if (!f.url().includes('/stomp/html')) continue;
 			try {
 				const value = await f.evaluate((k) => window[k], key);
 				if (value?.done) return value;
@@ -66,7 +66,7 @@ ok(
 let framed = null;
 for (let i = 0; i < 30 && framed === null; i++) {
 	for (const f of page.frames()) {
-		if (!f.url().includes('/stomp/html/')) continue;
+		if (!f.url().includes('/stomp/html')) continue;
 		try {
 			const text = await f.evaluate(() => document.body?.textContent || '');
 			if (text.startsWith('{')) framed = JSON.parse(text).cookie || '';
@@ -76,11 +76,13 @@ for (let i = 0; i < 30 && framed === null; i++) {
 	}
 	if (framed === null) await sleep(500);
 }
+// the embedded frame is a nested document: judged by the top-level page,
+// so no Lax either (the nested-cookies suite has the top-level navigation)
 ok(
-	'a cross-site frame navigation carries Lax and None but not Strict',
+	'a nested cross-site frame carries SameSite=None only',
 	framed !== null &&
-		has(framed, 'lax') &&
 		has(framed, 'none') &&
+		!has(framed, 'lax') &&
 		!has(framed, 'strict'),
 	JSON.stringify(framed),
 );
