@@ -48,6 +48,17 @@
 	} catch (error) {
 		__rb.domainOther = error.name;
 	}
+	// a string inside image-set() is a URL: routed, and read back without the route
+	{
+		const d = document.createElement('div');
+		document.body.append(d);
+		d.style.backgroundImage =
+			'image-set("/pages/sprite.svg?set" 1x, url("/pages/sprite.svg?set2") 2x)';
+		__rb.imageSet = [
+			d.style.backgroundImage,
+			getComputedStyle(d).backgroundImage,
+		];
+	}
 	const holder = document.getElementById('holder');
 	holder.innerHTML =
 		'<script>window.__rb.markupRan = top === window;<\/script>';

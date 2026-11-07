@@ -82,4 +82,11 @@ ok(
 		rb.markupText === 'window.__rb.markupRan = top === window;',
 	JSON.stringify([rb.markupRan, rb.markupText]),
 );
+ok(
+	'image-set strings are routed and read back as the page wrote them',
+	Array.isArray(rb.imageSet) &&
+		rb.imageSet.every((v) => /sprite\.svg\?set/.test(v) && !/stomp\//.test(v)),
+	JSON.stringify(rb.imageSet),
+);
+
 await done(browser);

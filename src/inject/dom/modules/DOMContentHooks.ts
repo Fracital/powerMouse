@@ -36,6 +36,20 @@ applyDescriptors(nativeHTMLStyleElement, HTMLStyleElement.prototype);
 applyDescriptors(nativeHTMLScriptElement, HTMLScriptElement.prototype);
 applyDescriptors(nativeHTMLFormElement, HTMLFormElement.prototype);
 
+/**
+ * The name the hooks know an element by: HTML elements uppercase (what an
+ * HTML document's nodeName is; an XHTML document keeps them lowercase),
+ * anything else (SVG, MathML) as is.
+ */
+export function htmlName(node: Node): string {
+	if (node.nodeType !== 1) return node.nodeName;
+	return usePrototype(node as Element, nativeElement, (element) =>
+		element.namespaceURI === 'http://www.w3.org/1999/xhtml'
+			? element.nodeName.toUpperCase()
+			: element.nodeName,
+	);
+}
+
 function getSupportedQueryInterface(
 	node: Node,
 ): DocumentFragment | Element | undefined {
@@ -175,6 +189,47 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// tree, which is the moment it runs. At that point it is not connected
 		// yet, so the connected check alone would skip every dynamically
 		// inserted inline script and leave it unrewritten.
+		// an SVG script element (inline SVG, a standalone SVG document) has no
+		// `text`: its textContent is the source, rewritten the same way
+		const rewriteSVGScript = (script: Element, willConnect: boolean) => {
+			const source = script.textContent ?? '';
+			if (
+				!source ||
+				!shouldRewriteScript(script) ||
+				rewrittenScripts.get(script as HTMLScriptElement) === source ||
+				(!script.isConnected &&
+					!willConnect &&
+					getGlobalParsingState(this.client.global) !== 'parsingBeforeWrite')
+			)
+				return;
+			const rewritten = modifyJS(
+				source,
+				this.client.url,
+				this.client.config,
+				scriptType(script),
+			);
+			rewrittenScripts.set(script as HTMLScriptElement, rewritten);
+			script.textContent = rewritten;
+		};
+		// `node` arrives with its prototype swapped (the insert hook reads it
+		// as a plain Node), so the kind is read natively: an HTML script gets
+		// the script prototype, an SVG one (inline SVG, an SVG document) the
+		// element's
+		const rewriteAnyScript = (node: Node, willConnect: boolean) => {
+			const namespace = usePrototype(
+				node,
+				nativeElement,
+				(element) => element.namespaceURI,
+			);
+			if (namespace === 'http://www.w3.org/1999/xhtml')
+				usePrototype(node, nativeHTMLScriptElement, (script) =>
+					rewriteScript(script, willConnect),
+				);
+			else
+				usePrototype(node, nativeElement, (element) =>
+					rewriteSVGScript(element, willConnect),
+				);
+		};
 		const rewriteScript = (script: HTMLScriptElement, willConnect = false) => {
 			// an import map's targets are routed once, before it connects
 			if (script.type.trim().toLowerCase() === 'importmap') {
@@ -355,12 +410,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				});
 
 			// we're about to render
+			const name = htmlName(insert);
 			usePrototype(insert, nativeNode, (node) => {
-				if (node.nodeName === 'SCRIPT') {
-					usePrototype(insert, nativeHTMLScriptElement, (script) =>
-						rewriteScript(script, willConnect),
-					);
-				} else if (node.nodeName === 'STYLE') {
+				if (name === 'SCRIPT') {
+					rewriteAnyScript(insert, willConnect);
+				} else if (name === 'STYLE') {
 					// before it connects and the browser parses it
 					if (willConnect)
 						usePrototype(insert, nativeHTMLStyleElement, (style) =>
@@ -382,17 +436,15 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 							}
 
 							for (const script of queryable.querySelectorAll('script'))
-								usePrototype(script, nativeHTMLScriptElement, (script) =>
-									rewriteScript(script, willConnect),
-								);
+								rewriteAnyScript(script, willConnect);
 						});
 				}
 			});
 
 			const result = insertElement();
 
-			usePrototype(insert, nativeNode, (node) => {
-				switch (node.nodeName) {
+			usePrototype(insert, nativeNode, () => {
+				switch (name) {
 					case 'FORM':
 						usePrototype(insert, CustomElement.prototype, (form) => {
 							domAttributesModule.formHook!(form);

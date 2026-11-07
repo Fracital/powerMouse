@@ -117,6 +117,30 @@ export function modifyCSS(
 				offset +=
 					node.loc!.end.offset - node.loc!.start.offset - generated.length;
 			}
+		} else if (
+			node.type === 'String' &&
+			/^(-webkit-)?image-set$|^src$/i.test(this.function?.name ?? '')
+		) {
+			// a string inside image-set() or src() is a URL: routed as a url()
+			// token, so the readback restores the written value like any other
+			try {
+				const resolved = new StompURL(new URL(node.value, url.toString()), url);
+				const generated = generate({
+					type: 'Url',
+					value: preserveValue(
+						routeBinary(resolved),
+						`url(${JSON.stringify(node.value)})`,
+					),
+				});
+				script =
+					script.slice(0, node.loc!.start.offset - offset) +
+					generated +
+					script.slice(node.loc!.end.offset - offset);
+				offset +=
+					node.loc!.end.offset - node.loc!.start.offset - generated.length;
+			} catch (error) {
+				// not a URL: left as written
+			}
 		} else if (node.type === 'String' && this.atrule?.name === 'import') {
 			try {
 				// already routed (a second pass over rewritten text): leave it

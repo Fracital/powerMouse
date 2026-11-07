@@ -5,7 +5,7 @@ import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import StompURL from '../../StompURL';
 import { OPEN_TAB, WORKER_BASE } from '../../transport/messages';
 import Client from '../Client';
-import cloneRawNode, { parseHTML } from './cloneNode';
+import cloneRawNode, { nativeAttributes, parseHTML } from './cloneNode';
 import { scriptKind, shouldRewriteScript } from './modules/DOMAttributes';
 
 type OpenCallback = () => void;
@@ -191,18 +191,24 @@ export default class DocumentClient extends Client {
 	 */
 	rewriteInlineScripts(root: ParentNode) {
 		for (const script of root.querySelectorAll('script')) {
-			if (!script.text) continue;
+			// an SVG script element has no `text`: its textContent is the source
+			const element: Element = script;
+			const isHTMLScript = script instanceof this.global.HTMLScriptElement;
+			const read = () =>
+				(isHTMLScript ? script.text : element.textContent) || '';
+			const write = (text: string) => {
+				if (isHTMLScript) this.scriptText(script, text);
+				else element.textContent = text;
+			};
+			if (!read()) continue;
 			if (
 				(script.getAttribute('type') || '').trim().toLowerCase() === 'importmap'
 			) {
-				this.scriptText(
-					script,
-					rewriteImportMap(script.text, this.url, this.config),
-				);
+				write(rewriteImportMap(read(), this.url, this.config));
 				continue;
 			}
 			if (!shouldRewriteScript(script)) continue;
-			const source = script.text;
+			const source = read();
 			const isModule = scriptKind(script) === 'module';
 			// the restore runs after the script's directive prologue, so a strict
 			// script stays strict
@@ -215,8 +221,47 @@ export default class DocumentClient extends Client {
 					? ''
 					: `document.currentScript.textContent = ${JSON.stringify(source)};`,
 			);
-			this.scriptText(script, rewritten.replace(/<\/script/gi, '<\\/script'));
+			write(rewritten.replace(/<\/script/gi, '<\\/script'));
 		}
+	}
+	/**
+	 * Load an XML document (a standalone SVG, an XHTML page) served through
+	 * the XML shell: parsed with its own mime, its scripts rewritten, its tree
+	 * re-created through the hooks in this document (namespaces kept) under
+	 * the shell's root, since an XML document has no document.write.
+	 * Scripts run as the tree lands, like a parser's would.
+	 */
+	loadXML(markup: string, mime: string) {
+		const parsed = parseHTML(
+			markup,
+			this.global.document,
+			mime as DOMParserSupportedType,
+		);
+		const root = parsed.documentElement;
+		const live = this.global.document.documentElement;
+		if (!root || !live) return;
+		setGlobalParsingState(this.global, 'parsingBeforeWrite');
+		this.rewriteInlineScripts(root);
+		// The shell's root is the document's own start tag, so it stays (a
+		// root put in its place would not carry the title: Chrome's
+		// document.title only follows an SVG <title> that is inserted under
+		// the connected root). Its attributes are set again, through the
+		// hooks, and the shell's scripts give way to the page's children.
+		for (const attribute of Array.from(
+			Reflect.apply(nativeAttributes, live, []) as NamedNodeMap,
+		))
+			if (attribute.namespaceURI)
+				live.setAttributeNS(
+					attribute.namespaceURI,
+					attribute.name,
+					attribute.value,
+				);
+			else live.setAttribute(attribute.name, attribute.value);
+		while (live.firstChild) live.removeChild(live.firstChild);
+		const clone = cloneRawNode(root, this.global.document, true);
+		setGlobalParsingState(this.global);
+		live.append(clone);
+		runDocumentOpenListeners(this.global);
 	}
 	/** @internal the rewritten text each script element carries (DOMContentHooks, DOMHooks) */
 	readonly rewrittenScripts = new WeakMap<HTMLScriptElement, string>();

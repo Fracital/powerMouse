@@ -118,6 +118,52 @@ export function modifyHTML(
 	return `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${baseScript}<script src="${injectDocumentJS(url, config)}"></script><script>${inject}</script></body></html>`;
 }
 
+/** the mimes an XML document is served under and parsed with */
+export const XML_DOCUMENT_MIMES = ['image/svg+xml', 'application/xhtml+xml'];
+
+/**
+ * The shell of an XML document (a standalone SVG, an XHTML page): the same
+ * root element with its namespace declarations, holding the inject bundle
+ * and the client call as XHTML script elements (which an XML parser runs),
+ * the original markup in a CDATA section. The client parses it with the
+ * document's own mime and replaces the root in place: an XML document has
+ * no document.write.
+ */
+export function modifyXML(
+	script: string,
+	url: StompURL,
+	config: Config,
+	mime: string,
+): string {
+	// the root start tag, after the prolog, comments and doctype
+	const tags =
+		/<\?[^>]*\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>|<([A-Za-z_][\w.:-]*)(\s[^>]*?)?(\/?)>/g;
+	let root = `<svg xmlns="http://www.w3.org/2000/svg">`;
+	let name = 'svg';
+	let match: RegExpExecArray | null;
+	while ((match = tags.exec(script)) !== null) {
+		if (match[1]) {
+			name = match[1];
+			root = `<${name}${match[2] ?? ''}>`;
+			break;
+		}
+	}
+	if (mime === 'application/xhtml+xml' && !match?.[1])
+		root = `<html xmlns="http://www.w3.org/1999/xhtml">`;
+	const cdata = (text: string) =>
+		`<![CDATA[${text.split(']]>').join(']]]]><![CDATA[>')}]]>`;
+	const inject = `if (typeof globalThis.createClient !== 'function') {
+	document.documentElement.textContent = "Stomp bundle did not load. See devtools output for more information.";
+} else {
+	if (!(${JSON.stringify(CLIENT_KEY)} in globalThis))
+		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
+	if (!${CLIENT_KEY}.applied) ${CLIENT_KEY}.apply();
+	${CLIENT_KEY}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});
+}`;
+	const xhtml = 'http://www.w3.org/1999/xhtml';
+	return `<?xml version="1.0" encoding="UTF-8"?>${root}<script xmlns="${xhtml}" src="${injectDocumentJS(url, config)}"></script><script xmlns="${xhtml}">${cdata(inject)}</script></${name}>`;
+}
+
 /**
  * The HTML spec's parse of a refresh value (`<meta http-equiv=refresh>`, the
  * `Refresh` header): whitespace, the time (digits, then anything up to the

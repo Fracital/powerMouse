@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="100" viewBox="0 0 200 100">
+	<title>STANDALONE SVG</title>
+	<a id="link" href="/pages/hist-1.html"><text x="10" y="40">link</text></a>
+	<image id="img" href="/pages/sprite.svg?svgdoc" width="20" height="20" />
+	<script><![CDATA[
+		document.documentElement.setAttribute('data-top', top === window ? 'self' : 'OTHER');
+		document.documentElement.setAttribute('data-href', location.href);
+		document.documentElement.setAttribute('data-link', document.getElementById('link').href.baseVal);
+	]]></script>
+</svg>

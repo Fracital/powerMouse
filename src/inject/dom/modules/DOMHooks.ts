@@ -260,10 +260,16 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		}
 	}
 	updateAttributeHooks(element: CustomElement, attribute: string) {
+		// HTML hooks are keyed by the uppercase nodeName of an HTML document;
+		// an XHTML document's elements carry the same names in lowercase
+		const name =
+			element.namespaceURI === 'http://www.w3.org/1999/xhtml'
+				? element.nodeName.toUpperCase()
+				: element.nodeName;
 		for (const entry of this.hooks) {
 			if (
 				!isAttributeHook(entry.hook) ||
-				(entry.hook[0] !== '*' && entry.hook[0] !== element.nodeName) ||
+				(entry.hook[0] !== '*' && entry.hook[0] !== name) ||
 				entry.hook[1] !== attribute
 			)
 				continue;

@@ -10,8 +10,10 @@ import { modifyCSS, rewriteCSSValueURLs, routeCSS } from '../rewriteCSS';
 import {
 	modifyHTML,
 	modifyRefresh,
+	modifyXML,
 	nestedTopOf,
 	routeHTML,
+	XML_DOCUMENT_MIMES,
 } from '../rewriteHTML';
 import { modifyJS, routeJS, ScriptType } from '../rewriteJS';
 import { parseRoutedURL, routeBinary } from '../routeURL';
@@ -721,7 +723,7 @@ function genericForward(
 	};
 }
 
-const htmlMimes = ['image/svg+xml', 'text/html', ''];
+const htmlMimes = ['text/html', '', ...XML_DOCUMENT_MIMES];
 
 export function getMime(contentType: string): string {
 	return contentType.split(';')[0];
@@ -829,11 +831,21 @@ export function registerRewrites(
 			rewriter,
 			async (url, response, responseHeaders) => {
 				const contentType = responseHeaders.get('content-type');
-				if (!htmlMimes.includes(getMime(contentType || ''))) return false;
+				const mime = getMime(contentType || '');
+				if (!htmlMimes.includes(mime)) return false;
 				// decode the way the browser would have (BOM, header charset,
 				// <meta charset>), then serve the rewritten document as UTF-8
 				const bytes = new Uint8Array(await response.arrayBuffer());
 				responseHeaders.set('content-type', utf8ContentType(contentType));
+				// an XML document (a standalone SVG, an XHTML page) keeps its mime
+				// and gets an XML shell: the HTML one is not well-formed XML
+				if (XML_DOCUMENT_MIMES.includes(mime))
+					return modifyXML(
+						decodeDocument(bytes, contentType),
+						url,
+						rewriter.config,
+						mime,
+					);
 				return modifyHTML(
 					decodeDocument(bytes, contentType),
 					url,

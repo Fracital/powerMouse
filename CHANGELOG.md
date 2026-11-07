@@ -379,6 +379,21 @@ url`) carries its value and targets that window. An about:blank child of
   status 0 and `error: "aborted"`, and cancels the origin's answer unread
   when it arrives, so the transport stops reading. Before, the worker waited
   for the origin and reported the request as completed.
+- Standalone SVG documents and XHTML pages are proxied as what they are. An
+  XML document got the HTML shell under its XML mime (the browser parsed the
+  shell as XML and showed nothing) or, for XHTML, nothing at all (raw, with
+  `top` and every URL leaking). Both now get an XML shell (the same root
+  element and namespaces, XHTML script elements, CDATA) under their own mime;
+  the client parses the markup with that mime, rewrites the scripts and
+  re-creates the tree through the hooks, namespaces kept, under the shell's
+  root (an XML document has no `document.write`; a replaced root would lose
+  the SVG title). The clone helper creates every element in its own namespace
+  now, so an inline SVG inserted from a markup string is an SVG element, and
+  the hooks that compared uppercase HTML names (attribute routing, script and
+  style insertion, the script source readback) know an XHTML document's
+  lowercase ones and leave an SVG `<script>` to its own hook. A string inside
+  `image-set()` or `src()` is routed like a `url()` and reads back as
+  written.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

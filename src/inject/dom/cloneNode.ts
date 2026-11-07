@@ -9,8 +9,9 @@ function parserFor(document: Document): DOMParser {
 export function parseHTML(
 	script: string,
 	document: Document = globalThis.document,
+	mime: DOMParserSupportedType = 'text/html',
 ) {
-	return parserFor(document).parseFromString(script, 'text/html');
+	return parserFor(document).parseFromString(script, mime);
 }
 
 /**
@@ -30,6 +31,12 @@ export function parseHTMLFragment(
 	return [...parsed.body.children[0].childNodes];
 }
 
+// taken before the DOM hooks replace the getter
+export const nativeAttributes = Reflect.getOwnPropertyDescriptor(
+	Element.prototype,
+	'attributes',
+)!.get!;
+
 const STACK_ITERATE = Symbol();
 const STACK_FINALIZE = Symbol();
 
@@ -45,6 +52,9 @@ export default function cloneRawNode(
 	// the document the nodes are made in: the client's, which for a child
 	// frame the parent injected is not this bundle's own
 	document: Document = globalThis.document,
+	// a document being loaded (loadXML): its scripts are made fresh so they
+	// run when the tree lands, instead of adopted "already started"
+	runScripts = false,
 ): DocumentFragment {
 	const tempTarget = document.createDocumentFragment();
 
@@ -92,6 +102,7 @@ export default function cloneRawNode(
 					// (an SVG script is re-created like any other element: the script
 					// hooks expect HTMLScriptElement)
 					if (
+						!runScripts &&
 						d[0].nodeName === 'SCRIPT' &&
 						(d[0] as Element).namespaceURI === 'http://www.w3.org/1999/xhtml'
 					) {
@@ -110,7 +121,18 @@ export default function cloneRawNode(
 					let target = d[0] as Element;
 
 					try {
-						target = document.createElement(d[0].nodeName);
+						// in the element's own namespace: an SVG in an HTML page, or
+						// any element of an XML document (where createElement would
+						// make one of no namespace)
+						const namespace = (d[0] as Element).namespaceURI;
+						target =
+							namespace === 'http://www.w3.org/1999/xhtml' &&
+							document.contentType === 'text/html'
+								? document.createElement(d[0].nodeName)
+								: document.createElementNS(
+										namespace,
+										(d[0] as Element).localName,
+									);
 					} catch (err) {
 						// d[0].nodeName may be HTMLUnknownElement
 						console.error(err);
@@ -118,12 +140,20 @@ export default function cloneRawNode(
 						debugger;
 					}
 
-					for (const attribute of (d[0] as Element).getAttributeNames()) {
-						target.setAttribute(
-							attribute,
-							(d[0] as Element).getAttribute(attribute)!,
-						);
-					}
+					// the native map: the hooked `attributes` getter hands the page a
+					// view that hides the markers, not an iterable NamedNodeMap
+					for (const attribute of Array.from(
+						Reflect.apply(nativeAttributes, d[0], []) as NamedNodeMap,
+					))
+						// a namespaced attribute (xlink:href) keeps its namespace; the
+						// hooks see both ways of setting it
+						if (attribute.namespaceURI)
+							target.setAttributeNS(
+								attribute.namespaceURI,
+								attribute.name,
+								attribute.value,
+							);
+						else target.setAttribute(attribute.name, attribute.value);
 
 					// a template's children live in its content fragment, not in
 					// childNodes; clone them into the new template's fragment

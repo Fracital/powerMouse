@@ -90,24 +90,34 @@ export default class ReadbackModule extends Module<DocumentClient> {
 			'parentNode',
 		)!.get!;
 
-		// the script elements an insertion argument brings along
+		// the HTML script elements an insertion argument brings along (an SVG
+		// script has no `text`; its source is its textContent, not tracked)
+		const isHTMLScript = (element: Element) =>
+			usePrototype(
+				element,
+				nativeElement,
+				(element) =>
+					element.localName === 'script' &&
+					element.namespaceURI === 'http://www.w3.org/1999/xhtml',
+			);
 		const scriptsIn = (node: unknown): HTMLScriptElement[] => {
 			if (typeof node !== 'object' || node === null) return [];
 			try {
 				return usePrototype(node as Node, nativeNode, (native) => {
 					if (native.nodeType === 1) {
-						if (native.nodeName === 'SCRIPT')
+						if (isHTMLScript(node as Element))
 							return [node as HTMLScriptElement];
-						return usePrototype(node as Element, nativeElement, (element) => [
-							...element.querySelectorAll('script'),
-						]);
+						return usePrototype(node as Element, nativeElement, (element) =>
+							[...element.querySelectorAll('script')].filter(isHTMLScript),
+						) as HTMLScriptElement[];
 					}
 					if (native.nodeType === 11)
 						return usePrototype(
 							node as DocumentFragment,
 							nativeDocumentFragment,
-							(fragment) => [...fragment.querySelectorAll('script')],
-						);
+							(fragment) =>
+								[...fragment.querySelectorAll('script')].filter(isHTMLScript),
+						) as HTMLScriptElement[];
 					return [];
 				});
 			} catch (error) {
