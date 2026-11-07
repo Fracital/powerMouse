@@ -42,7 +42,7 @@ export const REMOTE_RPC = 'stomp-remote';
 
 /** implemented by the controller frame, called by the host */
 export type FrameBound = {
-	init: [ControllerFrameInit, { config: Config }];
+	init: [ControllerFrameInit, { config: Config; stale: StaleInfo | null }];
 	route: [string, string];
 	setTransport: [TransportDescriptor];
 	/** frames are addressed by their index in the host window's `frames` list */
@@ -53,9 +53,17 @@ export type FrameBound = {
 	cookies: [CookieCommand, CookieResult];
 };
 
+/** the two builds in a mismatch, as the host sees them on `controller.stale` */
+export interface StaleInfo {
+	controller: string;
+	worker: string;
+}
+
 /** implemented by the host, called by the controller frame */
 export type HostBound = {
 	ready: [];
 	/** a proxied request completed (only when the host asked for the log) */
 	request: [RequestInfo];
+	/** the inner controller's `stale` changed: the builds, or null once they agree again */
+	stale: [StaleInfo | null];
 };

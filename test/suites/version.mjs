@@ -176,4 +176,28 @@ ok(
 	JSON.stringify(slow),
 );
 
+// isolated mode: the host's RemoteController mirrors the inner controller's
+// state, so a host can listen the same way in both modes
+const remotePage = await openDemo(browser);
+const remote = await remotePage.evaluate(() => {
+	const controller = window.controller;
+	let listens = true;
+	try {
+		controller.addEventListener('stale', () => {});
+		controller.addEventListener('rebind', () => {});
+	} catch (error) {
+		listens = String(error);
+	}
+	return {
+		eventTarget: controller instanceof EventTarget,
+		stale: controller.stale,
+		listens,
+	};
+});
+ok(
+	'RemoteController is an EventTarget with stale null while the builds agree',
+	remote.eventTarget && remote.stale === null && remote.listens === true,
+	JSON.stringify(remote),
+);
+
 await done(browser, page.errors);

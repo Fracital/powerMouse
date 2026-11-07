@@ -14,6 +14,7 @@ import {
 	FrameBound,
 	HostBound,
 	REMOTE_RPC,
+	StaleInfo,
 	TransportDescriptor,
 } from './messages';
 
@@ -121,8 +122,15 @@ if (window === window.parent || !origins.length) {
 								}
 							: {}),
 					});
+					// the host mirrors `stale` and its two events
+					controller.addEventListener('stale', (event) => {
+						rpc.call('stale', (event as CustomEvent<StaleInfo>).detail);
+					});
+					controller.addEventListener('rebind', () => {
+						rpc.call('stale', null);
+					});
 					await controller.wait();
-					return [{ config: controller.config }, []];
+					return [{ config: controller.config, stale: controller.stale }, []];
 				},
 				route: async (url) => {
 					if (!controller) throw new Error('Controller is not initialised');

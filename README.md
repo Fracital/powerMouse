@@ -88,21 +88,22 @@ through, everything else is substituted into `template` at `%s`.
 the same shape as `StompController` but runs the real controller in a hidden
 frame on the proxy origin:
 
-| Member                        | Description                                                                                                                        |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `new RemoteController(init)`  | `init.proxyOrigin`, `init.transport` (`{ module, options }`), optional `directory`, `codec`, `sandbox`, `pollInterval`             |
-| `init.allowInvalidJs`         | as on `StompController`                                                                                                            |
-| `init.cache`                  | as on `StompController`                                                                                                            |
-| `init.onRequest`              | as on `StompController`, relayed through the controller frame                                                                      |
-| `init.onNavigate`             | as on `StompController`; the reports arrive from the proxy origin and are accepted only from this controller's own frames          |
-| `init.onOpen`                 | as on `StompController`: the request reaches the host from the proxy origin and is accepted only from this controller's own frames |
-| `wait()`                      | resolves once the controller frame has registered the service worker and loaded the transport                                      |
-| `createFrame(iframe?)`        | returns a `RemoteFrame`; applies the sandbox attribute                                                                             |
-| `setTransport(descriptor)`    | hot-swap the transport (loaded inside the controller frame)                                                                        |
-| `clearCache()`                | drop the HTTP cache (inside the controller frame)                                                                                  |
-| `cookies.*`                   | as on `StompController`, relayed through the controller frame                                                                      |
-| `route(url)`                  | the proxied URL for `url` on the proxy origin                                                                                      |
-| `frames`, `config`, `element` | frames created so far, the controller's config, the hidden controller iframe                                                       |
+| Member                             | Description                                                                                                                        |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `new RemoteController(init)`       | `init.proxyOrigin`, `init.transport` (`{ module, options }`), optional `directory`, `codec`, `sandbox`, `pollInterval`             |
+| `init.allowInvalidJs`              | as on `StompController`                                                                                                            |
+| `init.cache`                       | as on `StompController`                                                                                                            |
+| `init.onRequest`                   | as on `StompController`, relayed through the controller frame                                                                      |
+| `init.onNavigate`                  | as on `StompController`; the reports arrive from the proxy origin and are accepted only from this controller's own frames          |
+| `init.onOpen`                      | as on `StompController`: the request reaches the host from the proxy origin and is accepted only from this controller's own frames |
+| `wait()`                           | resolves once the controller frame has registered the service worker and loaded the transport                                      |
+| `createFrame(iframe?)`             | returns a `RemoteFrame`; applies the sandbox attribute                                                                             |
+| `setTransport(descriptor)`         | hot-swap the transport (loaded inside the controller frame)                                                                        |
+| `clearCache()`                     | drop the HTTP cache (inside the controller frame)                                                                                  |
+| `cookies.*`                        | as on `StompController`, relayed through the controller frame                                                                      |
+| `route(url)`                       | the proxied URL for `url` on the proxy origin                                                                                      |
+| `frames`, `config`, `element`      | frames created so far, the controller's config, the hidden controller iframe                                                       |
+| `stale`, `stale` / `rebind` events | as on `StompController`, mirrored from the controller frame                                                                        |
 
 `RemoteFrame`: `go(url)`, `back()`, `forward()`, `reload()` (the last three
 are relayed through the controller frame, which is same-origin with the

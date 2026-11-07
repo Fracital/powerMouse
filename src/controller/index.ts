@@ -21,6 +21,7 @@ import { RpcHelper } from '../transport/rpc';
 import serveTransport from '../transport/serveTransport';
 import { BUILD } from '../version';
 import { canTraverse, traverse } from './history';
+import type { StaleInfo } from './messages';
 import { DEFAULT_SANDBOX } from './remote';
 
 export { default as SearchBuilder } from '../bootstrapper/SearchBuilder';
@@ -191,11 +192,7 @@ export function activated(worker: ServiceWorker): Promise<ServiceWorker> {
 	});
 }
 
-/** the two builds in a mismatch, as the host sees them on `controller.stale` */
-export interface StaleInfo {
-	controller: string;
-	worker: string;
-}
+export type { StaleInfo };
 
 function defaultDirectory(): URL {
 	const script =

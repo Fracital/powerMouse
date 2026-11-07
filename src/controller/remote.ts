@@ -13,6 +13,7 @@ import {
 	FrameInfo,
 	HostBound,
 	REMOTE_RPC,
+	StaleInfo,
 	TransportDescriptor,
 } from './messages';
 
@@ -61,10 +62,17 @@ export interface RemoteRequestEvent extends RequestInfo {
 export const DEFAULT_SANDBOX =
 	'allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock';
 
-export class RemoteController {
+/**
+ * Events, as on StompController: `stale` (detail: StaleInfo) when the
+ * controller frame's service worker is another build than its controller
+ * and could not be replaced in time, `rebind` once the builds agree again.
+ */
+export class RemoteController extends EventTarget {
 	proxyOrigin: string;
 	directory: string;
 	config?: Config;
+	/** the inner controller's `stale` (see StompController); null while the builds agree */
+	stale: StaleInfo | null = null;
 	frames: RemoteFrame[] = [];
 	isReady = false;
 	/** service worker client ids the pages reported, by frame */
@@ -76,6 +84,7 @@ export class RemoteController {
 	private sandbox: string;
 
 	constructor(init: RemoteControllerInit) {
+		super();
 		this.init = init;
 		this.proxyOrigin = new URL(init.proxyOrigin).origin;
 		this.directory = init.directory ?? '/stomp/';
@@ -107,6 +116,23 @@ export class RemoteController {
 						...info,
 						frame: (info.client && this.clientFrames.get(info.client)) || null,
 					});
+				},
+				stale: async (info) => {
+					const was = this.stale;
+					this.stale = info;
+					if (info) {
+						if (this.config)
+							this.config = { ...this.config, build: info.worker };
+						this.dispatchEvent(new CustomEvent('stale', { detail: info }));
+					} else if (was) {
+						if (this.config)
+							this.config = { ...this.config, build: was.controller };
+						this.dispatchEvent(
+							new CustomEvent('rebind', {
+								detail: { build: was.controller },
+							}),
+						);
+					}
 				},
 			},
 			REMOTE_RPC,
@@ -149,8 +175,9 @@ export class RemoteController {
 					...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 				}),
 			)
-			.then(({ config }) => {
+			.then(({ config, stale }) => {
 				this.config = config;
+				this.stale = stale ?? null;
 				this.isReady = true;
 			});
 
