@@ -13,6 +13,11 @@ export const CONTROLLER_INIT = '$stomp$controllerInit';
 export const INIT_REMOTE_TRANSPORT = '$stomp$initRemoteTransport';
 /** SW -> every client: SW (re)started, controllers must re-send CONTROLLER_INIT */
 export const SW_REVIVE = '$stomp$swRevive';
+/** SW -> every window: the cookie jar changed for `domain` (every host when empty); pages drop their document.cookie cache */
+export const COOKIES_CHANGED = '$stomp$cookiesChanged';
+export interface CookiesChange {
+	domain: string;
+}
 /** proxied page -> dedicated worker, with [port]: the worker's transport port */
 export const TRANSPORT_INIT = '$stomp$transportInit';
 /**

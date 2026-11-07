@@ -205,7 +205,7 @@ Suites: headers, cookies, cookie-jar, cache, page-apis.
 | `Max-Age` in seconds, `Max-Age<=0` deletes, re-sets replace                                                                                             | ok      |                                                                                                                                                                                                             |
 | `__Host-` / `__Secure-` prefixes, 4096-byte cap, CTL rejection                                                                                          | ok      | cookie-rules suite                                                                                                                                                                                          |
 | HttpOnly cookies on WebSocket handshakes                                                                                                                | ok      | the controller adds the jar's Cookie header to the handshake; the page never holds it (ws-cookies suite)                                                                                                    |
-| `document.cookie` seeded into the page instead of a sync round trip                                                                                     | partial | every read spins the main thread; a worker-invalidated cache is the next cookies item                                                                                                                       |
+| `document.cookie` seeded into the page instead of a sync round trip                                                                                     | ok      | cached; invalidated by a storage version, every response, and the worker's broadcast (cookie-cache suite)                                                                                                   |
 | `cookieStore` removed from pages                                                                                                                        | ok      | ws-cookies suite                                                                                                                                                                                            |
 | Cookie jar reachable from the host                                                                                                                      | ahead   | `controller.cookies.get/set/list/clear`, host-only                                                                                                                                                          |
 | Sync XHR bridge                                                                                                                                         | ahead   | works; refused beacons fail at once; bodies text-decoded, headers flattened                                                                                                                                 |
@@ -292,9 +292,8 @@ Suites: navigate-events, request-log, version, cookie-jar, cache, isolation.
 
 1. Documents that escape the rewrite: `blob:` documents; import map package
    prefixes and scope keys.
-2. Cookies: a cached `document.cookie` invalidated by the worker (every read
-   is a sync round trip today); a nested cross-site iframe should not get
-   Lax cookies (needs the host to mark its top documents).
+2. Cookies: a nested cross-site iframe should not get Lax cookies (needs the
+   host to mark its top documents).
 3. The page's own `Referrer-Policy` (needs the document's headers per client).
 4. Cache: heuristic freshness from `Last-Modified`, stale-while-revalidate,
    stale-if-error.

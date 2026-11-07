@@ -1,0 +1,42 @@
+<!doctype html>
+<title>COOKIE CACHE</title>
+<iframe id="sib" src="cookie-sibling.html"></iframe>
+<script>
+	// document.cookie reads, and what must make the next read fresh: the
+	// page's own write, a same-origin sibling frame's write (synchronous),
+	// a response to this page's fetch that set a cookie, and a sibling frame's
+	// navigation whose response deleted one
+	window.__cc = {};
+	(async () => {
+		const reads = () => window.$P$s.cookieReads;
+		const before = reads();
+		let last = '';
+		for (let i = 0; i < 50; i++) last = document.cookie;
+		__cc.fiftyReads = reads() - before;
+		__cc.first = last;
+		document.cookie = 'own=1; path=/';
+		__cc.ownWrite = document.cookie.includes('own=1');
+		// the sibling frame writes sibling=1 in its own script and says so (its
+		// initial about:blank document already reports readyState complete)
+		const sib = document.getElementById('sib');
+		while (!sib.contentWindow.__wrote)
+			await new Promise((r) => setTimeout(r, 20));
+		__cc.siblingWrite = document.cookie.includes('sibling=1');
+		const set = await fetch('/pages/cookie-set.html');
+		await set.text();
+		__cc.afterFetch = document.cookie.includes('ma=1');
+		const nav = document.createElement('iframe');
+		const loaded = new Promise((r) =>
+			nav.addEventListener('load', r, { once: true }),
+		);
+		nav.src = 'cookie-del.html';
+		document.body.append(nav);
+		await loaded;
+		__cc.afterNavigation = !document.cookie.includes('ma=1');
+		__cc.reads = reads() - before;
+		__cc.done = true;
+	})().catch((error) => {
+		__cc.error = String(error);
+		__cc.done = true;
+	});
+</script>

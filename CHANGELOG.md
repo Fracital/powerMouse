@@ -110,6 +110,18 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- `document.cookie` no longer costs a synchronous round trip per read: the
+  page caches the string and drops it when the jar may have changed, on its
+  own write, on a write by another document of the site (a version the
+  writer bumps in the proxy origin's own storage, seen synchronously), when
+  a response reaches the page (fetch, XHR), and on the service worker's
+  broadcast for a Set-Cookie it applied, sent before it answers the response
+  that carried it, so the next read is fresh. Fifty reads cost one round
+  trip.
+- A child frame whose parent touched it before it loaded (its initial
+  about:blank window is reused for the real document) threw "Illegal
+  invocation" on every `document.cookie` access: the parent's client had
+  hooked it and checked against the parent's document.
 - Leak fix: the sync route behind `document.cookie` (`/cookies/get`) handed
   page script the whole jar, HttpOnly cookies included, and relied on the
   page's own module to filter them out. The route now answers without them.

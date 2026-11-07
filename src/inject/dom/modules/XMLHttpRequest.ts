@@ -144,6 +144,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				}
 
 				this.#readyState = HEADERS_RECEIVED;
+				that.client.notifyResponse();
 				this.#status = response!.status;
 				this.#statusText = response!.statusText;
 				const parsed = parseRoutedURL(

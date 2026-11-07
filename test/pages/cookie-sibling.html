@@ -1,0 +1,7 @@
+<!doctype html>
+<title>COOKIE SIBLING</title>
+<script>
+	// a same-origin document writing a cookie of its own (cookie-cache suite)
+	document.cookie = 'sibling=1; path=/';
+	window.__wrote = true;
+</script>

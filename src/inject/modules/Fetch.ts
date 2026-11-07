@@ -116,6 +116,8 @@ export default class FetchModule extends Module<Client> {
 					routeXHR(new StompURL(url, this.client.url)),
 					init,
 				);
+				// the response may have set cookies: document.cookie reads fresh
+				this.client.notifyResponse();
 
 				responseURLs.set(
 					res,

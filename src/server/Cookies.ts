@@ -9,7 +9,11 @@
 // on their own so they can be checked in node (cookie-rules suite).
 import { IDBPDatabase, openDB } from 'idb';
 import parseSetCookie, { Cookie as ParserCookie } from 'set-cookie-parser';
-import { CookieRecord } from '../transport/messages';
+import {
+	CookieRecord,
+	COOKIES_CHANGED,
+	CookiesChange,
+} from '../transport/messages';
 import Router, { jsonAPI } from './Router';
 
 export type SameSite = 'lax' | 'strict' | 'none';
@@ -298,6 +302,8 @@ const STORE = 'cookies';
 export default class Cookies {
 	private db: IDBPDatabase;
 	#publicSuffix: PublicSuffix;
+	/** called after the jar changed for a domain ('' for every host) */
+	onChange?: (domain: string) => void;
 	/** the last creation time handed out, so two sets in one ms keep their order */
 	#lastCreated = 0;
 	constructor(db: IDBPDatabase, publicSuffix: PublicSuffix) {
@@ -356,11 +362,13 @@ export default class Cookies {
 	async clear(origin?: string): Promise<void> {
 		if (!origin) {
 			await this.db.clear(STORE);
+			this.onChange?.('');
 			return;
 		}
 		const host = new URL(origin).hostname;
 		for (const cookie of (await this.db.getAll(STORE)) as JarCookie[])
 			if (coversHost(cookie, host)) await this.db.delete(STORE, cookie.id);
+		this.onChange?.(host);
 	}
 	/**
 	 * Apply Set-Cookie values from a response (or a script, when `source` says
@@ -413,6 +421,7 @@ export default class Cookies {
 			if (expired(cookie, now)) {
 				// Max-Age=0 or a past Expires: the site is deleting it
 				await this.db.delete(STORE, cookie.id);
+				this.onChange?.(cookie.domain);
 				continue;
 			}
 			if (existing) cookie.created = existing.created;
@@ -421,8 +430,27 @@ export default class Cookies {
 				this.#lastCreated = cookie.created;
 			}
 			await this.db.put(STORE, cookie);
+			this.onChange?.(cookie.domain);
 		}
 	}
+}
+
+declare const clients: Clients | undefined;
+
+/**
+ * Tell every window the jar changed for `domain`, so the documents it
+ * covers drop their document.cookie cache. Sent before the response that
+ * carried the Set-Cookie is answered, so the page's next read is fresh.
+ */
+async function broadcastChange(domain: string) {
+	if (typeof clients === 'undefined') return;
+	const windows = await clients.matchAll({
+		type: 'window',
+		includeUncontrolled: true,
+	});
+	const change: CookiesChange = { domain };
+	for (const client of windows)
+		client.postMessage({ [COOKIES_CHANGED]: change });
 }
 
 /**
@@ -495,6 +523,9 @@ export async function registerCookies(router: Router): Promise<Cookies> {
 	const cookies = new Cookies(db, (host) =>
 		getPublicSuffix(host, { allowPrivateDomains: true }),
 	);
+	cookies.onChange = (domain) => {
+		broadcastChange(domain);
+	};
 
 	// what page script may see: the jar without its HttpOnly cookies (the
 	// request path and the host's cookies API get the whole jar)

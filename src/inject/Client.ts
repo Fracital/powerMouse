@@ -35,6 +35,10 @@ export default class Client {
 	/** unparseable scripts fail instead of running raw when false (config.allowInvalidJs) */
 	allowInvalidJs: boolean;
 	applied: boolean;
+	/** @internal called after a response reached this context (fetch, XHR): caches that depend on the jar drop */
+	readonly responseListeners = new Set<() => void>();
+	/** @internal how often document.cookie went to the jar (cookie-cache suite) */
+	cookieReads = 0;
 	isDOM: boolean;
 	isWorker: boolean;
 	#bare?: BareCompatibleClient;
@@ -160,6 +164,10 @@ export default class Client {
 	 * Messages the service worker posts to this document (storage changes),
 	 * on the container kept from before the page lost `navigator.serviceWorker`.
 	 */
+	/** @internal a response reached this context */
+	notifyResponse() {
+		for (const listener of this.responseListeners) listener();
+	}
 	onServiceWorkerMessage(listener: (data: unknown) => void) {
 		const container = this.#serviceWorkerContainer;
 		if (!container) return;
