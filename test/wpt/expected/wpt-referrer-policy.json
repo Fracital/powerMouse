@@ -27,14 +27,6 @@
 	"/referrer-policy/generic/inheritance/iframe-inheritance-srcdoc.html": {
 		"Srcdoc iframe inherits referrer policy from parent on creation.": "FAIL: assert_equals: Referrer policy should be inherited from parent. expected \"http://localhost:PORT/\" but got \"FAILURE\""
 	},
-	"/referrer-policy/generic/meta-tag-in-svg-image.html": {
-		"(harness)": "TIMEOUT: ",
-		"Meta tag in SVG image loaded via img should be ignored": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/referrer-policy/generic/multiple-headers-and-values.html": {
-		"(harness)": "TIMEOUT: timeout: no report within 30 s",
-		"Image uses the last recognized Referrer-Policy header value": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
 	"/referrer-policy/generic/refresh-cross-origin.sub.html": {
 		"cross-origin meta refresh with referrer policy \"origin\" refreshes with origin as referrer": "NOTRUN: ",
 		"cross-origin header refresh with referrer policy \"origin\" refreshes with origin as referrer": "NOTRUN: ",
