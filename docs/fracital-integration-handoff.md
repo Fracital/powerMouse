@@ -9,10 +9,10 @@ the settings row) is tracked in the Fracital repo, not here.
 | Workstream                           | State                                                                                                                                                                                                                                                            | Where                             |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
 | WS1 request-header policy            | done: `rules` / `setRules` on both controllers (URLPattern match, header set and delete, block, redirect, status), applied after stomp rebuilds Origin and Referer so a host rule wins, `onRequest` reports `rule`; acceptance checks in `test/suites/rules.mjs` | shipped                           |
-| WS2 epoxy as the supported transport | in progress: `examples/minimal-host.html` boots a same-origin `StompController` on epoxy; README "Embedding"                                                                                                                                                     | host example agent                |
+| WS2 epoxy as the supported transport | done: `examples/minimal-host.html` boots a same-origin `StompController` on epoxy and proxies Wikipedia; README "Embedding" carries the transport guidance                                                                                                       | shipped                           |
 | WS3 relocatable asset paths          | done: `assets` on both controllers names every served file (defaults to today's names), the controller frame learns its script name from `?script=`; the assets suite boots a fully renamed bundle under `/neutral/` and sees no URL with the package name       | parity session                    |
 | WS4 same-origin hook coverage        | in progress: scramjet's adversarial corpus ported as measurement suites; leaks become parity rows and fixes                                                                                                                                                      | corpus agent, then parity session |
-| WS5 host-embedding API parity        | in progress: `test/suites/host-api.mjs` runs the checklist against the example host                                                                                                                                                                              | host example agent                |
+| WS5 host-embedding API parity        | checklist green (`test/suites/host-api.mjs`, 41 checks against the example host); gap list below is being worked                                                                                                                                                 | shipped, gaps in progress         |
 
 ## Goal and shape
 
@@ -130,6 +130,28 @@ Confirm with tests the surface a host tab UI needs: `frame.url` / `title` /
 the `navigate` event, back/forward/reload resolution, `onOpen` for new-tab
 handling, `onRequest` for favicon/title, the cookies jar. Most of this exists;
 treat as a checklist plus gap fixes, mirroring `docs/scramjet-parity.md`.
+
+## WS5 gap list (from writing the example host)
+
+1. `frame.go()` resolves when the iframe src is set, not when the page has
+   loaded, and `frame.reload()` returns void; a host waits on the `navigate`
+   event itself. `go` and `reload` should resolve on the first report.
+2. The first `navigate` report fires at document start, before the body is
+   parsed; right for an address bar, too early for anything reading the DOM.
+3. `onRequest` reports `frame: null` for head subresources fetched before the
+   page has reported its client id (the document itself is held and
+   attributed).
+4. `onRequest` URLs for CSS `url()` images carry the `#url(...)` fragment the
+   CSS rewriter appends for idempotence; the report should strip it.
+5. `destination` is empty for keepalive POST beacons.
+6. `onNavigate`, `onOpen` and `onRequest` are constructor-only; the controller
+   should also dispatch `open` and `request` events so handlers can be added
+   later.
+7. The controller wants an activated `ServiceWorker`; every host copies the
+   demo's activation helper. Accept a `ServiceWorkerRegistration` or offer a
+   `register(directory)` helper.
+8. TypeScript-private controller members are reachable at run time; AGENTS
+   asks for `#fields` for anything a page could reach.
 
 ## Config stomp will receive from Fracital (reference)
 

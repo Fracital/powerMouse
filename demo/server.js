@@ -3,6 +3,7 @@
 //   /suggestions TLD autocomplete for the address bar
 //   /api/status  uptime + version for the landing page
 //   /stomp/      Stomp dist (service worker, inject bundles, controller)
+//   /examples/   embedding examples (examples/minimal-host.html)
 //   /epoxy/      epoxy transport module
 //   /libcurl/    libcurl transport module
 //   /fonts/      Montserrat from @fontsource
@@ -200,6 +201,13 @@ app.use(
 	express.static(fileURLToPath(new URL('./public/', import.meta.url)), fresh),
 );
 app.use('/stomp/', express.static(stompPath, fresh));
+app.use(
+	'/examples/',
+	express.static(
+		fileURLToPath(new URL('../examples/', import.meta.url)),
+		fresh,
+	),
+);
 app.use('/epoxy/', express.static(transportDir('epoxy-transport'), cached));
 app.use('/libcurl/', express.static(transportDir('libcurl-transport'), cached));
 // self-hosted font for the page (no Google Fonts round-trip)

@@ -1,0 +1,218 @@
+<!doctype html>
+<!--
+  The smallest host application for Stomp: one page, one module script, no
+  framework. Serve dist/ under `directory` (here the demo server mounts it at
+  /stomp/ and this page at /examples/), open the page, type a URL. Everything
+  a host has to do is in the script below, in boot order, with a comment per
+  step; README.md "Embedding" walks through the same steps in prose.
+
+  Same-origin mode (what this page runs) is for development and in-house use:
+  a proxied page shares this page's origin, and the hooks that hide the host
+  from it are not a security boundary. See README.md "Origin isolation" for
+  RemoteController, which puts the proxy on a second origin.
+-->
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Stomp minimal host</title>
+		<style>
+			body {
+				margin: 0;
+				height: 100vh;
+				display: flex;
+				flex-direction: column;
+				font:
+					14px system-ui,
+					sans-serif;
+			}
+			#bar {
+				display: flex;
+				gap: 4px;
+				padding: 4px;
+			}
+			#address {
+				flex: 1;
+			}
+			#status,
+			#title {
+				padding: 0 4px;
+				font-size: 12px;
+				color: #555;
+			}
+			#view {
+				flex: 1;
+				border: 0;
+			}
+			#log {
+				height: 7em;
+				margin: 0;
+				padding: 2px 4px;
+				overflow: auto;
+				font-size: 11px;
+				border-top: 1px solid #ccc;
+			}
+		</style>
+	</head>
+	<body>
+		<!-- the address bar: the frame's own history, a reload, and a URL to go to -->
+		<form id="bar">
+			<button id="back" type="button" disabled>Back</button>
+			<button id="forward" type="button" disabled>Forward</button>
+			<button id="reload" type="button">Reload</button>
+			<input id="address" placeholder="https://" autocomplete="off" />
+			<button id="go">Go</button>
+		</form>
+		<!-- controller state: starting, ready, or ready on an older service worker -->
+		<div id="status">Starting</div>
+		<!-- the proxied page's title, as the page reports it -->
+		<div id="title"></div>
+		<!-- the proxied page goes here; createFrame() fills it with an <iframe> -->
+		<div id="view"></div>
+		<!-- one line per proxied request (onRequest), newest last -->
+		<pre id="log"></pre>
+
+		<script type="module">
+			// Everything a deployment changes is here. `directory` is where dist/
+			// is served and the service worker's scope; one controller per
+			// directory. `transport` is a proxy-transports module on this origin;
+			// epoxy is the one to use for HTTP-heavy sites (see the README). The
+			// wisp URL is derived from this page's origin: the demo server runs a
+			// wisp endpoint at /wisp/, a real host points this at its relay.
+			const config = {
+				directory: '/stomp/',
+				transport: '/epoxy/index.mjs',
+				wisp: `${location.origin.replace(/^http/, 'ws')}/wisp/`,
+				codec: 'xor',
+			};
+
+			const $ = (id) => document.getElementById(id);
+			const status = (text) => ($('status').textContent = text);
+
+			// Step 1: register the service worker with the directory as its scope.
+			// updateViaCache: 'none' makes the browser revalidate the worker script
+			// on every check, so a deploy is picked up instead of a cached copy.
+			status('Registering service worker');
+			const registration = await navigator.serviceWorker.register(
+				`${config.directory}serviceWorker.js`,
+				{ scope: config.directory, updateViaCache: 'none' },
+			);
+			const serviceworker = await activated(registration);
+
+			// Step 2: load the transport module and construct it. The transport
+			// lives in this page; the service worker and every proxied page reach
+			// it through the controller, so no proxied page ever loads it.
+			status('Loading transport');
+			const { default: EpoxyTransport } = await import(config.transport);
+			const transport = new EpoxyTransport({ wisp: config.wisp });
+
+			// Step 3: the controller. It owns the transport, talks to the service
+			// worker, and hands the three callbacks below what the pages report.
+			const { StompController } = await import(
+				`${config.directory}controller.mjs`
+			);
+			const controller = new StompController({
+				serviceworker,
+				transport,
+				directory: config.directory,
+				codec: config.codec,
+				// HTTP cache in the service worker (the default; false turns it off)
+				cache: true,
+				// The page reported where it is: on load, pushState, hashchange and
+				// title changes. This is how the address bar and the title follow
+				// the page; nothing needs polling.
+				onNavigate(info) {
+					$('address').value = info.url;
+					$('title').textContent = info.title;
+					// null when the browser has no Navigation API: then a host cannot
+					// tell and would keep both buttons enabled
+					$('back').disabled = info.canGoBack === false;
+					$('forward').disabled = info.canGoForward === false;
+				},
+				// The page wants a new tab (window.open, target="_blank", a middle
+				// or modifier click). The page's window.open returns null, like a
+				// popup blocker, and the URL is ours to place. A real host opens a
+				// tab here; with one frame, this example opens it in place.
+				onOpen(url) {
+					frame.go(url);
+				},
+				// One report per proxied request, after it finished: the real URL,
+				// method, destination, status (0 with `error` when the transport
+				// failed), time, whether the cache answered, and the Frame it
+				// belongs to (null before a page has introduced itself). A host
+				// with tabs keys each tab's log, favicon and title on info.frame;
+				// here the line starts with the frame's index in controller.frames.
+				onRequest(info) {
+					const log = $('log');
+					const where = info.frame
+						? controller.frames.indexOf(info.frame)
+						: '-';
+					const result = info.status || `error ${info.error}`;
+					const line = `${where} ${info.method} ${result} ${info.destination} ${info.url}${info.cached ? ' (cache)' : ''} ${info.ms}ms\n`;
+					// keep the last 50 lines
+					const lines = (log.textContent + line).split('\n').slice(-51);
+					log.textContent = lines.join('\n');
+					log.scrollTop = log.scrollHeight;
+				},
+			});
+
+			// Step 4: wait for the service worker to have a server for this
+			// controller. After a deploy an older worker may still be in charge:
+			// wait() resolves on it with `stale` set ({ controller, worker }
+			// builds), and the controller rebinds on its own when the new worker
+			// activates, announced by the `rebind` event.
+			status('Waiting for the service worker');
+			await controller.wait();
+			const showState = () =>
+				status(
+					controller.stale
+						? `Ready on an older service worker (controller build ${controller.stale.controller}, worker build ${controller.stale.worker})`
+						: 'Ready',
+				);
+			controller.addEventListener('stale', showState);
+			controller.addEventListener('rebind', showState);
+			showState();
+
+			// Step 5: a frame. createFrame() makes the <iframe> (and sets its
+			// sandbox attribute); it is ours to place.
+			const frame = controller.createFrame();
+			frame.element.id = 'view';
+			frame.element.title = 'Proxied page';
+			$('view').replaceWith(frame.element);
+
+			// Step 6: the buttons. back() and forward() step the frame's own
+			// history (never the host page's) and resolve false when there is no
+			// entry in that direction; canGoBack / canGoForward say so in advance.
+			$('back').onclick = () => frame.back();
+			$('forward').onclick = () => frame.forward();
+			$('reload').onclick = () => frame.reload();
+			$('bar').onsubmit = (event) => {
+				event.preventDefault();
+				let url = $('address').value.trim();
+				if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+				frame.go(url);
+			};
+
+			// for the console and for test/suites/host-api.mjs
+			window.host = { controller, frame };
+
+			// The registration's worker may still be installing on the first visit;
+			// the controller needs an activated one.
+			function activated(registration) {
+				const worker =
+					registration.active ||
+					registration.waiting ||
+					registration.installing;
+				if (!worker) throw new Error('No service worker in registration');
+				if (worker.state === 'activated') return Promise.resolve(worker);
+				return new Promise((resolve, reject) => {
+					worker.addEventListener('statechange', () => {
+						if (worker.state === 'activated') resolve(worker);
+						else if (worker.state === 'redundant')
+							reject(new Error('Service worker became redundant'));
+					});
+				});
+			}
+		</script>
+	</body>
+</html>

@@ -38,6 +38,10 @@ The first release after a four-year gap. Everything below is breaking.
   page reload (same-origin mode), server restarts and host-page bundles
   reloading the page, and an esbuild error overlay. Development only
   (`STOMP_DEV`).
+- `examples/minimal-host.html` is the smallest host application (same-origin
+  `StompController` on epoxy, one frame, the three callbacks), served by the
+  demo at `/examples/`; README "Embedding" walks through it, and the new
+  `host-api` suite runs the host API checklist against it.
 - The demo has a request viewer: long-press Recents or Ctrl+Shift+R slides
   up a panel with the active tab's proxied requests (method, status, real
   URL, destination, time, size, a `cached` tag), built from the controller's
