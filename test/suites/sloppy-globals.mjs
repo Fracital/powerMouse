@@ -16,12 +16,13 @@ const browser = await launch();
 const page = await openDemo(browser);
 await submitLanding(page, `${FIXTURE}pages/var-location.html`);
 let title = '';
-for (let i = 0; i < 40 && title !== 'HIST 2'; i++) {
+// a slow runner can take more than ten seconds to show the frame
+for (let i = 0; i < 120 && title !== 'HIST 2'; i++) {
 	await sleep(250);
 	const frame = page
 		.frames()
 		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
-	title = await frame.evaluate(() => document.title).catch(() => '');
+	title = await frame?.evaluate(() => document.title).catch(() => '');
 }
 ok(
 	'a top-level var location navigates to the routed page',

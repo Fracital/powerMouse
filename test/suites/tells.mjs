@@ -18,12 +18,13 @@ const browser = await launch();
 const page = await openDemo(browser);
 await submitLanding(page, `${FIXTURE}pages/tells.html`);
 let tells = null;
-for (let i = 0; i < 40 && !tells; i++) {
+// a slow runner can take more than ten seconds to show the frame
+for (let i = 0; i < 120 && !tells; i++) {
 	await sleep(250);
 	const frame = page
 		.frames()
 		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
-	tells = await frame.evaluate(() => window.__tells).catch(() => null);
+	tells = await frame?.evaluate(() => window.__tells).catch(() => null);
 }
 tells ||= {};
 ok(

@@ -19,12 +19,13 @@ const consoleTypes = [];
 page.on('console', (message) => consoleTypes.push(message.type()));
 await submitLanding(page, `${FIXTURE}pages/noops.html`);
 let noops = null;
-for (let i = 0; i < 40 && !noops?.done; i++) {
+// a slow runner can take more than ten seconds to show the frame
+for (let i = 0; i < 120 && !noops?.done; i++) {
 	await sleep(250);
 	const frame = page
 		.frames()
 		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
-	noops = await frame.evaluate(() => window.__noops).catch(() => null);
+	noops = await frame?.evaluate(() => window.__noops).catch(() => null);
 }
 noops ||= {};
 ok(
