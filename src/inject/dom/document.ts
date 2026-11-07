@@ -3,6 +3,7 @@ import baseModules from '../modules';
 import DocumentClient from './Client';
 import AnchorModule from './modules/Anchor';
 import AudioModule from './modules/Audio';
+import BlobDocumentsModule from './modules/BlobDocuments';
 import ContextModule from './modules/Context';
 import { CookiesModule } from './modules/Cookies';
 import CSSOMModule from './modules/CSSOM';
@@ -34,6 +35,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(IFrameModule);
 	client.addModule(SyncModule);
 	client.addModule(AudioModule);
+	client.addModule(BlobDocumentsModule);
 	client.addModule(StorageModule);
 	client.addModule(XMLHttpRequestModule);
 	client.addModule(CookiesModule);

@@ -8,6 +8,7 @@ import {
 	routeURL,
 } from './routeURL';
 import StompURL from './StompURL';
+import { WORKER_BASE } from './transport/messages';
 
 export function routeHTML(
 	resource: StompURL,
@@ -40,10 +41,17 @@ export function routeHTML(
 	return routeURL(form ? 'html:form' : 'html', resource);
 }
 
+/**
+ * The shell that stands in for a document: loads the inject bundle, creates
+ * the client and hands it the real markup. A document whose own URL cannot
+ * carry the page URL (a blob: document the page built) gets `base`: the
+ * shell names the page URL for the client first.
+ */
 export function modifyHTML(
 	script: string,
 	url: StompURL,
 	config: Config,
+	base = false,
 ): string {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	const inject = `if (typeof globalThis.createClient !== 'function') {
@@ -67,7 +75,10 @@ export function modifyHTML(
 	}
 }`;
 
-	return `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body><script src="${injectDocumentJS(
+	const baseScript = base
+		? `<script>globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(url.toString())};</script>`
+		: '';
+	return `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${baseScript}<script src="${injectDocumentJS(
 		url,
 	)}"></script><script>${inject}</script></body></html>`;
 }

@@ -91,12 +91,12 @@ that is accurate and expected.
 | Page calls `document.open()`                                                                           | window hooks registered again (measured)                                            | same (measured)                      |
 | Host `postMessage` into the frame                                                                      | arrives, unwrapped, as if the page sent it (measured)                               | dropped (measured)                   |
 | `<area href>`                                                                                          | routed, navigates through the proxy (measured)                                      | same                                 |
-| `blob:` navigations                                                                                    | unrewritten documents                                                               | same                                 |
+| `blob:` navigations                                                                                    | text/html blobs wrapped in the shell, injected (measured)                           | same                                 |
 | `about:blank` popups written by the page                                                               | injected, writes rewritten (measured)                                               | same                                 |
 | Nested destructuring (`{ a: { top } }`), parameter patterns (`({ top: t }) => t`)                      | spoofed (measured)                                                                  | spoofed (measured)                   |
 | Array patterns (`[{ top }] = [w]`), nested pattern defaults, `Reflect.get(window,'top')`               | raw `top`, stopped only by sandbox                                                  | stopped by sandbox                   |
 
-Open, in order of leverage: `blob:` documents; array patterns.
+Open, in order of leverage: HTML blobs from binary parts; array patterns.
 
 ## 3. JS rewriter
 
@@ -210,7 +210,7 @@ Suites: headers, cookies, cookie-jar, cache, page-apis.
 | Cookie jar reachable from the host                                                                                                                      | ahead   | `controller.cookies.get/set/list/clear`, host-only                                                                                                                                                          |
 | Sync XHR bridge                                                                                                                                         | ahead   | works; refused beacons fail at once; bodies text-decoded, headers flattened                                                                                                                                 |
 | `blob:` workers                                                                                                                                         | ok      | bootstrap blob with the page as base; the blob's own code is not rewritten                                                                                                                                  |
-| `blob:` navigations and `data:` percent-decoding                                                                                                        | partial |                                                                                                                                                                                                             |
+| `blob:` navigations and `data:` percent-decoding                                                                                                        | partial | text/html blobs from strings wrapped (blobdoc suite); binary-part HTML blobs and `data:` percent-decoding open                                                                                              |
 | Decoded URL equals proxy origin guard                                                                                                                   | missing |                                                                                                                                                                                                             |
 | XHR `responseType` json/blob/document, `responseXML`, `timeout`, `upload`                                                                               | partial |                                                                                                                                                                                                             |
 | `WebSocketStream`                                                                                                                                       | missing |                                                                                                                                                                                                             |
@@ -290,8 +290,8 @@ Suites: navigate-events, request-log, version, cookie-jar, cache, isolation.
 
 ## 10. What is left, by payoff
 
-1. Documents that escape the rewrite: `blob:` documents; import map package
-   prefixes and scope keys.
+1. Documents that escape the rewrite: HTML blobs built from binary parts;
+   import map package prefixes and scope keys.
 2. Cookies: a nested cross-site iframe should not get Lax cookies (needs the
    host to mark its top documents).
 3. Cache: heuristic freshness from `Last-Modified`, stale-while-revalidate,

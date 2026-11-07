@@ -1,0 +1,45 @@
+<!doctype html>
+<title>BLOBDOC</title>
+<script>
+	// a document the page builds itself and shows from a blob: URL; nothing
+	// fetched it, so its script and markup only get rewritten if the blob's
+	// contents were wrapped when it was made
+	window.__blob = {};
+	const html =
+		'<!doctype html><title>BLOB</title>' +
+		'<img id="i" src="/pages/hdr.json" alt="">' +
+		'<script>window.__inBlob = { top: top === parent && top !== window, href: location.href };<\/script>';
+	const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+	const frame = document.createElement('iframe');
+	frame.src = url;
+	frame.addEventListener('load', () => {
+		setTimeout(() => {
+			try {
+				__blob.result = frame.contentWindow.__inBlob || null;
+				__blob.title = frame.contentDocument.title;
+			} catch (error) {
+				__blob.error = String(error);
+			}
+			__blob.done = true;
+		}, 500);
+	});
+	document.documentElement.append(frame);
+	const file = new File(['<title>FILE</title>'], 'a.html', {
+		type: 'text/html',
+	});
+	__blob.fileType = file.type;
+	__blob.fileName = file.name;
+	// anything that is not an HTML document is left alone
+	(async () => {
+		__blob.plain = await new Blob(['abc'], { type: 'text/plain' }).text();
+		__blob.json = await new Blob(['{"a":1}'], {
+			type: 'application/json',
+		}).text();
+		__blob.image = new Blob([new Uint8Array(4)], { type: 'image/png' }).size;
+		__blob.untyped = await new Blob(['<b>x</b>']).text();
+		__blob.binaryHTML = await new Blob([new TextEncoder().encode('<b>x</b>')], {
+			type: 'text/html',
+		}).text();
+		__blob.others = true;
+	})();
+</script>

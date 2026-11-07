@@ -3,7 +3,7 @@ import { ParsedConfig } from '../../config';
 import { modifyJS, rewriteImportMap } from '../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import StompURL from '../../StompURL';
-import { OPEN_TAB } from '../../transport/messages';
+import { OPEN_TAB, WORKER_BASE } from '../../transport/messages';
 import Client from '../Client';
 import cloneRawNode, { parseHTML } from './cloneNode';
 import { scriptKind, shouldRewriteScript } from './modules/DOMAttributes';
@@ -124,8 +124,10 @@ export default class DocumentClient extends Client {
 				`${this.baseURI.origin}${this.directory}`,
 			).url;
 		} else {
+			// a blob: document the page built: its shell named the page URL
+			const base = (this.global as Record<string, unknown>)[WORKER_BASE];
 			return new StompURL(
-				this.baseURI.href,
+				typeof base === 'string' ? base : this.baseURI.href,
 				this.codec,
 				`${this.baseURI.origin}${this.directory}`,
 			);

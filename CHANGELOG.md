@@ -110,6 +110,12 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- A document the page builds itself and shows from a `blob:` URL (a
+  `text/html` Blob or File in a frame or a window) is injected and rewritten
+  like a fetched one: its string contents are wrapped in the shell at
+  construction, with the page as its URL (`location`, relative URLs, the
+  spoof all answer for the page). Blobs of any other type, untyped blobs and
+  HTML blobs built from binary parts are untouched.
 - The Referer follows the page's own referrer policy. The browser derives
   every request's policy natively (the document's `Referrer-Policy` header,
   which now reaches the browser; `<meta name="referrer">`; an element's
@@ -486,7 +492,8 @@ Fixed while testing real sites and a feature fixture:
   reach the real `top`, which is one more reason that mode is not a security
   boundary.
 - The code of a `blob:` worker runs with the worker hooks but is not itself
-  rewritten; worklet modules get no inject.
+  rewritten; worklet modules get no inject; an HTML blob built from binary
+  parts (an ArrayBuffer, another Blob) is shown as it is.
 - Transports, as tested against `wisp-js` 0.5.2 with or without Stomp in the
   path: epoxy 3.0.2 handles HTTP well but stops delivering incoming WebSocket
   frames after the first round trip; libcurl 2.0.6 handles WebSockets but
