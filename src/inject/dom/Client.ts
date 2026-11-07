@@ -1,4 +1,4 @@
-import { decode, escapeText } from 'entities';
+import { decode } from 'entities';
 import { ParsedConfig } from '../../config';
 import { modifyJS } from '../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
@@ -165,9 +165,7 @@ export default class DocumentClient extends Client {
 			script.text = (
 				isModule
 					? rewritten
-					: `document.currentScript.textContent = ${escapeText(
-							JSON.stringify(source),
-						)};${rewritten}`
+					: `document.currentScript.textContent = ${JSON.stringify(source)};${rewritten}`
 			).replace(/<\/script/gi, '<\\/script');
 		}
 

@@ -85,11 +85,14 @@ ok(
 // routed URLs are codec-encoded, so the originals cannot be matched by
 // substring: count the routed binary fetches instead (three images, the
 // SVG sprite) with no raw fetch left
-const routedBinary = requests.filter((name) => name.includes('/stomp/binary/'));
+// the page reads its own URLs back from performance entries (readback
+// suite): a routed fetch resolves to the fixture origin (three images, the
+// SVG sprite), a raw one would have hit the proxy origin, checked above
+const routed = requests.filter((name) => name.startsWith(`${FIXTURE}pages/`));
 ok(
 	'setAttributeNS, DOMParser, createContextualFragment nodes and the SVG sprite are routed',
-	routedBinary.length >= 4,
-	`${routedBinary.length} routed binary fetches`,
+	routed.length >= 4,
+	`${routed.length} routed fetches`,
 );
 
 await done(

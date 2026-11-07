@@ -110,6 +110,19 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- A proxied page reads its own URLs back: `PerformanceEntry.name` and
+  `toJSON` un-route (`getEntries*`, `PerformanceObserver` lists and
+  `takeRecords` hide the inject bundles' entries; `getEntriesByName` takes
+  the page's URL), `hashchange` `oldURL` / `newURL` and the Navigation API's
+  entry and `destination` URLs are the page's, error stacks name the page's
+  scripts (V8 `Error.prepareStackTrace`; a page's own formatter runs on
+  cleaned frames, inject frames dropped), a script the page inserted reads
+  back the source it wrote, and `document.documentURI` / `window.origin`
+  agree with `document.URL` / `location`. Parser-inserted scripts no longer
+  read `&amp;` for `&` in `currentScript.textContent`.
+- `RemoteController` is an `EventTarget` like `StompController` and mirrors
+  the controller frame's `stale` property and its `stale` / `rebind` events
+  (one RPC from the frame), so an isolated host shows the same notice.
 - A URL attribute changed after it was routed takes effect. Once the hooks had
   routed an element's `href` or `src`, every later `setAttribute` or property
   assignment was discarded in favour of the stored original, so links and
@@ -372,6 +385,9 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- `Error.prepareStackTrace` reads back as a function (Stomp's formatter)
+  instead of `undefined`; scripts created from markup strings read back
+  rewritten.
 - Aborting a fetch does not cancel the request on the transport (epoxy
   ignores the signal); the response is discarded.
 - The HTTP cache never serves stale on a failed revalidation and uses no

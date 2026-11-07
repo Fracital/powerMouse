@@ -7,6 +7,7 @@ import {
 	launch,
 	ok,
 	openDemo,
+	PROXY,
 	sleep,
 	submitLanding,
 } from '../lib.mjs';
@@ -31,9 +32,14 @@ ok(
 	sd.result?.[0] === true,
 	JSON.stringify(sd.result),
 );
+// the page reads its own URLs back from performance entries (readback
+// suite): a routed fetch resolves to the fixture origin, a raw one would
+// have hit the proxy origin
+const names = (sd.result?.[1] || '').split(' ');
 ok(
 	'srcdoc resources are routed through the proxy',
-	/\/stomp\/binary\//.test(sd.result?.[1] || ''),
+	names.includes(`${FIXTURE}pages/echo.json`) &&
+		!names.some((name) => name.startsWith(`${PROXY}pages/`)),
 	JSON.stringify(sd.result?.[1]),
 );
 

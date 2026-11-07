@@ -16,6 +16,7 @@ import LocationModule from './modules/Location';
 import NavigateModule from './modules/Navigate';
 import NavigatorModule from './modules/Navigator';
 import OpenModule from './modules/Open';
+import ReadbackModule from './modules/Readback';
 import StorageModule from './modules/Storage';
 import SyncModule from './modules/Sync';
 import XMLHttpRequestModule from './modules/XMLHttpRequest';
@@ -41,6 +42,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(ContextModule);
 	client.addModule(OpenModule);
 	client.addModule(NavigateModule);
+	client.addModule(ReadbackModule);
 }
 
 const createDOMClient = createClientFactory(DocumentClient, addClientModules);

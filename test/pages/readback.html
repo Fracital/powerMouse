@@ -1,0 +1,199 @@
+<!doctype html>
+<title>READBACK</title>
+<pre id="result">pending</pre>
+<script>
+	// registered before the external script below throws, so its error
+	// (and the stack of a script loaded through the js route) is recorded
+	window.__rbErrors = [];
+	window.addEventListener('error', (e) => {
+		window.__rbErrors.push(e.error && e.error.stack);
+	});
+</script>
+<script src="/pages/paint.js"></script>
+<iframe
+	srcdoc="<img src='/pages/echo.json?sd'><script>setTimeout(() => { parent.__rb.srcdoc = { origin: location.origin, href: location.href, documentURI: document.documentURI, prepare: typeof Error.prepareStackTrace, names: performance.getEntriesByType('resource').map((e) => e.name), stack: new Error('sd').stack }; }, 800)</script>"
+></iframe>
+<script>
+	// Every API a page can read its own URLs back from. Each value is
+	// recorded raw; the suite decides what counts as a leak.
+	const r = { done: false };
+	window.__rb = r;
+	const out = () => {
+		document.getElementById('result').textContent = JSON.stringify(r);
+	};
+	const t = (k, f) => {
+		try {
+			r[k] = f();
+		} catch (e) {
+			r[k] = 'threw ' + e.name + ': ' + e.message;
+		}
+	};
+	const real = location.href;
+	r.real = real;
+
+	// 5. document and window URL readback
+	t('documentURI', () => document.documentURI);
+	t('documentURL', () => document.URL);
+	t('baseURI', () => document.baseURI);
+	t('origin', () => window.origin);
+	t('selfOrigin', () => self.origin);
+	t('globalThisOrigin', () => globalThis.origin);
+	t('locationOrigin', () => location.origin);
+
+	// 3. error stacks
+	t('inlineStack', () => new Error('probe').stack);
+	t('externalStack', () => window.__rbErrors[0]);
+	t('stackDescriptor', () => {
+		const d = Object.getOwnPropertyDescriptor(new Error('x'), 'stack');
+		return d ? Object.keys(d).join(',') : 'none';
+	});
+	t('stackProtoDescriptor', () => {
+		const d = Object.getOwnPropertyDescriptor(Error.prototype, 'stack');
+		return d ? Object.keys(d).join(',') : 'none';
+	});
+	t('prepareStackTraceType', () => typeof Error.prepareStackTrace);
+	// a page's own formatter still runs and sees the page's file names
+	t('customPrepare', () => {
+		Error.prepareStackTrace = (e, sites) =>
+			'CUSTOM ' + sites.map((s) => s.getFileName()).join(',');
+		const s = new Error('y').stack;
+		Error.prepareStackTrace = undefined;
+		return s;
+	});
+	t('stackAfterCustom', () => new Error('z').stack);
+
+	// 4. scripts the page inserted itself read back what the page wrote
+	const code = (k) =>
+		'window.__rb_' + k + ' = top === window && location.href;';
+	const s1 = document.createElement('script');
+	s1.textContent = code('textContent');
+	document.body.append(s1);
+	t('scriptTextContent', () => s1.textContent === code('textContent'));
+	t('scriptTextContentRaw', () => s1.textContent.slice(0, 120));
+	const s2 = document.createElement('script');
+	s2.text = code('text');
+	document.body.appendChild(s2);
+	t('scriptText', () => s2.text === code('text'));
+	const s3 = document.createElement('script');
+	s3.innerHTML = code('innerHTML');
+	document.head.insertBefore(s3, null);
+	t('scriptInnerHTML', () => s3.innerHTML === code('innerHTML'));
+	const s4 = document.createElement('script');
+	s4.appendChild(document.createTextNode(code('textNode')));
+	document.body.append(s4);
+	t('scriptTextNode', () => s4.textContent === code('textNode'));
+	t('scriptFirstChildData', () => s4.firstChild.data === code('textNode'));
+	t(
+		'scriptOuterHTML',
+		() => s2.outerHTML === '<script>' + code('text') + '</scr' + 'ipt>',
+	);
+	// a script edited after it ran reads back the new text, not a stale copy
+	s1.textContent = 'edited';
+	t('scriptEdited', () => s1.textContent === 'edited');
+	t('scriptsRan', () => [
+		window.__rb_textContent,
+		window.__rb_text,
+		window.__rb_innerHTML,
+		window.__rb_textNode,
+	]);
+	t('parserScript', () =>
+		document.currentScript.textContent.includes(
+			'top === window && location.href',
+		),
+	);
+	t('parserScriptRaw', () => {
+		const text = document.currentScript.textContent;
+		const index = text.indexOf('__rb_');
+		return text.slice(index, index + 90);
+	});
+
+	const scriptURL = new URL('/pages/paint.js', real).href;
+	const fetchURL = new URL('/pages/echo.json', real).href;
+	r.scriptURL = scriptURL;
+	r.fetchURL = fetchURL;
+
+	(async () => {
+		// 1. performance entries
+		const observed = [];
+		try {
+			new PerformanceObserver((list) => {
+				for (const e of list.getEntries()) observed.push(e.name);
+				for (const e of list.getEntriesByType('resource'))
+					observed.push('type:' + e.name);
+				for (const e of list.getEntriesByName(scriptURL))
+					observed.push('name:' + e.name);
+			}).observe({ type: 'resource', buffered: true });
+		} catch (e) {
+			r.observerError = e.message;
+		}
+		try {
+			await fetch('/pages/echo.json');
+		} catch (e) {
+			r.fetchError = e.message;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 800));
+		t('resourceNames', () =>
+			performance.getEntriesByType('resource').map((e) => e.name),
+		);
+		t('allNames', () => performance.getEntries().map((e) => e.name));
+		t('scriptInitiator', () => {
+			const e = performance
+				.getEntriesByType('resource')
+				.find((e) => e.name === scriptURL);
+			return e ? e.initiatorType : 'no entry';
+		});
+		t('byName', () => performance.getEntriesByName(scriptURL).length);
+		t(
+			'byNameTyped',
+			() => performance.getEntriesByName(fetchURL, 'resource').length,
+		);
+		t('navigationName', () => {
+			const e = performance.getEntriesByType('navigation')[0];
+			return e ? e.name : 'no entry';
+		});
+		t('toJSONName', () => {
+			const e = performance.getEntriesByType('resource')[0];
+			return e ? e.toJSON().name : 'no entry';
+		});
+		t('entryJSON', () => {
+			const e = performance.getEntriesByType('resource')[0];
+			return e ? JSON.parse(JSON.stringify(e)).name : 'no entry';
+		});
+		r.observed = observed;
+
+		// 2. hashchange and the Navigation API
+		const nav = window.navigation;
+		if (nav)
+			nav.addEventListener(
+				'navigate',
+				(e) => {
+					r.navigateDestination = e.destination.url;
+				},
+				{ once: true },
+			);
+		await new Promise((resolve) => {
+			addEventListener(
+				'hashchange',
+				(e) => {
+					r.hashOld = e.oldURL;
+					r.hashNew = e.newURL;
+					resolve();
+				},
+				{ once: true },
+			);
+			setTimeout(resolve, 2000);
+			location.hash = '#frag';
+		});
+		t('hrefAfterHash', () => location.href);
+		t('navEntryURL', () => (nav ? nav.currentEntry.url : 'no navigation'));
+		t('navEntriesURLs', () =>
+			nav ? nav.entries().map((e) => e.url) : 'no navigation',
+		);
+		// the srcdoc child reports after 800 ms
+		for (let i = 0; i < 20 && !r.srcdoc; i++)
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		r.done = true;
+		out();
+	})();
+	out();
+</script>

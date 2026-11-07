@@ -6,6 +6,7 @@ import IndexedDBModule from './modules/IndexedDB';
 import PartitionModule from './modules/Partition';
 import ProxyModule from './modules/Proxy';
 import TimersModule from './modules/Timers';
+import UnrouteModule from './modules/Unroute';
 import WebSocketModule from './modules/WebSocket';
 import WorkerModule from './modules/Worker';
 
@@ -19,4 +20,5 @@ export default function baseModules(client: Client) {
 	client.addModule(IndexedDBModule);
 	client.addModule(PartitionModule);
 	client.addModule(WebSocketModule);
+	client.addModule(UnrouteModule);
 }
