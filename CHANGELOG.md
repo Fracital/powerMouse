@@ -253,6 +253,13 @@ url`) carries its value and targets that window. An about:blank child of
   spine for an earlier optional link (a parenthesised chain ends it, as in
   the language) and keeps the rest of the chain optional. `img.currentSrc`
   reads back the candidate the browser picked as the page wrote it.
+- The service worker refuses a route that decodes to the proxy's own origin
+  (403, "Stomp does not proxy its own origin", reported with `error`): the
+  proxy fetching itself was a loop and a way to its host page. A fetch's
+  credentials mode reaches the cookie jar the way the browser applies its
+  own: `omit` sends no cookies and stores none from the response,
+  `same-origin` sends them only when the initiator's real origin is the
+  target's, `include` and the default send them.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

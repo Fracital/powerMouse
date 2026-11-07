@@ -147,6 +147,27 @@ function genericForward(
 			`${oURL.origin}${rewriter.directory}`,
 		);
 
+		// a route that decodes to the proxy's own origin would make the proxy
+		// fetch itself (its host page, its worker): a loop and an exposure
+		// of the host, so it is refused, like a blocked request
+		if (url.url.origin === oURL.origin) {
+			rewriter.log?.({
+				url: reportURL(url),
+				method: serverRequest.method,
+				destination: serverRequest.destination || 'fetch',
+				status: 403,
+				ms: Date.now() - started,
+				cached: false,
+				bytes: 0,
+				error: 'refused: the proxy does not proxy its own origin',
+				client: context?.clientId,
+			});
+			return new Response('Stomp does not proxy its own origin', {
+				status: 403,
+				headers: { 'content-type': 'text/plain; charset=utf-8' },
+			});
+		}
+
 		const requestHeaders = filterNativeRequestHeaders(
 			serverRequest.headers,
 			url,
@@ -258,17 +279,31 @@ function genericForward(
 			requestHeaders.set('sec-fetch-site', site);
 		}
 		const nested = nestedTopOf(oURL.pathname, rewriter.directory) !== null;
-		requestHeaders.set(
-			'cookie',
-			(
-				await rewriter.cookies.get(url.url, {
-					site: site as CookieRequestContext['site'],
-					navigation:
-						destination === 'document' || (destination === 'iframe' && !nested),
-					method: serverRequest.method,
-				})
-			).toString(),
-		);
+		// the request's credentials mode, as the browser would apply it to its
+		// own jar: `omit` sends and stores no cookies, `same-origin` only when
+		// the initiator's real origin is the target's (every proxied request
+		// looks same-origin to the browser, so this is decided here; an
+		// unknown initiator is given the benefit), `include` always
+		const credentials =
+			serverRequest.credentials === 'omit'
+				? false
+				: serverRequest.credentials === 'same-origin'
+					? initiator === null || initiator.origin === url.url.origin
+					: true;
+		if (credentials)
+			requestHeaders.set(
+				'cookie',
+				(
+					await rewriter.cookies.get(url.url, {
+						site: site as CookieRequestContext['site'],
+						navigation:
+							destination === 'document' ||
+							(destination === 'iframe' && !nested),
+						method: serverRequest.method,
+					})
+				).toString(),
+			);
+		else requestHeaders.delete('cookie');
 
 		// the host's rules, on the real request as it would go out: the first
 		// match blocks, answers, redirects or edits headers. Before the cache
@@ -491,7 +526,8 @@ function genericForward(
 
 		for (const [header, value] of response.rawHeaders ?? []) {
 			if (header.toLowerCase() === 'set-cookie') {
-				await rewriter.cookies.set(value, url.url);
+				// a response to a request without credentials sets nothing
+				if (credentials) await rewriter.cookies.set(value, url.url);
 			}
 		}
 
