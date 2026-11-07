@@ -490,7 +490,7 @@ console.warn = warn;
 	ok(
 		'a single-expression javascript: URL hands a string value to the client; statements are left as they are',
 		expression.startsWith('javascript:((r,c)=>') &&
-			expression.includes('.javascriptDocument(r)') &&
+			expression.includes('.javascriptDocument(r,document.URL)') &&
 			expression.includes('("<p>x</p>")') &&
 			!statements.includes('javascriptDocument'),
 		[expression, statements].join('\n'),

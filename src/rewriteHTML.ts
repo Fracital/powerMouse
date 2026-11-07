@@ -86,7 +86,7 @@ export function routeHTML(
 		const expression = javascriptExpression(body, rewritten);
 		if (expression === null) return `javascript:${rewritten}`;
 		const client = JSON.stringify(helperNames(config).client);
-		return `javascript:((r,c)=>typeof r==='string'&&c?c.javascriptDocument(r):r)((${expression}),self[${client}]||(()=>{try{return parent[${client}]}catch(e){}})())`;
+		return `javascript:((r,c)=>typeof r==='string'&&c?c.javascriptDocument(r,document.URL):r)((${expression}),self[${client}]||(()=>{try{return parent[${client}]}catch(e){}})())`;
 	}
 
 	return routeURL(
@@ -165,7 +165,7 @@ ${referred(names.client, referrer)}
 }`;
 
 	const baseScript = base
-		? `<script>globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(url.toString())};</script>`
+		? `<script>globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(url.toString()).replace(/</g, '\\u003c')};</script>`
 		: '';
 	return `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${baseScript}<script src="${injectDocumentJS(url, config)}"></script><script>${inject}</script></body></html>`;
 }

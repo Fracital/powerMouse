@@ -274,6 +274,49 @@ export default class ContextModule extends Module<DocumentClient> {
 			},
 		];
 	}
+	/**
+	 * Whether a message with these arguments reaches `receiver`, judged by
+	 * the real origins the way the browser judges real ones (every proxied
+	 * window shares the proxy origin, so the browser's own check passes them
+	 * all): `*` reaches any, `/` the sender's own origin, anything else must
+	 * be the receiver's origin ("null" for an opaque document never matches).
+	 * An unparsable target origin is the browser's SyntaxError.
+	 */
+	targetAllows(args: unknown[], receiver: Context): boolean {
+		const second = args[1];
+		const requested =
+			typeof second === 'object' && second !== null
+				? (second as WindowPostMessageOptions).targetOrigin
+				: second;
+		const target = requested === undefined ? '/' : String(requested);
+		if (target === '*') return true;
+		let receiverOrigin: string;
+		try {
+			const client = (receiver as Record<string, any>)[
+				this.client.names.client
+			] as DocumentClient | undefined;
+			if (!client) return true;
+			receiverOrigin = client.url.url.origin;
+		} catch (error) {
+			return true;
+		}
+		const wanted =
+			target === '/'
+				? this.client.url.url.origin
+				: (() => {
+						try {
+							return new URL(target).origin;
+						} catch (error) {
+							throw new this.client.global.DOMException(
+								"Failed to execute 'postMessage' on 'Window': Invalid target origin '" +
+									target +
+									"' in a call to 'postMessage'.",
+								'SyntaxError',
+							);
+						}
+					})();
+		return wanted !== 'null' && wanted === receiverOrigin;
+	}
 	restrictContext(context: Context): RestrictedContext {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
@@ -367,6 +410,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				postMessage: {
 					value: proxyModule.wrapFunction(postMessage, (target, that, args) => {
 						catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
+						if (!this.targetAllows(args, context)) return;
 						return Reflect.apply(target, context, this.postMessage(<any>args));
 					}),
 				},
@@ -382,6 +426,19 @@ export default class ContextModule extends Module<DocumentClient> {
 		);
 
 		return res;
+	}
+	/**
+	 * The stand-in for a frame showing an opaque (data:) document: restricted
+	 * like a frame of another origin, whatever runs in it, and never injected
+	 * from this side (see DOMAttributes' opaqueDocument).
+	 */
+	restrictOpaque(context: Context): RestrictedContext {
+		if (!this.restricted.has(context)) {
+			const restricted = this.restrictContext(context);
+			this.restricted.set(context, restricted);
+			this.restrictedContexts.set(restricted, context);
+		}
+		return this.restricted.get(context)!;
 	}
 	newRestricted(context: Context): RestrictedContext {
 		// a cross-origin window (the host application in isolation mode) throws
@@ -611,6 +668,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			const receiver = (target as Record<string, any>)[
 				this.client.names.client
 			] as Client;
+			if (!this.targetAllows(args as unknown[], target as Context)) return;
 			const [data, options] = this.postMessage(
 				args as PostMessageArgs,
 			) as PostMessageArgs2;

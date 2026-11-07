@@ -1,0 +1,50 @@
+<!doctype html>
+<title>DATA FRAME</title>
+<body>
+	<script>
+		// a data: frame is its own opaque origin "null": it fetches through the
+		// proxy and messages this page, but neither side can reach the other's
+		// document, and a message aimed at this page's origin never reaches it
+		window.__data = { fromChild: [] };
+		const out = __data;
+		const target = location.origin;
+		addEventListener('message', (event) => {
+			if (!event.data || !event.data.dataFrame) return;
+			out.fromChild.push({ origin: event.origin, ...event.data.dataFrame });
+			if (event.data.dataFrame.kind === 'ready') {
+				frame.contentWindow.postMessage({ toChild: 'star' }, '*');
+				frame.contentWindow.postMessage({ toChild: 'page-origin' }, target);
+				setTimeout(() => {
+					out.done = true;
+				}, 800);
+			}
+		});
+		const child = `<script>
+			const report = (data) => parent.postMessage({ dataFrame: data }, '*');
+			const reach = (fn) => { try { fn(); return 'reachable'; } catch (e) { return e.name; } };
+			addEventListener('message', (event) => report({ kind: 'echo', got: event.data.toChild, from: event.origin }));
+			fetch('${location.origin}/pages/echo.json')
+				.then((r) => r.json())
+				.then((j) => j.ok === true, (e) => String(e))
+				.then((fetched) => report({
+					kind: 'ready', fetched,
+					origin: self.origin, locationOrigin: location.origin,
+					href: location.href.slice(0, 15), domain: document.domain,
+					parentDocument: reach(() => parent.document.title),
+					topDocument: reach(() => top.document.title),
+				}));
+		<\/script>`;
+		const frame = document.createElement('iframe');
+		frame.src = `data:text/html,${encodeURIComponent(child)}`;
+		document.body.append(frame);
+		out.contentDocument = frame.contentDocument === null ? 'null' : 'document';
+		out.childDocument = (() => {
+			try {
+				return frame.contentWindow.document ? 'reachable' : 'none';
+			} catch (error) {
+				return error.name;
+			}
+		})();
+		out.src = frame.src.slice(0, 15);
+	</script>
+</body>

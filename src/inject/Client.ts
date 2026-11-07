@@ -19,6 +19,7 @@ import StompURL from '../StompURL';
 import {
 	ABORT_REQUEST,
 	INIT_REMOTE_TRANSPORT,
+	NO_DEFAULT_REFERRER,
 	TRANSPORT_INIT,
 	WORKER_BASE,
 } from '../transport/messages';
@@ -190,6 +191,24 @@ export default class Client {
 			return false;
 		}
 	}
+	/**
+	 * Whether this document's requests have no referrer by default: a data:
+	 * document's URL, or the about:blank a javascript: URL's document keeps,
+	 * strips to none. Sent from an ancestor's realm, they would carry the
+	 * ancestor instead.
+	 */
+	#noDefaultReferrer(): boolean {
+		try {
+			return (
+				this.url.url.protocol === 'data:' ||
+				(this.global as unknown as Record<string, unknown>)[
+					NO_DEFAULT_REFERRER
+				] === true
+			);
+		} catch (error) {
+			return false;
+		}
+	}
 	/** @internal this bundle's native fetch, which runs in this client's realm */
 	nativeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
 		return fetch(input, init);
@@ -202,24 +221,42 @@ export default class Client {
 	 */
 	routedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
 		if (this.controlled || !this.isDOM) return fetch(input, init);
-		let context: typeof globalThis = this.global;
+		// up the chain of clients by each one's native parent (the page-facing
+		// getter hands a frame of another origin, or an opaque one, the
+		// restricted stand-in)
+		const parentOf = (client: Client) =>
+			(client as unknown as { parent?: typeof globalThis }).parent;
+		let below: typeof globalThis = this.global;
+		let parent = parentOf(this);
 		for (let depth = 0; depth < 16; depth++) {
-			let parent: typeof globalThis;
 			try {
-				parent = context.parent as unknown as typeof globalThis;
-				if (!parent || parent === context) break;
-				const client = (
-					parent as unknown as Record<string, Client | undefined>
-				)[this.names.client];
-				if (client?.controlled) return client.nativeFetch(input, init);
+				if (!parent || parent === below) break;
+				const next = (parent as unknown as Record<string, Client | undefined>)[
+					this.names.client
+				];
+				if (!next) break;
+				if (next.controlled)
+					// sent from the ancestor's realm, the request would carry the
+					// ancestor as its referrer: where this document's own default
+					// is none, it goes without one; an explicit one goes as asked
+					return next.nativeFetch(
+						input,
+						init instanceof Request ||
+							(init && 'referrer' in init) ||
+							!this.#noDefaultReferrer()
+							? init
+							: { ...init, referrer: '' },
+					);
+				below = next.global;
+				parent = parentOf(next);
 			} catch (error) {
 				// a cross-origin ancestor ends the walk
 				break;
 			}
-			context = parent;
 		}
 		return fetch(input, init);
 	}
+
 	/**
 	 * Tell the service worker the page aborted the request it sent with this
 	 * id (the browser does not relay a fetch's abort to the worker): the

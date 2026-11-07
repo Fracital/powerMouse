@@ -97,6 +97,12 @@ export interface NavigateInfo {
  * URL of the page that made it, which is what its relative URLs mean
  */
 export const WORKER_BASE = '$stomp$workerBase';
+/**
+ * set by the shell of a document a javascript: URL made out of an iframe's
+ * initial about:blank: its URL is about:blank, so its requests have no
+ * referrer by default (see Client.routedFetch)
+ */
+export const NO_DEFAULT_REFERRER = '$stomp$noDefaultReferrer';
 
 export interface StorageChange {
 	store: string;

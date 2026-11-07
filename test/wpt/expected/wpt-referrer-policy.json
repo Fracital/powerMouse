@@ -3,23 +3,8 @@
 		"The fetch() API in an about:blank iframe with the 'client' referrer is fetched with no 'Referer' header": "FAIL: assert_equals: expected (undefined) undefined but got (string) \"http://localhost:PORT/\"",
 		"The value of document.referrer in an about:blank iframe is the outer document's full URL, regardless of referrer policy": "FAIL: assert_equals: expected \"http://localhost:PORT/referrer-policy/generic/inheritance/iframe-inheritance-about-blank.html\" but got \"\""
 	},
-	"/referrer-policy/generic/inheritance/iframe-inheritance-data.html": {
-		"(harness)": "TIMEOUT: ",
-		"iframes with data url uses no referrer": "NOTRUN: "
-	},
-	"/referrer-policy/generic/inheritance/iframe-inheritance-document-write.html": {
-		"document.open() should not change the referrer policy of the opened document.": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/referrer-policy/generic/inheritance/iframe-inheritance-history-about-srcdoc.html": {
-		"New srcdoc iframe uses new policy.": "FAIL: assert_equals: expected \"http://localhost:PORT/custom\" but got \"FAILURE\""
-	},
 	"/referrer-policy/generic/inheritance/iframe-inheritance-javascript-child.html": {
-		"Referrer Policy: iframes with javascript url reuse referrer policy": "TIMEOUT: Test timed out",
 		"Referrer Policy: iframes with javascript url reuse referrer policy 3": "NOTRUN: "
-	},
-	"/referrer-policy/generic/inheritance/iframe-inheritance-javascript.html": {
-		"Referrer Policy: iframes with javascript url reuse referrer policy": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: iframes with javascript url reuse referrer policy 1": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
 	"/referrer-policy/generic/inheritance/iframe-inheritance-srcdoc-child.html": {
 		"iframes srcdoc child correctly inherit the ancestor's referrer policy": "MISSING: the harness ended TIMEOUT before this subtest"

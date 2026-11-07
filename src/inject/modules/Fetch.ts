@@ -124,6 +124,33 @@ export default class FetchModule extends Module<Client> {
 					return await fetch(proxyBlobURL(url.href), init);
 				}
 
+				// an explicit referrer is a page URL: in proxy space (routed) the
+				// browser takes it as same-origin and the worker reads the real
+				// one back; one of another real origin is not allowed, and the
+				// request falls back to its default, as the browser's would
+				if (
+					init &&
+					!(init instanceof Request) &&
+					typeof init.referrer === 'string' &&
+					init.referrer !== '' &&
+					init.referrer !== 'about:client'
+				) {
+					const { referrer, ...rest } = init;
+					try {
+						const requested = new URL(referrer, this.client.url.toString());
+						init =
+							requested.origin === this.client.url.url.origin
+								? {
+										...rest,
+										referrer: routeXHR(
+											new StompURL(requested, this.client.url),
+										),
+									}
+								: rest;
+					} catch (error) {
+						init = rest;
+					}
+				}
 				// an abort never reaches the worker on its own: the request carries
 				// an id and the abort is posted to the worker under it
 				const signal = init?.signal;

@@ -6,7 +6,12 @@ import { modifyHTML } from '../../rewriteHTML';
 import { modifyJS, rewriteImportMap } from '../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import StompURL from '../../StompURL';
-import { HOOK_ERROR, OPEN_TAB, WORKER_BASE } from '../../transport/messages';
+import {
+	HOOK_ERROR,
+	NO_DEFAULT_REFERRER,
+	OPEN_TAB,
+	WORKER_BASE,
+} from '../../transport/messages';
 import Client from '../Client';
 import cloneRawNode, { nativeAttributes, parseHTML } from './cloneNode';
 import { scriptKind, shouldRewriteScript } from './modules/DOMAttributes';
@@ -215,13 +220,23 @@ export default class DocumentClient extends Client {
 	protected override reportHookError(info: HookErrorInfo): void {
 		this.postToHost({ [HOOK_ERROR]: info });
 	}
+	/** @internal frame elements showing an opaque (data:) document: never injected from this page (DOMAttributes, IFrame) */
+	readonly opaqueFrames = new WeakSet<Element>();
 	/**
 	 * The document a javascript: URL's string value becomes, in the shell
 	 * with this page as its URL (as a blob document gets it), so its scripts
 	 * run injected; routeHTML's javascript: wrapper calls this.
 	 */
-	javascriptDocument(markup: string): string {
-		return modifyHTML(markup, this.url, this.config, true);
+	javascriptDocument(markup: string, documentURL?: string): string {
+		const shell = modifyHTML(markup, this.url, this.config, true);
+		// the replaced document was an iframe's initial about:blank: the new
+		// one keeps that URL, which strips to no referrer
+		return documentURL === 'about:blank'
+			? shell.replace(
+					'<body>',
+					`<body><script>Object.defineProperty(globalThis, ${JSON.stringify(NO_DEFAULT_REFERRER)}, { value: true });</script>`,
+				)
+			: shell;
 	}
 	postToHost(message: object): boolean {
 		if (!this.topPostMessage) return false;

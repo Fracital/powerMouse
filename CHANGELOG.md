@@ -291,6 +291,33 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A `data:` frame runs proxied, as the opaque origin it is. Its document has
+  an opaque origin the inject could not reach: its requests had nowhere to go
+  and its messages never arrived. A `data:text/html` frame now loads from a
+  blob: URL of the shell with the data: URL as its document's URL, so it runs
+  injected while every readback treats it as origin `"null"`: its `origin`,
+  `location.origin` and messages say `"null"`, `location.href` is the data:
+  URL, `document.domain` is empty, and the page and the frame see each other
+  through the restricted cross-origin stand-ins (`contentDocument` null,
+  `SecurityError` on reaching the other's document). The page never injects
+  such a frame itself. This is the same best-effort footing as every proxied
+  cross-origin frame in same-origin mode, not the browser's isolation.
+  Requests from a document no service worker controls go through the nearest
+  controlled ancestor, by each client's own parent, and without a referrer
+  where the document's own default is none (data:, and the about:blank a
+  `javascript:` URL's document keeps); an explicit `referrer` of the page's
+  origin is sent in proxy space, so the browser honours it (data-frames
+  suite, both modes; wpt-referrer-policy: the inheritance pages, 7 more
+  subtests pass).
+- `postMessage` honours the target origin between proxied windows. Every
+  proxied window shares the proxy origin, so the browser's own check let any
+  `targetOrigin` through: a message aimed at one origin reached a frame of
+  another. The target is now compared with the receiver's real origin (`*`
+  any, `/` the sender's own, `"null"` never matches) and an invalid one is the
+  browser's `SyntaxError` (data-frames suite).
+- The shell writes a blob document's URL into its first script with `<`
+  escaped: a URL holding `</script>` (a data: document's markup) ended that
+  script early and the document lost its URL.
 - `<object data>` and `<embed src>` load through the proxy. Chrome never
   routes their loads through a service worker, so the routed URL reached the
   proxy origin's own server and the element showed nothing (a page, a PDF or

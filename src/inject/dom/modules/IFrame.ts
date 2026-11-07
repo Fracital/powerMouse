@@ -84,6 +84,11 @@ export default class IFrameModule extends Module<DocumentClient> {
 				const context = getContentWindowDescriptor.get!.call(element) as
 					typeof globalThis | null;
 
+				if (context && this.client.opaqueFrames.has(element))
+					// an opaque (data:) document: another origin from here, never
+					// injected by this page (its own shell injects it)
+					return windowModule.restrictOpaque(context);
+
 				if (context) {
 					injectContext(context);
 

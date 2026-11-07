@@ -8,6 +8,7 @@ import {
 import { modifyHTML, modifyRefresh, routeHTML } from '../../../rewriteHTML';
 import { modifyJS, routeJS, ScriptType } from '../../../rewriteJS';
 import {
+	parseDataURI,
 	proxyBlobURL,
 	ROUTE_PROTOCOLS,
 	routeBinary,
@@ -95,6 +96,35 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		return nativeElement.getAttribute.call(this.#scratch, 'style') ?? '';
 	}
 	apply() {
+		// before the BlobDocuments module wraps it (it applies after this one)
+		const NativeBlob = this.client.global.Blob;
+		// A frame whose src is a data: document gets an opaque origin, which
+		// the inject cannot reach: its requests would have nowhere to go and
+		// its messages no route to the page. It loads instead from a blob: URL
+		// of the shell with the data: URL itself as the document's URL, so it
+		// runs injected and same-origin underneath, while every readback treats
+		// it as the opaque origin "null" it is: its location is the data: URL,
+		// its origin "null", and the page and the frame see each other through
+		// the restricted cross-origin stand-ins (contentDocument null), as for
+		// any frame of another real origin. Best effort, as every proxied
+		// cross-origin frame is in same-origin mode.
+		const opaqueDocument = (resource: StompURL): string | null => {
+			if (resource.url.protocol !== 'data:') return null;
+			const { mime, data } = parseDataURI(
+				resource.url.pathname + resource.url.search,
+			);
+			if (
+				!/^\s*(text\/html|application\/xhtml\+xml)\s*$/i.test(
+					mime || 'text/plain',
+				)
+			)
+				return null;
+			const blob = new NativeBlob(
+				[modifyHTML(data, resource, this.client.config, true)],
+				{ type: 'text/html' },
+			);
+			return proxyBlobURL(this.client.global.URL.createObjectURL(blob));
+		};
 		const domHooksModule = this.client.getModule(DOMHooksModule)!;
 
 		// inline event handler attributes are scripts too: `onclick="top.x()"`
@@ -527,21 +557,23 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 				if (element.hasAttribute('src') && element.getAttribute('src') !== '') {
 					element.setAttributeOG('src', element.getAttribute('src')!);
+					const resource = new StompURL(
+						new URL(element.getAttribute('src')!, this.client.url.toString()),
+						this.client.url,
+					);
+					const opaque = opaqueDocument(resource);
+					if (opaque) this.client.opaqueFrames.add(element);
+					else this.client.opaqueFrames.delete(element);
 					element.setAttribute(
 						'src',
-						routeHTML(
-							new StompURL(
-								new URL(
-									element.getAttribute('src')!,
-									this.client.url.toString(),
-								),
+						opaque ??
+							routeHTML(
+								resource,
 								this.client.url,
+								this.client.config,
+								false,
+								this.client.topOrigin,
 							),
-							this.client.url,
-							this.client.config,
-							false,
-							this.client.topOrigin,
-						),
 					);
 				}
 			},
@@ -1108,7 +1140,6 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// element loads nothing until then; a later value wins over a load
 		// still in flight, and a failed fetch falls back to the routed URL.
 		// The attribute and the property read back as the page wrote them.
-		const NativeBlob = this.client.global.Blob;
 		// per element: the URL the page wrote, the load for it, and the blob:
 		// URL once it is in. A hook that runs again for the same value (the
 		// insertion hooks re-run every attribute hook) keeps the load and its
