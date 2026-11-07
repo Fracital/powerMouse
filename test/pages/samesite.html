@@ -1,0 +1,23 @@
+<!doctype html>
+<title>SAMESITE</title>
+<script>
+	// loaded from the fixture's other host name (localhost): the fixture's
+	// 127.0.0.1 origin is a different site, whose cookies the proxy must send
+	// by their SameSite rules
+	window.__ss = {};
+	const target = location.origin.replace('localhost', '127.0.0.1');
+	const frame = document.createElement('iframe');
+	frame.src = target + '/echo-headers';
+	document.documentElement.append(frame);
+	fetch(target + '/echo-headers')
+		.then((r) => r.json())
+		.then((h) => {
+			__ss.subresource = h.cookie || '';
+		})
+		.catch((e) => {
+			__ss.error = String(e);
+		})
+		.finally(() => {
+			__ss.done = true;
+		});
+</script>

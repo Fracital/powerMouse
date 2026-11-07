@@ -201,7 +201,7 @@ Suites: headers, cookies, cookie-jar, cache, page-apis.
 | Rewrite `Link` and `Content-Location`                                                                                                                   | ok      | per link by `rel` / `as`                                                                                                                                                                                    |
 | Force `text/event-stream` when SSE is requested                                                                                                         | ok      |                                                                                                                                                                                                             |
 | `Refresh` header, route-preserving `Location`, `Content-MD5` removal, `frame-ancestors`, HTML/JSON error pages, request queueing while the server boots | ahead   |                                                                                                                                                                                                             |
-| Cookie matching: label-boundary domain walk, hostOnly, path boundary, SameSite                                                                          | ok      | the jar evaluates all of it; the forward passes no SameSite request context yet (cookie-rules suite)                                                                                                        |
+| Cookie matching: label-boundary domain walk, hostOnly, path boundary, SameSite                                                                          | ok      | the jar evaluates all of it with the forward's site, navigation and method; iframe navigations count as top-level (cookie-rules and samesite suites)                                                        |
 | `Max-Age` in seconds, `Max-Age<=0` deletes, re-sets replace                                                                                             | ok      |                                                                                                                                                                                                             |
 | `__Host-` / `__Secure-` prefixes, 4096-byte cap, CTL rejection                                                                                          | ok      | cookie-rules suite                                                                                                                                                                                          |
 | HttpOnly cookies on WebSocket handshakes                                                                                                                | missing |                                                                                                                                                                                                             |
@@ -297,8 +297,9 @@ Suites: navigate-events, request-log, version, cookie-jar, cache, isolation.
 3. Reading back: `getComputedStyle` and `getPropertyValue` un-rewrite, Typed
    OM, `SVGAnimatedString.baseVal`, `script.textContent`,
    `PerformanceEntry.name`, `Error.prepareStackTrace`, `hashchange` URLs.
-4. Cookies: the SameSite request context in the forward, HttpOnly on
-   WebSockets, `cookieStore` removal, seeding `document.cookie` into the page.
+4. Cookies: HttpOnly on WebSockets, `cookieStore` removal, seeding
+   `document.cookie` into the page; a nested cross-site iframe should not get
+   Lax cookies (needs the host to mark its top documents).
 5. The page's own `Referrer-Policy` (needs the document's headers per client).
 6. Cache: heuristic freshness from `Last-Modified`, stale-while-revalidate,
    stale-if-error.

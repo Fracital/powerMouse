@@ -110,6 +110,15 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- The Cookie header follows SameSite: the service worker asks the jar with
+  the request's site (from the fetch metadata it computes), whether it is a
+  navigation and its method, so a cross-site subresource carries
+  `SameSite=None` cookies only and a cross-site GET navigation adds Lax but
+  never Strict. Every proxied page reaches the worker as an iframe
+  destination, so iframe navigations count as top-level: a cross-site link
+  into a site that keeps its login in Lax cookies works, and a nested
+  cross-site iframe gets Lax cookies a browser would withhold.
+  `controller.cookies.list()` records carry `hostOnly`.
 - The HTTP cache serves a request that arrives while the same URL's entry is
   still being written (its body streaming into the store) from that entry,
   instead of racing it upstream; on a slow machine the second of two fetches

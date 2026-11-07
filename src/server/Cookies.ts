@@ -347,6 +347,7 @@ export default class Cookies {
 				secure: cookie.secure,
 				httpOnly: cookie.httpOnly,
 				sameSite: cookie.sameSite,
+				hostOnly: cookie.hostOnly,
 			});
 		}
 		return records;

@@ -101,6 +101,8 @@ export interface CookieRecord {
 	secure: boolean;
 	httpOnly: boolean;
 	sameSite: 'lax' | 'strict' | 'none';
+	/** set without a Domain attribute: sent to that host only */
+	hostOnly: boolean;
 }
 
 export type CookieCommand =

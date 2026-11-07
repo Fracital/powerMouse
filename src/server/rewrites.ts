@@ -15,7 +15,7 @@ import type { RequestInfo, RouteContext } from '../transport/messages';
 import { BUILD } from '../version';
 import { HttpCache, isCacheable } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
-import Cookies from './Cookies';
+import Cookies, { CookieRequestContext } from './Cookies';
 import {
 	AdditionalFilter,
 	filterNativeRequestHeaders,
@@ -76,11 +76,6 @@ function genericForward(
 
 		requestHeaders.set('user-agent', navigator.userAgent);
 
-		requestHeaders.set(
-			'cookie',
-			(await rewriter.cookies.get(url.url)).toString(),
-		);
-
 		// Referer, Origin and the fetch metadata are forbidden headers, so the
 		// service worker never sees the page's; rebuild them from the (proxied)
 		// referrer the way the browser would for the real origins. The referrer
@@ -137,6 +132,22 @@ function genericForward(
 			}
 		}
 		requestHeaders.set('sec-fetch-site', site);
+
+		// the jar applies SameSite against the request's site. Every proxied
+		// page arrives here as an iframe (the host's frame), so an iframe
+		// destination counts as a navigation: a cross-site link into a site
+		// that keeps its login in Lax cookies still works, at the price of
+		// nested cross-site iframes getting Lax cookies a browser would withhold
+		requestHeaders.set(
+			'cookie',
+			(
+				await rewriter.cookies.get(url.url, {
+					site: site as CookieRequestContext['site'],
+					navigation: destination === 'document' || destination === 'iframe',
+					method: serverRequest.method,
+				})
+			).toString(),
+		);
 
 		// the HTTP cache, unless the host turned it off: a fresh entry answers
 		// without the transport; a stale one with validators is revalidated
