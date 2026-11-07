@@ -110,6 +110,20 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- Styles and references read back as the page wrote them: computed styles
+  (`getComputedStyle`, property and `getPropertyValue`), an inline style's
+  `getPropertyValue`, and the Typed OM's values stringify with the page's
+  `url()`; what the page parses (`CSSStyleValue.parse`) or sets on a
+  `StylePropertyMap` is routed; an SVG reference's `href.baseVal` and
+  `animVal` are the written value and setting `baseVal` routes;
+  `document.domain` accepts the page's host or a parent domain and refuses
+  anything else with a `SecurityError`, as a browser does, instead of the
+  proxy origin's refusal.
+- A script that arrives in a markup string (`innerHTML`,
+  `insertAdjacentHTML`, `outerHTML`) no longer runs: the browser's fragment
+  parser marks such scripts "already started" and Stomp's re-creation of the
+  parsed nodes had lost that, so the script ran, and raw. The parsed script
+  element is adopted instead of re-created.
 - Markup is read the way the browser reads it: a script runs rewritten
   whatever the case, spacing or legacy spelling of its JavaScript MIME type
   (and the `language` attribute), with `module` matched as Chrome does; a
@@ -426,11 +440,10 @@ Fixed while testing real sites and a feature fixture:
   heuristic freshness.
 - The page's own `Referrer-Policy` is not applied; requests follow
   `strict-origin-when-cross-origin`.
-- `href.baseVal` on SVG elements and `getSVGDocument()` are not spoofed;
-  `script.textContent` returns the rewritten source for scripts the page
-  inserted itself.
-- `getComputedStyle` / `getPropertyValue` return routed `url()` values;
-  `CSSRule.cssText` assignment and the Typed OM are not rewritten.
+- `getSVGDocument()` is not spoofed.
+- `CSSRule.cssText` assignment is not rewritten (a no-op for style rules).
+  Un-rewritten `url()` values read back as the page wrote them (relative
+  when written relative), not as the absolute URL a browser would serialise.
 - Array destructuring patterns (`const [{ top }] = [w]`) and a nested
   pattern's default value (`{ a: { top } = w }`) still read the real value.
 - In same-origin mode a `postMessage` from the host into a frame runs the

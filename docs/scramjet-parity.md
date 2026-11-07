@@ -164,24 +164,24 @@ before the inject bundle runs (no-JS user agents, crawlers) sees raw markup.
 | Standalone SVG / XHTML documents                                                                                                                                           | partial      | both weak                                                                                                                       |
 | `setHTMLUnsafe`, `getHTML`, `Document.parseHTMLUnsafe`                                                                                                                     | missing      | declarative shadow DOM                                                                                                          |
 | `script.textContent` getter returns the original source                                                                                                                    | ok           | inserted and parser-inserted scripts; not scripts from innerHTML strings (readback suite)                                       |
-| `HTMLImageElement.currentSrc`, `SVGAnimatedString.baseVal`, `getSVGDocument`                                                                                               | missing      | `HTMLAnchorElement.toString` and the URL parts are the link's own now                                                           |
+| `HTMLImageElement.currentSrc`, `getSVGDocument`                                                                                                                            | missing      | `href.baseVal` / `animVal` are the written value now (style-readback suite)                                                     |
 | `contentWindow` / `contentDocument` injection on `frame`, `object`, `embed`                                                                                                | partial      | only `iframe`                                                                                                                   |
-| `document.documentURI`, `document.domain` setter, `window.origin` / `self.origin`                                                                                          | partial      | documentURI and window.origin agree with the page; the domain setter is still missing                                           |
+| `document.documentURI`, `document.domain` setter, `window.origin` / `self.origin`                                                                                          | ok           | readback and style-readback suites; a parent domain is accepted and read back, else SecurityError                               |
 | `document.write` incremental tokenizer (tags split across calls)                                                                                                           | partial      | each call parsed as a complete fragment                                                                                         |
 | Inline script escaping, `<base href>` + `baseURI` spoof, `rel=manifest` removal, `script type` set after `src`                                                             | ahead        |                                                                                                                                 |
 
 ## 5. CSS
 
-| Feature                                                          | Status     | Notes                                                                                                      |
-| ---------------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
-| `url()`, `@import`, `@font-face`, custom properties              | ok         | css-tree based; idempotent now (a routed `url()` keeps the original after `#`)                             |
-| `CSSStyleSheet.insertRule/replace/replaceSync`                   | ok         | css suite                                                                                                  |
-| `FontFace` constructor                                           | ok         | string sources                                                                                             |
-| `CSSRule.cssText` set, `CSSStyleValue.parse`, `StylePropertyMap` | missing    | a no-op for style rules; Typed OM (`attributeStyleMap`, `computedStyleMap`) passes raw URLs                |
-| `getPropertyValue` / `getComputedStyle` un-rewrite               | partial    | computed values show the routed `url()`                                                                    |
-| `@namespace url()` left alone                                    | both wrong | both rewrite it                                                                                            |
-| `modifyCSS` parse failure                                        | partial    | falls back to the raw `url()` regex for CSSOM inserts and `<style>` text; a `/css/` response still rejects |
-| `data:` CSS decoded with `atob`                                  | partial    | mangles non-Latin1                                                                                         |
+| Feature                                                          | Status     | Notes                                                                                                                  |
+| ---------------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `url()`, `@import`, `@font-face`, custom properties              | ok         | css-tree based; idempotent now (a routed `url()` keeps the original after `#`)                                         |
+| `CSSStyleSheet.insertRule/replace/replaceSync`                   | ok         | css suite                                                                                                              |
+| `FontFace` constructor                                           | ok         | string sources                                                                                                         |
+| `CSSRule.cssText` set, `CSSStyleValue.parse`, `StylePropertyMap` | partial    | Typed OM: values stringify as written, parse and set route (style-readback suite); `CSSRule.cssText` set still a no-op |
+| `getPropertyValue` / `getComputedStyle` un-rewrite               | ok         | as written (relative stays relative), style-readback suite                                                             |
+| `@namespace url()` left alone                                    | both wrong | both rewrite it                                                                                                        |
+| `modifyCSS` parse failure                                        | partial    | falls back to the raw `url()` regex for CSSOM inserts and `<style>` text; a `/css/` response still rejects             |
+| `data:` CSS decoded with `atob`                                  | partial    | mangles non-Latin1                                                                                                     |
 
 ## 6. Requests, headers, cookies
 
@@ -292,16 +292,13 @@ Suites: navigate-events, request-log, version, cookie-jar, cache, isolation.
 
 1. Documents that escape the rewrite: `blob:` documents; import map package
    prefixes and scope keys.
-2. Reading back: `getComputedStyle` and `getPropertyValue` un-rewrite, Typed
-   OM, `SVGAnimatedString.baseVal`, `script.textContent`,
-   `PerformanceEntry.name`, `Error.prepareStackTrace`, `hashchange` URLs.
-3. Cookies: HttpOnly on WebSockets, `cookieStore` removal, seeding
+2. Cookies: HttpOnly on WebSockets, `cookieStore` removal, seeding
    `document.cookie` into the page; a nested cross-site iframe should not get
    Lax cookies (needs the host to mark its top documents).
-4. The page's own `Referrer-Policy` (needs the document's headers per client).
-5. Cache: heuristic freshness from `Last-Modified`, stale-while-revalidate,
+3. The page's own `Referrer-Policy` (needs the document's headers per client).
+4. Cache: heuristic freshness from `Last-Modified`, stale-while-revalidate,
    stale-if-error.
-6. The Tap: a request hook chain (intercept, request, response) once a second
+5. The Tap: a request hook chain (intercept, request, response) once a second
    consumer beyond `onRequest` exists, and `Frame.hooks.error.request`.
-7. A demo request viewer on `onRequest`; browser suites in CI; scramjet's
+6. A demo request viewer on `onRequest`; browser suites in CI; scramjet's
    adversarial corpus ported one file at a time.

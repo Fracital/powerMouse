@@ -192,6 +192,67 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['SCRIPT', attribute],
 			]);
 
+		// an SVG reference's `href` is an SVGAnimatedString: its baseVal and
+		// animVal read the attribute the page wrote (the hooked getAttribute),
+		// setting baseVal writes through the hooked setAttribute, so it routes
+		{
+			const proxyModule = this.client.getModule(ProxyModule)!;
+			const global = this.client.global as unknown as Record<string, any>;
+			const owners = new WeakMap<object, Element>();
+			for (const name of Object.getOwnPropertyNames(global)) {
+				if (!/^SVG\w+Element$/.test(name)) continue;
+				const prototype = global[name]?.prototype;
+				const descriptor =
+					prototype && Reflect.getOwnPropertyDescriptor(prototype, 'href');
+				if (!descriptor?.get) continue;
+				Reflect.defineProperty(prototype, 'href', {
+					...descriptor,
+					get: proxyModule.wrapFunction(
+						descriptor.get,
+						(target, that, args) => {
+							const value = Reflect.apply(target, that, args);
+							if (value && typeof value === 'object') owners.set(value, that);
+							return value;
+						},
+					),
+				});
+			}
+			const animated = global.SVGAnimatedString?.prototype;
+			if (animated)
+				for (const property of ['baseVal', 'animVal']) {
+					const descriptor = Reflect.getOwnPropertyDescriptor(
+						animated,
+						property,
+					);
+					if (!descriptor?.get) continue;
+					Reflect.defineProperty(animated, property, {
+						...descriptor,
+						get: proxyModule.wrapFunction(
+							descriptor.get,
+							(target, that, args) => {
+								const owner = owners.get(that);
+								if (!owner) return Reflect.apply(target, that, args);
+								return (
+									owner.getAttribute(
+										owner.hasAttribute('href') ? 'href' : 'xlink:href',
+									) ?? ''
+								);
+							},
+						),
+						set: descriptor.set
+							? proxyModule.wrapFunction(
+									descriptor.set,
+									(target, that, args) => {
+										const owner = owners.get(that);
+										if (!owner) return Reflect.apply(target, that, args);
+										owner.setAttribute('href', String(args[0]));
+									},
+								)
+							: undefined,
+					});
+				}
+		}
+
 		// browsing context names that would leave the frame: a top-level page
 		// navigates itself for these, so does a proxied one. `_blank` and
 		// names stay native (popups) until a host opts into onOpen
@@ -805,6 +866,15 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					proxy = new Proxy(declaration, {
 						get: (target, key) => {
 							const value = Reflect.get(target, key);
+							// getPropertyValue reads back the page's URL like the named
+							// properties do
+							if (key === 'getPropertyValue' && typeof value === 'function')
+								return (...args: unknown[]) => {
+									const result = Reflect.apply(value, target, args);
+									return typeof result === 'string' && result.includes('url(')
+										? restoreCSSValueURLs(result)
+										: result;
+								};
 							if (typeof value === 'function') return value.bind(target);
 							return typeof value === 'string' && value.includes('url(')
 								? restoreCSSValueURLs(value)
@@ -843,6 +913,48 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					),
 				});
 			}
+
+			// computed styles read back the page's URLs too
+			this.client.global.getComputedStyle = proxyModule.wrapFunction(
+				this.client.global.getComputedStyle,
+				(target, that, args) =>
+					wrapDeclaration(Reflect.apply(target, that, args)),
+			);
+
+			// the Typed OM: values stringify with the page's URLs; what the page
+			// parses or sets is routed
+			const typed = this.client.global as unknown as Record<string, any>;
+			if (typeof typed.CSSStyleValue === 'function') {
+				for (const name of ['parse', 'parseAll'])
+					if (typeof typed.CSSStyleValue[name] === 'function')
+						typed.CSSStyleValue[name] = proxyModule.wrapFunction(
+							typed.CSSStyleValue[name],
+							(target, that, args) => {
+								if (args.length > 1) args[1] = rewriteValue(args[1]);
+								return Reflect.apply(target, that, args);
+							},
+						);
+				typed.CSSStyleValue.prototype.toString = proxyModule.wrapFunction(
+					typed.CSSStyleValue.prototype.toString,
+					(target, that, args) => {
+						const value = Reflect.apply(target, that, args);
+						return typeof value === 'string' && value.includes('url(')
+							? restoreCSSValueURLs(value)
+							: value;
+					},
+				);
+			}
+			if (typeof typed.StylePropertyMap === 'function')
+				for (const name of ['set', 'append'])
+					if (typeof typed.StylePropertyMap.prototype[name] === 'function')
+						typed.StylePropertyMap.prototype[name] = proxyModule.wrapFunction(
+							typed.StylePropertyMap.prototype[name],
+							(target, that, args) => {
+								for (let i = 1; i < args.length; i++)
+									args[i] = rewriteValue(args[i]);
+								return Reflect.apply(target, that, args);
+							},
+						);
 
 			styleProto.setProperty = proxyModule.wrapFunction(
 				styleProto.setProperty,

@@ -32,8 +32,6 @@ const REWRITTEN = [
 	'text',
 	'textNode',
 	'innerHTML',
-	'divInnerHTML',
-	'insertAdjacentHTML',
 	'indirectEval',
 	'directEval',
 	'Function',
@@ -46,6 +44,14 @@ for (const key of REWRITTEN) {
 		JSON.stringify(r),
 	);
 }
+// a script that arrives in a markup string (innerHTML, insertAdjacentHTML)
+// never runs in a browser: the fragment parser marks it "already started"
+for (const key of ['divInnerHTML', 'insertAdjacentHTML'])
+	ok(
+		`${key} script does not run, like a browser`,
+		results[key] === undefined,
+		JSON.stringify(results[key]),
+	);
 // known limitation: string timers are not rewritten (CHANGELOG)
 console.log('stringTimer (known raw):', JSON.stringify(results.stringTimer));
 

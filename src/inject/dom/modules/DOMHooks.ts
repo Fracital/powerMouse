@@ -415,18 +415,37 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			),
 		});
 
+		// document.domain: the page's host; setting it to the host or a parent
+		// domain is accepted (and read back) like a browser does, anything else
+		// is the browser's SecurityError. The native setter never runs: it
+		// would act on the proxy origin, and refuses in a sandboxed frame
+		const domainDescriptor = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Document.prototype,
+			'domain',
+		)!;
+		const domains = new WeakMap<Document, string>();
 		Reflect.defineProperty(this.client.global.Document.prototype, 'domain', {
 			enumerable: true,
 			configurable: true,
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(
-					this.client.global.Document.prototype,
-					'domain',
-				)!.get!,
-				(target, that, args) => {
+				domainDescriptor.get!,
+				(target, that: Document, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
-					return this.client.url.url.hostname;
+					return domains.get(that) ?? this.client.url.url.hostname;
+				},
+			),
+			set: proxyModule.wrapFunction(
+				domainDescriptor.set!,
+				(target, that: Document, args) => {
+					const value = String(args[0]);
+					const host = this.client.url.url.hostname;
+					if (value !== host && !host.endsWith(`.${value}`))
+						throw new DOMException(
+							`Failed to set the 'domain' property on 'Document': '${value}' is not a suffix of '${host}'.`,
+							'SecurityError',
+						);
+					domains.set(that, value);
 				},
 			),
 		});

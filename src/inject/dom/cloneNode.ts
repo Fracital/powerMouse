@@ -66,6 +66,28 @@ export default function cloneRawNode(
 						continue;
 					}
 
+					// a script from a markup string must not run (the parser marked
+					// it "already started", as a browser's innerHTML does); a fresh
+					// element would lose that, so the parsed one is adopted and only
+					// its attributes go through the hooks
+					// (an SVG script is re-created like any other element: the script
+					// hooks expect HTMLScriptElement)
+					if (
+						d[0].nodeName === 'SCRIPT' &&
+						d[0].namespaceURI === 'http://www.w3.org/1999/xhtml'
+					) {
+						const script = document.adoptNode(d[0]) as Element;
+						// attributes first, on an empty element (the type hook reads the
+						// text), then the source back, like a fresh clone would
+						const children = [...script.childNodes];
+						for (const child of children) script.removeChild(child);
+						for (const attribute of script.getAttributeNames())
+							script.setAttribute(attribute, script.getAttribute(attribute)!);
+						for (const child of children) script.appendChild(child);
+						stack.push([STACK_FINALIZE, d[1], script]);
+						continue;
+					}
+
 					let target = d[0];
 
 					try {

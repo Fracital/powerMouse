@@ -33,7 +33,13 @@ function restoreValue(url: string) {
 		throw new Error('Invalid value URL');
 	}
 
-	return url.slice(hashi + 1);
+	// the browser percent-encodes the quotes of a serialised url() token
+	const token = url.slice(hashi + 1);
+	try {
+		return decodeURIComponent(token);
+	} catch (error) {
+		return token;
+	}
 }
 
 const RAW_URL = /url\(\s*(['"]?)(.*?)\1\s*\)/g;

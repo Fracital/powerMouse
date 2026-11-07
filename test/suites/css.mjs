@@ -28,29 +28,38 @@ for (let i = 0; i < 60; i++) {
 	}
 	if (css.done) break;
 }
-const routed = (value) =>
-	typeof value === 'string' && value.includes('/stomp/binary/');
+// computed styles read back the URL the page wrote (style-readback suite);
+// that the image went through the proxy shows in the resource entries below
+const own = (value) =>
+	typeof value === 'string' &&
+	value.includes('/pages/echo.json') &&
+	!value.includes('/stomp/');
 ok(
-	'insertRule url() is routed',
-	routed(css.insertRule),
+	'insertRule url() reads back as written',
+	own(css.insertRule),
 	JSON.stringify(css.insertRule),
 );
 ok(
-	'replaceSync url() is routed',
-	routed(css.replaceSync),
+	'replaceSync url() reads back as written',
+	own(css.replaceSync),
 	JSON.stringify(css.replaceSync),
 );
 ok(
-	'replace() url() is routed',
-	routed(css.replace),
+	'replace() url() reads back as written',
+	own(css.replace),
 	JSON.stringify(css.replace),
 );
 ok(
-	'<style> text url() is routed',
-	routed(css.styleText),
+	'<style> text url() reads back as written',
+	own(css.styleText),
 	JSON.stringify(css.styleText),
 );
 const requests = css.requests || [];
+ok(
+	'the background image went through the proxy',
+	requests.some((name) => name.startsWith(`${FIXTURE}pages/echo.json`)),
+	requests.filter((n) => n.includes('/pages/')).join(' '),
+);
 const proxyOrigin = new URL(PROXY).origin;
 const raw = requests.filter((name) => name.startsWith(`${proxyOrigin}/pages/`));
 ok(

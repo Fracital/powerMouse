@@ -1,0 +1,55 @@
+<!doctype html>
+<title>READBACK STYLE</title>
+<style>
+	#bg {
+		background-image: url('sprite.svg');
+	}
+</style>
+<div id="bg" style="width: 10px; height: 10px"></div>
+<div id="inline" style="background-image: url('sprite.svg')"></div>
+<svg width="10" height="10">
+	<use id="use" href="sprite.svg#icon"></use>
+</svg>
+<div id="holder"></div>
+<script>
+	window.__rb = {};
+	const bg = document.getElementById('bg');
+	const inline = document.getElementById('inline');
+	const computed = getComputedStyle(bg);
+	__rb.computed = computed.backgroundImage;
+	__rb.computedProperty = computed.getPropertyValue('background-image');
+	__rb.inlineProperty = inline.style.getPropertyValue('background-image');
+	__rb.inlineCssText = inline.style.cssText;
+	try {
+		__rb.typed = String(inline.attributeStyleMap.get('background-image'));
+		__rb.typedComputed = String(bg.computedStyleMap().get('background-image'));
+		inline.attributeStyleMap.set(
+			'background-image',
+			CSSStyleValue.parse('background-image', 'url("hdr.json")'),
+		);
+		__rb.typedSet = inline.style.backgroundImage;
+	} catch (error) {
+		__rb.typedError = String(error);
+	}
+	const use = document.getElementById('use');
+	__rb.baseVal = use.href.baseVal;
+	__rb.animVal = use.href.animVal;
+	use.href.baseVal = 'sprite.svg#other';
+	__rb.baseValSet = use.getAttribute('href');
+	try {
+		document.domain = location.hostname;
+		__rb.domainSame = document.domain;
+	} catch (error) {
+		__rb.domainSame = String(error);
+	}
+	try {
+		document.domain = 'example.com';
+		__rb.domainOther = 'allowed';
+	} catch (error) {
+		__rb.domainOther = error.name;
+	}
+	const holder = document.getElementById('holder');
+	holder.innerHTML =
+		'<script>window.__rb.markupRan = top === window;<\/script>';
+	__rb.markupText = holder.querySelector('script').text;
+</script>
