@@ -29,6 +29,7 @@ for (let i = 0; i < 40; i++) {
 	if (
 		apis.idbName !== undefined &&
 		apis.fetchRequest !== undefined &&
+		apis.fetchRequestFromRequest !== undefined &&
 		apis.upload !== undefined
 	)
 		break;
@@ -47,6 +48,19 @@ ok(
 	'fetch(Request) with a body works',
 	apis.fetchRequest?.ok === true,
 	JSON.stringify(apis.fetchRequest),
+);
+
+ok(
+	'a Request built from a Request keeps its URL, and fetching it works',
+	JSON.stringify(apis.requestFromRequest) ===
+		JSON.stringify([
+			`${FIXTURE}pages/echo.json?inner`,
+			`${FIXTURE}pages/echo.json?inner`,
+			'POST',
+		]) &&
+		JSON.stringify(apis.fetchRequestFromRequest) ===
+			JSON.stringify([200, `${FIXTURE}pages/echo.json?inner`]),
+	JSON.stringify([apis.requestFromRequest, apis.fetchRequestFromRequest]),
 );
 
 ok(

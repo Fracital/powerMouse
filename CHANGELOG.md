@@ -291,6 +291,22 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- `new Request(request)` keeps the request's URL. The Request constructor
+  hook resolved its first argument as a URL string against the page, so a
+  Request given a Request (what `fetch(new Request(req, init))` and libraries
+  that copy requests do) asked for `/[object Request]` on the page's origin
+  (Last.fm's request log showed the 404s). A Request input is now copied as
+  the browser copies it; strings and URLs resolve as before (page-apis
+  suite).
+- A `data:` script, stylesheet or document whose body holds a `?` is rewritten
+  whole. The URL parser files everything from the first `?` of a data: URL
+  under `search`, and the rewriters read the data from `pathname` only, so a
+  body with a query in it (`data:text/javascript,import("https://x/s.py?a=1")`,
+  what the WPT referrer-policy dynamic-import pages do) was cut there, failed
+  to parse and ran as written, with a SyntaxError in the page. The data is now
+  everything after `data:` but the fragment (wpt-referrer-policy: the 30
+  `script-tag-dynamic-import` pages, 384 subtests, from every scenario
+  rejecting to all passing; rewriter-unit shape).
 - A host page controlled by the host's own service worker boots. Our
   worker's startup revive (or any message carrying the `$stomp$swRevive`
   key) that arrived before the first handshake, which a descriptor transport

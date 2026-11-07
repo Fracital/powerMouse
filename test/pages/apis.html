@@ -79,6 +79,22 @@
 		.catch((e) => {
 			__apis.upload = 'error ' + e.message;
 		});
+	// a Request built from another Request keeps the URL (String(Request) is
+	// "[object Request]", which once became a request for that path)
+	try {
+		const inner = new Request('/pages/echo.json?inner');
+		const outer = new Request(inner, { method: 'POST' });
+		__apis.requestFromRequest = [inner.url, outer.url, outer.method];
+		fetch(new Request(outer))
+			.then((r) => {
+				__apis.fetchRequestFromRequest = [r.status, r.url];
+			})
+			.catch((e) => {
+				__apis.fetchRequestFromRequest = 'error ' + e.message;
+			});
+	} catch (e) {
+		__apis.requestFromRequest = 'error ' + e.message;
+	}
 	fetch(new Request('/pages/echo.json', { method: 'POST', body: 'payload' }))
 		.then((r) => r.json())
 		.then((j) => {

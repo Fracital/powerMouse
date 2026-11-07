@@ -94,11 +94,14 @@ export default class FetchModule extends Module<Client> {
 					);
 				}
 
-				return Reflect.construct(
-					target,
-					[new URL(args[0], this.client.url.toString()), args[1]],
-					newTarget,
-				);
+				// a Request given as the input is copied as it is (its URL was
+				// resolved when it was made); anything else is a URL string to
+				// resolve against the page's real URL, which String(Request) is not
+				const input =
+					args[0] instanceof target
+						? args[0]
+						: new URL(args[0], this.client.url.toString());
+				return Reflect.construct(target, [input, args[1]], newTarget);
 			},
 			true,
 		);
