@@ -27,6 +27,12 @@ export interface Config {
 	cache?: boolean;
 	/** @internal the host wants a RequestInfo per request (ControllerInit.onRequest) */
 	requestLog?: boolean;
+	/**
+	 * A script the rewriter cannot parse runs as it was (default). `false`
+	 * makes it fail instead, with a SyntaxError naming the rewriter error, so
+	 * a broken rewrite is loud while developing.
+	 */
+	allowInvalidJs?: boolean;
 	/** @internal build id of the service worker that serves the page (src/version.ts) */
 	build?: string;
 }

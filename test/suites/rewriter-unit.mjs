@@ -116,6 +116,14 @@ const parses = (code) => {
 		'a script the rewriter cannot parse comes back as it was',
 		rewrite(source) === source,
 	);
+	const strict = rewrite(source, 'generic', { allowInvalidJs: false });
+	ok(
+		'allowInvalidJs: false turns it into a thrown SyntaxError',
+		/^throw new SyntaxError\("Stomp could not rewrite https:\/\/example\.com\/a\.js: /.test(
+			strict,
+		) && parses(strict),
+		strict,
+	);
 }
 console.warn = warn;
 await done();

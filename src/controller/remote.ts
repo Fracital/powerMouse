@@ -47,6 +47,8 @@ export interface RemoteControllerInit {
 	onNavigate?: (info: NavigateInfo, frame: RemoteFrame) => void;
 	/** HTTP cache in the service worker, off by default (see StompController) */
 	cache?: boolean;
+	/** a script the rewriter cannot parse fails instead of running raw when `false` (see StompController) */
+	allowInvalidJs?: boolean;
 	/** one report per proxied request, with the RemoteFrame when known (see StompController.onRequest) */
 	onRequest?: (info: RemoteRequestEvent) => void;
 }
@@ -144,6 +146,7 @@ export class RemoteController {
 					openTab: !!init.onOpen,
 					cache: !!init.cache,
 					requestLog: !!init.onRequest,
+					...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 				}),
 			)
 			.then(({ config }) => {

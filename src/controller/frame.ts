@@ -111,6 +111,7 @@ if (window === window.parent || !origins.length) {
 						frameAncestors: [hostOrigin],
 						openTab: !!init.openTab,
 						cache: !!init.cache,
+						...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 						// the host's request log travels SW -> here -> host
 						...(init.requestLog
 							? {

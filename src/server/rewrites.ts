@@ -305,6 +305,7 @@ export function registerRewrites(
 				codec: codecType(this.codec),
 				frameAncestors: init.frameAncestors,
 				...(init.openTab ? { openTab: true } : {}),
+				...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 				build: BUILD,
 			};
 		},

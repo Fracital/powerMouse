@@ -32,6 +32,8 @@ export default class Client {
 	openTab: boolean;
 	/** the service worker's build id, from the shell */
 	build?: string;
+	/** unparseable scripts fail instead of running raw when false (config.allowInvalidJs) */
+	allowInvalidJs: boolean;
 	applied: boolean;
 	isDOM: boolean;
 	isWorker: boolean;
@@ -80,6 +82,7 @@ export default class Client {
 		this.directory = init.directory;
 		this.openTab = !!init.openTab;
 		this.build = init.build;
+		this.allowInvalidJs = init.allowInvalidJs !== false;
 		// a stale cached bundle next to a new service worker: say so once,
 		// the page still gets its best effort
 		if (init.build && init.build !== BUILD)
@@ -108,6 +111,7 @@ export default class Client {
 			codec: codecType(this.codec),
 			...(this.openTab ? { openTab: true } : {}),
 			...(this.build ? { build: this.build } : {}),
+			...(this.allowInvalidJs ? {} : { allowInvalidJs: false }),
 		};
 	}
 	/**

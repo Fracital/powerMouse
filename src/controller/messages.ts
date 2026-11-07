@@ -23,6 +23,8 @@ export interface ControllerFrameInit {
 	cache?: boolean;
 	/** the host wants a RequestInfo per request (RemoteControllerInit.onRequest) */
 	requestLog?: boolean;
+	/** unparseable scripts fail instead of running raw (RemoteControllerInit.allowInvalidJs) */
+	allowInvalidJs?: boolean;
 }
 
 export interface FrameInfo {

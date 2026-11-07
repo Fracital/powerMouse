@@ -81,6 +81,13 @@ export interface ControllerInit {
 	 */
 	cache?: boolean;
 	/**
+	 * A script the rewriter cannot parse runs as it was (default, like a
+	 * browser that does not know the syntax either). `false` makes it fail
+	 * with a SyntaxError naming the rewriter error instead, so a broken
+	 * rewrite is loud while developing.
+	 */
+	allowInvalidJs?: boolean;
+	/**
 	 * sandbox flags for proxied frames, default `DEFAULT_SANDBOX`. Same-origin
 	 * frames are not a security boundary, but without a sandbox the browser
 	 * lets `<a target="_top">`, `<form target="_parent">` and
@@ -200,6 +207,7 @@ export class StompController {
 			...(init.onOpen || init.openTab ? { openTab: true } : {}),
 			...(init.cache ? { cache: true } : {}),
 			...(init.onRequest || init.requestLog ? { requestLog: true } : {}),
+			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 		};
 
 		window.addEventListener('message', (event) => {
