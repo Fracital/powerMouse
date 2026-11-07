@@ -12,6 +12,7 @@ import { modifyJS, routeJS, ScriptType } from '../rewriteJS';
 import { parseRoutedURL, routeBinary } from '../routeURL';
 import StompURL from '../StompURL';
 import { BUILD } from '../version';
+import { HttpCache, isCacheable } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
 import Cookies from './Cookies';
 import {
@@ -40,6 +41,8 @@ interface Rewriter {
 	bare: BareCompatibleClient;
 	config: Config;
 	cookies: Cookies;
+	/** the HTTP cache, when the host turned it on */
+	cache?: HttpCache;
 }
 
 function genericForward(
@@ -127,16 +130,59 @@ function genericForward(
 		}
 		requestHeaders.set('sec-fetch-site', site);
 
-		const response = await rewriter.bare.fetch(url.toString(), {
-			method: serverRequest.method,
-			redirect: 'manual',
-			// redirect: serverRequest.redirect,
-			body:
-				(!BODY_ILLEGAL.includes(serverRequest.method) &&
-					(await serverRequest.blob())) ||
-				undefined,
-			headers: capitalizeHeaders(requestHeaders),
-		});
+		// the HTTP cache, when the host turned it on: a fresh entry answers
+		// without the transport; a stale one with validators is revalidated
+		// and a 304 refreshes it; what comes back cacheable is stored (its
+		// body split in two, one copy for the store)
+		const cache = rewriter.cache;
+		const hit =
+			cache &&
+			(serverRequest.method === 'GET' || serverRequest.method === 'HEAD')
+				? await cache.match(url.toString(), requestHeaders)
+				: null;
+		let response: Response & { rawHeaders?: [string, string][] };
+		if (hit && hit.fresh && !hit.mustRevalidate) {
+			response = hit.response;
+		} else {
+			if (hit) {
+				if (hit.etag) requestHeaders.set('if-none-match', hit.etag);
+				if (hit.lastModified)
+					requestHeaders.set('if-modified-since', hit.lastModified);
+			}
+			const upstream = await rewriter.bare.fetch(url.toString(), {
+				method: serverRequest.method,
+				redirect: 'manual',
+				// redirect: serverRequest.redirect,
+				body:
+					(!BODY_ILLEGAL.includes(serverRequest.method) &&
+						(await serverRequest.blob())) ||
+					undefined,
+				headers: capitalizeHeaders(requestHeaders),
+			});
+			if (hit && upstream.status === 304) {
+				response = await cache!.refresh(url.toString(), hit, upstream.headers);
+			} else if (
+				cache &&
+				upstream.body &&
+				isCacheable({
+					method: serverRequest.method,
+					requestHeaders,
+					status: upstream.status,
+					responseHeaders: upstream.headers,
+				})
+			) {
+				const [forStore, forPage] = upstream.body.tee();
+				cache.put(url.toString(), requestHeaders, upstream, forStore);
+				response = new Response(forPage, {
+					status: upstream.status,
+					statusText: upstream.statusText,
+					headers: upstream.headers,
+				});
+				response.rawHeaders = upstream.rawHeaders;
+			} else {
+				response = upstream;
+			}
+		}
 
 		const responseHeaders = filterResponseHeaders(
 			response.headers,
@@ -169,7 +215,7 @@ function genericForward(
 		)
 			responseHeaders.set('content-type', 'text/event-stream');
 
-		for (const [header, value] of response.rawHeaders) {
+		for (const [header, value] of response.rawHeaders ?? []) {
 			if (header.toLowerCase() === 'set-cookie') {
 				await rewriter.cookies.set(value, url.url);
 			}
@@ -206,6 +252,7 @@ export function registerRewrites(
 	init: ParsedConfig,
 	cookies: Cookies,
 	transport: ProxyTransport,
+	cache?: HttpCache,
 ) {
 	const rewriter: Rewriter = {
 		get config() {
@@ -218,6 +265,7 @@ export function registerRewrites(
 			};
 		},
 		cookies,
+		cache,
 		codec: init.codec,
 		directory: init.directory,
 		bare: new BareCompatibleClient(transport),

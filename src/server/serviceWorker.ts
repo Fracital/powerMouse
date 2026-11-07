@@ -42,6 +42,9 @@ function registerController(
 	const rpc = new RpcHelper<SWbound, Controllerbound>(
 		{
 			route: async (url) => [(await server).route(url), []],
+			clearCache: async () => {
+				await (await server).clearCache();
+			},
 		},
 		CONTROLLER_RPC,
 		(data, transfer) => postToPort(port, data, transfer),

@@ -82,6 +82,8 @@ export const TRANSPORT_RPC = 'transport';
 export type SWbound = {
 	/** resolve a URL against the controller's config into a routed (proxied) URL */
 	route: [string, string];
+	/** drop every entry of the HTTP cache */
+	clearCache: [];
 };
 
 /** implemented by the controller, called by the SW */

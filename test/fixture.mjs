@@ -106,9 +106,17 @@ const PAGES = {
 	'/rewriter': REWRITER,
 };
 
+// how often each /pages/ file was requested, and how many of those were
+// answered 304 (cache suite); /hits returns the counters
+const hits = new Map();
+
 export function startFixture(port = 8084) {
 	const server = createServer((req, res) => {
 		const path = new URL(req.url, 'http://x').pathname;
+		if (path === '/hits') {
+			res.setHeader('content-type', 'application/json');
+			return res.end(JSON.stringify(Object.fromEntries(hits)));
+		}
 		// the request headers the proxy sent, as JSON (headers suites)
 		if (path === '/echo-headers') {
 			res.setHeader('content-type', 'application/json');
@@ -120,11 +128,20 @@ export function startFixture(port = 8084) {
 			const ext = file.slice(file.lastIndexOf('.') + 1);
 			res.setHeader('content-type', TYPES[ext] || 'application/octet-stream');
 			const sidecar = `${pagesDir}${file}.headers.json`;
-			if (existsSync(sidecar))
-				for (const [name, value] of Object.entries(
-					JSON.parse(readFileSync(sidecar, 'utf8')),
-				))
-					res.setHeader(name, value);
+			const extra = existsSync(sidecar)
+				? JSON.parse(readFileSync(sidecar, 'utf8'))
+				: {};
+			for (const [name, value] of Object.entries(extra))
+				res.setHeader(name, value);
+			const count = hits.get(file) || { requests: 0, notModified: 0 };
+			count.requests++;
+			hits.set(file, count);
+			// a file with an ETag answers a matching conditional request with 304
+			if (extra.etag && req.headers['if-none-match'] === extra.etag) {
+				count.notModified++;
+				res.statusCode = 304;
+				return res.end();
+			}
 			return res.end(readFileSync(`${pagesDir}${file}`));
 		}
 		if (path in MODULES) {

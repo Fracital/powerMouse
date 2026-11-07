@@ -109,6 +109,7 @@ if (window === window.parent || !origins.length) {
 						codec: init.codec,
 						frameAncestors: [hostOrigin],
 						openTab: !!init.openTab,
+						cache: !!init.cache,
 					});
 					await controller.wait();
 					return [{ config: controller.config }, []];
@@ -140,6 +141,10 @@ if (window === window.parent || !origins.length) {
 						},
 						[],
 					];
+				},
+				clearCache: async () => {
+					if (!controller) throw new Error('Controller is not initialised');
+					await controller.clearCache();
 				},
 				frameCommand: async ({ index, command }) => {
 					const win = proxiedWindow(index);

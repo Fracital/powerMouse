@@ -58,6 +58,12 @@ export interface ControllerInit {
 	/** @internal pages may post open requests; set by the controller frame */
 	openTab?: boolean;
 	/**
+	 * HTTP cache in the service worker, off by default: GET/HEAD responses
+	 * with explicit freshness (max-age, Expires) are kept in a Cache API
+	 * store and revalidated when stale; `clearCache()` drops it.
+	 */
+	cache?: boolean;
+	/**
 	 * sandbox flags for proxied frames, default `DEFAULT_SANDBOX`. Same-origin
 	 * frames are not a security boundary, but without a sandbox the browser
 	 * lets `<a target="_top">`, `<form target="_parent">` and
@@ -136,6 +142,7 @@ export class StompController {
 			directory: this.directory.pathname,
 			...(init.frameAncestors ? { frameAncestors: init.frameAncestors } : {}),
 			...(init.onOpen || init.openTab ? { openTab: true } : {}),
+			...(init.cache ? { cache: true } : {}),
 		};
 
 		window.addEventListener('message', (event) => {
@@ -240,6 +247,11 @@ export class StompController {
 	/** hot-swap the transport; in-flight requests finish on the old one */
 	setTransport(transport: ProxyTransport) {
 		this.transport = transport;
+	}
+	/** drop every entry of the service worker's HTTP cache */
+	async clearCache(): Promise<void> {
+		await this.ready;
+		await this.rpc!.call('clearCache', undefined);
 	}
 	/** the proxied URL a frame should navigate to in order to load `url` */
 	async route(url: string): Promise<string> {

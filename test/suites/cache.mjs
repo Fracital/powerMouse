@@ -1,0 +1,96 @@
+// The service worker's HTTP cache, off by default and on with `?cache` in
+// the demo: a fresh entry (max-age) serves the second fetch without an
+// upstream request, no-store never caches, a stale entry with an ETag
+// revalidates and a 304 refreshes it, a request with Authorization bypasses,
+// clearCache() forces a refetch, and without the flag nothing is cached.
+import {
+	done,
+	FIXTURE,
+	HOST,
+	launch,
+	ok,
+	openDemo,
+	sleep,
+	submitLanding,
+} from '../lib.mjs';
+
+const browser = await launch();
+
+async function run(base) {
+	const page = await openDemo(browser, base);
+	await submitLanding(page, `${FIXTURE}pages/cache.html`);
+	let result = {};
+	for (let i = 0; i < 60; i++) {
+		await sleep(250);
+		const frame = page
+			.frames()
+			.findLast((f) => f.url().includes('/stomp/html/'));
+		try {
+			result = (await frame.evaluate(() => window.__cache)) || {};
+		} catch (error) {
+			result = {};
+		}
+		if (result.done) break;
+	}
+	return { page, result };
+}
+
+// cache on
+{
+	const { page, result } = await run(`${HOST}?cache`);
+	const hits = result.hits || {};
+	ok(
+		'page fetched everything',
+		result.error === undefined,
+		JSON.stringify(result.error),
+	);
+	ok(
+		'a fresh entry serves the second fetch from the cache',
+		hits['fresh.json']?.requests === 1,
+		JSON.stringify(hits['fresh.json']),
+	);
+	ok(
+		'no-store is fetched every time',
+		hits['nostore.json']?.requests === 2,
+		JSON.stringify(hits['nostore.json']),
+	);
+	ok(
+		'a stale entry with an ETag revalidates and gets a 304',
+		hits['revalidate.json']?.requests === 2 &&
+			hits['revalidate.json']?.notModified === 1,
+		JSON.stringify(hits['revalidate.json']),
+	);
+	ok(
+		'a request with Authorization bypasses the cache',
+		hits['auth.json']?.requests === 2,
+		JSON.stringify(hits['auth.json']),
+	);
+	await page.evaluate(() => window.controller.clearCache());
+	// after clearCache the fresh file must be fetched again
+	await submitLanding(page, `${FIXTURE}pages/cache.html`);
+	await sleep(4000);
+	const hits2 = await (await fetch(`${FIXTURE}hits`)).json();
+	ok(
+		'clearCache() makes the fresh entry fetch again',
+		hits2['fresh.json']?.requests === 2,
+		JSON.stringify(hits2['fresh.json']),
+	);
+	await page.close();
+}
+
+// cache off by default
+{
+	const before = await (await fetch(`${FIXTURE}hits`)).json();
+	const { page, result } = await run(HOST);
+	const hits = result.hits || {};
+	ok(
+		'without the flag a fresh entry is fetched every time',
+		(hits['fresh.json']?.requests || 0) -
+			(before['fresh.json']?.requests || 0) ===
+			2,
+		JSON.stringify([before['fresh.json'], hits['fresh.json']]),
+	);
+	await page.close();
+}
+
+await done(browser);

@@ -45,6 +45,8 @@ export interface RemoteControllerInit {
 	 * (`pollInterval`) stays as a fallback and can be disabled with 0.
 	 */
 	onNavigate?: (info: NavigateInfo, frame: RemoteFrame) => void;
+	/** HTTP cache in the service worker, off by default (see StompController) */
+	cache?: boolean;
 }
 
 export const DEFAULT_SANDBOX =
@@ -124,6 +126,7 @@ export class RemoteController {
 					directory: this.directory,
 					transport: init.transport,
 					openTab: !!init.onOpen,
+					cache: !!init.cache,
 				}),
 			)
 			.then(({ config }) => {
@@ -143,6 +146,11 @@ export class RemoteController {
 	async route(url: string): Promise<string> {
 		await this.ready;
 		return this.rpc.call('route', url);
+	}
+	/** drop every entry of the service worker's HTTP cache */
+	async clearCache(): Promise<void> {
+		await this.ready;
+		await this.rpc.call('clearCache', undefined);
 	}
 	async setTransport(transport: TransportDescriptor): Promise<void> {
 		await this.ready;

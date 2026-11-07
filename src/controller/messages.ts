@@ -14,6 +14,8 @@ export interface ControllerFrameInit {
 	transport: TransportDescriptor;
 	/** the host handles `window.open` / `_blank` (RemoteControllerInit.onOpen) */
 	openTab?: boolean;
+	/** HTTP cache in the service worker (RemoteControllerInit.cache) */
+	cache?: boolean;
 }
 
 export interface FrameInfo {
@@ -38,6 +40,7 @@ export type FrameBound = {
 	frameInfo: [number, FrameInfo];
 	/** resolves to whether the command was carried out (false: nothing to go back/forward to) */
 	frameCommand: [{ index: number; command: FrameCommand }, boolean];
+	clearCache: [];
 };
 
 /** implemented by the host, called by the controller frame */

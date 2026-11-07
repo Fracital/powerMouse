@@ -38,6 +38,13 @@ The first release after a four-year gap. Everything below is breaking.
   page reload (same-origin mode), server restarts and host-page bundles
   reloading the page, and an esbuild error overlay. Development only
   (`STOMP_DEV`).
+- An opt-in HTTP cache in the service worker (`cache: true`, `?cache` in the
+  demo): GET/HEAD responses with explicit freshness (max-age, s-maxage,
+  Expires) are served from a Cache API store, revalidated with ETag /
+  Last-Modified when stale, never stored for requests with Authorization or
+  cookies (unless `public`), no-store / private / no-cache or Vary: *, and
+  capped at 5 MB per entry and 50 MB in all; `controller.clearCache()` drops
+  it.
 - Frames dispatch a `navigate` event (and controllers take `onNavigate`)
   whenever the proxied page loads, changes its URL through pushState /
   hashchange or changes its title, with whether its own history can step;
@@ -290,6 +297,8 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- The HTTP cache never serves stale on a failed revalidation and uses no
+  heuristic freshness.
 - The page's own `Referrer-Policy` is not applied; requests follow
   `strict-origin-when-cross-origin`.
 - `href.baseVal` on SVG elements and `getSVGDocument()` are not spoofed;

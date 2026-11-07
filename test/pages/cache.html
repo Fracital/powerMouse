@@ -1,0 +1,22 @@
+<!doctype html>
+<title>CACHE</title>
+<script>
+	window.__cache = {};
+	const twice = async (file, init) => {
+		for (let i = 0; i < 2; i++)
+			await (await fetch('/pages/' + file, init)).json();
+	};
+	(async () => {
+		await twice('fresh.json');
+		await twice('nostore.json');
+		await twice('revalidate.json');
+		await twice('auth.json', { headers: { authorization: 'Bearer x' } });
+		__cache.hits = await (await fetch('/hits')).json();
+	})()
+		.catch((e) => {
+			__cache.error = String(e);
+		})
+		.finally(() => {
+			__cache.done = true;
+		});
+</script>

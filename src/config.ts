@@ -19,6 +19,12 @@ export interface Config {
 	 * opening a popup, and `window.open` returns null like a popup blocker.
 	 */
 	openTab?: boolean;
+	/**
+	 * HTTP cache in the service worker (off by default): GET/HEAD responses
+	 * with explicit freshness are served from a Cache API store and
+	 * revalidated with ETag / Last-Modified when stale.
+	 */
+	cache?: boolean;
 	/** @internal build id of the service worker that serves the page (src/version.ts) */
 	build?: string;
 }

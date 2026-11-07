@@ -1,6 +1,7 @@
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { openDB } from 'idb';
 import { Config, generateConfigCodecKey, parseConfig } from '../config';
+import { HttpCache } from './cache';
 import { registerCookies } from './Cookies';
 import { registerRewrites } from './rewrites';
 import Router from './Router';
@@ -11,6 +12,8 @@ export interface StompServer {
 	router: Router;
 	/** turn a URL into the proxied URL a frame should navigate to */
 	route(url: string): string;
+	/** drop every entry of the HTTP cache (a no-op when it is off) */
+	clearCache(): Promise<void>;
 }
 
 export default async function createServer(
@@ -26,25 +29,39 @@ export default async function createServer(
 	const tx = db.transaction('consts', 'readwrite');
 	const store = tx.objectStore('consts');
 
+	// an IndexedDB transaction commits during any other await, so nothing
+	// but the store may be awaited until tx.done
+	let newKey = false;
 	if (!(await store.get(`codecKey:${config.codec}`))) {
 		await store.put(
 			generateConfigCodecKey(config.codec),
 			`codecKey:${config.codec}`,
 		);
+		newKey = true;
 	}
 
 	const codecKey = await store.get(`codecKey:${config.codec}`);
 
 	await tx.done;
 
+	// routed URLs change with the key; nothing cached is reachable anymore
+	if (newKey) await new HttpCache().clear();
+
 	const init = parseConfig(config, codecKey);
 
 	const router = new Router(init.directory);
 
 	const cookies = await registerCookies(router);
-	const { route } = registerRewrites(router, init, cookies, transport);
+	const cache = config.cache ? new HttpCache() : undefined;
+	const { route } = registerRewrites(router, init, cookies, transport, cache);
 	await registerStorage(router);
 	registerXhr(router);
 
-	return { router, route };
+	return {
+		router,
+		route,
+		clearCache: async () => {
+			await cache?.clear();
+		},
+	};
 }
