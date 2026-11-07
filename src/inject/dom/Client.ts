@@ -1,9 +1,10 @@
 import { decode } from 'entities';
 import { ParsedConfig } from '../../config';
+import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
 import { modifyJS, rewriteImportMap } from '../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import StompURL from '../../StompURL';
-import { OPEN_TAB, WORKER_BASE } from '../../transport/messages';
+import { HOOK_ERROR, OPEN_TAB, WORKER_BASE } from '../../transport/messages';
 import Client from '../Client';
 import cloneRawNode, { nativeAttributes, parseHTML } from './cloneNode';
 import { scriptKind, shouldRewriteScript } from './modules/DOMAttributes';
@@ -155,6 +156,18 @@ export default class DocumentClient extends Client {
 	 * Post to the host application through the real top's postMessage taken
 	 * before any page code ran; returns whether it was sent.
 	 */
+	protected override hookContext(phase: HookPhase): HookContext {
+		const nested = this.nested;
+		return {
+			...super.hookContext(phase),
+			isTop: !nested,
+			nested,
+			kind: 'document',
+		};
+	}
+	protected override reportHookError(info: HookErrorInfo): void {
+		this.postToHost({ [HOOK_ERROR]: info });
+	}
 	postToHost(message: object): boolean {
 		if (!this.topPostMessage) return false;
 		try {
@@ -324,6 +337,10 @@ export default class DocumentClient extends Client {
 		setTimeout(() => {
 			Reflect.apply(this.open, this.global.document, []);
 			runDocumentOpenListeners(this.global);
+			// the host's post hook, on the document the page's markup lands in
+			// (the shell asked apply() to leave it to us), before the first
+			// script of the page
+			this.runHook('post');
 			this.write.call(this.global.document, newDocument);
 			this.global.document.close();
 		});

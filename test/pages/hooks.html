@@ -1,0 +1,61 @@
+<!doctype html>
+<title>HOOKS</title>
+<script>
+	// the first script of the page: what a hook left at document start
+	window.__hooks = {
+		start: { pre: !!self.__pre, post: !!self.__post },
+	};
+</script>
+<body>
+	<script>
+		// the realms this page makes: a nested proxied frame, an about:blank
+		// child, a srcdoc frame and a worker; each ran the host's hooks (or not)
+		const out = window.__hooks;
+		const child = document.createElement('iframe');
+		child.src = '/pages/hooks-child.html';
+		const blank = document.createElement('iframe');
+		const srcdoc = document.createElement('iframe');
+		srcdoc.srcdoc =
+			'<script>parent.__hooks.srcdoc = { pre: !!self.__pre, post: !!self.__post, nested: self.__pre && self.__pre.nested };<\/script>';
+		document.body.append(child, blank, srcdoc);
+		const blankWindow = blank.contentWindow;
+		out.blank = {
+			pre: !!blankWindow.__pre,
+			post: !!blankWindow.__post,
+			nested: blankWindow.__pre && blankWindow.__pre.nested,
+			url: blankWindow.__pre && blankWindow.__pre.url,
+		};
+		const worker = new Worker('/pages/hooks-worker.js');
+		const workerDone = new Promise((resolve) => {
+			worker.onmessage = (event) => {
+				out.worker = event.data;
+				resolve();
+			};
+			worker.onerror = () => {
+				out.worker = 'error';
+				resolve();
+			};
+			worker.postMessage(1);
+		});
+		const childDone = new Promise((resolve) => {
+			child.addEventListener('load', () => {
+				const win = child.contentWindow;
+				out.child = { pre: win.__pre, post: win.__post };
+				resolve();
+			});
+		});
+		const ready = new Promise((resolve) =>
+			document.readyState === 'loading'
+				? addEventListener('DOMContentLoaded', resolve)
+				: resolve(),
+		);
+		Promise.all([workerDone, childDone, ready]).then(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			out.marginTop = getComputedStyle(document.body).marginTop;
+			out.pre = self.__pre;
+			out.post = self.__post;
+			out.fromUrl = self.__fromUrl;
+			out.done = true;
+		});
+	</script>
+</body>

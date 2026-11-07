@@ -1,5 +1,6 @@
 import type { Assets, Config, ConfigCodec } from '../config';
 import type { HelperNames } from '../helperNames';
+import type { HookErrorInfo, InitHooks } from '../hooks';
 import type {
 	CookieCommand,
 	CookieResult,
@@ -48,6 +49,8 @@ export interface ControllerFrameInit {
 	assets?: Assets;
 	/** the deployment's helper names (RemoteControllerInit.names) */
 	names?: Partial<HelperNames>;
+	/** host code for every proxied realm (RemoteControllerInit.hooks), resolved by the controller frame */
+	hooks?: InitHooks;
 	/** the host's error page, a path on the proxy origin (RemoteControllerInit.errorPage) */
 	errorPage?: string;
 }
@@ -93,4 +96,6 @@ export type HostBound = {
 	request: [RequestInfo];
 	/** the inner controller's `stale` changed: the builds, or null once they agree again */
 	stale: [StaleInfo | null];
+	/** a host hook threw in a proxied realm, or a hook URL could not be fetched */
+	hookError: [HookErrorInfo];
 };

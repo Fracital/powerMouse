@@ -31,6 +31,26 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- `hooks` on `StompController` and `RemoteController`: host code run inside
+  every proxied realm, scramjet's `Frame.hooks.init.pre` and `post` by name,
+  as scripts that travel rather than closures (a realm on the proxy origin
+  cannot reach the host's objects). `hooks.init.pre` runs before the inject
+  installs its hooks and `hooks.init.post` after, before the page's first
+  script (after the document re-open a written page goes through, so
+  listeners survive); in the page, its nested frames, about:blank children,
+  popups and srcdoc frames, and with `hooks.workers` in dedicated and shared
+  workers. Each phase is `{ source }` (the text) or `{ url }` (fetched once at
+  construction; its text is what travels, so a redeploy of the file needs a
+  new controller). The code runs raw with the realm's real globals and one
+  argument: `{ url, origin, isTop, nested, kind, phase, names, frameId,
+window }`, `frameId` being the controller's id. It is trusted host code,
+  and what it leaves on the window is reachable by the page. A throw never
+  reaches the page: it is logged in the realm and reported to the host as a
+  `hookerror` event, `onHookError` and `controller.hookErrors`; a URL that
+  cannot be fetched is reported the same way and the controller serves
+  without it. A bad shape is a `TypeError`. Types `InitHooks`, `HookScript`,
+  `HookContext` and `HookErrorInfo` are exported (realm-hooks suite, both
+  modes).
 - `names` on `StompController` and `RemoteController`: the four global names
   the rewriter and the inject bundles use (`access` for the API every
   rewritten script calls, `client` for the client on the window, `globalProxy`

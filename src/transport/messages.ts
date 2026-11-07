@@ -68,6 +68,11 @@ export const STORAGE_EVENT = '$stomp$storageEvent';
  * pushState / replaceState, hashchange, popstate and title changes); posted
  * to the real top window, the host matches the source to one of its frames
  */
+/**
+ * a proxied page telling the host application that a host hook threw
+ * (src/hooks.ts); posted to the real top window like a navigate report
+ */
+export const HOOK_ERROR = '$stomp$hookError';
 export const NAVIGATE = '$stomp$navigate';
 
 export interface NavigateInfo {

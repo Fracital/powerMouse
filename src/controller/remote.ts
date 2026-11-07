@@ -6,6 +6,7 @@ import { assetName } from '../config';
 // frames the host page can neither read nor be read by.
 import type { Assets, Config, ConfigCodec } from '../config';
 import { validateNames, type HelperNames } from '../helperNames';
+import { validateHooks, type HookErrorInfo, type InitHooks } from '../hooks';
 import type {
 	NavigateInfo,
 	RequestInfo,
@@ -14,8 +15,9 @@ import type {
 import { RpcHelper } from '../transport/rpc';
 import { controllerId } from './id';
 import {
-	cookieJar,
 	CookieJar,
+	cookieJar,
+	hookErrorReport,
 	navigateReport,
 	NAVIGATION_WAIT_MS,
 	openRequest,
@@ -80,6 +82,10 @@ export interface RemoteControllerInit {
 	assets?: Assets;
 	/** the deployment's helper names (see StompController.names) */
 	names?: Partial<HelperNames>;
+	/** host code for every proxied realm (see StompController.hooks); a `{ url }` must be readable from the proxy origin, where the controller frame fetches it */
+	hooks?: InitHooks;
+	/** a host hook threw in a proxied realm, or a hook URL failed (see StompController) */
+	onHookError?: (info: HookErrorInfo) => void;
 	/**
 	 * The host's own page for a document the proxy failed to produce (see
 	 * StompController): a path on the proxy origin, where the worker runs,
@@ -126,6 +132,7 @@ export class RemoteController extends EventTarget {
 	constructor(init: RemoteControllerInit) {
 		super();
 		validateNames(init.names, Object.getOwnPropertyNames(globalThis));
+		validateHooks(init.hooks);
 		this.#init = init;
 		this.proxyOrigin = new URL(init.proxyOrigin).origin;
 		this.directory = init.directory ?? '/stomp/';
@@ -157,6 +164,12 @@ export class RemoteController extends EventTarget {
 			{
 				ready: async () => {
 					frameReady();
+				},
+				hookError: async (info) => {
+					init.onHookError?.(info);
+					this.dispatchEvent(
+						new CustomEvent('hookerror', { detail: { info } }),
+					);
 				},
 				request: async (info) => {
 					let frame =
@@ -227,6 +240,16 @@ export class RemoteController extends EventTarget {
 			if (url !== null) {
 				init.onOpen?.(url, frame);
 				this.dispatchEvent(new CustomEvent('open', { detail: { url, frame } }));
+				return;
+			}
+			// a hook that threw: the page posts to the real top, which is this
+			// host page (the controller frame only relays URL fetch failures)
+			const hookError = hookErrorReport(event.data);
+			if (hookError) {
+				init.onHookError?.(hookError);
+				this.dispatchEvent(
+					new CustomEvent('hookerror', { detail: { info: hookError, frame } }),
+				);
 			}
 		});
 
@@ -246,6 +269,7 @@ export class RemoteController extends EventTarget {
 					...(init.rules ? { rules: init.rules } : {}),
 					...(init.assets ? { assets: init.assets } : {}),
 					...(init.names ? { names: init.names } : {}),
+					...(init.hooks ? { hooks: init.hooks } : {}),
 					...(init.errorPage ? { errorPage: init.errorPage } : {}),
 				}),
 			)

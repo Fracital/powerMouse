@@ -762,6 +762,8 @@ export function registerRewrites(
 				// the deployment's helper names: the shell and every rewritten
 				// script use them, and the inject reads them from this config
 				...(init.names ? { names: init.names } : {}),
+				// the host's hooks: every shell and worker preamble runs them
+				...(init.hooks ? { hooks: init.hooks } : {}),
 				build: BUILD,
 			};
 		},

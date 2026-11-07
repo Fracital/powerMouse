@@ -1,5 +1,6 @@
 import GenericCodec, { AESCodec, Base64Codec, XORCodec } from './Codecs';
 import type { HelperNames } from './helperNames';
+import type { ResolvedHooks } from './hooks';
 
 export declare type ConfigCodec = 'generic' | 'xor' | 'aes' | 'base64';
 
@@ -57,6 +58,12 @@ export interface Config {
 	 * otherwise. Defaults: `$s$j`, `$s$L`, `$s$N`, `$P$s`.
 	 */
 	names?: Partial<HelperNames>;
+	/**
+	 * Host code run in every proxied realm, as resolved text (see
+	 * src/hooks.ts; the controllers take `init.hooks` with sources or URLs
+	 * and put the text here).
+	 */
+	hooks?: ResolvedHooks;
 	/**
 	 * The host's own page for a document the proxy failed to produce (a
 	 * transport failure, the timeout, a routing error, a blocked rule, the

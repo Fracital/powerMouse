@@ -8,6 +8,12 @@ import {
 	ParsedConfig,
 } from '../config';
 import { HelperNames, helperNames } from '../helperNames';
+import type {
+	HookContext,
+	HookErrorInfo,
+	HookPhase,
+	ResolvedHooks,
+} from '../hooks';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../routeURL';
 import StompURL from '../StompURL';
 import {
@@ -102,9 +108,15 @@ export default class Client {
 	readonly names: HelperNames;
 	/** the host set its own helper names: pass them on to every shell this client writes */
 	readonly #customNames: boolean;
+	/** the host's hooks, as text (config.hooks) */
+	readonly hooks?: ResolvedHooks;
+	/** the realm's Function before the Function module wraps it: a hook is host code, not rewritten */
+	readonly #nativeFunction: FunctionConstructor;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		this.names = helperNames(init);
 		this.#customNames = !!(init as { names?: unknown }).names;
+		this.hooks = init.hooks;
+		this.#nativeFunction = global.Function;
 		this.global = global;
 		this.applied = false;
 		this.modules = new Map();
@@ -147,6 +159,7 @@ export default class Client {
 			...(this.allowInvalidJs ? {} : { allowInvalidJs: false }),
 			...(this.assets ? { assets: this.assets } : {}),
 			...(this.#customNames ? { names: this.names } : {}),
+			...(this.hooks ? { hooks: this.hooks } : {}),
 		};
 	}
 	/**
@@ -266,7 +279,13 @@ export default class Client {
 	 called once all modules are created
 	 apis can be called, functions can be hooked
 	*/
-	apply() {
+	/**
+	 * @param deferPost the HTML shell's loadHTML follows and runs the post
+	 * hook itself, after its document.open (which drops every listener a
+	 * hook registered before it)
+	 */
+	apply(deferPost = false) {
+		this.runHook('pre');
 		for (const module of this.modules.values()) {
 			if (module.apply) {
 				module.apply();
@@ -274,7 +293,72 @@ export default class Client {
 		}
 
 		this.applied = true;
+		if (!deferPost) this.runHook('post');
 	}
+	/**
+	 * Run the host's code for `phase` in this realm (src/hooks.ts): raw, with
+	 * the realm's real globals, one argument. A throw never reaches the shell:
+	 * it is logged here and reported to the host (`hookerror`); a promise it
+	 * returns is not awaited, its rejection is reported the same way.
+	 */
+	runHook(phase: HookPhase) {
+		const source = this.hooks?.[phase];
+		if (!source) return;
+		if (this.isWorker && !this.hooks?.workers) return;
+		const context = this.hookContext(phase);
+		const report = (error: unknown) => {
+			const message = error instanceof Error ? error.message : String(error);
+			const stack = error instanceof Error ? error.stack : undefined;
+			console.error(
+				`Stomp: the host's ${phase} hook threw in ${context.url}: ${message}`,
+			);
+			this.reportHookError({
+				phase,
+				kind: context.kind,
+				url: context.url,
+				message,
+				...(stack ? { stack } : {}),
+			});
+		};
+		try {
+			const result: unknown = Reflect.apply(
+				new this.#nativeFunction('stomp', source),
+				this.global,
+				[context],
+			);
+			if (
+				typeof result === 'object' &&
+				result !== null &&
+				typeof (result as Promise<unknown>).then === 'function'
+			)
+				(result as Promise<unknown>).then(undefined, report);
+		} catch (error) {
+			report(error);
+		}
+	}
+	/** what a hook is handed; documents add what they know (DocumentClient) */
+	protected hookContext(phase: HookPhase): HookContext {
+		const global = this.global as unknown as Record<string, unknown>;
+		const id = this.directory.startsWith(this.scope)
+			? this.directory.slice(this.scope.length).replace(/\/$/, '')
+			: '';
+		return {
+			url: this.url.toString(),
+			origin: this.url.url.origin,
+			isTop: false,
+			nested: false,
+			kind:
+				typeof global.SharedWorkerGlobalScope === 'function'
+					? 'sharedWorker'
+					: 'worker',
+			phase,
+			names: this.names,
+			...(id ? { frameId: id } : {}),
+			window: this.global,
+		};
+	}
+	/** a document posts the report to the host; a worker has nobody to tell */
+	protected reportHookError(_info: HookErrorInfo): void {}
 	addModule(Module: ModuleCtor) {
 		this.modules.set(Module, new Module(this));
 	}

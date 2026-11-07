@@ -10,6 +10,12 @@ import {
 	DEFAULT_ASSETS,
 } from '../config';
 import { helperNames, validateNames, type HelperNames } from '../helperNames';
+import {
+	resolveHooks,
+	validateHooks,
+	type HookErrorInfo,
+	type InitHooks,
+} from '../hooks';
 import { isUrlLike, urlLike } from '../StompURL';
 import type { RequestRule } from '../transport/messages';
 import {
@@ -21,6 +27,7 @@ import {
 	CookieCommand,
 	CookieRecord,
 	CookieResult,
+	HOOK_ERROR,
 	NAVIGATE,
 	NavigateInfo,
 	OPEN_TAB,
@@ -149,6 +156,21 @@ export interface ControllerInit {
 	 */
 	names?: Partial<HelperNames>;
 	/**
+	 * Host code run inside every proxied realm (documents, nested frames,
+	 * about:blank children, popups, srcdoc frames; workers with
+	 * `hooks.workers`): `hooks.init.pre` before the inject installs its hooks,
+	 * `hooks.init.post` after, before the page's first script. Scripts that
+	 * travel, not closures: `{ source }` is the text, `{ url }` is fetched
+	 * once at construction and its text travels (a redeploy of the file needs
+	 * a new controller). Trusted host code with the realm's real globals; see
+	 * src/hooks.ts. A bad shape is a TypeError; a URL that cannot be fetched
+	 * is a `hookerror` event (and an entry in `hookErrors`), and the
+	 * controller serves without that hook.
+	 */
+	hooks?: InitHooks;
+	/** a host hook threw in a proxied realm (or a hook URL failed); also the `hookerror` CustomEvent */
+	onHookError?: (info: HookErrorInfo, frame: Frame | null) => void;
+	/**
 	 * The host's own page for a document the proxy failed to produce (the
 	 * transport could not reach the origin, the worker's timeout, a routing
 	 * error, a blocked rule, the refusal to proxy its own origin): a URL on
@@ -214,6 +236,27 @@ export function navigateReport(data: unknown): NavigateInfo | null {
 		canGoBack: typeof canGoBack === 'boolean' ? canGoBack : null,
 		canGoForward: typeof canGoForward === 'boolean' ? canGoForward : null,
 		...(typeof client === 'string' ? { client } : {}),
+	};
+}
+
+/** a hook error report posted by a proxied page, else null */
+export function hookErrorReport(data: unknown): HookErrorInfo | null {
+	if (typeof data !== 'object' || data === null) return null;
+	const info = (data as Record<string, unknown>)[HOOK_ERROR];
+	if (typeof info !== 'object' || info === null) return null;
+	const { phase, kind, url, message, stack } = info as HookErrorInfo;
+	if (
+		(phase !== 'pre' && phase !== 'post' && phase !== 'url') ||
+		typeof url !== 'string' ||
+		typeof message !== 'string'
+	)
+		return null;
+	return {
+		phase,
+		url,
+		message,
+		...(typeof kind === 'string' ? { kind } : {}),
+		...(typeof stack === 'string' ? { stack } : {}),
 	};
 }
 
@@ -284,6 +327,12 @@ export type { StaleInfo };
 export type { Assets } from '../config';
 export { DEFAULT_ASSETS } from '../config';
 export type { HelperNames } from '../helperNames';
+export type {
+	HookContext,
+	HookErrorInfo,
+	HookScript,
+	InitHooks,
+} from '../hooks';
 export { DEFAULT_NAMES } from '../helperNames';
 export type {
 	RequestRule,
@@ -403,6 +452,9 @@ export class StompController extends EventTarget {
 	#worker?: TransportWorker;
 	/** settles once the transport exists where it is hosted; the handshake waits for it */
 	#hostReady: Promise<void>;
+	/** every hook error so far (a hook that threw, a hook URL that failed), newest last; also `hookerror` events */
+	readonly hookErrors: HookErrorInfo[] = [];
+	#init: ControllerInit;
 	/** service worker client ids the pages reported, by frame */
 	#clientFrames = new Map<string, Frame>();
 	#onRequest?: (info: RequestEvent) => void;
@@ -456,8 +508,10 @@ export class StompController extends EventTarget {
 	#registration?: ServiceWorkerRegistration;
 	constructor(init: ControllerInit) {
 		super();
+		this.#init = init;
 		// before anything async: a bad name is a programming error
 		validateNames(init.names, Object.getOwnPropertyNames(globalThis));
+		validateHooks(init.hooks);
 		if (!('serviceWorker' in navigator))
 			throw new Error('Your browser does not support service workers.');
 
@@ -511,11 +565,21 @@ export class StompController extends EventTarget {
 
 		// a described transport is started where it is hosted before the first
 		// handshake; a failure there never leaves the controller dead
-		this.#hostReady = !isTransportDescriptor(given)
+		// the hooks' text must be in the config before the first handshake
+		const hooksReady = resolveHooks(init.hooks, location.href).then(
+			({ hooks, errors }) => {
+				if (hooks) this.config.hooks = hooks;
+				for (const error of errors) this.#reportHookError(error, null);
+			},
+		);
+		const transportReady: Promise<void> = !isTransportDescriptor(given)
 			? Promise.resolve()
 			: this.transportHost === 'worker'
 				? this.#startWorker(given)
 				: this.#importInPage(given);
+		this.#hostReady = Promise.all([hooksReady, transportReady]).then(
+			() => undefined,
+		);
 
 		window.addEventListener('message', (event) => {
 			// only our own frames, same origin as this page in this mode
@@ -538,7 +602,10 @@ export class StompController extends EventTarget {
 			if (url !== null) {
 				init.onOpen?.(url, frame);
 				this.dispatchEvent(new CustomEvent('open', { detail: { url, frame } }));
+				return;
 			}
+			const hookError = hookErrorReport(event.data);
+			if (hookError) this.#reportHookError(hookError, frame);
 		});
 
 		this.#ready = new Promise((resolve) => {
@@ -911,6 +978,14 @@ export class StompController extends EventTarget {
 	/** resolves once the service worker has created a server for this controller */
 	async wait(): Promise<void> {
 		await this.#ready;
+	}
+	/** a hook that threw in a realm, or a hook URL that failed: callback and `hookerror` event */
+	#reportHookError(info: HookErrorInfo, frame: Frame | null) {
+		this.hookErrors.push(info);
+		this.#init.onHookError?.(info, frame);
+		this.dispatchEvent(
+			new CustomEvent('hookerror', { detail: { info, frame } }),
+		);
 	}
 	/**
 	 * Hot-swap the transport; in-flight requests finish on the old one. The

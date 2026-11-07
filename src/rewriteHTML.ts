@@ -100,7 +100,7 @@ export function modifyHTML(
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 
 	if (!${names.client}.applied) try {
-		${names.client}.apply();
+		${names.client}.apply(true);
 	} catch(error) {
 		document.write("Failure applying Stomp hooks. See devtools output for more information.");
 		throw error;

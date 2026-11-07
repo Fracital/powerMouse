@@ -6,6 +6,7 @@
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { assetName } from '../config';
 import { helperNames } from '../helperNames';
+import type { HookErrorInfo } from '../hooks';
 import type { RequestInfo } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import { canTraverse, traverse } from './history';
@@ -130,6 +131,10 @@ if (window === window.parent || !origins.length) {
 						...(init.rules ? { rules: init.rules } : {}),
 						...(init.assets ? { assets: init.assets } : {}),
 						...(init.names ? { names: init.names } : {}),
+						...(init.hooks ? { hooks: init.hooks } : {}),
+						onHookError: (info: HookErrorInfo) => {
+							rpc.call('hookError', info);
+						},
 						...(init.errorPage ? { errorPage: init.errorPage } : {}),
 						// the host's request log travels SW -> here -> host
 						...(init.requestLog
