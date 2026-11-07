@@ -1,0 +1,35 @@
+<!doctype html>
+<title>NESTED SAME</title>
+<body></body>
+<script>
+	window.__nest = { messages: {} };
+	const reach = (source) => {
+		try {
+			return source.document ? 'reachable' : 'blocked';
+		} catch (error) {
+			return 'threw';
+		}
+	};
+	addEventListener('message', (event) => {
+		if (!event.data || !event.data.tell) return;
+		const who = event.data.tell;
+		const frame = document.getElementById(who);
+		__nest.messages[who] = {
+			frameElement: event.data.frameElement,
+			sourceIsFrame: event.source === frame.contentWindow,
+			document: reach(event.source),
+			postMessage: typeof event.source.postMessage,
+		};
+		if (__nest.messages.same && __nest.messages.cross) __nest.done = true;
+	});
+	const same = document.createElement('iframe');
+	same.id = 'same';
+	same.src = '/pages/frame-tell.html?who=same';
+	const cross = document.createElement('iframe');
+	cross.id = 'cross';
+	cross.src = `${location.origin.replace('127.0.0.1', 'localhost')}/pages/frame-tell.html?who=cross`;
+	document.body.append(same, cross);
+	setTimeout(() => {
+		__nest.done = true;
+	}, 8000);
+</script>

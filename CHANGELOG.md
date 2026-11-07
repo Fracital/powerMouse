@@ -319,6 +319,17 @@ url`) carries its value and targets that window. An about:blank child of
   `<object>` or `<embed>` still cannot be proxied: Chrome never routes their
   loads through a service worker (measured: no request reaches the worker),
   so the browser fetches the routed URL from the proxy origin directly.
+- A frame nested in a proxied page of the same real origin reads its own
+  `frameElement` (another origin's parent gives null, the host's frame is
+  never seen), and `MessageEvent.source` follows the real origins: a window
+  of the page's own origin as it is, another proxied origin's restricted
+  (every proxied window shares the proxy origin, so the browser handed the
+  page the whole window), anything outside the proxied world as the top.
+  Known gap, measured: a same-origin child posting to its parent goes through
+  the parent's own `postMessage` wrapper, which makes the parent the
+  incumbent, so the browser reports the parent as the source (and the
+  envelope the parent's origin); a cross-origin child posts through its own
+  realm's wrapper and is reported right.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

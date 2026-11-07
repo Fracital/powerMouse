@@ -3,7 +3,7 @@ import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../../routeURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
-import ContextModule from './Context';
+import ContextModule, { sameOrigin } from './Context';
 
 /**
  * Makes a proxied document believe it is a top-level page even though the
@@ -27,16 +27,32 @@ export default class FramingModule extends Module<DocumentClient> {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const global = this.client.global;
 
+		// the host's frame is never seen; a frame nested in a proxied page of the
+		// same real origin gets its element, as a browser gives it (another
+		// origin's parent gives null, as a browser does too)
+		const nativeFrameElement =
+			Reflect.getOwnPropertyDescriptor(global, 'frameElement')?.get ||
+			function () {
+				return null;
+			};
 		Reflect.defineProperty(global, 'frameElement', {
 			configurable: true,
 			enumerable: true,
-			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(global, 'frameElement')?.get ||
-					function () {
+			get: proxyModule.wrapFunction(nativeFrameElement, () => {
+				if (!this.client.nested) return null;
+				try {
+					const parentClient = (this.client.parent as Record<string, any>)[
+						CLIENT_KEY
+					] as DocumentClient;
+					if (
+						!sameOrigin(this.client.url.toString(), parentClient.url.toString())
+					)
 						return null;
-					},
-				() => null,
-			),
+					return Reflect.apply(nativeFrameElement, global, []);
+				} catch (error) {
+					return null;
+				}
+			}),
 		});
 
 		// opener: a page opened by another Stomp page keeps it (restricted

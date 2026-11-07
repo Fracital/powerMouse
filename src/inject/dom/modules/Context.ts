@@ -484,6 +484,30 @@ export default class ContextModule extends Module<DocumentClient> {
 			},
 		);
 
+		// the sender's window as the page may see it: its own real origin's
+		// windows as they are, another proxied origin's restricted (every
+		// proxied window shares the proxy origin, so the browser would hand the
+		// page the whole window), anything outside the proxied world as the
+		// top; ports and workers as they are
+		const sourceDescriptor = Reflect.getOwnPropertyDescriptor(
+			this.client.global.MessageEvent.prototype,
+			'source',
+		)!;
+		Reflect.defineProperty(
+			this.client.global.MessageEvent.prototype,
+			'source',
+			{
+				...sourceDescriptor,
+				get: proxyModule.wrapFunction(
+					sourceDescriptor.get!,
+					(target, that: MessageEvent, args) => {
+						const source = Reflect.apply(target, that, args);
+						return isWindow(source) ? this.newRestricted(source) : source;
+					},
+				),
+			},
+		);
+
 		Reflect.defineProperty(this.client.global.MessageEvent.prototype, 'data', {
 			configurable: true,
 			enumerable: true,

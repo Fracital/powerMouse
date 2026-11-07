@@ -1,0 +1,13 @@
+<!doctype html>
+<title>FRAME TELL</title>
+<script>
+	// a nested frame tells its parent what it sees of its own framing
+	const element = frameElement;
+	parent.postMessage(
+		{
+			tell: new URLSearchParams(location.search).get('who'),
+			frameElement: element ? `${element.tagName}#${element.id}` : null,
+		},
+		'*',
+	);
+</script>
