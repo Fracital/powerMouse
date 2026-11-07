@@ -115,6 +115,9 @@
 				codec: config.codec,
 				// HTTP cache in the service worker (the default; false turns it off)
 				cache: true,
+				// the host's own page for a document the proxy fails to produce
+				// (unreachable site, timeout, blocked rule); see error.html
+				errorPage: '/examples/error.html',
 				// The page reported where it is: on load, pushState, hashchange and
 				// title changes. This is how the address bar and the title follow
 				// the page; nothing needs polling.

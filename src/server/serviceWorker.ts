@@ -16,6 +16,7 @@ import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
 import createServer, { StompServer } from './createServer';
+import { hostErrorPage } from './errorPage';
 
 interface ControllerRef {
 	directory: string;
@@ -191,16 +192,28 @@ const escapeHTML = (text: string) =>
 		(c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!,
 	);
 
-function timedOut(request: Request, ms: number): Response {
+async function timedOut(
+	request: Request,
+	ms: number,
+	ref: ControllerRef,
+): Promise<Response> {
 	const message = `Stomp: no answer for ${request.url} within ${ms / 1000} seconds`;
 	console.warn(message);
 	if (DOCUMENT_DESTINATIONS.has(request.destination))
-		return new Response(
-			`<!doctype html><title>504</title><h1>504</h1><p>${escapeHTML(message)}</p>`,
-			{
+		return (
+			(await hostErrorPage(ref.config, {
+				url: ref.ready?.realURL(request.url) ?? request.url,
 				status: 504,
-				headers: { 'content-type': 'text/html; charset=utf-8' },
-			},
+				error: message,
+				kind: 'timeout',
+			})) ??
+			new Response(
+				`<!doctype html><title>504</title><h1>504</h1><p>${escapeHTML(message)}</p>`,
+				{
+					status: 504,
+					headers: { 'content-type': 'text/html; charset=utf-8' },
+				},
+			)
 		);
 	return new Response(null, { status: 504 });
 }
@@ -209,16 +222,16 @@ function timedOut(request: Request, ms: number): Response {
 function bounded(
 	request: Request,
 	response: Promise<Response>,
-	config: Config,
+	ref: ControllerRef,
 ): Promise<Response> {
 	const ms =
-		config.fetchTimeout ??
+		ref.config.fetchTimeout ??
 		(LONG_DESTINATIONS.has(request.destination)
 			? FETCH_TIMEOUT_LONG_MS
 			: FETCH_TIMEOUT_MS);
 	let timer: ReturnType<typeof setTimeout>;
 	const timeout = new Promise<Response>((resolve) => {
-		timer = setTimeout(() => resolve(timedOut(request, ms)), ms);
+		timer = setTimeout(() => resolve(timedOut(request, ms, ref)), ms);
 	});
 	return Promise.race([response.finally(() => clearTimeout(timer)), timeout]);
 }
@@ -240,7 +253,7 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 				bounded(
 					event.request,
 					ref.ready.router.route(event.request, { clientId }),
-					ref.config,
+					ref,
 				),
 			);
 	} else {
@@ -253,7 +266,7 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 						? router.route(event.request, { clientId })
 						: fetch(event.request),
 				),
-				ref.config,
+				ref,
 			),
 		);
 	}

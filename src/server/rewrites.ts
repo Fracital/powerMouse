@@ -17,6 +17,7 @@ import { modifyJS, routeJS, ScriptType } from '../rewriteJS';
 import { parseRoutedURL, routeBinary } from '../routeURL';
 import StompURL from '../StompURL';
 import type {
+	RequestErrorKind,
 	RequestInfo,
 	RequestRule,
 	RouteContext,
@@ -25,6 +26,7 @@ import { BUILD } from '../version';
 import { HttpCache, isCacheable } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
 import Cookies, { CookieRequestContext } from './Cookies';
+import { DOCUMENT_DESTINATIONS, hostErrorPage } from './errorPage';
 import {
 	AdditionalFilter,
 	filterNativeRequestHeaders,
@@ -118,6 +120,8 @@ interface Rewriter {
 	directory: string;
 	bare: BareCompatibleClient;
 	config: Config;
+	/** the host's error page, worker-only (never in the page's config) */
+	errorPage?: string;
 	cookies: Cookies;
 	/** the HTTP cache, unless the host turned it off */
 	cache?: HttpCache;
@@ -134,7 +138,7 @@ function genericForward(
 	additionalRequestFilter: AdditionalFilter | void,
 	additionalResponseFilter: AdditionalFilter | void,
 ) {
-	return async function (
+	const forward = async function (
 		serverRequest: Request,
 		_resolved?: string,
 		context?: RouteContext,
@@ -160,12 +164,23 @@ function genericForward(
 				cached: false,
 				bytes: 0,
 				error: 'refused: the proxy does not proxy its own origin',
+				kind: 'refused',
 				client: context?.clientId,
 			});
-			return new Response('Stomp does not proxy its own origin', {
-				status: 403,
-				headers: { 'content-type': 'text/plain; charset=utf-8' },
-			});
+			return (
+				(DOCUMENT_DESTINATIONS.has(serverRequest.destination)
+					? await hostErrorPage(rewriter, {
+							url: reportURL(url),
+							status: 403,
+							error: 'refused: the proxy does not proxy its own origin',
+							kind: 'refused',
+						})
+					: null) ??
+				new Response('Stomp does not proxy its own origin', {
+					status: 403,
+					headers: { 'content-type': 'text/plain; charset=utf-8' },
+				})
+			);
 		}
 
 		const requestHeaders = filterNativeRequestHeaders(
@@ -316,6 +331,7 @@ function genericForward(
 				status: number,
 				headers?: Record<string, string>,
 				error?: string,
+				kind?: RequestErrorKind,
 			) => {
 				rewriter.log?.({
 					url: reportURL(url),
@@ -326,13 +342,25 @@ function genericForward(
 					cached: false,
 					bytes: 0,
 					...(error ? { error } : {}),
+					...(kind ? { kind } : {}),
 					client: context?.clientId,
 					rule: rule.index,
 				});
 				return new Response(null, { status, headers });
 			};
-			if (rule.action === 'block')
-				return answer(403, undefined, 'blocked by a rule');
+			if (rule.action === 'block') {
+				const built = answer(403, undefined, 'blocked by a rule', 'blocked');
+				return (
+					(DOCUMENT_DESTINATIONS.has(serverRequest.destination)
+						? await hostErrorPage(rewriter, {
+								url: reportURL(url),
+								status: 403,
+								error: 'blocked by a rule',
+								kind: 'blocked',
+							})
+						: null) ?? built
+				);
+			}
 			if (rule.action.status !== undefined)
 				return answer(rule.action.status, undefined, 'answered by a rule');
 			if (rule.action.redirect !== undefined)
@@ -434,10 +462,13 @@ function genericForward(
 						status: 0,
 						ms: Date.now() - started,
 						cached: false,
+						kind: 'transport',
 						bytes: null,
 						error: String(error),
 						client: context?.clientId,
 					});
+					// reported here; the wrapper serves the page without a second report
+					(error as { stompReported?: boolean }).stompReported = true;
 					throw error;
 				}
 			}
@@ -549,6 +580,65 @@ function genericForward(
 			headers: responseHeaders,
 		});
 	};
+	// a transport failure surfaces wherever the connection's promise was
+	// awaited (the headers, the body, a cache write): for a document it is one
+	// failure to the user, shown the host's way; the router keeps the errors
+	// that are ours (a bug, an HTTP error of the routing)
+	return async function (
+		serverRequest: Request,
+		resolved?: string,
+		context?: RouteContext,
+	): Promise<Response> {
+		const started = Date.now();
+		try {
+			return await forward(serverRequest, resolved, context);
+		} catch (error) {
+			if (
+				!DOCUMENT_DESTINATIONS.has(serverRequest.destination) ||
+				!(error instanceof Error) ||
+				error instanceof TypeError ||
+				error instanceof ReferenceError ||
+				error instanceof RangeError ||
+				error instanceof SyntaxError ||
+				'status' in error
+			)
+				throw error;
+			let real = serverRequest.url;
+			try {
+				real = reportURL(
+					parseRoutedURL(
+						serverRequest.url,
+						rewriter.codec,
+						`${new URL(serverRequest.url).origin}${rewriter.directory}`,
+					).url,
+				);
+			} catch (parseError) {
+				// not a routed URL after all: reported as it came
+			}
+			if (!(error as { stompReported?: boolean }).stompReported)
+				rewriter.log?.({
+					url: real,
+					method: serverRequest.method,
+					destination: serverRequest.destination || 'fetch',
+					status: 0,
+					ms: Date.now() - started,
+					cached: false,
+					kind: 'transport',
+					bytes: null,
+					error: String(error),
+					client: context?.clientId,
+				});
+			// the report says 0 (no response); the document needs a status: 502
+			const page = await hostErrorPage(rewriter, {
+				url: real,
+				status: 502,
+				error: String(error),
+				kind: 'transport',
+			});
+			if (page) return page;
+			throw error;
+		}
+	};
 }
 
 const htmlMimes = ['image/svg+xml', 'text/html', ''];
@@ -583,6 +673,7 @@ export function registerRewrites(
 		rules: [],
 		codec: init.codec,
 		directory: init.directory,
+		errorPage: init.errorPage,
 		bare: new BareCompatibleClient(transport),
 	};
 

@@ -66,6 +66,12 @@ export interface RemoteControllerInit {
 	rules?: RequestRule[];
 	/** the served file names, when the host renamed them (see StompController) */
 	assets?: Assets;
+	/**
+	 * The host's own page for a document the proxy failed to produce (see
+	 * StompController): a path on the proxy origin, where the worker runs,
+	 * so in this mode the page must be served from the proxy host.
+	 */
+	errorPage?: string;
 	/** one report per proxied request, with the RemoteFrame when known (see StompController.onRequest) */
 	onRequest?: (info: RemoteRequestEvent) => void;
 }
@@ -219,6 +225,7 @@ export class RemoteController extends EventTarget {
 					...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 					...(init.rules ? { rules: init.rules } : {}),
 					...(init.assets ? { assets: init.assets } : {}),
+					...(init.errorPage ? { errorPage: init.errorPage } : {}),
 				}),
 			)
 			.then(({ config, stale }) => {

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Page unavailable</title>
+		<style>
+			body {
+				margin: 0;
+				min-height: 100vh;
+				display: grid;
+				place-items: center;
+				font:
+					16px/1.5 system-ui,
+					sans-serif;
+				color: #222;
+				background: #fafafa;
+			}
+			main {
+				max-width: 32rem;
+				padding: 2rem;
+			}
+			code {
+				word-break: break-all;
+			}
+			button {
+				font: inherit;
+				padding: 0.4rem 1rem;
+			}
+		</style>
+	</head>
+	<body>
+		<!--
+			The host's own error page (ControllerInit.errorPage). The service
+			worker serves it under the frame's URL for a document it failed to
+			produce, with globalThis.stompError = { url, status, error, kind }
+			in the head; location.reload() retries the real page.
+		-->
+		<main>
+			<h1 id="title">Page unavailable</h1>
+			<p>Stomp could not load <code id="url"></code>.</p>
+			<p id="detail"></p>
+			<button id="retry" type="button">Retry</button>
+		</main>
+		<script>
+			const info = globalThis.stompError || {};
+			const titles = {
+				transport: 'Could not reach the site',
+				timeout: 'The site took too long',
+				routing: 'Something went wrong',
+				blocked: 'Blocked by this host',
+				refused: 'Not available through the proxy',
+			};
+			document.getElementById('title').textContent =
+				titles[info.kind] || 'Page unavailable';
+			document.getElementById('url').textContent = info.url || location.href;
+			document.getElementById('detail').textContent = info.error
+				? `${info.kind || 'error'}${info.status ? ` (${info.status})` : ''}: ${info.error}`
+				: '';
+			document
+				.getElementById('retry')
+				.addEventListener('click', () => location.reload());
+		</script>
+	</body>
+</html>

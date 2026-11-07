@@ -148,6 +148,10 @@ export type CookieCommand =
 
 export type CookieResult = string | CookieRecord[] | undefined;
 
+/** a failure the proxy produced: the transport could not reach the origin, the worker's timeout, a routing error, a blocked rule, the refusal to proxy its own origin */
+export type RequestErrorKind =
+	'transport' | 'timeout' | 'routing' | 'blocked' | 'refused';
+
 /** one completed (or failed) proxied request, for the host's request log */
 export interface RequestInfo {
 	/** the real URL */
@@ -164,6 +168,8 @@ export interface RequestInfo {
 	/** Content-Length of the response, when known */
 	bytes: number | null;
 	error?: string;
+	/** what failed, when the proxy itself produced the failure (see ControllerInit.errorPage) */
+	kind?: RequestErrorKind;
 	/** the service worker client that made it; the controller maps it to a frame */
 	client?: string;
 	/** the index, in the host's `rules`, of the rule that applied */

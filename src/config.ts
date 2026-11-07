@@ -39,6 +39,16 @@ export interface Config {
 	fetchTimeout?: number;
 	/** the served file names, when the host renamed them (see Assets) */
 	assets?: Assets;
+	/**
+	 * The host's own page for a document the proxy failed to produce (a
+	 * transport failure, the timeout, a routing error, a blocked rule, the
+	 * refusal to proxy its own origin): a path on the service worker's origin,
+	 * which in origin-isolation mode is the proxy host, not the host page's.
+	 * Served with the failure's status and `globalThis.stompError`
+	 * (`{ url, status, error, kind }`), never cached. Without it the built-in
+	 * pages answer.
+	 */
+	errorPage?: string;
 }
 
 export interface ParsedConfig extends Omit<Config, 'codec'> {

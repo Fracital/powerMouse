@@ -52,6 +52,12 @@ export default class Router {
 			context?: RouteContext,
 		) => Promise<Response> | Response
 	>;
+	/** the host's page for a failed document (createServer sets it from the config) */
+	errorPage?: (
+		request: Request,
+		status: number,
+		message: string,
+	) => Promise<Response | null>;
 	constructor(directory: string) {
 		this.directory = directory;
 		this.routes = new Map();
@@ -104,7 +110,17 @@ export default class Router {
 				}
 			}
 
-			if (request.destination === 'document') {
+			if (
+				request.destination === 'document' ||
+				request.destination === 'iframe' ||
+				request.destination === 'frame'
+			) {
+				const host = await this.errorPage?.(
+					request,
+					httpError.status,
+					httpError.message,
+				);
+				if (host) return host;
 				return new Response(
 					`<!DOCTYPE HTML>
 <html>

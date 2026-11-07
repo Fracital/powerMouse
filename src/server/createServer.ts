@@ -1,9 +1,11 @@
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { openDB } from 'idb';
 import { Config, generateConfigCodecKey, parseConfig } from '../config';
+import { parseRoutedURL } from '../routeURL';
 import type { RequestInfo, RequestRule } from '../transport/messages';
 import { HttpCache } from './cache';
 import Cookies, { registerCookies } from './Cookies';
+import { hostErrorPage } from './errorPage';
 import { registerRewrites } from './rewrites';
 import Router, { json } from './Router';
 import { registerStorage } from './Storage';
@@ -19,6 +21,8 @@ export interface StompServer {
 	cookies: Cookies;
 	/** replace the host's request rules */
 	setRules(rules: RequestRule[]): void;
+	/** the real URL of a routed one; the input when it is not routed */
+	realURL(routed: string): string;
 }
 
 export default async function createServer(
@@ -56,6 +60,25 @@ export default async function createServer(
 	const init = parseConfig(config, codecKey);
 
 	const router = new Router(init.directory);
+	const realURL = (routed: string): string => {
+		try {
+			return parseRoutedURL(
+				routed,
+				init.codec,
+				`${location.origin}${init.directory}`,
+			).url.toString();
+		} catch (error) {
+			return routed;
+		}
+	};
+	// a routing error on a document: the host's page when it has one
+	router.errorPage = (request, status, message) =>
+		hostErrorPage(init, {
+			url: realURL(request.url),
+			status,
+			error: message,
+			kind: 'routing',
+		});
 
 	const cookies = await registerCookies(router);
 	const cache = config.cache === false ? undefined : new HttpCache();
@@ -83,5 +106,6 @@ export default async function createServer(
 			await cache?.clear();
 		},
 		setRules,
+		realURL,
 	};
 }

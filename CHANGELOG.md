@@ -99,6 +99,20 @@ The first release after a four-year gap. Everything below is breaking.
   classes keep their state in `#fields`: nothing a page could reach is an own
   property any more (`lastHandshake` stays, the dev loop sets it).
   The demo boots through `register()` too.
+- `errorPage` on both controllers: the host's own page for a document the
+  proxy itself failed to produce (the transport could not reach the origin,
+  the worker's timeout, a routing error, a blocked rule, the refusal to proxy
+  its own origin). The worker fetches it from its own origin without the HTTP
+  cache, puts `globalThis.stompError = { url, status, error, kind }` in its
+  head (escaped so no message can close the script) and answers under the
+  frame's routed URL with the failure's status (502 for a transport
+  failure, which the request report counts as 0), never cached, so
+  `location.reload()` retries the real page (the page is not an injected
+  one: `frame.url` reads null for it, the request report names the URL).
+  Upstream error pages (a site's own 404) are untouched. In origin-isolation
+  mode the path is on the proxy host, where the worker runs. Request reports
+  carry the same `kind` next to `error`. `examples/minimal-host.html` uses
+  `examples/error.html`.
 - `onOpen(url, frame)` on `StompController` and `RemoteController`: a proxied
   page's `window.open`, `target="_blank"` and named-target or modifier clicks
   become a callback to the host, which opens them in its own tab model; the

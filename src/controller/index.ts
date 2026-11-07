@@ -112,6 +112,16 @@ export interface ControllerInit {
 	 */
 	assets?: Assets;
 	/**
+	 * The host's own page for a document the proxy failed to produce (the
+	 * transport could not reach the origin, the worker's timeout, a routing
+	 * error, a blocked rule, the refusal to proxy its own origin): a URL on
+	 * this origin, resolved against the page. Served under the frame's routed
+	 * URL with the failure's status, never cached, with
+	 * `globalThis.stompError = { url, status, error, kind }` in its head;
+	 * `location.reload()` retries. Without it the built-in pages answer.
+	 */
+	errorPage?: string;
+	/**
 	 * sandbox flags for proxied frames, default `DEFAULT_SANDBOX`. Same-origin
 	 * frames are not a security boundary, but without a sandbox the browser
 	 * lets `<a target="_top">`, `<form target="_parent">` and
@@ -341,6 +351,13 @@ export class StompController extends EventTarget {
 
 		if (this.directory.origin !== location.origin)
 			throw new Error('Stomp directory must be same-origin');
+		let errorPage: string | undefined;
+		if (init.errorPage !== undefined) {
+			const page = new URL(init.errorPage, location.href);
+			if (page.origin !== location.origin)
+				throw new Error('Stomp errorPage must be same-origin');
+			errorPage = `${page.pathname}${page.search}`;
+		}
 
 		this.config = {
 			codec: init.codec ?? 'xor',
@@ -352,6 +369,7 @@ export class StompController extends EventTarget {
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 			...(init.fetchTimeout ? { fetchTimeout: init.fetchTimeout } : {}),
 			...(init.assets ? { assets: init.assets } : {}),
+			...(errorPage ? { errorPage } : {}),
 		};
 
 		window.addEventListener('message', (event) => {

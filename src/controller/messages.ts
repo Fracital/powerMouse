@@ -30,6 +30,8 @@ export interface ControllerFrameInit {
 	rules?: RequestRule[];
 	/** the served file names (RemoteControllerInit.assets) */
 	assets?: Assets;
+	/** the host's error page, a path on the proxy origin (RemoteControllerInit.errorPage) */
+	errorPage?: string;
 }
 
 export interface FrameInfo {

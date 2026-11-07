@@ -116,6 +116,7 @@ if (window === window.parent || !origins.length) {
 						...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 						...(init.rules ? { rules: init.rules } : {}),
 						...(init.assets ? { assets: init.assets } : {}),
+						...(init.errorPage ? { errorPage: init.errorPage } : {}),
 						// the host's request log travels SW -> here -> host
 						...(init.requestLog
 							? {
