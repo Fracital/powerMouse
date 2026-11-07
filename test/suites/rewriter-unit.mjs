@@ -406,4 +406,23 @@ console.warn = warn;
 		[generic, worker, shell].join('\n'),
 	);
 }
+
+// a data: script whose body holds a `?` (a dynamic import of a URL with a
+// query, what the WPT referrer-policy pages do): the URL parser files the
+// tail under `search`, and the rewriter must keep it
+{
+	const data = new StompURL(
+		'data:text/javascript,import("https://example.com/s.py?a=1&b=2");',
+		url,
+	);
+	const routed = routeJS(data, url, config, 'generic');
+	const body = decodeURIComponent(routed.slice(routed.indexOf(',') + 1));
+	ok(
+		'a data: script keeps the part of its body after a question mark',
+		body.includes('s.py?a=1&b=2') &&
+			parses(body) &&
+			!body.includes('could not rewrite'),
+		body,
+	);
+}
 await done();

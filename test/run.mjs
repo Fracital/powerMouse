@@ -42,7 +42,14 @@ const SLOW = [
 	'backwalk-tabs',
 	'back',
 ];
-const SUITE_TIMEOUT_MS = 10 * 60 * 1000;
+// how long a suite may run before it is killed: ten minutes, more for the
+// suites that need it (the WPT referrer-policy matrix at WPT_CONCURRENCY=1
+// takes about twelve), and SUITE_TIMEOUT=<minutes> for every suite of a run
+const SUITE_TIMEOUT_MINUTES = { 'wpt-referrer-policy': 25 };
+const suiteTimeoutMs = (name) =>
+	(Number(process.env.SUITE_TIMEOUT) || SUITE_TIMEOUT_MINUTES[name] || 10) *
+	60 *
+	1000;
 
 if (!existsSync(`${root}dist/serviceWorker.js`)) {
 	console.error('dist/ is missing: run `npm run build` first');
@@ -192,11 +199,12 @@ function runSuite(name, { port, fixturePort }) {
 		let pass = 0;
 		let fail = 0;
 		let buffer = '';
+		const timeoutMs = suiteTimeoutMs(name);
 		const timer = setTimeout(() => {
-			emit(`FAIL ${name}: timed out after ${SUITE_TIMEOUT_MS / 1000}s`);
+			emit(`FAIL ${name}: timed out after ${timeoutMs / 1000}s`);
 			fail++;
 			child.kill('SIGKILL');
-		}, SUITE_TIMEOUT_MS);
+		}, timeoutMs);
 		child.stdout.on('data', (chunk) => {
 			buffer += chunk;
 			const parts = buffer.split('\n');

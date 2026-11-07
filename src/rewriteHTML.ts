@@ -30,7 +30,11 @@ export function routeHTML(
 	nested: string | false = false,
 ) {
 	if (resource.url.protocol === 'data:') {
-		const { mime, data, attributes } = parseDataURI(resource.url.pathname);
+		const { mime, data, attributes } = parseDataURI(
+			// the data is everything after `data:` but the fragment: a `?` in it
+			// is data too, which the URL parser filed under `search`
+			resource.url.pathname + resource.url.search,
+		);
 		return createDataURI({
 			mime,
 			data: modifyHTML(data, url, config),

@@ -102,6 +102,10 @@ Every page starts with an empty cookie jar in both modes and has 30 s to
 report; a page that does not is a failure with the cause `timeout`.
 `WPT_ONLY=<regex>` runs a few pages for a look, `WPT_CONCURRENCY=<n>` sets how
 many load at once (the cookie pages share the jar and run one at a time).
+The runner gives `wpt-referrer-policy` 25 minutes instead of the usual ten
+(the matrix at `WPT_CONCURRENCY=1`, the honest setting, takes about twelve;
+a run the runner kills writes no list); `SUITE_TIMEOUT=<minutes>` overrides
+it for every suite of a run.
 
 To refresh from upstream:
 

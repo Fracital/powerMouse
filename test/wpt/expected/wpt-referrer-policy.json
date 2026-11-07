@@ -6,42 +6,12 @@
 		"Referrer Policy: Expects omitted for a-tag to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects omitted for a-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
-	"/referrer-policy/gen/req.attr/no-referrer/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
-	},
 	"/referrer-policy/gen/req.attr/no-referrer-when-downgrade/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
 		"Referrer Policy: Expects stripped-referrer for a-tag to cross-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for a-tag to cross-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for a-tag to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for a-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/referrer-policy/gen/req.attr/no-referrer-when-downgrade/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/req.attr/origin/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
@@ -80,21 +50,6 @@
 		"Referrer Policy: Expects origin for img-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects origin for img-tag to same-https origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
-	"/referrer-policy/gen/req.attr/origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "TIMEOUT: timeout: no report within 30 s",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
 	"/referrer-policy/gen/req.attr/origin-when-cross-origin/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
 		"Referrer Policy: Expects origin for a-tag to cross-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
@@ -114,21 +69,6 @@
 	"/referrer-policy/gen/req.attr/origin-when-cross-origin/img-tag.http.html": {
 		"Referrer Policy: Expects origin for img-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/req.attr/origin-when-cross-origin/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
 		"Referrer Policy: Expects origin for img-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/req.attr/origin-when-cross-origin/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]"
-	},
-	"/referrer-policy/gen/req.attr/origin-when-cross-origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/req.attr/origin-when-cross-origin/script-tag.http.html": {
 		"Referrer Policy: Expects origin for script-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/req.attr/origin-when-cross-origin/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
@@ -153,19 +93,6 @@
 	"/referrer-policy/gen/req.attr/same-origin/img-tag.http.html": {
 		"Referrer Policy: Expects omitted for img-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/req.attr/same-origin/img-tag.http.html\" not in array [undefined]",
 		"Referrer Policy: Expects omitted for img-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/req.attr/same-origin/img-tag.http.html\" not in array [undefined]"
-	},
-	"/referrer-policy/gen/req.attr/same-origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/req.attr/same-origin/script-tag.http.html": {
 		"Referrer Policy: Expects omitted for script-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/req.attr/same-origin/script-tag.http.html\" not in array [undefined]",
@@ -208,21 +135,6 @@
 		"Referrer Policy: Expects origin for img-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects origin for img-tag to same-https origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
-	"/referrer-policy/gen/req.attr/strict-origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "TIMEOUT: timeout: no report within 30 s",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
 	"/referrer-policy/gen/req.attr/strict-origin-when-cross-origin/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
 		"Referrer Policy: Expects origin for a-tag to cross-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
@@ -243,21 +155,6 @@
 		"Referrer Policy: Expects origin for img-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/req.attr/strict-origin-when-cross-origin/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
 		"Referrer Policy: Expects origin for img-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/req.attr/strict-origin-when-cross-origin/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]"
 	},
-	"/referrer-policy/gen/req.attr/strict-origin-when-cross-origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
-	},
 	"/referrer-policy/gen/req.attr/strict-origin-when-cross-origin/script-tag.http.html": {
 		"Referrer Policy: Expects origin for script-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/req.attr/strict-origin-when-cross-origin/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
 		"Referrer Policy: Expects origin for script-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/req.attr/strict-origin-when-cross-origin/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]"
@@ -268,21 +165,6 @@
 		"Referrer Policy: Expects stripped-referrer for a-tag to cross-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for a-tag to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for a-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/referrer-policy/gen/req.attr/unsafe-url/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/top.http-rp/no-referrer/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
@@ -336,21 +218,6 @@
 		"Referrer Policy: Expects omitted for img-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects omitted for img-tag to same-https origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
-	"/referrer-policy/gen/top.http-rp/no-referrer/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
-	},
 	"/referrer-policy/gen/top.http-rp/no-referrer-when-downgrade/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
 		"Referrer Policy: Expects stripped-referrer for a-tag to cross-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
@@ -358,42 +225,12 @@
 		"Referrer Policy: Expects stripped-referrer for a-tag to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for a-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
-	"/referrer-policy/gen/top.http-rp/no-referrer-when-downgrade/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
-	},
 	"/referrer-policy/gen/top.http-rp/origin/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
 		"Referrer Policy: Expects origin for a-tag to cross-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects origin for a-tag to cross-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects origin for a-tag to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects origin for a-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/referrer-policy/gen/top.http-rp/origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/top.http-rp/origin-when-cross-origin/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
@@ -440,21 +277,6 @@
 		"Referrer Policy: Expects stripped-referrer for img-tag to same-http origin and keep-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for img-tag to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
-	"/referrer-policy/gen/top.http-rp/origin-when-cross-origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
-	},
 	"/referrer-policy/gen/top.http-rp/origin-when-cross-origin/script-tag.http.html": {
 		"Referrer Policy: Expects origin for script-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.http-rp/origin-when-cross-origin/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
 		"Referrer Policy: Expects origin for script-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.http-rp/origin-when-cross-origin/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]"
@@ -487,19 +309,6 @@
 		"Referrer Policy: Expects omitted for img-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.http-rp/same-origin/img-tag.http.html\" not in array [undefined]",
 		"Referrer Policy: Expects omitted for img-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.http-rp/same-origin/img-tag.http.html\" not in array [undefined]"
 	},
-	"/referrer-policy/gen/top.http-rp/same-origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
-	},
 	"/referrer-policy/gen/top.http-rp/same-origin/script-tag.http.html": {
 		"Referrer Policy: Expects omitted for script-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.http-rp/same-origin/script-tag.http.html\" not in array [undefined]",
 		"Referrer Policy: Expects omitted for script-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.http-rp/same-origin/script-tag.http.html\" not in array [undefined]"
@@ -514,21 +323,6 @@
 		"Referrer Policy: Expects origin for a-tag to cross-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects origin for a-tag to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects origin for a-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/referrer-policy/gen/top.http-rp/strict-origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/top.http-rp/strict-origin-when-cross-origin/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
@@ -575,21 +369,6 @@
 		"Referrer Policy: Expects stripped-referrer for img-tag to same-http origin and keep-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for img-tag to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
-	"/referrer-policy/gen/top.http-rp/strict-origin-when-cross-origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
-	},
 	"/referrer-policy/gen/top.http-rp/strict-origin-when-cross-origin/script-tag.http.html": {
 		"Referrer Policy: Expects origin for script-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.http-rp/strict-origin-when-cross-origin/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
 		"Referrer Policy: Expects origin for script-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.http-rp/strict-origin-when-cross-origin/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]"
@@ -604,21 +383,6 @@
 		"Referrer Policy: Expects stripped-referrer for a-tag to cross-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for a-tag to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for a-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/referrer-policy/gen/top.http-rp/unsafe-url/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/top.http-rp/unset/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
@@ -643,21 +407,6 @@
 	"/referrer-policy/gen/top.http-rp/unset/img-tag.http.html": {
 		"Referrer Policy: Expects origin for img-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.http-rp/unset/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
 		"Referrer Policy: Expects origin for img-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.http-rp/unset/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]"
-	},
-	"/referrer-policy/gen/top.http-rp/unset/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/top.http-rp/unset/script-tag.http.html": {
 		"Referrer Policy: Expects origin for script-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.http-rp/unset/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
@@ -713,21 +462,6 @@
 		"Referrer Policy: Expects stripped-referrer for iframe-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for iframe-tag to same-https origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
-	"/referrer-policy/gen/top.meta/always/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
-	},
 	"/referrer-policy/gen/top.meta/default/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
 		"Referrer Policy: Expects origin for a-tag to cross-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
@@ -752,21 +486,6 @@
 		"Referrer Policy: Expects origin for img-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/default/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
 		"Referrer Policy: Expects origin for img-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/default/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]"
 	},
-	"/referrer-policy/gen/top.meta/default/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
-	},
 	"/referrer-policy/gen/top.meta/default/script-tag.http.html": {
 		"Referrer Policy: Expects origin for script-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/default/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
 		"Referrer Policy: Expects origin for script-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/default/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]"
@@ -781,21 +500,6 @@
 		"Referrer Policy: Expects omitted for a-tag to cross-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects omitted for a-tag to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects omitted for a-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/referrer-policy/gen/top.meta/never/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/top.meta/never/worker-classic.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
@@ -839,21 +543,6 @@
 		"Referrer Policy: Expects omitted for iframe-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects omitted for iframe-tag to same-https origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
-	"/referrer-policy/gen/top.meta/no-referrer/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
-	},
 	"/referrer-policy/gen/top.meta/no-referrer-when-downgrade/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
 		"Referrer Policy: Expects stripped-referrer for a-tag to cross-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
@@ -861,42 +550,12 @@
 		"Referrer Policy: Expects stripped-referrer for a-tag to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for a-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
-	"/referrer-policy/gen/top.meta/no-referrer-when-downgrade/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
-	},
 	"/referrer-policy/gen/top.meta/origin/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
 		"Referrer Policy: Expects origin for a-tag to cross-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects origin for a-tag to cross-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects origin for a-tag to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects origin for a-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/referrer-policy/gen/top.meta/origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/top.meta/origin/script-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
@@ -949,21 +608,6 @@
 		"Referrer Policy: Expects origin for img-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/origin-when-cross-origin/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
 		"Referrer Policy: Expects origin for img-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/origin-when-cross-origin/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]"
 	},
-	"/referrer-policy/gen/top.meta/origin-when-cross-origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
-	},
 	"/referrer-policy/gen/top.meta/origin-when-cross-origin/script-tag.http.html": {
 		"Referrer Policy: Expects origin for script-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/origin-when-cross-origin/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
 		"Referrer Policy: Expects origin for script-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/origin-when-cross-origin/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]"
@@ -995,21 +639,6 @@
 	"/referrer-policy/gen/top.meta/origin-when-crossorigin/img-tag.http.html": {
 		"Referrer Policy: Expects origin for img-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/origin-when-crossorigin/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
 		"Referrer Policy: Expects origin for img-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/origin-when-crossorigin/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]"
-	},
-	"/referrer-policy/gen/top.meta/origin-when-crossorigin/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/top.meta/origin-when-crossorigin/script-tag.http.html": {
 		"Referrer Policy: Expects origin for script-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/origin-when-crossorigin/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
@@ -1051,19 +680,6 @@
 		"Referrer Policy: Expects omitted for img-tag to same-https origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for img-tag to same-http origin and keep-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for img-tag to same-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/referrer-policy/gen/top.meta/same-origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects omitted for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/top.meta/same-origin/script-tag.http.html": {
 		"Referrer Policy: Expects omitted for script-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/same-origin/script-tag.http.html\" not in array [undefined]",
@@ -1110,21 +726,6 @@
 		"Referrer Policy: Expects origin for iframe-tag to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects origin for iframe-tag to same-https origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
-	"/referrer-policy/gen/top.meta/strict-origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
-	},
 	"/referrer-policy/gen/top.meta/strict-origin-when-cross-origin/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
 		"Referrer Policy: Expects origin for a-tag to cross-http origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
@@ -1148,21 +749,6 @@
 	"/referrer-policy/gen/top.meta/strict-origin-when-cross-origin/img-tag.http.html": {
 		"Referrer Policy: Expects origin for img-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/strict-origin-when-cross-origin/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
 		"Referrer Policy: Expects origin for img-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/strict-origin-when-cross-origin/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]"
-	},
-	"/referrer-policy/gen/top.meta/strict-origin-when-cross-origin/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/top.meta/strict-origin-when-cross-origin/script-tag.http.html": {
 		"Referrer Policy: Expects origin for script-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/strict-origin-when-cross-origin/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
@@ -1193,21 +779,6 @@
 		"Referrer Policy: Expects stripped-referrer for fetch to same-https origin and keep-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for fetch to same-https origin and no-redirect redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Referrer Policy: Expects stripped-referrer for fetch to same-https origin and swap-origin redirection from http context.": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/referrer-policy/gen/top.meta/unsafe-url/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/top.meta/unset/a-tag.http.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
@@ -1244,21 +815,6 @@
 	"/referrer-policy/gen/top.meta/unset/img-tag.http.html": {
 		"Referrer Policy: Expects origin for img-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/unset/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
 		"Referrer Policy: Expects origin for img-tag to cross-https origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/unset/img-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]"
-	},
-	"/referrer-policy/gen/top.meta/unset/script-tag-dynamic-import.http.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to cross-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-http origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects origin for script-tag-dynamic-import to same-https origin and swap-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and keep-origin redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\"",
-		"Referrer Policy: Expects stripped-referrer for script-tag-dynamic-import to same-http origin and no-redirect redirection from http context.": "FAIL: promise_test: Unhandled rejection with value: object \"[object ErrorEvent]\""
 	},
 	"/referrer-policy/gen/top.meta/unset/script-tag.http.html": {
 		"Referrer Policy: Expects origin for script-tag to cross-http origin and swap-origin redirection from http context.": "FAIL: assert_in_array: document.referrer value \"http://localhost:PORT/referrer-policy/gen/top.meta/unset/script-tag.http.html\" not in array [\"http://localhost:PORT/\", undefined]",
