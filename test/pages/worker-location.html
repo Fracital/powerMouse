@@ -1,0 +1,36 @@
+<!doctype html>
+<title>WORKER LOCATION</title>
+<script>
+	window.__wl = {};
+	const ask = (worker, port = worker) =>
+		new Promise((resolve, reject) => {
+			port.onmessage = (event) => resolve(event.data);
+			worker.onerror = (event) => reject(new Error(event.message));
+			setTimeout(() => reject(new Error('no reply')), 8000);
+			port.postMessage('go');
+		});
+	(async () => {
+		const classic = new Worker('/pages/worker-loc.js', { name: 'wl-classic' });
+		__wl.classic = await ask(classic);
+		classic.terminate();
+		const mod = new Worker('/pages/worker-loc.js', { type: 'module' });
+		__wl.module = await ask(mod);
+		mod.terminate();
+		const source = await (await fetch('/pages/worker-loc.js')).text();
+		const blob = new Worker(
+			URL.createObjectURL(new Blob([source], { type: 'text/javascript' })),
+			{ name: 'wl-blob' },
+		);
+		__wl.blob = await ask(blob);
+		blob.terminate();
+		const shared = new SharedWorker('/pages/worker-loc-shared.js', 'wl-shared');
+		shared.port.start();
+		__wl.shared = await ask(shared, shared.port);
+	})()
+		.catch((error) => {
+			__wl.error = String(error);
+		})
+		.finally(() => {
+			__wl.done = true;
+		});
+</script>

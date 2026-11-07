@@ -40,6 +40,10 @@ const LINE_COLUMN = /(?::\d+){1,2}$/;
  * drop them do so before formatting.
  */
 export function unrouteText(client: Client, text: string): string {
+	// a blob: URL the page made carries the proxy origin: the page's is shown
+	const proxyBlob = `blob:${client.global.location.origin}/`;
+	if (text.includes(proxyBlob))
+		text = text.split(proxyBlob).join(`blob:${client.url.url.origin}/`);
 	const prefix = routedPrefix(client);
 	if (!text.includes(prefix)) return text;
 	const pattern = new RegExp(

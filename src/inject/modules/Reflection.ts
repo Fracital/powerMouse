@@ -33,13 +33,24 @@ export default class ReflectionModule extends Module<Client> {
 
 		const unforgeable = (key: unknown): key is string =>
 			typeof key === 'string' && UNDEFINABLE.includes(key);
-		// a window (this one, another, a Proxy over one) or the document: the
-		// objects whose `top`, `location` and `eval` the page must not see raw
+		// a window (this one, another, a Proxy over one), the document, a
+		// worker scope or a prototype of the scope (WorkerGlobalScope.prototype
+		// holds a worker's `location`): the objects whose `top`, `location`
+		// and `eval` the page must not see raw
+		const scopePrototypes = new Set<object>();
+		for (
+			let prototype = Object.getPrototypeOf(global);
+			prototype && prototype !== global.Object.prototype;
+			prototype = Object.getPrototypeOf(prototype)
+		)
+			scopePrototypes.add(prototype);
 		const windowLike = (target: unknown): boolean => {
 			if (typeof target !== 'object' || target === null) return false;
-			if (target === document) return true;
+			if (target === global || target === document) return true;
+			if (scopePrototypes.has(target)) return true;
 			try {
-				return (target as { window?: unknown }).window === target;
+				const scope = target as { window?: unknown; self?: unknown };
+				return scope.window === target || scope.self === target;
 			} catch (error) {
 				return false;
 			}

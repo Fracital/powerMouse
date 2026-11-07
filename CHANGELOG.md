@@ -226,6 +226,17 @@ url`) carries its value and targets that window. An about:blank child of
   own names and no others. Corpus: urls 22 failing checks to 12; the 12 are
   blob: URLs carrying the proxy origin (five probes) and the absent
   `navigator.serviceWorker` (a decision: pages never reach the worker).
+- A worker believes it runs where the page put it: `self.location` (every
+  URL part and `String(location)`) and `self.origin` are the real script URL
+  for a classic or module worker, the same blob under the page's origin for a
+  worker started from a blob: URL (its stack frames agree), and a shared
+  worker reads its own name back without the origin the constructor hook
+  appends to keep proxied origins apart. Like a document's, the stand-in is
+  what rewritten code gets from the access API; `WorkerLocation.prototype`
+  is untouched, and the reflection hooks treat a worker scope and its
+  prototypes like a window (`getOwnPropertyDescriptor(WorkerGlobalScope.prototype,
+'location')` resolves to the stand-in, the access API's name is hidden
+  from `getOwnPropertyNames(self)`). Corpus: workers 10 failing checks to 0.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,
@@ -686,9 +697,6 @@ Fixed while testing real sites and a feature fixture:
   10 s, which covers the service worker rewriting a 10 MB script. The answer
   travels in `SameSite=None` cookies, so in origin-isolation mode the bridge
   needs third-party cookies allowed for the proxy origin.
-- Still unproxied or unspoofed: `self.location` inside workers, scripts
-  written into a child frame with `document.write`, and `a.pathname` on
-  anchors (reports the page's path).
 - Without `onOpen`, `_blank` and named targets open the proxied page in a
   bare new tab outside the host application (the frame sandbox keeps
   `allow-popups`).
