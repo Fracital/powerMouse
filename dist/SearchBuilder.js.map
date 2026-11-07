@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../src/bootstrapper/SearchBuilder.ts", "../src/bootstrapper/entry.ts"],
+  "sourcesContent": ["const HOST = /^(\\S*?\\.\\S*|^localhost(:\\d+)?)(\\/.*?)?$/;\nconst HTTP = /^https?:\\/\\//;\n\nexport default class SearchBuilder {\n\ttemplate: string;\n\tconstructor(template: string) {\n\t\tthis.template = template;\n\t}\n\tquery(input: string) {\n\t\tif (HTTP.test(input)) {\n\t\t\treturn input;\n\t\t} else if (HOST.test(input)) {\n\t\t\treturn `http://${input}`;\n\t\t} else {\n\t\t\treturn this.template.replace('%s', encodeURIComponent(input));\n\t\t}\n\t}\n}\n", "import SearchBuilder from './SearchBuilder';\n\nReflect.defineProperty(globalThis, 'SearchBuilder', {\n\tvalue: SearchBuilder,\n\tconfigurable: true,\n\twritable: true,\n});\n"],
+  "mappings": "mBAAA,IAAMA,EAAO,0CACPC,EAAO,eAEQC,EAArB,KAAmC,CAClC,SACA,YAAYC,EAAkB,CAC7B,KAAK,SAAWA,CACjB,CACA,MAAMC,EAAe,CACpB,OAAIH,EAAK,KAAKG,CAAK,EACXA,EACGJ,EAAK,KAAKI,CAAK,EAClB,UAAUA,CAAK,GAEf,KAAK,SAAS,QAAQ,KAAM,mBAAmBA,CAAK,CAAC,CAE9D,CACD,ECfA,QAAQ,eAAe,WAAY,gBAAiB,CACnD,MAAOC,EACP,aAAc,GACd,SAAU,EACX,CAAC",
+  "names": ["HOST", "HTTP", "SearchBuilder", "template", "input", "SearchBuilder"]
+}

@@ -1,0 +1,41 @@
+{
+	"name": "stomp-rewrite",
+	"version": "4.2.0",
+	"description": "A rewrite of the Stomp proxy.",
+	"license": "GPL-3.0",
+	"type": "module",
+	"main": "./dist/controller.mjs",
+	"types": "./dist/types/controller/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/types/controller/index.d.ts",
+			"default": "./dist/controller.mjs"
+		},
+		"./path": {
+			"types": "./lib/index.d.cts",
+			"default": "./lib/index.cjs"
+		}
+	},
+	"files": [
+		"dist",
+		"lib"
+	],
+	"engines": {
+		"node": ">=22"
+	},
+	"dependencies": {
+		"@javascript-obfuscator/escodegen": "^2.4.2",
+		"@mercuryworkshop/proxy-transports": "^1.0.2",
+		"ast-types": "^0.16.1",
+		"crypto-js": "^4.2.0",
+		"css-tree": "^3.1.0",
+		"entities": "^9.0.0",
+		"idb": "^8.0.3",
+		"meriyah": "^7.0.0",
+		"parse5": "^8.0.0",
+		"set-cookie-parser": "^3.0.0",
+		"srcset": "^5.0.1",
+		"tldts": "^7.0.0"
+	},
+	"gitHead": "24bdc81d7f56d97b33e6368ceb5c56968d9b7d1d"
+}
