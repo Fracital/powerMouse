@@ -6,3 +6,4 @@
 deploy/epoxy/out/
 # screenshots from SHOTS=1 npm test
 test/out/
+/.claude/
