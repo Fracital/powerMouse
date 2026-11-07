@@ -19,7 +19,8 @@ mkdirSync(OUT, { recursive: true });
 const entry = `${OUT}rewriter-unit-entry.mjs`;
 writeFileSync(
 	entry,
-	`export { modifyJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
+	`export { modifyJS, routeJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
+export { routeHTML } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 `,
@@ -33,7 +34,7 @@ await esbuild.build({
 	outfile: bundle,
 	logLevel: 'silent',
 });
-const { modifyJS, StompURL, parseConfig } = await import(
+const { modifyJS, routeJS, routeHTML, StompURL, parseConfig } = await import(
 	`${bundle}?${Date.now()}`
 );
 
@@ -98,6 +99,54 @@ const parses = (code) => {
 		'a stack names the script after its sourceURL comment',
 		/named-by-comment\.js/.test(stack),
 		stack,
+	);
+}
+{
+	// a data: body is percent-encoded (RFC 2397): decoded before the rewrite,
+	// encoded again after; a base64 body the same way
+	const full = { ...config, ...parsed };
+	const js = routeJS(
+		new StompURL(new URL('data:text/javascript,top.x%3B'), url),
+		url,
+		full,
+		'generic',
+	);
+	const b64 = routeJS(
+		new StompURL(
+			new URL(
+				`data:text/javascript;base64,${Buffer.from('top.x').toString('base64')}`,
+			),
+			url,
+		),
+		url,
+		full,
+		'generic',
+	);
+	const html = routeHTML(
+		new StompURL(
+			new URL('data:text/html,%3Cscript%3Etop.x%3C%2Fscript%3E'),
+			url,
+		),
+		url,
+		full,
+		false,
+		false,
+	);
+	const decoded = (uri) => decodeURIComponent(uri.slice(uri.indexOf(',') + 1));
+	ok(
+		'data: bodies are percent-decoded before rewriting and encoded again',
+		/^data:text\/javascript,/.test(js) &&
+			/\$s\$j\.get\(top, 'top'\)\.x/.test(decoded(js)) &&
+			/^data:text\/javascript;base64,/.test(b64) &&
+			/\$s\$j\.get\(top, 'top'\)/.test(
+				Buffer.from(b64.split(',')[1], 'base64').toString(),
+			) &&
+			/^data:text\/html,/.test(html) &&
+			// the shell carries the decoded document; its scripts are rewritten
+			// by the page's inject at load
+			/injectDocument\.js/.test(decoded(html)) &&
+			/top\.x/.test(decoded(html)),
+		JSON.stringify([js, decoded(html).slice(0, 200)]),
 	);
 }
 {

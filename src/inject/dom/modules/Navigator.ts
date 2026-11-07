@@ -14,6 +14,61 @@ export default class NavigatorModule extends Module<DocumentClient> {
 
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
+		// a protocol handler would be registered for the proxy origin, with the
+		// browser's prompt naming it: accepted silently, like a denied prompt,
+		// after the checks the browser makes first (the safelisted schemes and
+		// `web+` names, a URL with `%s`)
+		const SAFE_SCHEMES = new Set([
+			'bitcoin',
+			'ftp',
+			'ftps',
+			'geo',
+			'im',
+			'irc',
+			'ircs',
+			'magnet',
+			'mailto',
+			'matrix',
+			'mms',
+			'news',
+			'nntp',
+			'openpgp4fpr',
+			'sftp',
+			'sip',
+			'sms',
+			'smsto',
+			'ssh',
+			'tel',
+			'urn',
+			'webcal',
+			'wtai',
+			'xmpp',
+		]);
+		const navigator = this.client.global.Navigator.prototype as Record<
+			string,
+			any
+		>;
+		for (const name of ['registerProtocolHandler', 'unregisterProtocolHandler'])
+			if (typeof navigator[name] === 'function')
+				navigator[name] = proxyModule.wrapFunction(
+					navigator[name],
+					(target, that, args) => {
+						if (args.length < 2) return Reflect.apply(target, that, args);
+						const scheme = String(args[0]);
+						if (!SAFE_SCHEMES.has(scheme) && !/^web\+[a-z]+$/.test(scheme))
+							throw new this.client.global.DOMException(
+								`Failed to execute '${name}' on 'Navigator': The scheme '${scheme}' doesn't belong to the scheme allowlist. Please prefix non-allowlisted schemes with the string 'web+'.`,
+								'SecurityError',
+							);
+						if (!String(args[1]).includes('%s'))
+							throw new this.client.global.DOMException(
+								`Failed to execute '${name}' on 'Navigator': The url provided ('${String(args[1])}') does not contain '%s'.`,
+								'SyntaxError',
+							);
+						return undefined;
+					},
+				);
+
 		if (this.client.global.Navigator.prototype.sendBeacon)
 			this.client.global.Navigator.prototype.sendBeacon =
 				proxyModule.wrapFunction(

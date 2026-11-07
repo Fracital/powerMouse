@@ -1,5 +1,6 @@
 import Client from './Client';
 import AccessModule from './modules/Access';
+import ConsoleModule from './modules/Console';
 import FetchModule from './modules/Fetch';
 import FunctionModule from './modules/Function';
 import IndexedDBModule from './modules/IndexedDB';
@@ -23,4 +24,5 @@ export default function baseModules(client: Client) {
 	client.addModule(PartitionModule);
 	client.addModule(WebSocketModule);
 	client.addModule(UnrouteModule);
+	client.addModule(ConsoleModule);
 }

@@ -265,6 +265,12 @@ url`) carries its value and targets that window. An about:blank child of
   `//# sourceMappingURL=` routed against the real script URL (a `data:` map
   as it is), appended after the rewritten code; every other comment is still
   dropped with the formatting.
+- `navigator.registerProtocolHandler` (and `unregisterProtocolHandler`) is
+  accepted and does nothing: it would register the proxy origin, with the
+  browser's prompt naming it; a bad scheme still throws. `console.clear()`
+  does nothing in pages and workers: the console is shared with the host and
+  carries the rewriter's warnings. The Navigation API is kept, with its URLs
+  read back unrouted, rather than removed.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

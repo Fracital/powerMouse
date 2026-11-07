@@ -1,0 +1,25 @@
+<!doctype html>
+<title>NOOPS</title>
+<script>
+	window.__noops = {};
+	try {
+		__noops.register = navigator.registerProtocolHandler('web+stomp', '/h?%s');
+		__noops.unregister = navigator.unregisterProtocolHandler(
+			'web+stomp',
+			'/h?%s',
+		);
+	} catch (error) {
+		__noops.register = 'threw ' + error.name;
+	}
+	try {
+		navigator.registerProtocolHandler('nope', '/h?%s');
+		__noops.badScheme = 'no error';
+	} catch (error) {
+		__noops.badScheme = error.name;
+	}
+	console.log('before clear');
+	console.clear();
+	console.log('after clear');
+	__noops.clearShape = Function.prototype.toString.call(console.clear);
+	__noops.done = true;
+</script>
