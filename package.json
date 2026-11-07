@@ -52,7 +52,7 @@
 		"@eslint/js": "^10.0.0",
 		"@fontsource/montserrat": "^5.3.0",
 		"@ianvs/prettier-plugin-sort-imports": "^4.4.0",
-		"@mercuryworkshop/epoxy-transport": "git+https://github.com/Fracital/EpoxyTransport.git#ecec01c0026011a8eead5d09744720d116e92bcc",
+		"@mercuryworkshop/epoxy-transport": "git+https://github.com/Fracital/EpoxyTransport.git#9f5b8872df45ed76ea0426b7bfdab50d722c1e41",
 		"@mercuryworkshop/libcurl-transport": "^2.0.6",
 		"@mercuryworkshop/wisp-js": "^0.5.2",
 		"@types/crypto-js": "^4.2.2",

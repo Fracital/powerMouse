@@ -1152,14 +1152,9 @@ Fixed while testing real sites and a feature fixture:
   stops answering HTTP after roughly 70 requests with its default pool and
   roughly 160 with a larger one, which breaks any page that fans out that many
   assets. The demo defaults to epoxy and raises libcurl's pool when selected.
-- epoxy sends a request over a pooled HTTP/1.1 connection the server has
-  already closed for idling, and the request hangs instead of failing or
-  being retried on a new connection (a bare `transport.request()` against a
-  node server with a 2 s keep-alive: 200, then a hang 3.5 s later, then 200).
-  Any server that closes idle connections (node after 5 s, nginx after 75 s)
-  can stall a page's next subresource. The vendored web-platform-tests pages
-  stalled on it depending on how long the page before them took, so the
-  `wpt-*` suites' fixture keeps connections for ten minutes.
+- A request that starts just as the server closes its idle connection fails
+  with an error rather than being retried on a new connection the way Chrome
+  retries it (the pinned epoxy no longer hangs there; hyper does not retry).
 - epoxy (hyper) refuses a whole response whose header holds a NUL, CR or LF,
   where Chrome reads a NUL as a space and a bare CR or LF as the end of the
   header, and the service worker answers that fetch with a 500 rather than
