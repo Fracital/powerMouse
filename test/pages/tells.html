@@ -1,0 +1,32 @@
+<!doctype html>
+<title>TELLS</title>
+<script>
+	const helpers = ['$s$j', '$P$s', '$s$L', '$s$N'];
+	const names = (object) =>
+		[...Object.getOwnPropertyNames(object), ...Reflect.ownKeys(object)]
+			.filter((key) => typeof key === 'string')
+			.filter((key) => helpers.includes(key));
+	const asks = (object) =>
+		helpers.filter(
+			(key) =>
+				Object.prototype.hasOwnProperty.call(object, key) ||
+				Object.hasOwn(object, key) ||
+				Reflect.has(object, key) ||
+				Object.prototype.propertyIsEnumerable.call(object, key),
+		);
+	window.__tells = {
+		windowNames: names(window),
+		windowAsks: asks(window),
+		locationNames: names(location),
+		locationAsks: asks(location),
+		evalNames: names(eval),
+		evalAsks: asks(eval),
+		documentNames: names(document),
+		// documented tells, recorded, not asserted
+		inOperator: helpers.filter((key) => key in window),
+		prepare: typeof Error.prepareStackTrace,
+		// a page's own object answers natively
+		plainHasOwn: Object.hasOwn({ $s$j: 1 }, '$s$j'),
+		plainNames: Object.getOwnPropertyNames({ $P$s: 1 }),
+	};
+</script>

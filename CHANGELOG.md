@@ -237,6 +237,16 @@ url`) carries its value and targets that window. An about:blank child of
   prototypes like a window (`getOwnPropertyDescriptor(WorkerGlobalScope.prototype,
 'location')` resolves to the stand-in, the access API's name is hidden
   from `getOwnPropertyNames(self)`). Corpus: workers 10 failing checks to 0.
+- The helper names the rewriter and the inject rely on (`$s$j` and `$P$s` on
+  the window, `$s$L` and `$s$N` on the location and eval stand-ins) are not
+  visible to a page asking reflectively: `getOwnPropertyNames` and
+  `Reflect.ownKeys` leave them out, `hasOwnProperty`, `Object.hasOwn`,
+  `Reflect.has` and `propertyIsEnumerable` deny them, on the window, the
+  document, location and eval only (a page's own object with such a key
+  answers natively). Two tells stay and are documented: the bare `in`
+  operator (rewriting every `in` would cost more than it hides) and
+  `Error.prepareStackTrace` being a function (stack cleaning needs it;
+  scramjet carries the same).
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

@@ -1,4 +1,10 @@
-import { ACCESS_KEY, UNDEFINABLE } from '../../rewriteJS';
+import {
+	ACCESS_KEY,
+	CLIENT_KEY,
+	GLOBAL_NAME,
+	GLOBAL_PROXY,
+	UNDEFINABLE,
+} from '../../rewriteJS';
 import Client from '../Client';
 import Module from '../Module';
 import ProxyModule from './Proxy';
@@ -182,8 +188,30 @@ export default class ReflectionModule extends Module<Client> {
 				},
 			);
 
-		// the access API's own name never shows in an enumeration of the window
-		const hidden = new Set<PropertyKey>([ACCESS_KEY]);
+		// the helper names (the access API and client key on the window, the
+		// stand-in tags on location and eval) never show in an enumeration of
+		// those objects and are not "own" to any reflective question; the bare
+		// `in` operator remains a tell (rewriting every `in` would cost more)
+		const hidden = new Set<PropertyKey>([
+			ACCESS_KEY,
+			CLIENT_KEY,
+			GLOBAL_PROXY,
+			GLOBAL_NAME,
+		]);
+		const nativeHasOwn = global.Object.prototype.hasOwnProperty;
+		const tagged = (target: unknown): boolean => {
+			if (
+				(typeof target !== 'object' && typeof target !== 'function') ||
+				target === null
+			)
+				return false;
+			try {
+				return Reflect.apply(nativeHasOwn, target, [GLOBAL_NAME]) as boolean;
+			} catch (error) {
+				return false;
+			}
+		};
+		const ours = (target: unknown) => windowLike(target) || tagged(target);
 		for (const [holder, name] of [
 			[global.Object, 'getOwnPropertyNames'],
 			[global.Reflect, 'ownKeys'],
@@ -192,11 +220,35 @@ export default class ReflectionModule extends Module<Client> {
 				(holder as Record<string, any>)[name],
 				(target, that, args) => {
 					const keys = Reflect.apply(target, that, args) as PropertyKey[];
-					return windowLike(args[0])
-						? keys.filter((key) => !hidden.has(key))
-						: keys;
+					return ours(args[0]) ? keys.filter((key) => !hidden.has(key)) : keys;
 				},
 			);
+		for (const name of ['hasOwnProperty', 'propertyIsEnumerable'] as const)
+			objectPrototypeMethod(name);
+		function objectPrototypeMethod(name: string) {
+			const prototype = global.Object.prototype as Record<string, any>;
+			prototype[name] = proxyModule.wrapFunction(
+				prototype[name],
+				(target, that, args) =>
+					hidden.has(args[0] as PropertyKey) && ours(that)
+						? false
+						: Reflect.apply(target, that, args),
+			);
+		}
+		for (const [holder, name] of [
+			[global.Object, 'hasOwn'],
+			[global.Reflect, 'has'],
+		] as const) {
+			const record = holder as Record<string, any>;
+			if (typeof record[name] !== 'function') continue;
+			record[name] = proxyModule.wrapFunction(
+				record[name],
+				(target, that, args) =>
+					hidden.has(args[1] as PropertyKey) && ours(args[0])
+						? false
+						: Reflect.apply(target, that, args),
+			);
+		}
 
 		const objectPrototype = global.Object.prototype as Record<string, any>;
 		for (const name of ['__lookupGetter__', '__lookupSetter__'])
