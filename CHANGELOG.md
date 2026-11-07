@@ -291,6 +291,13 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A transport is initialised once at a time. Every port served from one
+  transport (the service worker's, each page's) called `init()` for every
+  request that found it not ready, so a burst at start-up initialised it
+  several times at once; epoxy's `init()` loaded its wasm again on each call,
+  and two same-tick calls killed the first client. All callers now wait on
+  one in-flight `init()` per transport, and a failed one is not kept, so the
+  next request tries again (transport-init suite).
 - A frame whose document a `javascript:` URL's string makes runs proxied.
   `<iframe src="javascript:'<p>...'">` (and a link or `location` set to such
   a URL) replaces the document with the string's markup, which nothing

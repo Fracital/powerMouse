@@ -22,6 +22,25 @@ export type DecorateHandshake = (
 const DECORATE_TIMEOUT_MS = 2000;
 
 /**
+ * One init() at a time per transport, however many ports and requests find
+ * it not ready: init() is not idempotent everywhere (epoxy's loaded its wasm
+ * again on each call, and two same-tick calls killed the first client), so
+ * every caller waits on the same in-flight promise. A failed init is not
+ * kept: the next caller tries again.
+ */
+const initializing = new WeakMap<ProxyTransport, Promise<void>>();
+function initOnce(transport: ProxyTransport): Promise<void> {
+	let pending = initializing.get(transport);
+	if (!pending) {
+		pending = Promise.resolve(transport.init()).finally(() =>
+			initializing.delete(transport),
+		);
+		initializing.set(transport, pending);
+	}
+	return pending;
+}
+
+/**
  * Serve a ProxyTransport to a `RemoteTransport` on the other end of `port`.
  * `getTransport` is a getter so the host can hot-swap transports. `decorate`
  * may add headers to a WebSocket handshake (the controller adds the cookie
@@ -40,7 +59,7 @@ export default function serveTransport(
 
 	const readyTransport = async () => {
 		const transport = getTransport();
-		if (!transport.ready) await transport.init();
+		if (!transport.ready) await initOnce(transport);
 		return transport;
 	};
 
