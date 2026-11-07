@@ -64,6 +64,36 @@ jobs:
       - name: Build
         run: node build.js && test -f dist/serviceWorker.js && test -f dist/controller.mjs
 
+  # Browser suites on the runner's Chrome. Fixture-based suites only
+  # (SKIP_NETWORK leaves out the ones that drive Wikipedia); no secrets, read
+  # only, not required by branch protection until it has proven stable.
+  browser:
+    name: browser suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build
+
+      - name: Browser suites
+        env:
+          CHROME: /usr/bin/google-chrome
+          SKIP_NETWORK: '1'
+          PARALLEL: '2'
+        run: npm test
+
   commits:
     name: commit messages
     if: github.event_name == 'pull_request'

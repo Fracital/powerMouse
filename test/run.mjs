@@ -49,11 +49,28 @@ if (!existsSync(`${root}dist/serviceWorker.js`)) {
 	process.exit(2);
 }
 
+// suites that drive real sites (Wikipedia) and cannot run on a runner
+// without a dependable internet path; SKIP_NETWORK=1 leaves them out
+const NETWORK_SUITES = new Set([
+	'back',
+	'demo',
+	'isolation',
+	'backwalk-single',
+	'backwalk-tabs',
+	'backwalk-browser',
+]);
+const SKIP_NETWORK = process.env.SKIP_NETWORK === '1';
+
 const wanted = process.argv.slice(2);
 const suites = readdirSync(suitesDir)
 	.filter((name) => name.endsWith('.mjs'))
 	.map((name) => name.slice(0, -4))
-	.filter((name) => !wanted.length || wanted.includes(name));
+	.filter((name) => !wanted.length || wanted.includes(name))
+	.filter((name) => {
+		if (!SKIP_NETWORK || !NETWORK_SUITES.has(name)) return true;
+		console.log(`SKIP ${name} (needs the internet; SKIP_NETWORK=1)`);
+		return false;
+	});
 
 if (!suites.length) {
 	console.error(`no suites match ${wanted.join(', ')}`);
@@ -85,6 +102,21 @@ process.on('SIGINT', () => {
  * the same-origin controller.
  */
 async function startServers() {
+	// free ports are picked before they are bound, so two runs starting at once
+	// can race for the same one (EADDRINUSE); start over on a fresh pair
+	let lastError;
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			return await startServersOnce();
+		} catch (error) {
+			lastError = error;
+			if (!/EADDRINUSE|no server at/.test(String(error))) throw error;
+		}
+	}
+	throw lastError;
+}
+
+async function startServersOnce() {
 	const pinned = PARALLEL === 1;
 	const port = String((pinned && process.env.PORT) || (await freePort()));
 	const fixturePort = Number(

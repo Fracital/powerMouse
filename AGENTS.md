@@ -163,7 +163,10 @@ rewriter: reproduce with a raw `controller.transport.request()` /
 request: `npm ci --ignore-scripts`, `npm run check`, `npm run lint`,
 `npx prettier --check .`, `npm run check:prose` (no em dashes, no AI
 attribution; the same script checks a PR's commit messages) and the esbuild
-build. All of it must pass locally before you push.
+build. All of it must pass locally before you push. A `browser suites` job
+runs `npm test` on the runner's Chrome with `SKIP_NETWORK=1` (the suites
+that drive Wikipedia stay out) and `PARALLEL=2`; it is informational until it
+has proven stable and is not required by branch protection.
 
 Rules for touching the workflow, because a PR from anyone runs it:
 

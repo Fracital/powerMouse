@@ -184,9 +184,10 @@ export function startFixture(port = 8084) {
 			return res.end('<title>LANDED</title><h1>landed</h1>');
 		res.end(PAGES[path] ?? '<title>other</title>other');
 	});
-	return new Promise((resolve) => {
+	return new Promise((resolve, reject) => {
 		// every interface, so http://localhost:PORT/ (a second proxied origin
 		// for the suites) answers over ::1 as well as 127.0.0.1
+		server.once('error', reject);
 		server.listen(port, () => resolve(server));
 	});
 }
