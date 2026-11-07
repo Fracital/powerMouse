@@ -7,7 +7,11 @@ import type { Config } from '../config';
 
 // postMessage keys (controller <-> service worker <-> proxied contexts)
 
-/** controller -> SW, with [port]: register a controller for `directory` */
+/**
+ * controller -> SW, with [port] or [port, transportPort]: register a
+ * controller for `directory`; the transport is served on the second port when
+ * the controller's transport worker hosts it, else on the rpc port itself
+ */
 export const CONTROLLER_INIT = '$stomp$controllerInit';
 /** proxied page -> SW, with [port]: ask the controller for `directory` to serve a transport on this port */
 export const INIT_REMOTE_TRANSPORT = '$stomp$initRemoteTransport';
@@ -221,6 +225,31 @@ export type TransportToHost = {
 /** implemented by RemoteTransport, called by the host */
 export type HostToTransport = {
 	ready: [];
+};
+
+/** rpc id on the controller <-> transport worker channel (the Worker's own) */
+export const TRANSPORT_WORKER_RPC = 'stomp-transport-worker';
+
+/** what the transport worker constructs: a module URL and constructor arguments */
+export interface TransportModule {
+	module: string;
+	options?: unknown[];
+}
+
+/** implemented by the transport worker (src/transport/worker.ts), called by the controller */
+export type WorkerBound = {
+	/** import the module and construct the transport; rejects with the import or constructor error */
+	init: [TransportModule];
+	/** replace the transport; in-flight requests finish on the old one */
+	setTransport: [TransportModule];
+	/** serve the transport to the RemoteTransport on this port (the service worker's, a page's, the host's) */
+	serve: [MessagePort];
+};
+
+/** implemented by the controller, called by the transport worker */
+export type WorkerToController = {
+	/** the headers a WebSocket handshake goes out with (the controller adds the jar's Cookie) */
+	decorate: [{ url: string; headers: RawHeaders }, RawHeaders];
 };
 
 export type WebSocketMessage =

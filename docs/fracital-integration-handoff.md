@@ -102,8 +102,9 @@ every filename renamed, and the string `stomp` appears in no requested URL.
 
 **Shipped.** `assets` on `Config`, `ControllerInit` and `RemoteControllerInit`
 (`serviceWorker`, `injectDocument`, `injectWorker`, `controllerFrame`,
-`controllerFrameScript`). Inventory of what a host renames: the five files
-above, plus `Controller.js` / `controller.mjs` which the host loads itself.
+`controllerFrameScript`, `transportWorker`). Inventory of what a host renames:
+the six files above, plus `Controller.js` / `controller.mjs` which the host
+loads itself.
 Not URLs, left as they are: the `$stomp$` postMessage keys and the `stomp`
 RPC id (same-origin messages between the controller, the worker and the
 pages), the `stomp-allowed-origins` meta in `controllerFrame.html`, the

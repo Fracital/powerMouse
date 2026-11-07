@@ -85,6 +85,14 @@ const builds = [
 		outExtension: { '.js': '.mjs' },
 	},
 	{
+		// a classic worker script: the transport modules' emscripten glue
+		// (libcurl) recognises a worker by `importScripts`, which a module
+		// worker does not have. The transport module itself is loaded with a
+		// dynamic import(), which classic workers support.
+		entryPoints: { transportWorker: 'src/transport/worker.ts' },
+		format: 'iife',
+	},
+	{
 		entryPoints: { SearchBuilder: 'src/bootstrapper/entry.ts' },
 		format: 'iife',
 	},

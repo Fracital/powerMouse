@@ -110,9 +110,13 @@ on every save (use a `git worktree`).
   `$s$j.get2(obj, key, partial, true)` and the rest of the chain is marked
   optional. Any new access rewrite must preserve short-circuiting.
 - **The sync bridge (`src/inject/dom/modules/Sync.ts`) spins the main thread**
-  waiting for the service worker via cookies. With the transport hosted in
-  the same renderer, a synchronous request that needs the network deadlocks
-  until the spin limit. Don't add new synchronous paths.
+  waiting for the service worker via cookies. The deadlock only exists with
+  an in-page transport: a ProxyTransport instance (or a descriptor with
+  `host: 'page'`) is served from the host page's thread, which the spinning
+  frame shares in same-origin mode, so a synchronous request that needs the
+  network waits out the spin limit. A descriptor (the default) runs the
+  transport in the transport worker (`src/transport/worker.ts`), off that
+  thread, and the request completes. Don't add new synchronous paths.
 - **One controller per `directory`.** Inject bundle URLs are built from the
   directory, so the scramjet-style random prefix per controller doesn't apply.
 - **Same-origin `StompController` is for development only.** It is not a

@@ -138,13 +138,21 @@ const NEUTRAL = {
 	'ctl.js': 'Controller.js',
 	'frame.html': 'controllerFrame.html',
 	'frame.js': 'controllerFrame.js',
+	'tw.js': 'transportWorker.js',
 };
-const transportFile = fileURLToPath(
-	new URL(
-		'../node_modules/@mercuryworkshop/epoxy-transport/dist/index.mjs',
-		import.meta.url,
-	),
-);
+// the transport modules under neutral names too (assets and transport-worker
+// suites): /neutral/transport.mjs is epoxy, /neutral/libcurl.mjs is libcurl
+const TRANSPORTS = {
+	'transport.mjs': 'epoxy-transport',
+	'libcurl.mjs': 'libcurl-transport',
+};
+const transportFile = (name) =>
+	fileURLToPath(
+		new URL(
+			`../node_modules/@mercuryworkshop/${name}/dist/index.mjs`,
+			import.meta.url,
+		),
+	);
 
 export function startFixture(port = 8084) {
 	const server = createServer((req, res) => {
@@ -156,10 +164,9 @@ export function startFixture(port = 8084) {
 		}
 		const neutral = /^\/neutral\/([\w.-]+)$/.exec(path)?.[1];
 		if (neutral) {
-			const file =
-				neutral === 'transport.mjs'
-					? transportFile
-					: NEUTRAL[neutral] && `${distDir}${NEUTRAL[neutral]}`;
+			const file = TRANSPORTS[neutral]
+				? transportFile(TRANSPORTS[neutral])
+				: NEUTRAL[neutral] && `${distDir}${NEUTRAL[neutral]}`;
 			if (!file || !existsSync(file)) {
 				res.statusCode = 404;
 				return res.end('no such neutral asset');

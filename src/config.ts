@@ -119,6 +119,8 @@ export interface Assets {
 	controllerFrame?: string;
 	/** the script controllerFrame.html loads; told to the frame through `?script=` */
 	controllerFrameScript?: string;
+	/** the dedicated Worker that hosts a transport given as a descriptor */
+	transportWorker?: string;
 }
 
 export const DEFAULT_ASSETS: Required<Assets> = {
@@ -127,6 +129,7 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 	injectWorker: 'injectWorker.js',
 	controllerFrame: 'controllerFrame.html',
 	controllerFrameScript: 'controllerFrame.js',
+	transportWorker: 'transportWorker.js',
 };
 
 /** a served file's name: the host's, else the default */

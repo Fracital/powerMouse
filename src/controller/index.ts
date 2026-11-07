@@ -2,7 +2,13 @@ import type {
 	ProxyTransport,
 	RawHeaders,
 } from '@mercuryworkshop/proxy-transports';
-import { Assets, Config, ConfigCodec, DEFAULT_ASSETS } from '../config';
+import {
+	assetName,
+	Assets,
+	Config,
+	ConfigCodec,
+	DEFAULT_ASSETS,
+} from '../config';
 import { isUrlLike, urlLike } from '../StompURL';
 import type { RequestRule } from '../transport/messages';
 import {
@@ -21,11 +27,13 @@ import {
 	SW_REVIVE,
 	SWbound,
 } from '../transport/messages';
+import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
 import serveTransport from '../transport/serveTransport';
+import TransportWorker from '../transport/TransportWorker';
 import { BUILD } from '../version';
 import { canTraverse, traverse } from './history';
-import type { StaleInfo } from './messages';
+import type { StaleInfo, TransportDescriptor } from './messages';
 import { DEFAULT_SANDBOX } from './remote';
 
 export { default as SearchBuilder } from '../bootstrapper/SearchBuilder';
@@ -48,8 +56,17 @@ export interface ControllerInit {
 	 * then the controller takes its worker and waits for it to activate.
 	 */
 	serviceworker: ServiceWorker | ServiceWorkerRegistration;
-	/** transport that proxied traffic goes through, e.g. an EpoxyTransport */
-	transport: ProxyTransport;
+	/**
+	 * The transport proxied traffic goes through. A TransportDescriptor
+	 * (`{ module, options }`) is imported and constructed in a dedicated
+	 * Worker the controller starts from `transportWorker.js` in `directory`
+	 * (`host: 'page'` keeps it in this page); off the host page's thread, a
+	 * proxied frame's synchronous XHR that needs the network completes
+	 * instead of deadlocking. A ProxyTransport instance (an EpoxyTransport
+	 * the host constructed) is served from this page, as before. See
+	 * `transportHost` and the `transporthost` event.
+	 */
+	transport: ProxyTransport | TransportDescriptor;
 	codec?: ConfigCodec;
 	/**
 	 * URL of the directory `serviceworker` is scoped to and `dist/` is served
@@ -259,14 +276,77 @@ function defaultDirectory(): URL {
 	return new URL('.', script && script.src ? script.src : location.href);
 }
 
+/** a TransportDescriptor rather than a ProxyTransport instance */
+function isTransportDescriptor(
+	transport: ProxyTransport | TransportDescriptor,
+): transport is TransportDescriptor {
+	return (
+		typeof transport === 'object' &&
+		transport !== null &&
+		typeof (transport as TransportDescriptor).module === 'string'
+	);
+}
+
+/** the descriptor with its module URL resolved against this page (the worker would resolve it against its own) */
+function resolvedModule(descriptor: TransportDescriptor): TransportDescriptor {
+	return {
+		...descriptor,
+		module: new URL(descriptor.module, location.href).href,
+	};
+}
+
+/** import a descriptor's module in this page and construct it */
+async function importTransport(
+	descriptor: TransportDescriptor,
+): Promise<ProxyTransport> {
+	const { module, options } = resolvedModule(descriptor);
+	const { default: Transport } = (await import(/* @vite-ignore */ module)) as {
+		default: new (...args: unknown[]) => ProxyTransport;
+	};
+	if (typeof Transport !== 'function')
+		throw new TypeError(`${module} has no default export to construct`);
+	return new Transport(...(options || []));
+}
+
+/**
+ * A transport that fails every request with `error`: what a controller holds
+ * while its transport is still loading, or when neither the worker nor the
+ * page could import the module. Requests then fail at once (the worker's
+ * error page) rather than hang, and `setTransport()` repairs the controller.
+ */
+function failingTransport(error: unknown): ProxyTransport {
+	const message = error instanceof Error ? error.message : String(error);
+	return {
+		ready: true,
+		async init() {},
+		async request() {
+			throw new Error(`Stomp: no transport (${message})`);
+		},
+		connect(
+			_url,
+			_protocols,
+			_headers,
+			_onopen,
+			_onmessage,
+			_onclose,
+			onerror,
+		) {
+			onerror(`Stomp: no transport (${message})`);
+			return [() => {}, () => {}];
+		},
+	};
+}
+
 /**
  * Owns the transport and registers itself with the service worker.
  * Proxied content lives in frames created by `createFrame()`.
  */
 /**
  * Events: `stale` (detail: StaleInfo) when the handshake met a service worker
- * of another build that could not be replaced in time, and `rebind` (detail:
- * `{ build }`) when a later handshake agrees again.
+ * of another build that could not be replaced in time, `rebind` (detail:
+ * `{ build }`) when a later handshake agrees again, and `transporthost`
+ * (detail: `{ host: 'page', error }`) when the transport worker could not
+ * host a descriptor and the page took over.
  */
 export class StompController extends EventTarget {
 	config: Config;
@@ -278,9 +358,26 @@ export class StompController extends EventTarget {
 	stale: StaleInfo | null = null;
 	directory: URL;
 	serviceworker: ServiceWorker;
+	/**
+	 * The transport the proxy uses. With a worker-hosted descriptor this is a
+	 * RemoteTransport over a port the worker serves (so a host can still probe
+	 * `controller.transport.request()` from its console); otherwise the
+	 * instance the host gave or the page imported.
+	 */
 	transport: ProxyTransport;
+	/**
+	 * Where the transport runs: `worker` for a descriptor hosted in the
+	 * transport worker, `page` for an instance, a descriptor with
+	 * `host: 'page'`, or a descriptor the worker could not host (then a
+	 * `transporthost` event said so). `setTransport()` takes a descriptor for
+	 * the one and an instance for the other.
+	 */
+	transportHost: 'worker' | 'page';
 	frames: Frame[] = [];
 	isReady = false;
+	#worker?: TransportWorker;
+	/** settles once the transport exists where it is hosted; the handshake waits for it */
+	#hostReady: Promise<void>;
 	/** service worker client ids the pages reported, by frame */
 	#clientFrames = new Map<string, Frame>();
 	#onRequest?: (info: RequestEvent) => void;
@@ -341,7 +438,15 @@ export class StompController extends EventTarget {
 			this.#registration = init.serviceworker;
 			this.serviceworker = registrationWorker(init.serviceworker);
 		} else this.serviceworker = init.serviceworker;
-		this.transport = init.transport;
+		const given = init.transport;
+		if (isTransportDescriptor(given)) {
+			this.transportHost =
+				(given.host ?? 'worker') === 'page' ? 'page' : 'worker';
+			this.transport = failingTransport('the transport is still loading');
+		} else {
+			this.transportHost = 'page';
+			this.transport = given;
+		}
 		this.#sandbox = init.sandbox === undefined ? DEFAULT_SANDBOX : init.sandbox;
 		this.#onRequest = init.onRequest;
 		this.#rules = init.rules ?? [];
@@ -371,6 +476,14 @@ export class StompController extends EventTarget {
 			...(init.assets ? { assets: init.assets } : {}),
 			...(errorPage ? { errorPage } : {}),
 		};
+
+		// a described transport is started where it is hosted before the first
+		// handshake; a failure there never leaves the controller dead
+		this.#hostReady = !isTransportDescriptor(given)
+			? Promise.resolve()
+			: this.transportHost === 'worker'
+				? this.#startWorker(given)
+				: this.#importInPage(given);
 
 		window.addEventListener('message', (event) => {
 			// only our own frames, same origin as this page in this mode
@@ -564,8 +677,54 @@ export class StompController extends EventTarget {
 		this.serviceworker = worker;
 		this.#handshake();
 	}
-	/** (re)register with the service worker over a fresh MessageChannel */
+	/**
+	 * Start the transport worker and have it host `descriptor`. When the
+	 * worker cannot start or the module cannot be imported there, the page
+	 * imports it instead (the `transporthost` event tells the host); when
+	 * that fails too, the controller holds a transport that fails every
+	 * request until `setTransport()` gives it one.
+	 */
+	async #startWorker(descriptor: TransportDescriptor): Promise<void> {
+		const url = new URL(
+			assetName(this.config.assets, 'transportWorker'),
+			this.directory,
+		);
+		let worker: TransportWorker | undefined;
+		try {
+			worker = new TransportWorker(url, this.#handshakeHeaders);
+			await worker.init(resolvedModule(descriptor));
+			this.#worker = worker;
+			// the host's own view of the transport, served by the worker like
+			// the service worker's
+			this.transport = new RemoteTransport(worker.serve());
+		} catch (error) {
+			worker?.terminate();
+			console.warn(
+				'Stomp: the transport worker could not host the transport, hosting it in the page',
+				error,
+			);
+			this.transportHost = 'page';
+			await this.#importInPage(descriptor);
+			this.dispatchEvent(
+				new CustomEvent('transporthost', { detail: { host: 'page', error } }),
+			);
+		}
+	}
+	/** import a descriptor's module in this page (`host: 'page'`, or the worker fallback) */
+	async #importInPage(descriptor: TransportDescriptor): Promise<void> {
+		try {
+			this.transport = await importTransport(descriptor);
+		} catch (error) {
+			console.error('Stomp: the transport module could not be imported', error);
+			this.transport = failingTransport(error);
+		}
+	}
+	/** (re)register with the service worker once the transport is hosted */
 	#handshake() {
+		this.#hostReady.then(() => this.#handshakeNow());
+	}
+	/** (re)register with the service worker over a fresh MessageChannel */
+	#handshakeNow() {
 		if (this.#port) {
 			this.#rpc?.abort('Service worker replaced');
 			this.#stopServing?.();
@@ -608,7 +767,11 @@ export class StompController extends EventTarget {
 					this.#readyResolve();
 				},
 				initRemoteTransport: async (port) => {
-					serveTransport(port, () => this.transport, this.#handshakeHeaders);
+					// a page's own transport port (its WebSockets): served from the
+					// worker when there is one, so the page's sockets run off-thread too
+					if (this.#worker) this.#worker.servePort(port);
+					else
+						serveTransport(port, () => this.transport, this.#handshakeHeaders);
 				},
 				request: async (info) => {
 					let frame =
@@ -640,12 +803,21 @@ export class StompController extends EventTarget {
 		port.addEventListener('message', (event) => this.#rpc!.receive(event.data));
 		port.start();
 
-		// the service worker's own transport shares this port with the rpc above
-		this.#stopServing = serveTransport(
-			port,
-			() => this.transport,
-			this.#handshakeHeaders,
-		);
+		const transfer: Transferable[] = [channel.port2];
+		if (this.#worker) {
+			// the service worker's transport is served from the worker, on a
+			// port of its own that travels with the handshake
+			const transportChannel = new MessageChannel();
+			this.#worker.servePort(transportChannel.port1);
+			transfer.push(transportChannel.port2);
+			this.#stopServing = undefined;
+		} else
+			// the service worker's own transport shares this port with the rpc above
+			this.#stopServing = serveTransport(
+				port,
+				() => this.transport,
+				this.#handshakeHeaders,
+			);
 
 		const message: ControllerInitMessage = {
 			directory: this.config.directory,
@@ -653,9 +825,7 @@ export class StompController extends EventTarget {
 			build: BUILD,
 		};
 
-		this.serviceworker.postMessage({ [CONTROLLER_INIT]: message }, [
-			channel.port2,
-		]);
+		this.serviceworker.postMessage({ [CONTROLLER_INIT]: message }, transfer);
 	}
 	/**
 	 * A page's WebSocket handshake carries the jar's Cookie header for the
@@ -687,9 +857,30 @@ export class StompController extends EventTarget {
 	async wait(): Promise<void> {
 		await this.#ready;
 	}
-	/** hot-swap the transport; in-flight requests finish on the old one */
-	setTransport(transport: ProxyTransport) {
-		this.transport = transport;
+	/**
+	 * Hot-swap the transport; in-flight requests finish on the old one. The
+	 * argument matches `transportHost`: a TransportDescriptor for a
+	 * worker-hosted transport (the worker imports and constructs it), a
+	 * ProxyTransport instance for a page-hosted one; the other kind is a
+	 * TypeError.
+	 */
+	async setTransport(
+		transport: ProxyTransport | TransportDescriptor,
+	): Promise<void> {
+		await this.#hostReady;
+		if (isTransportDescriptor(transport)) {
+			if (!this.#worker)
+				throw new TypeError(
+					'Stomp: this controller hosts its transport in the page; setTransport() takes a ProxyTransport instance',
+				);
+			await this.#worker.setTransport(resolvedModule(transport));
+		} else {
+			if (this.#worker)
+				throw new TypeError(
+					'Stomp: this controller hosts its transport in a worker; setTransport() takes a TransportDescriptor',
+				);
+			this.transport = transport;
+		}
 	}
 	/** replace the request rules the service worker applies (see ControllerInit.rules) */
 	async setRules(rules: RequestRule[]): Promise<void> {

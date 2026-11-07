@@ -1,0 +1,81 @@
+<!doctype html>
+<title>TRANSPORT PROBE</title>
+<script>
+	// A proxied page that exercises the transport the way the transport-worker
+	// suite asks in its query: `sync` makes a synchronous XHR to this origin
+	// (deadlocks for 30 s with an in-page transport), `latency=N` times N
+	// sequential fetches of a small file (median ms), `ws` opens the fixture's
+	// echo socket, `fetch` is one plain fetch. Everything lands on
+	// window.__probe, `done` last.
+	const want = new URLSearchParams(location.search);
+	const out = (window.__probe = {});
+	if (want.has('sync')) {
+		const started = performance.now();
+		const x = new XMLHttpRequest();
+		x.open('GET', '/pages/echo.json?sync', false);
+		try {
+			x.send();
+			out.sync = { status: x.status, length: x.responseText.length };
+		} catch (error) {
+			out.sync = { status: 0, error: String(error) };
+		}
+		out.sync.ms = Math.round(performance.now() - started);
+	}
+	(async () => {
+		if (want.has('latency')) {
+			const n = Number(want.get('latency')) || 50;
+			const times = [];
+			for (let i = 0; i < n; i++) {
+				const started = performance.now();
+				const response = await fetch(`/pages/echo.json?i=${i}`, {
+					cache: 'no-store',
+				});
+				await response.text();
+				times.push(performance.now() - started);
+			}
+			times.sort((a, b) => a - b);
+			const at = (q) => Math.round(times[Math.min(n - 1, Math.floor(n * q))]);
+			out.latency = {
+				n,
+				median: at(0.5),
+				p90: at(0.9),
+				mean: Math.round(times.reduce((a, b) => a + b, 0) / n),
+			};
+		}
+		if (want.has('ws'))
+			out.ws = await new Promise((resolve) => {
+				const timer = setTimeout(() => resolve({ error: 'timeout' }), 15000);
+				try {
+					const socket = new WebSocket(
+						`${location.origin.replace(/^http/, 'ws')}/ws-echo`,
+					);
+					socket.onmessage = (event) => {
+						clearTimeout(timer);
+						resolve(JSON.parse(event.data));
+					};
+					socket.onerror = () => {
+						clearTimeout(timer);
+						resolve({ error: 'error' });
+					};
+				} catch (error) {
+					clearTimeout(timer);
+					resolve({ error: String(error) });
+				}
+			});
+		// `fetch` alone is this origin's small file; `fetch=<url>` another site
+		// (libcurl cannot reach a loopback server through wisp, so the suite's
+		// swap check fetches example.com)
+		if (want.has('fetch')) {
+			try {
+				const response = await fetch(
+					want.get('fetch') || '/pages/echo.json?fetch',
+					{ cache: 'no-store' },
+				);
+				out.fetch = { status: response.status, url: response.url };
+			} catch (error) {
+				out.fetch = { status: 0, error: String(error) };
+			}
+		}
+		out.done = true;
+	})();
+</script>

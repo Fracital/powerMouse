@@ -6,12 +6,24 @@ import type {
 	RequestRule,
 } from '../transport/messages';
 
-/** how a transport is described across the host/controller-frame boundary */
+/**
+ * A transport described rather than constructed: what `StompController` hosts
+ * in its transport worker, and what crosses the host/controller-frame
+ * boundary (the frame instantiates it on the proxy origin).
+ */
 export interface TransportDescriptor {
-	/** ES module URL on the proxy origin whose default export is a ProxyTransport class */
+	/** ES module URL (on the proxy origin, for the controller frame) whose default export is a ProxyTransport class */
 	module: string;
 	/** constructor arguments */
 	options?: unknown[];
+	/**
+	 * Where the controller runs it: `worker` (default) starts it in a dedicated
+	 * Worker (`transportWorker.js`), off the host page's thread, so a proxied
+	 * frame's synchronous XHR no longer deadlocks on the network; `page`
+	 * imports and constructs it in the controller's own page, as a
+	 * ProxyTransport instance would be.
+	 */
+	host?: 'worker' | 'page';
 }
 
 export interface ControllerFrameInit {

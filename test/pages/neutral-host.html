@@ -22,10 +22,11 @@
 					if (worker.state === 'activated') resolve();
 				}),
 			);
-		const { default: Transport } = await import('/neutral/transport.mjs');
+		// a descriptor, so the renamed transport worker hosts the (renamed)
+		// transport module
 		const controller = new StompController({
 			serviceworker: worker,
-			transport: new Transport({ wisp }),
+			transport: { module: '/neutral/transport.mjs', options: [{ wisp }] },
 			directory: '/neutral/',
 			codec: 'xor',
 			assets: {
@@ -34,18 +35,24 @@
 				injectWorker: 'wk.js',
 				controllerFrame: 'frame.html',
 				controllerFrameScript: 'frame.js',
+				transportWorker: 'tw.js',
 			},
 		});
 		await controller.wait();
+		__neutral.transportHost = controller.transportHost;
 		window.controller = controller;
 		const element = document.createElement('iframe');
 		document.body.append(element);
 		const loaded = new Promise((resolve) =>
 			element.addEventListener('load', resolve, { once: true }),
 		);
+		// the proxy refuses its own origin: the page is the fixture's other
+		// host name
 		await controller
 			.createFrame(element)
-			.go(`${location.origin}/pages/hist-1.html`);
+			.go(
+				`${location.origin.replace('127.0.0.1', 'localhost')}/pages/hist-1.html`,
+			);
 		await loaded;
 		__neutral.title = element.contentDocument?.title;
 		__neutral.fetched = await element.contentWindow

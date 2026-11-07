@@ -1,0 +1,116 @@
+<!doctype html>
+<title>TRANSPORT HOST</title>
+<!--
+	A host page on the fixture origin for the transport-worker suite: a
+	same-origin StompController from the bundle under /neutral/ (renamed
+	files, see test/fixture.mjs), booted the way the query says.
+	  wisp=        the wisp server (the demo's)
+	  transport=   descriptor (default: epoxy, hosted in a worker), page (the
+	               descriptor with host: 'page'), instance (an epoxy instance
+	               constructed here, the path every host used before)
+	  module=      replaces the descriptor's module URL (a 404 for the fallback)
+	  worker=      the transportWorker asset name (a 404 for the fallback)
+	window.__th records the boot; probe() runs transport-probe.html in a frame.
+-->
+<script src="/neutral/ctl.js"></script>
+<script type="module">
+	const query = new URLSearchParams(location.search);
+	const wisp = query.get('wisp');
+	const out = (window.__th = { events: [] });
+	const assets = {
+		serviceWorker: 'sw.js',
+		injectDocument: 'doc.js',
+		injectWorker: 'wk.js',
+		controllerFrame: 'frame.html',
+		controllerFrameScript: 'frame.js',
+		transportWorker: query.get('worker') || 'tw.js',
+	};
+	const describe = (window.describe = (name) => ({
+		module:
+			name === 'libcurl' ? '/neutral/libcurl.mjs' : '/neutral/transport.mjs',
+		options: [
+			name === 'libcurl' ? { wisp, connections: [500, 400, 200] } : { wisp },
+		],
+	}));
+	const instantiate = (window.instantiate = async (descriptor) => {
+		const { default: Transport } = await import(descriptor.module);
+		return new Transport(...descriptor.options);
+	});
+	(async () => {
+		const registration = await StompController.register('/neutral/', {
+			assets,
+		});
+		const mode = query.get('transport') || 'descriptor';
+		let transport;
+		if (mode === 'instance') transport = await instantiate(describe('epoxy'));
+		else {
+			transport = describe('epoxy');
+			if (query.has('module')) transport.module = query.get('module');
+			if (mode === 'page') transport.host = 'page';
+		}
+		const controller = (window.controller = new StompController({
+			serviceworker: registration,
+			transport,
+			directory: '/neutral/',
+			codec: 'xor',
+			cache: false,
+			assets,
+		}));
+		controller.addEventListener('transporthost', (event) =>
+			out.events.push({
+				host: event.detail.host,
+				error: event.detail.error ? String(event.detail.error) : null,
+			}),
+		);
+		await controller.wait();
+		out.host = controller.transportHost;
+		out.ready = true;
+	})().catch((error) => {
+		out.error = String(error);
+		out.ready = true;
+	});
+	// the probe page in a fresh proxied frame; resolves with its record. The
+	// proxy refuses its own origin, so the probe is the fixture's other host
+	// name (localhost)
+	window.probe = async (search, timeout = 45000) => {
+		const element = document.createElement('iframe');
+		document.body.append(element);
+		const origin = location.origin.replace('127.0.0.1', 'localhost');
+		await controller
+			.createFrame(element)
+			.go(`${origin}/pages/transport-probe.html?${search}`);
+		const deadline = Date.now() + timeout;
+		let record = {};
+		while (Date.now() < deadline) {
+			try {
+				record = element.contentWindow?.__probe || {};
+			} catch (error) {
+				record = {};
+			}
+			if (record.done) break;
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+		element.remove();
+		return record.done ? record : { ...record, timeout: true };
+	};
+	// navigate a fresh frame to the probe page and report how the document
+	// came out: its title (the error page's when the transport failed) and
+	// how long go() took
+	window.load = async (search) => {
+		const element = document.createElement('iframe');
+		document.body.append(element);
+		const started = Date.now();
+		const origin = location.origin.replace('127.0.0.1', 'localhost');
+		await controller
+			.createFrame(element)
+			.go(`${origin}/pages/transport-probe.html?${search}`);
+		let title = null;
+		try {
+			title = element.contentDocument?.title ?? null;
+		} catch (error) {
+			title = String(error);
+		}
+		element.remove();
+		return { ms: Date.now() - started, title };
+	};
+</script>

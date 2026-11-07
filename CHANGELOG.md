@@ -31,6 +31,28 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- The transport can run off the host page's thread. `StompController` takes
+  a `TransportDescriptor` (`{ module, options }`, what `RemoteController`
+  already took) in place of a ProxyTransport instance and starts it in a
+  dedicated Worker (`dist/transportWorker.js`, the `transportWorker` asset,
+  served from the directory like the rest); the service worker and every
+  proxied page reach the transport over ports the worker serves, and the
+  WebSocket handshake cookies stay with the controller, which the worker asks
+  for them. A proxied frame's synchronous XMLHttpRequest that needs the
+  network now completes in same-origin mode (it spun the main thread for
+  the 30 s limit while the transport shared it; measured: status 0 after
+  30.0 s before, 200 after). `host: 'page'` on the descriptor keeps the
+  import in the page, and an instance is served from the page as before.
+  `controller.transportHost` says which (`worker` or `page`); when the worker
+  cannot start or the module cannot be imported there, the page imports it
+  instead and a `transporthost` event (`detail: { host: 'page', error }`)
+  says so, never a dead controller. `setTransport()` takes a descriptor on a
+  worker host (the swap is a message to the worker; in-flight requests finish
+  on the old transport) and an instance on a page host, a TypeError
+  otherwise. The controller frame hosts its worker the same way, so
+  `RemoteController` gets it for free. The `transport-worker` suite covers
+  the boot, the sync XHR, a swap from epoxy to libcurl, both fallbacks and a
+  page WebSocket served from the worker.
 - `npm run dev` is a live-reload development loop: esbuild watch plus the
   demo server in one command, a `/__dev` WebSocket that reconnects forever,
   stylesheets swapped in place, inject rebuilds reloading the proxied frames,

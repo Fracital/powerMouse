@@ -31,26 +31,29 @@ for (let i = 0; i < 90 && !neutral.done; i++) {
 	}
 }
 ok(
-	'the renamed bundle boots from /neutral/ and proxies a page',
+	'the renamed bundle boots from /neutral/ and proxies a page, the transport in its renamed worker',
 	neutral.done === true &&
 		!neutral.error &&
 		neutral.title === 'HIST 1' &&
 		neutral.fetched === 200 &&
-		neutral.worker === 'ran',
+		neutral.worker === 'ran' &&
+		neutral.transportHost === 'worker',
 	JSON.stringify({
 		error: neutral.error,
 		title: neutral.title,
 		fetched: neutral.fetched,
 		worker: neutral.worker,
+		transportHost: neutral.transportHost,
 	}),
 );
 const served = (await (await fetch(`${FIXTURE}requests`)).json()).slice(before);
 const neutralServed = served.filter((p) => p.startsWith('/neutral/'));
 ok(
-	'the worker and the pages fetched the renamed inject bundles',
+	'the worker and the pages fetched the renamed inject bundles and the renamed transport worker',
 	neutralServed.includes('/neutral/sw.js') &&
 		neutralServed.includes('/neutral/doc.js') &&
-		neutralServed.includes('/neutral/wk.js'),
+		neutralServed.includes('/neutral/wk.js') &&
+		neutralServed.includes('/neutral/tw.js'),
 	JSON.stringify([...new Set(neutralServed)]),
 );
 const hostURLs = [...(neutral.resources || []), neutral.scriptURL || ''];

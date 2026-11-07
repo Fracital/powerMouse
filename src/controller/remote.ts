@@ -34,6 +34,10 @@ export interface RemoteControllerInit {
 	proxyOrigin: string;
 	/** pathname of dist/ on that origin, default `/stomp/` */
 	directory?: string;
+	/**
+	 * the transport, described: the controller frame instantiates it on the
+	 * proxy origin, in its transport worker unless `host: 'page'`
+	 */
 	transport: TransportDescriptor;
 	codec?: ConfigCodec;
 	/**

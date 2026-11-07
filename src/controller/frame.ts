@@ -62,14 +62,22 @@ if (window === window.parent || !origins.length) {
 			});
 		}
 
-		async function loadTransport(
+		/** the descriptor with its module URL resolved, refused off the proxy origin */
+		function onProxyOrigin(
 			descriptor: TransportDescriptor,
-		): Promise<ProxyTransport> {
+		): TransportDescriptor {
 			const url = new URL(descriptor.module, location.href);
 			if (url.origin !== location.origin)
 				throw new Error('Transport modules must live on the proxy origin');
-			const { default: Transport } = await import(/* @vite-ignore */ url.href);
-			return new Transport(...(descriptor.options || []));
+			return { ...descriptor, module: url.href };
+		}
+
+		async function loadTransport(
+			descriptor: TransportDescriptor,
+		): Promise<ProxyTransport> {
+			const { module, options } = onProxyOrigin(descriptor);
+			const { default: Transport } = await import(/* @vite-ignore */ module);
+			return new Transport(...(options || []));
 		}
 
 		/**
@@ -104,10 +112,11 @@ if (window === window.parent || !origins.length) {
 						{ scope: init.directory, updateViaCache: 'none' },
 					);
 					const serviceworker = await activated(registration);
-					const transport = await loadTransport(init.transport);
+					// the descriptor goes to the controller as it is: it hosts the
+					// transport in its worker (or in this frame, `host: 'page'`)
 					controller = new StompController({
 						serviceworker,
-						transport,
+						transport: onProxyOrigin(init.transport),
 						directory: init.directory,
 						codec: init.codec,
 						frameAncestors: [hostOrigin],
@@ -142,7 +151,11 @@ if (window === window.parent || !origins.length) {
 				},
 				setTransport: async (descriptor) => {
 					if (!controller) throw new Error('Controller is not initialised');
-					controller.setTransport(await loadTransport(descriptor));
+					// the worker swaps by descriptor; a page-hosted transport (the
+					// host asked for it, or the worker fell back) takes an instance
+					if (controller.transportHost === 'worker')
+						await controller.setTransport(onProxyOrigin(descriptor));
+					else await controller.setTransport(await loadTransport(descriptor));
 				},
 				frameInfo: async (index) => {
 					const win = proxiedWindow(index);

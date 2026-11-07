@@ -60,6 +60,7 @@ const controllers = new Map<string, ControllerRef>();
 function registerController(
 	{ directory, config }: ControllerInitMessage,
 	port: MessagePort,
+	transportPort?: MessagePort,
 ) {
 	const existing = controllers.get(directory);
 
@@ -68,7 +69,9 @@ function registerController(
 		existing.port.close();
 	}
 
-	const transport = new RemoteTransport(port);
+	// a controller whose transport lives in its worker sends a second port,
+	// served from there; otherwise the transport shares the rpc port
+	const transport = new RemoteTransport(transportPort ?? port);
 	// the host's request log, only when it asked: one RPC per request. The
 	// rpc is created below; requests only arrive once it exists
 	function report(info: RequestInfo) {
@@ -150,7 +153,7 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 	if (typeof data !== 'object' || data === null) return;
 
 	if (CONTROLLER_INIT in data) {
-		registerController(data[CONTROLLER_INIT], event.ports[0]);
+		registerController(data[CONTROLLER_INIT], event.ports[0], event.ports[1]);
 	} else if (ABORT_REQUEST in data) {
 		abortRequest((data as Record<string, unknown>)[ABORT_REQUEST]);
 	} else if (INIT_REMOTE_TRANSPORT in data) {
