@@ -95,6 +95,13 @@ ok(
 	`${routed.length} routed fetches`,
 );
 
+ok(
+	'meta content reads back as written (a payload, a rewritten refresh)',
+	dom.metaPayload === 'eyJhIjoxfQ==' &&
+		dom.metaRefresh === '99999; url=/pages/dom.html',
+	JSON.stringify([dom.metaPayload, dom.metaRefresh]),
+);
+
 await done(
 	browser,
 	page.errors.filter((e) => !/max cycles/.test(e)),

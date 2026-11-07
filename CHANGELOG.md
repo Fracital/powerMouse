@@ -185,6 +185,11 @@ url`) carries its value and targets that window. An about:blank child of
   the remaining ones report the browser's own results (a window returned by
   `window.open('about:blank')`, a probe's own source text serialised by
   `innerHTML`, a sloppy-mode detached method call that does not throw).
+- A meta element's `content` property reads back what the page wrote: the
+  hook treated every content as a URL and answered `<proxy>/stomp/html/null`
+  for a meta the proxy never rewrote, which broke pages decoding a base64
+  payload from one (GitHub's `visitor-payload`, three atob errors per load).
+  A rewritten refresh reads back as written too.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

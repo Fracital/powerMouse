@@ -618,15 +618,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				[
 					this.client.global.HTMLMetaElement,
 					'content',
-					(element) =>
-						element.hasAttribute('content') &&
-						element.getAttribute('content') !== '' &&
-						new URL(
-							element.getAttributeOG('content')!,
-							this.client.url.toString(),
-						).toString(),
+					// what the page wrote, for a refresh the hook rewrote; any
+					// other content (a token, a payload) is not a URL and reads
+					// natively
+					(element) => element.getAttributeOG('content') ?? false,
 				],
-				[HTMLMetaElement, 'httpEquiv', () => false],
+				[this.client.global.HTMLMetaElement, 'httpEquiv', () => false],
 			],
 		);
 

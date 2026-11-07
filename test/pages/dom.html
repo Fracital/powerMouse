@@ -1,11 +1,21 @@
 <!doctype html>
 <title>DOM</title>
+<meta name="visitor-payload" content="eyJhIjoxfQ==" />
+<meta http-equiv="refresh" content="99999; url=/pages/dom.html" />
 <div id="wrap"><a id="a" href="/x">x</a></div>
 <svg id="svg" width="10" height="10">
 	<use id="use" href="/pages/sprite.svg#i"></use>
 </svg>
 <script>
 	window.__dom = {};
+	// a meta's content is not a URL: a payload reads back as written, a
+	// refresh the proxy rewrote reads back as the page wrote it
+	__dom.metaPayload = document.querySelector(
+		'meta[name=visitor-payload]',
+	).content;
+	__dom.metaRefresh = document.querySelector(
+		'meta[http-equiv=refresh]',
+	).content;
 	const a = document.getElementById('a');
 	__dom.names = a.getAttributeNames();
 	__dom.hasMarker = a.hasAttribute('s_o:href');
