@@ -735,6 +735,58 @@ export function isBareSpecifier(specifier: string): boolean {
 	return BARE_SPECIFIER.test(specifier);
 }
 
+/**
+ * An import map's targets, routed as modules: bare specifiers stay bare and
+ * reach the browser's map, the URL they map to is proxied. Entries ending in
+ * `/` (package prefixes) and scope keys are URL prefixes the browser matches
+ * against module URLs, which a routed URL does not preserve, so they are
+ * left as written (a known limitation). Invalid JSON is left alone too.
+ */
+export function rewriteImportMap(
+	json: string,
+	url: StompURL,
+	config: Config,
+): string {
+	let map: {
+		imports?: Record<string, string>;
+		scopes?: Record<string, Record<string, string>>;
+		integrity?: Record<string, string>;
+	};
+	try {
+		map = JSON.parse(json);
+	} catch (error) {
+		return json;
+	}
+	if (typeof map !== 'object' || map === null) return json;
+	const route = (entries: Record<string, string> | undefined) => {
+		if (typeof entries !== 'object' || entries === null) return;
+		for (const [specifier, target] of Object.entries(entries)) {
+			if (
+				typeof target !== 'string' ||
+				specifier.endsWith('/') ||
+				target.endsWith('/') ||
+				// already routed (a second pass)
+				target.includes(`${url.directory}js/`)
+			)
+				continue;
+			try {
+				entries[specifier] = routeJS(
+					new StompURL(new URL(target, url.toString()), url),
+					url,
+					config,
+					'genericModule',
+				);
+			} catch (error) {
+				// not a URL: the browser reports it
+			}
+		}
+	};
+	route(map.imports);
+	if (typeof map.scopes === 'object' && map.scopes !== null)
+		for (const scope of Object.values(map.scopes)) route(scope);
+	return JSON.stringify(map);
+}
+
 export function restoreJS(script: string, _url: StompURL) {
 	return script;
 }

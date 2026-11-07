@@ -323,25 +323,27 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			this.client.global.open,
 			(target, that, args) => {
 				const name = args[1] === undefined ? '_blank' : String(args[1]);
+				// about:blank (or no URL) is a document the page writes itself:
+				// opened as is, injected by the IFrame module's hook
+				let destination: URL | null = null;
+				if (args[0] !== undefined && String(args[0]) !== '')
+					destination = new URL(String(args[0]), this.client.url.toString());
+				const routable =
+					destination !== null && /^https?:$/.test(destination.protocol);
 				// a new tab: the host's to open, when it said so (then the page
 				// sees null, as with a popup blocker)
 				if (
-					args[0] !== undefined &&
+					routable &&
 					!['_self', '_top', '_parent', '_unfencedtop'].includes(
 						name.toLowerCase(),
 					) &&
-					this.client.openInHost(
-						new URL(String(args[0]), this.client.url.toString()).toString(),
-					)
+					this.client.openInHost(destination!.toString())
 				)
 					return null;
 
-				if (args[0] !== undefined)
+				if (routable)
 					args[0] = routeHTML(
-						new StompURL(
-							new URL(String(args[0]), this.client.url.toString()),
-							this.client.url,
-						),
+						new StompURL(destination!, this.client.url),
 						this.client.url,
 						this.client.config,
 					);
@@ -646,7 +648,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.hasAttribute,
 				(target, that, args) =>
-					isMarker(args[0]) ? false : Reflect.apply(target, that, args),
+					isMarker(args[0])
+						? false
+						: Reflect.apply(target, that, args) ||
+							// an attribute a hook dropped (iframe sandbox) is still
+							// there for the page
+							usePrototype(that, CustomElement.prototype, (element) =>
+								element.hasAttributeOG(String(args[0])),
+							),
 			);
 
 		this.client.global.Element.prototype.getAttributeNames =

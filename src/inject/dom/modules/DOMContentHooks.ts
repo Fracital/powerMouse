@@ -1,5 +1,5 @@
 import { modifyCSS, rewriteCSSValueURLs } from '../../../rewriteCSS';
-import { modifyJS } from '../../../rewriteJS';
+import { modifyJS, rewriteImportMap } from '../../../rewriteJS';
 import Module from '../../Module';
 import ProxyModule, {
 	applyDescriptors,
@@ -175,6 +175,17 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// yet, so the connected check alone would skip every dynamically
 		// inserted inline script and leave it unrewritten.
 		const rewriteScript = (script: HTMLScriptElement, willConnect = false) => {
+			// an import map's targets are routed once, before it connects
+			if (script.type === 'importmap') {
+				if (rewrittenScripts.has(script)) return;
+				rewrittenScripts.add(script);
+				script.text = rewriteImportMap(
+					script.text,
+					this.client.url,
+					this.client.config,
+				);
+				return;
+			}
 			if (
 				!shouldRewriteScript(script) ||
 				rewrittenScripts.has(script) ||

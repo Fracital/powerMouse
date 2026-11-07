@@ -110,6 +110,14 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- Documents that escaped the rewrite: a child frame's `sandbox`, `csp` and
+  `credentialless` attributes are dropped (an opaque origin or a policy would
+  put its document outside the service worker; the page reads them back as
+  written), an import map's targets are routed as modules (package prefixes
+  and scope keys are left as written: they are URL prefixes a routed URL
+  cannot keep), and an about:blank popup the page opens without a URL is
+  injected like a child frame, so what the page writes into it is rewritten.
+  `window.open` hands only http(s) URLs to the host's `onOpen`.
 - A proxied page reads its own URLs back: `PerformanceEntry.name` and
   `toJSON` un-route (`getEntries*`, `PerformanceObserver` lists and
   `takeRecords` hide the inject bundles' entries; `getEntriesByName` takes

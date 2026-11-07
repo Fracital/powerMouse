@@ -1,6 +1,6 @@
 import { decode } from 'entities';
 import { ParsedConfig } from '../../config';
-import { modifyJS } from '../../rewriteJS';
+import { modifyJS, rewriteImportMap } from '../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import StompURL from '../../StompURL';
 import { OPEN_TAB } from '../../transport/messages';
@@ -153,7 +153,12 @@ export default class DocumentClient extends Client {
 		// `document.currentScript.textContent`; a module has no currentScript.
 		// Nothing may produce `</script` in the markup.
 		for (const script of node.querySelectorAll('script')) {
-			if (!script.text || !shouldRewriteScript(script)) continue;
+			if (!script.text) continue;
+			if ((script.getAttribute('type') || '') === 'importmap') {
+				script.text = rewriteImportMap(script.text, this.url, this.config);
+				continue;
+			}
+			if (!shouldRewriteScript(script)) continue;
 			const source = script.text;
 			const isModule = script.type === 'module';
 			const rewritten = modifyJS(

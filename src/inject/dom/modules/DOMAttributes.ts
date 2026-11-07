@@ -983,6 +983,21 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			],
 		);
 
+		// a child frame's sandbox (an opaque origin), csp or credentialless
+		// attribute would put its document outside what the service worker can
+		// serve or rewrite: dropped, read back as written
+		for (const attribute of ['sandbox', 'csp', 'credentialless'])
+			domHooksModule.useAttributes(
+				(element) => {
+					element.restoreAttributesOG(attribute);
+					if (element.hasAttribute(attribute)) {
+						element.setAttributeOG(attribute, element.getAttribute(attribute)!);
+						element.removeAttribute(attribute);
+					}
+				},
+				[['IFRAME', attribute]],
+			);
+
 		domHooksModule.useAttributes(this.formHook, [
 			['FORM', 'action'],
 			['FORM', 'method'],

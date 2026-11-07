@@ -27,6 +27,29 @@ export default class IFrameModule extends Module<DocumentClient> {
 			});
 		};
 
+		// a popup the page opens without a URL (about:blank) is a document
+		// nobody fetched: inject it like a child frame, so what the page writes
+		// into it is rewritten; the page gets the window as a top-level page
+		// would. Wraps the DOMHooks hook, which routed the URL (or handed a
+		// tab to the host and returned null).
+		this.client.global.open = proxyModule.wrapFunction(
+			this.client.global.open,
+			(target, that, args) => {
+				const opened = Reflect.apply(target, that, args) as
+					typeof globalThis | null;
+				if (!opened) return opened;
+				try {
+					if (opened.location.href === 'about:blank') {
+						injectContext(opened);
+						if (!opened[CLIENT_KEY]!.applied) opened[CLIENT_KEY]!.apply();
+					}
+				} catch (error) {
+					// cross-origin: not ours to inject
+				}
+				return opened;
+			},
+		);
+
 		const getContentWindowDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global.HTMLIFrameElement.prototype,
 			'contentWindow',

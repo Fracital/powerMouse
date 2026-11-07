@@ -1,0 +1,25 @@
+<!doctype html>
+<title>DOCS</title>
+<iframe
+	id="sb"
+	sandbox="allow-scripts allow-same-origin"
+	csp="default-src 'self'"
+	src="hist-1.html"
+></iframe>
+<script type="importmap">
+	{ "imports": { "lib": "/mod-a.js" } }
+</script>
+<script type="module">
+	import { a } from 'lib';
+
+	window.__im = a;
+</script>
+<script>
+	// a popup the page writes itself: an about:blank document nobody fetched
+	window.__popup = () => {
+		const w = window.open();
+		w.document.body.innerHTML = '<img id="i" src="/pages/hdr.json" alt="" />';
+		window.__w = w;
+		return w ? 'opened' : 'null';
+	};
+</script>
