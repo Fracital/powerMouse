@@ -2,19 +2,18 @@ export function parseHTML(script: string) {
 	return new DOMParser().parseFromString(script, 'text/html');
 }
 
-export function parseHTMLFragment(script: string): DocumentFragment {
+/**
+ * Parse markup into nodes that stay in the parser's inert document: moving
+ * them into the page's document would start their loads (an `<img src>`
+ * fires `error` with its raw `onerror` the moment it is adopted), so the
+ * page only ever sees the re-created copies cloneRawNode makes from them.
+ */
+export function parseHTMLFragment(script: string): Node[] {
 	const parsed = new DOMParser().parseFromString(
 		`<fragment>${script}</fragment>`,
 		'text/html',
 	);
-	const simulatedFragment = parsed.body.children[0];
-	const fragment = document.createDocumentFragment();
-
-	for (const child of [...simulatedFragment.childNodes]) {
-		fragment.append(child);
-	}
-
-	return fragment;
+	return [...parsed.body.children[0].childNodes];
 }
 
 const STACK_ITERATE = Symbol();
@@ -28,9 +27,12 @@ type stackFinalizeData = [parent: ParentNode, node: Node];
  * @param node Node to clone
  */
 export default function cloneRawNode(
-	fragment: ParentNode | ParentNode[],
+	fragment: ParentNode | Node[],
+	// the document the nodes are made in: the client's, which for a child
+	// frame the parent injected is not this bundle's own
+	document: Document = globalThis.document,
 ): DocumentFragment {
-	const tempTarget = new DocumentFragment();
+	const tempTarget = document.createDocumentFragment();
 
 	const stack: [symbol, ...(stackIterateData | stackFinalizeData)][] = [];
 

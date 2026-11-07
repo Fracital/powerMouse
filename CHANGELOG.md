@@ -131,6 +131,32 @@ The first release after a four-year gap. Everything below is breaking.
   SyntaxError), and a function made with `new Function` reads back the source
   the page gave in the browser's shape. Corpus: protos 36 leaks to 0, eval 6
   to 0, in both modes.
+- Scripts a page inserts or writes at runtime run rewritten in more shapes:
+  the inline scripts of `document.write` / `writeln` markup; a connected
+  script's `text` / `textContent` set after insertion (the moment it runs);
+  a JavaScript Blob (`text/javascript` and the other JavaScript MIME types)
+  loaded as a script's `src` or imported by a worker, rewritten at
+  construction like an HTML blob (as a module when only that parses); a
+  script appended to a connected shadow root; and every node argument of
+  `append` / `prepend` / `replaceChildren` / `before` / `after` on elements,
+  fragments and documents (`append(a, b)` rewrote `a` only). `Attr.value`
+  and `nodeValue` writes reach the attribute hooks, a `javascript:`
+  destination of `window.open` is rewritten, and `Reflect.set` /
+  `Object.assign` with `location` route like an assignment.
+- Markup the browser parses itself goes through our parser first:
+  `setHTMLUnsafe` on an element or a shadow root (so a declarative
+  `<template shadowrootmode>` gets rewritten contents) and a shadow root's
+  `innerHTML`, which reads back as the page wrote it. Nodes parsed from a
+  markup string stay in the parser's document until they are cloned: an
+  `img onerror` from `innerHTML` / `outerHTML` / `insertAdjacentHTML` no
+  longer fires once raw before the rewritten handler runs.
+- A write to another window's `location` (`frame.contentWindow.location =
+url`) carries its value and targets that window. An about:blank child of
+  a proxied page runs its creator's bundle, whose free `location` was the
+  creator's, so the creator navigated to `undefined`; the Location module
+  reads the document's own `location` for the same reason. Corpus: scripts
+  51 leaks to 2 in both modes; the 2 are one probe that reports the window
+  `window.open('javascript:')` returns, which is the browser's own result.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

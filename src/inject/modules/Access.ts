@@ -110,7 +110,9 @@ export default class AccessModule extends Module<Client> {
 						target === (this.client.global as any).document;
 					if (target === this.client.global || isDocument) {
 						if (key === 'location') {
-							target = (location as any)[GLOBAL_PROXY];
+							// this client's location: an about:blank child runs its
+							// creator's bundle, whose free `location` is the creator's
+							target = (this.client.global.location as any)[GLOBAL_PROXY];
 							key = 'href';
 						}
 					} else {
@@ -124,7 +126,8 @@ export default class AccessModule extends Module<Client> {
 						} catch (error) {
 							// a cross-origin window: nothing of ours to delegate to
 						}
-						if (foreign) return target[ACCESS_KEY]!.set2(target, key, operate);
+						if (foreign)
+							return target[ACCESS_KEY]!.set2(target, key, operate, righthand);
 					}
 				}
 

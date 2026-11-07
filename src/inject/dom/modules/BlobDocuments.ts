@@ -1,9 +1,13 @@
 import { modifyHTML } from '../../../rewriteHTML';
+import { modifyJS } from '../../../rewriteJS';
 import Module from '../../Module';
 import ProxyModule, { catchRequiredArguments } from '../../modules/Proxy';
 import DocumentClient from '../Client';
 
 const HTML_TYPE = /^\s*text\/html\s*(;|$)/i;
+// the JavaScript MIME type essences (HTML "JavaScript MIME type")
+const JS_TYPE =
+	/^\s*(?:application\/(?:x-)?(?:ecma|java)script|text\/(?:(?:x-)?(?:ecma|java)script|javascript1\.[0-5]|jscript|livescript))\s*(;|$)/i;
 
 /**
  * A document the page builds itself (`new Blob([html], { type: 'text/html' })`,
@@ -14,6 +18,10 @@ const HTML_TYPE = /^\s*text\/html\s*(;|$)/i;
  * are decoded with the type's charset (UTF-8 by default) first; a blob whose
  * bytes do not decode, or one built from another Blob (its bytes are not
  * readable synchronously), is left as it is.
+ *
+ * A script blob (`new Blob([js], { type: 'text/javascript' })`, loaded as a
+ * script's src or imported by a worker) is rewritten the same way: as a
+ * classic script, or as a module when only that parses.
  */
 export default class BlobDocumentsModule extends Module<DocumentClient> {
 	apply() {
@@ -21,12 +29,10 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 		const global = this.client.global;
 
 		const wrap = (parts: unknown, options: unknown): unknown => {
-			if (
-				typeof options !== 'object' ||
-				options === null ||
-				!HTML_TYPE.test(String((options as BlobPropertyBag).type ?? ''))
-			)
-				return parts;
+			if (typeof options !== 'object' || options === null) return parts;
+			const type = String((options as BlobPropertyBag).type ?? '');
+			const isHTML = HTML_TYPE.test(type);
+			if (!isHTML && !JS_TYPE.test(type)) return parts;
 			let list: unknown[];
 			try {
 				list = [...(parts as Iterable<unknown>)];
@@ -59,9 +65,20 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 			} catch (error) {
 				return parts;
 			}
-			return [
-				modifyHTML(text.join(''), this.client.url, this.client.config, true),
-			];
+			const source = text.join('');
+			if (isHTML)
+				return [modifyHTML(source, this.client.url, this.client.config, true)];
+			// a script that does not parse comes back as it was: then it may be
+			// a module (its `import` / `export` are the usual reason)
+			let rewritten = modifyJS(source, this.client.url, this.client.config);
+			if (rewritten === source)
+				rewritten = modifyJS(
+					source,
+					this.client.url,
+					this.client.config,
+					'genericModule',
+				);
+			return [rewritten];
 		};
 
 		const globals = global as unknown as Record<string, unknown>;

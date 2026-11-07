@@ -114,6 +114,43 @@ export default class ReflectionModule extends Module<Client> {
 			},
 		);
 
+		// writes: a location written reflectively routes like `location = v`
+		const assign = (target: object, key: string, value: unknown) =>
+			api().set2(
+				target,
+				key,
+				(object, property, v) => {
+					object[property] = v;
+				},
+				value,
+			);
+		global.Reflect.set = proxyModule.wrapFunction(
+			global.Reflect.set,
+			(target, that, args) => {
+				if (windowLike(args[0]) && args[1] === 'location') {
+					assign(args[0] as object, 'location', args[2]);
+					return true;
+				}
+				return Reflect.apply(target, that, args);
+			},
+		);
+		global.Object.assign = proxyModule.wrapFunction(
+			global.Object.assign,
+			(target, that, args) => {
+				const [to, ...sources] = args;
+				if (!windowLike(to)) return Reflect.apply(target, that, args);
+				for (const source of sources) {
+					if (source === null || source === undefined) continue;
+					for (const key of Reflect.ownKeys(Object(source))) {
+						const value = (source as Record<PropertyKey, unknown>)[key];
+						if (key === 'location') assign(to as object, 'location', value);
+						else (to as Record<PropertyKey, unknown>)[key] = value;
+					}
+				}
+				return to;
+			},
+		);
+
 		for (const name of ['entries', 'values'] as const)
 			global.Object[name] = proxyModule.wrapFunction(
 				global.Object[name],

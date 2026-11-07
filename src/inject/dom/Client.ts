@@ -58,6 +58,10 @@ export default class DocumentClient extends Client {
 	// native innerHTML, taken before the hooks: the page-facing getter folds
 	// the markers back, which is the opposite of what the written page needs
 	private innerHTML: (element: Element) => string;
+	// native script text setter: the hooked one rewrites what it is given, and
+	// markup the client rewrites itself must not go through it twice
+	private scriptText: (script: HTMLScriptElement, text: string) => void;
+	private isConnected: (node: Node) => boolean;
 	private baseURIDescriptor: PropertyDescriptor;
 	private parentDescriptor: PropertyDescriptor;
 	private topDescriptor: PropertyDescriptor;
@@ -73,6 +77,16 @@ export default class DocumentClient extends Client {
 			'innerHTML',
 		)!.get!;
 		this.innerHTML = (element) => Reflect.apply(innerHTMLGet, element, []);
+		const textSet = Reflect.getOwnPropertyDescriptor(
+			this.global.HTMLScriptElement.prototype,
+			'text',
+		)!.set!;
+		this.scriptText = (script, text) => Reflect.apply(textSet, script, [text]);
+		const isConnectedGet = Reflect.getOwnPropertyDescriptor(
+			this.global.Node.prototype,
+			'isConnected',
+		)!.get!;
+		this.isConnected = (node) => Reflect.apply(isConnectedGet, node, []);
 		this.baseURIDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.global.Node.prototype,
 			'baseURI',
@@ -169,6 +183,74 @@ export default class DocumentClient extends Client {
 	get baseURI(): URL {
 		return new URL(this.baseURIDescriptor.get!.call(this.global.document));
 	}
+	/**
+	 * Rewrite every inline script under `root` the way the parser will run it
+	 * (a classic script gets the currentScript preamble, a module none, an
+	 * import map its routed targets): the written page (loadHTML) and
+	 * document.write markup go through here before the browser parses them.
+	 */
+	rewriteInlineScripts(root: ParentNode) {
+		for (const script of root.querySelectorAll('script')) {
+			if (!script.text) continue;
+			if (
+				(script.getAttribute('type') || '').trim().toLowerCase() === 'importmap'
+			) {
+				this.scriptText(
+					script,
+					rewriteImportMap(script.text, this.url, this.config),
+				);
+				continue;
+			}
+			if (!shouldRewriteScript(script)) continue;
+			const source = script.text;
+			const isModule = scriptKind(script) === 'module';
+			const rewritten = modifyJS(
+				source,
+				this.url,
+				this.config,
+				isModule ? 'genericModule' : 'generic',
+			);
+			this.scriptText(
+				script,
+				(isModule
+					? rewritten
+					: `document.currentScript.textContent = ${JSON.stringify(source)};${rewritten}`
+				).replace(/<\/script/gi, '<\\/script'),
+			);
+		}
+	}
+	/** @internal the rewritten text each script element carries (DOMContentHooks, DOMHooks) */
+	readonly rewrittenScripts = new WeakMap<HTMLScriptElement, string>();
+	/**
+	 * @internal The text a script should get when the page sets it (`text`,
+	 * `textContent`). A connected script runs the moment its text lands,
+	 * before any hook, so the text is rewritten here and recorded so the
+	 * insertion hook does not rewrite it a second time. A detached script is
+	 * rewritten when it is inserted (where the readback module records what
+	 * the page wrote), and the running script setting its own text (the
+	 * preamble restoring the source the page wrote) is already started: both
+	 * keep what they are given.
+	 */
+	prepareScriptText(script: HTMLScriptElement, text: string): string {
+		if (
+			!this.isConnected(script) ||
+			!shouldRewriteScript(script) ||
+			script === this.global.document.currentScript
+		)
+			return text;
+		const rewritten = modifyJS(
+			text,
+			this.url,
+			this.config,
+			scriptKind(script) === 'module' ? 'genericModule' : 'generic',
+		);
+		this.rewrittenScripts.set(script, rewritten);
+		return rewritten;
+	}
+	/** @internal the native serialisation of an element (markers kept), for markup the browser will parse */
+	innerHTMLOf(element: Element): string {
+		return this.innerHTML(element);
+	}
 	loadHTML(script: string) {
 		setGlobalParsingState(this.global, 'parsingBeforeWrite');
 
@@ -187,29 +269,7 @@ export default class DocumentClient extends Client {
 		// preamble that restores the source the page wrote for
 		// `document.currentScript.textContent`; a module has no currentScript.
 		// Nothing may produce `</script` in the markup.
-		for (const script of node.querySelectorAll('script')) {
-			if (!script.text) continue;
-			if (
-				(script.getAttribute('type') || '').trim().toLowerCase() === 'importmap'
-			) {
-				script.text = rewriteImportMap(script.text, this.url, this.config);
-				continue;
-			}
-			if (!shouldRewriteScript(script)) continue;
-			const source = script.text;
-			const isModule = scriptKind(script) === 'module';
-			const rewritten = modifyJS(
-				source,
-				this.url,
-				this.config,
-				isModule ? 'genericModule' : 'generic',
-			);
-			script.text = (
-				isModule
-					? rewritten
-					: `document.currentScript.textContent = ${JSON.stringify(source)};${rewritten}`
-			).replace(/<\/script/gi, '<\\/script');
-		}
+		this.rewriteInlineScripts(node);
 
 		const newDocument =
 			(parsed.doctype ? `<!DOCTYPE ${parsed.doctype.name}>` : '') +

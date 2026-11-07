@@ -330,6 +330,16 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					destination = new URL(String(args[0]), this.client.url.toString());
 				const routable =
 					destination !== null && /^https?:$/.test(destination.protocol);
+				// a javascript: URL runs in the opened window: rewritten, like a
+				// javascript: link (routeHTML rewrites its body)
+				if (destination !== null && destination.protocol === 'javascript:')
+					args[0] = routeHTML(
+						new StompURL(destination, this.client.url),
+						this.client.url,
+						this.client.config,
+						false,
+						this.client.nestedRoute,
+					);
 				// a new tab: the host's to open, when it said so (then the page
 				// sees null, as with a popup blocker)
 				if (
@@ -369,9 +379,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				for (let i = 0; i < args.length; i++) {
 					const prevState = getGlobalParsingState(this.client.global);
 					setGlobalParsingState(this.client.global, 'parsingBeforeWrite');
-					const div = document.createElement('div');
+					// the client's document (this hook also serves a child frame the
+					// parent injected); scripts in the markup run when the parser
+					// sees them, so they are rewritten here like the written page's
+					const div = this.client.global.document.createElement('div');
 					div.append(cloneRawNode(parseHTMLFragment(String(args[i]))));
-					args[i] = div.innerHTML;
+					this.client.rewriteInlineScripts(div);
+					args[i] = this.client.innerHTMLOf(div);
 					setGlobalParsingState(this.client.global, prevState);
 				}
 
@@ -486,7 +500,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						// other node and leaves half the old text in place
 						for (const node of [...that.childNodes]) node.remove();
 
-						that.append(new Text(args[0]));
+						that.append(
+							new Text(this.client.prepareScriptText(that, String(args[0]))),
+						);
 					},
 				),
 			},
@@ -511,7 +527,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 					for (const node of [...that.childNodes]) node.remove();
 
-					(that as Element).append(new Text(args[0]));
+					// a script's text set while it is connected runs at once
+					const text =
+						that instanceof this.client.global.HTMLScriptElement
+							? this.client.prepareScriptText(that, String(args[0]))
+							: String(args[0]);
+					(that as Element).append(new Text(text));
 				},
 			),
 		});
@@ -640,6 +661,59 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			),
 		});
 
+		// markup the browser parses itself (setHTMLUnsafe, where a
+		// `<template shadowrootmode>` becomes a shadow root only in the real
+		// parser; a shadow root's innerHTML): our parser rewrites it first and
+		// hands over the serialisation, markers included. The fragment parser
+		// never runs a script, so none is rewritten here.
+		const rewriteMarkup = (markup: unknown): string => {
+			const div = this.client.global.document.createElement('div');
+			div.append(cloneRawNode(parseHTMLFragment(String(markup))));
+			return this.client.innerHTMLOf(div);
+		};
+		const shadowRootPrototype = (
+			this.client.global as { ShadowRoot?: typeof ShadowRoot }
+		).ShadowRoot?.prototype;
+		for (const proto of [
+			this.client.global.Element.prototype,
+			shadowRootPrototype,
+		]) {
+			const native = (proto as { setHTMLUnsafe?: unknown } | undefined)
+				?.setHTMLUnsafe;
+			if (typeof native !== 'function') continue;
+			(proto as { setHTMLUnsafe: unknown }).setHTMLUnsafe =
+				proxyModule.wrapFunction(
+					native as (html: string) => void,
+					(target, that, args) => {
+						if (args.length) args[0] = rewriteMarkup(args[0]);
+						return Reflect.apply(target, that, args);
+					},
+				);
+		}
+		const shadowInnerHTML =
+			shadowRootPrototype &&
+			Reflect.getOwnPropertyDescriptor(shadowRootPrototype, 'innerHTML');
+		if (shadowRootPrototype && shadowInnerHTML?.get && shadowInnerHTML.set)
+			Reflect.defineProperty(shadowRootPrototype, 'innerHTML', {
+				...shadowInnerHTML,
+				get: proxyModule.wrapFunction(
+					shadowInnerHTML.get,
+					(target, that: ShadowRoot) => {
+						// as the page wrote it: the children copied under an element
+						// and their markers folded back
+						const div = this.client.global.document.createElement('div');
+						for (const child of that.childNodes)
+							div.append(child.cloneNode(true));
+						return this.serializeOriginal(div, false);
+					},
+				),
+				set: proxyModule.wrapFunction(
+					shadowInnerHTML.set,
+					(target, that: ShadowRoot, args) =>
+						Reflect.apply(target, that, [rewriteMarkup(args[0])]),
+				),
+			});
+
 		this.client.global.Element.prototype.getAttribute =
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.getAttribute,
@@ -710,6 +784,15 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					return that instanceof this.client.global.Attr
 						? attrValue(that, native)
 						: native;
+				}),
+				// writing an attribute node is writing the attribute: through the
+				// owner's hooked setAttribute, so src, on* and srcdoc are rewritten
+				set: proxyModule.wrapFunction(descriptor.set!, (target, that, args) => {
+					if (that instanceof this.client.global.Attr && that.ownerElement) {
+						that.ownerElement.setAttribute(that.name, String(args[0]));
+						return;
+					}
+					return Reflect.apply(target, that, args);
 				}),
 			});
 		}

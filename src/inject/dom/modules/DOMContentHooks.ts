@@ -168,7 +168,8 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 		// a script element runs once, so rewrite its text once: a rewritten
 		// script that is moved to another parent must not be rewritten again
-		const rewrittenScripts = new WeakSet<HTMLScriptElement>();
+		// the rewritten text each script carries; text set later is rewritten again
+		const rewrittenScripts = this.client.rewrittenScripts;
 
 		// `willConnect`: the script is about to be inserted into a connected
 		// tree, which is the moment it runs. At that point it is not connected
@@ -178,7 +179,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// an import map's targets are routed once, before it connects
 			if (script.type.trim().toLowerCase() === 'importmap') {
 				if (rewrittenScripts.has(script)) return;
-				rewrittenScripts.add(script);
+				rewrittenScripts.set(script, script.text);
 				script.text = rewriteImportMap(
 					script.text,
 					this.client.url,
@@ -188,7 +189,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			}
 			if (
 				!shouldRewriteScript(script) ||
-				rewrittenScripts.has(script) ||
+				rewrittenScripts.get(script) === script.text ||
 				(!script.isConnected &&
 					!willConnect &&
 					getGlobalParsingState(this.client.global) !== 'parsingBeforeWrite')
@@ -197,17 +198,17 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				return;
 			}
 
-			rewrittenScripts.add(script);
-
 			/*document.currentScript.textContent = ${JSON.stringify(
 				script.textContent
 			)};*/
-			script.text = modifyJS(
+			const rewritten = modifyJS(
 				script.text,
 				this.client.url,
 				this.client.config,
 				scriptType(script),
 			);
+			rewrittenScripts.set(script, rewritten);
+			script.text = rewritten;
 		};
 
 		function cdUpdated(element: CharacterData, parent?: Element | null) {
@@ -415,16 +416,22 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			return result;
 		};
 
+		// every node argument is about to land (`append(a, b)`, a string is
+		// a text node); the hooks run innermost-last, then the insertion
 		const willInsertNode = (x: (inserted: Node, ...args: any[]) => any) =>
-			proxyModule.wrapFunction(x, (target, that, args) =>
-				insert(args[0], that, () => Reflect.apply(target, that, args)),
-			);
+			proxyModule.wrapFunction(x, (target, that, args) => {
+				const nodes = args.filter(
+					(arg): arg is Node => arg instanceof this.client.global.Node,
+				);
+				const run = (index: number): any =>
+					index < nodes.length
+						? insert(nodes[index], that, () => run(index + 1))
+						: Reflect.apply(target, that, args);
+				return run(0);
+			});
 
 		this.client.global.Node.prototype.appendChild = willInsertNode(
 			this.client.global.Node.prototype.appendChild,
-		);
-		this.client.global.Element.prototype.append = willInsertNode(
-			this.client.global.Element.prototype.append,
 		);
 		this.client.global.Node.prototype.insertBefore = willInsertNode(
 			this.client.global.Node.prototype.insertBefore,
@@ -432,9 +439,29 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		this.client.global.Node.prototype.replaceChild = willInsertNode(
 			this.client.global.Node.prototype.replaceChild,
 		);
-		this.client.global.Element.prototype.replaceWith = willInsertNode(
-			this.client.global.Element.prototype.replaceWith,
-		);
+		// ParentNode and ChildNode methods, on each prototype that has its own
+		// copy: a shadow root (a DocumentFragment) connected through its host
+		// runs a script appended to it like any connected parent
+		for (const proto of [
+			this.client.global.Element.prototype,
+			this.client.global.DocumentFragment.prototype,
+			this.client.global.Document.prototype,
+		])
+			for (const method of [
+				'append',
+				'prepend',
+				'replaceChildren',
+				'replaceWith',
+				'before',
+				'after',
+			] as const) {
+				const methods = proto as unknown as Record<string, unknown>;
+				const native = methods[method];
+				if (typeof native !== 'function') continue;
+				methods[method] = willInsertNode(
+					native as (inserted: Node, ...args: any[]) => any,
+				);
+			}
 
 		function insertAdjacentTarget(
 			position: string,

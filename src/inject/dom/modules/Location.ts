@@ -82,7 +82,11 @@ export default class LocationModule extends Module<DocumentClient> {
 							locationDescriptor.get,
 							(target, that, args) => {
 								if (common === 'hash')
-									return Reflect.apply(target, location, args);
+									return Reflect.apply(
+										target,
+										this.client.global.location,
+										args,
+									);
 
 								const temp = new URL(this.client.location.toString());
 
@@ -95,7 +99,11 @@ export default class LocationModule extends Module<DocumentClient> {
 							locationDescriptor.set,
 							(target, that, args) => {
 								if (common === 'hash')
-									return Reflect.apply(target, location, args);
+									return Reflect.apply(
+										target,
+										this.client.global.location,
+										args,
+									);
 
 								const temp = new URL(this.client.location.toString());
 
@@ -105,7 +113,7 @@ export default class LocationModule extends Module<DocumentClient> {
 
 								Reflect.apply(urlDescriptor.set!, temp, args);
 
-								location.href = routeHTML(
+								this.client.global.location.href = routeHTML(
 									new StompURL(temp, this.client.url),
 									this.client.url,
 									this.client.config,
@@ -139,9 +147,9 @@ export default class LocationModule extends Module<DocumentClient> {
 
 		Reflect.defineProperty(proxy, 'assign', {
 			value: proxyModule.wrapFunction(
-				location.assign,
+				this.client.global.location.assign,
 				(target, that, [url]) => {
-					return Reflect.apply(target, location, [
+					return Reflect.apply(target, this.client.global.location, [
 						routeHTML(
 							new StompURL(
 								new URL(url, this.client.url.toString()),
@@ -162,9 +170,9 @@ export default class LocationModule extends Module<DocumentClient> {
 
 		Reflect.defineProperty(proxy, 'replace', {
 			value: proxyModule.wrapFunction(
-				location.replace,
+				this.client.global.location.replace,
 				(target, that, [url]) => {
-					return Reflect.apply(target, location, [
+					return Reflect.apply(target, this.client.global.location, [
 						routeHTML(
 							new StompURL(
 								new URL(url, this.client.url.toString()),
@@ -184,10 +192,11 @@ export default class LocationModule extends Module<DocumentClient> {
 		});
 
 		// an own property of the real location, not of Location.prototype, so
-		// the proxy needs its own copy or `location.reload()` is undefined
+		// the proxy needs its own copy or `this.client.global.location.reload()` is undefined
 		Reflect.defineProperty(proxy, 'reload', {
-			value: proxyModule.wrapFunction(location.reload, (target) =>
-				Reflect.apply(target, location, []),
+			value: proxyModule.wrapFunction(
+				this.client.global.location.reload,
+				(target) => Reflect.apply(target, this.client.global.location, []),
 			),
 			writable: false,
 			enumerable: true,
@@ -195,20 +204,26 @@ export default class LocationModule extends Module<DocumentClient> {
 		});
 
 		Reflect.defineProperty(proxy, 'toString', {
-			value: proxyModule.wrapFunction(location.assign, (target, that) => {
-				invokeGlobal(that, proxy);
-				return this.client.url.toString();
-			}),
+			value: proxyModule.wrapFunction(
+				this.client.global.location.assign,
+				(target, that) => {
+					invokeGlobal(that, proxy);
+					return this.client.url.toString();
+				},
+			),
 			writable: false,
 			enumerable: true,
 			configurable: false,
 		});
 
 		Reflect.defineProperty(proxy, 'valueOf', {
-			value: proxyModule.wrapFunction(location.assign, (target, that) => {
-				invokeGlobal(that, proxy);
-				return proxy;
-			}),
+			value: proxyModule.wrapFunction(
+				this.client.global.location.assign,
+				(target, that) => {
+					invokeGlobal(that, proxy);
+					return proxy;
+				},
+			),
 			writable: false,
 			enumerable: false,
 			configurable: false,
@@ -216,6 +231,6 @@ export default class LocationModule extends Module<DocumentClient> {
 
 		Reflect.setPrototypeOf(proxy, Location.prototype);
 
-		setGlobalProxy(location, 'location', proxy);
+		setGlobalProxy(this.client.global.location, 'location', proxy);
 	}
 }
