@@ -29,6 +29,8 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			}
 		}
 
+		class XMLHttpRequestUploadProxy extends XMLHttpRequestEventTargetProxy {}
+
 		const decoder = new TextDecoder('utf-8');
 
 		const XMLHttpRequestResponseType = [
@@ -63,11 +65,59 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			#responseText = '';
 			#readyState = UNSENT;
 			#responseURL = '';
-			#responseXML = null;
-			#response: null | string | ArrayBuffer = null;
+			#responseXML: Document | null = null;
+			#response: unknown = null;
 			#status = 0;
 			#statusText = '';
 			#abort = new AbortController();
+			#timeout = 0;
+			#timer: ReturnType<typeof setTimeout> | undefined;
+			#withCredentials = false;
+			#sent = false;
+			#bodySize = 0;
+			#upload = new XMLHttpRequestUploadProxy(real);
+			get upload() {
+				return this.#upload;
+			}
+			get timeout() {
+				return this.#timeout;
+			}
+			set timeout(value) {
+				if (!this.#async && typeof document !== 'undefined')
+					throw new DOMException(
+						"Failed to set the 'timeout' property on 'XMLHttpRequest': Timeouts cannot be set for synchronous requests made from a document.",
+						'InvalidAccessError',
+					);
+				this.#timeout = Math.max(0, Number(value) || 0);
+			}
+			get withCredentials() {
+				return this.#withCredentials;
+			}
+			set withCredentials(value) {
+				if (this.#sent || this.#loadingOrDone)
+					throw new DOMException(
+						"Failed to set the 'withCredentials' property on 'XMLHttpRequest': The value may only be set if the object's state is UNSENT or OPENED.",
+						'InvalidStateError',
+					);
+				this.#withCredentials = !!value;
+			}
+			#end(name: 'timeout' | 'error' | 'abort') {
+				clearTimeout(this.#timer);
+				this.#readyState = DONE;
+				this.#status = 0;
+				this.#statusText = '';
+				// an empty string for a text type, null for the others, as the browser
+				this.#response =
+					this.responseType === '' || this.responseType === 'text' ? '' : null;
+				this.#responseText = '';
+				this.#dispatchReadyState();
+				if (this.#bodySize) {
+					this.#upload.dispatchEvent(new ProgressEvent(name));
+					this.#upload.dispatchEvent(new ProgressEvent('loadend'));
+				}
+				this.dispatchEvent(new ProgressEvent(name));
+				this.dispatchEvent(new ProgressEvent('loadend'));
+			}
 			get status() {
 				return this.#status;
 			}
@@ -95,6 +145,13 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				return this.#responseText;
 			}
 			get responseXML() {
+				if (this.responseType !== '' && this.responseType !== 'document')
+					throw new DOMException(
+						"Failed to read the 'responseXML' property from 'XMLHttpRequest': The value is only accessible if the object's 'responseType' is '' or 'document' (was '" +
+							this.responseType +
+							"').",
+						'InvalidStateError',
+					);
 				return this.#responseXML;
 			}
 			get responseType() {
@@ -140,6 +197,18 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					console.error(error);
 				}
 
+				clearTimeout(this.#timer);
+				if (this.#bodySize) {
+					this.#upload.dispatchEvent(
+						new ProgressEvent('progress', {
+							lengthComputable: true,
+							loaded: this.#bodySize,
+							total: this.#bodySize,
+						}),
+					);
+					this.#upload.dispatchEvent(new ProgressEvent('load'));
+					this.#upload.dispatchEvent(new ProgressEvent('loadend'));
+				}
 				this.#readyState = HEADERS_RECEIVED;
 				this.#status = response!.status;
 				this.#statusText = response!.statusText;
@@ -172,12 +241,16 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					}
 
 					console.error('error', error);
-					this.dispatchEvent(new Event('error'));
+					this.#end('error');
 					return;
 				}
 
+				clearTimeout(this.#timer);
 				this.#readyState = DONE;
 				this.#response = buffer!;
+				const contentType = response!.headers.get('content-type') || '';
+				const mime = contentType.split(';')[0].trim().toLowerCase();
+				const text = () => decoder.decode(buffer!);
 
 				switch (this.responseType) {
 					case 'arraybuffer':
@@ -186,9 +259,21 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					case 'document':
 						this.#response = null;
 						break;
+					case 'json':
+						try {
+							this.#response = JSON.parse(text());
+						} catch (parseError) {
+							this.#response = null;
+						}
+						break;
+					case 'blob':
+						this.#response = new that.client.global.Blob([buffer!], {
+							type: mime,
+						});
+						break;
 					case 'text':
-						this.#response = decoder.decode(this.#response);
-						this.#responseText = this.#response;
+						this.#responseText = decoder.decode(this.#response as ArrayBuffer);
+						this.#response = this.#responseText;
 						break;
 				}
 
@@ -199,6 +284,13 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				);
 				const length = isNaN(parsedLen) ? 1000 : parsedLen;
 
+				this.dispatchEvent(
+					new ProgressEvent('progress', {
+						lengthComputable: true,
+						loaded: buffer!.byteLength,
+						total: buffer!.byteLength,
+					}),
+				);
 				this.dispatchEvent(
 					new ProgressEvent('load', {
 						total: length,
@@ -235,8 +327,9 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					return;
 				}
 
+				if (this.#readyState === DONE || this.#readyState === UNSENT) return;
 				this.#abort.abort();
-				this.dispatchEvent(new ProgressEvent('abort'));
+				this.#end('abort');
 			}
 			open(
 				method: string,
@@ -282,10 +375,13 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			}
 			send(body: string) {
 				this.#readyState = OPENED;
+				this.#sent = true;
 
 				const options: RequestInit = {
 					method: this.#method,
 					headers: this.#headers,
+					// the worker applies the credentials mode to the jar
+					credentials: this.#withCredentials ? 'include' : 'same-origin',
 				};
 
 				if (
@@ -294,7 +390,23 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					!['GET', 'HEAD'].includes(this.#method)
 				) {
 					options.body = body;
+					this.#bodySize =
+						typeof body === 'string'
+							? new TextEncoder().encode(body).byteLength
+							: ((body as { size?: number; byteLength?: number }).size ??
+								(body as { byteLength?: number }).byteLength ??
+								0);
 				}
+
+				this.dispatchEvent(new ProgressEvent('loadstart'));
+				if (this.#bodySize)
+					this.#upload.dispatchEvent(new ProgressEvent('loadstart'));
+				if (this.#async && this.#timeout > 0)
+					this.#timer = setTimeout(() => {
+						if (this.#readyState === DONE) return;
+						this.#abort.abort();
+						this.#end('timeout');
+					}, this.#timeout);
 
 				this.#fetch(
 					routeXHR(
@@ -334,6 +446,14 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 		onEventTarget(globalTargetProxy.prototype, 'timeout');
 
 		onEventTarget(globalProxy.prototype, 'readystatechange');
+		const nativeUpload = (
+			that.client.global as { XMLHttpRequestUpload?: unknown }
+		).XMLHttpRequestUpload;
+		const globalUploadProxy = domObjectConstructor(XMLHttpRequestUploadProxy);
+		if (typeof nativeUpload === 'function') {
+			proxyModule.mirrorClass(nativeUpload, globalUploadProxy, instances);
+			(that.client.global as any).XMLHttpRequestUpload = globalUploadProxy;
+		}
 		classConstant(globalProxy, 'UNSENT', UNSENT);
 		classConstant(globalProxy, 'OPENED', OPENED);
 		classConstant(globalProxy, 'HEADERS_RECEIVED', HEADERS_RECEIVED);

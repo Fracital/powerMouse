@@ -59,6 +59,7 @@ const NETWORK_SUITES = new Set([
 	'backwalk-tabs',
 	'backwalk-browser',
 	'host-api',
+	'xhr',
 ]);
 const SKIP_NETWORK = process.env.SKIP_NETWORK === '1';
 // suites whose checks depend on pointer timing (a flick's measured velocity)

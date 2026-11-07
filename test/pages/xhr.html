@@ -1,0 +1,137 @@
+<!doctype html>
+<title>XHR</title>
+<script>
+	window.__xhr = {};
+	const req = (setup, body) =>
+		new Promise((resolve) => {
+			const x = new XMLHttpRequest();
+			const out = { events: [] };
+			for (const name of [
+				'loadstart',
+				'progress',
+				'load',
+				'loadend',
+				'error',
+				'abort',
+				'timeout',
+			])
+				x.addEventListener(name, () => out.events.push(name));
+			x.addEventListener('loadend', () => {
+				out.readyState = x.readyState;
+				out.status = x.status;
+				try {
+					out.responseType = x.responseType;
+					out.responseKind =
+						x.response === null
+							? 'null'
+							: x.response instanceof Document
+								? 'Document'
+								: x.response instanceof Blob
+									? 'Blob'
+									: x.response instanceof ArrayBuffer
+										? 'ArrayBuffer'
+										: typeof x.response;
+					out.responseXML = x.responseXML
+						? x.responseXML.documentElement.nodeName
+						: null;
+					out.responseURL = x.responseURL.replace(location.origin, '');
+					out.headerShape = /content-type: /i.test(x.getAllResponseHeaders());
+				} catch (error) {
+					out.error = error.name;
+				}
+				resolve(out);
+			});
+			setup(x, out);
+			try {
+				x.send(body);
+			} catch (error) {
+				out.sendError = error.name;
+				resolve(out);
+			}
+		});
+	(async () => {
+		__xhr.json = await req((x) => {
+			x.open('GET', '/pages/fresh.json');
+			x.responseType = 'json';
+			x.addEventListener(
+				'load',
+				() =>
+					(__xhr.jsonValue =
+						x.response && typeof x.response === 'object'
+							? 'object'
+							: typeof x.response),
+			);
+		});
+		__xhr.blob = await req((x) => {
+			x.open('GET', '/pages/fresh.json');
+			x.responseType = 'blob';
+		});
+		__xhr.arraybuffer = await req((x) => {
+			x.open('GET', '/pages/fresh.json');
+			x.responseType = 'arraybuffer';
+		});
+		__xhr.document = await req((x) => {
+			x.open('GET', '/pages/hist-1.html');
+			x.responseType = 'document';
+		});
+		__xhr.xml = await req((x) => {
+			x.open('GET', '/pages/data.xml');
+		});
+		__xhr.htmlXML = await req((x) => {
+			x.open('GET', '/pages/hist-1.html');
+		});
+		__xhr.timeout = await req((x) => {
+			x.open('GET', '/slow');
+			x.timeout = 300;
+		});
+		__xhr.upload = await req(
+			(x, out) => {
+				x.open('POST', '/echo-headers');
+				out.upload = typeof x.upload;
+				if (x.upload)
+					x.upload.addEventListener(
+						'progress',
+						() => (out.uploadProgress = true),
+					);
+				if (x.upload)
+					x.upload.addEventListener('load', () => (out.uploadLoad = true));
+			},
+			'x'.repeat(512 * 1024),
+		);
+		__xhr.abort = await new Promise((resolve) => {
+			const x = new XMLHttpRequest();
+			const out = { events: [] };
+			for (const name of ['abort', 'loadend', 'error'])
+				x.addEventListener(name, () => out.events.push(name));
+			x.addEventListener('loadend', () => {
+				out.readyState = x.readyState;
+				out.status = x.status;
+				resolve(out);
+			});
+			x.open('GET', '/slow');
+			x.send();
+			setTimeout(() => x.abort(), 100);
+			setTimeout(() => resolve({ ...out, hung: true }), 3000);
+		});
+		__xhr.site = await req((x, out) => {
+			x.open('GET', 'https://example.com/');
+			out.site = true;
+		});
+		__xhr.misc = await req((x, out) => {
+			x.open('GET', '/pages/fresh.json');
+			out.withCredentials = x.withCredentials;
+			out.overrideMimeType = typeof x.overrideMimeType;
+			out.timeoutDefault = x.timeout;
+			out.setHeader = (() => {
+				try {
+					x.setRequestHeader('x-a', '1');
+					return 'ok';
+				} catch (e) {
+					return e.name;
+				}
+			})();
+		});
+	})()
+		.catch((e) => (__xhr.error = String(e)))
+		.finally(() => (__xhr.done = true));
+</script>

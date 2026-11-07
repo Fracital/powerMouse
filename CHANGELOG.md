@@ -335,6 +335,17 @@ url`) carries its value and targets that window. An about:blank child of
   case with or without `=`, a URL without `url=`, matching quotes dropped)
   instead of a regex that needed a literal `url=`; a bare time or a URL that
   is not http(s) is left alone.
+- `XMLHttpRequest` in pages and workers behaves like the browser's where it
+  did not: `responseType` `json` gives the parsed value (null when it does
+  not parse), `blob` a Blob with the response's type, `document` a Document
+  (HTML or XML by content type) and `responseXML` with it, which also comes
+  for an XML response under the default type and throws InvalidStateError
+  under the other types; the event sequence is `loadstart`, `progress`,
+  `load`, `loadend`; `timeout` is implemented (timeout then loadend, status
+  0); `abort()` and a failed request end with `loadend`; `upload` exists and
+  reports the body sent; `withCredentials` is kept and reaches the jar as
+  the credentials mode. Measured against the browser on one page before the
+  fix: of eleven shapes none matched; after: all eleven.
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,
