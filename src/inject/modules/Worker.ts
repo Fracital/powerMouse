@@ -1,4 +1,5 @@
 import { modifyJS, routeJS } from '../../rewriteJS';
+import { proxyBlobURL } from '../../routeURL';
 import StompURL from '../../StompURL';
 import { WORKER_BASE } from '../../transport/messages';
 import Client from '../Client';
@@ -39,8 +40,12 @@ export default class WorkerModule extends Module<Client> {
 						this.client.config,
 						type,
 					);
-				return global.URL.createObjectURL(
-					new global.Blob([bootstrap], { type: 'text/javascript' }),
+				// the bootstrap's own blob: URL goes to the browser, so in the
+				// proxy's form (createObjectURL hands the page the page's)
+				return proxyBlobURL(
+					global.URL.createObjectURL(
+						new global.Blob([bootstrap], { type: 'text/javascript' }),
+					),
 				);
 			}
 			return routeJS(

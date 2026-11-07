@@ -298,17 +298,19 @@ Suites: navigate-events, request-log, version, register, cookie-jar, cache, isol
 | Demo: multiple tabs with live previews, TLD autocomplete, isolation toggle, console badges, `?nocache`                                                             | ahead   |                                                                                                                         |
 | CI: package validation, release pipeline, browser suites in CI                                                                                                     | partial | lint, types, format, prose, build, pinned actions, deploy gate; the suites need Chrome and network on the runner        |
 
-| corpus | `packages/runway/src/tests/adversarial` ported as `test/suites/adversarial-*.mjs` over `test/pages/adv-*.html` (shared runner `test/adversarial.mjs`) | measured 2026-11-07, both modes together, failing checks per group: protos 36 to 0, eval 6 to 0, scripts 53 to 2 (one probe, the window `window.open('javascript:')` returns, which is the browser's result), frames 8 to 4 and messages 5 to 4 (the remaining eight are the browser's own results: a window from `window.open('about:blank')`, a probe's own source in `innerHTML`, a sloppy-mode detached call, and the child window a parent now sees as `event.source` since the postMessage rewrite), attrs 36 to 2 (MutationObserver records of the marker writes), urls 24 to 12 (blob: URLs carry the proxy origin; `navigator.serviceWorker` is absent by design), workers 12 to 0, globals 0. Leaks left: routed URLs readable through `Attr.textContent`, `getAttributeNS.call`, `XMLSerializer` (with `s_o:` attributes), `styleSheets[].href`, CSSOM `cssText` and computed values, `template.innerHTML`, MutationObserver records; proxy origin in blob: URLs, `BroadcastChannel` origin, `ErrorEvent.filename`, `caches` keys, `indexedDB.databases()` (stomp* names), every worker's `self.location`; `$s$j` enumerable on window; `super.location` breaks the script; `new Function().toString()` re-serialised. 41 have a scramjet twin in its failing list. |
+| corpus | `packages/runway/src/tests/adversarial` ported as `test/suites/adversarial-*.mjs` over `test/pages/adv-*.html` (shared runner `test/adversarial.mjs`) | measured 2026-11-07, both modes together, failing checks per group: protos 36 to 0, eval 6 to 0, scripts 53 to 2 (one probe, the window `window.open('javascript:')` returns, which is the browser's result), frames 8 to 4 and messages 5 to 4 (the remaining eight are the browser's own results: a window from `window.open('about:blank')`, a probe's own source in `innerHTML`, a sloppy-mode detached call, and the child window a parent now sees as `event.source` since the postMessage rewrite), attrs 36 to 2 (MutationObserver records of the marker writes), urls 24 to 2 (`navigator.serviceWorker` is absent by design; blob: URLs carry the page's origin since the ObjectURL module), workers 12 to 0 (the 2 the async XHR fix uncovered were the same blob: leak), globals 0. Leaks left: routed URLs readable through `Attr.textContent`, `getAttributeNS.call`, `XMLSerializer` (with `s_o:` attributes), `styleSheets[].href`, CSSOM `cssText` and computed values, `template.innerHTML`, MutationObserver records; proxy origin in blob: URLs, `BroadcastChannel` origin, `ErrorEvent.filename`, `caches` keys, `indexedDB.databases()` (stomp* names), every worker's `self.location`; `$s$j` enumerable on window; `super.location` breaks the script; `new Function().toString()` re-serialised. 41 have a scramjet twin in its failing list. |
 
 ## 10. What is left, by payoff
 
 1. Import map package prefixes and scope keys: URL prefixes the browser
    matches against module URLs, which a codec-encoded route cannot keep (the
    codecs transform the whole string), so they stay as written.
-2. The remaining corpus leaks (the corpus row above): the proxy origin in
-   blob: URLs (every consumer would have to map a page-origin blob: URL
-   back), MutationObserver records of the marker writes, and the absent
-   `navigator.serviceWorker`, which is the design. Every other group is at
-   zero or at probes that report the browser's own result. Outside the
-   corpus: `'$s$j' in window` and `typeof Error.prepareStackTrace` are the
-   two tells left (tells suite logs them).
+2. The remaining corpus leaks (the corpus row above): MutationObserver
+   records of the marker writes, and the absent `navigator.serviceWorker`,
+   which is the design. The proxy origin in blob: URLs is gone: the page
+   gets its own origin from `createObjectURL` and every consumer maps the
+   URL back (`routeURL` for blob:, the fetch bypass, the worker bootstrap,
+   `revokeObjectURL`; blob-origin suite). Every other group is at zero or at
+   probes that report the browser's own result. Outside the corpus:
+   `'$s$j' in window`, `typeof Error.prepareStackTrace` and the source of a
+   rewritten function are the tells left (tells suite logs them).

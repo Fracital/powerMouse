@@ -202,6 +202,18 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Fixes
 
+- `URL.createObjectURL` answers with the page's origin. A blob: URL names the
+  origin of the realm that minted it, which is the proxy's, so every object
+  URL a page or worker made (and stored, showed, or compared with
+  `new URL(u).origin`) carried the proxy origin: the last proxy-origin leak
+  the adversarial corpus could see, hidden until async XHR in workers worked.
+  The page now gets `blob:<its origin>/<uuid>` and everything it hands the URL
+  to maps it back to the browser's form (every URL-taking API routes through
+  `routeURL`, which does it for blob: URLs, plus `fetch`'s direct path, the
+  worker bootstrap and `revokeObjectURL`); response URLs and readback show the
+  page's form. A blob: URL of another origin is left as it is and does not
+  resolve, as the browser refuses blob: URLs across origins (blob-origin suite,
+  both modes; adversarial-urls 12 failures to 2, adversarial-workers 2 to 0).
 - A rewritten body no longer outlives the worker that made it. Rewritten
   responses (documents, scripts, stylesheets, XHR bodies, the inject shells)
   went out with the origin's caching headers, so the browser's HTTP cache

@@ -4,10 +4,38 @@ import StompURL from './StompURL';
 
 export const ROUTE_PROTOCOLS = ['http:', 'https:'];
 
+/**
+ * blob: URLs name the origin of the realm that made them, which is the
+ * proxy's. The page is shown them under its real origin (the ObjectURL
+ * module), so everything the page hands back is mapped to the proxy's form
+ * here, where every URL a page gives an API passes. Set once per inject
+ * bundle by the client; the service worker never sees a blob: URL. A blob:
+ * URL of another real origin stays as it is and does not resolve, as the
+ * browser refuses a blob: URL across origins.
+ */
+let blobOrigins: { page: string; proxy: string } | null = null;
+
+export function setBlobOrigins(page: string, proxy: string) {
+	blobOrigins = page === proxy ? null : { page, proxy };
+}
+
+/** a page-origin blob: URL as the proxy's; anything else as it is */
+export function proxyBlobURL(url: string): string {
+	if (!blobOrigins || !url.startsWith(`blob:${blobOrigins.page}/`)) return url;
+	return `blob:${blobOrigins.proxy}${url.slice(blobOrigins.page.length + 5)}`;
+}
+
+/** a proxy-origin blob: URL as the page's; anything else as it is */
+export function pageBlobURL(url: string): string {
+	if (!blobOrigins || !url.startsWith(`blob:${blobOrigins.proxy}/`)) return url;
+	return `blob:${blobOrigins.page}${url.slice(blobOrigins.proxy.length + 5)}`;
+}
+
 export function routeURL(resourceType: string, url: StompURL) {
 	if (!ROUTE_PROTOCOLS.includes(url.url.protocol)) {
-		// url is out of the scope of Stomp
-		return url.toString();
+		// url is out of the scope of Stomp (a page-origin blob: URL becomes
+		// the proxy's, which is the one the browser knows)
+		return proxyBlobURL(url.toString());
 	}
 
 	return `${url.directory}${resourceType}/${url.encode()}`;

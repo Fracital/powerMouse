@@ -1,4 +1,4 @@
-import { parseRoutedURL } from '../../routeURL';
+import { pageBlobURL, parseRoutedURL } from '../../routeURL';
 import Client from '../Client';
 import type DocumentClient from '../dom/Client';
 import Module from '../Module';
@@ -22,6 +22,8 @@ export function routedPrefix(client: Client): string {
  * bundle, `whoami`), which no page URL corresponds to.
  */
 export function unrouteURL(client: Client, url: string): string | null {
+	// a blob: URL the page made carries the proxy origin: the page's is shown
+	url = pageBlobURL(url);
 	const prefix = routedPrefix(client);
 	if (!url.startsWith(prefix)) return url;
 	try {

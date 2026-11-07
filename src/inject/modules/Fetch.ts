@@ -1,5 +1,6 @@
 import {
 	parseRoutedURL,
+	proxyBlobURL,
 	ROUTE_PROTOCOLS,
 	routeBinary,
 	routeXHR,
@@ -117,7 +118,8 @@ export default class FetchModule extends Module<Client> {
 				}
 
 				if (!ROUTE_PROTOCOLS.includes(url.protocol)) {
-					return await fetch(url, init);
+					// a page-origin blob: URL is fetched as the browser's
+					return await fetch(proxyBlobURL(url.href), init);
 				}
 
 				// an abort never reaches the worker on its own: the request carries

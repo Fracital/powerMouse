@@ -1,0 +1,75 @@
+<!doctype html>
+<title>BLOB ORIGIN</title>
+<img id="pic" alt="" />
+<script>
+	// the blob: URLs this page mints, and everything that consumes them:
+	// fetch, XHR, an image, a worker (and the worker's own), a revoke, and a
+	// blob: URL of another origin, which must not resolve
+	window.__blob = {};
+	const out = __blob;
+	const u = URL.createObjectURL(new Blob(['hello'], { type: 'text/plain' }));
+	out.url = u;
+	out.origin = new URL(u).origin;
+	out.file = URL.createObjectURL(new File(['x'], 'f.txt'));
+	(async () => {
+		try {
+			const r = await fetch(u);
+			out.fetchUrl = r.url;
+			out.text = await r.text();
+			const x = new XMLHttpRequest();
+			await new Promise((resolve, reject) => {
+				x.onload = resolve;
+				x.onerror = () => reject(new Error('xhr'));
+				x.open('GET', u);
+				x.send();
+			});
+			out.xhrUrl = x.responseURL;
+			out.xhrText = x.responseText;
+			// a 1x1 PNG, so the load shows in naturalWidth
+			const image = await (
+				await fetch(
+					'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+				)
+			).blob();
+			const imageURL = URL.createObjectURL(image);
+			out.imageURL = imageURL;
+			const img = document.getElementById('pic');
+			await new Promise((resolve) => {
+				img.onload = resolve;
+				img.onerror = resolve;
+				img.src = imageURL;
+			});
+			out.imgLoaded = img.naturalWidth > 0;
+			out.imgSrc = img.src;
+			const w = new Worker(
+				URL.createObjectURL(
+					new Blob(
+						[
+							'self.onmessage = async () => { const u = URL.createObjectURL(new Blob(["w"])); const r = await fetch(u); postMessage({ u, fetchUrl: r.url, text: await r.text(), origin: self.origin }); };',
+						],
+						{ type: 'text/javascript' },
+					),
+				),
+			);
+			out.worker = await new Promise((resolve, reject) => {
+				w.onmessage = (event) => resolve(event.data);
+				w.onerror = (event) => reject(new Error(event.message));
+				w.postMessage(1);
+			});
+			w.terminate();
+			const foreign = u.replace(location.origin, 'https://other.example');
+			out.foreign = await fetch(foreign).then(
+				() => 'resolved',
+				(error) => `rejected ${error.name}`,
+			);
+			URL.revokeObjectURL(u);
+			out.revoked = await fetch(u).then(
+				() => 'still fetchable',
+				(error) => `rejected ${error.name}`,
+			);
+		} catch (error) {
+			out.error = String(error);
+		}
+		out.done = true;
+	})();
+</script>
