@@ -67,10 +67,15 @@ The first release after a four-year gap. Everything below is breaking.
   change) is redirected to the newest live controller too. The worker also
   answers the inject bundles and the transport worker under an address
   (`/stomp/<id>/injectDocument.js`, a redirect to the scope's file), so a
-  worker of the previous build serving a page for a new controller still
-  gets its page a working inject. A replaced controller's calls reject with
+  request that reaches this worker under an address finds the file; a page
+  served by a worker of the previous build stays blank until the version
+  self-heal swaps the worker. A replaced controller's calls reject with
   "Controller replaced", and a request on a transport port whose other side
-  is gone fails at once instead of waiting out the worker's timeout. The
+  is gone fails at once instead of waiting out the worker's timeout. A tab
+  that crashes or is discarded fires neither `pagehide` nor a port close, so
+  its entry lingers until the worker restarts: documents at its address get
+  the orphan answer, its stale subresource links wait out the bounded
+  timeout. The
   multi-controller suite covers it, including the first controller still
   navigating after the second registered.
 - The transport can run off the host page's thread. `StompController` takes

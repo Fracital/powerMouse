@@ -41,6 +41,8 @@ interface ControllerRef {
 	 * itself goes only when the port closes
 	 */
 	client?: string;
+	/** the client that registered it, which alone may close it or re-point `client` */
+	owner?: string;
 	/** registration order: the newest live controller of a scope takes over an address whose controller is gone */
 	serial: number;
 }
@@ -160,6 +162,7 @@ function registerController(
 		transport,
 		server,
 		client,
+		owner: client,
 		serial: ++serials,
 	};
 	server.then((ready) => (ref.ready = ready));
@@ -368,13 +371,17 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 		// page is a client too, and must not be able to kill its host's)
 		const { directory } = data[CONTROLLER_CLOSE] as ControllerCloseMessage;
 		const ref = controllers.get(directory);
-		if (ref && ref.client === sender) forget(ref, 'Controller closed');
+		if (ref && ref.owner === sender) forget(ref, 'Controller closed');
 	} else if (CONTROLLER_CLIENT in data) {
 		const { directory, client } = data[
 			CONTROLLER_CLIENT
 		] as ControllerClientMessage;
+		// only the registering tab may re-point its own activity check (a
+		// proxied page could otherwise orphan its host's address, or make
+		// itself the client the close guard trusts)
 		const ref = controllers.get(directory);
-		if (ref) ref.client = typeof client === 'string' ? client : sender;
+		if (ref && ref.owner === sender)
+			ref.client = typeof client === 'string' ? client : sender;
 	} else if (INIT_REMOTE_TRANSPORT in data) {
 		const { directory } = data[
 			INIT_REMOTE_TRANSPORT
