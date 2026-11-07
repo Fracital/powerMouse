@@ -24,7 +24,8 @@ page.on('response', (response) => {
 	const url = response.url();
 	if (!url.includes('/stomp/')) return;
 	responses.push({
-		kind: /\/stomp\/([^/]+)\//.exec(url)?.[1] ?? '',
+		// the routed URL carries the controller's id before the kind
+		kind: /\/stomp\/[\w-]+\/([^/]+)\//.exec(url)?.[1] ?? '',
 		status: response.status(),
 		cacheControl: response.headers()['cache-control'] ?? null,
 		etag: response.headers()['etag'] ?? null,
@@ -32,7 +33,7 @@ page.on('response', (response) => {
 	});
 });
 const frameOf = () =>
-	page.frames().findLast((f) => f.url().includes('/stomp/html/'));
+	page.frames().findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 const loaded = async () => {
 	for (let i = 0; i < 40; i++) {
 		await sleep(250);
