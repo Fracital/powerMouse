@@ -494,9 +494,11 @@
 	});
 	childRoute('iframe.src = data:text/html', (p) =>
 		frame((f) => {
-			// a data: frame is cross-origin to us and has to post instead
+			// a data: frame is cross-origin to us and has to post instead; its href
+			// is cut to the scheme, since the full data: URL holds this source and
+			// with it the leak marker
 			const post =
-				'parent.postMessage({__adv:"iframe.src = data:text/html", top: top === parent ? "parent" : "OTHER-WINDOW", href: location.href, referrer: document.referrer}, "*")';
+				'parent.postMessage({__adv:"iframe.src = data:text/html", top: top === parent ? "parent" : "OTHER-WINDOW", href: location.href.slice(0, 15), referrer: document.referrer}, "*")';
 			f.src =
 				'data:text/html,' +
 				encodeURIComponent('<script>' + post + '<\/script>');
