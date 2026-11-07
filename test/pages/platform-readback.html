@@ -1,0 +1,50 @@
+<!doctype html>
+<title>PLATFORM READBACK</title>
+<script>
+	window.__pr = {};
+	window.onerror = (message, filename) => {
+		__pr.onerror = { message, filename };
+		return true;
+	};
+	addEventListener('error', (event) => {
+		__pr.event = { message: event.message, filename: event.filename };
+	});
+</script>
+<script src="/pages/boom.js"></script>
+<script>
+	(async () => {
+		try {
+			new Function('null.x')();
+		} catch (error) {
+			__pr.stack = error.stack;
+		}
+		const cache = await caches.open('pr-cache');
+		await cache.put('/pages/fresh.json', new Response('y'));
+		await cache.add('/pages/echo.json');
+		__pr.keys = (await cache.keys()).map((request) => request.url);
+		__pr.matched = await (await cache.match('/pages/fresh.json')).text();
+		__pr.added = await (await caches.match('/pages/echo.json')).text();
+		__pr.cacheNames = await caches.keys();
+		await new Promise((resolve) => {
+			const request = indexedDB.open('pr-db', 1);
+			request.onsuccess = () => {
+				request.result.close();
+				resolve();
+			};
+			request.onerror = resolve;
+		});
+		__pr.databases = (await indexedDB.databases()).map((info) => info.name);
+		await new Promise((resolve) => {
+			const request = indexedDB.deleteDatabase('pr-db');
+			request.onsuccess = resolve;
+			request.onerror = resolve;
+		});
+		__pr.afterDelete = (await indexedDB.databases()).map((info) => info.name);
+	})()
+		.catch((error) => {
+			__pr.error = String(error);
+		})
+		.finally(() => {
+			__pr.done = true;
+		});
+</script>

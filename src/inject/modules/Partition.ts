@@ -61,6 +61,62 @@ export default class PartitionModule extends Module<Client> {
 			) as any;
 		}
 
+		// a cache entry is keyed by the page's URL: a string resolves against
+		// the page (the hooked Request constructor), so `keys()` and matches
+		// come back as the page's; add() and addAll() fetch through the proxy
+		if (typeof global.Cache === 'function') {
+			const cache = global.Cache.prototype;
+			const asRequest = (input: unknown): Request =>
+				input instanceof global.Request
+					? input
+					: new global.Request(input as RequestInfo);
+			for (const method of ['match', 'matchAll', 'delete', 'keys'] as const)
+				cache[method] = proxyModule.wrapFunction(
+					cache[method] as Function,
+					(target, that, args) => {
+						if (args.length && args[0] !== undefined)
+							args[0] = asRequest(args[0]);
+						return Reflect.apply(target, that, args);
+					},
+				) as any;
+			const put = cache.put;
+			cache.put = proxyModule.wrapFunction(put, (target, that, args) => {
+				if (args.length) args[0] = asRequest(args[0]);
+				return Reflect.apply(target, that, args);
+			});
+			cache.addAll = proxyModule.wrapFunction(
+				cache.addAll,
+				async (target, that, args) => {
+					const requests = [...(args[0] as Iterable<unknown>)].map(asRequest);
+					const responses = await Promise.all(
+						requests.map((request) => global.fetch(request)),
+					);
+					for (const [index, response] of responses.entries()) {
+						if (!response.ok)
+							throw new TypeError(
+								`Failed to execute 'addAll' on 'Cache': Request failed`,
+							);
+						await Reflect.apply(put, that, [requests[index], response]);
+					}
+				},
+			);
+			cache.add = proxyModule.wrapFunction(cache.add, (target, that, args) =>
+				(that as Cache).addAll([args[0] as RequestInfo]),
+			);
+		}
+		if (typeof global.CacheStorage === 'function')
+			global.CacheStorage.prototype.match = proxyModule.wrapFunction(
+				global.CacheStorage.prototype.match,
+				(target, that, args) => {
+					if (args.length && args[0] !== undefined)
+						args[0] =
+							args[0] instanceof global.Request
+								? args[0]
+								: new global.Request(args[0] as RequestInfo);
+					return Reflect.apply(target, that, args);
+				},
+			);
+
 		if (typeof global.StorageManager === 'function') {
 			const manager = global.StorageManager.prototype;
 			if (typeof manager.getDirectory === 'function')

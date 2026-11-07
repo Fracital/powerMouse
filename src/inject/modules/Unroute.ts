@@ -91,6 +91,8 @@ interface CallSite {
 	getFileName(): string | null | undefined;
 	getScriptNameOrSourceURL(): string | null | undefined;
 	getEvalOrigin(): string | undefined;
+	getLineNumber(): number | null | undefined;
+	getColumnNumber(): number | null | undefined;
 	toString(): string;
 }
 
@@ -109,6 +111,7 @@ export default class UnrouteModule extends Module<Client> {
 	apply() {
 		this.applyPerformance();
 		this.applyErrorStacks();
+		this.applyErrorFilenames();
 	}
 	applyPerformance() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
@@ -194,6 +197,54 @@ export default class UnrouteModule extends Module<Client> {
 				global.PerformanceObserver.prototype.takeRecords,
 			);
 	}
+	/**
+	 * The script an uncaught error names is the page's: `ErrorEvent.filename`
+	 * and the second argument of an `onerror` handler come back unrouted.
+	 */
+	applyErrorFilenames() {
+		const proxyModule = this.client.getModule(ProxyModule)!;
+		const global = this.client.global as typeof globalThis &
+			Record<string, any>;
+		const unroute = (value: unknown) =>
+			typeof value === 'string'
+				? (unrouteURL(this.client, value) ?? value)
+				: value;
+		const filename = Reflect.getOwnPropertyDescriptor(
+			global.ErrorEvent?.prototype ?? {},
+			'filename',
+		);
+		if (filename?.get)
+			Reflect.defineProperty(global.ErrorEvent.prototype, 'filename', {
+				...filename,
+				get: proxyModule.wrapFunction(filename.get, (target, that, args) =>
+					unroute(Reflect.apply(target, that, args)),
+				),
+			});
+		const onerror = Reflect.getOwnPropertyDescriptor(global, 'onerror');
+		if (onerror?.get && onerror.set) {
+			let handler: unknown = null;
+			Reflect.defineProperty(global, 'onerror', {
+				...onerror,
+				get: () => handler,
+				set: (value: unknown) => {
+					handler =
+						typeof value === 'function' ||
+						(typeof value === 'object' && value !== null)
+							? value
+							: null;
+					Reflect.apply(onerror.set!, global, [
+						handler === null
+							? null
+							: (...args: unknown[]) => {
+									if (typeof handler !== 'function') return;
+									if (args.length > 1) args[1] = unroute(args[1]);
+									return Reflect.apply(handler, global, args);
+								},
+					]);
+				},
+			});
+		}
+	}
 	applyErrorStacks() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const ErrorCtor = this.client.global.Error as typeof Error & {
@@ -233,14 +284,58 @@ export default class UnrouteModule extends Module<Client> {
 			const name = site.getFileName();
 			return typeof name === 'string' && unrouteURL(this.client, name) === null;
 		};
+		// code the page handed to `new Function` or `eval` runs through the
+		// inject bundle, so V8 names the bundle as the eval origin of its
+		// frames; the page would see its own call site there (the next frame
+		// of the page's), or nothing
+		const prefix = routedPrefix(this.client);
+		const internalURL = new RegExp(
+			`${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\s()'"<>,]*`,
+			'g',
+		);
+		const pageLocation = (index: number, sites: CallSite[]): string => {
+			for (let i = index + 1; i < sites.length; i++) {
+				const name = fileName(sites[i]);
+				if (typeof name !== 'string' || isInternal(sites[i])) continue;
+				const line = sites[i].getLineNumber();
+				const column = sites[i].getColumnNumber();
+				return typeof line === 'number'
+					? `${name}:${line}${typeof column === 'number' ? `:${column}` : ''}`
+					: name;
+			}
+			return '<anonymous>';
+		};
+		const cleanFrame = (
+			text: string,
+			index: number,
+			sites: CallSite[],
+		): string =>
+			unrouteText(
+				this.client,
+				text.replace(internalURL, (match) => {
+					const url = match.replace(LINE_COLUMN, '');
+					return unrouteURL(this.client, url) === null
+						? pageLocation(index, sites)
+						: match;
+				}),
+			);
 		// what a page's own formatter sees: the same frame, naming page URLs
-		const cleanSite = (site: CallSite): CallSite =>
+		const cleanSite = (
+			site: CallSite,
+			index: number,
+			sites: CallSite[],
+		): CallSite =>
 			new Proxy(site, {
 				get: (target, key) => {
 					if (key === 'getFileName' || key === 'getScriptNameOrSourceURL')
 						return () => fileName(target);
 					if (key === 'getEvalOrigin' || key === 'toString')
-						return () => clean(Reflect.apply((target as any)[key], target, []));
+						return () => {
+							const value = Reflect.apply((target as any)[key], target, []);
+							return typeof value === 'string'
+								? cleanFrame(value, index, sites)
+								: value;
+						};
 					const value = Reflect.get(target, key, target);
 					return typeof value === 'function' ? value.bind(target) : value;
 				},
@@ -270,13 +365,18 @@ export default class UnrouteModule extends Module<Client> {
 			if (typeof pagePrepare === 'function') {
 				const result = Reflect.apply(pagePrepare, ErrorCtor, [
 					error,
-					shown.map(cleanSite),
+					shown.map((site, index) => cleanSite(site, index, shown)),
 				]);
 				return clean(result);
 			}
-			return unrouteText(
-				this.client,
-				header(error) + shown.map((site) => `\n    at ${site}`).join(''),
+			return (
+				unrouteText(this.client, header(error)) +
+				shown
+					.map(
+						(site, index) =>
+							`\n    at ${cleanFrame(String(site), index, shown)}`,
+					)
+					.join('')
 			);
 		};
 

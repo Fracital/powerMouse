@@ -8,6 +8,7 @@ import StompURL, { urlLike } from '../../StompURL';
 import Client from '../Client';
 import Module from '../Module';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
+import { unrouteURL } from './Unroute';
 
 export default class FetchModule extends Module<Client> {
 	apply() {
@@ -56,22 +57,24 @@ export default class FetchModule extends Module<Client> {
 				),
 		});
 
+		const nativeResponseURL = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Response.prototype,
+			'url',
+		)!.get!;
 		Reflect.defineProperty(this.client.global.Response.prototype, 'url', {
 			configurable: true,
 			enumerable: true,
-			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(
-					this.client.global.Response.prototype,
-					'url',
-				)!.get!,
-				(target, that, args) => {
-					if (responseURLs.has(that)) {
-						return responseURLs.get(that);
-					} else {
-						return Reflect.apply(<Function>target, that, args);
-					}
-				},
-			),
+			get: proxyModule.wrapFunction(nativeResponseURL, (target, that, args) => {
+				if (responseURLs.has(that)) {
+					return responseURLs.get(that);
+				}
+				// a response that came back from the Cache API or a clone the
+				// page made: its URL is the routed one it was fetched from
+				const url = Reflect.apply(<Function>target, that, args);
+				return typeof url === 'string'
+					? (unrouteURL(this.client, url) ?? url)
+					: url;
+			}),
 		});
 
 		this.client.global.Request = proxyModule.wrapFunction(
@@ -122,7 +125,7 @@ export default class FetchModule extends Module<Client> {
 				responseURLs.set(
 					res,
 					parseRoutedURL(
-						res.url,
+						Reflect.apply(nativeResponseURL, res, []) as string,
 						this.client.codec,
 						`${location.origin}${this.client.directory}`,
 					).url.toString(),

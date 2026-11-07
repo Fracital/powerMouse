@@ -17,6 +17,40 @@ export default class IndexedDBModule extends Module<Client> {
 			},
 		);
 
+		// deleting a database is deleting the page's own
+		this.client.global.IDBFactory.prototype.deleteDatabase =
+			proxyModule.wrapFunction(
+				this.client.global.IDBFactory.prototype.deleteDatabase,
+				(target, that, args) => {
+					if (typeof args[0] === 'string')
+						args[0] = `${args[0]}@${this.client.url.url.origin}`;
+					return Reflect.apply(target, that, args);
+				},
+			);
+
+		// the page's own databases, by their own names
+		const factory = this.client.global.IDBFactory.prototype as IDBFactory & {
+			databases?: () => Promise<IDBDatabaseInfo[]>;
+		};
+		if (typeof factory.databases === 'function')
+			factory.databases = proxyModule.wrapFunction(
+				factory.databases,
+				async (target, that, args) => {
+					const suffix = `@${this.client.url.url.origin}`;
+					const list = (await Reflect.apply(
+						target,
+						that,
+						args,
+					)) as IDBDatabaseInfo[];
+					return list
+						.filter((info) => info.name?.endsWith(suffix))
+						.map((info) => ({
+							...info,
+							name: info.name!.slice(0, -suffix.length),
+						}));
+				},
+			);
+
 		Reflect.defineProperty(this.client.global.IDBDatabase.prototype, 'name', {
 			get: proxyModule.wrapFunction(
 				Reflect.getOwnPropertyDescriptor(

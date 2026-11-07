@@ -214,6 +214,18 @@ url`) carries its value and targets that window. An about:blank child of
   node's `textContent` answer like `getAttribute`. Corpus: attrs 36 failing
   checks to 2 (MutationObserver records, which show the marker writes;
   scramjet fails that one too).
+- What the platform tells a page about itself names the page's URLs. An
+  uncaught error's `filename` (`ErrorEvent.filename` and the second argument
+  of a `window.onerror` handler) is the script's real URL; the stack of code
+  run through `new Function` or `eval` no longer names the inject bundle as
+  its eval origin but the page's own call site; a `Response` that came back
+  from the Cache API or was cloned reads its real URL. Cache API entries are
+  keyed by the page's URLs (a string key resolves against the page, `keys()`
+  and matches come back as the page's, `add()` and `addAll()` fetch through
+  the proxy); `indexedDB.databases()` lists the page's own databases by their
+  own names and no others. Corpus: urls 22 failing checks to 12; the 12 are
+  blob: URLs carrying the proxy origin (five probes) and the absent
+  `navigator.serviceWorker` (a decision: pages never reach the worker).
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,
