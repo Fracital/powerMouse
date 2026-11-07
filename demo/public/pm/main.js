@@ -222,7 +222,13 @@ async function boot() {
 
 	setStatus('Waiting for the service worker…');
 	await controller.wait();
-	setStatus('Ready');
+	// a deploy can leave an older service worker in charge for a moment: the
+	// controller keeps working on it and rebinds when the new one activates
+	controller.addEventListener('stale', () =>
+		setStatus('Ready (service worker updating)'),
+	);
+	controller.addEventListener('rebind', () => setStatus('Ready'));
+	setStatus(controller.stale ? 'Ready (service worker updating)' : 'Ready');
 	badge('Controller', `ready, codec ${controller.config.codec}`, 'green');
 }
 

@@ -35,6 +35,8 @@ export interface Config {
 	allowInvalidJs?: boolean;
 	/** @internal build id of the service worker that serves the page (src/version.ts) */
 	build?: string;
+	/** @internal ms a routed request may take before the service worker answers 504 (tests; default by destination) */
+	fetchTimeout?: number;
 }
 
 export interface ParsedConfig extends Omit<Config, 'codec'> {

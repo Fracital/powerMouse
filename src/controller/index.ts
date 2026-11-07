@@ -88,6 +88,8 @@ export interface ControllerInit {
 	 * rewrite is loud while developing.
 	 */
 	allowInvalidJs?: boolean;
+	/** @internal ms before the service worker answers a routed request with 504 (tests) */
+	fetchTimeout?: number;
 	/**
 	 * sandbox flags for proxied frames, default `DEFAULT_SANDBOX`. Same-origin
 	 * frames are not a security boundary, but without a sandbox the browser
@@ -156,12 +158,26 @@ export function openRequest(data: unknown): string | null {
 
 /** ignore the service worker's "revive" broadcast this soon after we registered */
 const REVIVE_GUARD_MS = 2000;
-/** how long a service worker of another build gets to update before wait() rejects */
-const UPDATE_TIMEOUT_MS = 15000;
+/**
+ * how long a service worker of another build gets to update and activate
+ * before wait() resolves on the one we have (the new one is adopted when it
+ * activates)
+ */
+const UPDATE_GRACE_MS = 5000;
 /** how long after registration.update() to wait for `updatefound` before concluding nothing changed */
 const UPDATE_FOUND_MS = 3000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** how long a document's request report waits for its page to say which frame it is in */
+const ATTRIBUTION_WAIT_MS = 3000;
+const DOCUMENT_DESTINATIONS = new Set([
+	'document',
+	'iframe',
+	'frame',
+	'embed',
+	'object',
+]);
 
 /** resolves once the worker is activated; rejects when it becomes redundant */
 export function activated(worker: ServiceWorker): Promise<ServiceWorker> {
@@ -175,8 +191,11 @@ export function activated(worker: ServiceWorker): Promise<ServiceWorker> {
 	});
 }
 
-const mismatch = (build: string) =>
-	`Stomp version mismatch: the controller is build ${BUILD}, the service worker is build ${build}; hard-reload the page or clear the old service worker`;
+/** the two builds in a mismatch, as the host sees them on `controller.stale` */
+export interface StaleInfo {
+	controller: string;
+	worker: string;
+}
 
 function defaultDirectory(): URL {
 	const script =
@@ -189,8 +208,19 @@ function defaultDirectory(): URL {
  * Owns the transport and registers itself with the service worker.
  * Proxied content lives in frames created by `createFrame()`.
  */
-export class StompController {
+/**
+ * Events: `stale` (detail: StaleInfo) when the handshake met a service worker
+ * of another build that could not be replaced in time, and `rebind` (detail:
+ * `{ build }`) when a later handshake agrees again.
+ */
+export class StompController extends EventTarget {
 	config: Config;
+	/**
+	 * set while the service worker serving this controller is another build
+	 * than the controller (a deploy the browser has not finished installing);
+	 * null once the builds agree
+	 */
+	stale: StaleInfo | null = null;
 	directory: URL;
 	serviceworker: ServiceWorker;
 	transport: ProxyTransport;
@@ -205,11 +235,11 @@ export class StompController {
 	private stopServing?: () => void;
 	private ready: Promise<void>;
 	private readyResolve!: () => void;
-	private readyReject!: (error: Error) => void;
 	private lastHandshake = 0;
 	/** a build mismatch is being healed: the next ready answer must agree */
 	private healing = false;
 	constructor(init: ControllerInit) {
+		super();
 		if (!('serviceWorker' in navigator))
 			throw new Error('Your browser does not support service workers.');
 
@@ -232,6 +262,7 @@ export class StompController {
 			...(init.cache === false ? { cache: false } : {}),
 			...(init.onRequest || init.requestLog ? { requestLog: true } : {}),
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
+			...(init.fetchTimeout ? { fetchTimeout: init.fetchTimeout } : {}),
 		};
 
 		window.addEventListener('message', (event) => {
@@ -252,12 +283,9 @@ export class StompController {
 			if (url !== null && init.onOpen) init.onOpen(url, frame);
 		});
 
-		this.ready = new Promise((resolve, reject) => {
+		this.ready = new Promise((resolve) => {
 			this.readyResolve = resolve;
-			this.readyReject = reject;
 		});
-		// an unhandled rejection is noise when the host only reads isReady
-		this.ready.catch(() => {});
 
 		navigator.serviceWorker.addEventListener('message', (event) => {
 			if (
@@ -315,19 +343,28 @@ export class StompController {
 	 * The service worker answered the handshake with another build: the page
 	 * loaded a newer bundle than the worker still active (a deploy the browser
 	 * has not finished installing), or the other way round. Update the
-	 * registration, wait for the new worker to activate, bind to it and shake
-	 * hands again. wait() rejects only when the builds still differ after that
-	 * or no new worker arrives in time.
+	 * registration and, when the new worker activates within the grace
+	 * period, bind to it and shake hands again. Otherwise the user is not kept
+	 * waiting: `wait()` resolves on the worker we have, `stale` records both
+	 * builds (a `stale` event for the host's notice) and the new worker is
+	 * adopted when it does activate (the old one may be pinned by a request
+	 * that never settles).
 	 */
 	private async heal(build: string) {
-		const fail = () => {
-			const error = new Error(mismatch(build));
-			console.error(error.message);
-			this.isReady = false;
-			this.readyReject(error);
+		const settle = () => {
+			this.healing = false;
+			if (!this.stale)
+				console.warn(
+					`Stomp: the controller is build ${BUILD}, the service worker is build ${build}; the new worker has not activated yet, continuing with the old one and switching when it does`,
+				);
+			this.stale = { controller: BUILD, worker: build };
+			this.config = { ...this.config, build };
+			this.isReady = true;
+			this.readyResolve();
+			this.dispatchEvent(new CustomEvent('stale', { detail: this.stale }));
 		};
 		// the second mismatch in a row: the update did not help
-		if (this.healing) return fail();
+		if (this.healing) return settle();
 		this.healing = true;
 		console.warn(
 			`Stomp: the controller is build ${BUILD}, the service worker is build ${build}; updating the service worker`,
@@ -335,12 +372,12 @@ export class StompController {
 		try {
 			const worker = await Promise.race([
 				this.updatedWorker(),
-				sleep(UPDATE_TIMEOUT_MS).then(() => null),
+				sleep(UPDATE_GRACE_MS).then(() => null),
 			]);
-			if (!worker) return fail();
+			if (!worker) return settle();
 			await this.rebind(worker);
 		} catch (error) {
-			fail();
+			settle();
 		}
 	}
 	/**
@@ -414,13 +451,25 @@ export class StompController {
 			{
 				ready: async (info) => {
 					const build = info?.build;
-					if (build !== undefined && build !== BUILD) {
+					// the worker we already settled on as stale answers again
+					// (it restarted): nothing new to heal
+					if (
+						build !== undefined &&
+						build !== BUILD &&
+						this.stale?.worker !== build
+					) {
 						this.heal(build);
 						return;
 					}
 					this.healing = false;
 					// the id both sides agreed on, visible to the host
 					if (build !== undefined) this.config = { ...this.config, build };
+					if (this.stale && build === BUILD) {
+						this.stale = null;
+						this.dispatchEvent(
+							new CustomEvent('rebind', { detail: { build } }),
+						);
+					}
 					this.isReady = true;
 					this.readyResolve();
 				},
@@ -428,10 +477,23 @@ export class StompController {
 					serveTransport(port, () => this.transport);
 				},
 				request: async (info) => {
-					this.onRequest?.({
-						...info,
-						frame: (info.client && this.clientFrames.get(info.client)) || null,
-					});
+					if (!this.onRequest) return;
+					let frame =
+						(info.client && this.clientFrames.get(info.client)) || null;
+					// a document's own request is reported before its page has told
+					// us which frame it is in: give that report a moment to arrive
+					if (
+						!frame &&
+						info.client &&
+						DOCUMENT_DESTINATIONS.has(info.destination)
+					) {
+						const deadline = Date.now() + ATTRIBUTION_WAIT_MS;
+						while (!frame && Date.now() < deadline) {
+							await sleep(50);
+							frame = this.clientFrames.get(info.client) || null;
+						}
+					}
+					this.onRequest({ ...info, frame });
 				},
 			},
 			CONTROLLER_RPC,

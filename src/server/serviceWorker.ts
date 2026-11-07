@@ -1,3 +1,4 @@
+import { Config } from '../config';
 import {
 	CONTROLLER_INIT,
 	CONTROLLER_RPC,
@@ -17,6 +18,7 @@ import createServer, { StompServer } from './createServer';
 
 interface ControllerRef {
 	directory: string;
+	config: Config;
 	port: MessagePort;
 	rpc: RpcHelper<SWbound, Controllerbound>;
 	server: Promise<StompServer>;
@@ -78,7 +80,7 @@ function registerController(
 	port.addEventListener('message', (event) => rpc.receive(event.data));
 	port.start();
 
-	const ref: ControllerRef = { directory, port, rpc, server };
+	const ref: ControllerRef = { directory, config, port, rpc, server };
 	server.then((ready) => (ref.ready = ready));
 	controllers.set(directory, ref);
 
@@ -123,23 +125,96 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 	}
 });
 
+/**
+ * How long a routed request may take before the worker answers 504 instead.
+ * A transport request that never settles (epoxy ignores abort) would
+ * otherwise keep its fetch event, and with it this worker, alive for good,
+ * and a waiting worker of a newer build could never activate. Documents and
+ * media get longer; `config.fetchTimeout` overrides both (tests).
+ */
+const FETCH_TIMEOUT_MS = 60000;
+const FETCH_TIMEOUT_LONG_MS = 120000;
+const LONG_DESTINATIONS = new Set([
+	'document',
+	'iframe',
+	'frame',
+	'embed',
+	'object',
+	'video',
+	'audio',
+	'track',
+]);
+const DOCUMENT_DESTINATIONS = new Set(['document', 'iframe', 'frame']);
+
+const escapeHTML = (text: string) =>
+	text.replace(
+		/[&<>"]/g,
+		(c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!,
+	);
+
+function timedOut(request: Request, ms: number): Response {
+	const message = `Stomp: no answer for ${request.url} within ${ms / 1000} seconds`;
+	console.warn(message);
+	if (DOCUMENT_DESTINATIONS.has(request.destination))
+		return new Response(
+			`<!doctype html><title>504</title><h1>504</h1><p>${escapeHTML(message)}</p>`,
+			{
+				status: 504,
+				headers: { 'content-type': 'text/html; charset=utf-8' },
+			},
+		);
+	return new Response(null, { status: 504 });
+}
+
+/** the response, or a 504 when it takes longer than the destination allows */
+function bounded(
+	request: Request,
+	response: Promise<Response>,
+	config: Config,
+): Promise<Response> {
+	const ms =
+		config.fetchTimeout ??
+		(LONG_DESTINATIONS.has(request.destination)
+			? FETCH_TIMEOUT_LONG_MS
+			: FETCH_TIMEOUT_MS);
+	let timer: ReturnType<typeof setTimeout>;
+	const timeout = new Promise<Response>((resolve) => {
+		timer = setTimeout(() => resolve(timedOut(request, ms)), ms);
+	});
+	return Promise.race([response.finally(() => clearTimeout(timer)), timeout]);
+}
+
 self.addEventListener('fetch', (event: FetchEvent) => {
 	const { pathname } = new URL(event.request.url);
 	const ref = controllerFor(pathname);
 	if (!ref) return;
+	// a navigation has no client yet; the document it creates is the one the
+	// host will hear from, so the report carries that id
+	const clientId =
+		event.request.mode === 'navigate'
+			? event.resultingClientId || event.clientId
+			: event.clientId;
 
 	if (ref.ready) {
 		if (ref.ready.router.willRoute(event.request.url))
 			event.respondWith(
-				ref.ready.router.route(event.request, { clientId: event.clientId }),
+				bounded(
+					event.request,
+					ref.ready.router.route(event.request, { clientId }),
+					ref.config,
+				),
 			);
 	} else {
 		// the server is still opening its databases; decide once it's up
 		event.respondWith(
-			ref.server.then(({ router }) =>
-				router.willRoute(event.request.url)
-					? router.route(event.request, { clientId: event.clientId })
-					: fetch(event.request),
+			bounded(
+				event.request,
+				ref.server.then(({ router }) =>
+					router.willRoute(event.request.url)
+						? router.route(event.request, { clientId })
+						: fetch(event.request),
+				),
+				ref.config,
 			),
 		);
 	}

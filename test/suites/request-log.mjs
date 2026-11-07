@@ -63,6 +63,13 @@ ok(
 	JSON.stringify(byFile('fresh.json').map((e) => e.cached)),
 );
 ok(
+	'the document request itself carries its frame',
+	byFile('cache.html').some(
+		(e) => e.destination === 'iframe' && e.frame === 'frame',
+	),
+	JSON.stringify(byFile('cache.html').map((e) => [e.destination, e.frame])),
+);
+ok(
 	'requests carry the frame once the page reported its client id',
 	byFile('nostore.json').some((e) => e.frame === 'frame'),
 	JSON.stringify(log.map((e) => e.frame)),
@@ -72,10 +79,19 @@ ok(
 	result.config.requestLog === true,
 	JSON.stringify(result.config),
 );
+// the demo itself passes onRequest (its request viewer), so a controller of
+// our own, bound to a worker that never answers, shows the default
 ok(
 	'without onRequest the config asks for nothing',
-	(await page.evaluate(() => window.controller.config.requestLog)) ===
-		undefined,
+	(await page.evaluate(
+		() =>
+			new window.StompController({
+				serviceworker: { postMessage() {} },
+				transport: window.controller.transport,
+				directory: '/nowhere/',
+				codec: 'xor',
+			}).config.requestLog,
+	)) === undefined,
 );
 
 await done(browser, page.errors);
