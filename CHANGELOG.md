@@ -308,6 +308,11 @@ url`) carries its value and targets that window. An about:blank child of
   node type. The request report for a failure the host's error page answers
   carries no client id (the page never reports one), so the host gets it at
   once instead of after the attribution wait.
+- `history.pushState` and `replaceState` refuse a URL of another origin, or
+  one that does not parse, with a SecurityError naming the page's origin and
+  URL, like the browser; before this the URL was routed and accepted (every
+  proxied URL looks same-origin to the browser, so the check is made on the
+  real origins).
 - An HTML blob built from bytes (an ArrayBuffer or a typed array, as a
   `text/html` Blob or File) is decoded with the type's charset (UTF-8 by
   default) and wrapped like one built from strings; bytes that do not decode,

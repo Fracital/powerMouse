@@ -1,6 +1,19 @@
 <!doctype html><title>APIS</title>
 <script>
 	window.__apis = { reload: typeof location.reload === 'function' };
+	// history URLs: the page's own origin only, like the browser
+	try {
+		history.pushState(null, '', 'https://other.example/x');
+		__apis.pushCross = 'no error';
+	} catch (error) {
+		__apis.pushCross = error.name;
+	}
+	try {
+		history.replaceState(null, '', '/pages/apis.html?replaced');
+		__apis.pushSame = location.search;
+	} catch (error) {
+		__apis.pushSame = error.name;
+	}
 	const req = indexedDB.open('mydb', 1);
 	req.onsuccess = () => {
 		__apis.idbName = req.result.name;

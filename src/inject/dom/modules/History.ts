@@ -38,35 +38,49 @@ export default class HistoryModule extends Module<DocumentClient> {
 		// taken before any page code runs
 		const navigation = (global as { navigation?: NavigationLike }).navigation;
 
-		function updateState(
-			this: HistoryModule,
-			target: typeof history.pushState,
-			that: History,
-			args: any[],
-		) {
-			if (args[2] !== undefined)
-				args[2] = routeHTML(
-					new StompURL(
-						new URL(args[2], this.client.url.toString()),
+		const updateState = (name: 'pushState' | 'replaceState') =>
+			function (
+				this: HistoryModule,
+				target: typeof history.pushState,
+				that: History,
+				args: any[],
+			) {
+				if (args[2] !== undefined && args[2] !== null) {
+					// the browser refuses a URL of another origin (every proxied URL
+					// looks same-origin to it, so the check is made here on the real
+					// origins) and one that does not parse, with a SecurityError
+					const page = this.client.url.url;
+					let url: URL | null;
+					try {
+						url = new URL(String(args[2]), this.client.url.toString());
+					} catch (error) {
+						url = null;
+					}
+					if (!url || url.origin !== page.origin)
+						throw new this.client.global.DOMException(
+							`Failed to execute '${name}' on 'History': A history state object with URL '${String(args[2])}' cannot be created in a document with origin '${page.origin}' and URL '${page.href}'.`,
+							'SecurityError',
+						);
+					args[2] = routeHTML(
+						new StompURL(url, this.client.url),
 						this.client.url,
-					),
-					this.client.url,
-					this.client.config,
-					false,
-					this.client.nestedRoute,
-				);
+						this.client.config,
+						false,
+						this.client.nestedRoute,
+					);
+				}
 
-			return Reflect.apply(target, that, args);
-		}
+				return Reflect.apply(target, that, args);
+			};
 
 		prototype.pushState = proxyModule.wrapFunction(
 			prototype.pushState,
-			updateState.bind(this),
+			updateState('pushState').bind(this),
 		);
 
 		prototype.replaceState = proxyModule.wrapFunction(
 			prototype.replaceState,
-			updateState.bind(this),
+			updateState('replaceState').bind(this),
 		);
 
 		if (!navigation) return;

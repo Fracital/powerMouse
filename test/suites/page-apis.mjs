@@ -53,6 +53,12 @@ ok(
 	JSON.stringify(apis.upload),
 );
 
+ok(
+	'pushState refuses another origin with SecurityError and takes its own',
+	apis.pushCross === 'SecurityError' && apis.pushSame === '?replaced',
+	JSON.stringify([apis.pushCross, apis.pushSame]),
+);
+
 await done(
 	browser,
 	page.errors.filter((e) => !/max cycles/.test(e)),
