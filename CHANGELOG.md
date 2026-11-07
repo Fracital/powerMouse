@@ -31,6 +31,25 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- `names.error`: the global the worker writes into the host's error page
+  (`globalThis.stompError = { url, status, error, kind }`) is the fifth
+  configurable helper name, default `stompError`, validated like the others.
+  A host whose build renames identifiers in its vendored pages (the example
+  error pages read `globalThis.stompError`) sets it to the name its page ends
+  up reading, so the worker's template and the page agree (error-page suite).
+- `NavigateInfo.icon`: the page's icon as the page declared it (the first
+  `<link rel="icon">` or `shortcut icon`, else the first `apple-touch-icon`,
+  resolved against the real URL; null without one), in every navigate report
+  and reported again when the page swaps it, so a host never reads the
+  frame's DOM for a favicon. `controller.unroute(url)` on both controllers:
+  the real URL a routed one stands for, the inverse of `route()` with the
+  controller's codec, null for anything that is not a route (navigate-events
+  suite).
+- `controller.build` on both controllers and `BUILD` exported from the
+  controller module: the build identifier baked into the bundle (version plus
+  commit, or the package version), which only the `stale` event exposed. The
+  worker's build stays `config.build`; `stale` says when they differ (version
+  suite).
 - `hooks` on `StompController` and `RemoteController`: host code run inside
   every proxied realm, scramjet's `Frame.hooks.init.pre` and `post` by name,
   as scripts that travel rather than closures (a realm on the proxy origin
@@ -257,6 +276,17 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A large `localStorage` value stores. The synchronous bridge carries a
+  page's `localStorage` calls to the worker in a beacon, which the browser
+  refuses over 64 KiB (and the quota is per document while the page's thread
+  spins, so no number of beacons helps; a sync XHR never reaches a service
+  worker in Chrome), so `setItem` with a large value (Wikipedia's) threw
+  `QuotaExceededError`. A write the bridge cannot carry is now kept as the
+  document's own view of that key and sent to the worker asynchronously, in
+  order; the writer reads it back, lists it and can remove it at once, later
+  operations on a key with a write in flight queue behind it, and other
+  documents see the value once it is stored (storage-events suite: a 200 KiB
+  and a 2 MiB value).
 - `URL.createObjectURL` answers with the page's origin. A blob: URL names the
   origin of the realm that minted it, which is the proxy's, so every object
   URL a page or worker made (and stored, showed, or compared with

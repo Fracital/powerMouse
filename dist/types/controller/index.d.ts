@@ -166,6 +166,8 @@ export declare const REGISTER_WAIT_MS = 30000;
 /** resolves once the worker is activated; rejects when it becomes redundant */
 export declare function activated(worker: ServiceWorker): Promise<ServiceWorker>;
 export type { StaleInfo };
+/** the build this controller bundle came from (version plus commit, or the package version); `controller.build` carries it too */
+export { BUILD } from '../version';
 export type { Assets } from '../config';
 export { DEFAULT_ASSETS } from '../config';
 export type { HelperNames } from '../helperNames';
@@ -196,6 +198,8 @@ export declare class StompController extends EventTarget {
     directory: URL;
     /** this controller's id; its address is `config.directory` (`directory` + id + `/`) */
     id: string;
+    /** the build this controller bundle came from (STOMP_BUILD: version plus commit, or the package version); the worker's build is `config.build`, and `stale` says when the two differ */
+    readonly build: string;
     serviceworker: ServiceWorker;
     /**
      * The transport the proxy uses. With a worker-hosted descriptor this is a
@@ -259,6 +263,13 @@ export declare class StompController extends EventTarget {
     readonly cookies: CookieJar;
     /** the proxied URL a frame should navigate to in order to load `url` */
     route(url: string): Promise<string>;
+    /**
+     * The real URL a routed one stands for (the inverse of `route()`, with
+     * this controller's codec), or null for anything that is not a route: a
+     * host reading a routed URL off a frame or a report never has to parse
+     * one itself.
+     */
+    unroute(url: string): Promise<string | null>;
     createFrame(element?: HTMLIFrameElement): Frame;
 }
 /**

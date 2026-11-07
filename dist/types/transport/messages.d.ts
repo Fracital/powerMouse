@@ -62,6 +62,13 @@ export interface NavigateInfo {
     /** whether the frame's own history has an entry in that direction; null without the Navigation API */
     canGoBack: boolean | null;
     canGoForward: boolean | null;
+    /**
+     * the page's icon as the page declared it, resolved against the page's
+     * real URL: the first `<link rel="icon">` (or `shortcut icon`), else the
+     * first `apple-touch-icon`, else null (a host may try /favicon.ico then);
+     * re-reported when the page changes it
+     */
+    icon: string | null;
     /** the page's service worker client id, once it learned it (`whoami`) */
     client?: string;
 }
@@ -127,6 +134,8 @@ export type SWbound = {
     rules: [RequestRule[]];
     /** resolve a URL against the controller's config into a routed (proxied) URL */
     route: [string, string];
+    /** the real URL a routed one stands for (the controller's codec); null for anything that is not a route */
+    unroute: [string, string | null];
     /** drop every entry of the HTTP cache */
     clearCache: [];
     /** the host reading, importing or wiping the cookie jar */

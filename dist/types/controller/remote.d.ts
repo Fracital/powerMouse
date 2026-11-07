@@ -84,6 +84,8 @@ export declare class RemoteController extends EventTarget {
     directory: string;
     /** the controller's id (ControllerInit.id), known before the frame answers */
     id: string;
+    /** the build this host-side bundle came from (see StompController.build); the controller frame's is `config.build` once it answered */
+    readonly build: string;
     config?: Config;
     /** the inner controller's `stale` (see StompController); null while the builds agree */
     stale: StaleInfo | null;
@@ -93,6 +95,8 @@ export declare class RemoteController extends EventTarget {
     constructor(init: RemoteControllerInit);
     wait(): Promise<void>;
     route(url: string): Promise<string>;
+    /** the real URL a routed one stands for, null for a non-route (see StompController.unroute) */
+    unroute(url: string): Promise<string | null>;
     /** replace the request rules (see StompController.setRules) */
     setRules(rules: RequestRule[]): Promise<void>;
     /** drop every entry of the service worker's HTTP cache */
