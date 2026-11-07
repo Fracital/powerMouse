@@ -1,0 +1,89 @@
+From 14a7350b0ad80f89a327eed462f09409157093c8 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Sat, 7 Nov 2026 16:44:35 -0500
+Subject: [PATCH 2/2] init: load the wasm module and build the client once
+ under concurrent calls
+
+A host that calls init() from each request finding the transport not ready
+(stomp's serveTransport, bare-mux style hosts) calls it twice when two
+requests arrive in one tick. Each call ran wasm-bindgen's init, whose
+"already loaded" check passes for both while the first is still awaiting
+instantiation, so the module was instantiated twice and the second instance
+replaced the glue's `wasm` export. The EpoxyClient the first call had built
+lived in the first instance's memory; its request's callbacks then ran
+against the second instance and the request never answered (one of two
+same-origin requests hung, the other loaded), and the second call built a
+second client with its own wisp connection.
+
+The module load is now one promise per realm and init() one promise per
+transport, both cleared on failure so a later call can retry.
+---
+ src/main.ts | 46 +++++++++++++++++++++++++++++++++++++---------
+ 1 file changed, 37 insertions(+), 9 deletions(-)
+
+diff --git a/src/main.ts b/src/main.ts
+index 1107e3a..a9b0c5b 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -36,8 +36,28 @@ const opts = [
+ 	"buffer_size",
+ ];
+ 
++// wasm-bindgen's init skips instantiating only once the module has loaded,
++// which it has not while a first call is still awaiting it: two calls in one
++// tick instantiate twice, and the second instance replaces the glue's `wasm`
++// export under every object the first one made. A client built on the first
++// instance then runs its callbacks against the second instance's memory and
++// its request never answers. Load the module once per realm.
++let epoxyLoaded: Promise<void> | null = null;
++function loadEpoxy(): Promise<void> {
++	epoxyLoaded ??= initEpoxy().then(
++		() => {},
++		(error) => {
++			// a failed load (network, CSP) may be retried by a later init()
++			epoxyLoaded = null;
++			throw error;
++		}
++	);
++	return epoxyLoaded;
++}
++
+ export default class EpoxyTransport implements ProxyTransport {
+ 	ready = false;
++	private initializing: Promise<void> | null = null;
+ 
+ 	client_version: typeof epoxyInfo;
+ 	client: EpoxyClient = null!;
+@@ -56,15 +76,23 @@ export default class EpoxyTransport implements ProxyTransport {
+ 		if (this.opts[opt] != null) opts[opt] = this.opts[opt];
+ 	}
+ 
+-	async init() {
+-		await initEpoxy();
+-
+-		let options = new EpoxyClientOptions();
+-		options.user_agent = navigator.userAgent;
+-		opts.forEach((x) => this.setopt(options, x));
+-		this.client = new EpoxyClient(this.wisp, options);
+-
+-		this.ready = true;
++	// Hosts call init() from every request that finds the transport not ready
++	// yet, so concurrent calls share one load and one client.
++	init(): Promise<void> {
++		this.initializing ??= (async () => {
++			await loadEpoxy();
++
++			let options = new EpoxyClientOptions();
++			options.user_agent = navigator.userAgent;
++			opts.forEach((x) => this.setopt(options, x));
++			this.client = new EpoxyClient(this.wisp, options);
++
++			this.ready = true;
++		})().catch((error) => {
++			this.initializing = null;
++			throw error;
++		});
++		return this.initializing;
+ 	}
+ 
+ 	async meta() {}

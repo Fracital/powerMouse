@@ -1,0 +1,115 @@
+From ed0eb0b52c4668316e3f123afecd1bb58390ed6c Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Sat, 7 Nov 2026 16:49:00 -0500
+Subject: [PATCH 3/3] wisp: finish closing a stream instead of leaving the
+ close event unsent
+
+MuxStreamWrite and MuxStreamAsyncWrite closed a stream by start_send'ing a
+Close event into the actor's flume SendSink and returning Pending. flume's
+SendSink only stores an item in start_send and hands it to the channel on
+the next poll of the sink, and the next poll_close only polled the oneshot
+whose sender travels inside that event. The event never left the sink, no
+waker was registered, and poll_close stayed Pending forever.
+
+hyper shuts its IO down this way when a server closes an idle keep-alive
+connection: the dispatcher reads EOF and waits in poll_shutdown, while its
+SendRequest still reports ready, so the legacy client's pool kept the dead
+connection as idle and handed it to the next request to that origin, which
+then hung without a byte on the wire. Measured through stomp: a request to
+an origin more than five seconds (node's keep-alive timeout) after the last
+one never answered; the one after it opened a new stream and loaded.
+
+Poll the sink after start_send (and on every later poll) before polling the
+oneshot, in both writers.
+---
+ wisp/src/stream/compat.rs | 29 +++++++++++++++++++----------
+ wisp/src/stream/mod.rs    | 20 +++++++++++++-------
+ 2 files changed, 32 insertions(+), 17 deletions(-)
+
+diff --git a/wisp/src/stream/compat.rs b/wisp/src/stream/compat.rs
+index eb9e9d9..ccd6526 100644
+--- a/wisp/src/stream/compat.rs
++++ b/wisp/src/stream/compat.rs
+@@ -141,14 +141,7 @@ impl<W: TransportWrite> AsyncWrite for MuxStreamAsyncWrite<W> {
+ 	}
+ 
+ 	fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+-		if let Some(oneshot) = &mut self.oneshot {
+-			let ret = ready!(oneshot.poll_unpin(cx));
+-			self.oneshot.take();
+-			Poll::Ready(
+-				ret.map_err(|_| io::Error::other(WispError::MuxMessageFailedToSend))?
+-					.map_err(io::Error::other),
+-			)
+-		} else {
++		if self.oneshot.is_none() {
+ 			ready!(self.as_mut().poll_flush(cx))?;
+ 
+ 			ready!(self.inner.poll_ready_unpin(cx))
+@@ -168,9 +161,25 @@ impl<W: TransportWrite> AsyncWrite for MuxStreamAsyncWrite<W> {
+ 			self.inner
+ 				.start_send_unpin(pkt)
+ 				.map_err(|_| io::Error::other(WispError::MuxMessageFailedToSend))?;
+-
+-			Poll::Pending
+ 		}
++
++		// flume's SendSink only stores an item in start_send; it reaches the
++		// actor when the sink is polled again. Returning Pending here instead
++		// left the close event (and the oneshot's sender) in the sink with no
++		// waker registered, so the close never finished.
++		ready!(self.inner.poll_flush_unpin(cx))
++			.map_err(|_| io::Error::other(WispError::MuxMessageFailedToSend))?;
++
++		let ret = ready!(self
++			.oneshot
++			.as_mut()
++			.expect("close event was sent above")
++			.poll_unpin(cx));
++		self.oneshot.take();
++		Poll::Ready(
++			ret.map_err(|_| io::Error::other(WispError::MuxMessageFailedToSend))?
++				.map_err(io::Error::other),
++		)
+ 	}
+ }
+ 
+diff --git a/wisp/src/stream/mod.rs b/wisp/src/stream/mod.rs
+index 51d498c..72e1f38 100644
+--- a/wisp/src/stream/mod.rs
++++ b/wisp/src/stream/mod.rs
+@@ -255,11 +255,7 @@ impl<W: TransportWrite> Sink<Payload> for MuxStreamWrite<W> {
+ 	}
+ 
+ 	fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+-		if let Some(oneshot) = &mut self.oneshot {
+-			let ret = ready!(oneshot.poll_unpin(cx));
+-			self.oneshot.take();
+-			Poll::Ready(ret.map_err(|_| WispError::MuxMessageFailedToSend)?)
+-		} else {
++		if self.oneshot.is_none() {
+ 			ready!(self.as_mut().poll_flush(cx))?;
+ 
+ 			ready!(self.inner.poll_ready_unpin(cx))
+@@ -279,9 +275,19 @@ impl<W: TransportWrite> Sink<Payload> for MuxStreamWrite<W> {
+ 			self.inner
+ 				.start_send_unpin(pkt)
+ 				.map_err(|_| WispError::MuxMessageFailedToSend)?;
+-
+-			Poll::Pending
+ 		}
++
++		// flume's SendSink only stores an item in start_send; it reaches the
++		// actor when the sink is polled again (see MuxStreamAsyncWrite).
++		ready!(self.inner.poll_flush_unpin(cx)).map_err(|_| WispError::MuxMessageFailedToSend)?;
++
++		let ret = ready!(self
++			.oneshot
++			.as_mut()
++			.expect("close event was sent above")
++			.poll_unpin(cx));
++		self.oneshot.take();
++		Poll::Ready(ret.map_err(|_| WispError::MuxMessageFailedToSend)?)
+ 	}
+ }
+ 

@@ -987,6 +987,18 @@ url`) carries its value and targets that window. An about:blank child of
   and published to the `dist` branches of `Fracital/epoxy-tls` and
   `Fracital/EpoxyTransport`, from which `package.json` installs it. No Rust
   toolchain is needed to install.
+- Two epoxy hangs, fixed by two more patches in `deploy/epoxy/` (once
+  published and pinned). Requests that started in one tick on a cold
+  transport lost all but one: each called `init()`, epoxy instantiated its
+  wasm module once per call, and the client built on the replaced instance
+  never answered ("memory access out of bounds" in the console); epoxy now
+  loads once however many requests wait for it. And a request to an origin
+  that had closed an idle keep-alive connection (node closes after 5 s) hung:
+  wisp's stream close never left its queue, so hyper's pool kept the dead
+  connection and handed it out; the close now goes out and the pool drops the
+  connection. Measured by the new `epoxy-concurrency` suite (2, 4 and 8
+  same-origin navigations, fetches and raw transport requests at once, and
+  again after the idle timeout; libcurl on a real site as the control).
 - The synchronous bridge throws a `QuotaExceededError` at once when the
   browser refuses its beacon (payloads over 64 KiB, such as a large
   `localStorage.setItem`), instead of spinning until the wall-clock limit
