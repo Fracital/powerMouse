@@ -3,6 +3,7 @@ import { routeHTML } from '../../rewriteHTML';
 import {
 	isBareSpecifier,
 	modifyJS,
+	postMessageMethod,
 	routeJS,
 	UNDEFINABLE,
 } from '../../rewriteJS';
@@ -209,11 +210,8 @@ export default class AccessModule extends Module<Client> {
 			 * window) is called as written.
 			 */
 			post: (target: any, args: any[], optional?: boolean): any => {
-				if (optional && (target === null || target === undefined))
-					return undefined;
-				const method = target?.postMessage;
-				if (optional && (method === null || method === undefined))
-					return undefined;
+				const method = postMessageMethod(target, optional);
+				if (method === undefined) return undefined;
 				if (this.client.postToWindow) {
 					let receiver: Client | undefined;
 					try {

@@ -19,7 +19,7 @@ mkdirSync(OUT, { recursive: true });
 const entry = `${OUT}rewriter-unit-entry.mjs`;
 writeFileSync(
 	entry,
-	`export { modifyJS, routeJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
+	`export { modifyJS, postMessageMethod, routeJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
 export { routeHTML, modifyHTML, modifyRefresh, parseRefresh } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
 export { parseDataURI, createDataURI } from ${JSON.stringify(`${root}src/routeURL.ts`)};
 export { modifyCSS } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
@@ -40,6 +40,7 @@ await esbuild.build({
 });
 const {
 	modifyJS,
+	postMessageMethod,
 	routeJS,
 	routeHTML,
 	modifyHTML,
@@ -283,6 +284,48 @@ const parses = (code) => {
 		(css.match(/\/stomp\/binary\//g) || []).length === 2 &&
 			!/background: url\(\/z\)/.test(css),
 		css,
+	);
+}
+{
+	// testharness's fetch_tests_from_window(win) posts to the window it was
+	// given; after a blocked window.open that is null, and the rewritten call
+	// must fail the way the original does (it threw "Function.prototype.apply
+	// was called on undefined" from inside the access API)
+	const access = {
+		post: (target, args, optional) => {
+			const method = postMessageMethod(target, optional);
+			return method === undefined
+				? undefined
+				: Reflect.apply(method, target, args);
+		},
+	};
+	const run = (code, remote) => {
+		try {
+			return String(new Function('remote', '$s$j', code)(remote, access));
+		} catch (error) {
+			return `${error.constructor.name}: ${error.message}`;
+		}
+	};
+	const shapes = [
+		"remote.postMessage({ type: 'getmessages' }, '*')",
+		"return remote?.postMessage({ type: 'getmessages' }, '*')",
+	];
+	const receivers = [null, undefined, { postMessage: () => 'posted' }];
+	const got = [];
+	const want = [];
+	for (const source of shapes)
+		for (const remote of receivers) {
+			want.push(run(source, remote));
+			got.push(run(rewrite(source), remote));
+		}
+	// a receiver whose postMessage is not callable throws a TypeError too
+	// (V8 names the expression in the message; the access API cannot)
+	const uncallable = run(rewrite(shapes[0]), { postMessage: 1 });
+	ok(
+		'a rewritten postMessage call on null or undefined throws like the original',
+		JSON.stringify(got) === JSON.stringify(want) &&
+			/^TypeError: /.test(uncallable),
+		JSON.stringify({ got, want, uncallable }),
 	);
 }
 {

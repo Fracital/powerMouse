@@ -34,6 +34,31 @@ export const UNDEFINABLE = ['eval', 'location', 'top'];
  * which ends the short-circuit (`(a?.b).location` throws on null).
  */
 /**
+ * The function a rewritten `x.postMessage(...)` calls, read the way the
+ * original call reads it: a null or undefined receiver throws the TypeError
+ * the property read would have thrown (`fetch_tests_from_window(null)` after
+ * a blocked `window.open`), not one from inside the access API's apply, and
+ * so does a postMessage that is not callable. With `optional` (`x?.post...`)
+ * a missing receiver or method answers undefined instead.
+ */
+export function postMessageMethod(
+	target: any,
+	optional = false,
+): ((...args: any[]) => any) | undefined {
+	if (target === null || target === undefined) {
+		if (optional) return undefined;
+		throw new TypeError(
+			`Cannot read properties of ${target} (reading 'postMessage')`,
+		);
+	}
+	const method = target.postMessage;
+	if (optional && (method === null || method === undefined)) return undefined;
+	if (typeof method !== 'function')
+		throw new TypeError('postMessage is not a function');
+	return method;
+}
+
+/**
  * A call that posts a message: `x.postMessage(...)`, `x.postMessage.call(w,
  * ...)`, `x.postMessage.apply(w, args)` and `Reflect.apply(x.postMessage, w,
  * args)`. The receiver, the arguments (an array expression or the array
