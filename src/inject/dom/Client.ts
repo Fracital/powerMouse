@@ -74,6 +74,10 @@ export default class DocumentClient extends Client {
 	// each document's referrer as the service worker decided it for the real
 	// origins (the browser's own is judged in proxy URL space)
 	#referrers = new WeakMap<Document, string>();
+	// the page's <base href> while loadHTML rewrites its markup: the base
+	// element is not in the document yet, but every URL in the page resolves
+	// against it, as the browser will once the markup is written
+	#parseBase: StompURL | null = null;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		this.write = this.global.document.write;
@@ -248,6 +252,7 @@ export default class DocumentClient extends Client {
 		}
 	}
 	get url(): StompURL {
+		if (this.#parseBase) return this.#parseBase;
 		// a document the page made (a blob, a data: frame, an inline document
 		// the worker served): its shell named the URL it shows
 		const named = (this.global as Record<string, unknown>)[WORKER_BASE];
@@ -393,20 +398,38 @@ export default class DocumentClient extends Client {
 
 		const parsed = parseHTML(decode(script), this.global.document);
 
-		// workaround:
-		// we cannot append any descendants of parsed into any element (whether it is attached or detached) because it will pre-fetch the images in parsed
-		// pass the entirety of parsed into cloneRawNode
+		// the first <base href> is the base URL of everything in the page; its
+		// own href resolves against the document's URL, and one that does not
+		// parse or names no web URL leaves the document's URL in place
+		const baseHref = parsed.querySelector('base[href]')?.getAttribute('href');
+		if (baseHref !== null && baseHref !== undefined)
+			try {
+				const base = new URL(baseHref, this.url.toString());
+				if (ROUTE_PROTOCOLS.includes(base.protocol))
+					this.#parseBase = new StompURL(base, this.url);
+			} catch (error) {
+				// not a URL: the document's own stands
+			}
 
 		const node = this.global.document.createElement('div');
-		node.append(cloneRawNode([parsed.documentElement], this.global.document));
+		try {
+			// workaround:
+			// we cannot append any descendants of parsed into any element (whether it is attached or detached) because it will pre-fetch the images in parsed
+			// pass the entirety of parsed into cloneRawNode
+			node.append(
+				cloneRawNode([parsed.documentElement], this.global.document),
+			);
 
-		setGlobalParsingState(this.global);
+			setGlobalParsingState(this.global);
 
-		// inline scripts are rewritten here, once. A classic script gets a
-		// preamble that restores the source the page wrote for
-		// `document.currentScript.textContent`; a module has no currentScript.
-		// Nothing may produce `</script` in the markup.
-		this.rewriteInlineScripts(node);
+			// inline scripts are rewritten here, once. A classic script gets a
+			// preamble that restores the source the page wrote for
+			// `document.currentScript.textContent`; a module has no currentScript.
+			// Nothing may produce `</script` in the markup.
+			this.rewriteInlineScripts(node);
+		} finally {
+			this.#parseBase = null;
+		}
 
 		const newDocument =
 			(parsed.doctype ? `<!DOCTYPE ${parsed.doctype.name}>` : '') +

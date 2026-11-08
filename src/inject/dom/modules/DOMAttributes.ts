@@ -1401,6 +1401,15 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[HTMLFormElement, 'method', () => false],
 		]);
 
+		// a base's href resolves against the document's URL, not against the
+		// base URL (which client.url follows once a base is in place, and is
+		// the page's own base while loadHTML rewrites the markup)
+		const documentURL = () => {
+			const location = this.client.location;
+			return ROUTE_PROTOCOLS.includes(location.url.protocol)
+				? location
+				: this.client.url;
+		};
 		domHooksModule.useAttributes(
 			(element) => {
 				element.restoreAttributesOG('href');
@@ -1409,18 +1418,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.hasAttribute('href') &&
 					element.getAttribute('href') !== ''
 				) {
+					const document = documentURL();
 					element.setAttributeOG('href', element.getAttribute('href')!);
 					element.setAttribute(
 						'href',
 						routeHTML(
 							new StompURL(
-								new URL(
-									element.getAttribute('href')!,
-									this.client.url.toString(),
-								),
-								this.client.url,
+								new URL(element.getAttribute('href')!, document.toString()),
+								document,
 							),
-							this.client.url,
+							document,
 							this.client.config,
 							false,
 							this.client.nestedRoute,
@@ -1438,7 +1445,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('href') !== '' &&
 						new URL(
 							element.getAttributeOG('href')!,
-							this.client.url.toString(),
+							documentURL().toString(),
 						).toString(),
 				],
 			],

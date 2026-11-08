@@ -326,6 +326,15 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   window the page already holds is now handed back as itself wherever it
   goes; that gives the page nothing it did not have (window-identity suite,
   both modes, against the page loaded natively).
+- A page's `<base href>` applies to its own markup. The page loader routes
+  every URL in the markup before writing it, when the base element is not in
+  the document yet, so every relative URL in the page (stylesheets, images,
+  srcset, media, SVG references, frames, forms, pings, inline module imports,
+  the import map) resolved against the page's URL instead of its base; and
+  the base's own href, and its `href` property, resolved against the base URL
+  in force rather than the document's URL. The loader now resolves the markup
+  against the first `<base href>` it holds, and a base's href against the
+  document's URL (bypass-relative suite).
 - An SVG `<use xlink:href>` with a relative URL is routed. The hooked
   `setAttributeNS` (which the page loader also uses for every namespaced
   attribute in the markup) wrote the page's value first and routed it after,
