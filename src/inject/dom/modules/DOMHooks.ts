@@ -20,13 +20,19 @@ import DocumentClient, {
 } from '../Client';
 import cloneRawNode, { parseHTMLFragment } from '../cloneNode';
 import WriteStream from '../WriteStream';
+import {
+	hookWrite,
+	MARKER,
+	pageWrite,
+	propertyAttribute,
+} from './MutationObserver';
 
 const attributeTab = new WeakMap<CustomElement, Map<string, string | null>>();
 // the value last applied to each hooked attribute (the routed one), so a
 // hook can tell an attribute it wrote from one the page changed since
 const appliedTab = new WeakMap<Element, Map<string, string | null>>();
 
-const ORIGINAL_ATTRIBUTE = `s_o:`;
+const ORIGINAL_ATTRIBUTE = MARKER;
 
 export class CustomElement extends Element {
 	get attributeTab() {
@@ -61,21 +67,28 @@ export class CustomElement extends Element {
 		const tab = attributeTab.get(this);
 		if (!tab) return;
 
-		for (const [attribute, value] of tab) {
-			tab.delete(attribute);
+		// outside a page write these are the hooks' own: no record for them
+		hookWrite(
+			this,
+			() => tab.keys(),
+			() => {
+				for (const [attribute, value] of tab) {
+					tab.delete(attribute);
 
-			try {
-				if (value === null) {
-					nativeElement.removeAttribute.call(this, attribute);
-				} else {
-					nativeElement.setAttribute.call(this, attribute, value);
+					try {
+						if (value === null) {
+							nativeElement.removeAttribute.call(this, attribute);
+						} else {
+							nativeElement.setAttribute.call(this, attribute, value);
+						}
+						if (!appliedTab.has(this)) appliedTab.set(this, new Map());
+						appliedTab.get(this)!.set(attribute, value);
+					} catch (error) {
+						console.warn('bad attribute', attribute, value, error);
+					}
 				}
-				if (!appliedTab.has(this)) appliedTab.set(this, new Map());
-				appliedTab.get(this)!.set(attribute, value);
-			} catch (error) {
-				console.warn('bad attribute', attribute, value, error);
-			}
-		}
+			},
+		);
 
 		attributeTab.delete(this);
 	}
@@ -318,9 +331,6 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 	}
 	apply() {
 		// all hooks are in, now apply them
-
-		// MutationObserver will leak a lot of values and is complex.. we cannot support this yet.
-		// delete (this.client.global as any).MutationObserver;
 
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
@@ -1085,56 +1095,61 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		this.client.global.Element.prototype.setAttributeNS =
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.setAttributeNS,
-				(target, that: Element, args) => {
-					const name = String(args[1]);
-					if (
-						args.length < 3 ||
-						!(that instanceof this.client.global.Element) ||
-						!this.attributeHooks(that, name).length
-					) {
-						Reflect.apply(target, that, args);
-						usePrototype(that, CustomElement.prototype, (element) =>
-							this.updateAttributeHooks(element, name),
-						);
-						return;
-					}
-					Reflect.apply(target, that, [args[0], name, '']);
-					// an attribute that was there keeps its own prefix
-					const actual =
-						(
-							Reflect.apply(nativeElement.getAttributeNodeNS, that, [
-								args[0],
-								name.slice(name.indexOf(':') + 1),
-							]) as Attr | null
-						)?.name ?? name;
-					usePrototype(that, CustomElement.prototype, (element) => {
-						element.setAttribute(actual, String(args[2]));
-						this.updateAttributeHooks(element, actual);
-					});
-				},
+				(target, that: Element, args) =>
+					pageWrite(that, String(args[1]), () => {
+						const name = String(args[1]);
+						if (
+							args.length < 3 ||
+							!(that instanceof this.client.global.Element) ||
+							!this.attributeHooks(that, name).length
+						) {
+							Reflect.apply(target, that, args);
+							usePrototype(that, CustomElement.prototype, (element) =>
+								this.updateAttributeHooks(element, name),
+							);
+							return;
+						}
+						Reflect.apply(target, that, [args[0], name, '']);
+						// an attribute that was there keeps its own prefix
+						const actual =
+							(
+								Reflect.apply(nativeElement.getAttributeNodeNS, that, [
+									args[0],
+									name.slice(name.indexOf(':') + 1),
+								]) as Attr | null
+							)?.name ?? name;
+						usePrototype(that, CustomElement.prototype, (element) => {
+							element.setAttribute(actual, String(args[2]));
+							this.updateAttributeHooks(element, actual);
+						});
+					}),
 			);
 		this.client.global.Element.prototype.toggleAttribute =
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.toggleAttribute,
-				(target, that: Element, args) => {
-					const result = Reflect.apply(target, that, args);
-					usePrototype(that, CustomElement.prototype, (element) =>
-						this.updateAttributeHooks(element, String(args[0])),
-					);
-					return result;
-				},
+				(target, that: Element, args) =>
+					pageWrite(that, String(args[0]), () => {
+						const result = Reflect.apply(target, that, args);
+						usePrototype(that, CustomElement.prototype, (element) =>
+							this.updateAttributeHooks(element, String(args[0])),
+						);
+						return result;
+					}),
 			);
 		this.client.global.Element.prototype.setAttributeNode =
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.setAttributeNode,
 				(target, that: Element, args) => {
 					const name = (args[0] as Attr)?.name;
-					const result = Reflect.apply(target, that, args);
-					if (name)
-						usePrototype(that, CustomElement.prototype, (element) =>
-							this.updateAttributeHooks(element, name),
-						);
-					return result;
+					const write = () => {
+						const result = Reflect.apply(target, that, args);
+						if (name)
+							usePrototype(that, CustomElement.prototype, (element) =>
+								this.updateAttributeHooks(element, name),
+							);
+						return result;
+					};
+					return name ? pageWrite(that, name, write) : write();
 				},
 			);
 
@@ -1148,11 +1163,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 					const [attribute, value] = args;
 
-					usePrototype(that, CustomElement.prototype, (element) => {
-						element.setAttribute(attribute, value);
+					pageWrite(that, attribute, () =>
+						usePrototype(that, CustomElement.prototype, (element) => {
+							element.setAttribute(attribute, value);
 
-						this.updateAttributeHooks(element, attribute);
-					});
+							this.updateAttributeHooks(element, attribute);
+						}),
+					);
 				},
 			);
 
@@ -1166,11 +1183,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 					const [attribute] = args;
 
-					usePrototype(that, CustomElement.prototype, (element) => {
-						element.removeAttribute(attribute);
-						element.removeAttributeOG(attribute);
-						this.updateAttributeHooks(element, attribute);
-					});
+					pageWrite(that, attribute, () =>
+						usePrototype(that, CustomElement.prototype, (element) => {
+							element.removeAttribute(attribute);
+							element.removeAttributeOG(attribute);
+							this.updateAttributeHooks(element, attribute);
+						}),
+					);
 				},
 			);
 
@@ -1226,9 +1245,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							});
 						},
 					),
-					set: proxyModule.wrapFunction(
-						descriptor.set!,
-						(target, that, args) => {
+					set: proxyModule.wrapFunction(descriptor.set!, (target, that, args) =>
+						// one write for the page's observers, however many it takes
+						pageWrite(that, propertyAttribute(property), () => {
 							// properties are only set at the end of the stack
 							// attributes differ because they will immediately have an effect and will overrule properties set in the same stack
 
@@ -1250,7 +1269,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 							if (typeof value === 'string' && args[0] !== '')
 								Reflect.apply(target, that, [value]);
-						},
+						}),
 					),
 				});
 			}

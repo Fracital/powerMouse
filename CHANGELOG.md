@@ -350,6 +350,17 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   proxy origin that names nothing. A hooked attribute is now created empty
   and the value written through the hooks, as `setAttribute` does
   (bypass-relative suite).
+- A page's MutationObserver sees the attribute writes it made, not the
+  proxy's. Each routed attribute keeps the page's value in an `s_o:` marker
+  next to it, and one write by the page is several native ones (the routed
+  value, the marker, the property applied again), so an observer got records
+  named `s_o:src` and `oldValue`s holding routed URLs, which frameworks and
+  analytics read. Observers now get one record per write, named for the
+  attribute, with the value the page saw before as its `oldValue`; the
+  hooks' own writes (routing an inserted element) make none, `takeRecords()`
+  answers the same, and a callback left with no record is not called.
+  Corpus: attrs 2 failing checks to 0 (scramjet fails this one too);
+  markup-parity compares every record with the page loaded natively.
 - A link's ping goes through the proxy. `<a ping>` and `<area ping>` were
   not routed: a ping to another origin reached the site straight from the
   browser, past the proxy, and its Ping-From and Ping-To headers named the
