@@ -45,6 +45,9 @@ async function process(
 			}
 
 			const response = await router.route(request);
+			// a network error (the connection failed): the page's synchronous
+			// request throws, as it does natively
+			if (response.type === 'error') throw new Error('network error');
 
 			if (
 				statusRedirect.includes(response.status) &&

@@ -1,5 +1,8 @@
 import { RouteContext } from '../transport/messages';
 
+/** a response the transport received and could not parse (epoxy reports hyper's `Parse(...)` error) */
+const UNREADABLE_RESPONSE = /\bParse\(/;
+
 export function json(status: number, data: unknown): Response {
 	return new Response(JSON.stringify(data, null, '\t'), {
 		status,
@@ -91,6 +94,21 @@ export default class Router {
 		try {
 			return await this.tryRoute(request, context);
 		} catch (err) {
+			// the transport could not reach the site for a subresource (the
+			// rewriter reported it and marked it): to the page that is a network
+			// error, as the browser's own failed connection is (fetch rejects, an
+			// XHR fires error), not a response the proxy made up. Not when the
+			// site answered and the transport refused to read the answer (hyper's
+			// strict header parser: a control character in a header value, a
+			// line without a colon): Chrome reads those, so the page gets a
+			// response there too, if not the site's
+			if (
+				err instanceof Error &&
+				(err as { stompReported?: boolean }).stompReported &&
+				!UNREADABLE_RESPONSE.test(err.message)
+			)
+				return Response.error();
+
 			console.error(`At ${request.method} ${request.url}`);
 			console.error(err);
 

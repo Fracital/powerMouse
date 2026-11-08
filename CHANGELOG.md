@@ -312,6 +312,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   `document.write` build to rewrite their markup are made in an inert
   document too: made in the page's, every custom element in them was
   constructed twice (custom-elements suite, both modes, against the page
+- A subresource whose connection fails (nothing listens, the host does not
+  resolve, the connection drops before an answer) is a network error for the
+  page: fetch rejects with a TypeError, an XHR fires `error` with status 0
+  and a synchronous XHR throws, as on the real site. The worker answered it
+  with a 500 JSON body of its own, so the page's fetch resolved. A response
+  the transport received and refused to parse (hyper's header parser
+  rejects a control character in a header value, which Chrome reads) still
+  gets an error response (network-errors suite, both modes, against the page
   loaded natively).
 - A script's rewritten output is kept in a cache of its own (Cache API,
   `stomp-rewrite-cache`), keyed by a digest of the body with everything the
