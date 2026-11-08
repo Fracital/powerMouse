@@ -291,6 +291,13 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A same-origin frame's hooked functions read as native from its parent.
+  Each proxied frame loads its own copy of the inject, whose wrappers the
+  parent's copy never made, so the parent's `Function.prototype.toString`
+  showed a frame's `fetch`, `open`, `document.write` and `toString` as the
+  wrapper's source. A function of another realm is now handed to that realm's
+  own toString, whose copy knows its wrappers (function-strings suite, both
+  modes, against the page loaded natively).
 - A script's rewritten output is kept in a cache of its own (Cache API,
   `stomp-rewrite-cache`), keyed by a digest of the body with everything the
   output depends on: the URL, the script type, the config, the codec key and

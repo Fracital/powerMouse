@@ -182,12 +182,51 @@ const functionStrings = new WeakMap<Function, string>();
 export default class ProxyModule extends Module<Client> {
 	functionStrings = functionStrings;
 	apply() {
+		const ownPrototype = this.client.global.Function.prototype;
+		// a function of another realm (a same-origin frame that loaded its own
+		// copy of the inject): that realm's toString, hooked by its copy, knows
+		// its wrappers, which this copy never made. One hop at most: the other
+		// realm's hook finds the function its own and answers natively.
+		const foreignToString = (that: unknown): Function | null => {
+			if (typeof that !== 'function') return null;
+			try {
+				// the own toString of the nearest prototype that has one, read as a
+				// value (a page-defined getter never runs)
+				let proto = Reflect.getPrototypeOf(that);
+				let toString: unknown;
+				while (proto) {
+					const own = Reflect.getOwnPropertyDescriptor(proto, 'toString');
+					if (own) {
+						toString = own.value;
+						break;
+					}
+					proto = Reflect.getPrototypeOf(proto);
+				}
+				if (!proto || proto === ownPrototype) return null;
+				return typeof toString === 'function' &&
+					toString !== ownPrototype.toString
+					? toString
+					: null;
+			} catch (error) {
+				return null;
+			}
+		};
+		let delegating = false;
 		this.client.global.Function.prototype.toString = this.wrapFunction(
 			this.client.global.Function.prototype.toString,
 			(target, that, args) => {
 				if (this.functionStrings.has(that))
 					return this.functionStrings.get(that);
-				else {
+				const foreign = delegating ? null : foreignToString(that);
+				if (foreign) {
+					delegating = true;
+					try {
+						return Reflect.apply(foreign, that, args);
+					} finally {
+						delegating = false;
+					}
+				}
+				{
 					let string = Reflect.apply(target, that, args);
 
 					if (!isNative(string)) {
