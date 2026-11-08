@@ -326,6 +326,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   window the page already holds is now handed back as itself wherever it
   goes; that gives the page nothing it did not have (window-identity suite,
   both modes, against the page loaded natively).
+- An SVG `<use xlink:href>` with a relative URL is routed. The hooked
+  `setAttributeNS` (which the page loader also uses for every namespaced
+  attribute in the markup) wrote the page's value first and routed it after,
+  and a `<use>` fetches its reference the moment the attribute lands: the
+  relative URL was requested against the document's route, a path on the
+  proxy origin that names nothing. A hooked attribute is now created empty
+  and the value written through the hooks, as `setAttribute` does
+  (bypass-relative suite).
 - A link's ping goes through the proxy. `<a ping>` and `<area ping>` were
   not routed: a ping to another origin reached the site straight from the
   browser, past the proxy, and its Ping-From and Ping-To headers named the

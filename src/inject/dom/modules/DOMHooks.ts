@@ -281,23 +281,24 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			});
 		}
 	}
-	updateAttributeHooks(element: CustomElement, attribute: string) {
+	/** the attribute hooks of `attribute` on `element` */
+	private attributeHooks(element: Element, attribute: string) {
 		// HTML hooks are keyed by the uppercase nodeName of an HTML document;
 		// an XHTML document's elements carry the same names in lowercase
 		const name =
 			element.namespaceURI === 'http://www.w3.org/1999/xhtml'
 				? element.nodeName.toUpperCase()
 				: element.nodeName;
-		for (const entry of this.hooks) {
-			if (
-				!isAttributeHook(entry.hook) ||
-				(entry.hook[0] !== '*' && entry.hook[0] !== name) ||
-				entry.hook[1] !== attribute
-			)
-				continue;
-
+		return this.hooks.filter(
+			(entry) =>
+				isAttributeHook(entry.hook) &&
+				(entry.hook[0] === '*' || entry.hook[0] === name) &&
+				entry.hook[1] === attribute,
+		);
+	}
+	updateAttributeHooks(element: CustomElement, attribute: string) {
+		for (const entry of this.attributeHooks(element, attribute))
 			entry.callback(element);
-		}
 	}
 	private updatePropertyHooks(
 		element: CustomElement,
@@ -1076,14 +1077,40 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			}
 
 		// the other ways to set an attribute all end in the same hooks
+		// A hooked attribute (xlink:href) never reaches the element as the page
+		// wrote it: an SVG <use> fetches its reference the moment the attribute
+		// lands, before a hook could route it, and against the document's
+		// route. The namespaced attribute is made empty (no reference), then
+		// the value is written through the hooks, as setAttribute does
 		this.client.global.Element.prototype.setAttributeNS =
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.setAttributeNS,
 				(target, that: Element, args) => {
-					Reflect.apply(target, that, args);
-					usePrototype(that, CustomElement.prototype, (element) =>
-						this.updateAttributeHooks(element, String(args[1])),
-					);
+					const name = String(args[1]);
+					if (
+						args.length < 3 ||
+						!(that instanceof this.client.global.Element) ||
+						!this.attributeHooks(that, name).length
+					) {
+						Reflect.apply(target, that, args);
+						usePrototype(that, CustomElement.prototype, (element) =>
+							this.updateAttributeHooks(element, name),
+						);
+						return;
+					}
+					Reflect.apply(target, that, [args[0], name, '']);
+					// an attribute that was there keeps its own prefix
+					const actual =
+						(
+							Reflect.apply(nativeElement.getAttributeNodeNS, that, [
+								args[0],
+								name.slice(name.indexOf(':') + 1),
+							]) as Attr | null
+						)?.name ?? name;
+					usePrototype(that, CustomElement.prototype, (element) => {
+						element.setAttribute(actual, String(args[2]));
+						this.updateAttributeHooks(element, actual);
+					});
 				},
 			);
 		this.client.global.Element.prototype.toggleAttribute =
