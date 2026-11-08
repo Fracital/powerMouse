@@ -1,0 +1,128 @@
+<!doctype html>
+<title>CUSTOM ELEMENTS</title>
+<script>
+	// What a markup string does to a custom element that is already defined,
+	// logged event by event. x-bound reads its `items` attribute the way
+	// Polymer deserializes a property of type Object (JSON, or the string as
+	// it is) and computes from it, as YouTube's watch-next renderer does with
+	// `shownItems.some(...)`: an element made from a template's raw markup,
+	// whose attribute is still the binding "[[...]]", logs that it threw.
+	window.__ce = { log: [], cases: {} };
+	const log = (entry) => __ce.log.push(entry);
+	customElements.define(
+		'x-bound',
+		class extends HTMLElement {
+			static observedAttributes = ['items'];
+			constructor() {
+				super();
+				log(`construct [${this.getAttributeNames().join(' ')}]`);
+			}
+			attributeChangedCallback(name, old, value) {
+				log(`changed ${name}=${value}`);
+				let items = value;
+				try {
+					items = JSON.parse(value);
+				} catch {
+					// a non-JSON literal stays a string
+				}
+				this.items = items;
+				try {
+					log(`some ${this.items.some((item) => item === 1)}`);
+				} catch (error) {
+					log(`threw ${error.message}`);
+				}
+			}
+			connectedCallback() {
+				log('connected');
+			}
+		},
+	);
+	const run = (name, fn) => {
+		__ce.log = [];
+		let result;
+		try {
+			result = fn();
+		} catch (error) {
+			log(`threw ${error.message}`);
+		}
+		__ce.cases[name] = { log: __ce.log, result };
+	};
+	// a template's markup is inert: nothing in it is constructed until the
+	// page clones it into its document, as Polymer and YouTube stamp a
+	// template once they have taken its bindings off
+	const bind = (template) => {
+		for (const element of template.content.querySelectorAll('x-bound'))
+			for (const name of element.getAttributeNames())
+				if (element.getAttribute(name).startsWith('[['))
+					element.removeAttribute(name);
+	};
+	const bound = (root) =>
+		[...root.querySelectorAll('x-bound')].map(
+			(element) =>
+				`${element.getAttributeNames().join(' ')} ${
+					element instanceof customElements.get('x-bound')
+						? 'upgraded'
+						: 'plain'
+				}`,
+		);
+</script>
+<body>
+	<script>
+		run('template innerHTML', () => {
+			const template = document.createElement('template');
+			template.innerHTML =
+				'<div><x-bound items="[[shown]]" on-items-changed="h" class="c"></x-bound><x-bound items="[1]"></x-bound></div>';
+			const before = bound(template.content);
+			bind(template);
+			log('stamp');
+			const stamped = document.importNode(template.content, true);
+			document.body.append(stamped);
+			return { before, after: bound(template.content) };
+		});
+		run('template in a markup string', () => {
+			const div = document.createElement('div');
+			div.innerHTML =
+				'<template><x-bound items="[[shown]]" class="c"></x-bound></template>';
+			return bound(div.querySelector('template').content);
+		});
+		run('template in insertAdjacentHTML', () => {
+			document.body.insertAdjacentHTML(
+				'beforeend',
+				'<template id="adjacent"><x-bound items="[[shown]]"></x-bound></template>',
+			);
+			return bound(document.getElementById('adjacent').content);
+		});
+		run('template in a contextual fragment', () => {
+			const fragment = document
+				.createRange()
+				.createContextualFragment(
+					'<template><x-bound items="[[shown]]"></x-bound></template>',
+				);
+			return bound(fragment.querySelector('template').content);
+		});
+		run('template in setHTMLUnsafe', () => {
+			const div = document.createElement('div');
+			div.setHTMLUnsafe(
+				'<template><x-bound items="[[shown]]"></x-bound></template>',
+			);
+			return bound(div.querySelector('template').content);
+		});
+		run('a shadow root innerHTML', () => {
+			const host = document.createElement('div');
+			document.body.append(host);
+			const root = host.attachShadow({ mode: 'open' });
+			root.innerHTML = '<x-bound items="[1]"></x-bound>';
+			return bound(root);
+		});
+		run('a template a template holds', () => {
+			const template = document.createElement('template');
+			template.innerHTML =
+				'<template><x-bound items="[[shown]]"></x-bound></template><x-bound items="[[outer]]"></x-bound>';
+			return [
+				...bound(template.content),
+				...bound(template.content.querySelector('template').content),
+			];
+		});
+		window.__ce.done = true;
+	</script>
+</body>
