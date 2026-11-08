@@ -33,7 +33,14 @@ const attributeTab = new WeakMap<CustomElement, Map<string, string | null>>();
 // hook can tell an attribute it wrote from one the page changed since
 const appliedTab = new WeakMap<Element, Map<string, string | null>>();
 
+// the namespace ('' for none) of each prefixed attribute a hook removed
+// (xlink:href, while a load's copy is on its way): set again, it is the same
+// attribute, not one of no namespace that the element ignores
+const removedNamespaces = new WeakMap<Element, Map<string, string>>();
+
 const ORIGINAL_ATTRIBUTE = MARKER;
+const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink';
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
 export class CustomElement extends Element {
 	get attributeTab() {
@@ -78,9 +85,36 @@ export class CustomElement extends Element {
 
 					try {
 						if (value === null) {
+							const node = nativeElement.getAttributeNode.call(this, attribute);
+							if (node && attribute.includes(':')) {
+								if (!removedNamespaces.has(this))
+									removedNamespaces.set(this, new Map());
+								removedNamespaces
+									.get(this)!
+									.set(attribute, node.namespaceURI ?? '');
+							}
 							nativeElement.removeAttribute.call(this, attribute);
-						} else {
+						} else if (nativeElement.hasAttribute.call(this, attribute)) {
 							nativeElement.setAttribute.call(this, attribute, value);
+						} else {
+							// an SVG element's xlink: attribute the hooks set first (one
+							// the parser made from written markup that a hook held back)
+							// is in the xlink namespace, as the parser would have put it
+							const namespace =
+								removedNamespaces.get(this)?.get(attribute) ??
+								(attribute.startsWith('xlink:') &&
+								Reflect.get(nativeElement, 'namespaceURI', this) ===
+									SVG_NAMESPACE
+									? XLINK_NAMESPACE
+									: '');
+							if (namespace)
+								nativeElement.setAttributeNS.call(
+									this,
+									namespace,
+									attribute,
+									value,
+								);
+							else nativeElement.setAttribute.call(this, attribute, value);
 						}
 						if (!appliedTab.has(this)) appliedTab.set(this, new Map());
 						appliedTab.get(this)!.set(attribute, value);
@@ -855,7 +889,24 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that: Element, args) => {
 					if (args.length >= 2 && (args[0] === null || args[0] === ''))
 						return that.getAttribute(String(args[1]));
-					return Reflect.apply(target, that, args);
+					// a namespaced attribute a hook rewrote (xlink:href): the page's
+					// value, by the attribute's qualified name, or by the xlink prefix
+					// while a load's copy is on its way and the attribute is gone
+					const value = Reflect.apply(target, that, args);
+					if (args.length < 2 || !(that instanceof this.client.global.Element))
+						return value;
+					const node = Reflect.apply(
+						nativeElement.getAttributeNodeNS,
+						that,
+						args.slice(0, 2),
+					) as Attr | null;
+					const name =
+						node?.name ??
+						(args[0] === XLINK_NAMESPACE ? `xlink:${args[1]}` : null);
+					if (name === null) return value;
+					return usePrototype(that, CustomElement.prototype, (element) =>
+						element.hasAttributeOG(name) ? element.getAttributeOG(name) : value,
+					);
 				},
 			);
 
@@ -923,16 +974,22 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		 * The attribute names in the order the page sees them: a marker stands
 		 * where the page wrote an attribute a hook then dropped (it is written
 		 * in the attribute's place), and is hidden where the attribute stayed.
+		 * An attribute after its marker was dropped and set again (a load's
+		 * copy in a document no worker controls): it stands at the marker's
+		 * place too.
 		 */
 		const visibleNames = (names: string[]): string[] => {
 			const result: string[] = [];
-			for (const name of names) {
-				if (!isMarker(name)) result.push(name);
-				else {
-					const base = name.slice(ORIGINAL_ATTRIBUTE.length);
-					if (!names.includes(base)) result.push(base);
+			names.forEach((name, index) => {
+				if (!isMarker(name)) {
+					const marker = names.indexOf(`${ORIGINAL_ATTRIBUTE}${name}`);
+					if (marker === -1 || marker > index) result.push(name);
+				} else {
+					const base = names.indexOf(name.slice(ORIGINAL_ATTRIBUTE.length));
+					if (base === -1 || base > index)
+						result.push(name.slice(ORIGINAL_ATTRIBUTE.length));
 				}
-			}
+			});
 			return result;
 		};
 
@@ -1121,7 +1178,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						for (const name of names)
 							if (isMarker(name)) {
 								const base = name.slice(ORIGINAL_ATTRIBUTE.length);
-								if (!names.includes(base)) dropped = true;
+								const at = names.indexOf(base);
+								if (at === -1 || at > names.indexOf(name)) dropped = true;
 								node.setAttribute(base, node.getAttribute(name)!);
 								node.removeAttribute(name);
 							}

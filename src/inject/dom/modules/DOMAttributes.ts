@@ -24,6 +24,9 @@ import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
 import { hookWrite } from './MutationObserver';
 import SyncModule from './Sync';
 
+const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+
 /** the JavaScript MIME type essences (HTML "JavaScript MIME type") */
 const JS_MIME_TYPES = new Set([
 	'application/ecmascript',
@@ -282,9 +285,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			state: Copy,
 			depth = 4,
 		): Promise<string> => {
-			const response = await this.client.routedFetch(routed, {
-				credentials: 'include',
-			});
+			// an SVG reference's fragment names the element in the copy
+			const hash = routed.indexOf('#');
+			const fragment = hash === -1 ? '' : routed.slice(hash);
+			const response = await this.client.routedFetch(
+				hash === -1 ? routed : routed.slice(0, hash),
+				{ credentials: 'include' },
+			);
 			if (!response.ok && response.status !== 0)
 				throw new Error(String(response.status));
 			const type = response.headers.get('content-type') ?? '';
@@ -300,7 +307,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			);
 			state.made.push(url);
 			blobLoads.set(url, page);
-			return url;
+			return url + fragment;
 		};
 		/**
 		 * A script's copy at once, through the nearest controlled document's
@@ -418,9 +425,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				element.removeAttribute(attribute);
 				return;
 			}
-			// a script the page writes: its copy now, or it would never run
+			// a script the page writes (its src, an SVG script's href): its copy
+			// now, or it would never run
 			if (
-				attribute === 'src' &&
+				(attribute === 'src' || element.namespaceURI === SVG_NAMESPACE) &&
 				element.localName === 'script' &&
 				this.client.writing &&
 				targets.length === 1
@@ -451,6 +459,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			if (
 				attribute === 'src' &&
 				element.localName === 'script' &&
+				element.namespaceURI === HTML_NAMESPACE &&
 				scriptAsync &&
 				!Reflect.apply(scriptAsync, element, [])
 			) {
@@ -558,22 +567,26 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			);
 
 		// SVG references (sprites, images, filters) by href or legacy
-		// xlink:href. SVG node names keep their case, and the fragment stays
+		// xlink:href. SVG node names keep their case, and the fragment stays.
+		// The ones that load another file (an <image>, a <use> of an external
+		// sprite, an <feImage>) are copied in a document no worker controls,
+		// the fragment kept on the copy
+		const SVG_LOADS = ['image', 'use', 'feimage'];
 		const svgHook = (attribute: string) => (element: CustomElement) => {
 			element.restoreAttributesOG(attribute);
 			if (!element.hasAttribute(attribute)) return;
 			const value = element.getAttribute(attribute)!;
 			if (value === '' || value.startsWith('#')) return;
 			element.setAttributeOG(attribute, value);
-			element.setAttribute(
-				attribute,
-				routeBinary(
-					new StompURL(
-						new URL(value, this.client.url.toString()),
-						this.client.url,
-					),
+			const routed = routeBinary(
+				new StompURL(
+					new URL(value, this.client.url.toString()),
+					this.client.url,
 				),
 			);
+			if (SVG_LOADS.includes(element.localName.toLowerCase()))
+				placeLoad(element, attribute, routed);
+			else element.setAttribute(attribute, routed);
 		};
 		for (const attribute of ['href', 'xlink:href'])
 			domHooksModule.useAttributes(
@@ -608,18 +621,19 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const value = element.getAttribute(attribute)!;
 			if (value === '') return;
 			element.setAttributeOG(attribute, value);
-			element.setAttribute(
-				attribute,
-				routeJS(
-					new StompURL(
-						new URL(value, this.client.url.toString()),
-						this.client.url,
-					),
+			const routed = routeJS(
+				new StompURL(
+					new URL(value, this.client.url.toString()),
 					this.client.url,
-					this.client.config,
-					'generic',
 				),
+				this.client.url,
+				this.client.config,
+				'generic',
 			);
+			// an HTML script's href loads nothing
+			if (element.namespaceURI === SVG_NAMESPACE)
+				placeLoad(element, attribute, routed);
+			else element.setAttribute(attribute, routed);
 		};
 		for (const attribute of ['href', 'xlink:href'])
 			domHooksModule.useAttributes(svgScriptHook(attribute), [
@@ -1586,10 +1600,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// not run.
 		const nativeQueryAll =
 			this.client.global.Document.prototype.querySelectorAll;
-		const LOADS = ['src', 'href', 'srcset', 'poster', 'data', 'imagesrcset'];
-		const written = LOADS.map(
-			(name) => `[s_o\\:${name}]:not([${name}]):not(script)`,
-		).join(',');
+		const LOADS = [
+			...['src', 'href', 'xlink:href', 'srcset', 'poster', 'data'],
+			'imagesrcset',
+		];
+		const written = LOADS.map((name) => name.replace(':', '\\:'))
+			.map((name) => `[s_o\\:${name}]:not([${name}]):not(script)`)
+			.join(',');
 		this.client.writtenLoads = (document) => {
 			if (!uncontrolled()) return;
 			let elements: Element[];

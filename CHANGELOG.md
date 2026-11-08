@@ -314,6 +314,19 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   666 KB), its stack positions on one line as natively; code written to be
   read keeps one statement per line, so an error's line number stays near
   the page's own (rewriter-unit suite).
+- SVG references in a document no service worker controls load through the
+  proxy: an `<image>` by href or xlink:href, a `<use>` of an external
+  sprite (its fragment kept on the copy), an `<feImage>` and an SVG
+  `<script href>` reached the proxy origin's own server and failed. They
+  are copied like an `<img>`, and released when the element shows another
+  value; an SVG script the page writes is copied at once, as an HTML one
+  is. An xlink:href a hook holds back while its copy loads is set again in
+  the xlink namespace, so the element still sees it, and the page's
+  MutationObserver sees no record of it. getAttributeNS for a namespaced
+  attribute a hook rewrote, getAttributeNames and the markup now read back
+  as the page wrote them, in the order it wrote them, also for an
+  attribute set again once its copy arrived (blank-sources suite, both
+  modes, against the page loaded natively, with the bypass recorder).
 - `document.write` and `writeln` are the prototype's methods again. The
   hook was an own property of each document, which a page could list
   (`Object.getOwnPropertyNames(document)`) and compare

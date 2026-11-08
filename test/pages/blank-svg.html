@@ -1,0 +1,150 @@
+<!doctype html>
+<title>BLANK SVG</title>
+<script>
+	// SVG references in documents the page builds, which no service worker
+	// controls (a new frame's about:blank, one it opened, one it wrote the
+	// SVG into, a popup): an <image> by href and by xlink:href, a <use> of an
+	// external sprite, an <feImage> and an SVG <script href>. Each reports
+	// what fired and what it reads back. Every URL is marked
+	// ?svg=<document>-<kind>.
+	const SVG = 'http://www.w3.org/2000/svg';
+	const XLINK = 'http://www.w3.org/1999/xlink';
+	const report = {};
+	window.__blankSvg = report;
+	const at = (file, name, kind) =>
+		new URL(`${file}?svg=${name}-${kind}`, location.href).href;
+	const watch = (seen, kind, element) => {
+		seen[kind] = 'pending';
+		element.addEventListener('load', () => (seen[kind] = 'load'));
+		element.addEventListener('error', () => (seen[kind] = 'error'));
+		return element;
+	};
+	const reportOn = (seen, win, [svg, image, xlink, use, feImage, script]) =>
+		setTimeout(() => {
+			let useBox = null;
+			try {
+				useBox = use.getBBox().width;
+			} catch (error) {
+				useBox = error.name;
+			}
+			seen.readback = {
+				image: image.getAttribute('href'),
+				imageBase: image.href.baseVal,
+				xlink: xlink.getAttributeNS(XLINK, 'href'),
+				xlinkAttr: xlink.getAttribute('xlink:href'),
+				names: xlink.getAttributeNames(),
+				use: use.getAttribute('href'),
+				useBase: use.href.baseVal,
+				useBox,
+				feImage: feImage.getAttribute('href'),
+				script: script.getAttribute('href'),
+				ran: win.__blankSvg ?? null,
+				markup: svg.outerHTML,
+				records: seen.records ?? null,
+			};
+		}, 2500);
+	// built with the DOM
+	const load = (name, doc, win) => {
+		const seen = (report[name] = {});
+		const make = (tag, kind) => {
+			const element = doc.createElementNS(SVG, tag);
+			return kind ? watch(seen, kind, element) : element;
+		};
+		const svg = make('svg');
+		// what the page's own observer sees of its writes
+		const records = [];
+		new win.MutationObserver((list) => {
+			for (const record of list)
+				records.push([
+					record.target.localName,
+					record.attributeName,
+					record.attributeNamespace,
+					record.oldValue,
+				]);
+		}).observe(svg, {
+			attributes: true,
+			subtree: true,
+			attributeOldValue: true,
+		});
+		seen.records = records;
+		svg.setAttribute('width', '40');
+		svg.setAttribute('height', '40');
+		const image = make('image', 'image');
+		image.setAttribute('width', '4');
+		image.setAttribute('height', '4');
+		image.setAttribute('href', at('blank-pixel.svg', name, 'image'));
+		const xlink = make('image', 'xlink');
+		xlink.setAttribute('width', '4');
+		xlink.setAttribute('height', '4');
+		xlink.setAttributeNS(
+			XLINK,
+			'xlink:href',
+			at('blank-pixel.svg', name, 'xlink'),
+		);
+		const use = make('use', 'use');
+		use.setAttribute('href', `${at('blank-sprite.svg', name, 'use')}#i`);
+		use.setAttribute('width', '10');
+		use.setAttribute('height', '10');
+		const filter = make('filter');
+		filter.id = 'f';
+		const feImage = make('feImage');
+		feImage.href.baseVal = at('blank-pixel.svg', name, 'feimage');
+		filter.append(feImage);
+		const rect = make('rect');
+		rect.setAttribute('width', '4');
+		rect.setAttribute('height', '4');
+		rect.setAttribute('filter', 'url(#f)');
+		const script = make('script', 'script');
+		script.setAttribute('href', at('blank-svg.js', name, 'script'));
+		svg.append(image, xlink, use, filter, rect);
+		doc.body.append(svg);
+		svg.append(script);
+		reportOn(seen, win, [svg, image, xlink, use, feImage, script]);
+	};
+	// the same SVG as markup the page writes: the parser makes the elements
+	// (the script runs while it parses, so only whether it ran is compared)
+	const written = (name, doc, win) => {
+		const seen = (report[name] = {});
+		doc.open();
+		doc.write(
+			'<!doctype html><body><svg width="40" height="40">' +
+				`<image width="4" height="4" href="${at('blank-pixel.svg', name, 'image')}"></image>` +
+				`<image width="4" height="4" xlink:href="${at('blank-pixel.svg', name, 'xlink')}"></image>` +
+				`<use href="${at('blank-sprite.svg', name, 'use')}#i" width="10" height="10"></use>` +
+				`<filter id="f"><feImage href="${at('blank-pixel.svg', name, 'feimage')}"></feImage></filter>` +
+				'<rect width="4" height="4" filter="url(#f)"></rect>' +
+				`<script href="${at('blank-svg.js', name, 'script')}"></` +
+				'script></svg></body>',
+		);
+		doc.close();
+		const [svg] = doc.getElementsByTagName('svg');
+		const [image, xlink] = svg.getElementsByTagName('image');
+		watch(seen, 'image', image);
+		watch(seen, 'xlink', xlink);
+		const [use] = svg.getElementsByTagName('use');
+		watch(seen, 'use', use);
+		const [feImage] = svg.getElementsByTagName('feImage');
+		const [script] = svg.getElementsByTagName('script');
+		reportOn(seen, win, [svg, image, xlink, use, feImage, script]);
+	};
+	addEventListener('load', () => {
+		const frame = (build) => {
+			const iframe = document.createElement('iframe');
+			document.body.append(iframe);
+			build(iframe.contentDocument, iframe.contentWindow);
+		};
+		frame((doc, win) => load('initial', doc, win));
+		frame((doc, win) => {
+			doc.open();
+			doc.close();
+			load('opened', doc, win);
+		});
+		frame((doc, win) => written('written', doc, win));
+		const popup = window.open();
+		if (popup) load('popup', popup.document, popup);
+		setTimeout(() => {
+			popup?.close();
+			report.done = true;
+		}, 3500);
+	});
+</script>

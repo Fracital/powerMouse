@@ -427,7 +427,14 @@ export function hookWrite<T>(
 			target: element,
 			name: null,
 			markers: new Set(),
-			written: new Set(names()),
+			// a prefixed attribute's records (xlink:href) carry its local name
+			written: new Set(
+				[...names()].flatMap((name) =>
+					!name.startsWith(MARKER) && name.includes(':')
+						? [name, name.slice(name.indexOf(':') + 1)]
+						: [name],
+				),
+			),
 			records: new Map(),
 		},
 		callback,
