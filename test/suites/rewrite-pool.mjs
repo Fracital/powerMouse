@@ -111,7 +111,10 @@ await controller({ rewriteWorkers: 0 });
 	ok(
 		"the pool's output is byte for byte the service worker's",
 		seen.length === 2 && seen[0] !== null && seen[0] === seen[1],
-		JSON.stringify(seen.map((body) => body?.length)),
+		// the bodies themselves when they differ, to see where
+		seen[0] === seen[1]
+			? JSON.stringify(seen.map((body) => body?.length))
+			: JSON.stringify(seen),
 	);
 }
 
