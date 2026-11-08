@@ -8,6 +8,12 @@ import ProxyModule, {
 	onEventTarget,
 } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
+import {
+	decodeText,
+	finalMime,
+	overrideMime,
+	type MimeType,
+} from '../../xhrText';
 import DocumentClient from '../Client';
 import SyncModule from './Sync';
 
@@ -61,6 +67,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				'sec-fetch-dest': 'empty',
 			});
 			#responseHeaders = new Headers();
+			#override: MimeType | null = null;
 			#method = '';
 			#url = '';
 			#async = true;
@@ -168,10 +175,12 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				if (this.#loadingOrDone) {
 					throw new DOMException(
 						`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.`,
+						'InvalidStateError',
 					);
 				} else if (!this.#async) {
 					throw new DOMException(
 						`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be changed for synchronous requests made from a document.`,
+						'InvalidAccessError',
 					);
 				}
 
@@ -256,11 +265,15 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				clearTimeout(this.#timer);
 				this.#readyState = DONE;
 				this.#response = buffer!;
-				const contentType = response!.headers.get('content-type') || '';
-				const mime = contentType.split(';')[0].trim().toLowerCase();
+				const type = finalMime(
+					this.#override,
+					response!.headers.get('content-type'),
+				);
+				const mime = type.essence;
 				const isXML =
 					/^(text|application)\/xml$/.test(mime) || /\+xml$/.test(mime);
-				const text = () => decoder.decode(buffer!);
+				// the bytes as the browser decodes them (JSON is always UTF-8)
+				const text = () => decodeText(buffer!, type.charset);
 
 				switch (this.#responseType) {
 					case 'arraybuffer':
@@ -284,7 +297,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					}
 					case 'json':
 						try {
-							this.#response = JSON.parse(text());
+							this.#response = JSON.parse(decoder.decode(buffer!));
 						} catch (parseError) {
 							this.#response = null;
 						}
@@ -298,7 +311,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					// console.log(this.#responseType, 'DEFAULT');
 					// fall through
 					case 'text':
-						this.#responseText = decoder.decode(this.#response as ArrayBuffer);
+						this.#responseText = text();
 						this.#response = this.#responseText;
 						// the default type gives an XML document for an XML response
 						if (this.#responseType === '' && isXML)
@@ -369,8 +382,14 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					}
 				}
 			}
-			// eslint-disable-next-line @typescript-eslint/no-unused-vars
-			overrideMimeType(mime: string) {}
+			overrideMimeType(mime: string) {
+				if (this.#loadingOrDone)
+					throw new DOMException(
+						"Failed to execute 'overrideMimeType' on 'XMLHttpRequest': MimeType cannot be overridden when the state is LOADING or DONE.",
+						'InvalidStateError',
+					);
+				this.#override = overrideMime(mime);
+			}
 			abort() {
 				if (!this.#async) {
 					return;

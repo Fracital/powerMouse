@@ -8,6 +8,12 @@ import ProxyModule, {
 	onEventTarget,
 } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
+import {
+	decodeText,
+	finalMime,
+	overrideMime,
+	type MimeType,
+} from '../../xhrText';
 import WorkerClient from '../Client';
 
 export default class XMLHttpRequestModule extends Module<WorkerClient> {
@@ -34,6 +40,60 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 
 		const decoder = new TextDecoder('utf-8');
 
+		// A worker's synchronous XHR reaches the service worker (Chrome hands a
+		// dedicated worker's sync request to its controller, unlike a
+		// document's), so the browser's own XHR carries it to the routed URL,
+		// its bytes as an ArrayBuffer. Its methods are taken now, before page
+		// code runs.
+		const NativeXHR = XMLHttpRequest;
+		const nativeProto = NativeXHR.prototype;
+		const method = (name: string) =>
+			Reflect.getOwnPropertyDescriptor(nativeProto, name)!.value;
+		const accessor = (name: string) =>
+			Reflect.getOwnPropertyDescriptor(nativeProto, name)!;
+		const nativeOpen = method('open');
+		const nativeSend = method('send');
+		const nativeSetHeader = method('setRequestHeader');
+		const nativeAllHeaders = method('getAllResponseHeaders');
+		const nativeResponseType = accessor('responseType').set!;
+		const nativeCredentials = accessor('withCredentials').set!;
+		const nativeStatus = accessor('status').get!;
+		const nativeStatusText = accessor('statusText').get!;
+		const nativeResponse = accessor('response').get!;
+		const nativeResponseURL = accessor('responseURL').get!;
+		const syncRequest = (url: string, init: RequestInit) => {
+			const xhr = new NativeXHR();
+			Reflect.apply(nativeOpen, xhr, [init.method, url, false]);
+			Reflect.apply(nativeResponseType, xhr, ['arraybuffer']);
+			Reflect.apply(nativeCredentials, xhr, [init.credentials === 'include']);
+			for (const [name, value] of init.headers as Headers)
+				try {
+					Reflect.apply(nativeSetHeader, xhr, [name, value]);
+				} catch (error) {
+					// a header the browser does not let a page set
+				}
+			Reflect.apply(nativeSend, xhr, [init.body ?? null]);
+			const headers = new Headers();
+			const lines = String(Reflect.apply(nativeAllHeaders, xhr, [])).split(
+				'\r\n',
+			);
+			for (const line of lines) {
+				const colon = line.indexOf(':');
+				if (colon > 0)
+					headers.append(line.slice(0, colon), line.slice(colon + 1).trim());
+			}
+			const response = {
+				status: Reflect.apply(nativeStatus, xhr, []) as number,
+				statusText: Reflect.apply(nativeStatusText, xhr, []) as string,
+				headers,
+			} as Response;
+			return {
+				response,
+				url: Reflect.apply(nativeResponseURL, xhr, []) as string,
+				buffer: Reflect.apply(nativeResponse, xhr, []) as ArrayBuffer,
+			};
+		};
+
 		const XMLHttpRequestResponseType = [
 			'',
 			'arraybuffer',
@@ -57,6 +117,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			}
 			#headers = new Headers();
 			#responseHeaders = new Headers();
+			#override: MimeType | null = null;
 			#method = '';
 			#url = '';
 			#async = true;
@@ -159,13 +220,12 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				return this.#responseType;
 			}
 			set responseType(value) {
+				// a worker may set any type on a synchronous request; only a
+				// document may not
 				if (this.#loadingOrDone) {
 					throw new DOMException(
 						`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.`,
-					);
-				} else if (!this.#async) {
-					throw new DOMException(
-						`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be changed for synchronous requests made from a document.`,
+						'InvalidStateError',
 					);
 				}
 
@@ -249,9 +309,11 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				clearTimeout(this.#timer);
 				this.#readyState = DONE;
 				this.#response = buffer!;
-				const contentType = response!.headers.get('content-type') || '';
-				const mime = contentType.split(';')[0].trim().toLowerCase();
-				const text = () => decoder.decode(buffer!);
+				const type = finalMime(
+					this.#override,
+					response!.headers.get('content-type'),
+				);
+				const mime = type.essence;
 
 				switch (this.responseType) {
 					case 'arraybuffer':
@@ -262,7 +324,8 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 						break;
 					case 'json':
 						try {
-							this.#response = JSON.parse(text());
+							// JSON is always UTF-8
+							this.#response = JSON.parse(decoder.decode(buffer!));
 						} catch (parseError) {
 							this.#response = null;
 						}
@@ -272,8 +335,9 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 							type: mime,
 						});
 						break;
+					default:
 					case 'text':
-						this.#responseText = decoder.decode(this.#response as ArrayBuffer);
+						this.#responseText = decodeText(buffer!, type.charset);
 						this.#response = this.#responseText;
 						break;
 				}
@@ -324,13 +388,27 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 						})
 						.catch((error) => this.#onDone(error));
 				} else {
-					throw new Error(
-						'Synchronous requests are not supported in this context.',
-					);
+					try {
+						const {
+							response,
+							url: final,
+							buffer,
+						} = syncRequest(String(url), init);
+						this.#onHeaders(undefined, response, final);
+						this.#onDone(undefined, response, buffer);
+					} catch (error) {
+						this.#onDone(error);
+					}
 				}
 			}
-			// eslint-disable-next-line @typescript-eslint/no-unused-vars
-			overrideMimeType(mime: string) {}
+			overrideMimeType(mime: string) {
+				if (this.#loadingOrDone)
+					throw new DOMException(
+						"Failed to execute 'overrideMimeType' on 'XMLHttpRequest': MimeType cannot be overridden when the state is LOADING or DONE.",
+						'InvalidStateError',
+					);
+				this.#override = overrideMime(mime);
+			}
 			abort() {
 				if (!this.#async) {
 					return;

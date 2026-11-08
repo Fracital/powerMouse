@@ -26,7 +26,12 @@ export function encodeCookie(cookie: string): string {
 			result += char;
 		} else {
 			const code = char.charCodeAt(0);
-			result += reserveChar + code.toString(16).padStart(2, '0');
+			// a code unit past U+00FF (UTF-8 text, U+FFFD) needs four digits; `u`
+			// is no hex digit, so the two forms cannot be confused
+			result +=
+				code > 0xff
+					? reserveChar + 'u' + code.toString(16).padStart(4, '0')
+					: reserveChar + code.toString(16).padStart(2, '0');
 		}
 	}
 
@@ -39,7 +44,10 @@ export function decodeCookie(cookie: string): string {
 	for (let i = 0; i < cookie.length; i++) {
 		const char = cookie[i];
 
-		if (char === reserveChar) {
+		if (char === reserveChar && cookie[i + 1] === 'u') {
+			result += String.fromCharCode(parseInt(cookie.slice(i + 2, i + 6), 16));
+			i += 5;
+		} else if (char === reserveChar) {
 			const code = parseInt(cookie.slice(i + 1, i + 3), 16);
 			const decoded = String.fromCharCode(code);
 

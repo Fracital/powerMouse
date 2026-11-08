@@ -314,6 +314,25 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   666 KB), its stack positions on one line as natively; code written to be
   read keeps one statement per line, so an error's line number stays near
   the page's own (rewriter-unit suite).
+- Synchronous requests carry binary and non-UTF-8 bodies byte for byte. The
+  synchronous bridge decoded every response body as UTF-8 in the service
+  worker, and its cookie encoding could not carry a character past U+00FF,
+  so a sync XHR for a font or an image (or any non-UTF-8 text), and a
+  script copied through the bridge into an uncontrolled document with CJK
+  text in it, arrived corrupted; storage values past U+00FF read through the
+  bridge did too. A UTF-8 body now travels as its text and anything else in
+  base64, and an ArrayBuffer or typed array request body as its bytes (it
+  was decoded as UTF-8, and a Uint8Array was dropped). XMLHttpRequest
+  decodes text as the browser does, in documents and workers, sync and
+  async: the `overrideMimeType()` charset first (it did nothing, so the
+  classic `charset=x-user-defined` binary read failed), then the response's
+  Content-Type charset, a byte order mark over both, UTF-8 otherwise. A
+  worker's synchronous XHR works (it threw; Chrome hands it to the service
+  worker, so the browser's own XHR carries it), with any responseType, and
+  a worker XHR with the default type has its responseText. A document's
+  refusal of a responseType on a sync request is an `InvalidAccessError`
+  as natively (sync-binary suite, both modes, against the page loaded
+  natively).
 - Typed OM writes in a document no service worker controls load through
   the proxy: an `attributeStyleMap` set, append, delete or clear now has
   its element's inline style copied as a CSSOM write is, underneath the

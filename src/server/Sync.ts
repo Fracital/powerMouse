@@ -1,6 +1,21 @@
+import { decodeBase64, encodeBase64 } from '../base64';
 import { encodeCookie } from '../encodeCookie';
-import { ProcessData, ProcessResult } from '../sync';
+import { ProcessData, ProcessResult, SyncBody } from '../sync';
 import Router from './Router';
+
+// a body that is valid UTF-8 travels as its text (no bigger than the bytes in
+// the cookies for most pages), anything else in base64: a font, an image, a
+// Latin-1 text the page decodes with its own charset. ignoreBOM keeps a byte
+// order mark in the text, so encoding it back gives the same bytes
+const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
+function encodeBody(bytes: Uint8Array): SyncBody {
+	try {
+		return { text: utf8.decode(bytes) };
+	} catch (error) {
+		return { base64: encodeBase64(bytes) };
+	}
+}
 
 const maxRedirects = 20;
 const statusRedirect = [301, 302, 303, 307, 308];
@@ -13,6 +28,8 @@ async function process(
 
 	if (data.body !== undefined) {
 		init.body = data.body;
+	} else if (data.bodyBase64 !== undefined) {
+		init.body = decodeBase64(data.bodyBase64);
 	}
 
 	let redirects = maxRedirects;
@@ -38,7 +55,7 @@ async function process(
 			}
 
 			return {
-				textArrayBuffer: new TextDecoder().decode(await response.arrayBuffer()),
+				...encodeBody(new Uint8Array(await response.arrayBuffer())),
 				init: {
 					status: response.status,
 					statusText: response.statusText,
@@ -98,8 +115,6 @@ export function registerXhr(router: Router) {
 				sameSite: 'none',
 			});
 		}
-
-		encodeCookie(JSON.stringify(response));
 
 		// the answer is read with document.cookie from a proxied frame, which in
 		// origin-isolation mode is a cross-site embed: the CookieStore default

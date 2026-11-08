@@ -1,7 +1,8 @@
+import { decodeBase64, encodeBase64 } from '../../../base64';
 import { decodeCookie } from '../../../encodeCookie';
 import { geckoXHR, queueXHR } from '../../../routeURL';
 import { urlLike } from '../../../StompURL';
-import { ProcessData, SerializableRequestInit } from '../../../sync';
+import { ProcessData, SerializableRequestInit, SyncBody } from '../../../sync';
 import Module from '../../Module';
 import DocumentClient from '../Client';
 import { CookiesModule } from './Cookies';
@@ -22,19 +23,29 @@ interface SyncResponse extends Response {
 	rawArrayBuffer: ArrayBuffer;
 }
 
-interface SyncResponseInit {
+interface SyncResponseInit extends SyncBody {
 	error: { message: string };
-	textArrayBuffer: string;
 	init: ResponseInit;
 	url: string;
 }
+
+// taken when the bundle loads, before page code can replace them
+const objectTag = Reflect.getOwnPropertyDescriptor(
+	Object.prototype,
+	'toString',
+)!.value as () => string;
+const isView = ArrayBuffer.isView;
 
 function createResponse(init: SyncResponseInit): SyncResponse {
 	if (init.error) {
 		throw new TypeError(init.error.message);
 	}
 
-	const { buffer: rawArrayBuffer } = encoder.encode(init.textArrayBuffer);
+	// the bytes the worker read: UTF-8 text encodes back to them exactly
+	const { buffer: rawArrayBuffer } =
+		init.base64 !== undefined
+			? decodeBase64(init.base64)
+			: encoder.encode(init.text ?? '');
 
 	let response: Response & Partial<SyncResponse>;
 
@@ -115,10 +126,21 @@ export default class SyncModule extends Module<DocumentClient> {
 			init: processInit,
 		};
 
-		if (init.body instanceof ArrayBuffer) {
-			data.body = decoder.decode(init.body);
-		} else if (typeof init.body === 'string') {
-			data.body = init.body;
+		// a binary body goes as its bytes (a UTF-8 decode would replace every
+		// byte that is not UTF-8); either kind of buffer, from any realm
+		const body = init.body;
+		if (typeof body === 'string') {
+			data.body = body;
+		} else if (isView(body)) {
+			data.bodyBase64 = encodeBase64(
+				new Uint8Array(body.buffer, body.byteOffset, body.byteLength),
+			);
+		} else if (
+			body !== null &&
+			typeof body === 'object' &&
+			Reflect.apply(objectTag, body, []) === '[object ArrayBuffer]'
+		) {
+			data.bodyBase64 = encodeBase64(new Uint8Array(body as ArrayBuffer));
 		}
 
 		if (navigator.userAgent.includes('gecko')) {
