@@ -1,0 +1,23 @@
+<!doctype html>
+<title>NETWORK ERROR</title>
+<script>
+	// ?port=<n> names a port nothing listens on: a fetch and an XHR to it fail
+	// at the connection, before any response. Records how each one ended.
+	window.__netError = {};
+	const port = new URLSearchParams(location.search).get('port');
+	const target = `http://127.0.0.1:${port}/nothing-here`;
+	const fetched = fetch(target).then(
+		(response) => `resolved ${response.status}`,
+		(error) => `rejected ${error.name}`,
+	);
+	const requested = new Promise((resolve) => {
+		const xhr = new XMLHttpRequest();
+		xhr.open('GET', target);
+		xhr.onload = () => resolve(`load ${xhr.status}`);
+		xhr.onerror = () => resolve(`error ${xhr.status}`);
+		xhr.send();
+	});
+	Promise.all([fetched, requested]).then(([fetch, xhr]) => {
+		Object.assign(__netError, { fetch, xhr, done: true });
+	});
+</script>
