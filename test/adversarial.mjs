@@ -7,7 +7,9 @@
 // a probe a leak when its value shows the host window or document, the demo
 // origin, a /stomp/ URL, an inject global, or a fingerprint the page marked
 // TELL:/LEAK:. It also checks the host page itself was not touched (URL,
-// title, a marker property, messages posted at it). Nothing here fixes
+// title, a marker property, messages posted at it), and prints a BYPASS:
+// line (outside the counts) for every request that reached the network
+// without the proxy. Nothing here fixes
 // anything: a leak is a FAIL line that names the probe and the value, so the
 // parity doc can carry it.
 //
@@ -21,6 +23,7 @@ import {
 	openDemo,
 	PORT,
 	PROXY,
+	recordRequests,
 	sleep,
 	submitLanding,
 } from './lib.mjs';
@@ -156,6 +159,7 @@ const proxiedFrame = (page) =>
  */
 async function measure(browser, base, group) {
 	const page = await openDemo(browser, base);
+	const recorder = await recordRequests(page.context());
 	const host = await page.evaluate(() => {
 		window.__hostMessages = [];
 		// only the pages' own tagged payloads count: the controller's
@@ -232,7 +236,8 @@ async function measure(browser, base, group) {
 	const frameUrl = proxiedFrame(page)?.url() ?? null;
 	const errors = page.errors.filter((e) => !/max cycles/.test(e));
 	await page.close();
-	return { host, after, adv, navigated, frameUrl, errors };
+	const raw = recorder.raw();
+	return { host, after, adv, navigated, frameUrl, errors, raw };
 }
 
 /**
@@ -249,6 +254,7 @@ export async function runGroup(group, scramjet = {}) {
 			adv,
 			navigated,
 			errors: pageErrors,
+			raw,
 		} = await measure(browser, base, group);
 		errors.push(...pageErrors.map((e) => `${mode}: ${e}`));
 		const leak = new RegExp(
@@ -296,6 +302,12 @@ export async function runGroup(group, scramjet = {}) {
 				after.messages.length === 0,
 			`url ${after.url} title ${JSON.stringify(after.title)} marker ${JSON.stringify(after.leak)}/${JSON.stringify(after.docLeak)} messages ${JSON.stringify(after.messages).slice(0, 300)}`,
 		);
+		// a request that reached the network without the proxy: its own line
+		// kind, outside the probe counts
+		for (const entry of raw)
+			console.log(
+				`BYPASS: ${mode}: ${group} ${entry.url.slice(0, 160)} (${entry.type}, ${entry.source})`,
+			);
 	}
 	await done(browser, errors);
 }

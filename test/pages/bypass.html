@@ -1,0 +1,238 @@
+<!doctype html>
+<title>BYPASS</title>
+<!-- every request a page can make, each marked ?bypass=<vector>: through the
+     proxy it reaches the worker (its request log names the marker); a raw
+     request to this origin is a bypass -->
+<link rel="stylesheet" href="inline.css?bypass=markup-stylesheet" />
+<link rel="prefetch" href="echo.json?bypass=prefetch" />
+<link rel="preload" as="fetch" crossorigin href="echo.json?bypass=preload" />
+<link rel="modulepreload" href="inline-script.js?bypass=modulepreload" />
+<link rel="icon" href="sprite.svg?bypass=icon" />
+<style>
+	@import url('imp.css?bypass=style-import');
+	@font-face {
+		font-family: bypass;
+		src: url('font.woff2?bypass=style-font');
+	}
+	.bypass-font {
+		font-family: bypass;
+	}
+	.bypass-bg {
+		background: url('sprite.svg?bypass=style-url');
+	}
+	.bypass-set {
+		background-image: image-set('sprite.svg?bypass=image-set' 1x);
+	}
+</style>
+<script type="speculationrules">
+	{
+		"prefetch": [{ "source": "list", "urls": ["echo.json?bypass=speculation"] }]
+	}
+</script>
+<p class="bypass-font">text</p>
+<p class="bypass-bg">text</p>
+<p class="bypass-set">text</p>
+<p style="background: url('sprite.svg?bypass=inline-style')">text</p>
+<img src="sprite.svg?bypass=markup-img" />
+<img srcset="sprite.svg?bypass=markup-srcset 2x" />
+<picture
+	><source srcset="sprite.svg?bypass=picture-source" />
+	<img
+/></picture>
+<input type="image" src="sprite.svg?bypass=input-image" />
+<video
+	poster="sprite.svg?bypass=poster"
+	src="echo.json?bypass=markup-video"
+	preload="auto"
+>
+	<track default kind="captions" src="hdr.json?bypass=track" />
+</video>
+<audio src="echo.json?bypass=markup-audio" preload="auto"></audio>
+<object data="sprite.svg?bypass=markup-object" type="image/svg+xml"></object>
+<embed src="sprite.svg?bypass=markup-embed" type="image/svg+xml" />
+<svg width="10" height="10">
+	<image href="sprite.svg?bypass=svg-image" width="10" height="10" />
+	<use href="sprite.svg?bypass=svg-use#x" />
+	<filter id="f"><feImage href="sprite.svg?bypass=fe-image" /></filter>
+</svg>
+<iframe name="sink" src="about:blank"></iframe>
+<a
+	id="ping"
+	href="/landed?bypass=ping-navigation"
+	ping="echo.json?bypass=ping"
+	target="sink"
+	>ping</a
+>
+<a
+	id="ping-absolute"
+	href="/landed?bypass=ping-absolute-navigation"
+	target="sink"
+	>ping</a
+>
+<a id="ping-read" href="#" ping="a.json  https://t.invalid/x">read</a>
+<form id="form" action="/landed" target="sink">
+	<input name="bypass" value="form" />
+</form>
+<iframe src="bypass-meta-refresh.html"></iframe>
+<iframe src="bypass-header-refresh.html"></iframe>
+<iframe srcdoc="<img src='sprite.svg?bypass=srcdoc-img'>"></iframe>
+<script type="module">
+	import('./inline-script.js?bypass=dynamic-import').catch(() => {});
+</script>
+<script>
+	const mark = (name, file = 'echo.json') =>
+		new URL(`${file}?bypass=${name}`, location.href).href;
+	const errors = {};
+	const attempt = (name, run) => {
+		try {
+			const result = run();
+			if (result && typeof result.catch === 'function')
+				result.catch((error) => (errors[name] = String(error).slice(0, 80)));
+		} catch (error) {
+			errors[name] = String(error).slice(0, 80);
+		}
+	};
+	const add = (tag, attributes) => {
+		const element = document.createElement(tag);
+		for (const [name, value] of Object.entries(attributes))
+			element.setAttribute(name, value);
+		document.body.append(element);
+		return element;
+	};
+	const wsURL = (name) => {
+		const url = new URL(`/ws-echo?bypass=${name}`, location.href);
+		url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+		return url.href;
+	};
+	attempt('fetch', () => fetch(mark('fetch')));
+	attempt('fetch-keepalive', () =>
+		fetch(mark('fetch-keepalive'), { keepalive: true }),
+	);
+	attempt('xhr', () => {
+		const xhr = new XMLHttpRequest();
+		xhr.open('GET', mark('xhr'));
+		xhr.send();
+	});
+	attempt('beacon', () => navigator.sendBeacon(mark('beacon'), 'x'));
+	attempt('eventsource', () => {
+		const source = new EventSource(mark('eventsource'));
+		setTimeout(() => source.close(), 3000);
+	});
+	// a WebSocket never passes the worker: the page says whether it opened
+	const opened = {};
+	attempt('websocket', () => {
+		const socket = new WebSocket(wsURL('websocket'));
+		socket.onopen = () => (opened.websocket = true);
+	});
+	attempt('websocketstream', () =>
+		typeof WebSocketStream === 'function'
+			? new WebSocketStream(wsURL('websocketstream')).opened.then(
+					() => (opened.websocketstream = true),
+				)
+			: (errors.websocketstream = 'absent'),
+	);
+	attempt(
+		'worker',
+		() =>
+			new Worker(mark('dedicated', 'bypass-worker.js'), { name: 'dedicated' }),
+	);
+	attempt('shared-worker', () =>
+		typeof SharedWorker === 'function'
+			? new SharedWorker(mark('shared', 'bypass-worker.js'), { name: 'shared' })
+			: (errors['shared-worker'] = 'absent'),
+	);
+	attempt('img', () => add('img', { src: mark('img', 'sprite.svg') }));
+	attempt(
+		'image-object',
+		() => (new Image().src = mark('image-object', 'sprite.svg')),
+	);
+	attempt('script', () =>
+		add('script', { src: mark('script', 'inline-script.js') }),
+	);
+	attempt('link-stylesheet', () =>
+		add('link', {
+			rel: 'stylesheet',
+			href: mark('link-stylesheet', 'inline.css'),
+		}),
+	);
+	attempt('link-prefetch', () =>
+		add('link', { rel: 'prefetch', href: mark('link-prefetch') }),
+	);
+	attempt('iframe', () => add('iframe', { src: mark('iframe', 'sprite.svg') }));
+	attempt('object', () =>
+		add('object', {
+			data: mark('object', 'sprite.svg'),
+			type: 'image/svg+xml',
+		}),
+	);
+	attempt('embed', () =>
+		add('embed', { src: mark('embed', 'sprite.svg'), type: 'image/svg+xml' }),
+	);
+	attempt('video', () => add('video', { src: mark('video'), preload: 'auto' }));
+	attempt('audio', () => add('audio', { src: mark('audio'), preload: 'auto' }));
+	attempt('audio-object', () => {
+		const audio = new Audio(mark('audio-object'));
+		audio.preload = 'auto';
+		audio.load();
+	});
+	attempt('font-face', () =>
+		new FontFace('b2', `url(${mark('font-face', 'font.woff2')})`).load(),
+	);
+	attempt('css-insert', () => {
+		const style = document.createElement('style');
+		style.textContent = `.x{background:url(${mark('css-insert', 'sprite.svg')})}`;
+		document.head.append(style);
+		add('div', { class: 'x' });
+	});
+	attempt('inner-html', () => {
+		const div = document.createElement('div');
+		div.innerHTML = `<img src="${mark('inner-html', 'sprite.svg')}">`;
+		document.body.append(div);
+	});
+	attempt('document-write', () =>
+		document.write(`<img src="${mark('document-write', 'sprite.svg')}">`),
+	);
+	attempt('paint-worklet', () =>
+		window.CSS && CSS.paintWorklet
+			? CSS.paintWorklet.addModule(mark('paint-worklet', 'inline-script.js'))
+			: (errors['paint-worklet'] = 'absent'),
+	);
+	attempt('audio-worklet', () =>
+		new AudioContext().audioWorklet.addModule(
+			mark('audio-worklet', 'inline-script.js'),
+		),
+	);
+	attempt('import', () => import(mark('import', 'inline-script.js')));
+	setTimeout(() => {
+		attempt('ping', () => document.getElementById('ping').click());
+		// an absolute ping URL, built from the page's own origin
+		attempt('ping-absolute', () => {
+			const link = document.getElementById('ping-absolute');
+			// the fixture keeps its headers under this run's key
+			const key = new URLSearchParams(location.search).get('k') || 'x';
+			link.ping = `${location.origin}/echo-headers?k=ping-${key}&bypass=ping-absolute`;
+			setTimeout(() => link.click(), 700);
+		});
+		setTimeout(
+			() => attempt('form', () => document.getElementById('form').submit()),
+			1500,
+		);
+		setTimeout(
+			() => attempt('open', () => window.open(mark('open', 'sprite.svg'))),
+			2500,
+		);
+	}, 1000);
+	setTimeout(
+		() =>
+			(window.__bypass = {
+				done: true,
+				errors,
+				opened,
+				pingRead: [
+					document.getElementById('ping-read').ping,
+					document.getElementById('ping-read').getAttribute('ping'),
+				],
+			}),
+		6000,
+	);
+</script>

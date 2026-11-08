@@ -1,9 +1,19 @@
 // Every way a click or a script on a proxied page could navigate the host
 // window, in either mode: same-origin (host and proxy on 127.0.0.1, where only
 // the frame sandbox and the rewriter stand in the way) or isolated (host on
-// localhost). A vector "escapes" when the host page's URL changes. One suite
+// localhost). A vector "escapes" when the host page's URL changes, or when
+// any request it set off reaches the site without the proxy. One suite
 // file per mode under suites/, so the two run at once.
-import { done, FIXTURE, HOST, launch, ok, PROXY, sleep } from './lib.mjs';
+import {
+	done,
+	FIXTURE,
+	HOST,
+	launch,
+	ok,
+	PROXY,
+	recordRequests,
+	sleep,
+} from './lib.mjs';
 
 let browser;
 
@@ -31,6 +41,7 @@ export async function runMode(mode) {
 	browser = await launch();
 	for (const [id, expected] of Object.entries(VECTORS)) {
 		const context = await browser.newContext();
+		const recorder = await recordRequests(context);
 		const page = await context.newPage();
 		await page.goto(base);
 		await page.waitForFunction(
@@ -100,6 +111,16 @@ export async function runMode(mode) {
 				newTabs === wantTabs &&
 				blocked,
 			`host ${page.url()} frame ${title} new tabs ${newTabs}${opened ? ` popup ${opened.url()}` : ''}${blocked ? '' : ' window.open returned a window'}`,
+		);
+		// nothing the vector set off reached the site past the proxy
+		const fixtureHost = new URL(FIXTURE).host;
+		const raw = recorder
+			.raw()
+			.filter((entry) => new URL(entry.url).host === fixtureHost);
+		ok(
+			`${mode}: ${id} makes no request past the proxy`,
+			raw.length === 0,
+			JSON.stringify(raw.map((entry) => [entry.url, entry.type, entry.source])),
 		);
 		await context.close();
 	}

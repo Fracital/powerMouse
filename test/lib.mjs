@@ -72,6 +72,108 @@ export async function launch() {
 	});
 }
 
+/**
+ * Every request the browser makes in `context`, from any page, frame, worker
+ * or service worker, WebSocket handshakes included, each classified: `worker`
+ * (the proxy origin under the scope, served by the service worker), `proxy`
+ * (the proxy origin outside it: the demo's own files, its wisp socket),
+ * `host` (the isolated host page's origin), `raw` (any other origin: it
+ * reached the network without the proxy) or `local` (data:, blob:, about:).
+ * A raw request to a target a proxied page named is a bypass. Requests are
+ * recorded from the call on; `raw()` lists the raw ones.
+ */
+export async function recordRequests(context, { scope = '/stomp/' } = {}) {
+	const proxy = new URL(PROXY);
+	const host = new URL(HOST);
+	const log = [];
+	const classify = (url) => {
+		let parsed;
+		try {
+			parsed = new URL(url);
+		} catch (error) {
+			return 'local';
+		}
+		if (!/^(https?|wss?):$/.test(parsed.protocol)) return 'local';
+		if (parsed.host === proxy.host)
+			return parsed.pathname.startsWith(scope) ? 'worker' : 'proxy';
+		if (parsed.host === host.host) return 'host';
+		return 'raw';
+	};
+	const add = (url, type, source) =>
+		log.push({ url, type, source, kind: classify(url) });
+	context.on('request', (request) => {
+		let source;
+		if (request.serviceWorker()) source = 'service-worker';
+		else
+			try {
+				source = request.frame().parentFrame() ? 'frame' : 'page';
+			} catch (error) {
+				source = 'worker';
+			}
+		add(request.url(), request.resourceType(), source);
+	});
+	// Playwright reports no worklet module request (measured): every page,
+	// and every frame in a process of its own, is watched over CDP too. An
+	// audio worklet's module request shows in neither (measured): not
+	// recorded
+	const watched = new WeakSet();
+	const watchTarget = async (target, source) => {
+		if (watched.has(target)) return;
+		watched.add(target);
+		try {
+			const session = await context.newCDPSession(target);
+			session.on('Network.requestWillBeSent', ({ request, type }) =>
+				add(request.url, type ?? 'other', `${source}-cdp`),
+			);
+			await session.send('Network.enable');
+		} catch (error) {
+			// a frame in its parent's process has no session of its own
+		}
+	};
+	const watch = (page) => {
+		page.on('websocket', (socket) => add(socket.url(), 'websocket', 'page'));
+		watchTarget(page, 'page');
+		page.on('framenavigated', (frame) => {
+			if (frame.parentFrame()) watchTarget(frame, 'frame');
+		});
+	};
+	for (const page of context.pages()) watch(page);
+	context.on('page', watch);
+	// Playwright reports no request of a shared worker (measured): those
+	// targets are watched over CDP, each through its own session
+	const browser = context.browser();
+	if (browser) {
+		const cdp = await browser.newBrowserCDPSession();
+		let id = 0;
+		cdp.on('Target.targetCreated', async ({ targetInfo }) => {
+			if (targetInfo.type !== 'shared_worker') return;
+			try {
+				const { sessionId } = await cdp.send('Target.attachToTarget', {
+					targetId: targetInfo.targetId,
+					flatten: false,
+				});
+				await cdp.send('Target.sendMessageToTarget', {
+					sessionId,
+					message: JSON.stringify({ id: ++id, method: 'Network.enable' }),
+				});
+			} catch (error) {
+				// the worker went before it could be watched
+			}
+		});
+		cdp.on('Target.receivedMessageFromTarget', ({ message }) => {
+			const { method, params } = JSON.parse(message);
+			if (method === 'Network.requestWillBeSent')
+				add(params.request.url, params.type ?? 'other', 'shared-worker');
+		});
+		await cdp.send('Target.setDiscoverTargets', { discover: true });
+		context.on('close', () => cdp.detach().catch(() => {}));
+	}
+	return {
+		log,
+		raw: () => log.filter((entry) => entry.kind === 'raw'),
+	};
+}
+
 /** a page on the demo's landing screen with the controller ready */
 export async function openDemo(browser, base = HOST, viewport = {}) {
 	await waitForServer(base);
