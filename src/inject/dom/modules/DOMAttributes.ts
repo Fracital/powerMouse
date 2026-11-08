@@ -161,6 +161,24 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
 			}
 		};
+		// async=false scripts run in the order they were added (the browser's
+		// list of scripts that execute in order follows when each gets its
+		// src): a copy is applied once every earlier one of its document's is
+		const scriptAsync = Reflect.getOwnPropertyDescriptor(
+			this.client.global.HTMLScriptElement.prototype,
+			'async',
+		)?.get;
+		const inOrder = new WeakMap<
+			object,
+			{ value?: string; apply: (value: string) => void }[]
+		>();
+		const flush = (document: object) => {
+			const queue = inOrder.get(document)!;
+			while (queue.length && queue[0].value !== undefined) {
+				const entry = queue.shift()!;
+				entry.apply(entry.value!);
+			}
+		};
 		/**
 		 * Set a load attribute to its routed value, or in a document no service
 		 * worker controls to a copy of what it names (`urls` maps the value to
@@ -205,7 +223,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			states.set(attribute, state);
 			// nothing loads until the copy is in
 			element.removeAttribute(attribute);
-			const settle = (value: string) => {
+			const apply = (value: string) => {
 				if (states.get(attribute) !== state) {
 					// replaced while it was on its way
 					release(state);
@@ -217,6 +235,24 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				);
 				release(current);
 			};
+			let settle = apply;
+			if (
+				attribute === 'src' &&
+				element.localName === 'script' &&
+				scriptAsync &&
+				!Reflect.apply(scriptAsync, element, [])
+			) {
+				const document = element.ownerDocument;
+				if (!inOrder.has(document)) inOrder.set(document, []);
+				const entry: { value?: string; apply: (value: string) => void } = {
+					apply,
+				};
+				inOrder.get(document)!.push(entry);
+				settle = (value) => {
+					entry.value = value;
+					flush(document);
+				};
+			}
 			// every copy is waited for: when one fails (the routed value is set,
 			// which fails as it would have), the others are released with it
 			Promise.allSettled(

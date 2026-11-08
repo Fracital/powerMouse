@@ -197,6 +197,20 @@ export function startFixture(port = 8084) {
 			});
 			return;
 		}
+		// a script that arrives after `ms` and records `mark` in the order its
+		// document runs scripts (blank-loads suite)
+		if (path === '/slow-js') {
+			const query = new URL(req.url, 'http://x').searchParams;
+			res.setHeader('content-type', 'text/javascript');
+			setTimeout(
+				() =>
+					res.end(
+						`window.__order.push(${JSON.stringify(query.get('mark') ?? '')});`,
+					),
+				Math.min(Number(query.get('ms')) || 0, 3000),
+			);
+			return;
+		}
 		// a response that takes five seconds (abort measurement)
 		if (path === '/slow') {
 			setTimeout(() => res.end('slow'), 5000);

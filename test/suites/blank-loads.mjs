@@ -13,6 +13,7 @@ import {
 	launch,
 	ok,
 	openDemo,
+	PORT,
 	PROXY,
 	sleep,
 	submitLanding,
@@ -138,6 +139,74 @@ for (const [mode, base] of [
 			!(await fetches(firstCopy)) &&
 			(await fetches(secondCopy)),
 		JSON.stringify({ first, second, firstCopy, secondCopy }),
+	);
+	await page.close();
+}
+// async=false scripts the page adds to a document it built run in the order
+// it added them, a slow one before a fast one, as natively
+// (blank-order.html). Measured with the demo and with a host page per
+// transport host.
+const orderOf = async (page) => {
+	for (let i = 0; i < 40; i++) {
+		await sleep(250);
+		for (const frame of page.frames()) {
+			const value = await frame
+				.evaluate(() => window.__blankOrder)
+				.catch(() => null);
+			if (value?.done) return value;
+		}
+	}
+	return null;
+};
+const orderPage = await browser.newPage();
+await orderPage.goto(`${FIXTURE}pages/blank-order.html`);
+const nativeOrder = await orderOf(orderPage);
+await orderPage.close();
+ok(
+	'natively, async=false scripts run in the order they were added',
+	nativeOrder?.dynamic === 'slow fast',
+	JSON.stringify(nativeOrder),
+);
+for (const [mode, base] of [
+	['same-origin', PROXY],
+	['isolated', HOST],
+]) {
+	const page = await openDemo(browser, base);
+	await submitLanding(page, `${FIXTURE}pages/blank-order.html`);
+	const order = await orderOf(page);
+	ok(
+		`${mode}: async=false scripts run in the order they were added`,
+		order?.dynamic === nativeOrder?.dynamic,
+		JSON.stringify(order),
+	);
+	await page.close();
+}
+const WISP = `ws://127.0.0.1:${PORT}/wisp/`;
+for (const [host, transport] of [
+	['worker', 'descriptor'],
+	['page', 'page'],
+]) {
+	const page = await browser.newPage();
+	const query = new URLSearchParams({ wisp: WISP, transport });
+	await page.goto(`${FIXTURE}pages/transport-host.html?${query}`);
+	await page
+		.waitForFunction(() => window.__th?.ready, null, { timeout: 60000 })
+		.catch(() => {});
+	const booted = await page.evaluate(() => window.__th);
+	await page.evaluate(async (fixture) => {
+		const element = document.createElement('iframe');
+		document.body.append(element);
+		// the proxy refuses its own origin, the host page's
+		const origin = new URL(fixture).origin.replace('127.0.0.1', 'localhost');
+		await window.controller
+			.createFrame(element)
+			.go(`${origin}/pages/blank-order.html`);
+	}, FIXTURE);
+	const order = await orderOf(page);
+	ok(
+		`a ${host}-hosted transport: async=false scripts run in the order they were added`,
+		booted?.host === host && order?.dynamic === nativeOrder?.dynamic,
+		JSON.stringify({ host: booted?.host, order }),
 	);
 	await page.close();
 }

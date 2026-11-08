@@ -1,0 +1,46 @@
+<!doctype html>
+<title>BLANK ORDER</title>
+<script>
+	// in a document the page writes itself, scripts run in the order the
+	// browser runs them on the real site: a written external script before
+	// the inline one after it, async=false dynamic scripts in insertion order
+	const report = {};
+	window.__blankOrder = report;
+	addEventListener('load', () => {
+		const iframe = document.createElement('iframe');
+		document.body.append(iframe);
+		const win = iframe.contentWindow;
+		const doc = iframe.contentDocument;
+		win.__order = [];
+		const a = new URL('order-a.js?written', location.href).href;
+		doc.open();
+		const px = (tag) => new URL(`blank-pixel.svg?${tag}`, location.href).href;
+		doc.write(
+			`<!doctype html><body><img id="w" src="${px('written-img')}" onload="__order.push('img-w')" onerror="__order.push('img-w-error')"><script src="${a}"><\/script><script>__order.push('inline')<\/script></body>`,
+		);
+		doc.close();
+		const holder = doc.createElement('div');
+		doc.body.append(holder);
+		holder.innerHTML = `<img src="${px('inner-img')}" onload="__order.push('img-i')" onerror="__order.push('img-i-error')">`;
+		const dynamic = (mark, ms) => {
+			const script = doc.createElement('script');
+			script.async = false;
+			script.src = new URL(
+				`/slow-js?mark=${mark}&ms=${ms}`,
+				location.href,
+			).href;
+			doc.body.append(script);
+		};
+		setTimeout(() => {
+			win.__order.push('|');
+			dynamic('slow', 800);
+			dynamic('fast', 0);
+		}, 1000);
+		setTimeout(() => {
+			const [written, dynamic] = win.__order.join(' ').split(' | ');
+			report.written = written;
+			report.dynamic = dynamic;
+			report.done = true;
+		}, 3000);
+	});
+</script>

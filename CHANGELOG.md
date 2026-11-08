@@ -291,6 +291,13 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- In a document no service worker controls, async=false scripts run in the
+  order the page added them. Each gets its source once its copy is in, and
+  the browser runs such scripts in the order they get one, so a slow script
+  ran after a fast one added after it. A copy is now applied only once every
+  earlier async=false script of the document has had its own (blank-loads
+  suite, both modes and both transport hosts, against the page loaded
+  natively).
 - A srcset copy that fails no longer leaves its other copies alive: every
   candidate's copy is waited for, and when one fails the others are released
   with it. The copies are made and released with the URL functions the page
