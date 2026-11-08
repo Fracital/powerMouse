@@ -1,0 +1,85 @@
+<!doctype html>
+<title>SANDBOX TOKENS</title>
+<body>
+	<script>
+		// Frames whose sandbox the page builds through the token list rather
+		// than the attribute: reCAPTCHA sets the attribute, then adds each newer
+		// flag the browser supports with `sandbox.add`. Each child reports to
+		// this page by name when its script runs.
+		window.__children = {};
+		addEventListener('message', (event) => {
+			if (event.data && typeof event.data.child === 'string')
+				window.__children[event.data.child] = true;
+		});
+		const frame = (name, build) => {
+			const element = document.createElement('iframe');
+			element.id = name;
+			build(element);
+			element.src = `sandbox-child.html#${name}`;
+			document.body.append(element);
+		};
+		// the reCAPTCHA anchor frame
+		frame('recaptcha', (element) => {
+			element.setAttribute(
+				'sandbox',
+				'allow-forms allow-popups allow-same-origin allow-scripts allow-top-navigation',
+			);
+			for (const token of [
+				'allow-modals',
+				'allow-popups-to-escape-sandbox',
+				'allow-storage-access-by-user-activation',
+			])
+				if (element.sandbox.supports(token)) element.sandbox.add(token);
+		});
+		// a sandbox that is only ever a token list
+		frame('added', (element) => element.sandbox.add('allow-scripts'));
+		frame('value', (element) => {
+			element.sandbox.value = 'allow-scripts allow-same-origin';
+		});
+
+		// what the page reads back, and what its token list calls return
+		const scratch = document.createElement('iframe');
+		const observer = new MutationObserver(() => {});
+		observer.observe(scratch, { attributes: true, attributeOldValue: true });
+		const list = scratch.sandbox;
+		const errorName = (run) => {
+			try {
+				run();
+				return null;
+			} catch (error) {
+				return error.name;
+			}
+		};
+		const steps = [];
+		const step = (name, result) =>
+			steps.push([name, result, scratch.getAttribute('sandbox')]);
+		step('remove on none', list.remove('allow-scripts'));
+		step('has after remove on none', scratch.hasAttribute('sandbox'));
+		step('add', list.add('allow-scripts', 'allow-forms'));
+		step('toggle off', list.toggle('allow-forms'));
+		step('toggle on', list.toggle('allow-popups'));
+		step('toggle forced', list.toggle('allow-popups', true));
+		step('replace', list.replace('allow-popups', 'allow-modals'));
+		step('replace missing', list.replace('allow-forms', 'allow-popups'));
+		step('remove', list.remove('allow-modals'));
+		step(
+			'add empty',
+			errorName(() => list.add('')),
+		);
+		step(
+			'add space',
+			errorName(() => list.add('a b')),
+		);
+		step('value set', (list.value = 'allow-same-origin'));
+		step('supports', list.supports('allow-scripts'));
+		window.__read = {
+			steps,
+			records: observer
+				.takeRecords()
+				.map((record) => [record.attributeName, record.oldValue]),
+			frames: ['recaptcha', 'added', 'value'].map((name) =>
+				document.getElementById(name).getAttribute('sandbox'),
+			),
+		};
+	</script>
+</body>

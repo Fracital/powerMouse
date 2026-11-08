@@ -1,0 +1,5 @@
+<!doctype html>
+<title>SANDBOX CHILD</title>
+<script>
+	parent.postMessage({ child: location.hash.slice(1) }, '*');
+</script>
