@@ -7,17 +7,8 @@
 		"(non-secure) Ignore cookie with __Secure- prefix and without Secure": "MISSING: the harness ended OK before this subtest",
 		"(non-secure) Cookie returned with __%53ecure- prefix and without Secure": "MISSING: the harness ended OK before this subtest"
 	},
-	"/cookies/name/name-ctl.html": {
-		"Cookie with %x0 in name is rejected or modified (HTTP).": "FAIL: assert_equals: The cookie was set as expected. expected \"test0 name=0\" but got \"\""
-	},
 	"/cookies/ordering/ordering.sub.html": {
 		"Test cookie ordering": "FAIL: Cannot read properties of null (reading 'postMessage')",
 		"Cookies with longer paths are listed before cookies with shorter paths": "MISSING: the harness ended OK before this subtest"
-	},
-	"/cookies/value/value-ctl.html": {
-		"Cookie with %x0 in name is rejected or modified (HTTP).": "FAIL: assert_equals: The cookie was set as expected. expected \"test0 name=0\" but got \"\""
-	},
-	"/cookies/value/value.html": {
-		"Set cookie but ignore value after LF": "FAIL: assert_equals: The cookie was set as expected. expected \"test=13\" but got \"\""
 	}
 }
