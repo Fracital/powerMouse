@@ -308,6 +308,14 @@ same-origin`, and with the default credentials carried that site's
   modes, against the page loaded natively; WPT fetch-metadata
   worker-dedicated-importscripts passes, its seven entries are off the
   expected list).
+- A proxied page may use what its frame's sandbox does not exist to stop.
+  The sandbox only keeps a page from navigating the host, but it lacked
+  `allow-presentation` and `allow-orientation-lock`, so `new
+PresentationRequest()` (Spotify) and `screen.orientation.lock()` threw
+  SecurityError, and popups a page opened inherited the sandbox, which they
+  never have natively. `DEFAULT_SANDBOX` now adds those two flags and
+  `allow-popups-to-escape-sandbox` (frame-features suite, both modes,
+  against the page loaded natively).
 - A same-origin frame's hooked functions read as native from its parent.
   Each proxied frame loads its own copy of the inject, whose wrappers the
   parent's copy never made, so the parent's `Function.prototype.toString`
