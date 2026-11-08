@@ -31,12 +31,69 @@ export function pageBlobURL(url: string): string {
 	return `blob:${blobOrigins.page}${url.slice(blobOrigins.proxy.length + 5)}`;
 }
 
+/**
+ * Where routes live, as `<proxy origin><scope>`: the realm's own (the
+ * client's) or every controller's (the service worker's). A URL under one
+ * of them is already a route.
+ */
+const routeScopes = new Set<string>();
+
+export function addRouteScope(origin: string, scope: string) {
+	routeScopes.add(`${origin}${scope}`);
+}
+
+/**
+ * The real URL a route of a known scope stands for, through any depth (a
+ * route of a route of a URL is that URL), with the outermost hash; null when
+ * `url` is not a route. Any controller id and any kind of the scope; decoded
+ * with `codec`, so a foreign controller's route with another codec stays as
+ * it is. An inline document's address names a token, not a URL.
+ */
+export function unwrapRoute(url: URL, codec: GenericCodec): URL | null {
+	let real: URL | null = null;
+	let href = url.href;
+	for (let depth = 0; depth < 8; depth++) {
+		let scope: string | undefined;
+		for (const candidate of routeScopes)
+			if (href.startsWith(candidate)) scope = candidate;
+		if (!scope) break;
+		const rest = href.slice(scope.length);
+		// `<id>/<kind>/<encoded>`, or `<kind>/<encoded>` where the scope is the
+		// controller's directory (a config from before addresses)
+		const id = /^([\w-]+)\//.exec(rest)?.[1];
+		const directories = id ? [`${scope}${id}/`, scope] : [scope];
+		let next: URL | null = null;
+		for (const directory of directories) {
+			if (href.slice(directory.length).startsWith('inline:')) break;
+			try {
+				const parsed = parseRoutedURL(href, codec, directory).url.url;
+				if (ROUTE_PROTOCOLS.includes(parsed.protocol)) {
+					next = parsed;
+					break;
+				}
+			} catch {
+				// not a route of this directory
+			}
+		}
+		if (!next) break;
+		real = next;
+		href = next.href;
+	}
+	return real;
+}
+
 export function routeURL(resourceType: string, url: StompURL) {
 	if (!ROUTE_PROTOCOLS.includes(url.url.protocol)) {
 		// url is out of the scope of Stomp (a page-origin blob: URL becomes
 		// the proxy's, which is the one the browser knows)
 		return proxyBlobURL(url.toString());
 	}
+
+	// a URL that is already a route (the page read its raw proxy URL through
+	// a path the rewriter missed) is routed as the real URL it stands for:
+	// routed again it would decode to the proxy's own origin, refused
+	const real = routeScopes.size ? unwrapRoute(url.url, url.codec) : null;
+	if (real) url = new StompURL(real, url);
 
 	return `${url.directory}${resourceType}/${url.encode()}`;
 }

@@ -1,0 +1,35 @@
+<!doctype html>
+<title>DOUBLE</title>
+<a id="a" href="hist-2.html">link</a>
+<form id="form" method="get" action="hist-2.html">
+	<input name="via" value="form" />
+</form>
+<script>
+	// what the page sees of each load: a counter that survives navigations,
+	// its own URL, and setters for a URL a test hands it
+	const loads = Number(sessionStorage.getItem('double-loads') || 0) + 1;
+	sessionStorage.setItem('double-loads', String(loads));
+	window.__double = {
+		loads,
+		href: location.href,
+		setLink(url) {
+			const a = document.getElementById('a');
+			a.href = url;
+			return a.href;
+		},
+		setAction(url) {
+			const form = document.getElementById('form');
+			form.action = url;
+			return form.action;
+		},
+		click() {
+			document.getElementById('a').click();
+		},
+		submit() {
+			document.getElementById('form').submit();
+		},
+		go(url) {
+			location.href = url;
+		},
+	};
+</script>

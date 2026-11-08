@@ -1,5 +1,6 @@
 import { getDomain } from 'tldts';
 import { Config, ConfigCodec } from '../config';
+import { addRouteScope } from '../routeURL';
 import {
 	ABORT_REQUEST,
 	CONTROLLER_CLIENT,
@@ -100,6 +101,8 @@ function registerController(
 	// a controller bundle from before addresses sends no scope: its directory
 	// is the scope
 	const config: Config = { ...given, scope: given.scope || given.directory };
+	// a URL under the scope is already a route: routeURL unwraps it
+	addRouteScope(location.origin, config.scope);
 
 	// a controller whose transport lives in its worker sends a second port,
 	// served from there; otherwise the transport shares the rpc port

@@ -14,7 +14,7 @@ import type {
 	HookPhase,
 	ResolvedHooks,
 } from '../hooks';
-import { parseRoutedURL, ROUTE_PROTOCOLS } from '../routeURL';
+import { addRouteScope, parseRoutedURL, ROUTE_PROTOCOLS } from '../routeURL';
 import StompURL from '../StompURL';
 import {
 	ABORT_REQUEST,
@@ -140,6 +140,10 @@ export default class Client {
 		this.codec = init.codec;
 		this.directory = init.directory;
 		this.scope = init.scope || init.directory;
+		// the realm's own origin is the proxy's (native at this point): a URL
+		// under its scope is already a route (routeURL unwraps it)
+		const origin = global.location?.origin;
+		if (origin && origin !== 'null') addRouteScope(origin, this.scope);
 		this.openTab = !!init.openTab;
 		this.build = init.build;
 		this.allowInvalidJs = init.allowInvalidJs !== false;

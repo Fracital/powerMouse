@@ -21,7 +21,7 @@ import {
 	XML_DOCUMENT_MIMES,
 } from '../rewriteHTML';
 import { modifyJS, routeJS, ScriptType } from '../rewriteJS';
-import { parseRoutedURL, routeBinary } from '../routeURL';
+import { parseRoutedURL, routeBinary, unwrapRoute } from '../routeURL';
 import StompURL from '../StompURL';
 import type {
 	RequestErrorKind,
@@ -251,11 +251,29 @@ function genericForward(
 				client: context?.clientId,
 			});
 		const oURL = new URL(serverRequest.url);
-		const { url } = parseRoutedURL(
+		const { url, resource } = parseRoutedURL(
 			serverRequest.url,
 			rewriter.codec,
 			`${oURL.origin}${rewriter.directory}`,
 		);
+
+		// a route of a route (a page handed a hook its raw proxy URL, routed
+		// again): the real URL is the inner route's, so the request is sent to
+		// the single route of it, a document and a subresource alike
+		const unwrapped =
+			url.url.origin === oURL.origin
+				? unwrapRoute(url.url, rewriter.codec)
+				: null;
+		if (unwrapped) {
+			const single = `${oURL.origin}${rewriter.directory}${resource}/${new StompURL(
+				unwrapped,
+				url,
+			).encode()}`;
+			return new Response(null, {
+				status: 307,
+				headers: { location: single, 'cache-control': 'no-store' },
+			});
+		}
 
 		// a route that decodes to the proxy's own origin would make the proxy
 		// fetch itself (its host page, its worker): a loop and an exposure

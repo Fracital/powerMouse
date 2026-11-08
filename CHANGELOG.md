@@ -291,6 +291,16 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A route of a route is the route. A page that got hold of its own raw
+  proxy URL (a read the rewriter missed) and handed it to a link, a form
+  action or `location` had it routed again, and the worker refused the result
+  as its own origin: a Last.fm sign-in on Fracital ended on the error page,
+  kind `refused`. Every routing hook now unwraps a URL that is already a route
+  of the scope (any controller id and kind, any depth) and routes the real URL
+  it stands for, and the worker answers a request for a double route with a
+  307 to the single route, documents and subresources alike. Only a genuine
+  own-origin URL is still refused. The page reads such a link back as it wrote
+  it (double-route suite, both modes).
 - Documents a page makes itself load their subresources through the proxy. A
   `javascript:` URL's string, a `text/html` blob shown in a frame and a
   `data:` frame became documents no service worker controls (Chrome does not
