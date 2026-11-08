@@ -251,6 +251,10 @@ export default class DocumentClient extends Client {
 			return false;
 		}
 	}
+	/** the document was opened (document.open(), or a write once it had loaded): its URL is its opener's, its loads may still have no worker */
+	opened = false;
+	/** @internal give the loads the parser made from markup the page wrote their copies (DOMAttributes; DOMHooks' write calls it) */
+	writtenLoads?: (document: Document) => void;
 	get url(): StompURL {
 		if (this.#parseBase) return this.#parseBase;
 		// a document the page made (a blob, a data: frame, an inline document

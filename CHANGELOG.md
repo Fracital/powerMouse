@@ -291,6 +291,16 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- What a page writes into a document no service worker controls loads:
+  an editor's frame (`<iframe src="">` written once it loads, as CKEditor 4
+  does) and a popup its opener writes into now show the written stylesheet
+  and images. The copy of each load was made on the clone the written
+  markup is rewritten on, and the element the parser made had only its
+  marker; now the parser's elements get their copies once the write is in
+  (scripts keep the copy they got during the write). A write into a
+  document that had loaded opens it again, as the browser does, and counts
+  as opened (written-documents suite, both modes, against the page loaded
+  natively, with the bypass recorder).
 - Reading a page's markup back loads nothing. innerHTML, outerHTML, a
   shadow root's innerHTML and XMLSerializer give the page its own markup by
   copying the subtree and folding the hooks' markers back; the copy was made

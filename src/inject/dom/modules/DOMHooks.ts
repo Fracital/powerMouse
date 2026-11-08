@@ -364,8 +364,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				// write left unfinished went with the old one
 				if (typeof that === 'object' && that !== null) stream.reset(that);
 				const result = Reflect.apply(target, that, args);
-				if (that === this.client.global.document)
+				if (that === this.client.global.document) {
+					this.client.opened = true;
 					runDocumentOpenListeners(this.client.global);
+				}
 				return result;
 			},
 		);
@@ -442,6 +444,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					typeof that === 'object' && that !== null
 						? that
 						: this.client.global.document;
+				// a write once the document has loaded opens it again (the page
+				// never called open()): known before the markup is rewritten, the
+				// listeners after, once the browser has dropped the window's own
+				const opens =
+					document === this.client.global.document &&
+					this.client.global.document.readyState === 'complete';
+				if (opens) this.client.opened = true;
 				const prevState = getGlobalParsingState(this.client.global);
 				setGlobalParsingState(this.client.global, 'parsingBeforeWrite');
 				let markup: string;
@@ -453,6 +462,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				// an empty write still reaches the parser: after the document
 				// has loaded it opens a new one, as the page's own call would
 				Reflect.apply(nativeWrite, that, [markup]);
+				if (opens) runDocumentOpenListeners(this.client.global);
+				this.client.writtenLoads?.(document as Document);
 			});
 
 		this.client.global.document.write = writeFactory(
@@ -472,7 +483,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			(target, that, args) => {
 				const tail = stream.take(that);
 				if (tail) Reflect.apply(nativeWrite, that, [tail]);
-				return Reflect.apply(target, that, args);
+				const result = Reflect.apply(target, that, args);
+				this.client.writtenLoads?.(that as Document);
+				return result;
 			},
 		);
 

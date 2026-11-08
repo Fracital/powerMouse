@@ -19,7 +19,7 @@ import Module from '../../Module';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { scopePrefix, unrouteURL } from '../../modules/Unroute';
 import { blobLoads } from '../blobLoads';
-import DocumentClient, { addDocumentOpenListener } from '../Client';
+import DocumentClient from '../Client';
 import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
 import { hookWrite } from './MutationObserver';
 import SyncModule from './Sync';
@@ -113,11 +113,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// element gets a blob: URL of the copy, written underneath the hooks:
 		// the attribute, the property and the markup read back as the page
 		// wrote them, currentSrc as the URL the copy came from.
-		let opened = false;
-		addDocumentOpenListener(this.client.global, () => (opened = true));
 		const uncontrolled = () =>
 			!this.client.controlled &&
-			(opened || this.client.global.location.href === 'about:blank');
+			(this.client.opened ||
+				this.client.global.location.href === 'about:blank');
 		// the proxy origin from the base URL: an about:blank document's own
 		// origin reads "null"
 		const isRoute = (value: string) => {
@@ -411,6 +410,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const states = copies.get(element)!;
 			const state: Copy = { routed, made: [] };
 			states.set(attribute, state);
+			// markup the page writes: the element here is the clone the markup
+			// is rewritten on; the parser makes the real one, which gets its copy
+			// after the write (writtenLoads). A script is copied at once below.
+			if (this.client.writing && element.localName !== 'script') {
+				states.delete(attribute);
+				element.removeAttribute(attribute);
+				return;
+			}
 			// a script the page writes: its copy now, or it would never run
 			if (
 				attribute === 'src' &&
@@ -1569,6 +1576,42 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					if (style.sheet) putBack(style.sheet);
 				},
 			);
+
+		// The elements the parser made from markup the page wrote into a
+		// document no service worker controls: each load the rewrite left with
+		// only its marker (see placeLoad) gets the page's value back and its
+		// hooks run on the element itself, which makes its copy. Underneath the
+		// hooks, so the page's observers see nothing. A script is not one: it
+		// got its copy during the write, or (the transport in the page) does
+		// not run.
+		const nativeQueryAll =
+			this.client.global.Document.prototype.querySelectorAll;
+		const LOADS = ['src', 'href', 'srcset', 'poster', 'data', 'imagesrcset'];
+		const written = LOADS.map(
+			(name) => `[s_o\\:${name}]:not([${name}]):not(script)`,
+		).join(',');
+		this.client.writtenLoads = (document) => {
+			if (!uncontrolled()) return;
+			let elements: Element[];
+			try {
+				elements = [
+					...(Reflect.apply(nativeQueryAll, document, [
+						written,
+					]) as NodeListOf<Element>),
+				];
+			} catch (error) {
+				return;
+			}
+			for (const element of elements)
+				usePrototype(element, CustomElement.prototype, (element) => {
+					for (const name of LOADS) {
+						const page = element.getAttributeOG(name);
+						if (page === null || element.hasAttribute(name)) continue;
+						element.setAttribute(name, page);
+						domHooksModule.updateAttributeHooks(element, name);
+					}
+				});
+		};
 
 		const validMethods = ['GET', 'POST'];
 

@@ -1,0 +1,53 @@
+<!doctype html>
+<title>WRITTEN DOCUMENTS</title>
+<div id="holder"></div>
+<script>
+	// Whole documents a page writes into windows it made: the editor frame
+	// (an <iframe src=""> built from markup, written once it loads, as
+	// CKEditor 4 does) and a popup its opener writes into. Each loads a
+	// stylesheet and an image, marked ?written=<case>-<kind>.
+	const report = {};
+	window.__written = report;
+	const at = (file, mark) =>
+		new URL(`${file}?written=${mark}`, location.href).href;
+	const page = (name) =>
+		`<!DOCTYPE html><html><head><link type="text/css" rel="stylesheet" href="${at('blank.css', `${name}-link`)}"></head><body contenteditable="true" class="editable"><img src="${at('blank-pixel.svg', `${name}-img`)}"></body></html>`;
+	const describe = (win) => {
+		const doc = win.document;
+		const image = doc.images[0];
+		return {
+			ownWrite: Object.getOwnPropertyNames(doc).includes('write'),
+			color: win.getComputedStyle(doc.body).color,
+			image: image ? image.complete && image.naturalWidth > 0 : null,
+			editable: doc.body.getAttribute('contenteditable'),
+			mode: doc.compatMode,
+		};
+	};
+	const holder = document.getElementById('holder');
+	const detached = document.createElement('div');
+	detached.innerHTML = '<iframe src="" frameBorder="0"></iframe>';
+	const iframe = detached.firstChild;
+	iframe.addEventListener(
+		'load',
+		() => {
+			const doc = iframe.contentWindow.document;
+			doc.open();
+			doc.write(page('frame'));
+			doc.close();
+			setTimeout(() => (report.frame = describe(iframe.contentWindow)), 2500);
+		},
+		{ once: true },
+	);
+	holder.append(iframe);
+	addEventListener('load', () => {
+		const popup = window.open();
+		if (!popup) return (report.popup = null);
+		popup.document.write(page('popup'));
+		popup.document.close();
+		setTimeout(() => {
+			report.popup = describe(popup);
+			popup.close();
+		}, 2500);
+	});
+	setTimeout(() => (report.done = true), 4000);
+</script>
