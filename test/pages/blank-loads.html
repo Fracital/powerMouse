@@ -1,0 +1,75 @@
+<!doctype html>
+<title>BLANK LOADS</title>
+<script>
+	// Documents the page builds itself and no service worker controls (a new
+	// frame's about:blank, one it opened, one it wrote, a popup): each loads
+	// an image, a srcset image, an image input, a script, a stylesheet, a
+	// poster and an audio source, and reports what fired and what it reads
+	// back. Every URL is marked ?blank=<document>-<kind>.
+	const report = {};
+	window.__blankLoads = report;
+	const at = (file, name, kind) =>
+		new URL(`${file}?blank=${name}-${kind}`, location.href).href;
+	const load = (name, doc, win) => {
+		const seen = (report[name] = {});
+		const watch = (kind, element) => {
+			seen[kind] = 'pending';
+			element.onload = () => (seen[kind] = 'load');
+			element.onerror = () => (seen[kind] = 'error');
+			return element;
+		};
+		const image = watch('img', doc.createElement('img'));
+		image.src = at('blank-pixel.svg', name, 'img');
+		const set = watch('srcset', doc.createElement('img'));
+		set.srcset = `${at('blank-pixel.svg', name, 'srcset')} 1x`;
+		const input = watch('input', doc.createElement('input'));
+		input.type = 'image';
+		input.src = at('blank-pixel.svg', name, 'input');
+		const script = watch('script', doc.createElement('script'));
+		script.src = at('blank-script.js', name, 'script');
+		const link = watch('link', doc.createElement('link'));
+		link.rel = 'stylesheet';
+		link.href = at('blank.css', name, 'link');
+		const video = doc.createElement('video');
+		video.poster = at('blank-pixel.svg', name, 'poster');
+		const audio = watch('audio', doc.createElement('audio'));
+		audio.src = at('echo.json', name, 'audio');
+		doc.head.append(link);
+		doc.body.append(image, set, input, video, audio, script);
+		setTimeout(() => {
+			seen.readback = {
+				attribute: image.getAttribute('src'),
+				property: image.src,
+				current: image.currentSrc,
+				setCurrent: set.currentSrc,
+				markup: doc.body.innerHTML,
+				script: win.__blankScript ?? null,
+				color: win.getComputedStyle(doc.body).color,
+			};
+		}, 2500);
+	};
+	addEventListener('load', () => {
+		const frame = (name, build) => {
+			const iframe = document.createElement('iframe');
+			document.body.append(iframe);
+			build(iframe.contentDocument);
+			load(name, iframe.contentDocument, iframe.contentWindow);
+		};
+		frame('initial', () => {});
+		frame('opened', (doc) => {
+			doc.open();
+			doc.close();
+		});
+		frame('written', (doc) => {
+			doc.open();
+			doc.write('<!doctype html><head></head><body></body>');
+			doc.close();
+		});
+		const popup = window.open();
+		if (popup) load('popup', popup.document, popup);
+		setTimeout(() => {
+			popup?.close();
+			report.done = true;
+		}, 3500);
+	});
+</script>

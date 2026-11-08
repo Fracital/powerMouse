@@ -27,22 +27,8 @@
 		"sec-fetch-dest": "FAIL: assert_array_equals: expected property 0 to be \"embed\" but got \"empty\" (expected array [\"embed\"] got [\"empty\"])"
 	},
 	"/fetch/metadata/generated/element-img-environment-change.https.sub.html": {
-		"sec-fetch-site - Same origin, no attributes": "TIMEOUT: Test timed out",
-		"sec-fetch-site - Cross-site, no attributes": "NOTRUN: ",
-		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect, no attributes": "NOTRUN: ",
-		"sec-fetch-site - Cross-Site -> Same Origin, no attributes": "NOTRUN: ",
-		"sec-fetch-site - Cross-Site -> Same-Site, no attributes": "NOTRUN: ",
-		"sec-fetch-site - Cross-Site -> Cross-Site, no attributes": "NOTRUN: ",
-		"sec-fetch-site - Same-Origin -> Same Origin, no attributes": "NOTRUN: ",
-		"sec-fetch-site - Same-Origin -> Cross-Site, no attributes": "NOTRUN: ",
-		"sec-fetch-site - Same-Site -> Cross-Site, no attributes": "NOTRUN: ",
-		"(harness)": "TIMEOUT: ",
 		"sec-fetch-mode - no attributes": "NOTRUN: ",
-		"sec-fetch-mode - attributes: crossorigin": "NOTRUN: ",
-		"sec-fetch-mode - attributes: crossorigin=anonymous": "NOTRUN: ",
-		"sec-fetch-mode - attributes: crossorigin=use-credentials": "NOTRUN: ",
-		"sec-fetch-dest - no attributes": "NOTRUN: ",
-		"sec-fetch-user - no attributes": "NOTRUN: "
+		"sec-fetch-dest - no attributes": "NOTRUN: "
 	},
 	"/fetch/metadata/generated/element-link-icon.https.sub.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",

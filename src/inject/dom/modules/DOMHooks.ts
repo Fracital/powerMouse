@@ -1370,7 +1370,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							// the document's own URL (a route), not a URL to apply.
 							const value = Reflect.apply(descriptor.get!, that, []);
 
-							if (typeof value === 'string' && args[0] !== '')
+							// nor one a hook removed (a load whose proxied copy is still on
+							// its way): written back it would be an empty URL, which a
+							// script reports as an error and never loads again
+							if (typeof value === 'string' && args[0] !== '' && value !== '')
 								Reflect.apply(target, that, [value]);
 						}),
 					),

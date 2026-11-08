@@ -1,6 +1,7 @@
 import Module from '../../Module';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
+import { blobLoads } from '../blobLoads';
 import DocumentClient from '../Client';
 import {
 	nativeDocumentFragment,
@@ -66,9 +67,11 @@ export default class ReadbackModule extends Module<DocumentClient> {
 				...descriptor,
 				get: proxyModule.wrapFunction(descriptor.get, (get, that, args) => {
 					const value = Reflect.apply(get, that, args);
-					return typeof value === 'string'
-						? (unrouteURL(this.client, value) ?? value)
-						: value;
+					if (typeof value !== 'string') return value;
+					// a copy the inject loaded for a document no worker controls
+					const copied = blobLoads.get(value);
+					if (copied !== undefined) return copied;
+					return unrouteURL(this.client, value) ?? value;
 				}),
 			});
 		};
@@ -78,6 +81,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		unrouteGetter(global.NavigationDestination?.prototype, 'url');
 		// the candidate the browser picked from src / srcset, as the page wrote it
 		unrouteGetter(global.HTMLImageElement?.prototype, 'currentSrc');
+		unrouteGetter(global.HTMLMediaElement?.prototype, 'currentSrc');
 	}
 	applyScriptSource() {
 		const proxyModule = this.client.getModule(ProxyModule)!;

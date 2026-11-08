@@ -17,7 +17,9 @@ import {
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
-import DocumentClient from '../Client';
+import { scopePrefix } from '../../modules/Unroute';
+import { blobLoads } from '../blobLoads';
+import DocumentClient, { addDocumentOpenListener } from '../Client';
 import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
 
 /** the JavaScript MIME type essences (HTML "JavaScript MIME type") */
@@ -98,6 +100,103 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 	apply() {
 		// before the BlobDocuments module wraps it (it applies after this one)
 		const NativeBlob = this.client.global.Blob;
+
+		// A document no service worker controls (an about:blank frame or popup
+		// the page built, or a document it opened: Chrome hands neither to the
+		// page's worker) loads its elements from the proxy origin's own server,
+		// where a route means nothing. Its loads are fetched through the proxy
+		// instead (routedFetch, from the nearest controlled ancestor) and the
+		// element gets a blob: URL of the copy, written underneath the hooks:
+		// the attribute, the property and the markup read back as the page
+		// wrote them, currentSrc as the URL the copy came from.
+		let opened = false;
+		addDocumentOpenListener(this.client.global, () => (opened = true));
+		const uncontrolled = () =>
+			!this.client.controlled &&
+			(opened || this.client.global.location.href === 'about:blank');
+		// the proxy origin from the base URL: an about:blank document's own
+		// origin reads "null"
+		const isRoute = (value: string) => {
+			const prefix = scopePrefix(this.client);
+			try {
+				return new URL(value, prefix).href.startsWith(prefix);
+			} catch (error) {
+				return false;
+			}
+		};
+		// per element and attribute: the routed value the copy is for, and its
+		// blob: URL once it is in (a hook that runs again for the same value
+		// keeps the copy)
+		const copies = new WeakMap<
+			Element,
+			Map<string, { routed: string; url?: string }>
+		>();
+		/** a routed URL's copy, as a blob: URL (the proxy's form) */
+		const copyOf = async (routed: string, page: string): Promise<string> => {
+			const response = await this.client.routedFetch(routed, {
+				credentials: 'include',
+			});
+			if (!response.ok && response.status !== 0)
+				throw new Error(String(response.status));
+			const url = proxyBlobURL(
+				this.client.global.URL.createObjectURL(await response.blob()),
+			);
+			blobLoads.set(url, page);
+			return url;
+		};
+		/**
+		 * Set a load attribute to its routed value, or in a document no service
+		 * worker controls to a copy of what it names (`urls` maps the value to
+		 * the routed URLs it holds, for a srcset; one URL otherwise).
+		 */
+		const placeLoad = (
+			element: CustomElement,
+			attribute: string,
+			routed: string,
+			urls: { routed: string; page: string }[] | null = null,
+			compose: (copies: string[]) => string = (copies) => copies[0],
+		) => {
+			const targets = urls ?? [
+				{
+					routed,
+					page: new URL(
+						element.getAttributeOG(attribute) ?? routed,
+						this.client.url.toString(),
+					).href,
+				},
+			];
+			if (!uncontrolled() || !targets.some(({ routed }) => isRoute(routed))) {
+				element.setAttribute(attribute, routed);
+				return;
+			}
+			if (!copies.has(element)) copies.set(element, new Map());
+			const perAttribute = copies.get(element)!;
+			const current = perAttribute.get(attribute);
+			if (current?.routed === routed) {
+				if (current.url) element.setAttribute(attribute, current.url);
+				else element.removeAttribute(attribute);
+				return;
+			}
+			const state: { routed: string; url?: string } = { routed };
+			perAttribute.set(attribute, state);
+			// nothing loads until the copy is in
+			element.removeAttribute(attribute);
+			const settle = (value: string) => {
+				if (perAttribute.get(attribute) !== state) return;
+				state.url = value;
+				usePrototype(element, CustomElement.prototype, (element) =>
+					element.setAttribute(attribute, value),
+				);
+			};
+			Promise.all(
+				targets.map(({ routed, page }) =>
+					isRoute(routed) ? copyOf(routed, page) : routed,
+				),
+			)
+				.then((urls) => settle(compose(urls)))
+				// the copy failed: the routed value, which fails as it would have
+				.catch(() => settle(routed));
+		};
 		// A frame whose src is a data: document gets an opaque origin, which
 		// the inject cannot reach: its requests would have nowhere to go and
 		// its messages no route to the page. It loads instead from a blob: URL
@@ -423,7 +522,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					shouldRewriteScript(element)
 				) {
 					element.setAttributeOG('src', element.getAttribute('src')!);
-					element.setAttribute(
+					placeLoad(
+						element,
 						'src',
 						routeJS(
 							new StompURL(
@@ -516,9 +616,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						rel.has('stylesheet') ||
 						((rel.has('preload') || rel.has('prefetch')) && as === 'style')
 					)
-						element.setAttribute('href', routeCSS(resource, this.client.url));
+						placeLoad(element, 'href', routeCSS(resource, this.client.url));
 					else if (rel.has('modulepreload'))
-						element.setAttribute(
+						placeLoad(
+							element,
 							'href',
 							routeJS(
 								resource,
@@ -531,11 +632,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						(rel.has('preload') || rel.has('prefetch')) &&
 						as === 'script'
 					)
-						element.setAttribute(
+						placeLoad(
+							element,
 							'href',
 							routeJS(resource, this.client.url, this.client.config, 'generic'),
 						);
-					else element.setAttribute('href', routeBinary(resource));
+					else placeLoad(element, 'href', routeBinary(resource));
 				}
 			},
 			[
@@ -669,7 +771,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 				if (element.hasAttribute('src') && element.getAttribute('src') !== '') {
 					element.setAttributeOG('src', element.getAttribute('src')!);
-					element.setAttribute(
+					placeLoad(
+						element,
 						'src',
 						routeBinary(
 							new StompURL(
@@ -737,7 +840,22 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						});
 					}
 
-					element.setAttribute('srcset', stringifySrcset(updated));
+					placeLoad(
+						element,
+						'srcset',
+						stringifySrcset(updated),
+						updated.map((candidate, index) => ({
+							routed: candidate.url,
+							page: new URL(parsed[index].url, this.client.url.toString()).href,
+						})),
+						(copied) =>
+							stringifySrcset(
+								updated.map((candidate, index) => ({
+									...candidate,
+									url: copied[index],
+								})),
+							),
+					);
 				}
 			},
 			[
@@ -768,7 +886,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 				if (element.hasAttribute('src') && element.getAttribute('src') !== '') {
 					element.setAttributeOG('src', element.getAttribute('src')!);
-					element.setAttribute(
+					placeLoad(
+						element,
 						'src',
 						routeBinary(
 							new StompURL(
@@ -1123,7 +1242,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 		/** route one URL attribute, keeping the page's value as the original */
 		const routeAttribute =
-			(attribute: string, route: (resource: StompURL) => string) =>
+			(
+				attribute: string,
+				route: (resource: StompURL) => string,
+				// a load (an image, media): copied in a document no worker controls
+				load = false,
+			) =>
 			(element: CustomElement) => {
 				element.restoreAttributesOG(attribute);
 				if (
@@ -1131,18 +1255,17 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.getAttribute(attribute) !== ''
 				) {
 					element.setAttributeOG(attribute, element.getAttribute(attribute)!);
-					element.setAttribute(
-						attribute,
-						route(
-							new StompURL(
-								new URL(
-									element.getAttribute(attribute)!,
-									this.client.url.toString(),
-								),
-								this.client.url,
+					const value = route(
+						new StompURL(
+							new URL(
+								element.getAttribute(attribute)!,
+								this.client.url.toString(),
 							),
+							this.client.url,
 						),
 					);
+					if (load) placeLoad(element, attribute, value);
+					else element.setAttribute(attribute, value);
 				}
 			};
 
@@ -1303,7 +1426,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		);
 
 		// <video poster>
-		domHooksModule.useAttributes(routeAttribute('poster', routeBinary), [
+		domHooksModule.useAttributes(routeAttribute('poster', routeBinary, true), [
 			['VIDEO', 'poster'],
 			[HTMLVideoElement, 'poster', originalURL('poster')],
 		]);

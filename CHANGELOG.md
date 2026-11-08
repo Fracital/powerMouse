@@ -291,6 +291,21 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- Documents a page builds itself load their images, scripts and
+  stylesheets through the proxy. Chrome hands an about:blank frame or popup
+  no service worker, whether the page writes into its first document, opens
+  it or navigates it to about:blank (measured in plain Chrome 152; a srcdoc
+  frame it does), so every element load in one reached the proxy origin's
+  own server and failed: the content of editors, ad slots and widgets built
+  that way. In such a document (no controller, and about:blank or opened)
+  an image, srcset, image input, script, stylesheet, poster or media source
+  is now fetched through the proxy and given a blob: copy, written under the
+  hooks; the attribute, the property, currentSrc and the markup read back as
+  the page wrote them. A property set no longer writes an emptied URL back
+  (a script then failed for good). The url()s inside such a stylesheet, CSS
+  in style attributes and fonts are not covered yet. WPT's fetch-metadata
+  element-img-environment-change no longer hangs (blank-loads suite, both
+  modes, against the page loaded natively).
 - A download link whose click handler stops the click's propagation still
   saves what the site serves. The proxy's copy was started from the window
   at the end of the click, which such a handler never let it reach, and the
