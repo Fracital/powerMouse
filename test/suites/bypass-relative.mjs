@@ -27,7 +27,7 @@ import {
 const PAGE = `${FIXTURE}pages/deep/a/b/bypass-relative.html`;
 const VARIANTS = [
 	['deep', ''],
-	['base', `base=${encodeURIComponent('../../x/y/')}&`],
+	['base', `base=${encodeURIComponent('../../x/y/z/')}&`],
 ];
 const fixtureHost = new URL(FIXTURE).host;
 const vectorOf = (url) => /[?&]rb=([\w-]+)/.exec(url)?.[1] ?? null;
@@ -135,7 +135,7 @@ for (const [variant, query] of VARIANTS) {
 				continue;
 			const key = vector ?? `unmarked ${entry.url.slice(0, 80)}`;
 			if (!unrouted.has(key))
-				unrouted.set(key, [entry.kind, entry.url.slice(0, 120)]);
+				unrouted.set(key, [entry.kind, entry.source, entry.url.slice(0, 120)]);
 		}
 		ok(
 			`${label}: no relative URL is requested unrouted`,

@@ -7,11 +7,23 @@
      the right resolution (against the page's real URL, its base, a
      stylesheet's or a worker script's URL) differs from the one against the
      proxy's route -->
+<script type="importmap">
+	{
+		"imports": {
+			"relative-bare": "../c/bypass-relative-mod.js?rb=importmap"
+		}
+	}
+</script>
 <link rel="stylesheet" href="../c/bypass-relative.css?rb=markup-stylesheet" />
 <link rel="prefetch" href="../c/echo.json?rb=prefetch" />
 <link rel="preload" as="fetch" crossorigin href="../c/echo.json?rb=preload" />
 <link rel="modulepreload" href="../c/bypass-relative-mod.js?rb=modulepreload" />
 <link rel="icon" href="../c/sprite.svg?rb=icon" />
+<link
+	rel="preload"
+	as="image"
+	imagesrcset="../c/sprite.svg?rb=preload-imagesrcset 1x"
+/>
 <style>
 	@import url('../c/imp.css?rb=style-import');
 	@import '../c/imp.css?rb=style-import-string';
@@ -72,6 +84,13 @@
 	<track default kind="captions" src="../c/hdr.json?rb=track" />
 </video>
 <audio src="../c/echo.json?rb=markup-audio" preload="auto"></audio>
+<video preload="auto">
+	<source src="../c/echo.json?rb=video-source" />
+</video>
+<script src="../c/inline-script.js?rb=markup-script"></script>
+<template id="template"
+	><img src="../c/sprite.svg?rb=template-clone"
+/></template>
 <object data="../c/sprite.svg?rb=markup-object" type="image/svg+xml"></object>
 <embed src="../c/sprite.svg?rb=markup-embed" type="image/svg+xml" />
 <svg
@@ -89,6 +108,7 @@
 	<use href="../c/sprite.svg?rb=svg-use#x" />
 	<use xlink:href="../c/sprite.svg?rb=svg-use-xlink#x" />
 	<filter id="f"><feImage href="../c/sprite.svg?rb=fe-image" /></filter>
+	<script href="../c/inline-script.js?rb=svg-script"></script>
 </svg>
 <iframe name="sink" src="about:blank"></iframe>
 <iframe name="sink2" src="about:blank"></iframe>
@@ -123,6 +143,9 @@
 
 	import('../c/bypass-relative-mod.js?rb=dynamic-import').catch(() => {});
 </script>
+<script type="module">
+	import 'relative-bare';
+</script>
 <script>
 	const errors = {};
 	const attempt = (name, run) => {
@@ -144,6 +167,12 @@
 	const rel = (name, file = 'echo.json') => `../c/${file}?rb=${name}`;
 	attempt('fetch', () => fetch(rel('fetch')));
 	attempt('fetch-request', () => fetch(new Request(rel('fetch-request'))));
+	attempt('base-uri', () =>
+		fetch(new URL(rel('base-uri'), document.baseURI).href),
+	);
+	attempt('cache-add', () =>
+		caches.open('relbypass').then((cache) => cache.add(rel('cache-add'))),
+	);
 	attempt('fetch-keepalive', () =>
 		fetch(rel('fetch-keepalive'), { keepalive: true }),
 	);
@@ -301,6 +330,33 @@
 		div.innerHTML = `<img src="${rel('inner-html', 'sprite.svg')}"><img srcset="${rel('inner-html-srcset', 'sprite.svg')} 2x">`;
 		document.body.append(div);
 	});
+	attempt('insert-adjacent', () =>
+		document.body.insertAdjacentHTML(
+			'beforeend',
+			`<img src="${rel('insert-adjacent', 'sprite.svg')}">`,
+		),
+	);
+	attempt('contextual-fragment', () =>
+		document.body.append(
+			document
+				.createRange()
+				.createContextualFragment(
+					`<img src="${rel('contextual-fragment', 'sprite.svg')}">`,
+				),
+		),
+	);
+	attempt('set-html-unsafe', () => {
+		const div = document.createElement('div');
+		if (typeof div.setHTMLUnsafe !== 'function')
+			return (errors['set-html-unsafe'] = 'absent');
+		div.setHTMLUnsafe(`<img src="${rel('set-html-unsafe', 'sprite.svg')}">`);
+		document.body.append(div);
+	});
+	attempt('template-clone', () =>
+		document.body.append(
+			document.getElementById('template').content.cloneNode(true),
+		),
+	);
 	attempt('document-write', () =>
 		document.write(`<img src="${rel('document-write', 'sprite.svg')}">`),
 	);
@@ -328,6 +384,13 @@
 		document.getElementById('formaction-button').click(),
 	);
 	later(3500, 'open', () => window.open(rel('open', 'sprite.svg')));
+	// a URL the page moved to is what its relative URLs resolve against
+	// (the base, when there is one, stays)
+	later(5000, 'after-pushstate', () => {
+		history.pushState(null, '', '../../p/q/bypass-relative.html');
+		fetch(rel('after-pushstate'));
+		add('img', { src: rel('after-pushstate-img', 'sprite.svg') });
+	});
 	setTimeout(
 		() => (window.__relbypass = { done: true, errors, sockets }),
 		7000,
