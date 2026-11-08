@@ -21,6 +21,7 @@ import { scopePrefix, unrouteURL } from '../../modules/Unroute';
 import { blobLoads } from '../blobLoads';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
+import { hookWrite } from './MutationObserver';
 import SyncModule from './Sync';
 
 /** the JavaScript MIME type essences (HTML "JavaScript MIME type") */
@@ -71,6 +72,8 @@ export function scriptType(element: Element): ScriptType {
 
 export default class DOMAttributesModule extends Module<DocumentClient> {
 	formHook?: (element: CustomElement) => void;
+	/** @internal copy a <style>'s routed loads in a document no service worker controls (DOMContentHooks) */
+	copySheet?: (style: HTMLStyleElement, mark: (rule: CSSRule) => void) => void;
 	/** @internal the page's view of a CSSStyleDeclaration: reads unrouted, writes routed (CSSReadback) */
 	wrapDeclaration?: (declaration: CSSStyleDeclaration) => CSSStyleDeclaration;
 	// captured before the hooks replace them, for serializeStyle
@@ -134,6 +137,49 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		/** one value's copies: the routed value, what was set, the blobs made */
 		type Copy = { routed: string; url?: string; made: string[] };
 		const copies = new WeakMap<Element, Map<string, Copy>>();
+		// a route inside a url(): the worker's rewritten CSS writes them whole,
+		// then the marker that keeps the page's token
+		const routePattern = () => {
+			const escaped = scopePrefix(this.client).replace(
+				/[.*+?^${}()|[\]\\]/g,
+				'\\$&',
+			);
+			return new RegExp(`(url\\(\\s*["']?)(${escaped}[^"'\\s)#]*)`, 'g');
+		};
+		const routesIn = (text: string) => [
+			...new Set([...text.matchAll(routePattern())].map((match) => match[2])),
+		];
+		const withCopies = (text: string, copied: Map<string, string>) =>
+			text.replace(
+				routePattern(),
+				(match, open: string, target: string) =>
+					`${open}${copied.get(target) ?? target}`,
+			);
+		/** the copies the inject made that `text` shows */
+		const blobsIn = (text: string) =>
+			new Set(
+				[...text.matchAll(/blob:[^"'\s)#]+/g)]
+					.map((match) => match[0])
+					.filter((url) => blobLoads.has(url)),
+			);
+		/** copies of every route in `text`, by route (a failed one is left out) */
+		const copiesOf = async (text: string, state: Copy, depth: number) => {
+			const copied = new Map<string, string>();
+			await Promise.allSettled(
+				routesIn(text).map(async (target) =>
+					copied.set(
+						target,
+						await copyOf(
+							target,
+							unrouteURL(this.client, target) ?? target,
+							state,
+							depth,
+						),
+					),
+				),
+			);
+			return copied;
+		};
 		/**
 		 * A copied stylesheet's text with its own loads copied too: every route
 		 * in a url() (an @import, a background, a font) becomes the blob: URL
@@ -146,36 +192,58 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			text: string,
 			state: Copy,
 			depth: number,
-		): Promise<string> => {
-			if (depth <= 0) return text;
-			const prefix = scopePrefix(this.client);
-			const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-			const pattern = new RegExp(
-				`(url\\(\\s*["']?)(${escaped}[^"'\\s)#]*)`,
-				'g',
-			);
-			const targets = [
-				...new Set([...text.matchAll(pattern)].map((m) => m[2])),
-			];
-			const copied = new Map<string, string>();
-			await Promise.allSettled(
-				targets.map(async (target) =>
-					copied.set(
-						target,
-						await copyOf(
-							target,
-							unrouteURL(this.client, target) ?? target,
-							state,
-							depth - 1,
-						),
-					),
-				),
-			);
-			return text.replace(
-				pattern,
-				(match, open: string, target: string) =>
-					`${open}${copied.get(target) ?? target}`,
-			);
+		): Promise<string> =>
+			depth <= 0
+				? text
+				: withCopies(text, await copiesOf(text, state, depth - 1));
+		// the latest pass per owner and key: an earlier one that ends later
+		// gives way
+		const passes = new WeakMap<Element, Map<string, number>>();
+		let passCount = 0;
+		/**
+		 * The CSS `owner` shows under `key` (its inline style, a <style>'s
+		 * sheet), its routes copied and written back by `write`. The copies it
+		 * shows afterwards are its own: an earlier pass's still shown move over
+		 * to this one, the rest are released.
+		 */
+		const copyOwned = (
+			owner: Element,
+			key: string,
+			read: () => string,
+			write: (copied: Map<string, string>) => void,
+		) => {
+			if (!uncontrolled()) return;
+			if (!copies.has(owner)) copies.set(owner, new Map());
+			const perOwner = copies.get(owner)!;
+			if (!passes.has(owner)) passes.set(owner, new Map());
+			const pass = ++passCount;
+			passes.get(owner)!.set(key, pass);
+			const state: Copy = { routed: key, made: [] };
+			const settle = () => {
+				const shown = blobsIn(read());
+				const previous = perOwner.get(key);
+				if (previous)
+					for (const url of previous.made.splice(0))
+						if (shown.has(url)) state.made.push(url);
+						else {
+							blobLoads.delete(url);
+							Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
+						}
+				perOwner.set(key, state);
+			};
+			const text = read();
+			if (!routesIn(text).length) {
+				settle();
+				return;
+			}
+			copiesOf(text, state, 4).then((copied) => {
+				if (passes.get(owner)!.get(key) !== pass) {
+					release(state);
+					return;
+				}
+				write(copied);
+				settle();
+			});
 		};
 		/** a routed URL's copy, as a blob: URL (the proxy's form) */
 		const copyOf = async (
@@ -1125,6 +1193,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			],
 		);
 
+		// An element's inline style in a document no service worker controls:
+		// once a write settles (the attribute, a CSSOM write), its routes are
+		// copied and the copies set underneath the hooks, owned by the element.
+		// Set up with the declaration hooks below.
+		let copyInlineSoon: (element: Element) => void = () => {};
+
 		domHooksModule.useAttributes(
 			(element) => {
 				// our rewritten text comes back serialized by the browser when the
@@ -1164,6 +1238,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						),
 					);
 				}
+				copyInlineSoon(element);
 			},
 			[
 				['*', 'style'],
@@ -1175,6 +1250,64 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		{
 			const styleProto = this.client.global.CSSStyleDeclaration.prototype;
 			const proxyModule = this.client.getModule(ProxyModule)!;
+
+			// the declaration's own methods, before the hooks below wrap them
+			const nativeSetProperty = styleProto.setProperty;
+			const nativeGetPropertyValue = styleProto.getPropertyValue;
+			const nativeGetPropertyPriority = styleProto.getPropertyPriority;
+			const nativeItem = styleProto.item;
+			const nativeLength = Reflect.getOwnPropertyDescriptor(
+				styleProto,
+				'length',
+			)!.get!;
+			// the element each page-facing declaration belongs to
+			const owners = new WeakMap<CSSStyleDeclaration, Element>();
+			const pending = new WeakSet<Element>();
+			copyInlineSoon = (element) => {
+				if (!uncontrolled() || pending.has(element)) return;
+				pending.add(element);
+				queueMicrotask(() => {
+					pending.delete(element);
+					const declaration = Reflect.apply(
+						this.#nativeStyle.get!,
+						element,
+						[],
+					) as CSSStyleDeclaration;
+					copyOwned(
+						element,
+						'style',
+						() => nativeElement.getAttribute.call(element, 'style') ?? '',
+						(copied) =>
+							hookWrite(
+								element,
+								() => ['style'],
+								() => {
+									const length = Reflect.apply(nativeLength, declaration, []);
+									for (let i = 0; i < length; i++) {
+										const name = Reflect.apply(nativeItem, declaration, [i]);
+										const value = Reflect.apply(
+											nativeGetPropertyValue,
+											declaration,
+											[name],
+										) as string;
+										if (!routesIn(value).length) continue;
+										Reflect.apply(nativeSetProperty, declaration, [
+											name,
+											withCopies(value, copied),
+											Reflect.apply(nativeGetPropertyPriority, declaration, [
+												name,
+											]),
+										]);
+									}
+								},
+							),
+					);
+				});
+			};
+			const afterWrite = (declaration: unknown) => {
+				const owner = owners.get(declaration as CSSStyleDeclaration);
+				if (owner) copyInlineSoon(owner);
+			};
 
 			const rewriteValue = (value: unknown) =>
 				typeof value === 'string' && value.includes('url(')
@@ -1226,7 +1359,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 									key === 'cssText'
 										? rewriteCssText(value)
 										: rewriteValue(value);
-							return Reflect.set(target, key, value);
+							const done = Reflect.set(target, key, value);
+							afterWrite(target);
+							return done;
 						},
 					});
 
@@ -1249,8 +1384,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 				Reflect.defineProperty(ctor.prototype, 'style', {
 					...descriptor,
-					get: proxyModule.wrapFunction(descriptor.get, (target, that, args) =>
-						wrapDeclaration(Reflect.apply(target, that, args)),
+					get: proxyModule.wrapFunction(
+						descriptor.get,
+						(target, that, args) => {
+							const declaration = Reflect.apply(target, that, args);
+							if (declaration && typeof declaration === 'object')
+								owners.set(declaration, that as Element);
+							return wrapDeclaration(declaration);
+						},
 					),
 				});
 			}
@@ -1301,7 +1442,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				styleProto.setProperty,
 				(target, that, args) => {
 					if (args.length > 1) args[1] = rewriteValue(args[1]);
-					return Reflect.apply(target, that, args);
+					const result = Reflect.apply(target, that, args);
+					afterWrite(that);
+					return result;
 				},
 			);
 
@@ -1340,12 +1483,83 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						...descriptor,
 						set: proxyModule.wrapFunction(
 							descriptor.set,
-							(target, that, args) =>
-								Reflect.apply(target, that, [rewrite(args[0])]),
+							(target, that, args) => {
+								const result = Reflect.apply(target, that, [rewrite(args[0])]);
+								afterWrite(that);
+								return result;
+							},
 						),
 					});
 				}
 		}
+
+		// A <style>'s sheet in a document no service worker controls: once its
+		// rules are routed (DOMContentHooks), a rule that names routes is put
+		// back with their copies (through the CSSOM: its text, and the page's
+		// observers, see nothing), `mark` telling the CSSOM pass it is done.
+		// The copies are the element's.
+		// the rules' own text and methods, before the readback and CSSOM
+		// modules (which apply later) wrap them
+		const ruleText = Reflect.getOwnPropertyDescriptor(
+			this.client.global.CSSRule.prototype,
+			'cssText',
+		)!.get!;
+		const nativeRules = {
+			sheet: {
+				insert: this.client.global.CSSStyleSheet.prototype.insertRule,
+				delete: this.client.global.CSSStyleSheet.prototype.deleteRule,
+			},
+			group: {
+				insert: this.client.global.CSSGroupingRule.prototype.insertRule,
+				delete: this.client.global.CSSGroupingRule.prototype.deleteRule,
+			},
+		};
+		const textOf = (rule: CSSRule) =>
+			Reflect.apply(ruleText, rule, []) as string;
+		this.copySheet = (style, mark) =>
+			copyOwned(
+				style,
+				'sheet',
+				() => {
+					try {
+						return [...(style.sheet?.cssRules ?? [])].map(textOf).join('\n');
+					} catch (error) {
+						return '';
+					}
+				},
+				(copied) => {
+					const putBack = (container: CSSStyleSheet | CSSGroupingRule) => {
+						const methods =
+							container instanceof this.client.global.CSSStyleSheet
+								? nativeRules.sheet
+								: nativeRules.group;
+						const rules = container.cssRules;
+						for (let i = 0; i < rules.length; i++) {
+							const rule = rules[i];
+							if (!routesIn(textOf(rule)).length) continue;
+							// a grouping rule (@media, @supports, @layer) is entered; a style
+							// rule (which lists its nested rules too) is put back whole
+							if (
+								'cssRules' in rule &&
+								!('selectorText' in rule) &&
+								!('styleSheet' in rule)
+							) {
+								putBack(rule as CSSGroupingRule);
+								continue;
+							}
+							const text = withCopies(textOf(rule), copied);
+							try {
+								Reflect.apply(methods.delete, container, [i]);
+								Reflect.apply(methods.insert, container, [text, i]);
+								mark(container.cssRules[i]);
+							} catch (error) {
+								// a rule the browser will not take back: it keeps its route
+							}
+						}
+					};
+					if (style.sheet) putBack(style.sheet);
+				},
+			);
 
 		const validMethods = ['GET', 'POST'];
 

@@ -156,10 +156,18 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				return;
 			}
 
+			// a document no service worker controls: the routed rules' loads are
+			// copied (DOMAttributes)
+			const copied = () =>
+				this.client
+					.getModule(DOMAttributesModule)
+					?.copySheet?.(style, (rule) => ((rule as any)[rewrittenRule] = true));
+
 			if (prewritten.has(style)) {
 				prewritten.delete(style);
 				for (const rule of style.sheet.cssRules)
 					(rule as any)[rewrittenRule] = true;
+				copied();
 				return;
 			}
 
@@ -178,6 +186,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				);
 				(style.sheet!.cssRules[added] as any)[rewrittenRule] = true;
 			}
+			copied();
 		};
 
 		// a script element runs once, so rewrite its text once: a rewritten

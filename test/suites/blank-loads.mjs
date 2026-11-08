@@ -238,11 +238,17 @@ for (const [host, transport] of [
 	);
 	await page.close();
 }
-// A stylesheet a document no worker controls loads (blank-css.html) has
-// its own loads copied: its url()s, its @import (and the import's url()s)
-// and its font reach the worker, and the frame reads its computed style back
-// as the page's controlled document does the same stylesheet.
-const CSS_KINDS = ['link-bg', 'import', 'import-bg', 'link-font'];
+// CSS in a document no worker controls (blank-css.html): a stylesheet's
+// own loads are copied (its url()s, its @import and the import's url()s, its
+// font) and it reads back as the page's controlled document reads the same
+// stylesheet; a <style>'s rules, a style attribute and a CSSOM write have
+// their url()s copied underneath the hooks, so they read back, and the
+// page's observer sees them, as on the real site; an inline style that
+// changes its image releases the copy it showed.
+const CSS_KINDS = [
+	...['link-bg', 'import', 'import-bg', 'link-font'],
+	...['style-bg', 'attr-bg', 'cssom-bg'],
+];
 /** the report holding `key` (the ?top run's, or the frame run's) */
 const cssOf = async (page, key) => {
 	for (let i = 0; i < 40; i++) {
@@ -256,6 +262,10 @@ const cssOf = async (page, key) => {
 	}
 	return null;
 };
+const nativeCssPage = await browser.newPage();
+await nativeCssPage.goto(`${FIXTURE}pages/blank-css.html`);
+const nativeCss = await cssOf(nativeCssPage, 'computed');
+await nativeCssPage.close();
 for (const [mode, base] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
@@ -278,9 +288,65 @@ for (const [mode, base] of [
 		(kind) => !served.some((url) => url.includes(`css=${kind}`)),
 	);
 	ok(
-		`${mode}: a stylesheet's url()s, @import and font go through the worker`,
+		`${mode}: CSS loads go through the worker (a stylesheet's url()s, @import and font, a <style>, a style attribute, a CSSOM write)`,
 		missing.length === 0,
 		`missing: ${missing.join(', ')}`,
+	);
+	// a <style>'s rules, a style attribute and a CSSOM write: their copies are
+	// set underneath the hooks, so the page reads and observes what it wrote
+	const declared = (value) => ({
+		style: value?.computed?.style,
+		attr: value?.computed?.attr,
+		cssom: value?.computed?.cssom,
+		attribute: value?.attribute,
+		records: value?.records,
+	});
+	ok(
+		`${mode}: a <style>, a style attribute and a CSSOM write read back and are observed as on the real site`,
+		JSON.stringify(declared(css)) === JSON.stringify(declared(nativeCss)),
+		JSON.stringify({ native: declared(nativeCss), proxied: declared(css) }),
+	);
+	// an inline style that changes its image releases the copy it showed
+	const frame = page.frames().find((f) => f.url() === 'about:blank');
+	const restyle = (kind) =>
+		frame.evaluate((kind) => {
+			const element =
+				document.getElementById('restyle') ?? document.createElement('div');
+			element.id = 'restyle';
+			document.body.append(element);
+			element.style.backgroundImage = `url("${new URL(`blank-pixel.svg?css=${kind}`, document.baseURI).href}")`;
+		}, kind);
+	const inlineCopy = async () => {
+		for (let i = 0; i < 20; i++) {
+			const style = await frame.locator('#restyle').getAttribute('style');
+			const copy = /blob:[^"')#]+/.exec(style ?? '')?.[0];
+			if (copy) return copy;
+			await sleep(100);
+		}
+		return null;
+	};
+	const fetches = (url) =>
+		frame.evaluate(
+			(url) =>
+				fetch(url).then(
+					() => true,
+					() => false,
+				),
+			url,
+		);
+	await restyle('restyle-a');
+	const firstCopy = await inlineCopy();
+	await restyle('restyle-b');
+	await sleep(300);
+	const secondCopy = await inlineCopy();
+	ok(
+		`${mode}: an inline style that changes its image releases the copy it showed`,
+		firstCopy !== null &&
+			secondCopy !== null &&
+			firstCopy !== secondCopy &&
+			!(await fetches(firstCopy)) &&
+			(await fetches(secondCopy)),
+		JSON.stringify({ firstCopy, secondCopy }),
 	);
 	ok(
 		`${mode}: a copied stylesheet reads back as in a controlled document`,

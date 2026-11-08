@@ -54,6 +54,17 @@
 				doc.body.append(div);
 				return div;
 			};
+			// what the page's own observer sees of its style writes
+			const records = [];
+			new win.MutationObserver((list) => {
+				for (const record of list)
+					records.push([record.attributeName, record.oldValue]);
+			}).observe(doc.body, {
+				attributes: true,
+				subtree: true,
+				attributeOldValue: true,
+			});
+			report.records = records;
 			const elements = {
 				link: make('link-bg'),
 				import: make('import-bg'),

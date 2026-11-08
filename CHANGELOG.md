@@ -291,6 +291,17 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- CSS a page writes into a document no service worker controls loads its
+  images through the proxy: a `<style>`'s rules, a style attribute and a
+  CSSOM write (`el.style.x = ...`, setProperty, cssText) have their url()s
+  copied, and the copies are set underneath the hooks (a rule is put back
+  through the CSSOM, an inline style with the declaration's own setProperty
+  inside the hooks' write scope), so the page reads back its own text and
+  its MutationObserver sees only its own writes. The copies are the
+  element's: an inline style or a `<style>` that changes keeps the copies it
+  still shows and releases the rest. Typed OM writes, constructed sheets
+  and FontFace sources in such a document are not covered (blank-loads
+  suite, both modes, against the page loaded natively).
 - A stylesheet a document no service worker controls loads has its own
   loads copied too: its url()s, its @import (whose own url()s are copied in
   turn, four levels at most) and its fonts reach the proxy instead of the
