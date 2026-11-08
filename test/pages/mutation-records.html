@@ -1,0 +1,283 @@
+<!doctype html>
+<title>MUTATION RECORDS</title>
+<div id="box">
+	<a id="a" href="/start?x=1#h">link</a>
+	<img id="img" src="/one.png" alt="" />
+	<form id="form" action="/send"><button id="go">go</button></form>
+	<link id="css" rel="stylesheet" href="/none.css" />
+	<span id="span" class="c" style="color: red">x</span>
+</div>
+<pre id="result"></pre>
+<script>
+	// What a page's MutationObserver sees for writes of the attributes the
+	// proxy routes: each scenario writes, waits for delivery and lists the
+	// records (type, attribute, old value, target) and how many times the
+	// callback ran. The markup-parity suite compares this with the same page
+	// loaded natively, so every record must be the browser's own.
+	const box = document.getElementById('box');
+	const describe = (node) =>
+		node.nodeType === 1
+			? node.localName + (node.id ? `#${node.id}` : '')
+			: node.nodeName;
+	const later = () => new Promise((resolve) => setTimeout(resolve, 0));
+	const scenarios = [];
+	const scenario = (name, options, target, write, take = false) =>
+		scenarios.push({ name, options, target, write, take });
+
+	scenario(
+		'setAttribute href twice',
+		{ attributes: true, attributeOldValue: true },
+		'a',
+		(a) => {
+			a.setAttribute('href', '/second');
+			a.setAttribute('href', 'https://example.com/third');
+		},
+	);
+	scenario(
+		'href property',
+		{ attributes: true, attributeOldValue: true },
+		'a',
+		(a) => {
+			a.href = '/prop';
+		},
+	);
+	scenario(
+		'href property without old values',
+		{ attributes: true },
+		'a',
+		(a) => {
+			a.href = '/prop2';
+		},
+	);
+	scenario(
+		'href same value again',
+		{ attributes: true, attributeOldValue: true },
+		'a',
+		(a) => {
+			a.setAttribute('href', a.getAttribute('href'));
+		},
+	);
+	scenario(
+		'removeAttribute href, then again',
+		{ attributes: true, attributeOldValue: true },
+		'a',
+		(a) => {
+			a.removeAttribute('href');
+			a.removeAttribute('href');
+			a.setAttribute('href', '/back');
+		},
+	);
+	scenario(
+		'uppercase attribute name',
+		{ attributes: true, attributeOldValue: true },
+		'a',
+		(a) => {
+			a.setAttribute('HREF', '/upper');
+		},
+	);
+	scenario(
+		'setAttributeNS null href',
+		{ attributes: true, attributeOldValue: true },
+		'a',
+		(a) => {
+			a.setAttributeNS(null, 'href', '/ns');
+		},
+	);
+	scenario(
+		'Attr value write',
+		{ attributes: true, attributeOldValue: true },
+		'a',
+		(a) => {
+			a.attributes.href.value = '/attr';
+		},
+	);
+	scenario(
+		'target _top',
+		{ attributes: true, attributeOldValue: true },
+		'a',
+		(a) => {
+			a.target = '_top';
+			a.setAttribute('target', '_blank');
+		},
+	);
+	scenario(
+		'img src property and attribute',
+		{ attributes: true, attributeOldValue: true },
+		'img',
+		(img) => {
+			img.src = '/two.png';
+			img.setAttribute('src', '/three.png');
+		},
+	);
+	scenario(
+		'img srcset',
+		{ attributes: true, attributeOldValue: true },
+		'img',
+		(img) => {
+			img.srcset = '/a.png 1x, /b.png 2x';
+		},
+	);
+	scenario(
+		'attributeFilter src',
+		{ attributeFilter: ['src'], attributeOldValue: true },
+		'img',
+		(img) => {
+			img.setAttribute('alt', 'ignored');
+			img.src = '/four.png';
+		},
+	);
+	scenario(
+		'attributeFilter that never matches',
+		{ attributeFilter: ['data-x'] },
+		'img',
+		(img) => {
+			img.src = '/five.png';
+		},
+	);
+	scenario(
+		'form action',
+		{ attributes: true, attributeOldValue: true },
+		'form',
+		(form) => {
+			form.action = '/post';
+			form.setAttribute('action', '');
+		},
+	);
+	scenario(
+		'link href and rel',
+		{ attributes: true, attributeOldValue: true },
+		'css',
+		(link) => {
+			link.href = '/other.css';
+			link.rel = 'preload';
+		},
+	);
+	scenario(
+		'style attribute with a url',
+		{ attributes: true, attributeOldValue: true },
+		'span',
+		(span) => {
+			span.setAttribute('style', 'background-image: url(/bg.png)');
+			span.setAttribute('style', 'color: blue');
+		},
+	);
+	scenario(
+		'class and toggleAttribute',
+		{ attributes: true, attributeOldValue: true },
+		'span',
+		(span) => {
+			span.className = 'd';
+			span.setAttribute('class', 'd');
+			span.toggleAttribute('hidden');
+			span.toggleAttribute('hidden');
+		},
+	);
+	scenario(
+		'inline handler',
+		{ attributes: true, attributeOldValue: true },
+		'span',
+		(span) => {
+			span.setAttribute('onclick', 'top.x = location.href');
+			span.setAttribute('onclick', 'void 0');
+		},
+	);
+	scenario(
+		'subtree: appended elements',
+		{
+			attributes: true,
+			attributeOldValue: true,
+			childList: true,
+			subtree: true,
+		},
+		'box',
+		(box) => {
+			const a = document.createElement('a');
+			a.href = '/made';
+			box.append(a);
+			a.setAttribute('href', '/made2');
+			const parsed = new DOMParser().parseFromString(
+				'<a href="/parsed">p</a><img src="/parsed.png">',
+				'text/html',
+			);
+			box.append(...parsed.body.childNodes);
+			const div = document.createElement('div');
+			div.innerHTML = '<a href="/inner">i</a>';
+			box.append(div);
+			div.firstChild.href = '/inner2';
+		},
+	);
+	scenario(
+		'subtree: script type then src',
+		{
+			attributes: true,
+			attributeOldValue: true,
+			childList: true,
+			subtree: true,
+		},
+		'box',
+		(box) => {
+			const script = document.createElement('script');
+			script.src = 'data:text/javascript,void 0';
+			script.type = 'module';
+			box.append(script);
+		},
+	);
+	scenario(
+		'iframe srcdoc',
+		{ attributes: true, attributeOldValue: true, subtree: true },
+		'box',
+		(box) => {
+			const frame = document.createElement('iframe');
+			box.append(frame);
+			frame.srcdoc = '<p>one</p>';
+			frame.setAttribute('srcdoc', '<p>two</p>');
+		},
+	);
+	scenario(
+		'takeRecords',
+		{ attributes: true, attributeOldValue: true },
+		'a',
+		(a) => {
+			a.href = '/taken';
+			a.setAttribute('href', '/taken2');
+		},
+		true,
+	);
+
+	(async () => {
+		const results = {};
+		for (const { name, options, target, write, take } of scenarios) {
+			const node = document.getElementById(target);
+			const seen = { calls: 0, records: [] };
+			const list = (records) =>
+				records.map((r) => [
+					r.type,
+					r.attributeName,
+					r.oldValue,
+					describe(r.target),
+					[...r.addedNodes].map(describe).join(' '),
+				]);
+			const observer = new MutationObserver((records, self) => {
+				seen.calls++;
+				seen.records.push(...list(records));
+				seen.self = self === observer;
+			});
+			observer.observe(node, options);
+			try {
+				write(node);
+				if (take) seen.taken = list(observer.takeRecords());
+			} catch (error) {
+				seen.error = String(error);
+			}
+			await later();
+			observer.disconnect();
+			results[name] = seen;
+		}
+		window.__mutations = results;
+		document.getElementById('result').textContent = JSON.stringify(
+			results,
+			null,
+			1,
+		);
+	})();
+</script>
