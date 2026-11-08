@@ -1,0 +1,4 @@
+/* applied when property-order.html's late-rel link loads */
+#sheet-probe {
+	color: rgb(4, 5, 6);
+}

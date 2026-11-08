@@ -1,0 +1,51 @@
+<!doctype html>
+<title>PROPERTY ORDER</title>
+<p id="sheet-probe">probe</p>
+<script>
+	// A URL property set before the attribute that gives it meaning, as
+	// YouTube's player loads its stylesheet (link.href, then link.rel, then
+	// into the head): what the element holds and whether the sheet applies.
+	// The suite compares every case with the page loaded natively.
+	window.__po = { cases: {} };
+	const record = (name, value) => (__po.cases[name] = value);
+	const sheet = '/pages/property-order.css';
+	const color = () =>
+		getComputedStyle(document.getElementById('sheet-probe')).color;
+
+	addEventListener('load', async () => {
+		// href first: nothing makes it a load yet, so it is the attribute as
+		// written; the rel that comes next makes it the stylesheet
+		const late = document.createElement('link');
+		late.href = sheet;
+		const before = late.getAttribute('href');
+		late.rel = 'stylesheet';
+		const loaded = new Promise((resolve) => {
+			late.onload = () => resolve('load');
+			late.onerror = () => resolve('error');
+		});
+		document.head.append(late);
+		const event = await Promise.race([
+			loaded,
+			new Promise((resolve) => setTimeout(() => resolve('timeout'), 5000)),
+		]);
+		record('href before rel', {
+			before,
+			after: late.getAttribute('href'),
+			event,
+			color: color(),
+		});
+
+		// an icon (no proxied load of its own) keeps what the page wrote
+		const icon = document.createElement('link');
+		icon.href = '/pages/blank-pixel.svg';
+		icon.rel = 'icon';
+		record('href before rel=icon', icon.getAttribute('href'));
+
+		// a link that never gets a rel holds the URL as written
+		const bare = document.createElement('link');
+		bare.href = '../pages/blank.css';
+		record('href without rel', bare.getAttribute('href'));
+
+		__po.done = true;
+	});
+</script>
