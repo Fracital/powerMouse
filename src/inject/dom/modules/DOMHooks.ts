@@ -216,6 +216,8 @@ function isAttributeHook(
 export default class DOMHooksModule extends Module<DocumentClient> {
 	/** markup of an element as the page wrote it (markers folded back) */
 	serializeOriginal!: (element: Element, outer: boolean) => string;
+	/** a deep copy of `node` in a document with no window, where nothing loads */
+	inertCopy!: <T extends Node>(node: T) => T;
 	private hooks: {
 		hook: AttributeHook | PropertyHook;
 		callback: HookCallback;
@@ -809,10 +811,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					shadowInnerHTML.get,
 					(target, that: ShadowRoot) => {
 						// as the page wrote it: the children copied under an element
-						// and their markers folded back
-						const div = this.client.global.document.createElement('div');
+						// of the inert document (see inertCopy) and their markers
+						// folded back
+						const div = this.inertCopy(
+							this.client.global.document.createElement('div'),
+						);
 						for (const child of that.childNodes)
-							div.append(child.cloneNode(true));
+							div.append(this.inertCopy(child));
 						return this.serializeOriginal(div, false);
 					},
 				),
@@ -1056,7 +1061,6 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 		// markup as the page wrote it: a copy with every marker folded back,
 		// template contents included (their elements are not descendants)
-		const nativeCloneNode = this.client.global.Node.prototype.cloneNode;
 		const nativeQueryAll = {
 			element: nativeElement.querySelectorAll,
 			document: this.client.global.Document.prototype.querySelectorAll,
@@ -1115,9 +1119,46 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					});
 			}
 		};
+		// A copy to fold the markers on and serialize, in a document of its own
+		// with no window: there nothing loads or runs, where a copy in the
+		// page's document would fetch every image and media source the fold
+		// puts back (the page's raw URLs, past the proxy). HTML markup in an
+		// HTML document, XML (an SVG, an XHTML page) in an XML one, so it
+		// serializes as before.
+		const nativeImportNode = this.client.global.Document.prototype.importNode;
+		const nativeContentType = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Document.prototype,
+			'contentType',
+		)!.get!;
+		const implementation = this.client.global.document.implementation;
+		const inertDocuments: { html?: Document; xml?: Document } = {};
+		const inertDocumentFor = (node: Node) => {
+			const owner = (
+				node.nodeType === 9 ? node : node.ownerDocument
+			) as Document | null;
+			const html =
+				!owner || Reflect.apply(nativeContentType, owner, []) === 'text/html';
+			return html
+				? (inertDocuments.html ??= Reflect.apply(
+						this.client.global.DOMImplementation.prototype.createHTMLDocument,
+						implementation,
+						[''],
+					) as Document)
+				: (inertDocuments.xml ??= Reflect.apply(
+						this.client.global.DOMImplementation.prototype.createDocument,
+						implementation,
+						[null, null, null],
+					) as Document);
+		};
+		const inertCopy = <T extends Node>(node: T): T =>
+			Reflect.apply(nativeImportNode, inertDocumentFor(node), [
+				node,
+				true,
+			]) as T;
+		this.inertCopy = inertCopy;
 		const serializeOriginal = (element: Element, outer: boolean): string =>
 			usePrototype(element, nativeElement, (native) => {
-				const clone = Reflect.apply(nativeCloneNode, native, [true]) as Element;
+				const clone = inertCopy(native);
 				foldMarkers(clone);
 				return usePrototype(clone, nativeElement, (clone) =>
 					outer ? clone.outerHTML : clone.innerHTML,
@@ -1133,7 +1174,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				const node = args[0];
 				if (!(node instanceof this.client.global.Node))
 					return Reflect.apply(target, that, args);
-				const clone = Reflect.apply(nativeCloneNode, node, [true]) as Node;
+				const clone = inertCopy(node as Node);
 				foldMarkers(clone);
 				return unrouteCSS(
 					this.client,

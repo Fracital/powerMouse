@@ -15,6 +15,7 @@ import {
 	openDemo,
 	PORT,
 	PROXY,
+	recordRequests,
 	sleep,
 	submitLanding,
 } from '../lib.mjs';
@@ -52,6 +53,7 @@ for (const [mode, base] of [
 	['isolated', HOST],
 ]) {
 	const page = await openDemo(browser, base);
+	const recorder = await recordRequests(page.context());
 	await page.evaluate(() => {
 		window.__served = [];
 		window.controller.addEventListener('request', (event) =>
@@ -62,6 +64,19 @@ for (const [mode, base] of [
 	const proxied = await report(page);
 	await sleep(1500);
 	const served = await page.evaluate(() => window.__served);
+	// nothing a document no worker controls loads reaches the site past the
+	// proxy (the bypass recorder sees every request of the context)
+	const fixtureHost = new URL(FIXTURE).host;
+	const raw = recorder
+		.raw()
+		.filter((entry) => new URL(entry.url).host === fixtureHost);
+	ok(
+		`${mode}: no load of these documents reaches the site past the proxy`,
+		raw.length === 0,
+		JSON.stringify(
+			raw.map((entry) => [entry.url.replace(/^.*\?/, ''), entry.type]),
+		),
+	);
 	for (const name of DOCUMENTS) {
 		const events = (value) =>
 			Object.fromEntries(

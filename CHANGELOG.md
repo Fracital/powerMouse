@@ -291,6 +291,15 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- Reading a page's markup back loads nothing. innerHTML, outerHTML, a
+  shadow root's innerHTML and XMLSerializer give the page its own markup by
+  copying the subtree and folding the hooks' markers back; the copy was made
+  in the page's own document, where every image and media source the fold
+  put back (the page's raw URLs) started loading straight from the site.
+  The copy is now made in a document with no window (one for HTML, one for
+  XML), where nothing loads or runs, and serializes as before
+  (property-sets and blank-loads suites, both modes, with the bypass
+  recorder).
 - A URL property a page sets never loads past the proxy. A reflecting
   property's setter handed the page's raw value to the browser's own setter
   before the hooks routed it, so a script, stylesheet, frame, embed or

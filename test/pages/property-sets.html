@@ -36,6 +36,35 @@
 			}
 		const image = new Image();
 		image.src = at('blank-pixel.svg', 'image-object');
+		// ?read: the markup is read back every way a page can, after its own
+		// loads are in; the reads must load nothing at all
+		if (location.search.includes('read'))
+			setTimeout(() => {
+				const holder = document.createElement('div');
+				holder.innerHTML = `<img src="${at('blank-pixel.svg', 'read-img')}"><img srcset="${at('blank-pixel.svg', 'read-srcset')} 1x"><link rel="stylesheet" href="${at('blank.css', 'read-link')}">`;
+				const template = document.createElement('template');
+				template.innerHTML = `<img src="${at('blank-pixel.svg', 'read-template')}">`;
+				holder.append(template);
+				const host = document.createElement('div');
+				host.attachShadow({ mode: 'open' }).innerHTML =
+					`<img src="${at('blank-pixel.svg', 'read-shadow')}">`;
+				holder.append(host);
+				document.body.append(holder);
+				// the page's own loads first, then a quiet moment to read in
+				setTimeout(() => {
+					window.__readStarted = true;
+					window.__read = [
+						document.body.innerHTML.length,
+						holder.outerHTML.length,
+						typeof holder.getHTML === 'function'
+							? holder.getHTML({ serializableShadowRoots: true }).length
+							: 0,
+						new XMLSerializer().serializeToString(holder).length,
+						template.innerHTML.length,
+						host.shadowRoot.innerHTML.length,
+					];
+				}, 1500);
+			}, 300);
 		setTimeout(() => (window.__propertySets = { done: true }), 2000);
 	});
 </script>

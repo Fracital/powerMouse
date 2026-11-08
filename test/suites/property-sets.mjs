@@ -53,4 +53,61 @@ for (const [mode, base] of [
 	);
 	await page.close();
 }
+
+// reading the markup back loads nothing: no request at all, through the
+// proxy or past it, from innerHTML, outerHTML, getHTML, XMLSerializer, a
+// template's or a shadow root's innerHTML (the page's own loads are in before)
+for (const [mode, base] of [
+	['same-origin', PROXY],
+	['isolated', HOST],
+]) {
+	const page = await openDemo(browser, base);
+	await page.evaluate(() => {
+		window.__served = [];
+		window.controller.addEventListener('request', (event) =>
+			window.__served.push(event.detail.url),
+		);
+	});
+	await submitLanding(page, `${FIXTURE}pages/property-sets.html?read`);
+	let frame = null;
+	for (let i = 0; i < 40 && !frame; i++) {
+		await sleep(100);
+		for (const f of page.frames())
+			if (
+				await f
+					.evaluate(
+						() =>
+							window.__readStarted === undefined &&
+							!!document.querySelector('template'),
+					)
+					.catch(() => false)
+			)
+				frame = f;
+	}
+	const recorder = await recordRequests(page.context());
+	let read = null;
+	for (let i = 0; i < 40 && !read; i++) {
+		await sleep(100);
+		read = await frame?.evaluate(() => window.__read ?? null).catch(() => null);
+	}
+	await sleep(1000);
+	const during = recorder.log
+		.filter((entry) => /prop=read-/.test(entry.url))
+		.map((entry) => [entry.kind, entry.url.replace(/^.*prop=/, '')]);
+	// through the worker: each marked load once, the page's own
+	const served = await page.evaluate(() => window.__served);
+	const counts = {};
+	for (const url of served) {
+		const mark = /prop=(read-[\w-]+)/.exec(url)?.[1];
+		if (mark) counts[mark] = (counts[mark] ?? 0) + 1;
+	}
+	ok(
+		`${mode}: reading the markup back makes no request at all`,
+		read !== null &&
+			during.length === 0 &&
+			Object.values(counts).every((count) => count <= 1),
+		JSON.stringify({ read, during, counts }),
+	);
+	await page.close();
+}
 await done(browser);
