@@ -315,7 +315,9 @@ export function modifyJS(
 				case 'ExportNamedDeclaration':
 					// a bare specifier (`import x from "react"`) is the import
 					// map's to resolve: leave it, or `new URL` throws and the whole
-					// module is lost
+					// module is lost. A module worker's static imports run before
+					// its own body, which loads the client: each is a worker module
+					// too, so whichever runs first loads it, and none runs unhooked
 					if (ctx.node.source && !isBareSpecifier(ctx.node.source.value))
 						ctx.node.source = b.literal(
 							routeJS(
@@ -325,7 +327,7 @@ export function modifyJS(
 								),
 								url,
 								config,
-								'genericModule',
+								type === 'workerModule' ? 'workerModule' : 'genericModule',
 							),
 						);
 					break;
@@ -770,8 +772,10 @@ export function modifyJS(
 			prologue +
 			// a module worker has no importScripts: fetch the bundle and run it
 			// as the classic script it is (indirect eval, top-level await)
+			// (once: the bundle deletes createClient when the client is made,
+			// and a module worker's imports each carry this preamble)
 			(isWorker
-				? `if (!globalThis.createClient)
+				? `if (!(${JSON.stringify(names.client)} in globalThis) && !globalThis.createClient)
 	${
 		type === 'workerModule'
 			? `(0, eval)(await (await fetch(${JSON.stringify(injectWorkerJS(url, config))})).text());`

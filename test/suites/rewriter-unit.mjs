@@ -178,7 +178,7 @@ const parses = (code) => {
 	const mod = rewrite("'use strict';\nexport const a = top;", 'genericModule');
 	ok(
 		'the directive prologue comes before the worker bootstrap and a preamble',
-		/^["']use strict["'];["']other["'];if \(!globalThis\.createClient\)/.test(
+		/^["']use strict["'];["']other["'];if \(!\("[^"]+" in globalThis\) && !globalThis\.createClient\)/.test(
 			worker,
 		) &&
 			/^["']use strict["'];document\.currentScript\.textContent = "x";/.test(
@@ -494,6 +494,23 @@ console.warn = warn;
 			expression.includes('("<p>x</p>")') &&
 			!statements.includes('javascriptDocument'),
 		[expression, statements].join('\n'),
+	);
+}
+{
+	// a module worker's static imports run before its body loads the client:
+	// each is routed as a worker module, which loads it itself (once); a
+	// page module's stay page modules
+	const worker = rewrite(
+		"import './a.js';\nexport * from './b.js';",
+		'workerModule',
+	);
+	const page = rewrite("import './a.js';", 'genericModule');
+	ok(
+		"a module worker's imports are worker modules",
+		(worker.match(/\/js:workerModule\//g) ?? []).length === 2 &&
+			page.includes('/js:genericModule/') &&
+			!page.includes('/js:workerModule/'),
+		[worker, page].join('\n'),
 	);
 }
 await done();

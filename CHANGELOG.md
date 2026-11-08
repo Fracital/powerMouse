@@ -326,6 +326,13 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   window the page already holds is now handed back as itself wherever it
   goes; that gives the page nothing it did not have (window-identity suite,
   both modes, against the page loaded natively).
+- A module worker's imported modules run with the hooks in place. A module
+  worker loads the client from the top of its own body, but its static
+  imports are evaluated before that body runs, so a request an imported
+  module made at the top level (a `fetch` built on `import.meta.url`) went
+  straight to the site. Every static import of a worker module is now routed
+  as a worker module, and whichever module of the graph runs first loads the
+  client, once (bypass-relative and rewriter-unit suites).
 - A page's `<base href>` applies to its own markup. The page loader routes
   every URL in the markup before writing it, when the base element is not in
   the document yet, so every relative URL in the page (stylesheets, images,
