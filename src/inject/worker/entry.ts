@@ -1,5 +1,6 @@
+import { helperNames } from '../../helperNames';
 import { TRANSPORT_INIT } from '../../transport/messages';
-import { setWorkerTransportPort } from './Client';
+import WorkerClient, { setWorkerTransportPort } from './Client';
 import createWorkerClient from './worker';
 
 // The page that constructed this worker posts a transport port before any of
@@ -44,9 +45,19 @@ setWorkerTransportPort(
 );
 
 // Classic-script global consumed (and deleted) by the inject snippet in
-// rewriteJS.ts. See ../dom/entry.ts.
+// rewriteJS.ts. See ../dom/entry.ts. A module worker's preamble hands over
+// the events it held while it loaded this bundle.
 Reflect.defineProperty(globalThis, 'createClient', {
-	value: createWorkerClient,
+	value: (
+		config: Parameters<typeof createWorkerClient>[0],
+		codecKey: string,
+		held?: MessageEvent[],
+	) => {
+		createWorkerClient(config, codecKey);
+		(
+			Reflect.get(globalThis, helperNames(config).client) as WorkerClient
+		).releaseHeld(held);
+	},
 	configurable: true,
 	writable: true,
 });

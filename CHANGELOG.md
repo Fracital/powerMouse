@@ -358,6 +358,19 @@ PresentationRequest()` (Spotify) and `screen.orientation.lock()` threw
   Storage events the browser fires about the proxy origin's own storage (the
   stamps, the cookie cache's, a same-origin host's) no longer reach the
   page (storage-burst and storage-events suites, both modes).
+- A blob: module worker runs. Its bootstrap was built with the page's
+  `Blob`, which a document hooks to rewrite script blobs, so our own
+  preamble was rewritten once more and called the access helper before it
+  had loaded the inject (`$s$j is not defined`); and its static import ran
+  the page's module before the preamble, so a top-level read of
+  `self.location` threw the same way. The bootstrap is made with the native
+  `Blob` and imports the page's module once the client is in place. Module
+  workers also lost the messages posted to them at once: the browser
+  dispatches them during the preamble's top-level await, before the page's
+  module has set its handlers, where natively its top level runs first. The
+  preamble holds them (and a shared worker's connects) and the client
+  dispatches them again (helper-realms suite, against the page loaded
+  natively).
 - A same-origin frame's hooked functions read as native from its parent.
   Each proxied frame loads its own copy of the inject, whose wrappers the
   parent's copy never made, so the parent's `Function.prototype.toString`

@@ -790,21 +790,43 @@ export function modifyJS(
 			// a module worker has no importScripts: fetch the bundle and run it
 			// as the classic script it is (indirect eval, top-level await)
 			// (once: the bundle deletes createClient when the client is made,
-			// and a module worker's imports each carry this preamble)
-			(isWorker
-				? `if (!(${JSON.stringify(names.client)} in globalThis) && !globalThis.createClient)
-	${
-		type === 'workerModule'
-			? `(0, eval)(await (await fetch(${JSON.stringify(injectWorkerJS(url, config))})).text());`
-			: `importScripts(${JSON.stringify(injectWorkerJS(url, config))});`
+			// and a module worker's imports each carry this preamble). The
+			// browser dispatches messages during a top-level await, when the
+			// page's module has not set its handlers yet (natively its top
+			// level runs first): those, and a shared worker's connects, are
+			// held and the client dispatches them again
+			(type === 'workerModule'
+				? `if (!(${JSON.stringify(names.client)} in globalThis)) {
+	let held;
+	if (!globalThis.createClient) {
+		held = [];
+		const hold = (event) => {
+			event.stopImmediatePropagation();
+			held.push(event);
+		};
+		addEventListener('message', hold);
+		addEventListener('connect', hold);
+		try {
+			(0, eval)(await (await fetch(${JSON.stringify(injectWorkerJS(url, config))})).text());
+		} finally {
+			removeEventListener('message', hold);
+			removeEventListener('connect', hold);
+		}
 	}
+	createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)}, held);
+}
+if (!${names.client}.applied)
+	${names.client}.apply();`
+				: isWorker
+					? `if (!(${JSON.stringify(names.client)} in globalThis) && !globalThis.createClient)
+	importScripts(${JSON.stringify(injectWorkerJS(url, config))});
 
 if (!(${JSON.stringify(names.client)} in globalThis))
 	createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 
 if (!${names.client}.applied) 
 	${names.client}.apply();`
-				: '') +
+					: '') +
 			// import.meta.resolve answers with the page's URLs; a bare specifier
 			// belongs to the import map and comes back as it is
 			(isModule

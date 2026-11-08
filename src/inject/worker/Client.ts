@@ -8,6 +8,43 @@ export function setWorkerTransportPort(port: Promise<MessagePort>) {
 	transportPort = port;
 }
 
+// taken when the bundle loads, before the page's code (or our own hooks)
+// could replace them
+const nativeAddEventListener = EventTarget.prototype.addEventListener;
+const nativeRemoveEventListener = EventTarget.prototype.removeEventListener;
+const nativeDispatchEvent = EventTarget.prototype.dispatchEvent;
+const nativeSetTimeout = globalThis.setTimeout;
+const NativeMessageEvent = globalThis.MessageEvent;
+
+/** the events a held message or connect stands for */
+const HELD_TYPES = ['message', 'connect'];
+
+/**
+ * Dispatch copies of events that were held from the worker's global (an
+ * event that was stopped cannot be dispatched again): the same data, ports
+ * and origin, in the order they came
+ */
+function dispatchHeld(events: readonly MessageEvent[]) {
+	for (const event of events)
+		Reflect.apply(nativeDispatchEvent, globalThis, [
+			new NativeMessageEvent(event.type, {
+				data: event.data,
+				origin: event.origin,
+				lastEventId: event.lastEventId,
+				source: event.source,
+				ports: [...event.ports],
+			}),
+		]);
+}
+
+// what the module preamble held, until it is dispatched
+let preambleHeld: MessageEvent[] = [];
+function releasePreambleHeld() {
+	const events = preambleHeld;
+	preambleHeld = [];
+	dispatchHeld(events);
+}
+
 export default class WorkerClient extends Client {
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
@@ -18,5 +55,41 @@ export default class WorkerClient extends Client {
 			throw new Error('Stomp: this worker was not handed a transport port');
 
 		return transportPort;
+	}
+	/**
+	 * Dispatch again, after the current task, the messages (a shared worker's
+	 * connects) the module preamble held while it loaded this bundle: they
+	 * came during its top-level await, when the page's module had not set
+	 * its handlers yet, and natively its top level runs before any message
+	 */
+	releaseHeld(events: readonly MessageEvent[] | undefined) {
+		if (!events?.length) return;
+		preambleHeld.push(...events);
+		Reflect.apply(nativeSetTimeout, globalThis, [releasePreambleHeld]);
+	}
+	/**
+	 * Hold the messages and connects that arrive until `until` settles, then
+	 * dispatch them again: a blob: module worker's bootstrap imports the
+	 * page's module only once the client is in place, and the page's handlers
+	 * exist only once that import has run. The transport's own message is
+	 * taken by the entry's listener, which comes first.
+	 */
+	async holdEvents(until: Promise<unknown>): Promise<unknown> {
+		const held: MessageEvent[] = [];
+		const hold = (event: Event) => {
+			event.stopImmediatePropagation();
+			held.push(event as MessageEvent);
+		};
+		for (const type of HELD_TYPES)
+			Reflect.apply(nativeAddEventListener, globalThis, [type, hold]);
+		try {
+			return await until;
+		} finally {
+			for (const type of HELD_TYPES)
+				Reflect.apply(nativeRemoveEventListener, globalThis, [type, hold]);
+			// the preamble's, when they are still waiting, came first
+			releasePreambleHeld();
+			dispatchHeld(held);
+		}
 	}
 }

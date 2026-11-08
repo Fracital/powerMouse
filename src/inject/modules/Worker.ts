@@ -13,13 +13,18 @@ export default class WorkerModule extends Module<Client> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const global = this.client.global;
+		// the bootstrap below is our own code: a document's BlobDocuments
+		// module (it applies after this one) would rewrite it once more as a
+		// script blob, and the rewritten preamble then called the access
+		// helper before it had loaded the inject that defines it
+		const NativeBlob = global.Blob;
 
 		/**
 		 * The script URL a worker should really start with. A blob: URL holds
 		 * page data the service worker can never read, so the worker starts
 		 * from a small bootstrap instead: the usual worker preamble (inject,
-		 * client) followed by an import of the page's blob. Its code runs with
-		 * the worker hooks in place but is not itself rewritten.
+		 * client), then the page's blob. A document rewrote the blob's script
+		 * when the page made it (BlobDocuments); a worker's are not rewritten.
 		 */
 		const workerURL = (source: string, isModule: boolean): string => {
 			const url = new URL(source, this.client.url.toString());
@@ -32,19 +37,26 @@ export default class WorkerModule extends Module<Client> {
 				)};`;
 				const bootstrap =
 					base +
-					modifyJS(
-						isModule
-							? `import ${JSON.stringify(url.href)};`
-							: `importScripts(${JSON.stringify(url.href)});`,
-						this.client.url,
-						this.client.config,
-						type,
-					);
+					(isModule
+						? // a static import would run the page's module before this
+							// module's body, which is what loads the client: imported
+							// once the client is in place instead, with the messages
+							// that come meanwhile held for the handlers it sets
+							modifyJS('', this.client.url, this.client.config, type) +
+							`\nawait ${this.client.names.client}.holdEvents(import(${JSON.stringify(
+								proxyBlobURL(url.href),
+							)}));`
+						: modifyJS(
+								`importScripts(${JSON.stringify(url.href)});`,
+								this.client.url,
+								this.client.config,
+								type,
+							));
 				// the bootstrap's own blob: URL goes to the browser, so in the
 				// proxy's form (createObjectURL hands the page the page's)
 				return proxyBlobURL(
 					global.URL.createObjectURL(
-						new global.Blob([bootstrap], { type: 'text/javascript' }),
+						new NativeBlob([bootstrap], { type: 'text/javascript' }),
 					),
 				);
 			}
