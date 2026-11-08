@@ -349,6 +349,13 @@ PresentationRequest()` (Spotify) and `screen.orientation.lock()` threw
   the attribute as the page wrote it when no hook took the value, and the
   home page renders the same elements, tag for tag, as natively
   (property-order suite, both modes, against the page loaded natively).
+- `fetch(request)` fetches the request's own URL, not a `url` the page
+  defined on the object. YouTube checks its fetch with a `data:` Request
+  whose `url` and `method` it shadows with getters naming its player
+  endpoint, and expects the data back; the hook read the shadowed `url`, so
+  every load sent a GET to `/youtubei/v1/player` (405) and told YouTube its
+  fetch was patched. The hook reads the URL through the native getter, and
+  a Request it does not route is fetched as itself (page-apis suite).
 - A fetch, image, script or other load from an iframe's initial about:blank
   document sends no Referer, as natively (about:blank strips to no
   referrer); a fetch that names a referrer still sends it under the policy

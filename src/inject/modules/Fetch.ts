@@ -105,15 +105,24 @@ export default class FetchModule extends Module<Client> {
 			true,
 		);
 
+		// a Request's own URL: the browser fetches that, whatever `url` the
+		// page has defined on the object (YouTube shadows a data: Request's
+		// url and method to see whether fetch reads them)
+		const nativeRequestURL = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Request.prototype,
+			'url',
+		)!.get!;
+
 		this.client.global.fetch = proxyModule.wrapFunction(
 			this.client.global.fetch,
 			async (_target, _that, args) => {
 				let init: RequestInit;
 				let url: urlLike;
 
-				if (args[0] instanceof Request) {
-					url = new URL(args[0].url);
-					init = args[0];
+				const request = args[0] instanceof Request ? args[0] : null;
+				if (request) {
+					url = new URL(Reflect.apply(nativeRequestURL, request, []) as string);
+					init = request;
 				} else {
 					url = new URL(args[0], this.client.url.toString());
 					init = args[1];
@@ -121,7 +130,13 @@ export default class FetchModule extends Module<Client> {
 
 				if (!ROUTE_PROTOCOLS.includes(url.protocol)) {
 					// a page-origin blob: URL is fetched as the browser's
-					return await fetch(proxyBlobURL(url.href), init);
+					const browserURL = proxyBlobURL(url.href);
+					// a Request of a URL the browser can fetch as it is goes as
+					// itself: as an init its members would be read through the
+					// getters the page may have put on it
+					if (request && browserURL === url.href)
+						return await fetch(request, args[1]);
+					return await fetch(browserURL, init);
 				}
 
 				// an explicit referrer is a page URL: in proxy space (routed) the
