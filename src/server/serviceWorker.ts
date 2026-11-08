@@ -27,6 +27,7 @@ import createServer, { addressCodec, StompServer } from './createServer';
 import { hostErrorPage } from './errorPage';
 import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
 import { RewriteCache } from './rewriteCache';
+import { RewritePool } from './rewritePool';
 import { abortRequest } from './rewrites';
 
 interface ControllerRef {
@@ -37,6 +38,8 @@ interface ControllerRef {
 	rpc: RpcHelper<SWbound, Controllerbound>;
 	/** the controller's transport, over the second port or the rpc port */
 	transport: RemoteTransport;
+	/** the controller's rewrite workers, when it started any */
+	pool?: RewritePool;
 	server: Promise<StompServer>;
 	ready?: StompServer;
 	/**
@@ -86,11 +89,20 @@ const controllers = new Map<string, ControllerRef>();
 let serials = 0;
 
 function registerController(
-	{ directory, config: given }: ControllerInitMessage,
-	port: MessagePort,
-	transportPort?: MessagePort,
+	{ directory, config: given, rewritePool }: ControllerInitMessage,
+	ports: MessagePort[],
 	client?: string,
 ) {
+	// the handshake's ports: the rpc's, the transport's when it lives in the
+	// controller's worker, then one per rewrite worker
+	const poolPorts =
+		rewritePool && rewritePool.ports > 0
+			? ports.splice(Math.max(1, ports.length - rewritePool.ports))
+			: [];
+	const [port, transportPort] = ports;
+	const pool = poolPorts.length
+		? new RewritePool(poolPorts, rewritePool!.timeout)
+		: undefined;
 	const existing = controllers.get(directory);
 
 	if (existing) {
@@ -117,6 +129,7 @@ function registerController(
 		config,
 		transport,
 		config.requestLog ? report : undefined,
+		pool,
 	);
 
 	const rpc = new RpcHelper<SWbound, Controllerbound>(
@@ -173,6 +186,7 @@ function registerController(
 		rpc,
 		transport,
 		server,
+		pool,
 		client,
 		owner: client,
 		serial: ++serials,
@@ -231,6 +245,7 @@ async function newestAlive(
 function forget(ref: ControllerRef, reason: string) {
 	ref.rpc.abort(reason);
 	ref.transport.close(reason);
+	ref.pool?.close();
 	ref.port.close();
 	if (controllers.get(ref.directory) === ref) controllers.delete(ref.directory);
 }
@@ -370,12 +385,7 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 	const sender = event.source instanceof Client ? event.source.id : undefined;
 
 	if (CONTROLLER_INIT in data) {
-		registerController(
-			data[CONTROLLER_INIT],
-			event.ports[0],
-			event.ports[1],
-			sender,
-		);
+		registerController(data[CONTROLLER_INIT], [...event.ports], sender);
 	} else if (INLINE_DOCUMENT in data) {
 		// only from a document of that controller (its routed URL under the
 		// address), with a well-formed token and bounded markup

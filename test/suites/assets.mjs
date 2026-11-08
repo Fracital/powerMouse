@@ -49,11 +49,12 @@ ok(
 const served = (await (await fetch(`${FIXTURE}requests`)).json()).slice(before);
 const neutralServed = served.filter((p) => p.startsWith('/neutral/'));
 ok(
-	'the worker and the pages fetched the renamed inject bundles and the renamed transport worker',
+	'the worker and the pages fetched the renamed inject bundles, the renamed transport worker and the renamed rewrite workers',
 	neutralServed.includes('/neutral/sw.js') &&
 		neutralServed.includes('/neutral/doc.js') &&
 		neutralServed.includes('/neutral/wk.js') &&
-		neutralServed.includes('/neutral/tw.js'),
+		neutralServed.includes('/neutral/tw.js') &&
+		neutralServed.includes('/neutral/rw.js'),
 	JSON.stringify([...new Set(neutralServed)]),
 );
 const hostURLs = [...(neutral.resources || []), neutral.scriptURL || ''];

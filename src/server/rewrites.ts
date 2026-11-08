@@ -43,6 +43,7 @@ import {
 } from './filterHeaders';
 import { takeInline } from './inline';
 import type { RewriteCache, RewriteCacheOutcome } from './rewriteCache';
+import type { RewritePool } from './rewritePool';
 import Router from './Router';
 import { applyHeaderRule, CompiledRule, compileRules } from './rules';
 
@@ -186,8 +187,14 @@ type BodyTransform = (
 	/** the request as it went upstream (its method, its final headers) */
 	request: { method: string; headers: Headers },
 	/** what the transform tells the request log */
-	note: { rewriteCache?: RewriteCacheOutcome },
+	note: Note,
 ) => Promise<BodyInit | false>;
+
+/** what a body's transform tells the request log */
+interface Note {
+	rewriteCache?: RewriteCacheOutcome;
+	rewriteIn?: 'pool' | 'service-worker';
+}
 
 interface Rewriter {
 	codec: GenericCodec;
@@ -203,6 +210,8 @@ interface Rewriter {
 	cache?: HttpCache;
 	/** the rewriter's output for scripts, unless the host turned the cache off */
 	rewrites?: RewriteCache;
+	/** the controller's rewrite workers, when it started any */
+	pool?: RewritePool;
 	/** the host's request log, when it asked for one */
 	log?: (info: RequestInfo) => void;
 	/** the host's request rules, compiled */
@@ -756,7 +765,7 @@ function genericForward(
 
 		// the report is made now (its time is to the headers) and sent once the
 		// body's transform has said how it went
-		const note: { rewriteCache?: RewriteCacheOutcome } = {};
+		const note: Note = {};
 		let report: RequestInfo | null = null;
 		if (rewriter.log) {
 			const length = Number(response.headers.get('content-length'));
@@ -777,6 +786,7 @@ function genericForward(
 				rewriter.log!({
 					...report,
 					...(note.rewriteCache ? { rewriteCache: note.rewriteCache } : {}),
+					...(note.rewriteIn ? { rewriteIn: note.rewriteIn } : {}),
 				});
 			report = null;
 		};
@@ -973,6 +983,7 @@ export function registerRewrites(
 	cache?: HttpCache,
 	log?: (info: RequestInfo) => void,
 	rewrites?: RewriteCache,
+	pool?: RewritePool,
 ) {
 	const rewriter: Rewriter = {
 		get config() {
@@ -998,6 +1009,7 @@ export function registerRewrites(
 		cookies,
 		cache,
 		rewrites,
+		pool,
 		log,
 		rules: [],
 		codec: init.codec,
@@ -1027,6 +1039,20 @@ export function registerRewrites(
 	// a script's rewritten output comes from the rewrite cache when the same
 	// body was rewritten before for the same URL, type and config; it is kept
 	// only when the response may be kept at all (the HTTP cache's rules)
+	// a script is rewritten by one of the controller's rewrite workers when
+	// one is live and answers in time, here otherwise: the same output
+	const rewriteScript = async (
+		text: string,
+		url: StompURL,
+		type: ScriptType,
+		note: Note,
+	): Promise<string> => {
+		const pooled = rewriter.pool?.live
+			? await rewriter.pool.rewrite(text, url, rewriter.config, type)
+			: null;
+		note.rewriteIn = pooled === null ? 'service-worker' : 'pool';
+		return pooled ?? modifyJS(text, url, rewriter.config, type);
+	};
 	const scriptTypeFactory = (type: ScriptType) =>
 		genericForward(
 			rewriter,
@@ -1044,7 +1070,7 @@ export function registerRewrites(
 					})
 				) {
 					note.rewriteCache = 'skip';
-					return modifyJS(text, url, rewriter.config, type);
+					return rewriteScript(text, url, type, note);
 				}
 				const key = await rewrites.key(
 					[
@@ -1061,7 +1087,7 @@ export function registerRewrites(
 					note.rewriteCache = 'hit';
 					return kept;
 				}
-				const output = modifyJS(text, url, rewriter.config, type);
+				const output = await rewriteScript(text, url, type, note);
 				await rewrites.put(key, output);
 				note.rewriteCache = 'miss';
 				return output;

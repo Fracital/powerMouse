@@ -153,6 +153,8 @@ export interface Assets {
 	controllerFrameScript?: string;
 	/** the dedicated Worker that hosts a transport given as a descriptor */
 	transportWorker?: string;
+	/** the dedicated Workers that rewrite scripts for the service worker */
+	rewriteWorker?: string;
 }
 
 export const DEFAULT_ASSETS: Required<Assets> = {
@@ -162,6 +164,7 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 	controllerFrame: 'controllerFrame.html',
 	controllerFrameScript: 'controllerFrame.js',
 	transportWorker: 'transportWorker.js',
+	rewriteWorker: 'rewriteWorker.js',
 };
 
 /** a served file's name: the host's, else the default */

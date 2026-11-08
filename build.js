@@ -93,6 +93,11 @@ const builds = [
 		format: 'iife',
 	},
 	{
+		// the controller's rewrite workers (src/controller/rewriteWorkers.ts)
+		entryPoints: { rewriteWorker: 'src/rewriteWorker.ts' },
+		format: 'iife',
+	},
+	{
 		entryPoints: { SearchBuilder: 'src/bootstrapper/entry.ts' },
 		format: 'iife',
 	},

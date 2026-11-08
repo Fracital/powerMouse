@@ -147,6 +147,7 @@ const NEUTRAL = {
 	'frame.html': 'controllerFrame.html',
 	'frame.js': 'controllerFrame.js',
 	'tw.js': 'transportWorker.js',
+	'rw.js': 'rewriteWorker.js',
 };
 // the transport modules under neutral names too (assets and transport-worker
 // suites): /neutral/transport.mjs is epoxy, /neutral/libcurl.mjs is libcurl
@@ -215,7 +216,7 @@ export function startFixture(port = 8084) {
 		}
 		// a script whose body is the same until /rewrite-js/bump?name=<name>
 		// changes it, whatever else the URL carries; `cc=` is its Cache-Control
-		// (rewrite-cache suite)
+		// (rewrite-cache and rewrite-pool suites)
 		if (path === '/rewrite-js/bump') {
 			const name = new URL(req.url, 'http://x').searchParams.get('name');
 			scriptVersions.set(name, (scriptVersions.get(name) ?? 0) + 1);
@@ -226,6 +227,15 @@ export function startFixture(port = 8084) {
 			const version = scriptVersions.get(query.get('name')) ?? 0;
 			res.setHeader('content-type', 'text/javascript');
 			if (query.get('cc')) res.setHeader('cache-control', query.get('cc'));
+			// `three=<n>`: n copies of three.js first, a script that takes a
+			// while to rewrite (rewrite-pool suite)
+			const three = Math.min(Number(query.get('three')) || 0, 4);
+			if (three)
+				res.write(
+					`${readFileSync(`${pagesDir}vendor-three.min.js`, 'utf8')};\n`.repeat(
+						three,
+					),
+				);
 			return res.end(
 				`(window.__rc ??= []).push([${JSON.stringify(query.get('name'))}, ${version}, location.href.length > 0, typeof window.top]);\n`,
 			);

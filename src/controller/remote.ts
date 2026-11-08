@@ -77,6 +77,10 @@ export interface RemoteControllerInit {
 	cache?: boolean;
 	/** a script the rewriter cannot parse fails instead of running raw when `false` (see StompController) */
 	allowInvalidJs?: boolean;
+	/** Workers that rewrite scripts for the service worker; `0` starts none (see StompController) */
+	rewriteWorkers?: number;
+	/** ms the service worker waits on a rewrite worker before rewriting itself (see StompController) */
+	rewriteTimeout?: number;
 	/** request rules run in the service worker (see StompController) */
 	rules?: RequestRule[];
 	/** the served file names, when the host renamed them (see StompController) */
@@ -269,6 +273,12 @@ export class RemoteController extends EventTarget {
 					...(init.cache === false ? { cache: false } : {}),
 					requestLog: !!init.onRequest,
 					...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
+					...(init.rewriteWorkers !== undefined
+						? { rewriteWorkers: init.rewriteWorkers }
+						: {}),
+					...(init.rewriteTimeout !== undefined
+						? { rewriteTimeout: init.rewriteTimeout }
+						: {}),
 					...(init.rules ? { rules: init.rules } : {}),
 					...(init.assets ? { assets: init.assets } : {}),
 					...(init.names ? { names: init.names } : {}),

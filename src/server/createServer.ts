@@ -14,6 +14,7 @@ import { HttpCache } from './cache';
 import Cookies, { openCookies, registerCookies } from './Cookies';
 import { hostErrorPage } from './errorPage';
 import { RewriteCache } from './rewriteCache';
+import type { RewritePool } from './rewritePool';
 import { registerRewrites } from './rewrites';
 import Router, { json } from './Router';
 import { openStorage, registerStorage, StorageHosts } from './Storage';
@@ -132,6 +133,8 @@ export default async function createServer(
 	config: Config,
 	transport: ProxyTransport,
 	log?: (info: RequestInfo) => void,
+	/** the controller's rewrite workers, when it started any */
+	pool?: RewritePool,
 ): Promise<StompServer> {
 	const db = await openConfigDB();
 
@@ -220,6 +223,7 @@ export default async function createServer(
 		cache,
 		log,
 		rewrites,
+		pool,
 	);
 	registerStorage(router, stores.storage);
 	registerXhr(router);

@@ -128,6 +128,13 @@ if (window === window.parent || !origins.length) {
 						openTab: !!init.openTab,
 						...(init.cache === false ? { cache: false } : {}),
 						...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
+						// numbers only: the controller clamps them
+						...(typeof init.rewriteWorkers === 'number'
+							? { rewriteWorkers: init.rewriteWorkers }
+							: {}),
+						...(typeof init.rewriteTimeout === 'number'
+							? { rewriteTimeout: init.rewriteTimeout }
+							: {}),
 						...(init.rules ? { rules: init.rules } : {}),
 						...(init.assets ? { assets: init.assets } : {}),
 						...(init.names ? { names: init.names } : {}),

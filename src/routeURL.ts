@@ -42,6 +42,16 @@ export function addRouteScope(origin: string, scope: string) {
 	routeScopes.add(`${origin}${scope}`);
 }
 
+/** every route scope known here, as `<origin><scope>` (a rewrite worker is told the service worker's) */
+export function routeScopeList(): string[] {
+	return [...routeScopes];
+}
+
+/** take on route scopes as routeScopeList gave them */
+export function addRouteScopes(scopes: string[]) {
+	for (const scope of scopes) routeScopes.add(scope);
+}
+
 /**
  * The real URL a route of a known scope stands for, through any depth (a
  * route of a route of a URL is that URL), with the outermost hash; null when

@@ -45,6 +45,10 @@ import { canTraverse, traverse } from './history';
 import { controllerId } from './id';
 import type { StaleInfo, TransportDescriptor } from './messages';
 import { DEFAULT_SANDBOX } from './remote';
+import RewriteWorkers, {
+	DEFAULT_REWRITE_TIMEOUT_MS,
+	defaultRewriteWorkers,
+} from './rewriteWorkers';
 
 export { default as SearchBuilder } from '../bootstrapper/SearchBuilder';
 export type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
@@ -187,6 +191,21 @@ export interface ControllerInit {
 	 * `window.open(url, '_top')` navigate the host page. `null` disables it.
 	 */
 	sandbox?: string | null;
+	/**
+	 * How many Workers the controller starts to rewrite scripts for the
+	 * service worker, whose own thread would otherwise rewrite one script at
+	 * a time (from `rewriteWorker.js` in `directory`). Default: half the
+	 * cores, one to four; `0` starts none. Whenever no worker answers (none
+	 * started, one failed to load or crashed, this page closed), the service
+	 * worker rewrites the script itself.
+	 */
+	rewriteWorkers?: number;
+	/**
+	 * Milliseconds the service worker waits for a rewrite worker's answer
+	 * before it rewrites the script itself and stops using that worker.
+	 * Default 10000.
+	 */
+	rewriteTimeout?: number;
 }
 
 /** a RequestInfo with the frame it belongs to, when the page reported its client id */
@@ -456,6 +475,8 @@ export class StompController extends EventTarget {
 	frames: Frame[] = [];
 	isReady = false;
 	#worker?: TransportWorker;
+	#rewriteWorkers?: RewriteWorkers;
+	#rewriteTimeout: number;
 	/** settles once the transport exists where it is hosted; the handshake waits for it */
 	#hostReady: Promise<void>;
 	/** every hook error so far (a hook that threw, a hook URL that failed), newest last; also `hookerror` events */
@@ -535,6 +556,14 @@ export class StompController extends EventTarget {
 			this.transport = given;
 		}
 		this.#sandbox = init.sandbox === undefined ? DEFAULT_SANDBOX : init.sandbox;
+		const rewriteWorkers = Math.min(
+			16,
+			Math.max(0, Math.floor(init.rewriteWorkers ?? defaultRewriteWorkers())),
+		);
+		this.#rewriteTimeout = Math.min(
+			120000,
+			Math.max(50, init.rewriteTimeout ?? DEFAULT_REWRITE_TIMEOUT_MS),
+		);
 		this.#onRequest = init.onRequest;
 		this.#rules = init.rules ?? [];
 		this.directory = isUrlLike(init.directory)
@@ -568,6 +597,12 @@ export class StompController extends EventTarget {
 			...(init.names ? { names: init.names } : {}),
 			...(errorPage ? { errorPage } : {}),
 		};
+
+		if (rewriteWorkers > 0)
+			this.#rewriteWorkers = new RewriteWorkers(
+				new URL(assetName(this.config.assets, 'rewriteWorker'), this.directory),
+				rewriteWorkers,
+			);
 
 		// a described transport is started where it is hosted before the first
 		// handshake; a failure there never leaves the controller dead
@@ -970,10 +1005,22 @@ export class StompController extends EventTarget {
 				this.#handshakeHeaders,
 			);
 
+		// the rewrite workers' ports come last (see ControllerInitMessage)
+		const rewritePorts = this.#rewriteWorkers?.ports() ?? [];
+		transfer.push(...rewritePorts);
+
 		const message: ControllerInitMessage = {
 			directory: this.config.directory,
 			config: this.config,
 			build: BUILD,
+			...(rewritePorts.length
+				? {
+						rewritePool: {
+							ports: rewritePorts.length,
+							timeout: this.#rewriteTimeout,
+						},
+					}
+				: {}),
 		};
 
 		this.serviceworker.postMessage({ [CONTROLLER_INIT]: message }, transfer);

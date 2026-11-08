@@ -335,6 +335,22 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   rejects a control character in a header value, which Chrome reads) still
   gets an error response (network-errors suite, both modes, against the page
   loaded natively).
+- Scripts are rewritten off the service worker's thread. The service worker
+  rewrote every script itself, one at a time, so a page of large scripts
+  waited for each in turn (six 600 KB scripts took about a second to arrive,
+  natively about 115 ms). The controller now starts rewrite workers
+  (`rewriteWorker.js`; `rewriteWorkers`, default half the cores, one to
+  four, `0` for none) and hands the service worker a port to each with the
+  handshake; a script goes to the worker with the fewest in hand, and comes
+  back byte for byte what the service worker would have made. The first load
+  of that page went from about 1030 ms to about 530 ms. A worker is used
+  once it says it is ready, so one that failed to load costs nothing; the
+  service worker rewrites the script itself whenever no worker is ready or
+  one has not answered within `rewriteTimeout` (default 10 s; that worker is
+  not used again), and lets the workers go with their controller. The
+  request log says where (`rewriteIn`: `pool` or `service-worker`). The
+  inline scripts of an HTML document are still rewritten in the service
+  worker, with the document (rewrite-pool suite).
 - A script's rewritten output is kept in a cache of its own (Cache API,
   `stomp-rewrite-cache`), keyed by a digest of the body with everything the
   output depends on: the URL, the script type, the config, the codec key and

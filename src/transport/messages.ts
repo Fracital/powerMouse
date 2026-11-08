@@ -127,8 +127,16 @@ export interface ControllerInitMessage {
 	config: Config;
 	/** the controller bundle's build id (src/version.ts) */
 	build: string;
+	/**
+	 * The controller's rewrite workers: the last `ports` ports of the
+	 * handshake are theirs, one each; a rewrite that has no answer within
+	 * `timeout` ms is made in the service worker instead
+	 */
+	rewritePool?: { ports: number; timeout: number };
 }
 
+/** the message that hands a rewrite worker a port to serve (the service worker holds the other end) */
+export const REWRITE_PORT = '$stomp$rewritePort';
 export interface InitRemoteTransportMessage {
 	directory: string;
 }
@@ -225,6 +233,8 @@ export interface RequestInfo {
 	cached: boolean;
 	/** a script's rewritten output: from the rewrite cache, made now and kept, or made now and not kept (the response may not be kept) */
 	rewriteCache?: 'hit' | 'miss' | 'skip';
+	/** where a script made now was rewritten: one of the controller's rewrite workers, or the service worker itself */
+	rewriteIn?: 'pool' | 'service-worker';
 	/** Content-Length of the response, when known */
 	bytes: number | null;
 	error?: string;

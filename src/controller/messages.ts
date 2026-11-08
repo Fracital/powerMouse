@@ -43,6 +43,10 @@ export interface ControllerFrameInit {
 	requestLog?: boolean;
 	/** unparseable scripts fail instead of running raw (RemoteControllerInit.allowInvalidJs) */
 	allowInvalidJs?: boolean;
+	/** how many rewrite workers the controller starts (RemoteControllerInit.rewriteWorkers) */
+	rewriteWorkers?: number;
+	/** ms the service worker waits on a rewrite worker (RemoteControllerInit.rewriteTimeout) */
+	rewriteTimeout?: number;
 	/** request rules (RemoteControllerInit.rules) */
 	rules?: RequestRule[];
 	/** the served file names (RemoteControllerInit.assets) */
