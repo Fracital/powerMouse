@@ -312,6 +312,12 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   `document.write` build to rewrite their markup are made in an inert
   document too: made in the page's, every custom element in them was
   constructed twice (custom-elements suite, both modes, against the page
+- `document.referrer` in an iframe's initial about:blank document is its
+  creator's full URL, whatever the referrer policy, as natively: it read
+  empty, because the readback compared the routed referrer's origin with the
+  document's location origin, which about:blank and srcdoc documents read as
+  `"null"` (blank-referrer suite, both modes, against the page loaded
+  natively; WPT referrer-policy iframe-inheritance-about-blank).
 - A subresource whose connection fails (nothing listens, the host does not
   resolve, the connection drops before an answer) is a network error for the
   page: fetch rejects with a TypeError, an XHR fires `error` with status 0

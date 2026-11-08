@@ -1,6 +1,7 @@
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../../routeURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { routedPrefix } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import ContextModule, { sameOrigin } from './Context';
 
@@ -130,8 +131,12 @@ export default class FramingModule extends Module<DocumentClient> {
 					if (!referrer) return '';
 					try {
 						const url = new URL(referrer);
+						// the proxy origin from the routed prefix, not from location:
+						// an about:blank or srcdoc document reads its location origin as
+						// "null", and an iframe's initial about:blank has its creator's
+						// full (routed) URL as its referrer whatever the policy
 						if (
-							url.origin === global.location.origin &&
+							url.origin === new URL(routedPrefix(this.client)).origin &&
 							ROUTE_PROTOCOLS.includes(url.protocol) &&
 							url.pathname.startsWith(`${this.client.directory}html`)
 						) {
