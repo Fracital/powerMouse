@@ -316,6 +316,19 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   being deleted and inserted again (which detached the page's reference).
   Only @import and @font-face rules, which have no declarations to edit,
   are still put back whole (blank-loads suite, both modes).
+- A frame whose sandbox the page builds through its token list loads through
+  the proxy. `iframe.sandbox.add`, `.toggle`, `.replace`, `.remove` and
+  `.value =` write the attribute without any attribute hook seeing it, so the
+  sandbox Stomp drops stayed on the real frame. reCAPTCHA sets its anchor
+  frame's sandbox, then adds each newer flag the browser supports that way:
+  the frame was sandboxed with those flags alone, an opaque origin whose
+  navigation skipped the service worker, and the proxy server answered its
+  `html:nested` route with a 404 (seen on the TinyMCE docs through
+  stomp.fracit.al). A hooked list's call now runs on a detached copy holding
+  the page's value and writes the result through the page's `setAttribute`,
+  so it returns, throws and shows MutationObserver records as natively and
+  the page reads its full sandbox back (sandbox-tokens suite). The list's own
+  reads (`value`, `contains`, iteration) still show the real, empty list.
 - CSS a page writes into a document no service worker controls loads its
   images through the proxy: a `<style>`'s rules, a style attribute and a
   CSSOM write (`el.style.x = ...`, setProperty, cssText) have their url()s

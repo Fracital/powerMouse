@@ -23,6 +23,7 @@ import OpenModule from './modules/Open';
 import ReadbackModule from './modules/Readback';
 import StorageModule from './modules/Storage';
 import SyncModule from './modules/Sync';
+import TokenListsModule from './modules/TokenLists';
 import XMLHttpRequestModule from './modules/XMLHttpRequest';
 
 export function addClientModules(client: DocumentClient) {
@@ -35,6 +36,8 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(DOMContentHooks);
 	client.addModule(CSSOMModule);
 	client.addModule(DOMHooksModule);
+	// after DOMHooks: wraps the property getters its hooks defined
+	client.addModule(TokenListsModule);
 	client.addModule(IFrameModule);
 	client.addModule(SyncModule);
 	client.addModule(AudioModule);
