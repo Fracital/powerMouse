@@ -17,7 +17,7 @@ import {
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
-import { scopePrefix } from '../../modules/Unroute';
+import { scopePrefix, unrouteURL } from '../../modules/Unroute';
 import { blobLoads } from '../blobLoads';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
@@ -134,20 +134,70 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		/** one value's copies: the routed value, what was set, the blobs made */
 		type Copy = { routed: string; url?: string; made: string[] };
 		const copies = new WeakMap<Element, Map<string, Copy>>();
+		/**
+		 * A copied stylesheet's text with its own loads copied too: every route
+		 * in a url() (an @import, a background, a font) becomes the blob: URL
+		 * of its copy, the page's token kept after the marker for readbacks. An
+		 * import's copy is a stylesheet again, copied the same way, `depth`
+		 * levels at most (a cycle ends there). A route whose copy failed stays,
+		 * and fails as it would have.
+		 */
+		const copyCSS = async (
+			text: string,
+			state: Copy,
+			depth: number,
+		): Promise<string> => {
+			if (depth <= 0) return text;
+			const prefix = scopePrefix(this.client);
+			const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+			const pattern = new RegExp(
+				`(url\\(\\s*["']?)(${escaped}[^"'\\s)#]*)`,
+				'g',
+			);
+			const targets = [
+				...new Set([...text.matchAll(pattern)].map((m) => m[2])),
+			];
+			const copied = new Map<string, string>();
+			await Promise.allSettled(
+				targets.map(async (target) =>
+					copied.set(
+						target,
+						await copyOf(
+							target,
+							unrouteURL(this.client, target) ?? target,
+							state,
+							depth - 1,
+						),
+					),
+				),
+			);
+			return text.replace(
+				pattern,
+				(match, open: string, target: string) =>
+					`${open}${copied.get(target) ?? target}`,
+			);
+		};
 		/** a routed URL's copy, as a blob: URL (the proxy's form) */
 		const copyOf = async (
 			routed: string,
 			page: string,
 			state: Copy,
+			depth = 4,
 		): Promise<string> => {
 			const response = await this.client.routedFetch(routed, {
 				credentials: 'include',
 			});
 			if (!response.ok && response.status !== 0)
 				throw new Error(String(response.status));
+			const type = response.headers.get('content-type') ?? '';
+			const body = /^\s*text\/css/i.test(type)
+				? new NativeBlob([await copyCSS(await response.text(), state, depth)], {
+						type,
+					})
+				: await response.blob();
 			const url = proxyBlobURL(
 				Reflect.apply(createObjectURL, this.client.global.URL, [
-					await response.blob(),
+					body,
 				]) as string,
 			);
 			state.made.push(url);

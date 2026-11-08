@@ -1,0 +1,11 @@
+@import url('blank-import.css?css=import');
+.link-bg {
+	background-image: url('blank-pixel.svg?css=link-bg');
+}
+@font-face {
+	font-family: blank-font;
+	src: url('font.woff2?css=link-font');
+}
+.font {
+	font-family: blank-font;
+}

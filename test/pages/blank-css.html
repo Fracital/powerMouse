@@ -1,0 +1,86 @@
+<!doctype html>
+<title>BLANK CSS</title>
+
+<script>
+	// CSS in a document the page builds, which no service worker controls: a
+	// stylesheet's url()s, its @import and font, a <style> element's url(),
+	// a style attribute's, and a CSSOM write's. Each URL is marked ?css=<kind>.
+	const report = {};
+	window.__blankCss = report;
+	// ?top: the same stylesheet in this (controlled) document only, for the
+	// readback the frame's copy is compared with
+	if (location.search.includes('top')) {
+		const link = document.createElement('link');
+		link.rel = 'stylesheet';
+		link.href = 'blank-urls.css';
+		document.head.append(link);
+		const make = (className) => {
+			const div = document.createElement('div');
+			div.className = className;
+			document.body.append(div);
+			return div;
+		};
+		addEventListener('load', () => {
+			const elements = { link: make('link-bg'), import: make('import-bg') };
+			setTimeout(() => {
+				report.top = Object.fromEntries(
+					Object.entries(elements).map(([name, element]) => [
+						name,
+						getComputedStyle(element).backgroundImage,
+					]),
+				);
+				report.done = true;
+			}, 1500);
+		});
+	} else
+		addEventListener('load', () => {
+			const iframe = document.createElement('iframe');
+			document.body.append(iframe);
+			const doc = iframe.contentDocument;
+			const win = iframe.contentWindow;
+			const at = (file, kind) =>
+				new URL(`${file}?css=${kind}`, location.href).href;
+			const link = doc.createElement('link');
+			link.rel = 'stylesheet';
+			link.href = new URL('blank-urls.css', location.href).href;
+			doc.head.append(link);
+			const style = doc.createElement('style');
+			style.textContent = `.style-bg { background-image: url("${at('blank-pixel.svg', 'style-bg')}"); }`;
+			doc.head.append(style);
+			const make = (className) => {
+				const div = doc.createElement('div');
+				div.className = className;
+				div.textContent = 'x';
+				doc.body.append(div);
+				return div;
+			};
+			const elements = {
+				link: make('link-bg'),
+				import: make('import-bg'),
+				style: make('style-bg'),
+				font: make('font'),
+				attr: make(''),
+				cssom: make(''),
+			};
+			elements.attr.setAttribute(
+				'style',
+				`background-image: url("${at('blank-pixel.svg', 'attr-bg')}")`,
+			);
+			elements.cssom.style.backgroundImage = `url("${at('blank-pixel.svg', 'cssom-bg')}")`;
+			setTimeout(async () => {
+				report.computed = Object.fromEntries(
+					Object.entries(elements)
+						.filter(([name]) => name !== 'font')
+						.map(([name, element]) => [
+							name,
+							win.getComputedStyle(element).backgroundImage,
+						]),
+				);
+				report.fonts = (
+					await doc.fonts.load('10px blank-font').catch(() => [])
+				).length;
+				report.attribute = elements.attr.getAttribute('style');
+				report.done = true;
+			}, 2500);
+		});
+</script>

@@ -291,6 +291,13 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A stylesheet a document no service worker controls loads has its own
+  loads copied too: its url()s, its @import (whose own url()s are copied in
+  turn, four levels at most) and its fonts reach the proxy instead of the
+  proxy origin's own server, and the copy reads back as the same stylesheet
+  does in a controlled document (the page's token kept after each copy's
+  marker). The copies go with the stylesheet's (blank-loads suite, both
+  modes).
 - A script the page writes (document.write) into a document no service
   worker controls runs in place, in the order it does on the real site: its
   copy is made at once through the synchronous bridge from the nearest

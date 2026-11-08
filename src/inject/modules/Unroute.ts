@@ -1,5 +1,6 @@
 import { pageBlobURL, parseRoutedURL } from '../../routeURL';
 import Client from '../Client';
+import { blobLoads } from '../dom/blobLoads';
 import type DocumentClient from '../dom/Client';
 import Module from '../Module';
 import ProxyModule from './Proxy';
@@ -103,7 +104,9 @@ export function unrouteCSS(client: Client, text: string): string {
 	return text.replace(
 		ROUTED_CSS_URL,
 		(match, quote: string, target: string, escape: string, inner: string) => {
-			if (!target.startsWith(prefix)) return match;
+			// a route, or the copy of one the inject made for a document no
+			// service worker controls (the token stays after the marker)
+			if (!target.startsWith(prefix) && !blobLoads.has(target)) return match;
 			let token = inner.replace(/&quot;/g, '"').replace(/\\(.)/g, '$1');
 			try {
 				token = decodeURIComponent(token);

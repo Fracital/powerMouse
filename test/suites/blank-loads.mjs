@@ -238,4 +238,57 @@ for (const [host, transport] of [
 	);
 	await page.close();
 }
+// A stylesheet a document no worker controls loads (blank-css.html) has
+// its own loads copied: its url()s, its @import (and the import's url()s)
+// and its font reach the worker, and the frame reads its computed style back
+// as the page's controlled document does the same stylesheet.
+const CSS_KINDS = ['link-bg', 'import', 'import-bg', 'link-font'];
+/** the report holding `key` (the ?top run's, or the frame run's) */
+const cssOf = async (page, key) => {
+	for (let i = 0; i < 40; i++) {
+		await sleep(250);
+		for (const frame of page.frames()) {
+			const value = await frame
+				.evaluate(() => window.__blankCss)
+				.catch(() => null);
+			if (value?.done && value[key]) return value;
+		}
+	}
+	return null;
+};
+for (const [mode, base] of [
+	['same-origin', PROXY],
+	['isolated', HOST],
+]) {
+	const page = await openDemo(browser, base);
+	await page.evaluate(() => {
+		window.__served = [];
+		window.controller.addEventListener('request', (event) =>
+			window.__served.push(event.detail.url),
+		);
+	});
+	await submitLanding(page, `${FIXTURE}pages/blank-css.html?top`);
+	const top = (await cssOf(page, 'top'))?.top;
+	await page.evaluate(() => (window.__served = []));
+	await submitLanding(page, `${FIXTURE}pages/blank-css.html`);
+	const css = await cssOf(page, 'computed');
+	await sleep(1000);
+	const served = await page.evaluate(() => window.__served);
+	const missing = CSS_KINDS.filter(
+		(kind) => !served.some((url) => url.includes(`css=${kind}`)),
+	);
+	ok(
+		`${mode}: a stylesheet's url()s, @import and font go through the worker`,
+		missing.length === 0,
+		`missing: ${missing.join(', ')}`,
+	);
+	ok(
+		`${mode}: a copied stylesheet reads back as in a controlled document`,
+		css?.computed?.link === top?.link &&
+			css?.computed?.import === top?.import &&
+			top?.link !== 'none',
+		JSON.stringify({ frame: css?.computed, top }),
+	);
+	await page.close();
+}
 await done(browser);
