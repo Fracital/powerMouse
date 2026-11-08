@@ -1,0 +1,30 @@
+<!doctype html>
+<title>DOWNLOAD</title>
+<a id="plain" href="echo.json?download=plain" download>plain</a>
+<a id="named" href="hdr.json?download=named" download="named.json">named</a>
+<map name="m"
+	><area id="area" href="sprite.svg?download=area" download shape="default"
+/></map>
+<img usemap="#m" src="sprite.svg" width="10" height="10" />
+<a id="blob" download="blob.txt">blob</a>
+<a
+	id="disposition"
+	href="download-attachment.json?download=disposition"
+	download
+	>disposition</a
+>
+<script>
+	// each link is clicked in turn; the browser saves what it fetched under
+	// the name it chose, which the test compares with the real site's
+	document.getElementById('blob').href = URL.createObjectURL(
+		new Blob(['from a blob'], { type: 'text/plain' }),
+	);
+	const ids = ['plain', 'named', 'area', 'blob', 'disposition'];
+	ids.forEach((id, index) =>
+		setTimeout(() => document.getElementById(id).click(), 300 + index * 700),
+	);
+	setTimeout(
+		() => (window.__download = { done: true }),
+		300 + ids.length * 700 + 1500,
+	);
+</script>

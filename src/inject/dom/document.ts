@@ -11,6 +11,7 @@ import CSSReadbackModule from './modules/CSSReadback';
 import DOMAttributesModule from './modules/DOMAttributes';
 import DOMContentHooks from './modules/DOMContentHooks';
 import DOMHooksModule from './modules/DOMHooks';
+import DownloadModule from './modules/Download';
 import FramingModule from './modules/Framing';
 import HistoryModule from './modules/History';
 import IFrameModule from './modules/IFrame';
@@ -44,6 +45,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(FramingModule);
 	client.addModule(ContextModule);
 	client.addModule(OpenModule);
+	client.addModule(DownloadModule);
 	client.addModule(NavigateModule);
 	client.addModule(ReadbackModule);
 	client.addModule(CSSReadbackModule);

@@ -291,6 +291,16 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A link with a `download` attribute saves what the site serves. Chrome
+  hands no download to a service worker, so the browser fetched the routed
+  URL from the proxy origin's own server: the download was its 404 page,
+  named after the route, and was cancelled. A same-origin download (the only
+  kind the attribute applies to) is now fetched through the proxy and saved
+  from a blob: URL under the name the browser picks on the real site (the
+  attribute, the Content-Disposition, or the URL's last segment); the page's
+  own click handlers run first and can cancel it. WPT's fetch-metadata
+  element-a and element-area pages no longer hang (download suite, both
+  modes, against the page loaded natively).
 - A window keeps its identity when it navigates to another site. The page
   got a window as itself while it was of its origin (the popup
   `window.open()` returned, a frame's `contentWindow` read before the frame
