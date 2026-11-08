@@ -214,6 +214,16 @@ const twin = await page.evaluate(
 		.fetch('/slow')
 		.then((response) => ({ status: response.status }), (error) => ({ error: String(error) }))
 		.then((result) => ({ ...result, ms: Date.now() - started }));
+	// b only once the fixture has the request: made sooner, b's init can
+	// reach the worker before the frame's fetch does, which then routes to b
+	// (the address is b's by then) and is served normally after five seconds
+	for (let i = 0; i < 100; i++) {
+		const served = await fa.element.contentWindow
+			.fetch('/requests')
+			.then((response) => response.json(), () => []);
+		if (served.includes('/slow')) break;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
 	const b = make({ id: 'twin', onRequest: (info) => logB.push(info.url) });
 	await b.wait();
 	out.ids = [a.id, b.id];
