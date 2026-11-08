@@ -133,10 +133,27 @@ const cTarget = 't$t';
 const cProp = 't$p';
 const cValue = 't$v';
 
+// A minified script is written back minified: indented and broken into
+// lines it came back up to twice its size, which cost the worker and the
+// page the time to write and read it, while its stack positions were on
+// line 1 natively anyway. Code written to be read keeps one statement per
+// line, so an error's line number still points near the page's own.
+const COMPACT = { format: { compact: true } };
+const minified = (script: string) => {
+	let lines = 1;
+	for (
+		let at = script.indexOf('\n');
+		at !== -1;
+		at = script.indexOf('\n', at + 1)
+	)
+		lines++;
+	return script.length / lines > 200;
+};
+
 function generatePartial(script: string, ctx: AcornContext) {
 	let result = ctx.node.range
 		? script.slice(ctx.node.range[0], ctx.node.range[1])
-		: generate(ctx.node);
+		: generate(ctx.node, COMPACT);
 
 	if (
 		ctx.node.type.includes('Expression') &&
@@ -794,7 +811,7 @@ if (!${names.client}.applied)
 				? `import.meta.url = ${JSON.stringify(url.toString())};import.meta.resolve = (s) => ${BARE_SPECIFIER}.test(s = String(s)) ? s : new URL(s, import.meta.url).href;`
 				: '') +
 			preamble +
-			generate(tree) +
+			generate(tree, minified(script) ? COMPACT : undefined) +
 			trailer
 		);
 	} catch (error) {

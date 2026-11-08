@@ -2,7 +2,7 @@
 // esbuild into test/out/ and run directly, so a shape can be asserted on the
 // generated code itself (what the browser suites cannot see). Skips with a
 // message when esbuild is not installed (a tarball install).
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { done, ok, OUT } from '../lib.mjs';
 
@@ -69,6 +69,24 @@ const parses = (code) => {
 		return false;
 	}
 };
+{
+	// a minified library comes back minified, about its own size (indented
+	// and broken into lines it was up to twice that); code written to be read
+	// keeps one statement per line, so a stack's line numbers stay near the
+	// page's own
+	const source = readFileSync(`${root}test/pages/vendor-three.min.js`, 'utf8');
+	const out = rewrite(source);
+	const readable = rewrite(
+		'function f() {\n\tconst a = 1;\n\treturn a;\n}\nf();',
+	);
+	ok(
+		'a minified library is rewritten to about its own size, readable code keeps its lines',
+		out.length < source.length * 1.25 &&
+			parses(out) &&
+			readable.split('\n').length >= 4,
+		`${source.length} -> ${out.length}; ${JSON.stringify(readable)}`,
+	);
+}
 
 {
 	// an unforgeable reached through an earlier optional link keeps the

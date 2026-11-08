@@ -11,3 +11,4 @@
 !/test/wpt/resources
 /test/wpt/resources/testharness.js
 /test/wpt/resources/testdriver.js
+test/pages/vendor-*.js

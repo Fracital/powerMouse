@@ -291,6 +291,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A minified script is rewritten minified. The generator indented and broke
+  every line, so a minified library came back up to twice its size (three.js
+  614 KB to 986 KB, TinyMCE 457 KB to 876 KB): the worker spent the time
+  writing it and the page reading and parsing it. Minified input (lines over
+  200 characters on average) now comes back about its own size (three.js
+  666 KB), its stack positions on one line as natively; code written to be
+  read keeps one statement per line, so an error's line number stays near
+  the page's own (rewriter-unit suite).
 - `document.write` and `writeln` are the prototype's methods again. The
   hook was an own property of each document, which a page could list
   (`Object.getOwnPropertyNames(document)`) and compare
