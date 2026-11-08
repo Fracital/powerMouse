@@ -291,6 +291,12 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- getHTML with shadow roots the page lists serializes them as the browser
+  does: an open root that is not serializable and a closed one, passed in
+  `shadowRoots`, come out with the browser's own template attributes. The
+  copies keep each root's flags and the browser's serializer gets the page's
+  options with the copies of the listed roots, so it decides what to include
+  as it would on the page's own (markup-parity suite, both modes).
 - getHTML reads a page's markup back as the page wrote it. It returned the
   proxy's routed URLs and its `s_o:` markers (innerHTML and outerHTML did
   not); an element's and a shadow root's getHTML now serialize a folded

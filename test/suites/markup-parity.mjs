@@ -66,6 +66,18 @@ const snapshot = () => {
 				'<img src="sprite.svg?shadow"><a href="hist-1.html">s</a>',
 			);
 		document.body.append(host);
+		// roots getHTML includes only when the page lists them: an open one
+		// that is not serializable, and a closed one
+		const open = document.createElement('div');
+		open.id = 'listed-open';
+		const openRoot = open.attachShadow({ mode: 'open' });
+		openRoot.setHTMLUnsafe?.('<img src="sprite.svg?listed-open">');
+		const closed = document.createElement('div');
+		closed.id = 'listed-closed';
+		const closedRoot = closed.attachShadow({ mode: 'closed' });
+		closedRoot.setHTMLUnsafe?.('<a href="hist-1.html">closed</a>');
+		document.body.append(open, closed);
+		window.__listedRoots = [openRoot, closedRoot];
 	}
 	const name = (element) => {
 		if (element.id) return `${element.localName}#${element.id}`;
@@ -114,6 +126,12 @@ const snapshot = () => {
 				: null,
 		shadowHTML:
 			document.getElementById('shadow-host')?.shadowRoot?.getHTML?.() ?? null,
+		listedHTML:
+			window.__listedRoots && typeof document.body.getHTML === 'function'
+				? document.body
+						.getHTML({ shadowRoots: window.__listedRoots })
+						.replace(/(<pre id="result"[^>]*>)[\s\S]*?(<\/pre>)/, '$1$2')
+				: null,
 		elements,
 		mutations: window.__mutations ?? null,
 	};
@@ -295,6 +313,13 @@ for (const file of PAGES) {
 					native: native.shadowHTML,
 					proxied: proxied.shadowHTML,
 				}),
+			);
+			ok(
+				`${mode}: ${file} getHTML with roots the page lists reads back as natively`,
+				native.listedHTML === proxied.listedHTML,
+				native.listedHTML === proxied.listedHTML
+					? ''
+					: firstDifference(native.listedHTML ?? '', proxied.listedHTML ?? ''),
 			);
 			ok(
 				`${mode}: ${file} getHTML reads back as natively`,

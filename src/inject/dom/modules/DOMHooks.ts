@@ -1187,9 +1187,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		this.serializeOriginal = serializeOriginal;
 
 		// getHTML: the browser's own serializer on a folded copy in the inert
-		// document (see inertCopy), with a copy of each shadow root it would
+		// document (see inertCopy), with a copy of each shadow root it could
 		// serialize (open and serializable, or one the page lists) attached to
-		// the copy of its host, its markers folded too
+		// the copy of its host as the root is, its markers folded too; the
+		// native call gets the page's options with the copies of the roots it
+		// listed, so it decides what to include as it would on the page's own
 		type ShadowOptions = {
 			serializableShadowRoots?: boolean;
 			shadowRoots?: ShadowRoot[];
@@ -1197,6 +1199,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		const copyWithShadows = <T extends Element | DocumentFragment>(
 			node: T,
 			options: ShadowOptions,
+			// the copies of the roots the page listed, for the native call
+			listed: ShadowRoot[],
 		): T =>
 			usePrototype(node, nativeNode, (native) => {
 				const copy = inertCopy(native) as T;
@@ -1222,16 +1226,19 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						)
 					)
 						return;
+					// the root as it is: the browser decides from these, as it would
+					// from the page's own
 					const shadow = (copies[index] as Element).attachShadow({
 						mode: root.mode,
-						serializable: true,
+						serializable: root.serializable,
 						clonable: root.clonable,
 						delegatesFocus: root.delegatesFocus,
 					});
+					if (options.shadowRoots?.includes(root)) listed.push(shadow);
 					for (const child of root.childNodes)
 						shadow.append(
 							child.nodeType === 1
-								? copyWithShadows(child as Element, options)
+								? copyWithShadows(child as Element, options, listed)
 								: inertCopy(child),
 						);
 					foldMarkers(shadow);
@@ -1254,16 +1261,20 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				getHTML as (options?: ShadowOptions) => string,
 				(target, that, args) => {
 					const options = (args[0] ?? {}) as ShadowOptions;
-					// the copies' shadow roots are all serializable: ask for them
-					const all = [{ serializableShadowRoots: true }];
-					if (that instanceof this.client.global.Element)
+					// the page's options, with the copies of the roots it listed
+					const listed: ShadowRoot[] = [];
+					const call = () => [
+						{
+							serializableShadowRoots: !!options.serializableShadowRoots,
+							shadowRoots: listed,
+						},
+					];
+					if (that instanceof this.client.global.Element) {
+						const copy = copyWithShadows(that, options, listed);
 						return this.foldMarkup(
-							Reflect.apply(
-								target,
-								copyWithShadows(that, options),
-								all,
-							) as string,
+							Reflect.apply(target, copy, call()) as string,
 						);
+					}
 					// a shadow root cannot be copied: its children are, under a
 					// holder in the inert document, serialized as the root's
 					const holder = inertCopy(
@@ -1272,12 +1283,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					for (const child of (that as ShadowRoot).childNodes)
 						holder.append(
 							child.nodeType === 1
-								? copyWithShadows(child as Element, options)
+								? copyWithShadows(child as Element, options, listed)
 								: inertCopy(child),
 						);
 					foldMarkers(holder);
 					return this.foldMarkup(
-						Reflect.apply(elementGetHTML!, holder, all) as string,
+						Reflect.apply(elementGetHTML!, holder, call()) as string,
 					);
 				},
 			);
