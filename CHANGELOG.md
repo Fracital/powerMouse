@@ -338,6 +338,17 @@ PresentationRequest()` (Spotify) and `screen.orientation.lock()` threw
   document too: made in the page's, every custom element in them was
   constructed twice (custom-elements suite, both modes, against the page
   loaded natively).
+- A URL property set before the attribute that makes it a load holds the
+  page's URL as written. `link.href` set before `link.rel` (YouTube's player
+  loads `www-player.css` that way) was read back through the browser's
+  getter and written into the attribute, resolved against the document's
+  real URL, the proxy's; when the rel came, the stylesheet was fetched from
+  the proxy origin and refused. The player never built: through the proxy
+  YouTube's home page rendered about 1,600 elements where it renders about
+  2,000 natively, `ytd-player` holding 2 of its 406. The setter now leaves
+  the attribute as the page wrote it when no hook took the value, and the
+  home page renders the same elements, tag for tag, as natively
+  (property-order suite, both modes, against the page loaded natively).
 - A fetch, image, script or other load from an iframe's initial about:blank
   document sends no Referer, as natively (about:blank strips to no
   referrer); a fetch that names a referrer still sends it under the policy

@@ -1598,14 +1598,24 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							// forwards to cssText.
 							if (property === 'style') Reflect.apply(target, that, args);
 
+							const written = String(args[0]);
+							let untouched = false;
 							usePrototype(that, CustomElement.prototype, (element) => {
+								const attribute = propertyAttribute(property);
 								if (property !== 'style')
-									element.setAttribute(
-										propertyAttribute(property),
-										String(args[0]),
-									);
+									element.setAttribute(attribute, written);
 								this.updatePropertyHooks(element, ctor, property);
+								untouched =
+									property !== 'style' &&
+									element.getAttribute(attribute) === written;
 							});
+							// No hook took the value (a link's href before its rel is
+							// set, an icon's): it is the page's attribute as written,
+							// as natively. Read back through the native getter it would
+							// be resolved against the document's real URL, the proxy's,
+							// and the hook that takes it later (when the rel comes)
+							// would load it from the proxy origin.
+							if (untouched) return;
 
 							// getter isn't stack based and we can use this to make the attribute immediately take effect
 
