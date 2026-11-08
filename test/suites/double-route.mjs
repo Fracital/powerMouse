@@ -56,20 +56,9 @@ async function codecOf(page) {
 		known,
 	);
 	const encoded = routed.slice(routed.lastIndexOf('/html/') + 6);
-	const raw = encoded.replace(/\$([0-9a-f]{2})/g, (_, hex) =>
-		String.fromCharCode(parseInt(hex, 16)),
-	);
-	let xor = 0;
-	let frequency = 0;
-	for (let i = 0; i < known.length; i++) {
-		if (raw[i] === known[i]) continue;
-		xor = (raw.charCodeAt(i) - 1) ^ known.charCodeAt(i);
-		if (i > 0 && !frequency) frequency = i;
-	}
-	if (raw[0] !== known[0] && !frequency) frequency = 1;
 	const valid =
 		'-_~:0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-	const encode = (input) => {
+	const encodeWith = (frequency, xor) => (input) => {
 		let out = '';
 		for (let i = 0; i < input.length; i++)
 			out +=
@@ -84,7 +73,16 @@ async function codecOf(page) {
 			)
 			.join('');
 	};
-	if (encode(known) !== encoded) throw new Error('codec not derived');
+	// every (frequency, key) pair is tried: guessing them from where the
+	// characters changed fails for a key that leaves one of them as it was
+	let encode = null;
+	for (let frequency = 0; frequency <= known.length && !encode; frequency++)
+		for (let xor = 0; xor < 256 && !encode; xor++) {
+			const candidate = encodeWith(frequency, xor);
+			if (candidate(known) === encoded) encode = candidate;
+			if (!frequency) break;
+		}
+	if (!encode) throw new Error('codec not derived');
 	return { encode, prefix: routed.slice(0, routed.lastIndexOf('/html/') + 6) };
 }
 
