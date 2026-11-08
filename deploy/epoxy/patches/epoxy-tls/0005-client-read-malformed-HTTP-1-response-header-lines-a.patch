@@ -1,0 +1,38 @@
+From 7f9f71635840a21a54a5916394dae594608782dc Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Sun, 8 Nov 2026 18:35:30 -0500
+Subject: [PATCH 5/6] client: read malformed HTTP/1 response header lines as
+ Chrome does
+
+hyper's HTTP/1 client refuses the whole response over one header line it
+does not like (no colon, a control character, a space before the colon, an
+obs-fold continuation), so the page got an error where Chrome reads the
+response. Turn on http1_ignore_invalid_headers_in_responses (skip the line),
+http1_allow_spaces_after_header_name_in_responses and
+http1_allow_obsolete_multiline_headers_in_responses (hyper joins the fold
+with one space, as Chrome does). A lone CR is still fatal to httparse with
+these; the hyper patch rewrites it first. NUL stays fatal, as in Chrome.
+---
+ client/src/lib.rs | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index 4d824ee..f6d45df 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -444,7 +444,14 @@ impl EpoxyClient {
+ 		builder
+ 			.http09_responses(true)
+ 			.http1_title_case_headers(options.title_case_headers)
+-			.http1_max_headers(options.header_limit);
++			.http1_max_headers(options.header_limit)
++			// hyper refuses a whole HTTP/1 response over one header line it
++			// does not like, where Chrome reads the response: it skips a line
++			// with no colon or a control character, accepts a space before the
++			// colon and joins an obs-fold line to the one before it
++			.http1_ignore_invalid_headers_in_responses(true)
++			.http1_allow_spaces_after_header_name_in_responses(true)
++			.http1_allow_obsolete_multiline_headers_in_responses(true);
+ 
+ 		#[cfg(feature = "full")]
+ 		builder.http2_max_concurrent_reset_streams(10); // set back to default, on wasm it is 0

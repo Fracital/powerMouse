@@ -1,6 +1,7 @@
 #!/bin/bash
 # Build epoxy-transport from pinned upstream plus patches/ (see README.md).
 # Needs docker (or podman). Output: deploy/epoxy/out/{epoxy-tls,epoxy-transport}.
+# ENGINE names the engine (or a wrapper around it) when the default is wrong.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -24,6 +25,7 @@ tag="epoxy-fracital:${EPOXY_TLS_REV:0:12}-$(cat patches/*/*.patch | sha256sum | 
 	--build-arg "HYPER_UTIL_WASM_REV=$HYPER_UTIL_WASM_REV" \
 	--build-arg "EPOXY_TLS_REV=$EPOXY_TLS_REV" \
 	--build-arg "EPOXY_TRANSPORT_REV=$EPOXY_TRANSPORT_REV" \
+	--build-arg "HYPER_REV=$HYPER_REV" \
 	-t "$tag" .
 
 rm -rf out

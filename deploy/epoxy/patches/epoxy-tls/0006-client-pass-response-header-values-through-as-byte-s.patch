@@ -1,0 +1,57 @@
+From 1e0b9ea6e56ce73e270696d0a898dc05f316f17a Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Sun, 8 Nov 2026 18:31:07 -0500
+Subject: [PATCH 6/6] client: pass response header values through as byte
+ strings
+
+rawHeaders converted every value with HeaderValue::to_str and `?`, which
+refuses any byte past 0x7E, so one header carrying UTF-8 (a filename in
+Content-Disposition, say) failed the whole response, and the ResponseInit
+headers dropped it. Browsers expose such a value as a byte string, one code
+unit per byte; do the same for both.
+---
+ client/src/lib.rs | 17 ++++++++++-------
+ 1 file changed, 10 insertions(+), 7 deletions(-)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index f6d45df..73d4273 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -324,6 +324,14 @@ impl EpoxyHandlers {
+ 	}
+ }
+ 
++/// A header value as the byte string a browser exposes, one code unit per byte.
++/// `HeaderValue::to_str` refuses any byte past 0x7E, so a UTF-8 filename in
++/// Content-Disposition (or any other obs-text) failed the whole response, and
++/// `Response.headers` silently lost the header.
++fn byte_string(value: &HeaderValue) -> String {
++	value.as_bytes().iter().copied().map(char::from).collect()
++}
++
+ fn create_wisp_transport(function: Function) -> ProviderWispTransportGenerator {
+ 	let wisp_transport = SendWrapper::new(function);
+ 	Box::new(move |wisp_v2| {
+@@ -694,12 +702,7 @@ impl EpoxyClient {
+ 		let response_headers: Array = response
+ 			.headers()
+ 			.iter()
+-			.filter_map(|val| {
+-				Some(Array::of2(
+-					&val.0.as_str().into(),
+-					&val.1.to_str().ok()?.into(),
+-				))
+-			})
++			.map(|val| Array::of2(&val.0.as_str().into(), &byte_string(val.1).into()))
+ 			.collect();
+ 		let response_headers = from_entries(&response_headers)
+ 			.map_err(|_| EpoxyError::ResponseHeadersFromEntriesFailed)?;
+@@ -763,7 +766,7 @@ impl EpoxyClient {
+ 		let raw_headers = Object::new();
+ 		for (k, v) in &response_headers_raw {
+ 			let k = k.as_str();
+-			let v: JsValue = v.to_str()?.to_string().into();
++			let v: JsValue = byte_string(v).into();
+ 			let jv = object_get(&raw_headers, k);
+ 			if jv.is_array() {
+ 				let arr = Array::from(&jv);

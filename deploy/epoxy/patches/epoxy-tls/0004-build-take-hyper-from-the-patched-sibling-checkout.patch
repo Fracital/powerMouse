@@ -1,0 +1,23 @@
+From a0f0736ec5b9c716a6397c467913ee7a8183a2fd Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Sun, 8 Nov 2026 18:30:30 -0500
+Subject: [PATCH 4/6] build: take hyper from the patched sibling checkout
+
+---
+ Cargo.toml | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/Cargo.toml b/Cargo.toml
+index ed36f6c..87aaab3 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -12,6 +12,9 @@ opt-level = 3
+ 
+ [patch.crates-io]
+ h2 = { git = "https://github.com/r58Playz/h2-wasm" }
++# The sibling checkout carries deploy/epoxy/patches/hyper (reads a lone CR
++# in an HTTP/1 response head as Chrome does instead of refusing the response).
++hyper = { path = "../hyper" }
+ 
+ # The sibling checkout carries deploy/epoxy/patches/hyper-util-wasm (exposes
+ # http2_max_header_list_size on the legacy client builder).

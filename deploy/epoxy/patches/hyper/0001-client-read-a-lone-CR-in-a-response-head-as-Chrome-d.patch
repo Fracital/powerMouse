@@ -1,0 +1,167 @@
+From 18f8f0c1aa3354a529354d13631e3fb402434c57 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Sun, 8 Nov 2026 18:30:12 -0500
+Subject: [PATCH] client: read a lone CR in a response head as Chrome does
+
+httparse refuses the whole response when a header line holds a CR that is
+not followed by LF, even with ignore_invalid_headers_in_responses (it skips
+other invalid lines, but not that one), where Chrome splits header lines on
+CR as well as LF and reads the response. Before parsing, the client
+rewrites the line breaks of the head in place: a CR inside a line ends it,
+a CR that starts a line moves before the LF that ended the previous one,
+and a CR before another CR is trailing whitespace. NUL is left alone:
+Chrome refuses a head with a NUL (a network error), as httparse does. The
+body and HTTP/0.9 responses are not touched.
+---
+ src/proto/h1/role.rs | 124 +++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 124 insertions(+)
+
+diff --git a/src/proto/h1/role.rs b/src/proto/h1/role.rs
+index 1674e26b..2b6772e4 100644
+--- a/src/proto/h1/role.rs
++++ b/src/proto/h1/role.rs
+@@ -1002,6 +1002,7 @@ impl Http1Transaction for Client {
+ 
+         // Loop to skip information status code headers (100 Continue, etc).
+         loop {
++            Client::normalize_head(buf);
+             let mut headers_indices: SmallVec<[MaybeUninit<HeaderIndices>; DEFAULT_MAX_HEADERS]> =
+                 match ctx.h1_max_headers {
+                     Some(cap) => smallvec![MaybeUninit::uninit(); cap],
+@@ -1419,6 +1420,61 @@ impl Client {
+         set_content_length(headers, len)
+     }
+ 
++    /// Rewrites the line breaks of a response head in place the way a browser
++    /// reads them, before httparse sees the head. httparse refuses the whole
++    /// response over a CR that is not followed by LF, even with
++    /// `ignore_invalid_headers_in_responses`, where Chrome splits header lines
++    /// on CR as well as on LF and skips the empty pieces. So a lone CR:
++    ///
++    /// - after other bytes of a line, and before more of them, ends the line
++    ///   (becomes LF);
++    /// - at the start of a line is moved before the LF that ended the previous
++    ///   line, which keeps the line it starts (or, after a CRLF, the CR becomes
++    ///   trailing whitespace of the previous line);
++    /// - before another CR is trailing whitespace (SP), which httparse trims.
++    ///
++    /// NUL is left alone: Chrome refuses a response with a NUL anywhere in its
++    /// head (a network error), and so does httparse.
++    ///
++    /// Only the head is touched: the scan stops at the first empty line, and
++    /// at a CR that is the last byte read so far (the next read tells whether
++    /// it starts a CRLF). An HTTP/0.9 response has no head and is left alone.
++    fn normalize_head(buf: &mut [u8]) {
++        let start = buf
++            .iter()
++            .position(|b| *b != b'\r' && *b != b'\n')
++            .unwrap_or(buf.len());
++        if !buf[start..].starts_with(b"HTTP/") {
++            return;
++        }
++        // buf[start] is the H of "HTTP/", so every CR or LF below is past it
++        // and `i - 1`, `i - 2` stay inside the head
++        for i in start..buf.len() {
++            match buf[i] {
++                b'\n' => match (buf.get(i + 1), buf.get(i + 2)) {
++                    (Some(b'\n'), _) | (Some(b'\r'), Some(b'\n')) => return,
++                    _ => {}
++                },
++                b'\r' => match buf.get(i + 1) {
++                    None => return,
++                    Some(b'\n') => {}
++                    Some(b'\r') => buf[i] = b' ',
++                    Some(_) if buf[i - 1] != b'\n' => buf[i] = b'\n',
++                    Some(_) if buf[i - 2] == b'\r' => {
++                        buf[i - 2] = b' ';
++                        buf[i - 1] = b'\r';
++                        buf[i] = b'\n';
++                    }
++                    Some(_) => {
++                        buf[i - 1] = b'\r';
++                        buf[i] = b'\n';
++                    }
++                },
++                _ => {}
++            }
++        }
++    }
++
+     fn obs_fold_line(all: &mut [u8], idx: &mut HeaderIndices) {
+         // If the value has obs-folded text, then in-place shift the bytes out
+         // of here.
+@@ -1699,6 +1755,74 @@ mod tests {
+         assert_eq!(msg.head.headers["Content-Length"], "0");
+     }
+ 
++    fn parse_lenient_response(raw: &mut BytesMut) -> ParseResult<crate::StatusCode> {
++        let mut h1_parser_config = httparse::ParserConfig::default();
++        h1_parser_config.ignore_invalid_headers_in_responses(true);
++        let ctx = ParseContext {
++            cached_headers: &mut None,
++            req_method: &mut Some(crate::Method::GET),
++            h1_parser_config,
++            h1_max_headers: None,
++            preserve_header_case: false,
++            #[cfg(feature = "ffi")]
++            preserve_header_order: false,
++            h09_responses: true,
++            #[cfg(feature = "client")]
++            on_informational: &mut None,
++        };
++        Client::parse(raw, ctx)
++    }
++
++    #[test]
++    fn test_parse_response_still_refuses_nul() {
++        let mut raw = BytesMut::from(&b"HTTP/1.1 200 OK\r\nX-A: a\0b\r\nX-B: 1\r\n\r\n"[..]);
++        parse_lenient_response(&mut raw).unwrap_err();
++        let mut raw = BytesMut::from(&b"HTTP/1.1 200 OK\r\nX-N\0me: 1\r\nX-B: 1\r\n\r\n"[..]);
++        parse_lenient_response(&mut raw).unwrap_err();
++    }
++
++    #[test]
++    fn test_parse_response_lone_cr_ends_line() {
++        let mut raw = BytesMut::from(
++            &b"HTTP/1.1 200 OK\r\nX-Cr: a\rX-After: b\r\nX-End: c\r\r\nNoColon\r\n\r\n"[..],
++        );
++        let msg = parse_lenient_response(&mut raw).unwrap().unwrap();
++        assert_eq!(msg.head.headers.len(), 3);
++        assert_eq!(msg.head.headers["x-cr"], "a");
++        assert_eq!(msg.head.headers["x-after"], "b");
++        assert_eq!(msg.head.headers["x-end"], "c");
++    }
++
++    #[test]
++    fn test_parse_response_lone_cr_starting_a_line() {
++        let mut raw = BytesMut::from(
++            &b"HTTP/1.1 200 OK\r\nX-A: a\n\rX-B: b\r\n\rX-C: c\r\n\r\n"[..],
++        );
++        let msg = parse_lenient_response(&mut raw).unwrap().unwrap();
++        assert_eq!(raw.len(), 0);
++        assert_eq!(msg.head.headers.len(), 3);
++        assert_eq!(msg.head.headers["x-a"], "a");
++        assert_eq!(msg.head.headers["x-b"], "b");
++        assert_eq!(msg.head.headers["x-c"], "c");
++    }
++
++    #[test]
++    fn test_parse_response_waits_on_trailing_cr() {
++        let mut raw = BytesMut::from(&b"HTTP/1.1 200 OK\r\nX-A: 1\r"[..]);
++        assert!(parse_lenient_response(&mut raw).unwrap().is_none());
++        assert_eq!(raw, &b"HTTP/1.1 200 OK\r\nX-A: 1\r"[..]);
++    }
++
++    #[test]
++    fn test_parse_response_leaves_body_alone() {
++        let mut raw = BytesMut::from(&b"HTTP/1.1 200 OK\nContent-Length: 3\n\n\0\r!"[..]);
++        parse_lenient_response(&mut raw).unwrap().unwrap();
++        assert_eq!(raw, &b"\0\r!"[..]);
++        let mut raw = BytesMut::from(&b"\0\r!"[..]);
++        parse_lenient_response(&mut raw).unwrap().unwrap();
++        assert_eq!(raw, &b"\0\r!"[..]);
++    }
++
+     #[cfg(feature = "server")]
+     #[test]
+     fn test_parse_request_errors() {

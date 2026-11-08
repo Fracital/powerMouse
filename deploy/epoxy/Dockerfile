@@ -25,6 +25,7 @@ RUN curl -fsSL "https://nodejs.org/dist/v${NODE}/node-v${NODE}-linux-x64.tar.xz"
 ARG HYPER_UTIL_WASM_REV
 ARG EPOXY_TLS_REV
 ARG EPOXY_TRANSPORT_REV
+ARG HYPER_REV
 WORKDIR /src
 RUN git clone -q https://github.com/r58Playz/hyper-util-wasm.git hyper-util-wasm \
  && git -C hyper-util-wasm checkout -q "$HYPER_UTIL_WASM_REV"
@@ -32,10 +33,12 @@ RUN git clone -q https://github.com/MercuryWorkshop/epoxy-tls.git epoxy-tls \
  && git -C epoxy-tls checkout -q "$EPOXY_TLS_REV"
 RUN git clone -q https://github.com/MercuryWorkshop/EpoxyTransport.git epoxy-transport \
  && git -C epoxy-transport checkout -q "$EPOXY_TRANSPORT_REV"
+RUN git clone -q https://github.com/hyperium/hyper.git hyper \
+ && git -C hyper checkout -q "$HYPER_REV"
 
 # --- patches, in numeric order, each checked before it is applied ------------
 COPY patches /patches
-RUN for repo in hyper-util-wasm epoxy-tls epoxy-transport; do \
+RUN for repo in hyper hyper-util-wasm epoxy-tls epoxy-transport; do \
       for p in /patches/$repo/*.patch; do \
         [ -e "$p" ] || continue; \
         echo "[patch] $repo <- $(basename "$p")"; \
@@ -60,5 +63,5 @@ RUN mkdir -p /out/epoxy-tls /out/epoxy-transport \
  && cd /src/epoxy-tls/client && cp -r full minimal package.json README.md LICENSE /out/epoxy-tls/ \
  && cd /src/epoxy-transport && cp -r dist lib package.json package-lock.json README.md .gitignore /out/epoxy-transport/ \
  && cp LICENSE /out/epoxy-transport/ 2>/dev/null || true \
- && printf 'hyper-util-wasm %s\nepoxy-tls %s\nepoxy-transport %s\n' "$HYPER_UTIL_WASM_REV" "$EPOXY_TLS_REV" "$EPOXY_TRANSPORT_REV" > /out/UPSTREAM \
+ && printf 'hyper-util-wasm %s\nepoxy-tls %s\nepoxy-transport %s\nhyper %s\n' "$HYPER_UTIL_WASM_REV" "$EPOXY_TLS_REV" "$EPOXY_TRANSPORT_REV" "$HYPER_REV" > /out/UPSTREAM \
  && (cd /patches && find . -name '*.patch' | sort) >> /out/UPSTREAM

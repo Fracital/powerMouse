@@ -26,6 +26,10 @@ export const CASES = {
 		`X-Bad\0Name: 1\r\nSet-Cookie: rh_nulname_${tag}=1; Path=/\r\n`,
 	'lone-cr': (tag) =>
 		`X-Cr: a\rX-Cr-After: b\r\nSet-Cookie: rh_cr_${tag}=1; Path=/\rX-Tail: t\r\n`,
+	'space-colon': (tag) => `X-Sp : 1\r\nSet-Cookie: rh_sp_${tag}=1; Path=/\r\n`,
+	// obs-fold: Chrome joins the continuation with one space
+	'obs-fold': (tag) =>
+		`X-Fold: a\r\n b\r\nSet-Cookie: rh_fold_${tag}=1; Path=/\r\n`,
 	// obs-text: a header carrying UTF-8 bytes (a Content-Disposition
 	// filename, say) is a byte string to the page
 	'obs-text': () => 'X-Utf8: caf\xc3\xa9\r\n',

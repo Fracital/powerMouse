@@ -1,7 +1,8 @@
 // A response with one malformed header line is read the way Chrome reads it.
 // hyper (inside epoxy) refused the whole HTTP/1 response over a line with no
-// colon, a NUL, a CR alone or a byte past 0x7E, so the page got an error
-// where Chrome skips the line (no colon), splits the line (CR) or keeps the
+// colon, a NUL, a CR alone, a space before the colon or an obs-fold, and
+// epoxy over a byte past 0x7E, so the page got an error where Chrome skips
+// the line (no colon), splits it (CR), reads it (space, fold) or keeps the
 // value as a byte string, and only a NUL makes it a network error. Each case
 // of test/raw-http.mjs is fetched and loaded in a frame, natively and through
 // the proxy, and the two are compared: status, body, the x- headers the page
@@ -54,6 +55,21 @@ ok(
 );
 
 const show = (value) => JSON.stringify(value);
+// Chrome encodes as UTF-8 again every header byte past 0x7F that a service
+// worker's Response carries (measured with no proxy: a worker that relays a
+// network response's headers unchanged hands the page c3 83 c2 a9 for c3 a9),
+// so a proxied value is compared after undoing that one encoding
+const unworkered = (fetched) =>
+	typeof fetched === 'object' && fetched !== null
+		? {
+				...fetched,
+				headers: fetched.headers.map((line) =>
+					new TextDecoder().decode(
+						Uint8Array.from(line, (unit) => unit.charCodeAt(0)),
+					),
+				),
+			}
+		: fetched;
 for (const [mode, base] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
@@ -67,7 +83,7 @@ for (const [mode, base] of [
 		const got = proxied?.cases[name];
 		ok(
 			`${mode}: ${name}: fetch sees what it sees natively (status, body, headers)`,
-			show(got?.fetch) === show(want?.fetch),
+			show(unworkered(got?.fetch)) === show(want?.fetch),
 			show({ native: want?.fetch, proxied: got?.fetch }),
 		);
 		// a network error shows the browser's own error page natively and the

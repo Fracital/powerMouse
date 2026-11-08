@@ -498,6 +498,23 @@ PresentationRequest()` (Spotify) and `screen.orientation.lock()` threw
   rejects a control character in a header value, which Chrome reads) still
   gets an error response (network-errors suite, both modes, against the page
   loaded natively).
+- A response with one malformed header line reads as it does natively, once
+  the epoxy build from `deploy/epoxy/` with the new patches is published and
+  pinned. hyper refused the whole HTTP/1 response over a line with no colon,
+  a space before the colon, an obs-fold continuation or a lone CR, and
+  epoxy failed it over any byte past 0x7E (a UTF-8 `Content-Disposition`
+  filename), so the page got the worker's error response, or a network
+  error, where Chrome skips the line, joins the fold, splits the line at the
+  CR and keeps the value as a byte string. A patch to hyper rewrites a lone
+  CR in the head as Chrome reads it (httparse refuses it even when told to
+  skip invalid lines), epoxy-tls turns on hyper's lenient header options and
+  passes values through byte for byte. A NUL in the head stays fatal: Chrome
+  refuses it too (measured: a network error, not the space RFC 9110
+  allows), so a response the transport cannot read is now a network error
+  for a subresource, like a failed connection, and the worker no longer
+  tells the two apart by hyper's `Parse(` error text (malformed-headers
+  suite, both modes, against the page loaded natively; wpt-cookies
+  `%x0 in name (HTTP)` twice and `ignore value after LF` now pass).
 - Scripts are rewritten off the service worker's thread. The service worker
   rewrote every script itself, one at a time, so a page of large scripts
   waited for each in turn (six 600 KB scripts took about a second to arrive,
@@ -1819,11 +1836,16 @@ Fixed while testing real sites and a feature fixture:
 - A request that starts just as the server closes its idle connection fails
   with an error rather than being retried on a new connection the way Chrome
   retries it (the pinned epoxy no longer hangs there; hyper does not retry).
-- epoxy (hyper) refuses a whole response whose header holds a NUL, CR or LF,
-  where Chrome reads a NUL as a space and a bare CR or LF as the end of the
-  header, and the service worker answers that fetch with a 500 rather than
-  a network error (wpt-cookies: the `%x0 in name (HTTP)` and `value after
-LF` cases).
+- A header line holding a control character other than NUL, CR or LF
+  (`\x01`, DEL) is skipped by epoxy; Chrome keeps it and hands the page the
+  value with the byte in it. An HTTP/2 response is parsed by h2, which none
+  of the HTTP/1 leniency applies to.
+- A header value with bytes past 0x7F reaches the page encoded as UTF-8 a
+  second time (the bytes `c3 a9` arrive as `c3 83 c2 a9`). Chrome
+  does that to every such header a service worker's Response carries
+  (measured with no proxy: a worker relaying a network response's headers
+  unchanged does it too), so the proxy cannot hand the page the site's
+  bytes.
 - The published epoxy-transport (hyper's HTTP/2 client) resets any response
   whose header block is larger than 16 KiB with `PROTOCOL_ERROR`, and its
   `header_limit` option does not change that. YouTube answers a
