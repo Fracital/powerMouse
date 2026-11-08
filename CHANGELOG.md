@@ -291,6 +291,16 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A URL property a page sets never loads past the proxy. A reflecting
+  property's setter handed the page's raw value to the browser's own setter
+  before the hooks routed it, so a script, stylesheet, frame, embed or
+  object already in the document given its URL by property (`s.src = ...`
+  after appending, `iframe.src = ...` on a frame on screen) loaded it
+  straight from the site, and in a document no service worker controls an
+  image or a media element did too. The value now goes into the hooks'
+  view of the attribute, as with setAttribute, and only the route or copy
+  they make reaches the element; `style`, which forwards to cssText, keeps
+  its own path (property-sets suite, both modes, with the bypass recorder).
 - A `<style>` rule the page holds stays the sheet's own while its loads are
   copied in a document no service worker controls: a style rule takes the
   copies into its own declarations, as an inline style does, instead of

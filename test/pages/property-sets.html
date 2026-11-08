@@ -1,0 +1,41 @@
+<!doctype html>
+<title>PROPERTY SETS</title>
+<script>
+	// every URL property a page sets, on a detached element and on one in the
+	// document, each marked ?prop=<kind>-<where>
+	const at = (file, mark) =>
+		new URL(`${file}?prop=${mark}`, location.href).href;
+	const sets = [
+		['img', 'src', 'blank-pixel.svg'],
+		['img', 'srcset', 'blank-pixel.svg', (url) => `${url} 1x`],
+		['input', 'src', 'blank-pixel.svg', null, { type: 'image' }],
+		['video', 'poster', 'blank-pixel.svg'],
+		['audio', 'src', 'echo.json'],
+		['video', 'src', 'echo.json'],
+		['source', 'srcset', 'blank-pixel.svg', (url) => `${url} 1x`],
+		['script', 'src', 'blank-script.js'],
+		['link', 'href', 'blank.css', null, { rel: 'stylesheet' }],
+		['iframe', 'src', 'blank-pixel.svg'],
+		['embed', 'src', 'blank-pixel.svg'],
+		['object', 'data', 'blank-pixel.svg'],
+		['track', 'src', 'hdr.json'],
+	];
+	addEventListener('load', () => {
+		for (const where of ['detached', 'connected'])
+			for (const [tag, property, file, wrap, attributes] of sets) {
+				const element = document.createElement(tag);
+				for (const [name, value] of Object.entries(attributes ?? {}))
+					element[name] = value;
+				if (where === 'connected')
+					(tag === 'source'
+						? document.createElement('picture')
+						: document.body
+					).append(element);
+				const url = at(file, `${tag}-${property}-${where}`);
+				element[property] = wrap ? wrap(url) : url;
+			}
+		const image = new Image();
+		image.src = at('blank-pixel.svg', 'image-object');
+		setTimeout(() => (window.__propertySets = { done: true }), 2000);
+	});
+</script>

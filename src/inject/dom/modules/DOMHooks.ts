@@ -1354,9 +1354,21 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							// properties are only set at the end of the stack
 							// attributes differ because they will immediately have an effect and will overrule properties set in the same stack
 
-							Reflect.apply(target, that, args);
+							// A reflecting property is its attribute: the page's value goes
+							// into the hooks' view of it and only what they make of it (a
+							// route, a copy) reaches the element, as with setAttribute.
+							// Handed to the native setter first, the raw URL would start a
+							// load (a connected script, link or frame, an image) straight
+							// from the site, past the proxy. `style` is not one: its setter
+							// forwards to cssText.
+							if (property === 'style') Reflect.apply(target, that, args);
 
 							usePrototype(that, CustomElement.prototype, (element) => {
+								if (property !== 'style')
+									element.setAttribute(
+										propertyAttribute(property),
+										String(args[0]),
+									);
 								this.updatePropertyHooks(element, ctor, property);
 							});
 
