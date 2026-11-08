@@ -87,15 +87,27 @@ export function rewriteCSSValueURLs(value: string, url: StompURL): string {
 	});
 }
 
+// a url() token whose quoted target may hold escapes: a Typed OM value
+// serialises the routed URL as a CSS string, the quotes of the page's token
+// after '#' escaped with backslashes
+const QUOTED_URL =
+	/url\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^)]*?))\s*\)/gs;
+
 /** inverse of rewriteCSSValueURLs for values the page reads back */
 export function restoreCSSValueURLs(value: string): string {
-	return value.replace(RAW_URL, (match, quote, target) => {
-		try {
-			return restoreValue(target);
-		} catch (error) {
-			return match;
-		}
-	});
+	return value.replace(
+		QUOTED_URL,
+		(match, double?: string, single?: string, bare?: string) => {
+			try {
+				const quoted = double ?? single;
+				return restoreValue(
+					quoted === undefined ? bare! : quoted.replace(/\\(.)/gs, '$1'),
+				);
+			} catch (error) {
+				return match;
+			}
+		},
+	);
 }
 
 export function modifyCSS(

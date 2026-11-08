@@ -1,8 +1,8 @@
 // Loads named outside an element's src or href in documents a page builds
 // itself, which no service worker controls (a new frame's about:blank, one
 // the page opened, a popup): SVG references (blank-svg.html), FontFace
-// sources (blank-fonts.html) and constructed, adopted stylesheets
-// (blank-sheets.html). Each goes
+// sources (blank-fonts.html), constructed, adopted stylesheets
+// (blank-sheets.html) and Typed OM writes (blank-typed.html). Each goes
 // through the proxy, not to the proxy origin's own server: it fires and
 // reads back as on the real site and reaches the worker, and nothing the
 // page names loads past the proxy. Compared with the same page loaded
@@ -191,6 +191,16 @@ const CASES = [
 				JSON.stringify({ firstCopy, secondCopy }),
 			);
 		},
+	},
+	{
+		name: 'Typed OM writes',
+		page: 'blank-typed.html',
+		key: '__blankTyped',
+		marker: 'typed',
+		documents: ['initial', 'opened', 'popup'],
+		events: [],
+		// attributeStyleMap.set from a string and a parsed value, append
+		loads: ['string', 'parsed', 'appended'],
 	},
 ];
 

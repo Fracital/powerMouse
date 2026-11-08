@@ -314,6 +314,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   666 KB), its stack positions on one line as natively; code written to be
   read keeps one statement per line, so an error's line number stays near
   the page's own (rewriter-unit suite).
+- Typed OM writes in a document no service worker controls load through
+  the proxy: an `attributeStyleMap` set, append, delete or clear now has
+  its element's inline style copied as a CSSOM write is, underneath the
+  hooks, so the page's MutationObserver sees only its own write. A Typed
+  OM value read back (`attributeStyleMap.get(...)`, a parsed
+  CSSStyleValue) showed the page's url() with its quotes escaped
+  (`url(\"...\")`); it reads as the page wrote it (blank-sources suite,
+  both modes, against the page loaded natively).
 - Constructed stylesheets in a document no service worker controls load
   through the proxy: the url()s and fonts of a sheet the page makes with
   `new CSSStyleSheet()` and fills with replaceSync, replace or insertRule,

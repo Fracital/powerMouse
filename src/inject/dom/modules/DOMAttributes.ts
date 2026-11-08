@@ -1456,15 +1456,45 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					},
 				);
 			}
+			// the element each page-facing attributeStyleMap belongs to: a write
+			// there changes its inline style, whose loads are copied in a
+			// document no worker controls (and released by a delete or clear)
+			const mapOwners = new WeakMap<object, Element>();
+			for (const ctor of [
+				this.client.global.HTMLElement,
+				this.client.global.SVGElement,
+			]) {
+				const descriptor = Reflect.getOwnPropertyDescriptor(
+					ctor.prototype,
+					'attributeStyleMap',
+				);
+				if (!descriptor?.get) continue;
+				Reflect.defineProperty(ctor.prototype, 'attributeStyleMap', {
+					...descriptor,
+					get: proxyModule.wrapFunction(
+						descriptor.get,
+						(target, that, args) => {
+							const map = Reflect.apply(target, that, args);
+							if (map && typeof map === 'object')
+								mapOwners.set(map, that as Element);
+							return map;
+						},
+					),
+				});
+			}
 			if (typeof typed.StylePropertyMap === 'function')
-				for (const name of ['set', 'append'])
+				for (const name of ['set', 'append', 'delete', 'clear'])
 					if (typeof typed.StylePropertyMap.prototype[name] === 'function')
 						typed.StylePropertyMap.prototype[name] = proxyModule.wrapFunction(
 							typed.StylePropertyMap.prototype[name],
 							(target, that, args) => {
-								for (let i = 1; i < args.length; i++)
-									args[i] = rewriteValue(args[i]);
-								return Reflect.apply(target, that, args);
+								if (name === 'set' || name === 'append')
+									for (let i = 1; i < args.length; i++)
+										args[i] = rewriteValue(args[i]);
+								const result = Reflect.apply(target, that, args);
+								const owner = mapOwners.get(that);
+								if (owner) copyInlineSoon(owner);
+								return result;
 							},
 						);
 

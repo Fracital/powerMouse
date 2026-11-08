@@ -1,0 +1,79 @@
+<!doctype html>
+<title>BLANK TYPED</title>
+<script>
+	// Typed OM writes in documents the page builds, which no service worker
+	// controls (a new frame's about:blank, one it opened, a popup): an
+	// element's attributeStyleMap set from a string and from a parsed
+	// CSSStyleValue, and one appended to. Every URL is marked
+	// ?typed=<document>-<kind>.
+	const report = {};
+	window.__blankTyped = report;
+	const at = (name, kind) =>
+		new URL(`blank-pixel.svg?typed=${name}-${kind}`, location.href).href;
+	const load = (name, doc, win) => {
+		const seen = (report[name] = {});
+		const make = () => {
+			const div = doc.createElement('div');
+			div.textContent = 'x';
+			doc.body.append(div);
+			return div;
+		};
+		const records = [];
+		new win.MutationObserver((list) => {
+			for (const record of list)
+				records.push([record.attributeName, record.oldValue]);
+		}).observe(doc.body, {
+			attributes: true,
+			subtree: true,
+			attributeOldValue: true,
+		});
+		const elements = { string: make(), parsed: make(), appended: make() };
+		elements.string.attributeStyleMap.set(
+			'background-image',
+			`url("${at(name, 'string')}")`,
+		);
+		elements.parsed.attributeStyleMap.set(
+			'background-image',
+			win.CSSStyleValue.parse(
+				'background-image',
+				`url("${at(name, 'parsed')}")`,
+			),
+		);
+		elements.appended.attributeStyleMap.append(
+			'background-image',
+			`url("${at(name, 'appended')}")`,
+		);
+		setTimeout(() => {
+			seen.readback = Object.fromEntries(
+				Object.entries(elements).map(([kind, element]) => [
+					kind,
+					{
+						typed: String(element.attributeStyleMap.get('background-image')),
+						attribute: element.getAttribute('style'),
+						computed: win.getComputedStyle(element).backgroundImage,
+					},
+				]),
+			);
+			seen.readback.records = records;
+		}, 2000);
+	};
+	addEventListener('load', () => {
+		const frame = (build) => {
+			const iframe = document.createElement('iframe');
+			document.body.append(iframe);
+			build(iframe.contentDocument, iframe.contentWindow);
+		};
+		frame((doc, win) => load('initial', doc, win));
+		frame((doc, win) => {
+			doc.open();
+			doc.close();
+			load('opened', doc, win);
+		});
+		const popup = window.open();
+		if (popup) load('popup', popup.document, popup);
+		setTimeout(() => {
+			popup?.close();
+			report.done = true;
+		}, 2500);
+	});
+</script>
