@@ -312,6 +312,7 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   `document.write` build to rewrite their markup are made in an inert
   document too: made in the page's, every custom element in them was
   constructed twice (custom-elements suite, both modes, against the page
+  loaded natively).
 - A fetch, image, script or other load from an iframe's initial about:blank
   document sends no Referer, as natively (about:blank strips to no
   referrer); a fetch that names a referrer still sends it under the policy
