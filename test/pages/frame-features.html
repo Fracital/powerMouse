@@ -1,0 +1,27 @@
+<!doctype html>
+<title>FRAME FEATURES</title>
+<script>
+	// features a page uses that a sandbox without the matching flag refuses:
+	// the error each throws (or "ok"), here and in a popup this page opens
+	const probe = (w) => {
+		const out = {};
+		try {
+			new w.PresentationRequest('https://example.invalid/');
+			out.presentation = 'ok';
+		} catch (error) {
+			out.presentation = error.name;
+		}
+		return out;
+	};
+	window.__features = async () => {
+		const own = probe(window);
+		const popup = window.open('about:blank', '_blank', 'popup');
+		const inPopup = popup ? probe(popup) : 'no popup';
+		const orientation = await screen.orientation.lock('landscape').then(
+			() => 'ok',
+			(error) => error.name,
+		);
+		popup?.close();
+		return { own, inPopup, orientation };
+	};
+</script>
