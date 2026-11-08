@@ -1,6 +1,7 @@
 import { routeBinary } from '../../../routeURL';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
+import ProxyModule from '../../modules/Proxy';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 
 /** the name a Content-Disposition header gives, if any */
@@ -25,11 +26,65 @@ function dispositionName(header: string | null): string | null {
  * browser navigates, which the worker serves) is fetched through the proxy
  * here and saved from a blob: URL, under the name the browser would pick on
  * the real site: the attribute's, the Content-Disposition's, or the URL's
- * last segment. The page's own handlers run first and can cancel it.
+ * last segment.
+ *
+ * The browser's own download is cancelled as the click starts (a handler
+ * that stops the click's propagation still downloads, as it does natively);
+ * once the click has gone through the page, the copy is saved unless a
+ * handler cancelled it. Until then the page reads `defaultPrevented` and
+ * `returnValue` as its own calls left them.
  */
 export default class DownloadModule extends Module<DocumentClient> {
 	apply() {
 		const global = this.client.global;
+		const proxyModule = this.client.getModule(ProxyModule)!;
+		const nativePreventDefault = global.Event.prototype.preventDefault;
+		// clicks this module cancelled, and which of them the page cancelled
+		const ours = new WeakSet<Event>();
+		const cancelledByPage = new WeakSet<Event>();
+		global.Event.prototype.preventDefault = proxyModule.wrapFunction(
+			nativePreventDefault,
+			(target, that, args) => {
+				if (that instanceof global.Event && ours.has(that) && that.cancelable)
+					cancelledByPage.add(that);
+				return Reflect.apply(target, that, args);
+			},
+		);
+		for (const [property, read] of [
+			['defaultPrevented', (event: Event) => cancelledByPage.has(event)],
+			['returnValue', (event: Event) => !cancelledByPage.has(event)],
+		] as const) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(
+				global.Event.prototype,
+				property,
+			);
+			if (!descriptor?.get) continue;
+			Reflect.defineProperty(global.Event.prototype, property, {
+				...descriptor,
+				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) =>
+					that instanceof global.Event && ours.has(that)
+						? read(that)
+						: Reflect.apply(target, that, args),
+				),
+				...(descriptor.set && property === 'returnValue'
+					? {
+							set: proxyModule.wrapFunction(
+								descriptor.set,
+								(target, that, args) => {
+									if (
+										that instanceof global.Event &&
+										ours.has(that) &&
+										!args[0]
+									)
+										cancelledByPage.add(that);
+									return Reflect.apply(target, that, args);
+								},
+							),
+						}
+					: {}),
+			});
+		}
+
 		const listener = (event: MouseEvent) => {
 			if (event.defaultPrevented || event.button !== 0) return;
 			const link = event
@@ -51,13 +106,19 @@ export default class DownloadModule extends Module<DocumentClient> {
 			}
 			if (!['http:', 'https:'].includes(url.protocol)) return;
 			if (url.origin !== this.client.url.url.origin) return;
-			event.preventDefault();
+			ours.add(event);
+			Reflect.apply(nativePreventDefault, event, []);
 			const named = link.getAttribute('download')!.trim();
-			this.save(url, named).catch(() => {
-				// the fetch failed: nothing to save, as a failed download
-			});
+			// after the click has gone through every handler of the page
+			global.setTimeout(() => {
+				if (cancelledByPage.has(event)) return;
+				this.save(url, named).catch(() => {
+					// the fetch failed: nothing to save, as a failed download
+				});
+			}, 0);
 		};
-		const install = () => global.addEventListener('click', listener);
+		const install = () =>
+			global.addEventListener('click', listener, { capture: true });
 		install();
 		addDocumentOpenListener(global, install);
 	}

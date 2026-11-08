@@ -291,6 +291,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A download link whose click handler stops the click's propagation still
+  saves what the site serves. The proxy's copy was started from the window
+  at the end of the click, which such a handler never let it reach, and the
+  browser's own (broken) download went ahead. The browser's download is now
+  cancelled as the click starts and the copy saved once every handler ran,
+  unless one cancelled it; until then the page reads `defaultPrevented` and
+  `returnValue` as its own calls left them (download suite, both modes,
+  against the page loaded natively).
 - A popup opened without a URL, and a new frame, read their location as
   `about:blank`. A window the page injects itself (its about:blank document
   runs the opener's inject bundle) read the bundle's own window's location,
