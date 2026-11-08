@@ -1371,8 +1371,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 		// a child frame's sandbox (an opaque origin), csp or credentialless
 		// attribute would put its document outside what the service worker can
-		// serve or rewrite: dropped, read back as written
-		for (const attribute of ['sandbox', 'csp', 'credentialless'])
+		// serve or rewrite: dropped, read back as written. Setting the
+		// property (`iframe.sandbox = x` writes through its token list, which
+		// no attribute hook sees) drops it at once too, so it is not dropped
+		// later on insertion, behind attributes the page set after it. Not
+		// `csp`: the property hook applies a string property's value again,
+		// which would bring the attribute back
+		const iframePrototype = this.client.global.HTMLIFrameElement.prototype;
+		for (const [attribute, property] of [
+			['sandbox', 'sandbox'],
+			['csp', ''],
+			['credentialless', 'credentialless'],
+		])
 			domHooksModule.useAttributes(
 				(element) => {
 					element.restoreAttributesOG(attribute);
@@ -1381,7 +1391,19 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.removeAttribute(attribute);
 					}
 				},
-				[['IFRAME', attribute]],
+				[
+					['IFRAME', attribute],
+					...(property &&
+					Reflect.getOwnPropertyDescriptor(iframePrototype, property)?.set
+						? [
+								[
+									this.client.global.HTMLIFrameElement,
+									property,
+									() => false,
+								] as [typeof HTMLIFrameElement, string, () => false],
+							]
+						: []),
+				],
 			);
 
 		domHooksModule.useAttributes(this.formHook, [

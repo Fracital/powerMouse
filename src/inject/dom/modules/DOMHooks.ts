@@ -21,6 +21,7 @@ import DocumentClient, {
 import cloneRawNode, { parseHTMLFragment } from '../cloneNode';
 import WriteStream from '../WriteStream';
 import {
+	attributeName,
 	hookWrite,
 	MARKER,
 	pageWrite,
@@ -840,7 +841,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
 
-					const attribute: string = args[0];
+					const attribute = attributeName(that, String(args[0]));
+					if (isMarker(attribute)) return null;
 
 					return usePrototype(that, CustomElement.prototype, (element) => {
 						if (element.hasAttributeOG(attribute)) {
@@ -861,28 +863,59 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// serialised from a copy with the markers folded back in.
 		const isMarker = (name: unknown) =>
 			typeof name === 'string' && name.startsWith(ORIGINAL_ATTRIBUTE);
+		// the name a call acts on is lowercased on an HTML element, so
+		// `S_O:HREF` names a marker there too
+		const isMarkerOn = (element: unknown, name: unknown) =>
+			typeof name === 'string' && isMarker(attributeName(element, name));
 
 		this.client.global.Element.prototype.hasAttribute =
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.hasAttribute,
-				(target, that, args) =>
-					isMarker(args[0])
-						? false
-						: Reflect.apply(target, that, args) ||
-							// an attribute a hook dropped (iframe sandbox) is still
-							// there for the page
-							usePrototype(that, CustomElement.prototype, (element) =>
-								element.hasAttributeOG(String(args[0])),
-							),
+				(target, that, args) => {
+					const native = Reflect.apply(target, that, args);
+					if (isMarkerOn(that, args[0])) return false;
+					// an attribute a hook dropped (iframe sandbox, an object's data)
+					// is still there for the page
+					return (
+						native ||
+						usePrototype(that, CustomElement.prototype, (element) =>
+							element.hasAttributeOG(attributeName(that, String(args[0]))),
+						)
+					);
+				},
 			);
+
+		this.client.global.Element.prototype.getAttributeNode =
+			proxyModule.wrapFunction(
+				this.client.global.Element.prototype.getAttributeNode,
+				(target, that, args) => {
+					const node = Reflect.apply(target, that, args);
+					return isMarkerOn(that, args[0]) ? null : node;
+				},
+			);
+
+		/**
+		 * The attribute names in the order the page sees them: a marker stands
+		 * where the page wrote an attribute a hook then dropped (it is written
+		 * in the attribute's place), and is hidden where the attribute stayed.
+		 */
+		const visibleNames = (names: string[]): string[] => {
+			const result: string[] = [];
+			for (const name of names) {
+				if (!isMarker(name)) result.push(name);
+				else {
+					const base = name.slice(ORIGINAL_ATTRIBUTE.length);
+					if (!names.includes(base)) result.push(base);
+				}
+			}
+			return result;
+		};
 
 		this.client.global.Element.prototype.getAttributeNames =
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.getAttributeNames,
 				(target, that, args) =>
-					(Reflect.apply(target, that, args) as string[]).filter(
-						(name) => !isMarker(name),
-					),
+					visibleNames(Reflect.apply(target, that, args) as string[]),
 			);
 
 		// Attr.value: the page's value when the element keeps one for it
@@ -923,6 +956,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 		// Element.attributes: a view of the map without the markers
 		const attributeMaps = new WeakMap<NamedNodeMap, NamedNodeMap>();
+		const standIns = new WeakMap<Attr, Attr>();
+		const nativeCreateAttribute =
+			this.client.global.Document.prototype.createAttribute;
+		const nativeOwnerDocument = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Node.prototype,
+			'ownerDocument',
+		)!.get!;
 		const attributesDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global.Element.prototype,
 			'attributes',
@@ -934,8 +974,36 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that, args) => {
 					const map: NamedNodeMap = Reflect.apply(target, that, args);
 					if (!attributeMaps.has(map)) {
-						const visible = () =>
-							[...map].filter((attr) => !isMarker(attr.name));
+						const owner = that as Element;
+						// an attribute a hook dropped is still the page's: a detached
+						// Attr with its name and value stands in, where it was written
+						const visible = () => {
+							const all = [...map];
+							const names = all.map((attr) => attr.name);
+							const result: Attr[] = [];
+							for (const attr of all) {
+								if (!isMarker(attr.name)) {
+									result.push(attr);
+									continue;
+								}
+								const base = attr.name.slice(ORIGINAL_ATTRIBUTE.length);
+								if (names.includes(base)) continue;
+								let standIn = standIns.get(attr);
+								if (!standIn) {
+									standIn = Reflect.apply(
+										nativeCreateAttribute,
+										Reflect.apply(nativeOwnerDocument, owner, []),
+										[base],
+									) as Attr;
+									standIns.set(attr, standIn);
+								}
+								standIn.value = attr.value;
+								result.push(standIn);
+							}
+							return result;
+						};
+						const named = (name: string) =>
+							visible().find((attr) => attr.name === name);
 						attributeMaps.set(
 							map,
 							new Proxy(map, {
@@ -947,22 +1015,35 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 										return (index: number) => visible()[index] ?? null;
 									if (key === 'getNamedItem')
 										return (name: string) =>
-											isMarker(name) ? null : map.getNamedItem(name);
+											isMarkerOn(owner, name)
+												? null
+												: (map.getNamedItem(name) ??
+													named(attributeName(owner, String(name))) ??
+													null);
 									if (key === Symbol.iterator)
 										return function* () {
 											yield* visible();
 										};
+									if (typeof key === 'string' && isMarker(key))
+										return undefined;
 									const value = Reflect.get(map, key);
+									if (value === undefined && typeof key === 'string')
+										return named(key);
 									return typeof value === 'function' ? value.bind(map) : value;
 								},
 								has: (map, key) =>
 									typeof key === 'string' && /^\d+$/.test(key)
 										? Number(key) < visible().length
-										: Reflect.has(map, key),
+										: typeof key === 'string' && isMarker(key)
+											? false
+											: Reflect.has(map, key) ||
+												(typeof key === 'string' && !!named(key)),
 								ownKeys: (map) => [
 									...visible().map((_, i) => String(i)),
 									...Reflect.ownKeys(map).filter(
-										(key) => typeof key !== 'string' || !/^\d+$/.test(key),
+										(key) =>
+											typeof key !== 'string' ||
+											(!/^\d+$/.test(key) && !isMarker(key)),
 									),
 								],
 							}),
@@ -1011,13 +1092,23 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						: querySelectorAllOf(current);
 				for (const node of elements)
 					usePrototype(node, nativeElement, (node) => {
-						for (const name of node.getAttributeNames())
+						const names = node.getAttributeNames();
+						let dropped = false;
+						for (const name of names)
 							if (isMarker(name)) {
-								node.setAttribute(
-									name.slice(ORIGINAL_ATTRIBUTE.length),
-									node.getAttribute(name)!,
-								);
+								const base = name.slice(ORIGINAL_ATTRIBUTE.length);
+								if (!names.includes(base)) dropped = true;
+								node.setAttribute(base, node.getAttribute(name)!);
 								node.removeAttribute(name);
+							}
+						// an attribute a hook dropped was set again at the end: every
+						// attribute goes back to the order the page wrote them in
+						if (dropped)
+							for (const name of visibleNames(names)) {
+								const attr = node.getAttributeNode(name);
+								if (!attr) continue;
+								node.removeAttributeNode(attr);
+								node.setAttributeNode(attr);
 							}
 						if (node.nodeName === 'TEMPLATE')
 							queue.push(Reflect.apply(templateContent, node, []));
@@ -1131,7 +1222,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					pageWrite(that, String(args[0]), () => {
 						const result = Reflect.apply(target, that, args);
 						usePrototype(that, CustomElement.prototype, (element) =>
-							this.updateAttributeHooks(element, String(args[0])),
+							this.updateAttributeHooks(
+								element,
+								attributeName(that, String(args[0])),
+							),
 						);
 						return result;
 					}),
@@ -1161,7 +1255,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// illegal invocation error will throw by nature
 					// Reflect.apply(target, that, args);
 
-					const [attribute, value] = args;
+					// the hooks are keyed by the name the attribute gets:
+					// `setAttribute('HREF', x)` writes `href`
+					const value = args[1];
+					const attribute =
+						typeof args[0] === 'string'
+							? attributeName(that, args[0])
+							: args[0];
 
 					pageWrite(that, attribute, () =>
 						usePrototype(that, CustomElement.prototype, (element) => {
@@ -1181,7 +1281,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// illegal invocation error will throw by nature
 					// Reflect.apply(target, that, args);
 
-					const [attribute] = args;
+					const attribute =
+						typeof args[0] === 'string'
+							? attributeName(that, args[0])
+							: args[0];
 
 					pageWrite(that, attribute, () =>
 						usePrototype(that, CustomElement.prototype, (element) => {

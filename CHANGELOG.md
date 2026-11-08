@@ -350,6 +350,16 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   proxy origin that names nothing. A hooked attribute is now created empty
   and the value written through the hooks, as `setAttribute` does
   (bypass-relative suite).
+- Every element reads its attributes back as on the real site (found by
+  the new markup-parity suite, which compares the corpus pages and the
+  attribute fixtures loaded natively and through the proxy, in both modes).
+  `setAttribute('HREF', x)` on an HTML element skipped the hooks (they are
+  keyed by the lowercase name), so the link went out raw and read back its
+  previous value. An attribute a hook drops (an object's `data` placeholder,
+  an iframe's `sandbox`) was missing from `getAttributeNames()` and
+  `attributes`, and serialised after the attributes written later.
+  `attributes['s_o:href']`, `getAttribute('s_o:href')` and a marker name in
+  capitals still answered.
 - A page's MutationObserver sees the attribute writes it made, not the
   proxy's. Each routed attribute keeps the page's value in an `s_o:` marker
   next to it, and one write by the page is several native ones (the routed
