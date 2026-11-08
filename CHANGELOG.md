@@ -358,6 +358,14 @@ PresentationRequest()` (Spotify) and `screen.orientation.lock()` threw
   Storage events the browser fires about the proxy origin's own storage (the
   stamps, the cookie cache's, a same-origin host's) no longer reach the
   page (storage-burst and storage-events suites, both modes).
+- A javascript: URL in a fresh iframe runs. `iframe.src = 'javascript:...'`
+  (or the attribute, or the markup) runs its body in the frame's initial
+  about:blank, which nothing injected unless the page had read the frame's
+  `contentWindow`, so the rewritten body threw `$s$j is not defined` and
+  never ran (adv-scripts, both modes). The rewritten URL now has the
+  parent's client inject the frame first, the way reading `contentWindow`
+  does; a page, or a frame already injected, has its own client and nothing
+  happens (helper-realms suite).
 - A blob: module worker runs. Its bootstrap was built with the page's
   `Blob`, which a document hooks to rewrite script blobs, so our own
   preamble was rewritten once more and called the access helper before it

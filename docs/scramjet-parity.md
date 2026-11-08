@@ -46,6 +46,7 @@ Fixed and covered by a suite unless marked open.
 | XHR `responseType` `json` / `blob` / `document`; `open()` stores the password into `#username`                                                                   | open                                                                                                        |
 | `MockWebSocket` rejects relative URLs, no `http(s)` to `ws(s)` mapping, no HttpOnly cookies on handshakes                                                        | fixed (ws-cookies suite)                                                                                    |
 | Context's `message` tagger only registered on `document.open()`; a page's own `document.open()` dropped every window hook                                        | fixed (history suite)                                                                                       |
+| A `javascript:` URL in a fresh iframe ran in its uninjected initial about:blank: `$s$j is not defined` (measured, adv-scripts)                                   | fixed: the parent injects the frame first (helper-realms suite)                                             |
 
 ## 2. Isolation and the "I am the top window" spoof
 

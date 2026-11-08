@@ -26,6 +26,19 @@ export default class IFrameModule extends Module<DocumentClient> {
 			});
 		};
 
+		// a javascript: URL a frame navigates to runs in the frame's own
+		// window: an iframe's initial about:blank, which nothing injected when
+		// the page never read its contentWindow (`iframe.src = 'javascript:...'`
+		// on a fresh frame). Only a child of this page, so a page cannot have
+		// another document's window injected with its bundle
+		this.client.injectChild = (context) => {
+			if (Reflect.get(context, 'parent') !== (this.client.global as unknown))
+				return;
+			injectContext(context);
+			const client = (context as Record<string, any>)[this.client.names.client];
+			if (!client.applied) client.apply();
+		};
+
 		// a popup the page opens without a URL (about:blank) is a document
 		// nobody fetched: inject it like a child frame, so what the page writes
 		// into it is rewritten; the page gets the window as a top-level page

@@ -95,15 +95,24 @@ export function routeHTML(
 			// not percent-encoded
 		}
 		const rewritten = modifyJS(body, url, config, 'generic');
+		const client = JSON.stringify(helperNames(config).client);
+		// The body runs in the window it navigates: in a fresh iframe that is
+		// the frame's initial about:blank, which nothing injected, and the
+		// rewritten code would throw on the access helper. The parent's client
+		// injects the frame first (a page or a frame it already injected has
+		// its own client, and nothing happens).
+		const inject = `self[${client}]||(()=>{try{parent[${client}].injectChild(self)}catch(e){}})()`;
 		// A javascript: URL whose value is a string replaces the document with
 		// that markup, which nothing would inject: the frame or page would run
 		// its scripts raw. For a single-expression body the string goes through
 		// the client (the frame's own, else its parent's), which wraps it in
 		// the shell like a blob document; other values pass through untouched.
 		const expression = javascriptExpression(body, rewritten);
-		if (expression === null) return `javascript:${rewritten}`;
-		const client = JSON.stringify(helperNames(config).client);
-		return `javascript:((r,c)=>typeof r==='string'&&c?c.javascriptDocument(r,document.URL):r)((${expression}),self[${client}]||(()=>{try{return parent[${client}]}catch(e){}})())`;
+		if (expression === null)
+			// statements: injected after their directive prologue, so a
+			// 'use strict' stays one
+			return `javascript:${modifyJS(body, url, config, 'generic', `void (${inject});`)}`;
+		return `javascript:((r,c)=>typeof r==='string'&&c?c.javascriptDocument(r,document.URL):r)((${inject},(${expression})),self[${client}]||(()=>{try{return parent[${client}]}catch(e){}})())`;
 	}
 
 	return routeURL(

@@ -255,6 +255,13 @@ export default class DocumentClient extends Client {
 	opened = false;
 	/** @internal give the loads the parser made from markup the page wrote their copies (DOMAttributes; DOMHooks' write calls it) */
 	writtenLoads?: (document: Document) => void;
+	/**
+	 * @internal inject this page's bundle into a child frame's window nothing
+	 * injected yet, as reading its contentWindow does (IFrame sets it):
+	 * routeHTML's javascript: wrapper calls it from the frame, whose rewritten
+	 * code needs the access helper before it runs
+	 */
+	injectChild?: (context: typeof globalThis) => void;
 	get url(): StompURL {
 		if (this.#parseBase) return this.#parseBase;
 		// a document the page made (a blob, a data: frame, an inline document
