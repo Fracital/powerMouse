@@ -295,6 +295,7 @@ for (const [mode, base] of [
 	// a <style>'s rules, a style attribute and a CSSOM write: their copies are
 	// set underneath the hooks, so the page reads and observes what it wrote
 	const declared = (value) => ({
+		sameRule: value?.sameRule,
 		style: value?.computed?.style,
 		attr: value?.computed?.attr,
 		cssom: value?.computed?.cssom,

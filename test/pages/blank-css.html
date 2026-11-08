@@ -47,6 +47,9 @@
 			const style = doc.createElement('style');
 			style.textContent = `.style-bg { background-image: url("${at('blank-pixel.svg', 'style-bg')}"); }`;
 			doc.head.append(style);
+			// a rule the page holds stays the sheet's own while its loads are
+			// copied
+			const heldRule = style.sheet.cssRules[0];
 			const make = (className) => {
 				const div = doc.createElement('div');
 				div.className = className;
@@ -87,6 +90,7 @@
 							win.getComputedStyle(element).backgroundImage,
 						]),
 				);
+				report.sameRule = style.sheet.cssRules[0] === heldRule;
 				report.fonts = (
 					await doc.fonts.load('10px blank-font').catch(() => [])
 				).length;

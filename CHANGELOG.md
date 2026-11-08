@@ -291,6 +291,12 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A `<style>` rule the page holds stays the sheet's own while its loads are
+  copied in a document no service worker controls: a style rule takes the
+  copies into its own declarations, as an inline style does, instead of
+  being deleted and inserted again (which detached the page's reference).
+  Only @import and @font-face rules, which have no declarations to edit,
+  are still put back whole (blank-loads suite, both modes).
 - CSS a page writes into a document no service worker controls loads its
   images through the proxy: a `<style>`'s rules, a style attribute and a
   CSSOM write (`el.style.x = ...`, setProperty, cssText) have their url()s

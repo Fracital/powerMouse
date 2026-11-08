@@ -245,6 +245,37 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				settle();
 			});
 		};
+		// a declaration block's own methods, before the hooks wrap them
+		const declarationProto = this.client.global.CSSStyleDeclaration.prototype;
+		const nativeDeclaration = {
+			setProperty: declarationProto.setProperty,
+			getPropertyValue: declarationProto.getPropertyValue,
+			getPropertyPriority: declarationProto.getPropertyPriority,
+			item: declarationProto.item,
+			length: Reflect.getOwnPropertyDescriptor(declarationProto, 'length')!
+				.get!,
+		};
+		/** every property of `declaration` that names routes, set to their copies */
+		const putCopies = (
+			declaration: CSSStyleDeclaration,
+			copied: Map<string, string>,
+		) => {
+			const call = (method: Function, args: unknown[]) =>
+				Reflect.apply(method, declaration, args);
+			const length = call(nativeDeclaration.length, []) as number;
+			for (let i = 0; i < length; i++) {
+				const name = call(nativeDeclaration.item, [i]) as string;
+				const value = call(nativeDeclaration.getPropertyValue, [
+					name,
+				]) as string;
+				if (!routesIn(value).length) continue;
+				call(nativeDeclaration.setProperty, [
+					name,
+					withCopies(value, copied),
+					call(nativeDeclaration.getPropertyPriority, [name]),
+				]);
+			}
+		};
 		/** a routed URL's copy, as a blob: URL (the proxy's form) */
 		const copyOf = async (
 			routed: string,
@@ -1251,15 +1282,6 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const styleProto = this.client.global.CSSStyleDeclaration.prototype;
 			const proxyModule = this.client.getModule(ProxyModule)!;
 
-			// the declaration's own methods, before the hooks below wrap them
-			const nativeSetProperty = styleProto.setProperty;
-			const nativeGetPropertyValue = styleProto.getPropertyValue;
-			const nativeGetPropertyPriority = styleProto.getPropertyPriority;
-			const nativeItem = styleProto.item;
-			const nativeLength = Reflect.getOwnPropertyDescriptor(
-				styleProto,
-				'length',
-			)!.get!;
 			// the element each page-facing declaration belongs to
 			const owners = new WeakMap<CSSStyleDeclaration, Element>();
 			const pending = new WeakSet<Element>();
@@ -1281,25 +1303,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							hookWrite(
 								element,
 								() => ['style'],
-								() => {
-									const length = Reflect.apply(nativeLength, declaration, []);
-									for (let i = 0; i < length; i++) {
-										const name = Reflect.apply(nativeItem, declaration, [i]);
-										const value = Reflect.apply(
-											nativeGetPropertyValue,
-											declaration,
-											[name],
-										) as string;
-										if (!routesIn(value).length) continue;
-										Reflect.apply(nativeSetProperty, declaration, [
-											name,
-											withCopies(value, copied),
-											Reflect.apply(nativeGetPropertyPriority, declaration, [
-												name,
-											]),
-										]);
-									}
-								},
+								() => putCopies(declaration, copied),
 							),
 					);
 				});
@@ -1537,16 +1541,21 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						for (let i = 0; i < rules.length; i++) {
 							const rule = rules[i];
 							if (!routesIn(textOf(rule)).length) continue;
-							// a grouping rule (@media, @supports, @layer) is entered; a style
-							// rule (which lists its nested rules too) is put back whole
-							if (
-								'cssRules' in rule &&
-								!('selectorText' in rule) &&
-								!('styleSheet' in rule)
-							) {
+							// a style rule keeps its identity: its own declarations take the
+							// copies (as an inline style does), its nested rules are entered
+							if ('selectorText' in rule) {
+								putCopies((rule as CSSStyleRule).style, copied);
+								if ('cssRules' in rule)
+									putBack(rule as unknown as CSSGroupingRule);
+								continue;
+							}
+							// a grouping rule (@media, @supports, @layer) is entered
+							if ('cssRules' in rule && !('styleSheet' in rule)) {
 								putBack(rule as CSSGroupingRule);
 								continue;
 							}
+							// @import and @font-face have no declarations to edit: put back
+							// whole
 							const text = withCopies(textOf(rule), copied);
 							try {
 								Reflect.apply(methods.delete, container, [i]);
