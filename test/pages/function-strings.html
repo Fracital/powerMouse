@@ -1,0 +1,24 @@
+<!doctype html>
+<title>FUNCTION STRINGS</title>
+<iframe id="same" src="frame-tell.html?who=same"></iframe>
+<script>
+	// a hooked function of another realm, read through this realm's toString:
+	// a frame that loaded its own copy of the inject, and an about:blank
+	// frame this page's copy injected
+	window.__read = () => {
+		const same = document.getElementById('same').contentWindow;
+		const blank = document.body.appendChild(
+			document.createElement('iframe'),
+		).contentWindow;
+		const read = (fn) => Function.prototype.toString.call(fn);
+		return {
+			sameFetch: read(same.fetch),
+			sameOpen: read(same.open),
+			sameWrite: read(same.document.write),
+			sameToString: read(same.Function.prototype.toString),
+			blankFetch: read(blank.fetch),
+			blankWrite: read(blank.document.write),
+			own: read(window.fetch),
+		};
+	};
+</script>
