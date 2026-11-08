@@ -127,6 +127,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// per element and attribute: the routed value the copy is for, and its
 		// blob: URL once it is in (a hook that runs again for the same value
 		// keeps the copy)
+		// taken now: a page that replaces them later sees none of the copies
+		const createObjectURL = this.client.global.URL.createObjectURL;
+		const revokeObjectURL = this.client.global.URL.revokeObjectURL;
 		/** one value's copies: the routed value, what was set, the blobs made */
 		type Copy = { routed: string; url?: string; made: string[] };
 		const copies = new WeakMap<Element, Map<string, Copy>>();
@@ -142,7 +145,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			if (!response.ok && response.status !== 0)
 				throw new Error(String(response.status));
 			const url = proxyBlobURL(
-				this.client.global.URL.createObjectURL(await response.blob()),
+				Reflect.apply(createObjectURL, this.client.global.URL, [
+					await response.blob(),
+				]) as string,
 			);
 			state.made.push(url);
 			blobLoads.set(url, page);
@@ -153,7 +158,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			if (!state) return;
 			for (const url of state.made.splice(0)) {
 				blobLoads.delete(url);
-				this.client.global.URL.revokeObjectURL(url);
+				Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
 			}
 		};
 		/**
@@ -212,14 +217,26 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				);
 				release(current);
 			};
-			Promise.all(
+			// every copy is waited for: when one fails (the routed value is set,
+			// which fails as it would have), the others are released with it
+			Promise.allSettled(
 				targets.map(({ routed, page }) =>
 					isRoute(routed) ? copyOf(routed, page, state) : routed,
 				),
-			)
-				.then((urls) => settle(compose(urls)))
-				// the copy failed: the routed value, which fails as it would have
-				.catch(() => settle(routed));
+			).then((results) => {
+				if (results.every((result) => result.status === 'fulfilled'))
+					settle(
+						compose(
+							results.map(
+								(result) => (result as PromiseFulfilledResult<string>).value,
+							),
+						),
+					);
+				else {
+					settle(routed);
+					release(state);
+				}
+			});
 		};
 		// A frame whose src is a data: document gets an opaque origin, which
 		// the inject cannot reach: its requests would have nowhere to go and

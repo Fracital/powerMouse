@@ -291,6 +291,11 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A srcset copy that fails no longer leaves its other copies alive: every
+  candidate's copy is waited for, and when one fails the others are released
+  with it. The copies are made and released with the URL functions the page
+  had when the proxy started, so a page that replaces them sees none of
+  the proxy's.
 - A copy loaded for a document no service worker controls is released once
   its element shows another value: an editor frame that swaps its images no
   longer keeps every earlier blob alive. The old copies are revoked after the
