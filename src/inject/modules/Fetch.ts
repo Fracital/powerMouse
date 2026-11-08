@@ -96,10 +96,21 @@ export default class FetchModule extends Module<Client> {
 				// a Request given as the input is copied as it is (its URL was
 				// resolved when it was made); anything else is a URL string to
 				// resolve against the page's real URL, which String(Request) is not
-				const input =
-					args[0] instanceof target
-						? args[0]
-						: new URL(args[0], this.client.url.toString());
+				let input: Request | URL;
+				if (args[0] instanceof target) input = args[0];
+				else {
+					const text = String(args[0]);
+					try {
+						input = new URL(text, this.client.url.toString());
+					} catch (error) {
+						// a URL that does not parse against the page's (a relative
+						// one in a data: worker, whose origin is opaque) throws
+						// Request's own error, not URL's
+						throw new this.client.global.TypeError(
+							`Failed to construct 'Request': Failed to parse URL from ${text}`,
+						);
+					}
+				}
 				return Reflect.construct(target, [input, args[1]], newTarget);
 			},
 			true,

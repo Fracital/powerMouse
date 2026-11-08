@@ -358,6 +358,11 @@ PresentationRequest()` (Spotify) and `screen.orientation.lock()` threw
   Storage events the browser fires about the proxy origin's own storage (the
   stamps, the cookie cache's, a same-origin host's) no longer reach the
   page (storage-burst and storage-events suites, both modes).
+- `new Request(url)` with a URL that does not parse against the page's (a
+  relative one in a data: worker, whose origin is opaque) throws the
+  TypeError Request throws natively (`Failed to parse URL from ...`), not the
+  URL constructor's `Invalid URL` from inside the inject (helper-realms
+  suite).
 - A javascript: URL in a fresh iframe runs. `iframe.src = 'javascript:...'`
   (or the attribute, or the markup) runs its body in the frame's initial
   about:blank, which nothing injected unless the page had read the frame's
