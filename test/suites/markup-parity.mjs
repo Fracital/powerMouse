@@ -1,7 +1,7 @@
 // Markup parity: a page reads its own markup back exactly as it does when
 // served natively. Each fixture page is loaded straight from the fixture
 // site and through the proxy (both demo modes); once it has finished, the
-// document's outerHTML, every element's attribute names, its `attributes`
+// document's outerHTML and its body's getHTML, every element's attribute names, its `attributes`
 // map and getAttribute for every name either side has are read through the
 // page's own APIs and compared. An attribute only the proxy has (a marker,
 // one a hook wrote that the page never did), one only the page has, or a
@@ -55,6 +55,18 @@ const finished = () =>
  * carries values the corpus measures elsewhere, so its text is left out.
  */
 const snapshot = () => {
+	// a serializable shadow root with routed loads, for getHTML's shadow
+	// path: made once, the same natively and proxied
+	if (!document.getElementById('shadow-host') && document.body.attachShadow) {
+		const host = document.createElement('div');
+		host.id = 'shadow-host';
+		host
+			.attachShadow({ mode: 'open', serializable: true })
+			.setHTMLUnsafe?.(
+				'<img src="sprite.svg?shadow"><a href="hist-1.html">s</a>',
+			);
+		document.body.append(host);
+	}
 	const name = (element) => {
 		if (element.id) return `${element.localName}#${element.id}`;
 		const parent = element.parentElement;
@@ -93,6 +105,15 @@ const snapshot = () => {
 			/(<pre id="result"[^>]*>)[\s\S]*?(<\/pre>)/,
 			'$1$2',
 		),
+		// getHTML, the shadow-root-aware serializer, the same way
+		getHTML:
+			typeof document.body.getHTML === 'function'
+				? document.body
+						.getHTML({ serializableShadowRoots: true })
+						.replace(/(<pre id="result"[^>]*>)[\s\S]*?(<\/pre>)/, '$1$2')
+				: null,
+		shadowHTML:
+			document.getElementById('shadow-host')?.shadowRoot?.getHTML?.() ?? null,
 		elements,
 		mutations: window.__mutations ?? null,
 	};
@@ -266,6 +287,21 @@ for (const file of PAGES) {
 				native.html === proxied.html
 					? ''
 					: firstDifference(native.html, proxied.html),
+			);
+			ok(
+				`${mode}: ${file} a shadow root's getHTML reads back as natively`,
+				native.shadowHTML === proxied.shadowHTML,
+				JSON.stringify({
+					native: native.shadowHTML,
+					proxied: proxied.shadowHTML,
+				}),
+			);
+			ok(
+				`${mode}: ${file} getHTML reads back as natively`,
+				native.getHTML === proxied.getHTML,
+				native.getHTML === proxied.getHTML
+					? ''
+					: firstDifference(native.getHTML ?? '', proxied.getHTML ?? ''),
 			);
 			if (native.mutations)
 				for (const [name, seen] of Object.entries(native.mutations)) {

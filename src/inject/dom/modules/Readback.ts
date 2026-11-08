@@ -303,6 +303,20 @@ export default class ReadbackModule extends Module<DocumentClient> {
 
 		// serialised markup: the rewritten text of every recorded script in
 		// it (the element itself included) replaced by what the page wrote
+		const restoreScripts = (that: Element, markup: string): string => {
+			for (const script of scriptsIn(that)) {
+				const source = written(script);
+				if (source === undefined) continue;
+				const { rewritten } = sources.get(script)!;
+				const index = markup.indexOf(rewritten);
+				if (index === -1) continue;
+				markup =
+					markup.slice(0, index) +
+					source +
+					markup.slice(index + rewritten.length);
+			}
+			return markup;
+		};
 		const wrapMarkupGetter = (key: string) => {
 			const descriptor = Reflect.getOwnPropertyDescriptor(
 				global.Element.prototype,
@@ -313,25 +327,21 @@ export default class ReadbackModule extends Module<DocumentClient> {
 				...descriptor,
 				get: proxyModule.wrapFunction(
 					descriptor.get,
-					(target, that: Element, args) => {
-						let markup: string = Reflect.apply(target, that, args);
-						for (const script of scriptsIn(that)) {
-							const source = written(script);
-							if (source === undefined) continue;
-							const { rewritten } = sources.get(script)!;
-							const index = markup.indexOf(rewritten);
-							if (index === -1) continue;
-							markup =
-								markup.slice(0, index) +
-								source +
-								markup.slice(index + rewritten.length);
-						}
-						return markup;
-					},
+					(target, that: Element, args) =>
+						restoreScripts(that, Reflect.apply(target, that, args)),
 				),
 			});
 		};
 		wrapMarkupGetter('innerHTML');
 		wrapMarkupGetter('outerHTML');
+		// getHTML is a method: the same for what it returns
+		const getHTML = (global.Element.prototype as { getHTML?: unknown }).getHTML;
+		if (typeof getHTML === 'function')
+			(global.Element.prototype as { getHTML: unknown }).getHTML =
+				proxyModule.wrapFunction(
+					getHTML as (options?: unknown) => string,
+					(target, that: Element, args) =>
+						restoreScripts(that, Reflect.apply(target, that, args) as string),
+				);
 	}
 }

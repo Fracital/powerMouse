@@ -216,6 +216,8 @@ function isAttributeHook(
 export default class DOMHooksModule extends Module<DocumentClient> {
 	/** markup of an element as the page wrote it (markers folded back) */
 	serializeOriginal!: (element: Element, outer: boolean) => string;
+	/** getHTML's serialized markup, for the readback modules to finish (CSS) */
+	foldMarkup!: (html: string) => string;
 	/** a deep copy of `node` in a document with no window, where nothing loads */
 	inertCopy!: <T extends Node>(node: T) => T;
 	private hooks: {
@@ -1183,6 +1185,103 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				);
 			});
 		this.serializeOriginal = serializeOriginal;
+
+		// getHTML: the browser's own serializer on a folded copy in the inert
+		// document (see inertCopy), with a copy of each shadow root it would
+		// serialize (open and serializable, or one the page lists) attached to
+		// the copy of its host, its markers folded too
+		type ShadowOptions = {
+			serializableShadowRoots?: boolean;
+			shadowRoots?: ShadowRoot[];
+		};
+		const copyWithShadows = <T extends Element | DocumentFragment>(
+			node: T,
+			options: ShadowOptions,
+		): T =>
+			usePrototype(node, nativeNode, (native) => {
+				const copy = inertCopy(native) as T;
+				const originals: Node[] = [
+					...(native.nodeType === 1 ? [native] : []),
+					...querySelectorAllOf(native),
+				];
+				const copies: Node[] = [
+					...(copy.nodeType === 1 ? [copy] : []),
+					...querySelectorAllOf(copy),
+				];
+				originals.forEach((original, index) => {
+					const host = original as Element;
+					const root =
+						host.shadowRoot ??
+						options.shadowRoots?.find((root) => root.host === host) ??
+						null;
+					if (
+						!root ||
+						!(
+							(options.serializableShadowRoots && root.serializable) ||
+							options.shadowRoots?.includes(root)
+						)
+					)
+						return;
+					const shadow = (copies[index] as Element).attachShadow({
+						mode: root.mode,
+						serializable: true,
+						clonable: root.clonable,
+						delegatesFocus: root.delegatesFocus,
+					});
+					for (const child of root.childNodes)
+						shadow.append(
+							child.nodeType === 1
+								? copyWithShadows(child as Element, options)
+								: inertCopy(child),
+						);
+					foldMarkers(shadow);
+				});
+				foldMarkers(copy);
+				return copy;
+			});
+		this.foldMarkup = (html: string): string => html;
+		const elementGetHTML = (
+			this.client.global.Element.prototype as { getHTML?: unknown }
+		).getHTML as ((options?: ShadowOptions) => string) | undefined;
+		for (const proto of [
+			this.client.global.Element.prototype,
+			(this.client.global as { ShadowRoot?: typeof ShadowRoot }).ShadowRoot
+				?.prototype,
+		]) {
+			const getHTML = (proto as { getHTML?: unknown } | undefined)?.getHTML;
+			if (typeof getHTML !== 'function') continue;
+			(proto as { getHTML: unknown }).getHTML = proxyModule.wrapFunction(
+				getHTML as (options?: ShadowOptions) => string,
+				(target, that, args) => {
+					const options = (args[0] ?? {}) as ShadowOptions;
+					// the copies' shadow roots are all serializable: ask for them
+					const all = [{ serializableShadowRoots: true }];
+					if (that instanceof this.client.global.Element)
+						return this.foldMarkup(
+							Reflect.apply(
+								target,
+								copyWithShadows(that, options),
+								all,
+							) as string,
+						);
+					// a shadow root cannot be copied: its children are, under a
+					// holder in the inert document, serialized as the root's
+					const holder = inertCopy(
+						this.client.global.document.createElement('div'),
+					);
+					for (const child of (that as ShadowRoot).childNodes)
+						holder.append(
+							child.nodeType === 1
+								? copyWithShadows(child as Element, options)
+								: inertCopy(child),
+						);
+					foldMarkers(holder);
+					return this.foldMarkup(
+						Reflect.apply(elementGetHTML!, holder, all) as string,
+					);
+				},
+			);
+		}
 
 		// XMLSerializer: the same folded copy, serialised as XML
 		const serializeToString =

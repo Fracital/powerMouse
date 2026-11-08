@@ -291,6 +291,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- getHTML reads a page's markup back as the page wrote it. It returned the
+  proxy's routed URLs and its `s_o:` markers (innerHTML and outerHTML did
+  not); an element's and a shadow root's getHTML now serialize a folded
+  copy in the inert document, a copy of every shadow root they would
+  include (open and serializable, or listed in `shadowRoots`) attached to
+  the copy of its host, and go through the CSS and script readbacks as
+  innerHTML does (markup-parity suite, both modes, against the pages loaded
+  natively).
 - A whole document a page writes keeps its doctype and its html, head and
   body tags. Written markup was rewritten as a fragment, which dropped the
   doctype (the document rendered in quirks mode) and the attributes of the

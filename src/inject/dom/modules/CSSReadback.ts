@@ -101,5 +101,7 @@ export default class CSSReadbackModule extends Module<DocumentClient> {
 		const serializeOriginal = domHooks.serializeOriginal;
 		domHooks.serializeOriginal = (element, outer) =>
 			css(serializeOriginal(element, outer));
+		const foldMarkup = domHooks.foldMarkup;
+		domHooks.foldMarkup = (html) => css(foldMarkup(html));
 	}
 }
