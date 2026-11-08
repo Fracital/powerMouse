@@ -84,12 +84,28 @@ export function inertDocumentOf(document: Document): Document {
 	);
 }
 
+/**
+ * Elements cloneRawNode made inside a template's content or a <noscript>.
+ * Where the written page puts them, a script runs with no
+ * document.currentScript (a declarative shadow root), never runs (a plain
+ * template) or is text (a noscript, with scripting on), so markup that
+ * replaces itself from a script (DOMContentHooks' parsed <style>) must land
+ * as itself there.
+ */
+export const inertClones = new WeakSet<Node>();
+
 const STACK_ITERATE = Symbol();
 const STACK_FINALIZE = Symbol();
 
 // the document the child is made in: the caller's, or a template's inert
-// content document below a template
-type stackIterateData = [child: Node, target: ParentNode, document: Document];
+// content document below a template; whether it is below a template or a
+// noscript (inertClones)
+type stackIterateData = [
+	child: Node,
+	target: ParentNode,
+	document: Document,
+	inert: boolean,
+];
 type stackFinalizeData = [parent: ParentNode, node: Node];
 
 /**
@@ -114,7 +130,7 @@ export default function cloneRawNode(
 
 	for (let i = 0; i < max; i++) {
 		const child = childNodes[max - i - 1];
-		stack.push([STACK_ITERATE, child, tempTarget, document]);
+		stack.push([STACK_ITERATE, child, tempTarget, document, false]);
 	}
 
 	while (true) {
@@ -205,9 +221,12 @@ export default function cloneRawNode(
 							);
 						else target.setAttribute(attribute.name, attribute.value);
 
+					if (d[3]) inertClones.add(target);
+
 					// a template's children live in its content fragment, not in
 					// childNodes; clone them into the new template's fragment
 					const isTemplate = d[0].nodeName === 'TEMPLATE';
+					const inert = d[3] || isTemplate || d[0].nodeName === 'NOSCRIPT';
 					const children = isTemplate
 						? (d[0] as HTMLTemplateElement).content.childNodes
 						: d[0].childNodes;
@@ -221,7 +240,7 @@ export default function cloneRawNode(
 					for (let i = 0; i < max; i++) {
 						// append in reverse order
 						const child = children[max - i - 1];
-						stack.push([STACK_ITERATE, child, parent, childDocument]);
+						stack.push([STACK_ITERATE, child, parent, childDocument, inert]);
 					}
 
 					stack.push([STACK_FINALIZE, d[1], target]);

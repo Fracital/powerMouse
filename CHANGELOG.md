@@ -316,6 +316,16 @@ PresentationRequest()` (Spotify) and `screen.orientation.lock()` threw
   never have natively. `DEFAULT_SANDBOX` now adds those two flags and
   `allow-popups-to-escape-sandbox` (frame-features suite, both modes,
   against the page loaded natively).
+- A `<style>` in a declarative shadow root, a plain template or a
+  `<noscript>` stays a style through the page load. While the written page
+  is prepared, each parsed `<style>` is replaced by a script that puts it
+  back with `document.currentScript.outerHTML`. In a shadow root
+  `currentScript` is null, so the script threw "Cannot set properties of null
+  (setting 'outerHTML')" and the root lost its styles (every Lit component on
+  MDN); in a template the page found a script in `content`, and in a
+  noscript the script markup became its text. cloneRawNode marks what it
+  makes below a template or a noscript, and those styles keep their
+  (already rewritten) text in place (html suite).
 - A no-break space in a page's script, style or JSON payload reads as the
   character again, not as the text `&nbsp;`. The HTML shell escapes the
   page's markup with `entities`' `escapeText`, which writes U+00A0 as

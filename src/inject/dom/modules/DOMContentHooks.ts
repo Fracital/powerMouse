@@ -7,7 +7,7 @@ import ProxyModule, {
 	usePrototype,
 } from '../../modules/Proxy';
 import DocumentClient, { getGlobalParsingState } from '../Client';
-import cloneRawNode, { parseHTMLFragment } from '../cloneNode';
+import cloneRawNode, { inertClones, parseHTMLFragment } from '../cloneNode';
 import DOMAttributesModule, {
 	scriptType,
 	shouldRewriteScript,
@@ -134,6 +134,10 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					// rewritten now, so the browser never fetches an @import or a
 					// font from the proxy origin while parsing the written page
 					rewriteStyleText(style);
+					// in a template or a noscript the script could not put it back
+					// (MDN's declarative shadow roots threw on currentScript);
+					// its text is rewritten already
+					if (inertClones.has(style)) return;
 					compositeElement(style, () => {
 						const script = document.createElement('script');
 
