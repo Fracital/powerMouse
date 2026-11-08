@@ -350,6 +350,12 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   proxy origin that names nothing. A hooked attribute is now created empty
   and the value written through the hooks, as `setAttribute` does
   (bypass-relative suite).
+- A script reads back the source the page wrote when `document.write`,
+  `innerHTML` or `insertAdjacentHTML` made it, when its text was set while
+  it was connected, and when it is an SVG script; each read back (and
+  serialised as) the rewritten code. A script `document.write` wrote was
+  even rewritten twice, so its own `document.currentScript.text` was the
+  first rewrite (markup-parity, readback suites).
 - Every element reads its attributes back as on the real site (found by
   the new markup-parity suite, which compares the corpus pages and the
   attribute fixtures loaded natively and through the proxy, in both modes).

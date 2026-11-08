@@ -20,7 +20,8 @@ interface ScriptSource {
  * location, hashchange oldURL/newURL and the Navigation API's entry and
  * destination URLs are the page's, and a script element the page inserted
  * reads back (text, textContent, innerHTML, outerHTML, its text node) the
- * source the page wrote rather than the rewritten one that ran.
+ * source the page wrote rather than the rewritten one that ran (an SVG
+ * script its textContent).
  */
 export default class ReadbackModule extends Module<DocumentClient> {
 	apply() {
@@ -83,32 +84,36 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		const global = this.client.global;
 		const sources = new WeakMap<HTMLScriptElement, ScriptSource>();
 
+		const HTML = 'http://www.w3.org/1999/xhtml';
+		const SVG = 'http://www.w3.org/2000/svg';
+		// an SVG script has no `text`: its source is its textContent
 		const nativeText = (script: HTMLScriptElement): string =>
-			usePrototype(script, nativeHTMLScriptElement, (script) => script.text);
+			usePrototype(script, nativeElement, (element) => element.namespaceURI) ===
+			HTML
+				? usePrototype(script, nativeHTMLScriptElement, (script) => script.text)
+				: (usePrototype(script, nativeNode, (node) => node.textContent) ?? '');
 		const parentNodeGet = Reflect.getOwnPropertyDescriptor(
 			global.Node.prototype,
 			'parentNode',
 		)!.get!;
 
-		// the HTML script elements an insertion argument brings along (an SVG
-		// script has no `text`; its source is its textContent, not tracked)
-		const isHTMLScript = (element: Element) =>
+		// the script elements (HTML or SVG) an insertion argument brings along
+		const isScript = (element: Element) =>
 			usePrototype(
 				element,
 				nativeElement,
 				(element) =>
 					element.localName === 'script' &&
-					element.namespaceURI === 'http://www.w3.org/1999/xhtml',
+					(element.namespaceURI === HTML || element.namespaceURI === SVG),
 			);
 		const scriptsIn = (node: unknown): HTMLScriptElement[] => {
 			if (typeof node !== 'object' || node === null) return [];
 			try {
 				return usePrototype(node as Node, nativeNode, (native) => {
 					if (native.nodeType === 1) {
-						if (isHTMLScript(node as Element))
-							return [node as HTMLScriptElement];
+						if (isScript(node as Element)) return [node as HTMLScriptElement];
 						return usePrototype(node as Element, nativeElement, (element) =>
-							[...element.querySelectorAll('script')].filter(isHTMLScript),
+							[...element.querySelectorAll('script')].filter(isScript),
 						) as HTMLScriptElement[];
 					}
 					if (native.nodeType === 11)
@@ -116,7 +121,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 							node as DocumentFragment,
 							nativeDocumentFragment,
 							(fragment) =>
-								[...fragment.querySelectorAll('script')].filter(isHTMLScript),
+								[...fragment.querySelectorAll('script')].filter(isScript),
 						) as HTMLScriptElement[];
 					return [];
 				});
@@ -135,7 +140,14 @@ export default class ReadbackModule extends Module<DocumentClient> {
 			for (const node of nodes)
 				for (const script of scriptsIn(node)) {
 					const text = nativeText(script);
-					if (sources.get(script)?.rewritten !== text)
+					// a record of a script that was not rewritten (inserted into a
+					// detached fragment first) is no reason to skip it
+					const record = sources.get(script);
+					if (
+						!record ||
+						record.written === record.rewritten ||
+						record.rewritten !== text
+					)
 						pending.push([script, text]);
 				}
 			try {
@@ -163,8 +175,23 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		wrapInsert(global.Node.prototype, 'appendChild', first);
 		wrapInsert(global.Node.prototype, 'insertBefore', first);
 		wrapInsert(global.Node.prototype, 'replaceChild', first);
-		for (const name of ['append', 'prepend', 'before', 'after', 'replaceWith'])
+		for (const name of [
+			'append',
+			'prepend',
+			'before',
+			'after',
+			'replaceWith',
+			'replaceChildren',
+		])
 			wrapInsert(global.Element.prototype, name, all);
+		// markup the page writes (document.write) is re-created into a
+		// fragment, whose scripts are rewritten as they land in it
+		for (const prototype of [
+			global.DocumentFragment.prototype,
+			global.Document.prototype,
+		])
+			for (const name of ['append', 'prepend', 'replaceChildren'])
+				wrapInsert(prototype, name, all);
 		wrapInsert(global.Element.prototype, 'insertAdjacentElement', (args) => [
 			args[1],
 		]);
@@ -173,12 +200,21 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		// rewritten text; a script the page edited afterwards reads natively
 		const written = (script: HTMLScriptElement): string | undefined => {
 			const record = sources.get(script);
+			if (!record) return;
+			const text = nativeText(script);
+			if (record.written !== record.rewritten)
+				return text === record.rewritten ? record.written : undefined;
+			// recorded before the hooks rewrote it where no wrapper here saw
+			// (markup a hook parses and inserts itself: insertAdjacentHTML)
+			const rewritten = this.client.rewrittenScripts.get(script);
 			if (
-				record &&
-				record.written !== record.rewritten &&
-				nativeText(script) === record.rewritten
-			)
+				rewritten !== undefined &&
+				rewritten !== record.written &&
+				text === rewritten
+			) {
+				sources.set(script, { written: record.written, rewritten });
 				return record.written;
+			}
 		};
 		// the recorded script `that` reads from: itself, or its text node
 		const scriptOf = (that: unknown): HTMLScriptElement | undefined => {
@@ -222,6 +258,44 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		// innerText accessors, which shadow the ones on Node and HTMLElement
 		wrapTextGetter(global.HTMLScriptElement.prototype, 'textContent');
 		wrapTextGetter(global.HTMLScriptElement.prototype, 'innerText');
+
+		// a connected script's text set by the page runs at once, rewritten by
+		// the setter (prepareScriptText): what it was given is what it wrote
+		const isScriptNode = (that: unknown): that is HTMLScriptElement => {
+			try {
+				return (
+					typeof that === 'object' &&
+					that !== null &&
+					usePrototype(that as Node, nativeNode, (node) => node.nodeType) ===
+						1 &&
+					isScript(that as Element)
+				);
+			} catch (error) {
+				return false;
+			}
+		};
+		const wrapTextSetter = (prototype: object, key: string) => {
+			const descriptor = Reflect.getOwnPropertyDescriptor(prototype, key);
+			if (!descriptor?.set) return;
+			Reflect.defineProperty(prototype, key, {
+				...descriptor,
+				set: proxyModule.wrapFunction(descriptor.set, (target, that, args) => {
+					const result = Reflect.apply(target, that, args);
+					if (isScriptNode(that)) {
+						// unchanged (detached, or the running script restoring its
+						// source): recorded as written, for a rewrite on insertion
+						sources.set(that, {
+							written: String(args[0]),
+							rewritten: nativeText(that),
+						});
+					}
+					return result;
+				}),
+			});
+		};
+		wrapTextSetter(global.HTMLScriptElement.prototype, 'text');
+		wrapTextSetter(global.Node.prototype, 'textContent');
+		wrapTextSetter(global.HTMLScriptElement.prototype, 'textContent');
 
 		// serialised markup: the rewritten text of every recorded script in
 		// it (the element itself included) replaced by what the page wrote
