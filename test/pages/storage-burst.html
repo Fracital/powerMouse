@@ -1,0 +1,95 @@
+<!doctype html>
+<title>STORAGE BURST</title>
+<script>
+	// Twitch reads one feature flag key from localStorage on every flag
+	// lookup, a few hundred times in one task while it renders, and its error
+	// logger looks a flag up again (Eppo's getJSONAssignment, discord-style
+	// loggers do the same). Natively a read never throws, so the logger ends.
+	// Through the proxy each read was a beacon to the service worker, the
+	// document's 64 KiB beacon quota ran out inside the task, every read
+	// after it threw QuotaExceededError and the logger recursed until the
+	// stack overflowed.
+	window.__sb = { cases: {} };
+	const record = (name, run) => {
+		try {
+			__sb.cases[name] = run();
+		} catch (error) {
+			__sb.cases[name] = `threw ${error.name}`;
+		}
+	};
+	const flag = () => {
+		try {
+			return localStorage.getItem('force_default_assignments');
+		} catch (error) {
+			report(error);
+			return null;
+		}
+	};
+	const report = (error) => {
+		// a logger that asks a flag whether to report
+		if (flag() !== 'quiet') __sb.reported = String(error).slice(0, 80);
+	};
+	localStorage.setItem('force_default_assignments', 'no');
+	sessionStorage.setItem('tab', 'one');
+	record('a thousand reads of one key in one task', () => {
+		let last;
+		for (let i = 0; i < 1000; i++) last = flag();
+		return last;
+	});
+	record('key and length walks in one task', () => {
+		const seen = [];
+		for (let round = 0; round < 50; round++)
+			for (let i = 0; i < localStorage.length; i++)
+				seen.push(localStorage.key(i));
+		return [seen.length > 0, seen.includes('force_default_assignments')];
+	});
+	record('session reads in one task', () => {
+		let last;
+		for (let i = 0; i < 1000; i++) last = sessionStorage.getItem('tab');
+		return last;
+	});
+	record('cookie reads in one task', () => {
+		document.cookie = 'burst=1';
+		let last;
+		for (let i = 0; i < 1000; i++) last = document.cookie.includes('burst=1');
+		return last;
+	});
+	record('own writes read back', () => {
+		localStorage.setItem('mine', 'a');
+		const a = localStorage.getItem('mine');
+		localStorage.mine = 'b';
+		const b = localStorage.getItem('mine');
+		localStorage.removeItem('mine');
+		return [a, b, localStorage.getItem('mine'), 'mine' in localStorage];
+	});
+	__sb.reported ??= null;
+	// another document of the origin writes; this one reads at once
+	const child = document.createElement('iframe');
+	child.src = 'storage-burst-child.html';
+	addEventListener('message', (event) => {
+		if (event.data !== 'child ready') return;
+		const other = child.contentWindow;
+		record('a write by another document is read at once', () => {
+			const before = localStorage.getItem('shared');
+			const keysBefore = localStorage.length;
+			other.localStorage.setItem('shared', 'from child');
+			const after = localStorage.getItem('shared');
+			const keysAfter = localStorage.length;
+			other.localStorage.removeItem('shared');
+			const gone = localStorage.getItem('shared');
+			other.sessionStorage.setItem('tab', 'two');
+			const tab = sessionStorage.getItem('tab');
+			other.localStorage.clear();
+			return [
+				before,
+				after,
+				keysAfter - keysBefore,
+				gone,
+				tab,
+				localStorage.length,
+			];
+		});
+		__sb.done = true;
+	});
+	document.documentElement.append(child);
+</script>

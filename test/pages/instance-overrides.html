@@ -1,0 +1,80 @@
+<!doctype html>
+<title>INSTANCE OVERRIDES</title>
+<script>
+	// OneTrust's OtAutoBlock (discord.com) wraps createElement: a script it
+	// makes gets own src and type accessors that write through the hooked
+	// setAttribute taken from the element itself, and an own setAttribute
+	// that sends src and type to those accessors. Natively that ends after
+	// one round; the hooks must not call the element's own setAttribute.
+	window.__io = { cases: {} };
+	const record = (name, run) => {
+		try {
+			__io.cases[name] = run();
+		} catch (error) {
+			__io.cases[name] = `threw ${error.name}: ${error.message}`.slice(0, 120);
+		}
+	};
+	const create = document.createElement;
+	document.createElement = function (...args) {
+		const element = create.apply(document, args);
+		if (String(args[0]).toLowerCase() !== 'script') return element;
+		const setAttribute = element.setAttribute.bind(element);
+		Object.defineProperties(element, {
+			src: {
+				get: () => element.getAttribute('src') || '',
+				set: (value) => setAttribute('src', value),
+			},
+			type: {
+				get: () => element.getAttribute('type') || '',
+				set: (value) => setAttribute('type', `blocked/${value}`),
+			},
+		});
+		element.setAttribute = function (name, value) {
+			if (name === 'src' || name === 'type') element[name] = value;
+			else HTMLScriptElement.prototype.setAttribute.call(element, name, value);
+		};
+		return element;
+	};
+	record('setAttribute through own accessors', () => {
+		const script = document.createElement('script');
+		script.setAttribute('type', 'text/plain');
+		script.setAttribute('src', 'boom.js?blocked');
+		script.setAttribute('data-x', '1');
+		return [
+			script.getAttribute('type'),
+			script.getAttribute('src'),
+			script.getAttribute('data-x'),
+			script.type,
+			script.src,
+		];
+	});
+	record('property writes through own accessors', () => {
+		const script = document.createElement('script');
+		script.type = 'text/plain';
+		script.src = 'boom.js?prop';
+		return [script.getAttribute('type'), script.getAttribute('src')];
+	});
+	// an own getAttribute that reads the hooked one off the prototype
+	record('own getAttribute and removeAttribute', () => {
+		const div = document.createElement('a');
+		div.getAttribute = function (name) {
+			return `own:${Element.prototype.getAttribute.call(this, name)}`;
+		};
+		div.removeAttribute = function (name) {
+			Element.prototype.removeAttribute.call(this, name);
+			this.removed = name;
+		};
+		div.setAttribute('href', 'other.html');
+		div.removeAttribute('title');
+		div.setAttribute('title', 't');
+		const before = div.getAttribute('title');
+		div.removeAttribute('title');
+		return [
+			div.getAttribute('href'),
+			before,
+			div.getAttribute('title'),
+			div.removed,
+		];
+	});
+	__io.done = true;
+</script>

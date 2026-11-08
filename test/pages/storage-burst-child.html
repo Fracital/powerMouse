@@ -1,0 +1,7 @@
+<!doctype html>
+<title>STORAGE BURST CHILD</title>
+<script>
+	// a second document of the origin, which the parent writes through
+	localStorage.getItem('shared');
+	parent.postMessage('child ready', '*');
+</script>
