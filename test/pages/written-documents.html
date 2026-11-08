@@ -16,7 +16,17 @@
 		const doc = win.document;
 		const image = doc.images[0];
 		return {
-			ownWrite: Object.getOwnPropertyNames(doc).includes('write'),
+			ownWrite: Object.getOwnPropertyNames(doc).some((name) =>
+				/^write(ln)?$/.test(name),
+			),
+			// what a page can tell of the method it calls
+			writeTells: [
+				doc.write.name,
+				doc.write.length,
+				Function.prototype.toString.call(doc.write),
+				doc.write === win.Document.prototype.write,
+				doc.writeln === win.Document.prototype.writeln,
+			],
 			color: win.getComputedStyle(doc.body).color,
 			image: image ? image.complete && image.naturalWidth > 0 : null,
 			editable: doc.body.getAttribute('contenteditable'),

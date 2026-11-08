@@ -343,7 +343,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		 * Etc hooks are here
 		 */
 
-		// native write, taken before the own property below replaces it: the
+		// native write, taken before the prototype hook below replaces it: the
 		// stream's output and a pending tail go through it
 		const nativeWrite = this.client.global.document.write;
 		const stream = new WriteStream(this.client);
@@ -473,14 +473,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				this.client.writtenLoads?.(document as Document);
 			});
 
-		this.client.global.document.write = writeFactory(
-			this.client.global.document.write,
-			false,
-		);
-		this.client.global.document.writeln = writeFactory(
-			this.client.global.document.writeln,
-			true,
-		);
+		// on the prototype, where the browser has them: an own property of the
+		// document is a tell (Object.getOwnPropertyNames(document)), and a
+		// window that keeps its realm across documents hands each new one the
+		// hook. A popup's document finds its own realm's prototype, and so
+		// that realm's client.
+		const documentProto = this.client.global.Document.prototype;
+		documentProto.write = writeFactory(documentProto.write, false);
+		documentProto.writeln = writeFactory(documentProto.writeln, true);
 
 		// document.close() ends the input: the unfinished tail goes to the
 		// parser as it is, which meets it at the end of its input the way the

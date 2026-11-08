@@ -64,6 +64,19 @@ for (const [mode, base] of [
 		JSON.stringify([...new Set(raw)]),
 	);
 	for (const name of ['frame', 'popup']) {
+		const tells = (value) => ({
+			ownWrite: value?.ownWrite,
+			writeTells: value?.writeTells,
+		});
+		ok(
+			`${mode}: the ${name}'s document.write is the prototype's and reads as native`,
+			JSON.stringify(tells(proxied?.[name])) ===
+				JSON.stringify(tells(native?.[name])),
+			JSON.stringify({
+				native: tells(native?.[name]),
+				proxied: tells(proxied?.[name]),
+			}),
+		);
 		const loads = (value) => ({ color: value?.color, image: value?.image });
 		const wrapper = (value) => ({
 			mode: value?.mode,

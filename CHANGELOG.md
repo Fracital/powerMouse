@@ -291,6 +291,16 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- `document.write` and `writeln` are the prototype's methods again. The
+  hook was an own property of each document, which a page could list
+  (`Object.getOwnPropertyNames(document)`) and compare
+  (`document.write !== Document.prototype.write`); it is now on
+  Document.prototype, where the browser has it, so a popup's or a frame's
+  document finds its own realm's hook and client. A hooked function of
+  another realm the inject made (a popup's `write`, a frame's `fetch`) read
+  through the page's own Function.prototype.toString gave the wrapper's
+  source: the native source is now known to every realm of the bundle
+  (written-documents suite, both modes, against the page loaded natively).
 - getHTML with shadow roots the page lists serializes them as the browser
   does: an open root that is not serializable and a closed one, passed in
   `shadowRoots`, come out with the browser's own template attributes. The

@@ -173,8 +173,14 @@ export function contextThis(that: unknown, global: typeof globalThis): unknown {
 	}
 }
 
+// the native source each wrapper shows: one table for every realm the
+// bundle hooks, so a page that reads another realm's hooked function (a
+// popup's document.write, a frame's fetch) through its own toString sees
+// the native source too
+const functionStrings = new WeakMap<Function, string>();
+
 export default class ProxyModule extends Module<Client> {
-	functionStrings = new WeakMap<Function, string>();
+	functionStrings = functionStrings;
 	apply() {
 		this.client.global.Function.prototype.toString = this.wrapFunction(
 			this.client.global.Function.prototype.toString,
