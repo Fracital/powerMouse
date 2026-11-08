@@ -93,6 +93,52 @@ for (const [mode, base] of [
 			}),
 		);
 	}
+	// a copy is let go once the element shows another: an image that swaps
+	// its source keeps no old blob alive
+	const blank = page.frames().find((frame) => frame.url() === 'about:blank');
+	const show = (file) =>
+		blank.evaluate(
+			(file) =>
+				new Promise((resolve) => {
+					let image = document.getElementById('swap');
+					if (!image) {
+						image = document.createElement('img');
+						image.id = 'swap';
+						document.body.append(image);
+					}
+					image.onload = () => resolve('load');
+					image.onerror = () => resolve('error');
+					image.src = new URL(file, document.baseURI).href;
+					setTimeout(() => resolve('timeout'), 3000);
+				}),
+			file,
+		);
+	const real = () => blank.locator('#swap').getAttribute('src');
+	const fetches = (url) =>
+		blank.evaluate(
+			(url) =>
+				fetch(url).then(
+					() => true,
+					() => false,
+				),
+			url,
+		);
+	const first = await show('blank-pixel.svg?blank=swap-a');
+	const firstCopy = await real();
+	const second = await show('blank-pixel.svg?blank=swap-b');
+	const secondCopy = await real();
+	await sleep(300);
+	ok(
+		`${mode}: an image that swaps its source releases the copy it showed`,
+		first === 'load' &&
+			second === 'load' &&
+			firstCopy.startsWith('blob:') &&
+			secondCopy.startsWith('blob:') &&
+			firstCopy !== secondCopy &&
+			!(await fetches(firstCopy)) &&
+			(await fetches(secondCopy)),
+		JSON.stringify({ first, second, firstCopy, secondCopy }),
+	);
 	await page.close();
 }
 await done(browser);

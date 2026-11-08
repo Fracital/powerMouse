@@ -127,12 +127,15 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// per element and attribute: the routed value the copy is for, and its
 		// blob: URL once it is in (a hook that runs again for the same value
 		// keeps the copy)
-		const copies = new WeakMap<
-			Element,
-			Map<string, { routed: string; url?: string }>
-		>();
+		/** one value's copies: the routed value, what was set, the blobs made */
+		type Copy = { routed: string; url?: string; made: string[] };
+		const copies = new WeakMap<Element, Map<string, Copy>>();
 		/** a routed URL's copy, as a blob: URL (the proxy's form) */
-		const copyOf = async (routed: string, page: string): Promise<string> => {
+		const copyOf = async (
+			routed: string,
+			page: string,
+			state: Copy,
+		): Promise<string> => {
 			const response = await this.client.routedFetch(routed, {
 				credentials: 'include',
 			});
@@ -141,13 +144,24 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const url = proxyBlobURL(
 				this.client.global.URL.createObjectURL(await response.blob()),
 			);
+			state.made.push(url);
 			blobLoads.set(url, page);
 			return url;
+		};
+		/** a value's copies are let go: no element shows them any more */
+		const release = (state: Copy | undefined) => {
+			if (!state) return;
+			for (const url of state.made.splice(0)) {
+				blobLoads.delete(url);
+				this.client.global.URL.revokeObjectURL(url);
+			}
 		};
 		/**
 		 * Set a load attribute to its routed value, or in a document no service
 		 * worker controls to a copy of what it names (`urls` maps the value to
-		 * the routed URLs it holds, for a srcset; one URL otherwise).
+		 * the routed URLs it holds, for a srcset; one URL otherwise). The copies
+		 * of the value it replaces are released once the new one is set (a
+		 * media element plays the old one until then).
 		 */
 		const placeLoad = (
 			element: CustomElement,
@@ -165,32 +179,42 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					).href,
 				},
 			];
+			const perAttribute = copies.get(element);
+			const current = perAttribute?.get(attribute);
 			if (!uncontrolled() || !targets.some(({ routed }) => isRoute(routed))) {
 				element.setAttribute(attribute, routed);
+				if (current) {
+					perAttribute!.delete(attribute);
+					release(current);
+				}
 				return;
 			}
-			if (!copies.has(element)) copies.set(element, new Map());
-			const perAttribute = copies.get(element)!;
-			const current = perAttribute.get(attribute);
 			if (current?.routed === routed) {
 				if (current.url) element.setAttribute(attribute, current.url);
 				else element.removeAttribute(attribute);
 				return;
 			}
-			const state: { routed: string; url?: string } = { routed };
-			perAttribute.set(attribute, state);
+			if (!perAttribute) copies.set(element, new Map());
+			const states = copies.get(element)!;
+			const state: Copy = { routed, made: [] };
+			states.set(attribute, state);
 			// nothing loads until the copy is in
 			element.removeAttribute(attribute);
 			const settle = (value: string) => {
-				if (perAttribute.get(attribute) !== state) return;
+				if (states.get(attribute) !== state) {
+					// replaced while it was on its way
+					release(state);
+					return;
+				}
 				state.url = value;
 				usePrototype(element, CustomElement.prototype, (element) =>
 					element.setAttribute(attribute, value),
 				);
+				release(current);
 			};
 			Promise.all(
 				targets.map(({ routed, page }) =>
-					isRoute(routed) ? copyOf(routed, page) : routed,
+					isRoute(routed) ? copyOf(routed, page, state) : routed,
 				),
 			)
 				.then((urls) => settle(compose(urls)))

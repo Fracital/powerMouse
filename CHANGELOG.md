@@ -291,6 +291,12 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A copy loaded for a document no service worker controls is released once
+  its element shows another value: an editor frame that swaps its images no
+  longer keeps every earlier blob alive. The old copies are revoked after the
+  new value is set (a media element plays the old one until then), and a
+  copy that arrives after its value was replaced is released at once
+  (blank-loads suite, both modes).
 - Documents a page builds itself load their images, scripts and
   stylesheets through the proxy. Chrome hands an about:blank frame or popup
   no service worker, whether the page writes into its first document, opens
