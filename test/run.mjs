@@ -149,9 +149,14 @@ async function startServers(name) {
 async function startServersOnce(name) {
 	const pinned = PARALLEL === 1;
 	const port = String((pinned && process.env.PORT) || (await freePort()));
-	const fixturePort = Number(
+	// a probe's port is free again once it closes, so the second probe can
+	// hand back the first: the fixture then takes the demo server's port, the
+	// server fails to bind, and the readiness check passes on the fixture
+	// (which answers any path), so the suite runs against the wrong server
+	let fixturePort = Number(
 		(pinned && process.env.FIXTURE_PORT) || (await freePort()),
 	);
+	while (String(fixturePort) === port) fixturePort = await freePort();
 	const fixture = await startFixture(fixturePort);
 	// the epoxy transport sends a request over a pooled connection the server
 	// already closed for idling (node closes them after 5 s) and the request
