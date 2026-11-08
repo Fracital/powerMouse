@@ -96,6 +96,10 @@ at a time, the `inheritance/` ones for about:blank, `javascript:`, srcdoc,
 data: and `document.write` children among them; those are proxy failures,
 not load.
 
+Since then the lists only shrink as fixes land; on 2026-11-08 they hold 9
+cookie and 12 referrer-policy entries, each with its cause in
+`docs/scramjet-parity.md` (the WPT row of section 9).
+
 ## Running and refreshing
 
 ```sh
