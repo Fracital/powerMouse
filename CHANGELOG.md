@@ -1416,6 +1416,18 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- A page that races its own parser against an async script loses that race
+  more often through the proxy, because its parser-blocking scripts arrive
+  later: each is rewritten in the service worker, and Chrome fetches every
+  script its preload scanner found in a `document.write`d document a second
+  time when a service worker controls it (measured with a pass-through
+  worker and no Stomp). The TinyMCE docs page sets `piAId = ''` at the end of
+  its body while Google Tag Manager's page-view tag sets the Pardot IDs as
+  soon as gtm.js arrives; natively the parser wins by about 40 ms, so a
+  throttled native load (150 ms latency) clobbers the IDs too, and Pardot
+  answers `campaign_id=null` with an HTML refusal its script tag cannot
+  parse. Nothing in the rewrite is involved: sloppy global writes, script
+  order and GTM's inserted scripts behave as natively.
 - `Error.prepareStackTrace` reads back as a function (Stomp's formatter)
   instead of `undefined`; scripts created from markup strings read back
   rewritten.
