@@ -450,12 +450,17 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				const opens =
 					document === this.client.global.document &&
 					this.client.global.document.readyState === 'complete';
+				// a document just opened (no root yet), or one this write opens
+				const fresh =
+					opens ||
+					(document === this.client.global.document &&
+						this.client.global.document.documentElement === null);
 				if (opens) this.client.opened = true;
 				const prevState = getGlobalParsingState(this.client.global);
 				setGlobalParsingState(this.client.global, 'parsingBeforeWrite');
 				let markup: string;
 				try {
-					markup = stream.write(document, text);
+					markup = stream.write(document, text, fresh);
 				} finally {
 					setGlobalParsingState(this.client.global, prevState);
 				}

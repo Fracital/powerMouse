@@ -65,6 +65,21 @@ for (const [mode, base] of [
 	);
 	for (const name of ['frame', 'popup']) {
 		const loads = (value) => ({ color: value?.color, image: value?.image });
+		const wrapper = (value) => ({
+			mode: value?.mode,
+			doctype: value?.doctype,
+			editable: value?.editable,
+			bodyClass: value?.bodyClass,
+		});
+		ok(
+			`${mode}: the ${name}'s written doctype and html, head and body tags are its own, as natively`,
+			JSON.stringify(wrapper(proxied?.[name])) ===
+				JSON.stringify(wrapper(native?.[name])),
+			JSON.stringify({
+				native: wrapper(native?.[name]),
+				proxied: wrapper(proxied?.[name]),
+			}),
+		);
 		ok(
 			`${mode}: the ${name}'s written stylesheet and image load, as natively`,
 			JSON.stringify(loads(proxied?.[name])) ===
@@ -72,6 +87,11 @@ for (const [mode, base] of [
 			JSON.stringify({ native: native?.[name], proxied: proxied?.[name] }),
 		);
 	}
+	ok(
+		`${mode}: a document written in pieces, a tag and a script split across writes, reads as natively`,
+		JSON.stringify(proxied?.split) === JSON.stringify(native?.split),
+		JSON.stringify({ native: native?.split, proxied: proxied?.split }),
+	);
 	await page.close();
 }
 await done(browser);

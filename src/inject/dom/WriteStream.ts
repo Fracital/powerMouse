@@ -59,9 +59,26 @@ export default class WriteStream {
 		this.reset(document);
 		return tail;
 	}
-	/** the markup to write now for `text`; the incomplete tail is kept */
-	write(document: object, text: string): string {
+	/**
+	 * The markup to write now for `text`; the incomplete tail is kept.
+	 * `opens`: this write opens a fresh document (just opened, or a write
+	 * once the document had loaded), whose doctype and html, head and body
+	 * tags are the document's own, not a fragment's.
+	 */
+	write(document: object, text: string, opens = false): string {
 		const state = this.#state(document);
+		// a fresh document's doctype and html, head and body tags go first, as
+		// they are; the rest is this document's stream from there on (a tail
+		// the write leaves unfinished waits for the next one)
+		let prelude = '';
+		if (opens && !state.tail) {
+			const found = this.#prelude(text);
+			if (found) {
+				prelude = found.markup;
+				text = found.rest;
+				state.stack = [];
+			}
+		}
 		const script = this.#currentScript(document);
 		if (state.script !== script) {
 			state.script = script;
@@ -70,8 +87,54 @@ export default class WriteStream {
 		const buffer = state.tail + text;
 		const end = completeLength(buffer);
 		state.tail = buffer.slice(end);
-		if (end === 0) return '';
-		return this.#rewrite(buffer.slice(0, end), state);
+		if (end === 0) return prelude;
+		return prelude + this.#rewrite(buffer.slice(0, end), state);
+	}
+	/**
+	 * A fresh document's markup that starts with its prelude: the doctype
+	 * as written, the html, head and body start tags with their attributes
+	 * (routed by the hooks, as any element's) and the head's content
+	 * rewritten as a fragment; `rest` is what follows, for the document's own
+	 * stream (a tail it leaves unfinished waits for the next write). Null
+	 * when the markup does not start with a prelude (a fragment, as any other
+	 * write).
+	 */
+	#prelude(markup: string): { markup: string; rest: string } | null {
+		const match =
+			/^(\s*(?:<!--[\s\S]*?-->\s*)*)(<!doctype[^>]*>)?(\s*)(<html\b[^>]*>)?(\s*)(?:(<head\b[^>]*>)([\s\S]*?)(<\/head\s*>))?(\s*)(<body\b[^>]*>)?/i.exec(
+				markup,
+			);
+		if (!match || !(match[2] || match[4] || match[6] || match[10])) return null;
+		const [whole, lead, doctype, , html, , head, headContent, , , body] = match;
+		const tag = (start: string | undefined, name: string) => {
+			if (!start) return '';
+			// the start tag's attributes on an element of the client's
+			// document, through the hooks, serialized back as `name`'s
+			const attributes = start.replace(/^<\w+/i, '').replace(/\/?>$/, '');
+			const holder = parseHTMLContainer(
+				`<div${attributes}></div>`,
+				this.#client.global.document,
+			);
+			const div = this.#client.global.document.createElement('div');
+			div.append(
+				cloneRawNode([...holder.childNodes], this.#client.global.document),
+			);
+			const serialized = this.#client.innerHTMLOf(div);
+			const open = /^<div([^>]*)>/i.exec(serialized)?.[1] ?? '';
+			return `<${name}${open}>`;
+		};
+		const headState: WriteState = { tail: '', stack: [], script: null };
+		return {
+			markup:
+				lead +
+				(doctype ?? '') +
+				tag(html, 'html') +
+				(head
+					? `${tag(head, 'head')}${headContent ? this.#rewrite(headContent, headState) : ''}</head>`
+					: '') +
+				tag(body, 'body'),
+			rest: markup.slice(whole.length),
+		};
 	}
 	#currentScript(document: object): Element | null {
 		const doc = document as { currentScript?: unknown };

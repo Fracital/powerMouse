@@ -291,6 +291,16 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A whole document a page writes keeps its doctype and its html, head and
+  body tags. Written markup was rewritten as a fragment, which dropped the
+  doctype (the document rendered in quirks mode) and the attributes of the
+  html, head and body tags: an editor frame lost its body's
+  `contenteditable` and class. A write that opens a fresh document (just
+  opened, or written once it had loaded) and starts with them keeps them,
+  their attributes through the hooks as any element's; the head's content
+  and the rest are rewritten as before, and a write into a document already
+  being parsed stays a fragment (written-documents suite, both modes,
+  against the page loaded natively).
 - What a page writes into a document no service worker controls loads:
   an editor's frame (`<iframe src="">` written once it loads, as CKEditor 4
   does) and a popup its opener writes into now show the written stylesheet

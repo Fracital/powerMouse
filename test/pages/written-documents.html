@@ -21,6 +21,8 @@
 			image: image ? image.complete && image.naturalWidth > 0 : null,
 			editable: doc.body.getAttribute('contenteditable'),
 			mode: doc.compatMode,
+			bodyClass: doc.body.className,
+			doctype: doc.doctype ? doc.doctype.name : null,
 		};
 	};
 	const holder = document.getElementById('holder');
@@ -49,5 +51,21 @@
 			popup.close();
 		}, 2500);
 	});
+	// a prelude write that stops in the middle of a tag, finished by the next
+	const split = document.createElement('iframe');
+	document.body.append(split);
+	const splitDoc = split.contentDocument;
+	splitDoc.open();
+	splitDoc.write('<!doctype html><html><body class="split"><p class="a');
+	splitDoc.write('b">x</p><script>document.body.dataset.ran = "yes"</scr');
+	splitDoc.write('ipt>');
+	splitDoc.close();
+	report.split = {
+		mode: splitDoc.compatMode,
+		bodyClass: splitDoc.body.className,
+		paragraph: splitDoc.querySelector('p')?.className ?? null,
+		text: splitDoc.querySelector('p')?.textContent ?? null,
+		ran: splitDoc.body.dataset.ran ?? null,
+	};
 	setTimeout(() => (report.done = true), 4000);
 </script>
