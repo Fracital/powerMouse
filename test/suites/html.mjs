@@ -82,6 +82,34 @@ for (const [file, expected, why] of [
 	ok(`${why} decodes`, got === expected, JSON.stringify(got));
 }
 
+// Raw text (script, style, noscript) and template contents as the page wrote
+// them: a no-break space in a JSON script reached React as "&nbsp;" (BBC's
+// hydration errors), and a <style> in a declarative shadow root became a
+// script that throws there (MDN). Each value is the page's own reading,
+// natively and through the proxy.
+const native = await browser.newPage();
+await native.goto(`${FIXTURE}pages/raw-text.html.bin`);
+await native.waitForFunction(() => window.__raw, null, { timeout: 15000 });
+const expected = await native.evaluate(() => window.__raw);
+await native.close();
+const raw = await load('raw-text.html.bin', '__raw');
+for (const [key, why] of [
+	['json', 'a no-break space in a JSON script'],
+	['js', 'a no-break space in an inline script'],
+	['css', 'a no-break space in a <style>'],
+	['text', 'a no-break space in text'],
+	['noscript', 'a <style> in a <noscript>'],
+	['shadow', 'a <style> in a declarative shadow root'],
+	['shadowColor', 'the declarative shadow root style applies'],
+	['template', 'a <style> in a template stays a style'],
+	['errors', 'the page throws nothing'],
+])
+	ok(
+		`${why} reads as natively`,
+		JSON.stringify(raw?.[key]) === JSON.stringify(expected[key]),
+		`proxied ${JSON.stringify(raw?.[key])}, native ${JSON.stringify(expected[key])}`,
+	);
+
 await done(
 	browser,
 	page.errors.filter((e) => !/max cycles/.test(e)),

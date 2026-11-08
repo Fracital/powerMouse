@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>RAW TEXT</title>
+<script>
+	window.__errors = [];
+	addEventListener('error', (event) => window.__errors.push(String(event.message)));
+</script>
+<style id="css">#text::after{content:"x y"}</style>
+<script id="data" type="application/json">{"text":"a b"}</script>
+<p id="text">a b</p>
+<noscript><style>p{color:rgb(7, 8, 9)}</style></noscript>
+<div id="host"><template shadowrootmode="open"><style>p{color:rgb(1, 2, 3)}</style><p id="inner">shadow</p></template></div>
+<template id="plain"><style>p{color:rgb(4, 5, 6)}</style><p>t</p></template>
+<script>
+	window.__js = 'a b';
+	addEventListener('load', () => {
+		const host = document.getElementById('host');
+		const root = host.shadowRoot;
+		window.__raw = {
+			json: JSON.parse(document.getElementById('data').textContent).text,
+			js: window.__js,
+			css: document.getElementById('css').textContent,
+			text: document.getElementById('text').textContent,
+			noscript: document.querySelector('noscript').textContent,
+			shadow: root ? [...root.children].map((e) => e.localName).join(',') : null,
+			shadowColor: root
+				? getComputedStyle(root.getElementById('inner')).color
+				: null,
+			template: [...document.getElementById('plain').content.children]
+				.map((e) => e.localName)
+				.join(','),
+			errors: window.__errors,
+		};
+	});
+</script>
