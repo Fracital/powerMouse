@@ -1,4 +1,4 @@
-import { decode } from 'entities';
+import { decodeHTML } from 'entities';
 import { ParsedConfig } from '../../config';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
 import { refererFor, type ReferrerInfo } from '../../referrerPolicy';
@@ -400,7 +400,11 @@ export default class DocumentClient extends Client {
 	loadHTML(script: string) {
 		setGlobalParsingState(this.global, 'parsingBeforeWrite');
 
-		const parsed = parseHTML(decode(script), this.global.document);
+		// the shell escaped the markup with escapeText (modifyHTML), which
+		// writes a no-break space as &nbsp;: an XML-level decode leaves that
+		// as text, and every U+00A0 in a script, a style or a JSON payload
+		// read "&nbsp;" (BBC's __NEXT_DATA__, so React's hydration failed)
+		const parsed = parseHTML(decodeHTML(script), this.global.document);
 
 		// the first <base href> is the base URL of everything in the page; its
 		// own href resolves against the document's URL, and one that does not

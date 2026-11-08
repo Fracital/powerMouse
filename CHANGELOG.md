@@ -316,6 +316,16 @@ PresentationRequest()` (Spotify) and `screen.orientation.lock()` threw
   never have natively. `DEFAULT_SANDBOX` now adds those two flags and
   `allow-popups-to-escape-sandbox` (frame-features suite, both modes,
   against the page loaded natively).
+- A no-break space in a page's script, style or JSON payload reads as the
+  character again, not as the text `&nbsp;`. The HTML shell escapes the
+  page's markup with `entities`' `escapeText`, which writes U+00A0 as
+  `&nbsp;`, and `loadHTML` decoded it at the XML level, which only knows
+  `&amp;`, `&lt;`, `&gt;`, `&quot;` and `&apos;`. Text outside raw text
+  elements was parsed back by the browser, so only scripts, styles and
+  noscript contents kept the entity: BBC News's `__NEXT_DATA__` handed React
+  "sites.&nbsp;" where the server had rendered a no-break space, and
+  hydration failed with React errors #425, #418 and #423. `loadHTML` decodes
+  at the HTML level, the inverse of `escapeText` (html suite).
 - A same-origin frame's hooked functions read as native from its parent.
   Each proxied frame loads its own copy of the inject, whose wrappers the
   parent's copy never made, so the parent's `Function.prototype.toString`
