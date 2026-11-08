@@ -1,0 +1,170 @@
+<!doctype html>
+<title>SYNC BINARY</title>
+<script>
+	// Response bodies of synchronous requests arrive byte for byte: the
+	// classic binary trick (a sync XHR with the x-user-defined charset), a
+	// Latin-1 text, a UTF-8 text with characters past U+00FF, the same in a
+	// dedicated worker with responseType arraybuffer and blob (legal there),
+	// a UTF-8 script written into a document no service worker controls, and
+	// the async XHR and fetch reads of the same files for comparison. Every
+	// value is a string the suite compares with the page loaded natively.
+	const out = {};
+	window.__syncBinary = out;
+	const files = {
+		binary: '/pages/sync-binary.bin',
+		latin1: '/pages/sync-latin1.bin',
+		utf8: '/pages/sync-utf8.bin',
+	};
+	const hex = (bytes) =>
+		Array.from(new Uint8Array(bytes), (b) =>
+			b.toString(16).padStart(2, '0'),
+		).join('');
+	const codes = (text) =>
+		Array.from({ length: text.length }, (_, i) =>
+			text.charCodeAt(i).toString(16).padStart(4, '0'),
+		).join(' ');
+	const headers = (x) => ({
+		status: x.status,
+		statusText: x.statusText,
+		responseURL: x.responseURL,
+		type: x.getResponseHeader('content-type'),
+		length: x.getResponseHeader('content-length'),
+		marker: x.getResponseHeader('x-sync-binary'),
+	});
+	const attempt = (name, run) => {
+		try {
+			out[name] = run();
+		} catch (error) {
+			out[name] = { threw: error.name, message: String(error.message) };
+		}
+	};
+	const sync = (url, override) => {
+		const x = new XMLHttpRequest();
+		x.open('GET', url, false);
+		if (override) x.overrideMimeType(override);
+		x.send();
+		return x;
+	};
+
+	const userDefined = 'text/plain; charset=x-user-defined';
+	attempt('syncUserDefined', () => {
+		const x = sync(files.binary, userDefined);
+		return {
+			...headers(x),
+			codes: codes(x.responseText),
+			// the page's way back to the bytes
+			bytes: hex(
+				Uint8Array.from(x.responseText, (c) => c.charCodeAt(0) & 0xff),
+			),
+		};
+	});
+	attempt('syncLatin1', () => {
+		const x = sync(files.latin1);
+		return { ...headers(x), codes: codes(x.responseText) };
+	});
+	attempt('syncLatin1UserDefined', () => {
+		const x = sync(files.latin1, userDefined);
+		return { ...headers(x), codes: codes(x.responseText) };
+	});
+	attempt('syncUtf8', () => {
+		const x = sync(files.utf8);
+		return { ...headers(x), codes: codes(x.responseText) };
+	});
+	attempt('syncBinaryText', () => {
+		const x = sync(files.binary);
+		return { ...headers(x), codes: codes(x.responseText) };
+	});
+	// a window may not set a response type on a synchronous request
+	attempt('syncArrayBufferInWindow', () => {
+		const x = new XMLHttpRequest();
+		x.open('GET', files.binary, false);
+		x.responseType = 'arraybuffer';
+		return 'set';
+	});
+	// a request body goes out byte for byte too (the fixture counts them)
+	const ramp = Uint8Array.from({ length: 256 }, (_, i) => i);
+	for (const [name, body] of [
+		['syncPostBuffer', ramp.buffer],
+		['syncPostView', ramp],
+	])
+		attempt(name, () => {
+			const x = new XMLHttpRequest();
+			x.open('POST', '/echo-body', false);
+			x.send(body);
+			return { status: x.status, body: x.responseText };
+		});
+
+	const async = (url, type, override) =>
+		new Promise((resolve) => {
+			const x = new XMLHttpRequest();
+			x.open('GET', url);
+			if (type) x.responseType = type;
+			if (override) x.overrideMimeType(override);
+			x.onloadend = () => resolve(x);
+			x.send();
+		});
+	const writeScript = () =>
+		new Promise((resolve) => {
+			const iframe = document.createElement('iframe');
+			document.body.append(iframe);
+			const win = iframe.contentWindow;
+			const doc = iframe.contentDocument;
+			doc.open();
+			doc.write(
+				`<!doctype html><body><script src="${new URL(files.utf8, location.href).href}"><\/script><script>__ran = typeof __utf8Script<\/script></body>`,
+			);
+			doc.close();
+			setTimeout(
+				() =>
+					resolve({
+						ran: win.__ran ?? null,
+						codes:
+							typeof win.__utf8Script === 'string'
+								? codes(win.__utf8Script)
+								: null,
+					}),
+				500,
+			);
+		});
+
+	addEventListener('load', async () => {
+		try {
+			let x = await async(files.binary, 'arraybuffer');
+			out.asyncArrayBuffer = { ...headers(x), bytes: hex(x.response) };
+			x = await async(files.binary, '', userDefined);
+			out.asyncUserDefined = { ...headers(x), codes: codes(x.responseText) };
+			x = await async(files.latin1);
+			out.asyncLatin1 = { ...headers(x), codes: codes(x.responseText) };
+			x = await async(files.utf8);
+			out.asyncUtf8 = { ...headers(x), codes: codes(x.responseText) };
+			x = await async(files.binary, 'blob');
+			out.asyncBlob = {
+				...headers(x),
+				type: x.response.type,
+				bytes: hex(await x.response.arrayBuffer()),
+			};
+			let r = await fetch(files.binary);
+			out.fetchBinary = {
+				status: r.status,
+				type: r.headers.get('content-type'),
+				length: r.headers.get('content-length'),
+				marker: r.headers.get('x-sync-binary'),
+				bytes: hex(await r.arrayBuffer()),
+			};
+			r = await fetch(files.latin1);
+			out.fetchLatin1 = {
+				type: r.headers.get('content-type'),
+				codes: codes(await r.text()),
+			};
+			out.writtenScript = await writeScript();
+			out.worker = await new Promise((resolve) => {
+				const worker = new Worker('sync-binary-worker.js');
+				worker.onmessage = (event) => resolve(event.data);
+				worker.onerror = (event) => resolve({ error: String(event.message) });
+			});
+		} catch (error) {
+			out.error = String(error);
+		}
+		out.done = true;
+	});
+</script>
