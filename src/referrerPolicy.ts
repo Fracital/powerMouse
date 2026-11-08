@@ -15,6 +15,9 @@ export function refererFor(
 	target: URL,
 	policy: string,
 ): string | null {
+	// a document whose URL is not http(s) (about:blank, data:, an inline
+	// document's stand-in) has no referrer to send: the spec's "strip url"
+	if (source.protocol !== 'http:' && source.protocol !== 'https:') return null;
 	const sameOrigin = source.origin === target.origin;
 	const downgrade =
 		source.protocol === 'https:' && target.protocol !== 'https:';

@@ -6,12 +6,7 @@ import { modifyHTML } from '../../rewriteHTML';
 import { modifyJS, rewriteImportMap } from '../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import StompURL from '../../StompURL';
-import {
-	HOOK_ERROR,
-	NO_DEFAULT_REFERRER,
-	OPEN_TAB,
-	WORKER_BASE,
-} from '../../transport/messages';
+import { HOOK_ERROR, OPEN_TAB, WORKER_BASE } from '../../transport/messages';
 import Client from '../Client';
 import cloneRawNode, { nativeAttributes, parseHTML } from './cloneNode';
 import { scriptKind, shouldRewriteScript } from './modules/DOMAttributes';
@@ -228,16 +223,21 @@ export default class DocumentClient extends Client {
 	 * run injected; routeHTML's javascript: wrapper calls this.
 	 */
 	javascriptDocument(markup: string, documentURL?: string): string {
-		const shell = modifyHTML(markup, this.url, this.config, true);
-		// the replaced document was an iframe's initial about:blank: the new
-		// one keeps that URL, which strips to no referrer
-		return documentURL === 'about:blank'
-			? shell.replace(
-					'<body>',
-					`<body><script>Object.defineProperty(globalThis, ${JSON.stringify(NO_DEFAULT_REFERRER)}, { value: true });</script>`,
-				)
-			: shell;
+		// served by the worker as an inline document, so it is controlled and
+		// its subresources reach the worker; the javascript: document itself is
+		// a raw bootstrap that replaces itself with it. The replaced document
+		// was an iframe's initial about:blank, whose URL strips to no referrer,
+		// or another (an srcdoc), whose requests refer like the page
+		const url = this.url.toString();
+		const route = this.inlineDocument(
+			markup,
+			url,
+			documentURL === 'about:blank' ? 'about:blank' : url,
+		);
+		if (!route) return modifyHTML(markup, this.url, this.config, true);
+		return `<!doctype html><script>location.replace(${JSON.stringify(route).replace(/</g, '\\u003c')})</script>`;
 	}
+
 	postToHost(message: object): boolean {
 		if (!this.topPostMessage) return false;
 		try {
@@ -248,6 +248,15 @@ export default class DocumentClient extends Client {
 		}
 	}
 	get url(): StompURL {
+		// a document the page made (a blob, a data: frame, an inline document
+		// the worker served): its shell named the URL it shows
+		const named = (this.global as Record<string, unknown>)[WORKER_BASE];
+		if (typeof named === 'string')
+			return new StompURL(
+				named,
+				this.codec,
+				`${this.baseURI.origin}${this.directory}`,
+			);
 		if (ROUTE_PROTOCOLS.includes(this.baseURI.protocol)) {
 			return parseRoutedURL(
 				this.baseURI.href,

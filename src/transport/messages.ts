@@ -98,11 +98,16 @@ export interface NavigateInfo {
  */
 export const WORKER_BASE = '$stomp$workerBase';
 /**
- * set by the shell of a document a javascript: URL made out of an iframe's
- * initial about:blank: its URL is about:blank, so its requests have no
- * referrer by default (see Client.routedFetch)
+ * page -> SW: markup to serve once as an inline document (src/server/inline.ts)
+ * at the controller address `directory`, under `token`
  */
-export const NO_DEFAULT_REFERRER = '$stomp$noDefaultReferrer';
+export const INLINE_DOCUMENT = '$stomp$inlineDocument';
+export interface InlineDocumentMessage {
+	directory: string;
+	token: string;
+	markup: string;
+	url: string;
+}
 
 export interface StorageChange {
 	store: string;

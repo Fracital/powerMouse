@@ -41,6 +41,7 @@ import {
 	filterResponseHeaders,
 	RouteTransform,
 } from './filterHeaders';
+import { takeInline } from './inline';
 import Router from './Router';
 import { applyHeaderRule, CompiledRule, compileRules } from './rules';
 
@@ -996,6 +997,55 @@ export function registerRewrites(
 				}
 			},
 		),
+	);
+
+	// an inline document (src/server/inline.ts): markup the page registered
+	// under a single-use token, rewritten here like any fetched page and
+	// served from this address, so the document is controlled and its
+	// subresources reach this worker. An unknown, used or foreign token gets
+	// the error page, never content.
+	router.routes.set(
+		/^\/inline:([A-Za-z0-9_-]{22})\//,
+		async (request, path) => {
+			const token = /^\/inline:([A-Za-z0-9_-]{22})\//.exec(path)![1];
+			const entry = await takeInline(token, rewriter.directory);
+			const headers: Record<string, string> = {
+				'content-type': 'text/html; charset=utf-8',
+				'cache-control': 'no-store',
+			};
+			if (!entry) {
+				const message =
+					'Stomp: this inline document is unknown, used or expired';
+				return (
+					(await hostErrorPage(rewriter, {
+						url: request.url,
+						status: 404,
+						error: message,
+						kind: 'routing',
+					})) ??
+					new Response(`<!doctype html><title>404</title><p>${message}</p>`, {
+						status: 404,
+						headers,
+					})
+				);
+			}
+			const url = new StompURL(
+				entry.url,
+				rewriter.codec,
+				`${location.origin}${rewriter.directory}`,
+			);
+			// a document of a local scheme (about:, blob:, data:) inherits its
+			// creator's referrer policy, which this navigation's request carries
+			if (request.referrerPolicy)
+				headers['referrer-policy'] = request.referrerPolicy;
+			return new Response(
+				modifyHTML(entry.markup, url, rewriter.config, true),
+				{
+					status: 200,
+					headers,
+				},
+			);
+		},
 	);
 
 	router.routes.set(

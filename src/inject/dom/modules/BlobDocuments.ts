@@ -1,5 +1,7 @@
-import { modifyHTML } from '../../../rewriteHTML';
+import { modifyHTML, setInlineBlobResolver } from '../../../rewriteHTML';
 import { modifyJS } from '../../../rewriteJS';
+import { proxyBlobURL } from '../../../routeURL';
+import { htmlBlobs, htmlBlobURLs } from '../../htmlBlobs';
 import Module from '../../Module';
 import ProxyModule, { catchRequiredArguments } from '../../modules/Proxy';
 import DocumentClient from '../Client';
@@ -28,6 +30,8 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const global = this.client.global;
 
+		// the markup the last wrap() made into a shell, kept with the blob
+		let wrappedSource: string | undefined;
 		const wrap = (parts: unknown, options: unknown): unknown => {
 			if (typeof options !== 'object' || options === null) return parts;
 			const type = String((options as BlobPropertyBag).type ?? '');
@@ -66,8 +70,10 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 				return parts;
 			}
 			const source = text.join('');
-			if (isHTML)
+			if (isHTML) {
+				wrappedSource = source;
 				return [modifyHTML(source, this.client.url, this.client.config, true)];
+			}
 			// a script that does not parse comes back as it was: then it may be
 			// a module (its `import` / `export` are the usual reason)
 			let rewritten = modifyJS(source, this.client.url, this.client.config);
@@ -80,6 +86,15 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 				);
 			return [rewritten];
 		};
+
+		// a navigation to one of these blobs (a frame's src, location, a link,
+		// window.open) is served by the worker as an inline document
+		setInlineBlobResolver((href) => {
+			const entry = htmlBlobURLs.get(proxyBlobURL(href));
+			return entry
+				? this.client.inlineDocument(entry.markup, entry.url, entry.url)
+				: null;
+		});
 
 		const globals = global as unknown as Record<string, unknown>;
 		for (const name of ['Blob', 'File'] as const) {
@@ -96,8 +111,12 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 						catchRequiredArguments(args.length, 2, name, 'constructor');
 					// Blob(parts, options); File(parts, name, options)
 					const optionsAt = name === 'File' ? 2 : 1;
+					wrappedSource = undefined;
 					if (args.length) args[0] = wrap(args[0], args[optionsAt]);
-					return Reflect.construct(target, args, newTarget);
+					const blob = Reflect.construct(target, args, newTarget) as Blob;
+					if (wrappedSource !== undefined) htmlBlobs.set(blob, wrappedSource);
+					wrappedSource = undefined;
+					return blob;
 				},
 				true,
 			);

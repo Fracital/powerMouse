@@ -1,5 +1,6 @@
 import { pageBlobURL, proxyBlobURL, setBlobOrigins } from '../../routeURL';
 import Client from '../Client';
+import { htmlBlobs, htmlBlobURLs } from '../htmlBlobs';
 import Module from '../Module';
 import ProxyModule from './Proxy';
 
@@ -25,13 +26,23 @@ export default class ObjectURLModule extends Module<Client> {
 		if (typeof URLCtor?.createObjectURL !== 'function') return;
 		URLCtor.createObjectURL = proxyModule.wrapFunction(
 			URLCtor.createObjectURL,
-			(target, that, args) =>
-				pageBlobURL(String(Reflect.apply(target, that, args))),
+			(target, that, args) => {
+				const url = String(Reflect.apply(target, that, args));
+				// an HTML blob the page made: a navigation to it becomes an inline
+				// document (htmlBlobs.ts), showing the page's URL as before
+				const markup = htmlBlobs.get(args[0] as Blob);
+				if (markup !== undefined)
+					htmlBlobURLs.set(url, { markup, url: this.client.url.toString() });
+				return pageBlobURL(url);
+			},
 		);
 		URLCtor.revokeObjectURL = proxyModule.wrapFunction(
 			URLCtor.revokeObjectURL,
 			(target, that, args) => {
-				if (args.length) args[0] = proxyBlobURL(String(args[0]));
+				if (args.length) {
+					args[0] = proxyBlobURL(String(args[0]));
+					htmlBlobURLs.delete(args[0] as string);
+				}
 				return Reflect.apply(target, that, args);
 			},
 		);

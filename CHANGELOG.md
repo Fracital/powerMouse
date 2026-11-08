@@ -291,6 +291,25 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- Documents a page makes itself load their subresources through the proxy. A
+  `javascript:` URL's string, a `text/html` blob shown in a frame and a
+  `data:` frame became documents no service worker controls (Chrome does not
+  hand them the creator's), so their images, scripts, stylesheets, fonts and
+  XHRs reached the proxy origin's own server and failed (nothing went to the
+  site). They are now inline documents: the page registers the markup with the
+  worker under a single-use random token (from a document of the same
+  controller, at most 4 MiB, expiring in seconds) and the frame navigates to
+  `<address>inline:<token>/...`; the worker rewrites the markup itself as for
+  any fetched page and serves it, so the document is controlled, with the
+  referrer policy its creator's navigation carries. A `javascript:` URL's
+  document is a raw bootstrap that replaces itself with it. An unknown, used
+  or expired token gets the error page. Readbacks are as before (a data: frame
+  is origin `"null"`, a blob document shows the page's URL), and a document
+  whose URL is not http(s) sends no Referer, as the spec's strip rule says. An
+  `<object>` or `<embed>` document cannot be made controlled (Chrome never
+  hands their loads, or their documents' own navigations, to a service
+  worker): its fetches go through the page, its markup subresources and XHRs
+  still miss the worker (inline-documents suite, both modes).
 - A `data:` frame runs proxied, as the opaque origin it is. Its document has
   an opaque origin the inject could not reach: its requests had nowhere to go
   and its messages never arrived. A `data:text/html` frame now loads from a

@@ -119,6 +119,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				)
 			)
 				return null;
+			// served by the worker as an inline document (controlled, its
+			// subresources reaching the worker); its requests refer as a data:
+			// document does, with nothing. Without a worker to register with,
+			// the shell is a blob as before (subresources then miss the worker)
+			const inline = this.client.inlineDocument(
+				data,
+				resource.url.href,
+				'data:,',
+			);
+			if (inline) return inline;
 			const blob = new NativeBlob(
 				[modifyHTML(data, resource, this.client.config, true)],
 				{ type: 'text/html' },

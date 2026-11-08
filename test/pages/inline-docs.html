@@ -1,0 +1,45 @@
+<!doctype html>
+<title>INLINE DOCS</title>
+<body>
+	<script>
+		// documents the page makes itself, four ways: each loads a stylesheet
+		// (with a font), an inline style with a url(), an image, a script and an
+		// XHR, and reports back; the suite reads the controller's request log
+		// to see which of those the worker served
+		window.__inline = { reports: {} };
+		addEventListener('message', (event) => {
+			const report = event.data && event.data.inlineDoc;
+			if (!report) return;
+			__inline.reports[report.tag] = { ...report, messageOrigin: event.origin };
+			if (Object.keys(__inline.reports).length === 4) __inline.done = true;
+		});
+		const base = `${location.origin}/pages/`;
+		const markup = (tag) =>
+			`<!doctype html><title>INLINE ${tag}</title>` +
+			`<link rel="stylesheet" href="${base}inline.css?${tag}">` +
+			`<style>body { background: url('${base}sprite.svg?${tag}-style') }</style>` +
+			`<img src="${base}sprite.svg?${tag}-img" alt="">` +
+			`<script src="${base}inline-script.js?${tag}"><\/script>` +
+			`<script>const x = new XMLHttpRequest(); x.open('GET', '${base}echo.json?${tag}-xhr'); ` +
+			`x.onloadend = () => parent.postMessage({ inlineDoc: { tag: '${tag}', script: window.__inlineScript === true, xhr: x.status, href: location.href, origin: self.origin } }, '*'); x.send();<\/script>`;
+		const frame = (src) => {
+			const f = document.createElement('iframe');
+			f.src = src;
+			document.body.append(f);
+			return f;
+		};
+		frame(
+			`javascript:'${markup('javascript').replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`,
+		);
+		frame(
+			URL.createObjectURL(new Blob([markup('blob')], { type: 'text/html' })),
+		);
+		frame(`data:text/html,${encodeURIComponent(markup('data'))}`);
+		const object = document.createElement('object');
+		object.data = 'inline-object-doc.html';
+		document.body.append(object);
+		setTimeout(() => {
+			__inline.done = true;
+		}, 8000);
+	</script>
+</body>

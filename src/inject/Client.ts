@@ -19,7 +19,7 @@ import StompURL from '../StompURL';
 import {
 	ABORT_REQUEST,
 	INIT_REMOTE_TRANSPORT,
-	NO_DEFAULT_REFERRER,
+	INLINE_DOCUMENT,
 	TRANSPORT_INIT,
 	WORKER_BASE,
 } from '../transport/messages';
@@ -36,6 +36,9 @@ type PostMessage = (
 	message: unknown,
 	transfer: Transferable[],
 ) => void;
+
+/** the largest markup an inline document takes (the worker refuses more) */
+const INLINE_DOCUMENT_MAX = 4 * 1024 * 1024;
 
 export default class Client {
 	modules: Map<ModuleCtor, Module<any>>;
@@ -89,6 +92,19 @@ export default class Client {
 	 * May not match the context URL
 	 */
 	get location(): StompURL {
+		// a document the page made, or an inline document the worker served:
+		// its shell named the URL it shows (with the live fragment)
+		const named = (this.global as Record<string, unknown>)[WORKER_BASE];
+		if (typeof named === 'string' && this.isDOM) {
+			const url = new URL(named);
+			const hash = this.global.location.hash;
+			if (hash) url.hash = hash;
+			return new StompURL(
+				url,
+				this.codec,
+				`${this.global.location.origin}${this.directory}`,
+			);
+		}
 		if (ROUTE_PROTOCOLS.includes(location.protocol)) {
 			return parseRoutedURL(
 				location.toString(),
@@ -191,39 +207,19 @@ export default class Client {
 			return false;
 		}
 	}
-	/**
-	 * Whether this document's requests have no referrer by default: a data:
-	 * document's URL, or the about:blank a javascript: URL's document keeps,
-	 * strips to none. Sent from an ancestor's realm, they would carry the
-	 * ancestor instead.
-	 */
-	#noDefaultReferrer(): boolean {
-		try {
-			return (
-				this.url.url.protocol === 'data:' ||
-				(this.global as unknown as Record<string, unknown>)[
-					NO_DEFAULT_REFERRER
-				] === true
-			);
-		} catch (error) {
-			return false;
-		}
-	}
 	/** @internal this bundle's native fetch, which runs in this client's realm */
 	nativeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
 		return fetch(input, init);
 	}
 	/**
-	 * The fetch a routed request goes through: this realm's own when a service
-	 * worker controls it, else the nearest controlled same-origin ancestor's.
-	 * A document a javascript: URL produced is not controlled, so its routed
-	 * requests would miss the worker and reach the proxy origin's server.
+	 * The nearest client whose document a service worker controls: this one,
+	 * or an ancestor up the chain of each client's native parent (the
+	 * page-facing getter hands a frame of another origin, or an opaque one,
+	 * the restricted stand-in). Null when there is none.
 	 */
-	routedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-		if (this.controlled || !this.isDOM) return fetch(input, init);
-		// up the chain of clients by each one's native parent (the page-facing
-		// getter hands a frame of another origin, or an opaque one, the
-		// restricted stand-in)
+	controlledClient(): Client | null {
+		if (this.controlled) return this;
+		if (!this.isDOM) return null;
 		const parentOf = (client: Client) =>
 			(client as unknown as { parent?: typeof globalThis }).parent;
 		let below: typeof globalThis = this.global;
@@ -235,18 +231,7 @@ export default class Client {
 					this.names.client
 				];
 				if (!next) break;
-				if (next.controlled)
-					// sent from the ancestor's realm, the request would carry the
-					// ancestor as its referrer: where this document's own default
-					// is none, it goes without one; an explicit one goes as asked
-					return next.nativeFetch(
-						input,
-						init instanceof Request ||
-							(init && 'referrer' in init) ||
-							!this.#noDefaultReferrer()
-							? init
-							: { ...init, referrer: '' },
-					);
+				if (next.controlled) return next;
 				below = next.global;
 				parent = parentOf(next);
 			} catch (error) {
@@ -254,7 +239,110 @@ export default class Client {
 				break;
 			}
 		}
-		return fetch(input, init);
+		return null;
+	}
+	/** the nearest client whose document is a routed page of its controller: this one or an ancestor */
+	routedClient(): Client | null {
+		const routed = (client: Client) => {
+			try {
+				const { origin, href } = client.global.location;
+				return (
+					client.controlled && href.startsWith(`${origin}${client.directory}`)
+				);
+			} catch (error) {
+				return false;
+			}
+		};
+		if (routed(this)) return this;
+		if (!this.isDOM) return null;
+		const parentOf = (client: Client) =>
+			(client as unknown as { parent?: typeof globalThis }).parent;
+		let below: typeof globalThis = this.global;
+		let parent = parentOf(this);
+		for (let depth = 0; depth < 16; depth++) {
+			try {
+				if (!parent || parent === below) break;
+				const next = (parent as unknown as Record<string, Client | undefined>)[
+					this.names.client
+				];
+				if (!next) break;
+				if (routed(next)) return next;
+				below = next.global;
+				parent = parentOf(next);
+			} catch (error) {
+				break;
+			}
+		}
+		return null;
+	}
+	/**
+	 * The fetch a routed request goes through: this realm's own when a service
+	 * worker controls it, else the nearest controlled ancestor's. An object's
+	 * or embed's document is not controlled (Chrome never hands their loads
+	 * to a service worker), so its routed requests would miss the worker and
+	 * reach the proxy origin's server.
+	 */
+	routedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+		const client = this.controlledClient();
+		return client && client !== this
+			? client.nativeFetch(input, init)
+			: fetch(input, init);
+	}
+	/** post to the service worker that controls this document; whether it went */
+	postToWorker(message: object): boolean {
+		const controller = this.#serviceWorkerContainer?.controller;
+		if (!controller || !this.#serviceWorkerPostMessage) return false;
+		try {
+			this.#serviceWorkerPostMessage.call(controller, message, []);
+			return true;
+		} catch (error) {
+			return false;
+		}
+	}
+	/**
+	 * The routed URL of an inline document (src/server/inline.ts) for markup
+	 * the page made itself: registered with the worker under a fresh token by
+	 * the nearest controlled document, and served once, rewritten by the
+	 * worker, at `<address>inline:<token>/<referrer URL>`. A frame navigated
+	 * there is controlled, so its subresources reach the worker. `url` is the
+	 * document's URL as its readbacks show it; `referrer` is what the worker
+	 * takes as its URL for the Referer of its requests (about:blank or data:
+	 * send none). Null when no controlled document can register it, or the
+	 * markup is too large.
+	 */
+	inlineDocument(markup: string, url: string, referrer: string): string | null {
+		if (markup.length > INLINE_DOCUMENT_MAX) return null;
+		// registered by a routed document of this controller (the worker takes
+		// registrations from those only: an about:blank or srcdoc document's
+		// URL says nothing about which controller it belongs to)
+		const client = this.routedClient();
+		if (!client) return null;
+		const bytes = new Uint8Array(16);
+		this.global.crypto.getRandomValues(bytes);
+		let token = '';
+		for (const byte of bytes) token += String.fromCharCode(byte);
+		token = btoa(token)
+			.replace(/\+/g, '-')
+			.replace(/\//g, '_')
+			.replace(/=+$/, '');
+		if (
+			!client.postToWorker({
+				[INLINE_DOCUMENT]: {
+					directory: client.directory,
+					token,
+					markup,
+					url,
+				},
+			})
+		)
+			return null;
+		const origin = client.global.location.origin;
+		const encoded = new StompURL(
+			referrer,
+			client.codec,
+			`${origin}${client.directory}`,
+		).encode();
+		return `${origin}${client.directory}inline:${token}/${encoded}`;
 	}
 
 	/**

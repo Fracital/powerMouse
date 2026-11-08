@@ -47,6 +47,18 @@ function javascriptExpression(body: string, rewritten: string): string | null {
 	return single(`(${expression})`) ? expression : null;
 }
 
+/**
+ * In a page: the inline-document route for a navigation to one of the page's
+ * own text/html blobs, or null (src/inject/htmlBlobs.ts). Unset in the
+ * service worker.
+ */
+let inlineBlob: ((blobURL: string) => string | null) | null = null;
+export function setInlineBlobResolver(
+	resolver: (blobURL: string) => string | null,
+) {
+	inlineBlob = resolver;
+}
+
 export function routeHTML(
 	resource: StompURL,
 	url: StompURL,
@@ -54,6 +66,11 @@ export function routeHTML(
 	form = false,
 	nested: string | false = false,
 ) {
+	if (resource.url.protocol === 'blob:' && inlineBlob) {
+		const inline = inlineBlob(resource.url.href);
+		if (inline) return inline;
+	}
+
 	if (resource.url.protocol === 'data:') {
 		const { mime, data, attributes } = parseDataURI(
 			// the data is everything after `data:` but the fragment: a `?` in it

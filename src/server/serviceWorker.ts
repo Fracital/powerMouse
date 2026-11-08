@@ -12,6 +12,8 @@ import {
 	ControllerInitMessage,
 	INIT_REMOTE_TRANSPORT,
 	InitRemoteTransportMessage,
+	INLINE_DOCUMENT,
+	InlineDocumentMessage,
 	postToPort,
 	RequestInfo,
 	SW_REVIVE,
@@ -22,6 +24,7 @@ import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
 import createServer, { addressCodec, StompServer } from './createServer';
 import { hostErrorPage } from './errorPage';
+import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
 import { abortRequest } from './rewrites';
 
 interface ControllerRef {
@@ -369,6 +372,29 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 			event.ports[1],
 			sender,
 		);
+	} else if (INLINE_DOCUMENT in data) {
+		// only from a document of that controller (its routed URL under the
+		// address), with a well-formed token and bounded markup
+		const message = data[INLINE_DOCUMENT] as InlineDocumentMessage;
+		const source =
+			event.source instanceof Client ? event.source.url : undefined;
+		if (
+			!message ||
+			typeof message.directory !== 'string' ||
+			!controllers.has(message.directory) ||
+			!source?.startsWith(`${location.origin}${message.directory}`) ||
+			typeof message.token !== 'string' ||
+			!INLINE_TOKEN.test(message.token) ||
+			typeof message.markup !== 'string' ||
+			message.markup.length > INLINE_MAX ||
+			typeof message.url !== 'string'
+		)
+			return;
+		putInline(message.token, {
+			directory: message.directory,
+			markup: message.markup,
+			url: message.url,
+		});
 	} else if (ABORT_REQUEST in data) {
 		abortRequest((data as Record<string, unknown>)[ABORT_REQUEST]);
 	} else if (CONTROLLER_CLOSE in data) {

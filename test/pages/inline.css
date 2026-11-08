@@ -1,0 +1,7 @@
+@font-face {
+	font-family: InlineFont;
+	src: url('font.woff2?inline-css-font') format('woff2');
+}
+html {
+	font-family: InlineFont;
+}

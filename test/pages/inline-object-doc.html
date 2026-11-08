@@ -1,0 +1,27 @@
+<!doctype html>
+<title>INLINE OBJECT</title>
+<link rel="stylesheet" href="inline.css?object" />
+<style>
+	body {
+		background: url('sprite.svg?object-style');
+	}
+</style>
+<img src="sprite.svg?object-img" alt="" />
+<script src="inline-script.js?object"></script>
+<script>
+	const x = new XMLHttpRequest();
+	x.open('GET', 'echo.json?object-xhr');
+	x.onloadend = () =>
+		parent.postMessage(
+			{
+				inlineDoc: {
+					tag: 'object',
+					script: window.__inlineScript === true,
+					xhr: x.status,
+					href: location.href,
+				},
+			},
+			'*',
+		);
+	x.send();
+</script>
