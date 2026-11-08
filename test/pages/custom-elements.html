@@ -123,6 +123,17 @@
 				...bound(template.content.querySelector('template').content),
 			];
 		});
+		// written while the page parses: the browser's parser makes the
+		// element once
+		run('document.write', () => {
+			document.write(
+				'<x-bound id="written" items="[1]"></x-bound><template id="written-template"><x-bound items="[[shown]]"></x-bound></template>',
+			);
+			return [
+				document.querySelectorAll('#written').length,
+				...bound(document.getElementById('written-template').content),
+			];
+		});
 		window.__ce.done = true;
 	</script>
 </body>
