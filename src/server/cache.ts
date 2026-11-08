@@ -65,12 +65,7 @@ export function mayKeep({
 	if (requestHeaders.has('authorization')) return false;
 	if (!CACHEABLE_STATUS.includes(status)) return false;
 	const control = parseCacheControl(responseHeaders.get('cache-control'));
-	if (
-		control.has('no-store') ||
-		control.has('private') ||
-		control.has('no-cache')
-	)
-		return false;
+	if (control.has('no-store') || control.has('private')) return false;
 	if ((responseHeaders.get('vary') || '').trim() === '*') return false;
 	// a page fetched with cookies is personalised unless the server says not
 	if ((requestHeaders.get('cookie') || '') !== '' && !control.has('public'))
@@ -78,10 +73,17 @@ export function mayKeep({
 	return true;
 }
 
-/** whether a response may be stored at all */
+/**
+ * Whether the HTTP cache stores a response: what mayKeep allows, with a
+ * size and an explicit freshness, and not `no-cache` (this cache does not
+ * keep what it would have to revalidate every time). The rewrite cache keys
+ * on the body it was just sent, so `no-cache` does not concern it.
+ */
 export function isCacheable(cacheability: Cacheability): boolean {
 	if (!mayKeep(cacheability)) return false;
 	const { responseHeaders } = cacheability;
+	if (parseCacheControl(responseHeaders.get('cache-control')).has('no-cache'))
+		return false;
 	const length = Number(responseHeaders.get('content-length'));
 	if (!Number.isFinite(length) || length < 0 || length > ENTRY_LIMIT)
 		return false;

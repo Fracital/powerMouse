@@ -298,13 +298,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   rewriting it, byte for byte the same; a six-script page of 600 KB scripts
   went from about 1000 ms to about 155 ms on the second load (natively about
   105 ms), and Chrome's extra fetches of a parser-inserted script are hits.
-  It keeps only what the HTTP cache's privacy rules allow (no `no-store`,
-  `private` or `no-cache`, no Authorization, no cookie without `public`),
-  at most 300 entries of 8 MB (the oldest go first), and is cleared with the
+  It keeps only what the HTTP cache's privacy rules allow (no `no-store` or
+  `private`, no Authorization, no cookie without `public`), at most 300
+  entries of 8 MB (the oldest go first), and is cleared with the
   HTTP cache (`clearCache()`, a new codec key) and whenever a new service
   worker activates. `cache: false` turns it off with the HTTP cache. The
   request log says which it was (`rewriteCache`: `hit`, `miss` or `skip`)
-  (rewrite-cache suite).
+  (rewrite-cache suite). A `no-cache` script is kept too: its body arrives
+  every time and is the key, so nothing goes stale.
 - A minified script is rewritten minified. The generator indented and broke
   every line, so a minified library came back up to twice its size (three.js
   614 KB to 986 KB, TinyMCE 457 KB to 876 KB): the worker spent the time

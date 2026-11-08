@@ -2,7 +2,7 @@
 // depends on, so the second load of the same script is answered from it,
 // byte for byte what the rewrite made, while a change of any one part (the
 // body, the URL, the script type, the config) is a miss. A response the
-// HTTP cache may not keep (no-store, private) is never kept, a host with the
+// HTTP cache may not keep for privacy (no-store, private) is never kept, no-cache is,, a host with the
 // cache off keeps nothing, and clearCache() empties it. The request log says
 // which it was (`rewriteCache`: hit, miss or skip). The suite constructs its
 // own controllers on the demo's service worker, as request-log does.
@@ -121,6 +121,18 @@ for (const cc of ['no-store', 'private, max-age=60']) {
 	ok(
 		`a script answered ${cc} is never kept`,
 		outcomes.every((o) => o === 'skip'),
+		outcomes.join(' '),
+	);
+}
+
+// no-cache is not a privacy rule: the body arrives every time and the key
+// is its digest, so the output is kept
+{
+	const query = 'name=d&cc=no-cache';
+	const outcomes = [await load(query), await load(query)];
+	ok(
+		'a script answered no-cache is kept (the key is the body it just sent)',
+		outcomes[0] === 'miss' && outcomes[1] === 'hit',
 		outcomes.join(' '),
 	);
 }
