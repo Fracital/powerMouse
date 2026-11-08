@@ -1,5 +1,5 @@
 import type DocumentClient from './Client';
-import cloneRawNode, { parseHTMLContainer } from './cloneNode';
+import cloneRawNode, { inertDocumentOf, parseHTMLContainer } from './cloneNode';
 import { completeLength } from './writeTokenizer';
 
 /**
@@ -229,9 +229,11 @@ export default class WriteStream {
 		const document = this.#client.global.document;
 		// the client's document (this hook also serves a child frame the
 		// parent injected); scripts in the markup run when the parser sees
-		// them, so they are rewritten here like the written page's
-		const div = document.createElement('div');
-		div.append(cloneRawNode(nodes, document));
+		// them, so they are rewritten here like the written page's (in an
+		// inert document, see inertDocumentOf)
+		const inert = inertDocumentOf(document);
+		const div = inert.createElement('div');
+		div.append(cloneRawNode(nodes, inert));
 		this.#client.rewriteInlineScripts(div);
 		return this.#client.innerHTMLOf(div);
 	}

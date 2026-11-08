@@ -18,7 +18,11 @@ import DocumentClient, {
 	runDocumentOpenListeners,
 	setGlobalParsingState,
 } from '../Client';
-import cloneRawNode, { parseHTMLFragment } from '../cloneNode';
+import cloneRawNode, {
+	inertDocumentOf,
+	parseHTMLFragment,
+	templateContentDocument,
+} from '../cloneNode';
 import WriteStream from '../WriteStream';
 import {
 	attributeName,
@@ -768,10 +772,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							usePrototype(that, nativeHTMLTemplateElement, (element) => {
 								for (const node of element.content.childNodes) node.remove();
 
+								// made in the content's own inert document, as the
+								// browser parses it: nothing in it is constructed
 								element.content.append(
 									cloneRawNode(
 										parseHTMLFragment(args[0], this.client.global.document),
-										this.client.global.document,
+										templateContentDocument(element),
 									),
 								);
 							});
@@ -825,13 +831,15 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// `<template shadowrootmode>` becomes a shadow root only in the real
 		// parser; a shadow root's innerHTML): our parser rewrites it first and
 		// hands over the serialisation, markers included. The fragment parser
-		// never runs a script, so none is rewritten here.
+		// never runs a script, so none is rewritten here. The copy is made in
+		// an inert document (see inertDocumentOf).
 		const rewriteMarkup = (markup: unknown): string => {
-			const div = this.client.global.document.createElement('div');
+			const inert = inertDocumentOf(this.client.global.document);
+			const div = inert.createElement('div');
 			div.append(
 				cloneRawNode(
 					parseHTMLFragment(String(markup), this.client.global.document),
-					this.client.global.document,
+					inert,
 				),
 			);
 			return this.client.innerHTMLOf(div);

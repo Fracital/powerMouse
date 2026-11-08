@@ -45,10 +45,51 @@ export const nativeAttributes = Reflect.getOwnPropertyDescriptor(
 	'attributes',
 )!.get!;
 
+const nativeOwnerDocument = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'ownerDocument',
+)!.get!;
+const nativeTemplateContent = Reflect.getOwnPropertyDescriptor(
+	HTMLTemplateElement.prototype,
+	'content',
+)!.get!;
+
+/**
+ * The document a template's content lives in: inert, with no window and so
+ * no custom element registry. What the parser puts in a template is made
+ * there, so a defined custom element in it is not constructed until the
+ * page clones it into its own document (Polymer and YouTube take the
+ * "[[...]]" bindings off a template's attributes first; an element made in
+ * the page's document is constructed with them on and reads them as its
+ * data).
+ */
+export function templateContentDocument(template: Element): Document {
+	return Reflect.apply(
+		nativeOwnerDocument,
+		Reflect.apply(nativeTemplateContent, template, []),
+		[],
+	) as Document;
+}
+
+/**
+ * An inert document of `document`'s kind (HTML for an HTML page, XML
+ * otherwise) to build a throwaway copy of markup in: made in the page's
+ * document, every defined custom element in the copy would be constructed,
+ * and then again for the markup the browser parses from it.
+ */
+export function inertDocumentOf(document: Document): Document {
+	// in the HTML namespace, so it is a template in an SVG document too
+	return templateContentDocument(
+		document.createElementNS('http://www.w3.org/1999/xhtml', 'template'),
+	);
+}
+
 const STACK_ITERATE = Symbol();
 const STACK_FINALIZE = Symbol();
 
-type stackIterateData = [child: Node, target: ParentNode];
+// the document the child is made in: the caller's, or a template's inert
+// content document below a template
+type stackIterateData = [child: Node, target: ParentNode, document: Document];
 type stackFinalizeData = [parent: ParentNode, node: Node];
 
 /**
@@ -73,7 +114,7 @@ export default function cloneRawNode(
 
 	for (let i = 0; i < max; i++) {
 		const child = childNodes[max - i - 1];
-		stack.push([STACK_ITERATE, child, tempTarget]);
+		stack.push([STACK_ITERATE, child, tempTarget, document]);
 	}
 
 	while (true) {
@@ -87,6 +128,7 @@ export default function cloneRawNode(
 			case STACK_ITERATE:
 				{
 					const d = data as stackIterateData;
+					const document = d[2];
 
 					// node types, not realm constructors: the parsed nodes and the
 					// client's document may each belong to another realm than this
@@ -172,11 +214,14 @@ export default function cloneRawNode(
 					const parent = isTemplate
 						? (target as HTMLTemplateElement).content
 						: target;
+					const childDocument = isTemplate
+						? templateContentDocument(target)
+						: document;
 					const max = children.length;
 					for (let i = 0; i < max; i++) {
 						// append in reverse order
 						const child = children[max - i - 1];
-						stack.push([STACK_ITERATE, child, parent]);
+						stack.push([STACK_ITERATE, child, parent, childDocument]);
 					}
 
 					stack.push([STACK_FINALIZE, d[1], target]);

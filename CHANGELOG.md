@@ -298,6 +298,21 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   wrapper's source. A function of another realm is now handed to that realm's
   own toString, whose copy knows its wrappers (function-strings suite, both
   modes, against the page loaded natively).
+- A defined custom element in a template's markup is no longer
+  constructed until the page stamps it. The hooks that take a markup string
+  (a template's `innerHTML`, markup holding a `<template>` through
+  `innerHTML`, `insertAdjacentHTML`, `outerHTML` or a written document) made
+  a template's children in the page's document, so each one was constructed
+  with its attributes still the page's "[[...]]" bindings, which Polymer and
+  YouTube take off before they clone the template. YouTube's watch-next
+  renderer read `shownItems` as the string `"[[watchNextShownItems]]"` and
+  threw `E.some is not a function` on every load. A template's children are
+  now made in its own inert content document, as the browser parses them.
+  The copies `setHTMLUnsafe`, a shadow root's `innerHTML` and
+  `document.write` build to rewrite their markup are made in an inert
+  document too: made in the page's, every custom element in them was
+  constructed twice (custom-elements suite, both modes, against the page
+  loaded natively).
 - A script's rewritten output is kept in a cache of its own (Cache API,
   `stomp-rewrite-cache`), keyed by a digest of the body with everything the
   output depends on: the URL, the script type, the config, the codec key and
