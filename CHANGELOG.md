@@ -291,6 +291,15 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A link's ping goes through the proxy. `<a ping>` and `<area ping>` were
+  not routed: a ping to another origin reached the site straight from the
+  browser, past the proxy, and its Ping-From and Ping-To headers named the
+  proxy's own address and routes; a relative ping was lost. Every URL in the
+  attribute is now routed (the page reads it back as written) and the worker
+  rewrites Ping-From and Ping-To to the real URLs. Found by the new bypass
+  suite, which fires every request API and loading element in a proxied page
+  and fails on any request that reaches the network without the proxy, in
+  both modes (bypass suite).
 - A URL property whose attribute is missing or empty reads back as on the
   real site, never as the proxy's address. A form without an action got a
   routed one the page could read (`getAttribute('action')`, `outerHTML`):

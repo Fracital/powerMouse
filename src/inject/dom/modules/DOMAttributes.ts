@@ -1254,6 +1254,54 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[this.client.global.HTMLEmbedElement, 'src', writtenURL('src')],
 		]);
 
+		// <a ping>, <area ping>: a list of URLs the browser posts to when the
+		// link is followed. Each is routed, or the ping would reach the site
+		// past the proxy (and name the proxy's URLs in Ping-From / Ping-To);
+		// one that does not parse is dropped, as the browser drops it
+		domHooksModule.useAttributes(
+			(element) => {
+				element.restoreAttributesOG('ping');
+				if (
+					element.hasAttribute('ping') &&
+					element.getAttribute('ping')!.trim() !== ''
+				) {
+					const written = element.getAttribute('ping')!;
+					element.setAttributeOG('ping', written);
+					const routed: string[] = [];
+					for (const token of written.split(/[\t\n\f\r ]+/)) {
+						if (!token) continue;
+						try {
+							routed.push(
+								routeXHR(
+									new StompURL(
+										new URL(token, this.client.url.toString()),
+										this.client.url,
+									),
+								),
+							);
+						} catch (error) {
+							// not a URL
+						}
+					}
+					element.setAttribute('ping', routed.join(' '));
+				}
+			},
+			[
+				['A', 'ping'],
+				['AREA', 'ping'],
+				[
+					this.client.global.HTMLAnchorElement,
+					'ping',
+					(element) => element.getAttributeOG('ping') ?? false,
+				],
+				[
+					this.client.global.HTMLAreaElement,
+					'ping',
+					(element) => element.getAttributeOG('ping') ?? false,
+				],
+			],
+		);
+
 		// <video poster>
 		domHooksModule.useAttributes(routeAttribute('poster', routeBinary), [
 			['VIDEO', 'poster'],

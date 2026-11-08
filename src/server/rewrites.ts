@@ -334,6 +334,24 @@ function genericForward(
 		// proxy URL; the fetch event carries none (nor the page's user
 		// activation)
 		for (const name of FETCH_METADATA) requestHeaders.delete(name);
+		// a ping names the page that sent it and the link's target, both
+		// routes here: the site is told the real URLs, or nothing
+		for (const name of ['ping-from', 'ping-to']) {
+			const value = requestHeaders.get(name);
+			if (value === null) continue;
+			try {
+				requestHeaders.set(
+					name,
+					parseRoutedURL(
+						value,
+						rewriter.codec,
+						`${oURL.origin}${rewriter.directory}`,
+					).url.toString(),
+				);
+			} catch (error) {
+				requestHeaders.delete(name);
+			}
+		}
 		const destination = serverRequest.destination || 'empty';
 		const navigation = serverRequest.mode === 'navigate';
 		const nestedRoute = nestedTopOf(oURL.pathname, rewriter.directory);
