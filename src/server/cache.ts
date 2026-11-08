@@ -49,8 +49,13 @@ export interface Cacheability {
 	responseHeaders: Headers;
 }
 
-/** whether a response may be stored at all */
-export function isCacheable({
+/**
+ * Whether anything made from a response may be kept on disk at all: the
+ * privacy rules of the HTTP cache (no credentials it was not told it may
+ * keep, no `no-store` or `private` answer). The rewrite cache keeps its
+ * output under the same rules.
+ */
+export function mayKeep({
 	method,
 	requestHeaders,
 	status,
@@ -70,6 +75,13 @@ export function isCacheable({
 	// a page fetched with cookies is personalised unless the server says not
 	if ((requestHeaders.get('cookie') || '') !== '' && !control.has('public'))
 		return false;
+	return true;
+}
+
+/** whether a response may be stored at all */
+export function isCacheable(cacheability: Cacheability): boolean {
+	if (!mayKeep(cacheability)) return false;
+	const { responseHeaders } = cacheability;
 	const length = Number(responseHeaders.get('content-length'));
 	if (!Number.isFinite(length) || length < 0 || length > ENTRY_LIMIT)
 		return false;

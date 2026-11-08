@@ -1,0 +1,14 @@
+<!doctype html>
+<title>REWRITE CACHE</title>
+<!-- a parser-inserted script the preload scanner fetches too -->
+<script src="/rewrite-js?name=parsed"></script>
+<script>
+	// ?s=<query for /rewrite-js>&module: one more script, inserted by the page
+	const query = new URLSearchParams(location.search);
+	if (query.get('s')) {
+		const script = document.createElement('script');
+		if (query.has('module')) script.type = 'module';
+		script.src = `/rewrite-js?${query.get('s')}`;
+		document.head.append(script);
+	}
+</script>

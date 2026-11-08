@@ -129,6 +129,8 @@ const PAGES = {
 // how often each /pages/ file was requested, and how many of those were
 // answered 304 (cache suite); /hits returns the counters
 const hits = new Map();
+// the body version of each /rewrite-js script, by name
+const scriptVersions = new Map();
 // every path served, in order (/requests returns it; the assets suite checks
 // that no served URL carries the package name)
 const served = [];
@@ -210,6 +212,23 @@ export function startFixture(port = 8084) {
 				Math.min(Number(query.get('ms')) || 0, 3000),
 			);
 			return;
+		}
+		// a script whose body is the same until /rewrite-js/bump?name=<name>
+		// changes it, whatever else the URL carries; `cc=` is its Cache-Control
+		// (rewrite-cache suite)
+		if (path === '/rewrite-js/bump') {
+			const name = new URL(req.url, 'http://x').searchParams.get('name');
+			scriptVersions.set(name, (scriptVersions.get(name) ?? 0) + 1);
+			return res.end('bumped');
+		}
+		if (path === '/rewrite-js') {
+			const query = new URL(req.url, 'http://x').searchParams;
+			const version = scriptVersions.get(query.get('name')) ?? 0;
+			res.setHeader('content-type', 'text/javascript');
+			if (query.get('cc')) res.setHeader('cache-control', query.get('cc'));
+			return res.end(
+				`(window.__rc ??= []).push([${JSON.stringify(query.get('name'))}, ${version}, location.href.length > 0, typeof window.top]);\n`,
+			);
 		}
 		// a response that takes five seconds (abort measurement)
 		if (path === '/slow') {

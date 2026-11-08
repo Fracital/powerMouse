@@ -26,6 +26,7 @@ import { BUILD } from '../version';
 import createServer, { addressCodec, StompServer } from './createServer';
 import { hostErrorPage } from './errorPage';
 import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
+import { RewriteCache } from './rewriteCache';
 import { abortRequest } from './rewrites';
 
 interface ControllerRef {
@@ -546,8 +547,13 @@ self.addEventListener('install', () => {
 	self.skipWaiting();
 });
 
+// a new worker is new bytes, and may be a new rewriter: what the last one
+// made is dropped (the key names the build, but a build made from an
+// uncommitted tree has the same name as its commit's)
 self.addEventListener('activate', (event: ExtendableEvent) => {
-	event.waitUntil(self.clients.claim());
+	event.waitUntil(
+		Promise.all([self.clients.claim(), new RewriteCache().clear()]),
+	);
 });
 
 // This script only runs again when the worker was terminated and restarted.

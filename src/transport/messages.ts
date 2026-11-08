@@ -223,6 +223,8 @@ export interface RequestInfo {
 	ms: number;
 	/** answered from the HTTP cache without a request */
 	cached: boolean;
+	/** a script's rewritten output: from the rewrite cache, made now and kept, or made now and not kept (the response may not be kept) */
+	rewriteCache?: 'hit' | 'miss' | 'skip';
 	/** Content-Length of the response, when known */
 	bytes: number | null;
 	error?: string;

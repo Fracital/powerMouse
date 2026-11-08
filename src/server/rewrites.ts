@@ -31,7 +31,7 @@ import type {
 } from '../transport/messages';
 import { ABORT_HEADER } from '../transport/messages';
 import { BUILD } from '../version';
-import { HttpCache, isCacheable } from './cache';
+import { HttpCache, isCacheable, mayKeep } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
 import Cookies from './Cookies';
 import { DOCUMENT_DESTINATIONS, hostErrorPage } from './errorPage';
@@ -42,6 +42,7 @@ import {
 	RouteTransform,
 } from './filterHeaders';
 import { takeInline } from './inline';
+import type { RewriteCache, RewriteCacheOutcome } from './rewriteCache';
 import Router from './Router';
 import { applyHeaderRule, CompiledRule, compileRules } from './rules';
 
@@ -182,6 +183,10 @@ type BodyTransform = (
 	response: Response,
 	responseHeaders: Headers,
 	referrer: ReferrerInfo,
+	/** the request as it went upstream (its method, its final headers) */
+	request: { method: string; headers: Headers },
+	/** what the transform tells the request log */
+	note: { rewriteCache?: RewriteCacheOutcome },
 ) => Promise<BodyInit | false>;
 
 interface Rewriter {
@@ -196,6 +201,8 @@ interface Rewriter {
 	cookies: Cookies;
 	/** the HTTP cache, unless the host turned it off */
 	cache?: HttpCache;
+	/** the rewriter's output for scripts, unless the host turned the cache off */
+	rewrites?: RewriteCache;
 	/** the host's request log, when it asked for one */
 	log?: (info: RequestInfo) => void;
 	/** the host's request rules, compiled */
@@ -747,9 +754,13 @@ function genericForward(
 			return Response.error();
 		}
 
+		// the report is made now (its time is to the headers) and sent once the
+		// body's transform has said how it went
+		const note: { rewriteCache?: RewriteCacheOutcome } = {};
+		let report: RequestInfo | null = null;
 		if (rewriter.log) {
 			const length = Number(response.headers.get('content-length'));
-			rewriter.log({
+			report = {
 				url: reportURL(url),
 				method: serverRequest.method,
 				destination: serverRequest.destination || 'fetch',
@@ -759,8 +770,16 @@ function genericForward(
 				bytes: Number.isFinite(length) ? length : null,
 				client: context?.clientId,
 				...(rule ? { rule: rule.index } : {}),
-			});
+			};
 		}
+		const sendReport = () => {
+			if (report)
+				rewriter.log!({
+					...report,
+					...(note.rewriteCache ? { rewriteCache: note.rewriteCache } : {}),
+				});
+			report = null;
+		};
 
 		const responseHeaders = filterResponseHeaders(
 			response.headers,
@@ -820,9 +839,22 @@ function genericForward(
 		if (statusEmpty.includes(+response.status)) {
 			body = undefined;
 		} else {
-			const transformed = transformBody
-				? await transformBody(url, response, responseHeaders, referrerInfo)
-				: false;
+			let transformed: BodyInit | false;
+			try {
+				transformed = transformBody
+					? await transformBody(
+							url,
+							response,
+							responseHeaders,
+							referrerInfo,
+							{ method: serverRequest.method, headers: requestHeaders },
+							note,
+						)
+					: false;
+			} catch (error) {
+				sendReport();
+				throw error;
+			}
 
 			body = transformed !== false ? transformed : response.body!;
 
@@ -839,6 +871,7 @@ function genericForward(
 			}
 		}
 
+		sendReport();
 		return new Response(body, {
 			status: response.status,
 			statusText: response.statusText,
@@ -939,6 +972,7 @@ export function registerRewrites(
 	transport: ProxyTransport,
 	cache?: HttpCache,
 	log?: (info: RequestInfo) => void,
+	rewrites?: RewriteCache,
 ) {
 	const rewriter: Rewriter = {
 		get config() {
@@ -963,6 +997,7 @@ export function registerRewrites(
 		},
 		cookies,
 		cache,
+		rewrites,
 		log,
 		rules: [],
 		codec: init.codec,
@@ -989,12 +1024,48 @@ export function registerRewrites(
 		return routeHTML(surl, surl, rewriter.config);
 	};
 
+	// a script's rewritten output comes from the rewrite cache when the same
+	// body was rewritten before for the same URL, type and config; it is kept
+	// only when the response may be kept at all (the HTTP cache's rules)
 	const scriptTypeFactory = (type: ScriptType) =>
 		genericForward(
 			rewriter,
-			async (url, response) =>
-				response.ok &&
-				modifyJS(await response.text(), url, rewriter.config, type),
+			async (url, response, _headers, _referrer, request, note) => {
+				if (!response.ok) return false;
+				const text = await response.text();
+				const rewrites = rewriter.rewrites;
+				if (
+					!rewrites ||
+					!mayKeep({
+						method: request.method,
+						requestHeaders: request.headers,
+						status: response.status,
+						responseHeaders: response.headers,
+					})
+				) {
+					note.rewriteCache = 'skip';
+					return modifyJS(text, url, rewriter.config, type);
+				}
+				const key = await rewrites.key(
+					[
+						BUILD,
+						url.toString(),
+						type,
+						JSON.stringify(rewriter.config),
+						url.codec.key,
+					],
+					text,
+				);
+				const kept = await rewrites.match(key);
+				if (kept !== null) {
+					note.rewriteCache = 'hit';
+					return kept;
+				}
+				const output = modifyJS(text, url, rewriter.config, type);
+				await rewrites.put(key, output);
+				note.rewriteCache = 'miss';
+				return output;
+			},
 			(resource, url) => routeJS(resource, url, rewriter.config, type),
 			undefined,
 			(headers, filteredHeaders) => {

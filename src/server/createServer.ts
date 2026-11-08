@@ -13,6 +13,7 @@ import type { RequestInfo, RequestRule } from '../transport/messages';
 import { HttpCache } from './cache';
 import Cookies, { openCookies, registerCookies } from './Cookies';
 import { hostErrorPage } from './errorPage';
+import { RewriteCache } from './rewriteCache';
 import { registerRewrites } from './rewrites';
 import Router, { json } from './Router';
 import { openStorage, registerStorage, StorageHosts } from './Storage';
@@ -22,7 +23,7 @@ export interface StompServer {
 	router: Router;
 	/** turn a URL into the proxied URL a frame should navigate to */
 	route(url: string): string;
-	/** drop every entry of the HTTP cache (a no-op when it is off) */
+	/** drop every entry of the HTTP cache and the rewrite cache (a no-op when they are off) */
 	clearCache(): Promise<void>;
 	/** the cookie jar, for the host's cookies API */
 	cookies: Cookies;
@@ -41,6 +42,8 @@ export interface StompServer {
 interface SharedStores {
 	cookies: Cookies;
 	cache: HttpCache;
+	/** the rewriter's output for scripts, kept with the HTTP cache */
+	rewrites: RewriteCache;
 	storage: StorageHosts;
 }
 
@@ -52,6 +55,7 @@ function sharedStores(scope: string): Promise<SharedStores> {
 		stores = (async () => ({
 			cookies: await openCookies(),
 			cache: new HttpCache(),
+			rewrites: new RewriteCache(),
 			storage: await openStorage(),
 		}))();
 		// a failure to open is not kept: the next server tries again
@@ -170,7 +174,10 @@ export default async function createServer(
 	await tx.done;
 
 	// routed URLs change with the key; nothing cached is reachable anymore
-	if (newKey) await new HttpCache().clear();
+	if (newKey) {
+		await new HttpCache().clear();
+		await new RewriteCache().clear();
+	}
 
 	const init = parseConfig(config, codecKey);
 	const stores = await sharedStores(init.scope);
@@ -198,6 +205,7 @@ export default async function createServer(
 
 	const cookies = registerCookies(router, stores.cookies);
 	const cache = config.cache === false ? undefined : stores.cache;
+	const rewrites = config.cache === false ? undefined : stores.rewrites;
 	// a page asks who it is (its service worker client id) and reports it to
 	// the host, so the host can attribute requests to frames
 	router.routes.set(/^\/whoami$/, (request, url, context) =>
@@ -211,6 +219,7 @@ export default async function createServer(
 		transport,
 		cache,
 		log,
+		rewrites,
 	);
 	registerStorage(router, stores.storage);
 	registerXhr(router);
@@ -221,6 +230,7 @@ export default async function createServer(
 		cookies,
 		clearCache: async () => {
 			await cache?.clear();
+			await rewrites?.clear();
 		},
 		setRules,
 		realURL,
