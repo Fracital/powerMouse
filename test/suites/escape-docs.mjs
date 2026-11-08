@@ -83,12 +83,22 @@ const written = await page
 		return img && Element.prototype.getAttribute.call(img, 'src');
 	})
 	.catch((error) => `error ${error.message.slice(0, 60)}`);
+// no service worker controls the popup (Chrome hands about:blank none), so
+// the load is a blob: copy the inject fetched through the proxy: it must hold
+// the real file
+const copied =
+	typeof written === 'string' && written.startsWith('blob:')
+		? await page
+				.evaluate((url) => fetch(url).then((r) => r.text()), written)
+				.catch((error) => `error ${error.message.slice(0, 60)}`)
+		: null;
+const real = await fetch(`${FIXTURE}pages/hdr.json`).then((r) => r.text());
 ok(
-	'what the page writes into an about:blank popup is routed',
+	'what the page writes into an about:blank popup goes through the proxy',
 	opened === 'opened' &&
 		popup !== null &&
 		typeof written === 'string' &&
-		/\/stomp\/[\w-]+\/binary\//.test(written),
-	JSON.stringify({ opened, popup: popup?.url(), written }),
+		(/\/stomp\/[\w-]+\/binary\//.test(written) || copied === real),
+	JSON.stringify({ opened, popup: popup?.url(), written, copied }),
 );
 await done(browser);
