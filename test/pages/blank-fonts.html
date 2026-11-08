@@ -1,0 +1,83 @@
+<!doctype html>
+<title>BLANK FONTS</title>
+<script>
+	// FontFace sources in documents the page builds, which no service worker
+	// controls (a new frame's about:blank, one it opened, a popup): a face
+	// the page loads itself (FontFace.load) and one the document's font set
+	// loads (document.fonts.load), each made with the document's own FontFace
+	// and added to its document.fonts. blank-font.ttf draws "x" three ems
+	// wide, so a text that uses it measures what loaded. Every URL is marked
+	// ?font=<document>-<kind>.
+	const report = {};
+	window.__blankFonts = report;
+	const at = (name, kind) =>
+		new URL(`blank-font.ttf?font=${name}-${kind}`, location.href).href;
+	// a load that never settles is reported, not waited for
+	const within = (promise) =>
+		Promise.race([
+			promise,
+			new Promise((resolve) => setTimeout(() => resolve('timeout'), 4000)),
+		]);
+	const load = async (name, doc, win) => {
+		const seen = (report[name] = {});
+		const face = new win.FontFace(`face-${name}`, `url("${at(name, 'face')}")`);
+		const set = new win.FontFace(`set-${name}`, `url(${at(name, 'set')})`, {
+			style: 'normal',
+		});
+		doc.fonts.add(face);
+		doc.fonts.add(set);
+		const before = { face: face.status, set: set.status };
+		seen.face = await within(face.load()).then(
+			(loaded) => (loaded === face ? 'load' : String(loaded)),
+			(error) => `error ${error.name}`,
+		);
+		seen.set = await within(doc.fonts.load(`20px set-${name}`)).then(
+			(faces) => (faces.length === 1 && faces[0] === set ? 'load' : faces),
+			(error) => `error ${error.name}`,
+		);
+		const span = doc.createElement('span');
+		span.textContent = 'xxx';
+		span.style.font = `20px face-${name}, monospace`;
+		doc.body.append(span);
+		seen.readback = {
+			before,
+			status: [face.status, set.status],
+			family: face.family,
+			own: face instanceof win.FontFace,
+			proto: Object.getPrototypeOf(face) === win.FontFace.prototype,
+			has: doc.fonts.has(face),
+			size: doc.fonts.size,
+			check: doc.fonts.check(`20px set-${name}`),
+			loaded: (await within(face.loaded)) === face,
+			// the promises are the document's own
+			promises: [
+				face.loaded instanceof win.Promise,
+				face.load() instanceof win.Promise,
+				face.load() === face.loaded,
+				face.loaded === face.loaded,
+			],
+			width: span.getBoundingClientRect().width,
+		};
+	};
+	addEventListener('load', async () => {
+		const frame = (build) => {
+			const iframe = document.createElement('iframe');
+			document.body.append(iframe);
+			return build(iframe.contentDocument, iframe.contentWindow);
+		};
+		const popup = window.open();
+		await Promise.allSettled([
+			frame((doc, win) => load('initial', doc, win)),
+			frame((doc, win) => {
+				doc.open();
+				doc.close();
+				return load('opened', doc, win);
+			}),
+			popup && load('popup', popup.document, popup),
+		]);
+		setTimeout(() => {
+			popup?.close();
+			report.done = true;
+		}, 500);
+	});
+</script>

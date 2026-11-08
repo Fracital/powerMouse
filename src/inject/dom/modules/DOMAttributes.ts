@@ -75,6 +75,8 @@ export function scriptType(element: Element): ScriptType {
 
 export default class DOMAttributesModule extends Module<DocumentClient> {
 	formHook?: (element: CustomElement) => void;
+	/** @internal whether this document is one no service worker controls, whose routed loads miss the worker */
+	uncontrolled: () => boolean = () => false;
 	/** @internal copy a <style>'s routed loads in a document no service worker controls (DOMContentHooks) */
 	copySheet?: (style: HTMLStyleElement, mark: (rule: CSSRule) => void) => void;
 	/** @internal the page's view of a CSSStyleDeclaration: reads unrouted, writes routed (CSSReadback) */
@@ -120,6 +122,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			!this.client.controlled &&
 			(this.client.opened ||
 				this.client.global.location.href === 'about:blank');
+		this.uncontrolled = uncontrolled;
 		// the proxy origin from the base URL: an about:blank document's own
 		// origin reads "null"
 		const isRoute = (value: string) => {

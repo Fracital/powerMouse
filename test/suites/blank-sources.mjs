@@ -1,6 +1,7 @@
 // Loads named outside an element's src or href in documents a page builds
 // itself, which no service worker controls (a new frame's about:blank, one
-// the page opened, a popup): SVG references (blank-svg.html). Each goes
+// the page opened, a popup): SVG references (blank-svg.html) and FontFace
+// sources (blank-fonts.html). Each goes
 // through the proxy, not to the proxy origin's own server: it fires and
 // reads back as on the real site and reaches the worker, and nothing the
 // page names loads past the proxy. Compared with the same page loaded
@@ -18,7 +19,6 @@ import {
 	submitLanding,
 } from '../lib.mjs';
 
-const DOCUMENTS = ['initial', 'opened', 'written', 'popup'];
 const host = new URL(FIXTURE).host;
 
 /** the report `key` holds once it is done, from whichever frame has it */
@@ -52,6 +52,7 @@ const CASES = [
 		page: 'blank-svg.html',
 		key: '__blankSvg',
 		marker: 'svg',
+		documents: ['initial', 'opened', 'written', 'popup'],
 		// what fires, and what reaches the worker
 		events: ['image', 'xlink', 'use', 'script'],
 		loads: ['image', 'xlink', 'use', 'feimage', 'script'],
@@ -113,6 +114,16 @@ const CASES = [
 			);
 		},
 	},
+	{
+		name: 'FontFace sources',
+		page: 'blank-fonts.html',
+		key: '__blankFonts',
+		marker: 'font',
+		documents: ['initial', 'opened', 'popup'],
+		// FontFace.load and document.fonts.load
+		events: ['face', 'set'],
+		loads: ['face', 'set'],
+	},
 ];
 
 const browser = await launch();
@@ -124,7 +135,7 @@ for (const test of CASES) {
 	await page.close();
 	ok(
 		`natively, the ${test.name} load in every document`,
-		DOCUMENTS.every((name) =>
+		test.documents.every((name) =>
 			test.events.every(
 				// a written script runs while the page writes: no event to see
 				(kind) =>
@@ -162,7 +173,7 @@ for (const [mode, base] of [
 			raw.length === 0,
 			JSON.stringify([...new Set(raw)]),
 		);
-		for (const name of DOCUMENTS) {
+		for (const name of test.documents) {
 			const events = (value) =>
 				Object.fromEntries(test.events.map((kind) => [kind, value?.[kind]]));
 			ok(

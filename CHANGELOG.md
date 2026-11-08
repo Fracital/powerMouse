@@ -314,6 +314,18 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   666 KB), its stack positions on one line as natively; code written to be
   read keeps one statement per line, so an error's line number stays near
   the page's own (rewriter-unit suite).
+- A FontFace a page makes in a document no service worker controls loads
+  its source through the proxy. `new FontFace(name, 'url(...)')` there
+  fetched the font from the proxy origin's own server, so `load()` and
+  `document.fonts.load` failed with a NetworkError. A face's source cannot
+  change once it is made and the face fetches from the realm that made it,
+  so a copy made later could never reach it: a face whose source names
+  routes is made instead with the FontFace of the nearest controlled realm
+  (the one routed fetches go through), keeping the document's own
+  prototype, and its `loaded` and `load()` promises are the document's own.
+  A face from an ArrayBuffer, and any face in a controlled document, is
+  made as before (blank-sources suite, both modes, against the page loaded
+  natively, with the bypass recorder).
 - SVG references in a document no service worker controls load through the
   proxy: an `<image>` by href or xlink:href, a `<use>` of an external
   sprite (its fragment kept on the copy), an `<feImage>` and an SVG
