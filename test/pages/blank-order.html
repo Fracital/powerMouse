@@ -13,10 +13,11 @@
 		const doc = iframe.contentDocument;
 		win.__order = [];
 		const a = new URL('order-a.js?written', location.href).href;
+		const chain = new URL('order-chain.js?written', location.href).href;
 		doc.open();
 		const px = (tag) => new URL(`blank-pixel.svg?${tag}`, location.href).href;
 		doc.write(
-			`<!doctype html><body><img id="w" src="${px('written-img')}" onload="__order.push('img-w')" onerror="__order.push('img-w-error')"><script src="${a}"><\/script><script>__order.push('inline')<\/script></body>`,
+			`<!doctype html><body><img id="w" src="${px('written-img')}" onload="__order.push('img-w')" onerror="__order.push('img-w-error')"><script src="${a}"><\/script><script src="${chain}"><\/script><script>__order.push('inline')<\/script></body>`,
 		);
 		doc.close();
 		const holder = doc.createElement('div');
@@ -39,6 +40,8 @@
 		setTimeout(() => {
 			const [written, dynamic] = win.__order.join(' ').split(' | ');
 			report.written = written;
+			const script = doc.querySelector('script[src]');
+			report.writtenSrc = script && [script.getAttribute('src'), script.src];
 			report.dynamic = dynamic;
 			report.done = true;
 		}, 3000);

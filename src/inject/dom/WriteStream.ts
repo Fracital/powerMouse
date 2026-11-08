@@ -100,6 +100,17 @@ export default class WriteStream {
 		return stack;
 	}
 	#rewrite(markup: string, state: WriteState): string {
+		// a script copied while the page's markup is rewritten is copied at
+		// once (a document no worker controls; see placeLoad)
+		const writing = this.#client.writing;
+		this.#client.writing = true;
+		try {
+			return this.#rewriteNow(markup, state);
+		} finally {
+			this.#client.writing = writing;
+		}
+	}
+	#rewriteNow(markup: string, state: WriteState): string {
 		const result = this.#parse(markup, state.stack);
 		if (result) {
 			state.stack = result.stack;

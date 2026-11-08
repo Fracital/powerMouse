@@ -86,6 +86,9 @@ export default class SyncModule extends Module<DocumentClient> {
 		url: urlLike,
 		init: Omit<RequestInit, 'signal'> = {},
 		loopback = false,
+		// a shorter limit than the bridge's own, for a caller that has a
+		// fallback
+		limit?: number,
 	): SyncResponse {
 		const processInit: SerializableRequestInit = {};
 
@@ -148,7 +151,7 @@ export default class SyncModule extends Module<DocumentClient> {
 				'QuotaExceededError',
 			);
 
-		const timeout = loopback ? LOOPBACK_TIMEOUT : TIMEOUT;
+		const timeout = limit ?? (loopback ? LOOPBACK_TIMEOUT : TIMEOUT);
 		const deadline = Date.now() + timeout;
 
 		for (let cycles = 0; Date.now() < deadline; cycles++) {

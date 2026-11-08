@@ -291,6 +291,19 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A script the page writes (document.write) into a document no service
+  worker controls runs in place, in the order it does on the real site: its
+  copy is made at once through the synchronous bridge from the nearest
+  controlled document, so it blocks the parser as natively, and one that
+  writes the next script (an ad chain) runs that one before what follows.
+  This holds with the transport in the transport worker (a
+  TransportDescriptor, the default), where the bridge completes; the
+  controller says so in the config (`workerTransport`). With the transport
+  in the page (an instance, or `host: 'page'`) the bridge would spin to its
+  limit, so there a written script still does not run: the known limit. The
+  bridge is given 5 s at most, and a failure falls back to the asynchronous
+  copy (blank-loads suite, both modes and both transport hosts, against the
+  page loaded natively).
 - In a document no service worker controls, async=false scripts run in the
   order the page added them. Each gets its source once its copy is in, and
   the browser runs such scripts in the order they get one, so a slow script

@@ -21,6 +21,7 @@ import { scopePrefix } from '../../modules/Unroute';
 import { blobLoads } from '../blobLoads';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
+import SyncModule from './Sync';
 
 /** the JavaScript MIME type essences (HTML "JavaScript MIME type") */
 const JS_MIME_TYPES = new Set([
@@ -153,6 +154,46 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			blobLoads.set(url, page);
 			return url;
 		};
+		/**
+		 * A script's copy at once, through the nearest controlled document's
+		 * synchronous bridge: a script the page writes runs in place, blocking
+		 * the parser as it does natively (its copy cannot wait). Only when the
+		 * transport runs in the transport worker, where the bridge completes;
+		 * bounded well under the bridge's own limit. Null when it cannot.
+		 */
+		const syncCopyOf = (
+			routed: string,
+			page: string,
+			state: Copy,
+		): string | null => {
+			if (!this.client.workerTransport) return null;
+			const controlled =
+				this.client.controlledClient() as DocumentClient | null;
+			const sync = controlled?.getModule(SyncModule);
+			if (!sync) return null;
+			try {
+				const response = sync.fetch(
+					new URL(routed, scopePrefix(this.client)).href,
+					{ credentials: 'include' },
+					false,
+					5000,
+				);
+				if (!response.ok) return null;
+				const url = proxyBlobURL(
+					Reflect.apply(createObjectURL, this.client.global.URL, [
+						new NativeBlob([response.rawArrayBuffer], {
+							type: response.headers.get('content-type') ?? 'text/javascript',
+						}),
+					]) as string,
+				);
+				state.made.push(url);
+				blobLoads.set(url, page);
+				return url;
+			} catch (error) {
+				// a stuck or refused bridge: the copy is made the usual way
+				return null;
+			}
+		};
 		/** a value's copies are let go: no element shows them any more */
 		const release = (state: Copy | undefined) => {
 			if (!state) return;
@@ -221,6 +262,21 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const states = copies.get(element)!;
 			const state: Copy = { routed, made: [] };
 			states.set(attribute, state);
+			// a script the page writes: its copy now, or it would never run
+			if (
+				attribute === 'src' &&
+				element.localName === 'script' &&
+				this.client.writing &&
+				targets.length === 1
+			) {
+				const url = syncCopyOf(routed, targets[0].page, state);
+				if (url) {
+					state.url = url;
+					element.setAttribute(attribute, url);
+					release(current);
+					return;
+				}
+			}
 			// nothing loads until the copy is in
 			element.removeAttribute(attribute);
 			const apply = (value: string) => {

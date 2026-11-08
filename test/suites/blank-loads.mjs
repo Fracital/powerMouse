@@ -144,8 +144,20 @@ for (const [mode, base] of [
 }
 // async=false scripts the page adds to a document it built run in the order
 // it added them, a slow one before a fast one, as natively
-// (blank-order.html). Measured with the demo and with a host page per
-// transport host.
+// (blank-order.html). Scripts the page writes run in place, in the native
+// order, a script that writes the next one included (an ad chain), and read
+// back as written: their copy is made at once through the synchronous
+// bridge, which completes with the transport in the transport worker. With
+// the transport in the page the bridge would spin to its limit, so a written
+// script does not run there (the known limit). Measured with the demo (its
+// transport in the worker) and with a host page per transport host.
+// The image events fall where the network puts them: only the scripts' order
+// is compared.
+const scripts = (order) =>
+	order?.written
+		?.split(' ')
+		.filter((mark) => !mark.startsWith('img'))
+		.join(' ');
 const orderOf = async (page) => {
 	for (let i = 0; i < 40; i++) {
 		await sleep(250);
@@ -163,8 +175,9 @@ await orderPage.goto(`${FIXTURE}pages/blank-order.html`);
 const nativeOrder = await orderOf(orderPage);
 await orderPage.close();
 ok(
-	'natively, async=false scripts run in the order they were added',
-	nativeOrder?.dynamic === 'slow fast',
+	'natively, async=false and written scripts run in order',
+	nativeOrder?.dynamic === 'slow fast' &&
+		scripts(nativeOrder) === 'a chain b inline',
 	JSON.stringify(nativeOrder),
 );
 for (const [mode, base] of [
@@ -178,6 +191,13 @@ for (const [mode, base] of [
 		`${mode}: async=false scripts run in the order they were added`,
 		order?.dynamic === nativeOrder?.dynamic,
 		JSON.stringify(order),
+	);
+	ok(
+		`${mode}: written scripts run in place, in the native order, and read back as written`,
+		scripts(order) === scripts(nativeOrder) &&
+			JSON.stringify(order?.writtenSrc) ===
+				JSON.stringify(nativeOrder?.writtenSrc),
+		JSON.stringify({ native: nativeOrder, proxied: order }),
 	);
 	await page.close();
 }
@@ -207,6 +227,14 @@ for (const [host, transport] of [
 		`a ${host}-hosted transport: async=false scripts run in the order they were added`,
 		booted?.host === host && order?.dynamic === nativeOrder?.dynamic,
 		JSON.stringify({ host: booted?.host, order }),
+	);
+	ok(
+		host === 'worker'
+			? 'a worker-hosted transport: written scripts run in place, in the native order'
+			: 'a page-hosted transport: a written script does not run (the known limit)',
+		booted?.host === host &&
+			scripts(order) === (host === 'worker' ? scripts(nativeOrder) : 'inline'),
+		JSON.stringify({ host: booted?.host, order, native: scripts(nativeOrder) }),
 	);
 	await page.close();
 }

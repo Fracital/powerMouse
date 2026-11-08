@@ -50,6 +50,10 @@ export default class Client {
 	scope: string;
 	/** the host handles window.open / target=_blank (config.openTab) */
 	openTab: boolean;
+	/** a synchronous request completes: the transport runs in the transport worker (config.workerTransport) */
+	workerTransport: boolean;
+	/** set while the markup the page writes is rewritten (WriteStream) */
+	writing = false;
 	/** the service worker's build id, from the shell */
 	build?: string;
 	/** unparseable scripts fail instead of running raw when false (config.allowInvalidJs) */
@@ -148,6 +152,7 @@ export default class Client {
 		const origin = global.location?.origin;
 		if (origin && origin !== 'null') addRouteScope(origin, this.scope);
 		this.openTab = !!init.openTab;
+		this.workerTransport = !!init.workerTransport;
 		this.build = init.build;
 		this.allowInvalidJs = init.allowInvalidJs !== false;
 		this.assets = init.assets;
@@ -179,6 +184,7 @@ export default class Client {
 			scope: this.scope,
 			codec: codecType(this.codec),
 			...(this.openTab ? { openTab: true } : {}),
+			...(this.workerTransport ? { workerTransport: true } : {}),
 			...(this.build ? { build: this.build } : {}),
 			...(this.allowInvalidJs ? {} : { allowInvalidJs: false }),
 			...(this.assets ? { assets: this.assets } : {}),

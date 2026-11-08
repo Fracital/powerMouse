@@ -948,6 +948,9 @@ export function registerRewrites(
 				codec: codecType(this.codec),
 				frameAncestors: init.frameAncestors,
 				...(init.openTab ? { openTab: true } : {}),
+				// the pages' synchronous requests complete (a written script in
+				// a document no worker controls is copied at once)
+				...(init.workerTransport ? { workerTransport: true } : {}),
 				...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 				...(init.assets ? { assets: init.assets } : {}),
 				// the deployment's helper names: the shell and every rewritten

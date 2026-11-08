@@ -32,6 +32,13 @@ export interface Config {
 	 */
 	openTab?: boolean;
 	/**
+	 * Set by the controller when its transport runs in the transport worker,
+	 * where a synchronous request from a page completes (with the transport
+	 * in the page the spin would block it): a document no service worker
+	 * controls then loads a script the page writes synchronously, in order.
+	 */
+	workerTransport?: boolean;
+	/**
 	 * HTTP cache in the service worker, on unless `false`: GET/HEAD responses
 	 * with explicit freshness are served from a Cache API store and
 	 * revalidated with ETag / Last-Modified when stale.

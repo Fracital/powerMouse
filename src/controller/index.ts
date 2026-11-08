@@ -583,9 +583,13 @@ export class StompController extends EventTarget {
 			: this.transportHost === 'worker'
 				? this.#startWorker(given)
 				: this.#importInPage(given);
-		this.#hostReady = Promise.all([hooksReady, transportReady]).then(
-			() => undefined,
-		);
+		// the transport is hosted where it will stay (a worker that failed has
+		// fallen back to the page by now, and setTransport keeps the host)
+		// before the first handshake hands the config to any frame
+		this.#hostReady = Promise.all([hooksReady, transportReady]).then(() => {
+			if (this.transportHost === 'worker') this.config.workerTransport = true;
+			else delete this.config.workerTransport;
+		});
 
 		window.addEventListener('message', (event) => {
 			// only our own frames, same origin as this page in this mode
