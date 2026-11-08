@@ -6,7 +6,12 @@ import ProxyModule, {
 	cleanupPrototype,
 	usePrototype,
 } from '../../modules/Proxy';
-import { unrouteCSS } from '../../modules/Unroute';
+import {
+	routedPrefix,
+	scopePrefix,
+	unrouteCSS,
+	unrouteURL,
+} from '../../modules/Unroute';
 import DocumentClient, {
 	addDocumentOpenListener,
 	getGlobalParsingState,
@@ -205,6 +210,21 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		super(client);
 
 		this.hooks = [];
+	}
+	/**
+	 * A URL property's native value as the page sees it: a route of the scope
+	 * is the real URL it stands for (an inline document's own address is the
+	 * page's URL); anything else is returned as it is.
+	 */
+	readbackURL(value: string): string {
+		if (!value.startsWith(scopePrefix(this.client))) return value;
+		if (value.startsWith(`${routedPrefix(this.client)}inline:`)) {
+			const hash = value.indexOf('#');
+			const url = new URL(this.client.url.toString());
+			url.hash = hash === -1 ? '' : value.slice(hash);
+			return url.href;
+		}
+		return unrouteURL(this.client, value) ?? value;
 	}
 	/*useAttributes(
 		callback: (element: CustomElement) => void,
@@ -1168,7 +1188,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 									return result;
 								}
 
-								return Reflect.apply(target, that, args);
+								// no hook answered (the attribute is missing or empty): the
+								// browser's value for a URL property is then the document's
+								// own URL or base URL, which is a route, and is read back as
+								// the page's
+								const value = Reflect.apply(target, that, args);
+								return typeof value === 'string'
+									? this.readbackURL(value)
+									: value;
 							});
 						},
 					),
@@ -1190,9 +1217,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							// returns the declaration object, and assigning that back goes
 							// through PutForwards=cssText as "[object CSSStyleDeclaration]",
 							// which wipes the inline style
+							// An empty value stays empty: the browser's reading of it is
+							// the document's own URL (a route), not a URL to apply.
 							const value = Reflect.apply(descriptor.get!, that, []);
 
-							if (typeof value === 'string')
+							if (typeof value === 'string' && args[0] !== '')
 								Reflect.apply(target, that, [value]);
 						},
 					),

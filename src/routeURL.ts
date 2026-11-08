@@ -193,9 +193,15 @@ export function parseRoutedURL(
 	}
 
 	const resource = path.slice(0, split);
-	const encoded = path.slice(split + 1);
+	// every codec escapes `?`, so a literal one starts a query the browser put
+	// after the route: a GET form submitted to a document's own address (a
+	// form without an action) replaces that URL's query with its fields
+	const query = path.indexOf('?', split + 1);
+	const encoded =
+		query === -1 ? path.slice(split + 1) : path.slice(split + 1, query);
 	const decoded = codec.decode(encoded);
 	const url = new URL(decoded);
+	if (query !== -1) url.search = path.slice(query);
 
 	url.hash = hashIndex === -1 ? '' : routed.slice(hashIndex);
 

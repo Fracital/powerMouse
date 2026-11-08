@@ -1,0 +1,62 @@
+<!doctype html>
+<title>URL DEFAULTS</title>
+<form id="form" method="post"><button id="button">go</button></form>
+<form id="get"><input name="via" value="get" /></form>
+<script>
+	// URL properties whose attribute is missing or empty: the browser answers
+	// with the document's URL or its base URL, and the page must read the
+	// same through the proxy (never the proxy's own address)
+	const make = (tag, attributes = {}) => {
+		const element = document.createElement(tag);
+		for (const [name, value] of Object.entries(attributes))
+			element.setAttribute(name, value);
+		return element;
+	};
+	const set = (tag, property, value) => {
+		const element = document.createElement(tag);
+		element[property] = value;
+		return [
+			element[property],
+			element.getAttribute(property === 'formAction' ? 'formaction' : property),
+		];
+	};
+	// a submission of one of the forms (below) lands back here
+	const submitted = sessionStorage.getItem('url-defaults-submit');
+	sessionStorage.removeItem('url-defaults-submit');
+	window.__submit = (id) => {
+		sessionStorage.setItem('url-defaults-submit', id);
+		document.getElementById(id).submit();
+	};
+	const form = document.getElementById('form');
+	window.__defaults = {
+		submitted,
+		href: location.href,
+		formInMarkup: form.action,
+		formInMarkupAttribute: [
+			form.hasAttribute('action'),
+			form.getAttribute('action'),
+			form.outerHTML.includes('action'),
+		],
+		getFormInMarkup: document.getElementById('get').action,
+		buttonInMarkup: document.getElementById('button').formAction,
+		formMissing: make('form').action,
+		formEmpty: make('form', { action: '' }).action,
+		buttonMissing: make('button').formAction,
+		buttonEmpty: make('button', { formaction: '' }).formAction,
+		inputMissing: make('input').formAction,
+		baseMissing: make('base').href,
+		baseEmpty: make('base', { href: '' }).href,
+		anchorMissing: make('a').href,
+		anchorEmpty: make('a', { href: '' }).href,
+		areaEmpty: make('area', { href: '' }).href,
+		imageEmpty: make('img', { src: '' }).src,
+		scriptEmpty: make('script', { src: '' }).src,
+		linkEmpty: make('link', { href: '' }).href,
+		posterEmpty: make('video', { poster: '' }).poster,
+		inputSrcEmpty: make('input', { src: '' }).src,
+		anchorSetEmpty: set('a', 'href', ''),
+		formSetEmpty: set('form', 'action', ''),
+		buttonSetEmpty: set('button', 'formAction', ''),
+		imageSetEmpty: set('img', 'src', ''),
+	};
+</script>

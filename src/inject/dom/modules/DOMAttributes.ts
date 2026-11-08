@@ -1064,15 +1064,19 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				element.setAttributeOG('action', current!);
 			}
 
+			// a form without an action (or an empty one) submits to the document's
+			// own address, which is already a route; the page reads it back
+			// without an action, as it wrote it (a routed one would hand the page
+			// the proxy's address, which it might route again)
+			if (!element.hasAttributeOG('action')) return;
+
 			/**
 			 * Absolute URL
 			 */
-			const action = element.hasAttributeOG('action')
-				? new URL(
-						element.getAttributeOG('action')!,
-						this.client.url.toString(),
-					).toString()
-				: this.client.url.toString();
+			const action = new URL(
+				element.getAttributeOG('action')!,
+				this.client.url.toString(),
+			).toString();
 
 			const methodIndex = validMethods.indexOf(
 				element.getAttribute('method')?.toUpperCase() || '',

@@ -291,6 +291,18 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A URL property whose attribute is missing or empty reads back as on the
+  real site, never as the proxy's address. A form without an action got a
+  routed one the page could read (`getAttribute('action')`, `outerHTML`):
+  Last.fm's pjax submits a form to `$form.attr('action')`, so its sign-in sent
+  the proxy's raw URL on, which was routed again and refused (the route of a
+  route is now the route, so it lands, but the page still saw the proxy). Such
+  a form now keeps no action and submits to the document's own address, whose
+  query a GET submission replaces as the browser would. `form.action`,
+  `formAction` and `base.href` without an attribute, and an empty `href` or
+  `src`, read the document's URL or its base URL, and setting one to `''`
+  leaves it empty (url-defaults suite, both modes, against the page loaded
+  natively).
 - A route of a route is the route. A page that got hold of its own raw
   proxy URL (a read the rewriter missed) and handed it to a link, a form
   action or `location` had it routed again, and the worker refused the result
