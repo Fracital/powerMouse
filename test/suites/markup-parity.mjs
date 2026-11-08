@@ -7,7 +7,8 @@
 // one a hook wrote that the page never did), one only the page has, or a
 // value that differs fails by element and attribute name. The page's
 // MutationObserver records for routed attributes (mutation-records.html)
-// are compared the same way, record by record.
+// are compared the same way, record by record, and so are the page errors:
+// one the proxied load raises and the native load does not fails.
 import {
 	done,
 	FIXTURE,
@@ -15,9 +16,11 @@ import {
 	launch,
 	ok,
 	openDemo,
+	proxiedOnlyErrors,
 	PROXY,
 	sleep,
 	submitLanding,
+	trackErrors,
 } from '../lib.mjs';
 
 // the adversarial corpus (each page waits for its probes), and pages built
@@ -267,10 +270,10 @@ function firstDifference(a, b) {
 }
 
 const browser = await launch();
-const errors = [];
 for (const file of PAGES) {
 	const url = `${FIXTURE}pages/${file}`;
 	const nativePage = await browser.newPage();
+	const nativeErrors = trackErrors(nativePage);
 	await nativePage.goto(url).catch(() => {});
 	const nativeFrame = await waitFor(() => nativePage.mainFrame());
 	const native = nativeFrame
@@ -340,8 +343,20 @@ for (const file of PAGES) {
 					);
 				}
 		}
-		errors.push(...page.errors.map((e) => `${mode} ${file}: ${e}`));
+		// an error only the proxied load raises is code that throws through
+		// the proxy and runs natively (rewritten code in a realm the inject
+		// never reached throws a ReferenceError for the access helper)
+		const extra = proxiedOnlyErrors(
+			nativeErrors,
+			page.errors,
+			page.errorStacks,
+		);
+		ok(
+			`${mode}: ${file} raises no page error it does not raise natively`,
+			extra.length === 0,
+			JSON.stringify(extra),
+		);
 		await page.close();
 	}
 }
-await done(browser, errors);
+await done(browser);

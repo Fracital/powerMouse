@@ -1,0 +1,134 @@
+<!doctype html>
+<title>HELPER REALMS</title>
+<pre id="result">pending</pre>
+<script>
+	// Rewritten code that runs in a realm or scope of its own: a javascript:
+	// URL in a fresh iframe (its initial about:blank, which nothing touched),
+	// a blob: module worker (its code, and its top level), a data: worker.
+	// Each case reports what it saw; one that never reports names the route
+	// whose code ran without the access helper (a ReferenceError the page
+	// sees). The helper-realms suite compares the report with the native
+	// one.
+	const report = {};
+	window.__realms = { report, done: false };
+	const render = () => {
+		document.getElementById('result').textContent = JSON.stringify(
+			window.__realms,
+			null,
+			1,
+		);
+	};
+	window.__realmsRecord = (name, value) => {
+		report[name] = value;
+		render();
+	};
+	const pending = [];
+	const expect = (name, ms = 8000) =>
+		pending.push(
+			new Promise((resolve) => {
+				const started = Date.now();
+				const poll = () => {
+					if (name in report || Date.now() - started > ms) resolve();
+					else setTimeout(poll, 50);
+				};
+				poll();
+			}),
+		);
+
+	// a javascript: URL runs in the frame's own realm: the child's top is
+	// this page, its location about:blank
+	const payload = (name) =>
+		'parent.__realmsRecord(' +
+		JSON.stringify(name) +
+		', [top === parent ? "top is the page" : "OTHER-TOP", location.href])';
+	const frame = (fn) => {
+		const f = document.createElement('iframe');
+		fn(f);
+		document.body.append(f);
+	};
+	frame((f) => (f.src = 'javascript:' + payload('iframe.src = javascript:')));
+	expect('iframe.src = javascript:');
+	frame((f) =>
+		f.setAttribute(
+			'src',
+			'javascript:' + payload('iframe.setAttribute(src, javascript:)'),
+		),
+	);
+	expect('iframe.setAttribute(src, javascript:)');
+	// statements, not one expression: written back without the string wrapper
+	frame(
+		(f) =>
+			(f.src =
+				'javascript:var seen = location.href; ' +
+				payload('javascript: statements')),
+	);
+	expect('javascript: statements');
+	// parsed markup: the attribute the rewriter rewrote
+	const holder = document.createElement('div');
+	holder.innerHTML =
+		"<iframe src='javascript:" +
+		payload('markup iframe src=javascript:').replace(/'/g, '&#39;') +
+		"'></iframe>";
+	document.body.append(holder);
+	expect('markup iframe src=javascript:');
+
+	const ask = (worker) =>
+		new Promise((resolve) => {
+			worker.onmessage = (event) => resolve(event.data);
+			worker.onerror = (event) => {
+				event.preventDefault();
+				resolve('error: ' + event.message);
+			};
+			setTimeout(() => resolve('no reply'), 8000);
+			worker.postMessage('go');
+		});
+	const blobWorker = (source, options) =>
+		new Worker(
+			URL.createObjectURL(new Blob([source], { type: 'text/javascript' })),
+			options,
+		);
+	const run = (name, worker) => {
+		ask(worker).then((value) => {
+			worker.terminate();
+			__realmsRecord(name, value);
+		});
+		expect(name);
+	};
+	// the worker's own code, when a message comes
+	run(
+		'blob: module worker, on message',
+		blobWorker(
+			'self.onmessage = () => postMessage([self.location.protocol, typeof import.meta.url]);',
+			{ type: 'module' },
+		),
+	);
+	// and its top level, which runs before any message
+	run(
+		'blob: module worker, top level',
+		blobWorker(
+			'const seen = [self.location.protocol, self.location.origin]; self.onmessage = () => postMessage(seen); export {};',
+			{ type: 'module' },
+		),
+	);
+	run(
+		'blob: classic worker, top level',
+		blobWorker(
+			'const seen = [self.location.protocol, self.location.origin]; self.onmessage = () => postMessage(seen);',
+		),
+	);
+	// a data: worker has an opaque origin: a relative URL does not parse
+	run(
+		'data: worker, new Request(relative)',
+		new Worker(
+			'data:text/javascript,' +
+				encodeURIComponent(
+					"self.onmessage = () => { try { postMessage(new Request('/x').url); } catch (e) { postMessage([e.name, e.message]); } };",
+				),
+		),
+	);
+
+	Promise.all(pending).then(() => {
+		window.__realms.done = true;
+		render();
+	});
+</script>

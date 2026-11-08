@@ -181,9 +181,13 @@
 		};
 		if (new URLSearchParams(location.search).has('post')) {
 			parent.postMessage(report, '*');
-		} else {
+		} else if (parent !== window) {
 			parent.__advRecord(name, report);
 		}
+		// else a popup (adv-frames' window.open probe): natively the page
+		// closes it before it loads; a host that takes popups as tabs (the
+		// demo) returns null instead, so it loads top-level, with no parent
+		// page to report to
 		// a grandchild that posts to `top`: spoofed, that is our parent page;
 		// real, that is the host
 		if (new URLSearchParams(location.search).has('nested')) {

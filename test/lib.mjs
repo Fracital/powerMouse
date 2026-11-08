@@ -181,8 +181,14 @@ export async function openDemo(browser, base = HOST, viewport = {}) {
 		viewport: { width: 1280, height: 800, ...viewport },
 	});
 	const errors = [];
-	page.on('pageerror', (error) => errors.push(error.message));
+	const stacks = [];
+	page.on('pageerror', (error) => {
+		errors.push(error.message);
+		stacks.push(error.stack || error.message);
+	});
 	page.errors = errors;
+	// the same errors with their stacks, in the same order
+	page.errorStacks = stacks;
 	await page.goto(base);
 	await page.waitForFunction(
 		() => /^(Ready|Error)/.test(document.getElementById('logMsg').textContent),
@@ -190,6 +196,34 @@ export async function openDemo(browser, base = HOST, viewport = {}) {
 		{ timeout: 45000 },
 	);
 	return page;
+}
+
+/**
+ * The uncaught errors of a page loaded natively (pages, frames and dedicated
+ * workers report through `pageerror`), as a live list of messages
+ */
+export function trackErrors(page) {
+	const errors = [];
+	page.on('pageerror', (error) => errors.push(error.message));
+	return errors;
+}
+
+/**
+ * The errors a proxied load raised that the native load of the same page did
+ * not: `proxied` minus `native`, message by message, so an error the page
+ * throws natively too (a probe's own TypeError) is not the proxy's. With
+ * `stacks` (the proxied errors' stacks, in order) each comes with its stack.
+ */
+export function proxiedOnlyErrors(native, proxied, stacks = []) {
+	const left = new Map();
+	for (const message of native) left.set(message, (left.get(message) ?? 0) + 1);
+	const extra = [];
+	proxied.forEach((message, i) => {
+		const count = left.get(message) ?? 0;
+		if (count) left.set(message, count - 1);
+		else extra.push(stacks[i] ?? message);
+	});
+	return extra;
 }
 
 export function screenshot(page, name) {
