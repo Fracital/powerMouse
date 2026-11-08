@@ -24,6 +24,7 @@ const VECTORS = [
 	...['inline-style', 'markup-img', 'markup-srcset', 'picture-source'],
 	...['input-image', 'poster', 'markup-video', 'track', 'markup-audio'],
 	...['markup-object', 'markup-embed', 'svg-image', 'svg-use', 'fe-image'],
+	...['svg-use-xlink'],
 	...['ping', 'ping-navigation', 'ping-absolute', 'ping-absolute-navigation'],
 	...['form', 'meta-refresh', 'header-refresh'],
 	...['srcdoc-img', 'dynamic-import', 'fetch', 'fetch-keepalive', 'xhr'],

@@ -1,0 +1,4 @@
+/* imported by bypass-relative-imp.css with a bare relative string */
+.rel-import-nested-url {
+	background: url(../h/sprite.svg?rb=import-nested-url);
+}

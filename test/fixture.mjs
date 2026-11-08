@@ -251,7 +251,12 @@ export function startFixture(port = 8084) {
 			res.setHeader('content-type', 'application/json');
 			return res.end(JSON.stringify(recorded.get(key) ?? null));
 		}
-		const file = /^\/pages\/([\w.-]+)$/.exec(path)?.[1];
+		// /pages/deep/<any dirs>/<file> is test/pages/<file> too: a page under a
+		// deeper path, whose relative URLs resolve somewhere other than the
+		// directory of its route would (bypass-relative suite)
+		const file = /^\/pages\/(?:deep\/(?:[\w.-]+\/)*)?([\w.-]+)$/.exec(
+			path,
+		)?.[1];
 		if (file && existsSync(`${pagesDir}${file}`)) {
 			const ext = file.slice(file.lastIndexOf('.') + 1);
 			res.setHeader('content-type', TYPES[ext] || 'application/octet-stream');
@@ -270,6 +275,20 @@ export function startFixture(port = 8084) {
 				res.statusCode = 304;
 				return res.end();
 			}
+			// `?base=<url>` puts a <base href> where the page has `<!--BASE-->`;
+			// a page that marks its requests (`?rb=`) is a stub when a form
+			// without an action submits back to it, so its vectors fire once
+			const query = new URL(req.url, 'http://x').searchParams;
+			if (ext === 'html' && query.has('rb') && file === 'bypass-relative.html')
+				return res.end('<title>LANDED</title><h1>landed</h1>');
+			const base = query.get('base');
+			if (ext === 'html' && base !== null)
+				return res.end(
+					readFileSync(`${pagesDir}${file}`, 'utf8').replace(
+						'<!--BASE-->',
+						`<base href="${base.replace(/[&"<]/g, (c) => `&#${c.charCodeAt(0)};`)}" />`,
+					),
+				);
 			return res.end(readFileSync(`${pagesDir}${file}`));
 		}
 		if (path in MODULES) {
@@ -282,16 +301,19 @@ export function startFixture(port = 8084) {
 		res.end(PAGES[path] ?? '<title>other</title>other');
 	});
 	// /ws-echo: a WebSocket that sends its handshake's Cookie and Origin
-	// headers as one message, then closes (ws-cookies suite)
+	// headers and its path as one message, then closes (ws-cookies suite).
+	// Any path ending in /ws-echo answers, so a relative socket URL shows
+	// where it resolved (bypass-relative suite)
 	const sockets = new WebSocketServer({ noServer: true });
 	server.on('upgrade', (req, socket, head) => {
-		if (new URL(req.url, 'http://x').pathname !== '/ws-echo')
+		if (!new URL(req.url, 'http://x').pathname.endsWith('/ws-echo'))
 			return socket.destroy();
 		sockets.handleUpgrade(req, socket, head, (ws) => {
 			ws.send(
 				JSON.stringify({
 					cookie: req.headers.cookie || '',
 					origin: req.headers.origin || '',
+					url: req.url,
 				}),
 			);
 			ws.close();

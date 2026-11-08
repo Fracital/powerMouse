@@ -1,0 +1,19 @@
+/* a stylesheet under a deeper path than its page: its URLs resolve against
+   its own URL (bypass-relative.html) */
+@import url('../d/bypass-relative-imp.css?rb=sheet-import');
+@font-face {
+	font-family: relsheet;
+	src: url('../e/font.woff2?rb=sheet-font');
+}
+.rel-sheet-font {
+	font-family: relsheet;
+}
+.rel-sheet-url {
+	background: url('../e/sprite.svg?rb=sheet-url');
+}
+.rel-sheet-set {
+	background-image: image-set('../e/sprite.svg?rb=sheet-image-set' 1x);
+}
+.rel-sheet-set-url {
+	background-image: image-set(url('../e/sprite.svg?rb=sheet-image-set-url') 1x);
+}

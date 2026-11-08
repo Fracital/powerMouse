@@ -1,0 +1,6 @@
+/* imported from bypass-relative.css, from another directory: its URLs
+   resolve against its own URL */
+@import 'bypass-relative-imp2.css?rb=import-nested';
+.rel-import-url {
+	background: url('../g/sprite.svg?rb=import-url');
+}

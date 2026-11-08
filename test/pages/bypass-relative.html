@@ -1,0 +1,335 @@
+<!doctype html>
+<title>BYPASS RELATIVE</title>
+<!--BASE-->
+<!-- the relative twin of bypass.html, served from a deeper path
+     (/pages/deep/a/b/), and with ?base=<href> under a <base href> elsewhere
+     on the site: every URL below is relative and marked ?rb=<vector>, so
+     the right resolution (against the page's real URL, its base, a
+     stylesheet's or a worker script's URL) differs from the one against the
+     proxy's route -->
+<link rel="stylesheet" href="../c/bypass-relative.css?rb=markup-stylesheet" />
+<link rel="prefetch" href="../c/echo.json?rb=prefetch" />
+<link rel="preload" as="fetch" crossorigin href="../c/echo.json?rb=preload" />
+<link rel="modulepreload" href="../c/bypass-relative-mod.js?rb=modulepreload" />
+<link rel="icon" href="../c/sprite.svg?rb=icon" />
+<style>
+	@import url('../c/imp.css?rb=style-import');
+	@import '../c/imp.css?rb=style-import-string';
+	@font-face {
+		font-family: relbypass;
+		src: url('../c/font.woff2?rb=style-font');
+	}
+	.rel-font {
+		font-family: relbypass;
+	}
+	.rel-bg {
+		background: url('../c/sprite.svg?rb=style-url');
+	}
+	.rel-set {
+		background-image: image-set('../c/sprite.svg?rb=image-set' 1x);
+	}
+	.rel-set-url {
+		background-image: image-set(url('../c/sprite.svg?rb=image-set-url') 1x);
+	}
+</style>
+<script type="speculationrules">
+	{
+		"prefetch": [
+			{ "source": "list", "urls": ["../c/echo.json?rb=speculation"] }
+		]
+	}
+</script>
+<p class="rel-font">text</p>
+<p class="rel-bg">text</p>
+<p class="rel-set">text</p>
+<p class="rel-set-url">text</p>
+<p class="rel-sheet-font">text</p>
+<p class="rel-sheet-url">text</p>
+<p class="rel-sheet-set">text</p>
+<p class="rel-sheet-set-url">text</p>
+<p class="rel-import-url">text</p>
+<p class="rel-import-nested-url">text</p>
+<p style="background: url('../c/sprite.svg?rb=inline-style')">text</p>
+<img src="../c/sprite.svg?rb=markup-img" />
+<img src="c2/sprite.svg?rb=markup-img-bare" />
+<img src="/pages/deep/r/sprite.svg?rb=markup-img-root" />
+<img srcset="../c/sprite.svg?rb=markup-srcset 2x" />
+<img
+	srcset="../c/sprite.svg?rb=markup-srcset-w 100w"
+	sizes="10px"
+	src="../c/sprite.svg?rb=markup-srcset-src"
+/>
+<picture
+	><source srcset="../c/sprite.svg?rb=picture-source" />
+	<img
+/></picture>
+<input type="image" src="../c/sprite.svg?rb=input-image" />
+<video
+	poster="../c/sprite.svg?rb=poster"
+	src="../c/echo.json?rb=markup-video"
+	preload="auto"
+>
+	<track default kind="captions" src="../c/hdr.json?rb=track" />
+</video>
+<audio src="../c/echo.json?rb=markup-audio" preload="auto"></audio>
+<object data="../c/sprite.svg?rb=markup-object" type="image/svg+xml"></object>
+<embed src="../c/sprite.svg?rb=markup-embed" type="image/svg+xml" />
+<svg
+	width="10"
+	height="10"
+	xmlns="http://www.w3.org/2000/svg"
+	xmlns:xlink="http://www.w3.org/1999/xlink"
+>
+	<image href="../c/sprite.svg?rb=svg-image" width="10" height="10" />
+	<image
+		xlink:href="../c/sprite.svg?rb=svg-image-xlink"
+		width="10"
+		height="10"
+	/>
+	<use href="../c/sprite.svg?rb=svg-use#x" />
+	<use xlink:href="../c/sprite.svg?rb=svg-use-xlink#x" />
+	<filter id="f"><feImage href="../c/sprite.svg?rb=fe-image" /></filter>
+</svg>
+<iframe name="sink" src="about:blank"></iframe>
+<iframe name="sink2" src="about:blank"></iframe>
+<iframe name="sink3" src="about:blank"></iframe>
+<iframe name="sink4" src="about:blank"></iframe>
+<iframe name="sink5" src="about:blank"></iframe>
+<a
+	id="ping"
+	href="../c/landed?rb=ping-navigation"
+	ping="../c/echo.json?rb=ping"
+	target="sink"
+	>ping</a
+>
+<form id="form" action="../c/landed" target="sink2">
+	<input name="rb" value="form" />
+</form>
+<form id="form-no-action" target="sink3">
+	<input name="rb" value="form-no-action" />
+</form>
+<form id="form-empty-action" action="" target="sink4">
+	<input name="rb" value="form-empty-action" />
+</form>
+<form id="formaction" action="../c/wrong" target="sink5">
+	<input name="rb" value="formaction" />
+	<button id="formaction-button" formaction="../c/landed">go</button>
+</form>
+<iframe src="../c/bypass-relative-meta-refresh.html"></iframe>
+<iframe src="../c/bypass-relative-header-refresh.html"></iframe>
+<iframe srcdoc="<img src='../c/sprite.svg?rb=srcdoc-img'>"></iframe>
+<script type="module">
+	import '../c/bypass-relative-mod.js?rb=static-import';
+
+	import('../c/bypass-relative-mod.js?rb=dynamic-import').catch(() => {});
+</script>
+<script>
+	const errors = {};
+	const attempt = (name, run) => {
+		try {
+			const result = run();
+			if (result && typeof result.catch === 'function')
+				result.catch((error) => (errors[name] = String(error).slice(0, 80)));
+		} catch (error) {
+			errors[name] = String(error).slice(0, 80);
+		}
+	};
+	const add = (tag, attributes) => {
+		const element = document.createElement(tag);
+		for (const [name, value] of Object.entries(attributes))
+			element.setAttribute(name, value);
+		document.body.append(element);
+		return element;
+	};
+	const rel = (name, file = 'echo.json') => `../c/${file}?rb=${name}`;
+	attempt('fetch', () => fetch(rel('fetch')));
+	attempt('fetch-request', () => fetch(new Request(rel('fetch-request'))));
+	attempt('fetch-keepalive', () =>
+		fetch(rel('fetch-keepalive'), { keepalive: true }),
+	);
+	attempt('xhr', () => {
+		const xhr = new XMLHttpRequest();
+		xhr.open('GET', rel('xhr'));
+		xhr.send();
+	});
+	attempt('beacon', () => navigator.sendBeacon(rel('beacon'), 'x'));
+	attempt('eventsource', () => {
+		const source = new EventSource(rel('eventsource'));
+		setTimeout(() => source.close(), 3000);
+	});
+	// a WebSocket never passes the worker: the page keeps the path the
+	// fixture saw
+	const sockets = {};
+	attempt('websocket', () => {
+		const socket = new WebSocket('../c/ws-echo?rb=websocket');
+		socket.onmessage = (event) =>
+			(sockets.websocket = JSON.parse(event.data).url);
+	});
+	attempt('websocketstream', () =>
+		typeof WebSocketStream === 'function'
+			? new WebSocketStream('../c/ws-echo?rb=websocketstream').opened.then(
+					async ({ readable }) => {
+						const { value } = await readable.getReader().read();
+						sockets.websocketstream = JSON.parse(value).url;
+					},
+				)
+			: (errors.websocketstream = 'absent'),
+	);
+	attempt(
+		'worker',
+		() =>
+			new Worker(rel('dedicated', 'bypass-relative-worker.js'), {
+				name: 'dedicated',
+			}),
+	);
+	attempt('shared-worker', () =>
+		typeof SharedWorker === 'function'
+			? new SharedWorker(rel('shared', 'bypass-relative-worker.js'), {
+					name: 'shared',
+				})
+			: (errors['shared-worker'] = 'absent'),
+	);
+	attempt(
+		'module-worker',
+		() =>
+			new Worker(rel('module-worker', 'bypass-relative-modworker.js'), {
+				type: 'module',
+			}),
+	);
+	attempt('img', () => add('img', { src: rel('img', 'sprite.svg') }));
+	attempt('img-srcset', () => {
+		const img = document.createElement('img');
+		img.srcset = `${rel('img-srcset', 'sprite.svg')} 2x`;
+		document.body.append(img);
+	});
+	attempt(
+		'image-object',
+		() => (new Image().src = rel('image-object', 'sprite.svg')),
+	);
+	attempt('svg-xlink-dynamic', () => {
+		const image = document.createElementNS(
+			'http://www.w3.org/2000/svg',
+			'image',
+		);
+		image.setAttributeNS(
+			'http://www.w3.org/1999/xlink',
+			'xlink:href',
+			rel('svg-xlink-dynamic', 'sprite.svg'),
+		);
+		document.querySelector('svg').append(image);
+	});
+	attempt('svg-href-dynamic', () => {
+		const image = document.createElementNS(
+			'http://www.w3.org/2000/svg',
+			'image',
+		);
+		image.setAttribute('href', rel('svg-href-dynamic', 'sprite.svg'));
+		document.querySelector('svg').append(image);
+	});
+	attempt('script', () =>
+		add('script', { src: rel('script', 'inline-script.js') }),
+	);
+	attempt('link-stylesheet', () =>
+		add('link', {
+			rel: 'stylesheet',
+			href: rel('link-stylesheet', 'inline.css'),
+		}),
+	);
+	attempt('link-prefetch', () =>
+		add('link', { rel: 'prefetch', href: rel('link-prefetch') }),
+	);
+	attempt('iframe', () => add('iframe', { src: rel('iframe', 'sprite.svg') }));
+	attempt('object', () =>
+		add('object', {
+			data: rel('object', 'sprite.svg'),
+			type: 'image/svg+xml',
+		}),
+	);
+	attempt('embed', () =>
+		add('embed', { src: rel('embed', 'sprite.svg'), type: 'image/svg+xml' }),
+	);
+	attempt('video', () => add('video', { src: rel('video'), preload: 'auto' }));
+	attempt('audio', () => add('audio', { src: rel('audio'), preload: 'auto' }));
+	attempt('audio-object', () => {
+		const audio = new Audio(rel('audio-object'));
+		audio.preload = 'auto';
+		audio.load();
+	});
+	attempt('font-face', () =>
+		new FontFace('r2', `url(${rel('font-face', 'font.woff2')})`).load(),
+	);
+	attempt('css-insert', () => {
+		const style = document.createElement('style');
+		style.textContent = `.rel-x{background:url(${rel('css-insert', 'sprite.svg')})}`;
+		document.head.append(style);
+		add('div', { class: 'rel-x' });
+	});
+	attempt('cssom-insert-rule', () => {
+		const style = document.createElement('style');
+		document.head.append(style);
+		style.sheet.insertRule(
+			`.rel-y{background:url(${rel('cssom-insert-rule', 'sprite.svg')})}`,
+		);
+		add('div', { class: 'rel-y' });
+	});
+	attempt('constructed-sheet', () => {
+		const sheet = new CSSStyleSheet();
+		sheet.replaceSync(
+			`.rel-z{background:url(${rel('constructed-sheet', 'sprite.svg')})}`,
+		);
+		document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+		add('div', { class: 'rel-z' });
+	});
+	attempt('style-property', () => {
+		const div = add('div', {});
+		div.style.backgroundImage = `url(${rel('style-property', 'sprite.svg')})`;
+	});
+	attempt('style-set-property', () => {
+		const div = add('div', {});
+		div.style.setProperty(
+			'background-image',
+			`url(${rel('style-set-property', 'sprite.svg')})`,
+		);
+	});
+	attempt('style-attribute', () =>
+		add('div', {
+			style: `background:url(${rel('style-attribute', 'sprite.svg')})`,
+		}),
+	);
+	attempt('inner-html', () => {
+		const div = document.createElement('div');
+		div.innerHTML = `<img src="${rel('inner-html', 'sprite.svg')}"><img srcset="${rel('inner-html-srcset', 'sprite.svg')} 2x">`;
+		document.body.append(div);
+	});
+	attempt('document-write', () =>
+		document.write(`<img src="${rel('document-write', 'sprite.svg')}">`),
+	);
+	attempt('paint-worklet', () =>
+		window.CSS && CSS.paintWorklet
+			? CSS.paintWorklet.addModule(rel('paint-worklet', 'paint.js'))
+			: (errors['paint-worklet'] = 'absent'),
+	);
+	attempt('audio-worklet', () =>
+		new AudioContext().audioWorklet.addModule(
+			rel('audio-worklet', 'inline-script.js'),
+		),
+	);
+	attempt('import', () => import(rel('import', 'bypass-relative-mod.js')));
+	const later = (ms, name, run) => setTimeout(() => attempt(name, run), ms);
+	later(1000, 'ping', () => document.getElementById('ping').click());
+	later(1300, 'form', () => document.getElementById('form').submit());
+	later(1600, 'form-no-action', () =>
+		document.getElementById('form-no-action').submit(),
+	);
+	later(1900, 'form-empty-action', () =>
+		document.getElementById('form-empty-action').submit(),
+	);
+	later(2200, 'formaction', () =>
+		document.getElementById('formaction-button').click(),
+	);
+	later(3500, 'open', () => window.open(rel('open', 'sprite.svg')));
+	setTimeout(
+		() => (window.__relbypass = { done: true, errors, sockets }),
+		7000,
+	);
+</script>
