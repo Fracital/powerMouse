@@ -291,6 +291,12 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A popup opened without a URL, and a new frame, read their location as
+  `about:blank`. A window the page injects itself (its about:blank document
+  runs the opener's inject bundle) read the bundle's own window's location,
+  so `popup.location.href` and a fresh frame's `contentWindow.location.href`
+  showed the opener's URL (window-identity suite, both modes, against the page
+  loaded natively).
 - A link with a `download` attribute saves what the site serves. Chrome
   hands no download to a service worker, so the browser fetched the routed
   URL from the proxy origin's own server: the download was its 404 page,

@@ -37,6 +37,7 @@
 	document.addEventListener('DOMContentLoaded', () => {
 		document.body.append(frame);
 		frameWindow = frame.contentWindow;
+		report.frameBlank = frameWindow.location.href;
 		frame.src = child('frame');
 	});
 	setTimeout(() => (report.done = true), 8000);

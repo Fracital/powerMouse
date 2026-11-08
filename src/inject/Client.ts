@@ -105,6 +105,9 @@ export default class Client {
 				`${this.global.location.origin}${this.directory}`,
 			);
 		}
+		// this client's own window, not the bundle's: a popup or frame the
+		// opener injected (about:blank) runs the opener's bundle
+		const location = this.global.location;
 		if (ROUTE_PROTOCOLS.includes(location.protocol)) {
 			return parseRoutedURL(
 				location.toString(),

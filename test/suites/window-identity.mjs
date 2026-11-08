@@ -3,8 +3,9 @@
 // contentWindow before the frame loaded another site, compares that object
 // with a message's event.source: it must be the same object, as it is in the
 // browser (WPT fetch-metadata window-location and form-submission hung on
-// exactly this). Every value is compared with the same page loaded natively;
-// both demo modes.
+// exactly this). The popup's about:blank reads back as about:blank, not as
+// its opener's URL. Every value is compared with the same page loaded
+// natively; both demo modes.
 import {
 	done,
 	FIXTURE,
@@ -57,6 +58,15 @@ for (const [mode, base] of [
 			JSON.stringify(proxied?.[key]) === JSON.stringify(native?.[key]),
 			JSON.stringify({ native: native?.[key], proxied: proxied?.[key] }),
 		);
+	ok(
+		`${mode}: a popup opened without a URL, and a new frame, read back as about:blank`,
+		proxied?.blank === native?.blank &&
+			proxied?.frameBlank === native?.frameBlank,
+		JSON.stringify({
+			native: [native?.blank, native?.frameBlank],
+			proxied: [proxied?.blank, proxied?.frameBlank],
+		}),
+	);
 	await page.close();
 }
 await done(browser);
