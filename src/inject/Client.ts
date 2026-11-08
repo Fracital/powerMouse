@@ -297,9 +297,27 @@ export default class Client {
 	 */
 	routedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
 		const client = this.controlledClient();
-		return client && client !== this
-			? client.nativeFetch(input, init)
-			: fetch(input, init);
+		if (!client || client === this) return fetch(input, init);
+		// through the ancestor's realm the request's client is the ancestor,
+		// whose URL would be the referrer. An about:blank document's URL strips
+		// to no referrer (a request that names one keeps it, under the policy
+		// about:blank inherited, which is the ancestor's)
+		let blank = false;
+		try {
+			blank = /^about:blank([?#]|$)/.test(this.global.location.href);
+		} catch (error) {
+			// a window being torn down: as the ancestor
+		}
+		const named =
+			init?.referrer !== undefined && init.referrer !== 'about:client';
+		// a Request's members are getters a spread would not copy (it may be
+		// this document's realm's, which the bundle's Request is not)
+		if (blank && !named)
+			init =
+				init instanceof Request || init instanceof this.global.Request
+					? new Request(init as Request, { referrer: '' })
+					: { ...init, referrer: '' };
+		return client.nativeFetch(input, init);
 	}
 	/** post to the service worker that controls this document; whether it went */
 	postToWorker(message: object): boolean {

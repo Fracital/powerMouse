@@ -312,6 +312,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   `document.write` build to rewrite their markup are made in an inert
   document too: made in the page's, every custom element in them was
   constructed twice (custom-elements suite, both modes, against the page
+- A fetch, image, script or other load from an iframe's initial about:blank
+  document sends no Referer, as natively (about:blank strips to no
+  referrer); a fetch that names a referrer still sends it under the policy
+  about:blank inherited. No service worker controls that document, so its
+  loads go through the parent's realm, and they carried the parent's
+  referrer (blank-referrer suite, both modes, against the page loaded
+  natively; WPT referrer-policy iframe-inheritance-about-blank passes, its
+  two entries are off the expected list).
 - `document.referrer` in an iframe's initial about:blank document is its
   creator's full URL, whatever the referrer policy, as natively: it read
   empty, because the readback compared the routed referrer's origin with the
