@@ -1,0 +1,114 @@
+<!doctype html>
+<title>BLANK SHEETS</title>
+<script>
+	// Constructed stylesheets in documents the page builds, which no service
+	// worker controls (a new frame's about:blank, one it opened, a popup):
+	// replaceSync, replace (with a font) and insertRule, each sheet adopted by
+	// the document or by a shadow root. An @import in a constructed sheet is
+	// dropped natively (its URL never loads). Every URL is marked
+	// ?sheet=<document>-<kind>.
+	const report = {};
+	window.__blankSheets = report;
+	const at = (file, name, kind) =>
+		new URL(`${file}?sheet=${name}-${kind}`, location.href).href;
+	const load = async (name, doc, win) => {
+		const seen = (report[name] = {});
+		const make = (className, parent = doc.body) => {
+			const div = doc.createElement('div');
+			div.className = className;
+			div.textContent = 'xxx';
+			parent.append(div);
+			return div;
+		};
+		const sync = new win.CSSStyleSheet();
+		sync.replaceSync(
+			`@import url("${at('blank.css', name, 'import')}");` +
+				`.sync { background-image: url("${at('blank-pixel.svg', name, 'sync')}"); }`,
+		);
+		const replaced = new win.CSSStyleSheet();
+		const resolved = await replaced
+			.replace(
+				`@font-face { font-family: sheet-${name}; src: url("${at('blank-font.ttf', name, 'font')}"); }` +
+					`.replaced { background-image: url("${at('blank-pixel.svg', name, 'replace')}"); font: 20px sheet-${name}, monospace; display: inline-block; }`,
+			)
+			.then(
+				(sheet) => sheet === replaced,
+				(error) => error.name,
+			);
+		const inserted = new win.CSSStyleSheet();
+		inserted.insertRule(
+			`.inserted { background-image: url("${at('blank-pixel.svg', name, 'insert')}"); }`,
+		);
+		let importRule = null;
+		try {
+			inserted.insertRule(`@import url("${at('blank.css', name, 'import')}");`);
+		} catch (error) {
+			importRule = error.name;
+		}
+		// a rule the page holds stays the sheet's own while its loads are
+		// copied
+		const held = sync.cssRules[sync.cssRules.length - 1];
+		doc.adoptedStyleSheets = [sync, replaced];
+		const host = make('host');
+		const shadow = host.attachShadow({ mode: 'open' });
+		shadow.adoptedStyleSheets = [inserted];
+		// a sheet of another document's realm: natively refused or taken
+		let foreign = null;
+		try {
+			doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, new CSSStyleSheet()];
+			foreign = doc.adoptedStyleSheets.length;
+		} catch (error) {
+			foreign = error.name;
+		}
+		const elements = {
+			sync: make('sync'),
+			replaced: make('replaced'),
+			inserted: make('inserted', shadow),
+		};
+		await win.document.fonts.ready;
+		setTimeout(async () => {
+			await doc.fonts.load(`20px sheet-${name}`).catch(() => null);
+			seen.readback = {
+				resolved,
+				importRule,
+				foreign,
+				computed: Object.fromEntries(
+					Object.entries(elements).map(([kind, element]) => [
+						kind,
+						win.getComputedStyle(element).backgroundImage,
+					]),
+				),
+				rules: [sync, replaced, inserted].map((sheet) =>
+					[...sheet.cssRules].map((rule) => rule.cssText),
+				),
+				sameRule: sync.cssRules[sync.cssRules.length - 1] === held,
+				width: elements.replaced.getBoundingClientRect().width,
+				adopted: [
+					doc.adoptedStyleSheets.length,
+					shadow.adoptedStyleSheets.length,
+				],
+			};
+		}, 2000);
+	};
+	addEventListener('load', async () => {
+		const frame = (build) => {
+			const iframe = document.createElement('iframe');
+			document.body.append(iframe);
+			return build(iframe.contentDocument, iframe.contentWindow);
+		};
+		const popup = window.open();
+		await Promise.allSettled([
+			frame((doc, win) => load('initial', doc, win)),
+			frame((doc, win) => {
+				doc.open();
+				doc.close();
+				return load('opened', doc, win);
+			}),
+			popup && load('popup', popup.document, popup),
+		]);
+		setTimeout(() => {
+			popup?.close();
+			report.done = true;
+		}, 2500);
+	});
+</script>

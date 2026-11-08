@@ -52,14 +52,32 @@ export default class CSSOMModule extends Module<DocumentClient> {
 			}
 		};
 
+		// a constructed sheet in a document no service worker controls has its
+		// loads copied once its rules change (replace: once they are in)
+		const domAttributes = this.client.getModule(DOMAttributesModule);
+		const copied = (sheet: unknown) => {
+			if (domAttributes?.uncontrolled())
+				domAttributes.copyConstructed?.(sheet as CSSStyleSheet);
+		};
+		const promiseThen = global.Promise.prototype.then;
 		const sheet = global.CSSStyleSheet.prototype;
-		for (const method of ['insertRule', 'replace', 'replaceSync'] as const) {
+		for (const method of [
+			'insertRule',
+			'replace',
+			'replaceSync',
+			'deleteRule',
+		] as const) {
 			if (typeof sheet[method] !== 'function') continue;
 			sheet[method] = proxyModule.wrapFunction(
 				sheet[method] as Function,
 				(target, that, args) => {
-					if (args.length) args[0] = rewrite(args[0]);
-					return Reflect.apply(target, that, args);
+					if (method !== 'deleteRule' && args.length)
+						args[0] = rewrite(args[0]);
+					const result = Reflect.apply(target, that, args);
+					if (method !== 'replace') copied(that);
+					else
+						Reflect.apply(promiseThen, result, [() => copied(that), () => {}]);
+					return result;
 				},
 			) as any;
 		}

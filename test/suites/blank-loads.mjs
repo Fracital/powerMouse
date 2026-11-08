@@ -371,6 +371,14 @@ for (const [mode, base] of [
 			top?.link !== 'none',
 		JSON.stringify({ frame: css?.computed, top }),
 	);
+	// a <style> rule takes its copies through its own declarations: an
+	// error there (the readback's view of them refused by the native
+	// methods) left the rule with its route
+	ok(
+		`${mode}: copying CSS loads throws nothing in the page`,
+		page.errors.length === 0,
+		JSON.stringify(page.errors),
+	);
 	await page.close();
 }
 await done(browser);

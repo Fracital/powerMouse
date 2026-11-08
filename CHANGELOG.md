@@ -314,6 +314,21 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   666 KB), its stack positions on one line as natively; code written to be
   read keeps one statement per line, so an error's line number stays near
   the page's own (rewriter-unit suite).
+- Constructed stylesheets in a document no service worker controls load
+  through the proxy: the url()s and fonts of a sheet the page makes with
+  `new CSSStyleSheet()` and fills with replaceSync, replace or insertRule,
+  adopted by the document or a shadow root, reached the proxy origin's own
+  server. Once its rules change (replace: once they are in) the sheet's
+  routes are copied and put back as a `<style>`'s are, a style rule
+  through its own declarations, so a rule the page holds stays the sheet's
+  own and the CSSOM reads back what the page wrote; the copies are the
+  sheet's and are released when its rules no longer show them. An @import
+  in a constructed sheet is still dropped, as natively. Copying into a
+  `<style>`'s style rules failed with "Illegal invocation" (the native
+  methods were handed the readback's view of the declarations), which left
+  those rules with their routes; they now take their copies (blank-sources
+  and blank-loads suites, both modes, against the page loaded natively,
+  with the bypass recorder).
 - A FontFace a page makes in a document no service worker controls loads
   its source through the proxy. `new FontFace(name, 'url(...)')` there
   fetched the font from the proxy origin's own server, so `load()` and

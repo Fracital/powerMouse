@@ -79,6 +79,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 	uncontrolled: () => boolean = () => false;
 	/** @internal copy a <style>'s routed loads in a document no service worker controls (DOMContentHooks) */
 	copySheet?: (style: HTMLStyleElement, mark: (rule: CSSRule) => void) => void;
+	/** @internal copy a constructed sheet's routed loads in a document no service worker controls (CSSOM) */
+	copyConstructed?: (sheet: CSSStyleSheet) => void;
 	/** @internal the page's view of a CSSStyleDeclaration: reads unrouted, writes routed (CSSReadback) */
 	wrapDeclaration?: (declaration: CSSStyleDeclaration) => CSSStyleDeclaration;
 	// captured before the hooks replace them, for serializeStyle
@@ -141,7 +143,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const revokeObjectURL = this.client.global.URL.revokeObjectURL;
 		/** one value's copies: the routed value, what was set, the blobs made */
 		type Copy = { routed: string; url?: string; made: string[] };
-		const copies = new WeakMap<Element, Map<string, Copy>>();
+		const copies = new WeakMap<object, Map<string, Copy>>();
 		// a route inside a url(): the worker's rewritten CSS writes them whole,
 		// then the marker that keeps the page's token
 		const routePattern = () => {
@@ -203,7 +205,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				: withCopies(text, await copiesOf(text, state, depth - 1));
 		// the latest pass per owner and key: an earlier one that ends later
 		// gives way
-		const passes = new WeakMap<Element, Map<string, number>>();
+		const passes = new WeakMap<object, Map<string, number>>();
 		let passCount = 0;
 		/**
 		 * The CSS `owner` shows under `key` (its inline style, a <style>'s
@@ -212,7 +214,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		 * to this one, the rest are released.
 		 */
 		const copyOwned = (
-			owner: Element,
+			owner: object,
 			key: string,
 			read: () => string,
 			write: (copied: Map<string, string>) => void,
@@ -1544,55 +1546,100 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		};
 		const textOf = (rule: CSSRule) =>
 			Reflect.apply(ruleText, rule, []) as string;
+		// a style rule's own declarations, not the page-facing view the
+		// readback module (which applies later) hands out: the native
+		// methods putCopies calls refuse that view
+		const ruleStyle = Reflect.getOwnPropertyDescriptor(
+			this.client.global.CSSStyleRule.prototype,
+			'style',
+		)!.get!;
+		const sheetText = (sheet: CSSStyleSheet | null | undefined) => {
+			try {
+				return [...(sheet?.cssRules ?? [])].map(textOf).join('\n');
+			} catch (error) {
+				return '';
+			}
+		};
+		/** every rule of `container` that names routes, given their copies */
+		const putBack = (
+			container: CSSStyleSheet | CSSGroupingRule,
+			copied: Map<string, string>,
+			mark: (rule: CSSRule) => void,
+		) => {
+			const methods =
+				container instanceof this.client.global.CSSStyleSheet
+					? nativeRules.sheet
+					: nativeRules.group;
+			const rules = container.cssRules;
+			for (let i = 0; i < rules.length; i++) {
+				const rule = rules[i];
+				if (!routesIn(textOf(rule)).length) continue;
+				// a style rule keeps its identity: its own declarations take the
+				// copies (as an inline style does), its nested rules are entered
+				if ('selectorText' in rule) {
+					putCopies(
+						Reflect.apply(ruleStyle, rule, []) as CSSStyleDeclaration,
+						copied,
+					);
+					if ('cssRules' in rule)
+						putBack(rule as unknown as CSSGroupingRule, copied, mark);
+					continue;
+				}
+				// a grouping rule (@media, @supports, @layer) is entered
+				if ('cssRules' in rule && !('styleSheet' in rule)) {
+					putBack(rule as CSSGroupingRule, copied, mark);
+					continue;
+				}
+				// @import and @font-face have no declarations to edit: put back
+				// whole
+				const text = withCopies(textOf(rule), copied);
+				try {
+					Reflect.apply(methods.delete, container, [i]);
+					Reflect.apply(methods.insert, container, [text, i]);
+					mark(container.cssRules[i]);
+				} catch (error) {
+					// a rule the browser will not take back: it keeps its route
+				}
+			}
+		};
 		this.copySheet = (style, mark) =>
 			copyOwned(
 				style,
 				'sheet',
-				() => {
-					try {
-						return [...(style.sheet?.cssRules ?? [])].map(textOf).join('\n');
-					} catch (error) {
-						return '';
-					}
-				},
+				() => sheetText(style.sheet),
 				(copied) => {
-					const putBack = (container: CSSStyleSheet | CSSGroupingRule) => {
-						const methods =
-							container instanceof this.client.global.CSSStyleSheet
-								? nativeRules.sheet
-								: nativeRules.group;
-						const rules = container.cssRules;
-						for (let i = 0; i < rules.length; i++) {
-							const rule = rules[i];
-							if (!routesIn(textOf(rule)).length) continue;
-							// a style rule keeps its identity: its own declarations take the
-							// copies (as an inline style does), its nested rules are entered
-							if ('selectorText' in rule) {
-								putCopies((rule as CSSStyleRule).style, copied);
-								if ('cssRules' in rule)
-									putBack(rule as unknown as CSSGroupingRule);
-								continue;
-							}
-							// a grouping rule (@media, @supports, @layer) is entered
-							if ('cssRules' in rule && !('styleSheet' in rule)) {
-								putBack(rule as CSSGroupingRule);
-								continue;
-							}
-							// @import and @font-face have no declarations to edit: put back
-							// whole
-							const text = withCopies(textOf(rule), copied);
-							try {
-								Reflect.apply(methods.delete, container, [i]);
-								Reflect.apply(methods.insert, container, [text, i]);
-								mark(container.cssRules[i]);
-							} catch (error) {
-								// a rule the browser will not take back: it keeps its route
-							}
-						}
-					};
-					if (style.sheet) putBack(style.sheet);
+					if (style.sheet) putBack(style.sheet, copied, mark);
 				},
 			);
+		// A constructed sheet a document no service worker controls made
+		// (replace, replaceSync, insertRule, deleteRule): the same, the copies
+		// the sheet's own. A sheet a <link> or <style> owns, or an @import's,
+		// has its loads copied with its owner.
+		const ownerNode = Reflect.getOwnPropertyDescriptor(
+			this.client.global.StyleSheet.prototype,
+			'ownerNode',
+		)!.get!;
+		const ownerRule = Reflect.getOwnPropertyDescriptor(
+			this.client.global.CSSStyleSheet.prototype,
+			'ownerRule',
+		)!.get!;
+		this.copyConstructed = (sheet) => {
+			try {
+				if (
+					Reflect.apply(ownerNode, sheet, []) !== null ||
+					Reflect.apply(ownerRule, sheet, []) !== null
+				)
+					return;
+			} catch (error) {
+				return;
+			}
+			copyOwned(
+				sheet,
+				'rules',
+				() => sheetText(sheet),
+				(copied) => putBack(sheet, copied, () => {}),
+			);
+		};
 
 		// The elements the parser made from markup the page wrote into a
 		// document no service worker controls: each load the rewrite left with

@@ -1,7 +1,8 @@
 // Loads named outside an element's src or href in documents a page builds
 // itself, which no service worker controls (a new frame's about:blank, one
-// the page opened, a popup): SVG references (blank-svg.html) and FontFace
-// sources (blank-fonts.html). Each goes
+// the page opened, a popup): SVG references (blank-svg.html), FontFace
+// sources (blank-fonts.html) and constructed, adopted stylesheets
+// (blank-sheets.html). Each goes
 // through the proxy, not to the proxy origin's own server: it fires and
 // reads back as on the real site and reaches the worker, and nothing the
 // page names loads past the proxy. Compared with the same page loaded
@@ -124,15 +125,136 @@ const CASES = [
 		events: ['face', 'set'],
 		loads: ['face', 'set'],
 	},
+	{
+		name: 'constructed sheets',
+		page: 'blank-sheets.html',
+		key: '__blankSheets',
+		marker: 'sheet',
+		documents: ['initial', 'opened', 'popup'],
+		events: [],
+		// replaceSync, replace and its font, insertRule (in a shadow root)
+		loads: ['sync', 'replace', 'font', 'insert'],
+		// an @import, which a constructed sheet drops
+		never: ['import'],
+		// a sheet whose rules change releases the copy it no longer shows
+		async afterwards(page, mode) {
+			const blank = page
+				.frames()
+				.find((frame) => frame.url() === 'about:blank');
+			await blank.evaluate(() => {
+				document.documentElement.dataset.swap = '';
+				window.__swap = new CSSStyleSheet();
+				document.adoptedStyleSheets = [
+					...document.adoptedStyleSheets,
+					window.__swap,
+				];
+			});
+			const show = (kind) =>
+				blank.evaluate((kind) => {
+					const url = new URL(
+						`blank-pixel.svg?sheet=swap-${kind}`,
+						document.baseURI,
+					).href;
+					window.__swap.replaceSync(
+						`.swap { background-image: url("${url}"); }`,
+					);
+				}, kind);
+			const copy = async (other) => {
+				for (let i = 0; i < 30; i++) {
+					const text = await realSheet(page, blank, '[data-swap]');
+					const url = /blob:[^"')#\\]+/.exec(text ?? '')?.[0];
+					if (url && url !== other) return url;
+					await sleep(100);
+				}
+				return null;
+			};
+			const fetches = (url) =>
+				blank.evaluate(
+					(url) =>
+						fetch(url).then(
+							() => true,
+							() => false,
+						),
+					url,
+				);
+			await show('a');
+			const firstCopy = await copy(null);
+			await show('b');
+			const secondCopy = await copy(firstCopy);
+			await sleep(300);
+			ok(
+				`${mode}: a constructed sheet whose rules change releases the copy it showed`,
+				firstCopy !== null &&
+					secondCopy !== null &&
+					!(await fetches(firstCopy)) &&
+					(await fetches(secondCopy)),
+				JSON.stringify({ firstCopy, secondCopy }),
+			);
+		},
+	},
 ];
+
+/**
+ * The text the browser holds for the last sheet adopted by the about:blank
+ * frame whose document matches `selector`, read in an isolated world: the
+ * page's own cssText reads back the page's URLs, not the copies. The
+ * session is the frame's process's (its parent's, an out-of-process frame
+ * in isolated mode, else the page's).
+ */
+async function realSheet(page, frame, selector) {
+	const cdp = await page
+		.context()
+		.newCDPSession(frame.parentFrame())
+		.catch(() => page.context().newCDPSession(page));
+	try {
+		const { frameTree } = await cdp.send('Page.getFrameTree');
+		const frames = [];
+		const walk = (node) => {
+			frames.push(node.frame);
+			for (const child of node.childFrames ?? []) walk(child);
+		};
+		walk(frameTree);
+		for (const frame of frames) {
+			if (frame.url !== 'about:blank') continue;
+			const { executionContextId } = await cdp.send(
+				'Page.createIsolatedWorld',
+				{ frameId: frame.id, worldName: 'blank-sources' },
+			);
+			// the sheet is the page's object: found through the document,
+			// which both worlds share
+			const { result } = await cdp.send('Runtime.evaluate', {
+				contextId: executionContextId,
+				returnByValue: true,
+				expression: `document.querySelector(${JSON.stringify(selector)}) && [...document.adoptedStyleSheets.at(-1).cssRules].map((rule) => rule.cssText).join(' ')`,
+			});
+			if (result.value) return result.value;
+		}
+		return null;
+	} finally {
+		await cdp.detach().catch(() => {});
+	}
+}
 
 const browser = await launch();
 const natives = {};
 for (const test of CASES) {
 	const page = await browser.newPage();
+	const requested = [];
+	page.context().on('request', (request) => requested.push(request.url()));
 	await page.goto(`${FIXTURE}pages/${test.page}`);
 	natives[test.page] = await reportOf(page, test.key);
 	await page.close();
+	const never = (test.never ?? []).filter((kind) =>
+		requested.some(
+			(url) => url.includes(`${test.marker}=`) && url.includes(`-${kind}`),
+		),
+	);
+	if (test.never)
+		ok(
+			`natively, the ${test.name} never load ${test.never.join(', ')}`,
+			never.length === 0,
+			JSON.stringify(never),
+		);
 	ok(
 		`natively, the ${test.name} load in every document`,
 		test.documents.every((name) =>
@@ -189,10 +311,13 @@ for (const [mode, base] of [
 				(kind) =>
 					!served.some((url) => url.includes(`${test.marker}=${name}-${kind}`)),
 			);
+			const loaded = (test.never ?? []).filter((kind) =>
+				served.some((url) => url.includes(`${test.marker}=${name}-${kind}`)),
+			);
 			ok(
 				`${mode}: the ${name} document's ${test.name} go through the worker`,
-				missing.length === 0,
-				`missing: ${missing.join(', ')}`,
+				missing.length === 0 && loaded.length === 0,
+				`missing: ${missing.join(', ')}; loaded: ${loaded.join(', ')}`,
 			);
 			ok(
 				`${mode}: the ${name} document's ${test.name} read back as the page wrote them`,
@@ -203,6 +328,11 @@ for (const [mode, base] of [
 				),
 			);
 		}
+		ok(
+			`${mode}: the ${test.name} throw nothing in the page`,
+			page.errors.length === 0,
+			JSON.stringify(page.errors),
+		);
 		await test.afterwards?.(page, mode);
 		await page.close();
 	}
