@@ -107,10 +107,23 @@ interface ParsedPostMessageArgs {
 export default class ContextModule extends Module<DocumentClient> {
 	restricted: WeakMap<Context, RestrictedContext>;
 	restrictedContexts: WeakMap<RestrictedContext, Context>;
+	/**
+	 * Windows this realm already holds as themselves (one it opened, a frame
+	 * it reached while that frame was of its origin): a window keeps its
+	 * identity when it navigates, so `event.source`, `contentWindow` and
+	 * `opener` stay the object the page compares them with. The page holds
+	 * that object already; handing it out again gives it nothing new.
+	 */
+	held: WeakSet<Context>;
 	constructor(client: DocumentClient) {
 		super(client);
 		this.restricted = new WeakMap();
 		this.restrictedContexts = new WeakMap();
+		this.held = new WeakSet();
+	}
+	/** a window this realm now holds as itself (see `held`) */
+	hold(context: Context) {
+		this.held.add(context);
 	}
 	restrictObject(
 		interfaces: PropertyDescriptorMap,
@@ -456,6 +469,8 @@ export default class ContextModule extends Module<DocumentClient> {
 			return findTop(this.client.global, this.client.names.client);
 		}
 
+		if (this.held.has(context)) return context;
+
 		if (
 			sameOrigin(
 				this.client.url.toString(),
@@ -463,8 +478,10 @@ export default class ContextModule extends Module<DocumentClient> {
 					(context as any)[this.client.names.client] as DocumentClient
 				).url.toString(),
 			)
-		)
+		) {
+			this.held.add(context);
 			return context;
+		}
 
 		if (!this.restricted.has(context)) {
 			const restricted = this.restrictContext(context);

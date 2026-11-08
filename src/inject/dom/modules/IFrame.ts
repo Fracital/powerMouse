@@ -37,6 +37,9 @@ export default class IFrameModule extends Module<DocumentClient> {
 				const opened = Reflect.apply(target, that, args) as
 					typeof globalThis | null;
 				if (!opened) return opened;
+				// the page holds the window it opened as itself, wherever it
+				// navigates (its messages' source is this object)
+				this.client.getModule(ContextModule)!.hold(opened);
 				try {
 					if (opened.location.href === 'about:blank') {
 						injectContext(opened);

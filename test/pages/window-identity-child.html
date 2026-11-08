@@ -1,0 +1,9 @@
+<!doctype html>
+<title>WINDOW IDENTITY CHILD</title>
+<script>
+	// a page on another site, opened or framed by window-identity.html
+	(opener || parent).postMessage(
+		{ identity: new URLSearchParams(location.search).get('via') },
+		'*',
+	);
+</script>

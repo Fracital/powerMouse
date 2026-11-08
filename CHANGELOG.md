@@ -291,6 +291,17 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A window keeps its identity when it navigates to another site. The page
+  got a window as itself while it was of its origin (the popup
+  `window.open()` returned, a frame's `contentWindow` read before the frame
+  loaded) and as a restricted stand-in once it was not, so a message's
+  `event.source`, a later `contentWindow` and `opener` were another object
+  than the one the page held: the common check `event.source === popup` (an
+  OAuth or payment popup, an embed's frame) never matched, and WPT's
+  fetch-metadata window-location and form-submission pages hung on it. A
+  window the page already holds is now handed back as itself wherever it
+  goes; that gives the page nothing it did not have (window-identity suite,
+  both modes, against the page loaded natively).
 - A link's ping goes through the proxy. `<a ping>` and `<area ping>` were
   not routed: a ping to another origin reached the site straight from the
   browser, past the proxy, and its Ping-From and Ping-To headers named the

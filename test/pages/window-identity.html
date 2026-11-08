@@ -1,0 +1,43 @@
+<!doctype html>
+<title>WINDOW IDENTITY</title>
+<script>
+	// A window keeps its identity when it navigates to another site: the
+	// popup the page opened and the frame whose contentWindow it read first
+	// are the very objects a message from them names as its source.
+	const report = {};
+	window.__identity = report;
+	const child = (via) => {
+		const url = new URL(`window-identity-child.html?via=${via}`, location.href);
+		url.hostname = url.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+		return url.href;
+	};
+	let popup = null;
+	let frameWindow = null;
+	const frame = document.createElement('iframe');
+	addEventListener('message', (event) => {
+		const via = event.data && event.data.identity;
+		if (via === 'popup') {
+			report.popup = {
+				source: event.source === popup,
+				origin: event.origin === new URL(child('popup')).origin,
+			};
+			popup.close();
+		}
+		if (via === 'frame')
+			report.frame = {
+				source: event.source === frameWindow,
+				contentWindow: frame.contentWindow === frameWindow,
+				origin: event.origin === new URL(child('frame')).origin,
+			};
+		report.done = !!(report.popup && report.frame);
+	});
+	popup = window.open();
+	report.blank = popup ? popup.location.href : null;
+	popup.location = child('popup');
+	document.addEventListener('DOMContentLoaded', () => {
+		document.body.append(frame);
+		frameWindow = frame.contentWindow;
+		frame.src = child('frame');
+	});
+	setTimeout(() => (report.done = true), 8000);
+</script>
