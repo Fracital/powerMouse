@@ -1,0 +1,29 @@
+<!doctype html>
+<title>BLOB WORKER SITE</title>
+<script>
+	// A blob: worker's requests, judged as the page that made it: an
+	// importScripts and a fetch to another site (`?cross=<origin>`), and a
+	// fetch to the page's own origin, all with the default credentials
+	// (same-origin). Each request's headers are echoed or kept by key
+	// (`?k=<key>`). With `?setup` the page only sets its cookie (the
+	// .headers.json sidecar: SameSite=Strict) and stops.
+	const query = new URLSearchParams(location.search);
+	if (!query.has('setup')) {
+		const key = query.get('k');
+		const cross = query.get('cross');
+		const source = `
+			importScripts(${JSON.stringify(`${cross}/echo-headers?js&k=${key}-import`)});
+			Promise.all([
+				fetch(${JSON.stringify(`${cross}/echo-headers?k=${key}-cross`)}).then((r) => r.json()),
+				fetch(${JSON.stringify(`${location.origin}/echo-headers?k=${key}-same`)}).then((r) => r.json()),
+			]).then(([cross, same]) => postMessage({ cross, same }), (error) => postMessage({ error: String(error) }));
+		`;
+		const url = URL.createObjectURL(
+			new Blob([source], { type: 'text/javascript' }),
+		);
+		const worker = new Worker(url);
+		worker.onmessage = (event) => (window.__blobSite = event.data);
+		worker.onerror = (event) =>
+			(window.__blobSite = { error: event.message || 'worker error' });
+	}
+</script>

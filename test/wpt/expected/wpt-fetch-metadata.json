@@ -46,14 +46,5 @@
 	},
 	"/fetch/metadata/generated/script-json-module-import-static.https.sub.html": {
 		"(harness)": "ERROR: Uncaught SyntaxError: Unexpected token 'i', \"import.met\"... is not valid JSON"
-	},
-	"/fetch/metadata/generated/worker-dedicated-importscripts.https.sub.html": {
-		"sec-fetch-site - Cross-site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Cross-Site -> Same Origin": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Cross-Site -> Same-Site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Cross-Site -> Cross-Site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Same-Origin -> Cross-Site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])",
-		"sec-fetch-site - Same-Site -> Cross-Site": "FAIL: assert_array_equals: expected property 0 to be \"cross-site\" but got \"same-origin\" (expected array [\"cross-site\"] got [\"same-origin\"])"
 	}
 }

@@ -1,4 +1,5 @@
 import { pageBlobURL, proxyBlobURL, setBlobOrigins } from '../../routeURL';
+import { BLOB_MINTED } from '../../transport/messages';
 import Client from '../Client';
 import { htmlBlobs, htmlBlobURLs } from '../htmlBlobs';
 import Module from '../Module';
@@ -14,6 +15,20 @@ import ProxyModule from './Proxy';
  * here. Both documents and workers.
  */
 export default class ObjectURLModule extends Module<Client> {
+	/**
+	 * Tell the service worker about a blob: URL this realm minted, so a
+	 * worker started from it is judged as this page (BLOB_MINTED). Sent by
+	 * the nearest routed document, whose URL the worker decodes, and only
+	 * when that document has this realm's real origin (an about:blank or
+	 * srcdoc child, not an opaque one)
+	 */
+	#register(url: string) {
+		const routed = this.client.routedClient();
+		if (!routed || routed.url.url.origin !== this.client.url.url.origin) return;
+		routed.postToWorker({
+			[BLOB_MINTED]: { directory: routed.directory, url },
+		});
+	}
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		// the page's origin and the proxy's (the global's own, native at this
@@ -33,6 +48,7 @@ export default class ObjectURLModule extends Module<Client> {
 				const markup = htmlBlobs.get(args[0] as Blob);
 				if (markup !== undefined)
 					htmlBlobURLs.set(url, { markup, url: this.client.url.toString() });
+				this.#register(url);
 				return pageBlobURL(url);
 			},
 		);

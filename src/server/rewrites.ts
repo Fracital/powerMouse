@@ -31,6 +31,7 @@ import type {
 } from '../transport/messages';
 import { ABORT_HEADER } from '../transport/messages';
 import { BUILD } from '../version';
+import { blobOriginOf } from './blobOrigins';
 import { HttpCache, isCacheable, mayKeep } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
 import Cookies from './Cookies';
@@ -404,7 +405,12 @@ function genericForward(
 			if (!client)
 				try {
 					const found = await clients.get(id);
-					client = found ? decode(found.url) : null;
+					// a blob: worker's URL is the blob: URL: judged as the
+					// document that minted it, when that one said so
+					client = found
+						? (decode(found.url) ??
+							(found.url.startsWith('blob:') ? blobOriginOf(found.url) : null))
+						: null;
 				} catch (error) {
 					// the client is gone
 				}
@@ -469,8 +475,9 @@ function genericForward(
 
 		// Sec-Fetch-Site: `none` for a navigation nobody in a page started (the
 		// host's, which the user typed or picked); a subresource whose client
-		// is not a proxied page (a blob: worker) is taken as its target's own,
-		// the benefit the credentials mode gives it too
+		// is not a proxied page and not a blob: worker a page registered (one
+		// minted in a worker) is taken as its target's own, the benefit the
+		// credentials mode gives it too
 		let site: Site = initiator
 			? siteBetween(initiator, url.url)
 			: navigation

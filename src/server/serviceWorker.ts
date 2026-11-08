@@ -3,6 +3,8 @@ import { Config, ConfigCodec } from '../config';
 import { addRouteScope } from '../routeURL';
 import {
 	ABORT_REQUEST,
+	BLOB_MINTED,
+	BlobMintedMessage,
 	CONTROLLER_CLIENT,
 	CONTROLLER_CLOSE,
 	CONTROLLER_INIT,
@@ -23,6 +25,7 @@ import {
 import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
+import { recordBlobOrigin } from './blobOrigins';
 import createServer, { addressCodec, StompServer } from './createServer';
 import { hostErrorPage } from './errorPage';
 import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
@@ -409,6 +412,35 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 			markup: message.markup,
 			url: message.url,
 		});
+	} else if (BLOB_MINTED in data) {
+		// from a routed document of that controller, for a blob: URL of this
+		// origin; the origin recorded is the document's own real one, never
+		// one the message names
+		const message = data[BLOB_MINTED] as BlobMintedMessage;
+		const source =
+			event.source instanceof Client ? event.source.url : undefined;
+		if (
+			!message ||
+			typeof message.directory !== 'string' ||
+			typeof message.url !== 'string' ||
+			message.url.length > 512 ||
+			!message.url.startsWith(`blob:${location.origin}/`) ||
+			!source?.startsWith(`${location.origin}${message.directory}`)
+		)
+			return;
+		const ready = controllers.get(message.directory)?.ready;
+		if (!ready) return;
+		const real = ready.realURL(source);
+		if (real === source) return;
+		try {
+			recordBlobOrigin(
+				message.url,
+				new URL(real).origin,
+				(event.source as Client).id,
+			);
+		} catch (error) {
+			// not a URL: nothing to record
+		}
 	} else if (ABORT_REQUEST in data) {
 		abortRequest((data as Record<string, unknown>)[ABORT_REQUEST]);
 	} else if (CONTROLLER_CLOSE in data) {

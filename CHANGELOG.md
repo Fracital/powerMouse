@@ -291,6 +291,23 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A blob: worker's requests are judged as the page that made it. The
+  worker's client URL is the blob: URL, which the service worker could not
+  decode to a page, so it took the request as its target's own: an
+  importScripts or fetch to another site went out as `Sec-Fetch-Site:
+same-origin`, and with the default credentials carried that site's
+  cookies, SameSite=Strict ones included. A page now tells the service
+  worker which blob: URLs it mints; the worker records each under the real
+  origin of the document that told it, read from that document's own routed
+  URL, never from the message, and judges the blob's worker by it: another
+  site is cross-site and gets no cookie under `same-origin` credentials.
+  Entries outlive `revokeObjectURL` (pages revoke right after
+  `new Worker()`) and go with the document that minted them. A blob: URL
+  minted inside a worker is not registered (a worker cannot reach the
+  service worker) and is judged as before (blob-worker-site suite, both
+  modes, against the page loaded natively; WPT fetch-metadata
+  worker-dedicated-importscripts passes, its seven entries are off the
+  expected list).
 - A same-origin frame's hooked functions read as native from its parent.
   Each proxied frame loads its own copy of the inject, whose wrappers the
   parent's copy never made, so the parent's `Function.prototype.toString`

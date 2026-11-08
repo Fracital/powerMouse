@@ -102,6 +102,18 @@ export const WORKER_BASE = '$stomp$workerBase';
  * at the controller address `directory`, under `token`
  */
 export const INLINE_DOCUMENT = '$stomp$inlineDocument';
+/**
+ * A page minted a blob: URL (the browser's form, `blob:<proxy origin>/...`):
+ * the worker records it under the real origin of the document that said so,
+ * which it reads from that document's own routed URL, so a blob: worker's
+ * requests are judged as its creator's (Sec-Fetch-Site, credentials,
+ * SameSite) rather than as the target's own
+ */
+export const BLOB_MINTED = '$stomp$blobMinted';
+export interface BlobMintedMessage {
+	directory: string;
+	url: string;
+}
 export interface InlineDocumentMessage {
 	directory: string;
 	token: string;
