@@ -30,6 +30,7 @@ for (let i = 0; i < 40; i++) {
 		apis.idbName !== undefined &&
 		apis.fetchRequest !== undefined &&
 		apis.fetchRequestFromRequest !== undefined &&
+		apis.fetchShadowedRequest !== undefined &&
 		apis.upload !== undefined
 	)
 		break;
@@ -61,6 +62,16 @@ ok(
 		JSON.stringify(apis.fetchRequestFromRequest) ===
 			JSON.stringify([200, `${FIXTURE}pages/echo.json?inner`]),
 	JSON.stringify([apis.requestFromRequest, apis.fetchRequestFromRequest]),
+);
+
+// natively fetch(request) reads the request's own URL, never its JavaScript
+// `url`: YouTube's fetch check (a data: Request shadowed to name its player
+// endpoint) became a GET to that endpoint, a 405
+ok(
+	'fetch(request) fetches the request, not the url a page shadows on it',
+	JSON.stringify(apis.fetchShadowedRequest) ===
+		JSON.stringify([{ own: 1 }, `${FIXTURE}pages/echo.json?own`]),
+	JSON.stringify(apis.fetchShadowedRequest),
 );
 
 ok(

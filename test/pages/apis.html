@@ -95,6 +95,30 @@
 	} catch (e) {
 		__apis.requestFromRequest = 'error ' + e.message;
 	}
+	// fetch(request) fetches the request itself, whatever its JavaScript
+	// members say: YouTube shadows a data: Request's `url` and `method` with
+	// getters naming its player endpoint and checks that the data comes back
+	// (a fetch that reads them is a patched one)
+	const shadowed = (url) => {
+		const request = new Request(url);
+		Object.defineProperty(request, 'url', {
+			get: () => `${location.origin}/pages/echo.json?shadowed`,
+		});
+		Object.defineProperty(request, 'method', { get: () => 'POST' });
+		return request;
+	};
+	Promise.all([
+		fetch(shadowed('data:application/json;base64,' + btoa('{"own":1}'))).then(
+			(r) => r.json(),
+		),
+		fetch(shadowed('/pages/echo.json?own')).then((r) => r.url),
+	])
+		.then((results) => {
+			__apis.fetchShadowedRequest = results;
+		})
+		.catch((e) => {
+			__apis.fetchShadowedRequest = 'error ' + e.message;
+		});
 	fetch(new Request('/pages/echo.json', { method: 'POST', body: 'payload' }))
 		.then((r) => r.json())
 		.then((j) => {
