@@ -1,0 +1,32 @@
+<!doctype html>
+<meta name="referrer" content="origin" />
+<title>BLANK REFERRER</title>
+<script>
+	// An iframe's initial about:blank document, under a parent whose policy
+	// is origin: its document.referrer is the parent's full URL whatever the
+	// policy, its fetches send no Referer (about:blank strips to none) unless
+	// the fetch names a referrer, which the inherited policy reduces.
+	window.__blankRef = {};
+	window.__record = (key, value) => {
+		__blankRef[key] = value;
+		if (['documentReferrer', 'client', 'named'].every((k) => k in __blankRef))
+			__blankRef.done = true;
+	};
+	const frame = document.createElement('iframe');
+	frame.addEventListener('load', () => {
+		const script = frame.contentDocument.createElement('script');
+		script.textContent = `
+			const echo = (init) =>
+				fetch('${location.origin}/echo-headers', init)
+					.then((response) => response.json())
+					.then((headers) => headers.referer ?? null, (error) => 'threw ' + error);
+			parent.__record('documentReferrer', document.referrer);
+			echo().then((referer) => parent.__record('client', referer));
+			echo({ referrer: '${location.href}/custom' }).then((referer) =>
+				parent.__record('named', referer),
+			);
+		`;
+		frame.contentDocument.body.append(script);
+	});
+	document.documentElement.append(frame);
+</script>
