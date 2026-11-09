@@ -291,6 +291,17 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A request carries the browser's Accept-Language, no empty Cookie header,
+  and a WebSocket handshake the browser's Pragma and Cache-Control. The
+  browser's network stack adds Accept-Language after the service worker, so
+  no proxied request had one, and sites served their default language (and
+  could tell); the worker now writes it from the user's languages as Chrome
+  does (`en-US,en;q=0.9`), and the controller puts it on a page's socket
+  handshake with `Pragma: no-cache` and `Cache-Control: no-cache`. A request
+  for which the jar had no cookie went with `Cookie:` and nothing after it,
+  which the browser never sends (request-header-parity suite, both modes,
+  every header compared with the page loaded natively for a navigation, a
+  script, an image, a fetch, an XHR and a WebSocket handshake).
 - A WebSocket handshake goes out as the browser's does, once the epoxy
   build from `deploy/epoxy/` with the new patches is published and pinned.
   epoxy wrote the whole socket URL as the request-target

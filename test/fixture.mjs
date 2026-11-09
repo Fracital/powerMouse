@@ -364,6 +364,10 @@ export function startFixture(port = 8084) {
 	server.on('upgrade', (req, socket, head) => {
 		if (!new URL(req.url, 'http://x').pathname.endsWith('/ws-echo'))
 			return socket.destroy();
+		// `?k=<key>`: the handshake's headers kept, as /echo-headers keeps a
+		// request's (request-header-parity suite)
+		const key = new URL(req.url, 'http://x').searchParams.get('k');
+		if (key) recorded.set(key, req.headers);
 		sockets.handleUpgrade(req, socket, head, (ws) => {
 			ws.send(
 				JSON.stringify({

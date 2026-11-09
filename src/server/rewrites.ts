@@ -3,6 +3,7 @@ import {
 	type ProxyTransport,
 } from '@mercuryworkshop/proxy-transports';
 import { getDomain } from 'tldts';
+import { acceptLanguage } from '../acceptLanguage';
 import GenericCodec from '../Codecs';
 import { codecType, Config, ParsedConfig } from '../config';
 import { capitalizeHeaders, rewriteLinkHeader } from '../headers';
@@ -392,6 +393,12 @@ function genericForward(
 		requestHeaders.delete(LOAD_HEADER);
 
 		requestHeaders.set('user-agent', navigator.userAgent);
+		// the browser's network stack adds it after this worker, so no request
+		// here carries it: from the user's languages, as Chrome writes it
+		if (!requestHeaders.has('accept-language')) {
+			const languages = acceptLanguage(navigator.languages);
+			if (languages) requestHeaders.set('accept-language', languages);
+		}
 
 		// Referer, Origin and the fetch metadata are forbidden headers, so the
 		// service worker never sees the page's; rebuild them from the initiator
@@ -629,17 +636,17 @@ function genericForward(
 				: serverRequest.credentials === 'same-origin'
 					? (initiator === null && !unknownBlob) || sameOrigin
 					: true;
-		if (credentials)
-			requestHeaders.set(
-				'cookie',
-				(
+		// no cookie to send is no Cookie header, as the browser sends it
+		const cookie = credentials
+			? (
 					await rewriter.cookies.get(url.url, {
 						site: cookieSite,
 						navigation: topLevel,
 						method: serverRequest.method,
 					})
-				).toString(),
-			);
+				).toString()
+			: '';
+		if (cookie) requestHeaders.set('cookie', cookie);
 		else requestHeaders.delete('cookie');
 
 		// the host's rules, on the real request as it would go out: the first

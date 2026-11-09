@@ -2,6 +2,7 @@ import type {
 	ProxyTransport,
 	RawHeaders,
 } from '@mercuryworkshop/proxy-transports';
+import { acceptLanguage } from '../acceptLanguage';
 import {
 	assetName,
 	Assets,
@@ -1074,8 +1075,20 @@ export class StompController extends EventTarget {
 	 */
 	#handshakeHeaders = async (
 		url: URL,
-		headers: RawHeaders,
+		given: RawHeaders,
 	): Promise<RawHeaders> => {
+		// what Chrome's handshake carries besides: the user's languages, and a
+		// request that no cache may answer. The transport's own client says
+		// which encodings it takes (as on its HTTP requests), and offers no
+		// permessage-deflate it could not speak
+		const headers: RawHeaders = [...given];
+		const has = (name: string) =>
+			headers.some(([header]) => header.toLowerCase() === name);
+		const languages = acceptLanguage(navigator.languages);
+		if (languages && !has('accept-language'))
+			headers.push(['Accept-Language', languages]);
+		if (!has('pragma')) headers.push(['Pragma', 'no-cache']);
+		if (!has('cache-control')) headers.push(['Cache-Control', 'no-cache']);
 		if (!this.isReady || !this.#rpc) return headers;
 		const origin = headers.find(([name]) => name.toLowerCase() === 'origin');
 		try {

@@ -1,0 +1,23 @@
+<!doctype html>
+<title>HEADER PARITY</title>
+<script>
+	// a script, an image, a fetch, an XHR and a WebSocket handshake of this
+	// page, each request's headers kept by the fixture under
+	// `hp<run>-<kind>` (`?run=<id>`)
+	const run = new URLSearchParams(location.search).get('run') ?? '';
+	const at = (kind, path = '/echo-headers') =>
+		`${location.origin}${path}?k=hp${run}-${kind}`;
+	const script = document.createElement('script');
+	script.src = `${at('script')}&js`;
+	document.head.append(script);
+	const image = new Image();
+	image.src = at('image');
+	document.documentElement.append(image);
+	fetch(at('fetch'));
+	const xhr = new XMLHttpRequest();
+	xhr.open('GET', at('xhr'));
+	xhr.send();
+	const socket = new WebSocket(at('ws', '/ws-echo').replace(/^http/, 'ws'));
+	socket.onmessage = () => socket.close();
+	setTimeout(() => (window.__parity = true), 2500);
+</script>
