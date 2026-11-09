@@ -307,6 +307,11 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   fixed in the transport, with Chrome's header order (ws-handshake suite,
   reading the raw handshake the fixture received, both modes, against the
   page loaded natively).
+- `location ||= url` and `location ??= url` assign nothing, as natively (a
+  location is always set). The access API's `set1` navigated to whatever
+  the operator left, which was the location itself: the page reloaded, and
+  forever when the write was in its own script. It now navigates only when
+  the operator assigned (location-writes suite, both modes).
 - An `<embed>`'s or `<object>`'s resource goes out as the browser loads
   it: `Sec-Fetch-Dest: embed` or `object`, `Sec-Fetch-Mode: navigate`. The
   proxy loads it as a copy in every document (a fetch, handed to the

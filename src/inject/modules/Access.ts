@@ -181,15 +181,24 @@ export default class AccessModule extends Module<Client> {
 				righthand: any,
 			) => {
 				// name = normalizeKey(name);
-				const proxy = api.get(target, name);
-
 				const property = Symbol();
+				let value = api.get(target, name);
+				let assigned = false;
 				const object = {
-					[property]: proxy,
+					get [property]() {
+						return value;
+					},
+					set [property](v: unknown) {
+						value = v;
+						assigned = true;
+					},
 				};
 
 				const result = operate(object, property, righthand);
-				const value = object[property];
+				// `location ||= v` and `location ??= v` assign nothing (a
+				// location is always set): navigating to it again would reload
+				// the page, forever when the write is in its own script
+				if (!assigned) return result;
 
 				if (
 					typeof target === 'object' &&
