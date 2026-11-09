@@ -31,10 +31,14 @@ for (const [mode, base] of [
 ]) {
 	const page = await openDemo(browser, base);
 	await submitLanding(page, `${FIXTURE}pages/hist-1.html`);
-	let frame = null;
-	for (let i = 0; i < 40 && !frame; i++) {
+	// the page has loaded, not just its frame begun
+	let loaded = false;
+	for (let i = 0; i < 80 && !loaded; i++) {
 		await sleep(250);
-		frame = frameOf(page);
+		loaded =
+			(await frameOf(page)
+				?.evaluate(() => document.title)
+				.catch(() => null)) === 'HIST 1';
 	}
 	const status = () =>
 		Promise.race([
@@ -48,7 +52,12 @@ for (const [mode, base] of [
 				.catch((e) => String(e)),
 			sleep(4000).then(() => 'no answer'),
 		]);
-	ok(`${mode}: the page's requests answer`, (await status()) === 200);
+	const before = await status();
+	ok(
+		`${mode}: the page's requests answer`,
+		loaded && before === 200,
+		JSON.stringify({ loaded, status: before }),
+	);
 	const cdp = await page.context().newCDPSession(page);
 	await cdp.send('ServiceWorker.enable');
 	let stops = 0;
