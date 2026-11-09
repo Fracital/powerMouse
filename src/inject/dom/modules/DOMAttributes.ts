@@ -831,16 +831,24 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			['AREA', 'target'],
 			['FORM', 'target'],
 			['BASE', 'target'],
-			[HTMLAnchorElement, 'target', ogOrFalse('target')],
-			[HTMLAreaElement, 'target', ogOrFalse('target')],
-			[HTMLFormElement, 'target', ogOrFalse('target')],
-			[HTMLBaseElement, 'target', ogOrFalse('target')],
+			[this.client.global.HTMLAnchorElement, 'target', ogOrFalse('target')],
+			[this.client.global.HTMLAreaElement, 'target', ogOrFalse('target')],
+			[this.client.global.HTMLFormElement, 'target', ogOrFalse('target')],
+			[this.client.global.HTMLBaseElement, 'target', ogOrFalse('target')],
 		]);
 		domHooksModule.useAttributes(targetHook('formtarget'), [
 			['BUTTON', 'formtarget'],
 			['INPUT', 'formtarget'],
-			[HTMLButtonElement, 'formTarget', ogOrFalse('formtarget')],
-			[HTMLInputElement, 'formTarget', ogOrFalse('formtarget')],
+			[
+				this.client.global.HTMLButtonElement,
+				'formTarget',
+				ogOrFalse('formtarget'),
+			],
+			[
+				this.client.global.HTMLInputElement,
+				'formTarget',
+				ogOrFalse('formtarget'),
+			],
 		]);
 
 		// <iframe srcdoc>: the inline document gets the same shell a fetched
@@ -1059,7 +1067,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['LINK', 'href'],
 				['LINK', 'rel'],
 				['LINK', 'as'],
-				[HTMLLinkElement, 'as', () => false],
+				[this.client.global.HTMLLinkElement, 'as', () => false],
 				[
 					this.client.global.HTMLLinkElement,
 					'href',
@@ -1071,7 +1079,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							this.client.url.toString(),
 						).toString(),
 				],
-				[HTMLLinkElement, 'rel', () => false],
+				[this.client.global.HTMLLinkElement, 'rel', () => false],
 			],
 		);
 
@@ -1414,7 +1422,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			},
 			[
 				['*', 'style'],
-				[HTMLElement, 'style', () => false],
+				[this.client.global.HTMLElement, 'style', () => false],
 			],
 		);
 
@@ -2097,7 +2105,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// <video poster>
 		domHooksModule.useAttributes(routeAttribute('poster', routeBinary, true), [
 			['VIDEO', 'poster'],
-			[HTMLVideoElement, 'poster', originalURL('poster')],
+			[this.client.global.HTMLVideoElement, 'poster', originalURL('poster')],
 		]);
 
 		// <button formaction>, <input formaction>: the form's method decides how
@@ -2115,8 +2123,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[
 				['BUTTON', 'formaction'],
 				['INPUT', 'formaction'],
-				[HTMLButtonElement, 'formAction', originalURL('formaction')],
-				[HTMLInputElement, 'formAction', originalURL('formaction')],
+				[
+					this.client.global.HTMLButtonElement,
+					'formAction',
+					originalURL('formaction'),
+				],
+				[
+					this.client.global.HTMLInputElement,
+					'formAction',
+					originalURL('formaction'),
+				],
 			],
 		);
 
@@ -2214,7 +2230,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						this.client.url.toString(),
 					).toString(),
 			],
-			[HTMLFormElement, 'method', () => false],
+			[this.client.global.HTMLFormElement, 'method', () => false],
 		]);
 
 		// a base's href resolves against the document's URL, not against the

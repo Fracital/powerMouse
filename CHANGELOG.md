@@ -355,6 +355,20 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   route that rewrites carries none (what the GET would send is not known),
   and a body passed through keeps the origin's length, as natively
   (content-length suite, both modes).
+- An about:blank frame its creator reaches into before it loads no longer
+  hooks the creator's elements. Such a frame runs the creator's bundle, and
+  the property hooks for a link's `rel` and `as`, an element's `style`, a
+  video's `poster`, `target`, `formTarget`, `formAction` and a form's
+  `method` were keyed on that bundle's free constructors, so each frame put
+  its hooks on the creator's prototypes, and its own stayed native. The
+  frame's client, which no worker controls, then made blob: copies of the
+  creator's own loads: Google Docs builds three such frames and sets its
+  module preloads by property, so every kix module preload became an unused
+  blob: copy, each module was fetched two or three times, and each
+  `el.style` read went through three extra layers of hooks (200k reads took
+  900 ms, now 265 ms; the editor is ready about 0.6 s sooner on a cold load).
+  The hooks now go on the frame's own prototypes (blank-creator suite, both
+  modes).
 - A worker the page terminates at once no longer reports an import of the
   proxy's. A proxied worker imports the inject bundle (and a blob: worker the
   private URL of its script) before the page's script runs, and Chrome reports

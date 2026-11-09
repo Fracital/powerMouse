@@ -326,6 +326,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			properties,
 		]);
 	}*/
+	/**
+	 * A property hook's constructor is this client's realm's
+	 * (`this.client.global.X`), never the bundle's free global: an about:blank
+	 * frame its creator reaches into runs the creator's bundle, and a free
+	 * name would put the frame's hooks on the creator's prototypes (the frame,
+	 * which no worker controls, then copied the creator's own loads).
+	 */
 	useAttributes(
 		callback: HookCallback,
 		hooks: (AttributeHook | PropertyHook)[],
