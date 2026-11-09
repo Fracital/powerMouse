@@ -1,0 +1,30 @@
+<!doctype html>
+<title>OBJECT RESOURCES DOC</title>
+<link rel="stylesheet" href="object-resources.css" />
+<script src="object-resources.js"></script>
+<body>
+	<p id="styled">styled</p>
+	<img id="image" src="blank-pixel.svg" />
+	<script>
+		// what loaded: the image, the script's flag and the stylesheet's
+		// colour, once all three have or after five seconds (each load is
+		// what counts, as in blank-loads: a document no worker controls gets
+		// its loads as copies, which come after its own load event)
+		const started = Date.now();
+		const check = () => {
+			const image = document.getElementById('image');
+			const result = {
+				image: image.complete && image.naturalWidth > 0,
+				script: window.__objectScript === true,
+				style: getComputedStyle(document.getElementById('styled')).color,
+				base: document.baseURI.replace(/^.*\/pages\//, ''),
+			};
+			const all =
+				result.image && result.script && result.style === 'rgb(1, 2, 3)';
+			if (all || Date.now() - started > 5000)
+				parent.postMessage({ objres: result }, '*');
+			else setTimeout(check, 100);
+		};
+		check();
+	</script>
+</body>

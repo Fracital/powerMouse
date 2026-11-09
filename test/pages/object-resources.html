@@ -1,0 +1,18 @@
+<!doctype html>
+<title>OBJECT RESOURCES</title>
+<body>
+	<script>
+		// an <object> showing an HTML document whose image, script and
+		// stylesheet are relative URLs: what the document reports of each
+		window.__objres = null;
+		addEventListener('message', (event) => {
+			if (event.data && event.data.objres) window.__objres = event.data.objres;
+		});
+		const object = document.createElement('object');
+		object.type = 'text/html';
+		object.data = 'object-resources-doc.html';
+		object.width = 300;
+		object.height = 200;
+		document.body.append(object);
+	</script>
+</body>

@@ -291,6 +291,21 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- An `<object>` showing an HTML document loads that document's relative
+  images, scripts and stylesheets. Chrome sends no object load through a
+  service worker, so the document is a blob: copy the worker controls
+  neither, and its loads went to the proxy origin's own server, which
+  answered 404: three things stood in the way. A blob: document was not
+  taken for one no worker controls, so its loads were not made as copies;
+  its own markup was written without the care markup a page writes gets
+  (a script is copied at once, or it never runs; the rest after the write,
+  and again once the parser is past a script it waited for); and the copy
+  of a script asked the controlled page's synchronous bridge through a
+  class of its own bundle, which a blob: document's bundle is not. Its
+  XHRs went to the proxy origin's server too, unnoticed while its scripts
+  never ran: an XHR of a document no worker controls now goes through the
+  nearest controlled page, as fetch() already did (object-resources suite,
+  both modes, against the page loaded natively; inline-documents).
 - An error message names the page's URL right whatever the codec key. The
   xor codec's text may end in `:digits`, and the error-text cleaning took
   that for a line and column, decoded the rest to another URL and put the

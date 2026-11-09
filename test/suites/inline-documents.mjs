@@ -6,8 +6,9 @@
 // writes. Their readbacks stay as they were: the data: frame is origin
 // "null", the blob document shows the page's URL. An <object>'s document
 // cannot be controlled (Chrome never hands an object's loads, or its
-// document's own navigations, to a service worker): its XHR goes through the
-// page, its markup subresources do not reach the worker, recorded here.
+// document's own navigations, to a service worker): its script runs, its
+// XHR goes through the page, and its markup subresources reach the worker
+// as copies the page fetches (object-resources covers them against native).
 // A route hit with an unknown token gets the error page. Both demo modes.
 import {
 	done,
@@ -92,12 +93,11 @@ for (const [mode, base] of [
 	);
 	const object = loads('object');
 	ok(
-		`${mode}: an <object> document runs and its XHR goes through the page; its markup subresources do not reach the worker (recorded)`,
-		reports.object?.script === false || reports.object?.xhr === 200,
+		`${mode}: an <object> document runs, its XHR goes through the page, and its markup subresources reach the worker`,
+		reports.object?.script === true &&
+			reports.object?.xhr === 200 &&
+			Object.values(object ?? {}).every(Boolean),
 		JSON.stringify({ report: reports.object, seen: object }),
-	);
-	console.log(
-		`${mode}: object subresources through the worker: ${JSON.stringify(object)}`,
 	);
 	errors.push(...page.errors.map((e) => `${mode}: ${e}`));
 	await page.close();

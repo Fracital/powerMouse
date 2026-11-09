@@ -368,7 +368,10 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 						{ once: true },
 					);
 
-					fetch(url, init)
+					// through a controlled realm (this one, or an ancestor when this
+					// document is one no service worker controls: an <object>'s)
+					that.client
+						.routedFetch(url, init)
 						.then(async (response) => {
 							this.#onHeaders(undefined, response, response.url);
 							const buffer = await response.arrayBuffer();
@@ -377,7 +380,12 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 						.catch((error) => this.#onDone(error));
 				} else {
 					try {
-						const response = syncModule.fetch(url, init);
+						// the controlled client's own bridge (it may be of another
+						// bundle): this document's reaches no worker when none controls it
+						const bridge =
+							(that.client.controlledClient() as DocumentClient | null)
+								?.syncBridge ?? syncModule;
+						const response = bridge.fetch(url, init);
 						this.#onHeaders(undefined, response, response.rawUrl);
 						this.#onDone(undefined, response, response.rawArrayBuffer);
 					} catch (error) {

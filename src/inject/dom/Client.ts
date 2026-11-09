@@ -10,8 +10,12 @@ import StompURL from '../../StompURL';
 import { HOOK_ERROR, OPEN_TAB, WORKER_BASE } from '../../transport/messages';
 import Client from '../Client';
 import cloneRawNode, { nativeAttributes, parseHTML } from './cloneNode';
-import { scriptKind, shouldRewriteScript } from './modules/DOMAttributes';
+import DOMAttributesModule, {
+	scriptKind,
+	shouldRewriteScript,
+} from './modules/DOMAttributes';
 import { MARKER } from './modules/MutationObserver';
+import SyncModule from './modules/Sync';
 import {
 	documentNonce,
 	guardDocument,
@@ -504,6 +508,14 @@ export default class DocumentClient extends Client {
 	/** @internal give the loads the parser made from markup the page wrote their copies (DOMAttributes; DOMHooks' write calls it) */
 	writtenLoads?: (document: Document) => void;
 	/**
+	 * @internal this client's synchronous bridge, for a client of another
+	 * bundle: a blob: document runs a bundle of its own, whose module classes
+	 * are not this one's, so it cannot look this client's module up itself
+	 */
+	get syncBridge(): SyncModule | undefined {
+		return this.getModule(SyncModule);
+	}
+	/**
 	 * @internal inject this page's bundle into a child frame's window nothing
 	 * injected yet, as reading its contentWindow does (IFrame sets it):
 	 * routeHTML's javascript: wrapper calls it from the frame, whose rewritten
@@ -739,6 +751,14 @@ export default class DocumentClient extends Client {
 			}
 
 		const node = this.global.document.createElement('div');
+		// a document no worker controls (an <object>'s HTML document is a
+		// blob: copy) gets its loads as copies, and its own markup is written
+		// as markup the page writes is (WriteStream): a script copied at once,
+		// or it would never run, the rest after the write (writtenLoads)
+		const uncontrolled =
+			!!this.getModule(DOMAttributesModule)?.uncontrolled?.();
+		const writing = this.writing;
+		if (uncontrolled) this.writing = true;
 		try {
 			// workaround:
 			// we cannot append any descendants of parsed into any element (whether it is attached or detached) because it will pre-fetch the images in parsed
@@ -754,6 +774,7 @@ export default class DocumentClient extends Client {
 			this.rewriteInlineScripts(node, true);
 		} finally {
 			this.#parseBase = null;
+			this.writing = writing;
 		}
 
 		const newDocument =
@@ -769,6 +790,17 @@ export default class DocumentClient extends Client {
 			// script of the page
 			this.runHook('post');
 			this.write.call(this.global.document, newDocument);
+			if (uncontrolled) {
+				// what the write parsed now; what comes after a script it waits
+				// for, once the parser is through (a copy is not made twice)
+				const document = this.global.document;
+				this.writtenLoads?.(document);
+				document.addEventListener(
+					'DOMContentLoaded',
+					() => this.writtenLoads?.(document),
+					{ once: true },
+				);
+			}
 			this.global.document.close();
 		};
 		// The browser runs a timer's callback in the realm that made it, and

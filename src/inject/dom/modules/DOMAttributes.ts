@@ -25,7 +25,6 @@ import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
 import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
 import { hookWrite } from './MutationObserver';
 import NavigationHintModule from './NavigationHint';
-import SyncModule from './Sync';
 import TokenListsModule from './TokenLists';
 
 const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
@@ -117,8 +116,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const NativeBlob = this.client.global.Blob;
 
 		// A document no service worker controls (an about:blank frame or popup
-		// the page built, or a document it opened: Chrome hands neither to the
-		// page's worker) loads its elements from the proxy origin's own server,
+		// the page built, a document it opened, or a blob: document: Chrome
+		// hands none to the page's worker, and an <object>'s HTML document is
+		// a blob: copy, since Chrome sends no object load through a worker)
+		// loads its elements from the proxy origin's own server,
 		// where a route means nothing. Its loads are fetched through the proxy
 		// instead (routedFetch, from the nearest controlled ancestor) and the
 		// element gets a blob: URL of the copy, written underneath the hooks:
@@ -127,7 +128,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const uncontrolled = () =>
 			!this.client.controlled &&
 			(this.client.opened ||
-				this.client.global.location.href === 'about:blank');
+				this.client.global.location.href === 'about:blank' ||
+				this.client.global.location.protocol === 'blob:');
 		this.uncontrolled = uncontrolled;
 		// the proxy origin from the base URL: an about:blank document's own
 		// origin reads "null"
@@ -425,7 +427,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			if (!this.client.workerTransport) return null;
 			const controlled =
 				this.client.controlledClient() as DocumentClient | null;
-			const sync = controlled?.getModule(SyncModule);
+			// asked of the controlled client itself: it may be of another bundle
+			const sync = controlled?.syncBridge;
 			if (!sync) return null;
 			try {
 				const response = sync.fetch(
