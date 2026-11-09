@@ -1,7 +1,9 @@
 // The rewrite cache: a script's rewritten output is kept by everything it
 // depends on, so the second load of the same script is answered from it,
 // byte for byte what the rewrite made, while a change of any one part (the
-// body, the URL, the script type, the config) is a miss. A response the
+// body, the URL, the script type, the config) is a miss, but for the client's
+// name, which a controller mints anew: a page script that never mentions it
+// rewrites the same under any. A response the
 // HTTP cache may not keep for privacy (no-store, private) is never kept, no-cache is,, a host with the
 // cache off keeps nothing, and clearCache() empties it. The request log says
 // which it was (`rewriteCache`: hit, miss or skip). The suite constructs its
@@ -159,6 +161,20 @@ ok(
 ok(
 	'and a hit under that config the second time',
 	(await load('name=a')) === 'hit',
+);
+
+// a host that keeps its controller's id across a reload (a new controller,
+// the same address) gets the outputs it kept: the client's name is minted
+// again, and a script that does not mention it rewrites the same
+await controller({ id: 'rcKeep' });
+ok(
+	'a script under a kept id is a miss first',
+	(await load('name=k')) === 'miss',
+);
+await controller({ id: 'rcKeep' });
+ok(
+	'and a hit for the next controller of the same id, whose client name differs',
+	(await load('name=k')) === 'hit',
 );
 
 // clearCache empties it

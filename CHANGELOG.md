@@ -320,7 +320,11 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   reached its parent through the client, by the default name and by the
   learned one in ten ways, and through `evalSnapshot`; now through none of
   them. A fresh about:blank frame's native eval, reached by a literal name,
-  still sees the real top (a known limitation below).
+  still sees the real top (a known limitation below). The rewrite cache
+  leaves the minted name out of a page script's key unless the script
+  mentions it (a worker's preamble always names it), so a host that keeps
+  its controller's id across a reload still gets the outputs it kept
+  (rewrite-cache suite).
 - An `<object>` showing an HTML document loads that document's relative
   images, scripts and stylesheets. Chrome sends no object load through a
   service worker, so the document is a blob: copy the worker controls

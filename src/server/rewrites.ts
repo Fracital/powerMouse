@@ -1260,6 +1260,25 @@ export function registerRewrites(
 			pooled === null ? 'service-worker' : split ? 'pool split' : 'pool';
 		return pooled ?? modifyJS(text, url, rewriter.config, type);
 	};
+	// the config a script's rewrite depends on, for its cache key: all of it
+	// but the client's name, which a controller mints anew (a host that keeps
+	// its id across a reload would miss every script). A page script's
+	// output names it only where the body mentions it (the rewriter routes
+	// it); a worker's preamble always does
+	const cacheConfig = (config: Config, type: ScriptType, text: string) => {
+		const client = config.names?.client;
+		if (
+			client === undefined ||
+			type === 'worker' ||
+			type === 'workerModule' ||
+			text.includes(client)
+		)
+			return JSON.stringify(config);
+		return JSON.stringify({
+			...config,
+			names: { ...config.names, client: undefined },
+		});
+	};
 	const scriptTypeFactory = (type: ScriptType) =>
 		genericForward(
 			rewriter,
@@ -1284,7 +1303,7 @@ export function registerRewrites(
 						BUILD,
 						url.toString(),
 						type,
-						JSON.stringify(rewriter.config),
+						cacheConfig(rewriter.config, type, text),
 						url.codec.key,
 					],
 					text,
