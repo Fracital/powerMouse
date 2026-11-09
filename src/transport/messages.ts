@@ -279,8 +279,8 @@ export interface RequestInfo {
 	cached: boolean;
 	/** a script's rewritten output: from the rewrite cache, made now and kept, or made now and not kept (the response may not be kept) */
 	rewriteCache?: 'hit' | 'miss' | 'skip';
-	/** where a script made now was rewritten: one of the controller's rewrite workers, or the service worker itself */
-	rewriteIn?: 'pool' | 'service-worker';
+	/** where a script made now was rewritten: one of the controller's rewrite workers, several of them (a large bundle split across them), or the service worker itself */
+	rewriteIn?: 'pool' | 'pool split' | 'service-worker';
 	/** Content-Length of the response, when known */
 	bytes: number | null;
 	error?: string;

@@ -15,6 +15,7 @@ import {
 	RewriteRequest,
 } from './rewriteMessages';
 import { addRouteScopes } from './routeURL';
+import { planSplit } from './splitRewrite';
 import StompURL from './StompURL';
 import { REWRITE_PORT } from './transport/messages';
 import { RpcHelper } from './transport/rpc';
@@ -25,12 +26,22 @@ function rewrite(request: RewriteRequest): string {
 	addRouteScopes(request.scopes);
 	const { codec } = parseConfig(request.config, request.codecKey);
 	const url = new StompURL(new URL(request.url), codec, request.directory);
-	return modifyJS(request.script, url, request.config, request.type);
+	return modifyJS(
+		request.script,
+		url,
+		request.config,
+		request.type,
+		'',
+		request.compact,
+	);
 }
 
 function serve(port: MessagePort) {
 	const rpc = new RpcHelper<RewriteBound, Record<string, never>>(
-		{ rewrite: async (request) => [rewrite(request), []] },
+		{
+			rewrite: async (request) => [rewrite(request), []],
+			plan: async (request) => [planSplit(request.script, request.parts), []],
+		},
 		REWRITE_RPC,
 		(data, transfer) => port.postMessage(data, transfer),
 	);

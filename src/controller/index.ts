@@ -197,7 +197,8 @@ export interface ControllerInit {
 	/**
 	 * How many Workers the controller starts to rewrite scripts for the
 	 * service worker, whose own thread would otherwise rewrite one script at
-	 * a time (from `rewriteWorker.js` in `directory`). Default: half the
+	 * a time (from `rewriteWorker.js` in `directory`). A large webpack
+	 * bundle is shared out among them, a part to each. Default: half the
 	 * cores, one to four; `0` starts none. Whenever no worker answers (none
 	 * started, one failed to load or crashed, this page closed), the service
 	 * worker rewrites the script itself.

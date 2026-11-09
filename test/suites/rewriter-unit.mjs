@@ -20,6 +20,7 @@ const entry = `${OUT}rewriter-unit-entry.mjs`;
 writeFileSync(
 	entry,
 	`export { modifyJS, postMessageMethod, routeJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
+export { planSplit, splitSources, stitch } from ${JSON.stringify(`${root}src/splitRewrite.ts`)};
 export { routeHTML, modifyHTML, modifyRefresh, parseRefresh } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
 export { parseDataURI, createDataURI } from ${JSON.stringify(`${root}src/routeURL.ts`)};
 export { modifyCSS } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
@@ -40,6 +41,9 @@ await esbuild.build({
 });
 const {
 	modifyJS,
+	planSplit,
+	splitSources,
+	stitch,
 	postMessageMethod,
 	routeJS,
 	routeHTML,
@@ -647,5 +651,54 @@ console.warn = warn;
 			parses(carried),
 		carried,
 	);
+}
+{
+	// a large webpack bundle split across the rewrite workers is put back
+	// together byte for byte as one rewrite of the whole makes it: the
+	// runtime form (an IIFE declaring its module table) and a chunk
+	// (`.push([[ids], {modules}])`); what is not that shape, or has a module
+	// that could see a name of the window's bound around it, is not split
+	const whole = (script) => modifyJS(script, url, config, 'generic');
+	const split = (script, parts) => {
+		const plan = planSplit(script, parts);
+		if (!plan) return null;
+		const sources = splitSources(script, plan);
+		const part = (text) => modifyJS(text, url, config, 'generic', '', true);
+		return stitch(part(sources.skeleton), sources.parts.map(part), plan);
+	};
+	const runtime = readFileSync(`${root}test/pages/split-bundle.js.bin`, 'utf8');
+	const chunk =
+		'(self.webpackChunk=self.webpackChunk||[]).push([["c"],{' +
+		Array.from(
+			{ length: 40 },
+			(_, i) =>
+				`${i}:(e,t,n)=>{e.exports=[location.href,top,o[k${i}],w.postMessage(${i}n,"*"),eval("${i}")]}`,
+		).join(',') +
+		'}]);' +
+		' '.repeat(4000);
+	for (const [name, script] of [
+		['the runtime form', runtime],
+		['a chunk', chunk],
+	])
+		for (const parts of [2, 4])
+			ok(
+				`${name} split in ${parts} is the whole's rewrite byte for byte`,
+				split(script, parts) === whole(script),
+				`${String(split(script, parts)).slice(0, 120)}`,
+			);
+	const notSplit = [
+		[
+			'an IIFE that binds location around its modules',
+			'(()=>{var location=1,r={1(e){e.exports=location},2(e){},3(e){},4(e){}};})();',
+		],
+		[
+			'a table entry that is not a module function',
+			'(()=>{var r={1(e){},2:5,3(e){},4(e){}};})();',
+		],
+		['two statements', 'a();b();'],
+		['no module table', '(()=>{var r=1;})();'],
+	];
+	for (const [name, script] of notSplit)
+		ok(`not split: ${name}`, planSplit(script, 2) === null, script);
 }
 await done();

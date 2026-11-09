@@ -6,9 +6,10 @@
 // with the page or a crash) or the worker took longer than the timeout. A
 // port that closed or timed out is not used again.
 import type { Config } from '../config';
-import type { ScriptType } from '../rewriteJS';
+import { minified, ScriptType } from '../rewriteJS';
 import { REWRITE_READY, REWRITE_RPC, RewriteBound } from '../rewriteMessages';
 import { routeScopeList } from '../routeURL';
+import { SPLIT_MIN, splitSources, stitch } from '../splitRewrite';
 import type StompURL from '../StompURL';
 import { RpcHelper } from '../transport/rpc';
 
@@ -64,13 +65,8 @@ export class RewritePool {
 	close() {
 		for (const member of this.#members) this.#drop(member, 'released');
 	}
-	/** the script rewritten by a worker, or null when the caller must rewrite it itself */
-	async rewrite(
-		script: string,
-		url: StompURL,
-		config: Config,
-		type: ScriptType,
-	): Promise<string | null> {
+	/** the worker with the fewest scripts in hand */
+	#pick(): Member | undefined {
 		let member: Member | undefined;
 		for (const candidate of this.#members)
 			if (
@@ -79,24 +75,23 @@ export class RewritePool {
 				(!member || candidate.busy < member.busy)
 			)
 				member = candidate;
+		return member;
+	}
+	/** a call to the worker with the fewest in hand, null when none answered in time */
+	async #call<K extends keyof RewriteBound>(
+		method: K,
+		request: RewriteBound[K][0],
+	): Promise<RewriteBound[K][1] | null> {
+		const member = this.#pick();
 		if (!member) return null;
 		member.busy++;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
 			return await Promise.race([
-				member.rpc.call('rewrite', {
-					script,
-					url: url.toString(),
-					directory: url.directory,
-					codecKey: url.codec.key,
-					config,
-					type,
-					scopes: routeScopeList(),
-				}),
+				member.rpc.call(method, request),
 				new Promise<never>((_, reject) => {
 					timer = setTimeout(() => {
-						const late = member!;
-						this.#drop(late, `took over ${this.#timeout} ms`);
+						this.#drop(member, `took over ${this.#timeout} ms`);
 						reject(new Error('rewrite worker timed out'));
 					}, this.#timeout);
 				}),
@@ -107,5 +102,71 @@ export class RewritePool {
 			clearTimeout(timer);
 			member.busy--;
 		}
+	}
+	#rewriteOne(
+		script: string,
+		url: StompURL,
+		config: Config,
+		type: ScriptType,
+		compact?: boolean,
+	): Promise<string | null> {
+		return this.#call('rewrite', {
+			script,
+			url: url.toString(),
+			directory: url.directory,
+			codecKey: url.codec.key,
+			config,
+			type,
+			scopes: routeScopeList(),
+			...(compact === undefined ? {} : { compact }),
+		});
+	}
+	/**
+	 * A large webpack bundle rewritten by every live worker at once
+	 * (splitRewrite): one plans the split, then the skeleton and each group
+	 * go to the one with the fewest in hand. Null when it is not split (not a
+	 * page's classic script, too small, not minified, fewer than two workers,
+	 * a shape not recognised) or a part did not come back: the whole is then
+	 * rewritten as one.
+	 */
+	async #split(
+		script: string,
+		url: StompURL,
+		config: Config,
+		type: ScriptType,
+	): Promise<string | null> {
+		if (type !== 'generic' || script.length < SPLIT_MIN) return null;
+		const live = this.#members.filter(
+			(member) => member.alive && member.ready,
+		).length;
+		if (live < 2 || !minified(script)) return null;
+		const plan = await this.#call('plan', { script, parts: live });
+		if (!plan) return null;
+		const { skeleton, parts } = splitSources(script, plan);
+		const outputs = await Promise.all(
+			[skeleton, ...parts].map((text) =>
+				this.#rewriteOne(text, url, config, type, true),
+			),
+		);
+		if (outputs.some((output) => output === null)) return null;
+		return stitch(outputs[0]!, outputs.slice(1) as string[], plan);
+	}
+	/**
+	 * The script rewritten by the workers, or null when the caller must
+	 * rewrite it itself. `split` is told when it was split across them.
+	 */
+	async rewrite(
+		script: string,
+		url: StompURL,
+		config: Config,
+		type: ScriptType,
+		split?: () => void,
+	): Promise<string | null> {
+		const parts = await this.#split(script, url, config, type);
+		if (parts !== null) {
+			split?.();
+			return parts;
+		}
+		return this.#rewriteOne(script, url, config, type);
 	}
 }

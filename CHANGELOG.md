@@ -291,6 +291,18 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A large webpack bundle is rewritten by every rewrite worker at once.
+  One script was one worker's work, and Discord's 13 MB main bundle took
+  three and a half seconds in one while the page waited for it. A minified
+  page script of 512 KB or more in a shape the split recognises (webpack's
+  runtime, an IIFE declaring its module table, or a chunk pushing one) is
+  cut into a group of modules per worker; the groups are rewritten side by
+  side and put back together byte for byte as one rewrite of the whole
+  makes it (checked on all 10 scripts that split among 46 MB of Discord's,
+  CNN's and Docs' scripts; Docs' are not webpack bundles). Discord's
+  login is ready in about 6.0 s through a local demo against 6.7 s. The
+  request log says `pool split` (split-rewrite suite; rewriter-unit suite:
+  byte identity, and the shapes not split).
 - A BigInt literal stays a BigInt in rewritten code. Escodegen prints a
   BigInt only from its raw text, which the rewriter's parse does not keep, so
   `0n` came out as `0`, a Number: arithmetic with BigInts threw a TypeError,

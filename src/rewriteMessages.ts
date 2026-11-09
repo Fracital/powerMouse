@@ -3,6 +3,7 @@
 // controller and its declarations import, because this names the rewriter.
 import type { Config } from './config';
 import type { ScriptType } from './rewriteJS';
+import type { SplitPlan } from './splitRewrite';
 
 /** rpc id on a rewrite worker's port */
 export const REWRITE_RPC = 'stomp-rewrite';
@@ -25,9 +26,19 @@ export interface RewriteRequest {
 	type: ScriptType;
 	/** the service worker's route scopes (routeURL), origin included */
 	scopes: string[];
+	/** printed compact whatever it looks like: a part of a split script (splitRewrite) */
+	compact?: boolean;
+}
+
+/** a large script to plan a split of (splitRewrite) */
+export interface PlanRequest {
+	script: string;
+	/** how many groups */
+	parts: number;
 }
 
 /** implemented by a rewrite worker (src/rewriteWorker.ts), called by the service worker */
 export type RewriteBound = {
 	rewrite: [RewriteRequest, string];
+	plan: [PlanRequest, SplitPlan | null];
 };

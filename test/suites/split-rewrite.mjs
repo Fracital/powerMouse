@@ -1,0 +1,88 @@
+// A large webpack bundle is rewritten by several rewrite workers at once and
+// runs as natively. Discord's 13 MB main bundle was one worker's work for
+// three and a half seconds; a minified page script of 512 KB or more in a
+// shape the split recognises (here the runtime form: an IIFE declaring a
+// table of 2000 module functions) is cut into one group per worker, and the
+// groups' output put back together. Its modules read location and top,
+// index an object, eval and use BigInts; the results hash the same as the
+// page loaded natively. The request log says the bundle was rewritten split
+// ("pool split") with four workers, and whole ("pool") with one. The suite
+// constructs its own controllers on the demo's service worker, as
+// rewrite-cache does.
+import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
+
+const browser = await launch();
+const PAGE = `${FIXTURE}pages/split-bundle.html`;
+
+const native = await (async () => {
+	const page = await browser.newPage();
+	await page.goto(PAGE);
+	const value = await page.evaluate(() => window.__split);
+	await page.close();
+	return value;
+})();
+ok(
+	'natively: the bundle ran every module',
+	native?.count === 2000,
+	JSON.stringify(native),
+);
+
+/** the bundle through a controller with `workers` rewrite workers: its results and its log entry */
+async function proxied(workers) {
+	const page = await openDemo(browser, PROXY);
+	await page.evaluate(
+		async ({ workers, url }) => {
+			const old = window.controller;
+			window.__log = [];
+			const controller = new window.StompController({
+				serviceworker: (
+					await navigator.serviceWorker.getRegistration('/stomp/')
+				).active,
+				transport: old.transport,
+				directory: '/stomp/',
+				codec: 'xor',
+				rewriteWorkers: workers,
+				onRequest: (info) => window.__log.push(info),
+			});
+			await controller.wait();
+			const element = document.createElement('iframe');
+			element.id = 'split-frame';
+			document.body.append(element);
+			controller.createFrame(element).go(url);
+		},
+		{ workers, url: PAGE },
+	);
+	let result = null;
+	let entry = null;
+	for (let i = 0; i < 240 && !(result && entry); i++) {
+		await sleep(250);
+		for (const frame of page.frames())
+			result ??= await frame
+				.evaluate(() => window.__split ?? null)
+				.catch(() => null);
+		entry = await page.evaluate(() =>
+			window.__log.find((info) => info.url.includes('split-bundle.js.bin')),
+		);
+	}
+	await page.close();
+	return { result, entry };
+}
+
+for (const [workers, expected] of [
+	[4, 'pool split'],
+	[1, 'pool'],
+]) {
+	const { result, entry } = await proxied(workers);
+	ok(
+		`${workers} rewrite worker${workers > 1 ? 's' : ''}: the bundle is rewritten ${expected === 'pool split' ? 'split across them' : 'whole'}`,
+		entry?.rewriteIn === expected,
+		JSON.stringify({ rewriteIn: entry?.rewriteIn, ms: entry?.ms }),
+	);
+	ok(
+		`${workers} rewrite worker${workers > 1 ? 's' : ''}: every module ran as natively`,
+		JSON.stringify(result) === JSON.stringify(native),
+		`native ${JSON.stringify(native)} proxied ${JSON.stringify(result)}`,
+	);
+}
+
+await done(browser);

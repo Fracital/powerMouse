@@ -249,7 +249,7 @@ type BodyTransform = (
 /** what a body's transform tells the request log */
 interface Note {
 	rewriteCache?: RewriteCacheOutcome;
-	rewriteIn?: 'pool' | 'service-worker';
+	rewriteIn?: 'pool' | 'pool split' | 'service-worker';
 }
 
 interface Rewriter {
@@ -1231,10 +1231,18 @@ export function registerRewrites(
 		type: ScriptType,
 		note: Note,
 	): Promise<string> => {
+		let split = false;
 		const pooled = rewriter.pool?.live
-			? await rewriter.pool.rewrite(text, url, rewriter.config, type)
+			? await rewriter.pool.rewrite(
+					text,
+					url,
+					rewriter.config,
+					type,
+					() => (split = true),
+				)
 			: null;
-		note.rewriteIn = pooled === null ? 'service-worker' : 'pool';
+		note.rewriteIn =
+			pooled === null ? 'service-worker' : split ? 'pool split' : 'pool';
 		return pooled ?? modifyJS(text, url, rewriter.config, type);
 	};
 	const scriptTypeFactory = (type: ScriptType) =>

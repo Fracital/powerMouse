@@ -234,7 +234,8 @@ const cValue = 't$v';
 // line 1 natively anyway. Code written to be read keeps one statement per
 // line, so an error's line number still points near the page's own.
 const COMPACT = { format: { compact: true } };
-const minified = (script: string) => {
+/** whether a script is printed compact: minified code comes back minified */
+export const minified = (script: string) => {
 	let lines = 1;
 	for (
 		let at = script.indexOf('\n');
@@ -323,6 +324,11 @@ export function modifyJS(
 	type: ScriptType = 'generic',
 	/** code the caller needs to run first (an inline script's currentScript restore): placed after the directive prologue */
 	preamble = '',
+	/**
+	 * print compact (true) or readable (false) whatever the script looks like:
+	 * a part of a larger script (splitRewrite) is printed as the whole would be
+	 */
+	compact?: boolean,
 ) {
 	const names = helperNames(config);
 	try {
@@ -1167,7 +1173,7 @@ if (!${names.client}.applied)
 				? `import.meta.url = ${JSON.stringify(url.toString())};import.meta.resolve = (s) => ${BARE_SPECIFIER}.test(s = String(s)) ? s : new URL(s, import.meta.url).href;`
 				: '') +
 			preamble +
-			generate(tree, minified(script) ? COMPACT : undefined) +
+			generate(tree, (compact ?? minified(script)) ? COMPACT : undefined) +
 			trailer
 		);
 	} catch (error) {
