@@ -6,6 +6,7 @@ import AudioModule from './modules/Audio';
 import BlobDocumentsModule from './modules/BlobDocuments';
 import ContextModule from './modules/Context';
 import { CookiesModule } from './modules/Cookies';
+import CredentialsModule from './modules/Credentials';
 import CSSOMModule from './modules/CSSOM';
 import CSSReadbackModule from './modules/CSSReadback';
 import DOMAttributesModule from './modules/DOMAttributes';
@@ -32,6 +33,7 @@ export function addClientModules(client: DocumentClient) {
 	baseModules(client);
 	client.addModule(HistoryModule);
 	client.addModule(NavigatorModule);
+	client.addModule(CredentialsModule);
 	client.addModule(LocationModule);
 	client.addModule(AnchorModule);
 	client.addModule(DOMAttributesModule);

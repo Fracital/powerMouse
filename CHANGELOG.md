@@ -301,6 +301,25 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   suite, both modes, against the page loaded natively; WPT fetch-metadata
   element-embed's sec-fetch-dest passes, its entry is off the expected
   list).
+- FedCM is unavailable to a proxied page, as in a browser without it.
+  `navigator.credentials.get({ identity })` (Google One Tap, seen on Stack
+  Overflow and TikTok) makes the browser itself fetch the identity
+  provider's `/.well-known/web-identity`, its config and its accounts
+  endpoint, from its own process and never through the service worker: the
+  user's real Google cookies went straight to Google with a client id that
+  names the real site (measured in same-origin mode; isolated mode's frame
+  lacks the `identity-credentials-get` permission, so Chrome refused it
+  there before fetching). The proxy cannot route those requests, so a page
+  now reads as in Chrome with `--disable-features=FedCm`:
+  `IdentityCredential`, `IdentityProvider`, `IdentityCredentialError`,
+  `NavigatorLogin` and `navigator.login` are gone, and an identity request
+  rejects with `NotSupportedError: FedCM is not supported.` (after the same
+  dictionary TypeErrors and an aborted signal's reason). Sign-in libraries
+  fall back to their iframe or popup flow, which goes through the proxy.
+  Every other `credentials.get` (passwords, federated, WebAuthn) goes to
+  the browser as before (fedcm suite, both modes, against a top-level page
+  with FedCM off and against the page natively in a frame shaped like each
+  mode's).
 - A JSON or CSS module loads as what it is. Every import was routed as a
   module script and rewritten, so a JSON module that also parses as a
   script (`{}`, an array) came back with the module preamble
@@ -1969,6 +1988,12 @@ Fixed while testing real sites and a feature fixture:
   nothing); stale entries are served only within the origin's
   `stale-while-revalidate` and `stale-if-error` windows.
 - `getSVGDocument()` is not spoofed.
+- WebAuthn with the real site's `rpId` (a passkey sign-in) is not a
+  suffix of the proxy origin, so Chrome tries a related-origin fetch of
+  `https://<rpId>/.well-known/webauthn` itself, past the service worker
+  (measured on Chrome 152: its SecurityError says the fetch was made;
+  neither Playwright nor CDP shows the request), and the ceremony fails.
+  That request reaches the real site directly; it is not handled yet.
 - `CSSRule.cssText` assignment is not rewritten (a no-op for style rules).
   Un-rewritten `url()` values read back as the page wrote them (relative
   when written relative), not as the absolute URL a browser would serialise.
