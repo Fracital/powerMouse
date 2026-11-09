@@ -291,6 +291,17 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A controller shakes hands again after a service worker restart that comes
+  soon after its last handshake. A restarted worker knows no controller and
+  asks them once to register again; the controller ignored that request for
+  two seconds after a handshake, taking it for the startup broadcast of the
+  worker its own handshake had started. A worker that stopped within those
+  two seconds (Chrome stops idle ones; a crash) took the registration with
+  it, and its successor's only request was ignored: every routed request of
+  the page fell through to the host, a 404, until a later restart. Within
+  the two seconds the controller now asks the worker over its port and
+  shakes hands again when it gets no answer within a second (sw-restart
+  suite, both modes, the worker stopped over CDP).
 - A blob: worker's requests are judged as the page that made it. The
   worker's client URL is the blob: URL, which the service worker could not
   decode to a page, so it took the request as its target's own: an

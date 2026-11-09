@@ -288,8 +288,10 @@ export function openRequest(data: unknown): string | null {
 	return typeof url === 'string' ? url : null;
 }
 
-/** ignore the service worker's "revive" broadcast this soon after we registered */
+/** this soon after we registered, a "revive" broadcast is checked over the port rather than acted on */
 const REVIVE_GUARD_MS = 2000;
+/** how long that check waits for the worker to answer */
+const REVIVE_PING_MS = 1000;
 /**
  * how long a service worker of another build gets to update and activate
  * before wait() resolves on the one we have (the new one is adopted when it
@@ -666,17 +668,28 @@ export class StompController extends EventTarget {
 		// and only a controller of ours is adopted; a foreign worker in
 		// control changes nothing about which worker we talk to (the
 		// controllerchange handler below applies the same test).
-		navigator.serviceWorker.addEventListener('message', (event) => {
+		navigator.serviceWorker.addEventListener('message', async (event) => {
 			if (
 				typeof event.data !== 'object' ||
 				event.data === null ||
 				!(SW_REVIVE in event.data) ||
-				!this.lastHandshake ||
-				Date.now() - this.lastHandshake <= REVIVE_GUARD_MS
+				!this.lastHandshake
 			)
 				return;
 			const source = event.source;
 			if (!(source instanceof ServiceWorker) || !this.#ours(source)) return;
+			// soon after a handshake the revive is usually from the worker that
+			// handshake started, which knows us already. Usually: a worker that
+			// stopped right after it (Chrome stops idle ones; a crash) took the
+			// registration with it, and its successor's revive is the only one
+			// there will be. So ask over the port instead of assuming: an
+			// answer means it knows us, silence or a dead port means shake
+			// hands again
+			if (
+				Date.now() - this.lastHandshake <= REVIVE_GUARD_MS &&
+				(await this.#knownToWorker())
+			)
+				return;
 			const active = navigator.serviceWorker.controller;
 			this.serviceworker =
 				active && this.#ours(active)
@@ -894,6 +907,28 @@ export class StompController extends EventTarget {
 		} catch (error) {
 			console.error('Stomp: the transport module could not be imported', error);
 			this.transport = failingTransport(error);
+		}
+	}
+	/** whether the worker at the other end of our port answers within REVIVE_PING_MS (it holds this controller) */
+	async #knownToWorker(): Promise<boolean> {
+		const rpc = this.#rpc;
+		if (!rpc) return false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				rpc.call('route', 'https://example.com/'),
+				new Promise((_, reject) => {
+					timer = setTimeout(
+						() => reject(new Error('no answer')),
+						REVIVE_PING_MS,
+					);
+				}),
+			]);
+			return true;
+		} catch (error) {
+			return false;
+		} finally {
+			clearTimeout(timer);
 		}
 	}
 	/** (re)register with the service worker once the transport is hosted */
