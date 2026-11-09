@@ -399,6 +399,11 @@ function genericForward(
 		// client id is the document being created, and asking for it would
 		// wait on this very response
 		let client: URL | null = null;
+		// a blob: worker whose minting page this worker does not know (it
+		// restarted since, which empties what it was told, or the blob was
+		// minted inside a worker): judged as another site, never as the
+		// target's own, so it gets no same-origin credentials or Strict cookies
+		let unknownBlob = false;
 		if (!navigation && context?.clientId && typeof clients !== 'undefined') {
 			const id = context.clientId;
 			client = clientURLs.get(id) ?? null;
@@ -411,6 +416,7 @@ function genericForward(
 						? (decode(found.url) ??
 							(found.url.startsWith('blob:') ? blobOriginOf(found.url) : null))
 						: null;
+					unknownBlob = !client && !!found?.url.startsWith('blob:');
 				} catch (error) {
 					// the client is gone
 				}
@@ -462,7 +468,7 @@ function genericForward(
 			refererSource ??
 			(navigation && nestedRoute ? new URL(nestedRoute) : null);
 		const sameOrigin =
-			initiator !== null && initiator.origin === url.url.origin;
+			!unknownBlob && initiator !== null && initiator.origin === url.url.origin;
 
 		// the browser sends Origin on cross-origin CORS requests and on every
 		// request with a body
@@ -475,14 +481,16 @@ function genericForward(
 
 		// Sec-Fetch-Site: `none` for a navigation nobody in a page started (the
 		// host's, which the user typed or picked); a subresource whose client
-		// is not a proxied page and not a blob: worker a page registered (one
-		// minted in a worker) is taken as its target's own, the benefit the
-		// credentials mode gives it too
-		let site: Site = initiator
-			? siteBetween(initiator, url.url)
-			: navigation
-				? 'none'
-				: 'same-origin';
+		// is not a proxied page is taken as its target's own, the benefit the
+		// credentials mode gives it too, except a blob: worker of a page this
+		// worker does not know (unknownBlob), which is another site
+		let site: Site = unknownBlob
+			? 'cross-site'
+			: initiator
+				? siteBetween(initiator, url.url)
+				: navigation
+					? 'none'
+					: 'same-origin';
 
 		// the jar applies SameSite against the request's site; a nested
 		// document's requests are judged by the top-level page as well (the
@@ -531,7 +539,7 @@ function genericForward(
 			serverRequest.credentials === 'omit'
 				? false
 				: serverRequest.credentials === 'same-origin'
-					? initiator === null || sameOrigin
+					? (initiator === null && !unknownBlob) || sameOrigin
 					: true;
 		if (credentials)
 			requestHeaders.set(

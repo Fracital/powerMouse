@@ -5,6 +5,9 @@
 // same-origin and carries its SameSite=Strict cookie. The worker cannot
 // decode a blob: URL to a page, so the page tells it which blob: URLs it
 // minted. Both modes, each request compared with the page loaded natively.
+// After the service worker restarts it has forgotten what it was told: the
+// live worker's requests are then judged as another site's (fail closed),
+// compared with what a cross-site request sends natively.
 import {
 	done,
 	FIXTURE,
@@ -25,17 +28,18 @@ const CROSS = `http://localhost:${fixture.port}`;
 const frameOf = (page) =>
 	page.frames().findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 
-/** what each of the worker's requests showed: its site, and whether the Strict cookie went */
-async function measure(getFrame, key) {
+/** what each of a round's requests showed: its site, and whether the Strict cookie went */
+async function measure(getFrame, key, tag = 'first') {
+	const slot = tag === 'first' ? '__blobSite' : '__blobAgain';
 	let result = null;
-	for (let i = 0; i < 80 && !result; i++) {
+	for (let i = 0; i < 240 && !result; i++) {
 		await sleep(250);
 		result = await getFrame()
-			?.evaluate(() => window.__blobSite ?? null)
+			?.evaluate((slot) => window[slot] ?? null, slot)
 			.catch(() => null);
 	}
 	const imported = await (
-		await fetch(`${FIXTURE}echo-headers/recorded?k=${key}-import`)
+		await fetch(`${FIXTURE}echo-headers/recorded?k=${key}-${tag}-import`)
 	).json();
 	const seen = (headers) => ({
 		site: headers?.['sec-fetch-site'] ?? null,
@@ -46,6 +50,8 @@ async function measure(getFrame, key) {
 		import: seen(imported),
 		cross: seen(result?.cross),
 		same: seen(result?.same),
+		include: seen(result?.include),
+		retries: result?.retries ?? null,
 	};
 }
 
@@ -96,6 +102,47 @@ for (const [mode, base] of [
 			JSON.stringify(proxied[request]) === JSON.stringify(native[request]),
 			`native ${JSON.stringify(native[request])} proxied ${JSON.stringify(proxied[request])}`,
 		);
+
+	// the service worker restarts (Chrome stops an idle one), which empties
+	// what pages told it: the live worker's next requests come from a blob:
+	// URL it no longer knows, and are judged as another site's, never as
+	// their target's own
+	const cdp = await page.context().newCDPSession(page);
+	await cdp.send('ServiceWorker.enable');
+	let stopped = false;
+	cdp.on('ServiceWorker.workerVersionUpdated', ({ versions }) => {
+		if (versions.some((version) => version.runningStatus === 'stopped'))
+			stopped = true;
+	});
+	await cdp.send('ServiceWorker.stopAllWorkers');
+	// the round starts once the worker is down: its first request wakes it
+	for (let i = 0; i < 40 && !stopped; i++) await sleep(100);
+	await cdp.detach();
+	await frameOf(page)?.evaluate(() => window.__blobWorker.postMessage('again'));
+	const again = await measure(() => frameOf(page), key, 'again');
+	ok(
+		`${mode}: after a service worker restart the blob worker's requests still run`,
+		!again.error,
+		again.error
+			? JSON.stringify(again.error)
+			: `${again.retries} retries of 500 ms while the worker came back`,
+	);
+	const asCross = native.cross;
+	for (const [request, label] of [
+		['import', 'importScripts from another site'],
+		['cross', 'fetch to another site'],
+		['same', "fetch to its page's own origin"],
+	])
+		ok(
+			`${mode}: after a restart, a blob worker's ${label} is judged as another site's, as natively cross-site`,
+			JSON.stringify(again[request]) === JSON.stringify(asCross),
+			`cross-site natively ${JSON.stringify(asCross)} proxied ${JSON.stringify(again[request])}`,
+		);
+	ok(
+		`${mode}: after a restart, its credentialed fetch to its own origin carries no Strict cookie`,
+		again.include.site === 'cross-site' && !again.include.strict,
+		JSON.stringify(again.include),
+	);
 	await page.close();
 }
 

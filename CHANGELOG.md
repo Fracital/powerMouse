@@ -302,6 +302,19 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   the two seconds the controller now asks the worker over its port and
   shakes hands again when it gets no answer within a second (sw-restart
   suite, both modes, the worker stopped over CDP).
+- A blob: worker the service worker knows nothing about is judged as
+  another site's, never as its target's own. What pages tell the worker
+  about the blob: URLs they mint lives in its memory, which Chrome empties
+  when it stops an idle worker (after about 30 s): a long-lived blob
+  worker's next request then came from an unknown blob: client, and went out
+  as `Sec-Fetch-Site: same-origin` with the target's cookies, SameSite=Strict
+  ones included. It now goes out cross-site, with no cookies under
+  `same-origin` credentials and none but SameSite=None ones under
+  `include`. A blob worker's requests to its own page's origin lose their
+  cookies after such a restart, which is the safe side of not knowing
+  (blob-worker-site suite, both modes: the service worker stopped over
+  CDP, then the live worker's requests compared with a cross-site request
+  natively).
 - A blob: worker's requests are judged as the page that made it. The
   worker's client URL is the blob: URL, which the service worker could not
   decode to a page, so it took the request as its target's own: an
@@ -315,7 +328,7 @@ same-origin`, and with the default credentials carried that site's
   Entries outlive `revokeObjectURL` (pages revoke right after
   `new Worker()`) and go with the document that minted them. A blob: URL
   minted inside a worker is not registered (a worker cannot reach the
-  service worker) and is judged as before (blob-worker-site suite, both
+  service worker) and is judged as another site's, below (blob-worker-site suite, both
   modes, against the page loaded natively; WPT fetch-metadata
   worker-dedicated-importscripts passes, its seven entries are off the
   expected list).
