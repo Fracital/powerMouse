@@ -1,0 +1,109 @@
+<!doctype html>
+<title>STORAGE QUOTA</title>
+<script>
+	// Discord's persist store writes several medium JSON values to
+	// localStorage in one task. Natively they all store: the quota is 5 MiB
+	// per origin (key and value lengths, in UTF-16 code units, measured in
+	// Chrome 152). Through the proxy every small write was a synchronous
+	// beacon to the service worker, Chrome refuses a document's beacons once
+	// 64 KiB are in flight, and setItem threw QuotaExceededError. This page
+	// writes a burst in one task, a burst across tasks, one large value and
+	// two that natively exceed the quota, then reloads itself in the task of
+	// its last write and reads everything back. The write phase's results
+	// ride in the URL fragment across the reload.
+	window.__sq = {};
+	const KiB = 1024;
+	const MiB = 1024 * KiB;
+	// a quote-heavy value is longer once escaped into the bridge's request
+	const make = (tag, n, unit = '"a",') =>
+		(tag + '|' + unit.repeat(Math.ceil(n / unit.length))).slice(0, n);
+	const brief = (value) =>
+		value === null
+			? null
+			: `${value.length}:${value.split('|')[0]}:${value.slice(-2)}`;
+
+	if (location.hash.startsWith('#read:')) {
+		const keys = Object.keys(localStorage).sort();
+		const values = {};
+		for (const key of keys)
+			try {
+				values[key] = brief(localStorage.getItem(key));
+			} catch (error) {
+				values[key] = `threw ${error.name}`;
+			}
+		__sq.written = JSON.parse(decodeURIComponent(location.hash.slice(6)));
+		__sq.read = { keys, values, length: localStorage.length };
+		__sq.done = true;
+	} else {
+		const results = {};
+		const set = (key, value) => {
+			try {
+				localStorage.setItem(key, value);
+				return localStorage.getItem(key) === value ? 'ok' : 'read back wrong';
+			} catch (error) {
+				return `threw ${error.name}`;
+			}
+		};
+		localStorage.clear();
+
+		// one task: overwrites of small values (which the bridge carries at
+		// once) and of medium ones, before and after ten medium writes
+		results.early = [
+			set('orderSmall', 'small-first|'),
+			set('orderSmall', 'small-second|'),
+			set('orderMixed', 'mixed-first|'),
+			set('orderEarly', make('early-first', 20 * KiB)),
+			set('orderEarly', make('early-second', 20 * KiB)),
+		];
+		results.oneTask = [];
+		for (let i = 0; i < 10; i++)
+			results.oneTask.push(set(`medium${i}`, make(`medium${i}`, 20 * KiB)));
+		results.late = [
+			set('orderLate', make('late-first', 20 * KiB)),
+			set('orderLate', make('late-second', 20 * KiB)),
+			set('orderMixed', make('mixed-second', 20 * KiB)),
+			set('orderGone', make('gone', 20 * KiB)),
+		];
+		localStorage.removeItem('orderGone');
+		results.gone = localStorage.getItem('orderGone') === null;
+		results.sameTask = {
+			length: localStorage.length,
+			keys: Object.keys(localStorage).sort().join(),
+			orderLate: brief(localStorage.getItem('orderLate')),
+			orderMixed: brief(localStorage.orderMixed),
+		};
+
+		// five tasks of four medium writes each
+		results.tasks = [];
+		const spread = (round) => {
+			for (let i = 0; i < 4; i++)
+				results.tasks.push(
+					set(`spread${round}-${i}`, make(`spread${round}-${i}`, 20 * KiB)),
+				);
+			if (round < 4) setTimeout(() => spread(round + 1));
+			else setTimeout(large);
+		};
+		const large = () => {
+			results.large = set('large', make('large', MiB, 'x'));
+			setTimeout(finish);
+		};
+		const finish = () => {
+			// about 1.7 Mi code units are stored: 4 MiB more is over the quota,
+			// and so is one value of 6 MiB on its own; 2 MiB still fits
+			results.over = set('over', make('over', 4 * MiB, 'x'));
+			results.alone = set('alone', make('alone', 6 * MiB, 'x'));
+			results.overGone = [
+				localStorage.getItem('over') === null,
+				localStorage.getItem('alone') === null,
+			];
+			results.fits = set('fits', make('fits', 2 * MiB, 'x'));
+			history.replaceState(
+				null,
+				'',
+				'#read:' + encodeURIComponent(JSON.stringify(results)),
+			);
+			location.reload();
+		};
+		setTimeout(() => spread(0));
+	}
+</script>
