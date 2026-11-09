@@ -6,7 +6,7 @@
 	// rel=noreferrer link. `__popup(url, click)` opens the popup and puts a
 	// link to `url` in it, clicking it when `click` (no user activation);
 	// otherwise the test clicks it. `__popupSelf(url)` opens a popup whose
-	// button sets its location.href when the test clicks it.
+	// own button script sets its location.href when the test clicks it.
 	// `__noreferrer(url)` clicks a rel=noreferrer link in this document.
 	window.__popup = (url, click) => {
 		const popup = window.open();
@@ -24,7 +24,12 @@
 		const button = popup.document.createElement('button');
 		button.textContent = 'go';
 		button.id = 'go';
-		button.onclick = () => (popup.location.href = url);
+		// an inline handler: compiled in the popup's own realm, so the script
+		// that navigates is the popup's, whose activation the click gave. A
+		// closure from this window would make this window the navigation's
+		// initiator, whose activation Chrome 156 takes (none) and Chrome 152
+		// did not
+		button.setAttribute('onclick', `location.href = ${JSON.stringify(url)}`);
 		popup.document.body.append(button);
 		window.__opened = popup;
 	};
