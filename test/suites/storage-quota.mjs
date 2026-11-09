@@ -8,6 +8,15 @@
 // value and two writes that natively exceed the quota, then reloads itself
 // in the task of its last write and reads every key back. Each result is
 // compared with the page loaded natively, in both demo modes.
+//
+// The writes the bridge cannot carry go to the worker asynchronously, and the
+// reloaded page must read them all back however late they land: on a slow CI
+// runner the 2 MiB write was missing after the reload (35 keys against
+// native's 36), because the next document read before the worker had it. So
+// every mode runs again with the worker reading the body of every
+// asynchronous write LATE_MS late (2 keys of 36 read back, before the fix),
+// and once more with the body of one overwrite never arriving: its key must
+// then read as absent after the reload, never as the value it replaced.
 import {
 	done,
 	FIXTURE,
@@ -59,16 +68,72 @@ ok(
 	JSON.stringify(native?.read?.values),
 );
 
+const LATE_MS = 2500;
+/** the overwrite whose body never arrives in the `lost` runs */
+const LOST = 'mixed-second|';
+/**
+ * Trouble on the way to the service worker for the asynchronous storage
+ * writes: `late` reads the body of every one LATE_MS late (its fetch event
+ * arrives at once; reading it is what takes the time for a large one on a
+ * slow runner), `lost` fails the body of the write of LOST
+ */
+const trouble = async (context, kind) => {
+	for (let i = 0; i < 100 && !context.serviceWorkers().length; i++)
+		await sleep(100);
+	const workers = context.serviceWorkers();
+	for (const worker of workers)
+		await worker.evaluate(
+			([kind, delay, lost]) => {
+				const text = Request.prototype.text;
+				for (const name of ['arrayBuffer', 'blob', 'json', 'text']) {
+					const read = Request.prototype[name];
+					Request.prototype[name] = async function () {
+						const { pathname } = new URL(this.url);
+						if (!/\/(local|session)Storage\/ordered$/.test(pathname))
+							return read.call(this);
+						if (kind === 'late')
+							await new Promise((resolve) => setTimeout(resolve, delay));
+						else if ((await text.call(this.clone())).includes(lost))
+							throw new TypeError('Failed to fetch');
+						return read.call(this);
+					};
+				}
+			},
+			[kind, LATE_MS, LOST],
+		);
+	return workers.length;
+};
+/** what natively reads back, less the key of the write that was lost */
+const withoutLost = (read) => {
+	if (!read) return read;
+	const values = { ...read.values };
+	delete values.orderMixed;
+	return {
+		keys: read.keys.filter((key) => key !== 'orderMixed'),
+		values,
+		length: read.length - 1,
+	};
+};
+
 const summary = (result) => ({
 	...result,
 	tasks: undefined,
 	oneTask: undefined,
 });
-for (const [mode, base] of [
+for (const [mode, base, kind] of [
 	['same-origin', PROXY],
+	['same-origin with late writes', PROXY, 'late'],
+	['same-origin with a lost write', PROXY, 'lost'],
 	['isolated', HOST],
+	['isolated with late writes', HOST, 'late'],
+	['isolated with a lost write', HOST, 'lost'],
 ]) {
 	const page = await openDemo(browser, base);
+	if (kind)
+		ok(
+			`${mode}: the worker is in trouble`,
+			(await trouble(page.context(), kind)) > 0,
+		);
 	await submitLanding(page, target);
 	let proxied = null;
 	// the write phase's results, from the fragment the page reloaded with,
@@ -87,11 +152,19 @@ for (const [mode, base] of [
 	}
 	ok(`${mode}: the page writes, reloads and reads back`, !!proxied);
 	if (!proxied && written) proxied = { written };
-	ok(
-		`${mode}: the last write of a key is the one read after the reload`,
-		lastWins(proxied?.read?.values),
-		JSON.stringify(proxied?.read?.values),
-	);
+	if (kind === 'lost')
+		ok(
+			`${mode}: a lost write's key reads as absent, not as the value it replaced`,
+			proxied?.read && !('orderMixed' in proxied.read.values),
+			JSON.stringify(proxied?.read?.values?.orderMixed),
+		);
+	else
+		ok(
+			`${mode}: the last write of a key is the one read after the reload`,
+			lastWins(proxied?.read?.values),
+			JSON.stringify(proxied?.read?.values),
+		);
+	const expected = kind === 'lost' ? withoutLost(native?.read) : native?.read;
 	const p = proxied?.written;
 	const same = (name, a, b) => {
 		const x = JSON.stringify(a);
@@ -109,19 +182,15 @@ for (const [mode, base] of [
 		summary(w),
 		summary(p),
 	);
-	same(
-		'the keys after the reload are',
-		native?.read?.keys,
-		proxied?.read?.keys,
-	);
+	same('the keys after the reload are', expected?.keys, proxied?.read?.keys);
 	same(
 		'every value after the reload reads',
-		native?.read?.values,
+		expected?.values,
 		proxied?.read?.values,
 	);
 	same(
 		'the length after the reload is',
-		native?.read?.length,
+		expected?.length,
 		proxied?.read?.length,
 	);
 	await page.close();
