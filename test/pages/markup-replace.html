@@ -1,0 +1,58 @@
+<!doctype html>
+<title>MARKUP REPLACE</title>
+<!-- innerHTML replaces every child an element had: each case records what
+     the element holds afterwards -->
+<body>
+	<div id="mixed">a<b>b</b>c<i>i</i>d</div>
+	<ul id="list">
+		<li>1</li>
+		<li>2</li>
+		<li>3</li>
+		<li>4</li>
+		<li>5</li>
+	</ul>
+	<p id="cleared"><span>1</span><span>2</span><span>3</span></p>
+	<template id="tpl"><em>1</em><em>2</em><em>3</em></template>
+	<script>
+		const result = {};
+		const record = (name, run) => {
+			try {
+				const element = run();
+				const root = element.content ?? element;
+				result[name] = {
+					nodes: root.childNodes.length,
+					html: element.innerHTML,
+				};
+			} catch (error) {
+				result[name] = String(error).slice(0, 80);
+			}
+		};
+		record('mixed', () => {
+			const mixed = document.getElementById('mixed');
+			mixed.innerHTML = '<p>new</p>';
+			return mixed;
+		});
+		record('list', () => {
+			const list = document.getElementById('list');
+			list.innerHTML = '<li>only</li>';
+			return list;
+		});
+		record('cleared', () => {
+			const cleared = document.getElementById('cleared');
+			cleared.innerHTML = '';
+			return cleared;
+		});
+		record('template', () => {
+			const template = document.getElementById('tpl');
+			template.innerHTML = '<strong>t</strong>';
+			return template;
+		});
+		record('built', () => {
+			const built = document.createElement('div');
+			for (let i = 0; i < 6; i++) built.append(document.createElement('hr'));
+			built.innerHTML = 'text';
+			return built;
+		});
+		window.__markupReplace = { done: true, result };
+	</script>
+</body>
