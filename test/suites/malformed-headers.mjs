@@ -21,6 +21,7 @@ import {
 import { CASES, startRawHttp } from '../raw-http.mjs';
 
 async function reportOf(page) {
+	let last = null;
 	for (let i = 0; i < 240; i++) {
 		await sleep(250);
 		for (const frame of page.frames()) {
@@ -28,9 +29,11 @@ async function reportOf(page) {
 				.evaluate(() => window.__rawHeaders)
 				.catch(() => null);
 			if (value?.done) return value;
+			if (value) last = value;
 		}
 	}
-	return null;
+	// the step the page never finished, for the failure's detail
+	return { stuck: last?.at ?? 'no report', cases: last?.cases ?? {} };
 }
 
 const server = await startRawHttp(0);
@@ -77,7 +80,11 @@ for (const [mode, base] of [
 	const page = await openDemo(browser, base);
 	await submitLanding(page, url);
 	const proxied = await reportOf(page);
-	ok(`${mode}: the page ran every case`, proxied?.done, show(proxied));
+	ok(
+		`${mode}: the page ran every case`,
+		proxied.done,
+		proxied.done ? '' : show({ stuck: proxied.stuck }),
+	);
 	for (const name of Object.keys(CASES)) {
 		const want = native?.cases[name];
 		const got = proxied?.cases[name];

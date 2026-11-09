@@ -45,7 +45,9 @@ const page = () => `<!doctype html>
 		[...jar()].filter((cookie) => !before.has(cookie)).sort();
 	async function fetched(name) {
 		try {
+			__rawHeaders.at = name + ': fetch';
 			const response = await fetch('/case/' + name, { cache: 'no-store' });
+			__rawHeaders.at = name + ': body';
 			return {
 				status: response.status,
 				body: await response.text(),
@@ -74,16 +76,30 @@ const page = () => `<!doctype html>
 				frame.remove();
 				resolve(text);
 			});
+			__rawHeaders.at = name + ': frame';
 			frame.src = '/frame/' + name;
 			document.body.append(frame);
 		});
 	}
 	addEventListener('load', async () => {
 		for (const name of NAMES) {
-			const before = jar();
-			const result = { fetch: await fetched(name), frame: await framed(name) };
-			result.cookies = added(before);
-			__rawHeaders.cases[name] = result;
+			// an error (a document.cookie read the bridge could not answer) is
+			// that case's result, and the next case still runs
+			try {
+				__rawHeaders.at = name + ': cookies';
+				const before = jar();
+				const result = {
+					fetch: await fetched(name),
+					frame: await framed(name),
+				};
+				__rawHeaders.at = name + ': cookies';
+				result.cookies = added(before);
+				__rawHeaders.cases[name] = result;
+			} catch (error) {
+				__rawHeaders.cases[name] = {
+					error: __rawHeaders.at + ': ' + error.name + ': ' + error.message,
+				};
+			}
 		}
 		__rawHeaders.done = true;
 	});
