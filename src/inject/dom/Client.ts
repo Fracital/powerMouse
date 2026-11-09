@@ -11,6 +11,7 @@ import { HOOK_ERROR, OPEN_TAB, WORKER_BASE } from '../../transport/messages';
 import Client from '../Client';
 import cloneRawNode, { nativeAttributes, parseHTML } from './cloneNode';
 import { scriptKind, shouldRewriteScript } from './modules/DOMAttributes';
+import { MARKER } from './modules/MutationObserver';
 
 type OpenCallback = () => void;
 
@@ -99,6 +100,18 @@ export default class DocumentClient extends Client {
 	#parseBase: StompURL | null = null;
 	/** the window's setTimeout, before page code can replace it (loadHTML) */
 	readonly #setTimeout: typeof setTimeout;
+	/** the window's native `origin` getter (Readback hooks the property) */
+	readonly #originGet: (() => string) | undefined;
+	/**
+	 * Whether this document is an opaque origin natively: its frame is
+	 * sandboxed without allow-same-origin, or is inside a frame that is (a
+	 * sandboxed frame's own frames inherit its flags). The page's sandbox
+	 * attribute is kept in a marker (the real one is dropped, since it would
+	 * put the document out of the service worker's reach), so the browser
+	 * does not make it opaque; decided once, as the browser decides it when
+	 * the document is created.
+	 */
+	readonly sandboxedOpaque: boolean;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		this.#setTimeout = this.global.setTimeout;
@@ -133,7 +146,63 @@ export default class DocumentClient extends Client {
 		} catch (error) {
 			this.topPostMessage = null;
 		}
+		this.#originGet = Reflect.getOwnPropertyDescriptor(this.global, 'origin')
+			?.get as (() => string) | undefined;
+		this.sandboxedOpaque = this.#sandboxedOpaque();
 		this.isDOM = true;
+	}
+	#sandboxedOpaque(): boolean {
+		try {
+			const frameGet = Reflect.getOwnPropertyDescriptor(
+				this.global,
+				'frameElement',
+			)?.get;
+			const frame =
+				frameGet &&
+				(Reflect.apply(frameGet, this.global, []) as Element | null);
+			if (frame) {
+				const sandbox = Reflect.apply(
+					this.global.Element.prototype.getAttribute,
+					frame,
+					[`${MARKER}sandbox`],
+				) as string | null;
+				if (
+					sandbox !== null &&
+					!sandbox
+						.toLowerCase()
+						.split(/[\t\n\f\r ]+/)
+						.includes('allow-same-origin')
+				)
+					return true;
+			}
+			const parent = this.parent;
+			if (parent === this.global) return false;
+			const client = (parent as unknown as Record<string, unknown>)[
+				this.names.client
+			] as DocumentClient | undefined;
+			return client?.sandboxedOpaque === true;
+		} catch (error) {
+			// a cross-origin parent (the host in isolation mode)
+			return false;
+		}
+	}
+	/**
+	 * This document's origin as the page sees it: its real site's, or "null"
+	 * for an opaque one (a data: document, a frame sandboxed without
+	 * allow-same-origin)
+	 */
+	get origin(): string {
+		return this.sandboxedOpaque ? 'null' : this.url.url.origin;
+	}
+	/**
+	 * The window's origin as the browser has it: the proxy origin (an
+	 * about:srcdoc or about:blank document's inherited one, which its
+	 * location reads as "null"), or "null" for a document the browser made
+	 * opaque
+	 */
+	realOrigin(): string {
+		if (!this.#originGet) return this.baseURI.origin;
+		return Reflect.apply(this.#originGet, this.global, []);
 	}
 	get parent(): typeof globalThis {
 		return this.parentDescriptor.get!.call(this.global);

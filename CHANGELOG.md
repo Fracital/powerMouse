@@ -386,6 +386,24 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   once, so its next read sees it, and a read the bridge cannot make answers
   from that instead of throwing (cookie-beacons suite, both modes; every
   write threw before).
+- postMessage from an opaque or about:srcdoc document no longer throws, and
+  a frame sandboxed without allow-same-origin posts as natively. The hooked
+  postMessage named the sending realm's `location.origin` as the target
+  origin of the proxy's own delivery; that reads "null" in an about:srcdoc
+  document (and in any document the browser made opaque), and Chrome threw
+  "Invalid target origin 'null'", as LinkedIn showed. The delivery now names
+  the receiver's real origin as the browser has it (the proxy origin every
+  proxied window shares, an about:srcdoc or about:blank child's inherited
+  one), "*" for a receiver the browser made opaque, and the proxy origin for
+  one the sender cannot reach, so the message still reaches nothing outside
+  the proxied world; whether the page's own target origin lets it through is
+  judged by the real origins as before. The proxy drops a frame's sandbox
+  attribute (an opaque document is out of the service worker's reach), so a
+  frame sandboxed without allow-same-origin, and every frame inside one, is
+  now opaque to the page as natively where messages are concerned:
+  `self.origin` and the `event.origin` of its messages read "null", "/" from
+  it reaches only itself, and a target origin naming a site never reaches it
+  (sandbox-messages suite, both modes; 12 of 17 checks failed before).
 - A worker the page terminates at once no longer reports an import of the
   proxy's. A proxied worker imports the inject bundle (and a blob: worker the
   private URL of its script) before the page's script runs, and Chrome reports

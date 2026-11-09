@@ -8,6 +8,7 @@ import ProxyModule, {
 	catchRequiredArguments,
 	usePrototype,
 } from '../../modules/Proxy';
+import { routedPrefix } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import { nativeFunction } from '../../nativeUtil';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
@@ -278,8 +279,35 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		return wrapped;
 	}
+	/**
+	 * The target origin the proxy's own delivery names to the browser, which
+	 * checks it against the receiver's real origin: the receiver's own (the
+	 * proxy origin every proxied window shares, an about:srcdoc or
+	 * about:blank child's inherited one), so the envelope reaches nothing
+	 * outside the proxied world, and "*" for a receiver the browser made
+	 * opaque, which no origin names. It was the realm's location.origin,
+	 * which reads "null" in an opaque or about:srcdoc document: Chrome
+	 * refuses that ("Invalid target origin 'null'"), and LinkedIn's frames
+	 * threw it. A receiver this realm cannot reach is named by the proxy
+	 * origin. Whether the page's own target origin lets the message through
+	 * is decided by the real origins (targetAllows).
+	 */
+	deliveryOrigin(receiver: Context): string {
+		let origin: string | undefined;
+		try {
+			const client = (receiver as Record<string, any>)[
+				this.client.names.client
+			] as DocumentClient | undefined;
+			origin = client?.realOrigin();
+		} catch (error) {
+			// a window of another real origin
+		}
+		if (origin === undefined) return new URL(routedPrefix(this.client)).origin;
+		return origin === 'null' ? '*' : origin;
+	}
 	postMessage(
 		args: PostMessageArgs | PostMessageArgs2,
+		receiver: Context,
 	): PostMessageArgs | PostMessageArgs2 {
 		/*if (!this.RestrictedContexts.has(targetWindow)) {
 			throw new TypeError('Illegal invocation');
@@ -320,10 +348,10 @@ export default class ContextModule extends Module<DocumentClient> {
 			<MessageData>{
 				[this.client.names.globalName]: 'stompMessage',
 				data: message.data,
-				origin: this.client.url.url.origin,
+				origin: this.client.origin,
 			},
 			{
-				targetOrigin: this.client.global.location.origin,
+				targetOrigin: this.deliveryOrigin(receiver),
 				transfer: message.transfer,
 			},
 		];
@@ -333,8 +361,10 @@ export default class ContextModule extends Module<DocumentClient> {
 	 * the real origins the way the browser judges real ones (every proxied
 	 * window shares the proxy origin, so the browser's own check passes them
 	 * all): `*` reaches any, `/` the sender's own origin, anything else must
-	 * be the receiver's origin ("null" for an opaque document never matches).
-	 * An unparsable target origin is the browser's SyntaxError.
+	 * be the receiver's origin. An opaque origin is the same only as itself:
+	 * "/" from an opaque document reaches that document alone, and a named
+	 * origin never reaches an opaque one. An unparsable target origin
+	 * ("null" included) is the browser's SyntaxError.
 	 */
 	targetAllows(args: unknown[], receiver: Context): boolean {
 		const second = args[1];
@@ -345,18 +375,22 @@ export default class ContextModule extends Module<DocumentClient> {
 		const target = requested === undefined ? '/' : String(requested);
 		if (target === '*') return true;
 		let receiverOrigin: string;
+		let receiverClient: DocumentClient;
 		try {
 			const client = (receiver as Record<string, any>)[
 				this.client.names.client
 			] as DocumentClient | undefined;
 			if (!client) return true;
-			receiverOrigin = client.url.url.origin;
+			receiverClient = client;
+			receiverOrigin = client.origin;
 		} catch (error) {
 			return true;
 		}
+		if (target === '/' && this.client.origin === 'null')
+			return receiverClient === this.client;
 		const wanted =
 			target === '/'
-				? this.client.url.url.origin
+				? this.client.origin
 				: (() => {
 						try {
 							return new URL(target).origin;
@@ -485,7 +519,11 @@ export default class ContextModule extends Module<DocumentClient> {
 					value: proxyModule.wrapFunction(postMessage, (target, that, args) => {
 						catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
 						if (!this.targetAllows(args, context)) return;
-						return Reflect.apply(target, context, this.postMessage(<any>args));
+						return Reflect.apply(
+							target,
+							context,
+							this.postMessage(<any>args, context),
+						);
 					}),
 				},
 			},
@@ -677,7 +715,7 @@ export default class ContextModule extends Module<DocumentClient> {
 
 						const origin = Reflect.apply(target, that, args);
 						if (origin !== '' && fromBroadcastChannel(that))
-							return this.client.url.url.origin;
+							return this.client.origin;
 						return origin;
 					},
 				),
@@ -764,7 +802,11 @@ export default class ContextModule extends Module<DocumentClient> {
 			if (!context) return false;
 			catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
 			if (this.targetAllows(args, context))
-				Reflect.apply(postMessage, context, this.postMessage(<any>args));
+				Reflect.apply(
+					postMessage,
+					context,
+					this.postMessage(<any>args, context),
+				);
 			return true;
 		};
 		this.client.postToWindow = (target, args) => {
@@ -774,21 +816,12 @@ export default class ContextModule extends Module<DocumentClient> {
 			if (!this.targetAllows(args as unknown[], target as Context)) return;
 			const [data, options] = this.postMessage(
 				args as PostMessageArgs,
+				target as Context,
 			) as PostMessageArgs2;
-			// the browser checks the target origin against the receiver's real
-			// one (the proxy origin, shared by every proxied window); an
-			// about:srcdoc caller reads its own as "null", so the receiver's
-			// is used, or any
-			const receiverOrigin = (receiver as DocumentClient).global.location
-				.origin;
 			// from this window's realm, whatever bundle this client is (callIn)
 			return this.client.callIn(receiver.nativePostMessage!, target, [
 				data,
-				{
-					...options,
-					targetOrigin:
-						receiverOrigin && receiverOrigin !== 'null' ? receiverOrigin : '*',
-				},
+				options,
 			]);
 		};
 		this.client.global.postMessage = proxyModule.wrapFunction(
@@ -798,7 +831,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				return Reflect.apply(
 					target,
 					this.client.global,
-					this.postMessage(<any>args),
+					this.postMessage(<any>args, this.client.global as Context),
 				);
 			},
 		);

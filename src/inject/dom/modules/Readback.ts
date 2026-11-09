@@ -54,7 +54,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 				...origin,
 				get: proxyModule.wrapFunction(origin.get, (target, that, args) => {
 					Reflect.apply(target, that, args);
-					return this.client.url.url.origin;
+					return this.client.origin;
 				}),
 			});
 
