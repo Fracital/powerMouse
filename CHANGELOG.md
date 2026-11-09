@@ -291,6 +291,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A large stylesheet is rewritten in time linear in its length. Each url()
+  the rewriter routed was spliced into the whole text, so a stylesheet's
+  rewrite was quadratic in its size times its url()s: CNN's front page
+  inlines 3 MB of CSS with 600 url()s, which took about 5 s of the page's
+  main thread, and CNN was ready in 11 s through the proxy against 1 s
+  natively. The edits are collected and applied once; CNN is ready in about
+  5 s, the output byte for byte the same (css-scale suite, both modes: four
+  times the stylesheet takes about twice as long to write, not sixteen).
 - CSS text a script puts into a `<style>` loads through the proxy however it
   gets there. chess.com fills its board's style with `innerHTML`, and through
   the proxy the board and every piece loaded straight from its image host,

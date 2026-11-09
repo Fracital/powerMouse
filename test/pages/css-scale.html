@@ -1,0 +1,40 @@
+<!doctype html>
+<title>CSS SCALE</title>
+<script>
+	// A stylesheet of n url()s, each in a rule padded to about 3 KB (CNN
+	// inlines 3 MB of CSS with 600 url()s), written into a <style>: the time,
+	// best of three, for n and for 4n, and whether it reads back as written.
+	function sheet(n) {
+		const pad = 'x'.repeat(3200);
+		let css = '';
+		for (let i = 0; i < n; i++)
+			css += `.r${i}{background:url("img-${i}.png");--pad:"${pad}"}\n`;
+		return css;
+	}
+	function best(f) {
+		let min = Infinity;
+		for (let i = 0; i < 3; i++) {
+			const start = performance.now();
+			f();
+			min = Math.min(min, performance.now() - start);
+		}
+		return min;
+	}
+	window.addEventListener('load', () => {
+		const result = { write: [], same: true };
+		for (const n of [150, 600]) {
+			const css = sheet(n);
+			const style = document.createElement('style');
+			document.head.append(style);
+			result.write.push(
+				best(() => {
+					style.textContent = '';
+					style.appendChild(document.createTextNode(css));
+				}),
+			);
+			if (style.textContent !== css) result.same = false;
+			style.remove();
+		}
+		window.__cssScale = result;
+	});
+</script>

@@ -113,13 +113,35 @@ export function restoreCSSValueURLs(value: string): string {
 	);
 }
 
+/**
+ * The replacements a walk makes in a stylesheet, in source order, applied
+ * once at the end. Splicing each into the whole text rebuilt it every time,
+ * which was quadratic: a page's 3 MB of inline CSS with 600 url()s took
+ * seconds to rewrite.
+ */
+class Edits {
+	readonly #parts: string[] = [];
+	#at = 0;
+	constructor(readonly text: string) {}
+	/** `text` from `start` to `end` becomes `replacement`; one that overlaps the last is dropped */
+	replace(start: number, end: number, replacement: string) {
+		if (start < this.#at) return;
+		this.#parts.push(this.text.slice(this.#at, start), replacement);
+		this.#at = end;
+	}
+	result(): string {
+		if (!this.#parts.length) return this.text;
+		return this.#parts.join('') + this.text.slice(this.#at);
+	}
+}
+
 export function modifyCSS(
 	script: string,
 	url: StompURL,
 	context = 'stylesheet',
 ) {
 	const tree = parse(script, { positions: true, context });
-	let offset = 0;
+	const edits = new Edits(script);
 
 	walk(tree, function (node) {
 		// css-tree leaves custom property values (--x: url(...)) unparsed, and
@@ -129,12 +151,7 @@ export function modifyCSS(
 			const generated = rewriteCSSValueURLs(node.value, url);
 
 			if (generated !== node.value) {
-				script =
-					script.slice(0, node.loc!.start.offset - offset) +
-					generated +
-					script.slice(node.loc!.end.offset - offset);
-				offset +=
-					node.loc!.end.offset - node.loc!.start.offset - generated.length;
+				edits.replace(node.loc!.start.offset, node.loc!.end.offset, generated);
 			}
 		} else if (
 			node.type === 'String' &&
@@ -151,12 +168,7 @@ export function modifyCSS(
 						`url(${JSON.stringify(node.value)})`,
 					),
 				});
-				script =
-					script.slice(0, node.loc!.start.offset - offset) +
-					generated +
-					script.slice(node.loc!.end.offset - offset);
-				offset +=
-					node.loc!.end.offset - node.loc!.start.offset - generated.length;
+				edits.replace(node.loc!.start.offset, node.loc!.end.offset, generated);
 			} catch (error) {
 				// not a URL: left as written
 			}
@@ -167,12 +179,7 @@ export function modifyCSS(
 				const resolved = new StompURL(new URL(node.value, url.toString()), url);
 				const generated = JSON.stringify(routeCSS(resolved, url));
 
-				script =
-					script.slice(0, node.loc!.start.offset - offset) +
-					generated +
-					script.slice(node.loc!.end.offset - offset);
-				offset +=
-					node.loc!.end.offset - node.loc!.start.offset - generated.length;
+				edits.replace(node.loc!.start.offset, node.loc!.end.offset, generated);
 			} catch (error) {
 				console.error(error);
 			}
@@ -188,10 +195,7 @@ export function modifyCSS(
 				// routed already: the page's token as it was kept
 				const raw =
 					routed?.token ??
-					script.slice(
-						node.loc!.start.offset - offset,
-						node.loc!.end.offset - offset,
-					);
+					script.slice(node.loc!.start.offset, node.loc!.end.offset);
 
 				if (this.atrule?.name === 'import') {
 					replace = {
@@ -207,40 +211,11 @@ export function modifyCSS(
 
 				const generated = generate(replace);
 
-				script =
-					script.slice(0, node.loc!.start.offset - offset) +
-					generated +
-					script.slice(node.loc!.end.offset - offset);
-				offset +=
-					node.loc!.end.offset - node.loc!.start.offset - generated.length;
+				edits.replace(node.loc!.start.offset, node.loc!.end.offset, generated);
 			} catch (error) {
 				console.error(error);
 			}
 	});
 
-	return script;
-}
-
-export function restoreCSS(script: string, url: StompURL, context: string) {
-	const tree = parse(script, {
-		positions: true,
-		context,
-	});
-	let offset = 0;
-
-	walk(tree, function (node) {
-		if (node.type === 'Url') {
-			// @ts-ignore
-			const generated = restoreValue(node.value);
-
-			script =
-				script.slice(0, node.loc!.start.offset - offset) +
-				generated +
-				script.slice(node.loc!.end.offset - offset);
-			offset +=
-				node.loc!.end.offset - node.loc!.start.offset - generated.length;
-		}
-	});
-
-	return script;
+	return edits.result();
 }
