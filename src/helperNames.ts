@@ -17,7 +17,10 @@ export interface HelperNames {
 	globalProxy: string;
 	/** the stand-in's name marker, and the key of a Stomp message envelope (default `$s$N`) */
 	globalName: string;
-	/** the client on the window and on workers (default `$P$s`) */
+	/**
+	 * the client on the window and on workers: a controller mints its own
+	 * (mintClientName) unless the host names one; `$P$s` only where nothing did
+	 */
 	client: string;
 	/**
 	 * the global the worker writes into the host's error page (`errorPage`)
@@ -50,6 +53,30 @@ export function helperNames(config?: object | null): HelperNames {
 }
 
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+
+const CLIENT_NAME_ALPHABET =
+	'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_';
+const CLIENT_NAME_LENGTH = 16;
+
+/**
+ * A fresh name for the client global, which a controller mints when its host
+ * names none. The client holds the real windows the inject works with (its
+ * `parent`, its `top`), and every proxied site shares the proxy's real
+ * origin, so a page that can name it reaches the window of any other site
+ * that frames it. No page is told this name: the shell and the worker
+ * preambles carry it, and the client never shows among a window's keys
+ * (Reflection). 16 characters of 63, about 95 bits.
+ */
+export function mintClientName(taken: Iterable<string> = []): string {
+	const takenSet = new Set(taken);
+	while (true) {
+		const bytes = crypto.getRandomValues(new Uint8Array(CLIENT_NAME_LENGTH));
+		let name = '$';
+		for (const byte of bytes)
+			name += CLIENT_NAME_ALPHABET[byte % CLIENT_NAME_ALPHABET.length];
+		if (!takenSet.has(name)) return name;
+	}
+}
 
 // reserved words, strict-mode reserved words and the names the rewriter or a
 // page gives a meaning no helper may take

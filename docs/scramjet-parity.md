@@ -187,6 +187,23 @@ Why the open ones stay open:
   every child document then runs the client its parent injected into the
   about:blank (as one whose `contentWindow` was read early already does).
 
+The proxy's own globals were a path of their own (helper-seal suite, both
+modes, with and without the framing page reading the frame early). The
+client on every window holds the real windows the inject works with, and it
+lived under the fixed name `$P$s`: a frame of another site read
+`$P$s.parent.document` and had its framing page raw. The access API handed
+out the native eval (`evalSnapshot`), which runs a page's code unrewritten
+with the real `top`. Now the controller mints the client's name (unless the
+host sets `names.client`), and a page that learns it anyway (a frame of its
+own site shows it in its shell while loading) reads nothing by it: the
+access API answers `undefined` for that key, the rewriter routes the name
+like `top` (members, identifiers, computed-key object patterns, run-time
+code), reflection gives it no descriptor. The rewriter's direct-eval test is
+a predicate (`isEval`). Still open: a fresh about:blank frame reached by a
+literal name runs no Stomp, and its native eval sees the real top (closed
+with the rest of the about:blank paths by injecting every frame as it
+connects).
+
 ## 3. JS rewriter
 
 Scramjet: Rust/oxc to wasm, offset edit list, binary sourcemap, helper names

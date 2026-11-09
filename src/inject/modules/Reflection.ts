@@ -33,6 +33,17 @@ export default class ReflectionModule extends Module<Client> {
 
 		const unforgeable = (key: unknown): key is string =>
 			typeof key === 'string' && UNDEFINABLE.includes(key);
+		// the helper names (the access API and client key on the window, the
+		// stand-in tags on location and eval) never show in an enumeration of
+		// those objects and are not "own" to any reflective question, nor have
+		// a descriptor; the bare `in` operator remains a tell (rewriting every
+		// `in` would cost more)
+		const hidden = new Set<PropertyKey>([
+			this.client.names.access,
+			this.client.names.client,
+			this.client.names.globalProxy,
+			this.client.names.globalName,
+		]);
 		// a window (this one, another, a Proxy over one), the document, a
 		// worker scope or a prototype of the scope (WorkerGlobalScope.prototype
 		// holds a worker's `location`): the objects whose `top`, `location`
@@ -107,6 +118,7 @@ export default class ReflectionModule extends Module<Client> {
 					const descriptor = Reflect.apply(target, that, args) as
 						PropertyDescriptor | undefined;
 					if (!descriptor || !windowLike(args[0])) return descriptor;
+					if (hidden.has(args[1] as PropertyKey)) return undefined;
 					return unforgeable(args[1])
 						? spoofed(descriptor, args[1])
 						: restricted(descriptor, args[1], args[0]);
@@ -125,9 +137,11 @@ export default class ReflectionModule extends Module<Client> {
 				>;
 				if (windowLike(args[0]))
 					for (const key of Reflect.ownKeys(descriptors))
-						descriptors[key] = unforgeable(key)
-							? spoofed(descriptors[key], key)
-							: restricted(descriptors[key], key, args[0]);
+						if (hidden.has(key)) Reflect.deleteProperty(descriptors, key);
+						else
+							descriptors[key] = unforgeable(key)
+								? spoofed(descriptors[key], key)
+								: restricted(descriptors[key], key, args[0]);
 				return descriptors;
 			},
 		);
@@ -231,16 +245,6 @@ export default class ReflectionModule extends Module<Client> {
 			},
 		);
 
-		// the helper names (the access API and client key on the window, the
-		// stand-in tags on location and eval) never show in an enumeration of
-		// those objects and are not "own" to any reflective question; the bare
-		// `in` operator remains a tell (rewriting every `in` would cost more)
-		const hidden = new Set<PropertyKey>([
-			this.client.names.access,
-			this.client.names.client,
-			this.client.names.globalProxy,
-			this.client.names.globalName,
-		]);
 		const nativeHasOwn = global.Object.prototype.hasOwnProperty;
 		const tagged = (target: unknown): boolean => {
 			if (

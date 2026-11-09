@@ -10,7 +10,12 @@ import {
 	ConfigCodec,
 	DEFAULT_ASSETS,
 } from '../config';
-import { helperNames, validateNames, type HelperNames } from '../helperNames';
+import {
+	helperNames,
+	mintClientName,
+	validateNames,
+	type HelperNames,
+} from '../helperNames';
 import {
 	resolveHooks,
 	validateHooks,
@@ -156,10 +161,13 @@ export interface ControllerInit {
 	 */
 	assets?: Assets;
 	/**
-	 * The four global names the rewriter and the inject bundles use (see
+	 * The global names the rewriter and the inject bundles use (see
 	 * HelperNames): a deployment's own, when the host set them. Each must be
 	 * an identifier no plain window has; the controller throws a TypeError
-	 * otherwise. Defaults: `$s$j`, `$s$L`, `$s$N`, `$P$s`.
+	 * otherwise. Defaults: `$s$j`, `$s$L`, `$s$N`, and for `client` a name
+	 * the controller mints, which no page is told. A host that sets `client`
+	 * publishes it: any page that names the client reaches the real windows
+	 * it holds, so leave it unset.
 	 */
 	names?: Partial<HelperNames>;
 	/**
@@ -603,7 +611,15 @@ export class StompController extends EventTarget {
 				? { navigationHintWait: init.navigationHintWait }
 				: {}),
 			...(init.assets ? { assets: init.assets } : {}),
-			...(init.names ? { names: init.names } : {}),
+			// the client's name is this controller's own unless the host chose
+			// one: a page that could name it would reach the real windows it
+			// holds (see mintClientName)
+			names: {
+				...init.names,
+				client:
+					init.names?.client ??
+					mintClientName(Object.getOwnPropertyNames(globalThis)),
+			},
 			...(errorPage ? { errorPage } : {}),
 		};
 

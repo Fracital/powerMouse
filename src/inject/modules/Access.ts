@@ -131,6 +131,13 @@ export default class AccessModule extends Module<Client> {
 			// `container`: what `object` was read from, when the read is a member
 			// read (a window's child is injected before the page gets it)
 			get: (object: any, key: any, container?: unknown): any => {
+				// the client, by its name, is nothing to a page: it holds the
+				// real windows the inject works with, and a page that read it
+				// would reach every proxied site that frames it. The rewriter
+				// routes every mention of the name here, and reflection's reads
+				// come here too, so knowing the name (a same-site frame's shell
+				// shows it while it loads) gives a page nothing
+				if (key === this.client.names.client) return undefined;
 				try {
 					if (key === 'top' && this.client.resolveTop)
 						return this.client.resolveTop(object);
@@ -165,6 +172,9 @@ export default class AccessModule extends Module<Client> {
 			) => {
 				// key = this.normalize_key(key);
 				// possibly a context
+
+				// the client's global is not the page's to replace (see get)
+				if (key === this.client.names.client) return righthand;
 
 				if (typeof key === 'string') {
 					// `document.location = url` is `window.location = url`
@@ -430,7 +440,11 @@ export default class AccessModule extends Module<Client> {
 					},
 				});
 			},
-			evalSnapshot,
+			// whether a direct `eval(...)` calls the real eval (the rewriter's
+			// test before it rewrites the code): a predicate, never the native
+			// itself, which would run a page's code unrewritten, where its
+			// `top` is the real one and reaches every proxied window
+			isEval: (fn: unknown): boolean => fn === evalSnapshot,
 		};
 
 		// not enumerable: Object.keys(window) must not name it

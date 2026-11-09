@@ -39,7 +39,9 @@ const result = await page.evaluate(async (fixture) => {
 			href: root?.getAttribute('data-href'),
 			link: root?.getAttribute('data-link'),
 			img: root?.getAttribute('data-img'),
-			injected: doc?.defaultView ? '$P$s' in doc.defaultView : null,
+			injected: doc?.defaultView
+				? window.controller.config.names.client in doc.defaultView
+				: null,
 		};
 	};
 	const svg = await show('standalone.svg');

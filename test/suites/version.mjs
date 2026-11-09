@@ -32,7 +32,8 @@ await page.evaluate(async () => {
 });
 const pageBuild = await page.evaluate(() => {
 	const frame = document.querySelector('iframe:not(.frame)');
-	return frame.contentWindow.$P$s.config.build;
+	return frame.contentWindow[window.controller.config.names.client].config
+		.build;
 });
 ok(
 	'the page client got the same build id from the shell',

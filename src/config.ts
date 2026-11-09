@@ -61,10 +61,10 @@ export interface Config {
 	/** the served file names, when the host renamed them (see Assets) */
 	assets?: Assets;
 	/**
-	 * The four global names the rewriter and the inject bundles use (see
-	 * HelperNames): a deployment's own, when the host set them. Each must be
-	 * an identifier no plain window has; the controller throws a TypeError
-	 * otherwise. Defaults: `$s$j`, `$s$L`, `$s$N`, `$P$s`.
+	 * The global names the rewriter and the inject bundles use (see
+	 * HelperNames): a deployment's own, when the host set them, and the
+	 * client's the controller minted otherwise. Defaults: `$s$j`, `$s$L`,
+	 * `$s$N` (`$P$s` for the client only where no controller named one).
 	 */
 	names?: Partial<HelperNames>;
 	/**

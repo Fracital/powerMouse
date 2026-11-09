@@ -19,6 +19,10 @@ await page.evaluate(async (fixture) => {
 	await window.controller
 		.createFrame(element)
 		.go(`${fixture}pages/cookie-cache.html`);
+	// the page counts its client's reads of the jar through this reader:
+	// no page can reach its client (by the name the controller minted)
+	const name = window.controller.config.names.client;
+	element.contentWindow.__reads = () => element.contentWindow[name].cookieReads;
 }, FIXTURE);
 let cc = {};
 for (let i = 0; i < 60 && !cc.done; i++) {

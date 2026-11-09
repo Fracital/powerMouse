@@ -8,7 +8,11 @@
 	// navigation whose response deleted one
 	window.__cc = {};
 	(async () => {
-		const reads = () => window.$P$s.cookieReads;
+		// the client's count of reads that reached the jar: no page can reach
+		// the client, so the suite hands this page a reader from the host
+		while (typeof window.__reads !== 'function')
+			await new Promise((r) => setTimeout(r, 20));
+		const reads = () => window.__reads();
 		const before = reads();
 		let last = '';
 		for (let i = 0; i < 50; i++) last = document.cookie;

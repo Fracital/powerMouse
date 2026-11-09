@@ -1,0 +1,188 @@
+<!doctype html>
+<title>SEAL CHILD</title>
+<body>
+	<script>
+		// A document of another site framed by helper-seal.html, hunting for
+		// its parent's secret through what the proxy keeps on this window: the
+		// client by its old default name and by every own key of the window,
+		// every function of the access API (named in a rewritten function's
+		// source) handed code that walks the frame tree from the real top, and
+		// then the client by its real name, which it learns from the shell of
+		// a frame of its own site while that frame loads. Each path reports
+		// what it reached; "SEAL-SECRET" anywhere is an escape.
+		const report = { paths: {} };
+		window.__seal = report;
+		const paths = report.paths;
+		const t = (key, get) => {
+			try {
+				paths[key] = String(get());
+			} catch (error) {
+				paths[key] = `threw ${error.name}`;
+			}
+		};
+		// the code a raw evaluator would run: every window below the real top
+		const walk = `(function f(w) {
+			for (let i = 0; i < w.length; i++) {
+				try {
+					if (w[i].sealSecret) return w[i].sealSecret;
+					const found = f(w[i]);
+					if (found) return found;
+				} catch (error) {}
+			}
+		})(top)`;
+		// what a client-like object leads to, by literal member reads (a
+		// computed read goes through the access API, which restricts a window)
+		const viaClient = (client) => {
+			const out = [];
+			const read = (get) => {
+				try {
+					out.push(String(get()));
+				} catch (error) {
+					out.push(error.name);
+				}
+			};
+			read(() => client.parent.sealSecret);
+			read(() => client.top.sealSecret);
+			read(() => client.proxiedTop.sealSecret);
+			read(() => client.global.parent.sealSecret);
+			return out.join(',');
+		};
+		t('defaultClient', () => viaClient(window.$P$s));
+		t('scanClient', () => {
+			const found = [];
+			for (const key of [
+				...Reflect.ownKeys(window),
+				...Object.getOwnPropertyNames(window),
+			]) {
+				let value;
+				try {
+					value = window[key];
+				} catch (error) {
+					continue;
+				}
+				if (
+					value &&
+					typeof value === 'object' &&
+					value.window !== value &&
+					('parent' in value || 'global' in value)
+				)
+					found.push(`${String(key)}:${viaClient(value)}`);
+			}
+			return found.join(';') || 'none';
+		});
+		// the access API's name, from the source of a rewritten function
+		const source = (() => location.href).toString();
+		const accessName = (source.match(/([A-Za-z_$][\w$]*)\.get2?\(/) || [])[1];
+		paths.accessNamed = String(!!accessName);
+		const api = accessName ? window[accessName] : undefined;
+		t('accessFunctions', () => {
+			const out = [];
+			for (const key of Reflect.ownKeys(api || {})) {
+				const member = api[key];
+				if (typeof member !== 'function') continue;
+				let value;
+				try {
+					value = member(walk);
+				} catch (error) {
+					value = error.name;
+				}
+				// a member that hands back code (the rewrite) is not a leak
+				if (String(value).includes('SEAL-SECRET'))
+					out.push(`${String(key)}=${value}`);
+			}
+			return out.join(';') || 'none';
+		});
+		// the realm the access API's own objects belong to (with ?early it
+		// could be the framing page's, whose Function reads that page)
+		t('accessRealm', () =>
+			api.constructor.constructor('return window.sealSecret')(),
+		);
+		t('accessFunctionRealm', () =>
+			api.get.constructor('return window.sealSecret')(),
+		);
+		// the page's own ways to run code, for comparison
+		t('eval', () => eval(walk));
+		t('indirectEval', () => (0, eval)(walk));
+		t('Function', () => Function(`return ${walk}`)());
+
+		// the client's real name, read off the shell of a frame of this site
+		// while it loads (the frame reuses the window this page can read)
+		const learnName = () =>
+			new Promise((resolve) => {
+				const frame = document.createElement('iframe');
+				frame.src = 'helper-seal.html?sub';
+				const channel = new MessageChannel();
+				const deadline = Date.now() + 8000;
+				channel.port1.onmessage = () => {
+					try {
+						const doc = frame.contentDocument;
+						for (const script of doc
+							? doc.getElementsByTagName('script')
+							: []) {
+							const match = (script.textContent || '').match(
+								/"(\$\w{12,})" in globalThis/,
+							);
+							if (match) return resolve(match[1]);
+						}
+					} catch (error) {
+						// not readable yet
+					}
+					if (Date.now() > deadline) return resolve(null);
+					channel.port2.postMessage(0);
+				};
+				document.body.append(frame);
+				channel.port2.postMessage(0);
+			});
+		(async () => {
+			const name = await learnName();
+			paths.learnedName = String(!!name);
+			// what a value read by that name leads to
+			const reach = (key, get) =>
+				t(key, () => {
+					const client = get();
+					return client && client.parent
+						? String(client.parent.sealSecret)
+						: 'nothing';
+				});
+			if (name) {
+				reach('learnedBracket', () => window[name]);
+				reach('learnedReflect', () => Reflect.get(window, name));
+				reach(
+					'learnedDescriptor',
+					() => Object.getOwnPropertyDescriptor(window, name).value,
+				);
+				reach('learnedDestructure', () => {
+					const { [name]: client } = window;
+					return client;
+				});
+				reach('learnedParameter', () =>
+					(({ [name]: client }) => client)(window),
+				);
+				reach('learnedWith', () => {
+					with (window) {
+						return eval(name);
+					}
+				});
+				reach('learnedIndirectEval', () => (0, eval)(name));
+				reach('learnedFunction', () => Function(`return ${name}`)());
+				reach('learnedMember', () => Function(`return window.${name}`)());
+				reach('learnedScript', () => {
+					const script = document.createElement('script');
+					script.textContent = `window.__learned = ${name};`;
+					document.head.append(script);
+					return window.__learned;
+				});
+			}
+			// through a fresh about:blank frame of this page reached by a
+			// literal name, whose realm nothing injected yet: its native
+			// evaluator sees the real top, so it needs no name at all
+			// (window-references known-open; closed by injecting every frame as
+			// it connects)
+			const blank = document.createElement('iframe');
+			blank.name = 'sealblank';
+			document.body.append(blank);
+			t('blankEval', () => frames.sealblank.eval(walk));
+			report.done = true;
+		})();
+	</script>
+</body>

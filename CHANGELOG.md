@@ -299,6 +299,28 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   `appendChild` threw "Cannot read properties of undefined (reading
   'toLowerCase')". The hooks and the script readback now call the
   browser's own getters on the node.
+- A proxied page can no longer reach another site's window through the
+  proxy's own globals. The client on every window held the real windows the
+  inject works with (its `parent`, its `top`) under the fixed name `$P$s`, so
+  a frame of another site read `$P$s.parent.document` and had its framing
+  page raw, in both modes; and the access API handed out the native eval
+  (`$s$j.evalSnapshot`), which ran a page's code unrewritten, where `top` is
+  the real one (in same-origin mode the host page and every proxied
+  window). The client now lives under a name each controller mints (16
+  random characters) unless the host sets `names.client`, which publishes
+  it. A page that learns the name anyway (a frame of its own site shows it
+  in its shell while it loads) reads nothing by it: the access API answers
+  `undefined` for it, the rewriter routes a mention of it like one of `top`
+  (members, bare identifiers, object patterns with a computed key, in code
+  made at run time too), and reflection gives it no descriptor. The rewriter
+  asks the access API whether a direct `eval` is the real one
+  (`$s$j.isEval`) instead of being handed it. Measured with a new
+  helper-seal suite (both modes, with and without the framing page reading
+  the frame before the child arrives): on the previous build the child
+  reached its parent through the client, by the default name and by the
+  learned one in ten ways, and through `evalSnapshot`; now through none of
+  them. A fresh about:blank frame's native eval, reached by a literal name,
+  still sees the real top (a known limitation below).
 - An `<object>` showing an HTML document loads that document's relative
   images, scripts and stylesheets. Chrome sends no object load through a
   service worker, so the document is a blob: copy the worker controls
@@ -2423,7 +2445,8 @@ Fixed while testing real sites and a feature fixture:
   direction, a frame of another site that reaches a fresh about:blank frame
   of its own by a literal name (`frames.x`, a bare `x`) or by such a copy gets
   a realm that runs no Stomp, whose native getters hand it the page that
-  framed it. Closing these needs either every frame injected as it connects
+  framed it, and whose native eval runs code where `top` is the real one
+  (helper-seal suite, asserted). Closing these needs either every frame injected as it connects
   (insertion hooks, markup setters and a document observer, whose records
   arrive before the parser runs the next script) or a real origin per
   proxied site.

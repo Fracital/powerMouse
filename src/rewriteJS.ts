@@ -355,6 +355,10 @@ export function modifyJS(
 	compact?: boolean,
 ) {
 	const names = helperNames(config);
+	// the names a read of must go through the access API: the unforgeables,
+	// and the client's global, which holds the real windows (the access API
+	// answers nothing for it, so a page that learned the name cannot read it)
+	const routed = [...UNDEFINABLE, names.client];
 	try {
 		const isModule = type === 'genericModule' || type === 'workerModule';
 		const isWorker = type === 'workerModule' || type === 'worker';
@@ -417,7 +421,7 @@ export function modifyJS(
 
 		// destructured parameters become plain ones with the pattern moved into
 		// the body, where the main pass wraps its source like any declaration
-		prepareTree(tree, names.access);
+		prepareTree(tree, names.access, routed);
 
 		for (const ctx of new AcornIterator(tree)) {
 			typeLoop: switch (ctx.node.type) {
@@ -491,7 +495,7 @@ export function modifyJS(
 					{
 						const spec =
 							ctx.node.init && !isPatternCall(ctx.node.init, names.access)
-								? patternSpec(ctx.node.id)
+								? patternSpec(ctx.node.id, routed)
 								: null;
 						if (spec)
 							ctx.replaceWith(
@@ -504,7 +508,7 @@ export function modifyJS(
 					break;
 				case 'AssignmentExpression':
 					{
-						const spec = patternSpec(ctx.node.left);
+						const spec = patternSpec(ctx.node.left, routed);
 						if (spec)
 							ctx.replaceWith(
 								b.assignmentExpression(
@@ -686,13 +690,12 @@ export function modifyJS(
 							// transform eval(...) into eval(...tompc$.eval.eval_scope(eval, ...['code',{note:"eval is possibly a var"}]))
 							ctx.replaceWith(
 								b.conditionalExpression(
-									b.binaryExpression(
-										'===',
-										b.identifier('eval'),
+									b.callExpression(
 										b.memberExpression(
 											b.identifier(names.access),
-											b.identifier('evalSnapshot'),
+											b.identifier('isEval'),
 										),
+										[b.identifier('eval')],
 									),
 									b.callExpression(b.identifier('eval'), [
 										b.callExpression(
@@ -799,7 +802,7 @@ export function modifyJS(
 								if (ctx.parentKey === 'left') break typeLoop;
 								break;
 						}
-						if (!UNDEFINABLE.includes(ctx.node.name)) break;
+						if (!routed.includes(ctx.node.name)) break;
 
 						if (
 							ctx.parent?.node.type === 'UpdateExpression' ||
@@ -926,7 +929,7 @@ export function modifyJS(
 
 							if (ctx.node.property.type === 'Literal') {
 								if (
-									!UNDEFINABLE.includes(ctx.node.property.value) &&
+									!routed.includes(ctx.node.property.value) &&
 									!indexRead(ctx)
 								) {
 									break typeLoop;
@@ -935,13 +938,13 @@ export function modifyJS(
 						} else
 							switch (ctx.node.property.type) {
 								case 'Identifier':
-									if (!UNDEFINABLE.includes(ctx.node.property.name)) {
+									if (!routed.includes(ctx.node.property.name)) {
 										break typeLoop;
 									}
 
 									break;
 								case 'Literal':
-									if (!UNDEFINABLE.includes(ctx.node.property.value)) {
+									if (!routed.includes(ctx.node.property.value)) {
 										break typeLoop;
 									}
 
@@ -1226,12 +1229,22 @@ if (!${names.client}.applied)
  */
 type PatternSpec = { [key: string]: true | PatternSpec };
 
-function patternSpec(pattern: any): PatternSpec | null {
+function patternSpec(
+	pattern: any,
+	routed: readonly string[] = UNDEFINABLE,
+): PatternSpec | null {
 	if (!pattern || pattern.type !== 'ObjectPattern') return null;
 	const spec: PatternSpec = {};
 	let any = false;
 	for (const property of pattern.properties) {
-		if (property.type !== 'Property' || property.computed) continue;
+		if (property.type !== 'Property') continue;
+		// a computed key may name anything (the client's global too): the
+		// source is wrapped, so the read resolves like a computed member read
+		// (a pattern under it is not wrapped again: no spec can name its key)
+		if (property.computed) {
+			any = true;
+			continue;
+		}
 		const key = property.key;
 		const name =
 			key.type === 'Identifier'
@@ -1243,11 +1256,11 @@ function patternSpec(pattern: any): PatternSpec | null {
 			property.value.type === 'AssignmentPattern'
 				? property.value.left
 				: property.value;
-		const nested = patternSpec(value);
+		const nested = patternSpec(value, routed);
 		if (nested) {
 			spec[name] = nested;
 			any = true;
-		} else if (UNDEFINABLE.includes(name)) {
+		} else if (routed.includes(name)) {
 			spec[name] = true;
 			any = true;
 		}
@@ -1355,7 +1368,7 @@ function mentions(node: any, names: string[]): boolean {
  * one lost its value. This pass reaches a literal the main walk does not (one
  * a replacement reuses, `location = 7n`); the text is the value in decimal.
  */
-function prepareTree(node: any, access: string) {
+function prepareTree(node: any, access: string, routed: readonly string[]) {
 	if (
 		node.type === 'Literal' &&
 		typeof node.bigint === 'string' &&
@@ -1364,10 +1377,14 @@ function prepareTree(node: any, access: string) {
 		node.raw = `${node.bigint}n`;
 		return;
 	}
-	hoistParamPatterns(node, access);
+	hoistParamPatterns(node, access, routed);
 }
 
-function hoistParamPatterns(node: any, access: string) {
+function hoistParamPatterns(
+	node: any,
+	access: string,
+	routed: readonly string[],
+) {
 	const PARAM_TEMP = `${access}a`;
 	// the children first, in source order (a plain loop: this runs on every
 	// node of the script)
@@ -1378,9 +1395,11 @@ function hoistParamPatterns(node: any, access: string) {
 		if (Array.isArray(value)) {
 			for (let i = 0; i < value.length; i++) {
 				const item = value[i];
-				if (item && typeof item.type === 'string') prepareTree(item, access);
+				if (item && typeof item.type === 'string')
+					prepareTree(item, access, routed);
 			}
-		} else if (typeof value.type === 'string') prepareTree(value, access);
+		} else if (typeof value.type === 'string')
+			prepareTree(value, access, routed);
 	}
 
 	if (
@@ -1394,7 +1413,7 @@ function hoistParamPatterns(node: any, access: string) {
 	node.params = node.params.map((param: any, index: number) => {
 		const isDefault = param.type === 'AssignmentPattern';
 		const target = isDefault ? param.left : param;
-		if (!patternSpec(target)) return param;
+		if (!patternSpec(target, routed)) return param;
 		const names = boundNames(target);
 		if (node.params.slice(index + 1).some((p: any) => mentions(p, names)))
 			return param;

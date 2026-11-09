@@ -141,12 +141,17 @@ await page.evaluate(async (fixture) => {
 const proxied = page
 	.frames()
 	.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
-const route = await proxied.evaluate(() =>
-	window['$P$s'].inlineDocument(
-		'<title>ONCE</title><p>once</p>',
-		location.href,
-		location.href,
-	),
+const clientName = await page.evaluate(
+	() => window.controller.config.names.client,
+);
+const route = await proxied.evaluate(
+	(name) =>
+		window[name].inlineDocument(
+			'<title>ONCE</title><p>once</p>',
+			location.href,
+			location.href,
+		),
+	clientName,
 );
 const twice = await page.evaluate(async (route) => {
 	const load = async () => {

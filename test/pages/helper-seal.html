@@ -1,0 +1,19 @@
+<!doctype html>
+<title>SEAL TOP</title>
+<body>
+	<script src="window-refs.js"></script>
+	<script>
+		// A page that frames another site and keeps a secret the child must not
+		// reach through anything the proxy puts on its own window (the client,
+		// the access API). With ?early the page reads the frame's contentWindow
+		// before the child's document arrives, which injects this page's client
+		// into the frame's initial about:blank (the child's document reuses it).
+		window.sealSecret = 'SEAL-SECRET';
+		const frame = document.createElement('iframe');
+		frame.src = refsCross(
+			`helper-seal-child.html${location.search.includes('early') ? '?early' : ''}`,
+		);
+		document.body.append(frame);
+		if (location.search.includes('early')) window.__early = frame.contentWindow;
+	</script>
+</body>

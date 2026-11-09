@@ -1,6 +1,6 @@
-// The helper names the rewriter and the inject rely on ($s$j and $P$s on the
-// window, $s$L and $s$N on the location and eval stand-ins) are not visible to
-// a page asking reflectively: enumeration, hasOwnProperty, Object.hasOwn,
+// The helper names the rewriter and the inject rely on ($s$j and the client
+// on the window, $s$L and $s$N on the location and eval stand-ins) are not
+// visible to a page asking reflectively: enumeration, hasOwnProperty, Object.hasOwn,
 // Reflect.has and propertyIsEnumerable all deny them; a page's own object with
 // such a key still answers natively. The bare `in` operator and
 // Error.prepareStackTrace being a function stay documented tells.
@@ -16,7 +16,21 @@ import {
 
 const browser = await launch();
 const page = await openDemo(browser);
-await submitLanding(page, `${FIXTURE}pages/tells.html`);
+// the names this controller uses (it mints the client's), so the page
+// checks the real ones
+const names = await page.evaluate(() => {
+	const { access, client, globalProxy, globalName } = {
+		access: '$s$j',
+		globalProxy: '$s$L',
+		globalName: '$s$N',
+		...window.controller.config.names,
+	};
+	return [access, client, globalProxy, globalName].join(',');
+});
+await submitLanding(
+	page,
+	`${FIXTURE}pages/tells.html?names=${encodeURIComponent(names)}`,
+);
 let tells = null;
 // a slow runner can take more than ten seconds to show the frame
 for (let i = 0; i < 120 && !tells; i++) {
@@ -49,7 +63,7 @@ ok(
 ok(
 	"a page's own object with such a key answers natively",
 	tells.plainHasOwn === true &&
-		JSON.stringify(tells.plainNames) === JSON.stringify(['$P$s']),
+		JSON.stringify(tells.plainNames) === JSON.stringify([names.split(',')[1]]),
 	JSON.stringify([tells.plainHasOwn, tells.plainNames]),
 );
 console.log(
