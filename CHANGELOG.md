@@ -291,6 +291,18 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A JSON or CSS module loads as what it is. Every import was routed as a
+  module script and rewritten, so a JSON module that also parses as a
+  script (`{}`, an array) came back with the module preamble
+  (`import.meta.url = ...`) and failed to parse as JSON, and its whole
+  module graph with it. An import's `with { type: 'json' }` now routes the
+  module as it came, `type: 'css'` as a stylesheet. A dynamic
+  `import(url, { with: { type: 'json' } })` lost its options in the rewrite
+  (the code generator drops them) and was refused as a script: the import
+  stays the page's own now, with its options, given the routed URL
+  (json-modules suite, both modes, against the page loaded natively; WPT
+  fetch-metadata script-json-module-import-static passes, its entry is off
+  the expected list).
 - A worker started from a blob: URL that the page revokes at once starts.
   Pages revoke the URL right after `new Worker(url)`, which the browser
   allows: it resolves the URL when the Worker is constructed. The proxy

@@ -1,0 +1,32 @@
+<!doctype html>
+<title>JSON MODULES</title>
+<script type="module">
+	// modules that are no scripts: JSON modules imported statically (one
+	// that would parse as a script too) and
+	// dynamically (`with { type: 'json' }`), the same file without the
+	// attribute (which the browser refuses as a script), and a CSS module.
+	// What each gave lands in window.__json.
+	import data from './json-module-data.json' with { type: 'json' };
+	// JSON that is a script too (an array literal): the rewriter takes it
+	import list from './json-module-list.json' with { type: 'json' };
+	import sheet from './json-module-sheet.css' with { type: 'css' };
+
+	const report = { static: data.value, staticList: list.length };
+	report.css =
+		sheet instanceof CSSStyleSheet ? sheet.cssRules.length : 'not a sheet';
+	const settle = (promise) =>
+		promise.then(
+			(module) => module.default?.value ?? 'loaded',
+			() => 'error',
+		);
+	Promise.all([
+		settle(
+			import('./json-module-data.json?dynamic', { with: { type: 'json' } }),
+		),
+		settle(import('./json-module-data.json?no-attribute')),
+	]).then(([dynamic, noAttribute]) => {
+		report.dynamic = dynamic;
+		report.noAttribute = noAttribute;
+		window.__json = report;
+	});
+</script>

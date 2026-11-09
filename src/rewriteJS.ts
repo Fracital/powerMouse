@@ -168,6 +168,37 @@ function generatePartial(script: string, ctx: AcornContext) {
 export type ScriptType =
 	'generic' | 'genericModule' | 'worker' | 'workerModule';
 
+/**
+ * The route of a module an import loads, by its `with { type }`: a JSON
+ * module is no script and goes as it is (its body is the module, and its
+ * MIME type the browser checks); a CSS module is a stylesheet, its url()s
+ * routed; anything else is a module script, rewritten
+ */
+export function routeImport(
+	resource: StompURL,
+	base: StompURL,
+	config: Config,
+	type: ScriptType,
+	moduleType: unknown,
+): string {
+	if (moduleType === 'json') return routeBinary(resource);
+	if (moduleType === 'css') return routeURL('css', resource);
+	return routeJS(resource, base, config, type);
+}
+
+/** the `type` a static import's `with { ... }` names, if any */
+function attributeType(node: { attributes?: unknown }): unknown {
+	const attributes = Array.isArray(node.attributes) ? node.attributes : [];
+	for (const attribute of attributes as {
+		key?: { name?: string; value?: unknown };
+		value?: { value?: unknown };
+	}[]) {
+		const key = attribute.key?.name ?? attribute.key?.value;
+		if (key === 'type') return attribute.value?.value;
+	}
+	return undefined;
+}
+
 export function routeJS(
 	resource: StompURL,
 	url: StompURL,
@@ -269,32 +300,54 @@ export function modifyJS(
 					// a proxied site's anti-debugging trap, not the user's breakpoint
 					ctx.replaceWith(b.emptyStatement());
 					break;
-				case 'ImportExpression':
+				case 'ImportExpression': {
 					// todo: add tompc$.import(meta, url)
+					const base = isModule
+						? b.memberExpression(
+								b.metaProperty(b.identifier('import'), b.identifier('meta')),
+								b.identifier('url'),
+							)
+						: // a classic script resolves against its own URL, which
+							// only the rewriter knows
+							b.literal(url.toString());
+					const options = (ctx.node as { options?: any }).options;
+					if (!options) {
+						ctx.replaceWith(
+							b.callExpression(
+								b.memberExpression(
+									b.identifier(names.access),
+									b.identifier('import'),
+								),
+								[base, ctx.node.source],
+							),
+						);
+						break;
+					}
+					// `import(url, { with: { type: 'json' } })`: the options pick the
+					// route and the browser checks them, so the import stays the
+					// page's own, given the routed URL: the specifier first, then
+					// the options, as natively. (Written as a call of `import`: the
+					// generator would drop an import expression's options)
 					ctx.replaceWith(
 						b.callExpression(
-							b.memberExpression(
-								b.identifier(names.access),
-								b.identifier('import'),
+							b.arrowFunctionExpression(
+								[b.identifier('s'), b.identifier('o')],
+								b.callExpression(b.identifier('import'), [
+									b.callExpression(
+										b.memberExpression(
+											b.identifier(names.access),
+											b.identifier('importRoute'),
+										),
+										[base, b.identifier('s'), b.identifier('o')],
+									),
+									b.identifier('o'),
+								]),
 							),
-							[
-								isModule
-									? b.memberExpression(
-											b.metaProperty(
-												b.identifier('import'),
-												b.identifier('meta'),
-											),
-											b.identifier('url'),
-										)
-									: // a classic script resolves against its own URL, which
-										// only the rewriter knows
-										b.literal(url.toString()),
-								ctx.node.source,
-							],
+							[ctx.node.source, options],
 						),
 					);
-
 					break;
+				}
 				case 'VariableDeclarator':
 					// `const { top: t } = o`, `const { a: { top } } = o`: the pattern
 					// reads `o.top` without a member expression to rewrite, so the
@@ -337,7 +390,7 @@ export function modifyJS(
 					// too, so whichever runs first loads it, and none runs unhooked
 					if (ctx.node.source && !isBareSpecifier(ctx.node.source.value))
 						ctx.node.source = b.literal(
-							routeJS(
+							routeImport(
 								new StompURL(
 									new URL(ctx.node.source.value, url.toString()),
 									url,
@@ -345,6 +398,7 @@ export function modifyJS(
 								url,
 								config,
 								type === 'workerModule' ? 'workerModule' : 'genericModule',
+								attributeType(ctx.node as { attributes?: unknown }),
 							),
 						);
 					break;

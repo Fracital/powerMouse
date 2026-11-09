@@ -4,7 +4,7 @@ import {
 	isBareSpecifier,
 	modifyJS,
 	postMessageMethod,
-	routeJS,
+	routeImport,
 	UNDEFINABLE,
 } from '../../rewriteJS';
 import StompURL, { urlLike } from '../../StompURL';
@@ -71,6 +71,24 @@ export default class AccessModule extends Module<Client> {
 
 		setGlobalProxy(evalSnapshot, 'eval', globalEvalProxy, this.client.names);
 
+		/** the routed URL of a module `url` imports (bare specifiers are the import map's), by its kind */
+		const route = (
+			baseURL: string | undefined,
+			url: string,
+			moduleType: unknown,
+		): string =>
+			isBareSpecifier(String(url))
+				? url
+				: routeImport(
+						new StompURL(
+							new URL(url, baseURL || this.client.url.toString()),
+							this.client.url,
+						),
+						this.client.url,
+						this.client.config,
+						'genericModule',
+						moduleType,
+					);
 		const api = {
 			get2: (
 				target: any,
@@ -264,23 +282,24 @@ export default class AccessModule extends Module<Client> {
 					'generic',
 				);
 			},
-			import: (baseURL: string | undefined, url: string): Promise<unknown> => {
-				// bare specifiers belong to the page's import map
-				if (isBareSpecifier(String(url)))
-					return import(/* webpackIgnore: true */ url);
+			import: (baseURL: string | undefined, url: string): Promise<unknown> =>
 				// @ts-ignore
-				return import(
-					/* webpackIgnore: true */
-					routeJS(
-						new StompURL(
-							new URL(url, baseURL || this.client.url.toString()),
-							this.client.url,
-						),
-						this.client.url,
-						this.client.config,
-						'genericModule',
-					)
-				);
+				import(/* webpackIgnore: true */ route(baseURL, url, undefined)),
+			// the URL `import(url, options)` loads: the rewriter keeps the import
+			// itself, with its options, in the page (see modifyJS)
+			importRoute: (
+				baseURL: string | undefined,
+				url: string,
+				options: unknown,
+			): string => {
+				let moduleType: unknown;
+				try {
+					moduleType = (options as { with?: { type?: unknown } } | undefined)
+						?.with?.type;
+				} catch (error) {
+					// options that throw: the browser's import throws the same
+				}
+				return route(baseURL, url, moduleType);
 			},
 			// `const { top: t } = o`: a pattern cannot be rewritten key by key,
 			// so the source is wrapped and every read of an unforgeable through

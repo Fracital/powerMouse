@@ -15,8 +15,5 @@
 		"sec-fetch-site - Same-Site -> Cross-Site no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
 		"sec-fetch-mode no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
 		"sec-fetch-user no attributes": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/fetch/metadata/generated/script-json-module-import-static.https.sub.html": {
-		"(harness)": "ERROR: Uncaught SyntaxError: Unexpected token 'i', \"import.met\"... is not valid JSON"
 	}
 }
