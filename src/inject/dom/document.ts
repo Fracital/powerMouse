@@ -16,6 +16,7 @@ import FramingModule from './modules/Framing';
 import HistoryModule from './modules/History';
 import IFrameModule from './modules/IFrame';
 import LocationModule from './modules/Location';
+import MediaSessionModule from './modules/MediaSession';
 import MutationObserverModule from './modules/MutationObserver';
 import NavigateModule from './modules/Navigate';
 import NavigationHintModule from './modules/NavigationHint';
@@ -51,6 +52,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(ContextModule);
 	client.addModule(OpenModule);
 	client.addModule(DownloadModule);
+	client.addModule(MediaSessionModule);
 	client.addModule(NavigateModule);
 	client.addModule(NavigationHintModule);
 	client.addModule(ReadbackModule);

@@ -291,6 +291,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A media session's artwork goes through the proxy. The browser fetches
+  `navigator.mediaSession` artwork itself, for its media controls, and the
+  page's URL went straight to the site (YouTube's watch page, a thumbnail
+  from i.ytimg.com), while a relative one read back against the proxy
+  origin. Each image's `src` is now routed when a `MediaMetadata` is made or
+  its `artwork` set, the service worker serves the browser's fetch, and
+  `artwork` reads back the page's URLs (media-session suite, both modes,
+  against the page loaded natively).
 - A navigation that arrives with no referrer carries the Sec-Fetch-Site and
   Sec-Fetch-User of the document that started it. A link clicked in a popup
   opened without a URL (about:blank sends no referrer), a `rel=noreferrer`
