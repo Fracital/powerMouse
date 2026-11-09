@@ -9,7 +9,11 @@ one tick on a cold transport (all but one never answered) and a request
 handed a keep-alive connection the server had already closed (see the
 `epoxy-concurrency` suite). And it reads an HTTP/1 response with a malformed
 header line the way Chrome does, where hyper refused the whole response (see
-the `malformed-headers` suite).
+the `malformed-headers` suite). And its WebSocket handshake goes out as
+Chrome's does: origin-form, with the port in Host, one User-Agent, Chrome's
+fields in Chrome's order, ALPN `http/1.1`, and the server's subprotocol
+reported (see the `ws-handshake` suite); TikTok's socket answered 400 to the
+absolute-form request line before.
 
 Nothing is forked in the sense of a diverging tree. `upstream.env` pins the
 four upstream revisions, `patches/` holds `git format-patch` output applied
@@ -27,8 +31,14 @@ fails the build at `git apply --check`.
 | MercuryWorkshop/epoxy-tls                                      | `0004` | `[patch.crates-io]` so hyper comes from the sibling checkout.                                                                                                                                                                                                                                                                                                     |
 | MercuryWorkshop/epoxy-tls                                      | `0005` | Turns on `http1_ignore_invalid_headers_in_responses` (skip a line with no colon or a control character), `http1_allow_spaces_after_header_name_in_responses` and `http1_allow_obsolete_multiline_headers_in_responses`, which Chrome all reads.                                                                                                                   |
 | MercuryWorkshop/epoxy-tls                                      | `0006` | Response header values reach JS as byte strings (one code unit per byte) instead of through `HeaderValue::to_str`, whose `?` failed the whole response over one byte past 0x7E.                                                                                                                                                                                   |
+| MercuryWorkshop/epoxy-tls                                      | `0007` | WebSocket handshake: the request-target is origin-form (`GET /path?query`) instead of the whole `wss://host/path` URL hyper's connection-level client wrote. Akamai, in front of TikTok's `im-ws.tiktok.com`, answered that with 400 "Invalid URL" to every handshake.                                                                                            |
+| MercuryWorkshop/epoxy-tls                                      | `0008` | WebSocket handshake: `Host` names the port when it is not the scheme's default (`ws://h:38155/` sent `Host: h`).                                                                                                                                                                                                                                                  |
+| MercuryWorkshop/epoxy-tls                                      | `0009` | WebSocket handshake: one User-Agent (the caller's replaces the client's; both went out), the caller cannot set Host, Connection, Upgrade, the key, the version or an extension epoxy cannot decode, Chrome's `Pragma`/`Cache-Control: no-cache` and `Accept-Encoding: gzip, deflate, br, zstd`, protocols joined with `, `, and the fields in Chrome's order.     |
+| MercuryWorkshop/epoxy-tls                                      | `0010` | A wss connection's ClientHello offers ALPN `http/1.1`, as Chrome's does for a WebSocket; it offered no ALPN at all.                                                                                                                                                                                                                                               |
+| MercuryWorkshop/epoxy-tls                                      | `0011` | WebSocket `onopen` gets the subprotocol the server chose (a page's `WebSocket.protocol` was always `""`), and a protocol the client did not offer fails the connection, as in a browser.                                                                                                                                                                          |
 | MercuryWorkshop/EpoxyTransport                                 | `0001` | Builds against the sibling epoxy-tls (`file:`), makes it a devDependency (it is bundled), pins TypeScript 5 for the type bundler, version `3.0.2-fracital.1`, stops ignoring `dist/`.                                                                                                                                                                             |
 | MercuryWorkshop/EpoxyTransport                                 | `0002` | `init()` loads the wasm module once per realm and builds one client per transport, however many calls overlap. Two concurrent inits instantiated the module twice and the client built on the replaced instance never answered.                                                                                                                                   |
+| MercuryWorkshop/EpoxyTransport                                 | `0003` | `connect` passes that subprotocol on to `onopen` (it reported `""`).                                                                                                                                                                                                                                                                                              |
 
 ## Build
 
@@ -45,6 +55,16 @@ the Rust and npm mirrors, set `ENGINE` to a wrapper that adds `--network host`
 to `docker build`. Output: `out/epoxy-tls` (the npm package
 layout) and `out/epoxy-transport` (with `dist/`), plus `out/UPSTREAM` naming
 the revisions and patches that went in.
+
+## Test a build before publishing
+
+The demo serves whatever `@mercuryworkshop/epoxy-transport` resolves to as
+`/epoxy/`, so a checkout runs the suites against a build when that package
+is the build's `out/epoxy-transport`. In a worktree whose `node_modules`
+links into the main checkout's, make `node_modules` a real directory of
+links and point only that package at the build, so the shared tree keeps its
+pinned copy; then `npm test` as usual (`ws-handshake`, `epoxy-concurrency`,
+`malformed-headers` exercise the patches).
 
 ## Publish and pin
 

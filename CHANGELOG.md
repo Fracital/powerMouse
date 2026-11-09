@@ -291,6 +291,22 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A WebSocket handshake goes out as the browser's does, once the epoxy
+  build from `deploy/epoxy/` with the new patches is published and pinned.
+  epoxy wrote the whole socket URL as the request-target
+  (`GET wss://host/path?query HTTP/1.1`, from hyper's connection-level
+  client), and servers that take no ws(s) scheme there refuse it: Akamai,
+  in front of TikTok's `im-ws.tiktok.com`, answered 400 "Invalid URL" to
+  every handshake, through any header, protocol or Origin. The
+  request-target is origin-form now. The handshake also dropped a
+  non-default port from `Host`, sent User-Agent twice (the client's and
+  the caller's), sent none of the `Pragma`, `Cache-Control` and
+  `Accept-Encoding` Chrome sends, joined the protocols without a space, and
+  its wss ClientHello offered no ALPN (Chrome offers `http/1.1`); the page's
+  `WebSocket.protocol` was always `""`, whatever the server chose. All
+  fixed in the transport, with Chrome's header order (ws-handshake suite,
+  reading the raw handshake the fixture received, both modes, against the
+  page loaded natively).
 - An `<embed>`'s or `<object>`'s resource goes out as the browser loads
   it: `Sec-Fetch-Dest: embed` or `object`, `Sec-Fetch-Mode: navigate`. The
   proxy loads it as a copy in every document (a fetch, handed to the
@@ -2037,6 +2053,14 @@ Fixed while testing real sites and a feature fixture:
 - A request that starts just as the server closes its idle connection fails
   with an error rather than being retried on a new connection the way Chrome
   retries it (the pinned epoxy no longer hangs there; hyper does not retry).
+- A WebSocket handshake through epoxy offers no `permessage-deflate`
+  (Chrome does): epoxy's WebSocket library refuses compressed frames, so an
+  offer the server took would break the socket. Its field names go out
+  title-cased (`Sec-Websocket-Key`), which HTTP reads case-insensitively.
+  `Accept-Language` on a handshake is the controller's to add from the
+  user's languages and is not added yet. epoxy's HTTP requests still say
+  `Accept-Encoding: gzip, br`, the encodings it decodes (Chrome adds
+  `deflate` and `zstd`).
 - A header line holding a control character other than NUL, CR or LF
   (`\x01`, DEL) is skipped by epoxy; Chrome keeps it and hands the page the
   value with the byte in it. An HTTP/2 response is parsed by h2, which none

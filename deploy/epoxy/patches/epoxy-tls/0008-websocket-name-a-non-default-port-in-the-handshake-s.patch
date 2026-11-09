@@ -1,0 +1,57 @@
+From 0c70db7ca6d42183600951c58ef2dd8621570f19 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 00:06:52 -0500
+Subject: [PATCH 08/11] websocket: name a non-default port in the handshake's
+ Host
+
+The handshake's Host was the URL's host alone, so `ws://h:38155/` went out
+as `Host: h`. Browsers send `host:port` whenever the port is not the
+scheme's default (RFC 9112 3.2), and a server on another port may route or
+check Origin by it.
+---
+ client/src/websocket.rs | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/client/src/websocket.rs b/client/src/websocket.rs
+index 30e4ef9..780dacd 100644
+--- a/client/src/websocket.rs
++++ b/client/src/websocket.rs
+@@ -59,12 +59,12 @@ impl EpoxyWebSocket {
+ 		let onerror_cloned = onerror.clone();
+ 		let ret: Result<EpoxyWebSocket, EpoxyError> = async move {
+ 			let url: Uri = url.try_into()?;
+-			let host = url.host().ok_or(EpoxyError::NoUrlHost)?;
++			let host = host_header(&url)?;
+ 
+ 			let mut req = Request::builder()
+ 				.method(Method::GET)
+ 				.uri(origin_form(&url)?)
+-				.header(HOST, host)
++				.header(HOST, &host)
+ 				.header(CONNECTION, "Upgrade")
+ 				.header(UPGRADE, "websocket")
+ 				.header(SEC_WEBSOCKET_KEY, ws_key())
+@@ -212,6 +212,23 @@ impl EpoxyWebSocket {
+ 	}
+ }
+ 
++// Host names the port when it is not the scheme's default, as the browser's
++// does (RFC 9112 3.2): `ws://h:8080/` is `Host: h:8080`, `wss://h:443/` is
++// `Host: h`. A server behind a non-default port may route or check Origin by
++// it.
++fn host_header(url: &Uri) -> Result<String, EpoxyError> {
++	let host = url.host().ok_or(EpoxyError::NoUrlHost)?;
++	let default = match url.scheme_str() {
++		Some("wss" | "https") => Some(443),
++		Some("ws" | "http") => Some(80),
++		_ => None,
++	};
++	Ok(match url.port_u16() {
++		Some(port) if Some(port) != default => format!("{host}:{port}"),
++		_ => host.to_string(),
++	})
++}
++
+ // A handshake's request-target is origin-form (`/path?query`), as browsers
+ // send it. hyper's connection-level client writes whatever URI the request
+ // holds, and the absolute-form `wss://host/path` it was given here is refused

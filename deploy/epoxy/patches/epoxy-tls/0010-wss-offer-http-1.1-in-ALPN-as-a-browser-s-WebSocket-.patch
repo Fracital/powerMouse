@@ -1,0 +1,128 @@
+From f817a96ebc107564c61c032f4703f299ab2568f9 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 00:08:17 -0500
+Subject: [PATCH 10/11] wss: offer http/1.1 in ALPN, as a browser's WebSocket
+ connection does
+
+A wss connection's ClientHello carried no ALPN extension at all (the
+config without ALPN is the one for raw connect_tls streams). Chrome offers
+http/1.1 alone for a new WebSocket connection. A third TLS config does
+that, and get_tls_stream takes which of the three to use.
+---
+ client/src/lib.rs             |  4 ++--
+ client/src/stream_provider.rs | 39 ++++++++++++++++++++++++++++-------
+ 2 files changed, 34 insertions(+), 9 deletions(-)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index 73d4273..fe08933 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -25,7 +25,7 @@ use js_sys::{Array, ArrayBuffer, Function, Object, Promise, Uint8Array};
+ use send_wrapper::SendWrapper;
+ use stream_provider::{
+ 	ProviderWispTransportGenerator, ProviderWispTransportRead, ProviderWispTransportWrite,
+-	StreamProvider, StreamProviderService,
++	StreamProvider, StreamProviderService, TlsAlpn,
+ };
+ use thiserror::Error;
+ use utils::{
+@@ -523,7 +523,7 @@ impl EpoxyClient {
+ 		let port = url.port_u16().ok_or(EpoxyError::NoUrlPort)?;
+ 		let stream = self
+ 			.stream_provider
+-			.get_tls_stream(host.to_string(), port, false)
++			.get_tls_stream(host.to_string(), port, TlsAlpn::None)
+ 			.await?;
+ 		Ok(iostream_from_asyncrw(
+ 			Either::Left(stream),
+diff --git a/client/src/stream_provider.rs b/client/src/stream_provider.rs
+index d37d477..7b46a8e 100644
+--- a/client/src/stream_provider.rs
++++ b/client/src/stream_provider.rs
+@@ -61,9 +61,20 @@ pub struct StreamProvider {
+ 	current_client: Arc<Mutex<Option<ClientMux<ProviderWispTransportWrite>>>>,
+ 
+ 	h2_config: Arc<ClientConfig>,
++	ws_config: Arc<ClientConfig>,
+ 	client_config: Arc<ClientConfig>,
+ }
+ 
++/// What a TLS connection offers in ALPN.
++pub enum TlsAlpn {
++	/// nothing: a raw TLS stream (`connect_tls`)
++	None,
++	/// h2 and http/1.1, for fetch
++	Http,
++	/// http/1.1 alone, for a WebSocket handshake, as browsers offer it
++	WebSocket,
++}
++
+ impl StreamProvider {
+ 	pub fn new(
+ 		wisp_generator: ProviderWispTransportGenerator,
+@@ -98,12 +109,17 @@ impl StreamProvider {
+ 		}
+ 		.with_no_client_auth();
+ 		let no_alpn_client_config = Arc::new(client_config.clone());
++		let mut ws_config = client_config.clone();
+ 		#[cfg(feature = "full")]
+ 		{
+ 			client_config.alpn_protocols =
+ 				vec!["h2".as_bytes().to_vec(), "http/1.1".as_bytes().to_vec()];
++			// a browser's ClientHello for a new WebSocket connection offers
++			// http/1.1 alone (measured, Chrome 152); epoxy offered no ALPN
++			ws_config.alpn_protocols = vec!["http/1.1".as_bytes().to_vec()];
+ 		}
+ 		let client_config = Arc::new(client_config);
++		let ws_config = Arc::new(ws_config);
+ 
+ 		Ok(Self {
+ 			wisp_generator,
+@@ -111,6 +127,7 @@ impl StreamProvider {
+ 			wisp_v2: options.wisp_v2,
+ 			udp_extension: options.udp_extension_required,
+ 			h2_config: client_config,
++			ws_config,
+ 			client_config: no_alpn_client_config,
+ 		})
+ 	}
+@@ -192,15 +209,15 @@ impl StreamProvider {
+ 		&self,
+ 		host: String,
+ 		port: u16,
+-		http: bool,
++		alpn: TlsAlpn,
+ 	) -> Result<ProviderTlsAsyncRW, EpoxyError> {
+ 		let stream = self
+ 			.get_asyncread(StreamType::Tcp, host.clone(), port)
+ 			.await?;
+-		let connector = TlsConnector::from(if http {
+-			self.h2_config.clone()
+-		} else {
+-			self.client_config.clone()
++		let connector = TlsConnector::from(match alpn {
++			TlsAlpn::Http => self.h2_config.clone(),
++			TlsAlpn::WebSocket => self.ws_config.clone(),
++			TlsAlpn::None => self.client_config.clone(),
+ 		});
+ 		let ret = connector
+ 			.connect(host.try_into()?, stream)
+@@ -324,8 +341,16 @@ impl StreamProviderService {
+ 		)?;
+ 		Ok(HyperIo {
+ 			inner: match scheme {
+-				"https" => Either::Left(self.0.get_tls_stream(host, port, true).await?),
+-				"wss" => Either::Left(self.0.get_tls_stream(host, port, false).await?),
++				"https" => Either::Left(
++					self.0
++						.get_tls_stream(host, port, TlsAlpn::Http)
++						.await?,
++				),
++				"wss" => Either::Left(
++					self.0
++						.get_tls_stream(host, port, TlsAlpn::WebSocket)
++						.await?,
++				),
+ 				"http" | "ws" => {
+ 					Either::Right(self.0.get_asyncread(StreamType::Tcp, host, port).await?)
+ 				}

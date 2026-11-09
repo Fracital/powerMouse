@@ -1,0 +1,67 @@
+From a8afa623a6baae0b537d7c1a7a6174d4a6fd0668 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 00:06:38 -0500
+Subject: [PATCH 07/11] websocket: send the handshake with an origin-form
+ request-target
+
+The handshake went out as `GET wss://host/path?query HTTP/1.1`: hyper's
+connection-level HTTP/1 client writes the request's URI as given, and the
+request held the whole socket URL. Browsers and every WebSocket client send
+origin-form (`GET /path?query`). Servers that take no ws(s) scheme in a
+request line refuse it; Akamai, in front of TikTok's im-ws.tiktok.com,
+answers 400 "Invalid URL" to every handshake.
+
+The request now carries the origin-form target and the connection is made
+from the full URL, passed alongside.
+---
+ client/src/websocket.rs | 18 +++++++++++++++---
+ 1 file changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/client/src/websocket.rs b/client/src/websocket.rs
+index 82e4dc0..30e4ef9 100644
+--- a/client/src/websocket.rs
++++ b/client/src/websocket.rs
+@@ -63,7 +63,7 @@ impl EpoxyWebSocket {
+ 
+ 			let mut req = Request::builder()
+ 				.method(Method::GET)
+-				.uri(url.clone())
++				.uri(origin_form(&url)?)
+ 				.header(HOST, host)
+ 				.header(CONNECTION, "Upgrade")
+ 				.header(UPGRADE, "websocket")
+@@ -89,7 +89,7 @@ impl EpoxyWebSocket {
+ 
+ 			let req = req.body(Empty::new())?;
+ 
+-			let mut response = request(req, client).await?;
++			let mut response = request(req, url, client).await?;
+ 			verify(&response)?;
+ 
+ 			let websocket = WebSocket::after_handshake(
+@@ -212,12 +212,24 @@ impl EpoxyWebSocket {
+ 	}
+ }
+ 
++// A handshake's request-target is origin-form (`/path?query`), as browsers
++// send it. hyper's connection-level client writes whatever URI the request
++// holds, and the absolute-form `wss://host/path` it was given here is refused
++// by servers that take no ws(s) scheme in a request line: Akamai answers 400
++// "Invalid URL" (TikTok's im-ws.tiktok.com).
++fn origin_form(url: &Uri) -> Result<Uri, EpoxyError> {
++	Ok(Uri::builder()
++		.path_and_query(url.path_and_query().map_or("/", |x| x.as_str()))
++		.build()?)
++}
++
+ async fn request(
+ 	req: Request<Empty<Bytes>>,
++	url: Uri,
+ 	client: &EpoxyClient,
+ ) -> Result<Response<Incoming>, EpoxyError> {
+ 	let stream = StreamProviderService(client.stream_provider.clone())
+-		.connect(req.uri().clone())
++		.connect(url)
+ 		.await?;
+ 
+ 	let (mut sender, conn) = http1::Builder::new()

@@ -1,0 +1,172 @@
+From 89ba9b1e526c65f15eb60f8217ee67b1d25ebbca Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 00:07:42 -0500
+Subject: [PATCH 09/11] websocket: send the handshake's header fields as Chrome
+ does
+
+- The caller's User-Agent replaces the client's instead of going out next
+  to it: the handshake carried two User-Agent lines, the client's default
+  and the one the caller passed.
+- The caller's Host, Connection, Upgrade, Sec-WebSocket-Key and -Version
+  are dropped (browsers forbid them to pages, and a second Host is a 400
+  anywhere), and so is Sec-WebSocket-Extensions: epoxy decodes no
+  extension, and a server that took one would send frames it refuses.
+- The fields Chrome's network stack adds to every handshake are there:
+  Pragma: no-cache, Cache-Control: no-cache and Accept-Encoding: gzip,
+  deflate, br, zstd (no body of a handshake's response is ever decoded, so
+  the encodings epoxy cannot read do not matter). A caller's value for any
+  of them replaces the default.
+- Sec-WebSocket-Protocol lists the protocols comma-space separated.
+- The fields go out in Chrome's order (Host, Connection, Pragma,
+  Cache-Control, User-Agent, Upgrade, Origin, Sec-WebSocket-Version,
+  Accept-Encoding, Accept-Language, the rest such as Cookie,
+  Sec-WebSocket-Key, Sec-WebSocket-Protocol).
+---
+ client/src/websocket.rs | 112 +++++++++++++++++++++++++++++++---------
+ 1 file changed, 89 insertions(+), 23 deletions(-)
+
+diff --git a/client/src/websocket.rs b/client/src/websocket.rs
+index 780dacd..586f8d8 100644
+--- a/client/src/websocket.rs
++++ b/client/src/websocket.rs
+@@ -1,4 +1,7 @@
+-use std::{str::from_utf8, sync::Arc};
++use std::{
++	str::{from_utf8, FromStr},
++	sync::Arc,
++};
+ 
+ use bytes::Bytes;
+ use fastwebsockets::{
+@@ -7,8 +10,8 @@ use fastwebsockets::{
+ use futures_util::lock::Mutex;
+ use http::{
+ 	header::{
+-		CONNECTION, HOST, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_PROTOCOL, SEC_WEBSOCKET_VERSION,
+-		UPGRADE, USER_AGENT,
++		HeaderName, HeaderValue, ACCEPT_ENCODING, CACHE_CONTROL, CONNECTION, HOST, PRAGMA,
++		SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_PROTOCOL, SEC_WEBSOCKET_VERSION, UPGRADE, USER_AGENT,
+ 	},
+ 	Method, Request, Response, StatusCode, Uri,
+ };
+@@ -61,30 +64,57 @@ impl EpoxyWebSocket {
+ 			let url: Uri = url.try_into()?;
+ 			let host = host_header(&url)?;
+ 
+-			let mut req = Request::builder()
+-				.method(Method::GET)
+-				.uri(origin_form(&url)?)
+-				.header(HOST, &host)
+-				.header(CONNECTION, "Upgrade")
+-				.header(UPGRADE, "websocket")
+-				.header(SEC_WEBSOCKET_KEY, ws_key())
+-				.header(SEC_WEBSOCKET_VERSION, "13")
+-				.header(USER_AGENT, user_agent);
+-
+-			if !protocols.is_empty() {
+-				req = req.header(SEC_WEBSOCKET_PROTOCOL, protocols.join(","));
+-			}
+-
+-			if web_sys::Headers::instanceof(&headers)
++			let caller = if web_sys::Headers::instanceof(&headers)
+ 				&& let Ok(entries) = from_entries(&headers)
+ 			{
+-				for header in entries_of_object(&entries) {
+-					req = req.header(&header[0], &header[1]);
+-				}
++				entries_of_object(&entries)
+ 			} else if headers.is_truthy() {
+-				for header in entries_of_object(&headers.into()) {
+-					req = req.header(&header[0], &header[1]);
++				entries_of_object(&headers.into())
++			} else {
++				Vec::new()
++			};
++
++			let mut list = vec![
++				(HOST, HeaderValue::from_str(&host)?),
++				(CONNECTION, HeaderValue::from_static("Upgrade")),
++				(PRAGMA, HeaderValue::from_static("no-cache")),
++				(CACHE_CONTROL, HeaderValue::from_static("no-cache")),
++				(USER_AGENT, HeaderValue::from_str(user_agent)?),
++				(UPGRADE, HeaderValue::from_static("websocket")),
++				(SEC_WEBSOCKET_VERSION, HeaderValue::from_static("13")),
++				(
++					ACCEPT_ENCODING,
++					HeaderValue::from_static("gzip, deflate, br, zstd"),
++				),
++				(SEC_WEBSOCKET_KEY, HeaderValue::from_str(&ws_key())?),
++			];
++			if !protocols.is_empty() {
++				list.push((
++					SEC_WEBSOCKET_PROTOCOL,
++					HeaderValue::from_str(&protocols.join(", "))?,
++				));
++			}
++			for header in caller {
++				let name = HeaderName::from_str(&header[0])?;
++				let value = HeaderValue::from_str(&header[1])?;
++				if handshake_owned(&name) {
++					continue;
+ 				}
++				// a caller's User-Agent (or any other default) replaces the
++				// default instead of going out next to it
++				match list.iter_mut().find(|(n, _)| *n == name) {
++					Some(slot) => slot.1 = value,
++					None => list.push((name, value)),
++				}
++			}
++			list.sort_by_key(|(name, _)| chrome_rank(name));
++
++			let mut req = Request::builder()
++				.method(Method::GET)
++				.uri(origin_form(&url)?);
++			let map = req.headers_mut().ok_or(EpoxyError::InvalidRequest)?;
++			for (name, value) in list {
++				map.append(name, value);
+ 			}
+ 
+ 			let req = req.body(Empty::new())?;
+@@ -212,6 +242,42 @@ impl EpoxyWebSocket {
+ 	}
+ }
+ 
++// The handshake's own fields, which a caller does not set: the browser
++// forbids them to pages, and an extension epoxy cannot decode (it speaks
++// none) would break the socket if the server took it.
++fn handshake_owned(name: &HeaderName) -> bool {
++	matches!(
++		name.as_str(),
++		"host"
++			| "connection"
++			| "upgrade"
++			| "sec-websocket-key"
++			| "sec-websocket-version"
++			| "sec-websocket-extensions"
++	)
++}
++
++// Chrome's order for a handshake's fields (measured, Chrome 152). A field it
++// does not send itself goes where Cookie does, before Sec-WebSocket-Key.
++fn chrome_rank(name: &HeaderName) -> u8 {
++	match name.as_str() {
++		"host" => 0,
++		"connection" => 1,
++		"pragma" => 2,
++		"cache-control" => 3,
++		"user-agent" => 4,
++		"upgrade" => 5,
++		"origin" => 6,
++		"sec-websocket-version" => 7,
++		"accept-encoding" => 8,
++		"accept-language" => 9,
++		"sec-websocket-key" => 11,
++		"sec-websocket-extensions" => 12,
++		"sec-websocket-protocol" => 13,
++		_ => 10,
++	}
++}
++
+ // Host names the port when it is not the scheme's default, as the browser's
+ // does (RFC 9112 3.2): `ws://h:8080/` is `Host: h:8080`, `wss://h:443/` is
+ // `Host: h`. A server behind a non-default port may route or check Origin by

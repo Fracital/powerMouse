@@ -1,0 +1,81 @@
+From 91810e8328a7ab4dbd8dfe9459be82a311781204 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 00:15:18 -0500
+Subject: [PATCH 11/11] websocket: hand onopen the subprotocol the server chose
+
+onopen was called with no arguments, so a page's WebSocket.protocol was
+always "" through epoxy, where the browser shows the protocol the server
+picked from the offered list ("binary" for ["binary", "base64", "pbbp2"]
+against a server that takes the first). It now gets the response's
+Sec-WebSocket-Protocol, and a protocol the client did not offer fails the
+connection, as RFC 6455 4.1 and browsers have it.
+---
+ client/src/lib.rs       |  3 +++
+ client/src/websocket.rs | 21 +++++++++++++++++----
+ 2 files changed, 20 insertions(+), 4 deletions(-)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index fe08933..0cb3dd2 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -144,6 +144,9 @@ pub enum EpoxyError {
+ 	#[error("Invalid websocket connection header: {0:?} != \"Upgrade\"")]
+ 	WsInvalidConnectionHeader(String),
+ 	#[cfg(feature = "full")]
++	#[error("Invalid websocket protocol: {0:?} was not offered")]
++	WsInvalidProtocol(String),
++	#[cfg(feature = "full")]
+ 	#[error("Invalid websocket payload: {0}")]
+ 	WsInvalidPayload(String),
+ 
+diff --git a/client/src/websocket.rs b/client/src/websocket.rs
+index 586f8d8..9e98782 100644
+--- a/client/src/websocket.rs
++++ b/client/src/websocket.rs
+@@ -120,7 +120,7 @@ impl EpoxyWebSocket {
+ 			let req = req.body(Empty::new())?;
+ 
+ 			let mut response = request(req, url, client).await?;
+-			verify(&response)?;
++			let protocol = verify(&response, &protocols)?;
+ 
+ 			let websocket = WebSocket::after_handshake(
+ 				TokioIo::new(upgrade::on(&mut response).await?),
+@@ -170,7 +170,7 @@ impl EpoxyWebSocket {
+ 				let _ = onclose.call0(&JsValue::null());
+ 			});
+ 
+-			let _ = onopen.call0(&JsValue::null());
++			let _ = onopen.call1(&JsValue::null(), &JsValue::from(protocol));
+ 
+ 			Ok(Self {
+ 				tx,
+@@ -331,7 +331,10 @@ async fn request(
+ }
+ 
+ // https://github.com/snapview/tungstenite-rs/blob/314feea3055a93e585882fb769854a912a7e6dae/src/handshake/client.rs#L189
+-fn verify(response: &Response<Incoming>) -> Result<(), EpoxyError> {
++// Answers the subprotocol the server chose ("" for none), which the page
++// reads as WebSocket.protocol. A choice the client did not offer fails the
++// connection, as it does in a browser (RFC 6455 4.1).
++fn verify(response: &Response<Incoming>, offered: &[String]) -> Result<String, EpoxyError> {
+ 	if response.status() != StatusCode::SWITCHING_PROTOCOLS {
+ 		return Err(EpoxyError::WsInvalidStatusCode(
+ 			response.status().as_u16(),
+@@ -363,5 +366,15 @@ fn verify(response: &Response<Incoming>) -> Result<(), EpoxyError> {
+ 		));
+ 	}
+ 
+-	Ok(())
++	let protocol = headers
++		.get(SEC_WEBSOCKET_PROTOCOL)
++		.and_then(|h| h.to_str().ok())
++		.unwrap_or_default()
++		.trim();
++
++	if !protocol.is_empty() && !offered.iter().any(|x| x == protocol) {
++		return Err(EpoxyError::WsInvalidProtocol(protocol.to_string()));
++	}
++
++	Ok(protocol.to_string())
+ }

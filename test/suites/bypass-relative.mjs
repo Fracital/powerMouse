@@ -173,8 +173,9 @@ for (const [variant, query] of VARIANTS) {
 			wrong.join('; '),
 		);
 
-		// a socket reaches the path it names natively
-		// (the request target the proxy sends is absolute)
+		// a socket reaches the path it names natively (compared by path and
+		// query: the epoxy before its ws-handshake patches sent an absolute
+		// request-target)
 		const target = (url) => {
 			const parsed = new URL(url, 'ws://x');
 			return parsed.pathname + parsed.search;

@@ -1,0 +1,28 @@
+From e7fee611909dac47f2eeeec83a9a2524f0affb11 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 00:15:25 -0500
+Subject: [PATCH] connect: report the subprotocol the server chose
+
+onopen always reported "" as the protocol, because epoxy-tls did not pass
+one. The patched epoxy-tls hands it to its onopen handler; pass it on.
+Extensions stay "": epoxy offers none.
+---
+ src/main.ts | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/main.ts b/src/main.ts
+index a9b0c5b..2a20178 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -159,8 +159,9 @@ export default class EpoxyTransport implements ProxyTransport {
+ 		(code: number, reason: string) => void,
+ 	] {
+ 		let handlers = new EpoxyHandlers(
+-			// epoxy does not support getting the server selected protocol/extension
+-			() => onopen("", ""),
++			// epoxy-tls passes the protocol the server chose; it offers no
++			// extension, so none is ever negotiated
++			(protocol?: string) => onopen(protocol ?? "", ""),
+ 			// epoxy does not support getting close code/reason
+ 			() => onclose(1000, "Closed by remote"),
+ 			onerror,
