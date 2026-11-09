@@ -1,0 +1,4 @@
+/* a stylesheet the worker rewrites: url() grows */
+body {
+	background: url('content-length.txt#ünï');
+}

@@ -1011,6 +1011,18 @@ function genericForward(
 
 			body = transformed !== false ? transformed : response.body!;
 
+			// The origin's Content-Length counts the origin's bytes, and a
+			// transformed body is the worker's own: it goes out with its own
+			// length, or none when that is not known before it is read. A HEAD
+			// has no body to transform, so the length of what the GET would get
+			// is unknown and goes. A body passed through keeps the origin's.
+			if (transformed !== false) {
+				const length =
+					serverRequest.method === 'HEAD' ? null : bodyLength(transformed);
+				if (length === null) responseHeaders.delete('content-length');
+				else responseHeaders.set('content-length', String(length));
+			}
+
 			// A rewritten body is this worker's output, not the origin's: the
 			// browser's HTTP cache must not keep it for as long as the origin
 			// allowed (a rewriter upgrade or new helper names would leave old
@@ -1098,6 +1110,35 @@ function genericForward(
 }
 
 const htmlMimes = ['text/html', '', ...XML_DOCUMENT_MIMES];
+
+/** the bytes `body` goes out as, or null when that is not known before it is read */
+export function bodyLength(body: BodyInit): number | null {
+	if (typeof body === 'string') return utf8Length(body);
+	if (body instanceof Blob) return body.size;
+	if (body instanceof ArrayBuffer) return body.byteLength;
+	if (ArrayBuffer.isView(body)) return body.byteLength;
+	return null;
+}
+
+/** how many bytes `text` is in UTF-8 (a lone surrogate goes out as U+FFFD, three) */
+function utf8Length(text: string): number {
+	let length = 0;
+	for (let i = 0; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		if (code < 0x80) length += 1;
+		else if (code < 0x800) length += 2;
+		else if (
+			code >= 0xd800 &&
+			code <= 0xdbff &&
+			i + 1 < text.length &&
+			(text.charCodeAt(i + 1) & 0xfc00) === 0xdc00
+		) {
+			length += 4;
+			i++;
+		} else length += 3;
+	}
+	return length;
+}
 
 export function getMime(contentType: string): string {
 	return contentType.split(';')[0];

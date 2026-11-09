@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>CONTENT LENGTH</title>
+<link rel="stylesheet" href="content-length.css" />
+<script src="content-length.js"></script>
+<body>
+	<p>Länge: ëö 你好 🙂</p>
+	<!-- its origin says its length for a HEAD as well (sidecar) -->
+	<iframe src="content-length-head.html.bin"></iframe>
+	<script>
+		// what the page reads of a passthrough body's length, GET and HEAD,
+		// for a plain file and a pre-gzipped one
+		(async function () {
+			const read = async (file, method) => {
+				const response = await fetch(file, { method });
+				const body =
+					method === 'GET' ? (await response.arrayBuffer()).byteLength : 0;
+				return {
+					length: response.headers.get('content-length'),
+					encoding: response.headers.get('content-encoding'),
+					body,
+				};
+			};
+			const result = {};
+			for (const file of ['content-length.txt', 'content-length.gz.bin'])
+				for (const method of ['GET', 'HEAD'])
+					result[file + ' ' + method] = await read(file, method);
+			window.__lengths = result;
+		})();
+	</script>
+</body>

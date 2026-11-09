@@ -321,6 +321,15 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   Reporting API reports name the page's URLs. Left as they are: source
   positions of rewritten code, a page's CSP (not forwarded, so no violation
   fires), resources the page's markup loads listed twice in resource timing.
+- A body the worker rewrites says its own length. A document's shell, a
+  rewritten script (from the rewrite cache too) and a rewritten stylesheet
+  went out with the origin's Content-Length, which counted the origin's
+  bytes: a 2367-byte shell said 1137. Chrome reads such a body to its end
+  anyway, but anything that reads the header saw a length that was not the
+  body's. A rewritten body now carries its own byte length, a HEAD of a
+  route that rewrites carries none (what the GET would send is not known),
+  and a body passed through keeps the origin's length, as natively
+  (content-length suite, both modes).
 - A worker the page terminates at once no longer reports an import of the
   proxy's. A proxied worker imports the inject bundle (and a blob: worker the
   private URL of its script) before the page's script runs, and Chrome reports
