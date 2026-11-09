@@ -1,0 +1,239 @@
+<!doctype html>
+<title>REFS TOP</title>
+<body>
+	<a id="jsurl" href="#">javascript: URL</a>
+	<button id="handler">handler</button>
+	<script src="window-refs.js"></script>
+	<script>
+		// Every way this page can reach a window of another site, each judged
+		// by what the reference lets it do (window-refs.js): the browser hands
+		// out a cross-origin WindowProxy that throws SecurityError for every
+		// read, call and write. frames[0] is the child of another site
+		// (named "kid"), frames[1] a sibling of this site (cross-site to the
+		// child), then a frameset whose frame is another site's, a frame held
+		// from its about:blank before it went to another site, a frame
+		// window.open() navigates by name, an <object> and an <embed> of
+		// another site, and a popup held from about:blank.
+		const report = { role: 'top', paths: {} };
+		window.__refs = report;
+		const paths = report.paths;
+		const inspect = refsInspect;
+		const inspectDoc = refsInspectDoc;
+		const ready = {};
+		window.__ready = ready;
+		const sources = {};
+		const frame = (id, src) => {
+			const element = document.createElement('iframe');
+			element.id = id;
+			element.name = id;
+			if (src) element.src = src;
+			document.body.append(element);
+			return element;
+		};
+		const kidElement = frame(
+			'kid',
+			refsCross('window-refs-child.html?role=child'),
+		);
+		frame('sib', 'window-refs-child.html?role=sib');
+		frame('fs', 'window-refs-frameset.html');
+		const heldElement = frame('held');
+		const heldWindow = heldElement.contentWindow;
+		heldElement.src = refsCross('window-refs-child.html?role=held');
+		frame('tgt');
+		// read while its document of another site is still on the way
+		const pendingElement = frame(
+			'pend',
+			refsCross('window-refs-child.html?role=pending'),
+		);
+		const pendingWindow = pendingElement.contentWindow;
+		// an SVG document of another site, which getSVGDocument() hands out
+		const svgFrame = frame('svgf', refsCross('standalone.svg'));
+		svgFrame.onload = () => (ready.svgFrame = true);
+		const svgObject = document.createElement('object');
+		svgObject.type = 'image/svg+xml';
+		svgObject.data = refsCross('standalone.svg');
+		svgObject.onload = () => (ready.svgObject = true);
+		document.body.append(svgObject);
+		const object = document.createElement('object');
+		object.id = 'obj';
+		object.name = 'obj';
+		object.type = 'text/html';
+		object.data = refsCross('window-refs-child.html?role=object');
+		document.body.append(object);
+		const embed = document.createElement('embed');
+		embed.id = 'emb';
+		embed.type = 'text/html';
+		embed.src = refsCross('window-refs-child.html?role=embed');
+		document.body.append(embed);
+		// the popup opens once the frames are in: Chrome pauses the page's
+		// frames while a window opens under DevTools, and a message or load
+		// event of a frame loading then can be lost (a test harness artifact)
+		let popup = null;
+		let portSource = 'no message';
+		const frames0 = ['child', 'sib', 'held', 'pending', 'object', 'frameset'];
+		addEventListener('message', (event) => {
+			const role = event.data && event.data.refs;
+			if (!role) return;
+			ready[role] = true;
+			sources[role] = event.source;
+			if (role === 'port')
+				event.ports[0].onmessage = (portEvent) => {
+					portSource = portEvent.source;
+				};
+			if (role === 'tgt') finish();
+			else if (!popup && frames0.every((name) => ready[name])) {
+				popup = window.open();
+				popup.location = refsCross('window-refs-child.html?role=popup');
+			} else if (role === 'popup' && !report.started) start();
+		});
+		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		async function start() {
+			report.started = true;
+			// an embed's document may never post (it has no window of its
+			// own in every engine): give it a moment, then go on
+			for (
+				let i = 0;
+				i < 30 && !(ready.embed && ready.svgFrame && ready.svgObject);
+				i++
+			)
+				await sleep(100);
+			const i = 0;
+			// by index
+			paths.framesIndex = inspect(() => frames[0]);
+			paths.windowIndex = inspect(() => window[0]);
+			paths.selfIndex = inspect(() => self[0]);
+			paths.globalThisIndex = inspect(() => globalThis[0]);
+			paths.topIndex = inspect(() => top[0]);
+			paths.windowFramesIndex = inspect(() => window.frames[0]);
+			paths.computedIndex = inspect(() => frames[i]);
+			paths.stringIndex = inspect(() => frames['0']);
+			paths.lengthLoop = inspect(() => {
+				for (let j = 0; j < frames.length; j++) if (j === 0) return frames[j];
+			});
+			paths.forOf = inspect(() => {
+				for (const w of frames) return w;
+			});
+			paths.arrayFrom = inspect(() => Array.from(frames)[0]);
+			paths.slice = inspect(() => Array.prototype.slice.call(frames)[0]);
+			paths.spread = inspect(() => ({ ...window })[0]);
+			paths.assign = inspect(() => Object.assign({}, frames)[0]);
+			paths.reflectGet = inspect(() => Reflect.get(window, 0));
+			paths.descriptor = inspect(
+				() => Object.getOwnPropertyDescriptor(window, '0').value,
+			);
+			paths.reflectDescriptor = inspect(
+				() => Reflect.getOwnPropertyDescriptor(frames, '0').value,
+			);
+			paths.descriptors = inspect(
+				() => Object.getOwnPropertyDescriptors(window)[0].value,
+			);
+			paths.entries = inspect(
+				() => Object.entries(window).find(([key]) => key === '0')[1],
+			);
+			paths.values = inspect(() => Object.values(window)[0]);
+			// by name
+			paths.bracketName = inspect(() => window['kid']);
+			paths.framesName = inspect(() => frames.kid);
+			paths.windowName = inspect(() => window.kid);
+			paths.bareName = inspect(() => kid);
+			paths.documentName = inspect(() => document.kid);
+			paths.reflectName = inspect(() => Reflect.get(window, 'kid'));
+			// through the element, found every way
+			paths.contentWindow = inspect(() => kidElement.contentWindow);
+			paths.getElementById = inspect(
+				() => document.getElementById('kid').contentWindow,
+			);
+			paths.querySelector = inspect(
+				() => document.querySelector('#kid').contentWindow,
+			);
+			paths.getElementsByTagName = inspect(
+				() => document.getElementsByTagName('iframe')[0].contentWindow,
+			);
+			paths.getElementsByName = inspect(
+				() => document.getElementsByName('kid')[0].contentWindow,
+			);
+			paths.contentDocument = inspectDoc(() => kidElement.contentDocument);
+			paths.getSVGDocument = inspectDoc(() => kidElement.getSVGDocument());
+			paths.defaultView = inspect(
+				() =>
+					(kidElement.contentDocument || kidElement.getSVGDocument() || {})
+						.defaultView,
+			);
+			paths.objectWindow = inspect(() => object.contentWindow);
+			paths.objectDocument = inspectDoc(() => object.contentDocument);
+			paths.objectSVGDocument = inspectDoc(() => object.getSVGDocument());
+			paths.embedSVGDocument = inspectDoc(() => embed.getSVGDocument());
+			paths.svgFrameDocument = inspectDoc(() => svgFrame.contentDocument);
+			paths.svgFrameSVGDocument = inspectDoc(() => svgFrame.getSVGDocument());
+			paths.svgObjectDocument = inspectDoc(() => svgObject.contentDocument);
+			paths.svgObjectSVGDocument = inspectDoc(() => svgObject.getSVGDocument());
+			paths.svgDefaultView = inspect(
+				() => (svgObject.getSVGDocument() || {}).defaultView,
+			);
+			paths.svgFrameWindow = inspect(() => svgFrame.contentWindow);
+			// code the page makes at run time
+			paths.eval = inspect(() => eval('frames[0]'));
+			paths.indirectEval = inspect(() => (0, eval)('frames[0]'));
+			paths.functionBody = inspect(() => new Function('return frames[0]')());
+			paths.with = inspect(() => {
+				with (window) {
+					return frames[0];
+				}
+			});
+			setTimeout('window.__refsTimer = frames[0]', 0);
+			const button = document.getElementById('handler');
+			button.setAttribute('onclick', 'window.__refsHandler = frames[0]');
+			button.click();
+			const link = document.getElementById('jsurl');
+			link.href = 'javascript:window.__refsURL = frames[0]; void 0';
+			link.click();
+			const module = document.createElement('script');
+			module.type = 'module';
+			module.textContent = 'window.__refsModule = frames[0];';
+			document.head.append(module);
+			await sleep(600);
+			paths.timer = inspect(() => window.__refsTimer);
+			paths.handler = inspect(() => window.__refsHandler);
+			paths.javascriptURL = inspect(() => window.__refsURL);
+			paths.module = inspect(() => window.__refsModule);
+			// what messages carry
+			paths.messageSource = inspect(() => sources.child);
+			paths.objectMessageSource = inspect(() => sources.object);
+			paths.popupMessageSource = inspect(() => sources.popup);
+			paths.portSource = inspect(() => portSource);
+			// a window this page held while it was of its own origin, and what
+			// the mediated paths give for it now that it is another site's
+			paths.heldFrame = inspect(() => heldWindow);
+			paths.heldFrameContentWindow = inspect(() => heldElement.contentWindow);
+			paths.heldFrameIndex = inspect(() => frames[3]);
+			paths.heldPopup = inspect(() => popup);
+			// read before its document of another site arrived
+			paths.pendingFrame = inspect(() => pendingWindow);
+			paths.pendingFrameIndex = inspect(() => frames[5]);
+			paths.heldPopupSource = inspect(() => sources.popup);
+			// window.open() returns the frame it navigates by name
+			window.__refsTarget = window.open(
+				refsCross('window-refs-child.html?role=tgt'),
+				'tgt',
+			);
+			setTimeout(finish, 4000);
+		}
+		let finished = false;
+		function finish() {
+			if (finished || !report.started) return;
+			finished = true;
+			paths.openByNameURL = inspect(() => window.__refsTarget);
+			paths.openByNameURLIndex = inspect(() => frames[4]);
+			// an existing frame of another site, reached by its name, last: a
+			// window handed out raw here could change what the paths above see
+			paths.openByName = inspect(() => window.open('', 'kid'));
+			for (const target of [kidElement.contentWindow, frames[1], popup])
+				target.postMessage('refs-probe', '*');
+			report.done = true;
+		}
+		setTimeout(() => {
+			report.timedOut = !report.started;
+			if (!report.started) start();
+		}, 15000);
+	</script>
+</body>

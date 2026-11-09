@@ -1,0 +1,83 @@
+<!doctype html>
+<title>REFS CHILD</title>
+<body>
+	<p>child</p>
+	<script src="window-refs.js"></script>
+	<script>
+		// A document of another site in a frame, an object, a frameset's frame
+		// or a popup of window-refs.html (or of its own site, as the sibling).
+		// It keeps things another site must not reach (its title, storage, a
+		// function, its DOM); as the child, the sibling and the popup it also
+		// probes what it reaches of its parent, its sibling and its opener.
+		const role = new URLSearchParams(location.search).get('role');
+		document.title = `REFS ${role}`;
+		window.refsSecret = () => 'SECRET';
+		try {
+			localStorage.setItem('refs', role);
+		} catch (error) {
+			// storage blocked
+		}
+		const report = { role, paths: {} };
+		window.__refs = report;
+		const paths = report.paths;
+		// an <object> or <embed> document of the proxy cannot load scripts by
+		// URL (CHANGELOG known limitations): it only reports, never probes
+		const inspect = (get) => refsInspect(get);
+		const probes = {
+			child(event) {
+				paths.parent = inspect(() => parent);
+				paths.windowParent = inspect(() => window.parent);
+				paths.top = inspect(() => top);
+				paths.parentFrames1 = inspect(() => parent.frames[1]);
+				paths.parentIndex1 = inspect(() => parent[1]);
+				paths.topIndex1 = inspect(() => top[1]);
+				paths.topFrames1 = inspect(() => top.frames[1]);
+				const one = 1;
+				paths.parentComputed1 = inspect(() => parent.frames[one]);
+				paths.parentReflect1 = inspect(() => Reflect.get(parent, 1));
+				paths.parentArrayFrom = inspect(() => Array.from(parent.frames)[1]);
+				paths.parentSibName = inspect(() => parent.sib);
+				paths.parentFramesSibName = inspect(() => parent.frames.sib);
+				paths.messageSource = inspect(() => event.source);
+			},
+			sib() {
+				paths.parentFrames0 = inspect(() => parent.frames[0]);
+				paths.parentIndex0 = inspect(() => parent[0]);
+				paths.topIndex0 = inspect(() => top[0]);
+				paths.parentKidName = inspect(() => parent.kid);
+				paths.parentFramesKidName = inspect(() => parent.frames.kid);
+				paths.parentDocumentKid = inspect(() => parent.document.kid);
+				paths.parentContentWindow = inspect(
+					() => parent.document.getElementById('kid').contentWindow,
+				);
+				paths.parentEval = inspect(() => parent.eval('frames[0]'));
+				paths.parentFunction = inspect(() =>
+					new parent.Function('return frames[0]')(),
+				);
+			},
+			popup(event) {
+				paths.opener = inspect(() => opener);
+				// the opener's first frame is of this page's own site
+				paths.openerFrames0 = inspect(() => opener.frames[0]);
+				paths.openerIndex1 = inspect(() => opener[1]);
+				paths.openerFramesSibName = inspect(() => opener.frames.sib);
+				paths.openerTop = inspect(() => opener.top);
+				paths.messageSource = inspect(() => event.source);
+			},
+		};
+		addEventListener('message', (event) => {
+			if (event.data !== 'refs-probe') return;
+			probes[role]?.(event);
+			report.done = true;
+		});
+		const up = role === 'popup' ? opener : parent;
+		up.postMessage({ refs: role }, '*');
+		if (role === 'child') {
+			// a port: its messages have no source window
+			const channel = new MessageChannel();
+			up.postMessage({ refs: 'port' }, '*', [channel.port2]);
+			channel.port1.postMessage('port');
+		}
+		if (!probes[role]) report.done = true;
+	</script>
+</body>

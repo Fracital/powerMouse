@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+	<head>
+		<title>REFS FRAMESET</title>
+		<script src="window-refs.js"></script>
+		<script>
+			// a frameset of the top page's site whose frame shows another site
+			const report = { role: 'frameset', paths: {} };
+			window.__refs = report;
+			addEventListener('message', (event) => {
+				if (!event.data || event.data.refs !== 'frame') return;
+				const frame = document.getElementById('fr');
+				const paths = report.paths;
+				paths.frameContentWindow = refsInspect(() => frame.contentWindow);
+				paths.frameContentDocument = refsInspectDoc(
+					() => frame.contentDocument,
+				);
+				paths.framesIndex = refsInspect(() => frames[0]);
+				paths.framesName = refsInspect(() => frames.fr);
+				paths.messageSource = refsInspect(() => event.source);
+				report.done = true;
+				parent.postMessage({ refs: 'frameset' }, '*');
+			});
+			document.addEventListener('DOMContentLoaded', () => {
+				document.getElementById('fr').src = refsCross(
+					'window-refs-child.html?role=frame',
+				);
+			});
+		</script>
+	</head>
+	<frameset cols="*">
+		<frame id="fr" name="fr" />
+	</frameset>
+</html>
