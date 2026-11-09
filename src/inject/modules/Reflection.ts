@@ -4,7 +4,7 @@ import Module from '../Module';
 import ProxyModule from './Proxy';
 
 type Api = {
-	get(object: unknown, key: unknown): unknown;
+	get(object: unknown, key: unknown, container?: unknown): unknown;
 	set2(
 		target: unknown,
 		key: unknown,
@@ -84,6 +84,19 @@ export default class ReflectionModule extends Module<Client> {
 			return result;
 		};
 
+		// a window's own children are its indexed properties (`window[0]`),
+		// which reflection reads too: another proxied site's comes back as the
+		// restricted stand-in a member read gives (the access API decides)
+		const restricted = (
+			descriptor: PropertyDescriptor,
+			key: unknown,
+			target: unknown,
+		) => {
+			if ('value' in descriptor)
+				descriptor.value = api().get(descriptor.value, key, target);
+			return descriptor;
+		};
+
 		const wrapDescriptorGetter = (
 			holder: Record<string, any>,
 			name: string,
@@ -93,9 +106,10 @@ export default class ReflectionModule extends Module<Client> {
 				(target, that, args) => {
 					const descriptor = Reflect.apply(target, that, args) as
 						PropertyDescriptor | undefined;
-					return descriptor && windowLike(args[0]) && unforgeable(args[1])
+					if (!descriptor || !windowLike(args[0])) return descriptor;
+					return unforgeable(args[1])
 						? spoofed(descriptor, args[1])
-						: descriptor;
+						: restricted(descriptor, args[1], args[0]);
 				},
 			);
 		};
@@ -106,13 +120,14 @@ export default class ReflectionModule extends Module<Client> {
 			global.Object.getOwnPropertyDescriptors,
 			(target, that, args) => {
 				const descriptors = Reflect.apply(target, that, args) as Record<
-					string,
+					PropertyKey,
 					PropertyDescriptor
 				>;
 				if (windowLike(args[0]))
-					for (const key of UNDEFINABLE)
-						if (key in descriptors)
-							descriptors[key] = spoofed(descriptors[key], key);
+					for (const key of Reflect.ownKeys(descriptors))
+						descriptors[key] = unforgeable(key)
+							? spoofed(descriptors[key], key)
+							: restricted(descriptors[key], key, args[0]);
 				return descriptors;
 			},
 		);
@@ -120,8 +135,8 @@ export default class ReflectionModule extends Module<Client> {
 		global.Reflect.get = proxyModule.wrapFunction(
 			global.Reflect.get,
 			(target, that, args) => {
-				const value = Reflect.apply(target, that, args);
-				return unforgeable(args[1]) ? api().get(value, args[1]) : value;
+				// any key: what it reads is handed out like a member read's value
+				return api().get(Reflect.apply(target, that, args), args[1], args[0]);
 			},
 		);
 
@@ -149,11 +164,23 @@ export default class ReflectionModule extends Module<Client> {
 			global.Object.assign,
 			(target, that, args) => {
 				const [to, ...sources] = args;
-				if (!windowLike(to)) return Reflect.apply(target, that, args);
+				if (!windowLike(to) && !sources.some(windowLike))
+					return Reflect.apply(target, that, args);
 				for (const source of sources) {
 					if (source === null || source === undefined) continue;
+					const from = windowLike(source);
 					for (const key of Reflect.ownKeys(Object(source))) {
-						const value = (source as Record<PropertyKey, unknown>)[key];
+						if (
+							!Reflect.getOwnPropertyDescriptor(Object(source), key)?.enumerable
+						)
+							continue;
+						const value = from
+							? api().get(
+									(source as Record<PropertyKey, unknown>)[key],
+									key,
+									source,
+								)
+							: (source as Record<PropertyKey, unknown>)[key];
 						if (key === 'location') assign(to as object, 'location', value);
 						else (to as Record<PropertyKey, unknown>)[key] = value;
 					}
@@ -174,13 +201,35 @@ export default class ReflectionModule extends Module<Client> {
 							name === 'entries'
 								? (entry as [string, unknown])[0]
 								: keys[index];
-						if (!unforgeable(key)) return entry;
 						return name === 'entries'
-							? [key, api().get((entry as [string, unknown])[1], key)]
-							: api().get(entry, key);
+							? [key, api().get((entry as [string, unknown])[1], key, args[0])]
+							: api().get(entry, key, args[0]);
 					});
 				},
 			);
+
+		// `Array.from(frames)`: a window is array-like by its children
+		global.Array.from = proxyModule.wrapFunction(
+			global.Array.from,
+			(target, that, args) => {
+				if (!windowLike(args[0])) return Reflect.apply(target, that, args);
+				const [items, map, thisArg] = args as [
+					unknown,
+					((value: unknown, index: number) => unknown) | undefined,
+					unknown,
+				];
+				// the map function sees what the page may see, as the result does
+				return Reflect.apply(target, that, [
+					items,
+					(value: unknown, index: number) => {
+						const child = api().get(value, index, items);
+						return map === undefined
+							? child
+							: Reflect.apply(map, thisArg, [child, index]);
+					},
+				]);
+			},
+		);
 
 		// the helper names (the access API and client key on the window, the
 		// stand-in tags on location and eval) never show in an enumeration of
