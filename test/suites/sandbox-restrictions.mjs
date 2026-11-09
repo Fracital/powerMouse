@@ -112,7 +112,17 @@ async function seen(run) {
 	return { beacons, reports };
 }
 const scripts = (set) => [...(set ?? [])].filter((b) => b.startsWith('s-'));
-const list = (set) => [...(set ?? [])].sort().join(' ');
+// An <object>'s HTML document loads into a blob: copy no service worker
+// controls, whose relative loads miss the worker, so its beacons never
+// arrive through the proxy, sandboxed or not (a known limit of object
+// documents, not of the sandbox): left out of the comparisons with native,
+// still counted by the checks that no script ran
+const OBJECT_BEACONS = ['n-object', 's-object'];
+const list = (set) =>
+	[...(set ?? [])]
+		.filter((beacon) => !OBJECT_BEACONS.includes(beacon))
+		.sort()
+		.join(' ');
 /** whether case `name` loaded what it shows (a javascript: URL frame shows nothing) */
 const rendered = (beacons, name) =>
 	name.startsWith('js-') ||
@@ -203,14 +213,22 @@ async function measure(label, context, load, topTitle) {
 	await clickIn(page, '#jslink');
 	await sleep(1500);
 
-	step(`${label}: popups`);
-	const popups = await load(
-		`${FIXTURE}pages/sandbox-restrictions-popups.html?run=${run}`,
-	);
-	await sleep(3000);
-	await clickIn(popups, '#popup');
-	await clickIn(popups, '#open');
-	await sleep(4000);
+	// the popups that stay sandboxed (or never open) first, together; each
+	// that escapes alone, since the demo opens it as a tab over the page
+	for (const cases of [
+		'pop-noscript,pop-noscript-blocked,pop-scripts',
+		'pop-noscript-escape',
+		'pop-scripts-escape',
+	]) {
+		step(`${label}: popups ${cases}`);
+		const popups = await load(
+			`${FIXTURE}pages/sandbox-restrictions-popups.html?run=${run}&cases=${cases}`,
+		);
+		await sleep(3000);
+		await clickIn(popups, '#popup');
+		await clickIn(popups, '#open');
+		await sleep(4000);
+	}
 
 	result.top = {};
 	for (const [name, sandbox, mode] of [

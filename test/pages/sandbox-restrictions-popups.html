@@ -6,9 +6,14 @@
 		// sandboxed frame opens is sandboxed the same way unless the frame has
 		// allow-popups-to-escape-sandbox; without allow-popups none opens. The
 		// suite clicks each frame's link or button; popups report by beacon.
-		const run = new URLSearchParams(location.search).get('run') || 'x';
+		// `cases` names the frames to make (all by default): a popup the demo
+		// opens as a tab hides this page, so each of those runs alone.
+		const query = new URLSearchParams(location.search);
+		const run = query.get('run') || 'x';
+		const only = query.get('cases')?.split(',');
 		const deep = (name) => `/pages/deep/${run}/${name}/`;
 		const frame = (id, sandbox, src) => {
+			if (only && !only.includes(id)) return;
 			const element = document.createElement('iframe');
 			element.id = id;
 			element.setAttribute('sandbox', sandbox);
