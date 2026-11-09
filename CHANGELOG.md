@@ -312,6 +312,22 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   which the browser never sends (request-header-parity suite, both modes,
   every header compared with the page loaded natively for a navigation, a
   script, an image, a fetch, an XHR and a WebSocket handshake).
+- reCAPTCHA loads through the proxy. Two bugs stood in the way, both about
+  frames a page makes. A proxied frame's `window.name` always read empty
+  (the shadow that hides the name the host gives its own frame applied to
+  every frame), so a frame looked up by name was missing: reCAPTCHA's
+  challenge frame finds its anchor as `parent.frames[name]` and threw
+  "Cannot read properties of undefined (reading 'postMessage')". Only the
+  host's frame has the shadow now; a frame or popup the page made keeps the
+  name it was given. And a page that reads an iframe's `contentWindow` at
+  once gets the initial about:blank, which the parent's bundle injects; the
+  browser keeps that Window for the document of the frame's src, and the
+  client stayed on it, as the parent realm's code. Its messages went out
+  with the parent as their source and its document took the parent's URL
+  on its deferred write, so reCAPTCHA's anchor answered its own page and the
+  widget timed out. The client now delivers messages and writes the
+  document from the window's own realm (frame-reuse suite, both modes,
+  against the page loaded natively).
 - A WebSocket handshake goes out as the browser's does, once the epoxy
   build from `deploy/epoxy/` with the new patches is published and pinned.
   epoxy wrote the whole socket URL as the request-target

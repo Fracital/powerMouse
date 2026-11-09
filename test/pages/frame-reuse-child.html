@@ -1,0 +1,27 @@
+<!doctype html>
+<title>FRAME REUSE CHILD</title>
+<script>
+	// a child of frame-reuse.html: tells its parent its name, its URL, and
+	// whether its sibling is found by name in the parent's frames
+	addEventListener('load', () => {
+		const sibling =
+			window.name === 'reuse-first' ? 'reuse-second' : 'reuse-first';
+		setTimeout(() => {
+			let found = 'missing';
+			try {
+				found = parent.frames[sibling] ? 'found' : 'missing';
+			} catch (error) {
+				found = 'threw';
+			}
+			parent.postMessage(
+				{
+					kind: 'frame-reuse',
+					name: window.name,
+					url: location.pathname + location.search,
+					sibling: found,
+				},
+				'*',
+			);
+		}, 500);
+	});
+</script>

@@ -764,7 +764,8 @@ export default class ContextModule extends Module<DocumentClient> {
 			// is used, or any
 			const receiverOrigin = (receiver as DocumentClient).global.location
 				.origin;
-			return Reflect.apply(receiver.nativePostMessage!, target, [
+			// from this window's realm, whatever bundle this client is (callIn)
+			return this.client.callIn(receiver.nativePostMessage!, target, [
 				data,
 				{
 					...options,

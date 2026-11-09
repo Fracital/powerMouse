@@ -11,9 +11,10 @@ import ContextModule, { sameOrigin } from './Context';
  * `top` and `parent`; this covers the other tells:
  *
  * - `frameElement` is null
- * - `window.name` is empty (the host names frames so its controller can find
- *   them; a page must never see that, but it may still use the name slot as
- *   storage, so writes go to a shadow value)
+ * - `window.name` is empty in the host's frame (the host names it so its
+ *   controller can find it; a page must never see that, but it may still use
+ *   the name slot as storage, so writes go to a shadow value); a frame or
+ *   popup the page made keeps the name it gave it
  * - outer size / screen position match the inner size, like a maximised
  *   window
  * - `document.referrer` never reveals the host; a document the service
@@ -80,20 +81,33 @@ export default class FramingModule extends Module<DocumentClient> {
 				set: openerDescriptor.set,
 			});
 
-		// window.name: shadow value, starts empty
-		let shadowName = '';
-		const nameDescriptor = Reflect.getOwnPropertyDescriptor(global, 'name')!;
-		Reflect.defineProperty(global, 'name', {
-			configurable: true,
-			enumerable: true,
-			get: proxyModule.wrapFunction(nameDescriptor.get!, () => shadowName),
-			set: proxyModule.wrapFunction(
-				nameDescriptor.set!,
-				(target, that, args) => {
-					shadowName = String(args[0]);
-				},
-			),
-		});
+		// window.name: in the host's frame a shadow value, starting empty (the
+		// name there is the host's). A frame the page made, or a popup, keeps
+		// its own: the page named it, and finds it by that name
+		// (`parent.frames[name]`, a link's target), as natively
+		const hostFramed = (() => {
+			try {
+				return !this.client.nested && (global.parent as unknown) !== global;
+			} catch (error) {
+				// a parent of another origin: the host's frame
+				return true;
+			}
+		})();
+		if (hostFramed) {
+			let shadowName = '';
+			const nameDescriptor = Reflect.getOwnPropertyDescriptor(global, 'name')!;
+			Reflect.defineProperty(global, 'name', {
+				configurable: true,
+				enumerable: true,
+				get: proxyModule.wrapFunction(nameDescriptor.get!, () => shadowName),
+				set: proxyModule.wrapFunction(
+					nameDescriptor.set!,
+					(target, that, args) => {
+						shadowName = String(args[0]);
+					},
+				),
+			});
+		}
 
 		// outer size and screen position of a "maximised top-level window"
 		const sizes: [string, () => number][] = [

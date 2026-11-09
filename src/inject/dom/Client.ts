@@ -454,7 +454,7 @@ export default class DocumentClient extends Client {
 			this.innerHTML(node);
 
 		// jump out of the DOM "write stream" so we can start loading our own HTML
-		setTimeout(() => {
+		const load = () => {
 			Reflect.apply(this.open, this.global.document, []);
 			runDocumentOpenListeners(this.global);
 			// the host's post hook, on the document the page's markup lands in
@@ -463,6 +463,19 @@ export default class DocumentClient extends Client {
 			this.runHook('post');
 			this.write.call(this.global.document, newDocument);
 			this.global.document.close();
-		});
+		};
+		// The browser runs a timer's callback in the realm that made it, and
+		// document.open() gives the document the URL of that realm's document.
+		// This client may be another realm's: one the parent injected into an
+		// iframe's initial about:blank stays on the window when the frame
+		// navigates to its src (the browser keeps the Window for a document of
+		// the same origin), and a callback of the parent's realm would give the
+		// page the parent's URL (reCAPTCHA's anchor took its page for its
+		// parent and never answered it). So the callback is this window's own.
+		const own = new this.global.Function(
+			'load',
+			'return function () { load(); };',
+		)(load) as () => void;
+		Reflect.apply(this.global.setTimeout, this.global, [own]);
 	}
 }

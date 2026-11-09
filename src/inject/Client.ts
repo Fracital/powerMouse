@@ -78,6 +78,36 @@ export default class Client {
 	hookedPostMessage?: unknown;
 	/** @internal set by the Context module: post `args` to a Stomp window from this realm, so this context is the incumbent (source and origin are its own) */
 	postToWindow?: (target: object, args: unknown[]) => unknown;
+	#callIn?: (method: Function, that: unknown, args: unknown[]) => unknown;
+	/**
+	 * Call `method` as this client's window would: through a function of that
+	 * window's own realm, so the browser takes the window for the incumbent
+	 * (a message's source, a navigation's initiator) and a timer's callback
+	 * for its own. This client's code may be another realm's: a parent's
+	 * bundle injects an iframe's initial about:blank, and the client stays on
+	 * the window when the frame navigates to a document of the same origin
+	 * (the browser keeps the Window). Plain `Reflect.apply` for a window
+	 * without a Function constructor of its own
+	 */
+	callIn(method: Function, that: unknown, args: unknown[]): unknown {
+		if (!this.#callIn) {
+			try {
+				const OwnFunction = (
+					this.global as unknown as { Function: FunctionConstructor }
+				).Function;
+				this.#callIn = new OwnFunction(
+					'method',
+					'that',
+					'args',
+					'return Reflect.apply(method, that, args);',
+				) as (method: Function, that: unknown, args: unknown[]) => unknown;
+			} catch (error) {
+				this.#callIn = (method, that, args) =>
+					Reflect.apply(method, that, args);
+			}
+		}
+		return this.#callIn(method, that, args);
+	}
 	/** @internal set by the Context module: post `args` to the window behind a restricted stand-in this context holds, from this realm; false when `target` is not one */
 	postToRestricted?: (target: unknown, args: unknown[]) => boolean;
 	// pristine copies taken before modules hook them: the Navigator module

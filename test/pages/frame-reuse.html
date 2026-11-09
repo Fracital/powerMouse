@@ -1,0 +1,42 @@
+<!doctype html>
+<title>FRAME REUSE</title>
+<script>
+	// Frames the page makes and names, as reCAPTCHA does: an iframe whose
+	// contentWindow the page reads at once (while it is still the initial
+	// about:blank the browser then keeps for the document of its src), and a
+	// second, named one. What the children report lands in window.__reuse.
+	const report = (window.__reuse = { messages: [] });
+	addEventListener('message', (event) => {
+		if (!event.data || event.data.kind !== 'frame-reuse') return;
+		const frames = [...document.querySelectorAll('iframe')];
+		report.messages.push({
+			from: event.data.name,
+			url: event.data.url,
+			// which frame the browser named as the sender
+			source:
+				event.source === window
+					? 'self'
+					: frames.findIndex((frame) => frame.contentWindow === event.source),
+			sibling: event.data.sibling,
+		});
+	});
+	addEventListener('load', () => {
+		const first = document.createElement('iframe');
+		first.name = 'reuse-first';
+		first.src = 'frame-reuse-child.html?first';
+		document.body.append(first);
+		// read now: the initial about:blank the navigation keeps
+		report.early = typeof first.contentWindow;
+		const second = document.createElement('iframe');
+		second.name = 'reuse-second';
+		second.src = 'frame-reuse-child.html?second';
+		document.body.append(second);
+		setTimeout(() => {
+			report.byName = {
+				first: window.frames['reuse-first'] === first.contentWindow,
+				second: window.frames['reuse-second'] === second.contentWindow,
+			};
+			report.done = true;
+		}, 3000);
+	});
+</script>
