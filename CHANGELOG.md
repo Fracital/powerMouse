@@ -420,6 +420,19 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   was ever refused. A value of about 700 KiB or more never read back: the
   answer rides in cookies and Chrome keeps about 180 per host. Values are
   read in parts of 256 KiB now (storage-quota suite, both modes).
+- A large `localStorage` write reads back after a reload on a slow machine.
+  On CI the 2 MiB write of storage-quota was missing after the reload (35
+  keys against native's 36). Besides the 10 s wait for a write that landed
+  (above), which held the last write back about 9 s, the worker learned of
+  an asynchronous write only once its body had been read, so the reloaded
+  page's first read could answer before a 2 MiB body was. The worker now
+  learns of each write from its URL (sender, number, key) when the request
+  arrives, and every other call of the origin waits for the ones it knows
+  of, up to 6 s. A write whose body never arrives, or is not applied by
+  then, is logged and its key emptied, so no document reads the value it
+  replaced as current; it is still stored if it lands later (storage-quota
+  suite, both modes, now also with every write's body read 2.5 s late and
+  with one never arriving).
 - A JSON or CSS module loads as what it is. Every import was routed as a
   module script and rewritten, so a JSON module that also parses as a
   script (`{}`, an array) came back with the module preamble

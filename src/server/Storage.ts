@@ -1,7 +1,7 @@
 import { IDBPDatabase, openDB } from 'idb';
 import { encodeCookie } from '../encodeCookie';
 import { STORAGE_EVENT, StorageChange } from '../transport/messages';
-import Router, { jsonAPI } from './Router';
+import Router, { json, jsonAPI } from './Router';
 
 declare const clients: Clients | undefined;
 
@@ -47,11 +47,20 @@ const answerCost = (part: string) =>
 const ORDER_WAIT_MS = 10e3;
 
 /**
- * how long any other call waits for the asynchronous operations that arrived
- * before it: a page reloaded right after a write reads it, as natively, and
- * a synchronous read must answer well inside the bridge's limit
+ * How long any other call of an origin waits for the asynchronous operations
+ * of that origin the worker heard of: a page reloaded right after a write
+ * reads it, as natively, however long its body takes to arrive (the worker
+ * hears of an operation from its URL, before its body: a 2 MiB value took
+ * long enough on a slow runner that the reloaded page read without it). A
+ * synchronous read must answer well inside the bridge's 10 s limit, so one
+ * still out after this counts as lost (see `lose`).
  */
-const SETTLE_WAIT_MS = 3e3;
+const SETTLE_WAIT_MS = 6e3;
+/** after that, how long an operation already being applied is waited for */
+const APPLY_WAIT_MS = 2e3;
+
+type OrderedName = 'setItem' | 'removeItem' | 'clear';
+const ORDERED_NAMES = new Set<string>(['setItem', 'removeItem', 'clear']);
 
 /**
  * how long a document's place in its asynchronous operations is kept after
@@ -70,6 +79,22 @@ interface Turns {
 	idle: number | null;
 }
 
+/** an asynchronous operation the worker heard of and has not finished */
+interface Heard {
+	origin: string;
+	name: OrderedName;
+	/** the key it writes, or null for a clear */
+	key: string | null;
+	/** its turn came and its body arrived: it is being applied */
+	started: boolean;
+	/** given up on: its key was emptied */
+	lost: boolean;
+	finished: Promise<void>;
+}
+
+const sleep = (ms: number) =>
+	new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 export default class Storage {
 	private db: IDBPDatabase;
 	private store: string;
@@ -77,8 +102,8 @@ export default class Storage {
 	private usage = new Map<string, Promise<number>>();
 	/** the next operation of each document that writes asynchronously */
 	private turns = new Map<string, Turns>();
-	/** the asynchronous operations that arrived and are not done */
-	private applying = new Set<Promise<void>>();
+	/** the asynchronous operations the worker heard of and has not finished */
+	private heard = new Set<Heard>();
 	constructor(db: IDBPDatabase, store: string) {
 		this.db = db;
 		this.store = store;
@@ -170,38 +195,107 @@ export default class Storage {
 	 * One of a document's asynchronous operations, applied in the order the
 	 * document made them: its requests are sent at once (a write queued behind
 	 * the answer to the one before was lost when the page unloaded first), so
-	 * they can arrive and be read in any order. `base` is the oldest the
-	 * document has in flight: every one before it landed, so a worker that
-	 * started since waits for none of those.
+	 * they can arrive and be read in any order. Which operation it is comes in
+	 * its URL (the document's `sender`, the operation's `seq`, `base`, `name`,
+	 * `origin` and `key`) and its arguments in its body: every other call of
+	 * the origin waits for it from the moment its request arrives, not from
+	 * when its body has been read, and one whose body never comes is known by
+	 * its key. `base` is the oldest the document has in flight: every one
+	 * before it landed, so a worker that started since waits for none of
+	 * those.
 	 */
-	ordered(
-		sender: string,
-		seq: number,
-		base: number,
-		name: 'setItem' | 'removeItem' | 'clear',
-		args: unknown[],
-	): Promise<void> {
-		const done = this.inTurn(sender, seq, base, name, args);
-		this.applying.add(done);
-		const forget = () => this.applying.delete(done);
-		done.then(forget, forget);
-		return done;
+	async ordered(request: Request): Promise<Response> {
+		const params = new URL(request.url).searchParams;
+		const sender = params.get('sender');
+		const seq = Number(params.get('seq'));
+		const base = Number(params.get('base'));
+		const name = params.get('name') ?? '';
+		const origin = params.get('origin');
+		const key = params.get('key');
+		if (
+			sender === null ||
+			origin === null ||
+			!ORDERED_NAMES.has(name) ||
+			!Number.isInteger(seq) ||
+			!Number.isInteger(base) ||
+			(name !== 'clear' && key === null)
+		)
+			return json(400, 'not an ordered storage operation');
+		// read from now on, while the operation waits for its turn
+		const body = request.json() as Promise<unknown[]>;
+		body.catch(() => {});
+		const op = {
+			origin,
+			name: name as OrderedName,
+			key: name === 'clear' ? null : key,
+			started: false,
+			lost: false,
+		} as Heard;
+		op.finished = this.inTurn(sender, seq, base, op, body);
+		this.heard.add(op);
+		const forget = () => this.heard.delete(op);
+		op.finished.then(forget, forget);
+		try {
+			await op.finished;
+			return json(200, null);
+		} catch (error) {
+			return json(500, String(error));
+		}
 	}
-	/** every asynchronous operation that arrived is done (or took too long) */
-	async settled(): Promise<void> {
+	/**
+	 * Every asynchronous operation of `origin` the worker heard of is done,
+	 * or counts as lost. A reader must answer, and must not answer with a
+	 * value that a write it knows of replaced, so the key of an operation
+	 * still out after the wait is emptied rather than read as current; the
+	 * operation is still applied if its body comes later.
+	 */
+	async settled(origin: string): Promise<void> {
 		const deadline = Date.now() + SETTLE_WAIT_MS;
-		while (this.applying.size && Date.now() < deadline)
+		const out = () =>
+			[...this.heard].filter((op) => op.origin === origin && !op.lost);
+		for (let ops = out(); ops.length && Date.now() < deadline; ops = out())
 			await Promise.race([
-				Promise.allSettled([...this.applying]),
-				new Promise((resolve) => setTimeout(resolve, deadline - Date.now())),
+				Promise.allSettled(ops.map((op) => op.finished)),
+				sleep(deadline - Date.now()),
 			]);
+		// decided once: one that arrives from now on is waited for by the
+		// calls after this one
+		const late = out();
+		await Promise.all(
+			late
+				.filter((op) => !op.started)
+				.map((op) => this.lose(op, `not applied within ${SETTLE_WAIT_MS} ms`)),
+		);
+		// one being applied now is in the store in a moment
+		const applying = late.filter((op) => op.started);
+		if (applying.length)
+			await Promise.race([
+				Promise.allSettled(applying.map((op) => op.finished)),
+				sleep(APPLY_WAIT_MS),
+			]);
+	}
+	/**
+	 * An operation that will not be applied in time, or ever: its key (every
+	 * key, for a clear) is emptied, so no document reads the value it
+	 * replaced as if it were current, and the loss is logged
+	 */
+	private async lose(op: Heard, why: string) {
+		if (op.lost) return;
+		op.lost = true;
+		console.error(
+			`Stomp: a ${this.store} ${op.name} of ${op.origin}${
+				op.key === null ? '' : ` (key ${JSON.stringify(op.key)})`
+			} was lost, ${why}; the key reads as absent`,
+		);
+		if (op.key === null) await this.clear(op.origin);
+		else await this.removeItem(op.origin, op.key);
 	}
 	private async inTurn(
 		sender: string,
 		seq: number,
 		base: number,
-		name: 'setItem' | 'removeItem' | 'clear',
-		args: unknown[],
+		op: Heard,
+		body: Promise<unknown[]>,
 	): Promise<void> {
 		const now = Date.now();
 		for (const [other, turns] of this.turns)
@@ -216,19 +310,28 @@ export default class Storage {
 		own.next = Math.max(own.next, base);
 		own.active++;
 		own.idle = null;
-		if (seq > own.next)
-			await new Promise<void>((resolve) => {
-				const timer = setTimeout(() => {
-					own.waiting.delete(seq);
-					resolve();
-				}, ORDER_WAIT_MS);
-				own.waiting.set(seq, () => {
-					clearTimeout(timer);
-					resolve();
-				});
-			});
 		try {
-			await (this[name] as (...args: unknown[]) => Promise<void>)(...args);
+			if (seq > own.next)
+				await new Promise<void>((resolve) => {
+					const timer = setTimeout(() => {
+						own.waiting.delete(seq);
+						resolve();
+					}, ORDER_WAIT_MS);
+					own.waiting.set(seq, () => {
+						clearTimeout(timer);
+						resolve();
+					});
+				});
+			let args: unknown[];
+			try {
+				args = await body;
+			} catch (error) {
+				// the document's request ended without its body
+				await this.lose(op, `its body did not arrive (${error})`);
+				throw error;
+			}
+			op.started = true;
+			await (this[op.name] as (...args: unknown[]) => Promise<void>)(...args);
 		} finally {
 			own.next = Math.max(own.next, seq + 1);
 			const wake = own.waiting.get(own.next);
@@ -388,14 +491,12 @@ export function registerStorage(router: Router, hosts: StorageHosts) {
 			) => Promise<unknown>;
 			router.routes.set(
 				new RegExp(`^\\/${name}\\/${api}$`),
-				jsonAPI(
-					api === 'ordered'
-						? call.bind(host)
-						: async (...args: unknown[]) => {
-								await host.settled();
-								return call.apply(host, args);
-							},
-				),
+				api === 'ordered'
+					? (request) => host.ordered(request)
+					: jsonAPI(async (origin: string, ...args: unknown[]) => {
+							await host.settled(origin);
+							return call.call(host, origin, ...args);
+						}),
 			);
 		}
 	}

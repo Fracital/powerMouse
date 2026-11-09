@@ -127,9 +127,14 @@ on every save (use a `git worktree`).
   and the storage module sends a write that would take them past its
   budget (a large value, or a medium one after others in a burst) with the
   async fetch instead: shadowed for the writer, numbered so the worker
-  applies them in order, sent at once so an unload does not lose them. The
-  budget leaves room for reads, which have no other way. An answer rides in
-  cookies, about 180 per host, so a value is read back in parts.
+  applies them in order, sent at once so an unload does not lose them. Which
+  operation it is (sender, number, key) rides in the URL, so the worker knows
+  of it before its body is read and every other storage call of the origin
+  waits for it (bounded at 6 s, after which its key is emptied, never read as
+  the value it replaced); the worker keeps a document's place in the sequence
+  for minutes after it goes idle. The budget leaves room for reads, which
+  have no other way. An answer rides in cookies, about 180 per host, so a
+  value is read back in parts.
 - **One controller per address, many per scope.** `config.directory` is a
   controller's address: the directory the host gave plus `controller.id`
   (`/stomp/k7qx2m/`). Every routed URL starts with it and the service worker

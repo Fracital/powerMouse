@@ -197,15 +197,32 @@ export default class StorageModule extends Module<DocumentClient> {
 			return shadow;
 		};
 		const busy = (directory: string) => !!pending.get(directory)?.inflight.size;
-		const post = (directory: string, name: string, args: unknown[]) =>
-			fetch(new URL(`${directory}${name}`, this.client.global.location.href), {
+		// Which operation it is goes in the URL, its arguments in the body:
+		// the worker hears of the write when the request arrives, so the next
+		// document's reads wait for it however long a large body takes to be
+		// read, and a body that never comes is known by its key.
+		const post = (
+			directory: string,
+			operation: Record<string, string>,
+			args: unknown[],
+		) => {
+			const url = new URL(
+				`${directory}ordered`,
+				this.client.global.location.href,
+			);
+			for (const [name, value] of Object.entries(operation))
+				url.searchParams.set(name, value);
+			return fetch(url, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(args),
 			}).then((response) => {
 				if (!response.ok)
-					throw new Error(`${name}: ${response.status} ${response.statusText}`);
+					throw new Error(
+						`${operation.name}: ${response.status} ${response.statusText}`,
+					);
 			});
+		};
 		const later = (
 			directory: string,
 			name: 'setItem' | 'removeItem' | 'clear',
@@ -235,13 +252,18 @@ export default class StorageModule extends Module<DocumentClient> {
 					if (entry.seq === seq) shadow.values.delete(item);
 				changed(directory, true);
 			};
-			post(directory, 'ordered', [sender, seq, base, name, args]).then(
-				settle,
-				(error) => {
-					console.error(`Stomp: a storage write could not be stored: ${error}`);
-					settle();
-				},
-			);
+			const operation: Record<string, string> = {
+				sender,
+				seq: String(seq),
+				base: String(base),
+				name,
+				origin: getOrigin(),
+			};
+			if (key !== null) operation.key = key;
+			post(directory, operation, args).then(settle, (error) => {
+				console.error(`Stomp: a storage write could not be stored: ${error}`);
+				settle();
+			});
 		};
 
 		/** `value` of `key` as this document sees it; undefined: ask the worker */
