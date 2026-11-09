@@ -277,6 +277,62 @@ const parses = (code) => {
 			parses(top),
 		JSON.stringify([top, inner]),
 	);
+	// a location the pattern or loop head of an assignment writes is a
+	// reference: it becomes the member `$s$j.ref1(location, setter).value`
+	// (`ref2(object, key)` for `x.location`), whose write routes; bindings
+	// and other targets stay as written (a member target named `top` was a
+	// get2 call, which is no assignment target)
+	const targets = rewrite(
+		'[location] = a; ({location} = o); ({a: location = 1} = o); [...location] = a; for (location of a); for (location in o);',
+	);
+	const members = rewrite(
+		"[top.location] = a; ({a: window['location']} = o); for (frames[0].location of a);",
+	);
+	const kept = [
+		['[a[i], a[j]] = [b, c];', '[a[i], a[j]] = [\n    b,\n    c\n];'],
+		['({x: a.top, y: [b]} = o);', '({\n    x: a.top,\n    y: [b]\n} = o);'],
+		['for (a.top of b);', 'for (a.top of b);'],
+		['for (k in o) f(k);', 'for (k in o)\n    f(k);'],
+		['function f([location]) {}', 'function f([location]) {\n}'],
+		['try {} catch ({location}) {}', 'try {\n} catch ({location}) {\n}'],
+	];
+	ok(
+		'a location an assignment pattern or a loop head writes routes',
+		(targets.match(/\$s\$j\.ref1\(location, t\$v =>/g) || []).length === 6 &&
+			/location: \$s\$j\.ref1\(/.test(targets) &&
+			/\.value = 1/.test(targets) &&
+			/for \(\$s\$j\.ref1\(location, t\$v =>\s*\(location = t\$v\)\)\.value of a\)/.test(
+				targets,
+			) &&
+			members.includes(
+				"[$s$j.ref2($s$j.get(top, 'top'), 'location').value] = a",
+			) &&
+			members.includes("a: $s$j.ref2(window, 'location').value") &&
+			members.includes("for ($s$j.ref2(frames[0], 'location').value of a)") &&
+			kept.every(([code, out]) => rewrite(code) === out) &&
+			parses(targets) &&
+			parses(members),
+		JSON.stringify([targets, members, kept.map(([code]) => rewrite(code))]),
+	);
+	// a classic script's var outside a function, in a block or a loop head,
+	// assigns the window's location like one at the top; its initialiser is
+	// rewritten like any expression
+	const nested = rewrite(
+		'{ var location = top.a; } if (x) var location = b; for (var location of a) f(); for (var [location] in o); for (var location = c, i = 0; i < 1; i++);',
+	);
+	const local = rewrite(
+		'function f() { { var location = 1; } for (var location of a); } class A { static { var location = 1; } }',
+	);
+	ok(
+		'a var binding of location outside any function routes the assignment',
+		(nested.match(/\$s\$j\.set1\(location, 'location'/g) || []).length === 5 &&
+			nested.includes("var $s$jl0 = $s$j.get(top, 'top').a;") &&
+			/for \(var \$s\$jl0 of a\) \{\s*\$s\$j\.set1\(location/.test(nested) &&
+			/for \(var \$s\$jl0 = c, i = 0, \$s\$jl1 = \(\$s\$j\.set1/.test(nested) &&
+			!/set1/.test(local) &&
+			parses(nested),
+		JSON.stringify([nested, local]),
+	);
 	// a base64 data: body is UTF-8 text
 	const uri = createDataURI({
 		mime: 'text/css',

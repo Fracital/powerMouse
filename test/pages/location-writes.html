@@ -1,0 +1,30 @@
+<!doctype html>
+<title>LOCATION WRITES</title>
+<script src="location-writes.js"></script>
+<body>
+	<script>
+		// A frame per case of location-writes.js (`?only=<name>` runs one, for
+		// the cases that navigate the top page); __loads counts each frame's
+		// loads, so a write that navigates nothing natively shows a reload
+		(function () {
+			window.__loads = {};
+			var only = new URLSearchParams(location.search).get('only');
+			var names = only
+				? [only]
+				: Object.keys(LOCATION_WRITES).filter(function (name) {
+						var entry = LOCATION_WRITES[name];
+						return !entry.child && !entry.alone;
+					});
+			window.__names = names;
+			names.forEach(function (name) {
+				var frame = document.createElement('iframe');
+				frame.name = 'case-' + name;
+				frame.onload = function () {
+					window.__loads[name] = (window.__loads[name] || 0) + 1;
+				};
+				frame.src = 'location-write.html?c=' + name;
+				document.body.append(frame);
+			});
+		})();
+	</script>
+</body>

@@ -1,0 +1,35 @@
+<!doctype html>
+<title>LOCATION WRITE</title>
+<script src="location-writes.js"></script>
+<body>
+	<button id="handler" onclick="location = U('handler')">handler</button>
+	<button id="handler-pattern" onclick="[location] = [U('handler-pattern')]">
+		handler pattern
+	</button>
+	<a id="javascript-url" href="javascript:void (location = U('javascript-url'))"
+		>javascript url</a
+	>
+	<a
+		id="javascript-url-pattern"
+		href="javascript:void ([location] = [U('javascript-url-pattern')])"
+		>javascript url pattern</a
+	>
+	<script>
+		// One case of location-writes.js, `?c=<name>`, written as a script of
+		// its own so its code runs at the top level; `&landed` is where a case
+		// navigates to
+		(function () {
+			var params = new URLSearchParams(location.search);
+			var name = params.get('c');
+			if (params.has('landed')) {
+				window.__landed = name;
+				return;
+			}
+			window.__case = name;
+			var entry = LOCATION_WRITES[name];
+			var code = typeof entry === 'string' ? entry : entry.code;
+			var type = entry.module ? ' type="module"' : '';
+			document.write('<script' + type + '>' + code + '<\/script>');
+		})();
+	</script>
+</body>
