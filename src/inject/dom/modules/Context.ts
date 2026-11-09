@@ -706,8 +706,10 @@ export default class ContextModule extends Module<DocumentClient> {
 				set: setter,
 			};
 		};
-		const restrict = (value: unknown) =>
-			this.client.restrictForeign ? this.client.restrictForeign(value) : value;
+		const restrict = (value: unknown, container?: unknown) =>
+			this.client.restrictForeign
+				? this.client.restrictForeign(value, container)
+				: value;
 		const windowPrototype = global.Window.prototype;
 		const named = Reflect.getPrototypeOf(windowPrototype);
 		this.client.exposeChild = (name) => {
@@ -724,7 +726,7 @@ export default class ContextModule extends Module<DocumentClient> {
 					name,
 					accessor(
 						name,
-						(that) => restrict(Reflect.get(named, name, that)),
+						(that) => restrict(Reflect.get(named, name, that), that),
 						// an assignment makes a global of the page, as natively
 						(that, value) => {
 							Reflect.defineProperty(that as object, name, {
@@ -822,6 +824,21 @@ export default class ContextModule extends Module<DocumentClient> {
 		// window.top is unforgeable, so the JS rewriter routes `top` reads here:
 		// the proxied world's top is the outermost Stomp context
 		// only windows qualify: set2 also routes `obj['top'] = v` through here
+		// the client of a window this page reached (its own, a frame's), for
+		// a read off it; nothing for anything else
+		const windowClient = (container: unknown): DocumentClient | undefined => {
+			if (typeof container !== 'object' || container === null) return;
+			if (container === this.client.global) return this.client;
+			try {
+				const client = (container as Record<string, any>)[
+					this.client.names.client
+				] as DocumentClient | undefined;
+				return client?.global === container ? client : undefined;
+			} catch (error) {
+				// a window of another real origin
+			}
+		};
+
 		const isWindow = (value: unknown): value is Context => {
 			try {
 				return (
@@ -861,17 +878,43 @@ export default class ContextModule extends Module<DocumentClient> {
 		// (`frames[i]`, `window[name]`): the browser would hand the page a
 		// cross-origin WindowProxy, so the page gets the restricted stand-in
 		// (a same-origin one is returned as it is)
-		this.client.restrictForeign = (value) => {
+		this.client.restrictForeign = (value, container) => {
 			if (typeof value !== 'object' || value === null) return value;
 			try {
-				if (
-					!(this.client.names.client in value) ||
-					(value as { window?: unknown }).window !== value
-				)
+				if (!(this.client.names.client in value)) {
+					// a child window that runs nothing yet (an iframe's initial
+					// about:blank), read off its window by index or by name: injected
+					// first, as reading its contentWindow does. Its own natives (its
+					// `parent` getter, MessageEvent's `source` getter) called on a
+					// window of this page would answer raw, past every hook here
+					const owner = windowClient(container);
+					if (
+						!owner ||
+						(value as { window?: unknown }).window !== value ||
+						Reflect.get(value, 'parent') !== container
+					)
+						return value;
+					owner.injectChild?.(value as Context);
+					if (!(this.client.names.client in value)) return value;
+				} else if ((value as { window?: unknown }).window !== value)
 					return value;
 			} catch (error) {
 				// a real cross-origin window: the `in` check throws
 				return value;
+			}
+			// a frame on its initial about:blank: the document its src names decides
+			if (initialBlank(value as Context)) {
+				let element: unknown;
+				try {
+					element = Reflect.get(value, 'frameElement');
+				} catch (error) {
+					// no element this page can see
+				}
+				if (element)
+					return this.pending(
+						value as Context,
+						Reflect.get(element as object, 'src'),
+					);
 			}
 			return this.newRestricted(value as Context);
 		};

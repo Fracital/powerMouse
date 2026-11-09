@@ -126,9 +126,11 @@ export default class AccessModule extends Module<Client> {
 				if (optional && (target === null || target === undefined))
 					return undefined;
 
-				return api.get(target[key], key);
+				return api.get(target[key], key, target);
 			},
-			get: (object: any, key: any): any => {
+			// `container`: what `object` was read from, when the read is a member
+			// read (a window's child is injected before the page gets it)
+			get: (object: any, key: any, container?: unknown): any => {
 				try {
 					if (key === 'top' && this.client.resolveTop)
 						return this.client.resolveTop(object);
@@ -148,7 +150,7 @@ export default class AccessModule extends Module<Client> {
 				}
 
 				if (this.client.restrictForeign)
-					return this.client.restrictForeign(object);
+					return this.client.restrictForeign(object, container);
 
 				return object;
 			},
@@ -347,7 +349,7 @@ export default class AccessModule extends Module<Client> {
 			lazy: (target: any): ((key: any) => unknown) | undefined =>
 				target === null || target === undefined
 					? undefined
-					: (key: any) => api.get(target[key], key),
+					: (key: any) => api.get(target[key], key, target),
 			method: (
 				target: any,
 				chained: boolean,
