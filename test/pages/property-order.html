@@ -45,6 +45,14 @@
 		const bare = document.createElement('link');
 		bare.href = '../pages/blank.css';
 		record('href without rel', bare.getAttribute('href'));
+		// and its href property is that URL resolved against the page, before
+		// a rel and after one that loads nothing
+		record('href property without rel', bare.href);
+		bare.rel = 'alternate';
+		record('href property with rel=alternate', bare.href);
+		const anchor = document.createElement('a');
+		anchor.href = '../pages/blank.css';
+		record('anchor href property', anchor.href);
 
 		__po.done = true;
 	});
