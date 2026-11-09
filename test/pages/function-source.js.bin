@@ -1,0 +1,100 @@
+// Functions of every form as a page writes them, with its own spacing and
+// comments, read back through Function.prototype.toString and String() by
+// test/suites/function-source.mjs. Served byte for byte (a .bin, so prettier
+// leaves it alone): a few lines end in CRLF and one string holds a raw
+// U+2028, both of which a function's source keeps natively.
+(function () {
+	'use strict';
+	function   declared ( a,b ) { /* a comment */ return a + b }
+	var expression = function ( ) { return 1 }
+	var named = function   inner  ( ) { return inner }
+	var arrow = ( x ) =>  x * 2
+	var bare = x=>x
+	var empty = ( ) => { }
+	var asyncArrow = async  ( ) => { await 0 }
+	var asyncBare = async x => x
+	async   function asyncFunction ( ) { await null }
+	function *  generator ( ) { yield 1 }
+	async function * asyncGenerator ( ) { yield * [ ] }
+	class   Klass   extends   Object {
+		static #count = 1
+		static { this.ready = true }
+		constructor ( ) { super ( ) }
+		method ( a ) { return a }
+		static   staticMethod ( ) { return Klass.#count }
+		get   value ( ) { return 1 }
+		set value ( v ) { }
+		async * stream ( ) { }
+		[ 'comp' + 'uted' ] ( ) { }
+		'quoted /* not a comment */' ( ) { }
+		42 ( ) { }
+		#hidden ( ) { return this.#hidden }
+		reveal ( ) { return this.#hidden }
+	}
+	var Anonymous = class { m ( ) { } }
+	var object = {
+		method ( ) { },
+		get  prop ( ) { return 1 },
+		set prop ( v ) { },
+		async asyncMethod ( ) { },
+		* generatorMethod ( ) { },
+		[ Symbol.iterator ] ( ) { },
+		'string key' ( ) { },
+		plain : function ( ) { },
+		arrowValue : ( ) => { },
+	}
+	function readsLocation ( ) { return location.href }
+	function readsTop ( ) { return top === window }
+	function computed ( o , k ) { return o [ k ] }
+	function callsEval ( s ) { return eval ( s ) }
+	function writesLocation ( ) { if ( false ) location = '/x' }
+	function postsMessage ( w ) { w.postMessage ( 1 , '*' ) }
+	function outer ( ) {
+		function nested ( a ) {
+			return function deeper ( ) { return location.hash }
+		}
+		return nested
+	}
+	function defaults ( a = function ( ) { return top } , { b } = { } , ... rest ) { return [ a , b , rest ] }
+	function destructuresTop ( { top : t } ) { return t }
+	var holeFirst = ( [ , v ] ) => v
+	var emptyPattern = ( { } ) => 1
+	var computedPattern = ( { [ 'k' ] : v } ) => v
+	var unicode = function ( ) { return 'é ✓ 😀' }
+	var separator = function ( ) { return '  ' }
+	var tricky = function ( ) { return '/*abc.1.2*/' + "*/" + `${ 1 }
+	` + '<\/script>' }
+	var regex = function ( ) { return /\/\*[^*]*\*\// }
+	var crlf = function ( a ) {
+		return a
+	}
+	var instance = new Klass ( )
+	window.__put('ext:', {
+		declared, expression, named, arrow, bare, empty, asyncArrow, asyncBare,
+		asyncFunction, generator, asyncGenerator, Klass, Anonymous,
+		method: Klass.prototype.method,
+		staticMethod: Klass.staticMethod,
+		getter: Object.getOwnPropertyDescriptor(Klass.prototype, 'value').get,
+		setter: Object.getOwnPropertyDescriptor(Klass.prototype, 'value').set,
+		stream: Klass.prototype.stream,
+		computedKey: Klass.prototype.computed,
+		quotedKey: Klass.prototype['quoted /* not a comment */'],
+		numberKey: Klass.prototype[42],
+		privateMethod: instance.reveal(),
+		anonymousMethod: Anonymous.prototype.m,
+		objectMethod: object.method,
+		objectGetter: Object.getOwnPropertyDescriptor(object, 'prop').get,
+		objectSetter: Object.getOwnPropertyDescriptor(object, 'prop').set,
+		objectAsync: object.asyncMethod,
+		objectGenerator: object.generatorMethod,
+		objectIterator: object[Symbol.iterator],
+		objectStringKey: object['string key'],
+		objectPlain: object.plain,
+		objectArrow: object.arrowValue,
+		readsLocation, readsTop, computed, callsEval, writesLocation, postsMessage,
+		outer, nested: outer(), deeper: outer()(),
+		defaults, defaultParam: defaults()[0], destructuresTop,
+		holeFirst, emptyPattern, computedPattern, unicode, separator, tricky,
+		regex, crlf,
+	})
+})()

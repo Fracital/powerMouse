@@ -1,0 +1,12 @@
+// a module script's functions (test/suites/function-source.mjs)
+function   moduleFunction ( a ) { return import.meta.url + a }
+const moduleArrow = async ( { top : t } ) => location.href + t
+class   ModuleClass { static { this.ready = 1 } run ( ) { return top } }
+export default function ( ) { return 'default' }
+window.__put('module:', {
+	moduleFunction,
+	moduleArrow,
+	ModuleClass,
+	run: ModuleClass.prototype.run,
+})
+window.__pending.done('module')

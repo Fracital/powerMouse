@@ -1,0 +1,9 @@
+<!doctype html>
+<title>GSI BUTTON</title>
+<script>
+	// Google's GSI button frame: it is given a function's source in its URL
+	// and answers 400 unless the source is the one the page wrote
+	var expected = 'function clickListener ( event ) { return location.href + event.type }';
+	var got = new URLSearchParams(location.search).get('listener');
+	parent.postMessage({ gsi: got === expected ? 200 : 400 }, '*');
+</script>

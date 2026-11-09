@@ -1,0 +1,117 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FUNCTION SOURCE</title>
+<script>
+	// Every function the page defines reads back through toString and String()
+	// as the page wrote it (test/suites/function-source.mjs): external,
+	// inline, module, handler, eval, new Function, timer and worker code.
+	// Served byte for byte (a .bin, so prettier leaves the spacing alone).
+	window.__fnsrc = {};
+	window.__put = function (prefix, fns) {
+		for (var name in fns) {
+			window.__fnsrc[prefix + name] = Function.prototype.toString.call(fns[name]);
+			window.__fnsrc[prefix + name + ' String'] = String(fns[name]);
+		}
+	};
+	window.__pending = {
+		left: ['inline', 'handler', 'timer', 'module', 'inlinemodule', 'worker', 'gsi'],
+		done: function (name) {
+			this.left = this.left.filter(function (n) { return n !== name });
+			if (!this.left.length) window.__fnsrcDone = true;
+		},
+	};
+</script>
+<script src="function-source.js.bin"></script>
+<script type="module" src="function-source-mod.js.bin"></script>
+<button id="clicker" onclick="  return  location.href  /* kept */ ">x</button>
+<div id="hover" onmouseover="window.__hoverFn = function  fromHandler ( e ) { return top }">y</div>
+<script>
+	function   inlineDeclared ( a ) { return location.href + a }
+	var inlineArrow = ( ) =>  top
+	class InlineClass { static #n = 0; static { InlineClass.#n++ } get n ( ) { return InlineClass.#n } }
+	var inlineObject = { get   g ( ) { return 1 }, m ( ) { return eval ( 'top' ) } }
+	function clickListener ( event ) { return location.href + event.type }
+	window.__put('inline:', {
+		inlineDeclared,
+		inlineArrow,
+		InlineClass,
+		getter: Object.getOwnPropertyDescriptor(InlineClass.prototype, 'n').get,
+		objectGetter: Object.getOwnPropertyDescriptor(inlineObject, 'g').get,
+		objectMethod: inlineObject.m,
+		clickListener,
+		selfRead: function  selfRead ( ) { return 1 },
+	});
+	window.__fnsrc['inline:topLevel'] = (function  atTopLevel ( ) { return location }).toString();
+
+	var clicker = document.getElementById('clicker');
+	var hover = document.getElementById('hover');
+	var later = document.createElement('span');
+	later.setAttribute('onclick', 'var  f = ( ) => location ;  return f');
+	hover.dispatchEvent(new MouseEvent('mouseover'));
+	window.__put('handler:', {
+		onclick: clicker.onclick,
+		onmouseover: hover.onmouseover,
+		fromHandler: window.__hoverFn,
+		setAttribute: later.onclick,
+		nestedInSetAttribute: later.onclick(),
+	});
+	window.__pending.done('handler');
+
+	window.__put('eval:', {
+		direct: eval('(function  direct ( ) { return location })'),
+		indirect: (0, eval)('( x ) =>  top'),
+		declared: eval('function  declaredInEval ( ) { return 1 } declaredInEval'),
+		nested: eval('(function ( ) { return function  inEval ( a ) { return a[ location ] } })')(),
+		class: eval('(class   Evaluated { m ( ) { } })'),
+	});
+
+	var AsyncFunction = (async function () {}).constructor;
+	var GeneratorFunction = (function* () {}).constructor;
+	window.__put('function:', {
+		plain: new Function('a', 'b', 'return a + location.href'),
+		called: Function('return  1'),
+		noArgs: new Function(),
+		params: new Function('a = top, { b } = {}', '...c', 'return a'),
+		nested: new Function('return function  made ( x ) { return top }')(),
+		async: new AsyncFunction('a', 'await a'),
+		generator: new GeneratorFunction('yield  top'),
+	});
+
+	setTimeout("window.__put('timer:', { fromTimer: function  fromTimer ( ) { return location } }); window.__pending.done('timer')", 0);
+
+	function bound ( ) { }
+	window.__put('native:', {
+		bound: bound.bind(null),
+		max: Math.max,
+		proxy: new Proxy(bound, {}),
+		toString: Function.prototype.toString,
+		alert: window.alert,
+	});
+
+	var worker = new Worker('function-source-worker.js.bin');
+	worker.onmessage = function (event) {
+		for (var name in event.data) {
+			window.__fnsrc['worker:' + name] = event.data[name][0];
+			window.__fnsrc['worker:' + name + ' String'] = event.data[name][1];
+		}
+		window.__pending.done('worker');
+	};
+
+	// Google's GSI puts a listener's source in its button frame's URL, and the
+	// frame answers 400 when it is not the source the page wrote
+	addEventListener('message', function (event) {
+		if (!event.data || !('gsi' in event.data)) return;
+		window.__fnsrc['gsi:status'] = event.data.gsi;
+		window.__pending.done('gsi');
+	});
+	var gsi = document.createElement('iframe');
+	gsi.src = 'function-source-gsi.html.bin?listener=' + encodeURIComponent(String(clickListener));
+	document.body.appendChild(gsi);
+	window.__pending.done('inline');
+</script>
+<script type="module">
+	function   inlineModule ( ) { return import.meta.url }
+	const moduleArrow = ( { location : l } ) => l
+	window.__put('inlinemodule:', { inlineModule, moduleArrow });
+	window.__pending.done('inlinemodule');
+</script>

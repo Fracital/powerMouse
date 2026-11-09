@@ -1,0 +1,18 @@
+// a dedicated worker's functions, read in the worker and posted to the page
+// (test/suites/function-source.mjs)
+function   inWorker ( a ) { return self.location.href + a }
+var workerArrow = ( ) => { return location }
+class WorkerClass { method ( ) { return eval ( '1' ) } }
+var made = new Function ( 'a' , 'return a + location' )
+var evaluated = eval ( '( function  evaluated ( ) { return location } )' )
+var read = function ( fn ) {
+	return [ Function.prototype.toString.call ( fn ) , String ( fn ) ]
+}
+postMessage ( {
+	inWorker: read ( inWorker ),
+	workerArrow: read ( workerArrow ),
+	WorkerClass: read ( WorkerClass ),
+	method: read ( WorkerClass.prototype.method ),
+	made: read ( made ),
+	evaluated: read ( evaluated ),
+} )
