@@ -1,0 +1,13 @@
+<!doctype html>
+<title>LITERALS</title>
+<script src="literals.js"></script>
+<script>
+	// the same literals in an inline script
+	window.__inline = {
+		zero: typeof 0n + ' ' + String(0n),
+		hex: String(0x9e3779b185ebca87n),
+		product: String(0x9e3779b185ebca87n * 3n),
+		reused: String({ key: 4n }['k' + 'ey'] * 5n),
+	};
+	window.__done = true;
+</script>

@@ -387,7 +387,7 @@ export function modifyJS(
 
 		// destructured parameters become plain ones with the pattern moved into
 		// the body, where the main pass wraps its source like any declaration
-		hoistParamPatterns(tree, names.access);
+		prepareTree(tree, names.access);
 
 		for (const ctx of new AcornIterator(tree)) {
 			typeLoop: switch (ctx.node.type) {
@@ -1314,6 +1314,26 @@ function mentions(node: any, names: string[]): boolean {
  * refers to a name the pattern binds. (`'use strict'` cannot appear in such
  * a function, but other directives can, so the prologue is skipped.)
  */
+/**
+ * The pass over the whole tree before the main walk: destructured
+ * parameters hoisted, and every BigInt literal given its text. Escodegen
+ * prints a BigInt only from its `raw` text, which this parse does not keep:
+ * it printed 0n as 0, a Number, so arithmetic with BigInts threw and a large
+ * one lost its value. This pass reaches a literal the main walk does not (one
+ * a replacement reuses, `location = 7n`); the text is the value in decimal.
+ */
+function prepareTree(node: any, access: string) {
+	if (
+		node.type === 'Literal' &&
+		typeof node.bigint === 'string' &&
+		node.raw === undefined
+	) {
+		node.raw = `${node.bigint}n`;
+		return;
+	}
+	hoistParamPatterns(node, access);
+}
+
 function hoistParamPatterns(node: any, access: string) {
 	const PARAM_TEMP = `${access}a`;
 	// the children first, in source order (a plain loop: this runs on every
@@ -1325,11 +1345,9 @@ function hoistParamPatterns(node: any, access: string) {
 		if (Array.isArray(value)) {
 			for (let i = 0; i < value.length; i++) {
 				const item = value[i];
-				if (item && typeof item.type === 'string')
-					hoistParamPatterns(item, access);
+				if (item && typeof item.type === 'string') prepareTree(item, access);
 			}
-		} else if (typeof value.type === 'string')
-			hoistParamPatterns(value, access);
+		} else if (typeof value.type === 'string') prepareTree(value, access);
 	}
 
 	if (

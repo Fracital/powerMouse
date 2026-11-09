@@ -593,4 +593,59 @@ console.warn = warn;
 		[worker, page].join('\n'),
 	);
 }
+{
+	// every kind of literal the rewriter reprints keeps its value: a BigInt
+	// came out as a Number (escodegen prints one only from raw text, which
+	// the parse did not keep), the rest round-trip
+	const show = (v) =>
+		typeof v === 'string'
+			? `string ${[...v].map((c) => c.charCodeAt(0).toString(16))}`
+			: v instanceof RegExp
+				? `regexp ${v.source} ${v.flags}`
+				: `${typeof v} ${String(v)}`;
+	const kinds = [
+		'0n',
+		'0x9e3779b185ebca87n',
+		'0o17n',
+		'0b101n',
+		'1_000_000n',
+		'123456789012345678901234567890n',
+		'0x9e3779b185ebca87n * 3n',
+		'typeof 0n',
+		'/[\\p{L}--[a-z]]/v',
+		'/(?<n>a)/d',
+		'9007199254740993',
+		'5e-324',
+		'1.7976931348623157e308',
+		'"a\\ud800b\\udc00"',
+		'"\\u2028\\u2029"',
+	];
+	for (const kind of kinds) {
+		const source = `return ${kind};`;
+		const out = rewrite(source);
+		const native = show(new Function(source)());
+		let rewritten;
+		try {
+			rewritten = show(new Function(out)());
+		} catch (error) {
+			rewritten = String(error);
+		}
+		ok(
+			`the literal ${kind} keeps its value`,
+			rewritten === native,
+			`${native} -> ${rewritten}: ${JSON.stringify(out)}`,
+		);
+	}
+	// a BigInt a rewritten expression carries along (the main walk never
+	// reaches it) keeps its n
+	const carried = rewrite('o[k] = 9n; x = a[k] * 2n; location = 7n;');
+	ok(
+		'a BigInt inside a rewritten expression stays a BigInt',
+		/\b9n\b/.test(carried) &&
+			/\b2n\b/.test(carried) &&
+			/\b7n\b/.test(carried) &&
+			parses(carried),
+		carried,
+	);
+}
 await done();

@@ -291,6 +291,15 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A BigInt literal stays a BigInt in rewritten code. Escodegen prints a
+  BigInt only from its raw text, which the rewriter's parse does not keep, so
+  `0n` came out as `0`, a Number: arithmetic with BigInts threw a TypeError,
+  `typeof` said "number", and a large one such as `0x9e3779b185ebca87n`
+  lost its value to rounding. Discord's scripts had 93 of them. Each BigInt
+  literal now carries its value as text, including one a rewritten
+  expression carries along (`location = 7n`); every other kind of literal
+  already kept its value (literals suite, both modes, against the page
+  loaded natively; rewriter-unit suite, each kind).
 - A script is rewritten about a seventh faster. Two of the rewriter's walks
   allocated per node: the pass that moves destructured parameters into the
   body went through a generator for every node, and the main walk built a
