@@ -41,11 +41,16 @@ const SLOW = [
 	'escapes-isolated',
 	'backwalk-tabs',
 	'back',
+	'sandbox-restrictions',
 ];
 // how long a suite may run before it is killed: ten minutes, more for the
 // suites that need it (the WPT referrer-policy matrix at WPT_CONCURRENCY=1
 // takes about twelve), and SUITE_TIMEOUT=<minutes> for every suite of a run
-const SUITE_TIMEOUT_MINUTES = { 'wpt-referrer-policy': 25 };
+const SUITE_TIMEOUT_MINUTES = {
+	'wpt-referrer-policy': 25,
+	// waits for every frame's report, up to minutes on a busy runner
+	'sandbox-restrictions': 20,
+};
 const suiteTimeoutMs = (name) =>
 	(Number(process.env.SUITE_TIMEOUT) || SUITE_TIMEOUT_MINUTES[name] || 10) *
 	60 *

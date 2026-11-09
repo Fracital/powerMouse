@@ -148,13 +148,17 @@
 			'p-late-again',
 			'p-late-next',
 		];
+		// done once every frame has reported (each sends one report when it has
+		// run every probe), or after two minutes on a machine too busy for
+		// that: `missing` names the frames that never reported
 		const started = Date.now();
 		const finish = () => {
 			if (
 				EXPECTED.some((name) => !(name in __sr.reports)) &&
-				Date.now() - started < 25000
+				Date.now() - started < 120000
 			)
 				return setTimeout(finish, 250);
+			__sr.missing = EXPECTED.filter((name) => !(name in __sr.reports));
 			for (const name of [
 				...Object.keys(NOSCRIPT),
 				...Object.keys(PROBES),

@@ -23,9 +23,14 @@
 				report[key] = `threw ${error.name}`;
 			}
 		};
+		// an API that never settles (a busy machine, a prompt nobody answers)
+		// reads "pending" after ten seconds, so the report is always sent
 		const ta = async (key, run) => {
 			try {
-				report[key] = await run();
+				report[key] = await Promise.race([
+					run(),
+					settle(10000).then(() => 'pending'),
+				]);
 			} catch (error) {
 				report[key] =
 					`rejected ${error && error.name}: ${error && error.message}`;

@@ -80,6 +80,19 @@ const PROBE_KEYS = [
 	'presentation',
 	'orientation',
 ];
+// the reports by request to the fixture: popups and the top navigation
+// cases whose frame reports what it caught
+const BEACON_REPORTS = [
+	'pop-scripts-popup',
+	'pop-scripts-escape-popup',
+	'tn-none',
+	'tn-allow',
+	'tn-ua',
+	'tn-ua-click',
+	'tn-click-none',
+	'tn-custom-none',
+	'tn-custom',
+];
 const PROBES = [
 	'p-scripts',
 	'p-same',
@@ -128,6 +141,27 @@ const rendered = (beacons, name) =>
 	name.startsWith('js-') ||
 	[...(beacons[name] ?? [])].some((b) => b.startsWith('n-'));
 
+/**
+ * What the fixture saw of `run` once it stops changing: `keys` (report
+ * keys) all present, or the beacons the same two seconds apart, within
+ * `cap` ms. A busy machine delivers a frame's loads and reports late, and a
+ * fixed wait read them before they came.
+ */
+async function settled(run, keys = [], cap = 60000) {
+	const start = Date.now();
+	let last = '';
+	for (;;) {
+		const now = await seen(run);
+		const shape = JSON.stringify(
+			Object.entries(now.beacons).map(([name, set]) => [name, list(set)]),
+		);
+		const complete = keys.every((key) => key in now.reports);
+		if ((complete && shape === last) || Date.now() - start > cap) return now;
+		last = shape;
+		await sleep(2000);
+	}
+}
+
 /** click `selector` in every frame of `page` that has it */
 async function clickIn(page, selector) {
 	for (const frame of page.frames()) {
@@ -156,7 +190,7 @@ const within = (frame, run, arg, fallback, ms = 3000) =>
  * itself natively, the proxied top through the proxy (only those: a probe
  * frame may sit in a modal dialog, and an evaluation there never returns)
  */
-async function frameWith(page, global, tries = 120) {
+async function frameWith(page, global, tries = 600) {
 	for (let i = 0; i < tries; i++) {
 		for (const frame of page.frames()) {
 			if (
@@ -199,7 +233,7 @@ const browser = await launch();
 // the main harness, the popup harness and each top navigation case, loaded
 // by `load(url)` in `context`; `topTitle()` is the title of the page's top
 // (natively the page, through the proxy the proxied top document)
-async function measure(label, context, load, topTitle) {
+async function measure(label, context, load, topTitle, reportKeys) {
 	const run = `${RUN}${label}`;
 	const events = watch(context);
 	const result = { run };
@@ -264,13 +298,17 @@ async function measure(label, context, load, topTitle) {
 		await sleep(2500);
 		if (mode === 'click') await clickIn(topPage, '#topnav');
 		if (mode === 'link') await clickIn(topPage, '#toplink');
-		await sleep(2500);
-		result.top[name] = await topTitle(topPage);
+		// the top lands within six seconds of the attempt or not at all
+		let title = null;
+		for (let i = 0; i < 12 && title !== 'SR LANDED'; i++) {
+			await sleep(500);
+			title = await topTitle(topPage);
+		}
+		result.top[name] = title;
 	}
 
 	result.events = events;
-	await sleep(1000);
-	Object.assign(result, await seen(run));
+	Object.assign(result, await settled(run, reportKeys));
 	return result;
 }
 
@@ -285,8 +323,33 @@ const native = await measure(
 		return page;
 	},
 	(page) => page.title().catch(() => null),
+	BEACON_REPORTS,
 );
 await nativeContext.close();
+
+// every case the comparisons read must have reported natively: a missing
+// one is the measurement's failure, never compared as undefined
+const LATE = ['p-late', 'p-late-again', 'p-late-next'];
+const nativeMissing = [
+	...[...PROBES, ...LATE].filter((name) => !native.sr?.reports?.[name]),
+	...BEACON_REPORTS.filter((name) => !native.reports[name]),
+];
+for (const name of nativeMissing)
+	ok(`native report missing for ${name}`, false);
+ok(
+	'natively every case reported',
+	nativeMissing.length === 0,
+	nativeMissing.join(' '),
+);
+/** compare `name` only when both sides reported it; say which did not */
+const reported = (mode, name, native, proxied) => {
+	if (!native) return false;
+	if (!proxied) {
+		ok(`${mode}: proxied report missing for ${name}`, false);
+		return false;
+	}
+	return true;
+};
 
 ok(
 	'natively the main harness ran',
@@ -346,6 +409,7 @@ for (const [mode, base] of [
 				}
 			return null;
 		},
+		BEACON_REPORTS,
 	);
 	const same = (name, a, b) => {
 		const x = JSON.stringify(a);
@@ -379,7 +443,16 @@ for (const [mode, base] of [
 			list(proxied.beacons[name]),
 		);
 
-	for (const name of PROBES)
+	for (const name of PROBES) {
+		if (
+			!reported(
+				mode,
+				name,
+				native.sr?.reports?.[name],
+				proxied.sr?.reports?.[name],
+			)
+		)
+			continue;
 		for (const key of PROBE_KEYS) {
 			// a lock the sandbox allows can meet Chrome's limit on pointer lock
 			// requests in a short window (frames of one page share it): only
@@ -391,22 +464,31 @@ for (const [mode, base] of [
 				continue;
 			same(
 				`${name} ${key}`,
-				native.sr?.reports?.[name]?.[key],
-				proxied.sr?.reports?.[name]?.[key],
+				native.sr.reports[name][key],
+				proxied.sr.reports[name][key],
 			);
 		}
-	for (const name of ['p-late', 'p-late-again', 'p-late-next'])
-		same(
-			`${name} (the sandbox applies from the next navigation) origin and storage`,
-			[
-				native.sr?.reports?.[name]?.origin,
-				native.sr?.reports?.[name]?.localStorage,
-			],
-			[
-				proxied.sr?.reports?.[name]?.origin,
-				proxied.sr?.reports?.[name]?.localStorage,
-			],
-		);
+	}
+	for (const name of LATE)
+		if (
+			reported(
+				mode,
+				name,
+				native.sr?.reports?.[name],
+				proxied.sr?.reports?.[name],
+			)
+		)
+			same(
+				`${name} (the sandbox applies from the next navigation) origin and storage`,
+				[
+					native.sr?.reports?.[name]?.origin,
+					native.sr?.reports?.[name]?.localStorage,
+				],
+				[
+					proxied.sr?.reports?.[name]?.origin,
+					proxied.sr?.reports?.[name]?.localStorage,
+				],
+			);
 	for (const name of Object.keys(native.sr?.parentReads ?? {}))
 		same(
 			`what the page reads of ${name} (contentDocument, contentWindow.document, the attribute, its token list)`,
@@ -442,11 +524,12 @@ for (const [mode, base] of [
 		list(proxied.beacons['pop-noscript']),
 	);
 	for (const name of ['pop-scripts-popup', 'pop-scripts-escape-popup'])
-		same(
-			`the origin of the popup ${name} is`,
-			native.reports[name]?.origin,
-			proxied.reports[name]?.origin,
-		);
+		if (reported(mode, name, native.reports[name], proxied.reports[name]))
+			same(
+				`the origin of the popup ${name} is`,
+				native.reports[name]?.origin,
+				proxied.reports[name]?.origin,
+			);
 
 	// top navigation
 	for (const name of Object.keys(native.top))
@@ -464,11 +547,12 @@ for (const [mode, base] of [
 		'tn-custom-none',
 		'tn-custom',
 	])
-		same(
-			`${name}: what the frame caught navigating the top is`,
-			native.reports[name]?.caught,
-			proxied.reports[name]?.caught,
-		);
+		if (reported(mode, name, native.reports[name], proxied.reports[name]))
+			same(
+				`${name}: what the frame caught navigating the top is`,
+				native.reports[name]?.caught,
+				proxied.reports[name]?.caught,
+			);
 	ok(
 		`${mode}: no host page ever left the demo`,
 		// the demo's own page (a hash names its tabs); a top escape in
