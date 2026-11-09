@@ -1,0 +1,60 @@
+<!doctype html>
+<title>SANDBOX MESSAGES BOX</title>
+<script>
+	// sandboxed without allow-same-origin (sandbox-messages.html): an opaque
+	// origin, which posts to its parent, its sibling and itself on "go"
+	const out = {
+		threw: [],
+		self: [],
+		origin: self.origin,
+		locationOrigin: location.origin,
+	};
+	const attempt = (name, post) => {
+		try {
+			post();
+		} catch (error) {
+			out.threw.push(`${name}: ${error.name}: ${error.message}`);
+		}
+	};
+	addEventListener('message', (event) => {
+		if (event.data === 'go') {
+			// the site's origin, as a page would name its parent's
+			const site = new URL(location.href).origin;
+			attempt('parent *', () => parent.postMessage({ kind: 'star' }, '*'));
+			attempt('parent site', () => parent.postMessage({ kind: 'site' }, site));
+			attempt('parent options', () =>
+				parent.postMessage({ kind: 'options' }, { targetOrigin: '*' }),
+			);
+			attempt('parent other', () =>
+				parent.postMessage({ kind: 'other' }, 'http://other.invalid'),
+			);
+			attempt('parent /', () => parent.postMessage({ kind: 'slash' }, '/'));
+			attempt('parent null', () =>
+				parent.postMessage({ kind: 'null' }, 'null'),
+			);
+			attempt('sibling *', () =>
+				parent.frames[0].postMessage({ kind: 'sibling' }, '*'),
+			);
+			attempt('sibling site', () =>
+				parent.frames[0].postMessage({ kind: 'siblingSite' }, site),
+			);
+			attempt('self *', () => postMessage({ kind: 'self' }, '*'));
+			attempt('self default', () => postMessage({ kind: 'selfDefault' }));
+			setTimeout(
+				() => parent.postMessage({ kind: 'report', who: 'box', out }, '*'),
+				500,
+			);
+			return;
+		}
+		out.self.push({
+			kind: event.data?.kind ?? String(event.data),
+			origin: event.origin,
+			from:
+				event.source === window
+					? 'self'
+					: event.source === parent
+						? 'parent'
+						: String(event.source),
+		});
+	});
+</script>

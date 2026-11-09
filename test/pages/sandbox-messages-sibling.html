@@ -1,0 +1,19 @@
+<!doctype html>
+<title>SANDBOX MESSAGES SIBLING</title>
+<script>
+	// the sandboxed frame's sibling (sandbox-messages.html), of the page's
+	// origin: what reaches it from the sandboxed frame
+	window.__sib = [];
+	addEventListener('message', (event) => {
+		__sib.push({
+			kind: event.data?.kind ?? String(event.data),
+			origin: event.origin,
+			from:
+				event.source === parent.frames[1]
+					? 'box'
+					: event.source === parent
+						? 'parent'
+						: String(event.source),
+		});
+	});
+</script>

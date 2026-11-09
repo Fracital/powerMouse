@@ -1,0 +1,82 @@
+<!doctype html>
+<title>SANDBOX MESSAGES</title>
+<script>
+	// LinkedIn frames content in a frame sandboxed without allow-same-origin,
+	// whose document is an opaque origin, and that frame posts to its parent.
+	// Natively it may post with "*" (and nothing else reaches a receiver of a
+	// real origin from it but that origin named outright), and the receiver
+	// sees event.origin "null" and the frame's window as event.source.
+	// Through the proxy the hooked postMessage named the sending realm's
+	// location.origin as the target origin, which reads "null" in an opaque
+	// or about:srcdoc document, and Chrome threw "Invalid target origin
+	// 'null'". The sandboxed frame (box, frames[1]) posts to this page, to its
+	// sibling (frames[0]) and to itself with several target origins once
+	// everything has loaded, then reports what it caught; so do a sandboxed
+	// srcdoc frame (doc) and a plain one (plain), to this page and to
+	// themselves.
+	window.__sm = { parent: [], reports: {} };
+	const frames = ['box', 'doc', 'plain'];
+	const windowOf = (id) => document.getElementById(id).contentWindow;
+	addEventListener('message', (event) => {
+		if (event.data?.kind === 'report') {
+			__sm.reports[event.data.who] = event.data.out;
+			if (Object.keys(__sm.reports).length < frames.length) return;
+			// what reached the sibling (same-origin with this page)
+			setTimeout(() => {
+				__sm.sibling = windowOf('sib').__sib;
+				__sm.done = true;
+			}, 500);
+			return;
+		}
+		__sm.parent.push({
+			kind: event.data?.kind ?? String(event.data),
+			origin: event.origin,
+			from:
+				frames.find((id) => event.source === windowOf(id)) ??
+				(event.source === window ? 'self' : String(event.source)),
+		});
+	});
+	addEventListener('load', () => {
+		for (const id of frames) windowOf(id).postMessage('go', '*');
+	});
+	// a srcdoc frame's script: on "go", posts to its parent and itself
+	const srcdoc = (who) =>
+		'<scr' +
+		`ipt>
+		const out = { threw: [], self: [], origin: self.origin };
+		const attempt = (name, post) => {
+			try {
+				post();
+			} catch (error) {
+				out.threw.push(name + ': ' + error.name + ': ' + error.message);
+			}
+		};
+		addEventListener('message', (event) => {
+			if (event.data === 'go') {
+				attempt('parent *', () => parent.postMessage({ kind: '${who}Star' }, '*'));
+				attempt('self *', () => postMessage({ kind: '${who}Self' }, '*'));
+				attempt('self default', () => postMessage({ kind: '${who}Default' }));
+				setTimeout(() => parent.postMessage({ kind: 'report', who: '${who}', out }, '*'), 500);
+				return;
+			}
+			out.self.push({
+				kind: event.data?.kind ?? String(event.data),
+				origin: event.origin,
+				from: event.source === window ? 'self' : String(event.source),
+			});
+		});
+	</scr` +
+		'ipt>';
+</script>
+<iframe id="sib" src="sandbox-messages-sibling.html"></iframe>
+<iframe
+	id="box"
+	sandbox="allow-scripts"
+	src="sandbox-messages-box.html"
+></iframe>
+<iframe id="doc" sandbox="allow-scripts"></iframe>
+<iframe id="plain"></iframe>
+<script>
+	document.getElementById('doc').srcdoc = srcdoc('doc');
+	document.getElementById('plain').srcdoc = srcdoc('plain');
+</script>
