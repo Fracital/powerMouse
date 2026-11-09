@@ -412,8 +412,9 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   about:blank frame the page reaches into runs the page's bundle, whose
   `location.origin` reads "null": set from it, every object URL the page
   minted afterwards (and so `src` and `currentSrc`) came out in the proxy's
-  form. The proxy's origin is now taken from the routed base URL, as is the
-  one error stacks are cleaned of. `new Audio(url)` routed its URL into the
+  form. The proxy's origin is now the realm's own as the browser has it
+  (an about:blank child's inherited one), as is the one error stacks are
+  cleaned of. `new Audio(url)` routed its URL into the
   element's real attribute, so its `src` and src attribute read a blob: URL
   in the proxy's form too; the URL now goes through the element's `src`
   property as the page would set it (media-blobs suite, both modes; 18 of

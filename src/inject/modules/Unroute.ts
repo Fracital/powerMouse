@@ -31,6 +31,17 @@ export function scopePrefix(client: Client): string {
 }
 
 /**
+ * The origin this realm's blob: URLs are minted under, as the browser has
+ * it: a document's own (an about:blank or srcdoc child's inherited one,
+ * though its location reads "null"), a worker's location's
+ */
+export function realmOrigin(client: Client): string {
+	return client.isDOM
+		? (client as DocumentClient).realOrigin()
+		: client.global.location.origin;
+}
+
+/**
  * The page's URL for a routed one. A string that is not under the scope
  * comes back as it is; `null` means the proxy's own machinery (an inject
  * bundle under the scope, `whoami` under the address), which no page URL
@@ -69,7 +80,7 @@ const LINE_COLUMN = /(?::\d+){1,2}$/;
  */
 export function unrouteText(client: Client, text: string): string {
 	// a blob: URL the page made carries the proxy origin: the page's is shown
-	const proxyBlob = `blob:${new URL(scopePrefix(client)).origin}/`;
+	const proxyBlob = `blob:${realmOrigin(client)}/`;
 	if (text.includes(proxyBlob))
 		text = text.split(proxyBlob).join(`blob:${client.url.url.origin}/`);
 	const prefix = routedPrefix(client);
