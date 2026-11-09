@@ -26,6 +26,7 @@ export { parseDataURI, createDataURI } from ${JSON.stringify(`${root}src/routeUR
 export { modifyCSS } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
+export { keepEmbedded, originalSource, sourceKey } from ${JSON.stringify(`${root}src/functionSource.ts`)};
 `,
 );
 const bundle = `${OUT}rewriter-unit.mjs`;
@@ -55,6 +56,9 @@ const {
 	modifyCSS,
 	StompURL,
 	parseConfig,
+	keepEmbedded,
+	sourceKey,
+	originalSource,
 } = await import(`${bundle}?${Date.now()}`);
 
 const config = { directory: '/stomp/', codec: 'xor' };
@@ -63,8 +67,19 @@ const url = new StompURL('https://example.com/a.js', parsed.codec, '/stomp/');
 // the rewriter warns on the console about a script it cannot parse
 const warn = console.warn;
 console.warn = () => {};
-const rewrite = (source, type = 'generic', extra = {}) =>
+// the marks that let a function read back as written (src/functionSource.ts),
+// and the statement that keeps the script's text: taken out where a check
+// is about the shape of the rewritten code
+const unmarked = (out) =>
+	out
+		.replace(
+			/typeof (\S+?)!=="undefined"&&\1\.src\("[0-9a-z]+","[^"]*",function\(\)\{\/\*[^*]*\*\/\}\);/,
+			'',
+		)
+		.replace(/\/\*[0-9a-z]+\.[0-9a-z]+\.[0-9a-z]+\*\//g, '');
+const marked = (source, type = 'generic', extra = {}) =>
 	modifyJS(source, url, { ...config, ...extra }, type);
+const rewrite = (source, type, extra) => unmarked(marked(source, type, extra));
 const parses = (code) => {
 	try {
 		new Function(code);
@@ -77,18 +92,21 @@ const parses = (code) => {
 	// a minified library comes back minified, about its own size (indented
 	// and broken into lines it was up to twice that); code written to be read
 	// keeps one statement per line, so a stack's line numbers stay near the
-	// page's own
+	// page's own. Its text is kept once beside the code, for its functions'
+	// sources (src/functionSource.ts), which doubles what goes to the page
 	const source = readFileSync(`${root}test/pages/vendor-three.min.js`, 'utf8');
-	const out = rewrite(source);
+	const full = marked(source);
+	const out = unmarked(full);
 	const readable = rewrite(
 		'function f() {\n\tconst a = 1;\n\treturn a;\n}\nf();',
 	);
 	ok(
-		'a minified library is rewritten to about its own size, readable code keeps its lines',
+		'a minified library is rewritten to about its own size (twice that with its text), readable code keeps its lines',
 		out.length < source.length * 1.25 &&
-			parses(out) &&
+			full.length < source.length * 2.4 &&
+			parses(full) &&
 			readable.split('\n').length >= 4,
-		`${source.length} -> ${out.length}; ${JSON.stringify(readable)}`,
+		`${source.length} -> ${out.length} (${full.length} with its text); ${JSON.stringify(readable)}`,
 	);
 }
 
@@ -693,8 +711,13 @@ console.warn = warn;
 		const plan = planSplit(script, parts);
 		if (!plan) return null;
 		const sources = splitSources(script, plan);
-		const part = (text) => modifyJS(text, url, config, 'generic', '', true);
-		return stitch(part(sources.skeleton), sources.parts.map(part), plan);
+		const part = (text, source) =>
+			modifyJS(text, url, config, 'generic', '', true, source);
+		return stitch(
+			part(sources.skeleton, sources.skeletonSource),
+			sources.parts.map((text, i) => part(text, sources.partSources[i])),
+			plan,
+		);
 	};
 	const runtime = readFileSync(`${root}test/pages/split-bundle.js.bin`, 'utf8');
 	const chunk =
@@ -730,5 +753,105 @@ console.warn = warn;
 	];
 	for (const [name, script] of notSplit)
 		ok(`not split: ${name}`, planSplit(script, 2) === null, script);
+}
+{
+	// every function a script defines reads back as the page wrote it: the
+	// script run as written and as the service worker writes it (its text
+	// handed to the access API by the statement before its code), printed
+	// readable and compact: every form the browser suite's fixture has, and
+	// every class, method, getter and function three.js exports
+	const toString = Function.prototype.toString;
+	const access = new Proxy(
+		{ src: keepEmbedded, get: (value) => value, get2: (o, k) => o[k] },
+		{ get: (target, key) => target[key] ?? ((value) => value) },
+	);
+	const readBack = (fn) => {
+		const raw = toString.call(fn);
+		return originalSource(raw) ?? raw;
+	};
+	const run = (code, helper) => {
+		const got = {};
+		const window = { __put: (prefix, fns) => Object.assign(got, fns) };
+		new Function('window', '$s$j', 'location', 'top', code)(
+			window,
+			helper,
+			{ href: '', hash: '' },
+			window,
+		);
+		return got;
+	};
+	const fixture = readFileSync(
+		`${root}test/pages/function-source.js.bin`,
+		'utf8',
+	);
+	const native = run(fixture);
+	for (const [name, out] of [
+		['readable', marked(fixture)],
+		['compact', modifyJS(fixture, url, config, 'generic', '', true)],
+	]) {
+		const proxied = run(out, access);
+		const wrong = Object.keys(native).filter(
+			(key) => readBack(proxied[key]) !== toString.call(native[key]),
+		);
+		ok(
+			`every form of function reads back as written (${name})`,
+			Object.keys(native).length > 40 && wrong.length === 0,
+			wrong
+				.map((key) => `${key}: ${JSON.stringify(readBack(proxied[key]))}`)
+				.join('; '),
+		);
+	}
+	const three = readFileSync(`${root}test/pages/vendor-three.min.js`, 'utf8');
+	const load = (code, helper) => {
+		// its UMD wrapper puts THREE on globalThis
+		const self = {};
+		new Function('globalThis', 'console', '$s$j', code)(
+			self,
+			{ warn() {} },
+			helper,
+		);
+		return self.THREE;
+	};
+	const before = load(three);
+	// a page that hands over a holder of its own under the script's key,
+	// before the script runs, changes nothing
+	keepEmbedded(
+		sourceKey(three),
+		'\u0001\u0002\u0003\u0004\u0005\u0006',
+		// shaped like the rewriter's, so only its text tells it apart
+		new Function('return function(){/*not three.js*/}')(),
+	);
+	const after = load(marked(three), access);
+	const pairs = [];
+	for (const name of Object.keys(before)) {
+		if (typeof before[name] !== 'function') continue;
+		pairs.push([name, before[name], after[name]]);
+		for (const owner of ['prototype', null]) {
+			const a = owner ? before[name][owner] : before[name];
+			const b = owner ? after[name][owner] : after[name];
+			if (!a) continue;
+			for (const key of Object.getOwnPropertyNames(a))
+				for (const part of ['value', 'get', 'set']) {
+					const fn = Object.getOwnPropertyDescriptor(a, key)[part];
+					if (typeof fn === 'function' && key !== 'constructor')
+						pairs.push([
+							`${name}.${key}`,
+							fn,
+							Object.getOwnPropertyDescriptor(b, key)?.[part],
+						]);
+				}
+		}
+	}
+	const wrong = pairs.filter(
+		([, a, b]) => typeof b !== 'function' || readBack(b) !== toString.call(a),
+	);
+	ok(
+		`every function three.js exports reads back as written, a holder the page handed over first notwithstanding (${pairs.length - wrong.length}/${pairs.length})`,
+		pairs.length > 1000 && wrong.length === 0,
+		wrong
+			.slice(0, 3)
+			.map(([key]) => key)
+			.join(', '),
+	);
 }
 await done();

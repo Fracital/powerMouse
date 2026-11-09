@@ -2,7 +2,7 @@
 // src/server/rewritePool.ts). Apart from transport/messages.ts, which the
 // controller and its declarations import, because this names the rewriter.
 import type { Config } from './config';
-import type { ScriptType } from './rewriteJS';
+import type { ScriptSource, ScriptType } from './rewriteJS';
 import type { SplitPlan } from './splitRewrite';
 
 /** rpc id on a rewrite worker's port */
@@ -28,6 +28,8 @@ export interface RewriteRequest {
 	scopes: string[];
 	/** printed compact whatever it looks like: a part of a split script (splitRewrite) */
 	compact?: boolean;
+	/** where its functions' text is kept: a part of a split script */
+	source?: ScriptSource;
 }
 
 /** a large script to plan a split of (splitRewrite) */

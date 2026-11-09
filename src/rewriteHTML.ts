@@ -94,7 +94,18 @@ export function routeHTML(
 		} catch (error) {
 			// not percent-encoded
 		}
-		const rewritten = modifyJS(body, url, config, 'generic');
+		// its functions' text is never written into a URL: kept by the inject
+		// when it rewrites the URL, otherwise they read as rewritten
+		const kept = { embed: false };
+		const rewritten = modifyJS(
+			body,
+			url,
+			config,
+			'generic',
+			'',
+			undefined,
+			kept,
+		);
 		const client = JSON.stringify(helperNames(config).client);
 		// The body runs in the window it navigates: in a fresh iframe that is
 		// the frame's initial about:blank, which nothing injected, and the
@@ -111,7 +122,7 @@ export function routeHTML(
 		if (expression === null)
 			// statements: injected after their directive prologue, so a
 			// 'use strict' stays one
-			return `javascript:${modifyJS(body, url, config, 'generic', `void (${inject});`)}`;
+			return `javascript:${modifyJS(body, url, config, 'generic', `void (${inject});`, undefined, kept)}`;
 		return `javascript:((r,c)=>typeof r==='string'&&c?c.javascriptDocument(r,document.URL):r)((${inject},(${expression})),self[${client}]||(()=>{try{return parent[${client}]}catch(e){}})())`;
 	}
 

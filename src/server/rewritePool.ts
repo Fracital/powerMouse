@@ -6,7 +6,7 @@
 // with the page or a crash) or the worker took longer than the timeout. A
 // port that closed or timed out is not used again.
 import type { Config } from '../config';
-import { minified, ScriptType } from '../rewriteJS';
+import { minified, ScriptSource, ScriptType } from '../rewriteJS';
 import { REWRITE_READY, REWRITE_RPC, RewriteBound } from '../rewriteMessages';
 import { routeScopeList } from '../routeURL';
 import { SPLIT_MIN, splitSources, stitch } from '../splitRewrite';
@@ -109,6 +109,7 @@ export class RewritePool {
 		config: Config,
 		type: ScriptType,
 		compact?: boolean,
+		source?: ScriptSource,
 	): Promise<string | null> {
 		return this.#call('rewrite', {
 			script,
@@ -119,6 +120,7 @@ export class RewritePool {
 			type,
 			scopes: routeScopeList(),
 			...(compact === undefined ? {} : { compact }),
+			...(source === undefined ? {} : { source }),
 		});
 	}
 	/**
@@ -142,10 +144,20 @@ export class RewritePool {
 		if (live < 2 || !minified(script)) return null;
 		const plan = await this.#call('plan', { script, parts: live });
 		if (!plan) return null;
-		const { skeleton, parts } = splitSources(script, plan);
+		const { skeleton, parts, skeletonSource, partSources } = splitSources(
+			script,
+			plan,
+		);
 		const outputs = await Promise.all(
-			[skeleton, ...parts].map((text) =>
-				this.#rewriteOne(text, url, config, type, true),
+			[skeleton, ...parts].map((text, i) =>
+				this.#rewriteOne(
+					text,
+					url,
+					config,
+					type,
+					true,
+					i === 0 ? skeletonSource : partSources[i - 1],
+				),
 			),
 		);
 		if (outputs.some((output) => output === null)) return null;

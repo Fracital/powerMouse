@@ -11,7 +11,8 @@
 // would make, as long as everything is printed compact, as minified code is.
 // Only shapes recognised here are split; anything else is rewritten whole.
 import { parse } from 'meriyah';
-import { PROVIDERS, UNDEFINABLE } from './rewriteJS';
+import { sourceKey } from './functionSource';
+import { PROVIDERS, UNDEFINABLE, type ScriptSource } from './rewriteJS';
 
 /** below this a script is rewritten whole: the split's own parse costs more than it saves */
 export const SPLIT_MIN = 512 * 1024;
@@ -23,6 +24,8 @@ export interface SplitPlan {
 	strict: boolean;
 	/** a name no part of the script contains, for the placeholders */
 	token: string;
+	/** the key the whole script's text is kept by (src/functionSource.ts) */
+	key: string;
 }
 
 // names the rewriter treats as the window's: a module that saw one bound
@@ -171,27 +174,46 @@ export function planSplit(script: string, parts: number): SplitPlan | null {
 
 	let token = '$stomp$part';
 	while (script.includes(token)) token += '$';
-	return { groups, strict: strictScope, token };
+	return { groups, strict: strictScope, token, key: sourceKey(script) };
 }
 
-/** the skeleton (a placeholder where each group was) and the groups, each a script of its own */
+/**
+ * The skeleton (a placeholder where each group was) and the groups, each a
+ * script of its own, with where each stands in the whole: their functions
+ * read back from the whole's text, which the skeleton keeps
+ */
 export function splitSources(
 	script: string,
 	plan: SplitPlan,
-): { skeleton: string; parts: string[] } {
+): {
+	skeleton: string;
+	parts: string[];
+	skeletonSource: ScriptSource;
+	partSources: ScriptSource[];
+} {
 	let skeleton = '';
 	let at = 0;
+	const shifts: number[] = [];
 	plan.groups.forEach(([start, end], i) => {
 		skeleton += `${script.slice(at, start)}"${plan.token}${i}":0`;
+		// what follows the placeholder stands where the group ended
+		shifts.push(skeleton.length, end - skeleton.length);
 		at = end;
 	});
 	skeleton += script.slice(at);
 	const prologue = plan.strict ? '"use strict";' : '';
+	const open = prologue.length + '({'.length;
 	return {
 		skeleton,
 		parts: plan.groups.map(
 			([start, end]) => `${prologue}({${script.slice(start, end)}});`,
 		),
+		skeletonSource: { key: plan.key, text: script, shifts },
+		partSources: plan.groups.map(([start]) => ({
+			key: plan.key,
+			text: null,
+			shifts: [0, start - open],
+		})),
 	};
 }
 

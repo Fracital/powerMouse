@@ -1,3 +1,4 @@
+import { keepEmbedded } from '../../functionSource';
 import { HelperNames } from '../../helperNames';
 import { routeHTML } from '../../rewriteHTML';
 import {
@@ -445,6 +446,10 @@ export default class AccessModule extends Module<Client> {
 			// itself, which would run a page's code unrewritten, where its
 			// `top` is the real one and reaches every proxied window
 			isEval: (fn: unknown): boolean => fn === evalSnapshot,
+			// the text a script the service worker rewrote hands over, for its
+			// functions' sources (src/functionSource.ts)
+			src: (key: unknown, subs: unknown, holder: unknown): void =>
+				keepEmbedded(key, subs, holder),
 		};
 
 		// not enumerable: Object.keys(window) must not name it

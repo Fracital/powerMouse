@@ -33,6 +33,7 @@ function rewrite(request: RewriteRequest): string {
 		request.type,
 		'',
 		request.compact,
+		request.source,
 	);
 }
 

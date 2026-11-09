@@ -4,6 +4,13 @@ import { parse } from 'meriyah';
 import type { ESTree } from 'meriyah';
 import { AcornContext, AcornIterator, result } from './acornUtil';
 import { Config } from './config';
+import {
+	functionMark,
+	holderStatement,
+	keepSource,
+	keepsSourcesHere,
+	sourceKey,
+} from './functionSource';
 import { DEFAULT_NAMES, helperNames } from './helperNames';
 import {
 	createDataURI,
@@ -353,6 +360,8 @@ export function modifyJS(
 	 * a part of a larger script (splitRewrite) is printed as the whole would be
 	 */
 	compact?: boolean,
+	/** where the text its functions read back as is kept (a part of a split script, a javascript: URL) */
+	source?: ScriptSource,
 ) {
 	const names = helperNames(config);
 	// the names a read of must go through the access API: the unforgeables,
@@ -421,7 +430,9 @@ export function modifyJS(
 
 		// destructured parameters become plain ones with the pattern moved into
 		// the body, where the main pass wraps its source like any declaration
-		prepareTree(tree, names.access, routed);
+		// (the functions of the page's, children first, for their marks)
+		const functions: any[] = [];
+		prepareTree(tree, names.access, routed, functions);
 
 		for (const ctx of new AcornIterator(tree)) {
 			typeLoop: switch (ctx.node.type) {
@@ -1152,6 +1163,41 @@ export function modifyJS(
 			}
 		}
 
+		// every function of the page's is marked with where it stands in the
+		// text, which is kept for it (src/functionSource.ts)
+		const format = (compact ?? minified(script)) ? COMPACT : undefined;
+		const text = source?.text === undefined ? script : source.text;
+		let key = source?.key;
+		const shifts = source?.shifts ?? [];
+		const at = (position: number) => {
+			let shift = 0;
+			for (let i = 0; i < shifts.length && position >= shifts[i]!; i += 2)
+				shift = shifts[i + 1]!;
+			return position + shift;
+		};
+		let marks = 0;
+		try {
+			marks = markFunctions(
+				functions,
+				script,
+				(start, end) =>
+					functionMark((key ??= sourceKey(script)), at(start), at(end)),
+				(node) => generate(node, format),
+			);
+		} catch (error) {
+			// a mark that could not be placed: those placed read back, the
+			// rest show the rewritten code
+		}
+		let holder = '';
+		// (the part of a split script that keeps the text writes it whether
+		// or not functions of its own were marked, as the whole would)
+		if (text !== null && (marks || source?.text !== undefined)) {
+			key ??= sourceKey(script);
+			if (keepsSourcesHere()) keepSource(key, text);
+			else if (source?.embed !== false)
+				holder = holderStatement(names.access, key, text) ?? '';
+		}
+
 		const bundle = JSON.stringify(injectWorkerJS(url, config));
 		return (
 			prologue +
@@ -1203,7 +1249,8 @@ if (!${names.client}.applied)
 				? `import.meta.url = ${JSON.stringify(url.toString())};import.meta.resolve = (s) => ${BARE_SPECIFIER}.test(s = String(s)) ? s : new URL(s, import.meta.url).href;`
 				: '') +
 			preamble +
-			generate(tree, (compact ?? minified(script)) ? COMPACT : undefined) +
+			holder +
+			generate(tree, format) +
 			trailer
 		);
 	} catch (error) {
@@ -1368,7 +1415,12 @@ function mentions(node: any, names: string[]): boolean {
  * one lost its value. This pass reaches a literal the main walk does not (one
  * a replacement reuses, `location = 7n`); the text is the value in decimal.
  */
-function prepareTree(node: any, access: string, routed: readonly string[]) {
+function prepareTree(
+	node: any,
+	access: string,
+	routed: readonly string[],
+	functions: any[],
+) {
 	if (
 		node.type === 'Literal' &&
 		typeof node.bigint === 'string' &&
@@ -1377,13 +1429,14 @@ function prepareTree(node: any, access: string, routed: readonly string[]) {
 		node.raw = `${node.bigint}n`;
 		return;
 	}
-	hoistParamPatterns(node, access, routed);
+	hoistParamPatterns(node, access, routed, functions);
 }
 
 function hoistParamPatterns(
 	node: any,
 	access: string,
 	routed: readonly string[],
+	functions: any[],
 ) {
 	const PARAM_TEMP = `${access}a`;
 	// the children first, in source order (a plain loop: this runs on every
@@ -1396,11 +1449,12 @@ function hoistParamPatterns(
 			for (let i = 0; i < value.length; i++) {
 				const item = value[i];
 				if (item && typeof item.type === 'string')
-					prepareTree(item, access, routed);
+					prepareTree(item, access, routed, functions);
 			}
 		} else if (typeof value.type === 'string')
-			prepareTree(value, access, routed);
+			prepareTree(value, access, routed, functions);
 	}
+	if (MARKED.has(node.type)) functions.push(node);
 
 	if (
 		node.type !== 'FunctionDeclaration' &&
@@ -1499,6 +1553,209 @@ export function rewriteImportMap(
 	if (typeof map.scopes === 'object' && map.scopes !== null)
 		for (const scope of Object.values(map.scopes)) route(scope);
 	return JSON.stringify(map);
+}
+
+/**
+ * Where the text a script's functions read back as is kept
+ * (src/functionSource.ts). A whole script needs none of it: its own text is
+ * kept, by its own key.
+ */
+export interface ScriptSource {
+	/** the key of the text this script's positions refer to */
+	key?: string;
+	/** the text kept: null when another part of a split script keeps it */
+	text?: string | null;
+	/**
+	 * `[position, shift, ...]`, ascending: a position of this script at or
+	 * past `position` stands `shift` further on in the text (a part of a
+	 * split script)
+	 */
+	shifts?: number[];
+	/** false: never written into the output (a javascript: URL's body) */
+	embed?: boolean;
+}
+
+/** a node escodegen prints as `raw`, as it is (it prints a BigInt literal from its raw text) */
+const rawNode = (raw: string) => ({
+	type: 'Literal',
+	value: 0,
+	bigint: '',
+	raw,
+});
+/** an identifier (or #private name) printed with `suffix` after it */
+const suffixed = (node: any, suffix: string) => ({
+	type: node.type,
+	name: node.name + suffix,
+});
+
+/**
+ * Mark the first binding name of a parameter, or the first after which
+ * nothing but punctuation and quoted keys comes before it. 'empty': the
+ * pattern binds nothing (`{}`), 'none': its first part could hold a
+ * function (a computed key), and the parameter is marked as a whole.
+ */
+function markSlot(
+	container: any,
+	key: string | number,
+	mark: string,
+): 'marked' | 'empty' | 'none' {
+	const node = container[key];
+	switch (node?.type) {
+		case 'Identifier':
+			container[key] = suffixed(node, mark);
+			return 'marked';
+		case 'AssignmentPattern': {
+			const left = markSlot(node, 'left', mark);
+			return left === 'empty' ? 'none' : left;
+		}
+		case 'RestElement':
+			return markSlot(node, 'argument', mark);
+		case 'ArrayPattern':
+			for (let i = 0; i < node.elements.length; i++) {
+				if (!node.elements[i]) continue;
+				const element = markSlot(node.elements, i, mark);
+				if (element !== 'empty') return element;
+			}
+			return 'empty';
+		case 'ObjectPattern':
+			for (const property of node.properties) {
+				if (property.type === 'RestElement') {
+					const rest = markSlot(property, 'argument', mark);
+					if (rest !== 'empty') return rest;
+					continue;
+				}
+				if (property.computed) return 'none';
+				// a shorthand prints its key, or its default's target
+				if (property.shorthand)
+					return property.value?.type === 'AssignmentPattern'
+						? markSlot(property.value, 'left', mark)
+						: markSlot(property, 'key', mark);
+				if (property.key.type === 'Identifier')
+					return markSlot(property, 'key', mark);
+				// a quoted or numeric key: the value is next
+				const value = markSlot(property, 'value', mark);
+				if (value !== 'empty') return value;
+			}
+			return 'empty';
+	}
+	return 'none';
+}
+
+/** the position after `static` and what follows it up to the method's own source */
+function afterStatic(script: string, start: number): number {
+	let at = start + 'static'.length;
+	for (;;) {
+		if (script.startsWith('/*', at)) {
+			const end = script.indexOf('*/', at + 2);
+			if (end === -1) return at;
+			at = end + 2;
+		} else if (script.startsWith('//', at)) {
+			const end = script.slice(at).search(/[\n\r\u2028\u2029]/);
+			if (end === -1) return at;
+			at += end;
+		} else if (/\s/.test(script[at] ?? '')) at++;
+		else return at;
+	}
+}
+
+/** the nodes the pre-pass collects for markFunctions */
+const MARKED = new Set([
+	'FunctionDeclaration',
+	'FunctionExpression',
+	'ArrowFunctionExpression',
+	'ClassDeclaration',
+	'ClassExpression',
+	'MethodDefinition',
+	'Property',
+]);
+
+/**
+ * Mark every function of the page's (one with a source range: what the
+ * rewriter made has none) in the rewritten tree, right after the first
+ * token of its source, before anything that could hold a function: a
+ * function or class after its name, or after `function` / `class` (an
+ * anonymous one prints the mark as its name), an arrow after its first
+ * parameter's first name (the mark in parentheses standing for no
+ * parameters), a method, getter or setter after its key (inside the
+ * brackets of a computed one). `functions` are the ones the pre-pass
+ * found, children first (the rewrite keeps every function where it was,
+ * inside the same functions), so a part printed ahead of time (a computed
+ * key, a parameter pattern) carries the marks of its own functions. The
+ * count of marks.
+ */
+function markFunctions(
+	functions: any[],
+	script: string,
+	markOf: (start: number, end: number) => string,
+	print: (node: any) => string,
+): number {
+	let count = 0;
+	const isMethod = (node: any) =>
+		node.type === 'MethodDefinition' ||
+		(node.type === 'Property' &&
+			(node.method || node.kind === 'get' || node.kind === 'set'));
+	// a method's function is the method's: its source is the method's
+	const methodValues = new WeakSet<object>();
+	for (const node of functions)
+		if (isMethod(node)) methodValues.add(node.value);
+	for (const node of functions) {
+		if (!node.range) continue;
+		switch (node.type) {
+			case 'FunctionDeclaration':
+			case 'FunctionExpression':
+			case 'ClassDeclaration':
+			case 'ClassExpression':
+				if (methodValues.has(node)) continue;
+				node.id = suffixed(
+					node.id ?? { type: 'Identifier', name: '' },
+					markOf(node.range[0], node.range[1]),
+				);
+				count++;
+				continue;
+			case 'ArrowFunctionExpression': {
+				const mark = markOf(node.range[0], node.range[1]);
+				count++;
+				if (!node.params.length) {
+					node.params = [{ type: 'Identifier', name: `(${mark})` }];
+					continue;
+				}
+				let slot: ReturnType<typeof markSlot> = 'empty';
+				for (let i = 0; i < node.params.length && slot === 'empty'; i++)
+					slot = markSlot(node.params, i, mark);
+				// no name to mark before anything that could hold a function:
+				// the first parameter printed whole after the mark (any before
+				// a computed key binds nothing)
+				if (slot !== 'marked')
+					node.params[0] = rawNode(mark + print(node.params[0]));
+				continue;
+			}
+			case 'MethodDefinition':
+			case 'Property': {
+				if (!isMethod(node) || node.kind === 'constructor') continue;
+				// a static method's source starts after `static`
+				const mark = markOf(
+					node.static ? afterStatic(script, node.range[0]) : node.range[0],
+					node.range[1],
+				);
+				count++;
+				const { key } = node;
+				if (node.computed) {
+					const printed = print(key);
+					node.key = rawNode(
+						mark +
+							(key.type === 'SequenceExpression' ? `(${printed})` : printed),
+					);
+				} else if (
+					key.type === 'Identifier' ||
+					key.type === 'PrivateIdentifier'
+				)
+					node.key = suffixed(key, mark);
+				else node.key = rawNode(print(key) + mark);
+				continue;
+			}
+		}
+	}
+	return count;
 }
 
 export function restoreJS(script: string, _url: StompURL) {
