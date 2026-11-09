@@ -7,10 +7,40 @@ import ProxyModule, {
 	usePrototype,
 } from '../../modules/Proxy';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
-import SyncModule from './Sync';
+import SyncModule, { BEACON_QUOTA } from './Sync';
 
-/** a value this long (bytes) does not fit the synchronous bridge's beacon with the rest of the request */
-const LARGE_WRITE_BYTES = 48 * 1024;
+/**
+ * Chrome's quota for a store: 5 MiB of key and value lengths, in UTF-16 code
+ * units, per origin (measured in Chrome 152: a value of 5242879 characters
+ * under a one-character key stores, one more throws, whatever the characters)
+ */
+const QUOTA = 5 * 1024 * 1024;
+
+/**
+ * The beacons in flight a write may bring the document to (the bridge counts
+ * every beacon it sent, reads included); the rest of the quota is kept for
+ * reads, which cannot go another way.
+ */
+const WRITE_BUDGET = BEACON_QUOTA - 24 * 1024;
+
+const sizeOf = (key: string, value: string) => key.length + value.length;
+
+/** a key's newest operation that the worker may not have yet */
+interface Shadowed {
+	value: string | null;
+	seq: number;
+}
+
+/** a store's operations in flight from this document */
+interface Pending {
+	values: Map<string, Shadowed>;
+	/** the newest clear in flight, before which every other key is gone */
+	cleared: number | null;
+	/** the number of the next operation; the worker applies them in order */
+	seq: number;
+	/** the numbers of those in flight */
+	inflight: Set<number>;
+}
 
 export default class StorageModule extends Module<DocumentClient> {
 	apply() {
@@ -42,6 +72,12 @@ export default class StorageModule extends Module<DocumentClient> {
 			version: string;
 			values: Map<string, string | null>;
 			keys: string[] | null;
+			/**
+			 * the origin's size once every write this document made lands, or
+			 * more (never less): a write that keeps it under the quota needs
+			 * no question to the worker
+			 */
+			usage: number | null;
 		}
 		const caches = new Map<string, ReadCache>();
 		let stamps: Storage | null = null;
@@ -73,6 +109,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			if (version !== cache.version) {
 				cache.values.clear();
 				cache.keys = null;
+				cache.usage = null;
 				cache.version = version;
 			}
 			return cache;
@@ -113,33 +150,53 @@ export default class StorageModule extends Module<DocumentClient> {
 			if (value === null && index !== -1) cache.keys.splice(index, 1);
 			else if (value !== null && index === -1) cache.keys.push(key);
 		};
-		/** a change this document has no copy of: read it again */
-		const changed = (directory: string, bump: boolean) => {
+		/**
+		 * A change this document has no copy of: read it again. `own` is one of
+		 * this document's writes landing, which its size was counted for.
+		 */
+		const changed = (directory: string, own: boolean) => {
 			const cache = caches.get(directory);
 			if (!cache) return;
 			cache.values.clear();
 			cache.keys = null;
-			if (bump) stamp(cache);
+			if (!own) {
+				cache.usage = null;
+				return;
+			}
+			const before = current(directory);
+			const version = before && stamp(before);
+			if (before && version !== null) before.version = version;
 		};
 
-		// A write the synchronous bridge cannot carry (its beacon is refused
-		// over 64 KiB, and the quota is per document while this thread spins,
-		// so no number of beacons helps) is kept here as this document's view
-		// of the key and sent to the worker asynchronously, in order; a later
-		// operation on a key with a write in flight is queued behind it, so
-		// the worker sees them in the page's order. Reads of such a key answer
-		// from here until the write landed, which is what the page expects of
-		// its own writes; other documents see the value once it is stored.
-		const shadows = new Map<string, Map<string, string | null>>();
-		const shadowOf = (directory: string) => {
-			let shadow = shadows.get(directory);
+		// A write the synchronous bridge cannot carry is kept here as this
+		// document's view of the key and sent to the worker asynchronously.
+		// The bridge cannot carry a large value (its beacon is refused over
+		// 64 KiB, and the quota is per document while this thread spins, so
+		// no number of beacons helps), and it cannot carry a medium one once
+		// the beacons this document has in flight are near the quota: Discord
+		// writes several medium JSON values in one task, which natively store,
+		// and every one after the quota threw QuotaExceededError. While any
+		// operation is in flight every later one follows it, numbered, and the
+		// worker applies them in that order; each request is sent at once,
+		// since one waiting for the answer to the one before was lost when the
+		// page unloaded first. Reads of such a key answer from here until the
+		// write landed, which is what the page expects of its own writes;
+		// other documents see the value once it is stored.
+		const pending = new Map<string, Pending>();
+		const pendingOf = (directory: string) => {
+			let shadow = pending.get(directory);
 			if (!shadow) {
-				shadow = new Map();
-				shadows.set(directory, shadow);
+				shadow = {
+					values: new Map(),
+					cleared: null,
+					seq: 0,
+					inflight: new Set(),
+				};
+				pending.set(directory, shadow);
 			}
 			return shadow;
 		};
-		let queue: Promise<unknown> = Promise.resolve();
+		const busy = (directory: string) => !!pending.get(directory)?.inflight.size;
 		const post = (directory: string, name: string, args: unknown[]) =>
 			fetch(new URL(`${directory}${name}`, this.client.global.location.href), {
 				method: 'POST',
@@ -151,50 +208,175 @@ export default class StorageModule extends Module<DocumentClient> {
 			});
 		const later = (
 			directory: string,
-			name: string,
+			name: 'setItem' | 'removeItem' | 'clear',
 			args: unknown[],
-			key: string,
+			key: string | null,
 			value: string | null,
 		) => {
-			const shadow = shadowOf(directory);
-			shadow.set(key, value);
-			queue = queue.then(
-				() => post(directory, name, args),
-				() => post(directory, name, args),
-			);
+			const shadow = pendingOf(directory);
+			const seq = shadow.seq++;
+			shadow.inflight.add(seq);
+			// every operation before the oldest in flight has landed, so a
+			// worker that started since waits for none of those
+			let base = seq;
+			for (const other of shadow.inflight) base = Math.min(base, other);
+			if (key === null) {
+				shadow.cleared = seq;
+				for (const entry of shadow.values.values()) {
+					entry.value = null;
+					entry.seq = seq;
+				}
+			} else shadow.values.set(key, { value, seq });
 			// landed (or lost): from now on every document reads the worker's
-			queue.then(
-				() => {
-					if (shadow.get(key) === value) shadow.delete(key);
-					changed(directory, true);
-				},
+			const settle = () => {
+				shadow.inflight.delete(seq);
+				if (shadow.cleared === seq) shadow.cleared = null;
+				for (const [item, entry] of shadow.values)
+					if (entry.seq === seq) shadow.values.delete(item);
+				changed(directory, true);
+			};
+			post(directory, 'ordered', [sender, seq, base, name, args]).then(
+				settle,
 				(error) => {
 					console.error(`Stomp: a storage write could not be stored: ${error}`);
-					if (shadow.get(key) === value) shadow.delete(key);
-					changed(directory, true);
+					settle();
 				},
 			);
 		};
-		const encoder = new TextEncoder();
-		const tooLargeForSync = (value: string) =>
-			value.length > LARGE_WRITE_BYTES ||
-			(value.length * 3 > LARGE_WRITE_BYTES &&
-				encoder.encode(value).length > LARGE_WRITE_BYTES);
+
+		/** `value` of `key` as this document sees it; undefined: ask the worker */
+		const shadowed = (directory: string, key: string) => {
+			const shadow = pending.get(directory);
+			const entry = shadow?.values.get(key);
+			if (entry) return entry.value;
+			if (shadow && shadow.cleared !== null) return null;
+			return undefined;
+		};
+
+		// One answer of the bridge rides in cookies, of which Chrome keeps
+		// about 180 per host: a value of about 700 KiB or more never arrived
+		// whole and the read spun to its limit. The worker answers a part at a
+		// time, each with the value's tag, so the parts are of one value.
+		const readItem = (directory: string, key: string): string | null => {
+			for (let attempt = 0; ; attempt++) {
+				const parts: string[] = [];
+				let tag: string | undefined;
+				let length = 0;
+				let have = 0;
+				let torn = false;
+				do {
+					const part: {
+						part: string;
+						length: number;
+						tag: string;
+					} | null = syncModule.jsonAPI(
+						`${directory}getItemPart`,
+						getOrigin(),
+						key,
+						have,
+					);
+					if (part === null && tag === undefined) return null;
+					if (
+						part === null ||
+						(tag !== undefined && (part.tag !== tag || part.length !== length))
+					) {
+						torn = true;
+						break;
+					}
+					tag = part.tag;
+					length = part.length;
+					parts.push(part.part);
+					have += part.part.length;
+					if (!part.part.length && have < length) {
+						torn = true;
+						break;
+					}
+				} while (have < length);
+				if (!torn) return parts.join('');
+				// another document wrote between two parts: read it again, and
+				// after a few tries in one answer, which a value that fits takes
+				if (attempt >= 4)
+					return syncModule.jsonAPI(`${directory}getItem`, getOrigin(), key);
+			}
+		};
+
+		/**
+		 * What the store would come to with `key` set to `value` (null: not
+		 * known), or null when that is over the quota
+		 */
+		const sizeAfter = (
+			directory: string,
+			key: string,
+			value: string,
+		): { usage: number | null } | null => {
+			const size = sizeOf(key, value);
+			if (size > QUOTA) return null;
+			const cache = current(directory);
+			if (cache && cache.usage !== null && cache.usage + size <= QUOTA)
+				return { usage: cache.usage + size };
+			// near the quota (or not known yet): exactly, from the worker's sizes
+			// and the operations it may not have yet
+			const shadow = pending.get(directory);
+			const others = [...(shadow?.values ?? [])].filter(
+				([item]) => item !== key,
+			);
+			let usage: [total: number, sizes: number[]];
+			try {
+				usage = syncModule.jsonAPI(`${directory}getUsage`, getOrigin(), [
+					key,
+					...others.map(([item]) => item),
+				]);
+			} catch (error) {
+				// the bridge cannot ask now; a write the page made natively
+				// would not fail for that
+				return { usage: null };
+			}
+			const [total, sizes] = usage;
+			let after =
+				shadow && shadow.cleared !== null
+					? 0
+					: total - sizes.reduce((sum, item) => sum + item, 0);
+			for (const [item, entry] of others)
+				if (entry.value !== null) after += sizeOf(item, entry.value);
+			after += size;
+			return after > QUOTA ? null : { usage: after };
+		};
+		const counted = (directory: string, usage: number | null) => {
+			const cache = current(directory);
+			if (cache) cache.usage = usage;
+		};
+		/** the size `key` takes now, as far as this document knows */
+		const knownSize = (directory: string, key: string) => {
+			const value =
+				shadowed(directory, key) ?? caches.get(directory)?.values.get(key);
+			return value === undefined
+				? undefined
+				: value === null
+					? 0
+					: sizeOf(key, value);
+		};
 
 		const storageKeys = (directory: string): string[] => {
+			const shadow = pending.get(directory);
+			if (shadow && shadow.cleared !== null)
+				return [...shadow.values]
+					.filter(([, entry]) => entry.value !== null)
+					.map(([key]) => key);
 			const cache = current(directory);
 			const keys: string[] =
 				cache?.keys?.slice() ??
 				syncModule.jsonAPI(`${directory}getKeys`, this.client.url.url.origin);
 			if (cache && !cache.keys) cache.keys = keys.slice();
-			const shadow = shadows.get(directory);
-			if (!shadow?.size) return keys;
-			const merged = keys.filter((key) => shadow.get(key) !== null);
-			for (const [key, value] of shadow)
-				if (value !== null && !merged.includes(key)) merged.push(key);
+			if (!shadow?.values.size) return keys;
+			const merged = keys.filter(
+				(key) => shadow.values.get(key)?.value !== null,
+			);
+			for (const [key, entry] of shadow.values)
+				if (entry.value !== null && !merged.includes(key)) merged.push(key);
 			return merged;
 		};
 
+		const realm = this.client.global;
 		class StorageProxy {
 			#directory: string;
 			constructor(directory: string) {
@@ -205,49 +387,28 @@ export default class StorageModule extends Module<DocumentClient> {
 				this.#directory = directory;
 			}
 			clear(): void {
-				const shadow = shadows.get(this.#directory);
-				if (shadow?.size) {
-					// behind the writes in flight, so none of them lands after it
-					for (const key of shadow.keys()) shadow.set(key, null);
-					queue = queue.then(
-						() => post(this.#directory, 'clear', [getOrigin(), sender, here()]),
-						() => post(this.#directory, 'clear', [getOrigin(), sender, here()]),
-					);
-					const directory = this.#directory;
-					queue.then(
-						() => {
-							for (const [key, value] of shadow)
-								if (value === null) shadow.delete(key);
-							changed(directory, true);
-						},
-						() => changed(directory, true),
-					);
-					return;
-				}
-				syncModule.jsonAPI(
-					`${this.#directory}clear`,
-					getOrigin(),
-					sender,
-					here(),
-				);
-				wrote(this.#directory, null, null);
+				const directory = this.#directory;
+				const args = [getOrigin(), sender, here()];
+				if (
+					busy(directory) ||
+					!syncModule.tryJsonAPI(WRITE_BUDGET, `${directory}clear`, ...args)
+				)
+					later(directory, 'clear', args, null, null);
+				else wrote(directory, null, null);
+				counted(directory, 0);
 			}
 			getItem(...args: [unknown]): string | null {
 				catchRequiredArguments(args.length, 1, 'Storage', 'getItem');
 
 				const key = String(args[0]);
 
-				const shadow = shadows.get(this.#directory);
-				if (shadow?.has(key)) return shadow.get(key)!;
+				const shadow = shadowed(this.#directory, key);
+				if (shadow !== undefined) return shadow;
 
 				const cache = current(this.#directory);
 				if (cache?.values.has(key)) return cache.values.get(key)!;
 
-				const result: null | string = syncModule.jsonAPI(
-					`${this.#directory}getItem`,
-					getOrigin(),
-					String(key),
-				);
+				const result = readItem(this.#directory, key);
 				cache?.values.set(key, result);
 
 				return result;
@@ -267,52 +428,49 @@ export default class StorageModule extends Module<DocumentClient> {
 			removeItem(...args: [unknown]): void {
 				catchRequiredArguments(args.length, 1, 'Storage', 'removeItem');
 
+				const directory = this.#directory;
 				const item = String(args[0]);
+				const before = current(directory)?.usage ?? null;
+				const old = knownSize(directory, item);
+				const call = [getOrigin(), item, sender, here()];
 
-				if (shadows.get(this.#directory)?.has(item)) {
-					later(
-						this.#directory,
-						'removeItem',
-						[getOrigin(), item, sender, here()],
-						item,
-						null,
-					);
-					return;
-				}
-				syncModule.jsonAPI(
-					`${this.#directory}removeItem`,
-					getOrigin(),
-					item,
-					sender,
-					here(),
-				);
-				wrote(this.#directory, item, null);
+				if (
+					busy(directory) ||
+					!syncModule.tryJsonAPI(
+						WRITE_BUDGET,
+						`${directory}removeItem`,
+						...call,
+					)
+				)
+					later(directory, 'removeItem', call, item, null);
+				else wrote(directory, item, null);
+				if (before !== null && old !== undefined)
+					counted(directory, before - old);
 			}
 			setItem(...args: [unknown, unknown]): void {
 				catchRequiredArguments(args.length, 2, 'Storage', 'setItem');
 
+				const directory = this.#directory;
 				const item = String(args[0]);
 				const value = String(args[1]);
 
-				if (tooLargeForSync(value) || shadows.get(this.#directory)?.has(item)) {
-					later(
-						this.#directory,
-						'setItem',
-						[getOrigin(), item, value, sender, here()],
-						item,
-						value,
+				const after = sizeAfter(directory, item, value);
+				if (after === null)
+					throw new realm.DOMException(
+						`Failed to execute 'setItem' on 'Storage': Setting the value of '${item}' exceeded the quota.`,
+						'QuotaExceededError',
 					);
-					return;
-				}
-				syncModule.jsonAPI(
-					`${this.#directory}setItem`,
-					getOrigin(),
-					item,
-					value,
-					sender,
-					here(),
-				);
-				wrote(this.#directory, item, value);
+
+				const call = [getOrigin(), item, value, sender, here()];
+				if (
+					busy(directory) ||
+					// far over what the budget lets through, so not even encoded
+					value.length > WRITE_BUDGET ||
+					!syncModule.tryJsonAPI(WRITE_BUDGET, `${directory}setItem`, ...call)
+				)
+					later(directory, 'setItem', call, item, value);
+				else wrote(directory, item, value);
+				counted(directory, after.usage);
 			}
 		}
 
@@ -362,6 +520,7 @@ export default class StorageModule extends Module<DocumentClient> {
 				version: '',
 				values: new Map(),
 				keys: null,
+				usage: null,
 			});
 			const storage = new StorageProxy(directory);
 			const proxy = new Proxy(storage, {

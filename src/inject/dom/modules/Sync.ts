@@ -19,6 +19,29 @@ const LOOPBACK_TIMEOUT = 10e3;
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 
+/** Chrome's beacon quota: bytes of beacons in flight, per document */
+export const BEACON_QUOTA = 64 * 1024;
+
+// A beacon's share of the quota is given back only once the page has run the
+// task that completes it, which a page spinning here never does, and the
+// browser says nothing when it has. The bytes this bundle's document sent are
+// counted here (the snapshot `navigator` is this realm's, so every client the
+// bundle runs sends from one document) until a timer well after they were
+// sent, by which time their completion has run unless the page never let it.
+// A caller with a way around the bridge (an asynchronous write) is held to a
+// budget under the quota, so what it leaves is there for the reads, which
+// have no other way.
+const RELEASE_MS = 100;
+const nativeSetTimeout = globalThis.setTimeout;
+let inflight = 0;
+
+function byteLength(text: string, over: number) {
+	// UTF-8 takes at least one byte and at most three per code unit
+	if (text.length > over) return text.length;
+	if (text.length * 3 <= over) return text.length;
+	return encoder.encode(text).length;
+}
+
 interface SyncResponse extends Response {
 	rawUrl: string;
 	rawArrayBuffer: ArrayBuffer;
@@ -66,27 +89,40 @@ function createResponse(init: SyncResponseInit): SyncResponse {
 	return <SyncResponse>response;
 }
 
+function parseAPI(response: SyncResponse) {
+	const parsed = JSON.parse(decoder.decode(response.rawArrayBuffer));
+
+	if (response.ok) {
+		return parsed;
+	} else {
+		throw parsed;
+	}
+}
+
+const apiInit = (args: unknown[]) => ({
+	method: 'POST',
+	headers: {
+		'content-type': 'application/json',
+	},
+	body: JSON.stringify(args),
+});
+
 export default class SyncModule extends Module<DocumentClient> {
 	jsonAPI(url: urlLike, ...args: any[]) {
-		const response = this.fetch(
-			url,
-			{
-				method: 'POST',
-				headers: {
-					'content-type': 'application/json',
-				},
-				body: JSON.stringify(args),
-			},
-			true,
-		);
-
-		const parsed = JSON.parse(decoder.decode(response.rawArrayBuffer));
-
-		if (response.ok) {
-			return parsed;
-		} else {
-			throw parsed;
-		}
+		return parseAPI(this.fetch(url, apiInit(args), true));
+	}
+	/**
+	 * `jsonAPI` for a caller that has another way: null, and nothing sent,
+	 * when the request would take this document's beacons in flight past
+	 * `budget` bytes or the browser refused it
+	 */
+	tryJsonAPI(
+		budget: number,
+		url: urlLike,
+		...args: any[]
+	): { value: any } | null {
+		const response = this.fetch(url, apiInit(args), true, undefined, budget);
+		return response && { value: parseAPI(response) };
 	}
 	/**
 	 * Synchronous ServiceWorker fetch API
@@ -96,12 +132,27 @@ export default class SyncModule extends Module<DocumentClient> {
 	 */
 	fetch(
 		url: urlLike,
+		init?: Omit<RequestInit, 'signal'>,
+		loopback?: boolean,
+		limit?: number,
+	): SyncResponse;
+	fetch(
+		url: urlLike,
+		init: Omit<RequestInit, 'signal'>,
+		loopback: boolean,
+		limit: number | undefined,
+		budget: number,
+	): SyncResponse | null;
+	fetch(
+		url: urlLike,
 		init: Omit<RequestInit, 'signal'> = {},
 		loopback = false,
 		// a shorter limit than the bridge's own, for a caller that has a
 		// fallback
 		limit?: number,
-	): SyncResponse {
+		// with one, a request over it is not sent and the answer is null
+		budget?: number,
+	): SyncResponse | null {
 		const processInit: SerializableRequestInit = {};
 
 		processInit.cache = init.cache;
@@ -112,8 +163,11 @@ export default class SyncModule extends Module<DocumentClient> {
 		processInit.mode = init.mode;
 		processInit.redirect = init.redirect;
 		// the worker builds this request itself, so its referrer would be the
-		// worker's: the document's routed URL names the initiator instead
-		processInit.referrer = init.referrer ?? location.href;
+		// worker's: the document's routed URL names the initiator instead. A
+		// loopback route (storage, cookies) is told who asks in its arguments,
+		// and every byte of a beacon counts against the quota
+		processInit.referrer =
+			init.referrer ?? (loopback ? undefined : location.href);
 		processInit.referrerPolicy = init.referrerPolicy;
 
 		// a plain record went nowhere before (its branch tested `=== null`):
@@ -154,22 +208,27 @@ export default class SyncModule extends Module<DocumentClient> {
 		const cookies = this.client.getModule(CookiesModule)!;
 		const id = 'sync-request-' + Math.random().toString(16).slice(2);
 
+		const payload = JSON.stringify({
+			id,
+			data,
+		});
+		const bytes = byteLength(payload, BEACON_QUOTA);
+		if (budget !== undefined && inflight + bytes > budget) return null;
+
 		// a beacon is refused (and never sent) when the payload is over the
 		// browser's 64 KiB beacon quota, which a large localStorage value hits;
 		// spinning for an answer that cannot come would freeze the page
-		if (
-			!navigator.sendBeacon(
-				queueXHR(this.client.url),
-				JSON.stringify({
-					id,
-					data,
-				}),
-			)
-		)
+		if (!navigator.sendBeacon(queueXHR(this.client.url), payload)) {
+			if (budget !== undefined) return null;
 			throw new DOMException(
 				`The synchronous bridge cannot carry this request to ${url} (beacon refused, likely over the 64 KiB payload limit)`,
 				'QuotaExceededError',
 			);
+		}
+		inflight += bytes;
+		nativeSetTimeout(() => {
+			inflight -= bytes;
+		}, RELEASE_MS);
 
 		const timeout = limit ?? (loopback ? LOOPBACK_TIMEOUT : TIMEOUT);
 		const deadline = Date.now() + timeout;

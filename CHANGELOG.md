@@ -320,6 +320,24 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   the browser as before (fedcm suite, both modes, against a top-level page
   with FedCM off and against the page natively in a frame shaped like each
   mode's).
+- `localStorage` and `sessionStorage` writes that fit the native quota store,
+  and only those. Discord's persist store writes several medium JSON values
+  in one task; each small write was a synchronous beacon to the service
+  worker, a JSON value is escaped twice into it (a 20 KiB one took about
+  50 KiB), and Chrome refuses a document's beacons once 64 KiB of them are in
+  flight, which frees only some time after the task. So the second value
+  threw `QuotaExceededError`, and so did nearly every write in the tasks
+  right after. The bridge now counts its beacons in flight, and a write that
+  would take them past a budget under the quota goes with the asynchronous
+  path large values took, which keeps room for reads. Those writes are
+  numbered and sent at once, the worker applies each document's in order
+  and answers any other call after the ones that arrived, so a page that
+  reloads in the task of its last write reads every value back. A write
+  past 5 MiB of keys and values per origin (Chrome's quota, in UTF-16 code
+  units) throws `QuotaExceededError` as natively; through the proxy nothing
+  was ever refused. A value of about 700 KiB or more never read back: the
+  answer rides in cookies and Chrome keeps about 180 per host. Values are
+  read in parts of 256 KiB now (storage-quota suite, both modes).
 - A JSON or CSS module loads as what it is. Every import was routed as a
   module script and rewritten, so a JSON module that also parses as a
   script (`{}`, an array) came back with the module preamble
