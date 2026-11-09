@@ -291,6 +291,17 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A worker the page terminates at once no longer reports an import of the
+  proxy's. A proxied worker imports the inject bundle (and a blob: worker the
+  private URL of its script) before the page's script runs, and Chrome reports
+  an import a terminated worker was still loading as an error event on the
+  Worker. Cloudflare's challenge on Stack Overflow starts a blob: worker and
+  terminates it a moment later, so through the live demo it threw "importScripts
+  ... failed to load" naming `/stomp/injectWorker.js`, where natively nothing
+  is reported. Those errors now stop at the worker's first listener; an
+  import of the page's own that termination cuts off still reports. Measured
+  with the `worker-terminated` suite (22 and 20 error events in the two modes
+  before, 0 natively and after).
 - A storage write sent asynchronously no longer waits for one that already
   landed. The worker applies a document's asynchronous writes in order and
   forgot the document once none was left, but the page names the oldest

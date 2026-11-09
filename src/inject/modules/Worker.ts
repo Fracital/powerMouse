@@ -1,5 +1,5 @@
 import { modifyJS, routeJS } from '../../rewriteJS';
-import { proxyBlobURL } from '../../routeURL';
+import { injectWorkerJS, proxyBlobURL } from '../../routeURL';
 import StompURL from '../../StompURL';
 import { WORKER_BASE } from '../../transport/messages';
 import Client from '../Client';
@@ -118,8 +118,51 @@ export default class WorkerModule extends Module<Client> {
 			options !== null &&
 			(options as WorkerOptions).type === 'module';
 
+		/**
+		 * The workers the page terminated. Chrome reports an import a
+		 * terminated worker was still loading as an error event on its
+		 * Worker; a worker of ours imports the inject bundle (and a blob:
+		 * worker the private URL of its script) before any script of the
+		 * page's, so a page that terminates a worker at once (Cloudflare's
+		 * challenge probes one that way) saw "importScripts ... failed to
+		 * load" naming a URL of ours, where natively nothing was loading
+		 * and nothing is reported. An import of the page's own reports as
+		 * natively.
+		 */
+		const terminated = new WeakSet<object>();
+		const hideOwnLoss = (worker: Worker, own: string | undefined) => {
+			worker.addEventListener(
+				'error',
+				(event) => {
+					if (!terminated.has(worker)) return;
+					const message = String((event as ErrorEvent).message);
+					const bundle = new URL(
+						injectWorkerJS(this.client.url, this.client.config),
+						this.client.url.directory,
+					).href;
+					if (
+						![bundle, own].some(
+							(url) => url !== undefined && message.includes(`'${url}'`),
+						)
+					)
+						return;
+					// not the page's to see, nor the window's to report
+					event.stopImmediatePropagation();
+					event.preventDefault();
+				},
+				true,
+			);
+		};
+
 		// a shared worker scope has no Worker constructor
-		if (typeof global.Worker === 'function')
+		if (typeof global.Worker === 'function') {
+			global.Worker.prototype.terminate = proxyModule.wrapFunction(
+				global.Worker.prototype.terminate,
+				(target, that, args) => {
+					if (typeof that === 'object' && that !== null) terminated.add(that);
+					return Reflect.apply(target, that, args);
+				},
+			);
 			global.Worker = proxyModule.wrapFunction(
 				global.Worker,
 				(target, that, args, newTarget) => {
@@ -128,12 +171,15 @@ export default class WorkerModule extends Module<Client> {
 					args[0] = workerURL(String(args[0]), isModuleOptions(args[1]));
 					const own = lastPrivate;
 					const worker: Worker = Reflect.construct(target, args, newTarget);
+					// the worker's first listener, before any of the page's
+					hideOwnLoss(worker, own);
 					this.client.provisionWorkerTransport(worker);
 					if (own) releaseOnLoad(worker, own);
 					return worker;
 				},
 				true,
 			);
+		}
 
 		if (typeof global.SharedWorker === 'function')
 			global.SharedWorker = proxyModule.wrapFunction(
