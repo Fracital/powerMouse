@@ -232,6 +232,7 @@ export default class AccessModule extends Module<Client> {
 					)
 						return this.client.postToWindow(target, args);
 				}
+				if (this.client.postToRestricted?.(target, args)) return undefined;
 				return Reflect.apply(method, target, args);
 			},
 			call2: (

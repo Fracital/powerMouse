@@ -32,6 +32,31 @@ export function sameOrigin(first: string, second: string): boolean {
 	);
 }
 
+/**
+ * The key `sameOrigin` compares by: windows whose documents share it hold
+ * each other as themselves, so they must also share their stand-ins for
+ * every other window (null for an opaque document, which shares nothing).
+ */
+function originKey(url: string): string | null {
+	const parsed = new URL(url);
+	if (parsed.origin === 'null') return null;
+	return `${removeBlob(parsed.protocol)}//${getDomain(parsed.host) ?? parsed.host}:${parsed.port}`;
+}
+
+// taken before the page runs: a page may replace the global
+const NativeWeakRef = WeakRef;
+
+/** whether a window runs Stomp (a cross-origin one throws on the check) */
+function isStomp(value: unknown, client: string): boolean {
+	try {
+		return (
+			typeof value === 'object' && value !== null && client in (value as object)
+		);
+	} catch (error) {
+		return false;
+	}
+}
+
 function findTop(global: typeof globalThis, client: string): Context {
 	let context: Context = global;
 
@@ -370,11 +395,30 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		const res = <any>this.restrictObject(
 			{
+				// read from the real windows, not through the context's own
+				// getters: those answer with its view (its own stand-ins), and a
+				// climb by `parent` compares what it reaches with this page's `top`
 				top: {
-					get: () => this.newRestricted(<Context>(<unknown>context.top!)),
+					get: () =>
+						this.newRestricted(findTop(context, this.client.names.client)),
 				},
 				parent: {
-					get: () => this.newRestricted(<Context>(<unknown>context.parent!)),
+					get: () => {
+						let parent: Context;
+						try {
+							parent = (
+								(context as Record<string, any>)[
+									this.client.names.client
+								] as DocumentClient
+							).parent;
+						} catch (error) {
+							return this.newRestricted(<Context>(<unknown>context.parent!));
+						}
+						// the top of the proxied world is its own parent
+						return this.newRestricted(
+							isStomp(parent, this.client.names.client) ? parent : context,
+						);
+					},
 				},
 				opener: {
 					get: () => this.newRestricted(<Context>(<unknown>context.opener!)),
@@ -434,7 +478,13 @@ export default class ContextModule extends Module<DocumentClient> {
 				const child = (
 					context as unknown as Record<number, Context | undefined>
 				)[index];
-				return child ? this.newRestricted(child) : undefined;
+				if (!child) return undefined;
+				// a child that runs no Stomp yet (an iframe still on its initial
+				// about:blank) is still that child, of the frame's origin: never
+				// the top, which a walk down the tree would visit again forever
+				return isStomp(child, this.client.names.client)
+					? this.newRestricted(child)
+					: this.restrictOpaque(child);
 			},
 		);
 
@@ -456,18 +506,11 @@ export default class ContextModule extends Module<DocumentClient> {
 	newRestricted(context: Context): RestrictedContext {
 		// a cross-origin window (the host application in isolation mode) throws
 		// on the `in` check; it is never a Stomp context
-		let isStomp: boolean;
-		try {
-			isStomp = this.client.names.client in context;
-		} catch {
-			isStomp = false;
-		}
-
-		if (!isStomp) {
+		if (!isStomp(context, this.client.names.client))
 			// the proxied world ends here (the host, or anything it opened):
-			// present ourselves as the top
-			return findTop(this.client.global, this.client.names.client);
-		}
+			// present ourselves as the top, as this page sees it (a frame of
+			// another origin gets its stand-in, as for `top`)
+			context = findTop(this.client.global, this.client.names.client);
 
 		if (this.held.has(context)) return context;
 
@@ -484,7 +527,21 @@ export default class ContextModule extends Module<DocumentClient> {
 		}
 
 		if (!this.restricted.has(context)) {
-			const restricted = this.restrictContext(context);
+			// one stand-in per window for every document of an origin: a frame
+			// hands its same-origin parent's windows to its own code as they
+			// are, so the stand-ins that parent's getters return must be the
+			// ones this page's own reads return, or `t = t.parent` never
+			// reaches `top` (rubiconproject's usync in imgur's ad frames)
+			const standIns = (
+				(context as Record<string, any>)[this.client.names.client] as
+					DocumentClient | undefined
+			)?.standIns;
+			const key = originKey(this.client.url.toString());
+			let restricted = key === null ? undefined : standIns?.get(key)?.deref();
+			if (!restricted) {
+				restricted = this.restrictContext(context);
+				if (key !== null) standIns?.set(key, new NativeWeakRef(restricted));
+			}
 
 			this.restricted.set(context, restricted);
 			this.restrictedContexts.set(restricted, context);
@@ -681,6 +738,18 @@ export default class ContextModule extends Module<DocumentClient> {
 		// own realm (access API `post`), so it is the incumbent the browser
 		// reports as the source
 		this.client.nativePostMessage = this.client.global.postMessage;
+		// `x.postMessage()` on a stand-in this page holds: posted from this
+		// realm, since the browser names the realm that calls postMessage as
+		// the event's source, and the stand-in may be one another document of
+		// this origin made (see newRestricted)
+		this.client.postToRestricted = (target, args) => {
+			const context = this.restrictedContexts.get(target as Context);
+			if (!context) return false;
+			catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
+			if (this.targetAllows(args, context))
+				Reflect.apply(postMessage, context, this.postMessage(<any>args));
+			return true;
+		};
 		this.client.postToWindow = (target, args) => {
 			const receiver = (target as Record<string, any>)[
 				this.client.names.client

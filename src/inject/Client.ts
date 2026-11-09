@@ -78,6 +78,8 @@ export default class Client {
 	hookedPostMessage?: unknown;
 	/** @internal set by the Context module: post `args` to a Stomp window from this realm, so this context is the incumbent (source and origin are its own) */
 	postToWindow?: (target: object, args: unknown[]) => unknown;
+	/** @internal set by the Context module: post `args` to the window behind a restricted stand-in this context holds, from this realm; false when `target` is not one */
+	postToRestricted?: (target: unknown, args: unknown[]) => boolean;
 	// pristine copies taken before modules hook them: the Navigator module
 	// removes navigator.serviceWorker from proxied pages
 	#serviceWorkerContainer?: ServiceWorkerContainer;

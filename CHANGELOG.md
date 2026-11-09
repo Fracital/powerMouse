@@ -455,6 +455,23 @@ PresentationRequest()` (Spotify) and `screen.orientation.lock()` threw
   preamble holds them (and a shared worker's connects) and the client
   dispatches them again (helper-realms suite, against the page loaded
   natively).
+- imgur.com renders (about 700 elements, as natively) instead of hanging
+  its tab. Its ad sync pixels walk the frame tree from a frame of another
+  origin, and both walks ran forever through the proxy, holding the main
+  thread until the tab ran out of memory (the sweep saw no elements, then a
+  closed browser). rubiconproject's usync climbs `t = t.parent` until it
+  reaches `top`: a same-origin parent is handed over as itself, and its own
+  `parent` getter answered with its own stand-in for the top, never the one
+  this frame's `top` reads, so the climb went on at the top. ingage's pixel
+  visits every `frames[i]` from `top`: a frame still on its initial
+  about:blank runs no Stomp, and a stand-in's index read turned any such
+  window into the top, so the walk went round the tree, five levels deep.
+  Documents of one origin now share their stand-in for each window of
+  another (a `postMessage` through one is still sent from the caller's
+  realm, so the source is the caller), a stand-in's `parent` and `top` read
+  the real windows rather than the context's own getters, and a child that
+  runs no Stomp yet is restricted as itself (frame-walks suite, both modes,
+  against the page loaded natively).
 - A same-origin frame's hooked functions read as native from its parent.
   Each proxied frame loads its own copy of the inject, whose wrappers the
   parent's copy never made, so the parent's `Function.prototype.toString`
