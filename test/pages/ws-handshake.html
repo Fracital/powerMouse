@@ -1,0 +1,24 @@
+<!doctype html>
+<title>WS HANDSHAKE</title>
+<script>
+	// opens the fixture's /ws-echo on its own (non-default) port with
+	// protocols and records the handshake as the server read it: request
+	// target, HTTP version and the raw header lines (ws-handshake suite)
+	const record = (window.__hs = {});
+	try {
+		const socket = new WebSocket(`ws://${location.host}/ws-echo?hs=1`, [
+			'binary',
+			'base64',
+			'pbbp2',
+		]);
+		socket.onmessage = (event) => {
+			record.echo = JSON.parse(event.data);
+			record.protocol = socket.protocol;
+		};
+		socket.onerror = () => (record.error = 'error');
+		socket.onclose = () => (record.done = true);
+	} catch (error) {
+		record.error = String(error);
+		record.done = true;
+	}
+</script>

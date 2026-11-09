@@ -355,9 +355,11 @@ export function startFixture(port = 8084) {
 		res.end(PAGES[path] ?? '<title>other</title>other');
 	});
 	// /ws-echo: a WebSocket that sends its handshake's Cookie and Origin
-	// headers and its path as one message, then closes (ws-cookies suite).
-	// Any path ending in /ws-echo answers, so a relative socket URL shows
-	// where it resolved (bypass-relative suite)
+	// headers and its request-target as one message, then closes (ws-cookies
+	// suite), with the HTTP version and the header lines as they arrived:
+	// case, order and repeats (ws-handshake suite). Any path ending in
+	// /ws-echo answers, so a relative socket URL shows where it resolved
+	// (bypass-relative suite)
 	const sockets = new WebSocketServer({ noServer: true });
 	server.on('upgrade', (req, socket, head) => {
 		if (!new URL(req.url, 'http://x').pathname.endsWith('/ws-echo'))
@@ -368,6 +370,8 @@ export function startFixture(port = 8084) {
 					cookie: req.headers.cookie || '',
 					origin: req.headers.origin || '',
 					url: req.url,
+					version: req.httpVersion,
+					raw: req.rawHeaders,
 				}),
 			);
 			ws.close();
