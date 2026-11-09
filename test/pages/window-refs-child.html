@@ -39,6 +39,37 @@
 				paths.parentSibName = inspect(() => parent.sib);
 				paths.parentFramesSibName = inspect(() => parent.frames.sib);
 				paths.messageSource = inspect(() => event.source);
+				// the native getters of a fresh about:blank window of its own,
+				// called on this window and this message
+				const blank = (via) => {
+					const frame = document.createElement('iframe');
+					frame.name = `blank${via}`;
+					document.body.append(frame);
+					const index = frames.length - 1;
+					if (via === 'index') return frames[index];
+					if (via === 'name') return frames[`blank${via}`];
+					// read without the access API: a literal name, a copy
+					if (via === 'dot') return frames.blankdot;
+					if (via === 'slice') return Array.prototype.slice.call(frames).pop();
+					return frame.contentWindow;
+				};
+				for (const via of ['index', 'name', 'dot', 'slice', 'element']) {
+					paths[`${via}BlankParent`] = inspect(() => {
+						const w = blank(via);
+						return Object.getOwnPropertyDescriptor(w, 'parent').get.call(
+							window,
+						);
+					});
+					paths[`${via}BlankReflect`] = inspect(() =>
+						blank(via).Reflect.get(window, 'parent'),
+					);
+					paths[`${via}BlankSource`] = inspect(() =>
+						Object.getOwnPropertyDescriptor(
+							blank(via).MessageEvent.prototype,
+							'source',
+						).get.call(event),
+					);
+				}
 			},
 			sib() {
 				paths.parentFrames0 = inspect(() => parent.frames[0]);

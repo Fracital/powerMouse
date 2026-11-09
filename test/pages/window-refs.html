@@ -39,7 +39,6 @@
 		const heldElement = frame('held');
 		const heldWindow = heldElement.contentWindow;
 		heldElement.src = refsCross('window-refs-child.html?role=held');
-		frame('tgt');
 		// read while its document of another site is still on the way
 		const pendingElement = frame(
 			'pend',
@@ -113,10 +112,31 @@
 			paths.forOf = inspect(() => {
 				for (const w of frames) return w;
 			});
-			paths.arrayFrom = inspect(() => Array.from(frames)[0]);
-			paths.slice = inspect(() => Array.prototype.slice.call(frames)[0]);
-			paths.spread = inspect(() => ({ ...window })[0]);
-			paths.assign = inspect(() => Object.assign({}, frames)[0]);
+			// a copy is read without an index (a read by index is routed)
+			paths.arrayFrom = inspect(() => Array.from(frames).shift());
+			paths.arrayFromMap = inspect(() => {
+				let first;
+				Array.from(frames, (w, index) => {
+					if (index === 0) first = w;
+				});
+				return first;
+			});
+			paths.slice = inspect(() => Array.prototype.slice.call(frames).shift());
+			paths.forEach = inspect(() => {
+				let first;
+				Array.prototype.forEach.call(frames, (w, index) => {
+					if (index === 0) first = w;
+				});
+				return first;
+			});
+			paths.spread = inspect(() => {
+				const { 0: w } = { ...window };
+				return w;
+			});
+			paths.assign = inspect(() => {
+				const { 0: w } = Object.assign({}, frames);
+				return w;
+			});
 			paths.reflectGet = inspect(() => Reflect.get(window, 0));
 			paths.descriptor = inspect(
 				() => Object.getOwnPropertyDescriptor(window, '0').value,
@@ -127,10 +147,12 @@
 			paths.descriptors = inspect(
 				() => Object.getOwnPropertyDescriptors(window)[0].value,
 			);
-			paths.entries = inspect(
-				() => Object.entries(window).find(([key]) => key === '0')[1],
+			paths.entries = inspect(() =>
+				Object.entries(window)
+					.find(([key]) => key === '0')
+					.pop(),
 			);
-			paths.values = inspect(() => Object.values(window)[0]);
+			paths.values = inspect(() => Object.values(window).shift());
 			// by name
 			paths.bracketName = inspect(() => window['kid']);
 			paths.framesName = inspect(() => frames.kid);
@@ -138,6 +160,18 @@
 			paths.bareName = inspect(() => kid);
 			paths.documentName = inspect(() => document.kid);
 			paths.reflectName = inspect(() => Reflect.get(window, 'kid'));
+			// the named properties object, Window.prototype's prototype
+			paths.namedObject = inspect(
+				() => Object.getPrototypeOf(Window.prototype).kid,
+			);
+			paths.namedObjectDescriptor = inspect(
+				() =>
+					Reflect.getOwnPropertyDescriptor(
+						Reflect.getPrototypeOf(Window.prototype),
+						'kid',
+					).value,
+			);
+			paths.protoName = inspect(() => window.__proto__.__proto__.kid);
 			// through the element, found every way
 			paths.contentWindow = inspect(() => kidElement.contentWindow);
 			paths.getElementById = inspect(
@@ -209,9 +243,12 @@
 			paths.heldPopup = inspect(() => popup);
 			// read before its document of another site arrived
 			paths.pendingFrame = inspect(() => pendingWindow);
-			paths.pendingFrameIndex = inspect(() => frames[5]);
+			paths.pendingFrameIndex = inspect(() => frames[4]);
 			paths.heldPopupSource = inspect(() => sources.popup);
-			// window.open() returns the frame it navigates by name
+			// window.open() returns the frame it navigates by name (one the
+			// page never reached before)
+			frame('tgt');
+			window.__refsTargetIndex = frames.length - 1;
 			window.__refsTarget = window.open(
 				refsCross('window-refs-child.html?role=tgt'),
 				'tgt',
@@ -223,7 +260,9 @@
 			if (finished || !report.started) return;
 			finished = true;
 			paths.openByNameURL = inspect(() => window.__refsTarget);
-			paths.openByNameURLIndex = inspect(() => frames[4]);
+			paths.openByNameURLIndex = inspect(
+				() => frames[window.__refsTargetIndex],
+			);
 			// an existing frame of another site, reached by its name, last: a
 			// window handed out raw here could change what the paths above see
 			paths.openByName = inspect(() => window.open('', 'kid'));
