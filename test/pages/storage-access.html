@@ -1,0 +1,46 @@
+<!doctype html>
+<title>STORAGE ACCESS</title>
+<script>
+	// a frame of another site (`?child=<url>`): it asks the Storage Access API
+	// and reports to window.__storageAccess. With `?frame` this page is that
+	// child: it answers document.hasStorageAccess(), and
+	// requestStorageAccess() at once (no activation) and again from its
+	// button, which the test clicks (activation)
+	const query = new URLSearchParams(location.search);
+	const settle = (promise) =>
+		promise.then(
+			(value) => `resolved ${value ?? ''}`.trim(),
+			(error) => `rejected ${error?.name ?? error}`,
+		);
+	if (query.has('frame')) {
+		const report = {};
+		const send = () => parent.postMessage({ storageAccess: report }, '*');
+		(async () => {
+			report.has = await settle(document.hasStorageAccess());
+			report.request = await settle(document.requestStorageAccess());
+			send();
+		})();
+		addEventListener('DOMContentLoaded', () => {
+			const button = document.createElement('button');
+			button.id = 'request';
+			button.textContent = 'request';
+			button.onclick = async () => {
+				report.requestActivated = await settle(document.requestStorageAccess());
+				report.hasAfter = await settle(document.hasStorageAccess());
+				send();
+			};
+			document.body.append(button);
+		});
+	} else {
+		window.__storageAccess = null;
+		addEventListener('message', (event) => {
+			if (event.data?.storageAccess)
+				window.__storageAccess = event.data.storageAccess;
+		});
+		addEventListener('DOMContentLoaded', () => {
+			const iframe = document.createElement('iframe');
+			iframe.src = `${query.get('child')}?frame`;
+			document.body.append(iframe);
+		});
+	}
+</script>

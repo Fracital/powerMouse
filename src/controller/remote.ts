@@ -107,7 +107,7 @@ export interface RemoteRequestEvent extends RequestInfo {
 }
 
 export const DEFAULT_SANDBOX =
-	'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock';
+	'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock allow-storage-access-by-user-activation';
 
 /**
  * Events, as on StompController: `navigate`, `open`, `request` alongside the

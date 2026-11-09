@@ -312,6 +312,16 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   write as missing: its login page took 23 s to render instead of 8 (2.8 s
   natively). The worker keeps each document's place for five minutes after
   its last write (storage-turns suite, both modes).
+- A proxied frame may ask for storage access. The default frame sandbox
+  had no `allow-storage-access-by-user-activation`, so a frame's
+  `document.requestStorageAccess()` was refused for the sandbox ("The
+  document is sandboxed", reCAPTCHA's anchor asks), with or without user
+  activation; it answers as natively now. Every proxied frame is the proxy
+  origin's to the browser, so in a profile that blocks third-party cookies
+  a frame of another site is granted what natively it would have to ask the
+  user for (storage-access suite, both modes, against the page loaded
+  natively: hasStorageAccess, and requestStorageAccess without and with
+  activation).
 - A request carries the browser's Accept-Language, no empty Cookie header,
   and a WebSocket handshake the browser's Pragma and Cache-Control. The
   browser's network stack adds Accept-Language after the service worker, so
