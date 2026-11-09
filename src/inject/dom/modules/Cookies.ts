@@ -144,7 +144,10 @@ export class CookiesModule extends Module<DocumentClient> {
 		if (current && version !== null) this.#cacheVersion = version;
 		else this.#fresh = false;
 	}
-	/** what document.cookie reads for `list`, with the unsettled writes over it */
+	/**
+	 * What document.cookie reads for `list` (which has this document's
+	 * unsettled writes applied already): the cookies for this document's URL
+	 */
 	#show(list: JarCookie[]): string {
 		const now = Date.now();
 		const url = this.client.url.url;
