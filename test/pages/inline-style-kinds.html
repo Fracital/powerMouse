@@ -1,0 +1,46 @@
+<!doctype html>
+<title>INLINE STYLE KINDS</title>
+<body>
+	<script>
+		// A style attribute on elements that are not HTML, in a frame no
+		// service worker controls (a written about:blank, where ads put their
+		// markup): an SVG, a MathML and a no-namespace element. Natively none
+		// of it throws; each reads back as written.
+		const frame = document.createElement('iframe');
+		document.body.append(frame);
+		const win = frame.contentWindow;
+		const doc = frame.contentDocument;
+		doc.open();
+		doc.write('<!doctype html><body></body>');
+		doc.close();
+		const errors = [];
+		win.addEventListener('error', (event) =>
+			errors.push(String(event.message)),
+		);
+		window.addEventListener('error', (event) =>
+			errors.push(String(event.message)),
+		);
+		const style = 'fill: red; background-image: url(/pages/paint.png)';
+		const made = {
+			svg: doc.createElementNS('http://www.w3.org/2000/svg', 'rect'),
+			math: doc.createElementNS('http://www.w3.org/1998/Math/MathML', 'mi'),
+			plain: doc.createElementNS('urn:x-none', 'thing'),
+		};
+		for (const element of Object.values(made)) {
+			element.setAttribute('style', style);
+			doc.body.append(element);
+		}
+		setTimeout(() => {
+			window.__isk = {
+				errors,
+				read: Object.fromEntries(
+					Object.entries(made).map(([name, element]) => [
+						name,
+						element.getAttribute('style'),
+					]),
+				),
+				fill: made.svg.style.fill,
+			};
+		}, 500);
+	</script>
+</body>

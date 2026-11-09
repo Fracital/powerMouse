@@ -89,6 +89,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 	// captured before the hooks replace them, for serializeStyle
 	#nativeStyle: PropertyDescriptor;
 	#nativeCssText: PropertyDescriptor;
+	// each kind of element that has a declaration has its own getter, which
+	// throws "Illegal invocation" on any other kind
+	#nativeStyleGetters: (() => CSSStyleDeclaration)[];
 	#scratch?: HTMLElement;
 	constructor(client: DocumentClient) {
 		super(client);
@@ -96,10 +99,30 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			client.global.HTMLElement.prototype,
 			'style',
 		)!;
+		this.#nativeStyleGetters = [
+			client.global.HTMLElement,
+			client.global.SVGElement,
+			(client.global as { MathMLElement?: typeof Element }).MathMLElement,
+		].flatMap((ctor) => {
+			const get = ctor
+				? Reflect.getOwnPropertyDescriptor(ctor.prototype, 'style')?.get
+				: undefined;
+			return get ? [get] : [];
+		});
 		this.#nativeCssText = Reflect.getOwnPropertyDescriptor(
 			client.global.CSSStyleDeclaration.prototype,
 			'cssText',
 		)!;
+	}
+	/** an element's own declaration, null for a kind that has none */
+	#nativeDeclaration(element: Element): CSSStyleDeclaration | null {
+		for (const get of this.#nativeStyleGetters)
+			try {
+				return Reflect.apply(get, element, []);
+			} catch (error) {
+				// another kind of element
+			}
+		return null;
 	}
 	/** the style attribute the browser writes when `text` is assigned to el.style */
 	serializeStyle(text: string): string {
@@ -1484,11 +1507,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				pending.add(element);
 				queueMicrotask(() => {
 					pending.delete(element);
-					const declaration = Reflect.apply(
-						this.#nativeStyle.get!,
-						element,
-						[],
-					) as CSSStyleDeclaration;
+					const declaration = this.#nativeDeclaration(element);
+					// no declaration, no style: nothing loads
+					if (!declaration) return;
 					copyOwned(
 						element,
 						'style',

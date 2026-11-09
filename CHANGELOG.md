@@ -291,6 +291,12 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A `style` attribute on an SVG, MathML or other non-HTML element in a
+  frame no service worker controls throws nothing. The copy of an inline
+  style's loads read the element's declaration through HTMLElement's
+  getter, which throws "Illegal invocation" on any other kind of element
+  (imgur's ads, in a written about:blank frame). Each kind's own getter is
+  used, and an element with no declaration has nothing to copy.
 - A page's stack formatter that hands off to the one installed before it
   no longer throws. `Error.prepareStackTrace` reads as the proxy's own
   formatter, where natively it is undefined, so Notion's, which calls the
