@@ -12,6 +12,7 @@ import {
 	routeBinary,
 	routeURL,
 } from './routeURL';
+import { snapshot, splicePrinter } from './splicePrint';
 import StompURL from './StompURL';
 
 // the default helper names; the rewriter and the inject read a config's own
@@ -234,6 +235,51 @@ const cValue = 't$v';
 // line 1 natively anyway. Code written to be read keeps one statement per
 // line, so an error's line number still points near the page's own.
 const COMPACT = { format: { compact: true } };
+
+/**
+ * Print the output from the script's own text (splicePrint) rather than
+ * regenerating it: off by default until it has run clean for a while; the
+ * whole-file escodegen output stays the fallback
+ */
+let spliceOutput = false;
+export function setSpliceOutput(on: boolean) {
+	spliceOutput = on;
+}
+
+// a sourceMappingURL or sourceURL comment the trailer adds back, routed
+const TRAILER_COMMENT = /^[#@]\s*(sourceURL|sourceMappingURL)=/;
+
+/**
+ * The rewritten program from the script's own text: what comes before its
+ * first statement (the directive prologue, comments) as it was, then
+ * `header`, then the statements, spliced, and what follows them without the
+ * trailing sourceMappingURL and sourceURL comments. Null when the program's
+ * own statement list changed: the caller regenerates it.
+ */
+function printProgram(
+	script: string,
+	tree: any,
+	comments: ESTree.Comment[],
+	header: string,
+	format: object | undefined,
+): string | null {
+	const printer = splicePrinter(script, format);
+	const body: any[] = tree.body;
+	const start = body.length ? body[0].range[0] : script.length;
+	const printed = printer.printList(tree, 'body');
+	if (printed === null) return null;
+	const end = body.length ? body[body.length - 1].range[1] : script.length;
+	let tail = '';
+	let at = end;
+	for (const comment of comments) {
+		const range = (comment as any).range ?? [comment.start, comment.end];
+		if (range[0] < end || !TRAILER_COMMENT.test(comment.value.trim())) continue;
+		tail += script.slice(at, range[0]);
+		at = range[1];
+	}
+	tail += script.slice(at);
+	return script.slice(0, start) + header + printed + tail;
+}
 const minified = (script: string) => {
 	let lines = 1;
 	for (
@@ -387,6 +433,8 @@ export function modifyJS(
 
 		// destructured parameters become plain ones with the pattern moved into
 		// the body, where the main pass wraps its source like any declaration
+		// what the rewrite changes is told against this record (splicePrint)
+		if (spliceOutput) snapshot(tree);
 		hoistParamPatterns(tree, names.access);
 
 		for (const ctx of new AcornIterator(tree)) {
@@ -1117,8 +1165,7 @@ export function modifyJS(
 		}
 
 		const bundle = JSON.stringify(injectWorkerJS(url, config));
-		return (
-			prologue +
+		const header =
 			// a module worker has no importScripts: fetch the bundle and run it
 			// as the classic script it is (indirect eval, top-level await),
 			// named for its URL, so its frames are dropped from stacks like
@@ -1166,10 +1213,13 @@ if (!${names.client}.applied)
 			(isModule
 				? `import.meta.url = ${JSON.stringify(url.toString())};import.meta.resolve = (s) => ${BARE_SPECIFIER}.test(s = String(s)) ? s : new URL(s, import.meta.url).href;`
 				: '') +
-			preamble +
-			generate(tree, minified(script) ? COMPACT : undefined) +
-			trailer
-		);
+			preamble;
+		const format = minified(script) ? COMPACT : undefined;
+		if (spliceOutput) {
+			const printed = printProgram(script, tree, comments, header, format);
+			if (printed !== null) return printed + trailer;
+		}
+		return prologue + header + generate(tree, format) + trailer;
 	} catch (error) {
 		// a script the rewriter cannot handle runs as it was: the browser may
 		// still parse it (and rejects it the same way when it cannot), while a
