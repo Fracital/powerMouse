@@ -5,6 +5,7 @@ import { htmlBlobs, htmlBlobURLs } from '../htmlBlobs';
 import Module from '../Module';
 import { blobsByURL, isBlob } from '../workerBlobs';
 import ProxyModule from './Proxy';
+import { scopePrefix } from './Unroute';
 
 /**
  * `URL.createObjectURL` mints a blob: URL under the origin of the realm that
@@ -32,11 +33,16 @@ export default class ObjectURLModule extends Module<Client> {
 	}
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
-		// the page's origin and the proxy's (the global's own, native at this
-		// point), for every routeURL call from now on
+		// the page's origin and the proxy's, for every routeURL call from now
+		// on. The proxy's is the routed base URL's: an about:blank or srcdoc
+		// child that the page reaches into runs this bundle too (the IFrame
+		// module injects it), and its location.origin reads "null", which set
+		// here made every blob: URL the page minted after that come out in the
+		// proxy's form (YouTube Music's and SoundCloud's MediaSource URLs, read
+		// back through currentSrc)
 		setBlobOrigins(
 			this.client.url.url.origin,
-			this.client.global.location.origin,
+			new URL(scopePrefix(this.client)).origin,
 		);
 		const URLCtor = this.client.global.URL;
 		if (typeof URLCtor?.createObjectURL !== 'function') return;

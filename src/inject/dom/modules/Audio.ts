@@ -1,5 +1,3 @@
-import { routeBinary } from '../../../routeURL';
-import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
@@ -17,15 +15,21 @@ export default class AudioModule extends Module<DocumentClient> {
 					);
 				}
 
-				if (args[0] !== undefined)
-					args[0] = routeBinary(
-						new StompURL(
-							new URL(args[0], this.client.url.toString()),
-							this.client.url,
-						),
+				// the source goes through the element's src property as the page
+				// would set it, so it is routed and reads back as written: routed
+				// here it was the element's real attribute, and a blob: URL the
+				// page made read back in the proxy's form
+				const audio = Reflect.construct(target, [], newTarget);
+				if (args.length && args[0] !== undefined)
+					Reflect.apply(
+						Reflect.getOwnPropertyDescriptor(
+							this.client.global.HTMLMediaElement.prototype,
+							'src',
+						)!.set!,
+						audio,
+						[String(args[0])],
 					);
-
-				return Reflect.construct(target, args, newTarget);
+				return audio;
 			},
 			true,
 		);

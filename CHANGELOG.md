@@ -404,6 +404,20 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   `self.origin` and the `event.origin` of its messages read "null", "/" from
   it reaches only itself, and a target origin naming a site never reaches it
   (sandbox-messages suite, both modes; 12 of 17 checks failed before).
+- A media element's `currentSrc` and `src` read the page's own object URL.
+  SoundCloud and YouTube Music attach a MediaSource through an object URL
+  and read `currentSrc` back as `blob:http://<proxy>/<id>`, where natively
+  it is `blob:<page origin>/<id>`. The page's form of a blob: URL was mapped
+  from the proxy's by origins kept once per inject bundle, and an
+  about:blank frame the page reaches into runs the page's bundle, whose
+  `location.origin` reads "null": set from it, every object URL the page
+  minted afterwards (and so `src` and `currentSrc`) came out in the proxy's
+  form. The proxy's origin is now taken from the routed base URL, as is the
+  one error stacks are cleaned of. `new Audio(url)` routed its URL into the
+  element's real attribute, so its `src` and src attribute read a blob: URL
+  in the proxy's form too; the URL now goes through the element's `src`
+  property as the page would set it (media-blobs suite, both modes; 18 of
+  29 checks failed before).
 - A worker the page terminates at once no longer reports an import of the
   proxy's. A proxied worker imports the inject bundle (and a blob: worker the
   private URL of its script) before the page's script runs, and Chrome reports

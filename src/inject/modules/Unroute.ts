@@ -69,7 +69,7 @@ const LINE_COLUMN = /(?::\d+){1,2}$/;
  */
 export function unrouteText(client: Client, text: string): string {
 	// a blob: URL the page made carries the proxy origin: the page's is shown
-	const proxyBlob = `blob:${client.global.location.origin}/`;
+	const proxyBlob = `blob:${new URL(scopePrefix(client)).origin}/`;
 	if (text.includes(proxyBlob))
 		text = text.split(proxyBlob).join(`blob:${client.url.url.origin}/`);
 	const prefix = routedPrefix(client);
