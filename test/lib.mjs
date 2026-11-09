@@ -61,13 +61,15 @@ export async function waitForServer(url, tries = 60) {
  * reaching the real site. `*.localhost` stays resolvable too: the WPT suites
  * use www.localhost as a same-site, cross-origin host for the fixture.
  */
-export async function launch() {
+/** `args`: more Chrome flags (e.g. an autoplay policy for media suites) */
+export async function launch(args = []) {
 	return chromium.launch({
 		executablePath: CHROME,
 		headless: true,
 		args: [
 			'--no-sandbox',
 			'--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE *.localhost, EXCLUDE 127.0.0.1',
+			...args,
 		],
 	});
 }

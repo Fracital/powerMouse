@@ -1,0 +1,28 @@
+<!doctype html>
+<title>MEDIA SESSION</title>
+<audio id="a" loop></audio>
+<script>
+	// Chrome fetches the media session's artwork itself, for the media
+	// controls: once a page plays media and names artwork. Marked ?ms=<case>.
+	window.__ms = {};
+	addEventListener('load', async () => {
+		const audio = document.getElementById('a');
+		audio.src = '/pages/media-session.wav';
+		await audio.play().catch((error) => (__ms.play = error.name));
+		const cross = window.__cross || location.origin;
+		navigator.mediaSession.metadata = new MediaMetadata({
+			title: 'T',
+			artwork: [
+				{ src: `${cross}/pages/blank-pixel.svg?ms=ctor`, sizes: '96x96' },
+				{ src: '/pages/blank-pixel.svg?ms=relative', sizes: '128x128' },
+			],
+		});
+		__ms.read = navigator.mediaSession.metadata.artwork.map((a) => a.src);
+		const later = new MediaMetadata({ title: 'U' });
+		later.artwork = [{ src: `${cross}/pages/blank-pixel.svg?ms=setter` }];
+		navigator.mediaSession.metadata = later;
+		__ms.readSetter = later.artwork.map((a) => a.src);
+		await new Promise((resolve) => setTimeout(resolve, 6000));
+		__ms.done = true;
+	});
+</script>
