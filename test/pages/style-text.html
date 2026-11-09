@@ -1,0 +1,116 @@
+<!doctype html>
+<title>STYLE TEXT</title>
+<!-- every way a script puts CSS text into a <style> element, each rule
+     loading a background marked ?style=<way>: through the proxy it reaches
+     the worker; a raw request to this origin is a bypass. Each way gets its
+     own element, so a later way's write cannot rewrite an earlier one's. The
+     page also records what each element reads back. -->
+<body>
+	<script>
+		const mark = (name) =>
+			new URL(`sprite.svg?style=${name}`, location.href).href;
+		const rule = (name) =>
+			`.w-${name} { background-image: url('${mark(name)}'); }`;
+		const errors = {};
+		const read = {};
+		const ways = {};
+		// a connected <style> for `name`, and an element its rule paints
+		const sheet = (name) => {
+			const style = document.createElement('style');
+			style.id = `s-${name}`;
+			document.head.appendChild(style);
+			const box = document.createElement('div');
+			box.className = `w-${name}`;
+			box.style.cssText = 'width: 4px; height: 4px';
+			document.body.append(box);
+			return style;
+		};
+		ways['inner-html'] = () => {
+			sheet('inner-html').innerHTML = rule('inner-html');
+		};
+		// chess.com's board: the rule set through innerHTML, then the text it
+		// reads back set again without a transition
+		ways['inner-html-again'] = () => {
+			const style = sheet('inner-html-again');
+			style.innerHTML = `${rule('inner-html-again')} .t { transition: none; }`;
+			style.innerHTML = style.innerHTML.replace(
+				' .t { transition: none; }',
+				'',
+			);
+		};
+		// an @import is fetched as the browser parses the text, before any
+		// script could fix the rules it made
+		ways['import-text-content'] = () => {
+			sheet('import-text-content').textContent =
+				`@import url('${new URL('imp.css?style=import-text-content', location.href).href}');`;
+		};
+		ways['import-inner-html'] = () => {
+			sheet('import-inner-html').innerHTML =
+				`@import url('${new URL('imp.css?style=import-inner-html', location.href).href}');`;
+		};
+		ways['inner-text'] = () => {
+			sheet('inner-text').innerText = rule('inner-text');
+		};
+		ways['text-content'] = () => {
+			sheet('text-content').textContent = rule('text-content');
+		};
+		ways['append-text'] = () => {
+			sheet('append-text').append(rule('append-text'));
+		};
+		ways['append-child'] = () => {
+			sheet('append-child').appendChild(
+				document.createTextNode(rule('append-child')),
+			);
+		};
+		ways['text-data'] = () => {
+			const style = sheet('text-data');
+			const text = document.createTextNode('');
+			style.appendChild(text);
+			text.data = rule('text-data');
+		};
+		ways['node-value'] = () => {
+			const style = sheet('node-value');
+			const text = document.createTextNode('');
+			style.appendChild(text);
+			text.nodeValue = rule('node-value');
+		};
+		ways['append-data'] = () => {
+			const style = sheet('append-data');
+			const text = document.createTextNode('');
+			style.appendChild(text);
+			text.appendData(rule('append-data'));
+		};
+		ways['after-text'] = () => {
+			const style = sheet('after-text');
+			const text = document.createTextNode('');
+			style.appendChild(text);
+			text.after(rule('after-text'));
+		};
+		ways['replace-children'] = () => {
+			sheet('replace-children').replaceChildren(rule('replace-children'));
+		};
+		ways['set-html-unsafe'] = () => {
+			const style = sheet('set-html-unsafe');
+			if (typeof style.setHTMLUnsafe !== 'function') throw new Error('absent');
+			style.setHTMLUnsafe(rule('set-html-unsafe'));
+		};
+		for (const [name, run] of Object.entries(ways)) {
+			try {
+				run();
+			} catch (error) {
+				errors[name] = String(error).slice(0, 80);
+			}
+		}
+		setTimeout(() => {
+			for (const name of Object.keys(ways)) {
+				const style = document.getElementById(`s-${name}`);
+				read[name] = style && {
+					innerHTML: style.innerHTML,
+					textContent: style.textContent,
+					rule: style.sheet?.cssRules[0]?.cssText ?? null,
+				};
+			}
+			window.__styleText = { done: true, errors, read };
+		}, 1500);
+	</script>
+</body>
