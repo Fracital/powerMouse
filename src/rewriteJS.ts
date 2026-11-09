@@ -168,6 +168,30 @@ function optionalCall(callee: any, args: any[]) {
 }
 
 /**
+ * `frames[0]`, `parent['1']`: a literal index read can land on a child window
+ * of another proxied site (every one shares the real origin), so it goes
+ * through the access API like a computed key. Only a read hands the page a
+ * window: a call, a construction or a write through an index stays as it is.
+ */
+function indexRead(ctx: AcornContext): boolean {
+	const key = ctx.node.property.value;
+	if (
+		typeof key === 'number'
+			? !Number.isInteger(key) || key < 0
+			: typeof key !== 'string' || !/^(0|[1-9]\d*)$/.test(key)
+	)
+		return false;
+	const parent = ctx.parent?.node;
+	return !(
+		((parent?.type === 'CallExpression' || parent?.type === 'NewExpression') &&
+			ctx.parentKey === 'callee') ||
+		(parent?.type === 'TaggedTemplateExpression' && ctx.parentKey === 'tag') ||
+		parent?.type === 'UpdateExpression' ||
+		(parent?.type === 'AssignmentExpression' && ctx.parentKey === 'left')
+	);
+}
+
+/**
  * Whether a node is a target an assignment pattern or a loop head writes
  * (`[x] = a`, `({ a: x = 1, ...x } = o)`, `for (x of a)`, `for ([x] of a)`),
  * as opposed to the whole left of a plain assignment or a binding of a
@@ -901,7 +925,10 @@ export function modifyJS(
 							}
 
 							if (ctx.node.property.type === 'Literal') {
-								if (!UNDEFINABLE.includes(ctx.node.property.value)) {
+								if (
+									!UNDEFINABLE.includes(ctx.node.property.value) &&
+									!indexRead(ctx)
+								) {
 									break typeLoop;
 								}
 							}

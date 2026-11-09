@@ -312,12 +312,42 @@ const parses = (code) => {
 				"[$s$j.ref2($s$j.get(top, 'top'), 'location').value] = a",
 			) &&
 			members.includes("a: $s$j.ref2(window, 'location').value") &&
-			members.includes("for ($s$j.ref2(frames[0], 'location').value of a)") &&
+			members.includes(
+				"for ($s$j.ref2($s$j.get2(frames, 0, '(frames[0])'), 'location').value of a)",
+			) &&
 			kept.every(([code, out]) => rewrite(code) === out) &&
 			parses(targets) &&
 			parses(members),
 		JSON.stringify([targets, members, kept.map(([code]) => rewrite(code))]),
 	);
+	// a literal index read can be a child window of another proxied site:
+	// routed like a computed key; a call, a construction, a write, an update,
+	// a delete or a tag through an index stays as written, and so does a key
+	// that is no array index
+	{
+		const routed = ['frames[0]', "parent['1']", 'x = w[2].document'].map(
+			(code) => rewrite(code),
+		);
+		const kept = [
+			'a[0] = 1;',
+			'a[0]++;',
+			'a[0](x);',
+			'new a[0]();',
+			'delete a[0];',
+			'a[0]`t`;',
+			'a[1.5];',
+			"a['01'];",
+		];
+		ok(
+			'a literal index read goes through the access API, nothing else by index does',
+			routed[0].startsWith('$s$j.get2(frames, 0, ') &&
+				routed[1].startsWith("$s$j.get2(parent, '1', ") &&
+				routed[2].startsWith('x = $s$j.get2(w, 2, ') &&
+				routed[2].endsWith(').document;') &&
+				kept.every((code) => !rewrite(code).includes('$s$j')),
+			JSON.stringify([routed, kept.map((code) => rewrite(code))]),
+		);
+	}
 	// a classic script's var outside a function, in a block or a loop head,
 	// assigns the window's location like one at the top; its initialiser is
 	// rewritten like any expression
