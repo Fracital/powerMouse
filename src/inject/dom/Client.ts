@@ -12,6 +12,15 @@ import Client from '../Client';
 import cloneRawNode, { nativeAttributes, parseHTML } from './cloneNode';
 import { scriptKind, shouldRewriteScript } from './modules/DOMAttributes';
 import { MARKER } from './modules/MutationObserver';
+import {
+	documentNonce,
+	guardDocument,
+	pageSandbox,
+	sandboxTokens,
+	stripScripts,
+	textifyNoscript,
+	unwrapNoscript,
+} from './sandbox';
 
 type OpenCallback = () => void;
 
@@ -103,15 +112,23 @@ export default class DocumentClient extends Client {
 	/** the window's native `origin` getter (Readback hooks the property) */
 	readonly #originGet: (() => string) | undefined;
 	/**
-	 * Whether this document is an opaque origin natively: its frame is
-	 * sandboxed without allow-same-origin, or is inside a frame that is (a
-	 * sandboxed frame's own frames inherit its flags). The page's sandbox
-	 * attribute is kept in a marker (the real one is dropped, since it would
-	 * put the document out of the service worker's reach), so the browser
-	 * does not make it opaque; decided once, as the browser decides it when
-	 * the document is created.
+	 * The page's sandbox of this document, as the allow-* flags it grants
+	 * (lowercase), or null when it is not sandboxed: its frame's sandbox
+	 * (the page's value, kept in the frame's marker: the real attribute holds
+	 * what the browser can enforce while the worker still serves the frame,
+	 * see sandbox.ts), narrowed by its parent's (a sandboxed document's frames
+	 * inherit its flags) and by its opener's when it is a popup of a document
+	 * without allow-popups-to-escape-sandbox. Decided when the document
+	 * starts (again in loadHTML, for a window whose about:blank was injected
+	 * before its document arrived), as the browser decides it when it
+	 * creates the document: a sandbox the page changes later applies from the
+	 * next navigation on.
 	 */
-	readonly sandboxedOpaque: boolean;
+	sandboxFlags: Set<string> | null = null;
+	/** the window's native frameElement getter (the Framing module hooks it) */
+	#frameElementGet: (() => Element | null) | undefined;
+	/** the flags a popup inherited from its opener when it was created */
+	#inheritedFlags: Set<string> | null = null;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		this.#setTimeout = this.global.setTimeout;
@@ -148,43 +165,101 @@ export default class DocumentClient extends Client {
 		}
 		this.#originGet = Reflect.getOwnPropertyDescriptor(this.global, 'origin')
 			?.get as (() => string) | undefined;
-		this.sandboxedOpaque = this.#sandboxedOpaque();
+		this.#frameElementGet = Reflect.getOwnPropertyDescriptor(
+			this.global,
+			'frameElement',
+		)?.get as (() => Element | null) | undefined;
+		this.#inheritedFlags = this.#openerFlags();
+		this.sandboxFlags = this.#sandbox();
 		this.isDOM = true;
+		this.guardScripts();
 	}
-	#sandboxedOpaque(): boolean {
+	/** the page's flags of the document in `context`, or null */
+	#flagsOf(context: unknown): Set<string> | null {
+		const client = (context as Record<string, unknown>)[this.names.client] as
+			DocumentClient | undefined;
+		return client?.sandboxFlags ?? null;
+	}
+	/** a popup's flags from its opener, when the opener's sandbox carries over */
+	#openerFlags(): Set<string> | null {
 		try {
-			const frameGet = Reflect.getOwnPropertyDescriptor(
+			const openerGet = Reflect.getOwnPropertyDescriptor(
 				this.global,
-				'frameElement',
+				'opener',
 			)?.get;
+			const opener = openerGet && Reflect.apply(openerGet, this.global, []);
+			if (!opener || opener === this.global) return null;
+			const flags = this.#flagsOf(opener);
+			if (!flags || flags.has('allow-popups-to-escape-sandbox')) return null;
+			return flags;
+		} catch (error) {
+			// an opener of another origin (the host in isolation mode)
+			return null;
+		}
+	}
+	#sandbox(): Set<string> | null {
+		let flags: Set<string> | null = this.#inheritedFlags;
+		const narrow = (other: Set<string> | null) => {
+			if (!other) return;
+			flags = flags
+				? new Set([...flags].filter((token) => other.has(token)))
+				: new Set(other);
+		};
+		try {
 			const frame =
-				frameGet &&
-				(Reflect.apply(frameGet, this.global, []) as Element | null);
+				this.#frameElementGet &&
+				(Reflect.apply(
+					this.#frameElementGet,
+					this.global,
+					[],
+				) as Element | null);
 			if (frame) {
-				const sandbox = Reflect.apply(
-					this.global.Element.prototype.getAttribute,
-					frame,
-					[`${MARKER}sandbox`],
-				) as string | null;
-				if (
-					sandbox !== null &&
-					!sandbox
-						.toLowerCase()
-						.split(/[\t\n\f\r ]+/)
-						.includes('allow-same-origin')
-				)
-					return true;
+				const sandbox = pageSandbox(frame, MARKER);
+				if (sandbox !== null) narrow(sandboxTokens(sandbox));
 			}
 			const parent = this.parent;
-			if (parent === this.global) return false;
-			const client = (parent as unknown as Record<string, unknown>)[
-				this.names.client
-			] as DocumentClient | undefined;
-			return client?.sandboxedOpaque === true;
+			if (parent !== this.global) narrow(this.#flagsOf(parent));
 		} catch (error) {
 			// a cross-origin parent (the host in isolation mode)
-			return false;
 		}
+		return flags;
+	}
+	/** decide this document's sandbox again: a new document of this window starts */
+	refreshSandbox() {
+		this.sandboxFlags = this.#sandbox();
+		this.guardScripts();
+	}
+	/** whether this document's sandbox grants `flag` (an unsandboxed one grants all) */
+	allows(flag: string): boolean {
+		return this.sandboxFlags === null || this.sandboxFlags.has(flag);
+	}
+	/**
+	 * Whether this document is an opaque origin natively: sandboxed without
+	 * allow-same-origin
+	 */
+	get sandboxedOpaque(): boolean {
+		return !this.allows('allow-same-origin');
+	}
+	/** the nonce the inject's own scripts carry in a document without allow-scripts, else null */
+	get scriptNonce(): string | null {
+		return this.allows('allow-scripts')
+			? null
+			: documentNonce(this.global.document);
+	}
+	/**
+	 * A document without allow-scripts runs no script of the page: the real
+	 * frame has to allow scripts (the inject rewrites the document), so the
+	 * document gets a Content-Security-Policy that lets only scripts carrying
+	 * the inject's nonce run (sandbox.ts). It is in place before any of the
+	 * page's markup reaches the document, and every document this one makes
+	 * of its own (about:blank, srcdoc, blob:, data:) inherits it.
+	 */
+	guardScripts() {
+		if (!this.allows('allow-scripts')) guardDocument(this.global.document);
+	}
+	/** this document's requests go from an opaque origin (the request modules mark them) */
+	override get opaqueRequests(): boolean {
+		return this.sandboxedOpaque;
 	}
 	/**
 	 * This document's origin as the page sees it: its real site's, or "null"
@@ -220,8 +295,8 @@ export default class DocumentClient extends Client {
 			return false;
 		}
 	}
-	/** the origin of the outermost proxied document above this one (its own when it is the top) */
-	get topOrigin(): string {
+	/** the outermost proxied window above this one (its own when it is the top) */
+	get proxiedTop(): typeof globalThis {
 		let context: typeof globalThis = this.global;
 		for (;;) {
 			try {
@@ -233,9 +308,69 @@ export default class DocumentClient extends Client {
 				break;
 			}
 		}
+		return context;
+	}
+	/** the origin of the outermost proxied document above this one (its own when it is the top) */
+	get topOrigin(): string {
 		return (
-			(context as Record<string, any>)[this.names.client] as DocumentClient
+			(this.proxiedTop as Record<string, any>)[
+				this.names.client
+			] as DocumentClient
 		).url.url.origin;
+	}
+	/** the windows this document opened (a sandboxed document may navigate them) */
+	readonly openedWindows = new WeakSet<object>();
+	/**
+	 * Whether this document may navigate `target`, as the browser
+	 * decides it for a sandboxed document: itself, its descendants, the
+	 * windows it opened, and the proxied top under allow-top-navigation (with
+	 * user activation under allow-top-navigation-by-user-activation). Its
+	 * parent and every other window are out of reach; a script's top
+	 * navigation to a custom scheme (mailto:) is refused under
+	 * allow-top-navigation-to-custom-protocols as well, as Chrome 152 refuses
+	 * it (sandbox-restrictions suite, measured). An unsandboxed
+	 * document may navigate any. The real frame cannot say no here: the
+	 * proxied top is not the browser's top, and a navigation the target
+	 * window's own inject makes is the target's, which the browser allows.
+	 */
+	mayNavigate(target: unknown): boolean {
+		if (this.sandboxFlags === null || target === this.global) return true;
+		if (typeof target !== 'object' || target === null) return true;
+		if (this.openedWindows.has(target)) return true;
+		// a descendant: its chain of parents reaches this window
+		let context = target as typeof globalThis;
+		for (let depth = 0; depth < 64; depth++) {
+			let parent: typeof globalThis;
+			try {
+				parent = Reflect.apply(this.parentDescriptor.get!, context, []);
+			} catch (error) {
+				break;
+			}
+			if (parent === this.global) return true;
+			if (parent === context) break;
+			context = parent;
+		}
+		if (target !== this.proxiedTop) return false;
+		if (this.allows('allow-top-navigation')) return true;
+		return (
+			this.allows('allow-top-navigation-by-user-activation') &&
+			this.global.navigator.userActivation?.isActive === true
+		);
+	}
+	/**
+	 * The SecurityError a sandboxed document gets for navigating a window it
+	 * may not (`member` of Location, set or called), naming the URL as the
+	 * page wrote it
+	 */
+	navigationRefused(
+		member: string,
+		call: boolean,
+		url: URL | string,
+	): DOMException {
+		return new this.global.DOMException(
+			`${call ? `Failed to execute '${member}' on` : `Failed to set a named property '${member}' on`} 'Location': The current window does not have permission to navigate the target frame to '${String(url)}'.`,
+			'SecurityError',
+		);
 	}
 	/** what a navigation from this context routes as: the top origin when nested, else a top-level document */
 	get nestedRoute(): string | false {
@@ -292,6 +427,15 @@ export default class DocumentClient extends Client {
 	 */
 	openInHost(url: string): boolean {
 		if (!this.config.openTab) return false;
+		// the host takes requests from its frames' own windows (the proxied
+		// tops) only: a nested frame's goes through its top's client, whose
+		// realm then posts it, so the browser names the top as the source
+		const top = this.proxiedTop;
+		if (top !== this.global) {
+			const client = (top as Record<string, any>)[this.names.client] as
+				DocumentClient | undefined;
+			if (client) return client.openInHost(url);
+		}
 		return this.postToHost({ [OPEN_TAB]: url });
 	}
 	/**
@@ -334,7 +478,15 @@ export default class DocumentClient extends Client {
 			url,
 			documentURL === 'about:blank' ? 'about:blank' : url,
 		);
-		if (!route) return modifyHTML(markup, this.url, this.config, true);
+		if (!route)
+			return modifyHTML(
+				markup,
+				this.url,
+				this.config,
+				true,
+				undefined,
+				this.scriptNonce,
+			);
 		return `<!doctype html><script>location.replace(${JSON.stringify(route).replace(/</g, '\\u003c')})</script>`;
 	}
 
@@ -459,6 +611,8 @@ export default class DocumentClient extends Client {
 		const root = parsed.documentElement;
 		const live = this.global.document.documentElement;
 		if (!root || !live) return;
+		this.refreshSandbox();
+		if (!this.allows('allow-scripts')) stripScripts(root);
 		setGlobalParsingState(this.global, 'parsingBeforeWrite');
 		this.rewriteInlineScripts(root, true);
 		// The shell's root is the document's own start tag, so it stays (a
@@ -555,6 +709,9 @@ export default class DocumentClient extends Client {
 		return this.innerHTML(element);
 	}
 	loadHTML(script: string) {
+		// the document is new: its sandbox is decided now, and a document
+		// without allow-scripts is guarded before any of its markup is touched
+		this.refreshSandbox();
 		setGlobalParsingState(this.global, 'parsingBeforeWrite');
 
 		// the shell escaped the markup with escapeText (modifyHTML), which
@@ -562,6 +719,11 @@ export default class DocumentClient extends Client {
 		// as text, and every U+00A0 in a script, a style or a JSON payload
 		// read "&nbsp;" (BBC's __NEXT_DATA__, so React's hydration failed)
 		const parsed = parseHTML(decodeHTML(script), this.global.document);
+		if (parsed.documentElement) {
+			if (this.allows('allow-scripts'))
+				textifyNoscript(parsed.documentElement, this.innerHTML);
+			else unwrapNoscript(parsed.documentElement);
+		}
 
 		// the first <base href> is the base URL of everything in the page; its
 		// own href resolves against the document's URL, and one that does not

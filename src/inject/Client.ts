@@ -74,6 +74,14 @@ export default class Client {
 	resolveTop?: (value: unknown) => unknown;
 	/** set by the Context module: a window of another proxied origin, read through the access API (`frames[i]`, `window[name]`), becomes its restricted stand-in */
 	restrictForeign?: (value: unknown, container?: unknown) => unknown;
+	/**
+	 * @internal set by the Sandbox module: what a read of another window's
+	 * location (`real`, its stand-in `standIn`) gives a sandboxed document,
+	 * which may not navigate every window
+	 */
+	gateLocation?: (real: unknown, standIn: unknown) => unknown;
+	/** @internal set by the Sandbox module: throws when a sandboxed document may not navigate `target` to `value` */
+	gateNavigation?: (target: unknown, value: unknown) => void;
 	/** @internal this context's native window.postMessage, taken before the Context module wraps it: another context posting here calls it from its own realm */
 	nativePostMessage?: PostMessage;
 	/** @internal the Context module's wrapper over window.postMessage: a page that replaced it is called as written */
@@ -101,6 +109,15 @@ export default class Client {
 	 */
 	ownCallback(callback: () => void): () => void {
 		return this.#ownCallback(callback);
+	}
+	/**
+	 * Whether this context's requests go from an opaque origin (a document
+	 * the page sandboxed without allow-same-origin): the request modules tell
+	 * the worker (OPAQUE_HEADER), which then judges them as the browser
+	 * judges an opaque origin's
+	 */
+	get opaqueRequests(): boolean {
+		return false;
 	}
 	/** @internal set by the Context module: post `args` to the window behind a restricted stand-in this context holds, from this realm; false when `target` is not one */
 	postToRestricted?: (target: unknown, args: unknown[]) => boolean;

@@ -6,8 +6,9 @@ import { nativeElement } from './DOMHooks';
 /**
  * The token lists whose attribute a hook keeps off the real element: an
  * iframe's `sandbox` (an opaque origin the service worker cannot serve) is
- * dropped and read back as the page wrote it. As the constructor's name, the
- * list's property and the attribute it reflects.
+ * the proxy's on the real element and read back as the page wrote it. As
+ * the constructor's name, the list's property and the attribute it
+ * reflects.
  */
 const HOOKED_LISTS: [string, string, string][] = [
 	['HTMLIFrameElement', 'sandbox', 'sandbox'],
@@ -44,18 +45,36 @@ const nativeListGetters = new Map(
  * scripts. A call on a hooked list is made on a detached copy holding the
  * page's value, so it returns and throws as it would natively, and its
  * result is written back through the page's setAttribute, where the hooks
- * and the page's observers see one write. Reads stay native: the list is
- * an array-like whose indexed reads no hook can reach, so its own reads
- * agree with each other (and show the real list) rather than with
- * getAttribute.
+ * and the page's observers see one write. The list the page reads is a
+ * detached copy's too, kept holding the page's value (the getter and every
+ * hook run on the attribute bring it up to date): the real attribute is the
+ * proxy's (sandbox.ts), and the list is an array-like whose indexed reads no
+ * hook can reach, so the copy's list is the one that reads as natively.
  */
 export default class TokenListsModule extends Module<DocumentClient> {
+	/** bring the list the page reads of `element` up to the page's `value` of its attribute (DOMAttributes' hook) */
+	sync: (element: Element, value: string | null) => void = () => {};
 	apply() {
 		const global = this.client.global;
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		// the page-facing pair: the page's value in, the hooks on the way out
 		const pageGetAttribute = global.Element.prototype.getAttribute;
 		const pageSetAttribute = global.Element.prototype.setAttribute;
+
+		// the detached copy behind each element's list, as [copy, attribute]
+		const copies = new WeakMap<Element, [Element, string]>();
+		const sync = (element: Element, value: string | null) => {
+			const entry = copies.get(element);
+			if (!entry) return;
+			const [copy, attribute] = entry;
+			if (value === null)
+				Reflect.apply(nativeElement.removeAttribute, copy, [attribute]);
+			else if (
+				Reflect.apply(nativeElement.getAttribute, copy, [attribute]) !== value
+			)
+				Reflect.apply(nativeElement.setAttribute, copy, [attribute, value]);
+		};
+		this.sync = sync;
 
 		// each hooked list is the same object every time its getter answers
 		const owners = new WeakMap<object, [Element, string, string]>();
@@ -67,7 +86,20 @@ export default class TokenListsModule extends Module<DocumentClient> {
 			Reflect.defineProperty(prototype, property, {
 				...descriptor,
 				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
-					const list = Reflect.apply(target, that, args);
+					if (!copies.has(that))
+						copies.set(that, [
+							Reflect.apply(
+								nativeCreateElement,
+								Reflect.apply(nativeOwnerDocument, that, []),
+								[Reflect.apply(nativeLocalName, that, [])],
+							) as Element,
+							attribute,
+						]);
+					sync(
+						that,
+						Reflect.apply(pageGetAttribute, that, [attribute]) as string | null,
+					);
+					const list = Reflect.apply(target, copies.get(that)![0], args);
 					if (typeof list === 'object' && list !== null)
 						owners.set(list, [that, property, attribute]);
 					return list;

@@ -44,29 +44,31 @@ export default class FunctionModule extends Module<Client> {
 			);
 		};
 
-		const AsyncFunction = (
-			new this.client.global.Function(
-				'return async () => {}',
-			)() as () => Promise<void>
-		).constructor as FunctionConstructor;
+		// the realm's other function constructors, reached through a function
+		// of each kind. A document the page sandboxed without allow-scripts
+		// compiles nothing (its script policy refuses eval, sandbox.ts), and
+		// neither can its page: those stay as they are there
+		const constructorOf = (source: string): FunctionConstructor | null => {
+			try {
+				return (new this.client.global.Function(source)() as () => unknown)
+					.constructor as FunctionConstructor;
+			} catch (error) {
+				return null;
+			}
+		};
+		const AsyncFunction = constructorOf('return async () => {}');
 
-		const proxyAsyncFunction = functionFactory(AsyncFunction, 'async function');
 		const proxyFunction = functionFactory(Function);
 		// the generator constructors are reachable the same way
-		const GeneratorFunction = (
-			new this.client.global.Function(
-				'return function* () {}',
-			)() as () => unknown
-		).constructor as FunctionConstructor;
-		const AsyncGeneratorFunction = (
-			new this.client.global.Function(
-				'return async function* () {}',
-			)() as () => unknown
-		).constructor as FunctionConstructor;
+		const GeneratorFunction = constructorOf('return function* () {}');
+		const AsyncGeneratorFunction = constructorOf(
+			'return async function* () {}',
+		);
 		for (const [ctor, prefix] of [
 			[GeneratorFunction, 'function*'],
 			[AsyncGeneratorFunction, 'async function*'],
 		] as const) {
+			if (!ctor) continue;
 			const proxy = functionFactory(ctor, prefix);
 			Reflect.defineProperty(ctor.prototype, 'constructor', {
 				configurable: true,
@@ -87,15 +89,21 @@ export default class FunctionModule extends Module<Client> {
 			},
 		);
 
-		Reflect.defineProperty(AsyncFunction.prototype, 'constructor', {
-			configurable: true,
-			enumerable: false,
-			writable: true,
-			value: proxyAsyncFunction,
-		});
+		if (AsyncFunction) {
+			const proxyAsyncFunction = functionFactory(
+				AsyncFunction,
+				'async function',
+			);
+			Reflect.defineProperty(AsyncFunction.prototype, 'constructor', {
+				configurable: true,
+				enumerable: false,
+				writable: true,
+				value: proxyAsyncFunction,
+			});
+			AsyncFunction.prototype.constructor = proxyAsyncFunction;
+		}
 
 		this.client.global.Function.prototype.constructor = proxyFunction;
-		AsyncFunction.prototype.constructor = proxyAsyncFunction;
 
 		this.client.global.Function = proxyFunction;
 	}

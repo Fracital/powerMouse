@@ -83,7 +83,16 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 			const source = text.join('');
 			if (isHTML) {
 				wrappedSource = source;
-				return [modifyHTML(source, this.client.url, this.client.config, true)];
+				return [
+					modifyHTML(
+						source,
+						this.client.url,
+						this.client.config,
+						true,
+						undefined,
+						this.client.scriptNonce,
+					),
+				];
 			}
 			// a script that does not parse comes back as it was: then it may be
 			// a module (its `import` / `export` are the usual reason). A script

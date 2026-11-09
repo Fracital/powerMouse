@@ -21,10 +21,12 @@ import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { scopePrefix, unrouteURL } from '../../modules/Unroute';
 import { blobLoads } from '../blobLoads';
 import DocumentClient from '../Client';
+import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
 import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
 import { hookWrite } from './MutationObserver';
 import NavigationHintModule from './NavigationHint';
 import SyncModule from './Sync';
+import TokenListsModule from './TokenLists';
 
 const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -637,12 +639,30 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			);
 			if (inline) return inline;
 			const blob = new NativeBlob(
-				[modifyHTML(data, resource, this.client.config, true)],
+				[
+					modifyHTML(
+						data,
+						resource,
+						this.client.config,
+						true,
+						undefined,
+						this.client.scriptNonce,
+					),
+				],
 				{ type: 'text/html' },
 			);
 			return proxyBlobURL(this.client.global.URL.createObjectURL(blob));
 		};
 		const domHooksModule = this.client.getModule(DOMHooksModule)!;
+		// whether a document in this frame may run scripts: its own sandbox (as
+		// the page wrote it, in the marker) and this document's
+		const frameRunsScripts = (element: CustomElement) => {
+			const sandbox = element.getAttributeOG('sandbox');
+			return (
+				this.client.allows('allow-scripts') &&
+				(sandbox === null || sandboxTokens(sandbox).has('allow-scripts'))
+			);
+		};
 
 		// inline event handler attributes are scripts too: `onclick="top.x()"`
 		// would reach the real top. Every `on*` the platform knows about, from
@@ -815,12 +835,17 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// browsing context names that would leave the frame: a top-level page
 		// navigates itself for these, so does a proxied one. `_blank` and
 		// names stay native (popups) until a host opts into onOpen
+		// A sandboxed document's are left as written: the real frame's sandbox
+		// never allows top navigation, so the browser refuses them as it
+		// would natively, and the Sandbox module navigates the proxied top for
+		// a link the page's sandbox lets through
 		const selfTargets = ['_top', '_parent', '_unfencedtop'];
 		const targetHook = (attribute: string) => (element: CustomElement) => {
 			element.restoreAttributesOG(attribute);
 			if (!element.hasAttribute(attribute)) return;
 			const value = element.getAttribute(attribute)!;
 			if (!selfTargets.includes(value.toLowerCase())) return;
+			if (this.client.sandboxFlags !== null) return;
 			element.setAttributeOG(attribute, value);
 			element.setAttribute(attribute, '_self');
 		};
@@ -861,7 +886,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.setAttributeOG('srcdoc', source);
 					element.setAttribute(
 						'srcdoc',
-						modifyHTML(source, this.client.url, this.client.config),
+						modifyHTML(
+							source,
+							this.client.url,
+							this.client.config,
+							false,
+							undefined,
+							this.client.scriptNonce,
+						),
 					);
 				}
 			},
@@ -1096,6 +1128,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						new URL(element.getAttribute('src')!, this.client.url.toString()),
 						this.client.url,
 					);
+					// a javascript: URL runs in the frame, which a sandbox without
+					// allow-scripts forbids: natively nothing happens, so the frame
+					// is not navigated at all
+					if (
+						resource.url.protocol === 'javascript:' &&
+						!frameRunsScripts(element)
+					) {
+						element.removeAttribute('src');
+						return;
+					}
 					const opaque = opaqueDocument(resource);
 					if (opaque) this.client.opaqueFrames.add(element);
 					else this.client.opaqueFrames.delete(element);
@@ -2025,6 +2067,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 										resource,
 										this.client.config,
 										true,
+										undefined,
+										this.client.scriptNonce,
 									),
 								],
 								{ type: 'text/html' },
@@ -2178,17 +2222,15 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			],
 		);
 
-		// a child frame's sandbox (an opaque origin), csp or credentialless
-		// attribute would put its document outside what the service worker can
-		// serve or rewrite: dropped, read back as written. Setting the
-		// property (`iframe.sandbox = x` writes through its token list, which
-		// no attribute hook sees) drops it at once too, so it is not dropped
-		// later on insertion, behind attributes the page set after it. Not
-		// `csp`: the property hook applies a string property's value again,
+		// a child frame's csp or credentialless attribute would put its
+		// document outside what the service worker can serve or rewrite:
+		// dropped, read back as written. Setting the property
+		// (`iframe.credentialless = true`) drops it at once too, so it is not
+		// dropped later on insertion, behind attributes the page set after it.
+		// Not `csp`: the property hook applies a string property's value again,
 		// which would bring the attribute back
 		const iframePrototype = this.client.global.HTMLIFrameElement.prototype;
 		for (const [attribute, property] of [
-			['sandbox', 'sandbox'],
 			['csp', ''],
 			['credentialless', 'credentialless'],
 		])
@@ -2214,6 +2256,67 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						: []),
 				],
 			);
+
+		// A child frame's sandbox: as the page wrote it, it would make the
+		// document an opaque origin (without allow-same-origin), whose
+		// navigations the service worker never sees, or keep the inject from
+		// running (without allow-scripts). The page's value is kept in the
+		// marker and read back as written; the real attribute is the page's
+		// flags plus those two, without the top navigation flags (sandbox.ts),
+		// so the browser itself keeps enforcing forms, popups, modals,
+		// downloads, pointer lock, presentation and orientation lock, for the
+		// frame's own frames and its popups too, from the next navigation on.
+		// What it no longer enforces the frame's documents emulate from the
+		// marker (DocumentClient.sandboxFlags). A frame whose sandbox takes away
+		// scripts gets the script policy on the about:blank it shows now, before
+		// the page can write into it. Setting the property
+		// (`iframe.sandbox = x` writes through its token list, which no
+		// attribute hook sees) applies at once too.
+		const contentDocument = Reflect.getOwnPropertyDescriptor(
+			iframePrototype,
+			'contentDocument',
+		)!.get!;
+		domHooksModule.useAttributes(
+			(element) => {
+				element.restoreAttributesOG('sandbox');
+				const lists = this.client.getModule(TokenListsModule);
+				if (!element.hasAttribute('sandbox')) {
+					lists?.sync(element, null);
+					return;
+				}
+				const value = element.getAttribute('sandbox')!;
+				lists?.sync(element, value);
+				element.setAttributeOG('sandbox', value);
+				element.setAttribute('sandbox', realSandbox(value));
+				if (
+					sandboxTokens(value).has('allow-scripts') &&
+					this.client.allows('allow-scripts')
+				)
+					return;
+				try {
+					const child = Reflect.apply(
+						contentDocument,
+						element,
+						[],
+					) as Document | null;
+					if (child && child.URL === 'about:blank') guardDocument(child);
+				} catch (error) {
+					// nothing shown yet
+				}
+			},
+			[
+				['IFRAME', 'sandbox'],
+				...(Reflect.getOwnPropertyDescriptor(iframePrototype, 'sandbox')?.set
+					? [
+							[
+								this.client.global.HTMLIFrameElement,
+								'sandbox',
+								() => false,
+							] as [typeof HTMLIFrameElement, string, () => false],
+						]
+					: []),
+			],
+		);
 
 		domHooksModule.useAttributes(this.formHook, [
 			['FORM', 'action'],

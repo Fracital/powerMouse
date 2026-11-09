@@ -157,7 +157,11 @@ function referred(client: string, referrer: ReferrerInfo | undefined): string {
  * carry the page URL (a blob: document the page built) gets `base`: the
  * shell names the page URL for the client first. `referrer` is what the
  * service worker decided the document's referrer is (a document it served);
- * a shell the page realm builds has none and keeps the browser's.
+ * a shell the page realm builds has none and keeps the browser's. `nonce`:
+ * the script policy's nonce of the document that builds the shell, when it
+ * runs no script of the page (a sandbox without allow-scripts): an
+ * about:srcdoc, about:blank, blob: or data: document inherits that policy,
+ * and only the shell's own scripts carry the nonce.
  */
 export function modifyHTML(
 	script: string,
@@ -165,6 +169,7 @@ export function modifyHTML(
 	config: Config,
 	base = false,
 	referrer?: ReferrerInfo,
+	nonce?: string | null,
 ): string {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	const names = helperNames(config);
@@ -190,10 +195,11 @@ ${referred(names.client, referrer)}
 	}
 }`;
 
+	const attribute = nonce ? ` nonce="${nonce.replace(/[^\w+/=-]/g, '')}"` : '';
 	const baseScript = base
-		? `<script>globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(url.toString()).replace(/</g, '\\u003c')};</script>`
+		? `<script${attribute}>globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(url.toString()).replace(/</g, '\\u003c')};</script>`
 		: '';
-	return `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${baseScript}<script src="${injectDocumentJS(url, config)}"></script><script>${inject}</script></body></html>`;
+	return `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${baseScript}<script${attribute} src="${injectDocumentJS(url, config)}"></script><script${attribute}>${inject}</script></body></html>`;
 }
 
 /** the mimes an XML document is served under and parsed with */

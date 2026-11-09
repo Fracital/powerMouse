@@ -88,9 +88,19 @@ const real = await page.evaluate((names) => {
 		return element && Element.prototype.getAttribute.call(element, 'sandbox');
 	});
 }, NAMES);
+// the real sandbox is the page's flags plus allow-same-origin and
+// allow-scripts, without the top navigation flags (the inject emulates those
+// three; sandbox-restrictions suite)
 ok(
-	'the real frames carry no sandbox',
-	real.every((value) => value === null),
+	"the real frames carry the proxy's sandbox",
+	real.every((value) => {
+		const tokens = (value ?? '').split(' ');
+		return (
+			tokens.includes('allow-same-origin') &&
+			tokens.includes('allow-scripts') &&
+			!tokens.some((token) => token.startsWith('allow-top-navigation'))
+		);
+	}),
 	JSON.stringify(real),
 );
 

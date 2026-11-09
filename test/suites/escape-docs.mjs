@@ -1,10 +1,10 @@
-// Documents that used to escape the rewrite: a child iframe's sandbox and
-// csp attributes (which would give it an origin or a policy the service
-// worker cannot serve) are dropped but read back as written; an import map's
-// URLs are routed, so bare specifiers resolve to proxied modules; an
-// about:blank popup the page writes into is injected like a child frame, so
-// what it writes is routed. Same-origin mode (the host realm reads the
-// frame's real attributes).
+// Documents that used to escape the rewrite: a child iframe's csp attribute
+// (a policy the service worker cannot serve) is dropped and its sandbox
+// (an origin it cannot serve) is replaced by one it can, both read back as
+// written; an import map's URLs are routed, so bare specifiers resolve to
+// proxied modules; an about:blank popup the page writes into is injected
+// like a child frame, so what it writes is routed. Same-origin mode (the
+// host realm reads the frame's real attributes).
 import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
@@ -46,9 +46,11 @@ const sandbox = await page.evaluate(() => {
 		})(),
 	};
 });
+// the real sandbox keeps the frame reachable by the service worker and lets
+// the inject run: the page's flags plus allow-same-origin and allow-scripts
 ok(
-	'iframe sandbox and csp are dropped and the child loads through the proxy',
-	sandbox.sandbox === null &&
+	"iframe csp is dropped, the sandbox is the proxy's and the child loads through the proxy",
+	sandbox.sandbox === 'allow-same-origin allow-scripts' &&
 		sandbox.csp === null &&
 		typeof sandbox.child === 'string' &&
 		/\/stomp\/[\w-]+\/html/.test(sandbox.child),
