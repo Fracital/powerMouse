@@ -291,6 +291,16 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A storage write sent asynchronously no longer waits for one that already
+  landed. The worker applies a document's asynchronous writes in order and
+  forgot the document once none was left, but the page names the oldest
+  write it has in flight, which includes one that landed until its busy main
+  thread runs the answer. Discord writes a large value and writes again
+  while it renders, so the next write waited 10 s for nothing, every read
+  meanwhile waited 3 s for that write, and a reload in that time read the
+  write as missing: its login page took 23 s to render instead of 8 (2.8 s
+  natively). The worker keeps each document's place for five minutes after
+  its last write (storage-turns suite, both modes).
 - A request carries the browser's Accept-Language, no empty Cookie header,
   and a WebSocket handshake the browser's Pragma and Cache-Control. The
   browser's network stack adds Accept-Language after the service worker, so

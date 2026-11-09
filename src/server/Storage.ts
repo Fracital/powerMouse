@@ -53,11 +53,21 @@ const ORDER_WAIT_MS = 10e3;
  */
 const SETTLE_WAIT_MS = 3e3;
 
+/**
+ * how long a document's place in its asynchronous operations is kept after
+ * the last of them is done: the oldest one it names as in flight can be one
+ * that landed already, because it learns of that only when its main thread
+ * runs the answer, which a busy page does seconds later
+ */
+const TURNS_KEPT_MS = 5 * 60e3;
+
 interface Turns {
 	next: number;
 	waiting: Map<number, () => void>;
 	/** operations of the document that arrived and are not done */
 	active: number;
+	/** when the last of them was done, while none is left */
+	idle: number | null;
 }
 
 export default class Storage {
@@ -193,14 +203,19 @@ export default class Storage {
 		name: 'setItem' | 'removeItem' | 'clear',
 		args: unknown[],
 	): Promise<void> {
+		const now = Date.now();
+		for (const [other, turns] of this.turns)
+			if (turns.idle !== null && now - turns.idle > TURNS_KEPT_MS)
+				this.turns.delete(other);
 		let turns = this.turns.get(sender);
 		if (!turns) {
-			turns = { next: base, waiting: new Map(), active: 0 };
+			turns = { next: base, waiting: new Map(), active: 0, idle: null };
 			this.turns.set(sender, turns);
 		}
 		const own = turns;
 		own.next = Math.max(own.next, base);
 		own.active++;
+		own.idle = null;
 		if (seq > own.next)
 			await new Promise<void>((resolve) => {
 				const timer = setTimeout(() => {
@@ -219,9 +234,11 @@ export default class Storage {
 			const wake = own.waiting.get(own.next);
 			own.waiting.delete(own.next);
 			wake?.();
-			// forgotten only when none is left, or a later one would start
-			// from a base that is behind what was applied and wait it out
-			if (!--own.active) this.turns.delete(sender);
+			// kept when none is left: Discord writes again before its page has
+			// seen the last write land, from a base behind what was applied,
+			// and a document started afresh waited 10 s for a write it had,
+			// while every read waited 3 s for that one
+			if (!--own.active) own.idle = Date.now();
 		}
 	}
 	async getItem(origin: string, item: string): Promise<string | undefined> {
