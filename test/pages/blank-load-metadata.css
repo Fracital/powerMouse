@@ -1,0 +1,12 @@
+/* blank-load-metadata.html: a stylesheet's own loads, each kept by key */
+@import url('/echo-headers?k=blm-import');
+.blm-bg {
+	background-image: url('/echo-headers?k=blm-bg');
+}
+@font-face {
+	font-family: blm-font;
+	src: url('/echo-headers?k=blm-font');
+}
+.blm-font {
+	font-family: blm-font;
+}

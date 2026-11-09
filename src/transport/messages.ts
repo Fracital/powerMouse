@@ -45,6 +45,14 @@ export interface ControllerClientMessage {
 export const ABORT_REQUEST = '$stomp$abort';
 /** the request header a page adds so the worker can match an abort to the request; never forwarded */
 export const ABORT_HEADER = 'x-stomp-abort';
+/**
+ * On a request the inject makes for a page's load (the copy of an element's
+ * or a stylesheet's subresource in a document no service worker controls):
+ * `<destination> <mode>`, the Sec-Fetch-Dest and Sec-Fetch-Mode of the load
+ * it stands for. The worker takes subresource values only, never a
+ * navigation's, and strips it
+ */
+export const LOAD_HEADER = 'x-stomp-load';
 /** SW -> every window: the cookie jar changed for `domain` (every host when empty); pages drop their document.cookie cache */
 export const COOKIES_CHANGED = '$stomp$cookiesChanged';
 export interface CookiesChange {

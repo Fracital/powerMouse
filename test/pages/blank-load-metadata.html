@@ -1,0 +1,50 @@
+<!doctype html>
+<title>BLANK LOAD METADATA</title>
+<script>
+	// Loads in a frame the page builds (about:blank: no service worker
+	// controls it, so the proxy copies them): an image, a script, and a
+	// stylesheet with an @import, a background and a font; and a fetch of the
+	// page's own that names a navigation in the proxy's load header. Each
+	// request's headers are kept by key (`blm-<kind>`) for the suite.
+	addEventListener('load', () => {
+		const iframe = document.createElement('iframe');
+		document.body.append(iframe);
+		const doc = iframe.contentDocument;
+		const at = (path) => new URL(path, location.href).href;
+		const img = doc.createElement('img');
+		img.src = at('/echo-headers?k=blm-img');
+		doc.body.append(img);
+		const script = doc.createElement('script');
+		script.src = at('/echo-headers?k=blm-script&js');
+		doc.head.append(script);
+		const link = doc.createElement('link');
+		link.rel = 'stylesheet';
+		link.href = at('blank-load-metadata.css');
+		doc.head.append(link);
+		for (const name of ['blm-bg', 'blm-font']) {
+			const div = doc.createElement('div');
+			div.className = name;
+			div.textContent = 'x';
+			doc.body.append(div);
+		}
+		// for the host's request rules (`?run=<id>` keys them per run): an
+		// image of this (controlled) document, one copied in the frame that a
+		// rule blocks, and a fetch of the page's own that claims to be an image
+		const run = new URLSearchParams(location.search).get('run') ?? '';
+		const real = document.createElement('img');
+		real.src = at(`/echo-headers?k=blm-realimg${run}`);
+		document.body.append(real);
+		const blocked = doc.createElement('img');
+		blocked.src = at(`/echo-headers?k=blm-blocked${run}`);
+		doc.body.append(blocked);
+		fetch(at(`/echo-headers?k=blm-claim${run}`), {
+			headers: { 'x-stomp-load': 'image no-cors' },
+		});
+		// the page's own fetch naming a navigation in the proxy's load header:
+		// natively just a header the server sees
+		fetch(at('/echo-headers?k=blm-spoof'), {
+			headers: { 'x-stomp-load': 'document navigate' },
+		});
+		setTimeout(() => (window.__blankMeta = true), 2500);
+	});
+</script>

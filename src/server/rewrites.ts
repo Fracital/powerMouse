@@ -29,7 +29,7 @@ import type {
 	RequestRule,
 	RouteContext,
 } from '../transport/messages';
-import { ABORT_HEADER } from '../transport/messages';
+import { ABORT_HEADER, LOAD_HEADER } from '../transport/messages';
 import { BUILD } from '../version';
 import { blobOriginOf } from './blobOrigins';
 import { HttpCache, isCacheable, mayKeep } from './cache';
@@ -143,6 +143,33 @@ interface RedirectHop {
 	user?: boolean;
 	/** the origin that started the chain, when only a hint named it (a later hop has no referrer either) */
 	initiator?: string;
+}
+
+/** the destinations and modes a LOAD_HEADER may name: a page's subresource loads, never a navigation */
+const LOAD_DESTINATIONS = [
+	'image',
+	'script',
+	'style',
+	'font',
+	'audio',
+	'video',
+	'track',
+];
+const LOAD_MODES = ['no-cors', 'cors'];
+
+/**
+ * What a LOAD_HEADER says the request stands for, or null. A page could set
+ * the header on a fetch of its own: it can only make that fetch look like
+ * one of its own subresource loads, which its site (decided from its
+ * verified client, as ever) does not change
+ */
+function loadOf(
+	value: string | null,
+): { destination: string; mode: string } | null {
+	const [destination, mode, ...rest] = (value ?? '').trim().split(/\s+/);
+	if (rest.length || !LOAD_DESTINATIONS.includes(destination)) return null;
+	if (!LOAD_MODES.includes(mode)) return null;
+	return { destination, mode };
 }
 
 /** how long a navigation with no referrer and no client waits for its document's NAVIGATION_HINT */
@@ -345,6 +372,9 @@ function genericForward(
 		);
 		// ours, never the origin's (nor a cache key's)
 		requestHeaders.delete(ABORT_HEADER);
+		// a load the inject fetched for the page says what it stands for
+		const load = loadOf(serverRequest.headers.get(LOAD_HEADER));
+		requestHeaders.delete(LOAD_HEADER);
 
 		requestHeaders.set('user-agent', navigator.userAgent);
 
@@ -381,7 +411,8 @@ function genericForward(
 				requestHeaders.delete(name);
 			}
 		}
-		const destination = serverRequest.destination || 'empty';
+		const destination =
+			load?.destination ?? (serverRequest.destination || 'empty');
 		const navigation = serverRequest.mode === 'navigate';
 		const nestedRoute = nestedTopOf(oURL.pathname, rewriter.directory);
 		// every proxied page arrives here as an iframe (the host's frame): a
@@ -558,7 +589,9 @@ function genericForward(
 			requestHeaders.set('sec-fetch-site', site);
 			requestHeaders.set(
 				'sec-fetch-mode',
-				serverRequest.mode || (destination === 'empty' ? 'cors' : 'no-cors'),
+				load?.mode ??
+					(serverRequest.mode ||
+						(destination === 'empty' ? 'cors' : 'no-cors')),
 			);
 			requestHeaders.set(
 				'sec-fetch-dest',
@@ -597,8 +630,28 @@ function genericForward(
 		// the host's rules, on the real request as it would go out: the first
 		// match blocks, answers, redirects or edits headers. Before the cache
 		// (a blocked or redirected request never touches it) and logged as such
-		const rule = rewriter.rules.find((candidate) =>
-			candidate.matches(url.url, serverRequest.method, destination, site),
+		// the rules see the request's real destination. A load the inject
+		// copied for a page (LOAD_HEADER) counts as the load it names too, but
+		// only for a rule that blocks it: a page can name any load on a fetch
+		// of its own, so a rule that edits headers, redirects or answers takes
+		// the real destination only
+		const realDestination = serverRequest.destination || 'empty';
+		const rule = rewriter.rules.find(
+			(candidate) =>
+				candidate.matches(
+					url.url,
+					serverRequest.method,
+					realDestination,
+					site,
+				) ||
+				(load !== null &&
+					candidate.action === 'block' &&
+					candidate.matches(
+						url.url,
+						serverRequest.method,
+						load.destination,
+						site,
+					)),
 		);
 		if (rule) {
 			const answer = (

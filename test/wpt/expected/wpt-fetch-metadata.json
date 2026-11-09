@@ -8,10 +8,6 @@
 	"/fetch/metadata/generated/element-iframe.https.sub.html": {
 		"sec-fetch-user with user activation": "FAIL: assert_own_property: expected property \"sec-fetch-user\" missing"
 	},
-	"/fetch/metadata/generated/element-img-environment-change.https.sub.html": {
-		"sec-fetch-mode - no attributes": "NOTRUN: ",
-		"sec-fetch-dest - no attributes": "NOTRUN: "
-	},
 	"/fetch/metadata/generated/element-link-icon.https.sub.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
 		"sec-fetch-site - Same origin no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
@@ -27,9 +23,13 @@
 		"sec-fetch-user no attributes": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
 	"/fetch/metadata/generated/form-submission.https.sub.html": {
-		"sec-fetch-user - GET with user activation": "FAIL: assert_own_property: expected property \"sec-fetch-user\" missing"
+		"sec-fetch-user - GET with user activation": "FAIL: assert_own_property: expected property \"sec-fetch-user\" missing",
+		"sec-fetch-user - POST with user activation": "FAIL: assert_own_property: expected property \"sec-fetch-user\" missing"
 	},
 	"/fetch/metadata/generated/script-json-module-import-static.https.sub.html": {
 		"(harness)": "ERROR: Uncaught SyntaxError: Unexpected token 'i', \"import.met\"... is not valid JSON"
+	},
+	"/fetch/metadata/generated/window-location.https.sub.html": {
+		"sec-fetch-user - location.href with user activation": "FAIL: assert_own_property: expected property \"sec-fetch-user\" missing"
 	}
 }

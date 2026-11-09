@@ -15,6 +15,7 @@ import {
 	routeXHR,
 } from '../../../routeURL';
 import StompURL from '../../../StompURL';
+import { LOAD_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { scopePrefix, unrouteURL } from '../../modules/Unroute';
@@ -172,6 +173,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		/** copies of every route in `text`, by route (a failed one is left out) */
 		const copiesOf = async (text: string, state: Copy, depth: number) => {
 			const copied = new Map<string, string>();
+			// each route as the load where it first appears
+			const kinds = new Map<string, string>();
+			for (const match of text.matchAll(routePattern()))
+				if (!kinds.has(match[2]))
+					kinds.set(match[2], cssLoadKind(text, match.index ?? 0, match[2]));
 			await Promise.allSettled(
 				routesIn(text).map(async (target) =>
 					copied.set(
@@ -181,6 +187,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							unrouteURL(this.client, target) ?? target,
 							state,
 							depth,
+							kinds.get(target) ?? null,
 						),
 					),
 				),
@@ -283,19 +290,104 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				]);
 			}
 		};
+		/**
+		 * What an element's load is to the browser, `<destination> <mode>` as
+		 * its Sec-Fetch-Dest and Sec-Fetch-Mode (LOAD_HEADER): the copy is a
+		 * fetch, and goes out as the load it stands for. Null for anything the
+		 * worker would not take (a frame, an embed)
+		 */
+		const loadKind = (element: Element, attribute: string): string | null => {
+			const mode = (owner: Element | null) =>
+				owner?.hasAttribute('crossorigin') ? 'cors' : 'no-cors';
+			const name = element.localName;
+			if (element.namespaceURI === SVG_NAMESPACE)
+				return name === 'image' || name === 'feImage'
+					? 'image no-cors'
+					: name === 'script'
+						? 'script no-cors'
+						: null;
+			switch (name) {
+				case 'img':
+					return `image ${mode(element)}`;
+				case 'input':
+					return attribute === 'src' ? 'image no-cors' : null;
+				case 'source': {
+					const parent = element.parentElement;
+					if (parent?.localName === 'picture')
+						return `image ${mode(parent.querySelector('img'))}`;
+					if (parent?.localName === 'video' || parent?.localName === 'audio')
+						return `${parent.localName} ${mode(parent)}`;
+					return null;
+				}
+				case 'script':
+					return element.getAttribute('type') === 'module'
+						? 'script cors'
+						: `script ${mode(element)}`;
+				case 'link': {
+					const rel = (element.getAttribute('rel') ?? '')
+						.toLowerCase()
+						.split(/\s+/);
+					if (rel.includes('stylesheet')) return `style ${mode(element)}`;
+					if (rel.includes('modulepreload')) return 'script cors';
+					if (rel.includes('preload')) {
+						const as = (element.getAttribute('as') ?? '').toLowerCase();
+						if (as === 'font') return 'font cors';
+						if (
+							['image', 'script', 'style', 'audio', 'video', 'track'].includes(
+								as,
+							)
+						)
+							return `${as} ${mode(element)}`;
+					}
+					return null;
+				}
+				case 'video':
+				case 'audio':
+					return attribute === 'poster'
+						? 'image no-cors'
+						: `${name} ${mode(element)}`;
+				case 'track':
+					return 'track cors';
+				default:
+					return null;
+			}
+		};
+		/**
+		 * What a route inside a stylesheet is to the browser: an @import a
+		 * style, a font face's source a font, anything else (a background, a
+		 * cursor, a mask) an image
+		 */
+		const cssLoadKind = (text: string, at: number, target: string): string => {
+			try {
+				const kind = new URL(target).pathname
+					.slice(this.client.directory.length)
+					.split('/')[0];
+				if (kind === 'css') return 'style no-cors';
+			} catch (error) {
+				// not a URL: as an image
+			}
+			const face = text.lastIndexOf('@font-face', at);
+			return face !== -1 && text.lastIndexOf('}', at) < face
+				? 'font cors'
+				: 'image no-cors';
+		};
 		/** a routed URL's copy, as a blob: URL (the proxy's form) */
 		const copyOf = async (
 			routed: string,
 			page: string,
 			state: Copy,
 			depth = 4,
+			load: string | null = null,
 		): Promise<string> => {
 			// an SVG reference's fragment names the element in the copy
 			const hash = routed.indexOf('#');
 			const fragment = hash === -1 ? '' : routed.slice(hash);
 			const response = await this.client.routedFetch(
 				hash === -1 ? routed : routed.slice(0, hash),
-				{ credentials: 'include' },
+				{
+					credentials: 'include',
+					...(load ? { headers: { [LOAD_HEADER]: load } } : {}),
+				},
 			);
 			if (!response.ok && response.status !== 0)
 				throw new Error(String(response.status));
@@ -325,6 +417,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			routed: string,
 			page: string,
 			state: Copy,
+			load: string | null = null,
 		): string | null => {
 			if (!this.client.workerTransport) return null;
 			const controlled =
@@ -334,7 +427,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			try {
 				const response = sync.fetch(
 					new URL(routed, scopePrefix(this.client)).href,
-					{ credentials: 'include' },
+					{
+						credentials: 'include',
+						// a Headers: the bridge passes on no other kind
+						...(load ? { headers: new Headers({ [LOAD_HEADER]: load }) } : {}),
+					},
 					false,
 					5000,
 				);
@@ -438,7 +535,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				this.client.writing &&
 				targets.length === 1
 			) {
-				const url = syncCopyOf(routed, targets[0].page, state);
+				const url = syncCopyOf(
+					routed,
+					targets[0].page,
+					state,
+					loadKind(element, attribute),
+				);
 				if (url) {
 					state.url = url;
 					element.setAttribute(attribute, url);
@@ -483,7 +585,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// which fails as it would have), the others are released with it
 			Promise.allSettled(
 				targets.map(({ routed, page }) =>
-					isRoute(routed) ? copyOf(routed, page, state) : routed,
+					isRoute(routed)
+						? copyOf(routed, page, state, 4, loadKind(element, attribute))
+						: routed,
 				),
 			).then((results) => {
 				if (results.every((result) => result.status === 'fulfilled'))

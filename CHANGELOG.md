@@ -291,6 +291,26 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A load the proxy copies for a document no service worker controls goes
+  out as the load it stands for. Such a document (an about:blank frame or
+  popup the page builds, a document it opened) has its elements' loads
+  fetched through the proxy and handed to them as blob: copies, and the
+  site saw each as a fetch: `Sec-Fetch-Dest: empty`, `Sec-Fetch-Mode:
+cors`. The copy now names the load in a header of the proxy's own
+  (`x-stomp-load`), which the worker strips: an image, a script (a module
+  in `cors`), a stylesheet, a preload's `as`, media and tracks, a
+  `crossorigin` element in `cors`, and in a copied stylesheet an @import as
+  a style, a font face's source as a font in `cors`, anything else as an
+  image. The worker takes only those subresource values, never a
+  navigation's, and the site stays decided by the verified client, so a
+  page that sends the header itself gains nothing and the site never sees
+  it. The host's request rules match the real request: a rule that edits
+  headers, redirects or answers sees a copy as the fetch it is, and only a
+  rule that blocks sees the load it names too, so a page cannot pick up a
+  header rule meant for images or scripts by claiming to be one
+  (blank-load-metadata suite, both modes, against the page loaded
+  natively; WPT fetch-metadata element-img-environment-change passes, its
+  two entries are off the expected list).
 - A media session's artwork goes through the proxy. The browser fetches
   `navigator.mediaSession` artwork itself, for its media controls, and the
   page's URL went straight to the site (YouTube's watch page, a thumbnail
