@@ -291,6 +291,26 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A navigation that arrives with no referrer carries the Sec-Fetch-Site and
+  Sec-Fetch-User of the document that started it. A link clicked in a popup
+  opened without a URL (about:blank sends no referrer), a `rel=noreferrer`
+  link or one under a no-referrer policy reached the worker with nothing to
+  say who started it, and it took each for a navigation the user started
+  from the host: `Sec-Fetch-Site: none`, `Sec-Fetch-User: ?1`. The document
+  now tells the worker first: from the Navigation API's navigate event, or
+  in an initial about:blank document (which fires none) from link
+  activation, and from the location setters and `assign`/`replace`, with
+  whether it had user activation. The worker takes the initiator's origin
+  from the sending document's own routed URL, never from the message, so a
+  document can only vouch for navigations of its own origin. Only a
+  navigation with no referrer, no client and no earlier hop waits for one,
+  up to 100 ms; the host's own navigation sends the host page as its
+  referrer and never waits. A redirect chain keeps the initiator, the site
+  and the activation of its first hop. A page's navigation under user
+  activation now sends `Sec-Fetch-User: ?1` too (navigation-initiator
+  suite, both modes, against the page loaded natively; WPT fetch-metadata
+  element-a and element-area pass, their twenty entries are off the
+  expected list).
 - A request in the moment after the service worker restarts waits for its
   controller. A restarted worker knows no controller until they answer its
   revive, which takes a few hundred milliseconds (over a second when the

@@ -56,6 +56,8 @@ export interface Config {
 	build?: string;
 	/** @internal ms a routed request may take before the service worker answers 504 (tests; default by destination) */
 	fetchTimeout?: number;
+	/** @internal ms a navigation with no referrer waits for its document's hint (tests; default 100) */
+	navigationHintWait?: number;
 	/** the served file names, when the host renamed them (see Assets) */
 	assets?: Assets;
 	/**

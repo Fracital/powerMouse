@@ -140,6 +140,8 @@ export interface ControllerInit {
 	allowInvalidJs?: boolean;
 	/** @internal ms before the service worker answers a routed request with 504 (tests) */
 	fetchTimeout?: number;
+	/** @internal ms a navigation with no referrer waits for its document's hint (tests) */
+	navigationHintWait?: number;
 	/**
 	 * Request rules, run in the service worker on the real URL: block, answer
 	 * with a status, redirect, or edit request and response headers; the
@@ -595,6 +597,9 @@ export class StompController extends EventTarget {
 			...(init.onRequest || init.requestLog ? { requestLog: true } : {}),
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 			...(init.fetchTimeout ? { fetchTimeout: init.fetchTimeout } : {}),
+			...(init.navigationHintWait
+				? { navigationHintWait: init.navigationHintWait }
+				: {}),
 			...(init.assets ? { assets: init.assets } : {}),
 			...(init.names ? { names: init.names } : {}),
 			...(errorPage ? { errorPage } : {}),

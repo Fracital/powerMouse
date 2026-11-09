@@ -18,6 +18,7 @@ import IFrameModule from './modules/IFrame';
 import LocationModule from './modules/Location';
 import MutationObserverModule from './modules/MutationObserver';
 import NavigateModule from './modules/Navigate';
+import NavigationHintModule from './modules/NavigationHint';
 import NavigatorModule from './modules/Navigator';
 import OpenModule from './modules/Open';
 import ReadbackModule from './modules/Readback';
@@ -51,6 +52,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(OpenModule);
 	client.addModule(DownloadModule);
 	client.addModule(NavigateModule);
+	client.addModule(NavigationHintModule);
 	client.addModule(ReadbackModule);
 	client.addModule(CSSReadbackModule);
 	// last: the Navigate module's own observer keeps the native constructor

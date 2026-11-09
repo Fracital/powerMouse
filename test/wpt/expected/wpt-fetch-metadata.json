@@ -1,30 +1,12 @@
 {
-	"/fetch/metadata/generated/element-a.https.sub.html": {
-		"sec-fetch-site - Same origin - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Cross-site - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Cross-Site -> Same Origin - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Cross-Site -> Same-Site - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Cross-Site -> Cross-Site - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Same-Origin -> Same Origin - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Same-Origin -> Cross-Site - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Same-Site -> Cross-Site - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-user - no attributes": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/fetch/metadata/generated/element-area.https.sub.html": {
-		"sec-fetch-site - Same origin - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Cross-site - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Same-Origin -> Cross-Site -> Same-Origin redirect - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Cross-Site -> Same Origin - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Cross-Site -> Same-Site - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Cross-Site -> Cross-Site - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Same-Origin -> Same Origin - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Same-Origin -> Cross-Site - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-site - Same-Site -> Cross-Site - no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
-		"sec-fetch-user - no attributes": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
 	"/fetch/metadata/generated/element-embed.https.sub.html": {
 		"sec-fetch-dest": "FAIL: assert_array_equals: expected property 0 to be \"embed\" but got \"empty\" (expected array [\"embed\"] got [\"empty\"])"
+	},
+	"/fetch/metadata/generated/element-frame.https.sub.html": {
+		"sec-fetch-user with user activation": "FAIL: assert_own_property: expected property \"sec-fetch-user\" missing"
+	},
+	"/fetch/metadata/generated/element-iframe.https.sub.html": {
+		"sec-fetch-user with user activation": "FAIL: assert_own_property: expected property \"sec-fetch-user\" missing"
 	},
 	"/fetch/metadata/generated/element-img-environment-change.https.sub.html": {
 		"sec-fetch-mode - no attributes": "NOTRUN: ",
@@ -43,6 +25,9 @@
 		"sec-fetch-site - Same-Site -> Cross-Site no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
 		"sec-fetch-mode no attributes": "MISSING: the harness ended TIMEOUT before this subtest",
 		"sec-fetch-user no attributes": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/fetch/metadata/generated/form-submission.https.sub.html": {
+		"sec-fetch-user - GET with user activation": "FAIL: assert_own_property: expected property \"sec-fetch-user\" missing"
 	},
 	"/fetch/metadata/generated/script-json-module-import-static.https.sub.html": {
 		"(harness)": "ERROR: Uncaught SyntaxError: Unexpected token 'i', \"import.met\"... is not valid JSON"

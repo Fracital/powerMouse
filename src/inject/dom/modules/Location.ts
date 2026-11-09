@@ -4,6 +4,7 @@ import Module from '../../Module';
 import { setGlobalProxy } from '../../modules/Access';
 import ProxyModule, { invokeGlobal } from '../../modules/Proxy';
 import DocumentClient from '../Client';
+import NavigationHintModule from './NavigationHint';
 
 /**
 {
@@ -113,6 +114,7 @@ export default class LocationModule extends Module<DocumentClient> {
 
 								Reflect.apply(urlDescriptor.set!, temp, args);
 
+								this.client.getModule(NavigationHintModule)?.hint(temp.href);
 								this.client.global.location.href = routeHTML(
 									new StompURL(temp, this.client.url),
 									this.client.url,
@@ -179,12 +181,11 @@ export default class LocationModule extends Module<DocumentClient> {
 			value: proxyModule.wrapFunction(
 				this.client.global.location.assign,
 				(target, that, [url]) => {
+					const destination = new URL(url, this.client.url.toString());
+					this.client.getModule(NavigationHintModule)?.hint(destination.href);
 					return Reflect.apply(target, this.client.global.location, [
 						routeHTML(
-							new StompURL(
-								new URL(url, this.client.url.toString()),
-								this.client.url,
-							),
+							new StompURL(destination, this.client.url),
 							this.client.url,
 							this.client.config,
 							false,
@@ -202,12 +203,11 @@ export default class LocationModule extends Module<DocumentClient> {
 			value: proxyModule.wrapFunction(
 				this.client.global.location.replace,
 				(target, that, [url]) => {
+					const destination = new URL(url, this.client.url.toString());
+					this.client.getModule(NavigationHintModule)?.hint(destination.href);
 					return Reflect.apply(target, this.client.global.location, [
 						routeHTML(
-							new StompURL(
-								new URL(url, this.client.url.toString()),
-								this.client.url,
-							),
+							new StompURL(destination, this.client.url),
 							this.client.url,
 							this.client.config,
 							false,

@@ -17,6 +17,8 @@ import {
 	InitRemoteTransportMessage,
 	INLINE_DOCUMENT,
 	InlineDocumentMessage,
+	NAVIGATION_HINT,
+	NavigationHintMessage,
 	postToPort,
 	RequestInfo,
 	SW_REVIVE,
@@ -29,6 +31,7 @@ import { recordBlobOrigin } from './blobOrigins';
 import createServer, { addressCodec, StompServer } from './createServer';
 import { hostErrorPage } from './errorPage';
 import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
+import { recordNavigationHint } from './navigationHints';
 import { RewriteCache } from './rewriteCache';
 import { RewritePool } from './rewritePool';
 import { abortRequest } from './rewrites';
@@ -439,6 +442,37 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 				new URL(real).origin,
 				(event.source as Client).id,
 			);
+		} catch (error) {
+			// not a URL: nothing to record
+		}
+	} else if (NAVIGATION_HINT in data) {
+		// as BLOB_MINTED: from a routed document of that controller; the
+		// initiator is the document's own origin, the hint is keyed by the
+		// destination's real URL
+		const message = data[NAVIGATION_HINT] as NavigationHintMessage;
+		const source =
+			event.source instanceof Client ? event.source.url : undefined;
+		if (
+			!message ||
+			typeof message.directory !== 'string' ||
+			typeof message.url !== 'string' ||
+			message.url.length > 16384 ||
+			!source?.startsWith(`${location.origin}${message.directory}`)
+		)
+			return;
+		const ready = controllers.get(message.directory)?.ready;
+		if (!ready) return;
+		const real = ready.realURL(source);
+		if (real === source) return;
+		try {
+			// the page's view of the destination is the real URL (the inject's
+			// readback); a routed one is decoded to it
+			const target = new URL(ready.realURL(message.url));
+			if (!/^https?:$/.test(target.protocol)) return;
+			recordNavigationHint(target.href, {
+				origin: new URL(real).origin,
+				activated: message.activated === true,
+			});
 		} catch (error) {
 			// not a URL: nothing to record
 		}

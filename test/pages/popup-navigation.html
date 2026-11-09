@@ -1,0 +1,38 @@
+<!doctype html>
+<title>POPUP NAVIGATION</title>
+<script>
+	// Navigations that reach the worker with no referrer: a link clicked in a
+	// popup opened without a URL (about:blank sends no referrer), and a
+	// rel=noreferrer link. `__popup(url, click)` opens the popup and puts a
+	// link to `url` in it, clicking it when `click` (no user activation);
+	// otherwise the test clicks it. `__popupSelf(url)` opens a popup whose
+	// button sets its location.href when the test clicks it.
+	// `__noreferrer(url)` clicks a rel=noreferrer link in this document.
+	window.__popup = (url, click) => {
+		const popup = window.open();
+		const link = popup.document.createElement('a');
+		link.href = url;
+		link.textContent = 'go';
+		link.id = 'go';
+		popup.document.body.append(link);
+		if (click) link.click();
+		window.__opened = popup;
+	};
+	// a popup whose own button navigates it by location.href when clicked
+	window.__popupSelf = (url) => {
+		const popup = window.open();
+		const button = popup.document.createElement('button');
+		button.textContent = 'go';
+		button.id = 'go';
+		button.onclick = () => (popup.location.href = url);
+		popup.document.body.append(button);
+		window.__opened = popup;
+	};
+	window.__noreferrer = (url) => {
+		const link = document.createElement('a');
+		link.href = url;
+		link.rel = 'noreferrer';
+		document.body.append(link);
+		link.click();
+	};
+</script>

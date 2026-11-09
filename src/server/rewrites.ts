@@ -43,6 +43,11 @@ import {
 	RouteTransform,
 } from './filterHeaders';
 import { takeInline } from './inline';
+import {
+	awaitNavigationHint,
+	NavigationHint,
+	takeNavigationHint,
+} from './navigationHints';
 import type { RewriteCache, RewriteCacheOutcome } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
 import Router from './Router';
@@ -134,7 +139,14 @@ interface RedirectHop {
 	/** the Referer this hop sent (null: none); absent when it was unknown */
 	referer?: string | null;
 	site: Site;
+	/** the chain began under user activation (Sec-Fetch-User) */
+	user?: boolean;
+	/** the origin that started the chain, when only a hint named it (a later hop has no referrer either) */
+	initiator?: string;
 }
+
+/** how long a navigation with no referrer and no client waits for its document's NAVIGATION_HINT */
+const NAVIGATION_HINT_WAIT_MS = 100;
 const redirectHops = new Map<string, RedirectHop & { at: number }>();
 const REDIRECT_HOP_TTL = 60_000;
 const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
@@ -463,10 +475,34 @@ function genericForward(
 		// the request's origin: its client's; a navigation has none to ask, so
 		// the document that started it (its Referer), or for a nested document
 		// whose referrer was withheld the top-level page that routed it
-		const initiator =
+		const known =
 			client ??
 			refererSource ??
 			(navigation && nestedRoute ? new URL(nestedRoute) : null);
+		// a navigation's document told the worker it started it (its message
+		// may trail the request a little); it names the initiator only for a
+		// navigation that came with no referrer at all and no earlier hop,
+		// which would otherwise pass for the user's own from the host, and
+		// only that wait is ever paid (the host's frame.go sends the host page
+		// as its referrer)
+		let hint: NavigationHint | null = null;
+		if (navigation) {
+			hint = takeNavigationHint(url.url.href);
+			if (!hint && !known && !referrer && !previousHop)
+				hint = await awaitNavigationHint(
+					url.url.href,
+					rewriter.config.navigationHintWait ?? NAVIGATION_HINT_WAIT_MS,
+				);
+		}
+		const hinted =
+			hint && !referrer && !previousHop ? new URL(hint.origin) : null;
+		const initiator =
+			known ??
+			hinted ??
+			(previousHop?.initiator ? new URL(previousHop.initiator) : null);
+		// the page had user activation when this navigation (or the chain it
+		// redirects) began
+		const activated = !!(hint?.activated || previousHop?.user);
 		const sameOrigin =
 			!unknownBlob && initiator !== null && initiator.origin === url.url.origin;
 
@@ -510,8 +546,13 @@ function genericForward(
 
 		// the chain's earlier hops count for the site (Sec-Fetch-Site only:
 		// the browser's site for cookies does not follow redirects)
-		if (previousHop && site !== 'none')
-			site = widestSite(previousHop.site, site);
+		// a later hop of a chain a page started arrives without a referrer, as
+		// its first did: its site is the chain's
+		if (previousHop)
+			site =
+				site === 'none' && !initiator
+					? previousHop.site
+					: widestSite(previousHop.site, site);
 
 		if (potentiallyTrustworthy(url.url)) {
 			requestHeaders.set('sec-fetch-site', site);
@@ -523,10 +564,9 @@ function genericForward(
 				'sec-fetch-dest',
 				navigation && topLevel ? 'document' : destination,
 			);
-			// only a navigation the user started: the host's (typed, picked).
-			// One a page started under user activation would carry it too,
-			// but the worker cannot see the page's activation
-			if (navigation && topLevel && site === 'none')
+			// only a navigation the user started: the host's (typed, picked),
+			// or one a page started under user activation (its hint said so)
+			if (navigation && ((topLevel && site === 'none') || activated))
 				requestHeaders.set('sec-fetch-user', '?1');
 		}
 
@@ -825,7 +865,13 @@ function genericForward(
 				serverRequest.referrer,
 				responseHeaders.get('location')!,
 				serverRequest.url,
-				carried !== undefined || refererSource ? { referer, site } : { site },
+				{
+					...(carried !== undefined || refererSource ? { referer } : {}),
+					site,
+					user: activated,
+					// a chain only a hint named the initiator of keeps it
+					...(!known && initiator ? { initiator: initiator.origin } : {}),
+				},
 			);
 
 		// preloads announced by the server fetch through the proxy too

@@ -114,6 +114,26 @@ export interface BlobMintedMessage {
 	directory: string;
 	url: string;
 }
+
+/**
+ * A document is about to navigate (the Navigation API's navigate event, a
+ * new document only). A navigation can reach the worker
+ * with no referrer and no client (one from an about:blank document, or
+ * under a no-referrer policy), which it would take for one the user started
+ * from the host: Sec-Fetch-Site `none`, Sec-Fetch-User `?1`. The worker
+ * takes the initiator's origin from the sending document's own routed URL,
+ * never from the message, so a document can only vouch for navigations of
+ * its own origin; a forged `activated` gains at most Sec-Fetch-User on one
+ * of those.
+ */
+export const NAVIGATION_HINT = '$stomp$navigationHint';
+export interface NavigationHintMessage {
+	directory: string;
+	/** where the navigation goes, as the page sees it (the real URL; a routed one is decoded) */
+	url: string;
+	/** the document had transient user activation when the navigation began */
+	activated: boolean;
+}
 export interface InlineDocumentMessage {
 	directory: string;
 	token: string;
