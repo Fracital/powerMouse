@@ -307,6 +307,15 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   fixed in the transport, with Chrome's header order (ws-handshake suite,
   reading the raw handshake the fixture received, both modes, against the
   page loaded natively).
+- A classic script's `var` binding of location outside any function routes
+  like one at the top level: in a block, an `if`, a `try`, a labelled
+  statement, a `for` initialiser, a `for (var location of urls)` or
+  `for (var location in o)` head, and as a rest element
+  (`var [...location] = a`). Each assigns the window's location natively
+  and navigated past the proxy. The declaration's initialiser is now
+  rewritten like any expression too (`var { location } = top.o` read the
+  raw top), and `var { location = d } = o` keeps its key
+  (location-writes suite, both modes; rewriter-unit).
 - A location that an assignment pattern or a loop head writes navigates
   through the proxy: `[location] = [url]`, `({ location } = o)`,
   `({ a: location = d } = o)`, `[...location] = a`, `for (location of urls)`,

@@ -211,6 +211,19 @@ function unshorthand(ctx: AcornContext) {
 	if (parent?.node.type === 'Property') parent.node.shorthand = false;
 }
 
+/** inside a function or a class static block: a `var` there is local */
+function inFunction(ctx: AcornContext): boolean {
+	for (let current = ctx.parent; current; current = current.parent)
+		if (
+			current.node.type === 'FunctionDeclaration' ||
+			current.node.type === 'FunctionExpression' ||
+			current.node.type === 'ArrowFunctionExpression' ||
+			current.node.type === 'StaticBlock'
+		)
+			return true;
+	return false;
+}
+
 const cTarget = 't$t';
 const cProp = 't$p';
 const cValue = 't$v';
@@ -488,16 +501,20 @@ export function modifyJS(
 					break;
 				case 'VariableDeclaration':
 					{
-						// `var location = v` and `var { location } = o` at the top of
-						// a classic script assign the window's location (the var
-						// declares nothing new there): bound to a temporary and
-						// assigned, so the assignment routes like `location = v`
-						if (
-							isModule ||
-							ctx.node.kind !== 'var' ||
-							ctx.parent?.node.type !== 'Program'
-						)
-							break;
+						// `var location = v` and `var { location } = o` in a classic
+						// script outside any function (in a block, an `if`, a loop
+						// head too) assign the window's location (the var declares
+						// nothing new there): bound to a temporary and assigned, so
+						// the assignment routes like `location = v`
+						if (isModule || ctx.node.kind !== 'var' || inFunction(ctx)) break;
+						// `for (var location of a)`: no initialiser, each value is
+						// assigned at the top of the body
+						const loop =
+							(ctx.parent?.node.type === 'ForInStatement' ||
+								ctx.parent?.node.type === 'ForOfStatement') &&
+							ctx.parentKey === 'left'
+								? ctx.parent
+								: null;
 						const assignments: any[] = [];
 						const temp = () =>
 							b.identifier(`${names.access}l${assignments.length}`);
@@ -520,22 +537,54 @@ export function modifyJS(
 							if (node?.type === 'ObjectPattern')
 								for (const property of node.properties)
 									if (property.type === 'Property') {
+										const before = assignments.length;
 										const value = rebind(property.value);
-										if (value !== property.value) property.shorthand = false;
+										// `{ location = v }` rebinds inside the default
+										if (assignments.length !== before)
+											property.shorthand = false;
 										property.value = value;
-									}
+									} else rebind(property);
 							if (node?.type === 'ArrayPattern')
 								node.elements = node.elements.map((element: any) =>
 									element ? rebind(element) : element,
 								);
 							if (node?.type === 'AssignmentPattern')
 								node.left = rebind(node.left);
+							// `var [...location] = a`, `var {...location} = o`
+							if (node?.type === 'RestElement')
+								node.argument = rebind(node.argument);
 							return node;
 						};
 						for (const declarator of ctx.node.declarations)
-							if (declarator.init) declarator.id = rebind(declarator.id);
-						if (assignments.length)
-							ctx.replaceWith(b.blockStatement([ctx.node, ...assignments]));
+							if (declarator.init || loop)
+								declarator.id = rebind(declarator.id);
+						if (!assignments.length) break;
+						// the declaration is visited again (its initialisers, the
+						// pattern's source, are rewritten like any expression)
+						if (loop) {
+							const { node } = loop;
+							node.left = result(node.left);
+							node.right = result(node.right);
+							node.body = b.blockStatement([...assignments, result(node.body)]);
+							loop.replaceWith(node);
+						} else if (ctx.parent?.node.type === 'ForStatement') {
+							// `for (var location = v; ...)` takes a declaration list,
+							// so the assignments are one more declarator
+							const id = temp();
+							ctx.node.declarations.forEach(result);
+							ctx.node.declarations.push(
+								b.variableDeclarator(
+									id,
+									b.sequenceExpression(
+										assignments.map((statement) => statement.expression),
+									),
+								),
+							);
+							ctx.replaceWith(ctx.node);
+						} else
+							ctx.replaceWith(
+								b.blockStatement([result(ctx.node), ...assignments]),
+							);
 					}
 					break;
 				case 'CallExpression':
