@@ -1,0 +1,89 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>optional chains</title>
+	</head>
+	<body>
+		<p>Optional chains that short-circuit</p>
+		<script>
+			// When an optional chain short-circuits, nothing after the `?.` is
+			// evaluated: not a computed key, not a call's arguments. Discord's
+			// login page renders `t?.messages[s.current % t.messages.length]`
+			// with `t` undefined on its first pass, which is undefined natively
+			// and must not read `t.messages` first.
+			const results = {};
+			let work = 0;
+			const run = (name, body) => {
+				work = 0;
+				try {
+					results[name] = { value: String(body()), work };
+				} catch (error) {
+					results[name] = { threw: error.constructor.name, work };
+				}
+			};
+			const key = () => (work++, 'k');
+			const arg = () => (work++, 1);
+			const nothing = undefined;
+			const none = null;
+			const toast = { messages: ['one', 'two'] };
+			const counter = { current: 3 };
+			const holder = {
+				b: {
+					k: 'kept',
+					m() {
+						return this === holder.b;
+					},
+				},
+			};
+
+			// the Discord shape, both ways
+			run('discord-shape-undefined', () => {
+				const t = nothing;
+				return t?.messages[counter.current % t.messages.length];
+			});
+			run('discord-shape-defined', () => {
+				const t = toast;
+				return t?.messages[counter.current % t.messages.length];
+			});
+			// a computed key that does work, after an optional link
+			run('key-after-link', () => nothing?.b[key()]);
+			run('key-on-link', () => none?.[key()]);
+			run('key-deep', () => nothing?.a.b.c[key()]);
+			run('key-evaluated-when-defined', () => holder?.b[key()]);
+			// a call through a computed member: neither key nor arguments
+			run('call-after-link', () => nothing?.b[key()](arg()));
+			run('call-key-arguments-defined', () => holder?.b[('m', 'm')](arg()));
+			run('optional-call-arguments', () => holder.b.missing?.(arg()));
+			run('optional-computed-call-arguments', () =>
+				holder.b[('miss', 'missing')]?.(arg()),
+			);
+			// an unforgeable name through the chain, with work in the arguments
+			run('location-call-after-link', () => nothing?.location.assign(arg()));
+			// a message posted to nothing evaluates no arguments
+			run('post-to-nothing', () => nothing?.postMessage(arg(), '*'));
+			// the rest of a chain past a call short-circuits too
+			run('tail-after-call', () => nothing?.b[key()]().c);
+
+			// an awaited key is not awaited when the chain short-circuits
+			const awaited = async () => {
+				let ran = 0;
+				const later = () => (ran++, Promise.resolve('k'));
+				const value = nothing?.b[await later()];
+				return { value: String(value), work: ran };
+			};
+			awaited().then(
+				(value) => {
+					results['await-key-after-link'] = value;
+					window.__chains = { done: true, results };
+				},
+				(error) => {
+					results['await-key-after-link'] = {
+						threw: error.constructor.name,
+					};
+					window.__chains = { done: true, results };
+				},
+			);
+		</script>
+	</body>
+</html>
