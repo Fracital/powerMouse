@@ -129,6 +129,44 @@ function inOptionalChain(node: any): boolean {
 	return false;
 }
 
+/**
+ * Whether evaluating an expression can do nothing observable: a key or
+ * argument like this can be evaluated before the access API decides the
+ * chain short-circuited. Anything else (a call, a member read, an await)
+ * goes in the lazy form, where the browser's optional call skips it.
+ */
+function pure(node: any): boolean {
+	switch (node?.type) {
+		case 'Identifier':
+		case 'Literal':
+		case 'ThisExpression':
+		case 'ArrowFunctionExpression':
+		case 'FunctionExpression':
+			return true;
+		case 'TemplateLiteral':
+			return node.expressions.length === 0;
+		case 'ArrayExpression':
+			return node.elements.every(
+				(element: any) => element === null || pure(element),
+			);
+		case 'ObjectExpression':
+			return node.properties.every(
+				(property: any) =>
+					property.type === 'Property' &&
+					(!property.computed || pure(property.key)) &&
+					pure(property.value),
+			);
+	}
+	return false;
+}
+
+/** `callee?.(...args)`: an optional call, which skips its arguments */
+function optionalCall(callee: any, args: any[]) {
+	const call: any = b.callExpression(callee, args);
+	call.optional = true;
+	return call;
+}
+
 const cTarget = 't$t';
 const cProp = 't$p';
 const cValue = 't$v';
@@ -462,6 +500,26 @@ export function modifyJS(
 						// realm (access API `post`), or the receiver's wrapper would
 						// be the incumbent the browser names as the source
 						const post = postMessageCall(ctx.node);
+						// `w?.postMessage(f())`: nothing is posted, nor f called, when
+						// w is nullish
+						if (
+							post?.optional &&
+							!ctx.node.arguments.every((argument: any) => pure(argument))
+						) {
+							ctx.replaceWith(
+								optionalCall(
+									b.callExpression(
+										b.memberExpression(
+											b.identifier(names.access),
+											b.identifier('poster'),
+										),
+										[result(post.target)],
+									),
+									ctx.node.arguments.map((argument: any) => result(argument)),
+								),
+							);
+							break typeLoop;
+						}
 						if (post) {
 							ctx.replaceWith(
 								b.callExpression(
@@ -734,8 +792,51 @@ export function modifyJS(
 							);
 						} else if (
 							ctx.parent?.node.type === 'CallExpression' &&
+							ctx.parentKey === 'callee' &&
+							((chained && !pure(propertyArgument)) ||
+								((chained || ctx.parent.node.optional) &&
+									!ctx.parent.node.arguments.every((argument: any) =>
+										pure(argument),
+									)))
+						) {
+							// a?.b[k()](f()) / a[k]?.(f()): the key and the arguments are
+							// evaluated only past the links that can short-circuit
+							ctx.parent!.replaceWith(
+								optionalCall(
+									optionalCall(
+										b.callExpression(
+											b.memberExpression(
+												b.identifier(names.access),
+												b.identifier('method'),
+											),
+											[
+												result(ctx.node.object),
+												b.literal(chained),
+												b.literal(!!ctx.parent!.node.optional),
+											],
+										),
+										[propertyArgument],
+									),
+									ctx.parent!.node.arguments.map((argument: any) =>
+										result(argument),
+									),
+								),
+							);
+						} else if (
+							ctx.parent?.node.type === 'CallExpression' &&
 							ctx.parentKey === 'callee'
 						) {
+							// the rest of the chain past the call short-circuits too
+							const call = ctx.parent;
+							if (
+								chained &&
+								call.parent &&
+								((call.parent.node.type === 'MemberExpression' &&
+									call.parentKey === 'object') ||
+									(call.parent.node.type === 'CallExpression' &&
+										call.parentKey === 'callee'))
+							)
+								call.parent.node.optional = true;
 							ctx.parent!.replaceWith(
 								b.callExpression(
 									b.memberExpression(
@@ -802,6 +903,21 @@ export function modifyJS(
 											: result(ctx.parent!.node.right),
 										b.literal(generatePartial(script, ctx.parent!)),
 									],
+								),
+							);
+						} else if (chained && !pure(propertyArgument)) {
+							// a?.b[k()]: the key is evaluated only past the links that can
+							// short-circuit, and the rest of the chain follows in it
+							ctx.replaceWith(
+								optionalCall(
+									b.callExpression(
+										b.memberExpression(
+											b.identifier(names.access),
+											b.identifier('lazy'),
+										),
+										[result(ctx.node.object)],
+									),
+									[propertyArgument],
 								),
 							);
 						} else {

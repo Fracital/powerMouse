@@ -108,7 +108,10 @@ on every save (use a `git worktree`).
   module goal; both are handled, keep it that way.
 - **Optional chaining** through a computed member is rewritten to
   `$s$j.get2(obj, key, partial, true)` and the rest of the chain is marked
-  optional. Any new access rewrite must preserve short-circuiting.
+  optional; a key or call argument that does work goes in an optional call
+  instead (`$s$j.lazy(obj)?.(key)`, `method`, `poster`), because a helper's
+  arguments are evaluated before it can short-circuit. Any new access
+  rewrite must preserve short-circuiting.
 - **The sync bridge (`src/inject/dom/modules/Sync.ts`) spins the main thread**
   waiting for the service worker via cookies. The deadlock only exists with
   an in-page transport: a ProxyTransport instance (or a descriptor with

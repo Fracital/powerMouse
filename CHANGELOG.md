@@ -345,6 +345,17 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   submission builds from the form's data (navigation-initiator suite, both
   modes, against the page loaded natively). `form.submit()` fires no submit
   event and still sends none.
+- An optional chain that short-circuits evaluates nothing after it through
+  the proxy either. A computed member in a chain (`a?.b[k]`) becomes an
+  access API call, and its key and a call's arguments were evaluated as that
+  call's arguments before the API could see the chain had ended: Discord's
+  login page renders `t?.messages[s.current % t.messages.length]` with `t`
+  undefined, which threw reading `t.messages` and left the page blank. A key
+  or an argument that does work now goes in an optional call
+  (`$s$j.lazy(a?.b)?.(k())`, `$s$j.method(...)?.(k)?.(...args)`,
+  `$s$j.poster(w)?.(...args)`), which the browser skips as it would the
+  original; a plain name or literal keeps the direct form. The rest of a
+  chain past a rewritten call short-circuits too (optional-chains suite).
 - A request body goes upstream with its Content-Length, as natively, not as
   a chunked upload. The worker handed the transport the fetch event's body
   stream, and epoxy sends a stream chunked whatever the page gave (a

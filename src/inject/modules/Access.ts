@@ -271,6 +271,35 @@ export default class AccessModule extends Module<Client> {
 
 				return Reflect.apply(method, target, args);
 			},
+			// The lazy forms of get2, call2 and post, for a chain that can
+			// short-circuit when its computed key or its arguments do work: the
+			// rewriter emits `lazy(o)?.(k)`, `method(o, ...)?.(k)?.(...args)` and
+			// `poster(o)?.(...args)`, so the browser's own optional call skips the
+			// key and the arguments as the original chain did. Discord's login
+			// renders `t?.messages[s.current % t.messages.length]` with `t`
+			// undefined, which threw reading `t.messages` as a get2 argument.
+			lazy: (target: any): ((key: any) => unknown) | undefined =>
+				target === null || target === undefined
+					? undefined
+					: (key: any) => api.get(target[key], key),
+			method: (
+				target: any,
+				chained: boolean,
+				optionalCall: boolean,
+			): ((key: any) => ((...args: any[]) => any) | undefined) | undefined => {
+				if (chained && (target === null || target === undefined))
+					return undefined;
+				return (key: any) => {
+					const method = api.get(target[key], key);
+					if (optionalCall && (method === null || method === undefined))
+						return undefined;
+					return (...args: any[]) => Reflect.apply(method, target, args);
+				};
+			},
+			poster: (target: any): ((...args: any[]) => any) | undefined =>
+				postMessageMethod(target, true) === undefined
+					? undefined
+					: (...args: any[]) => api.post(target, args, true),
 			evalScope: (code: unknown) => {
 				// `eval(x)` with anything but a string returns x: handed back as it
 				// is, the direct eval then returns it

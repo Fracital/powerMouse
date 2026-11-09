@@ -316,6 +316,10 @@ const parses = (code) => {
 				? undefined
 				: Reflect.apply(method, target, args);
 		},
+		poster: (target) =>
+			postMessageMethod(target, true) === undefined
+				? undefined
+				: (...args) => access.post(target, args, true),
 	};
 	const run = (code, remote) => {
 		try {
@@ -327,6 +331,8 @@ const parses = (code) => {
 	const shapes = [
 		"remote.postMessage({ type: 'getmessages' }, '*')",
 		"return remote?.postMessage({ type: 'getmessages' }, '*')",
+		// an argument that does work goes in the lazy form (poster)
+		"return remote?.postMessage(JSON.stringify({ type: 'getmessages' }), '*')",
 	];
 	const receivers = [null, undefined, { postMessage: () => 'posted' }];
 	const got = [];
