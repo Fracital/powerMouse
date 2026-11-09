@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>request framing</title>
+	</head>
+	<body>
+		<p>Requests with a body, as a page makes them</p>
+		<script>
+			// How each request's body was framed when it reached the server: a
+			// body whose length the page's API knows (a string, a Blob, form
+			// data, a buffer) goes out with a Content-Length, never chunked.
+			// Servers that refuse a chunked request body (IIS answers 411 Length
+			// Required, as Bing's API endpoints did) depend on it.
+			const key = Math.random().toString(36).slice(2);
+			const framing = (headers) => ({
+				length: headers['content-length'] ?? null,
+				chunked: /chunked/i.test(headers['transfer-encoding'] ?? ''),
+			});
+			const form = new FormData();
+			form.set('name', 'value');
+			const fetches = {
+				string: { method: 'POST', body: 'a string body' },
+				empty: { method: 'POST', body: '' },
+				blob: { method: 'POST', body: new Blob(['a blob body']) },
+				buffer: {
+					method: 'POST',
+					body: new TextEncoder().encode('a buffer body').buffer,
+				},
+				params: { method: 'POST', body: new URLSearchParams({ a: '1' }) },
+				form: { method: 'POST', body: form },
+				put: { method: 'PUT', body: JSON.stringify({ put: true }) },
+			};
+			const xhr = (body) =>
+				new Promise((resolve, reject) => {
+					const request = new XMLHttpRequest();
+					request.open('POST', '/echo-headers?xhr');
+					request.onload = () => resolve(JSON.parse(request.responseText));
+					request.onerror = () => reject(new Error('xhr failed'));
+					request.send(body);
+				});
+			(async () => {
+				const result = {};
+				try {
+					for (const [name, init] of Object.entries(fetches)) {
+						const response = await fetch(`/echo-headers?${name}`, init);
+						result[name] = framing(await response.json());
+					}
+					result.xhr = framing(await xhr('an xhr body'));
+					navigator.sendBeacon(
+						`/echo-headers?k=framing-${key}`,
+						'a beacon body',
+					);
+					for (let i = 0; i < 40 && !result.beacon; i++) {
+						await new Promise((resolve) => setTimeout(resolve, 100));
+						const recorded = await fetch(
+							`/echo-headers/recorded?k=framing-${key}`,
+						).then((response) => response.json());
+						if (recorded) result.beacon = framing(recorded);
+					}
+				} catch (error) {
+					result.error = String(error);
+				}
+				window.__framing = { done: true, ...result };
+			})();
+		</script>
+	</body>
+</html>
