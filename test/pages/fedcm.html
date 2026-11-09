@@ -1,0 +1,112 @@
+<!doctype html>
+<title>FEDCM</title>
+<script>
+	// FedCM (Google One Tap) against this fixture as the identity provider:
+	// the page's own origin and its other name (localhost) as a cross-site
+	// IdP, like a site calling accounts.google.com. Records the feature
+	// detection a sign-in library makes and what each call gives.
+	window.__fedcm = {};
+	const cross = location.origin.replace('127.0.0.1', 'localhost');
+	const config = (origin) => `${origin}/pages/fedcm-config.json`;
+	const provider = (origin) => ({
+		configURL: config(origin),
+		clientId: 'stomp-rp',
+	});
+	const settle = async (call) => {
+		try {
+			const value = await Promise.race([
+				call(),
+				// headless Chrome shows no account chooser: a request that got
+				// that far stays pending
+				new Promise((resolve) => setTimeout(() => resolve('pending'), 3000)),
+			]);
+			return value === null || typeof value !== 'object'
+				? String(value)
+				: value.constructor.name;
+		} catch (error) {
+			return `${error.name}: ${error.message}`;
+		}
+	};
+	__fedcm.detect = {
+		IdentityCredential: 'IdentityCredential' in window,
+		IdentityProvider: 'IdentityProvider' in window,
+		IdentityCredentialError: 'IdentityCredentialError' in window,
+		NavigatorLogin: 'NavigatorLogin' in window,
+		login: 'login' in navigator,
+		protoLogin: 'login' in Navigator.prototype,
+		typeofLogin: typeof navigator.login,
+		globals: Object.getOwnPropertyNames(window)
+			.filter((name) => /Credential|Identity|Login/.test(name))
+			.sort(),
+		credentials: 'credentials' in navigator,
+		get: Function.prototype.toString.call(navigator.credentials.get),
+		getName: navigator.credentials.get.name,
+		getLength: navigator.credentials.get.length,
+	};
+	(async () => {
+		const calls = {};
+		// the rest of the Credential Management API keeps working (first, so
+		// no FedCM request is outstanding: one get at a time)
+		calls.password = await settle(() =>
+			navigator.credentials.get({ password: true, mediation: 'silent' }),
+		);
+		calls.federated = await settle(() =>
+			navigator.credentials.get({
+				federated: { providers: [cross] },
+				mediation: 'silent',
+			}),
+		);
+		calls.preventSilentAccess = await settle(() =>
+			navigator.credentials.preventSilentAccess(),
+		);
+		calls.conditional = await settle(() =>
+			PublicKeyCredential.isConditionalMediationAvailable(),
+		);
+		calls.crossSite = await settle(() =>
+			navigator.credentials.get({ identity: { providers: [provider(cross)] } }),
+		);
+		calls.sameSite = await settle(() =>
+			navigator.credentials.get({
+				identity: { providers: [provider(location.origin)] },
+				mediation: 'silent',
+			}),
+		);
+		calls.noProviders = await settle(() =>
+			navigator.credentials.get({ identity: { providers: [] } }),
+		);
+		calls.withPassword = await settle(() =>
+			navigator.credentials.get({
+				identity: { providers: [provider(cross)] },
+				password: true,
+			}),
+		);
+		calls.identityUndefined = await settle(() =>
+			navigator.credentials.get({ identity: undefined }),
+		);
+		calls.nothing = await settle(() => navigator.credentials.get({}));
+		calls.aborted = await settle(() => {
+			const controller = new AbortController();
+			controller.abort();
+			return navigator.credentials.get({
+				identity: { providers: [provider(cross)] },
+				signal: controller.signal,
+			});
+		});
+		// the IdP-side calls a FedCM-less browser does not have
+		calls.getUserInfo = await settle(() =>
+			IdentityProvider.getUserInfo(provider(cross)),
+		);
+		calls.close = await settle(() => IdentityProvider.close());
+		calls.disconnect = await settle(() =>
+			IdentityCredential.disconnect({
+				...provider(cross),
+				accountHint: 'user@idp.test',
+			}),
+		);
+		calls.setStatus = await settle(() =>
+			navigator.login.setStatus('logged-in'),
+		);
+		__fedcm.calls = calls;
+		__fedcm.done = true;
+	})();
+</script>

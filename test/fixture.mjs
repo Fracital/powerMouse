@@ -270,6 +270,17 @@ export function startFixture(port = 8084) {
 			}
 			return res.end(JSON.stringify({ n: count.requests }));
 		}
+		// FedCM's well-known file (fedcm suite): the browser fetches it from
+		// the identity provider's site before the config the page names
+		// (test/pages/fedcm-config.json)
+		if (path === '/.well-known/web-identity') {
+			res.setHeader('content-type', 'application/json');
+			return res.end(
+				JSON.stringify({
+					provider_urls: [`http://${req.headers.host}/pages/fedcm-config.json`],
+				}),
+			);
+		}
 		if (path === '/hits') {
 			res.setHeader('content-type', 'application/json');
 			return res.end(JSON.stringify(Object.fromEntries(hits)));

@@ -1,0 +1,11 @@
+{
+	"accounts": [
+		{
+			"id": "1",
+			"email": "user@idp.test",
+			"name": "User",
+			"given_name": "User",
+			"approved_clients": ["stomp-rp"]
+		}
+	]
+}
