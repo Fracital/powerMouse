@@ -291,6 +291,17 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A request in the moment after the service worker restarts waits for its
+  controller. A restarted worker knows no controller until they answer its
+  revive, which takes a few hundred milliseconds (over a second when the
+  controller checks first), and a routed request in that window was not
+  answered at all, so it went to the host's own server: a fetch got a 404
+  and a reload showed the host's error page. For three seconds after the
+  worker starts, a request under an address whose controller has not
+  registered is held until that controller does (another controller
+  registering first does not take it over), then answered as before
+  (sw-restart suite, both modes; multi-controller, two controllers, one of
+  them late).
 - A controller shakes hands again after a service worker restart that comes
   soon after its last handshake. A restarted worker knows no controller and
   asks them once to register again; the controller ignored that request for

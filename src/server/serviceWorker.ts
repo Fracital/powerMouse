@@ -196,6 +196,7 @@ function registerController(
 	};
 	server.then((ready) => (ref.ready = ready));
 	controllers.set(directory, ref);
+	for (const wake of [...registrationWaiters]) wake();
 	// the controller's side of the port went away (it shook hands again over
 	// a new channel; Chrome does not fire this when the tab itself goes, the
 	// controller's close message covers that): forget it, unless the address
@@ -572,17 +573,81 @@ async function serve(event: FetchEvent, ref: ControllerRef): Promise<Response> {
 		: fetch(request);
 }
 
-self.addEventListener('fetch', (event: FetchEvent) => {
-	const { pathname } = new URL(event.request.url);
+/** when this worker (re)started: its first moments are the revive window */
+const STARTED_AT = Date.now();
+/**
+ * How long after the worker starts a routed request whose controller has not
+ * registered yet waits for it. A restarted worker knows no controller until
+ * they answer its revive (below), which takes a moment, more when the
+ * controller checks first; a request in that window would otherwise fall
+ * through to the host's server.
+ */
+const REVIVE_HOLD_MS = 3000;
+/** requests waiting for a controller to register, woken by every registration */
+const registrationWaiters = new Set<() => void>();
+
+/** a routed address under this worker's scope: `<scope><id>/<route>` */
+function addressShaped(pathname: string): boolean {
+	const scope = new URL(self.registration.scope).pathname;
+	if (!pathname.startsWith(scope)) return false;
+	const match = SEGMENT.exec(pathname.slice(scope.length));
+	return !!match && ID.test(match[1]);
+}
+
+/** the answer for a request whose controller is known, or null when no controller of ours takes it */
+function answerFor(
+	event: FetchEvent,
+	pathname: string,
+): Promise<Response> | null {
 	const ref = controllerFor(pathname);
 	if (ref) {
 		// the server is still opening its databases: decide once it's up
-		if (ref.ready && !ref.ready.router.willRoute(event.request.url)) return;
-		event.respondWith(bounded(event.request, serve(event, ref), ref));
-		return;
+		if (ref.ready && !ref.ready.router.willRoute(event.request.url))
+			return null;
+		return bounded(event.request, serve(event, ref), ref);
 	}
 	const orphan = orphanOf(pathname);
-	if (orphan) event.respondWith(answerOrphan(event.request, orphan));
+	return orphan ? answerOrphan(event.request, orphan) : null;
+}
+
+/**
+ * A request in the revive window: held until its own controller registers
+ * (another tab's registering does not count: that tab's controller would
+ * take the address over as an orphan's) or the window ends, then answered
+ * as it would have been, the network last
+ */
+async function heldForRevive(
+	event: FetchEvent,
+	pathname: string,
+): Promise<Response> {
+	const deadline = STARTED_AT + REVIVE_HOLD_MS;
+	while (!controllerFor(pathname) && Date.now() < deadline)
+		await new Promise<void>((resolve) => {
+			const wake = () => {
+				registrationWaiters.delete(wake);
+				clearTimeout(timer);
+				resolve();
+			};
+			const timer = setTimeout(wake, deadline - Date.now());
+			registrationWaiters.add(wake);
+		});
+	return answerFor(event, pathname) ?? fetch(event.request);
+}
+
+self.addEventListener('fetch', (event: FetchEvent) => {
+	const { pathname } = new URL(event.request.url);
+	// in the revive window an address whose controller has not answered yet
+	// waits for it, before another controller could take it over as an orphan
+	if (
+		!controllerFor(pathname) &&
+		Date.now() - STARTED_AT < REVIVE_HOLD_MS &&
+		addressShaped(pathname)
+	) {
+		event.respondWith(heldForRevive(event, pathname));
+		return;
+	}
+	const answer = answerFor(event, pathname);
+	if (answer) event.respondWith(answer);
 });
 
 self.addEventListener('install', () => {

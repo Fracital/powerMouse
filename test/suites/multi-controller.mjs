@@ -431,4 +431,92 @@ ok(
 	JSON.stringify(stale.legacy),
 );
 
+// ---- a restart: an address waits for its own controller -------------------
+
+// after a service worker restart the controllers register again one by one;
+// a request for one's address that arrives after another registered waits
+// for its own (within the revive window) instead of being taken over as an
+// orphan's. B's tab holds back its handshakes (its host page's postMessage
+// to the worker, patched here) until B's request is out; A (this tab's demo
+// controller) registers first
+const held = await context.newPage();
+await held.goto(PROXY);
+await held.waitForFunction(
+	() => window.controller && window.controller.isReady,
+	null,
+	{ timeout: 45000 },
+);
+const heldB = await held.evaluate(
+	`(async (fixture) => {
+	${GO}
+	const b = make({ id: 'held-b' });
+	await b.wait();
+	window.__heldB = b;
+	// from now on this tab's handshakes wait until released
+	const post = ServiceWorker.prototype.postMessage;
+	window.__heldInits = [];
+	window.__holding = true;
+	ServiceWorker.prototype.postMessage = function (message, transfer) {
+		if (window.__holding && message && '$stomp$controllerInit' in message) {
+			window.__heldInits.push([this, message, transfer]);
+			return;
+		}
+		return post.call(this, message, transfer);
+	};
+	window.__release = () => {
+		window.__holding = false;
+		for (const [worker, message, transfer] of window.__heldInits.splice(0))
+			post.call(worker, message, transfer);
+	};
+	return b.route(fixture + 'pages/hist-1.html');
+})(${JSON.stringify(FIXTURE)})`,
+);
+const heldA = await page.evaluate(
+	(url) => window.controller.route(url),
+	`${FIXTURE}pages/hist-2.html`,
+);
+// past the controller's guard, so each answers the revive at once
+await sleep(2500);
+const swCdp = await context.newCDPSession(page);
+await swCdp.send('ServiceWorker.enable');
+let swStopped = false;
+swCdp.on('ServiceWorker.workerVersionUpdated', ({ versions }) => {
+	if (versions.some((version) => version.runningStatus === 'stopped'))
+		swStopped = true;
+});
+await swCdp.send('ServiceWorker.stopAllWorkers');
+for (let i = 0; i < 40 && !swStopped; i++) await sleep(100);
+const loadIn = (url) =>
+	page.evaluate(
+		`(async (url) => {
+	${GO}
+	return load(url);
+})(${JSON.stringify(url)})`,
+	);
+// A's address first: it starts the worker and waits for A to register
+const heldFirst = await loadIn(heldA);
+// then B's, while B's handshake is held back; released a moment later
+const heldSecond = loadIn(heldB);
+await sleep(300);
+const releasedInits = await held.evaluate(() => {
+	const count = window.__heldInits.length;
+	window.__release();
+	return count;
+});
+const heldResult = {
+	first: heldFirst,
+	second: await heldSecond,
+	releasedInits,
+};
+ok(
+	"after a restart, a request for one controller's address waits for that controller rather than going to another that registered first",
+	heldResult.releasedInits > 0 &&
+		heldResult.first?.title === 'HIST 2' &&
+		heldResult.second?.title === 'HIST 1' &&
+		heldResult.second?.path?.startsWith('/stomp/held-b/html/'),
+	JSON.stringify(heldResult),
+);
+await swCdp.detach().catch(() => {});
+await held.close();
+
 await done(browser, errors.slice(0, 5));
