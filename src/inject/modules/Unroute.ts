@@ -72,13 +72,29 @@ export function unrouteURL(client: Client, url: string): string | null {
 
 // a stack frame carries `:line:column` after the script URL
 const LINE_COLUMN = /(?::\d+){1,2}$/;
+// a frame's location always has both, the last two
+const FRAME_LINE_COLUMN = /:\d+:\d+$/;
+// a frame line of V8's stack (`    at f (url:1:2)`, `    at url:1:2`)
+const FRAME_LINE = /^\s*at\s/;
 
 /**
- * Every routed URL inside free text (an error stack) replaced by the page's
- * URL. Internal URLs (the inject bundles) are left alone; callers that can
- * drop them do so before formatting.
+ * Every routed URL inside free text (an error stack, a message) replaced by
+ * the page's URL. Internal URLs (the inject bundles) are left alone; callers
+ * that can drop them do so before formatting.
+ *
+ * A codec's text may itself end in `:digits` (`:` is one of its characters),
+ * so where the route ends is told by where it stands, not by its look: in a
+ * frame (a line of V8's stack, or after `@` in Gecko's) the location always
+ * ends in `:line:column`, the last two; anywhere else (a message) a URL has
+ * none. Reading a route's own `:0` as a column decoded the rest to another
+ * URL (`?ms=3009` came back as `?ms=30:1`).
  */
-export function unrouteText(client: Client, text: string): string {
+export function unrouteText(
+	client: Client,
+	text: string,
+	/** `text` is one frame (a call site's text): its URLs are locations */
+	frame = false,
+): string {
 	// a blob: URL the page made carries the proxy origin: the page's is shown
 	const proxyBlob = `blob:${realmOrigin(client)}/`;
 	if (text.includes(proxyBlob))
@@ -89,14 +105,19 @@ export function unrouteText(client: Client, text: string): string {
 		`${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\s()'"<>,]*`,
 		'g',
 	);
-	return text.replace(pattern, (match) => {
-		const suffix = LINE_COLUMN.exec(match)?.[0] ?? '';
+	return text.replace(pattern, (match, offset: number, whole: string) => {
+		const line = whole.slice(whole.lastIndexOf('\n', offset - 1) + 1, offset);
+		const inFrame = frame || FRAME_LINE.test(line) || whole[offset - 1] === '@';
+		const suffix = inFrame ? (FRAME_LINE_COLUMN.exec(match)?.[0] ?? '') : '';
 		const url = match.slice(0, match.length - suffix.length);
 		const real = unrouteURL(client, url);
 		if (real !== null && real !== url) return real + suffix;
-		// no line and column after all (a URL that ends in `:digits`)
-		const whole = unrouteURL(client, match);
-		return whole !== null && whole !== match ? whole : match;
+		// not a route as it stands: one with a line and column after all
+		const short = LINE_COLUMN.exec(url)?.[0] ?? '';
+		const shorter = unrouteURL(client, url.slice(0, url.length - short.length));
+		return short && shorter !== null && shorter !== url
+			? shorter + short + suffix
+			: match;
 	});
 }
 
@@ -779,6 +800,7 @@ export default class UnrouteModule extends Module<Client> {
 					.replace(internalURL, (match) =>
 						isInternalMatch(match) ? pageCaller(index, sites).location : match,
 					),
+				true,
 			);
 		// what a page's own formatter sees: the same frame, naming page URLs
 		const cleanSite = (

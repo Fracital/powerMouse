@@ -291,6 +291,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- An error message names the page's URL right whatever the codec key. The
+  xor codec's text may end in `:digits`, and the error-text cleaning took
+  that for a line and column, decoded the rest to another URL and put the
+  digits back after it: `?ms=3009` read back as `?ms=30:1`, now and then,
+  with the key a controller drew. Where a route ends is now told by where it
+  stands: in a stack frame its location ends in `:line:column`, in a message
+  a URL has none (unroute-unit suite, with a pinned key that always ends the
+  route in `:digits`).
 - A large webpack bundle is rewritten by every rewrite worker at once.
   One script was one worker's work, and Discord's 13 MB main bundle took
   three and a half seconds in one while the page waited for it. A minified
