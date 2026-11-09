@@ -669,6 +669,135 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		return this.restricted.get(context)!;
 	}
+	/**
+	 * A child window by its name (`frames.kid`, `window['kid']`, a bare
+	 * `kid`): the browser answers from the window's named properties, which
+	 * no rewrite sees, with the raw window of whatever site the child shows.
+	 * Each child tells its parent its name (when it loads and when it names
+	 * itself), and the parent puts an accessor of that name on its
+	 * Window.prototype, ahead of the named properties object: it reads the
+	 * browser's answer and hands it out through `restrictForeign`. A global
+	 * of the page by that name stays ahead of it, as natively. (A document's
+	 * named iframe, `document.kid`, cannot be covered this way: the document's
+	 * named properties come before anything that could be defined.)
+	 */
+	exposeNames(proxyModule: ProxyModule) {
+		const global = this.client.global;
+		const exposed = new Set<string>();
+		const accessor = (
+			name: string,
+			get: (that: unknown) => unknown,
+			set: (that: unknown, value: unknown) => void,
+		): PropertyDescriptor => {
+			const getter = proxyModule.wrapFunction(
+				function () {},
+				(target, that) => get(that),
+			);
+			const setter = proxyModule.wrapFunction(
+				function (_value: unknown) {},
+				(target, that, args) => set(that, args[0]),
+			);
+			proxyModule.functionStrings.set(getter, nativeFunction(`get ${name}`));
+			proxyModule.functionStrings.set(setter, nativeFunction(`set ${name}`));
+			return {
+				configurable: true,
+				enumerable: false,
+				get: getter,
+				set: setter,
+			};
+		};
+		const restrict = (value: unknown) =>
+			this.client.restrictForeign ? this.client.restrictForeign(value) : value;
+		const windowPrototype = global.Window.prototype;
+		const named = Reflect.getPrototypeOf(windowPrototype);
+		this.client.exposeChild = (name) => {
+			if (exposed.has(name)) return;
+			exposed.add(name);
+			// never ahead of a member the browser itself puts before the names
+			if (
+				named &&
+				!Reflect.getOwnPropertyDescriptor(windowPrototype, name) &&
+				!Reflect.has(Reflect.getPrototypeOf(named) ?? {}, name)
+			)
+				Reflect.defineProperty(
+					windowPrototype,
+					name,
+					accessor(
+						name,
+						(that) => restrict(Reflect.get(named, name, that)),
+						// an assignment makes a global of the page, as natively
+						(that, value) => {
+							Reflect.defineProperty(that as object, name, {
+								value,
+								writable: true,
+								enumerable: true,
+								configurable: true,
+							});
+						},
+					),
+				);
+		};
+
+		// the named properties object itself (Window.prototype's prototype)
+		// answers every name: the page reaches it through a stand-in whose
+		// reads are restricted the same way
+		if (named) {
+			const namedStandIn = new Proxy(named, {
+				get: (target, key) => restrict(Reflect.get(target, key, target)),
+				getOwnPropertyDescriptor: (target, key) => {
+					const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+					if (descriptor && 'value' in descriptor)
+						descriptor.value = restrict(descriptor.value);
+					return descriptor;
+				},
+			});
+			const prototypeOf = <T extends (...args: any[]) => any>(target: T): T =>
+				proxyModule.wrapFunction(target, (target, that, args) => {
+					const prototype = Reflect.apply(target, that, args);
+					return prototype === named ? namedStandIn : prototype;
+				});
+			global.Object.getPrototypeOf = prototypeOf(global.Object.getPrototypeOf);
+			global.Reflect.getPrototypeOf = prototypeOf(
+				global.Reflect.getPrototypeOf,
+			);
+			const protoDescriptor = Reflect.getOwnPropertyDescriptor(
+				global.Object.prototype,
+				'__proto__',
+			);
+			if (protoDescriptor?.get)
+				Reflect.defineProperty(global.Object.prototype, '__proto__', {
+					...protoDescriptor,
+					get: prototypeOf(protoDescriptor.get),
+				});
+		}
+
+		// this window's own name, told to its parent page (a proxied one)
+		const nameDescriptor = Reflect.getOwnPropertyDescriptor(global, 'name');
+		const tell = () => {
+			if (!this.client.nested || !nameDescriptor?.get) return;
+			try {
+				const name = Reflect.apply(nameDescriptor.get, global, []) as string;
+				const parent = (this.client.parent as Record<string, any>)[
+					this.client.names.client
+				] as DocumentClient | undefined;
+				if (name) parent?.exposeChild?.(name);
+			} catch (error) {
+				// a parent of another real origin
+			}
+		};
+		tell();
+		if (this.client.nested && nameDescriptor?.set)
+			Reflect.defineProperty(global, 'name', {
+				...nameDescriptor,
+				set: proxyModule.wrapFunction(
+					nameDescriptor.set,
+					(target, that, args) => {
+						Reflect.apply(target, that, args);
+						tell();
+					},
+				),
+			});
+	}
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
@@ -746,6 +875,8 @@ export default class ContextModule extends Module<DocumentClient> {
 			}
 			return this.newRestricted(value as Context);
 		};
+
+		this.exposeNames(proxyModule);
 
 		const messageData = new WeakMap<MessageEvent, MessageData>();
 

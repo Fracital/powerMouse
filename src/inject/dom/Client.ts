@@ -358,6 +358,8 @@ export default class DocumentClient extends Client {
 	 * code needs the access helper before it runs
 	 */
 	injectChild?: (context: typeof globalThis) => void;
+	/** @internal a child window has this name (Context module): reads of it by name are restricted like `frames[i]` */
+	exposeChild?: (name: string) => void;
 	get url(): StompURL {
 		if (this.#parseBase) return this.#parseBase;
 		// a document the page made (a blob, a data: frame, an inline document
