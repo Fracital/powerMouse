@@ -3,6 +3,7 @@ import { decodeCookie, joinAnswer } from '../../../encodeCookie';
 import { geckoXHR, queueXHR } from '../../../routeURL';
 import { urlLike } from '../../../StompURL';
 import { ProcessData, SerializableRequestInit, SyncBody } from '../../../sync';
+import { headersRecord } from '../../../syncHeaders';
 import Module from '../../Module';
 import DocumentClient from '../Client';
 import { CookiesModule } from './Cookies';
@@ -115,11 +116,9 @@ export default class SyncModule extends Module<DocumentClient> {
 		processInit.referrer = init.referrer ?? location.href;
 		processInit.referrerPolicy = init.referrerPolicy;
 
-		if (init.headers instanceof Headers) {
-			processInit.headers = Object.fromEntries(init.headers.entries());
-		} else if (typeof init.headers === 'object' && init.headers === null) {
-			processInit.headers = init.headers;
-		}
+		// a plain record went nowhere before (its branch tested `=== null`):
+		// jsonAPI's content-type never reached the worker
+		processInit.headers = headersRecord(init.headers);
 
 		const data: ProcessData = {
 			url: new URL(url, location.toString()).toString(),

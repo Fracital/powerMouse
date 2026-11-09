@@ -291,6 +291,12 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- The synchronous bridge sends the request headers it is given as a plain
+  record or a list of pairs. Only a Headers of the bundle's own realm went
+  through: the branch for a record tested it for `=== null`, so every
+  record was dropped (the cookie and storage calls' `content-type` never
+  reached the worker, which did not read it). A Headers of another realm
+  (an about:blank child's) goes through too (sync-headers suite).
 - A load the proxy copies for a document no service worker controls goes
   out as the load it stands for. Such a document (an about:blank frame or
   popup the page builds, a document it opened) has its elements' loads
