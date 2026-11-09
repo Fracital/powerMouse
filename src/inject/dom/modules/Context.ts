@@ -48,8 +48,17 @@ function originKey(url: string): string | null {
 // taken before the page runs: a page may replace the global
 const NativeWeakRef = WeakRef;
 
+/** whether a frame's window is still on the initial about:blank its creation gave it */
+export function initialBlank(context: typeof globalThis): boolean {
+	try {
+		return context.location.href === 'about:blank';
+	} catch (error) {
+		return false;
+	}
+}
+
 /** whether a window runs Stomp (a cross-origin one throws on the check) */
-function isStomp(value: unknown, client: string): boolean {
+export function isStomp(value: unknown, client: string): boolean {
 	try {
 		return (
 			typeof value === 'object' && value !== null && client in (value as object)
@@ -589,6 +598,30 @@ export default class ContextModule extends Module<DocumentClient> {
 			this.restrictedContexts.set(restricted, context);
 		}
 		return this.restricted.get(context)!;
+	}
+	/**
+	 * A window whose next document is of another site (the window
+	 * `window.open(url)` returns, a frame's contentWindow read while the
+	 * document its src names is on the way): its stand-in from the start.
+	 * Every proxied site shares the real origin, so the raw window the page
+	 * would hold now is that other site's window once its document arrives.
+	 * A window the page already holds is handed back as it is.
+	 */
+	pending(context: Context, url: unknown): RestrictedContext {
+		if (this.held.has(context)) return context;
+		let target: URL | undefined;
+		try {
+			target = new URL(String(url), this.client.url.toString());
+		} catch (error) {
+			// no URL: the window's own document decides
+		}
+		if (
+			target === undefined ||
+			!/^https?:$/.test(target.protocol) ||
+			sameOrigin(this.client.url.toString(), target.href)
+		)
+			return this.newRestricted(context);
+		return this.restrictOpaque(context);
 	}
 	newRestricted(context: Context): RestrictedContext {
 		// a cross-origin window (the host application in isolation mode) throws

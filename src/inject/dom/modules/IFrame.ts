@@ -3,7 +3,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
 import { addClientModules } from '../document';
-import ContextModule from './Context';
+import ContextModule, { initialBlank, isStomp } from './Context';
 
 export default class IFrameModule extends Module<DocumentClient> {
 	apply() {
@@ -39,6 +39,8 @@ export default class IFrameModule extends Module<DocumentClient> {
 			if (!client.applied) client.apply();
 		};
 
+		const windowModule = this.client.getModule(ContextModule)!;
+
 		// a popup the page opens without a URL (about:blank) is a document
 		// nobody fetched: inject it like a child frame, so what the page writes
 		// into it is rewritten; the page gets the window as a top-level page
@@ -47,12 +49,10 @@ export default class IFrameModule extends Module<DocumentClient> {
 		this.client.global.open = proxyModule.wrapFunction(
 			this.client.global.open,
 			(target, that, args) => {
+				const page = args[0];
 				const opened = Reflect.apply(target, that, args) as
 					typeof globalThis | null;
 				if (!opened) return opened;
-				// the page holds the window it opened as itself, wherever it
-				// navigates (its messages' source is this object)
-				this.client.getModule(ContextModule)!.hold(opened);
 				try {
 					if (opened.location.href === 'about:blank') {
 						injectContext(opened);
@@ -67,11 +67,42 @@ export default class IFrameModule extends Module<DocumentClient> {
 				} catch (error) {
 					// cross-origin: not ours to inject
 				}
-				return opened;
+				// the window as the page may hold it: one of its own origin as
+				// itself, wherever it navigates later (its messages' source is
+				// this object), one of another site (an existing frame by name,
+				// or one whose next document is the URL given) restricted
+				if (!isStomp(opened, this.client.names.client)) {
+					windowModule.hold(opened);
+					return opened;
+				}
+				return windowModule.pending(opened, page);
 			},
 		);
 
-		const windowModule = this.client.getModule(ContextModule)!;
+		// the document an embedding element hands out, as its window is: the
+		// document of a window this page may hold as itself, null for one of
+		// another site (the browser's own answer across origins)
+		const reachableDocument = (document: Document | null) => {
+			if (!document) return document;
+			const view = document.defaultView as typeof globalThis | null;
+			if (!view) return document;
+			const reached = windowModule.newRestricted(view);
+			return windowModule.restrictedContexts.has(reached) ? null : document;
+		};
+		const hookSVGDocument = (prototype: object, native: Function) =>
+			Reflect.defineProperty(prototype, 'getSVGDocument', {
+				configurable: true,
+				enumerable: true,
+				writable: true,
+				value: proxyModule.wrapFunction(native, (target, that, args) =>
+					reachableDocument(Reflect.apply(target, that, args)),
+				),
+			});
+		// <embed> has no contentWindow, only this
+		const embed = this.client.global.HTMLEmbedElement?.prototype as
+			{ getSVGDocument?: unknown } | undefined;
+		if (embed && typeof embed.getSVGDocument === 'function')
+			hookSVGDocument(embed, embed.getSVGDocument);
 
 		// the three elements that embed a document the page can reach: iframe,
 		// the frameset's frame, and object with an HTML or SVG document (embed
@@ -108,7 +139,11 @@ export default class IFrameModule extends Module<DocumentClient> {
 				if (context) {
 					injectContext(context);
 
-					const restricted = windowModule.newRestricted(context);
+					// still on its initial about:blank while the document its src
+					// names is on the way: that document decides
+					const restricted = initialBlank(context)
+						? windowModule.pending(context, Reflect.get(element, 'src'))
+						: windowModule.newRestricted(context);
 					if (
 						!(context as Record<string, any>)[this.client.names.client]!.applied
 					) {
@@ -129,6 +164,13 @@ export default class IFrameModule extends Module<DocumentClient> {
 					(target, that) => getContentWindow(that),
 				),
 			});
+
+			// getSVGDocument() hands out the document like contentDocument (an
+			// SVG one): never another site's
+			const getSVGDocument = (ctor.prototype as { getSVGDocument?: unknown })
+				.getSVGDocument;
+			if (typeof getSVGDocument === 'function')
+				hookSVGDocument(ctor.prototype, getSVGDocument);
 
 			Reflect.defineProperty(ctor.prototype, 'contentDocument', {
 				configurable: true,
