@@ -1,0 +1,15 @@
+<!doctype html>
+<title>SR OPENER</title>
+<!--
+	A document without script that opens a popup when its link is clicked
+	(sandbox-restrictions suite, popup cases). Served under
+	/pages/deep/<run>/<case>/: the popup is sandbox-restrictions-noscript.html
+	in the same directory, so its beacons name the case.
+-->
+<img src="beacon/n-opener" alt="" />
+<a id="popup" target="_blank" href="sandbox-restrictions-noscript.html"
+	>open a popup</a
+>
+<a id="toplink" target="_top" href="/pages/sandbox-restrictions-landed.html"
+	>navigate the top</a
+>

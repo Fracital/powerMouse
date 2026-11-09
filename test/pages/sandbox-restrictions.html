@@ -1,0 +1,190 @@
+<!doctype html>
+<title>SR HARNESS</title>
+<body>
+	<script>
+		// Frames the page sandboxes, each with the restrictions natively in
+		// force (sandbox-restrictions suite). `run` names the suite run, so the
+		// beacons of each run and case are their own: a frame without
+		// allow-scripts loads sandbox-restrictions-noscript.html under
+		// /pages/deep/<run>/<case>/, whose scripts would each request a
+		// beacon; the probe frames report what they may do; this page reads
+		// what it may reach of each frame.
+		const run = new URLSearchParams(location.search).get('run') || 'x';
+		const deep = (name) => `/pages/deep/${run}/${name}/`;
+		document.cookie = 'srck=1; path=/';
+		window.__sr = { reports: {}, parentReads: {}, done: false };
+		addEventListener('message', (event) => {
+			if (event.data && typeof event.data.sr === 'string')
+				__sr.reports[event.data.sr] = event.data.report;
+		});
+		const frame = (id, sandbox, src) => {
+			const element = document.createElement('iframe');
+			element.id = id;
+			if (sandbox !== null) element.setAttribute('sandbox', sandbox);
+			if (src !== null) element.src = src;
+			document.body.append(element);
+			return element;
+		};
+		const noscript = (name) =>
+			`${deep(name)}sandbox-restrictions-noscript.html`;
+		const probe = (name, extra = '') =>
+			`/pages/sandbox-restrictions-probe.html?run=${run}&case=${name}${extra}`;
+
+		// documents without allow-scripts, and controls that may run scripts
+		const NOSCRIPT = {
+			'ns-empty': '',
+			'ns-same': 'allow-same-origin',
+			'ns-most':
+				'allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-top-navigation allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock',
+			'ns-upper': 'ALLOW-SAME-ORIGIN Allow-Forms',
+			'ns-control': 'allow-scripts allow-same-origin',
+			'ns-plain': null,
+		};
+		for (const [name, sandbox] of Object.entries(NOSCRIPT))
+			frame(name, sandbox, noscript(name));
+
+		// a sandboxed srcdoc document
+		for (const [name, sandbox] of [
+			['sd-empty', ''],
+			['sd-control', null],
+		]) {
+			const element = document.createElement('iframe');
+			element.id = name;
+			if (sandbox !== null) element.setAttribute('sandbox', sandbox);
+			element.srcdoc = `<script>fetch('${deep(name)}beacon/s-inline')<\/script><img src="${deep(name)}beacon/n-loaded"><noscript><img src="${deep(name)}beacon/n-noscript"></noscript>`;
+			document.body.append(element);
+		}
+
+		// markup this page writes into a sandboxed frame's about:blank
+		for (const [name, sandbox] of [
+			['wr-same', 'allow-same-origin'],
+			['wr-control', null],
+		]) {
+			const element = frame(name, sandbox, null);
+			const child = element.contentDocument;
+			child.open();
+			child.write(
+				`<script>fetch('${deep(name)}beacon/s-written')<\/script><img src="${deep(name)}beacon/n-written">`,
+			);
+			child.close();
+			child.body.insertAdjacentHTML(
+				'beforeend',
+				`<img src="${deep(name)}missing.png" onerror="fetch('${deep(name)}beacon/s-inserted')">`,
+			);
+			const script = child.createElement('script');
+			script.textContent = `fetch('${deep(name)}beacon/s-appended')`;
+			child.body.append(script);
+		}
+
+		// a javascript: URL this page navigates a sandboxed frame to
+		for (const [name, sandbox] of [
+			['js-same', 'allow-same-origin'],
+			['js-control', null],
+		])
+			frame(
+				name,
+				sandbox,
+				`javascript:fetch('${deep(name)}beacon/s-jsurl');void 0`,
+			);
+
+		// the sandbox applies from the next navigation on: a frame sandboxed
+		// after it loaded keeps its document, and the next one is sandboxed;
+		// a frame whose sandbox goes keeps it until it navigates
+		const late = frame('ns-late', null, noscript('ns-late'));
+		late.addEventListener(
+			'load',
+			() => {
+				late.setAttribute('sandbox', '');
+				late.src = noscript('ns-late-next');
+			},
+			{ once: true },
+		);
+		const lifted = frame('ns-lifted', '', noscript('ns-lifted'));
+		lifted.addEventListener(
+			'load',
+			() => {
+				lifted.removeAttribute('sandbox');
+				lifted.src = noscript('ns-lifted-next');
+			},
+			{ once: true },
+		);
+
+		// frames whose scripts run, under every other restriction
+		const PROBES = {
+			'p-scripts': ['allow-scripts', '&open'],
+			'p-same': ['allow-scripts allow-same-origin', '&open'],
+			'p-all': [
+				'allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock',
+				'',
+			],
+			'p-plain': [null, ''],
+			'p-nested': ['allow-scripts', '&nest&open'],
+			'p-nested-same': ['allow-scripts allow-same-origin', '&nest&open'],
+		};
+		for (const [name, [sandbox, extra]] of Object.entries(PROBES))
+			frame(name, sandbox, probe(name, extra));
+
+		// sandboxed after it loaded: its document stays as it was, the next one
+		// is sandboxed
+		const probeLate = frame('p-late', null, probe('p-late'));
+		const reported = (name) =>
+			new Promise((resolve) => {
+				const poll = () =>
+					name in __sr.reports ? resolve() : setTimeout(poll, 100);
+				poll();
+			});
+		reported('p-late').then(async () => {
+			probeLate.setAttribute('sandbox', 'allow-scripts');
+			probeLate.contentWindow.postMessage({ sr: 'again' }, '*');
+			await reported('p-late-again');
+			probeLate.src = probe('p-late-next');
+		});
+
+		const EXPECTED = [
+			...Object.keys(PROBES),
+			'p-nested-child',
+			'p-nested-same-child',
+			'p-late',
+			'p-late-again',
+			'p-late-next',
+		];
+		const started = Date.now();
+		const finish = () => {
+			if (
+				EXPECTED.some((name) => !(name in __sr.reports)) &&
+				Date.now() - started < 25000
+			)
+				return setTimeout(finish, 250);
+			for (const name of [
+				...Object.keys(NOSCRIPT),
+				...Object.keys(PROBES),
+				'sd-empty',
+				'sd-control',
+				'wr-same',
+				'wr-control',
+			]) {
+				const element = document.getElementById(name);
+				const read = (run) => {
+					try {
+						return run();
+					} catch (error) {
+						return `threw ${error.name}`;
+					}
+				};
+				__sr.parentReads[name] = {
+					contentDocument: read(() => {
+						const child = element.contentDocument;
+						return child === null ? null : typeof child.title;
+					}),
+					windowDocument: read(
+						() => typeof element.contentWindow.document.title,
+					),
+					sandbox: element.getAttribute('sandbox'),
+					list: [...element.sandbox].join(' '),
+				};
+			}
+			__sr.done = true;
+		};
+		setTimeout(finish, 1000);
+	</script>
+</body>

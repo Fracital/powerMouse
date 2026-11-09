@@ -1,0 +1,8 @@
+<!doctype html>
+<title>SR INNER</title>
+<!-- a frame inside sandbox-restrictions-noscript.html: it inherits the sandbox -->
+<script>
+	fetch('beacon/s-nested');
+</script>
+<img src="beacon/n-nested" alt="" />
+<noscript><img src="beacon/n-nested-noscript" alt="" /></noscript>

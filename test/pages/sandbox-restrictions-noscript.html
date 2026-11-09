@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+	<head>
+		<title>SR NOSCRIPT</title>
+		<!--
+			Every way a document runs script, for a frame sandboxed without
+			allow-scripts (sandbox-restrictions suite). Served under
+			/pages/deep/<run>/<case>/, so each vector's relative beacon names its
+			run and case: beacon/s-* is a script that ran, beacon/n-* is a load
+			that needs no script (the document rendered, its noscript content
+			shows). Natively no s-* beacon of a frame without allow-scripts
+			ever arrives.
+		-->
+		<noscript><link rel="stylesheet" href="beacon/n-noscript-head" /></noscript>
+		<script>
+			fetch('beacon/s-inline');
+		</script>
+		<script type="module">
+			fetch('beacon/s-module');
+		</script>
+		<script src="/pages/sandbox-restrictions-exec.js?b=s-external"></script>
+		<script
+			type="module"
+			src="/pages/sandbox-restrictions-exec-module.js"
+		></script>
+	</head>
+	<body onload="fetch('beacon/s-bodyonload')">
+		<img src="beacon/n-loaded" alt="" />
+		<noscript><img src="beacon/n-noscript" alt="" /></noscript>
+		<img src="beacon/missing.png" onerror="fetch('beacon/s-onerror')" alt="" />
+		<svg onload="fetch('beacon/s-svgonload')"></svg>
+		<details open ontoggle="fetch('beacon/s-ontoggle')"></details>
+		<a id="jslink" href="javascript:fetch('beacon/s-jslink')"
+			>javascript link</a
+		>
+		<iframe
+			src="javascript:'<script>fetch(&quot;beacon/s-jsframe&quot;)</script>'"
+		></iframe>
+		<iframe
+			srcdoc="<script>fetch('beacon/s-srcdoc')</script><img src='beacon/n-srcdoc'>"
+		></iframe>
+		<iframe src="sandbox-restrictions-inner.html"></iframe>
+		<object
+			data="sandbox-restrictions-inner-object.html"
+			type="text/html"
+		></object>
+	</body>
+</html>

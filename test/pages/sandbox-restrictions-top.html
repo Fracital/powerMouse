@@ -1,0 +1,22 @@
+<!doctype html>
+<title>SR TOP</title>
+<body>
+	<script>
+		// One sandboxed frame that tries to navigate this page (sandbox-
+		// restrictions suite, top navigation cases): `sandbox` is its sandbox,
+		// `mode` how it tries (auto: a script at load, click: a button the
+		// suite clicks, custom: a script to a mailto: URL, link: a target=_top
+		// link the suite clicks).
+		const query = new URLSearchParams(location.search);
+		const run = query.get('run') || 'x';
+		const name = query.get('case') || 'tn';
+		const mode = query.get('mode') || 'auto';
+		const element = document.createElement('iframe');
+		element.setAttribute('sandbox', query.get('sandbox') || '');
+		element.src =
+			mode === 'link'
+				? `/pages/deep/${run}/${name}/sandbox-restrictions-opener.html`
+				: `/pages/sandbox-restrictions-probe.html?run=${run}&case=${name}&topnav=${mode}&report=beacon`;
+		document.body.append(element);
+	</script>
+</body>

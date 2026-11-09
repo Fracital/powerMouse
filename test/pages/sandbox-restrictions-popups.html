@@ -1,0 +1,40 @@
+<!doctype html>
+<title>SR POPUPS</title>
+<body>
+	<script>
+		// Frames that open popups (sandbox-restrictions suite). A popup a
+		// sandboxed frame opens is sandboxed the same way unless the frame has
+		// allow-popups-to-escape-sandbox; without allow-popups none opens. The
+		// suite clicks each frame's link or button; popups report by beacon.
+		const run = new URLSearchParams(location.search).get('run') || 'x';
+		const deep = (name) => `/pages/deep/${run}/${name}/`;
+		const frame = (id, sandbox, src) => {
+			const element = document.createElement('iframe');
+			element.id = id;
+			element.setAttribute('sandbox', sandbox);
+			element.src = src;
+			document.body.append(element);
+		};
+		for (const [name, sandbox] of [
+			['pop-noscript', 'allow-popups allow-same-origin'],
+			[
+				'pop-noscript-escape',
+				'allow-popups allow-popups-to-escape-sandbox allow-same-origin',
+			],
+			['pop-noscript-blocked', 'allow-same-origin'],
+		])
+			frame(name, sandbox, `${deep(name)}sandbox-restrictions-opener.html`);
+		for (const [name, sandbox] of [
+			['pop-scripts', 'allow-scripts allow-popups'],
+			[
+				'pop-scripts-escape',
+				'allow-scripts allow-popups allow-popups-to-escape-sandbox',
+			],
+		])
+			frame(
+				name,
+				sandbox,
+				`/pages/sandbox-restrictions-probe.html?run=${run}&case=${name}&popup&report=beacon`,
+			);
+	</script>
+</body>

@@ -1,0 +1,226 @@
+<!doctype html>
+<title>SR PROBE</title>
+<body>
+	<script>
+		// What a sandboxed frame may do (sandbox-restrictions suite): its origin,
+		// its storage, its parent, its requests, forms, popups, modals, top
+		// navigation, downloads, pointer lock, presentation and orientation
+		// lock. `case` names the report, `run` the suite run; `open` and
+		// `topnav` try what a frame without allow-popups or
+		// allow-top-navigation must not do, `nest` adds a child frame with no
+		// sandbox of its own, `popup` shows a button that opens this probe in
+		// a popup, `report=beacon` reports by a request to the fixture (a popup
+		// or a frame whose top navigates away has no one to post to).
+		const query = new URLSearchParams(location.search);
+		const run = query.get('run') || 'x';
+		const name = query.get('case') || 'probe';
+		const report = {};
+		const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const t = (key, run) => {
+			try {
+				report[key] = run();
+			} catch (error) {
+				report[key] = `threw ${error.name}`;
+			}
+		};
+		const ta = async (key, run) => {
+			try {
+				report[key] = await run();
+			} catch (error) {
+				report[key] =
+					`rejected ${error && error.name}: ${error && error.message}`;
+			}
+		};
+		const send = (key, value) => {
+			if (query.get('report') === 'beacon')
+				fetch(
+					`/sr-report/${run}/${key}/${encodeURIComponent(JSON.stringify(value))}`,
+				).catch(() => {});
+			else top.postMessage({ sr: key, report: value }, '*');
+		};
+		let prints = 0;
+		addEventListener('beforeprint', () => prints++);
+		addEventListener('message', (event) => {
+			if (event.data && event.data.sr === 'again')
+				send(`${name}-again`, {
+					origin: self.origin,
+					localStorage: (() => {
+						try {
+							return typeof localStorage.length;
+						} catch (error) {
+							return `threw ${error.name}`;
+						}
+					})(),
+				});
+		});
+
+		const topNavigation = (url) => {
+			try {
+				top.location.href = url;
+				return 'no throw';
+			} catch (error) {
+				return `threw ${error.name}: ${error.message}`;
+			}
+		};
+
+		const mode = query.get('topnav');
+		if (mode === 'auto' || mode === 'custom')
+			// a frame whose top may navigate away says what it caught first
+			setTimeout(() => {
+				const caught = topNavigation(
+					mode === 'custom'
+						? 'mailto:sr@example.com'
+						: `/pages/sandbox-restrictions-landed.html?${name}`,
+				);
+				send(name, { caught });
+			}, 200);
+		else if (mode === 'click') {
+			const button = document.createElement('button');
+			button.id = 'topnav';
+			button.textContent = 'navigate top';
+			button.onclick = () =>
+				send(name, {
+					caught: topNavigation(
+						`/pages/sandbox-restrictions-landed.html?${name}`,
+					),
+				});
+			document.body.append(button);
+		} else if (query.has('popup')) {
+			const button = document.createElement('button');
+			button.id = 'open';
+			button.textContent = 'open';
+			button.onclick = () => {
+				const opened = window.open(
+					`/pages/sandbox-restrictions-probe.html?run=${run}&case=${name}-popup&report=beacon`,
+				);
+				send(`${name}-opener`, { opened: opened === null ? null : 'window' });
+			};
+			document.body.append(button);
+		} else
+			(async () => {
+				t('origin', () => self.origin);
+				t('localStorage', () => {
+					localStorage.setItem('sr', '1');
+					return localStorage.getItem('sr');
+				});
+				t('sessionStorage', () => {
+					sessionStorage.setItem('sr', '1');
+					return sessionStorage.getItem('sr');
+				});
+				t('cookieRead', () => document.cookie.includes('srck=1'));
+				t('cookieWrite', () => {
+					document.cookie = `srw-${name}=1`;
+					return 'written';
+				});
+				await ta(
+					'indexedDB',
+					() =>
+						new Promise((resolve) => {
+							const request = indexedDB.open('sr-probe');
+							request.onsuccess = () => {
+								request.result.close();
+								resolve('opened');
+							};
+							request.onerror = () =>
+								resolve(`error ${request.error && request.error.name}`);
+						}),
+				);
+				await ta('caches', async () => {
+					await caches.keys();
+					return 'listed';
+				});
+				t('frameElement', () =>
+					frameElement === null ? null : frameElement.tagName,
+				);
+				t('parentDocument', () => typeof parent.document.title);
+				t('topDocument', () => typeof top.document.title);
+				await ta('fetch', async () => {
+					const response = await fetch('/echo-headers');
+					const headers = await response.json();
+					return {
+						origin: headers.origin ?? null,
+						cookie: (headers.cookie || '').includes('srck=1'),
+						site: headers['sec-fetch-site'] ?? null,
+					};
+				});
+				await ta('fetchOmit', async () => {
+					const response = await fetch('/echo-headers', {
+						credentials: 'omit',
+						method: 'POST',
+						body: 'x',
+					});
+					const headers = await response.json();
+					return { origin: headers.origin ?? null };
+				});
+				// a form submission into a frame of this document
+				await ta(
+					'form',
+					() =>
+						new Promise((resolve) => {
+							const sink = document.createElement('iframe');
+							sink.name = `sink-${name}`;
+							document.body.append(sink);
+							let loads = 0;
+							let submits = 0;
+							setTimeout(() => {
+								sink.addEventListener('load', () => loads++);
+								const form = document.createElement('form');
+								form.action = '/pages/sandbox-restrictions-landed.html';
+								form.target = sink.name;
+								form.addEventListener('submit', () => submits++);
+								form.append(document.createElement('button'));
+								document.body.append(form);
+								form.requestSubmit();
+								form.submit();
+								setTimeout(
+									() => resolve({ submits, navigated: loads > 0 }),
+									1500,
+								);
+							}, 200);
+						}),
+				);
+				if (query.has('open'))
+					t('open', () => {
+						const opened = window.open(
+							'/pages/sandbox-restrictions-landed.html',
+							`sr-open-${name}`,
+						);
+						if (opened) opened.close();
+						return opened === null ? null : 'window';
+					});
+				t('alert', () => String(alert(`sr:${name}:alert`)));
+				t('confirm', () => String(confirm(`sr:${name}:confirm`)));
+				t('prompt', () => String(prompt(`sr:${name}:prompt`)));
+				t('print', () => String(print()));
+				await settle(100);
+				report.prints = prints;
+				t('download', () => {
+					const link = document.createElement('a');
+					link.href = '/pages/sandbox-restrictions-dl.txt';
+					link.download = `sr-${name}.txt`;
+					document.body.append(link);
+					link.click();
+					return 'clicked';
+				});
+				await ta('pointerLock', async () => {
+					await document.body.requestPointerLock();
+					document.exitPointerLock();
+					return 'locked';
+				});
+				await ta('presentation', async () => {
+					await new PresentationRequest('https://example.com/').start();
+					return 'started';
+				});
+				await ta('orientation', async () => {
+					await screen.orientation.lock('portrait-primary');
+					return 'locked';
+				});
+				send(name, report);
+				if (query.has('nest')) {
+					const child = document.createElement('iframe');
+					child.src = `/pages/sandbox-restrictions-probe.html?run=${run}&case=${name}-child${query.has('open') ? '&open' : ''}`;
+					document.body.append(child);
+				}
+			})();
+	</script>
+</body>
