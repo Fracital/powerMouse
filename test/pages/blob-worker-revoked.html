@@ -1,0 +1,44 @@
+<!doctype html>
+<title>BLOB WORKER REVOKED</title>
+<script>
+	// Workers started from blob: URLs the page revokes at once, as pages do
+	// right after `new Worker()`: a classic worker, a module worker, and one
+	// whose script imports a second blob: URL also revoked. Each posts what it
+	// ran into window.__revoked, and the page's own fetch of each revoked URL
+	// what it got (`<name>Fetch`).
+	const report = (window.__revoked = {});
+	const start = (name, source, options) => {
+		const url = URL.createObjectURL(
+			new Blob([source], { type: 'text/javascript' }),
+		);
+		const worker = new Worker(url, options);
+		URL.revokeObjectURL(url);
+		// revoked is revoked: nothing else may load it any more
+		fetch(url).then(
+			() => (report[`${name}Fetch`] = 'loaded'),
+			() => (report[`${name}Fetch`] = 'failed'),
+		);
+		// every message the page's own listener gets, as natively: the
+		// proxy's bootstrap says nothing the page could see
+		const seen = (report[`${name}Messages`] = []);
+		worker.addEventListener(
+			'message',
+			(event) => seen.push(JSON.stringify(event.data)),
+			true,
+		);
+		worker.onmessage = (event) => (report[name] = event.data);
+		worker.onerror = (event) =>
+			(report[name] = `error: ${event.message || 'worker error'}`);
+	};
+	start('classic', `postMessage('ran');`);
+	start('module', `postMessage('ran');`, { type: 'module' });
+	const inner = URL.createObjectURL(
+		new Blob([`self.innerRan = 'ran';`], { type: 'text/javascript' }),
+	);
+	start(
+		'imports',
+		`importScripts(${JSON.stringify(inner)}); postMessage(self.innerRan);`,
+	);
+	setTimeout(() => URL.revokeObjectURL(inner), 0);
+	setTimeout(() => (report.done = true), 3000);
+</script>

@@ -291,6 +291,18 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A worker started from a blob: URL that the page revokes at once starts.
+  Pages revoke the URL right after `new Worker(url)`, which the browser
+  allows: it resolves the URL when the Worker is constructed. The proxy
+  starts a blob: worker from a bootstrap of its own that imports the
+  page's script inside the worker, a moment later, and found it revoked:
+  the worker failed to load. The worker hook now resolves the URL at
+  construction too, to the Blob the page minted it for, and the bootstrap
+  imports a private URL of that Blob. The page's revoke stays native and
+  immediate: its own fetch of the revoked URL fails at once, and a URL
+  the worker imports after the page revoked it fails, as natively
+  (blob-worker-revoked suite, both modes, against the page loaded
+  natively, classic and module workers).
 - A script from a blob that the proxy has nothing to rewrite in runs as a
   classic script. The page's script blobs are rewritten when it makes them,
   and one that came back unchanged was taken for one that does not parse as

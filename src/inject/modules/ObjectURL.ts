@@ -3,6 +3,7 @@ import { BLOB_MINTED } from '../../transport/messages';
 import Client from '../Client';
 import { htmlBlobs, htmlBlobURLs } from '../htmlBlobs';
 import Module from '../Module';
+import { blobsByURL, isBlob } from '../workerBlobs';
 import ProxyModule from './Proxy';
 
 /**
@@ -48,6 +49,8 @@ export default class ObjectURLModule extends Module<Client> {
 				const markup = htmlBlobs.get(args[0] as Blob);
 				if (markup !== undefined)
 					htmlBlobURLs.set(url, { markup, url: this.client.url.toString() });
+				// the registry's entry, for a worker started from it (workerBlobs)
+				if (isBlob(args[0])) blobsByURL.set(url, args[0]);
 				this.#register(url);
 				return pageBlobURL(url);
 			},
@@ -58,6 +61,7 @@ export default class ObjectURLModule extends Module<Client> {
 				if (args.length) {
 					args[0] = proxyBlobURL(String(args[0]));
 					htmlBlobURLs.delete(args[0] as string);
+					blobsByURL.delete(args[0] as string);
 				}
 				return Reflect.apply(target, that, args);
 			},

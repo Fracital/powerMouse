@@ -4,6 +4,7 @@ import StompURL from '../../StompURL';
 import { WORKER_BASE } from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
+import { blobsByURL, PRIVATE_URL_MS, WORKER_LOADED } from '../workerBlobs';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
 
 const WORKER_CTOR_ERROR = (name: string) =>
@@ -26,10 +27,28 @@ export default class WorkerModule extends Module<Client> {
 		 * client), then the page's blob. A document rewrote the blob's script
 		 * when the page made it (BlobDocuments); a worker's are not rewritten.
 		 */
+		/** the private URL each worker took its script from, released once it has (see workerBlobs) */
+		let lastPrivate: string | undefined;
 		const workerURL = (source: string, isModule: boolean): string => {
+			lastPrivate = undefined;
 			const url = new URL(source, this.client.url.toString());
 			const type = isModule ? 'workerModule' : 'worker';
 			if (url.protocol === 'blob:') {
+				// resolved now, as the browser resolves it at construction: the
+				// bootstrap imports a private URL of the page's Blob, which the
+				// page's revoke right after `new Worker()` does not reach
+				// (workerBlobs). A URL whose Blob is not known here is imported
+				// as it is
+				const blob = blobsByURL.get(proxyBlobURL(url.href));
+				let script = url.href;
+				// once the import is done the bootstrap says so, on a message
+				// the hook below takes before any of the page's listeners
+				let loaded = '';
+				if (blob) {
+					script = lastPrivate = proxyBlobURL(global.URL.createObjectURL(blob));
+					// (a shared worker's scope has no postMessage)
+					loaded = `\nif (typeof postMessage === 'function') postMessage({ [${JSON.stringify(WORKER_LOADED)}]: ${JSON.stringify(script)} });`;
+				}
 				// the page's URL first, so the client resolves relative URLs
 				// against it rather than against the blob
 				const base = `globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(
@@ -44,14 +63,15 @@ export default class WorkerModule extends Module<Client> {
 							// that come meanwhile held for the handlers it sets
 							modifyJS('', this.client.url, this.client.config, type) +
 							`\nawait ${this.client.names.client}.holdEvents(import(${JSON.stringify(
-								proxyBlobURL(url.href),
-							)}));`
+								proxyBlobURL(script),
+							)}));` +
+							loaded
 						: modifyJS(
-								`importScripts(${JSON.stringify(url.href)});`,
+								`importScripts(${JSON.stringify(script)});`,
 								this.client.url,
 								this.client.config,
 								type,
-							));
+							) + loaded);
 				// the bootstrap's own blob: URL goes to the browser, so in the
 				// proxy's form (createObjectURL hands the page the page's)
 				return proxyBlobURL(
@@ -68,6 +88,31 @@ export default class WorkerModule extends Module<Client> {
 			);
 		};
 
+		/**
+		 * Release a worker's private URL when its bootstrap says it has taken
+		 * it. The listener is the worker's first, and capturing (a page's
+		 * capturing listener would run before a bubbling one), so the message
+		 * stops there: the page's own never see it. A worker whose script
+		 * failed before saying so lets it go after PRIVATE_URL_MS
+		 */
+		const releaseOnLoad = (worker: Worker, own: string) => {
+			let released = false;
+			const release = () => {
+				if (released) return;
+				released = true;
+				worker.removeEventListener('message', listener, true);
+				global.URL.revokeObjectURL(own);
+			};
+			const listener = (event: Event) => {
+				const data = (event as MessageEvent).data;
+				if (data?.[WORKER_LOADED] !== own) return;
+				event.stopImmediatePropagation();
+				release();
+			};
+			worker.addEventListener('message', listener, true);
+			setTimeout(release, PRIVATE_URL_MS);
+		};
+
 		const isModuleOptions = (options: unknown) =>
 			typeof options === 'object' &&
 			options !== null &&
@@ -81,8 +126,10 @@ export default class WorkerModule extends Module<Client> {
 					if (!newTarget) throw new TypeError(WORKER_CTOR_ERROR('Worker'));
 					catchRequiredArguments(args.length, 1, 'Worker', 'constructor');
 					args[0] = workerURL(String(args[0]), isModuleOptions(args[1]));
+					const own = lastPrivate;
 					const worker: Worker = Reflect.construct(target, args, newTarget);
 					this.client.provisionWorkerTransport(worker);
+					if (own) releaseOnLoad(worker, own);
 					return worker;
 				},
 				true,
@@ -96,6 +143,11 @@ export default class WorkerModule extends Module<Client> {
 						throw new TypeError(WORKER_CTOR_ERROR('SharedWorker'));
 					catchRequiredArguments(args.length, 1, 'SharedWorker', 'constructor');
 					args[0] = workerURL(String(args[0]), isModuleOptions(args[1]));
+					// a shared worker has no postMessage to say it took its
+					// private URL: that one goes after PRIVATE_URL_MS
+					const own = lastPrivate;
+					if (own)
+						setTimeout(() => global.URL.revokeObjectURL(own), PRIVATE_URL_MS);
 					// shared workers are found by name within an origin: keep
 					// proxied origins apart
 					const suffix = `@${this.client.url.url.origin}`;
