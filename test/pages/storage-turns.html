@@ -1,0 +1,49 @@
+<!doctype html>
+<title>STORAGE TURNS</title>
+<script>
+	// Discord writes a large value, keeps its main thread busy while the
+	// service worker stores it, and writes again before it has seen the
+	// answer. Through the proxy the second write waited 10 s in the worker for
+	// the first, which had landed already, and every read meanwhile waited
+	// 3 s for it: Discord's login took 23 s instead of 3. This page does the
+	// same in two tasks, times a read right after, then reloads itself in the
+	// task of its last write and times the reads of both keys. The write
+	// phase's results ride in the URL fragment across the reload.
+	window.__st = {};
+	const large = 'large|' + 'x'.repeat(60 * 1024);
+	const timed = (key) => {
+		const start = performance.now();
+		const value = localStorage.getItem(key);
+		return {
+			value: value === null ? null : `${value.length}:${value.slice(0, 6)}`,
+			ms: Math.round(performance.now() - start),
+		};
+	};
+
+	if (location.hash.startsWith('#read:')) {
+		__st.written = JSON.parse(decodeURIComponent(location.hash.slice(6)));
+		__st.read = { second: timed('second'), large: timed('large') };
+		__st.done = true;
+	} else {
+		localStorage.clear();
+		// too large for the synchronous bridge: sent asynchronously
+		localStorage.setItem('large', large);
+		setTimeout(() => {
+			// the worker stores the large value while this task runs, and the
+			// page only learns of it once the task is over
+			const until = performance.now() + 600;
+			while (performance.now() < until);
+			localStorage.setItem('second', 'second|value');
+			const written = {
+				unrelated: timed('unrelated'),
+				second: timed('second'),
+			};
+			history.replaceState(
+				null,
+				'',
+				'#read:' + encodeURIComponent(JSON.stringify(written)),
+			);
+			location.reload();
+		}, 0);
+	}
+</script>
