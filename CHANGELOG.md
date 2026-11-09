@@ -291,6 +291,16 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- An `<embed>`'s or `<object>`'s resource goes out as the browser loads
+  it: `Sec-Fetch-Dest: embed` or `object`, `Sec-Fetch-Mode: navigate`. The
+  proxy loads it as a copy in every document (a fetch, handed to the
+  element as a blob: URL), and the site saw a fetch (`empty`, `cors`). The
+  copy names the load in the proxy's load header now; the worker takes
+  `navigate` for those two destinations only, and decides everything a
+  navigation changes from the real request's mode (blank-load-metadata
+  suite, both modes, against the page loaded natively; WPT fetch-metadata
+  element-embed's sec-fetch-dest passes, its entry is off the expected
+  list).
 - A JSON or CSS module loads as what it is. Every import was routed as a
   module script and rewritten, so a JSON module that also parses as a
   script (`{}`, an array) came back with the module preamble

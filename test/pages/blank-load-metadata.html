@@ -40,6 +40,36 @@
 		fetch(at(`/echo-headers?k=blm-claim${run}`), {
 			headers: { 'x-stomp-load': 'image no-cors' },
 		});
+		// an <embed> and an <object> of this document: the proxy loads their
+		// resources as copies in every document
+		const embed = document.createElement('embed');
+		embed.src = at('/echo-headers?k=blm-embed');
+		document.body.append(embed);
+		const object = document.createElement('object');
+		object.data = at('/echo-headers?k=blm-object');
+		document.body.append(object);
+		// the page's own fetch claiming an embed's navigation: what it got back
+		// (the JSON the site sent, or a document the proxy made of it) and how
+		// long it took (a navigation waits for a hint)
+		const claimStart = performance.now();
+		fetch(at(`/echo-headers?k=blm-embedclaim${run}`), {
+			headers: { 'x-stomp-load': 'embed navigate' },
+		})
+			.then(async (response) => {
+				const text = await response.text();
+				let json = false;
+				try {
+					json = typeof JSON.parse(text) === 'object';
+				} catch (error) {
+					// not the site's JSON
+				}
+				window.__embedClaim = {
+					json,
+					type: response.headers.get('content-type'),
+					ms: Math.round(performance.now() - claimStart),
+				};
+			})
+			.catch((error) => (window.__embedClaim = { error: String(error) }));
 		// the page's own fetch naming a navigation in the proxy's load header:
 		// natively just a header the server sees
 		fetch(at('/echo-headers?k=blm-spoof'), {

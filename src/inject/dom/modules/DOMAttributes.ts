@@ -1996,7 +1996,15 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				);
 			};
 			this.client
-				.routedFetch(routeXHR(resource))
+				// the copy goes out as the load it stands for (LOAD_HEADER)
+				.routedFetch(routeXHR(resource), {
+					headers: {
+						[LOAD_HEADER]:
+							// Chrome loads an object's or embed's resource as a nested
+							// context: mode navigate, destination its element
+							attribute === 'data' ? 'object navigate' : 'embed navigate',
+					},
+				})
 				.then(async (response) => {
 					if (!response.ok && response.status !== 0)
 						throw new Error(String(response.status));

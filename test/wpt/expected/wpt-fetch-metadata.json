@@ -1,7 +1,4 @@
 {
-	"/fetch/metadata/generated/element-embed.https.sub.html": {
-		"sec-fetch-dest": "FAIL: assert_array_equals: expected property 0 to be \"embed\" but got \"empty\" (expected array [\"embed\"] got [\"empty\"])"
-	},
 	"/fetch/metadata/generated/element-link-icon.https.sub.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
 		"sec-fetch-site - Same origin no attributes": "MISSING: the harness ended TIMEOUT before this subtest",

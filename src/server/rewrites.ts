@@ -154,8 +154,19 @@ const LOAD_DESTINATIONS = [
 	'audio',
 	'video',
 	'track',
+	// an <embed>'s or <object>'s resource, which the inject loads as a copy
+	'embed',
+	'object',
 ];
 const LOAD_MODES = ['no-cors', 'cors'];
+/**
+ * An object's or embed's resource, which Chrome loads as a nested context,
+ * goes as `navigate` too. Taken for those two destinations only: the worker
+ * decides everything a navigation changes from the real request's mode, and
+ * a site's isolation policy treats an object's or embed's navigation as
+ * none, so a page that names it on a fetch of its own gains nothing
+ */
+const LOAD_NAVIGATIONS = ['embed', 'object'];
 
 /**
  * What a LOAD_HEADER says the request stands for, or null. A page could set
@@ -168,7 +179,11 @@ function loadOf(
 ): { destination: string; mode: string } | null {
 	const [destination, mode, ...rest] = (value ?? '').trim().split(/\s+/);
 	if (rest.length || !LOAD_DESTINATIONS.includes(destination)) return null;
-	if (!LOAD_MODES.includes(mode)) return null;
+	if (
+		!LOAD_MODES.includes(mode) &&
+		!(mode === 'navigate' && LOAD_NAVIGATIONS.includes(destination))
+	)
+		return null;
 	return { destination, mode };
 }
 

@@ -2,7 +2,8 @@
 // about:blank frame the page builds) goes out with the Sec-Fetch-Dest and
 // Sec-Fetch-Mode of the load it stands for, not those of the fetch that
 // copies it (`empty`, `cors`): an image, a script, a stylesheet's @import,
-// background and font. Both modes, each request compared with the page
+// background and font; and an <embed>'s and an <object>'s resource, which
+// the proxy copies in every document. Both modes, each request compared with the page
 // loaded natively (Sec-Fetch-Site too). The header that says so is the
 // proxy's: a page's fetch that sends it with a navigation's values goes out
 // as the fetch it is, without it, and the host's request rules match it as
@@ -22,7 +23,16 @@ import {
 
 const browser = await launch();
 const PAGE = `${FIXTURE}pages/blank-load-metadata.html`;
-const KINDS = ['img', 'script', 'import', 'bg', 'font', 'spoof'];
+const KINDS = [
+	'img',
+	'script',
+	'import',
+	'bg',
+	'font',
+	'embed',
+	'object',
+	'spoof',
+];
 
 /** each load's metadata as the fixture saw it, once the page is done */
 async function measure(getFrame) {
@@ -107,6 +117,30 @@ for (const [mode, base] of [
 		`${mode}: a block rule for images blocks an image copied for the uncontrolled frame`,
 		blocked === null,
 		JSON.stringify(blocked && 'arrived'),
+	);
+	// a page's fetch claiming an embed's navigation goes out as that at
+	// most: the site sees the claim's dest and mode, and the worker treats
+	// it as the fetch it is (the site's body as it came, no Sec-Fetch-User,
+	// no wait for a navigation's hint)
+	const embedClaim = await keyed('blm-embedclaim');
+	const claimSeen = await frameOf(page)
+		?.evaluate(() => window.__embedClaim ?? null)
+		.catch(() => null);
+	ok(
+		`${mode}: a page's fetch claiming an embed's navigation goes out as navigate/embed at most, and is answered as a fetch`,
+		embedClaim?.['sec-fetch-dest'] === 'embed' &&
+			embedClaim?.['sec-fetch-mode'] === 'navigate' &&
+			embedClaim?.['sec-fetch-user'] === undefined &&
+			embedClaim?.['x-stomp-load'] === undefined &&
+			claimSeen?.json === true &&
+			/json/.test(claimSeen?.type ?? '') &&
+			claimSeen?.ms < 2000,
+		JSON.stringify({
+			dest: embedClaim?.['sec-fetch-dest'],
+			mode: embedClaim?.['sec-fetch-mode'],
+			user: embedClaim?.['sec-fetch-user'] ?? null,
+			page: claimSeen,
+		}),
 	);
 	await page.evaluate(() => window.controller.setRules([]));
 	const metadata = ({ dest, mode, site } = {}) => ({ dest, mode, site });
