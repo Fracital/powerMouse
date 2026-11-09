@@ -291,6 +291,24 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- CSS text a script puts into a `<style>` loads through the proxy however it
+  gets there. chess.com fills its board's style with `innerHTML`, and through
+  the proxy the board and every piece loaded straight from its image host,
+  past the service worker (a blank board where the network refused it). Only
+  `textContent`, `innerText` and an appended Text node were routed, and those
+  only after the browser had parsed the raw text: their url()s were fixed in
+  the CSSOM before the next style recalc, but an `@import` was already
+  fetched. Text is now routed before it lands, for every way in: `innerHTML`
+  and `setHTMLUnsafe` on the style (its markup is its text), `append`,
+  `prepend`, `replaceChildren` and a Text's `before`, `after` and
+  `replaceWith` with strings or Text nodes, `data`, `nodeValue` and
+  `textContent` of a Text in the style (whose setters routed nothing: the
+  check they called needed a parent they never passed), and `appendData`,
+  `insertData`, `replaceData` and `deleteData`, made to the text as the page
+  reads it so its offsets hold (`style-text` suite, compared with the page
+  natively, both modes: 11 of 14 ways bypassed before). A rule's `cssText`
+  reads its url() as the browser serialises it (`url("...")`) whatever quotes
+  the page wrote, and text routed twice keeps the page's own url() token.
 - Error surfaces read as natively: none names a route, the proxy origin, an
   inject bundle or a helper name, in pages and in dedicated, module and shared
   workers (`error-surfaces` suite, compared case by case with the page loaded

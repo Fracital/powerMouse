@@ -2,6 +2,7 @@ import { decodeHTML } from 'entities';
 import { ParsedConfig } from '../../config';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
 import { refererFor, type ReferrerInfo } from '../../referrerPolicy';
+import { modifyCSS, rewriteCSSValueURLs } from '../../rewriteCSS';
 import { modifyHTML } from '../../rewriteHTML';
 import { modifyJS, rewriteImportMap } from '../../rewriteJS';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
@@ -50,6 +51,24 @@ export function setGlobalParsingState(
 ) {
 	globalParsingState.set(global, value);
 }
+
+// taken when the bundle loads, before any hook or page code runs
+const nodeTypeGet = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'nodeType',
+)!.get!;
+const parentNodeGet = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'parentNode',
+)!.get!;
+const localNameGet = Reflect.getOwnPropertyDescriptor(
+	Element.prototype,
+	'localName',
+)!.get!;
+const namespaceGet = Reflect.getOwnPropertyDescriptor(
+	Element.prototype,
+	'namespaceURI',
+)!.get!;
 
 // runtime document !== document in 0.001 ms!?!?!?
 
@@ -419,6 +438,46 @@ export default class DocumentClient extends Client {
 		);
 		this.rewrittenScripts.set(script, rewritten);
 		return rewritten;
+	}
+	/**
+	 * @internal CSS text as the browser should parse it in a <style>: every
+	 * url() and @import routed. Text is routed before it lands, since the
+	 * browser fetches an @import as it parses and paints a url() at the next
+	 * style recalc. Routing is idempotent, and the page reads the text back
+	 * as it wrote it (CSSReadback).
+	 */
+	prepareStyleText(text: string): string {
+		try {
+			return modifyCSS(text, this.url);
+		} catch (error) {
+			// unparsable: route what the regex can find
+			return rewriteCSSValueURLs(text, this.url);
+		}
+	}
+	/** @internal `node` if it is an HTML <style> element, else null */
+	styleElement(node: unknown): HTMLStyleElement | null {
+		try {
+			return Reflect.apply(nodeTypeGet, node, []) === 1 &&
+				Reflect.apply(localNameGet, node, []) === 'style' &&
+				Reflect.apply(namespaceGet, node, []) === 'http://www.w3.org/1999/xhtml'
+				? (node as HTMLStyleElement)
+				: null;
+		} catch (error) {
+			// not a node
+			return null;
+		}
+	}
+	/**
+	 * @internal The HTML <style> whose text a Text node is part of (its
+	 * parent), else null: comments and elements in a style are not its text
+	 */
+	styleOfText(node: unknown): HTMLStyleElement | null {
+		try {
+			if (Reflect.apply(nodeTypeGet, node, []) !== 3) return null;
+			return this.styleElement(Reflect.apply(parentNodeGet, node, []));
+		} catch (error) {
+			return null;
+		}
 	}
 	/** @internal the native serialisation of an element (markers kept), for markup the browser will parse */
 	innerHTMLOf(element: Element): string {

@@ -98,9 +98,15 @@ const ROUTED_CSS_URL =
 /**
  * CSS text (a rule's cssText, a style element's text, serialised markup) with
  * every routed url() replaced by the url() the page wrote, which the rewriter
- * keeps after `#url(` for idempotence.
+ * keeps after `#url(` for idempotence. `serialized`: as the browser
+ * serialises a parsed url() (a rule's cssText), `url("...")` whatever quotes
+ * the page wrote; otherwise the page's own token (the text it wrote).
  */
-export function unrouteCSS(client: Client, text: string): string {
+export function unrouteCSS(
+	client: Client,
+	text: string,
+	serialized = false,
+): string {
 	if (!text.includes('#url')) return text;
 	const prefix = routedPrefix(client);
 	return text.replace(
@@ -115,7 +121,13 @@ export function unrouteCSS(client: Client, text: string): string {
 			} catch (error) {
 				// not percent-encoded
 			}
-			return `url(${token})`;
+			if (!serialized) return `url(${token})`;
+			const quoted = /^\s*(["'])([^]*)\1\s*$/.exec(token);
+			const value = quoted ? quoted[2] : token.trim();
+			return `url("${value
+				.replace(/\\/g, '\\\\')
+				.replace(/"/g, '\\"')
+				.replace(/\n/g, '\\a ')}")`;
 		},
 	);
 }

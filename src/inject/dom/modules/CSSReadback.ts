@@ -42,8 +42,11 @@ export default class CSSReadbackModule extends Module<DocumentClient> {
 		const css = (value: string) => unrouteCSS(this.client, value);
 		const url = (value: string) => unrouteURL(this.client, value) ?? value;
 
-		// rules and sheets
-		unrouteStringGetter(global.CSSRule?.prototype, 'cssText', css);
+		// rules and sheets: a rule is the browser's serialisation of what it
+		// parsed, whose url() is quoted whatever the page wrote
+		unrouteStringGetter(global.CSSRule?.prototype, 'cssText', (value) =>
+			unrouteCSS(this.client, value, true),
+		);
 		unrouteStringGetter(global.StyleSheet?.prototype, 'href', url);
 		unrouteStringGetter(global.CSSImportRule?.prototype, 'href', url);
 

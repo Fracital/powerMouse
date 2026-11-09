@@ -54,9 +54,9 @@ const RAW_URL = /url\(\s*(['"]?)(.*?)\1\s*\)/g;
  * percent-encoded quotes. Rewriting is idempotent because of this, so text
  * rewritten before parsing and rules rewritten again in the CSSOM agree.
  */
-function originalOf(target: string): string {
+function originalOf(target: string): { url: string; token: string } | null {
 	const hash = target.indexOf('#url(');
-	if (hash === -1) return target;
+	if (hash === -1) return null;
 	let token = target.slice(hash + 1);
 	try {
 		token = decodeURIComponent(token);
@@ -64,7 +64,7 @@ function originalOf(target: string): string {
 		// not percent-encoded
 	}
 	const match = /^url\(\s*(['"]?)(.*?)\1\s*\)$/s.exec(token);
-	return match ? match[2] : target;
+	return match ? { url: match[2], token } : null;
 }
 
 /**
@@ -74,9 +74,12 @@ function originalOf(target: string): string {
 export function rewriteCSSValueURLs(value: string, url: StompURL): string {
 	return value.replace(RAW_URL, (match, quote, target) => {
 		try {
-			const original = originalOf(target);
+			const routed = originalOf(target);
+			const original = routed?.url ?? target;
 			const resolved = new StompURL(new URL(original, url.toString()), url);
-			if (original !== target) match = `url(${JSON.stringify(original)})`;
+			// routed already: the page's token as it was kept, so text routed
+			// twice still reads back as the page wrote it
+			if (routed) match = routed.token;
 			// keep the page's own token after '#', so reads can give it back
 			return `url(${JSON.stringify(
 				preserveValue(routeBinary(resolved), match),
@@ -175,19 +178,20 @@ export function modifyCSS(
 			}
 		} else if (node.type === 'Url')
 			try {
-				const original = originalOf(node.value);
+				const routed = originalOf(node.value);
+				const original = routed?.url ?? node.value;
 				// @ts-ignore
 				const resolved = new StompURL(new URL(original, url), url);
 
 				let replace: Url;
 
+				// routed already: the page's token as it was kept
 				const raw =
-					original === node.value
-						? script.slice(
-								node.loc!.start.offset - offset,
-								node.loc!.end.offset - offset,
-							)
-						: `url(${JSON.stringify(original)})`;
+					routed?.token ??
+					script.slice(
+						node.loc!.start.offset - offset,
+						node.loc!.end.offset - offset,
+					);
 
 				if (this.atrule?.name === 'import') {
 					replace = {

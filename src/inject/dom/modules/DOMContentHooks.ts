@@ -1,4 +1,4 @@
-import { modifyCSS, rewriteCSSValueURLs } from '../../../rewriteCSS';
+import { modifyCSS } from '../../../rewriteCSS';
 import { modifyJS, rewriteImportMap } from '../../../rewriteJS';
 import Module from '../../Module';
 import ProxyModule, {
@@ -6,6 +6,7 @@ import ProxyModule, {
 	catchRequiredArguments,
 	usePrototype,
 } from '../../modules/Proxy';
+import { unrouteCSS } from '../../modules/Unroute';
 import DocumentClient, { getGlobalParsingState } from '../Client';
 import cloneRawNode, { inertClones, parseHTMLFragment } from '../cloneNode';
 import DOMAttributesModule, {
@@ -29,12 +30,37 @@ export const nativeCharacterData: CharacterData = Object.create(nativeNode);
 export const nativeDocumentFragment: DocumentFragment =
 	Object.create(nativeNode);
 
+applyDescriptors(nativeCharacterData, CharacterData.prototype);
 applyDescriptors(nativeCharacterData, Text.prototype);
 applyDescriptors(nativeDocumentFragment, DocumentFragment.prototype);
 applyDescriptors(nativeHTMLElement, HTMLElement.prototype);
 applyDescriptors(nativeHTMLStyleElement, HTMLStyleElement.prototype);
 applyDescriptors(nativeHTMLScriptElement, HTMLScriptElement.prototype);
 applyDescriptors(nativeHTMLFormElement, HTMLFormElement.prototype);
+const nativeCreateTextNode = Document.prototype.createTextNode;
+const nodeTypeGet = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'nodeType',
+)!.get!;
+const parentNodeGet = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'parentNode',
+)!.get!;
+/** a node of any realm (`instanceof` knows only one), else null */
+function nodeTypeOf(value: unknown): number | null {
+	try {
+		return Reflect.apply(nodeTypeGet, value, []) as number;
+	} catch (error) {
+		return null;
+	}
+}
+function parentOf(value: unknown): Node | null {
+	try {
+		return Reflect.apply(parentNodeGet, value, []) as Node | null;
+	} catch (error) {
+		return null;
+	}
+}
 
 /**
  * The name the hooks know an element by: HTML elements uppercase (what an
@@ -117,13 +143,61 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		const rewriteStyleText = (style: HTMLStyleElement) => {
 			const text = style.textContent;
 			if (!text) return;
-			try {
-				style.textContent = modifyCSS(text, this.client.url);
-			} catch (error) {
-				// unparsable: route what the regex can find
-				style.textContent = rewriteCSSValueURLs(text, this.client.url);
-			}
+			style.textContent = this.client.prepareStyleText(text);
 			prewritten.add(style);
+		};
+
+		// Text that becomes part of a <style>'s text, however it gets there,
+		// is routed before it lands (see prepareStyleText): chess.com filled
+		// its board's style with innerHTML and every piece loaded straight
+		// from the site. Each piece of text is routed on its own, which holds
+		// as long as no url() is split across two text nodes.
+		const routeTextNode = (node: Node) =>
+			usePrototype(node, nativeCharacterData, (text) => {
+				const data = text.data;
+				const routed = this.client.prepareStyleText(data);
+				if (routed !== data) text.data = routed;
+			});
+		// a node argument about to go into a style: a Text, or a fragment's
+		// Text children (an element in a style is not part of its text)
+		const routeInsertedText = (node: Node) =>
+			usePrototype(node, nativeNode, (native) => {
+				if (native.nodeType === 3) routeTextNode(node);
+				else if (native.nodeType === 11)
+					for (const child of [...native.childNodes])
+						if (
+							usePrototype(child, nativeNode, (child) => child.nodeType) === 3
+						)
+							routeTextNode(child);
+			});
+		// an edit of a Text node in a style (appendData, insertData,
+		// replaceData, deleteData) is made to the text as the page reads it,
+		// whose offsets count the page's URLs, on a scratch node, so the
+		// browser's own method decides the result and any IndexSizeError;
+		// the result is routed and set at once
+		const editStyleText = <T>(
+			node: CharacterData,
+			edit: (scratch: CharacterData) => T,
+		): T => {
+			const page = unrouteCSS(
+				this.client,
+				usePrototype(node, nativeCharacterData, (text) => text.data),
+			);
+			const scratch = Reflect.apply(
+				nativeCreateTextNode,
+				this.client.global.document,
+				[page],
+			) as Text;
+			const result = edit(scratch);
+			const edited = usePrototype(
+				scratch,
+				nativeCharacterData,
+				(text) => text.data,
+			);
+			usePrototype(node, nativeCharacterData, (text) => {
+				text.data = this.client.prepareStyleText(edited);
+			});
+			return result;
 		};
 
 		const rewriteStyle = (style: HTMLStyleElement) => {
@@ -291,7 +365,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			});
 		}
 
-		for (const triggersRender of ['replaceWith', 'replaceData', 'remove']) {
+		for (const triggersRender of ['replaceWith', 'remove']) {
 			(this.client.global.CharacterData.prototype as any)[triggersRender] =
 				proxyModule.wrapFunction(
 					(this.client.global.CharacterData.prototype as any)[triggersRender],
@@ -312,26 +386,43 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				);
 		}
 
-		const dataDescriptor = Reflect.getOwnPropertyDescriptor(
-			this.client.global.CharacterData.prototype,
-			'data',
-		)!;
+		// a style's text rewritten before the browser parsed it: the CSSOM
+		// pass only marks its rules (and copies their loads for a document no
+		// worker controls)
+		const prewrote = (style: HTMLStyleElement) => {
+			prewritten.add(style);
+			usePrototype(style, nativeHTMLStyleElement, (style) =>
+				rewriteStyle(style),
+			);
+		};
 
-		Reflect.defineProperty(this.client.global.CharacterData.prototype, 'data', {
-			enumerable: true,
-			configurable: true,
-			get: dataDescriptor.get,
-			set: proxyModule.wrapFunction(
-				dataDescriptor.set!,
-				(target, that: CharacterData, args) => {
-					Reflect.apply(target, that, args);
+		for (const edit of [
+			'appendData',
+			'insertData',
+			'replaceData',
+			'deleteData',
+		] as const) {
+			const native = this.client.global.CharacterData.prototype[edit];
+			if (typeof native !== 'function') continue;
+			(this.client.global.CharacterData.prototype as any)[edit] =
+				proxyModule.wrapFunction(
+					native as (...args: unknown[]) => unknown,
+					(target, that: CharacterData, args) => {
+						const style = this.client.styleOfText(that);
+						if (!style) return Reflect.apply(target, that, args);
+						const result = editStyleText(that, (scratch) =>
+							Reflect.apply(target, scratch, args),
+						);
+						prewrote(style);
+						return result;
+					},
+				);
+		}
 
-					cdUpdated(that);
-				},
-			),
-		});
-
+		// a Text node's whole text, set: `data`, `nodeValue` (`textContent`
+		// in DOMHooks), routed when it is a style's
 		for (const [prototype, property] of <[object, string][]>[
+			[this.client.global.CharacterData.prototype, 'data'],
 			[this.client.global.Node.prototype, 'nodeValue'],
 		]) {
 			const descriptor = Reflect.getOwnPropertyDescriptor(prototype, property)!;
@@ -341,9 +432,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				configurable: true,
 				get: descriptor.get,
 				set: proxyModule.wrapFunction(descriptor.set!, (target, that, args) => {
-					Reflect.apply(target, that, args);
-
-					cdUpdated(that);
+					const style = this.client.styleOfText(that);
+					if (!style) return Reflect.apply(target, that, args);
+					// null sets the empty string, as natively
+					const text = args[0] === null ? '' : String(args[0]);
+					Reflect.apply(target, that, [this.client.prepareStyleText(text)]);
+					prewrote(style);
 				}),
 			});
 		}
@@ -482,9 +576,32 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		};
 
 		// every node argument is about to land (`append(a, b)`, a string is
-		// a text node); the hooks run innermost-last, then the insertion
-		const willInsertNode = (x: (inserted: Node, ...args: any[]) => any) =>
+		// a text node); the hooks run innermost-last, then the insertion.
+		// `childNode`: the method inserts beside the receiver (before, after,
+		// replaceWith), into the receiver's parent; `strings`: the method
+		// takes strings as Text (the ParentNode and ChildNode methods), where
+		// the Node methods insert their first argument only
+		const willInsertNode = (
+			x: (inserted: Node, ...args: any[]) => any,
+			{ childNode = false, strings = false } = {},
+		) =>
 			proxyModule.wrapFunction(x, (target, that, args) => {
+				const style = this.client.styleElement(
+					childNode ? parentOf(that) : that,
+				);
+				if (style) {
+					const inserted = strings ? args.length : Math.min(args.length, 1);
+					for (let i = 0; i < inserted; i++) {
+						if (nodeTypeOf(args[i]) !== null) routeInsertedText(args[i]);
+						else if (strings)
+							args[i] = Reflect.apply(
+								nativeCreateTextNode,
+								this.client.global.document,
+								[this.client.prepareStyleText(String(args[i]))],
+							);
+					}
+					prewritten.add(style);
+				}
 				const nodes = args.filter(
 					(arg): arg is Node => arg instanceof this.client.global.Node,
 				);
@@ -492,7 +609,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					index < nodes.length
 						? insert(nodes[index], that, () => run(index + 1))
 						: Reflect.apply(target, that, args);
-				return run(0);
+				try {
+					return run(0);
+				} finally {
+					// the insertion threw before the pass that takes it
+					if (style) prewritten.delete(style);
+				}
 			});
 
 		this.client.global.Node.prototype.appendChild = willInsertNode(
@@ -507,10 +629,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// ParentNode and ChildNode methods, on each prototype that has its own
 		// copy: a shadow root (a DocumentFragment) connected through its host
 		// runs a script appended to it like any connected parent
+		// (a Text's before, after and replaceWith put text into its style)
 		for (const proto of [
 			this.client.global.Element.prototype,
 			this.client.global.DocumentFragment.prototype,
 			this.client.global.Document.prototype,
+			this.client.global.CharacterData.prototype,
 		])
 			for (const method of [
 				'append',
@@ -525,6 +649,10 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				if (typeof native !== 'function') continue;
 				methods[method] = willInsertNode(
 					native as (inserted: Node, ...args: any[]) => any,
+					{
+						childNode: ['replaceWith', 'before', 'after'].includes(method),
+						strings: true,
+					},
 				);
 			}
 

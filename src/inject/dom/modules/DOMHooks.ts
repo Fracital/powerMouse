@@ -659,6 +659,24 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			},
 		);
 
+		// A style's markup is its text: the browser parses what innerHTML or
+		// setHTMLUnsafe give a <style> as raw text, so it is set as the text,
+		// through the insertion hook of DOMContentHooks (applied before this
+		// module), which routes text going into a style before it lands
+		const hookedAppend = this.client.global.Element.prototype.append;
+		const setStyleText = (style: Element, text: string) => {
+			usePrototype(style, nativeElement, (element) => {
+				for (const node of [...element.childNodes]) node.remove();
+			});
+			// the empty string leaves no text node, as natively
+			if (text !== '') Reflect.apply(hookedAppend, style, [text]);
+		};
+		// and a Text's `data`, which DOMContentHooks routes in a style
+		const hookedDataSet = Reflect.getOwnPropertyDescriptor(
+			this.client.global.CharacterData.prototype,
+			'data',
+		)!.set!;
+
 		const textContentDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global.Node.prototype,
 			'textContent',
@@ -672,9 +690,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				textContentDescriptor.set!,
 				(target, that: Node, args) => {
 					// only elements and fragments have children to hook (and an
-					// `append`); YouTube sets textContent on Text nodes
+					// `append`); YouTube sets textContent on Text nodes, which is
+					// their data (null the empty string)
 					if (that.nodeType !== 1 && that.nodeType !== 11)
-						return Reflect.apply(target, that, args);
+						return this.client.styleOfText(that)
+							? Reflect.apply(hookedDataSet, that, [
+									args[0] === null ? '' : String(args[0]),
+								])
+							: Reflect.apply(target, that, args);
 
 					for (const node of [...that.childNodes]) node.remove();
 
@@ -767,6 +790,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			set: proxyModule.wrapFunction(
 				innerHTMLDescriptor.set!,
 				(target, that: Element, args) => {
+					if (this.client.styleElement(that))
+						return setStyleText(that, String(args[0]));
 					usePrototype(that, nativeElement, (element) => {
 						if (element.nodeName === 'TEMPLATE')
 							usePrototype(that, nativeHTMLTemplateElement, (element) => {
@@ -896,6 +921,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				proxyModule.wrapFunction(
 					native as (html: string) => void,
 					(target, that, args) => {
+						if (args.length && this.client.styleElement(that))
+							return setStyleText(that as Element, String(args[0]));
 						if (args.length) args[0] = rewriteMarkup(args[0]);
 						return Reflect.apply(target, that, args);
 					},
