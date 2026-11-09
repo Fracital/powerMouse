@@ -345,6 +345,19 @@ PresentationRequest()` (Spotify) and `screen.orientation.lock()` threw
   configurable properties that the hook prototype also has are now set aside
   while the hooks run (instance-overrides suite, both modes, against the
   page loaded natively).
+- twitch.tv no longer overflows the stack while it renders, and it renders
+  as many elements as natively (about 1700, was about 1500). Every
+  `localStorage` and `sessionStorage` call was a synchronous beacon to the
+  service worker, and Chrome refuses a document's beacons once 64 KiB of
+  them are in flight. Twitch reads one flag key over a hundred times in one
+  task, so the reads after that threw `QuotaExceededError`, which a native
+  read never does, and its error logger, which reads a flag again, recursed.
+  A document now keeps what it read and wrote while a stamp in the proxy
+  origin's own localStorage is unchanged, and every write by any document
+  changes the stamp, so another document's write is still read at once.
+  Storage events the browser fires about the proxy origin's own storage (the
+  stamps, the cookie cache's, a same-origin host's) no longer reach the
+  page (storage-burst and storage-events suites, both modes).
 - A same-origin frame's hooked functions read as native from its parent.
   Each proxied frame loads its own copy of the inject, whose wrappers the
   parent's copy never made, so the parent's `Function.prototype.toString`

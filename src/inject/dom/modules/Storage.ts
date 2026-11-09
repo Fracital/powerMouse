@@ -6,7 +6,7 @@ import ProxyModule, {
 	newConstructor,
 	usePrototype,
 } from '../../modules/Proxy';
-import DocumentClient from '../Client';
+import DocumentClient, { addDocumentOpenListener } from '../Client';
 import SyncModule from './Sync';
 
 /** a value this long (bytes) does not fit the synchronous bridge's beacon with the rest of the request */
@@ -25,6 +25,102 @@ export default class StorageModule extends Module<DocumentClient> {
 		// this document, so it never hears its own changes
 		const sender = Math.random().toString(36).slice(2);
 		const here = () => this.client.url.toString();
+
+		// Every call below is a synchronous beacon to the worker, and Chrome
+		// refuses a document's beacons once 64 KiB of them are in flight,
+		// which frees only between tasks. Twitch reads one flag key over a
+		// hundred times while it renders: the reads after the quota threw
+		// QuotaExceededError (a native read never throws) and its error
+		// logger, which reads a flag again, recursed until the stack
+		// overflowed. So a document keeps what it read and wrote for as long
+		// as a stamp in the proxy origin's own localStorage (unhooked, shared
+		// by every document of the proxy origin, taken before the page gets
+		// its own below) is unchanged, and every write by any document
+		// changes the stamp, as the Cookies module does for the jar.
+		interface ReadCache {
+			store: string;
+			version: string;
+			values: Map<string, string | null>;
+			keys: string[] | null;
+		}
+		const caches = new Map<string, ReadCache>();
+		let stamps: Storage | null = null;
+		let nativeGetItem: Storage['getItem'] | undefined;
+		let nativeSetItem: Storage['setItem'] | undefined;
+		try {
+			const global = this.client.global;
+			stamps =
+				(Reflect.getOwnPropertyDescriptor(global, 'localStorage')?.get?.call(
+					global,
+				) as Storage | undefined) ?? null;
+			nativeGetItem = global.Storage.prototype.getItem;
+			nativeSetItem = global.Storage.prototype.setItem;
+		} catch (error) {
+			// no storage of its own (an opaque origin): every read goes out
+		}
+		const stampOf = (cache: ReadCache) =>
+			`$stomp$${cache.store}:${getOrigin()}`;
+		/** the document's copy of a store, emptied when another document wrote */
+		const current = (directory: string): ReadCache | null => {
+			const cache = caches.get(directory);
+			if (!cache || !stamps || !nativeGetItem) return null;
+			let version: string;
+			try {
+				version = Reflect.apply(nativeGetItem, stamps, [stampOf(cache)]) ?? '';
+			} catch (error) {
+				return null;
+			}
+			if (version !== cache.version) {
+				cache.values.clear();
+				cache.keys = null;
+				cache.version = version;
+			}
+			return cache;
+		};
+		/** the store changed: every document reads it fresh */
+		const stamp = (cache: ReadCache): string | null => {
+			const version = `${Date.now()}:${Math.random()}`;
+			try {
+				Reflect.apply(nativeSetItem!, stamps, [stampOf(cache), version]);
+				return version;
+			} catch (error) {
+				return null;
+			}
+		};
+		/** this document wrote `key` (every key, for null) and the worker has it */
+		const wrote = (
+			directory: string,
+			key: string | null,
+			value: string | null,
+		) => {
+			const cache = current(directory);
+			if (!cache) return;
+			const version = stamp(cache);
+			if (version === null) {
+				cache.values.clear();
+				cache.keys = null;
+				return;
+			}
+			cache.version = version;
+			if (key === null) {
+				cache.values.clear();
+				cache.keys = [];
+				return;
+			}
+			cache.values.set(key, value);
+			if (!cache.keys) return;
+			const index = cache.keys.indexOf(key);
+			if (value === null && index !== -1) cache.keys.splice(index, 1);
+			else if (value !== null && index === -1) cache.keys.push(key);
+		};
+		/** a change this document has no copy of: read it again */
+		const changed = (directory: string, bump: boolean) => {
+			const cache = caches.get(directory);
+			if (!cache) return;
+			cache.values.clear();
+			cache.keys = null;
+			if (bump) stamp(cache);
+		};
 
 		// A write the synchronous bridge cannot carry (its beacon is refused
 		// over 64 KiB, and the quota is per document while this thread spins,
@@ -66,13 +162,16 @@ export default class StorageModule extends Module<DocumentClient> {
 				() => post(directory, name, args),
 				() => post(directory, name, args),
 			);
+			// landed (or lost): from now on every document reads the worker's
 			queue.then(
 				() => {
 					if (shadow.get(key) === value) shadow.delete(key);
+					changed(directory, true);
 				},
 				(error) => {
 					console.error(`Stomp: a storage write could not be stored: ${error}`);
 					if (shadow.get(key) === value) shadow.delete(key);
+					changed(directory, true);
 				},
 			);
 		};
@@ -83,10 +182,11 @@ export default class StorageModule extends Module<DocumentClient> {
 				encoder.encode(value).length > LARGE_WRITE_BYTES);
 
 		const storageKeys = (directory: string): string[] => {
-			const keys: string[] = syncModule.jsonAPI(
-				`${directory}getKeys`,
-				this.client.url.url.origin,
-			);
+			const cache = current(directory);
+			const keys: string[] =
+				cache?.keys?.slice() ??
+				syncModule.jsonAPI(`${directory}getKeys`, this.client.url.url.origin);
+			if (cache && !cache.keys) cache.keys = keys.slice();
 			const shadow = shadows.get(directory);
 			if (!shadow?.size) return keys;
 			const merged = keys.filter((key) => shadow.get(key) !== null);
@@ -113,12 +213,14 @@ export default class StorageModule extends Module<DocumentClient> {
 						() => post(this.#directory, 'clear', [getOrigin(), sender, here()]),
 						() => post(this.#directory, 'clear', [getOrigin(), sender, here()]),
 					);
+					const directory = this.#directory;
 					queue.then(
 						() => {
 							for (const [key, value] of shadow)
 								if (value === null) shadow.delete(key);
+							changed(directory, true);
 						},
-						() => {},
+						() => changed(directory, true),
 					);
 					return;
 				}
@@ -128,6 +230,7 @@ export default class StorageModule extends Module<DocumentClient> {
 					sender,
 					here(),
 				);
+				wrote(this.#directory, null, null);
 			}
 			getItem(...args: [unknown]): string | null {
 				catchRequiredArguments(args.length, 1, 'Storage', 'getItem');
@@ -137,11 +240,15 @@ export default class StorageModule extends Module<DocumentClient> {
 				const shadow = shadows.get(this.#directory);
 				if (shadow?.has(key)) return shadow.get(key)!;
 
+				const cache = current(this.#directory);
+				if (cache?.values.has(key)) return cache.values.get(key)!;
+
 				const result: null | string = syncModule.jsonAPI(
 					`${this.#directory}getItem`,
 					getOrigin(),
 					String(key),
 				);
+				cache?.values.set(key, result);
 
 				return result;
 			}
@@ -179,6 +286,7 @@ export default class StorageModule extends Module<DocumentClient> {
 					sender,
 					here(),
 				);
+				wrote(this.#directory, item, null);
 			}
 			setItem(...args: [unknown, unknown]): void {
 				catchRequiredArguments(args.length, 2, 'Storage', 'setItem');
@@ -204,6 +312,7 @@ export default class StorageModule extends Module<DocumentClient> {
 					sender,
 					here(),
 				);
+				wrote(this.#directory, item, value);
 			}
 		}
 
@@ -247,7 +356,13 @@ export default class StorageModule extends Module<DocumentClient> {
 			}
 		}
 
-		const storageFactory = (directory: string) => {
+		const storageFactory = (directory: string, store: string) => {
+			caches.set(directory, {
+				store,
+				version: '',
+				values: new Map(),
+				keys: null,
+			});
 			const storage = new StorageProxy(directory);
 			const proxy = new Proxy(storage, {
 				get: (target, prop, receiver) => {
@@ -324,12 +439,34 @@ export default class StorageModule extends Module<DocumentClient> {
 
 		const localStorage = storageFactory(
 			`${this.client.directory}localStorage/`,
+			'localStorage',
 		);
 		const sessionStorage = storageFactory(
 			`${this.client.directory}sessionStorage/`,
+			'sessionStorage',
 		);
 
 		building = false;
+
+		// A storage event the browser fires is about the proxy origin's own
+		// storage (the read stamps above, the Cookies module's, a same-origin
+		// host's), never the page's, whose events are the ones dispatched
+		// below: those are dropped before any page listener. document.open()
+		// drops every listener on the window, so it is registered again after
+		// each open.
+		const global = this.client.global;
+		const addListener = global.addEventListener;
+		const stopImmediate = global.Event.prototype.stopImmediatePropagation;
+		const dropBrowserEvents = () =>
+			Reflect.apply(addListener, global, [
+				'storage',
+				(event: Event) => {
+					if (event.isTrusted) Reflect.apply(stopImmediate, event, []);
+				},
+				true,
+			]);
+		dropBrowserEvents();
+		addDocumentOpenListener(global, dropBrowserEvents);
 
 		// changes made by the other documents of this origin arrive from the
 		// service worker; the area must be our own object, which the event's
@@ -338,13 +475,12 @@ export default class StorageModule extends Module<DocumentClient> {
 			const change = (data as Record<string, StorageChange> | null)?.[
 				STORAGE_EVENT
 			];
-			if (
-				!change ||
-				change.sender === sender ||
-				change.origin !== getOrigin() ||
-				change.store !== 'localStorage'
-			)
+			if (!change || change.sender === sender || change.origin !== getOrigin())
 				return;
+			// the writer changed the stamp already; this is for a writer whose
+			// stamp this document could not see
+			changed(`${this.client.directory}${change.store}/`, false);
+			if (change.store !== 'localStorage') return;
 			const event = new this.client.global.StorageEvent('storage', {
 				key: change.key,
 				oldValue: change.oldValue,
