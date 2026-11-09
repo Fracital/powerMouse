@@ -4,6 +4,7 @@ import type {
 	WebSocketDataType,
 } from '@mercuryworkshop/proxy-transports';
 import type { Config } from '../config';
+import type { PortBody } from './bodyPort';
 
 // postMessage keys (controller <-> service worker <-> proxied contexts)
 
@@ -316,6 +317,11 @@ export type Controllerbound = {
 	request: [RequestInfo];
 };
 
+/** a transport's response on its way to a RemoteTransport: a streamed body travels on a port of its own (bodyPort.ts) */
+export type WireResponse =
+	| TransferrableResponse
+	| (Omit<TransferrableResponse, 'body'> & { body: PortBody });
+
 /** implemented by the transport host, called by RemoteTransport */
 export type TransportToHost = {
 	request: [
@@ -325,7 +331,7 @@ export type TransportToHost = {
 			body: BodyInit | null;
 			headers: RawHeaders;
 		},
-		TransferrableResponse,
+		WireResponse,
 	];
 	connect: [
 		{

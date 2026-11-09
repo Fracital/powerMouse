@@ -79,11 +79,14 @@ const SKIP_NETWORK = process.env.SKIP_NETWORK === '1';
 // and misfire on a two-core runner; SKIP_TIMING=1 leaves them out
 const TIMING_SUITES = new Set(['switcher-momentum']);
 const SKIP_TIMING = process.env.SKIP_TIMING === '1';
-// measurement suites (the adversarial corpus, the vendored web-platform-tests)
-// report every known leak and every expected WPT failure on purpose;
+// measurement suites (the adversarial corpus, the vendored web-platform-tests,
+// the timings named measure-*) report every known leak, every expected WPT
+// failure and numbers that depend on the machine on purpose;
 // SKIP_MEASUREMENT=1 leaves them out of a gate run
 const isMeasurement = (name) =>
-	name.startsWith('adversarial-') || name.startsWith('wpt-');
+	name.startsWith('adversarial-') ||
+	name.startsWith('wpt-') ||
+	name.startsWith('measure-');
 const SKIP_MEASUREMENT = process.env.SKIP_MEASUREMENT === '1';
 
 const wanted = process.argv.slice(2);

@@ -4,6 +4,7 @@ import type {
 	TransferrableResponse,
 	WebSocketDataType,
 } from '@mercuryworkshop/proxy-transports';
+import { isPortBody, receiveBody } from './bodyPort';
 import {
 	HostToTransport,
 	postToPort,
@@ -71,11 +72,13 @@ export default class RemoteTransport implements ProxyTransport {
 		// AbortSignal can't cross a MessagePort
 		_signal: AbortSignal | undefined,
 	): Promise<TransferrableResponse> {
-		return this.rpc.call(
+		const response = await this.rpc.call(
 			'request',
 			{ remote: remote.href, method, body, headers },
 			transferablesOf(body),
 		);
+		const { body: sent, ...rest } = response;
+		return { ...rest, body: isPortBody(sent) ? receiveBody(sent) : sent };
 	}
 	connect(
 		url: URL,

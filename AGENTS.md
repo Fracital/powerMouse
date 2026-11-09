@@ -208,9 +208,9 @@ attribution; the same script checks a PR's commit messages) and the esbuild
 build. All of it must pass locally before you push. A `browser suites` job
 runs `npm test` on the runner's Chrome with `SKIP_NETWORK=1` (the suites
 that drive Wikipedia stay out), `SKIP_TIMING=1` (the flick-velocity suite)
-and `SKIP_MEASUREMENT=1` (the adversarial corpus and the vendored
+and `SKIP_MEASUREMENT=1` (the adversarial corpus, the vendored
 web-platform-tests, which report every known leak and expected failure on
-purpose) and `PARALLEL=2`; since 2026-11-07 it is
+purpose, and the `measure-*` timings) and `PARALLEL=2`; since 2026-11-07 it is
 required by branch protection, so a suite that cannot pass on the runner
 goes behind one of those flags rather than staying red (a per-frame animation
 measurement reads `SKIP_TIMING` itself and keeps only its final-position

@@ -299,6 +299,28 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   stands: in a stack frame its location ends in `:line:column`, in a message
   a URL has none (unroute-unit suite, with a pinned key that always ends the
   route in `:digits`).
+- A large response body reaches the service worker as fast as the
+  transport has it. A body crossed from the transport's worker as a
+  transferred ReadableStream, which moves one chunk per round trip between
+  the two threads, and epoxy hands out 16 KiB chunks: Discord's 12 MB main
+  bundle was about 800 round trips, and while the page's 500 other requests
+  filled the service worker's task queue each one waited behind them. The
+  worker took 1.3 s to read the bundle (about 10 MB/s) where epoxy had all
+  of it in 0.4 s. A body now travels on a port of its own: the transport's
+  side reads it as it arrives, sends what came within one task as one
+  message (its buffer transferred), and keeps up to 4 MiB ahead of the
+  reader, which grants more as it reads, so a reader that stops still stops
+  the transport and a cancelled body still cancels it. Discord's bundle is
+  read in about 0.5 s (median of 8 loads of discord.com/login through a
+  local demo, against 1.3 s); through the holyWisp edges about 1.0 s against
+  1.5 s, the rest being the edges' throughput (4 to 6 MB/s through
+  Cloudflare). Bytes cross wisp compressed (`gzip`, `br`) and are decoded
+  once, in epoxy's wasm (large-body suite: 12 MB plain, gzip and br arrive
+  byte for byte with the origin's Content-Encoding and Content-Length as
+  natively, a cut-short body fails the read, a cancelled one closes the
+  origin's response, an unread one resumes; measure-large-body times each
+  layer and a reader with a busy task queue: 4.4 to 5.5 s before, 61 to
+  73 ms now).
 - A large webpack bundle is rewritten by every rewrite worker at once.
   One script was one worker's work, and Discord's 13 MB main bundle took
   three and a half seconds in one while the page waited for it. A minified
@@ -2464,6 +2486,12 @@ Fixed while testing real sites and a feature fixture:
   stops answering HTTP after roughly 70 requests with its default pool and
   roughly 160 with a larger one, which breaks any page that fans out that many
   assets. The demo defaults to epoxy and raises libcurl's pool when selected.
+- Wisp has no flow control from the server to the client, and epoxy queues
+  each stream's incoming data without a bound, so a response nobody reads
+  (a paused media download) keeps arriving into the transport worker's
+  memory until it ends: of a 1 GB body left unread, the origin had written
+  about 950 MB after two seconds, before and after the body ports, which
+  bound only the hop from the transport to the reader.
 - A request that starts just as the server closes its idle connection fails
   with an error rather than being retried on a new connection the way Chrome
   retries it (the pinned epoxy no longer hangs there; hyper does not retry).

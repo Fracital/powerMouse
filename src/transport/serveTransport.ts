@@ -2,6 +2,7 @@ import type {
 	ProxyTransport,
 	RawHeaders,
 } from '@mercuryworkshop/proxy-transports';
+import { sendBody } from './bodyPort';
 import {
 	HostToTransport,
 	postToPort,
@@ -74,6 +75,11 @@ export default function serveTransport(
 					headers,
 					undefined,
 				);
+				// a streamed body goes on a port of its own (bodyPort.ts)
+				if (response.body instanceof ReadableStream) {
+					const pushed = sendBody(response.body);
+					return [{ ...response, body: pushed }, [pushed.$stompBodyPort]];
+				}
 				return [response, transferablesOf(response.body)];
 			},
 			connect: async ({ url, protocols, requestHeaders, port: socket }) => {
