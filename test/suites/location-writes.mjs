@@ -12,7 +12,11 @@
 // a navigating case's first document finishes loading is a race), and the
 // bypass recorder must see no request straight to the fixture. A write the
 // rewriter does not route navigates the frame to the site itself, past the
-// proxy. Both demo modes.
+// proxy. The cases that open a window run in a second harness: Chrome, while
+// it creates a window, pauses the frames of the renderer, and a frame that
+// commits a document then may never be resumed (its document never parses),
+// which with eighty frames navigating happened in about one run in thirty.
+// Both demo modes.
 import {
 	done,
 	FIXTURE,
@@ -79,7 +83,7 @@ async function settle(context, expected, timeout = 120000) {
 			last = snapshot;
 			stableSince = Date.now();
 		}
-		// every frame loaded once (the harness starts a few at a time)
+		// every frame loaded once
 		const loaded =
 			state !== null &&
 			state.names.every((name) => (state.loads[name] ?? 0) > 0);
@@ -93,11 +97,35 @@ async function settle(context, expected, timeout = 120000) {
 
 const browser = await launch();
 
-// natively: which cases navigate, and how often each frame loads
+/** one run of both harnesses: their landings, cases and loads together */
+function merge(a, b) {
+	return {
+		found: [...a.found, ...b.found],
+		state:
+			a.state && b.state
+				? {
+						names: [...a.state.names, ...b.state.names],
+						loads: { ...a.state.loads, ...b.state.loads },
+					}
+				: (a.state ?? b.state),
+		raw: [...(a.raw ?? []), ...(b.raw ?? [])],
+		frames: { ...a.frames, ...b.frames },
+	};
+}
+
+// natively: which cases navigate, and how often each frame loads (the
+// harness, then the one of the cases that open a window)
 const nativeContext = await browser.newContext();
 const nativePage = await nativeContext.newPage();
 await nativePage.goto(harness);
-const native = await settle(nativeContext, null, 30000);
+const nativeMain = await settle(nativeContext, null, 30000);
+await nativePage.close();
+const nativePopupPage = await nativeContext.newPage();
+await nativePopupPage.goto(`${harness}?popups`);
+const nativePopups = await settle(nativeContext, null, 30000);
+await nativePopupPage.close();
+const native = merge(nativeMain, nativePopups);
+const popupNames = nativePopups.state?.names ?? [];
 const names = native.state?.names ?? [];
 const alone = ['top', 'top-pattern', 'top-for-of', 'top-reflect'];
 const nativeLanded = new Set(native.found.map(([n]) => n));
@@ -160,29 +188,20 @@ for (const [mode, base] of [
 	['isolated', HOST],
 ]) {
 	const expected = names.filter((name) => nativeLanded.has(name));
-	const proxied = await proxiedRun(base, '', expected, 60000);
-	// A frame load through the proxy now and then never completes while
-	// eighty frames load through one controller (seen for a frame of any
-	// case, a nested one most often): a case whose frame never loaded runs
-	// again alone, and the report says so
-	const retried = (proxied.state?.names ?? names).filter(
-		(name) => !proxied.state?.loads?.[name],
-	);
-	for (const name of retried) {
-		const again = await proxiedRun(
+	const proxied = merge(
+		await proxiedRun(
 			base,
-			`?only=${name}`,
-			nativeLanded.has(name) ? [name] : [],
-			30000,
-		);
-		proxied.found = [
-			...proxied.found.filter(([n]) => n !== name),
-			...again.found.filter(([n]) => n === name),
-		];
-		if (proxied.state) proxied.state.loads[name] = again.state?.loads?.[name];
-		proxied.raw.push(...again.raw);
-		proxied.frames[name] = again.frames[name];
-	}
+			'',
+			expected.filter((name) => !popupNames.includes(name)),
+			60000,
+		),
+		await proxiedRun(
+			base,
+			'?popups',
+			expected.filter((name) => popupNames.includes(name)),
+			60000,
+		),
+	);
 	for (const name of names) {
 		const landed = proxied.found.filter(([n]) => n === name);
 		const nativeLoads = native.state?.loads?.[name];
@@ -199,7 +218,6 @@ for (const [mode, base] of [
 				loads,
 				nativeLoads,
 				leaked,
-				...(retried.includes(name) ? { retried: true } : {}),
 			}),
 		);
 	}

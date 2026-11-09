@@ -118,11 +118,17 @@ var LOCATION_WRITES = {
 	'frames-pattern':
 		"var f = document.createElement('iframe'); f.src = 'location-write.html?c=idle'; f.onload = function () { f.onload = null; [frames[0].location] = [U('frames-pattern')]; }; document.body.append(f);",
 	idle: { child: true, code: '' },
-	opener:
-		"var w = open(); w.location = new URL('location-write.html?c=opener-child', location.href).href;",
+	// `popup`: opens a window, so it runs in a harness of its own (see
+	// location-writes.html)
+	opener: {
+		popup: true,
+		code: "var w = open(); w.location = new URL('location-write.html?c=opener-child', location.href).href;",
+	},
 	'opener-child': { child: true, code: "opener.location = U('opener');" },
-	'opener-pattern':
-		"var w = open(); w.location = new URL('location-write.html?c=opener-pattern-child', location.href).href;",
+	'opener-pattern': {
+		popup: true,
+		code: "var w = open(); w.location = new URL('location-write.html?c=opener-pattern-child', location.href).href;",
+	},
 	'opener-pattern-child': {
 		child: true,
 		code: "for (opener.location of [U('opener-pattern')]);",
