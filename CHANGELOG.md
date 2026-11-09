@@ -307,6 +307,21 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   fixed in the transport, with Chrome's header order (ws-handshake suite,
   reading the raw handshake the fixture received, both modes, against the
   page loaded natively).
+- A location that an assignment pattern or a loop head writes navigates
+  through the proxy: `[location] = [url]`, `({ location } = o)`,
+  `({ a: location = d } = o)`, `[...location] = a`, `for (location of urls)`,
+  `for (location in o)`, and the member forms (`[top.location] = [url]`,
+  `({ a: window.location } = o)`, `for (frames[0].location of urls)`, of
+  `parent`, `opener` and `document` too). The rewriter took those targets
+  for bindings and left them raw, so the frame navigated to the site
+  itself, past the proxy, from page code, eval, `Function`, string timers,
+  inline handlers, javascript: URLs and modules alike. Such a target is now
+  the `value` of an access-API reference whose setter routes like
+  `location = url` (`ref1`, which assigns the name in the page's own scope)
+  or `x.location = url` (`ref2`). A member target named `top` or `eval`, or
+  any computed one, stays a plain reference; in an object pattern or a loop
+  head it was a `get2` call, which made the script a SyntaxError
+  (location-writes suite, both modes; rewriter-unit).
 - `location ||= url` and `location ??= url` assign nothing, as natively (a
   location is always set). The access API's `set1` navigated to whatever
   the operator left, which was the location itself: the page reloaded, and

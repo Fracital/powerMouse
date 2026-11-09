@@ -167,6 +167,50 @@ function optionalCall(callee: any, args: any[]) {
 	return call;
 }
 
+/**
+ * Whether a node is a target an assignment pattern or a loop head writes
+ * (`[x] = a`, `({ a: x = 1, ...x } = o)`, `for (x of a)`, `for ([x] of a)`),
+ * as opposed to the whole left of a plain assignment or a binding of a
+ * declaration, a parameter or a catch clause.
+ */
+function assignmentTarget(ctx: AcornContext): boolean {
+	for (let current = ctx; current.parent; current = current.parent) {
+		const { node } = current.parent;
+		const key = current.parentKey;
+		switch (node.type) {
+			case 'ArrayPattern':
+			case 'ObjectPattern':
+			case 'RestElement':
+				break;
+			case 'Property':
+				if (
+					key !== 'value' ||
+					current.parent.parent?.node.type !== 'ObjectPattern'
+				)
+					return false;
+				break;
+			case 'AssignmentPattern':
+				if (key !== 'left') return false;
+				break;
+			case 'AssignmentExpression':
+				return key === 'left' && current !== ctx;
+			case 'ForInStatement':
+			case 'ForOfStatement':
+				return key === 'left';
+			default:
+				return false;
+		}
+	}
+	return false;
+}
+
+/** `{ location }`, `{ location = v }` print from the key while shorthand */
+function unshorthand(ctx: AcornContext) {
+	let parent = ctx.parent;
+	if (parent?.node.type === 'AssignmentPattern') parent = parent.parent;
+	if (parent?.node.type === 'Property') parent.node.shorthand = false;
+}
+
 const cTarget = 't$t';
 const cProp = 't$p';
 const cValue = 't$v';
@@ -412,7 +456,9 @@ export function modifyJS(
 							ctx.replaceWith(
 								b.assignmentExpression(
 									'=',
-									ctx.node.left,
+									// visited too: a location target and the defaults
+									// (`({ location = top } = o)`) are rewritten there
+									result(ctx.node.left),
 									patternCall(result(ctx.node.right), spec, names.access),
 								),
 							);
@@ -579,6 +625,36 @@ export function modifyJS(
 					break;
 				case 'Identifier':
 					{
+						// `[location] = a`, `({ location } = o)`, `for (location of
+						// a)`: a reference no set1 call can stand for, so it becomes
+						// the member `$s$j.ref1(location, setter).value`, whose write
+						// routes like `location = v` (bindings are left below)
+						if (ctx.node.name === 'location' && assignmentTarget(ctx)) {
+							unshorthand(ctx);
+							ctx.replaceWith(
+								b.memberExpression(
+									b.callExpression(
+										b.memberExpression(
+											b.identifier(names.access),
+											b.identifier('ref1'),
+										),
+										[
+											b.identifier('location'),
+											b.arrowFunctionExpression(
+												[b.identifier(cValue)],
+												b.assignmentExpression(
+													'=',
+													b.identifier('location'),
+													b.identifier(cValue),
+												),
+											),
+										],
+									),
+									b.identifier('value'),
+								),
+							);
+							break;
+						}
 						// binding positions and names: rewriting these turns a valid
 						// script into a SyntaxError (`class A { top = 1 }`,
 						// `catch (location)`, `break top`) or changes its meaning
@@ -719,6 +795,32 @@ export function modifyJS(
 						// `super.location` reads the prototype chain, never the window,
 						// and `super` is not a value a helper could take
 						if (ctx.node.object.type === 'Super') break typeLoop;
+						// `[top.location] = a`, `for (frames[0].location of a)`: a
+						// pattern or loop head target is a reference, never a get2
+						// call; a location there becomes `$s$j.ref2(o, k).value`,
+						// whose write routes like set2, anything else stays as is
+						if (assignmentTarget(ctx)) {
+							const key = ctx.node.computed
+								? ctx.node.property.type === 'Literal' &&
+									ctx.node.property.value
+								: ctx.node.property.name;
+							if (key === 'location') {
+								unshorthand(ctx);
+								ctx.replaceWith(
+									b.memberExpression(
+										b.callExpression(
+											b.memberExpression(
+												b.identifier(names.access),
+												b.identifier('ref2'),
+											),
+											[result(ctx.node.object), b.literal(key)],
+										),
+										b.identifier('value'),
+									),
+								);
+							}
+							break typeLoop;
+						}
 						switch (ctx.parent?.node.type) {
 							case 'ArrayPattern':
 							case 'ObjectPattern':

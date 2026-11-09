@@ -223,6 +223,37 @@ export default class AccessModule extends Module<Client> {
 
 				return result;
 			},
+			/**
+			 * `[location] = a`, `for (location of a)`: the target of a pattern
+			 * or a loop head is a reference, which the rewriter makes the
+			 * `value` of this object; writing it routes like `location = v`.
+			 * `target` is what the name held, `set` assigns the name in the
+			 * page's own scope (a local, a `with` object, the window).
+			 */
+			ref1: (target: any, set: (value: unknown) => unknown) => ({
+				set value(value: unknown) {
+					api.set1(
+						target,
+						'location',
+						(object: any, property: any, v: unknown) => (object[property] = v),
+						set,
+						value,
+					);
+				},
+			}),
+			/** `[top.location] = a`: the member form of `ref1`, routed by set2 */
+			ref2: (target: any, key: any) => ({
+				set value(value: unknown) {
+					api.set2(
+						target,
+						key,
+						(object: any, property: any, v: unknown) => {
+							object[property] = v;
+						},
+						value,
+					);
+				},
+			}),
 			new2: (target: any, key: any, args: any): any => {
 				// key = normalizeKey(key);
 				return Reflect.construct(api.get(target[key], key), args);
