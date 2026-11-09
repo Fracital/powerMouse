@@ -1,3 +1,4 @@
+import { parse } from 'meriyah';
 import { modifyHTML, setInlineBlobResolver } from '../../../rewriteHTML';
 import { modifyJS } from '../../../rewriteJS';
 import { proxyBlobURL } from '../../../routeURL';
@@ -25,6 +26,16 @@ const JS_TYPE =
  * script's src or imported by a worker) is rewritten the same way: as a
  * classic script, or as a module when only that parses.
  */
+/** whether `source` parses as a classic script (as the rewriter parses one) */
+function parsesAsScript(source: string): boolean {
+	try {
+		parse(source, { next: true, globalReturn: true, webcompat: true });
+		return true;
+	} catch (error) {
+		return false;
+	}
+}
+
 export default class BlobDocumentsModule extends Module<DocumentClient> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
@@ -75,9 +86,12 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 				return [modifyHTML(source, this.client.url, this.client.config, true)];
 			}
 			// a script that does not parse comes back as it was: then it may be
-			// a module (its `import` / `export` are the usual reason)
+			// a module (its `import` / `export` are the usual reason). A script
+			// with nothing to rewrite comes back as it was too (generated the
+			// same), and stays a classic script: made a module, it would carry
+			// the module preamble a classic worker cannot run
 			let rewritten = modifyJS(source, this.client.url, this.client.config);
-			if (rewritten === source)
+			if (rewritten === source && !parsesAsScript(source))
 				rewritten = modifyJS(
 					source,
 					this.client.url,

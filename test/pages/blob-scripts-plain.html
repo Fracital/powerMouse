@@ -1,0 +1,26 @@
+<!doctype html>
+<title>BLOB SCRIPTS PLAIN</title>
+<script>
+	// Scripts from blobs whose code the proxy has nothing to rewrite: a
+	// classic <script>, a classic worker and a module worker. Each reports
+	// whether it ran into window.__plain.
+	const report = (window.__plain = {});
+	const blob = (source) =>
+		URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+	const script = document.createElement('script');
+	script.src = blob(`document.body.setAttribute('data-plain', 'ran');`);
+	script.onload = () =>
+		(report.script = document.body.getAttribute('data-plain') ?? 'did not run');
+	script.onerror = () => (report.script = 'error');
+	addEventListener('error', (event) => (report.scriptError ??= event.message));
+	document.head.append(script);
+	for (const [name, options] of [
+		['classic', undefined],
+		['module', { type: 'module' }],
+	]) {
+		const worker = new Worker(blob(`postMessage('ran');`), options);
+		worker.onmessage = (event) => (report[name] = event.data);
+		worker.onerror = (event) => (report[name] = `error: ${event.message}`);
+	}
+	setTimeout(() => (report.done = true), 2500);
+</script>

@@ -291,6 +291,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A script from a blob that the proxy has nothing to rewrite in runs as a
+  classic script. The page's script blobs are rewritten when it makes them,
+  and one that came back unchanged was taken for one that does not parse as
+  a classic script and rewritten again as a module: its preamble
+  (`import.meta.url = ...`) made a `<script src=blob:>` or a classic worker
+  fail with "Cannot use 'import.meta' outside a module". It is a module now
+  only when it does not parse as a classic script (blob-scripts-plain
+  suite, both modes, against the page loaded natively).
 - A navigation a page starts in another browsing context carries its
   Sec-Fetch-User. Setting an iframe's or frame's src, submitting a form into
   a named popup or frame, and clicking a link into one navigate a context
