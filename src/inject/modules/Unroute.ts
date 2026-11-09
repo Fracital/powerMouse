@@ -803,12 +803,15 @@ export default class UnrouteModule extends Module<Client> {
 				true,
 			);
 		// what a page's own formatter sees: the same frame, naming page URLs
+		// the sites a page's formatter is given, to tell its own call of this
+		// formatter from V8's
+		const cleanedSites = new WeakSet<object>();
 		const cleanSite = (
 			site: CallSite,
 			index: number,
 			sites: CallSite[],
-		): CallSite =>
-			new Proxy(site, {
+		): CallSite => {
+			const cleaned = new Proxy(site, {
 				get: (target, key) => {
 					if (key === 'getFileName' || key === 'getScriptNameOrSourceURL')
 						return () => fileName(target);
@@ -832,6 +835,9 @@ export default class UnrouteModule extends Module<Client> {
 					return typeof value === 'function' ? value.bind(target) : value;
 				},
 			});
+			cleanedSites.add(cleaned);
+			return cleaned;
+		};
 		// Error.prototype.toString, which V8 also uses for the first line. V8
 		// takes that line when it makes the error, unless a formatter is
 		// installed (this one), which reads the message when the stack is
@@ -860,6 +866,15 @@ export default class UnrouteModule extends Module<Client> {
 
 		let pagePrepare: unknown;
 		const prepare: PrepareStackTrace = (error, sites) => {
+			// V8 passes the error and its call sites. A page that calls the
+			// formatter it read, to hand off to the one installed before its own,
+			// passes what it has (Notion's: the error as `this`, the sites the
+			// one argument). Natively there is none before the page's, so such a
+			// call gets the default text and does not reach the page's formatter,
+			// which would call this one again.
+			const fromV8 =
+				Array.isArray(sites) && !sites.some((site) => cleanedSites.has(site));
+			if (!Array.isArray(sites)) sites = [];
 			let shown: CallSite[];
 			try {
 				shown = sites.filter((site) => !isInternal(site));
@@ -868,6 +883,7 @@ export default class UnrouteModule extends Module<Client> {
 			}
 			// where the page's code threw it, for the error's report
 			if (
+				fromV8 &&
 				((typeof error === 'object' && error !== null) ||
 					typeof error === 'function') &&
 				shown.length
@@ -888,7 +904,7 @@ export default class UnrouteModule extends Module<Client> {
 					? skippedFrames.get(error)
 					: undefined;
 			if (skip) shown = shown.slice(skip);
-			if (typeof pagePrepare === 'function') {
+			if (fromV8 && typeof pagePrepare === 'function') {
 				const result = Reflect.apply(pagePrepare, ErrorCtor, [
 					error,
 					shown.map((site, index) => cleanSite(site, index, shown)),

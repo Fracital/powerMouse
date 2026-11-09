@@ -61,6 +61,39 @@
 		return s;
 	});
 	t('stackAfterCustom', () => new Error('z').stack);
+	// a formatter that hands off to the one installed before it, if any,
+	// the way Notion's does (`call.bind(call)`: the error as `this`, the call
+	// sites the one argument), and puts it back: natively there is none
+	t('chainedPrepare', () => {
+		const callWith = Function.prototype.call.bind(Function.prototype.call);
+		const before = Error.prepareStackTrace;
+		let sites;
+		Error.prepareStackTrace = (...args) => {
+			[, sites] = args;
+			return before ? callWith(before, ...args) : 'default';
+		};
+		try {
+			new Error('c').stack;
+		} finally {
+			Error.prepareStackTrace = before;
+		}
+		return typeof sites?.[0]?.getFileName === 'function' ? 'ok' : 'no sites';
+	});
+	// one that calls it as V8 does (natively there is none: 'default')
+	t('chainedPrepareDirect', () => {
+		const before = Error.prepareStackTrace;
+		Error.prepareStackTrace = (error, sites) =>
+			before ? before(error, sites) : 'default';
+		try {
+			const stack = new Error('d').stack;
+			return stack === 'default' ||
+				(typeof stack === 'string' && stack.startsWith('Error: d'))
+				? 'ok'
+				: stack;
+		} finally {
+			Error.prepareStackTrace = before;
+		}
+	});
 
 	// 4. scripts the page inserted itself read back what the page wrote
 	const code = (k) =>

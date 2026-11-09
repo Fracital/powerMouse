@@ -291,6 +291,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A page's stack formatter that hands off to the one installed before it
+  no longer throws. `Error.prepareStackTrace` reads as the proxy's own
+  formatter, where natively it is undefined, so Notion's, which calls the
+  previous one when there is one, called it the way it calls everything
+  (the error as `this`, the call sites the one argument), and it threw
+  "Cannot read properties of undefined (reading 'length')". A call that
+  does not come from V8 now gets the default text and never reaches the
+  page's own formatter, which would call it again.
 - Inserting a node never calls a getter the page defined on the node
   itself. The insertion hooks swap in the native prototype to read
   `isConnected` and `nodeType`, but a getter on the instance shadows the

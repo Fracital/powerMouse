@@ -112,6 +112,16 @@ for (const [mode, base] of [
 		rb.customPrepare,
 	);
 	check(
+		'a formatter that calls the one before it, as Notion does, gets call sites and nothing throws',
+		rb.chainedPrepare === 'ok',
+		rb.chainedPrepare,
+	);
+	check(
+		'a formatter that calls the one before it with its error and sites gets the default text',
+		rb.chainedPrepareDirect === 'ok',
+		rb.chainedPrepareDirect,
+	);
+	check(
 		'clearing the custom formatter restores the cleaned default',
 		typeof rb.stackAfterCustom === 'string' &&
 			rb.stackAfterCustom.startsWith('Error: z') &&
