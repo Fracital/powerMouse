@@ -1,0 +1,62 @@
+<!doctype html>
+<title>WORKER TERMINATED</title>
+<script>
+	// Workers the page terminates a moment after starting them, as
+	// Cloudflare's challenge does with a blob: worker it only probes: a
+	// blob: worker and a URL worker per delay, none of which imports
+	// anything, so natively a terminated one reports nothing. Every error
+	// event is counted (`errors`, with the message of the first and the
+	// distinct kinds of URL the messages name), on the worker and on the
+	// window. `ownImport` is a worker terminated in the
+	// middle of an import of its own, which natively does report the import
+	// it lost.
+	const report = (window.__terminated = { errors: 0, first: null, kinds: [] });
+	const DELAYS = [-1, 0];
+	for (let ms = 2; ms <= 120; ms += 3) DELAYS.push(ms);
+	const count = (event) => {
+		report.errors++;
+		report.first ??= event.message || event.type;
+		const named = /'([a-z]+:[^']*)'/.exec(String(event.message));
+		const kind = named ? named[1].replace(/[^/]*$/, '') : event.type;
+		if (!report.kinds.includes(kind)) report.kinds.push(kind);
+	};
+	addEventListener('error', (event) => {
+		if (String(event.message).includes('importScripts')) count(event);
+	});
+	const blobSource = URL.createObjectURL(
+		new Blob(['onmessage = (e) => postMessage(e.data);'], {
+			type: 'text/javascript',
+		}),
+	);
+	const start = (url, ms) => {
+		const worker = new Worker(url);
+		worker.addEventListener('error', count);
+		if (ms < 0) worker.terminate();
+		else setTimeout(() => worker.terminate(), ms);
+	};
+	for (const ms of DELAYS) {
+		start(blobSource, ms);
+		start('worker-terminated.js', ms);
+	}
+	// an import of the worker's own, still loading when the page terminates
+	// the worker (the worker says when it starts it)
+	const own = new Worker(
+		URL.createObjectURL(
+			new Blob(
+				[
+					`postMessage('importing'); importScripts(${JSON.stringify(
+						new URL('/slow-js?ms=3000', location.href).href,
+					)});`,
+				],
+				{ type: 'text/javascript' },
+			),
+		),
+	);
+	own.onmessage = () => setTimeout(() => own.terminate(), 300);
+	own.onerror = (event) => {
+		// handled here, so the window does not count it
+		event.preventDefault();
+		report.ownImport = event.message || 'error';
+	};
+	setTimeout(() => (report.done = true), 4000);
+</script>
