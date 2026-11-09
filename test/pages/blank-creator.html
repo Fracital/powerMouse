@@ -1,0 +1,55 @@
+<!doctype html>
+<title>BLANK CREATOR</title>
+<script>
+	// A page that builds an about:blank frame and reaches into it before it
+	// loads (Google Docs does this for its text-event frame), then loads in
+	// both documents the way Docs' module loader does: a <link> whose href,
+	// rel and as are set as properties, in that order. In its own document it
+	// preloads a script and then adds the script; in the frame's it adds a
+	// stylesheet. Reports what fired, how often the script ran and the
+	// frame's text colour.
+	const report = { done: false };
+	window.__blankCreator = report;
+	let ran = 0;
+	window.__creatorRan = () => ++ran;
+	const settle = (element, attach) =>
+		new Promise((resolve) => {
+			element.onload = () => resolve('load');
+			element.onerror = () => resolve('error');
+			attach();
+			setTimeout(() => resolve('timeout'), 8000);
+		});
+	addEventListener('load', async () => {
+		const iframe = document.createElement('iframe');
+		iframe.src = 'about:blank';
+		document.body.append(iframe);
+		const child = iframe.contentDocument;
+		child.open();
+		child.write('<!doctype html><title>child</title><body>child</body>');
+		child.close();
+
+		const src = new URL('blank-creator.js', location.href).href;
+		const preload = document.createElement('link');
+		preload.id = 'preload';
+		preload.href = src;
+		preload.rel = 'preload';
+		preload.as = 'script';
+		report.preload = await settle(preload, () =>
+			document.head.insertBefore(preload, document.head.firstChild),
+		);
+		const script = document.createElement('script');
+		script.async = false;
+		script.src = src;
+		report.script = await settle(script, () => document.head.append(script));
+		report.ran = ran;
+
+		const sheet = child.createElement('link');
+		sheet.id = 'sheet';
+		sheet.href = new URL('blank-creator.css', location.href).href;
+		sheet.rel = 'stylesheet';
+		report.sheet = await settle(sheet, () => child.head.append(sheet));
+		report.color = iframe.contentWindow.getComputedStyle(child.body).color;
+		report.done = true;
+	});
+</script>
+<body></body>
