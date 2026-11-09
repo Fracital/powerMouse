@@ -747,20 +747,27 @@ function genericForward(
 		let cached = false;
 		const within = (window: number | null) =>
 			!!hit && !hit.mustRevalidate && window !== null && hit.staleFor <= window;
+		// the body goes out whole, as a Blob (the browser keeps a large one
+		// out of the worker's memory): a fetch event's body is always a
+		// stream, whatever the page gave, and epoxy sends a stream as a chunked
+		// upload, which servers that need a Content-Length refuse (IIS answers
+		// 411 Length Required: every Bing API call failed). Natively, only a
+		// page's own ReadableStream goes out without a length
+		const upload =
+			BODY_ILLEGAL.includes(serverRequest.method) || !serverRequest.body
+				? Promise.resolve(undefined)
+				: serverRequest.blob();
+		upload.catch(() => {});
 		const fetchUpstream = (headers: Headers) => {
-			const upstream = rewriter.bare.fetch(url.toString(), {
-				method: serverRequest.method,
-				redirect: 'manual',
-				// redirect: serverRequest.redirect,
-				// the body goes through as the stream it is (the port transfers
-				// it, the transport accepts it): an upload is never held in the
-				// service worker's memory
-				body:
-					(!BODY_ILLEGAL.includes(serverRequest.method) &&
-						serverRequest.body) ||
-					undefined,
-				headers: capitalizeHeaders(headers),
-			});
+			const upstream = upload.then((body) =>
+				rewriter.bare.fetch(url.toString(), {
+					method: serverRequest.method,
+					redirect: 'manual',
+					// redirect: serverRequest.redirect,
+					body,
+					headers: capitalizeHeaders(headers),
+				}),
+			);
 			// an answer that arrives after the page gave up is dropped unread, so
 			// the transport stops reading it
 			upstream.then(

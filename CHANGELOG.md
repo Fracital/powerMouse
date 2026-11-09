@@ -345,6 +345,16 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   submission builds from the form's data (navigation-initiator suite, both
   modes, against the page loaded natively). `form.submit()` fires no submit
   event and still sends none.
+- A request body goes upstream with its Content-Length, as natively, not as
+  a chunked upload. The worker handed the transport the fetch event's body
+  stream, and epoxy sends a stream chunked whatever the page gave (a
+  string, a Blob, form data, an empty body, from fetch, XHR or a beacon);
+  servers that need a length refuse that, and IIS answered 411 Length
+  Required to every Bing API call (search suggestions, rewards, the
+  proof-of-work token). The body is read into a Blob first, which the
+  browser keeps out of the worker's memory when it is large; a page's own
+  ReadableStream upload now arrives whole with a length too
+  (request-framing suite).
 - The synchronous bridge sends the request headers it is given as a plain
   record or a list of pairs. Only a Headers of the bundle's own realm went
   through: the branch for a record tested it for `=== null`, so every
@@ -1718,8 +1728,8 @@ url`) carries its value and targets that window. An about:blank child of
   filter and tagger, the link and navigate listeners are registered again,
   as they already were after the open that writes the page. The tagger that
   unwraps messages from other Stomp windows is also registered at install.
-- Request bodies stream to the transport instead of being buffered in the
-  service worker.
+- Request bodies reach the transport as a Blob (see the Content-Length
+  entry above for why they no longer stream).
 - The controller, the service worker and the inject bundles carry a build
   id; a mismatch (a stale bundle next to a new service worker) rejects
   `controller.wait()` with both ids and logs one error in the page, instead
