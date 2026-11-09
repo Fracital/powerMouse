@@ -139,38 +139,29 @@ export class AcornContext {
 		return created;
 	}
 	addEntriesToStack() {
-		const entries: [string, Node][] = [];
-
-		for (const key in this.node) {
-			const value = this.node[key];
-
-			if (typeof value !== 'object' || value === null) {
-				continue;
-			}
-
+		// each child node gets its context, in source order, and the stack
+		// gets them last first, so the first child is the next popped. No
+		// intermediate list: this runs for every node of a script, and its
+		// allocations were a large part of a big rewrite's garbage
+		const node = this.node;
+		const first = this.entries.length;
+		for (const key in node) {
+			if (key === 'range' || key === 'loc') continue;
+			const value = node[key];
+			if (typeof value !== 'object' || value === null) continue;
 			if (value instanceof Array) {
-				for (const sv of value) {
-					if (typeof sv !== 'object' || sv === null) {
-						continue;
-					}
-
-					if (typeof sv.type === 'string') {
-						entries.push([key, sv]);
-					}
+				for (let i = 0; i < value.length; i++) {
+					const sv = value[i];
+					if (typeof sv !== 'object' || sv === null) continue;
+					if (typeof sv.type === 'string')
+						this.entries.push(new AcornContext(sv, this, key, this.stack));
 				}
 			} else if (typeof value.type === 'string') {
-				entries.push([key, value]);
+				this.entries.push(new AcornContext(value, this, key, this.stack));
 			}
 		}
-
-		const start = this.stack.length - 1;
-		let length = entries.length;
-
-		for (const [key, node] of entries) {
-			const ctx = new AcornContext(node, this, key, this.stack);
-			this.stack[start + length--] = ctx;
-			this.entries.push(ctx);
-		}
+		for (let i = this.entries.length - 1; i >= first; i--)
+			this.stack.push(this.entries[i]);
 	}
 	removeDescendantsFromStack() {
 		for (let i = 0; i < this.entries.length; i++) {

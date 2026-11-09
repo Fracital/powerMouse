@@ -291,6 +291,13 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A script is rewritten about a seventh faster. Two of the rewriter's walks
+  allocated per node: the pass that moves destructured parameters into the
+  body went through a generator for every node, and the main walk built a
+  list of key and node pairs before it made each child's context. Both loop
+  plainly now. Over 46 MB of Discord's, CNN's and Docs' scripts the rewrite
+  takes 9.6 s against 11.2 s, with the output byte for byte the same; Discord
+  waits on its 13 MB main script's rewrite.
 - A large stylesheet is rewritten in time linear in its length. Each url()
   the rewriter routed was spliced into the whole text, so a stylesheet's
   rewrite was quadratic in its size times its url()s: CNN's front page

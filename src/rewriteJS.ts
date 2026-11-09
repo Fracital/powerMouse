@@ -1253,17 +1253,24 @@ function isPatternCall(node: any, access: string): boolean {
 	);
 }
 
-/** every child node of an ESTree node, in source order */
-function* children(node: any): Generator<any> {
+/**
+ * Whether `test` holds for a child node of an ESTree node, tried in source
+ * order. A plain loop, not a generator: the rewriter runs this on every node
+ * of a script, and a generator per node was a tenth of a large rewrite.
+ */
+function someChild(node: any, test: (child: any) => boolean): boolean {
 	for (const key in node) {
 		if (key === 'range' || key === 'loc') continue;
 		const value = node[key];
 		if (typeof value !== 'object' || value === null) continue;
 		if (Array.isArray(value)) {
-			for (const item of value)
-				if (item && typeof item.type === 'string') yield item;
-		} else if (typeof value.type === 'string') yield value;
+			for (let i = 0; i < value.length; i++) {
+				const item = value[i];
+				if (item && typeof item.type === 'string' && test(item)) return true;
+			}
+		} else if (typeof value.type === 'string' && test(value)) return true;
 	}
+	return false;
 }
 
 /** the names a binding pattern introduces */
@@ -1294,7 +1301,7 @@ function boundNames(pattern: any, names: string[] = []): string[] {
 
 function mentions(node: any, names: string[]): boolean {
 	if (node.type === 'Identifier' && names.includes(node.name)) return true;
-	for (const child of children(node)) if (mentions(child, names)) return true;
+	if (someChild(node, (child) => mentions(child, names))) return true;
 	return false;
 }
 
@@ -1309,7 +1316,21 @@ function mentions(node: any, names: string[]): boolean {
  */
 function hoistParamPatterns(node: any, access: string) {
 	const PARAM_TEMP = `${access}a`;
-	for (const child of children(node)) hoistParamPatterns(child, access);
+	// the children first, in source order (a plain loop: this runs on every
+	// node of the script)
+	for (const key in node) {
+		if (key === 'range' || key === 'loc') continue;
+		const value = node[key];
+		if (typeof value !== 'object' || value === null) continue;
+		if (Array.isArray(value)) {
+			for (let i = 0; i < value.length; i++) {
+				const item = value[i];
+				if (item && typeof item.type === 'string')
+					hoistParamPatterns(item, access);
+			}
+		} else if (typeof value.type === 'string')
+			hoistParamPatterns(value, access);
+	}
 
 	if (
 		node.type !== 'FunctionDeclaration' &&
