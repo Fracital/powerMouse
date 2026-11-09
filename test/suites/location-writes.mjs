@@ -12,11 +12,12 @@
 // a navigating case's first document finishes loading is a race), and the
 // bypass recorder must see no request straight to the fixture. A write the
 // rewriter does not route navigates the frame to the site itself, past the
-// proxy. The cases that open a window run in a second harness: Chrome, while
-// it creates a window, pauses the frames of the renderer, and a frame that
-// commits a document then may never be resumed (its document never parses),
-// which with eighty frames navigating happened in about one run in thirty.
-// Both demo modes.
+// proxy. The cases that open a window run in a second harness: under
+// DevTools (Playwright's auto-attach to the popup; plain Chrome does not
+// stall), Chrome pauses the renderer's frames while it creates a window, and
+// a frame that commits a document then may never be resumed (its document
+// never parses), which with eighty frames navigating happened in about one
+// run in thirty. Both demo modes.
 import {
 	done,
 	FIXTURE,

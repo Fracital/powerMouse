@@ -10,8 +10,8 @@
 		// (`?popups`): a window opened while many frames navigate leaves, now
 		// and then, a frame whose next document never parses (Chrome pauses
 		// the renderer's frames while it creates the window, and one that
-		// commits a document then is not resumed; it does with DevTools'
-		// waitForDebuggerOnStart off too)
+		// commits a document then is not resumed. Only under DevTools:
+		// Playwright's auto-attach to the popup; plain Chrome does not stall)
 		(function () {
 			window.__loads = {};
 			var params = new URLSearchParams(location.search);
