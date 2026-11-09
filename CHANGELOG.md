@@ -312,6 +312,33 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   expression carries along (`location = 7n`); every other kind of literal
   already kept its value (literals suite, both modes, against the page
   loaded natively; rewriter-unit suite, each kind).
+- A page no longer reaches another proxied site's window raw on most of the
+  ways the browser hands out a window. Every proxied site shares the proxy's
+  real origin, in isolated mode too (that mode keeps the host apart, not one
+  proxied site from another), so the browser's own cross-origin checks never
+  fire between them and the page must get the restricted stand-in. Measured
+  with a new window-references suite (a child of another site, a sibling, a
+  frameset frame, an object, an embed, an SVG document, popups; every path
+  compared with the same pages loaded natively, both modes), 60 paths per
+  mode handed out the other site's raw window or document. Literal index
+  reads (`frames[0]`, `window[0]`, `self[0]`, `top[0]`, `parent.frames[1]`,
+  and the same in eval, Function bodies, handlers, `javascript:` URLs, `with`
+  blocks and modules) are rewritten like computed ones; reflection
+  (`Reflect.get(window, 0)`, `getOwnPropertyDescriptor(s)`, `Object.values`,
+  `entries`, `assign`, `Array.from`) restricts what it reads off a window; a
+  child read by name (`frames.kid`, `window['kid']`, a bare `kid`, the named
+  properties object) is restricted by an accessor the child's name puts on
+  its parent's `Window.prototype`; `window.open('', name)` of another site's
+  frame, a window whose next document is of another site (`window.open(url)`,
+  a frame's `contentWindow` read while its `src` loads) and `getSVGDocument()`
+  no longer come back raw. A stand-in now names its children
+  (`parent.sibling`, as natively) and answers `opener.top` with its own top.
+  In the other direction a frame of another site could read the page that
+  framed it: a fresh about:blank frame of its own, reached by index or name,
+  ran no Stomp, and its native `parent` and `MessageEvent.source` getters,
+  called on its own window and messages, answered raw. Such a child is now
+  injected first, as reading its `contentWindow` does. What stays open is in
+  Known limitations.
 - A script is rewritten about a seventh faster. Two of the rewriter's walks
   allocated per node: the pass that moves destructured parameters into the
   body went through a generator for every node, and the main walk built a
@@ -2273,6 +2300,23 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- A proxied page can still reach another proxied site's window raw in these
+  ways (window-references suite, which asserts them raw so a fix shows up):
+  a window it reached while the window was of its own origin (a frame read
+  before it went to another site, a popup from `window.open()` it then
+  navigated) stays the browser's WindowProxy, which the inject cannot take
+  back, and through it the other site's document once it arrives (natively
+  the browser starts throwing then); copies of a window's children the
+  browser makes itself (`Array.prototype.slice.call(frames)`, `forEach`,
+  `{ ...window }`); and the document's named iframe (`document.kid`), whose
+  named properties come before anything that could be defined. In the other
+  direction, a frame of another site that reaches a fresh about:blank frame
+  of its own by a literal name (`frames.x`, a bare `x`) or by such a copy gets
+  a realm that runs no Stomp, whose native getters hand it the page that
+  framed it. Closing these needs either every frame injected as it connects
+  (insertion hooks, markup setters and a document observer, whose records
+  arrive before the parser runs the next script) or a real origin per
+  proxied site.
 - A page that races its own parser against an async script loses that race
   more often through the proxy, because its parser-blocking scripts arrive
   later: each is rewritten in the service worker, and Chrome fetches every

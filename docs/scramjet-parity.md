@@ -119,6 +119,74 @@ is not a security boundary at all.
 
 Open, in order of leverage: array patterns.
 
+### 2c. Window references between proxied sites (window-references suite)
+
+Every proxied site shares the proxy's one real origin, in both modes:
+isolated mode puts the host on its own origin, not each proxied site. The
+browser therefore never stops one proxied site from reading another's
+window; the inject must hand the page a restricted stand-in (every read,
+call and write throws SecurityError, `postMessage` and location writes
+pass), never the raw window. The suite reaches a child of another site, a
+sibling, a frameset frame, an object, an embed, an SVG document and popups
+every way below, judges each reference by what it lets the page read
+(document, `location.href`, `localStorage`, cookies, a function, a DOM
+write) and compares it with the same pages loaded natively, in both modes
+(the two modes measured the same on every path). "Raw" is the other site's
+window or document as is.
+
+| Path                                                                                                                                                                                                                                                            | Before (both modes)                   | Now (both modes)                         |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ---------------------------------------- |
+| `frames[0]`, `window[0]`, `self[0]`, `globalThis[0]`, `top[0]`, `window.frames[0]`, `frames['0']`; from a sibling `parent.frames[0]`, `parent[0]`, `top[0]`; a frameset's `frames[0]`                                                                           | raw                                   | restricted (literal index reads routed)  |
+| the same in `eval`, indirect eval, `Function` bodies, `with (window)`, string timers, inline handlers, `javascript:` URLs, module scripts, `parent.eval`, `new parent.Function`                                                                                 | raw                                   | restricted                               |
+| `frames[i]`, a `frames.length` loop, `parent.frames[1]` and `parent[1]` from the child (a stand-in)                                                                                                                                                             | restricted                            | restricted                               |
+| `for...of frames`; `Array.from(parent.frames)` across origins                                                                                                                                                                                                   | TypeError; SecurityError, as natively | same                                     |
+| `Reflect.get(window, 0)`, `Object.getOwnPropertyDescriptor(window, '0').value`, `Reflect.getOwnPropertyDescriptor`, `getOwnPropertyDescriptors`, `Object.values`, `Object.entries`, `Object.assign({}, frames)`, `Array.from(frames)` (with a map function too) | raw                                   | restricted                               |
+| `Array.prototype.slice.call(frames)`, `Array.prototype.forEach.call(frames)`, `{ ...window }`, read without an index                                                                                                                                            | raw                                   | **raw (open)**                           |
+| `window['kid']`, `frames.kid`, `window.kid`, a bare `kid`, `Reflect.get(window, 'kid')`, `Object.getPrototypeOf(Window.prototype).kid`, its descriptor, `window.__proto__.__proto__.kid`; `parent.kid`, `parent.frames.kid` from a sibling                      | raw                                   | restricted (an accessor per child name)  |
+| `document.kid` (a named iframe), also from a sibling                                                                                                                                                                                                            | raw                                   | **raw (open)**                           |
+| `parent.sib`, `parent.frames.sib`, `opener.frames.sib` across origins                                                                                                                                                                                           | SecurityError (natively a window)     | restricted, as natively                  |
+| `iframe.contentWindow` found by `getElementById`, `querySelector`, `getElementsByTagName`, `getElementsByName`; `object.contentWindow`; a frameset `frame.contentWindow`                                                                                        | restricted                            | restricted                               |
+| `contentDocument` of iframe, object, frame; `getSVGDocument()` of an HTML document                                                                                                                                                                              | null                                  | null                                     |
+| `getSVGDocument()` of another site's SVG document (iframe, object), and its `defaultView`                                                                                                                                                                       | raw                                   | null, as natively                        |
+| `event.source` of a message from the child, the object, the frameset's frame; a `MessagePort` message's `source`                                                                                                                                                | restricted; null                      | restricted; null                         |
+| `parent`, `top`, `opener` and their `frames`, `opener.frames[1]`                                                                                                                                                                                                | restricted                            | restricted                               |
+| `opener.top` (read through the access API)                                                                                                                                                                                                                      | the reader itself                     | restricted, as natively                  |
+| `window.open('', 'kid')` of another site's frame (and every path to that frame after it)                                                                                                                                                                        | raw                                   | restricted                               |
+| `window.open(url, 'tgt')` navigating a frame to another site, and `frames[i]` of it                                                                                                                                                                             | raw                                   | restricted                               |
+| a frame's `contentWindow` (or `frames[i]`) read while its `src` of another site loads                                                                                                                                                                           | raw                                   | restricted                               |
+| a frame's `contentWindow` read before its `src` was set, then the frame sent to another site; `contentWindow` and `frames[3]` of it afterwards                                                                                                                  | raw                                   | **raw (open)**                           |
+| a popup from `window.open()` the page then navigated to another site, and `event.source` of its messages                                                                                                                                                        | raw                                   | **raw (open)**                           |
+| from the child of another site: the native `parent` and `MessageEvent.source` getters of a fresh about:blank frame of its own, reached by `frames[i]` or a computed name                                                                                        | the framing page raw                  | restricted (the frame is injected first) |
+| the same reached by a literal name (`frames.x`) or `Array.prototype.slice.call(frames)`                                                                                                                                                                         | the framing page raw                  | **the framing page raw (open)**          |
+
+Why the open ones stay open:
+
+- A window the page reached while it was of its own origin (an about:blank
+  frame or popup) is the browser's WindowProxy, which keeps its identity when
+  it navigates (window-identity relies on that for `event.source === popup`).
+  Natively the browser checks every access against the document the window
+  shows now; here nothing does, and the inject cannot take back an object
+  the page holds. Only a real origin per proxied site, or a fresh browsing
+  context for every cross-site navigation of a window someone holds (which
+  breaks identity and cannot be done for redirects or popups), closes it.
+- `Array.prototype` methods called on a window and object spread read the
+  window's indices natively. Wrapping every array method would tax every
+  array call; spread could be rewritten (`{ ...$s$j.spread(x) }`) for a cost
+  per spread.
+- `Document` has `[LegacyOverrideBuiltIns]`: a named iframe is an own
+  property of the document that nothing can shadow or redefine while it
+  exists. Only virtualising frame names (the real name attribute and
+  browsing context name obfuscated, link targets and `window.name` mapped)
+  would close it.
+- A fresh about:blank frame's realm runs no Stomp until something injects
+  it; every read the inject mediates now injects it first, but a literal
+  name or a native copy is not mediated. Injecting every frame as it
+  connects (the insertion hooks, the markup setters, and a document
+  MutationObserver, whose records arrive at the microtask checkpoint the
+  parser performs before each script) would close this, at the price that
+  every child document then runs the client its parent injected into the
+  about:blank (as one whose `contentWindow` was read early already does).
+
 ## 3. JS rewriter
 
 Scramjet: Rust/oxc to wasm, offset edit list, binary sourcemap, helper names
@@ -351,10 +419,12 @@ from 14 when this section was last written.
      postMessage rewrite (messages 4).
    - Same-origin mode is hardening, not a boundary (section 3); the
      RemoteController mode is the boundary.
-   - Literal frame indices (`frames[0]`) and named frame access
-     (`frames.child`) are not routed, so they reach the raw window of another
-     proxied origin (parent-read suite documents the routed forms); routing
-     every literal index read would tax every array access.
+   - Another proxied site's window is still reachable raw through a window
+     the page held while it was of its own origin, native copies of a
+     window's children, a document's named iframe, and (from a frame of
+     another site) an uninjected about:blank frame of its own reached by a
+     literal name or a copy (section 2c). Literal indices and named access
+     on the window are routed since 2026-11-09.
    - Import map package prefixes and scope keys stay as written: URL
      prefixes the browser matches against module URLs, which a codec-encoded
      route cannot keep.
