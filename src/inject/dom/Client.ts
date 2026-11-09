@@ -306,7 +306,16 @@ export default class DocumentClient extends Client {
 	 * import map its routed targets): the written page (loadHTML) and
 	 * document.write markup go through here before the browser parses them.
 	 */
-	rewriteInlineScripts(root: ParentNode) {
+	rewriteInlineScripts(root: ParentNode, parsed = false) {
+		// The page's markup (`parsed`) reaches the browser through
+		// document.write, and a script that runs inside a write has no URL:
+		// its stack frames and errors read `<anonymous>`, where the network's
+		// parser names the document. Each is named for the document (the
+		// route, which reads back as the page's URL), unless it names itself.
+		// Markup the page writes is left as natively: unnamed.
+		const sourceURL = parsed
+			? `\n//# sourceURL=${this.global.location.href}`
+			: '';
 		for (const script of root.querySelectorAll('script')) {
 			// an SVG script element has no `text`: its textContent is the source
 			const element: Element = script;
@@ -338,7 +347,10 @@ export default class DocumentClient extends Client {
 					? ''
 					: `document.currentScript.textContent = ${JSON.stringify(source)};`,
 			);
-			write(rewritten.replace(/<\/script/gi, '<\\/script'));
+			const named = /^\/\/[#@]\s*sourceURL=/m.test(rewritten)
+				? rewritten
+				: rewritten + sourceURL;
+			write(named.replace(/<\/script/gi, '<\\/script'));
 		}
 	}
 	/**
@@ -358,7 +370,7 @@ export default class DocumentClient extends Client {
 		const live = this.global.document.documentElement;
 		if (!root || !live) return;
 		setGlobalParsingState(this.global, 'parsingBeforeWrite');
-		this.rewriteInlineScripts(root);
+		this.rewriteInlineScripts(root, true);
 		// The shell's root is the document's own start tag, so it stays (a
 		// root put in its place would not carry the title: Chrome's
 		// document.title only follows an SVG <title> that is inserted under
@@ -447,7 +459,7 @@ export default class DocumentClient extends Client {
 			// preamble that restores the source the page wrote for
 			// `document.currentScript.textContent`; a module has no currentScript.
 			// Nothing may produce `</script` in the markup.
-			this.rewriteInlineScripts(node);
+			this.rewriteInlineScripts(node, true);
 		} finally {
 			this.#parseBase = null;
 		}

@@ -5,6 +5,7 @@ import type {
 import { urlLike } from '../../StompURL';
 import Client from '../Client';
 import Module from '../Module';
+import { failsToParse, withStack } from '../nativeErrors';
 import ProxyModule, {
 	classConstant,
 	newConstructor,
@@ -19,7 +20,8 @@ export default class WebSocketModule extends Module<Client> {
 		const client = this.client;
 		const instances = new WeakSet();
 		const { origin } = this.client.url.url;
-		const { CONNECTING, OPEN, CLOSING, CLOSED } = this.client.global.WebSocket;
+		const NativeWebSocket = this.client.global.WebSocket;
+		const { CONNECTING, OPEN, CLOSING, CLOSED } = NativeWebSocket;
 
 		class MockWebSocket extends EventTarget {
 			#socket: BareCompatibleWebSocket;
@@ -30,31 +32,32 @@ export default class WebSocketModule extends Module<Client> {
 			constructor(...args: [url: urlLike, protocol?: string | string[]]) {
 				super();
 
-				if (!args.length)
-					throw new DOMException(
-						`Failed to construct 'WebSocket': 1 argument required, but only 0 present.`,
-					);
-
 				const [url, protocol] = args;
 
-				let parsed: URL;
+				// a URL the browser refuses (none, one that does not parse, another
+				// scheme, a fragment) gets the browser's own error from the native
+				// constructor, which throws before it connects anywhere
+				let parsed: URL | null = null;
+				if (args.length && !failsToParse(client, String(url)))
+					parsed = new URL(String(url), client.url.toString());
+				if (
+					!parsed ||
+					![...wsProtocols, 'http:', 'https:'].includes(parsed.protocol) ||
+					parsed.href.includes('#')
+				) {
+					// (never connects: the browser threw)
+					Reflect.construct(NativeWebSocket, args).close();
+					throw withStack(
+						new client.global.DOMException(
+							`Failed to construct 'WebSocket': The URL '${url}' is invalid.`,
+							'SyntaxError',
+						),
+					);
+				}
 
 				// relative URLs resolve against the page, http(s) means ws(s)
-				try {
-					parsed = new URL(String(url), client.url.toString());
-				} catch {
-					throw new DOMException(
-						`Failed to construct 'WebSocket': The URL '${url}' is invalid.`,
-					);
-				}
 				if (parsed.protocol === 'http:') parsed.protocol = 'ws:';
 				else if (parsed.protocol === 'https:') parsed.protocol = 'wss:';
-
-				if (!wsProtocols.includes(parsed.protocol)) {
-					throw new DOMException(
-						`Failed to construct 'WebSocket': The URL's scheme must be either 'ws' or 'wss'. '${parsed.protocol}' is not allowed.`,
-					);
-				}
 
 				instances.add(this);
 

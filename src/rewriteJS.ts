@@ -427,16 +427,26 @@ export function modifyJS(
 						b.callExpression(
 							b.arrowFunctionExpression(
 								[b.identifier('s'), b.identifier('o')],
-								b.callExpression(b.identifier('import'), [
-									b.callExpression(
-										b.memberExpression(
-											b.identifier(names.access),
-											b.identifier('importRoute'),
-										),
-										[base, b.identifier('s'), b.identifier('o')],
+								// its rejection names the route: `imported` hands it back
+								// naming the page's URL
+								b.callExpression(
+									b.memberExpression(
+										b.identifier(names.access),
+										b.identifier('imported'),
 									),
-									b.identifier('o'),
-								]),
+									[
+										b.callExpression(b.identifier('import'), [
+											b.callExpression(
+												b.memberExpression(
+													b.identifier(names.access),
+													b.identifier('importRoute'),
+												),
+												[base, b.identifier('s'), b.identifier('o')],
+											),
+											b.identifier('o'),
+										]),
+									],
+								),
 							),
 							[ctx.node.source, options],
 						),
@@ -1106,10 +1116,13 @@ export function modifyJS(
 			}
 		}
 
+		const bundle = JSON.stringify(injectWorkerJS(url, config));
 		return (
 			prologue +
 			// a module worker has no importScripts: fetch the bundle and run it
-			// as the classic script it is (indirect eval, top-level await)
+			// as the classic script it is (indirect eval, top-level await),
+			// named for its URL, so its frames are dropped from stacks like
+			// those of a bundle a classic worker imports
 			// (once: the bundle deletes createClient when the client is made,
 			// and a module worker's imports each carry this preamble). The
 			// browser dispatches messages during a top-level await, when the
@@ -1128,7 +1141,7 @@ export function modifyJS(
 		addEventListener('message', hold);
 		addEventListener('connect', hold);
 		try {
-			(0, eval)(await (await fetch(${JSON.stringify(injectWorkerJS(url, config))})).text());
+			(0, eval)((await (await fetch(${bundle})).text()) + '\\n//# sourceURL=' + new globalThis.URL(${bundle}, globalThis.location.href).href);
 		} finally {
 			removeEventListener('message', hold);
 			removeEventListener('connect', hold);

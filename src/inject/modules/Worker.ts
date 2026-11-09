@@ -1,11 +1,13 @@
 import { modifyJS, routeJS } from '../../rewriteJS';
-import { injectWorkerJS, proxyBlobURL } from '../../routeURL';
+import { injectWorkerJS, pageBlobURL, proxyBlobURL } from '../../routeURL';
 import StompURL from '../../StompURL';
-import { WORKER_BASE } from '../../transport/messages';
+import { WORKER_BASE, WORKER_ERROR } from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
+import { failsToParse, withStack } from '../nativeErrors';
 import { blobsByURL, PRIVATE_URL_MS, WORKER_LOADED } from '../workerBlobs';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
+import { reportedLocations, unrouteURL, type ErrorLocation } from './Unroute';
 
 const WORKER_CTOR_ERROR = (name: string) =>
 	`Failed to construct '${name}': Please use the 'new' operator, this DOM object constructor cannot be called as a function.`;
@@ -113,6 +115,42 @@ export default class WorkerModule extends Module<Client> {
 			setTimeout(release, PRIVATE_URL_MS);
 		};
 
+		/**
+		 * A script of another real origin is refused as the browser refuses
+		 * one (every route is same-origin to it, so it never does): a
+		 * SecurityError naming the script and the page's origin.
+		 */
+		const checkOrigin = (name: string, source: string) => {
+			const url = new URL(source, this.client.url.toString());
+			const { origin } = this.client.url.url;
+			if (['http:', 'https:'].includes(url.protocol) && url.origin !== origin)
+				throw withStack(
+					new global.DOMException(
+						`Failed to construct '${name}': Script at '${url.href}' cannot be accessed from origin '${origin}'.`,
+						'SecurityError',
+					),
+				);
+		};
+
+		// the native fields, which name the routes and the bundle the browser
+		// loaded ('' for an event that is no ErrorEvent: a script that failed
+		// to load)
+		const nativeField = (key: string) => {
+			const getter = Reflect.getOwnPropertyDescriptor(
+				global.ErrorEvent?.prototype ?? {},
+				key,
+			)?.get;
+			return (event: Event): string => {
+				try {
+					return getter ? String(Reflect.apply(getter, event, [])) : '';
+				} catch (error) {
+					return '';
+				}
+			};
+		};
+		const messageOf = nativeField('message');
+		const filenameOf = nativeField('filename');
+
 		const isModuleOptions = (options: unknown) =>
 			typeof options === 'object' &&
 			options !== null &&
@@ -130,18 +168,63 @@ export default class WorkerModule extends Module<Client> {
 		 * natively.
 		 */
 		const terminated = new WeakSet<object>();
-		const hideOwnLoss = (worker: Worker, own: string | undefined) => {
+		/**
+		 * The worker's first listeners, before any of the page's. An error the
+		 * browser located in the inject (a hook called the native API that
+		 * threw) is reported on the Worker with that location, and the event
+		 * there has no error object to find the page's from: the worker says
+		 * where it was, in a message ahead of the report (Unroute), taken here
+		 * and kept for the event's getters. A report the worker's own handler
+		 * cancelled never comes, and its location is passed over.
+		 */
+		const watchErrors = (
+			worker: Worker,
+			own: string | undefined,
+			script: string,
+		) => {
+			const located: (ErrorLocation & { message: string })[] = [];
+			worker.addEventListener(
+				'message',
+				(event) => {
+					const report = (event as MessageEvent).data?.[WORKER_ERROR];
+					if (!report) return;
+					event.stopImmediatePropagation();
+					located.push(report);
+				},
+				true,
+			);
 			worker.addEventListener(
 				'error',
 				(event) => {
+					const message = messageOf(event);
+					const index = located.findIndex(
+						(report) => report.message === message,
+					);
+					if (index !== -1) {
+						reportedLocations.set(event, located[index]);
+						located.splice(0, index + 1);
+					} else {
+						// a worker the page terminated says nothing more: the
+						// error is its script's, at no known place
+						const filename = filenameOf(event);
+						if (filename && unrouteURL(this.client, filename) === null)
+							reportedLocations.set(event, {
+								routed: null,
+								filename: script,
+								lineno: 0,
+								colno: 0,
+							});
+					}
 					if (!terminated.has(worker)) return;
-					const message = String((event as ErrorEvent).message);
 					const bundle = new URL(
 						injectWorkerJS(this.client.url, this.client.config),
 						this.client.url.directory,
 					).href;
+					// the browser writes the message by reading the exception's,
+					// which the worker's own hooks unroute (Unroute): its private
+					// URL comes in the page's form
 					if (
-						![bundle, own].some(
+						![bundle, own, own && pageBlobURL(own)].some(
 							(url) => url !== undefined && message.includes(`'${url}'`),
 						)
 					)
@@ -168,11 +251,19 @@ export default class WorkerModule extends Module<Client> {
 				(target, that, args, newTarget) => {
 					if (!newTarget) throw new TypeError(WORKER_CTOR_ERROR('Worker'));
 					catchRequiredArguments(args.length, 1, 'Worker', 'constructor');
-					args[0] = workerURL(String(args[0]), isModuleOptions(args[1]));
+					const source = String(args[0]);
+					// the browser's own SyntaxError
+					if (failsToParse(this.client, source))
+						return Reflect.construct(target, args, newTarget);
+					checkOrigin('Worker', source);
+					args[0] = workerURL(source, isModuleOptions(args[1]));
 					const own = lastPrivate;
 					const worker: Worker = Reflect.construct(target, args, newTarget);
-					// the worker's first listener, before any of the page's
-					hideOwnLoss(worker, own);
+					watchErrors(
+						worker,
+						own,
+						new URL(source, this.client.url.toString()).href,
+					);
 					this.client.provisionWorkerTransport(worker);
 					if (own) releaseOnLoad(worker, own);
 					return worker;
@@ -188,7 +279,11 @@ export default class WorkerModule extends Module<Client> {
 					if (!newTarget)
 						throw new TypeError(WORKER_CTOR_ERROR('SharedWorker'));
 					catchRequiredArguments(args.length, 1, 'SharedWorker', 'constructor');
-					args[0] = workerURL(String(args[0]), isModuleOptions(args[1]));
+					const source = String(args[0]);
+					if (failsToParse(this.client, source))
+						return Reflect.construct(target, args, newTarget);
+					checkOrigin('SharedWorker', source);
+					args[0] = workerURL(source, isModuleOptions(args[1]));
 					// a shared worker has no postMessage to say it took its
 					// private URL: that one goes after PRIVATE_URL_MS
 					const own = lastPrivate;

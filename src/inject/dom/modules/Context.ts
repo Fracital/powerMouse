@@ -8,6 +8,7 @@ import ProxyModule, {
 	catchRequiredArguments,
 	usePrototype,
 } from '../../modules/Proxy';
+import { withStack } from '../../nativeErrors';
 import { nativeFunction } from '../../nativeUtil';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 
@@ -151,6 +152,8 @@ export default class ContextModule extends Module<DocumentClient> {
 		this.held.add(context);
 	}
 	restrictObject(
+		// the interface the browser names in its errors
+		name: 'Window' | 'Location',
 		interfaces: PropertyDescriptorMap,
 		// a cross-origin window's child browsing contexts by index
 		indexed?: (index: number) => unknown,
@@ -172,11 +175,24 @@ export default class ContextModule extends Module<DocumentClient> {
 				configurable: false,
 			});
 
-		const accessError = () =>
-			new this.client.global.DOMException(
-				`Blocked a frame with "${this.client.url.url.origin}" from accessing a cross-origin frame.`,
-				'SecurityError',
+		// the browser's SecurityError: a read or a write names the property,
+		// anything else only the frame
+		const accessError = (access?: 'read' | 'set', prop?: string | symbol) => {
+			const blocked = `Blocked a frame with origin "${this.client.url.url.origin}" from accessing a cross-origin frame.`;
+			const key =
+				typeof prop === 'symbol' ? `[${prop.description ?? ''}]` : prop;
+			return withStack(
+				new this.client.global.DOMException(
+					access === 'read'
+						? `Failed to read a named property '${key}' from '${name}': ${blocked}`
+						: access === 'set'
+							? `Failed to set a named property '${key}' on '${name}': ${blocked}`
+							: blocked,
+					'SecurityError',
+				),
+				access ? 1 : 0,
 			);
+		};
 		const indexOf = (prop: string | symbol): number | undefined =>
 			indexed && typeof prop === 'string' && /^(0|[1-9]\d*)$/.test(prop)
 				? Number(prop)
@@ -214,7 +230,7 @@ export default class ContextModule extends Module<DocumentClient> {
 						const child = indexed!(index);
 						if (child !== undefined) return child;
 					}
-					throw accessError();
+					throw accessError('read', prop);
 				}
 
 				return Reflect.get(target, prop, receiver);
@@ -223,7 +239,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				const descriptor = Reflect.getOwnPropertyDescriptor(target, prop);
 
 				if (!descriptor || typeof descriptor.set !== 'function') {
-					throw accessError();
+					throw accessError('set', prop);
 				}
 
 				return Reflect.set(target, prop, value);
@@ -232,7 +248,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				throw accessError();
 			},
 			getOwnPropertyDescriptor: (target, prop) => {
-				if (!(prop in target)) throw accessError();
+				if (!(prop in target)) throw accessError('read', prop);
 				return Reflect.getOwnPropertyDescriptor(target, prop);
 			},
 			setPrototypeOf: () => {
@@ -358,7 +374,7 @@ export default class ContextModule extends Module<DocumentClient> {
 	restrictContext(context: Context): RestrictedContext {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
-		const restrictedLocation = this.restrictObject({
+		const restrictedLocation = this.restrictObject('Location', {
 			replace: {
 				value: (url: urlLike) => {
 					context.location.replace(
@@ -394,6 +410,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		});
 
 		const res = <any>this.restrictObject(
+			'Window',
 			{
 				// read from the real windows, not through the context's own
 				// getters: those answer with its view (its own stand-ins), and a

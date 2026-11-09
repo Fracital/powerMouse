@@ -11,6 +11,7 @@ import StompURL, { urlLike } from '../../StompURL';
 import Client from '../Client';
 import Module from '../Module';
 import ProxyModule from './Proxy';
+import { unrouteText } from './Unroute';
 
 /*
 // why was this necessary?
@@ -72,6 +73,31 @@ export default class AccessModule extends Module<Client> {
 		setGlobalProxy(evalSnapshot, 'eval', globalEvalProxy, this.client.names);
 
 		/** the routed URL of a module `url` imports (bare specifiers are the import map's), by its kind */
+		/**
+		 * A failed import rejects with the browser's TypeError, "Failed to
+		 * fetch dynamically imported module: <URL>", naming the route it was
+		 * given: the same error comes back naming the page's URL, before
+		 * anything of the page's sees it (a rejection handler, an
+		 * unhandledrejection listener, the console).
+		 */
+		const promiseThen = Promise.prototype.then;
+		const imported = (promise: Promise<unknown>): Promise<unknown> =>
+			Reflect.apply(promiseThen, promise, [
+				undefined,
+				(error: unknown) => {
+					const message =
+						typeof error === 'object' && error !== null
+							? Reflect.getOwnPropertyDescriptor(error, 'message')
+							: undefined;
+					if (message && typeof message.value === 'string')
+						Reflect.defineProperty(error as object, 'message', {
+							...message,
+							value: unrouteText(this.client, message.value),
+						});
+					throw error;
+				},
+			]);
+
 		const route = (
 			baseURL: string | undefined,
 			url: string,
@@ -352,8 +378,13 @@ export default class AccessModule extends Module<Client> {
 				);
 			},
 			import: (baseURL: string | undefined, url: string): Promise<unknown> =>
-				// @ts-ignore
-				import(/* webpackIgnore: true */ route(baseURL, url, undefined)),
+				imported(
+					// @ts-ignore
+					import(/* webpackIgnore: true */ route(baseURL, url, undefined)),
+				),
+			// an import the page's code makes itself (with options)
+			imported: (promise: Promise<unknown>): Promise<unknown> =>
+				imported(promise),
 			// the URL `import(url, options)` loads: the rewriter keeps the import
 			// itself, with its options, in the page (see modifyJS)
 			importRoute: (

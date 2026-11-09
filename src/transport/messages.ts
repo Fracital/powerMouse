@@ -106,6 +106,12 @@ export interface NavigateInfo {
  */
 export const WORKER_BASE = '$stomp$workerBase';
 /**
+ * dedicated worker -> its Worker object: where an uncaught error the browser
+ * located inside the inject really comes from (the page's call site), sent
+ * before the browser's report of it, which follows on the same queue
+ */
+export const WORKER_ERROR = '$stomp$workerError';
+/**
  * page -> SW: markup to serve once as an inline document (src/server/inline.ts)
  * at the controller address `directory`, under `token`
  */

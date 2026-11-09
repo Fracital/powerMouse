@@ -8,6 +8,7 @@ import StompURL, { urlLike } from '../../StompURL';
 import { ABORT_HEADER } from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
+import { failsToParse } from '../nativeErrors';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
 import { unrouteURL } from './Unroute';
 
@@ -126,7 +127,7 @@ export default class FetchModule extends Module<Client> {
 
 		this.client.global.fetch = proxyModule.wrapFunction(
 			this.client.global.fetch,
-			async (_target, _that, args) => {
+			async (target, that, args) => {
 				let init: RequestInit;
 				let url: urlLike;
 
@@ -135,7 +136,12 @@ export default class FetchModule extends Module<Client> {
 					url = new URL(Reflect.apply(nativeRequestURL, request, []) as string);
 					init = request;
 				} else {
-					url = new URL(args[0], this.client.url.toString());
+					// a URL that does not parse: the browser's own rejection, which
+					// names the URL as the page wrote it
+					const text = String(args[0]);
+					if (args.length && failsToParse(this.client, text))
+						return await Reflect.apply(target, that, [text, ...args.slice(1)]);
+					url = new URL(text, this.client.url.toString());
 					init = args[1];
 				}
 

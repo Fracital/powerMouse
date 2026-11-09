@@ -291,6 +291,36 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- Error surfaces read as natively: none names a route, the proxy origin, an
+  inject bundle or a helper name, in pages and in dedicated, module and shared
+  workers (`error-surfaces` suite, compared case by case with the page loaded
+  natively, both modes; 58 of 142 checks failed before). The browser's own
+  messages keep their text with the route in them read back as the page's URL:
+  `ErrorEvent.message` and an `onerror` handler's message (a worker's own
+  `onerror` too, whose source named the route), a DOMException's message
+  (importScripts' NetworkError), a failed `import()`'s TypeError (rejection,
+  `unhandledrejection`, the console). An uncaught error the browser located in
+  the inject (a hook called the API that threw, as for an importScripts the
+  worker could not load) is placed at the page's call, from its stack; a
+  dedicated worker tells its Worker object where, in a message ahead of the
+  browser's report. A cross-origin classic script's error at the window reads
+  "Script error." as natively (every route is same-origin to the browser,
+  which never muted one). A URL that does not parse goes to the native
+  `fetch`, `Worker`, `SharedWorker`, `importScripts` and `WebSocket` (which
+  also refuse a bad scheme and a fragment), whose own error replaces the one
+  `new URL` threw. `new Worker` and `new SharedWorker` of a script of another
+  origin throw the browser's SecurityError instead of starting it. The
+  cross-origin frame stand-ins throw the browser's messages ("Failed to read a
+  named property ..."), and every SecurityError the inject throws has a
+  stack. Stacks drop the frames of the inject's realm-made helpers (under
+  every script of the page's markup) and of the bundle a module worker
+  evaluates, name the page for scripts of its markup (they run inside the
+  document.write that loads it), take the first line of a browser error
+  without the call Blink prefixes later, read a `new Function` frame as
+  `eval`, and leave out a frame name V8 inferred from the rewriter's code.
+  Reporting API reports name the page's URLs. Left as they are: source
+  positions of rewritten code, a page's CSP (not forwarded, so no violation
+  fires), resources the page's markup loads listed twice in resource timing.
 - A worker the page terminates at once no longer reports an import of the
   proxy's. A proxied worker imports the inject bundle (and a blob: worker the
   private URL of its script) before the page's script runs, and Chrome reports
@@ -2124,6 +2154,17 @@ Fixed while testing real sites and a feature fixture:
 - `Error.prepareStackTrace` reads back as a function (Stomp's formatter)
   instead of `undefined`; scripts created from markup strings read back
   rewritten.
+- Error surfaces (error-surfaces suite): line and column numbers of rewritten
+  code are the rewritten code's (stacks, ErrorEvent, onerror, report bodies),
+  and an error the browser reported for a worker the page terminated mid
+  import names the worker's script at line 0 (the worker can no longer say
+  where). With a formatter installed V8 builds a stack's first line when the
+  stack is first read, not when the error is made, so a page that changes an
+  error's message before reading its stack sees the new message there
+  (Blink's own prefix is handled). A page's CSP is not forwarded, so no
+  `securitypolicyviolation` fires; a classic script of another origin that a
+  worker imports does not mute its errors; DevTools' structured call frames
+  (not readable by the page) still show routes.
 - Aborting a fetch does not cancel the request on the transport (epoxy
   ignores the signal); the response is discarded.
 - The HTTP cache uses no heuristic freshness (`Last-Modified` alone stores

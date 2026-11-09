@@ -2,6 +2,7 @@ import { routeHTML } from '../../../rewriteHTML';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { withStack } from '../../nativeErrors';
 import DocumentClient from '../Client';
 
 /**
@@ -57,9 +58,11 @@ export default class HistoryModule extends Module<DocumentClient> {
 						url = null;
 					}
 					if (!url || url.origin !== page.origin)
-						throw new this.client.global.DOMException(
-							`Failed to execute '${name}' on 'History': A history state object with URL '${String(args[2])}' cannot be created in a document with origin '${page.origin}' and URL '${page.href}'.`,
-							'SecurityError',
+						throw withStack(
+							new this.client.global.DOMException(
+								`Failed to execute '${name}' on 'History': A history state object with URL '${String(args[2])}' cannot be created in a document with origin '${page.origin}' and URL '${page.href}'.`,
+								'SecurityError',
+							),
 						);
 					args[2] = routeHTML(
 						new StompURL(url, this.client.url),

@@ -171,13 +171,22 @@ export default class Client {
 		// Function, over the bundle's snapshot of Reflect.apply: a page that
 		// later replaces Reflect.apply or Function never sees the method, the
 		// target or the arguments (the native postMessage, a route)
+		// Their code has no URL of its own, and their frames are under the
+		// page's (the timer that writes the page's markup runs every script
+		// in it): named under the proxy's scope, the stack cleaner drops them
+		// as it drops the bundle's (Unroute)
+		const realmOrigin = global.location?.origin;
+		const sourceURL =
+			realmOrigin && realmOrigin !== 'null'
+				? `\n//# sourceURL=${realmOrigin}${init.scope || init.directory}`
+				: '';
 		try {
 			this.#callIn = new this.#nativeFunction(
 				'apply',
-				'return function (method, that, args) { return apply(method, that, args); };',
+				`return function (method, that, args) { return apply(method, that, args); };${sourceURL}`,
 			)(Reflect.apply) as CallIn;
 			this.#ownCallback = new this.#nativeFunction(
-				'return function (callback) { return function () { callback(); }; };',
+				`return function (callback) { return function () { callback(); }; };${sourceURL}`,
 			)() as (callback: () => void) => () => void;
 		} catch (error) {
 			this.#callIn = (method, that, args) => Reflect.apply(method, that, args);
