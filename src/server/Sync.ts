@@ -1,5 +1,5 @@
 import { decodeBase64, encodeBase64 } from '../base64';
-import { encodeCookie } from '../encodeCookie';
+import { encodeCookie, splitAnswer } from '../encodeCookie';
 import { ProcessData, ProcessResult, SyncBody } from '../sync';
 import Router from './Router';
 
@@ -78,8 +78,6 @@ async function process(
 	}
 }
 
-const split = 4000;
-
 export function registerXhr(router: Router) {
 	router.routes.set(/\/gxhr/, async (request) => {
 		return new Response(
@@ -89,46 +87,27 @@ export function registerXhr(router: Router) {
 
 	router.routes.set(/\/xhr/, async (request) => {
 		const { id, data } = await request.json();
-		const expiration = new Date(Date.now() + 3e3);
 
 		const response = await process(router, data);
-
-		let long = encodeCookie(JSON.stringify(response));
-		let mainCookieValue =
-			(long.length < split - 2
-				? '0'
-				: (Math.ceil(long.length / split) - 1).toString()) + ',';
-
-		if (mainCookieValue.length < split) {
-			const end = long.slice(0, split - mainCookieValue.length);
-			long = long.slice(end.length);
-			mainCookieValue += end;
-		}
-
-		for (let i = 0; i < long.length; i += split) {
-			const part = long.slice(i, i + 4000);
-
-			const chunk = i / split;
-
-			await cookieStore.set({
-				name: id + chunk,
-				value: part,
-				expires: expiration.getTime(),
-				path: '/',
-				sameSite: 'none',
-			});
-		}
+		// counted from the answer, not from the request: an answer that took
+		// longer than this to come was set already expired, and the page spun
+		// to its limit waiting for it
+		const expires = Date.now() + 3e3;
 
 		// the answer is read with document.cookie from a proxied frame, which in
 		// origin-isolation mode is a cross-site embed: the CookieStore default
 		// (Strict) is invisible there and every bridge call would time out
-		await cookieStore.set({
-			name: id,
-			value: mainCookieValue,
-			expires: expiration.getTime(),
-			path: '/',
-			sameSite: 'none',
-		});
+		for (const [name, value] of splitAnswer(
+			id,
+			encodeCookie(JSON.stringify(response)),
+		))
+			await cookieStore.set({
+				name,
+				value,
+				expires,
+				path: '/',
+				sameSite: 'none',
+			});
 
 		return new Response();
 	});

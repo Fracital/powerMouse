@@ -60,3 +60,51 @@ export function decodeCookie(cookie: string): string {
 
 	return result;
 }
+
+/** the most of an encoded answer one sync bridge cookie carries */
+export const SYNC_CHUNK = 4000;
+
+/**
+ * The cookies that carry the service worker's answer to a synchronous
+ * request, in the order to set them: the chunks, then the main cookie named
+ * `id`, whose value is the number of chunks and the first piece, so a page
+ * that sees it sees the whole answer. The count is that of the chunks left
+ * once the first piece is cut (room is kept for a five-digit count); counted
+ * from the whole length, it came out one short when the answer ran a
+ * character or two past a multiple of the chunk size, and the page decoded a
+ * cut answer ("Bad control character in string literal in JSON").
+ */
+export function splitAnswer(id: string, encoded: string): [string, string][] {
+	const head = encoded.slice(0, SYNC_CHUNK - 6);
+	const rest = encoded.slice(head.length);
+	const count = Math.ceil(rest.length / SYNC_CHUNK);
+	const cookies: [string, string][] = [];
+	for (let i = 0; i < count; i++)
+		cookies.push([
+			`${id}${i}`,
+			rest.slice(i * SYNC_CHUNK, (i + 1) * SYNC_CHUNK),
+		]);
+	cookies.push([id, `${count},${head}`]);
+	return cookies;
+}
+
+/**
+ * The answer `splitAnswer` left in `cookies` (a `document.cookie` string) and
+ * the names of the cookies that carried it, or null while it is not all there.
+ */
+export function joinAnswer(
+	cookies: string,
+	id: string,
+): { value: string; names: string[] } | null {
+	const main = new RegExp(`(?:^|; )${id}=(\\d+),([^;]*)`).exec(cookies);
+	if (!main) return null;
+	const names = [id];
+	let value = main[2];
+	for (let i = 0; i < Number(main[1]); i++) {
+		const chunk = new RegExp(`(?:^|; )${id}${i}=([^;]*)`).exec(cookies);
+		if (!chunk) return null;
+		names.push(`${id}${i}`);
+		value += chunk[1];
+	}
+	return { value, names };
+}

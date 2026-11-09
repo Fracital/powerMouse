@@ -1,5 +1,5 @@
 import { decodeBase64, encodeBase64 } from '../../../base64';
-import { decodeCookie } from '../../../encodeCookie';
+import { decodeCookie, joinAnswer } from '../../../encodeCookie';
 import { geckoXHR, queueXHR } from '../../../routeURL';
 import { urlLike } from '../../../StompURL';
 import { ProcessData, SerializableRequestInit, SyncBody } from '../../../sync';
@@ -154,7 +154,6 @@ export default class SyncModule extends Module<DocumentClient> {
 
 		const cookies = this.client.getModule(CookiesModule)!;
 		const id = 'sync-request-' + Math.random().toString(16).slice(2);
-		const regex = new RegExp(`${id}=(\\d+),(.*?)(;|$)`);
 
 		// a beacon is refused (and never sent) when the payload is over the
 		// browser's 64 KiB beacon quota, which a large localStorage value hits;
@@ -179,44 +178,21 @@ export default class SyncModule extends Module<DocumentClient> {
 		for (let cycles = 0; Date.now() < deadline; cycles++) {
 			if (cycles % 3 !== 0) continue;
 
-			const cookie = cookies.cookie;
-			const match = cookie.match(regex);
-
-			if (!match) continue;
-
-			const clearCookies: string[] = [id];
-
-			const chunks = parseInt(match[1]);
-
-			let joinedValue = match[2];
-
-			for (let i = 0; i < chunks; i++) {
-				const cookieName = `${id}${i}`;
-				const regex = new RegExp(`${cookieName}=(.*?)(;|$)`);
-				const match = cookie.match(regex);
-
-				if (!match) {
-					console.warn(`Couldn't find chunk ${i}`);
-					continue;
-				}
-
-				clearCookies.push(cookieName);
-
-				const [, value] = match;
-
-				joinedValue += value;
-			}
+			// a piece missing would leave a cut answer, whose last escape decodes
+			// to a control character: wait for the whole of it
+			const answer = joinAnswer(cookies.cookie, id);
+			if (!answer) continue;
 
 			// same attributes as the service worker set, or a cross-site frame
 			// cannot delete them and they pile up until the next request to the
 			// proxy origin fails with 431
-			for (const cookieName of clearCookies) {
+			for (const cookieName of answer.names) {
 				cookies.cookie = `${cookieName}=; path=/; expires=${new Date(
 					0,
 				)}; SameSite=None; Secure`;
 			}
 
-			return createResponse(JSON.parse(decodeCookie(joinedValue)));
+			return createResponse(JSON.parse(decodeCookie(answer.value)));
 		}
 
 		throw new RangeError(

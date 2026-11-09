@@ -515,6 +515,18 @@ PresentationRequest()` (Spotify) and `screen.orientation.lock()` threw
   tells the two apart by hyper's `Parse(` error text (malformed-headers
   suite, both modes, against the page loaded natively; wpt-cookies
   `%x0 in name (HTTP)` twice and `ignore value after LF` now pass).
+- A synchronous request (a `document.cookie` read, a synchronous XHR) whose
+  answer ran a character or two past a multiple of 4000 encoded characters
+  threw `SyntaxError: Bad control character in string literal in JSON`. The
+  worker splits the answer into cookies of 4000 and counted the chunks from
+  the whole length, one short of the chunks it set past the first piece, so
+  the page joined a cut answer. The split and the join are now one pair of
+  functions in `src/encodeCookie.ts` and the page waits for every chunk it
+  is told of. The answer's cookies also expired 3 s after the request
+  arrived rather than after its answer, so an answer slower than that was
+  set already expired and the page spun to its limit (sync-chunks suite, in
+  node, every length up to four chunks; malformed-headers failed about every
+  other run once its jar grew to that size).
 - Scripts are rewritten off the service worker's thread. The service worker
   rewrote every script itself, one at a time, so a page of large scripts
   waited for each in turn (six 600 KB scripts took about a second to arrive,
