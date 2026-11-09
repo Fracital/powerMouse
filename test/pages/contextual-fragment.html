@@ -1,0 +1,40 @@
+<!doctype html>
+<title>CONTEXTUAL FRAGMENT</title>
+<script>
+	// Markup parsed by Range.createContextualFragment is made in this
+	// document, so its loads start at once, before (or without) insertion:
+	// an image never inserted, one inserted, a srcset, and what the
+	// fragment's markup reads back as. Marked ?cf=<case>.
+	window.__cf = {};
+	addEventListener('load', async () => {
+		const range = document.createRange();
+		range.selectNode(document.body);
+		const url = (name) => `/pages/blank-pixel.svg?cf=${name}`;
+		const kept = range.createContextualFragment(
+			`<img id="kept" src="${url('kept')}">`,
+		);
+		range.createContextualFragment(`<img src="${url('dropped')}">`);
+		range.createContextualFragment(`<img srcset="${url('srcset')} 1x">`);
+		const cross = range.createContextualFragment(
+			`<img src="${window.__cross}/pages/blank-pixel.svg?cf=cross">`,
+		);
+		// parsed in the range's context: a row in a table section is a row
+		const table = document.createElement('table');
+		const body = table.appendChild(document.createElement('tbody'));
+		const rows = document.createRange();
+		rows.selectNodeContents(body);
+		const row = rows.createContextualFragment('<tr><td>cell</td></tr>');
+		__cf.row = row.firstChild?.localName ?? null;
+		// a script in the fragment runs once the page inserts it
+		document.body.append(
+			range.createContextualFragment('<script>window.__cfRan = true<\/script>'),
+		);
+		__cf.ran = window.__cfRan === true;
+		__cf.markup = kept.firstChild.outerHTML;
+		__cf.src = kept.firstChild.getAttribute('src');
+		document.body.append(kept);
+		await new Promise((resolve) => setTimeout(resolve, 1500));
+		__cf.complete = document.getElementById('kept').complete;
+		__cf.done = true;
+	});
+</script>
