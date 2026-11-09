@@ -2,7 +2,18 @@
 <title>FRAME REUSE CHILD</title>
 <script>
 	// a child of frame-reuse.html: tells its parent its name, its URL, and
-	// whether its sibling is found by name in the parent's frames
+	// whether its sibling is found by name in the parent's frames. It
+	// replaces Reflect.apply first, as a page may: the replacement forwards,
+	// and records every call it gets (this page makes none), which the parent
+	// reads from window.__reflectCalls
+	const reflectCalls = (window.__reflectCalls = []);
+	const apply = Reflect.apply;
+	Reflect.apply = function (method, that, args) {
+		reflectCalls.push(
+			typeof method === 'function' ? method.name : typeof method,
+		);
+		return apply(method, that, args);
+	};
 	addEventListener('load', () => {
 		const sibling =
 			window.name === 'reuse-first' ? 'reuse-second' : 'reuse-first';

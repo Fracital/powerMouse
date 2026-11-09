@@ -5,6 +5,7 @@
 	// contentWindow the page reads at once (while it is still the initial
 	// about:blank the browser then keeps for the document of its src), and a
 	// second, named one. What the children report lands in window.__reuse.
+	// Each child replaced its Reflect.apply before posting.
 	const report = (window.__reuse = { messages: [] });
 	addEventListener('message', (event) => {
 		if (!event.data || event.data.kind !== 'frame-reuse') return;
@@ -35,6 +36,11 @@
 			report.byName = {
 				first: window.frames['reuse-first'] === first.contentWindow,
 				second: window.frames['reuse-second'] === second.contentWindow,
+			};
+			// what each child's own Reflect.apply was called with
+			report.reflectCalls = {
+				first: first.contentWindow.__reflectCalls,
+				second: second.contentWindow.__reflectCalls,
 			};
 			report.done = true;
 		}, 3000);

@@ -37,6 +37,8 @@ type PostMessage = (
 	transfer: Transferable[],
 ) => void;
 
+type CallIn = (method: Function, that: unknown, args: unknown[]) => unknown;
+
 /** the largest markup an inline document takes (the worker refuses more) */
 const INLINE_DOCUMENT_MAX = 4 * 1024 * 1024;
 
@@ -78,35 +80,27 @@ export default class Client {
 	hookedPostMessage?: unknown;
 	/** @internal set by the Context module: post `args` to a Stomp window from this realm, so this context is the incumbent (source and origin are its own) */
 	postToWindow?: (target: object, args: unknown[]) => unknown;
-	#callIn?: (method: Function, that: unknown, args: unknown[]) => unknown;
+	readonly #callIn: CallIn;
+	readonly #ownCallback: (callback: () => void) => () => void;
 	/**
 	 * Call `method` as this client's window would: through a function of that
 	 * window's own realm, so the browser takes the window for the incumbent
-	 * (a message's source, a navigation's initiator) and a timer's callback
-	 * for its own. This client's code may be another realm's: a parent's
-	 * bundle injects an iframe's initial about:blank, and the client stays on
-	 * the window when the frame navigates to a document of the same origin
-	 * (the browser keeps the Window). Plain `Reflect.apply` for a window
-	 * without a Function constructor of its own
+	 * (a message's source, a navigation's initiator). This client's code may
+	 * be another realm's: a parent's bundle injects an iframe's initial
+	 * about:blank, and the client stays on the window when the frame
+	 * navigates to a document of the same origin (the browser keeps the
+	 * Window). Plain `Reflect.apply` for a window without a Function
+	 * constructor of its own
 	 */
 	callIn(method: Function, that: unknown, args: unknown[]): unknown {
-		if (!this.#callIn) {
-			try {
-				const OwnFunction = (
-					this.global as unknown as { Function: FunctionConstructor }
-				).Function;
-				this.#callIn = new OwnFunction(
-					'method',
-					'that',
-					'args',
-					'return Reflect.apply(method, that, args);',
-				) as (method: Function, that: unknown, args: unknown[]) => unknown;
-			} catch (error) {
-				this.#callIn = (method, that, args) =>
-					Reflect.apply(method, that, args);
-			}
-		}
 		return this.#callIn(method, that, args);
+	}
+	/**
+	 * `callback` behind a function of this client's window's realm, for a
+	 * timer: the browser runs a timer's callback in the realm that made it
+	 */
+	ownCallback(callback: () => void): () => void {
+		return this.#ownCallback(callback);
 	}
 	/** @internal set by the Context module: post `args` to the window behind a restricted stand-in this context holds, from this realm; false when `target` is not one */
 	postToRestricted?: (target: unknown, args: unknown[]) => boolean;
@@ -173,6 +167,22 @@ export default class Client {
 		this.#customNames = !!(init as { names?: unknown }).names;
 		this.hooks = init.hooks;
 		this.#nativeFunction = global.Function;
+		// built now, before any page script runs, from the window's own
+		// Function, over the bundle's snapshot of Reflect.apply: a page that
+		// later replaces Reflect.apply or Function never sees the method, the
+		// target or the arguments (the native postMessage, a route)
+		try {
+			this.#callIn = new this.#nativeFunction(
+				'apply',
+				'return function (method, that, args) { return apply(method, that, args); };',
+			)(Reflect.apply) as CallIn;
+			this.#ownCallback = new this.#nativeFunction(
+				'return function (callback) { return function () { callback(); }; };',
+			)() as (callback: () => void) => () => void;
+		} catch (error) {
+			this.#callIn = (method, that, args) => Reflect.apply(method, that, args);
+			this.#ownCallback = (callback) => () => callback();
+		}
 		this.global = global;
 		this.applied = false;
 		this.modules = new Map();

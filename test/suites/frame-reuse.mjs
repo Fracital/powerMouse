@@ -9,8 +9,10 @@
 // client the parent injected into the initial about:blank stayed on the
 // kept Window and ran the new document from the parent's realm, which gave
 // the document the parent's URL and its messages the parent as their source
-// (reCAPTCHA's widget timed out). Both modes, against the page loaded
-// natively.
+// (reCAPTCHA's widget timed out). Each child replaces Reflect.apply before
+// it posts, as a page may: the message still names it as the source, and
+// the replacement never sees the proxy's call (the native postMessage and
+// its arguments). Both modes, against the page loaded natively.
 import {
 	done,
 	FIXTURE,
@@ -49,7 +51,9 @@ ok(
 	native?.messages.length === 2 &&
 		native.messages.every((m) => m.sibling === 'found' && m.source >= 0) &&
 		native.byName.first &&
-		native.byName.second,
+		native.byName.second &&
+		native.reflectCalls?.first?.length === 0 &&
+		native.reflectCalls?.second?.length === 0,
 	JSON.stringify(native),
 );
 
@@ -83,6 +87,10 @@ for (const [mode, base] of [
 			(r) => r?.messages.map((m) => [m.from, m.source]),
 		],
 		['the parent finds each child by name', (r) => r?.byName],
+		[
+			"a child's replaced Reflect.apply is never called with the proxy's arguments",
+			(r) => r?.reflectCalls,
+		],
 	])
 		ok(
 			`${mode}: ${name}, as natively`,

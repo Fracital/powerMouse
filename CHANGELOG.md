@@ -328,6 +328,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   widget timed out. The client now delivers messages and writes the
   document from the window's own realm (frame-reuse suite, both modes,
   against the page loaded natively).
+- A page that replaces `Reflect.apply` never sees the proxy's messages. The
+  function that posts a message from a window's own realm was made on the
+  first message and called the window's `Reflect.apply`, so a page that had
+  replaced it got the native `postMessage`, the window it posts to and the
+  message. It is made with the client now, before any page script, over the
+  bundle's own copy, and the document write that loads a page takes its
+  timer the same way (frame-reuse suite: each child replaces
+  `Reflect.apply` before it posts, and its replacement is never called).
 - A WebSocket handshake goes out as the browser's does, once the epoxy
   build from `deploy/epoxy/` with the new patches is published and pinned.
   epoxy wrote the whole socket URL as the request-target

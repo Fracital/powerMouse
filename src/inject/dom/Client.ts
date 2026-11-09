@@ -78,8 +78,11 @@ export default class DocumentClient extends Client {
 	// element is not in the document yet, but every URL in the page resolves
 	// against it, as the browser will once the markup is written
 	#parseBase: StompURL | null = null;
+	/** the window's setTimeout, before page code can replace it (loadHTML) */
+	readonly #setTimeout: typeof setTimeout;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
+		this.#setTimeout = this.global.setTimeout;
 		this.write = this.global.document.write;
 		this.open = this.global.document.open;
 		const innerHTMLGet = Reflect.getOwnPropertyDescriptor(
@@ -471,11 +474,8 @@ export default class DocumentClient extends Client {
 		// navigates to its src (the browser keeps the Window for a document of
 		// the same origin), and a callback of the parent's realm would give the
 		// page the parent's URL (reCAPTCHA's anchor took its page for its
-		// parent and never answered it). So the callback is this window's own.
-		const own = new this.global.Function(
-			'load',
-			'return function () { load(); };',
-		)(load) as () => void;
-		Reflect.apply(this.global.setTimeout, this.global, [own]);
+		// parent and never answered it). So the callback is this window's own,
+		// through a wrapper and a setTimeout taken before any page script ran.
+		Reflect.apply(this.#setTimeout, this.global, [this.ownCallback(load)]);
 	}
 }
