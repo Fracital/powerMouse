@@ -68,7 +68,8 @@ function parentOf(value: unknown): Node | null {
  * anything else (SVG, MathML) as is.
  */
 export function htmlName(node: Node): string {
-	if (node.nodeType !== 1) return node.nodeName;
+	if (nodeTypeOf(node) !== 1)
+		return usePrototype(node, nativeNode, (node) => node.nodeName);
 	return usePrototype(node as Element, nativeElement, (element) =>
 		element.namespaceURI === 'http://www.w3.org/1999/xhtml'
 			? element.nodeName.toUpperCase()
@@ -478,6 +479,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 		const domAttributesModule = this.client.getModule(DOMAttributesModule)!;
 		const domHooksModule = this.client.getModule(DOMHooksModule)!;
+		// the browser's own answers, called on the node: a prototype swapped
+		// in does not reach a getter the page put on the instance itself, and
+		// that getter would run with its prototype chain gone (YouTube's
+		// Polymer logging getters threw from appendChild)
+		const nativeGetter = (name: string) =>
+			Reflect.getOwnPropertyDescriptor(nativeNode, name)!.get!;
+		const nativeIsConnected = nativeGetter('isConnected');
+		const nativeNodeType = nativeGetter('nodeType');
 
 		const insert = <T>(
 			insert: Node,
@@ -490,16 +499,17 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 			// scripts inside `insert` run as soon as it lands in a connected tree
 			const willConnect = that
-				? usePrototype(that, nativeNode, (node) => node.isConnected)
+				? (Reflect.apply(nativeIsConnected, that, []) as boolean)
 				: false;
 
 			// nodes the hooks never saw (DOMParser, createContextualFragment,
 			// importNode, another document): route their attributes now
 			if (willConnect)
 				usePrototype(insert, nativeNode, (node) => {
-					if (node.nodeType !== 1 && node.nodeType !== 11) return;
+					const nodeType = Reflect.apply(nativeNodeType, insert, []) as number;
+					if (nodeType !== 1 && nodeType !== 11) return;
 					const elements: Element[] = [];
-					if (node.nodeType === 1) elements.push(insert as Element);
+					if (nodeType === 1) elements.push(insert as Element);
 					usePrototype(
 						insert,
 						getSupportedQueryInterface(node) ?? nativeNode,

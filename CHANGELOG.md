@@ -291,6 +291,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- Inserting a node never calls a getter the page defined on the node
+  itself. The insertion hooks swap in the native prototype to read
+  `isConnected` and `nodeType`, but a getter on the instance shadows the
+  prototype and ran with its chain gone: YouTube's
+  watch page puts logging getters on its Polymer elements, and
+  `appendChild` threw "Cannot read properties of undefined (reading
+  'toLowerCase')". The hooks and the script readback now call the
+  browser's own getters on the node.
 - An `<object>` showing an HTML document loads that document's relative
   images, scripts and stylesheets. Chrome sends no object load through a
   service worker, so the document is a blob: copy the worker controls

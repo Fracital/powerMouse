@@ -110,17 +110,23 @@ export default class ReadbackModule extends Module<DocumentClient> {
 					element.localName === 'script' &&
 					(element.namespaceURI === HTML || element.namespaceURI === SVG),
 			);
+		const nativeNodeType = Reflect.getOwnPropertyDescriptor(
+			nativeNode,
+			'nodeType',
+		)!.get!;
 		const scriptsIn = (node: unknown): HTMLScriptElement[] => {
 			if (typeof node !== 'object' || node === null) return [];
 			try {
-				return usePrototype(node as Node, nativeNode, (native) => {
-					if (native.nodeType === 1) {
+				// the browser's nodeType, not a getter the page put on the node
+				const nodeType = Reflect.apply(nativeNodeType, node, []) as number;
+				return usePrototype(node as Node, nativeNode, () => {
+					if (nodeType === 1) {
 						if (isScript(node as Element)) return [node as HTMLScriptElement];
 						return usePrototype(node as Element, nativeElement, (element) =>
 							[...element.querySelectorAll('script')].filter(isScript),
 						) as HTMLScriptElement[];
 					}
-					if (native.nodeType === 11)
+					if (nodeType === 11)
 						return usePrototype(
 							node as DocumentFragment,
 							nativeDocumentFragment,

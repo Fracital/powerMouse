@@ -1,0 +1,29 @@
+<!doctype html>
+<title>OWN GETTERS</title>
+<body>
+	<script>
+		// An element with getters of its own for isConnected and nodeType that
+		// read through its prototype chain (YouTube's Polymer logging puts
+		// such getters on its elements): inserting it, and into it, never calls
+		// them natively, since the browser reads its own internal state
+		const host = document.createElement('div');
+		let calls = 0;
+		for (const name of ['isConnected', 'nodeType'])
+			Object.defineProperty(host, name, {
+				get() {
+					calls++;
+					return this.tagName.toLowerCase() === 'div';
+				},
+			});
+		let error = null;
+		try {
+			document.body.append(host);
+			host.appendChild(document.createElement('span'));
+			host.append(document.createElement('b'));
+			host.insertBefore(document.createElement('i'), null);
+		} catch (caught) {
+			error = String(caught);
+		}
+		window.__own = { calls, error, children: host.children.length };
+	</script>
+</body>
