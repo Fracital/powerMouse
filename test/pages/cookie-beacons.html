@@ -1,0 +1,71 @@
+<!doctype html>
+<title>COOKIE BEACONS</title>
+<script>
+	// weather.com fills Chrome's beacon quota (64 KiB of beacons in flight per
+	// document) with its own analytics beacons, then writes a cookie.
+	// Natively a cookie write never throws. Through the proxy it was a
+	// synchronous beacon to the service worker, refused once the page's own
+	// beacons held the quota, and document.cookie = x threw
+	// QuotaExceededError. This page reads its cookies once, fills the quota,
+	// writes, overwrites and deletes cookies in one task, reads them back and
+	// fetches, in the same task, a URL that echoes the Cookie header it got.
+	// Then it reloads and reads and fetches again. The first phase's results
+	// ride in the URL fragment across the reload.
+	window.__cb = {};
+	const echo = async () => {
+		try {
+			const response = await fetch('/echo-headers');
+			return (await response.json()).cookie ?? '';
+		} catch (error) {
+			return `failed ${error.name}`;
+		}
+	};
+	if (location.hash.startsWith('#read:')) {
+		const written = JSON.parse(decodeURIComponent(location.hash.slice(6)));
+		const reloaded = document.cookie;
+		echo().then((fetched) => {
+			__cb.written = written;
+			__cb.reloaded = { read: reloaded, fetched };
+			__cb.done = true;
+		});
+	} else {
+		const results = { threw: [] };
+		results.first = document.cookie;
+		// as many bytes of beacons as the browser takes, largest first, until
+		// it refuses even one byte
+		let accepted = 0;
+		for (const size of [16384, 4096, 1024, 256, 64, 16, 4, 1])
+			for (let i = 0; i < 64; i++) {
+				if (
+					!navigator.sendBeacon(`/echo-body?b=${size}-${i}`, 'x'.repeat(size))
+				)
+					break;
+				accepted += size;
+			}
+		results.filled = accepted > 0 && !navigator.sendBeacon('/echo-body', 'x');
+		const write = (value) => {
+			try {
+				document.cookie = value;
+			} catch (error) {
+				results.threw.push(`${value}: ${error.name}: ${error.message}`);
+			}
+		};
+		write('cb1=one; path=/');
+		write('cb2=two; path=/');
+		results.between = document.cookie;
+		write('cb1=uno; path=/');
+		write('cbgone=x; path=/');
+		write('cbgone=; path=/; max-age=0');
+		write('cbelsewhere=e; path=/elsewhere');
+		results.read = document.cookie;
+		echo().then((fetched) => {
+			results.fetched = fetched;
+			history.replaceState(
+				null,
+				'',
+				'#read:' + encodeURIComponent(JSON.stringify(results)),
+			);
+			location.reload();
+		});
+	}
+</script>
