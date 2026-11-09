@@ -336,6 +336,15 @@ PresentationRequest()` (Spotify) and `screen.orientation.lock()` threw
   "sites.&nbsp;" where the server had rendered a no-break space, and
   hydration failed with React errors #425, #418 and #423. `loadHTML` decodes
   at the HTML level, the inverse of `escapeText` (html suite).
+- discord.com no longer throws "Maximum call stack size exceeded" for every
+  script OneTrust's OtAutoBlock creates. OtAutoBlock gives each one an own
+  `setAttribute` and own `src` and `type` accessors that write through the
+  hooked `setAttribute`. The hooks swap an element's prototype while they
+  work, but an own property shadows any prototype, so the `setAttribute`
+  hook called the page's own, which called the hook again. The element's own
+  configurable properties that the hook prototype also has are now set aside
+  while the hooks run (instance-overrides suite, both modes, against the
+  page loaded natively).
 - A same-origin frame's hooked functions read as native from its parent.
   Each proxied frame loads its own copy of the inject, whose wrappers the
   parent's copy never made, so the parent's `Function.prototype.toString`

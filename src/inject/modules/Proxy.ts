@@ -18,6 +18,21 @@ export function usePrototype<Prototype extends object, CallbackResult>(
 	const prototype = Reflect.getPrototypeOf(target);
 	Reflect.setPrototypeOf(target, usePrototype);
 
+	// an own property shadows any prototype: OneTrust (discord.com) gives the
+	// scripts it creates an own setAttribute that writes through the hooked
+	// one, so a hook calling `element.setAttribute` ran the page's and
+	// recursed. The own ones the hook prototype also has are set aside while
+	// the hooks work (a non-configurable one cannot be, and stays)
+	let hidden: [key: string | symbol, descriptor: PropertyDescriptor][] | null =
+		null;
+	for (const key of Reflect.ownKeys(target)) {
+		if (!(key in usePrototype)) continue;
+		const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+		if (!descriptor?.configurable || !Reflect.deleteProperty(target, key))
+			continue;
+		(hidden ??= []).push([key, descriptor]);
+	}
+
 	const uses = <
 		{ [preparePrototype]?: () => void; [cleanupPrototype]?: () => void }
 	>target;
@@ -44,6 +59,10 @@ export function usePrototype<Prototype extends object, CallbackResult>(
 	const cleanup = uses[cleanupPrototype];
 
 	Reflect.setPrototypeOf(target, prototype);
+
+	if (hidden)
+		for (const [key, descriptor] of hidden)
+			Reflect.defineProperty(target, key, descriptor);
 
 	if (cleanup) {
 		cleanup.call(target);
