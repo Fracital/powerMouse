@@ -795,7 +795,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					usePrototype(that, nativeElement, (element) => {
 						if (element.nodeName === 'TEMPLATE')
 							usePrototype(that, nativeHTMLTemplateElement, (element) => {
-								for (const node of element.content.childNodes) node.remove();
+								// snapshot: removing while iterating the live list skips
+								// every other node and leaves it next to the new markup
+								for (const node of [...element.content.childNodes])
+									node.remove();
 
 								// made in the content's own inert document, as the
 								// browser parses it: nothing in it is constructed
@@ -807,7 +810,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								);
 							});
 						else {
-							for (const node of element.childNodes) node.remove();
+							for (const node of [...element.childNodes]) node.remove();
 
 							if (element.nodeName === 'SCRIPT') {
 								// allow the bad practice of setting the script's innerHTML

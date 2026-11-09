@@ -309,6 +309,13 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   natively, both modes: 11 of 14 ways bypassed before). A rule's `cssText`
   reads its url() as the browser serialises it (`url("...")`) whatever quotes
   the page wrote, and text routed twice keeps the page's own url() token.
+- `innerHTML` replaces every child an element had. The hooked setter removed
+  the old children while iterating the live `childNodes` list, which skips
+  every other node, so they stayed next to the new markup: a list whose
+  items are separated by whitespace kept every old item, and
+  `ul.innerHTML = items` appended where it should replace (a template's
+  content too; `markup-replace` suite, all 10 checks failed before, both
+  modes).
 - Error surfaces read as natively: none names a route, the proxy origin, an
   inject bundle or a helper name, in pages and in dedicated, module and shared
   workers (`error-surfaces` suite, compared case by case with the page loaded
