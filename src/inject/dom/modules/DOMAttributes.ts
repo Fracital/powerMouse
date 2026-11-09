@@ -23,6 +23,7 @@ import { blobLoads } from '../blobLoads';
 import DocumentClient from '../Client';
 import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
 import { hookWrite } from './MutationObserver';
+import NavigationHintModule from './NavigationHint';
 import SyncModule from './Sync';
 
 const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
@@ -1090,6 +1091,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					const opaque = opaqueDocument(resource);
 					if (opaque) this.client.opaqueFrames.add(element);
 					else this.client.opaqueFrames.delete(element);
+					// the frame navigates for this document, under its activation
+					if (!opaque)
+						this.client
+							.getModule(NavigationHintModule)
+							?.hint(resource.url.href);
 					element.setAttribute(
 						'src',
 						opaque ??

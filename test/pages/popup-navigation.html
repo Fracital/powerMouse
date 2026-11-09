@@ -7,7 +7,8 @@
 	// link to `url` in it, clicking it when `click` (no user activation);
 	// otherwise the test clicks it. `__popupSelf(url)` opens a popup whose
 	// own button script sets its location.href when the test clicks it.
-	// `__noreferrer(url)` clicks a rel=noreferrer link in this document.
+	// `__noreferrer(url)` puts a rel=noreferrer link into a frame of this
+	// document for the test to click.
 	window.__popup = (url, click) => {
 		const popup = window.open();
 		const link = popup.document.createElement('a');
@@ -33,11 +34,78 @@
 		popup.document.body.append(button);
 		window.__opened = popup;
 	};
+	// navigations this document starts in another browsing context: an
+	// iframe whose src its button sets, a GET form and a link into a named
+	// popup. The test clicks the `#<kind>-go` element, or for a form
+	// `byUser` false, the page submits it itself
+	const fresh = (id) => document.getElementById(id)?.remove();
+	window.__frameByUser = (url) => {
+		fresh('frame-go');
+		const iframe = document.createElement('iframe');
+		document.body.append(iframe);
+		const button = document.createElement('button');
+		button.id = 'frame-go';
+		button.textContent = 'frame';
+		button.onclick = () => (iframe.src = url);
+		document.body.append(button);
+	};
+	// the same, set by the page from a timer: no activation of its own
+	window.__frameByScript = (url) => {
+		const iframe = document.createElement('iframe');
+		document.body.append(iframe);
+		setTimeout(() => (iframe.src = url), 50);
+	};
+	const named = () => {
+		const name = `p${Math.random().toString(36).slice(2)}`;
+		window.__opened = window.open('about:blank', name);
+		return name;
+	};
+	window.__formToPopup = (url, byUser) => {
+		fresh('form-go');
+		const target = new URL(url);
+		const form = document.createElement('form');
+		form.method = 'get';
+		form.target = named();
+		form.action = `${target.origin}${target.pathname}`;
+		for (const [name, value] of target.searchParams) {
+			const input = document.createElement('input');
+			input.type = 'hidden';
+			input.name = name;
+			input.value = value;
+			form.append(input);
+		}
+		const submit = document.createElement('input');
+		submit.type = 'submit';
+		submit.id = 'form-go';
+		form.append(submit);
+		document.body.append(form);
+		if (!byUser) submit.click();
+	};
+	window.__linkToPopup = (url) => {
+		fresh('link-go');
+		const link = document.createElement('a');
+		link.href = url;
+		link.target = named();
+		link.id = 'link-go';
+		link.textContent = 'link';
+		document.body.append(link);
+	};
+	// the test clicks it: the user's activation, not whatever an earlier
+	// click left (transient, and gone on a slow runner)
 	window.__noreferrer = (url) => {
+		fresh('noreferrer-go');
+		fresh('noreferrer-frame');
+		// into a frame of this page: the page stays for the next case
+		const frame = document.createElement('iframe');
+		frame.id = 'noreferrer-frame';
+		frame.name = 'noreferrer-frame';
+		document.body.append(frame);
 		const link = document.createElement('a');
 		link.href = url;
 		link.rel = 'noreferrer';
+		link.target = 'noreferrer-frame';
+		link.id = 'noreferrer-go';
+		link.textContent = 'noreferrer';
 		document.body.append(link);
-		link.click();
 	};
 </script>

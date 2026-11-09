@@ -10,9 +10,10 @@ import DocumentClient, { addDocumentOpenListener } from '../Client';
  * user activation, for Sec-Fetch-User. Sent through the nearest routed
  * document of this one's origin, which the worker can verify; for a popup
  * opened without a URL that is the opener's. From the Navigation API's
- * navigate event, or, in an initial about:blank document (which fires
- * none), from link activation and from the location hooks (`hint`), which
- * also run when another window navigates this one.
+ * navigate event, link activation and form submission (which may navigate
+ * another browsing context, and in an initial about:blank document, which
+ * fires no navigate events), the location hooks (`hint`, which also run
+ * when another window navigates this one), and a frame's src the page sets.
  */
 export default class NavigationHintModule extends Module<DocumentClient> {
 	/** tell the worker this document is about to navigate to `url` (the real URL): set by apply */
@@ -73,19 +74,11 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 			if (!navigate.destination || navigate.destination.sameDocument) return;
 			send(navigate.destination.url);
 		});
-		// an initial about:blank document (a popup opened without a URL, a new
-		// frame) fires no navigate events: its links say where they go when
-		// activated instead
-		const entry = Object.getOwnPropertyDescriptor(
-			Object.getPrototypeOf(navigation),
-			'currentEntry',
-		)?.get;
+		// a link says where it goes when activated: the navigation may be
+		// another browsing context's (a target), and an initial about:blank
+		// document (a popup opened without a URL, a new frame) fires no
+		// navigate events at all
 		const onClick = (event: Event) => {
-			try {
-				if (entry?.call(navigation)) return;
-			} catch (error) {
-				return;
-			}
 			const link = event
 				.composedPath()
 				.find(
@@ -99,7 +92,39 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 			const url = link.href;
 			if (/^https?:/.test(url)) send(url);
 		};
-		const listen = () => global.addEventListener('click', onClick, true);
+		// a form's submission, wherever it goes (a named popup or frame
+		// navigates for this document, under this document's activation): its
+		// destination as the browser builds it, the query the form's data for
+		// a GET
+		const onSubmit = (event: Event) => {
+			const form = event.target;
+			if (!(form instanceof global.HTMLFormElement)) return;
+			const submitter = (event as SubmitEvent).submitter as
+				HTMLButtonElement | HTMLInputElement | null;
+			const own = (name: string) => !!submitter?.hasAttribute(name);
+			const action = own('formaction') ? submitter!.formAction : form.action;
+			const method = (
+				(own('formmethod') ? submitter!.formMethod : form.method) || 'get'
+			).toLowerCase();
+			if (method === 'dialog') return;
+			try {
+				const url = new URL(action);
+				if (method === 'get')
+					url.search = new URLSearchParams(
+						new global.FormData(
+							form,
+							submitter ?? undefined,
+						) as unknown as Record<string, string>,
+					).toString();
+				if (/^https?:$/.test(url.protocol)) send(url.href);
+			} catch (error) {
+				// an action that is no URL submits nowhere
+			}
+		};
+		const listen = () => {
+			global.addEventListener('click', onClick, true);
+			global.addEventListener('submit', onSubmit, true);
+		};
 		listen();
 		// document.open() drops a window's listeners
 		addDocumentOpenListener(global, listen);

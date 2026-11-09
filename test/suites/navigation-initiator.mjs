@@ -2,7 +2,10 @@
 // carries the Sec-Fetch-Site and Sec-Fetch-User of the document that started
 // it: a link clicked in a popup opened without a URL (about:blank sends no
 // referrer), with and without user activation, such a popup sending itself
-// on by location.href under activation, and a rel=noreferrer link.
+// on by location.href under activation, a rel=noreferrer link; and the
+// Sec-Fetch-User of navigations a page starts in another browsing context
+// (an iframe's src, a form or a link into a named popup) under its
+// activation.
 // The worker took each for one the user started from the host (`none`,
 // `?1`); the document now tells it first (NAVIGATION_HINT). The host's own
 // navigation (frame.go) keeps `none` and `?1` and never waits for a hint.
@@ -41,6 +44,8 @@ const metadata = (headers) =>
 		user: headers['sec-fetch-user'] ?? null,
 	};
 
+// the named-popup cases last: in isolated mode the host opens a link's popup
+// as a tab of its own, over the page
 const CASES = [
 	['popup link to another site', 'popup', `${CROSS}/echo-headers`, true],
 	['popup link to the same origin', 'popup', `${FIXTURE}echo-headers`, true],
@@ -52,8 +57,33 @@ const CASES = [
 		false,
 	],
 	[
-		'rel=noreferrer link to another site',
+		'rel=noreferrer link into a frame, to another site, clicked by the user',
 		'noreferrer',
+		`${CROSS}/echo-headers`,
+	],
+	[
+		"an iframe's src set by the page's click handler",
+		'frameByUser',
+		`${CROSS}/echo-headers`,
+	],
+	[
+		"an iframe's src set by the page from a timer",
+		'frameByScript',
+		`${CROSS}/echo-headers`,
+	],
+	[
+		'a form into a named popup, submitted by the user',
+		'formUser',
+		`${CROSS}/echo-headers`,
+	],
+	[
+		'a form into a named popup, submitted by the page',
+		'formPage',
+		`${CROSS}/echo-headers`,
+	],
+	[
+		'a link into a named popup, clicked by the user',
+		'linkUser',
 		`${CROSS}/echo-headers`,
 	],
 ];
@@ -74,9 +104,33 @@ async function runCases(context, getFrame, tag) {
 			if (!click && popup) await popup.click('#go').catch(() => {});
 			seen[name] = metadata(await recorded(key));
 			await popup?.close().catch(() => {});
+		} else if (kind === 'frameByScript') {
+			await getFrame().evaluate((u) => window.__frameByScript(u), url);
+			seen[name] = metadata(await recorded(key));
+		} else if (kind === 'frameByUser') {
+			await getFrame().evaluate((u) => window.__frameByUser(u), url);
+			await getFrame().click('#frame-go');
+			seen[name] = metadata(await recorded(key));
+		} else if (['formUser', 'formPage', 'linkUser'].includes(kind)) {
+			const popupEvent = context.waitForEvent('page', { timeout: 10000 });
+			await getFrame().evaluate(
+				([u, k]) =>
+					k === 'linkUser'
+						? window.__linkToPopup(u)
+						: window.__formToPopup(u, k === 'formUser'),
+				[url, kind],
+			);
+			const popup = await popupEvent.catch(() => null);
+			if (kind !== 'formPage')
+				await getFrame()
+					.click(kind === 'linkUser' ? '#link-go' : '#form-go')
+					.catch(() => {});
+			seen[name] = metadata(await recorded(key));
+			await popup?.close().catch(() => {});
 		} else {
+			await getFrame().evaluate((u) => window.__noreferrer(u), url);
 			await getFrame()
-				.evaluate((u) => window.__noreferrer(u), url)
+				.click('#noreferrer-go')
 				.catch(() => {});
 			seen[name] = metadata(await recorded(key));
 		}
@@ -150,7 +204,7 @@ for (const [mode, base] of [
 			frame = candidate;
 	}
 	ok(`${mode}: the page loads`, !!frame);
-	const proxied = await runCases(page.context(), () => frameOf(page), mode);
+	const proxied = await runCases(page.context(), () => frame, mode);
 	for (const [name] of CASES)
 		ok(
 			`${mode}: ${name}: Sec-Fetch-Site and Sec-Fetch-User as natively`,

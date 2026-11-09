@@ -291,6 +291,18 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A navigation a page starts in another browsing context carries its
+  Sec-Fetch-User. Setting an iframe's or frame's src, submitting a form into
+  a named popup or frame, and clicking a link into one navigate a context
+  whose own navigate event, if it fires at all (an initial about:blank
+  fires none), says nothing about the page's activation; the worker sent no
+  Sec-Fetch-User even when the user's click started it, and a no-referrer
+  link into a frame went out as `Sec-Fetch-Site: none`. The page now tells
+  the worker itself, with its own activation: from the src hook, from every
+  link click and from a form's submit event, the destination a GET
+  submission builds from the form's data (navigation-initiator suite, both
+  modes, against the page loaded natively). `form.submit()` fires no submit
+  event and still sends none.
 - The synchronous bridge sends the request headers it is given as a plain
   record or a list of pairs. Only a Headers of the bundle's own realm went
   through: the branch for a record tested it for `=== null`, so every
