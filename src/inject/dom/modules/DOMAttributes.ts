@@ -800,7 +800,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.hasAttribute('href') &&
 						element.getAttribute('href') !== '' &&
 						new URL(
-							element.getAttributeOG('href')!,
+							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
 							this.client.url.toString(),
 						).toString(),
 				],
@@ -812,7 +812,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.hasAttribute('href') &&
 						element.getAttribute('href') !== '' &&
 						new URL(
-							element.getAttributeOG('href')!,
+							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
 							this.client.url.toString(),
 						).toString(),
 				],
@@ -859,7 +859,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
 						new URL(
-							element.getAttributeOG('src')!,
+							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
 							this.client.url.toString(),
 						).toString(),
 				],
@@ -887,7 +887,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('integrity') &&
 						element.getAttribute('integrity') !== '' &&
-						element.getAttributeOG('integrity')!,
+						(element.getAttributeOG('integrity') ??
+							element.getAttribute('integrity'))!,
 				],
 				[
 					this.client.global.HTMLScriptElement,
@@ -895,7 +896,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('integrity') &&
 						element.getAttribute('integrity') !== '' &&
-						element.getAttributeOG('integrity')!,
+						(element.getAttributeOG('integrity') ??
+							element.getAttribute('integrity'))!,
 				],
 			],
 		);
@@ -960,7 +962,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.hasAttribute('href') &&
 						element.getAttribute('href') !== '' &&
 						new URL(
-							element.getAttributeOG('href')!,
+							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
 							this.client.url.toString(),
 						).toString(),
 				],
@@ -1007,7 +1009,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
 						new URL(
-							element.getAttributeOG('src')!,
+							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
 							this.client.url.toString(),
 						).toString(),
 				],
@@ -1018,7 +1020,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
 						new URL(
-							element.getAttributeOG('src')!,
+							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
 							this.client.url.toString(),
 						).toString(),
 				],
@@ -1104,7 +1106,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
 						new URL(
-							element.getAttributeOG('src')!,
+							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
 							this.client.url.toString(),
 						).toString(),
 				],
@@ -1115,7 +1117,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
 						new URL(
-							element.getAttributeOG('src')!,
+							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
 							this.client.url.toString(),
 						).toString(),
 				],
@@ -1175,7 +1177,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('srcset') &&
 						element.getAttribute('srcset') !== '' &&
-						element.getAttributeOG('srcset')!,
+						(element.getAttributeOG('srcset') ??
+							element.getAttribute('srcset'))!,
 				],
 				[
 					this.client.global.HTMLSourceElement,
@@ -1183,7 +1186,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('srcset') &&
 						element.getAttribute('srcset') !== '' &&
-						element.getAttributeOG('srcset')!,
+						(element.getAttributeOG('srcset') ??
+							element.getAttribute('srcset'))!,
 				],
 			],
 		);
@@ -1221,7 +1225,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
 						new URL(
-							element.getAttributeOG('src')!,
+							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
 							this.client.url.toString(),
 						).toString(),
 				],
@@ -1232,7 +1236,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
 						new URL(
-							element.getAttributeOG('src')!,
+							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
 							this.client.url.toString(),
 						).toString(),
 				],
@@ -1243,7 +1247,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
 						new URL(
-							element.getAttributeOG('src')!,
+							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
 							this.client.url.toString(),
 						).toString(),
 				],
@@ -1267,7 +1271,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 				if (current !== null && element.hasAttributeOG('style')) {
 					const rewritten = modifyCSS(
-						element.getAttributeOG('style')!,
+						(element.getAttributeOG('style') ?? element.getAttribute('style'))!,
 						this.client.url,
 						'declarationList',
 					);
@@ -1289,7 +1293,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.setAttribute(
 						'style',
 						modifyCSS(
-							element.getAttributeOG('style')!,
+							(element.getAttributeOG('style') ??
+								element.getAttribute('style'))!,
 							this.client.url,
 							'declarationList',
 						),
@@ -1739,7 +1744,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			 * Absolute URL
 			 */
 			const action = new URL(
-				element.getAttributeOG('action')!,
+				(element.getAttributeOG('action') ?? element.getAttribute('action'))!,
 				this.client.url.toString(),
 			).toString();
 
@@ -1782,7 +1787,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			element.hasAttribute(attribute) &&
 			element.getAttribute(attribute) !== '' &&
 			new URL(
-				element.getAttributeOG(attribute)!,
+				(element.getAttributeOG(attribute) ?? element.getAttribute(attribute))!,
 				this.client.url.toString(),
 			).toString();
 
@@ -2033,7 +2038,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('imagesrcset') &&
 						element.getAttribute('imagesrcset') !== '' &&
-						element.getAttributeOG('imagesrcset')!,
+						(element.getAttributeOG('imagesrcset') ??
+							element.getAttribute('imagesrcset'))!,
 				],
 			],
 		);
@@ -2085,7 +2091,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.hasAttribute('action') &&
 					element.getAttribute('action') !== '' &&
 					new URL(
-						element.getAttributeOG('action')!,
+						(element.getAttributeOG('action') ??
+							element.getAttribute('action'))!,
 						this.client.url.toString(),
 					).toString(),
 			],
@@ -2135,7 +2142,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.hasAttribute('href') &&
 						element.getAttribute('href') !== '' &&
 						new URL(
-							element.getAttributeOG('href')!,
+							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
 							documentURL().toString(),
 						).toString(),
 				],

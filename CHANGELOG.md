@@ -326,6 +326,12 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   (blob-worker-site suite, both modes: the service worker stopped over
   CDP, then the live worker's requests compared with a cross-site request
   natively).
+- A URL property reads back right when no hook took its attribute. The
+  getters resolved the page's original value from the hooks' marker, and a
+  value no hook took (a link's `href` before it has a `rel`) has none, so
+  `link.href` read `<page directory>/null`. They now fall back to the
+  attribute as written (property-order suite, both modes, against the page
+  loaded natively).
 - A blob: worker's requests are judged as the page that made it. The
   worker's client URL is the blob: URL, which the service worker could not
   decode to a page, so it took the request as its target's own: an
