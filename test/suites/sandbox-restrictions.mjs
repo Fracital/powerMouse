@@ -131,12 +131,14 @@ const rendered = (beacons, name) =>
 /** click `selector` in every frame of `page` that has it */
 async function clickIn(page, selector) {
 	for (const frame of page.frames()) {
+		// a frame of a page whose other frames show modal dialogs can take a
+		// while to answer; a frame in a dialog itself never does
 		const handle = await Promise.race([
 			frame.$(selector).catch(() => null),
-			sleep(3000).then(() => null),
+			sleep(10000).then(() => null),
 		]);
 		if (handle)
-			await handle.click({ timeout: 5000 }).catch(() => {
+			await handle.click({ timeout: 10000 }).catch(() => {
 				// a frame that navigated meanwhile
 			});
 	}
