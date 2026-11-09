@@ -1,0 +1,130 @@
+<!doctype html>
+<title>MEDIA BLOBS</title>
+<body>
+	<script>
+		// SoundCloud and YouTube Music attach a MediaSource (or a blob) to an
+		// audio or video element through an object URL and read currentSrc
+		// back. Natively it is the URL the page made, blob:<page origin>/<id>;
+		// through the proxy it read as the proxy origin's blob: URL. Each case
+		// reads src and currentSrc at once and once the media has loaded (a
+		// MediaSource's sourceopen, a blob's loadedmetadata), first with no
+		// other frame in the page, then again after the page has reached into
+		// an about:blank frame of its own, as both sites do, and in that frame's
+		// document with that frame's MediaSource, URL and Audio.
+		window.__mb = {};
+		const page = location.origin;
+		const norm = (value) =>
+			typeof value === 'string'
+				? value
+						.split(page)
+						.join('PAGE')
+						.replace(/[0-9a-f]{8}-[0-9a-f-]{27}/g, 'ID')
+				: value;
+		// 0.1 s of silence, 8 kHz mono 16-bit
+		const wav = () => {
+			const samples = 800;
+			const view = new DataView(new ArrayBuffer(44 + samples * 2));
+			const text = (offset, value) =>
+				[...value].forEach((c, i) =>
+					view.setUint8(offset + i, c.charCodeAt(0)),
+				);
+			text(0, 'RIFF');
+			view.setUint32(4, 36 + samples * 2, true);
+			text(8, 'WAVEfmt ');
+			view.setUint32(16, 16, true);
+			view.setUint16(20, 1, true);
+			view.setUint16(22, 1, true);
+			view.setUint32(24, 8000, true);
+			view.setUint32(28, 16000, true);
+			view.setUint16(32, 2, true);
+			view.setUint16(34, 16, true);
+			text(36, 'data');
+			view.setUint32(40, samples * 2, true);
+			return new Blob([view.buffer], { type: 'audio/wav' });
+		};
+		const once = (target, name) =>
+			new Promise((resolve) => {
+				target.addEventListener(name, () => resolve(name), { once: true });
+				setTimeout(() => resolve(`no ${name}`), 3000);
+			});
+		const read = (element, url) => ({
+			url: norm(url),
+			src: norm(element.src),
+			currentSrc: norm(element.currentSrc),
+			srcIsURL: element.src === url,
+			currentIsURL: element.currentSrc === url,
+			attribute: norm(element.getAttribute('src')),
+		});
+		// each in window `w`: this page's, or its about:blank frame's
+		const cases = {
+			// a MediaSource through the src property
+			async audioSource(w) {
+				const source = new w.MediaSource();
+				const url = w.URL.createObjectURL(source);
+				const element = w.document.createElement('audio');
+				w.document.body.append(element);
+				const opened = once(source, 'sourceopen');
+				element.src = url;
+				const now = read(element, url);
+				return { now, event: await opened, loaded: read(element, url) };
+			},
+			// a MediaSource through setAttribute
+			async videoSource(w) {
+				const source = new w.MediaSource();
+				const url = w.URL.createObjectURL(source);
+				const element = w.document.createElement('video');
+				w.document.body.append(element);
+				const opened = once(source, 'sourceopen');
+				element.setAttribute('src', url);
+				const now = read(element, url);
+				return { now, event: await opened, loaded: read(element, url) };
+			},
+			// a blob through new w.Audio()
+			async audioBlob(w) {
+				const url = w.URL.createObjectURL(wav());
+				const element = new w.Audio(url);
+				const loaded = once(element, 'loadedmetadata');
+				const now = read(element, url);
+				return { now, event: await loaded, loaded: read(element, url) };
+			},
+			// a blob in a video's <source> child
+			async videoBlob(w) {
+				const url = w.URL.createObjectURL(wav());
+				const element = w.document.createElement('video');
+				const child = w.document.createElement('source');
+				child.src = url;
+				child.type = 'audio/wav';
+				element.append(child);
+				w.document.body.append(element);
+				const loaded = once(element, 'loadedmetadata');
+				element.load();
+				const now = read(element, url);
+				return {
+					now,
+					event: await loaded,
+					loaded: read(element, url),
+					sourceSrc: norm(child.src),
+				};
+			},
+		};
+		const run = async (w) => {
+			const results = {};
+			for (const [name, test] of Object.entries(cases))
+				try {
+					results[name] = await test(w);
+				} catch (error) {
+					results[name] = `threw ${error.name}: ${error.message}`;
+				}
+			return results;
+		};
+		(async () => {
+			__mb.alone = await run(window);
+			const frame = document.createElement('iframe');
+			document.body.append(frame);
+			frame.contentWindow.document.body.textContent = 'blank';
+			__mb.withFrame = await run(window);
+			__mb.inFrame = await run(frame.contentWindow);
+			__mb.done = true;
+		})();
+	</script>
+</body>
