@@ -1,0 +1,19 @@
+<!doctype html>
+<meta http-equiv="Content-Security-Policy" content="img-src 'none'" />
+<title>CSP SURFACES</title>
+<script>
+	// a CSP violation's event (error-surfaces suite): the page's own policy
+	// blocks an image, and the event's URLs are reported to the parent
+	const seen = [];
+	addEventListener('securitypolicyviolation', (event) =>
+		seen.push({
+			blockedURI: event.blockedURI,
+			documentURI: event.documentURI,
+			sourceFile: event.sourceFile,
+			violatedDirective: event.violatedDirective,
+		}),
+	);
+	const image = new Image();
+	image.src = 'pixel.png';
+	setTimeout(() => parent.postMessage({ csp: seen }, '*'), 600);
+</script>

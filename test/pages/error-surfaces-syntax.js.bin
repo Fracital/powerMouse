@@ -1,0 +1,2 @@
+// a syntax error in an external script (error-surfaces)
+let x = ;

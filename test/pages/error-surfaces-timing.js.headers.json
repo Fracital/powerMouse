@@ -1,0 +1,4 @@
+{
+	"server-timing": "db;dur=53;desc=\"fixture\", cache;desc=hit",
+	"timing-allow-origin": "*"
+}

@@ -1,0 +1,312 @@
+<!doctype html>
+<title>ERROR SURFACES</title>
+<script>
+	// scripts of the page's markup, before any external one (their stacks
+	// name the page), and one the page writes itself (natively unnamed)
+	window.__inline = { classic: new Error('inline').stack };
+	addEventListener(
+		'error',
+		(event) =>
+			(__inline.uncaught = {
+				message: event.message,
+				filename: event.filename,
+				lineno: event.lineno,
+				colno: event.colno,
+			}),
+		{ once: true },
+	);
+	document.write(
+		'<script>__inline.written = new Error("written").stack<\/script>',
+	);
+</script>
+<script>
+	throw new Error('inline uncaught');
+</script>
+<script type="module">
+	__inline.module = new Error('inline module').stack;
+</script>
+<script src="error-surfaces-lib.js"></script>
+<script src="error-surfaces-timing.js"></script>
+<script>
+	// Every error surface a page can read that the browser fills with a URL,
+	// one case at a time (error-surfaces suite): what the window's error
+	// listener, onerror and unhandledrejection saw, what a call threw, and
+	// what the workers reported. The suite compares each case with the page
+	// loaded natively. `window.__surfaces.done` when all have run.
+	const R = (window.__surfaces = { cases: {}, done: false });
+	const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+	const cross = location.href
+		.replace('//127.0.0.1:', '//localhost:')
+		.replace(/pages\/.*$/, '');
+	const describe = (value) =>
+		value === null || typeof value !== 'object'
+			? String(value)
+			: {
+					ctor: value.constructor && value.constructor.name,
+					name: value.name,
+					message: value.message,
+					stack: value.stack,
+				};
+	const describeEvent = (event) => {
+		const seen = { ctor: event.constructor.name, type: event.type };
+		if (event.target && event.target !== window && event.target.tagName)
+			seen.target = event.target.tagName;
+		if ('message' in event)
+			Object.assign(seen, {
+				message: event.message,
+				filename: event.filename,
+				lineno: event.lineno,
+				colno: event.colno,
+				error: describe(event.error),
+			});
+		return seen;
+	};
+	let current = null;
+	const push = (key, value) => {
+		if (current) (R.cases[current][key] ??= []).push(value);
+	};
+	addEventListener(
+		'error',
+		(event) => push('window', describeEvent(event)),
+		true,
+	);
+	window.onerror = (message, source, lineno, colno, error) =>
+		push('onerror', { message, source, lineno, colno, error: describe(error) });
+	addEventListener('unhandledrejection', (event) =>
+		push('unhandledrejection', describe(event.reason)),
+	);
+	const run = async (name, fn, wait = 300) => {
+		current = name;
+		R.cases[name] = {};
+		try {
+			const value = await fn();
+			if (value !== undefined) R.cases[name].value = value;
+		} catch (error) {
+			R.cases[name].threw = describe(error);
+		}
+		await sleep(wait);
+		current = null;
+	};
+	const script = (src, type) =>
+		new Promise((resolve) => {
+			const element = document.createElement('script');
+			if (type) element.type = type;
+			element.onload = () => resolve('load');
+			element.onerror = (event) => resolve(describeEvent(event));
+			element.src = src;
+			document.head.append(element);
+		});
+	// a worker's report and every event on its Worker object
+	const workerCase = (make, wait = 3000) =>
+		new Promise((resolve) => {
+			const seen = { events: [], messages: [] };
+			let worker;
+			try {
+				worker = make();
+			} catch (error) {
+				return resolve({ threw: describe(error) });
+			}
+			const target = worker.port ?? worker;
+			worker.addEventListener('error', (event) => {
+				seen.events.push(describeEvent(event));
+				event.preventDefault();
+			});
+			target.onmessage = ({ data }) => seen.messages.push(data);
+			target.postMessage({ cross });
+			setTimeout(() => {
+				if (worker.terminate) worker.terminate();
+				resolve(seen);
+			}, wait);
+		});
+
+	(async () => {
+		await sleep(200);
+		// 1. the window
+		await run('inlineScripts', () => window.__inline);
+		await run('throwExternal', () => script('error-surfaces-throw.js'));
+		await run('mutedCrossOrigin', () =>
+			script(`${cross}pages/error-surfaces-throw.js`),
+		);
+		await run('caughtStack', () => surfaces.thrower());
+		await run('evalStack', () => surfaces.evalThrow());
+		await run('functionStack', () => surfaces.functionThrow());
+		await run('uncaughtEval', () => surfaces.uncaughtEval());
+		await run('uncaughtThroughHook', () => surfaces.badWorkerLater());
+		await run('timerString', () => {
+			setTimeout('throw new Error("from timer string")');
+		});
+		await run('loadFailure', () =>
+			script('/neutral/error-surfaces-missing.js'),
+		);
+		await run('syntaxExternal', () => script('error-surfaces-syntax.js.bin'));
+		await run(
+			'moduleImportFailure',
+			() => script('error-surfaces-badimport.js', 'module'),
+			800,
+		);
+		await run('dynamicImport', () => surfaces.dynamicImport());
+		await run('dynamicImportUnhandled', () =>
+			surfaces.dynamicImportUnhandled(),
+		);
+		await run('fetchBadURL', () => fetch('http://[bad'));
+		await run(
+			'fetchUnreachable',
+			() => fetch('http://error-surfaces.invalid/'),
+			1500,
+		);
+		await run(
+			'fetchUnhandled',
+			() => {
+				fetch('http://error-surfaces.invalid/unhandled');
+			},
+			1500,
+		);
+		await run('pushStateCrossOrigin', () =>
+			history.pushState(null, '', `${cross}pages/elsewhere.html`),
+		);
+		await run('workerCrossOrigin', () => {
+			new Worker(`${cross}pages/error-surfaces-worker.js`).terminate();
+		});
+		await run('sharedWorkerCrossOrigin', () => {
+			new SharedWorker(`${cross}pages/error-surfaces-worker.js`);
+		});
+		await run('workerBadURL', () => {
+			new Worker('http://[bad').terminate();
+		});
+		await run('webSocketBadURL', () => {
+			new WebSocket('ws://[bad');
+		});
+		await run(
+			'frameCrossOrigin',
+			() =>
+				new Promise((resolve) => {
+					const frame = document.createElement('iframe');
+					frame.onload = () => {
+						const read = {};
+						for (const [key, fn] of [
+							['document', () => frame.contentWindow.document],
+							['href', () => frame.contentWindow.location.href],
+							['title', () => frame.contentWindow.document.title],
+						])
+							try {
+								fn();
+								read[key] = 'read';
+							} catch (error) {
+								read[key] = describe(error);
+							}
+						resolve(read);
+					};
+					frame.src = `${cross}landed?errsurf`;
+					document.body.append(frame);
+				}),
+		);
+		await run('serverTiming', () =>
+			performance
+				.getEntriesByType('resource')
+				.filter((entry) => entry.name.endsWith('error-surfaces-timing.js'))
+				.map((entry) => ({
+					name: entry.name,
+					initiatorType: entry.initiatorType,
+					serverTiming: entry.serverTiming.map((timing) => timing.toJSON()),
+					json: entry.toJSON().serverTiming,
+				})),
+		);
+
+		// 2. workers
+		await run('dedicatedWorker', () =>
+			workerCase(() => new Worker('error-surfaces-worker.js')),
+		);
+		await run('moduleWorker', () =>
+			workerCase(
+				() => new Worker('error-surfaces-worker.js', { type: 'module' }),
+			),
+		);
+		await run('sharedWorker', () =>
+			workerCase(() => new SharedWorker('error-surfaces-worker.js')),
+		);
+		await run('workerImport404', () =>
+			workerCase(() => new Worker('error-surfaces-import404.js'), 1500),
+		);
+		await run('workerMissing', () =>
+			workerCase(() => new Worker('/neutral/error-surfaces-missing.js'), 1500),
+		);
+		await run('sharedWorkerMissing', () =>
+			workerCase(
+				() => new SharedWorker('/neutral/error-surfaces-missing.js'),
+				1500,
+			),
+		);
+		await run('workerSyntax', () =>
+			workerCase(() => new Worker('error-surfaces-syntax.js.bin'), 1500),
+		);
+		await run('moduleWorkerImportFailure', () =>
+			workerCase(
+				() => new Worker('error-surfaces-badimport.js', { type: 'module' }),
+				1500,
+			),
+		);
+		await run(
+			'workerTerminatedImport',
+			() =>
+				new Promise((resolve) => {
+					const seen = { events: [] };
+					const worker = new Worker('error-surfaces-slowimport.js');
+					worker.onmessage = () => setTimeout(() => worker.terminate(), 300);
+					worker.onerror = (event) => {
+						seen.events.push(describeEvent(event));
+						event.preventDefault();
+					};
+					setTimeout(() => resolve(seen), 2500);
+				}),
+		);
+
+		// 3. reports
+		await run(
+			'cspViolation',
+			() =>
+				new Promise((resolve) => {
+					const frame = document.createElement('iframe');
+					addEventListener('message', ({ data }) => {
+						if (data && data.csp) resolve(data.csp);
+					});
+					frame.src = 'error-surfaces-csp.html';
+					document.body.append(frame);
+					setTimeout(() => resolve('no report'), 3000);
+				}),
+		);
+		await run(
+			'reportingObserver',
+			() =>
+				new Promise((resolve) => {
+					const reports = [];
+					const observer = new ReportingObserver(
+						(list) =>
+							reports.push(
+								...list.map((report) => ({
+									type: report.type,
+									url: report.url,
+									body: report.body && report.body.toJSON(),
+									json: report.toJSON(),
+								})),
+							),
+						{ buffered: true },
+					);
+					observer.observe();
+					// a deprecation of the page's own (an unload listener)
+					addEventListener('unload', () => {});
+					setTimeout(() => {
+						reports.push(
+							...observer.takeRecords().map((report) => ({
+								type: report.type,
+								url: report.url,
+								body: report.body && report.body.toJSON(),
+							})),
+						);
+						observer.disconnect();
+						resolve(reports);
+					}, 1000);
+				}),
+		);
+		R.done = true;
+	})();
+</script>
