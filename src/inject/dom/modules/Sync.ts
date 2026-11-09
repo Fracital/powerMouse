@@ -22,6 +22,13 @@ const encoder = new TextEncoder();
 /** Chrome's beacon quota: bytes of beacons in flight, per document */
 export const BEACON_QUOTA = 64 * 1024;
 
+/**
+ * The beacons in flight a write may bring the document to (the bridge counts
+ * every beacon it sent, reads included); the rest of the quota is kept for
+ * reads, which cannot go another way.
+ */
+export const WRITE_BUDGET = BEACON_QUOTA - 24 * 1024;
+
 // A beacon's share of the quota is given back only once the page has run the
 // task that completes it, which a page spinning here never does, and the
 // browser says nothing when it has. The bytes this bundle's document sent are

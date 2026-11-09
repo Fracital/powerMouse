@@ -134,7 +134,11 @@ on every save (use a `git worktree`).
   the value it replaced); the worker keeps a document's place in the sequence
   for minutes after it goes idle. The budget leaves room for reads, which
   have no other way. An answer rides in cookies, about 180 per host, so a
-  value is read back in parts.
+  value is read back in parts. The cookie module does the same with a
+  `document.cookie` write the bridge cannot carry (the page's own beacons
+  share the quota): numbered, applied to the document's view of the jar at
+  once, and every read of the jar in the worker (Cookie headers included)
+  waits for the writes it heard of.
 - **One controller per address, many per scope.** `config.directory` is a
   controller's address: the directory the host gave plus `controller.id`
   (`/stomp/k7qx2m/`). Every routed URL starts with it and the service worker

@@ -15,7 +15,7 @@ import {
 	COOKIES_CHANGED,
 	CookiesChange,
 } from '../transport/messages';
-import Router, { jsonAPI } from './Router';
+import Router, { json, jsonAPI } from './Router';
 
 export type SameSite = 'lax' | 'strict' | 'none';
 
@@ -328,6 +328,27 @@ export class BrowserCookieArray extends Array<JarCookie> {
 
 const STORE = 'cookies';
 
+/**
+ * How long a document's script write sent asynchronously waits for the one
+ * it made before (whose request may have failed), and how long a read of the
+ * jar waits for the asynchronous writes the worker heard of. A cookie write
+ * is small, so either is long only when a request was lost.
+ */
+const ORDER_WAIT_MS = 3e3;
+const SETTLE_WAIT_MS = 3e3;
+/** how long a document's place in its asynchronous writes is kept when idle */
+const TURNS_KEPT_MS = 5 * 60e3;
+
+interface Turns {
+	next: number;
+	waiting: Map<number, () => void>;
+	active: number;
+	idle: number | null;
+}
+
+const sleep = (ms: number) =>
+	new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 export default class Cookies {
 	private db: IDBPDatabase;
 	#publicSuffix: PublicSuffix;
@@ -335,9 +356,93 @@ export default class Cookies {
 	onChange?: (domain: string) => void;
 	/** the last creation time handed out, so two sets in one ms keep their order */
 	#lastCreated = 0;
+	/** each document's next asynchronous script write */
+	#turns = new Map<string, Turns>();
+	/** the asynchronous script writes the worker heard of and has not done */
+	#heard = new Set<Promise<void>>();
 	constructor(db: IDBPDatabase, publicSuffix: PublicSuffix) {
 		this.db = db;
 		this.#publicSuffix = publicSuffix;
+	}
+	/**
+	 * A document.cookie write the synchronous bridge could not carry (its
+	 * beacon was refused: the page's own beacons held the quota), sent with
+	 * fetch instead. Its sender, number and the oldest the sender has in
+	 * flight (`base`) ride in the URL and its arguments in the body: every
+	 * read of the jar waits for it from the moment its request arrives, so a
+	 * request the page makes after the write carries it, and a document's
+	 * writes are applied in the order it made them.
+	 */
+	async ordered(request: Request): Promise<Response> {
+		const params = new URL(request.url).searchParams;
+		const sender = params.get('sender');
+		const seq = Number(params.get('seq'));
+		const base = Number(params.get('base'));
+		if (sender === null || !Number.isInteger(seq) || !Number.isInteger(base))
+			return json(400, 'not an ordered cookie write');
+		const body = request.json() as Promise<[string, string]>;
+		body.catch(() => {});
+		const finished = this.#inTurn(sender, seq, base, async () => {
+			const [value, url] = await body;
+			await this.set(String(value), String(url), 'script');
+		});
+		this.#heard.add(finished);
+		const forget = () => this.#heard.delete(finished);
+		finished.then(forget, forget);
+		try {
+			await finished;
+			return json(200, null);
+		} catch (error) {
+			return json(500, String(error));
+		}
+	}
+	async #inTurn(
+		sender: string,
+		seq: number,
+		base: number,
+		apply: () => Promise<void>,
+	): Promise<void> {
+		const now = Date.now();
+		for (const [other, turns] of this.#turns)
+			if (turns.idle !== null && now - turns.idle > TURNS_KEPT_MS)
+				this.#turns.delete(other);
+		let turns = this.#turns.get(sender);
+		if (!turns) {
+			turns = { next: base, waiting: new Map(), active: 0, idle: null };
+			this.#turns.set(sender, turns);
+		}
+		const own = turns;
+		own.next = Math.max(own.next, base);
+		own.active++;
+		own.idle = null;
+		try {
+			if (seq > own.next)
+				await new Promise<void>((resolve) => {
+					const timer = setTimeout(() => {
+						own.waiting.delete(seq);
+						resolve();
+					}, ORDER_WAIT_MS);
+					own.waiting.set(seq, () => {
+						clearTimeout(timer);
+						resolve();
+					});
+				});
+			await apply();
+		} finally {
+			own.next = Math.max(own.next, seq + 1);
+			const wake = own.waiting.get(own.next);
+			own.waiting.delete(own.next);
+			wake?.();
+			if (!--own.active) own.idle = Date.now();
+		}
+	}
+	/** the asynchronous script writes the worker heard of are done, or late */
+	async #settled(): Promise<void> {
+		if (!this.#heard.size) return;
+		await Promise.race([
+			Promise.allSettled([...this.#heard]),
+			sleep(SETTLE_WAIT_MS),
+		]);
 	}
 	/** the cookies a request to `url` carries, in Cookie header order */
 	async get(
@@ -345,6 +450,7 @@ export default class Cookies {
 		context: CookieRequestContext = {},
 	): Promise<BrowserCookieArray> {
 		url = new URL(url);
+		await this.#settled();
 		const now = Date.now();
 		const result = new BrowserCookieArray();
 
@@ -366,6 +472,7 @@ export default class Cookies {
 	}
 	/** every stored cookie, or those a page of `origin` could receive */
 	async list(origin?: string): Promise<CookieRecord[]> {
+		await this.#settled();
 		const host = origin ? new URL(origin).hostname : null;
 		const records: CookieRecord[] = [];
 		for (const cookie of (await this.db.getAll(STORE)) as JarCookie[]) {
@@ -577,6 +684,9 @@ export function registerCookies(router: Router, cookies: Cookies): Cookies {
 		),
 	);
 	router.routes.set(/^\/cookies\/set$/, jsonAPI(cookies.set.bind(cookies)));
+	router.routes.set(/^\/cookies\/ordered$/, (request) =>
+		cookies.ordered(request),
+	);
 
 	return cookies;
 }

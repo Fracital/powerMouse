@@ -369,6 +369,23 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   900 ms, now 265 ms; the editor is ready about 0.6 s sooner on a cold load).
   The hooks now go on the frame's own prototypes (blank-creator suite, both
   modes).
+- A cookie write no longer throws once the page's own beacons fill the
+  quota. weather.com sends analytics beacons and then writes a cookie;
+  through the proxy each `document.cookie = x` was a synchronous beacon to
+  the service worker, the page's beacons share Chrome's 64 KiB of beacons in
+  flight per document, and the write threw QuotaExceededError ("The
+  synchronous bridge cannot carry this request to .../cookies/set"), where
+  natively it never throws. A write the bridge cannot carry (or one past the
+  budget storage writes keep under the quota) now goes to the worker with
+  fetch, numbered so the worker applies a document's writes in order, and
+  every later write of the document follows it while one is in flight. The
+  worker hears of the write when its request arrives, and every read of the
+  jar (a request's Cookie header, a page's document.cookie, a WebSocket
+  handshake) waits for it, so a fetch the page makes in the same task carries
+  the cookie. The document applies the write to what it knows of the jar at
+  once, so its next read sees it, and a read the bridge cannot make answers
+  from that instead of throwing (cookie-beacons suite, both modes; every
+  write threw before).
 - A worker the page terminates at once no longer reports an import of the
   proxy's. A proxied worker imports the inject bundle (and a blob: worker the
   private URL of its script) before the page's script runs, and Chrome reports

@@ -7,7 +7,7 @@ import ProxyModule, {
 	usePrototype,
 } from '../../modules/Proxy';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
-import SyncModule, { BEACON_QUOTA } from './Sync';
+import SyncModule, { WRITE_BUDGET } from './Sync';
 
 /**
  * Chrome's quota for a store: 5 MiB of key and value lengths, in UTF-16 code
@@ -15,13 +15,6 @@ import SyncModule, { BEACON_QUOTA } from './Sync';
  * under a one-character key stores, one more throws, whatever the characters)
  */
 const QUOTA = 5 * 1024 * 1024;
-
-/**
- * The beacons in flight a write may bring the document to (the bridge counts
- * every beacon it sent, reads included); the rest of the quota is kept for
- * reads, which cannot go another way.
- */
-const WRITE_BUDGET = BEACON_QUOTA - 24 * 1024;
 
 const sizeOf = (key: string, value: string) => key.length + value.length;
 

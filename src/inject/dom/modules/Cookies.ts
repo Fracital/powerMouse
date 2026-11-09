@@ -1,13 +1,48 @@
-import { getDomain } from 'tldts';
+import { getDomain, getPublicSuffix } from 'tldts';
 import {
 	BrowserCookieArray,
+	compareCookies,
+	cookieMatches,
+	parseCookie,
 	type FloatingCookie,
+	type JarCookie,
 } from '../../../server/Cookies';
 import { COOKIES_CHANGED, CookiesChange } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule, { invokeGlobal } from '../../modules/Proxy';
+import { routedPrefix } from '../../modules/Unroute';
 import DocumentClient from '../Client';
-import SyncModule from './Sync';
+import SyncModule, { BEACON_QUOTA, WRITE_BUDGET } from './Sync';
+
+const publicSuffix = (host: string) =>
+	getPublicSuffix(host, { allowPrivateDomains: true });
+
+const expired = (cookie: JarCookie, now: number) =>
+	cookie.expires !== undefined && cookie.expires <= now;
+
+/**
+ * `list` with a script write applied the way the jar applies it: the
+ * cookie of that domain, path and name replaced (moved to the end of its
+ * group unless its value is unchanged) or, for an expired one, removed
+ */
+function applyWrite(list: JarCookie[], cookie: JarCookie, now: number) {
+	const index = list.findIndex((other) => other.id === cookie.id);
+	const existing = index === -1 ? undefined : list[index];
+	if (index !== -1) list.splice(index, 1);
+	if (expired(cookie, now)) return;
+	let created = now;
+	for (const other of list) created = Math.max(created, other.created + 1);
+	list.push({
+		...cookie,
+		created: existing?.value === cookie.value ? existing.created : created,
+	});
+}
+
+/** a script write sent asynchronously that may not be in the jar yet */
+interface Unsettled {
+	cookie: JarCookie;
+	seq: number;
+}
 
 /**
  * document.cookie is a sync round trip to the jar, so the string is cached
@@ -22,8 +57,24 @@ import SyncModule from './Sync';
 export class CookiesModule extends Module<DocumentClient> {
 	private cookieDescriptor: PropertyDescriptor;
 	#defaultView?: () => Window | null;
-	#cache: string | null = null;
+	/**
+	 * The jar's cookies for this document as last read, with this document's
+	 * writes since applied; `#fresh` while nothing else may have changed
+	 * them (the version below tells of other documents' writes)
+	 */
+	#known: JarCookie[] | null = null;
+	#fresh = false;
 	#cacheVersion = '';
+	// The writes the synchronous bridge could not carry: its beacon was
+	// refused, because the page's own beacons (weather.com's analytics) hold
+	// the quota they share, and natively a cookie write never throws. They
+	// go to the worker with fetch, numbered so it applies them in order, and
+	// while any is in flight every later write follows it. Until each lands,
+	// reads answer with it applied over what the jar says.
+	#sender = Math.random().toString(36).slice(2);
+	#seq = 0;
+	#inflight = new Set<number>();
+	#unsettled = new Map<string, Unsettled>();
 	// the proxy origin's real localStorage, taken before the Storage module
 	// hands the page its own
 	#versions: Storage | null = null;
@@ -68,16 +119,81 @@ export class CookiesModule extends Module<DocumentClient> {
 	}
 	/** the jar changed for this site: every document of it reads fresh */
 	#bump() {
-		this.#cache = null;
+		this.#fresh = false;
+		this.#stamp();
+	}
+	/** a new version for this site; null when there is no storage for one */
+	#stamp(): string | null {
+		const version = `${Date.now()}:${Math.random()}`;
 		try {
-			this.#setItem?.call(
-				this.#versions,
-				this.#versionKey,
-				`${Date.now()}:${Math.random()}`,
-			);
+			if (!this.#setItem) return null;
+			this.#setItem.call(this.#versions, this.#versionKey, version);
+			return version;
 		} catch (error) {
 			// no storage: this document's cache is dropped at least
+			return null;
 		}
+	}
+	/**
+	 * Other documents read the jar again; this one keeps what it knows when
+	 * that was current (it has this document's own write applied)
+	 */
+	#restamp() {
+		const current = this.#fresh && this.#version() === this.#cacheVersion;
+		const version = this.#stamp();
+		if (current && version !== null) this.#cacheVersion = version;
+		else this.#fresh = false;
+	}
+	/** what document.cookie reads for `list`, with the unsettled writes over it */
+	#show(list: JarCookie[]): string {
+		const now = Date.now();
+		const url = this.client.url.url;
+		const shown = list.filter(
+			(cookie) => !expired(cookie, now) && cookieMatches(cookie, url),
+		);
+		shown.sort(compareCookies);
+		return new BrowserCookieArray(...shown).toString();
+	}
+	/** a write the bridge cannot carry now: applied here, sent with fetch */
+	#later(value: string) {
+		const now = Date.now();
+		const cookie = this.#parse(value, now);
+		const seq = this.#seq++;
+		this.#inflight.add(seq);
+		let base = seq;
+		for (const other of this.#inflight) base = Math.min(base, other);
+		if (cookie) {
+			this.#unsettled.set(cookie.id, { cookie, seq });
+			if (this.#known) applyWrite(this.#known, cookie, now);
+		}
+		// every other document of the site reads the jar, which waits for it
+		this.#restamp();
+		const settle = () => {
+			this.#inflight.delete(seq);
+			for (const [id, entry] of this.#unsettled)
+				if (entry.seq === seq) this.#unsettled.delete(id);
+			// in the jar now: a document that read before the worker heard of
+			// it reads again
+			this.#restamp();
+		};
+		const url = new URL(`${routedPrefix(this.client)}cookies/ordered`);
+		url.searchParams.set('sender', this.#sender);
+		url.searchParams.set('seq', String(seq));
+		url.searchParams.set('base', String(base));
+		this.client
+			.routedFetch(url.href, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify([value, this.client.url.toString()]),
+			})
+			.then((response) => {
+				if (!response.ok)
+					throw new Error(`${response.status} ${response.statusText}`);
+			})
+			.catch((error) => {
+				console.error(`Stomp: a cookie write could not be stored: ${error}`);
+			})
+			.finally(settle);
 	}
 	/**
 	 * A document without a browsing context (one a navigation replaced, one
@@ -96,7 +212,7 @@ export class CookiesModule extends Module<DocumentClient> {
 	}
 	/** this document's next read goes to the jar */
 	invalidate() {
-		this.#cache = null;
+		this.#fresh = false;
 	}
 	get cookie() {
 		return this.cookieDescriptor.get!.call(this.client.global.document);
@@ -106,34 +222,69 @@ export class CookiesModule extends Module<DocumentClient> {
 	}
 	get pageCookies() {
 		const version = this.#version();
-		if (this.#cache !== null && version === this.#cacheVersion)
-			return this.#cache;
+		if (this.#known && this.#fresh && version === this.#cacheVersion)
+			return this.#show(this.#known);
 
 		const syncModule = this.client.getModule(SyncModule)!;
 		this.client.cookieReads++;
 		// the jar answers without its HttpOnly cookies (the route filters)
-		const cookies: FloatingCookie[] = syncModule.jsonAPI(
+		const answer = syncModule.tryJsonAPI(
+			BEACON_QUOTA,
 			`${this.client.directory}cookies/get`,
 			this.client.url.toString(),
 		);
-		const value = new BrowserCookieArray(
-			...cookies.filter((cookie) => !cookie.httpOnly),
-		).toString();
-		this.#cache = value;
-		this.#cacheVersion = version;
-		return value;
+		if (answer) {
+			this.#known = this.#withUnsettled(
+				(answer.value as FloatingCookie[]).filter((cookie) => !cookie.httpOnly),
+			);
+			this.#fresh = true;
+			this.#cacheVersion = version;
+			return this.#show(this.#known);
+		}
+		// The bridge cannot ask now (the page's own beacons hold the quota),
+		// and a read never throws natively: what this document knew, with its
+		// own writes since, which is all the jar has unless another document
+		// or a response changed it in the meantime
+		return this.#show(this.#known ?? this.#withUnsettled([]));
+	}
+	/** `list` with the writes the jar may not have yet, in the order made */
+	#withUnsettled(list: JarCookie[]): JarCookie[] {
+		const now = Date.now();
+		for (const { cookie } of [...this.#unsettled.values()].sort(
+			(a, b) => a.seq - b.seq,
+		))
+			applyWrite(list, cookie, now);
+		return list;
+	}
+	/** `value` as the jar applies a script write, or null when it ignores it */
+	#parse(value: string, now: number): JarCookie | null {
+		return parseCookie(value, this.client.url.url, publicSuffix, {
+			source: 'script',
+			now,
+		});
 	}
 	set pageCookies(value: string) {
 		const syncModule = this.client.getModule(SyncModule)!;
 
 		// a script-set cookie can neither create nor replace an HttpOnly one
-		syncModule.jsonAPI(
-			`${this.client.directory}cookies/set`,
-			value,
-			this.client.url.toString(),
-			'script',
-		);
-		this.#bump();
+		if (
+			!this.#inflight.size &&
+			syncModule.tryJsonAPI(
+				WRITE_BUDGET,
+				`${this.client.directory}cookies/set`,
+				value,
+				this.client.url.toString(),
+				'script',
+			)
+		) {
+			// kept for a read the bridge cannot make later
+			const now = Date.now();
+			const cookie = this.#known && this.#parse(value, now);
+			if (cookie) applyWrite(this.#known!, cookie, now);
+			this.#bump();
+			return;
+		}
+		this.#later(value);
 	}
 	apply() {
 		// the Cookie Store API would bypass the jar: pages see document.cookie
