@@ -83,12 +83,20 @@ async function takeReport(path) {
 }
 
 /** wait for the page at `path` to report, or give up with a TIMEOUT */
+/** how long a page's posted report is waited for before its window is read instead */
+const FALLBACK_AFTER_MS = 10000;
+
 async function awaitReport(path, fallback) {
 	const started = Date.now();
 	while (Date.now() - started < PAGE_BUDGET_MS) {
 		await sleep(POLL_MS);
 		const report = await takeReport(path);
 		if (report) return report;
+		// the page's own report (posted to the fixture) is what counts; reading
+		// the window is the fallback for a page that cannot post, and only
+		// late: Playwright evaluates with a user gesture, which gives the page
+		// transient activation and so Sec-Fetch-User on its next navigation
+		if (Date.now() - started < FALLBACK_AFTER_MS) continue;
 		const direct = await fallback?.();
 		if (direct) return direct;
 	}
