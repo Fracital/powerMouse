@@ -1,0 +1,10 @@
+<!doctype html>
+<title>FRAME WALKS CONTAINER</title>
+<body></body>
+<script>
+	// a frame of another origin than the top that frames a document of its
+	// own origin, as an ad slot frames its sync pixel
+	const inner = document.createElement('iframe');
+	inner.src = '/pages/frame-walks-inner.html';
+	document.body.append(inner);
+</script>

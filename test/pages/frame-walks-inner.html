@@ -1,0 +1,49 @@
+<!doctype html>
+<title>FRAME WALKS INNER</title>
+<script>
+	// The two walks imgur's ad sync pixels make, bounded here so a walk that
+	// never ends is a count instead of a hung tab:
+	// rubiconproject's usync climbs `t = t.parent` until it reaches `top`,
+	// and ingage's pixel visits every frame from `top` down, five levels
+	// deep. Natively the climb takes two steps and the descent visits each of
+	// the four windows once.
+	window.__fw = { done: false };
+	const record = (name, fn) => {
+		try {
+			__fw[name] = fn();
+		} catch (error) {
+			__fw[name] = `threw ${error.name}`;
+		}
+	};
+	addEventListener('message', (event) => {
+		if (event.data !== 'frame-walks:walk') return;
+		record('climb', () => {
+			let steps = 0;
+			for (let t = window; t !== top && steps < 20; t = t.parent) steps++;
+			return steps;
+		});
+		record('parentParentIsTop', () => parent.parent === top);
+		record('topParentIsTop', () => top.parent === top);
+		record('topLength', () => top.length);
+		// a computed index, as the descent reads it (a literal one is not
+		// routed by the rewriter)
+		record('pendingIsTop', () => {
+			const index = 1;
+			return top[index] === top;
+		});
+		record('descent', () => {
+			let visits = 0;
+			const walk = (w, depth) => {
+				visits++;
+				if (visits > 500) throw new RangeError('runaway');
+				if (depth < 5)
+					for (let i = 0; i < w.frames.length; i++)
+						walk(w.frames[i], depth + 1);
+			};
+			walk(top, 0);
+			return visits;
+		});
+		__fw.done = true;
+	});
+	top.postMessage('frame-walks:pending', '*');
+</script>

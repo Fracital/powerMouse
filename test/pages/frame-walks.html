@@ -1,0 +1,21 @@
+<!doctype html>
+<title>FRAME WALKS</title>
+<body></body>
+<script>
+	// The outermost page of an ad stack, as imgur's: a frame of another origin
+	// (the fixture's other host name) that frames a document of its own
+	// origin, and a frame of this page's own that has not loaded yet (an
+	// iframe whose src answers in five seconds: the initial about:blank). The
+	// innermost document walks the tree (frame-walks-inner.html); it asks
+	// for the pending frame first, so it is still pending when the walk runs.
+	const container = document.createElement('iframe');
+	container.src = `${location.origin.replace('127.0.0.1', 'localhost')}/pages/frame-walks-container.html`;
+	document.body.append(container);
+	addEventListener('message', (event) => {
+		if (event.data !== 'frame-walks:pending') return;
+		const pending = document.createElement('iframe');
+		pending.src = '/slow';
+		document.body.append(pending);
+		event.source.postMessage('frame-walks:walk', '*');
+	});
+</script>
