@@ -844,6 +844,44 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			);
 			return this.client.innerHTMLOf(div);
 		};
+		// Range.createContextualFragment parses in the page's document, so an
+		// element in the fragment starts its load as it is parsed, inserted or
+		// not: the page's raw URLs went straight to the site, or unrouted to
+		// the proxy origin. The markup is parsed by the browser in an inert
+		// document instead, in a context element of the range's kind (a <tr>
+		// for a table section parses as one), and the nodes are made in the
+		// page's document through the hooks. Scripts in it run when the page
+		// inserts them, rewritten then, as natively.
+		const RangeProto = this.client.global.Range?.prototype;
+		if (typeof RangeProto?.createContextualFragment === 'function')
+			RangeProto.createContextualFragment = proxyModule.wrapFunction(
+				RangeProto.createContextualFragment,
+				(target, that: Range, args) => {
+					const start = that.startContainer;
+					const owner = (
+						start.nodeType === 9 ? start : start.ownerDocument
+					) as Document;
+					const inert = inertDocumentOf(owner);
+					// the context element, as the spec picks it: the start node
+					// if it is an element, else its parent element; none for a
+					// document or fragment
+					const element =
+						start.nodeType === 1
+							? (start as Element)
+							: start.parentNode?.nodeType === 1
+								? (start.parentNode as Element)
+								: null;
+					const holder = element
+						? inert.createElementNS(element.namespaceURI, element.localName)
+						: inert.createElement('body');
+					const range = inert.createRange();
+					range.selectNodeContents(holder);
+					const parsed = Reflect.apply(target, range, args) as DocumentFragment;
+					const fragment = owner.createDocumentFragment();
+					fragment.append(cloneRawNode([...parsed.childNodes], owner));
+					return fragment;
+				},
+			);
 		const shadowRootPrototype = (
 			this.client.global as { ShadowRoot?: typeof ShadowRoot }
 		).ShadowRoot?.prototype;

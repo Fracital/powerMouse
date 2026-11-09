@@ -302,6 +302,16 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   registering first does not take it over), then answered as before
   (sw-restart suite, both modes; multi-controller, two controllers, one of
   them late).
+- A contextual fragment's loads go through the proxy.
+  `Range.createContextualFragment` makes its nodes in the page's document,
+  so an image in it loads as it is parsed, inserted or not, and the hooks
+  never saw it: a cross-site URL was fetched straight from the site, past
+  the proxy, and a relative one from the proxy origin unrouted. The markup
+  is now parsed by the browser in an inert document, in a context element
+  of the range's kind, and the nodes are made in the page's document
+  through the hooks; a script in it runs when the page inserts it
+  (contextual-fragment suite, both modes, against the page loaded
+  natively).
 - A controller shakes hands again after a service worker restart that comes
   soon after its last handshake. A restarted worker knows no controller and
   asks them once to register again; the controller ignored that request for
