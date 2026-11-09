@@ -59,6 +59,27 @@ function isStomp(value: unknown, client: string): boolean {
 	}
 }
 
+/**
+ * The child window `context` exposes by `name` (its browsing context name),
+ * read from the named properties object, so neither a global of that window
+ * nor an accessor the Context module put on its Window.prototype answers.
+ */
+function childNamed(context: Context, name: string): Context | undefined {
+	try {
+		const prototype = Reflect.getPrototypeOf(context);
+		const named = prototype && Reflect.getPrototypeOf(prototype);
+		if (!named) return undefined;
+		const value = Reflect.getOwnPropertyDescriptor(named, name)?.value;
+		if (typeof value !== 'object' || value === null) return undefined;
+		for (let index = 0; index < context.length; index++)
+			if ((context as unknown as Record<number, unknown>)[index] === value)
+				return value as Context;
+	} catch (error) {
+		// a window of another real origin
+	}
+	return undefined;
+}
+
 function findTop(global: typeof globalThis, client: string): Context {
 	let context: Context = global;
 
@@ -158,6 +179,8 @@ export default class ContextModule extends Module<DocumentClient> {
 		interfaces: PropertyDescriptorMap,
 		// a cross-origin window's child browsing contexts by index
 		indexed?: (index: number) => unknown,
+		// and by name, which the browser lets another origin read too
+		named?: (name: string) => unknown,
 	) {
 		const restricted = {};
 
@@ -198,6 +221,11 @@ export default class ContextModule extends Module<DocumentClient> {
 			indexed && typeof prop === 'string' && /^(0|[1-9]\d*)$/.test(prop)
 				? Number(prop)
 				: undefined;
+		const child = (prop: string | symbol): unknown => {
+			const index = indexOf(prop);
+			if (index !== undefined) return indexed!(index);
+			return named && typeof prop === 'string' ? named(prop) : undefined;
+		};
 
 		for (const key in interfaces) {
 			const descriptor = interfaces[key];
@@ -226,11 +254,8 @@ export default class ContextModule extends Module<DocumentClient> {
 					!descriptor ||
 					(!('value' in descriptor) && typeof descriptor.get !== 'function')
 				) {
-					const index = indexOf(prop);
-					if (index !== undefined) {
-						const child = indexed!(index);
-						if (child !== undefined) return child;
-					}
+					const found = descriptor ? undefined : child(prop);
+					if (found !== undefined) return found;
 					throw accessError('read', prop);
 				}
 
@@ -257,8 +282,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			},
 			has: (target, prop) => {
 				if (!(prop in target)) {
-					const index = indexOf(prop);
-					if (index !== undefined && indexed!(index) !== undefined) return true;
+					if (child(prop) !== undefined) return true;
 					throw accessError();
 				}
 				return true;
@@ -407,6 +431,13 @@ export default class ContextModule extends Module<DocumentClient> {
 	}
 	restrictContext(context: Context): RestrictedContext {
 		const proxyModule = this.client.getModule(ProxyModule)!;
+		// a child that runs no Stomp yet (an iframe still on its initial
+		// about:blank) is still that child, of the frame's origin: never the
+		// top, which a walk down the tree would visit again forever
+		const restrictChild = (child: Context) =>
+			isStomp(child, this.client.names.client)
+				? this.newRestricted(child)
+				: this.restrictOpaque(child);
 
 		const restrictedLocation = this.restrictObject('Location', {
 			replace: {
@@ -534,12 +565,13 @@ export default class ContextModule extends Module<DocumentClient> {
 					context as unknown as Record<number, Context | undefined>
 				)[index];
 				if (!child) return undefined;
-				// a child that runs no Stomp yet (an iframe still on its initial
-				// about:blank) is still that child, of the frame's origin: never
-				// the top, which a walk down the tree would visit again forever
-				return isStomp(child, this.client.names.client)
-					? this.newRestricted(child)
-					: this.restrictOpaque(child);
+				return restrictChild(child);
+			},
+			// and by name (`parent.sibling`): only a child window the browser
+			// names, never another of the window's globals
+			(name) => {
+				const child = childNamed(context, name);
+				return child === undefined ? undefined : restrictChild(child);
 			},
 		);
 
@@ -644,6 +676,10 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		this.client.resolveTop = (value) => {
 			if (!isWindow(value)) return value;
+			// a stand-in answers with its own `top` (the top of its world, as
+			// this page may see it), never with this page's top
+			if (this.restrictedContexts.has(value as Context))
+				return Reflect.get(value, 'top');
 
 			try {
 				if (value === this.client.top || !(this.client.names.client in value))
