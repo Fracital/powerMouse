@@ -1,4 +1,5 @@
 import { parseSrcset, stringifySrcset } from 'srcset';
+import { handlerMark, keepSource, sourceKey } from '../../../functionSource';
 import {
 	modifyCSS,
 	restoreCSSValueURLs,
@@ -713,9 +714,19 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					if (element.hasAttribute(name)) {
 						const source = element.getAttribute(name)!;
 						element.setAttributeOG(name, source);
+						// the browser compiles the code as a function's body: marked,
+						// so the function reads back with the page's code in it
+						const key = sourceKey(source);
+						keepSource(key, source);
 						element.setAttribute(
 							name,
-							modifyJS(source, this.client.url, this.client.config, 'generic'),
+							handlerMark(key) +
+								modifyJS(
+									source,
+									this.client.url,
+									this.client.config,
+									'generic',
+								),
 						);
 					}
 				},

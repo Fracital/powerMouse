@@ -305,6 +305,41 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- A function the page defines reads back as the page wrote it.
+  `Function.prototype.toString` and `String(fn)` showed the rewriter's
+  output (`$s$j.get(location, 'location')`, its own spacing), a tell, and a
+  broken page where the source is used: Google's sign-in button on Pinterest
+  puts a click listener's source in its `gsi/button` frame's URL, and the
+  frame answered 400. Every function the rewriter prints now carries a mark,
+  a comment right after the first token of its source
+  (`function f/*k.s.l*/(`, an arrow's after its first parameter, a method's
+  after its key), naming the script's text and the function's place in it;
+  the mark is the first thing in the function's own source, so nesting never
+  confuses it. The text is kept once per script: by the inject for what it
+  rewrites (inline scripts and modules, handler attributes, eval, new
+  Function, string timers), and for what the service worker rewrites
+  (external scripts, modules, workers, split bundles, rewrite-cache hits) in
+  a comment inside a function the script hands the access API first
+  (`$s$j.src(key, subs, function(){/*text*/})`, on line 1, its line breaks
+  and `*` swapped for characters the text does not hold), read through the
+  native toString when one of its functions is first read, so the page keeps
+  no copy beside the script's own source. What the page hands `$s$j.src`
+  itself changes nothing: a key with several holders believes the one whose
+  text hashes to it. A handler's function
+  (`function onclick(event) {\n...\n}`) reads back with the attribute's
+  code. Every form reads back byte for byte as natively: declarations,
+  expressions, arrows, async functions and generators, classes with static
+  blocks and private methods, methods, getters, setters, computed and quoted
+  keys, CRLF lines and raw line separators; bound, native and Proxy
+  functions and the proxy's own wrappers keep their native strings. A worker-rewritten script grows by its
+  own size (three.js: 614 KB rewrote to 678 KB, now 1,338 KB, of which 46 KB
+  are marks; a 12.9 MB bundle to 28.1 MB, 1 MB of marks), the rewrite takes
+  about 2% longer (three.js 121 to 124 ms, the best of 21; the marks are
+  placed from the list the pre-pass already builds, and the key and the kept
+  text cost 18 ms and 23 ms on 12.9 MB), and a split bundle is still its
+  whole's rewrite byte for byte (function-source suite, both modes, against
+  the page loaded natively; rewriter-unit checks the fixture's every form and
+  three.js's 1,436 exported functions in node).
 - `localStorage` and `sessionStorage` work in a srcdoc frame. Its inject
   resolved the proxy's own storage route against the frame's location,
   `about:srcdoc`, and every call threw "Failed to construct 'URL':

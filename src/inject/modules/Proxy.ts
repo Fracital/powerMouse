@@ -1,4 +1,4 @@
-import { restoreJS } from '../../rewriteJS';
+import { keepSourcesHere, originalSource } from '../../functionSource';
 import Client from '../Client';
 import Module from '../Module';
 import { isNative } from '../nativeUtil';
@@ -201,6 +201,8 @@ const functionStrings = new WeakMap<Function, string>();
 export default class ProxyModule extends Module<Client> {
 	functionStrings = functionStrings;
 	apply() {
+		// what this bundle rewrites keeps its text here, for the hook below
+		keepSourcesHere();
 		const ownPrototype = this.client.global.Function.prototype;
 		// a function of another realm (a same-origin frame that loaded its own
 		// copy of the inject): that realm's toString, hooked by its copy, knows
@@ -245,22 +247,10 @@ export default class ProxyModule extends Module<Client> {
 						delegating = false;
 					}
 				}
-				{
-					let string = Reflect.apply(target, that, args);
-
-					if (!isNative(string)) {
-						let start = 0;
-						if (!string.startsWith('function ')) {
-							start = 'function '.length;
-							string = 'function ' + string;
-						}
-
-						string = restoreJS(string, this.client.url);
-						string = string.slice(start);
-					}
-
-					return string;
-				}
+				const string = Reflect.apply(target, that, args);
+				// a page's function: its source as the page wrote it, not the
+				// rewriter's output (src/functionSource.ts)
+				return isNative(string) ? string : (originalSource(string) ?? string);
 			},
 		);
 	}

@@ -1757,7 +1757,3 @@ function markFunctions(
 	}
 	return count;
 }
-
-export function restoreJS(script: string, _url: StompURL) {
-	return script;
-}

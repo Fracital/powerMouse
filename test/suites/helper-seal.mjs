@@ -74,8 +74,8 @@ for (const [mode, base] of [
 		const paths = report?.paths ?? {};
 		const detail = JSON.stringify(paths);
 		ok(
-			`${label}: the access API is named in the page's rewritten source`,
-			paths.accessNamed === 'true',
+			`${label}: the access API is found by its default name, and a function's source no longer shows it`,
+			paths.accessNamed === 'true' && paths.sourceShowsAccess === 'false',
 			detail,
 		);
 		ok(

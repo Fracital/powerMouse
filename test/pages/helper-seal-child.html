@@ -70,10 +70,14 @@
 			}
 			return found.join(';') || 'none';
 		});
-		// the access API's name, from the source of a rewritten function
+		// the access API's name: a rewritten function's source showed it once
+		// (it reads as the page wrote it now), and the default is public
 		const source = (() => location.href).toString();
-		const accessName = (source.match(/([A-Za-z_$][\w$]*)\.get2?\(/) || [])[1];
+		const accessName =
+			(source.match(/([A-Za-z_$][\w$]*)\.get2?\(/) || [])[1] ??
+			(typeof window['$s$j'] === 'object' ? '$s$j' : undefined);
 		paths.accessNamed = String(!!accessName);
+		paths.sourceShowsAccess = String(source !== '() => location.href');
 		const api = accessName ? window[accessName] : undefined;
 		t('accessFunctions', () => {
 			const out = [];

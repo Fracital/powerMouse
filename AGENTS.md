@@ -104,6 +104,11 @@ on every save (use a `git worktree`).
   (`src/inject/dom/modules/DOMAttributes.ts`), not prototype accessors.
 - **Rewritten inline scripts are serialized back into HTML.** Anything that
   can produce `</script` in generated code must escape it (`loadHTML`).
+- **Every function the rewriter prints carries a mark** (`/*key.start.len*/`
+  right after its first token, `src/functionSource.ts`): the toString hook
+  reads the page's source back by it. A new rewrite that rebuilds a function
+  node must keep the original node (its `range`), and a check on exact
+  rewriter output strips marks first (rewriter-unit's `unmarked`).
 - **Inline `<script type="module">` and `src` set before `type`** need the
   module goal; both are handled, keep it that way.
 - **Optional chaining** through a computed member is rewritten to
