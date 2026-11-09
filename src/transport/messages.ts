@@ -53,6 +53,15 @@ export const ABORT_HEADER = 'x-stomp-abort';
  * navigation's, and strips it
  */
 export const LOAD_HEADER = 'x-stomp-load';
+/**
+ * On a request a page's fetch or XMLHttpRequest makes from a document the
+ * page sandboxed without allow-same-origin (an opaque origin natively, the
+ * site's through the proxy): the worker judges it as the browser judges an
+ * opaque origin's request (Origin: null, cross-site, no same-origin
+ * credentials) and strips it. A page that sets it on a request of its own
+ * only takes privileges from itself
+ */
+export const OPAQUE_HEADER = 'x-stomp-opaque';
 /** SW -> every window: the cookie jar changed for `domain` (every host when empty); pages drop their document.cookie cache */
 export const COOKIES_CHANGED = '$stomp$cookiesChanged';
 export interface CookiesChange {

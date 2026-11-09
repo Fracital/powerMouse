@@ -47,7 +47,11 @@ export default class FramingModule extends Module<DocumentClient> {
 					const parentClient = (this.client.parent as Record<string, any>)[
 						this.client.names.client
 					] as DocumentClient;
+					// an opaque origin (a sandbox without allow-same-origin) is
+					// another origin to every other document, its parent included
 					if (
+						this.client.sandboxedOpaque ||
+						parentClient.sandboxedOpaque ||
 						!sameOrigin(this.client.url.toString(), parentClient.url.toString())
 					)
 						return null;

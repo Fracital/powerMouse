@@ -2,14 +2,17 @@
 <title>SANDBOX MESSAGES SIBLING</title>
 <script>
 	// the sandboxed frame's sibling (sandbox-messages.html), of the page's
-	// origin: what reaches it from the sandboxed frame
+	// origin: what reaches it from the sandboxed frame. The frame is named by
+	// a computed index: the proxy routes that read (a literal index reaches
+	// the raw window, a known limit, and an opaque frame is another origin)
 	window.__sib = [];
+	const box = 1;
 	addEventListener('message', (event) => {
 		__sib.push({
 			kind: event.data?.kind ?? String(event.data),
 			origin: event.origin,
 			from:
-				event.source === parent.frames[1]
+				event.source === parent.frames[box]
 					? 'box'
 					: event.source === parent
 						? 'parent'

@@ -1,6 +1,6 @@
 import { routeXHR } from '../../../routeURL';
 import StompURL from '../../../StompURL';
-import { ABORT_HEADER } from '../../../transport/messages';
+import { ABORT_HEADER, OPAQUE_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule, {
 	classConstant,
@@ -354,6 +354,9 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				);
 			}
 			#fetch(url: string | URL, init: RequestInit) {
+				// a request of an opaque origin goes as one (OPAQUE_HEADER)
+				if (that.client.opaqueRequests)
+					(init.headers as Headers).set(OPAQUE_HEADER, '1');
 				if (this.#async) {
 					init.signal = this.#abort.signal;
 					// abort() and a timeout reach the worker under this id

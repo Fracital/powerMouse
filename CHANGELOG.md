@@ -362,6 +362,63 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   natively. The edits are collected and applied once; CNN is ready in about
   5 s, the output byte for byte the same (css-scale suite, both modes: four
   times the stylesheet takes about twice as long to write, not sixteen).
+- A frame the page sandboxes is restricted as natively, and a frame without
+  allow-scripts runs no script of the page at all. The proxy dropped the
+  page's `sandbox` attribute (an opaque origin's navigations never reach the
+  service worker, and without allow-scripts the inject could not run), so a
+  frame a page sandboxed to contain untrusted HTML (webmail showing a
+  message, an editor's preview, an ad slot) ran every script in it, with the
+  site's storage, cookies and parent. The real attribute is now the page's
+  flags plus allow-same-origin and allow-scripts, without the top
+  navigation flags, so the browser keeps enforcing forms, popups, modals
+  and print, downloads, pointer lock, presentation and orientation lock,
+  for the frame's own frames and its popups too, and from the next
+  navigation on when the page changes it. What the browser no longer
+  enforces, the inject emulates from the page's value (kept in the frame's
+  marker), the parent's sandbox and a popup's opener's:
+  - Without allow-scripts the document gets a Content-Security-Policy (a
+    `<meta>` the inject puts in before any of the page's markup is touched)
+    that lets only the inject's own scripts, carrying its nonce, run. In
+    Chrome 152 it blocks inline, module and external scripts, event
+    handlers, javascript: URLs, eval and string timers, survives the
+    `document.open()` a written page goes through, and is inherited by the
+    about:blank, srcdoc, blob: and data: documents the page makes (the
+    inject's shells for them carry the nonce); a frame inside it starts
+    with the same decision. An about:blank the parent writes into is
+    guarded as soon as the sandbox is set, a javascript: URL never
+    navigates such a frame, and an XML document has its scripts, handlers
+    and javascript: URLs taken out (the policy needs an HTML head).
+    Noscript content shows as natively; in a document that runs scripts it
+    stays text (every proxied page used to fetch the images inside its
+    noscript blocks).
+  - Without allow-same-origin, localStorage, sessionStorage,
+    `document.cookie`, IndexedDB and Cache Storage throw Chrome's
+    SecurityError, `frameElement` is null, the parent's `contentDocument`
+    is null and `contentWindow.document` throws, every other window is
+    restricted like one of another origin both ways, and a fetch or
+    XMLHttpRequest goes as an opaque origin's: `Origin: null`,
+    `Sec-Fetch-Site: cross-site` and no cookies for `same-origin`
+    credentials (the inject marks it with `x-stomp-opaque`, which the
+    worker strips).
+  - A sandboxed document navigates only itself, its descendants, the
+    windows it opened and the proxied top under allow-top-navigation (with
+    user activation under allow-top-navigation-by-user-activation), and
+    gets Chrome's SecurityError for anything else: the window it navigates
+    runs its own inject, and the browser takes that navigation for the
+    target's own. A target=_top link it may follow navigates the proxied
+    top; one it may not is left to the browser, which refuses it.
+  - Without allow-popups the host's `onOpen` is not asked; without
+    allow-popups-to-escape-sandbox the popup is the browser's own window,
+    started with the opener's sandbox, never a host tab.
+
+  The token list the page reads (`iframe.sandbox`) holds its own value,
+  and a nested frame's new-tab link reaches the host's `onOpen` (the host
+  takes requests from its frames' own windows only, so it went nowhere).
+  sandbox-restrictions suite, compared with the pages loaded natively in
+  both modes, with a fixture beacon for every script vector of a frame
+  without allow-scripts that must never arrive: 231 of 494 checks failed
+  before, every script vector ran in every such frame.
+
 - CSS text a script puts into a `<style>` loads through the proxy however it
   gets there. chess.com fills its board's style with `innerHTML`, and through
   the proxy the board and every piece loaded straight from its image host,
@@ -2325,6 +2382,28 @@ Fixed while testing real sites and a feature fixture:
   (insertion hooks, markup setters and a document observer, whose records
   arrive before the parser runs the next script) or a real origin per
   proxied site.
+- A page's iframe sandbox (sandbox-restrictions suite) is enforced by the
+  browser for everything but scripts, the opaque origin and top
+  navigation, which the inject emulates, with these limits. A frame
+  sandboxed with allow-scripts but without allow-same-origin runs in the
+  site's real origin through the proxy: what the inject routes is
+  restricted, but a raw path (a literal frame index such as
+  `parent.frames[0]`, never routed) reaches another window's document, and
+  only its fetch and XMLHttpRequest go as an opaque origin's (its element
+  loads, sendBeacon, EventSource and WebSocket handshakes carry the site's
+  origin and cookies). A popup it opens with `noopener` in the features
+  string loses the inherited sandbox. In a frame without allow-scripts the
+  script policy also refuses what natively runs there on behalf of a
+  same-origin parent (`frame.contentWindow.eval(...)` throws EvalError) and
+  the host's `init.hooks` (compiled in the frame's realm); autofocus and
+  autoplay are not blocked there (the real frame allows scripts, which
+  turns them on); an XML document there has its scripts stripped rather
+  than refused by a policy. A form with `target="_top"` under
+  allow-top-navigation is refused by the browser where natively it
+  navigates the top. The sandbox is read when the document starts, not
+  when its navigation does, so a page that changes the attribute while the
+  navigation is in flight gets the new value. An `<object>`'s HTML document
+  is a blob: copy whose relative loads miss the worker, sandboxed or not.
 - A page that races its own parser against an async script loses that race
   more often through the proxy, because its parser-blocking scripts arrive
   later: each is rewritten in the service worker, and Chrome fetches every

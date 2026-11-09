@@ -211,7 +211,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		// the browser's SecurityError: a read or a write names the property,
 		// anything else only the frame
 		const accessError = (access?: 'read' | 'set', prop?: string | symbol) => {
-			const blocked = `Blocked a frame with origin "${this.client.url.url.origin}" from accessing a cross-origin frame.`;
+			const blocked = `Blocked a frame with origin "${this.client.origin}" from accessing a cross-origin frame.`;
 			const key =
 				typeof prop === 'symbol' ? `[${prop.description ?? ''}]` : prop;
 			return withStack(
@@ -438,6 +438,35 @@ export default class ContextModule extends Module<DocumentClient> {
 					})();
 		return wanted !== 'null' && wanted === receiverOrigin;
 	}
+	/**
+	 * Navigate `context` (a window behind a restricted stand-in) to the
+	 * page's `value`. A sandboxed document navigates only what it may
+	 * (DocumentClient.mayNavigate); the one it may but the browser would not
+	 * let it (the proxied top, an ancestor of its real frame) is navigated by
+	 * that window's own realm, as a navigation the target starts.
+	 */
+	#navigate(context: Context, value: urlLike, member: 'replace' | 'href') {
+		const destination = new URL(value, this.client.url.toString());
+		if (!this.client.mayNavigate(context))
+			throw this.client.navigationRefused(
+				member,
+				member === 'replace',
+				destination,
+			);
+		const routed = routeHTML(
+			new StompURL(destination, this.client.url),
+			this.client.url,
+			this.client.config,
+			false,
+			nestedRouteOf(context, this.client.names.client),
+		);
+		const target = (context as Record<string, any>)[
+			this.client.names.client
+		] as DocumentClient | undefined;
+		if (this.client.sandboxFlags !== null && target)
+			target.callIn(context.location.replace, context.location, [routed]);
+		else context.location.replace(routed);
+	}
 	restrictContext(context: Context): RestrictedContext {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		// a child that runs no Stomp yet (an iframe still on its initial
@@ -451,34 +480,12 @@ export default class ContextModule extends Module<DocumentClient> {
 		const restrictedLocation = this.restrictObject('Location', {
 			replace: {
 				value: (url: urlLike) => {
-					context.location.replace(
-						routeHTML(
-							new StompURL(
-								new URL(url, this.client.url.toString()),
-								this.client.url,
-							),
-							this.client.url,
-							this.client.config,
-							false,
-							nestedRouteOf(context, this.client.names.client),
-						),
-					);
+					this.#navigate(context, url, 'replace');
 				},
 			},
 			href: {
 				set: (value: urlLike) => {
-					context.location.replace(
-						routeHTML(
-							new StompURL(
-								new URL(value, this.client.url.toString()),
-								this.client.url,
-							),
-							this.client.url,
-							this.client.config,
-							false,
-							nestedRouteOf(context, this.client.names.client),
-						),
-					);
+					this.#navigate(context, value, 'href');
 				},
 			},
 		});
@@ -541,18 +548,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				location: {
 					get: () => restrictedLocation,
 					set: (value: urlLike) => {
-						context.location.replace(
-							routeHTML(
-								new StompURL(
-									new URL(value, this.client.url.toString()),
-									this.client.url,
-								),
-								this.client.url,
-								this.client.config,
-								false,
-								nestedRouteOf(context, this.client.names.client),
-							),
-						);
+						this.#navigate(context, value, 'href');
 					},
 				},
 				postMessage: {
@@ -634,7 +630,25 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		if (this.held.has(context)) return context;
 
+		// an opaque origin (a document the page sandboxed without
+		// allow-same-origin) is another origin to every other document, and
+		// every other document is to it
+		let opaque = false;
+		try {
+			opaque =
+				context !== this.client.global &&
+				(this.client.sandboxedOpaque ||
+					(
+						(context as Record<string, any>)[
+							this.client.names.client
+						] as DocumentClient
+					).sandboxedOpaque);
+		} catch (error) {
+			// a window being torn down
+		}
+
 		if (
+			!opaque &&
 			sameOrigin(
 				this.client.url.toString(),
 				(
@@ -656,7 +670,12 @@ export default class ContextModule extends Module<DocumentClient> {
 				(context as Record<string, any>)[this.client.names.client] as
 					DocumentClient | undefined
 			)?.standIns;
-			const key = originKey(this.client.url.toString());
+			// (never a sandboxed document's: its stand-ins hold its sandbox's
+			// limits, which another document of the site does not share)
+			const key =
+				this.client.sandboxFlags === null
+					? originKey(this.client.url.toString())
+					: null;
 			let restricted = key === null ? undefined : standIns?.get(key)?.deref();
 			if (!restricted) {
 				restricted = this.restrictContext(context);

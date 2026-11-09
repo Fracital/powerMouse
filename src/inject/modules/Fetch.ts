@@ -5,7 +5,7 @@ import {
 	routeXHR,
 } from '../../routeURL';
 import StompURL, { urlLike } from '../../StompURL';
-import { ABORT_HEADER } from '../../transport/messages';
+import { ABORT_HEADER, OPAQUE_HEADER } from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
 import { failsToParse } from '../nativeErrors';
@@ -203,6 +203,15 @@ export default class FetchModule extends Module<Client> {
 								once: true,
 							},
 						);
+				}
+				// a request of an opaque origin goes as one (OPAQUE_HEADER)
+				if (this.client.opaqueRequests) {
+					const headers = new Headers(init?.headers ?? undefined);
+					headers.set(OPAQUE_HEADER, '1');
+					init =
+						init instanceof Request
+							? new Request(init, { headers })
+							: { ...init, headers };
 				}
 				// [input, init]
 				//TODO: COOKIES

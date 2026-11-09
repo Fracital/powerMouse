@@ -30,7 +30,11 @@ import type {
 	RequestRule,
 	RouteContext,
 } from '../transport/messages';
-import { ABORT_HEADER, LOAD_HEADER } from '../transport/messages';
+import {
+	ABORT_HEADER,
+	LOAD_HEADER,
+	OPAQUE_HEADER,
+} from '../transport/messages';
 import { BUILD } from '../version';
 import { blobOriginOf } from './blobOrigins';
 import { HttpCache, isCacheable, mayKeep } from './cache';
@@ -391,6 +395,12 @@ function genericForward(
 		// a load the inject fetched for the page says what it stands for
 		const load = loadOf(serverRequest.headers.get(LOAD_HEADER));
 		requestHeaders.delete(LOAD_HEADER);
+		// a page's own request from an opaque origin (a document the page
+		// sandboxed without allow-same-origin): never a navigation
+		const opaque =
+			serverRequest.mode !== 'navigate' &&
+			serverRequest.headers.has(OPAQUE_HEADER);
+		requestHeaders.delete(OPAQUE_HEADER);
 
 		requestHeaders.set('user-agent', navigator.userAgent);
 		// the browser's network stack adds it after this worker, so no request
@@ -556,30 +566,35 @@ function genericForward(
 		// the page had user activation when this navigation (or the chain it
 		// redirects) began
 		const activated = !!(hint?.activated || previousHop?.user);
+		// an opaque origin is the same origin as nothing: its Origin is "null"
 		const sameOrigin =
-			!unknownBlob && initiator !== null && initiator.origin === url.url.origin;
+			!opaque &&
+			!unknownBlob &&
+			initiator !== null &&
+			initiator.origin === url.url.origin;
 
 		// the browser sends Origin on cross-origin CORS requests and on every
 		// request with a body
 		if (
-			initiator &&
+			(initiator || opaque) &&
 			((!sameOrigin && serverRequest.mode === 'cors') ||
 				!BODY_ILLEGAL.includes(serverRequest.method))
 		)
-			requestHeaders.set('origin', initiator.origin);
+			requestHeaders.set('origin', opaque ? 'null' : initiator!.origin);
 
 		// Sec-Fetch-Site: `none` for a navigation nobody in a page started (the
 		// host's, which the user typed or picked); a subresource whose client
 		// is not a proxied page is taken as its target's own, the benefit the
 		// credentials mode gives it too, except a blob: worker of a page this
 		// worker does not know (unknownBlob), which is another site
-		let site: Site = unknownBlob
-			? 'cross-site'
-			: initiator
-				? siteBetween(initiator, url.url)
-				: navigation
-					? 'none'
-					: 'same-origin';
+		let site: Site =
+			unknownBlob || opaque
+				? 'cross-site'
+				: initiator
+					? siteBetween(initiator, url.url)
+					: navigation
+						? 'none'
+						: 'same-origin';
 
 		// the jar applies SameSite against the request's site; a nested
 		// document's requests are judged by the top-level page as well (the
@@ -634,7 +649,7 @@ function genericForward(
 			serverRequest.credentials === 'omit'
 				? false
 				: serverRequest.credentials === 'same-origin'
-					? (initiator === null && !unknownBlob) || sameOrigin
+					? (initiator === null && !unknownBlob && !opaque) || sameOrigin
 					: true;
 		// no cookie to send is no Cookie header, as the browser sends it
 		const cookie = credentials

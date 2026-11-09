@@ -441,9 +441,17 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						this.client.nestedRoute,
 					);
 				// a new tab: the host's to open, when it said so (then the page
-				// sees null, as with a popup blocker)
+				// sees null, as with a popup blocker). Not for a sandboxed
+				// document's popup that keeps its sandbox: the browser refuses it
+				// without allow-popups, and opens it sandboxed like the page
+				// (the IFrame module starts it with the opener's flags)
+				const escapes =
+					this.client.sandboxFlags === null ||
+					(this.client.allows('allow-popups') &&
+						this.client.allows('allow-popups-to-escape-sandbox'));
 				if (
 					routable &&
+					escapes &&
 					!['_self', '_top', '_parent', '_unfencedtop'].includes(
 						name.toLowerCase(),
 					) &&

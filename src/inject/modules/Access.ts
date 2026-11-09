@@ -142,7 +142,10 @@ export default class AccessModule extends Module<Client> {
 							typeof object === 'function') &&
 						this.client.names.globalProxy in object
 					) {
-						return object[this.client.names.globalProxy];
+						const standIn = object[this.client.names.globalProxy];
+						return key === 'location' && this.client.gateLocation
+							? this.client.gateLocation(object, standIn)
+							: standIn;
 					}
 				} catch (error) {
 					// error was thrown during an accessor
@@ -189,6 +192,8 @@ export default class AccessModule extends Module<Client> {
 						} catch (error) {
 							// a cross-origin window: nothing of ours to delegate to
 						}
+						if (foreign && key === 'location')
+							this.client.gateNavigation?.(target, righthand);
 						if (foreign)
 							return target[this.client.names.access]!.set2(
 								target,

@@ -24,6 +24,7 @@ import NavigationHintModule from './modules/NavigationHint';
 import NavigatorModule from './modules/Navigator';
 import OpenModule from './modules/Open';
 import ReadbackModule from './modules/Readback';
+import SandboxModule from './modules/Sandbox';
 import StorageModule from './modules/Storage';
 import SyncModule from './modules/Sync';
 import TokenListsModule from './modules/TokenLists';
@@ -49,6 +50,8 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(StorageModule);
 	client.addModule(XMLHttpRequestModule);
 	client.addModule(CookiesModule);
+	// after Storage, Cookies and IndexedDB: an opaque document's storage throws
+	client.addModule(SandboxModule);
 	// Framing before Context: it needs the native MessageEvent.source getter
 	client.addModule(FramingModule);
 	client.addModule(ContextModule);
