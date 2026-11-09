@@ -61,11 +61,12 @@ async function harnessState(context) {
 }
 
 /**
- * Wait until every name in `expected` landed (or `want` landings for a
- * native run, which does not know them yet), then until nothing changes
- * for a while: a reload loop or a late write shows in what is returned.
+ * Wait until every case frame loaded and every name in `expected` landed
+ * (a native run, which does not know them yet, passes none), then until
+ * nothing changes for a while: a reload loop or a late write shows in what
+ * is returned.
  */
-async function settle(context, expected, timeout = 60000) {
+async function settle(context, expected, timeout = 120000) {
 	const start = Date.now();
 	let last = '';
 	let stableSince = Date.now();
@@ -78,9 +79,13 @@ async function settle(context, expected, timeout = 60000) {
 			last = snapshot;
 			stableSince = Date.now();
 		}
+		// every frame loaded once (the harness starts a few at a time)
+		const loaded =
+			state !== null &&
+			state.names.every((name) => (state.loads[name] ?? 0) > 0);
 		const all =
-			expected && expected.every((name) => found.some(([n]) => n === name));
-		if ((expected ? all : true) && Date.now() - stableSince > 3000)
+			!expected || expected.every((name) => found.some(([n]) => n === name));
+		if (loaded && all && Date.now() - stableSince > 3000)
 			return { found, state };
 	}
 	return { found: await landings(context), state: await harnessState(context) };
@@ -126,26 +131,63 @@ ok(
 	JSON.stringify({ names, landed: [...nativeLanded] }),
 );
 
+/**
+ * The harness (`query` picks cases) in a demo page of its own: what landed,
+ * the load counts, the requests that went straight to the fixture, and the
+ * URL of each case's frame (a frame keeps its name over navigations)
+ */
+async function proxiedRun(base, query, expected, timeout) {
+	const page = await openDemo(browser, base);
+	const recorder = await recordRequests(page.context());
+	await submitLanding(page, `${harness}${query}`);
+	const result = await settle(page.context(), expected, timeout);
+	result.raw = recorder
+		.raw()
+		.filter((entry) => new URL(entry.url).host === host)
+		.map((entry) => entry.url);
+	result.frames = {};
+	for (const frame of page.frames())
+		if (frame.name().startsWith('case-'))
+			(result.frames[frame.name().slice(5)] ??= []).push(
+				frame.url().slice(0, 100),
+			);
+	await page.close();
+	return result;
+}
+
 for (const [mode, base] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
 ]) {
-	const page = await openDemo(browser, base);
-	const context = page.context();
-	const recorder = await recordRequests(context);
-	await submitLanding(page, harness);
 	const expected = names.filter((name) => nativeLanded.has(name));
-	const proxied = await settle(context, expected);
-	const raw = () =>
-		recorder
-			.raw()
-			.filter((entry) => new URL(entry.url).host === host)
-			.map((entry) => entry.url);
+	const proxied = await proxiedRun(base, '', expected, 60000);
+	// A frame load through the proxy now and then never completes while
+	// eighty frames load through one controller (seen for a frame of any
+	// case, a nested one most often): a case whose frame never loaded runs
+	// again alone, and the report says so
+	const retried = (proxied.state?.names ?? names).filter(
+		(name) => !proxied.state?.loads?.[name],
+	);
+	for (const name of retried) {
+		const again = await proxiedRun(
+			base,
+			`?only=${name}`,
+			nativeLanded.has(name) ? [name] : [],
+			30000,
+		);
+		proxied.found = [
+			...proxied.found.filter(([n]) => n !== name),
+			...again.found.filter(([n]) => n === name),
+		];
+		if (proxied.state) proxied.state.loads[name] = again.state?.loads?.[name];
+		proxied.raw.push(...again.raw);
+		proxied.frames[name] = again.frames[name];
+	}
 	for (const name of names) {
 		const landed = proxied.found.filter(([n]) => n === name);
 		const nativeLoads = native.state?.loads?.[name];
 		const loads = proxied.state?.loads?.[name];
-		const leaked = raw().filter((url) => url.includes(`c=${name}&`));
+		const leaked = proxied.raw.filter((url) => url.includes(`c=${name}&`));
 		ok(
 			`${mode}: ${name} ${nativeLanded.has(name) ? 'lands on its routed URL' : 'navigates nothing'}, as natively`,
 			(nativeLanded.has(name)
@@ -153,13 +195,14 @@ for (const [mode, base] of [
 				: landed.length === 0 && loads === nativeLoads) && leaked.length === 0,
 			JSON.stringify({
 				landed: landed.map(([, url]) => url.slice(0, 100)),
+				frame: proxied.frames[name],
 				loads,
 				nativeLoads,
 				leaked,
+				...(retried.includes(name) ? { retried: true } : {}),
 			}),
 		);
 	}
-	await page.close();
 
 	// the cases that navigate the top page: one page each; the host page
 	// itself (the real top) stays where it is

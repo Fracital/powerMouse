@@ -5,7 +5,9 @@
 	<script>
 		// A frame per case of location-writes.js (`?only=<name>` runs one, for
 		// the cases that navigate the top page); __loads counts each frame's
-		// loads, so a write that navigates nothing natively shows a reload
+		// loads, so a write that navigates nothing natively shows a reload.
+		// A few frames start at a time, the next when one loads: eighty frames
+		// loading at once through one controller starve each other
 		(function () {
 			window.__loads = {};
 			var only = new URLSearchParams(location.search).get('only');
@@ -16,15 +18,28 @@
 						return !entry.child && !entry.alone;
 					});
 			window.__names = names;
-			names.forEach(function (name) {
+			var next = 0;
+			function start() {
+				if (next >= names.length) return;
+				var name = names[next++];
+				var started = false;
+				var after = function () {
+					if (started) return;
+					started = true;
+					start();
+				};
 				var frame = document.createElement('iframe');
 				frame.name = 'case-' + name;
 				frame.onload = function () {
 					window.__loads[name] = (window.__loads[name] || 0) + 1;
+					after();
 				};
+				// a case whose first document never loads still lets one start
+				setTimeout(after, 3000);
 				frame.src = 'location-write.html?c=' + name;
 				document.body.append(frame);
-			});
+			}
+			for (var i = 0; i < 6; i++) start();
 		})();
 	</script>
 </body>
