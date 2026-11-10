@@ -31,9 +31,10 @@ import {
 } from '../lib.mjs';
 
 const FRAMES = Number(process.env.FRAMES) || 60;
-// a ceiling well above what this build measures, so a slow runner passes:
-// it catches a change that puts the whole cost back
-const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1700;
+// a ceiling above what this build measures (1,060 KB) that a frame which
+// evaluates the rewriter library again (about +230 KB) or ast-types
+// (+450 KB) goes past
+const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1150;
 const ROUTE = /\/stomp\/[\w-]+\/html\//;
 const page = 'pages/frame-memory.html';
 const fixture = new URL(FIXTURE);
