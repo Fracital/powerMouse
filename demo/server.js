@@ -370,8 +370,10 @@ app.get('/api/commits', async (req, res) => {
 // The page, its scripts and the Stomp bundles change with every deploy and
 // are fetched once per visit anyway: no-cache makes browsers revalidate and
 // keeps CDNs (Cloudflare caches .js by default) from serving a stale service
-// worker or shell against a new build. The transports and fonts are versioned
-// by npm and may be cached.
+// worker or shell against a new build. The transports are too: their URLs
+// never change, so a day of max-age kept the previous epoxy (TLS, HTTP/2,
+// HTTP/3) in browsers and Cloudflare for a day after a pin bump. Fonts never
+// change and may be cached.
 const fresh = {
 	setHeaders: (res) => res.set('Cache-Control', 'no-cache'),
 };
@@ -387,8 +389,8 @@ app.use(
 		fresh,
 	),
 );
-app.use('/epoxy/', express.static(transportDir('epoxy-transport'), cached));
-app.use('/libcurl/', express.static(transportDir('libcurl-transport'), cached));
+app.use('/epoxy/', express.static(transportDir('epoxy-transport'), fresh));
+app.use('/libcurl/', express.static(transportDir('libcurl-transport'), fresh));
 // self-hosted font for the page (no Google Fonts round-trip)
 app.use(
 	'/fonts/montserrat/',
