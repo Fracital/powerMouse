@@ -343,6 +343,10 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A request a host rule sends with another Origin (the host's own, for a
+  site that answers only that) is checked against that origin by the CORS
+  check, not the page's: the site's Access-Control-Allow-Origin names the
+  Origin it was sent, and the host vouched for it. (rules suite.)
 - A page can no longer pass its own read for one of the proxy's copies by
   replacing `Headers.prototype[Symbol.iterator]` or the `Request.prototype`
   `headers` getter: the browser read the request's headers through them

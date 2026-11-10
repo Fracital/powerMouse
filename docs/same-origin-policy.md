@@ -150,6 +150,9 @@ Filled in commit by commit; see the CHANGELOG for each.
   document's (a `javascript:` URL's, a blob: or data: document's, recorded
   when the worker serves it), kept in IndexedDB so a service worker restart
   does not turn them into opaque origins (`src/server/blobOrigins.ts`).
+  A host rule that sets the request's Origin (WS1's host Origin for a
+  configured site) makes the CORS check and the preflight speak for that
+  origin.
 
 - **Canvas tainting** (section 2, sop-escapes: the 8 cases read as natively
   in both modes, and three more that must not taint or must: an SVG

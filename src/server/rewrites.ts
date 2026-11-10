@@ -1051,6 +1051,15 @@ function genericForward(
 				);
 			applyHeaderRule(requestHeaders, rule.action.requestHeaders);
 		}
+		// the origin the CORS protocol speaks for: the initiator's, unless a
+		// host's rule sent the site another Origin (the host's own, for a site
+		// that only answers it): the site's answer names that one, and the
+		// host vouched for it
+		const ruled =
+			rule && rule.action !== 'block' && rule.action.requestHeaders
+				? requestHeaders.get('origin')
+				: null;
+		const corsOrigin = ruled ?? policyOrigin;
 
 		// the body goes out whole, as a Blob (the browser keeps a large one
 		// out of the worker's memory): a fetch event's body is always a
@@ -1088,7 +1097,7 @@ function genericForward(
 			if (
 				needsPreflight(serverRequest.method, unsafe) &&
 				!preflightCached(
-					policyOrigin!,
+					corsOrigin!,
 					url.toString(),
 					credentialsIncluded,
 					serverRequest.method,
@@ -1098,7 +1107,7 @@ function genericForward(
 				const preflightHeaders = new Headers({
 					accept: '*/*',
 					'access-control-request-method': serverRequest.method,
-					origin: policyOrigin!,
+					origin: corsOrigin!,
 					'user-agent': requestHeaders.get('user-agent') ?? '',
 				});
 				if (unsafe.length)
@@ -1133,7 +1142,7 @@ function genericForward(
 					await answer.body?.cancel().catch(() => {});
 					allowed = preflightAllows(
 						answer,
-						policyOrigin!,
+						corsOrigin!,
 						url.toString(),
 						credentialsIncluded,
 						serverRequest.method,
@@ -1350,7 +1359,7 @@ function genericForward(
 		// or site
 		if (
 			corsChecked &&
-			!corsCheck(response.headers, policyOrigin!, credentialsIncluded)
+			!corsCheck(response.headers, corsOrigin!, credentialsIncluded)
 		) {
 			await response.body?.cancel().catch(() => {});
 			return refuse('blocked by CORS policy');
