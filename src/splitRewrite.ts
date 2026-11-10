@@ -217,6 +217,11 @@ function calledFunction(expression: any): any {
  * rewriter decides by the code itself and by names, never by the scope a
  * statement stands in, so a run is rewritten the same on its own (inside a
  * function and a block, under the same strictness) as in the whole.
+ *
+ * With no such function, the program's own statements are the list, when
+ * they are many: CNN's 3.5 MB inline script is one module chunk after
+ * another (`(self.modules=self.modules||[]).push(...)`), 1.4 s in one
+ * worker, which the page's first response waited for.
  */
 function planStatements(
 	script: string,
@@ -232,11 +237,14 @@ function planStatements(
 				statement.range[1] - statement.range[0] > call.range[1] - call.range[0])
 		)
 			call = statement;
-	if (!call || call.range[1] - call.range[0] < script.length / 2) return null;
-	const fn = calledFunction(call.expression);
+	const fn =
+		call && call.range[1] - call.range[0] >= script.length / 2
+			? calledFunction(call.expression)
+			: null;
+	const scope = fn ? fn.body : tree;
 	// two runs per worker: a statement (a module's try block) is not cut,
 	// and smaller runs even out what each worker gets
-	const target = (fn.body.range[1] - fn.body.range[0]) / (parts * 2);
+	const target = (scope.range[1] - scope.range[0]) / (parts * 2);
 	const groups: [number, number][] = [];
 	const take = (list: any[]) => {
 		let start = -1;
@@ -260,8 +268,9 @@ function planStatements(
 		}
 		close();
 	};
-	// a directive prologue of the function's own stays with the skeleton
-	const body: any[] = fn.body.body;
+	// a directive prologue of the function's own (or the program's) stays
+	// with the skeleton
+	const body: any[] = scope.body;
 	let first = 0;
 	while (
 		first < body.length &&
@@ -269,6 +278,8 @@ function planStatements(
 		typeof body[first].directive === 'string'
 	)
 		first++;
+	// a program of a few statements is no list of modules
+	if (!fn && body.length - first < parts * 2) return null;
 	take(body.slice(first));
 	if (groups.length < 2) return null;
 
@@ -277,7 +288,7 @@ function planStatements(
 	return {
 		kind: 'statements',
 		groups,
-		strict: strict(tree.body) || strict(fn.body.body),
+		strict: strict(tree.body) || (fn !== null && strict(fn.body.body)),
 		token,
 		key: sourceKey(script),
 	};

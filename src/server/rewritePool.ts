@@ -143,16 +143,20 @@ export class RewritePool {
 	}
 	/**
 	 * A document's inline script, rewritten as the document's client would
-	 * (with its preamble), by the worker with the least in hand: null when
-	 * none is ready or answered in time
+	 * (with its preamble): split across the workers when it is a shape the
+	 * split knows (its preamble goes with the skeleton, where the whole's
+	 * directive prologue is), else by the worker with the least in hand.
+	 * Null when none is ready or answered in time.
 	 */
-	rewriteInline(
+	async rewriteInline(
 		script: string,
 		url: StompURL,
 		config: Config,
 		type: ScriptType,
 		preamble: string,
 	): Promise<string | null> {
+		const parts = await this.#split(script, url, config, type, preamble);
+		if (parts !== null) return parts;
 		return this.#rewriteOne(
 			script,
 			url,
@@ -177,6 +181,7 @@ export class RewritePool {
 		url: StompURL,
 		config: Config,
 		type: ScriptType,
+		preamble = '',
 	): Promise<string | null> {
 		if (type !== 'generic' || script.length < SPLIT_MIN) return null;
 		const live = this.#members.filter(
@@ -209,6 +214,7 @@ export class RewritePool {
 						type,
 						true,
 						i === 0 ? skeletonSource : partSources[i - 1],
+						i === 0 ? preamble : undefined,
 					);
 				}),
 		);

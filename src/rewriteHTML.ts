@@ -12,7 +12,7 @@ import {
 } from './routeURL';
 import type { ControlInfo } from './serviceWorkerTypes';
 import StompURL from './StompURL';
-import { SW_CONTROL, WORKER_BASE } from './transport/messages';
+import { SHELL_MARKUP, SW_CONTROL, WORKER_BASE } from './transport/messages';
 
 /**
  * The route of a document. `form`: a GET form's action, whose query the
@@ -203,12 +203,71 @@ export function modifyHTML(
 	prewritten?: Prewritten | null,
 	upgradeInsecure = false,
 ): string {
+	const { head, tail } = shell(
+		script,
+		url,
+		config,
+		base,
+		referrer,
+		nonce,
+		control,
+		upgradeInsecure,
+		false,
+	);
+	return head + tail(prewritten);
+}
+
+/**
+ * The shell of modifyHTML for a document the service worker serves, in two
+ * pieces: `head`, which the page can have at once (the inject bundle's
+ * script, and the markup, kept in a global of the shell), and `tail`, which
+ * creates the client and hands it the markup and the prewritten table once
+ * the rewrite workers are done with it. The browser loads and runs the
+ * inject bundle while they work.
+ */
+export function modifyHTMLStreamed(
+	script: string,
+	url: StompURL,
+	config: Config,
+	referrer?: ReferrerInfo,
+	control?: ControlInfo,
+	upgradeInsecure = false,
+): { head: string; tail: (prewritten: Prewritten | null) => string } {
+	return shell(
+		script,
+		url,
+		config,
+		false,
+		referrer,
+		undefined,
+		control,
+		upgradeInsecure,
+		true,
+	);
+}
+
+function shell(
+	script: string,
+	url: StompURL,
+	config: Config,
+	base: boolean,
+	referrer: ReferrerInfo | undefined,
+	nonce: string | null | undefined,
+	control: ControlInfo | undefined,
+	upgradeInsecure: boolean,
+	/** the markup goes in the head, the client takes it from the global */
+	streamed: boolean,
+): { head: string; tail: (prewritten?: Prewritten | null) => string } {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	const names = helperNames(config);
+	const markupKey = JSON.stringify(SHELL_MARKUP);
+	const markup = () => escapeText(JSON.stringify(script));
 	const controlled = control
 		? `globalThis[${JSON.stringify(SW_CONTROL)}] = ${JSON.stringify(control).replace(/</g, '\\u003c')};\n\t`
 		: '';
-	const inject = `if (typeof globalThis.createClient !== 'function') {
+	const inject = (
+		prewritten?: Prewritten | null,
+	) => `if (typeof globalThis.createClient !== 'function') {
 	document.write("Stomp bundle did not load. See devtools output for more information.");
 } else {
 	${controlled}if (!(${JSON.stringify(names.client)} in globalThis))
@@ -228,7 +287,11 @@ ${referred(names.client, referrer)}${
 	}
 
 	try {
-		${names.client}.loadHTML(${escapeText(JSON.stringify(script))}${
+		${names.client}.loadHTML(${
+			streamed
+				? `(() => { const markup = globalThis[${markupKey}]; delete globalThis[${markupKey}]; return markup; })()`
+				: markup()
+		}${
 			prewritten && (prewritten.scripts.length || prewritten.styles.length)
 				? `, ${escapeText(JSON.stringify(JSON.stringify(prewritten)))}`
 				: ''
@@ -243,7 +306,14 @@ ${referred(names.client, referrer)}${
 	const baseScript = base
 		? `<script${attribute}>globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(url.toString()).replace(/</g, '\\u003c')};</script>`
 		: '';
-	return `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${baseScript}<script${attribute} src="${injectDocumentJS(url, config)}"></script><script${attribute}>${inject}</script></body></html>`;
+	const kept = streamed
+		? `<script${attribute}>globalThis[${markupKey}] = ${markup()};</script>`
+		: '';
+	return {
+		head: `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${baseScript}<script${attribute} src="${injectDocumentJS(url, config)}"></script>${kept}`,
+		tail: (prewritten) =>
+			`<script${attribute}>${inject(prewritten)}</script></body></html>`,
+	};
 }
 
 /** the mimes an XML document is served under and parsed with */

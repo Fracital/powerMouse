@@ -158,6 +158,12 @@ export const WORKER_BASE = '$stomp$workerBase';
  */
 export const WORKER_PARTITION = '$stomp$workerPartition';
 /**
+ * global of a document's streamed shell (modifyHTMLStreamed): the page's
+ * markup, sent before the worker's prewritten table, taken (and deleted)
+ * by the script that loads it once the table follows
+ */
+export const SHELL_MARKUP = '$stomp$shellMarkup';
+/**
  * dedicated worker -> its Worker object: where an uncaught error the browser
  * located inside the inject really comes from (the page's call site), sent
  * before the browser's report of it, which follows on the same queue

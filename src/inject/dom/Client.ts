@@ -1073,11 +1073,19 @@ export default class DocumentClient extends Client {
 		return this.innerHTML(element);
 	}
 	loadHTML(script: string, prewritten?: string) {
-		// the document's inline scripts and styles as the worker rewrote them
+		// the shell escaped the markup with escapeText (modifyHTML), which
+		// writes a no-break space as &nbsp;: an XML-level decode leaves that
+		// as text, and every U+00A0 in a script, a style or a JSON payload
+		// read "&nbsp;" (BBC's __NEXT_DATA__, so React's hydration failed)
+		const markup = unescapeText(script);
+		// the document's inline scripts and styles as the worker rewrote them,
+		// named by where their texts stand in the markup
 		if (prewritten !== undefined)
 			try {
 				this.#prewritten = new PrewrittenTable(
 					JSON.parse(unescapeText(prewritten)) as Prewritten,
+					markup,
+					this.names.access,
 				);
 			} catch (error) {
 				// not a table: everything is rewritten here
@@ -1087,11 +1095,7 @@ export default class DocumentClient extends Client {
 		this.refreshSandbox();
 		setGlobalParsingState(this.global, 'parsingBeforeWrite');
 
-		// the shell escaped the markup with escapeText (modifyHTML), which
-		// writes a no-break space as &nbsp;: an XML-level decode leaves that
-		// as text, and every U+00A0 in a script, a style or a JSON payload
-		// read "&nbsp;" (BBC's __NEXT_DATA__, so React's hydration failed)
-		const parsed = parseHTML(unescapeText(script), this.global.document);
+		const parsed = parseHTML(markup, this.global.document);
 		if (parsed.documentElement) {
 			if (this.allows('allow-scripts'))
 				textifyNoscript(parsed.documentElement, this.innerHTML);

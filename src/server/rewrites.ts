@@ -26,6 +26,7 @@ import {
 import {
 	hasBase,
 	inlineSources,
+	packRewrite,
 	scriptPreamble,
 	type Prewritten,
 } from '../prewrite';
@@ -37,6 +38,7 @@ import {
 import { modifyCSS, rewriteCSSValueURLs, routeCSS } from '../rewriteCSS';
 import {
 	modifyHTML,
+	modifyHTMLStreamed,
 	modifyRefresh,
 	modifyXML,
 	nestedMarkOf,
@@ -2133,12 +2135,17 @@ export function registerRewrites(
 	// the scripts by the rewrite workers, side by side, and kept in the
 	// rewrite cache when the document may be kept; null when no worker is
 	// live (the worker's own thread is not spent on them: the page rewrites
-	// them as before)
-	const prewrite = async (
+	// them as before). `dispatched`: every script is with a worker (or came
+	// from the cache), so this thread may do other work while they rewrite;
+	// `finish` rewrites the styles here and waits for the scripts
+	const prewrite = (
 		markup: string,
 		url: StompURL,
 		keep: boolean,
-	): Promise<Prewritten | null> => {
+	): {
+		dispatched: Promise<void>;
+		finish: () => Promise<Prewritten>;
+	} | null => {
 		const pool = rewriter.pool;
 		if (!pool?.live || hasBase(markup)) return null;
 		const { scripts, styles } = inlineSources(markup);
@@ -2146,11 +2153,21 @@ export function registerRewrites(
 		const config = rewriter.config;
 		const rewrites = keep ? rewriter.rewrites : undefined;
 		const encoder = new TextEncoder();
-		const done = await Promise.all(
-			scripts.map(
-				async ([kind, source]): Promise<
-					[kind: 'c' | 'm', source: string, output: string] | null
-				> => {
+		const dispatches: Promise<void>[] = [];
+		const access = helperNames(config).access;
+		const outputs = scripts.map(
+			async ([kind, source, start, end]): Promise<
+				Prewritten['scripts'][number] | null
+			> => {
+				const entry = (output: string): Prewritten['scripts'][number] => [
+					kind,
+					start,
+					end,
+					...packRewrite(kind, source, output, access),
+				];
+				let sent!: () => void;
+				dispatches.push(new Promise((resolve) => (sent = resolve)));
+				try {
 					const type: ScriptType = kind === 'm' ? 'genericModule' : 'generic';
 					const preamble = kind === 'm' ? '' : scriptPreamble(source);
 					const key = rewrites
@@ -2167,36 +2184,49 @@ export function registerRewrites(
 							)
 						: null;
 					const kept = key !== null ? await rewrites!.match(key) : null;
-					if (kept !== null) return [kind, source, await kept.text()];
-					const output = await pool.rewriteInline(
+					if (kept !== null) return entry(await kept.text());
+					const rewriting = pool.rewriteInline(
 						source,
 						url,
 						config,
 						type,
 						preamble,
 					);
+					sent();
+					const output = await rewriting;
 					if (output === null || output === source) return null;
 					if (key !== null) void rewrites!.put(key, output);
-					return [kind, source, output];
-				},
-			),
-		);
-		const prewritten: Prewritten = {
-			url: url.toString(),
-			scripts: done.filter(
-				(entry): entry is [kind: 'c' | 'm', source: string, output: string] =>
-					entry !== null,
-			),
-			// as the client's prepareStyleText makes them
-			styles: styles.map((source) => {
-				try {
-					return [source, modifyCSS(source, url)];
-				} catch (error) {
-					return [source, rewriteCSSValueURLs(source, url)];
+					return entry(output);
+				} finally {
+					sent();
 				}
-			}),
+			},
+		);
+		// a failure is finish's to report
+		for (const output of outputs) output.catch(() => {});
+		return {
+			dispatched: Promise.all(dispatches).then(() => {}),
+			finish: async () => {
+				// as the client's prepareStyleText makes them
+				const styleOutputs = styles.map(
+					([source, start, end]): Prewritten['styles'][number] => {
+						try {
+							return [start, end, modifyCSS(source, url)];
+						} catch (error) {
+							return [start, end, rewriteCSSValueURLs(source, url)];
+						}
+					},
+				);
+				const done = await Promise.all(outputs);
+				return {
+					url: url.toString(),
+					scripts: done.filter(
+						(entry): entry is Prewritten['scripts'][number] => entry !== null,
+					),
+					styles: styleOutputs,
+				};
+			},
 		};
-		return prewritten;
 	};
 	const scriptTypeFactory = (type: ScriptType) =>
 		genericForward(
@@ -2407,26 +2437,67 @@ export function registerRewrites(
 					metaUpgradesInsecureRequests(markup);
 				if (upgradeInsecure && request.navigation)
 					rememberUpgradeInsecure(request.routed, request.clientId);
-				return modifyHTML(
+				const job = prewrite(
+					markup,
+					url,
+					mayKeep({
+						method: request.method,
+						requestHeaders: request.headers,
+						status: response.status,
+						responseHeaders: response.headers,
+					}),
+				);
+				if (!job)
+					return modifyHTML(
+						markup,
+						url,
+						rewriter.config,
+						false,
+						referrer,
+						undefined,
+						note.serviceWorker,
+						null,
+						upgradeInsecure,
+					);
+				// The page does not wait for the rewrite workers: the shell's
+				// first part (the inject bundle's script and the markup) goes out
+				// as soon as they have the scripts, and the browser loads and
+				// runs the bundle while they rewrite (CNN's first visit waited
+				// 1.9 s for its first byte). The part that hands the client the
+				// markup and the table follows when the table is done; a table
+				// that could not be made leaves every script to the client, as
+				// with no worker.
+				await job.dispatched;
+				const { head, tail } = modifyHTMLStreamed(
 					markup,
 					url,
 					rewriter.config,
-					false,
 					referrer,
-					undefined,
 					note.serviceWorker,
-					await prewrite(
-						markup,
-						url,
-						mayKeep({
-							method: request.method,
-							requestHeaders: request.headers,
-							status: response.status,
-							responseHeaders: response.headers,
-						}),
-					),
 					upgradeInsecure,
 				);
+				const first = UTF8.encode(head);
+				return new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(first);
+						// after the response is on its way: the styles are
+						// rewritten on this thread
+						setTimeout(async () => {
+							let table: Prewritten | null = null;
+							try {
+								table = await job.finish();
+							} catch (error) {
+								console.warn('Stomp: no prewritten table:', error);
+							}
+							try {
+								controller.enqueue(UTF8.encode(tail(table)));
+								controller.close();
+							} catch (error) {
+								// the page went away
+							}
+						});
+					},
+				});
 			},
 			// a nested document redirected stays nested, in its partition
 			(resource, url, kind) =>

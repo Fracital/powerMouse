@@ -13,8 +13,10 @@
 // most two thirds as long prewritten. A script inside a table, parsed again
 // in a table section's context by innerHTML (fragment-context) and run as a
 // copy, still finds the worker's rewrite by its exact text, and a copy of
-// other text falls back to the page's. Same-origin mode (the real text is
-// read through the host's realm).
+// other text falls back to the page's. With workers the shell is streamed
+// (the markup before the table, modifyHTMLStreamed) and the copy of the
+// markup it keeps is gone before the page runs. Same-origin mode (the real
+// text is read through the host's realm).
 import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
@@ -91,6 +93,10 @@ const readSmall = () => {
 		texts: [...query.call(document, 'script, style')].map((node) =>
 			text.call(node),
 		),
+		// the streamed shell's copy of the markup (modifyHTMLStreamed)
+		shellMarkup: Reflect.getOwnPropertyDescriptor(window, '$stomp$shellMarkup')
+			? 'present'
+			: 'gone',
 	};
 };
 
@@ -105,6 +111,13 @@ for (const [name, result] of [
 		JSON.stringify(result?.pw) === JSON.stringify(native),
 		JSON.stringify({ native, proxied: result?.pw }),
 	);
+// with workers the service worker streams the shell: the markup goes out
+// first, in a global the shell's next script takes before the page runs
+ok(
+	'the streamed shell leaves no copy of the markup in the page',
+	withWorkers?.shellMarkup === 'gone' && inPage?.shellMarkup === 'gone',
+	JSON.stringify([withWorkers?.shellMarkup, inPage?.shellMarkup]),
+);
 // The worker's rewrite carries the script's text for its functions (a
 // holder statement), where the page's keeps it in memory: in the page the
 // module and the copied script show it only when the worker made them

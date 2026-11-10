@@ -27,7 +27,7 @@ export { modifyCSS } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 export { keepEmbedded, originalSource, sourceKey } from ${JSON.stringify(`${root}src/functionSource.ts`)};
-export { inlineSources, PrewrittenTable, scriptPreamble } from ${JSON.stringify(`${root}src/prewrite.ts`)};
+export { inlineSources, packRewrite, PrewrittenTable, scriptPreamble } from ${JSON.stringify(`${root}src/prewrite.ts`)};
 `,
 );
 const bundle = `${OUT}rewriter-unit.mjs`;
@@ -61,6 +61,7 @@ const {
 	sourceKey,
 	originalSource,
 	inlineSources,
+	packRewrite,
 	PrewrittenTable,
 	scriptPreamble,
 } = await import(`${bundle}?${Date.now()}`);
@@ -864,15 +865,18 @@ console.warn = warn;
 	// runtime form (an IIFE declaring its module table) and a chunk
 	// (`.push([[ids], {modules}])`); what is not that shape, or has a module
 	// that could see a name of the window's bound around it, is not split
-	const whole = (script) => modifyJS(script, url, config, 'generic');
-	const split = (script, parts) => {
+	// `preamble`: a document's inline script, rewritten with its client's
+	// preamble, which the skeleton carries (rewritePool's rewriteInline)
+	const whole = (script, preamble = '') =>
+		modifyJS(script, url, config, 'generic', preamble);
+	const split = (script, parts, preamble = '') => {
 		const plan = planSplit(script, parts);
 		if (!plan) return null;
 		const sources = splitSources(script, plan);
-		const part = (text, source) =>
-			modifyJS(text, url, config, 'generic', '', true, source);
+		const part = (text, source, first = '') =>
+			modifyJS(text, url, config, 'generic', first, true, source);
 		return stitch(
-			part(sources.skeleton, sources.skeletonSource),
+			part(sources.skeleton, sources.skeletonSource, preamble),
 			sources.parts.map((text, i) => part(text, sources.partSources[i])),
 			plan,
 		);
@@ -907,11 +911,30 @@ console.warn = warn;
 			(_, i) => `function f${i}(){return eval("${i}")}_.c${i}=f${i};`,
 		).join('') +
 		'}catch(e){}}).call(this,{});';
+	// a program that is one module chunk after another (CNN's 3.5 MB inline
+	// script): split into runs of its own statements, with a "use strict"
+	// that is no directive, declarations, `this`, and statements a line break
+	// ends without a semicolon
+	const program =
+		'window.modules=[];var shared=this;function helper(){return top}' +
+		Array.from({ length: 40 }, (_, i) =>
+			i === 7
+				? `"use strict";(self.modules=self.modules||[]).push([["${i}"],{${i}:(i,s,E)=>{s.exports=[location.href,o[k${i}]]}}])\n`
+				: i % 6 === 0
+					? `shared.m${i}=window.parent\n`
+					: `(self.modules=self.modules||[]).push([["${i}"],{${i}:(i,s,E)=>{s.exports=[location.href,top,o[k${i}],w.postMessage(${i},"*"),eval("${i}")]}}]);`,
+		).join('') +
+		'mount(helper());';
+	ok(
+		'a program of module chunks is split, into runs of its statements',
+		planSplit(program, 4)?.kind === 'statements',
+	);
 	for (const [name, script] of [
 		['the runtime form', runtime],
 		['a chunk', chunk],
 		['a Closure module', closure],
 		['a sloppy Closure-shaped module', sloppy],
+		['a program of module chunks', program],
 	])
 		for (const parts of [2, 4])
 			ok(
@@ -919,6 +942,17 @@ console.warn = warn;
 				split(script, parts) === whole(script),
 				`${String(split(script, parts)).slice(0, 120)}`,
 			);
+	// a document's inline script: its preamble is the skeleton's
+	for (const [name, script] of [
+		['a program of module chunks', program],
+		['a Closure module', closure],
+	])
+		ok(
+			`${name} inline, split in 4, is the whole's rewrite with its preamble byte for byte`,
+			split(script, 4, scriptPreamble(script)) ===
+				whole(script, scriptPreamble(script)),
+			`${String(split(script, 4, scriptPreamble(script))).slice(0, 120)}`,
+		);
 	const notSplit = [
 		[
 			'an IIFE that binds location around its modules',
@@ -1052,35 +1086,85 @@ console.warn = warn;
 	].join('\n');
 	const found = inlineSources(markup);
 	ok(
-		'the inline scripts that run, by kind, each text once, and the styles',
+		'the inline scripts that run, by kind, each text once, and the styles, with where each first stands in the markup',
 		JSON.stringify(found.scripts.map(([kind]) => kind)) ===
-			JSON.stringify(['c', 'm', 'c', 'c']) && found.styles.length === 1,
+			JSON.stringify(['c', 'm', 'c', 'c']) &&
+			found.styles.length === 1 &&
+			found.scripts.every(
+				([, source, start, end]) => markup.slice(start, end) === source,
+			) &&
+			found.styles.every(
+				([source, start, end]) => markup.slice(start, end) === source,
+			) &&
+			found.scripts[0][2] === markup.indexOf('var a'),
 		JSON.stringify(found),
 	);
+	// The table names a text by where it stands in the markup, and carries a
+	// rewrite without the preamble and the holder statement, which the client
+	// makes again from the text: each rewrite comes back byte for byte, as
+	// the document's own and bare, classic and module, functions or none
 	const sources = [
-		'var a = location.href; function g(x) { return top[x]; }',
-		'"use strict"; function f() { return top; }',
-		"'use strict';\n'another';\nwindow.q = () => location;",
+		['c', 'var a = location.href; function g(x) { return top[x]; }'],
+		['c', '"use strict"; function f() { return top; }'],
+		['c', "'use strict';\n'another';\nwindow.q = () => location;"],
+		['c', 'x = top; /* */ y = "*\\u2028<";'],
+		['m', 'import "./m.js"; export function h() { return location; }'],
+		['m', 'top.y = 1;'],
 	];
-	const table = new PrewrittenTable({
-		scripts: sources.map((source) => [
-			'c',
+	const access = '$s$j';
+	const doc = sources
+		.map(([kind, source]) =>
+			kind === 'm'
+				? `<script type="module">${source}</script>`
+				: `<script>${source}</script>`,
+		)
+		.join('\n');
+	const rewriteOf = (kind, source, bare = false) =>
+		kind === 'm'
+			? modifyJS(source, url, config, 'genericModule')
+			: modifyJS(
+					source,
+					url,
+					config,
+					'generic',
+					bare ? '' : scriptPreamble(source),
+				);
+	const table = new PrewrittenTable(
+		{
+			url: url.toString(),
+			scripts: inlineSources(doc).scripts.map(([kind, source, start, end]) => [
+				kind,
+				start,
+				end,
+				...packRewrite(kind, source, rewriteOf(kind, source), access),
+			]),
+			styles: [],
+		},
+		doc,
+		access,
+	);
+	const packedSizes = sources.map(([kind, source]) => {
+		const [rest, at] = packRewrite(
+			kind,
 			source,
-			modifyJS(source, url, config, 'generic', scriptPreamble(source)),
-		]),
-		styles: [],
+			rewriteOf(kind, source),
+			access,
+		);
+		return at === -1 ? 'whole' : rest.length < rewriteOf(kind, source).length;
 	});
 	const wrong = sources.filter(
-		(source) =>
-			table.script(false, source, true) !==
-				modifyJS(source, url, config, 'generic') ||
-			table.script(false, source) !==
-				modifyJS(source, url, config, 'generic', scriptPreamble(source)),
+		([kind, source]) =>
+			table.script(kind === 'm', source) !== rewriteOf(kind, source) ||
+			(kind === 'c' &&
+				table.script(false, source, true) !== rewriteOf(kind, source, true)),
 	);
 	ok(
-		'a prewritten script without its preamble is the bare rewrite, byte for byte',
-		wrong.length === 0 && table.script(true, sources[0]) === undefined,
-		JSON.stringify(wrong),
+		'a prewritten script comes back as its rewrite, and without its preamble as the bare rewrite, byte for byte',
+		wrong.length === 0 &&
+			table.script(true, sources[0][1]) === undefined &&
+			table.script(false, 'var a = 1;') === undefined &&
+			packedSizes.slice(0, 4).every((smaller) => smaller === true),
+		JSON.stringify({ wrong, packedSizes }),
 	);
 }
 await done();

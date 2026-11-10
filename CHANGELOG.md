@@ -418,6 +418,32 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   site stored showed in this one's usage. IndexedDB is sized from its
   values, where Chrome counts the compressed size on disk.
   (sop-escapes and sop-partitions suites.)
+- A document whose inline scripts the rewrite workers prewrite no longer
+  waits for them before its first byte, and its table of rewrites is a
+  quarter of the size. CNN's first visit sent nothing for 2.1 to 2.5 s: one
+  3.5 MB inline script took a worker 1.4 s (the split did not know its
+  shape, a program of module chunks), and the service worker then rewrote
+  the styles and built the shell. The table also carried every script's text
+  three times, as its key, in its preamble and in the holder of its
+  functions' sources, about 14 MB that the page's main thread compiled as a
+  string literal (0.7 s at full speed). Now the shell is streamed (the
+  inject bundle's script and the markup at once, the call that hands the
+  client the markup and the table when the workers are done), a program of
+  many statements is split across the workers like a Closure module, and the
+  table names each text by where it stands in the markup and leaves out the
+  preamble and the holder, which the client makes again from the text (the
+  worker sends a rewrite whole when that would not give it byte for byte).
+  The client still takes a rewrite only for the exact same kind and text.
+  CNN, same-origin, medians of 4 alternated runs (first byte, first
+  contentful paint, load): cold at full speed 2.1 to 0.65 s, 6.0 to 3.9 s,
+  7.6 to 5.8 s (with no workers at all 4.8 s to first paint, natively 0.5
+  s); cold with a four times slower CPU 2.5 to 0.76 s, 20.5 to 12.9 s, 24.8
+  to 16.7 s; the same tab again at full speed 1.4 to 0.18 s, 3.4 to 2.4 s.
+  (rewriter-unit: the new split and its inline form are the whole's rewrite
+  byte for byte, and a packed rewrite comes back byte for byte, bare and
+  not; 21 large scripts of Google, YouTube, Docs, CNN and Discord split and
+  stitch to the whole's rewrite; prewrite: the streamed shell leaves no copy
+  of the markup in the page.)
 - stomp-h3's HTTP/3 SETTINGS, control stream, QPACK streams, PRIORITY_UPDATE
   frames, QUIC transport parameter order and 1250-byte Initials are Chrome
   152's (docs/fingerprint.md); responses may use the QPACK dynamic table.
