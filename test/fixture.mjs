@@ -301,6 +301,34 @@ export function startFixture(port = 8084) {
 			res.setHeader('access-control-allow-origin', '*');
 			return res.end(JSON.stringify(req.headers));
 		}
+		// HTTP Basic auth (xhr-parity suite): /xhr-auth/<case>/<file>?k=<key>
+		// answers 401 with a challenge for the case's own realm unless the
+		// request carries the credentials `u` and `p`, then 200 with the
+		// Authorization it got; `nc` answers 200 without a challenge. Every
+		// request's Authorization is kept by key and case for /xhr-auth-log
+		const auth = /^\/xhr-auth\/([\w-]+)\//.exec(path)?.[1];
+		if (auth) {
+			const query = new URL(req.url, 'http://x').searchParams;
+			const key = `xhr-auth:${query.get('k')}`;
+			const log = recorded.get(key) ?? {};
+			recorded.set(key, log);
+			(log[auth] ??= []).push(req.headers.authorization ?? null);
+			const expected = `Basic ${Buffer.from(`${query.get('u')}:${query.get('p')}`).toString('base64')}`;
+			res.setHeader('content-type', 'application/json');
+			if (!query.has('nc') && req.headers.authorization !== expected) {
+				res.statusCode = 401;
+				res.setHeader('www-authenticate', `Basic realm="xhr-${auth}"`);
+				return res.end('{"denied":true}');
+			}
+			return res.end(
+				JSON.stringify({ authorization: req.headers.authorization ?? null }),
+			);
+		}
+		if (path === '/xhr-auth-log') {
+			const key = new URL(req.url, 'http://x').searchParams.get('k');
+			res.setHeader('content-type', 'application/json');
+			return res.end(JSON.stringify(recorded.get(`xhr-auth:${key}`) ?? {}));
+		}
 		if (path === '/echo-headers/recorded') {
 			const key = new URL(req.url, 'http://x').searchParams.get('k');
 			res.setHeader('content-type', 'application/json');
