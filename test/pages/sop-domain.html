@@ -1,0 +1,20 @@
+<!doctype html>
+<title>SOP DOMAIN</title>
+<script>
+	// document.domain in a document of a subdomain (sop battery): set to each
+	// of its parent domains in turn, each read back; reported to the framing
+	// page
+	const result = { before: document.domain };
+	const labels = location.hostname.split('.');
+	for (let i = 1; i < labels.length; i++) {
+		const value = labels.slice(i).join('.');
+		try {
+			document.domain = value;
+			result[value] = `ok ${document.domain}`;
+		} catch (error) {
+			result[value] = `${error.name}: ${error.message}`;
+		}
+	}
+	result.agentCluster = window.originAgentCluster;
+	parent.postMessage({ sopDomain: result }, '*');
+</script>

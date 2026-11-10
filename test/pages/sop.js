@@ -665,6 +665,37 @@
 		return result;
 	});
 
+	add(
+		'document/domain set to the parent domain by a subdomain',
+		() =>
+			new Promise((resolve) => {
+				const frame = document.createElement('iframe');
+				const listen = (event) => {
+					if (!event.data?.sopDomain) return;
+					window.removeEventListener('message', listen);
+					frame.remove();
+					resolve(event.data.sopDomain);
+				};
+				window.addEventListener('message', listen);
+				const sub = new URL(B);
+				sub.hostname = `a.www.${sub.hostname}`;
+				frame.src = `${sub.origin}/pages/sop-domain.html`;
+				document.body.append(frame);
+			}),
+	);
+	add('document/domain values', () => {
+		const result = {};
+		for (const value of ['com', '127.0.0.1.', '[::1]', 'a b']) {
+			try {
+				document.domain = value;
+				result[value] = `ok ${document.domain}`;
+			} catch (error) {
+				result[value] = failed(error);
+			}
+		}
+		return result;
+	});
+
 	// --- another site's document: storage, messages, referrer ------------
 	const frameOfB = () =>
 		new Promise((resolve) => {

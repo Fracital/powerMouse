@@ -343,6 +343,11 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- `document.domain`'s setter checks the value as Chrome does (parsed as a
+  host, an IP host only to itself, a public suffix refused as a top-level
+  domain, Chrome's messages) and then has no effect, as in the
+  origin-keyed agent cluster every document gets by default; it used to
+  accept a parent domain and read it back. (sop-escapes suite.)
 - The Navigation API shows a document only its own origin's entries:
   `navigation.entries()` listed the entries of every site the frame had
   shown, their full URLs and keys included, and `canGoBack` said yes into

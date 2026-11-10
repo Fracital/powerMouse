@@ -169,6 +169,14 @@ Filled in commit by commit; see the CHANGELOG for each.
   InvalidStateError past the run. `history.length`, `back()`, `forward()`
   and `go()` keep the frame's whole list (natively they cross origins too),
   and so does what the host's Back and Forward buttons are told.
+- **`document.domain`** (section 4, sop-escapes: 3 cases). The setter
+  parses the value as a host first (`0.0.1` is `0.0.0.1`, `127.0.0.1.` is
+  `127.0.0.1`, `a b` shows as `a%20b`), refuses an empty value, an IP host
+  other than its own, a value that is not a suffix and a public suffix
+  (`'localhost' is a top-level domain.`) with Chrome's messages, and then
+  does nothing: a document is in an origin-keyed agent cluster by default
+  (`window.originAgentCluster`), where Chrome's setter has no effect. It
+  used to accept a parent domain and read it back.
 
 ## Left
 

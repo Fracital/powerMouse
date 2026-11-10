@@ -1,3 +1,4 @@
+import { getPublicSuffix } from 'tldts';
 import { routeHTML } from '../../../rewriteHTML';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
@@ -620,15 +621,19 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			),
 		});
 
-		// document.domain: the page's host; setting it to the host or a parent
-		// domain is accepted (and read back) like a browser does, anything else
-		// is the browser's SecurityError. The native setter never runs: it
+		// document.domain: the page's host. The setter checks the value as
+		// Chrome does (parsed as a host, then the host itself or a parent
+		// domain of a name that is not a public suffix, else the browser's
+		// SecurityError) and then does nothing: a document is in an
+		// origin-keyed agent cluster by default, where the setter has no
+		// effect (window.originAgentCluster). The native setter never runs: it
 		// would act on the proxy origin, and refuses in a sandboxed frame
 		const domainDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global.Document.prototype,
 			'domain',
 		)!;
-		const domains = new WeakMap<Document, string>();
+		const isIP = (host: string) =>
+			host.startsWith('[') || /^\d+\.\d+\.\d+\.\d+$/.test(host);
 		Reflect.defineProperty(this.client.global.Document.prototype, 'domain', {
 			enumerable: true,
 			configurable: true,
@@ -637,7 +642,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that: Document, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
-					return domains.get(that) ?? this.client.url.url.hostname;
+					return this.client.url.url.hostname;
 				},
 			),
 			set: proxyModule.wrapFunction(
@@ -645,12 +650,29 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that: Document, args) => {
 					const value = String(args[0]);
 					const host = this.client.url.url.hostname;
-					if (value !== host && !host.endsWith(`.${value}`))
-						throw new DOMException(
-							`Failed to set the 'domain' property on 'Document': '${value}' is not a suffix of '${host}'.`,
+					const refuse = (reason: string) =>
+						new this.client.global.DOMException(
+							`Failed to set the 'domain' property on 'Document': ${reason}`,
 							'SecurityError',
 						);
-					domains.set(that, value);
+					if (value === '') throw refuse("'' is an empty domain.");
+					let parsed: string | null = null;
+					try {
+						parsed = new URL(`http://${value}/`).hostname;
+					} catch (error) {
+						// not a host
+					}
+					const shown = parsed ?? encodeURI(value);
+					if (parsed === host) return;
+					if (
+						parsed === null ||
+						isIP(host) ||
+						isIP(parsed) ||
+						!host.endsWith(`.${parsed}`)
+					)
+						throw refuse(`'${shown}' is not a suffix of '${host}'.`);
+					if (getPublicSuffix(parsed) === parsed)
+						throw refuse(`'${shown}' is a top-level domain.`);
 				},
 			),
 		});
