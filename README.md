@@ -170,8 +170,8 @@ and `message` events from outside the proxied world never reach the page.
 ## Embedding
 
 Install the package from npm. Nightly builds of master are published as
-`@sysce/stomp@nightly` (versions like `4.2.1-nightly.202611100717.g1a2b3c4`:
-the next patch, the UTC time, the commit), each only after CI passed on that
+`@sysce/stomp@nightly` (versions like `4.2.0-nightly.202611100717.g1a2b3c4`:
+the version in `package.json`, the UTC time, the commit), each only after CI passed on that
 commit, with npm provenance:
 
 ```sh

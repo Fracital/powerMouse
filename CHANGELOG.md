@@ -320,7 +320,7 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 - The package is `@sysce/stomp` on npm (it was `stomp-rewrite`, installed
   from this repository's `dist` branch, which is gone).
   `.github/workflows/nightly.yml` publishes master every night as
-  `@sysce/stomp@nightly`, version `<next patch>-nightly.<UTC
+  `@sysce/stomp@nightly`, version `<package.json version>-nightly.<UTC
 yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   the commit is not published yet, through npm trusted publishing (no token
   stored) with provenance. Import from `@sysce/stomp` and
