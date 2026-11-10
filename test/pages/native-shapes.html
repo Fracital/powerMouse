@@ -554,11 +554,15 @@
 			document.cookie = 'v=1; path=/';
 			document.cookie = 'w=1; path=/';
 		});
+		// whether document.cookie shows the write before set() settles is a
+		// race natively (the write reaches the jar off the page's thread, and
+		// Chrome read it as there once in a while on a loaded runner): recorded
+		// apart, not compared
 		await step('set and read at once', async () => {
 			const set = cookieStore.set('x1', '1');
-			const before = document.cookie.includes('x1=');
+			record.cookieSetSeenAtOnce = document.cookie.includes('x1=');
 			await set;
-			return [before, document.cookie.includes('x1=')];
+			return document.cookie.includes('x1=');
 		});
 		await step('write and get at once', async () => {
 			document.cookie = 'x2=1; path=/';

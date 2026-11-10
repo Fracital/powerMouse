@@ -11,9 +11,11 @@
 //   constructor;
 // - the Cookie Store API is there as natively, reads and writes the jar
 //   document.cookie does, fails as natively and reports its changes.
-// Recorded, not compared: whether the cookie change events are trusted, and
-// the members of the replaced prototypes. SHAPES_DUMP=<path prefix> writes
-// both records of each mode to <prefix>-<mode>.json.
+// Recorded, not compared: whether the cookie change events are trusted,
+// whether document.cookie shows a cookieStore.set() before it settles (a race
+// natively), and the members of the replaced prototypes.
+// SHAPES_DUMP=<path prefix> writes both records of each mode to
+// <prefix>-<mode>.json.
 import {
 	done,
 	FIXTURE,
@@ -178,6 +180,11 @@ for (const [mode, base] of [
 	console.log(
 		`${mode}: cookie change events trusted, recorded, not compared:`,
 		JSON.stringify([native.cookieTrusted, proxied.cookieTrusted]),
+	);
+	// natively a race (test/pages/native-shapes.html, 'set and read at once')
+	console.log(
+		`${mode}: a cookieStore.set() seen by document.cookie before it settles, recorded, not compared:`,
+		JSON.stringify([native.cookieSetSeenAtOnce, proxied.cookieSetSeenAtOnce]),
 	);
 	for (const [label, pick] of [
 		['window', (record) => record.prototypes],
