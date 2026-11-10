@@ -2,15 +2,29 @@
 	"name": "@sysce/stomp",
 	"version": "4.2.0",
 	"description": "A rewrite of the Stomp proxy.",
+	"keywords": [
+		"proxy",
+		"web-proxy",
+		"service-worker",
+		"wisp",
+		"tomp"
+	],
+	"license": "GPL-3.0",
+	"author": {
+		"name": "David Reed",
+		"url": "https://github.com/Fracital"
+	},
+	"homepage": "https://github.com/Fracital/powerMouse#readme",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/Fracital/powerMouse.git"
 	},
-	"homepage": "https://github.com/Fracital/powerMouse#readme",
 	"bugs": {
 		"url": "https://github.com/Fracital/powerMouse/issues"
 	},
-	"license": "GPL-3.0",
+	"publishConfig": {
+		"access": "public"
+	},
 	"type": "module",
 	"main": "./dist/controller.mjs",
 	"types": "./dist/types/controller/index.d.ts",
@@ -76,8 +90,5 @@
 		"typescript": "^5.9.0",
 		"typescript-eslint": "^8.72.0",
 		"ws": "^8.22.1"
-	},
-	"publishConfig": {
-		"access": "public"
 	}
 }
