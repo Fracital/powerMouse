@@ -63,6 +63,22 @@
 					paths[`${via}BlankReflect`] = inspect(() =>
 						blank(via).Reflect.get(window, 'parent'),
 					);
+					// the blank's own evaluator, where `top` is the browser's:
+					// a walk from it for the framing page (of another site),
+					// which natively reads no document and finds nothing
+					paths[`${via}BlankEval`] = inspect(() =>
+						blank(via).eval(`(function find(w) {
+							for (let i = 0; i < w.length; i++) {
+								try {
+									if (w[i].document.title === 'REFS TOP') return w[i];
+								} catch (error) {}
+								try {
+									const found = find(w[i]);
+									if (found) return found;
+								} catch (error) {}
+							}
+						})(top)`),
+					);
 					paths[`${via}BlankSource`] = inspect(() =>
 						Object.getOwnPropertyDescriptor(
 							blank(via).MessageEvent.prototype,

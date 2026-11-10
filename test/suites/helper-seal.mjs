@@ -121,8 +121,8 @@ for (const [mode, base] of [
 				detail,
 			);
 		ok(
-			`${label}: a fresh about:blank frame's native eval still reaches the parent (known open: inject on connect)`,
-			paths.blankEval === 'SEAL-SECRET',
+			`${label}: a fresh about:blank frame reached by a literal name runs no code that reaches the parent`,
+			!String(paths.blankEval).includes('SEAL-SECRET'),
 			detail,
 		);
 		errors.push(...page.errors);

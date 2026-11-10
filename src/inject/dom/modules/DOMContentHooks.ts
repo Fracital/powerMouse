@@ -559,6 +559,9 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			});
 
 			const result = insertElement();
+			// a frame that just connected is injected before the page can
+			// reach it by a literal name (IFrame's sweepFrames)
+			if (willConnect) this.client.sweepFrames?.();
 
 			usePrototype(insert, nativeNode, () => {
 				switch (name) {

@@ -297,6 +297,28 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   getter, which throws "Illegal invocation" on any other kind of element
   (imgur's ads, in a written about:blank frame). Each kind's own getter is
   used, and an element with no declaration has nothing to copy.
+- A frame of another site no longer reaches the page that frames it through
+  a fresh about:blank frame of its own. The blank frame's realm ran nothing
+  of the proxy until a read the inject mediates injected it, and a literal
+  name (`frames.x`, a bare `x`) or a native copy of the window's children is
+  no such read: the blank's native `parent` and `MessageEvent.source`
+  getters handed over the framing page, and its native eval ran code where
+  `top` is the browser's, from which a walk of `top`'s frames found the
+  framing page's document. A frame that stays on about:blank (no src,
+  srcdoc or data of its own) is now injected as it connects, as reading its
+  contentWindow injects it: from the insertion hooks and the markup setters,
+  from the preamble of every parser-inserted inline script (the parser runs
+  it inside the write that made the frame) and from a document observer; a
+  walk of the window's children, so it costs the number of frames. A frame
+  on its way to a document is left to that document's own shell, since the
+  browser keeps the Window for a document of the same origin and it would
+  otherwise run the parent's client (eight suites measured that). A client a page injected into a frame's initial
+  about:blank, which the document of the frame's src then keeps, posted to
+  a window through the bundle's own `postMessage`, of the injecting page's
+  realm, so the browser named the framing page as the message's source; it
+  posts through its window's own now (window-references: the six
+  about:blank paths, the new evaluator ones included, as natively in both
+  modes; helper-seal: the blank's evaluator reaches nothing).
 - A page's stack formatter that hands off to the one installed before it
   no longer throws. `Error.prepareStackTrace` reads as the proxy's own
   formatter, where natively it is undefined, so Notion's, which calls the
@@ -2459,14 +2481,8 @@ Fixed while testing real sites and a feature fixture:
   the browser starts throwing then); copies of a window's children the
   browser makes itself (`Array.prototype.slice.call(frames)`, `forEach`,
   `{ ...window }`); and the document's named iframe (`document.kid`), whose
-  named properties come before anything that could be defined. In the other
-  direction, a frame of another site that reaches a fresh about:blank frame
-  of its own by a literal name (`frames.x`, a bare `x`) or by such a copy gets
-  a realm that runs no Stomp, whose native getters hand it the page that
-  framed it, and whose native eval runs code where `top` is the real one
-  (helper-seal suite, asserted). Closing these needs either every frame injected as it connects
-  (insertion hooks, markup setters and a document observer, whose records
-  arrive before the parser runs the next script) or a real origin per
+  named properties come before anything that could be defined. Closing these
+  needs a membrane over every window the page holds, or a real origin per
   proxied site.
 - A page's iframe sandbox (sandbox-restrictions suite) is enforced by the
   browser for everything but scripts, the opaque origin and top

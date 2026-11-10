@@ -467,6 +467,22 @@ export default class ContextModule extends Module<DocumentClient> {
 			target.callIn(context.location.replace, context.location, [routed]);
 		else context.location.replace(routed);
 	}
+	/**
+	 * Post to `receiver` with this client's window as the incumbent the
+	 * browser names as the event's source: its own native postMessage,
+	 * called through a function of its realm. The bundle's free
+	 * `postMessage` is the realm the bundle was loaded in, which for a
+	 * client another page injected (a frame's initial about:blank, kept for
+	 * the document of its src) is that page's: its messages named the
+	 * framing page as their source.
+	 */
+	#postFromHere(receiver: Context, args: unknown[]) {
+		return this.client.callIn(
+			this.client.nativePostMessage ?? this.client.global.postMessage,
+			receiver,
+			this.postMessage(<any>args, receiver),
+		);
+	}
 	restrictContext(context: Context): RestrictedContext {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		// a child that runs no Stomp yet (an iframe still on its initial
@@ -552,15 +568,14 @@ export default class ContextModule extends Module<DocumentClient> {
 					},
 				},
 				postMessage: {
-					value: proxyModule.wrapFunction(postMessage, (target, that, args) => {
-						catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
-						if (!this.targetAllows(args, context)) return;
-						return Reflect.apply(
-							target,
-							context,
-							this.postMessage(<any>args, context),
-						);
-					}),
+					value: proxyModule.wrapFunction(
+						this.client.global.postMessage,
+						(target, that, args) => {
+							catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
+							if (!this.targetAllows(args, context)) return;
+							return this.#postFromHere(context, args);
+						},
+					),
 				},
 			},
 			// its frames, by index: cross-origin reads of them are allowed,
@@ -1063,12 +1078,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			const context = this.restrictedContexts.get(target as Context);
 			if (!context) return false;
 			catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
-			if (this.targetAllows(args, context))
-				Reflect.apply(
-					postMessage,
-					context,
-					this.postMessage(<any>args, context),
-				);
+			if (this.targetAllows(args, context)) this.#postFromHere(context, args);
 			return true;
 		};
 		this.client.postToWindow = (target, args) => {

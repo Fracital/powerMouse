@@ -522,6 +522,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				// an empty write still reaches the parser: after the document
 				// has loaded it opens a new one, as the page's own call would
 				Reflect.apply(nativeWrite, that, [markup]);
+				// a frame the written markup made (a script it holds sweeps
+				// first, see prepareScriptText)
+				this.client.sweepFrames?.();
 				if (opens) runDocumentOpenListeners(this.client.global);
 				this.client.writtenLoads?.(document as Document);
 			});
@@ -841,6 +844,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							}
 						}
 					});
+					// a frame in the markup is injected as it connects
+					this.client.sweepFrames?.();
 				},
 			),
 		});
@@ -942,7 +947,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						if (args.length && this.client.styleElement(that))
 							return setStyleText(that as Element, String(args[0]));
 						if (args.length) args[0] = rewriteMarkup(args[0]);
-						return Reflect.apply(target, that, args);
+						const result = Reflect.apply(target, that, args);
+						this.client.sweepFrames?.();
+						return result;
 					},
 				);
 		}
@@ -968,8 +975,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				),
 				set: proxyModule.wrapFunction(
 					shadowInnerHTML.set,
-					(target, that: ShadowRoot, args) =>
-						Reflect.apply(target, that, [rewriteMarkup(args[0])]),
+					(target, that: ShadowRoot, args) => {
+						Reflect.apply(target, that, [rewriteMarkup(args[0])]);
+						this.client.sweepFrames?.();
+					},
 				),
 			});
 

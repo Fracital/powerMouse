@@ -47,15 +47,26 @@ const KNOWN_OPEN = {
 		'spread',
 		'documentName',
 	],
-	// the native getters of a fresh about:blank child of its own that the
-	// child reached without the access API, called on its own window
-	child: [
-		'dotBlankParent',
-		'dotBlankSource',
-		'sliceBlankParent',
-		'sliceBlankSource',
-	],
 	sib: ['parentDocumentKid'],
+};
+
+// The held frame again, handed back by its own realm while it was of this
+// page's origin (its evaluator's `window`, its Function's `this`, its
+// document's defaultView, its own `self` and `frames`, an event's
+// currentTarget): the WindowProxy itself, which shows whatever document the
+// window navigates to. A membrane over the window references the page holds
+// cannot see these; only one over every object crossing between the realms
+// can. Asserted raw on their own, apart from KNOWN_OPEN.
+const EXTRACTION = {
+	top: [
+		'extractEval',
+		'extractArray',
+		'extractFunction',
+		'extractDefaultView',
+		'extractSelf',
+		'extractFrames',
+		'extractCurrentTarget',
+	],
 };
 
 /** every report of the fixture's documents, by role, from every page of the context */
@@ -116,10 +127,17 @@ for (const [mode, base] of [
 				native: nativePaths[path],
 				proxied: proxiedPaths[path],
 			});
-			if (KNOWN_OPEN[role]?.includes(path))
+			if (EXTRACTION[role]?.includes(path))
+				ok(
+					`${mode}: ${role} ${path} is still raw (extraction)`,
+					!String(nativePaths[path]).startsWith('RAW') &&
+						String(proxiedPaths[path]).startsWith('RAW'),
+					detail,
+				);
+			else if (KNOWN_OPEN[role]?.includes(path))
 				ok(
 					`${mode}: ${role} ${path} is still raw (known open)`,
-					nativePaths[path] === 'restricted' &&
+					!String(nativePaths[path]).startsWith('RAW') &&
 						String(proxiedPaths[path]).startsWith('RAW'),
 					detail,
 				);

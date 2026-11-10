@@ -38,6 +38,30 @@
 		frame('fs', 'window-refs-frameset.html');
 		const heldElement = frame('held');
 		const heldWindow = heldElement.contentWindow;
+		// the same window, handed back by its own realm while it is still of
+		// this origin: what a page keeps that way is the window itself
+		const extracted = {};
+		const extract = (key, get) => {
+			try {
+				extracted[key] = get();
+			} catch (error) {
+				extracted[key] = undefined;
+			}
+		};
+		extract('extractEval', () => heldWindow.eval('window'));
+		extract('extractArray', () => heldWindow.eval('[window]')[0]);
+		extract('extractFunction', () => new heldWindow.Function('return this')());
+		extract('extractDefaultView', () => heldWindow.document.defaultView);
+		extract('extractSelf', () => heldWindow.self);
+		extract('extractFrames', () => heldWindow.frames);
+		extract('extractCurrentTarget', () => {
+			let target;
+			const listener = (event) => (target = event.currentTarget);
+			heldWindow.addEventListener('refs', listener);
+			heldWindow.dispatchEvent(new heldWindow.Event('refs'));
+			heldWindow.removeEventListener('refs', listener);
+			return target;
+		});
 		heldElement.src = refsCross('window-refs-child.html?role=held');
 		// read while its document of another site is still on the way
 		const pendingElement = frame(
@@ -238,6 +262,8 @@
 			// a window this page held while it was of its own origin, and what
 			// the mediated paths give for it now that it is another site's
 			paths.heldFrame = inspect(() => heldWindow);
+			for (const key of Object.keys(extracted))
+				paths[key] = inspect(() => extracted[key]);
 			paths.heldFrameContentWindow = inspect(() => heldElement.contentWindow);
 			paths.heldFrameIndex = inspect(() => frames[3]);
 			paths.heldPopup = inspect(() => popup);

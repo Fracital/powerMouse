@@ -1,10 +1,11 @@
 import { parseConfig } from '../../../config';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
-import DocumentClient from '../Client';
+import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { addClientModules } from '../document';
 import { pageSandbox, sandboxTokens } from '../sandbox';
 import ContextModule, { initialBlank, isStomp } from './Context';
+import { nativeElement } from './DOMHooks';
 import { MARKER } from './MutationObserver';
 
 export default class IFrameModule extends Module<DocumentClient> {
@@ -120,6 +121,97 @@ export default class IFrameModule extends Module<DocumentClient> {
 				sandbox !== null && !sandboxTokens(sandbox).has('allow-same-origin')
 			);
 		};
+
+		// A child window still on its initial about:blank runs nothing of
+		// ours, and the page can reach it without a read the inject mediates
+		// (a literal name, `frames.x`; a native copy of the window's
+		// children): its own natives then hand the page what the hooks would
+		// not, its evaluator above all, which runs code with the browser's
+		// `top`. So every frame is injected as it connects, as reading its
+		// contentWindow injects it: from every insertion hook and markup
+		// setter, from the preamble of every parser-inserted inline script
+		// (the parser runs it inside the write that made the frame), and from
+		// an observer for the rest (records arrive before the next task). A
+		// walk of the window's children, so its cost is the number of frames,
+		// not the size of what was inserted.
+		// whether a frame element names a document of its own to load (the
+		// real attribute: a hook writes routes and markers into it)
+		const loadsDocument = (element: Element): boolean => {
+			for (const attribute of ['src', 'srcdoc', 'data']) {
+				const value = Reflect.apply(nativeElement.getAttribute, element, [
+					attribute,
+				]) as string | null;
+				if (
+					value !== null &&
+					value !== '' &&
+					!(attribute !== 'srcdoc' && /^\s*about:blank\s*$/i.test(value))
+				)
+					return true;
+			}
+			return false;
+		};
+		const sweepChild = (context: typeof globalThis) => {
+			try {
+				if (this.client.names.client in context || !initialBlank(context))
+					return;
+				const element = Reflect.get(context, 'frameElement') as Element | null;
+				if (
+					element &&
+					(this.client.opaqueFrames.has(element) ||
+						sandboxedOpaque(element) ||
+						// a frame on its way to a document (a src, a srcdoc) is
+						// about to leave its about:blank: the browser keeps the
+						// Window for a document of this origin, and that document
+						// would run this page's client, not its own. The page
+						// reaches it as the frame of its next document, which its
+						// own shell injects (a read of contentWindow before then
+						// still injects it, as it always did)
+						loadsDocument(element))
+				)
+					return;
+				if (Reflect.get(context, 'parent') !== (this.client.global as unknown))
+					return;
+			} catch (error) {
+				// a window of another real origin, or one being torn down
+				return;
+			}
+			injectContext(context);
+			const client = (context as Record<string, any>)[this.client.names.client];
+			if (client && !client.applied) client.apply();
+		};
+		const global = this.client.global;
+		this.client.sweepFrames = () => {
+			// a document that runs no script of the page (a sandbox without
+			// allow-scripts) has no code that could reach a child's realm, and
+			// a client in the child would guard that child's own document
+			if (!this.client.allows('allow-scripts')) return;
+			const count = global.length;
+			for (let index = 0; index < count; index++) {
+				let child: typeof globalThis | undefined;
+				try {
+					child = (global as unknown as Record<number, typeof globalThis>)[
+						index
+					];
+				} catch (error) {
+					continue;
+				}
+				if (child) sweepChild(child);
+			}
+		};
+		// the native observer: the MutationObserver module wraps the page's,
+		// and is added after this one
+		const NativeMutationObserver = global.MutationObserver;
+		if (typeof NativeMutationObserver === 'function') {
+			const observer = new NativeMutationObserver(() =>
+				this.client.sweepFrames?.(),
+			);
+			const observe = () =>
+				observer.observe(global.document, { childList: true, subtree: true });
+			observe();
+			// document.open() keeps the document node, but a written document
+			// may be a new one in this window's realm
+			addDocumentOpenListener(global, observe);
+		}
 
 		// the three elements that embed a document the page can reach: iframe,
 		// the frameset's frame, and object with an HTML or SVG document (embed

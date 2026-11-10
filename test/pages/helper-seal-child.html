@@ -174,10 +174,9 @@
 				});
 			}
 			// through a fresh about:blank frame of this page reached by a
-			// literal name, whose realm nothing injected yet: its native
-			// evaluator sees the real top, so it needs no name at all
-			// (window-references known-open; closed by injecting every frame as
-			// it connects)
+			// literal name: uninjected, its native evaluator would see the real
+			// top and need no name at all (every frame is injected as it
+			// connects)
 			const blank = document.createElement('iframe');
 			blank.name = 'sealblank';
 			document.body.append(blank);

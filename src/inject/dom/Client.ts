@@ -524,6 +524,11 @@ export default class DocumentClient extends Client {
 	injectChild?: (context: typeof globalThis) => void;
 	/** @internal a child window has this name (Context module): reads of it by name are restricted like `frames[i]` */
 	exposeChild?: (name: string) => void;
+	/**
+	 * @internal inject every child frame still on its initial about:blank
+	 * (IFrame sets it): called wherever a frame may have just connected
+	 */
+	sweepFrames?: () => void;
 	get url(): StompURL {
 		if (this.#parseBase) return this.#parseBase;
 		// a document the page made (a blob, a data: frame, an inline document
@@ -661,12 +666,15 @@ export default class DocumentClient extends Client {
 	 * keep what they are given.
 	 */
 	prepareScriptText(script: HTMLScriptElement, text: string): string {
-		if (
-			!this.isConnected(script) ||
-			!shouldRewriteScript(script) ||
-			script === this.global.document.currentScript
-		)
+		// the running script setting its own text is the preamble of a
+		// parser-inserted inline script: a frame the parser made before it
+		// is injected now, since the parser runs it inside the write that
+		// made the frame, before any observer hears of the frame
+		if (script === this.global.document.currentScript) {
+			this.sweepFrames?.();
 			return text;
+		}
+		if (!this.isConnected(script) || !shouldRewriteScript(script)) return text;
 		const rewritten = modifyJS(
 			text,
 			this.url,

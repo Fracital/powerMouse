@@ -134,30 +134,31 @@ write) and compares it with the same pages loaded natively, in both modes
 (the two modes measured the same on every path). "Raw" is the other site's
 window or document as is.
 
-| Path                                                                                                                                                                                                                                                            | Before (both modes)                   | Now (both modes)                         |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ---------------------------------------- |
-| `frames[0]`, `window[0]`, `self[0]`, `globalThis[0]`, `top[0]`, `window.frames[0]`, `frames['0']`; from a sibling `parent.frames[0]`, `parent[0]`, `top[0]`; a frameset's `frames[0]`                                                                           | raw                                   | restricted (literal index reads routed)  |
-| the same in `eval`, indirect eval, `Function` bodies, `with (window)`, string timers, inline handlers, `javascript:` URLs, module scripts, `parent.eval`, `new parent.Function`                                                                                 | raw                                   | restricted                               |
-| `frames[i]`, a `frames.length` loop, `parent.frames[1]` and `parent[1]` from the child (a stand-in)                                                                                                                                                             | restricted                            | restricted                               |
-| `for...of frames`; `Array.from(parent.frames)` across origins                                                                                                                                                                                                   | TypeError; SecurityError, as natively | same                                     |
-| `Reflect.get(window, 0)`, `Object.getOwnPropertyDescriptor(window, '0').value`, `Reflect.getOwnPropertyDescriptor`, `getOwnPropertyDescriptors`, `Object.values`, `Object.entries`, `Object.assign({}, frames)`, `Array.from(frames)` (with a map function too) | raw                                   | restricted                               |
-| `Array.prototype.slice.call(frames)`, `Array.prototype.forEach.call(frames)`, `{ ...window }`, read without an index                                                                                                                                            | raw                                   | **raw (open)**                           |
-| `window['kid']`, `frames.kid`, `window.kid`, a bare `kid`, `Reflect.get(window, 'kid')`, `Object.getPrototypeOf(Window.prototype).kid`, its descriptor, `window.__proto__.__proto__.kid`; `parent.kid`, `parent.frames.kid` from a sibling                      | raw                                   | restricted (an accessor per child name)  |
-| `document.kid` (a named iframe), also from a sibling                                                                                                                                                                                                            | raw                                   | **raw (open)**                           |
-| `parent.sib`, `parent.frames.sib`, `opener.frames.sib` across origins                                                                                                                                                                                           | SecurityError (natively a window)     | restricted, as natively                  |
-| `iframe.contentWindow` found by `getElementById`, `querySelector`, `getElementsByTagName`, `getElementsByName`; `object.contentWindow`; a frameset `frame.contentWindow`                                                                                        | restricted                            | restricted                               |
-| `contentDocument` of iframe, object, frame; `getSVGDocument()` of an HTML document                                                                                                                                                                              | null                                  | null                                     |
-| `getSVGDocument()` of another site's SVG document (iframe, object), and its `defaultView`                                                                                                                                                                       | raw                                   | null, as natively                        |
-| `event.source` of a message from the child, the object, the frameset's frame; a `MessagePort` message's `source`                                                                                                                                                | restricted; null                      | restricted; null                         |
-| `parent`, `top`, `opener` and their `frames`, `opener.frames[1]`                                                                                                                                                                                                | restricted                            | restricted                               |
-| `opener.top` (read through the access API)                                                                                                                                                                                                                      | the reader itself                     | restricted, as natively                  |
-| `window.open('', 'kid')` of another site's frame (and every path to that frame after it)                                                                                                                                                                        | raw                                   | restricted                               |
-| `window.open(url, 'tgt')` navigating a frame to another site, and `frames[i]` of it                                                                                                                                                                             | raw                                   | restricted                               |
-| a frame's `contentWindow` (or `frames[i]`) read while its `src` of another site loads                                                                                                                                                                           | raw                                   | restricted                               |
-| a frame's `contentWindow` read before its `src` was set, then the frame sent to another site; `contentWindow` and `frames[3]` of it afterwards                                                                                                                  | raw                                   | **raw (open)**                           |
-| a popup from `window.open()` the page then navigated to another site, and `event.source` of its messages                                                                                                                                                        | raw                                   | **raw (open)**                           |
-| from the child of another site: the native `parent` and `MessageEvent.source` getters of a fresh about:blank frame of its own, reached by `frames[i]` or a computed name                                                                                        | the framing page raw                  | restricted (the frame is injected first) |
-| the same reached by a literal name (`frames.x`) or `Array.prototype.slice.call(frames)`                                                                                                                                                                         | the framing page raw                  | **the framing page raw (open)**          |
+| Path                                                                                                                                                                                                                                                            | Before (both modes)                   | Now (both modes)                                 |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------ |
+| `frames[0]`, `window[0]`, `self[0]`, `globalThis[0]`, `top[0]`, `window.frames[0]`, `frames['0']`; from a sibling `parent.frames[0]`, `parent[0]`, `top[0]`; a frameset's `frames[0]`                                                                           | raw                                   | restricted (literal index reads routed)          |
+| the same in `eval`, indirect eval, `Function` bodies, `with (window)`, string timers, inline handlers, `javascript:` URLs, module scripts, `parent.eval`, `new parent.Function`                                                                                 | raw                                   | restricted                                       |
+| `frames[i]`, a `frames.length` loop, `parent.frames[1]` and `parent[1]` from the child (a stand-in)                                                                                                                                                             | restricted                            | restricted                                       |
+| `for...of frames`; `Array.from(parent.frames)` across origins                                                                                                                                                                                                   | TypeError; SecurityError, as natively | same                                             |
+| `Reflect.get(window, 0)`, `Object.getOwnPropertyDescriptor(window, '0').value`, `Reflect.getOwnPropertyDescriptor`, `getOwnPropertyDescriptors`, `Object.values`, `Object.entries`, `Object.assign({}, frames)`, `Array.from(frames)` (with a map function too) | raw                                   | restricted                                       |
+| `Array.prototype.slice.call(frames)`, `Array.prototype.forEach.call(frames)`, `{ ...window }`, read without an index                                                                                                                                            | raw                                   | **raw (open)**                                   |
+| `window['kid']`, `frames.kid`, `window.kid`, a bare `kid`, `Reflect.get(window, 'kid')`, `Object.getPrototypeOf(Window.prototype).kid`, its descriptor, `window.__proto__.__proto__.kid`; `parent.kid`, `parent.frames.kid` from a sibling                      | raw                                   | restricted (an accessor per child name)          |
+| `document.kid` (a named iframe), also from a sibling                                                                                                                                                                                                            | raw                                   | **raw (open)**                                   |
+| `parent.sib`, `parent.frames.sib`, `opener.frames.sib` across origins                                                                                                                                                                                           | SecurityError (natively a window)     | restricted, as natively                          |
+| `iframe.contentWindow` found by `getElementById`, `querySelector`, `getElementsByTagName`, `getElementsByName`; `object.contentWindow`; a frameset `frame.contentWindow`                                                                                        | restricted                            | restricted                                       |
+| `contentDocument` of iframe, object, frame; `getSVGDocument()` of an HTML document                                                                                                                                                                              | null                                  | null                                             |
+| `getSVGDocument()` of another site's SVG document (iframe, object), and its `defaultView`                                                                                                                                                                       | raw                                   | null, as natively                                |
+| `event.source` of a message from the child, the object, the frameset's frame; a `MessagePort` message's `source`                                                                                                                                                | restricted; null                      | restricted; null                                 |
+| `parent`, `top`, `opener` and their `frames`, `opener.frames[1]`                                                                                                                                                                                                | restricted                            | restricted                                       |
+| `opener.top` (read through the access API)                                                                                                                                                                                                                      | the reader itself                     | restricted, as natively                          |
+| `window.open('', 'kid')` of another site's frame (and every path to that frame after it)                                                                                                                                                                        | raw                                   | restricted                                       |
+| `window.open(url, 'tgt')` navigating a frame to another site, and `frames[i]` of it                                                                                                                                                                             | raw                                   | restricted                                       |
+| a frame's `contentWindow` (or `frames[i]`) read while its `src` of another site loads                                                                                                                                                                           | raw                                   | restricted                                       |
+| a frame's `contentWindow` read before its `src` was set, then the frame sent to another site; `contentWindow` and `frames[3]` of it afterwards                                                                                                                  | raw                                   | **raw (open)**                                   |
+| a popup from `window.open()` the page then navigated to another site, and `event.source` of its messages                                                                                                                                                        | raw                                   | **raw (open)**                                   |
+| from the child of another site: the native `parent` and `MessageEvent.source` getters of a fresh about:blank frame of its own, reached by `frames[i]` or a computed name                                                                                        | the framing page raw                  | restricted (the frame is injected first)         |
+| the same reached by a literal name (`frames.x`) or `Array.prototype.slice.call(frames)`                                                                                                                                                                         | the framing page raw                  | restricted (every frame injected as it connects) |
+| the held frame handed back by its own realm while of this origin: its `eval('window')`, `Function('return this')()`, `document.defaultView`, `self`, `frames`, an event's `currentTarget` (extraction, asserted on a list of their own)                         | raw                                   | **raw (open: needs the deep membrane)**          |
 
 Why the open ones stay open:
 
@@ -178,31 +179,20 @@ Why the open ones stay open:
   exists. Only virtualising frame names (the real name attribute and
   browsing context name obfuscated, link targets and `window.name` mapped)
   would close it.
-- A fresh about:blank frame's realm runs no Stomp until something injects
-  it; every read the inject mediates now injects it first, but a literal
-  name or a native copy is not mediated. Injecting every frame as it
-  connects (the insertion hooks, the markup setters, and a document
-  MutationObserver, whose records arrive at the microtask checkpoint the
-  parser performs before each script) would close this, at the price that
-  every child document then runs the client its parent injected into the
-  about:blank (as one whose `contentWindow` was read early already does).
-
-The proxy's own globals were a path of their own (helper-seal suite, both
-modes, with and without the framing page reading the frame early). The
-client on every window holds the real windows the inject works with, and it
-lived under the fixed name `$P$s`: a frame of another site read
-`$P$s.parent.document` and had its framing page raw. The access API handed
-out the native eval (`evalSnapshot`), which runs a page's code unrewritten
-with the real `top`. Now the controller mints the client's name (unless the
-host sets `names.client`), and a page that learns it anyway (a frame of its
-own site shows it in its shell while loading) reads nothing by it: the
-access API answers `undefined` for that key, the rewriter routes the name
-like `top` (members, identifiers, computed-key object patterns, run-time
-code), reflection gives it no descriptor. The rewriter's direct-eval test is
-a predicate (`isEval`). Still open: a fresh about:blank frame reached by a
-literal name runs no Stomp, and its native eval sees the real top (closed
-with the rest of the about:blank paths by injecting every frame as it
-connects).
+- (Closed.) A fresh about:blank frame's realm ran no Stomp until a mediated
+  read injected it, and a literal name or a native copy is no such read. A
+  frame that stays on about:blank (no src, srcdoc or data) is now injected
+  as it connects: from the insertion hooks and markup setters, from the
+  preamble of each parser-inserted inline script (the parser runs it inside
+  the write that made the frame, before any observer hears of it), and from
+  a document observer, at the cost of a walk of the window's children per
+  insertion. A frame on its way to a document is left to that document's
+  own shell: the browser keeps the Window for a same-origin document, which
+  would otherwise run the parent's client (eight suites regressed when
+  every frame was injected). A client injected into an about:blank that a
+  later document keeps (a contentWindow read early) now posts through its
+  window's own postMessage, or its messages named the framing page as their
+  source.
 
 ## 3. JS rewriter
 
