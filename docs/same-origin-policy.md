@@ -349,7 +349,11 @@ suites' known lists with the same reason.
    tainted in one document's bundle is not known to another document's (a
    same-origin child frame's canvas drawn by its parent); a tainted
    ImageBitmap sent to a worker is clean there; `new VideoFrame()` of a
-   tainting source is not refused.
+   tainting source is not refused. WebGL's texture uploads are hooked when
+   the realm's first WebGL context is made (making the WebGL interfaces in
+   every frame cost each about 90 KB of heap): a `texImage2D` the page took
+   from a WebGL prototype before any context existed uploads a tainting
+   source, and is not the function the prototype holds afterwards.
 3. A no-cors response that went through another origin and came back (A to
    B to A) is `basic` and readable; natively it is opaque. B's redirect
    decides only that A's own resource is shown.

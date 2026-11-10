@@ -7,6 +7,6 @@ import { library } from './rewriterLib';
 export const api = library({
 	modifyCSS,
 	getDomain,
-	getPublicSuffix: (host) =>
-		getPublicSuffix(host, { allowPrivateDomains: true }),
+	getPublicSuffix: (host, icann) =>
+		getPublicSuffix(host, { allowPrivateDomains: !icann }),
 });

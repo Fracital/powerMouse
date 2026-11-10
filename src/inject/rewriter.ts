@@ -209,10 +209,13 @@ export function getDomain(host: string): string | null {
 	return nullableString(result);
 }
 
-/** tldts getPublicSuffix with private domains: the public suffix of `host`, or null */
-export function getPublicSuffix(host: string): string | null {
+/**
+ * tldts getPublicSuffix: the public suffix of `host`, or null; with the
+ * private domains unless `icann` (the ICANN section alone)
+ */
+export function getPublicSuffix(host: string, icann = false): string | null {
 	const lib = library();
-	const result: unknown = lib.publicSuffix(text(host));
+	const result: unknown = lib.publicSuffix(text(host), icann);
 	settle(lib, false);
 	return nullableString(result);
 }

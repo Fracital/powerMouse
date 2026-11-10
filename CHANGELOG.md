@@ -844,6 +844,24 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   service worker, each rewrite worker, a top's rewriter realm, a sandboxed
   frame's own copy) saves it: the library costs 0.8 MB of renderer memory
   per realm instead of 1.0.
+- A proxied frame costs 1,015 KB of heap again instead of 1,220, and 2.5
+  MB of renderer memory instead of 2.8 (native: 400 KB and 1.1 MB;
+  measure-frame-memory, 60 ad-like frames, Chrome 152 and 156 alike). Since
+  the memory work it had grown by 150 KB: canvas tainting made the WebGL
+  interfaces in every frame to hook their texture uploads (+100 KB, the
+  browser makes an interface the first time anything names it), WebRTC's
+  hooks +22 KB, resource timing +9 KB, and document.domain's check imported
+  tldts into the inject bundle beside the rewriter library's copy (+133 KB
+  of bundle, +160 KB of renderer memory a frame). WebGL's methods are now
+  hooked the first time `getContext` hands out a WebGL context in the
+  realm, document.domain asks the rewriter library (the ICANN section of
+  the list, as before), and every hook's wrapper is made with the native's
+  name and length already (a computed key and that many parameters) instead
+  of defining them, which left each of the 600 wrappers of a frame with a
+  property dictionary of its own; a wrapper keeps the native it stands for
+  instead of a copy of its source text. A new `frame-cost` suite, which CI
+  runs, fails when a proxied frame of 20 costs more than 1,120 KB of heap
+  (this build: 1,048) or `dist/injectDocument.js` grows past 850 KB (790).
 - `caches.match()` looks in the page's own origin's caches only. It searched
   every cache of the proxy origin, so a page (or a service worker) could
   read another proxied site's cached responses, and Stomp's own HTTP cache,

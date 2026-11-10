@@ -1,4 +1,3 @@
-import { getPublicSuffix } from 'tldts';
 import { routeHTML } from '../../../rewriteHTML';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
@@ -13,6 +12,7 @@ import {
 	unrouteCSS,
 	unrouteURL,
 } from '../../modules/Unroute';
+import { getPublicSuffix } from '../../rewriter';
 import DocumentClient, {
 	addDocumentOpenListener,
 	getGlobalParsingState,
@@ -754,7 +754,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						!host.endsWith(`.${parsed}`)
 					)
 						throw refuse(`'${shown}' is not a suffix of '${host}'.`);
-					if (getPublicSuffix(parsed) === parsed)
+					// the ICANN section, as tldts answered by default here before
+					// (through the rewriter library: a copy of tldts in the bundle
+					// cost every frame its tables)
+					if (getPublicSuffix(parsed, true) === parsed)
 						throw refuse(`'${shown}' is a top-level domain.`);
 				},
 			),

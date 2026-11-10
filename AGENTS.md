@@ -237,7 +237,11 @@ purpose, and the `measure-*` timings) and `PARALLEL=2`; since 2026-11-07 it is
 required by branch protection, so a suite that cannot pass on the runner
 goes behind one of those flags rather than staying red (a per-frame animation
 measurement reads `SKIP_TIMING` itself and keeps only its final-position
-assertion there).
+assertion there). What every proxied frame costs is gated by `frame-cost`,
+which is not a measurement: a heap ceiling for one proxied frame of 20 with
+room for noise (measure-frame-memory is the full measurement) and a size
+budget for `dist/injectDocument.js`. Raise a budget only in the change that
+needs it, saying why.
 
 Rules for touching the workflow, because a PR from anyone runs it:
 

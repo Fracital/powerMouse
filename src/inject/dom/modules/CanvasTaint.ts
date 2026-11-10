@@ -15,6 +15,8 @@ const taintedSources = new WeakSet<object>();
 
 type Kind = 'image' | 'svgImage' | 'video' | 'canvas' | 'other';
 
+const toStringTag = Symbol.toStringTag;
+
 /**
  * Canvas tainting. Every route is same-origin to the browser, so an image of
  * another site drawn into a canvas never taints it and the page reads its
@@ -29,6 +31,11 @@ type Kind = 'image' | 'svgImage' | 'video' | 'canvas' | 'other';
  *
  * Hot path: a draw costs a WeakSet lookup when the canvas is tainted
  * already, else a WeakMap lookup and a native getter call for the source.
+ *
+ * WebGL's methods are hooked the first time a `getContext` of the realm
+ * hands out a WebGL context, which is the only way to one: the browser
+ * makes an interface the first time anything names it, and the two WebGL
+ * ones cost every frame about 90 KB of heap (an ad frame that never draws).
  */
 export default class CanvasTaintModule extends Module<DocumentClient> {
 	apply() {
@@ -294,6 +301,67 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 				`Failed to execute '${method}' on 'HTMLCanvasElement': Tainted canvases may not be exported.`,
 			);
 
+		// WebGL refuses a tainting source as a texture
+		const sourceName: Record<Kind, string> = {
+			image: 'The image element',
+			svgImage: 'The image element',
+			video: 'The video element',
+			canvas: 'The canvas element',
+			other: 'The source image',
+		};
+		/** a WebGL context's prototype, by its interface's name */
+		const hookTextures = (proto: object, name: string) => {
+			const methods =
+				name === 'WebGLRenderingContext'
+					? ['texImage2D', 'texSubImage2D']
+					: name === 'WebGL2RenderingContext'
+						? ['texImage2D', 'texSubImage2D', 'texImage3D', 'texSubImage3D']
+						: [];
+			for (const method of methods) {
+				const native = (proto as Record<string, unknown>)[method];
+				if (typeof native !== 'function') continue;
+				(proto as Record<string, unknown>)[method] = proxyModule.wrapFunction(
+					native,
+					(target, that, args) => {
+						// the source is the last argument of every overload that takes one
+						const source = args[args.length - 1];
+						if (taints(source))
+							throw securityError(
+								`Failed to execute '${method}' on '${name}': ${
+									sourceName[kindOf(source as object)]
+								} contains cross-origin data, and may not be loaded.`,
+							);
+						return Reflect.apply(target, that, args);
+					},
+				);
+			}
+		};
+		// the context prototypes looked at already: each is hooked (or not) on
+		// the first context of it a getContext hands out
+		const seen = new WeakSet<object>();
+		const hookGetContext = (proto: object | undefined) => {
+			const native = proto && (proto as Record<string, unknown>).getContext;
+			if (typeof native !== 'function') return;
+			(proto as Record<string, unknown>).getContext = proxyModule.wrapFunction(
+				native,
+				(target, that, args) => {
+					const context = Reflect.apply(target, that, args);
+					if (context === null || typeof context !== 'object') return context;
+					const proto = Reflect.getPrototypeOf(context);
+					if (proto && !seen.has(proto)) {
+						seen.add(proto);
+						const name = Reflect.getOwnPropertyDescriptor(
+							proto,
+							toStringTag,
+						)?.value;
+						if (typeof name === 'string') hookTextures(proto, name);
+					}
+					return context;
+				},
+			);
+		};
+		hookGetContext(canvasProto);
+
 		const offscreen2D = global.OffscreenCanvasRenderingContext2D?.prototype;
 		if (offscreen2D) {
 			hookDraw(offscreen2D, offscreenContextCanvas, 'drawImage');
@@ -304,6 +372,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 				taintedContexts,
 				"Failed to execute 'getImageData' on 'OffscreenCanvasRenderingContext2D': The canvas has been tainted by cross-origin data.",
 			);
+			hookGetContext(global.OffscreenCanvas.prototype);
 			// Chrome 153 reworded its OffscreenCanvas errors: 'Tainted
 			// "OffscreenCanvas" may not be exported.' became 'A tainted
 			// OffscreenCanvas may not be exported.'. No canvas is tainted natively
@@ -378,45 +447,6 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 					return result;
 				},
 			);
-		}
-
-		// WebGL refuses a tainting source as a texture
-		const sourceName: Record<Kind, string> = {
-			image: 'The image element',
-			svgImage: 'The image element',
-			video: 'The video element',
-			canvas: 'The canvas element',
-			other: 'The source image',
-		};
-		for (const [name, methods] of [
-			['WebGLRenderingContext', ['texImage2D', 'texSubImage2D']],
-			[
-				'WebGL2RenderingContext',
-				['texImage2D', 'texSubImage2D', 'texImage3D', 'texSubImage3D'],
-			],
-		] as const) {
-			const proto = (
-				global as unknown as Record<string, { prototype: object }>
-			)[name]?.prototype;
-			if (!proto) continue;
-			for (const method of methods) {
-				const native = (proto as Record<string, unknown>)[method];
-				if (typeof native !== 'function') continue;
-				(proto as Record<string, unknown>)[method] = proxyModule.wrapFunction(
-					native,
-					(target, that, args) => {
-						// the source is the last argument of every overload that takes one
-						const source = args[args.length - 1];
-						if (taints(source))
-							throw securityError(
-								`Failed to execute '${method}' on '${name}': ${
-									sourceName[kindOf(source as object)]
-								} contains cross-origin data, and may not be loaded.`,
-							);
-						return Reflect.apply(target, that, args);
-					},
-				);
-			}
 		}
 	}
 }

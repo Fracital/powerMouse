@@ -88,7 +88,8 @@ function parsesAsScript(source: string): boolean {
 export interface LibraryParts {
 	modifyCSS?: (text: string, url: StompURL, context?: string) => string;
 	getDomain?: (host: string) => string | null;
-	getPublicSuffix?: (host: string) => string | null;
+	/** with the private list unless `icann` (the ICANN section alone) */
+	getPublicSuffix?: (host: string, icann?: boolean) => string | null;
 }
 
 function missing(name: string): never {
@@ -153,9 +154,14 @@ export function library(parts: LibraryParts) {
 		domain(host: string): string | null {
 			return run(() => (parts.getDomain ?? missing('getDomain'))(host), null);
 		},
-		publicSuffix(host: string): string | null {
+		/** with the private list, or the ICANN section alone when `icann` */
+		publicSuffix(host: string, icann: boolean): string | null {
 			return run(
-				() => (parts.getPublicSuffix ?? missing('getPublicSuffix'))(host),
+				() =>
+					(parts.getPublicSuffix ?? missing('getPublicSuffix'))(
+						host,
+						icann === true,
+					),
 				null,
 			);
 		},

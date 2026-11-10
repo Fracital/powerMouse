@@ -163,8 +163,344 @@ export function contextThis(that: unknown, global: typeof globalThis): unknown {
 // the native source each wrapper shows: one table for every realm the
 // bundle hooks, so a page that reads another realm's hooked function (a
 // popup's document.write, a frame's fetch) through its own toString sees
-// the native source too
-const functionStrings = new WeakMap<Function, string>();
+// the native source too. A wrapper of a native function keeps the native
+// itself, whose source is read when asked: a frame makes some 600 wrappers,
+// and each kept string cost it about 50 bytes it almost never shows
+const functionStrings = new WeakMap<Function, string | Function>();
+// the realm's own, taken before any hook
+const nativeToString = Function.prototype.toString;
+
+/** what a wrapper's toString shows, by its entry in functionStrings */
+function sourceOf(entry: string | Function): string {
+	return typeof entry === 'string'
+		? entry
+		: Reflect.apply(nativeToString, entry, []);
+}
+
+type Wrap = (target: any, that: any, args: any[], newTarget?: any) => any;
+type Shape = (
+	key: string,
+	fn: Function,
+	wrap: Wrap,
+	construct: boolean | 'callable',
+) => Function;
+
+// taken before any page script runs
+const arraySlice = Array.prototype.slice;
+/** a function's arguments as an array, with no iterator the page can patch */
+const listOf = (args: IArguments): any[] => Reflect.apply(arraySlice, args, []);
+
+/** a call of the wrapper `wrapped` of a constructor `fn` (see wrapFunction) */
+function construct_(
+	fn: Function,
+	wrap: Wrap,
+	construct: boolean | 'callable',
+	wrapped: Function,
+	that: unknown,
+	args: any[],
+	newTarget: Function | undefined,
+) {
+	if (construct === true) {
+		if (!newTarget) return Reflect.apply(fn, that, args);
+		if (args.length < fn.length)
+			return Reflect.construct(
+				fn,
+				args,
+				newTarget === wrapped ? fn : newTarget,
+			);
+	}
+
+	// `this` is never the instance (wrap constructs it from newTarget); a
+	// prototype's constructor may be read-only (GeneratorFunction's), so
+	// nothing is written to it
+	if (construct && newTarget === wrapped) newTarget = fn;
+
+	return wrap(fn, that, args, newTarget);
+}
+
+/**
+ * Wrappers that read as a native of their name and length: named by a
+ * computed key, with that many parameters. Giving a function its `name` or
+ * `length` with defineProperty makes V8 keep its properties in a dictionary
+ * of its own, about 170 bytes, and a frame makes some 600 wrappers. A call
+ * with as many arguments as parameters hands them on as they are (as fast
+ * as the rest parameter was), any other reads them from `arguments`. Strict
+ * (a class body), so a constructible one has no own `arguments` or
+ * `caller`, as a native has not. Indexed by length; a longer native's
+ * wrapper is named the slow way.
+ */
+// a rest parameter would leave the length 0
+/* eslint-disable prefer-rest-params */
+class Shapes {
+	/** not constructible, no `prototype`: a native method's */
+	static method: Shape[] = [
+		(key, fn, wrap) =>
+			({
+				[key]() {
+					return wrap(
+						fn,
+						this,
+						arguments.length === 0 ? [] : listOf(arguments),
+					);
+				},
+			})[key],
+		(key, fn, wrap) =>
+			({
+				[key](_a: unknown) {
+					return wrap(
+						fn,
+						this,
+						arguments.length === 1 ? [_a] : listOf(arguments),
+					);
+				},
+			})[key],
+		(key, fn, wrap) =>
+			({
+				[key](_a: unknown, _b: unknown) {
+					return wrap(
+						fn,
+						this,
+						arguments.length === 2 ? [_a, _b] : listOf(arguments),
+					);
+				},
+			})[key],
+		(key, fn, wrap) =>
+			({
+				[key](_a: unknown, _b: unknown, _c: unknown) {
+					return wrap(
+						fn,
+						this,
+						arguments.length === 3 ? [_a, _b, _c] : listOf(arguments),
+					);
+				},
+			})[key],
+		(key, fn, wrap) =>
+			({
+				[key](_a: unknown, _b: unknown, _c: unknown, _d: unknown) {
+					return wrap(
+						fn,
+						this,
+						arguments.length === 4 ? [_a, _b, _c, _d] : listOf(arguments),
+					);
+				},
+			})[key],
+		(key, fn, wrap) =>
+			({
+				[key](_a: unknown, _b: unknown, _c: unknown, _d: unknown, _e: unknown) {
+					return wrap(
+						fn,
+						this,
+						arguments.length === 5 ? [_a, _b, _c, _d, _e] : listOf(arguments),
+					);
+				},
+			})[key],
+		(key, fn, wrap) =>
+			({
+				[key](
+					_a: unknown,
+					_b: unknown,
+					_c: unknown,
+					_d: unknown,
+					_e: unknown,
+					_f: unknown,
+				) {
+					return wrap(
+						fn,
+						this,
+						arguments.length === 6
+							? [_a, _b, _c, _d, _e, _f]
+							: listOf(arguments),
+					);
+				},
+			})[key],
+		(key, fn, wrap) =>
+			({
+				[key](
+					_a: unknown,
+					_b: unknown,
+					_c: unknown,
+					_d: unknown,
+					_e: unknown,
+					_f: unknown,
+					_g: unknown,
+				) {
+					return wrap(
+						fn,
+						this,
+						arguments.length === 7
+							? [_a, _b, _c, _d, _e, _f, _g]
+							: listOf(arguments),
+					);
+				},
+			})[key],
+	];
+	/** constructible, with a `prototype`: a native constructor's */
+	static constructor_: Shape[] = [
+		(key, fn, wrap, construct) => {
+			const wrapped = {
+				[key]: function (this: unknown) {
+					return construct_(
+						fn,
+						wrap,
+						construct,
+						wrapped,
+						this,
+						arguments.length === 0 ? [] : listOf(arguments),
+						new.target,
+					);
+				},
+			}[key];
+			return wrapped;
+		},
+		(key, fn, wrap, construct) => {
+			const wrapped = {
+				[key]: function (this: unknown, _a: unknown) {
+					return construct_(
+						fn,
+						wrap,
+						construct,
+						wrapped,
+						this,
+						arguments.length === 1 ? [_a] : listOf(arguments),
+						new.target,
+					);
+				},
+			}[key];
+			return wrapped;
+		},
+		(key, fn, wrap, construct) => {
+			const wrapped = {
+				[key]: function (this: unknown, _a: unknown, _b: unknown) {
+					return construct_(
+						fn,
+						wrap,
+						construct,
+						wrapped,
+						this,
+						arguments.length === 2 ? [_a, _b] : listOf(arguments),
+						new.target,
+					);
+				},
+			}[key];
+			return wrapped;
+		},
+		(key, fn, wrap, construct) => {
+			const wrapped = {
+				[key]: function (this: unknown, _a: unknown, _b: unknown, _c: unknown) {
+					return construct_(
+						fn,
+						wrap,
+						construct,
+						wrapped,
+						this,
+						arguments.length === 3 ? [_a, _b, _c] : listOf(arguments),
+						new.target,
+					);
+				},
+			}[key];
+			return wrapped;
+		},
+		(key, fn, wrap, construct) => {
+			const wrapped = {
+				[key]: function (
+					this: unknown,
+					_a: unknown,
+					_b: unknown,
+					_c: unknown,
+					_d: unknown,
+				) {
+					return construct_(
+						fn,
+						wrap,
+						construct,
+						wrapped,
+						this,
+						arguments.length === 4 ? [_a, _b, _c, _d] : listOf(arguments),
+						new.target,
+					);
+				},
+			}[key];
+			return wrapped;
+		},
+		(key, fn, wrap, construct) => {
+			const wrapped = {
+				[key]: function (
+					this: unknown,
+					_a: unknown,
+					_b: unknown,
+					_c: unknown,
+					_d: unknown,
+					_e: unknown,
+				) {
+					return construct_(
+						fn,
+						wrap,
+						construct,
+						wrapped,
+						this,
+						arguments.length === 5 ? [_a, _b, _c, _d, _e] : listOf(arguments),
+						new.target,
+					);
+				},
+			}[key];
+			return wrapped;
+		},
+		(key, fn, wrap, construct) => {
+			const wrapped = {
+				[key]: function (
+					this: unknown,
+					_a: unknown,
+					_b: unknown,
+					_c: unknown,
+					_d: unknown,
+					_e: unknown,
+					_f: unknown,
+				) {
+					return construct_(
+						fn,
+						wrap,
+						construct,
+						wrapped,
+						this,
+						arguments.length === 6
+							? [_a, _b, _c, _d, _e, _f]
+							: listOf(arguments),
+						new.target,
+					);
+				},
+			}[key];
+			return wrapped;
+		},
+		(key, fn, wrap, construct) => {
+			const wrapped = {
+				[key]: function (
+					this: unknown,
+					_a: unknown,
+					_b: unknown,
+					_c: unknown,
+					_d: unknown,
+					_e: unknown,
+					_f: unknown,
+					_g: unknown,
+				) {
+					return construct_(
+						fn,
+						wrap,
+						construct,
+						wrapped,
+						this,
+						arguments.length === 7
+							? [_a, _b, _c, _d, _e, _f, _g]
+							: listOf(arguments),
+						new.target,
+					);
+				},
+			}[key];
+			return wrapped;
+		},
+	];
+}
+/* eslint-enable prefer-rest-params */
 
 export default class ProxyModule extends Module<Client> {
 	functionStrings = functionStrings;
@@ -206,8 +542,8 @@ export default class ProxyModule extends Module<Client> {
 		this.client.global.Function.prototype.toString = this.wrapFunction(
 			this.client.global.Function.prototype.toString,
 			(target, that, args) => {
-				if (this.functionStrings.has(that))
-					return this.functionStrings.get(that);
+				const known = this.functionStrings.get(that);
+				if (known !== undefined) return sourceOf(known);
 				const foreign = delegating ? null : foreignToString(that);
 				if (foreign) {
 					delegating = true;
@@ -318,7 +654,7 @@ export default class ProxyModule extends Module<Client> {
 		}
 	}
 	mirrorAttributes<F extends Function, T extends Function>(from: F, to: T): T {
-		this.functionStrings.set(to, from.toString());
+		this.mirrorSource(from, to);
 
 		Reflect.defineProperty(to, 'length', {
 			configurable: true,
@@ -335,6 +671,21 @@ export default class ProxyModule extends Module<Client> {
 		});
 
 		return to;
+	}
+	/** `to`'s toString shows `from`'s source */
+	mirrorSource(from: Function, to: Function) {
+		const known = this.functionStrings.get(from);
+		if (known !== undefined) this.functionStrings.set(to, known);
+		else {
+			const source = from.toString();
+			// a native the page has not dressed up reads the same later
+			this.functionStrings.set(
+				to,
+				isNative(source) && source === Reflect.apply(nativeToString, from, [])
+					? from
+					: source,
+			);
+		}
 	}
 	/**
 	 * `wrapper` stands in for the realm's constructor `native` (the page's
@@ -432,36 +783,36 @@ export default class ProxyModule extends Module<Client> {
 		wrap: (target: T, that: any, args: any[], newTarget?: any) => any,
 		construct: boolean | 'callable' = false,
 	): T {
-		const wrapped: Function =
-			'prototype' in fn
+		const constructible = 'prototype' in fn;
+		const { name, length } = fn;
+		const shape =
+			typeof name === 'string' && typeof length === 'number'
+				? (constructible ? Shapes.constructor_ : Shapes.method)[length]
+				: undefined;
+		let wrapped: Function;
+		if (shape) {
+			wrapped = shape(name, fn, wrap, construct);
+			this.mirrorSource(fn, wrapped);
+		} else {
+			wrapped = constructible
 				? function attach(this: any, ...args: any[]): any {
-						let newTarget: Function = new.target;
-
-						if (construct === true) {
-							if (!new.target) return Reflect.apply(fn, this, args);
-							if (args.length < fn.length)
-								return Reflect.construct(
-									fn,
-									args,
-									new.target === wrapped ? fn : new.target,
-								);
-						}
-
-						// `this` is never the instance (wrap constructs it from
-						// newTarget); a prototype's constructor may be read-only
-						// (GeneratorFunction's), so nothing is written to it
-						if (construct && new.target === wrapped) newTarget = fn;
-
-						// @ts-ignore
-						return wrap(fn, this, args, newTarget);
+						return construct_(
+							fn,
+							wrap,
+							construct,
+							wrapped,
+							this,
+							args,
+							new.target,
+						);
 					}
 				: {
 						attach(this: any, ...args: any[]) {
 							return wrap(fn, this, args);
 						},
 					}.attach;
-
-		this.mirrorAttributes(fn, wrapped);
+			this.mirrorAttributes(fn, wrapped);
+		}
 
 		if (construct) {
 			wrapped.prototype = fn.prototype;
