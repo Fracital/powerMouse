@@ -861,6 +861,16 @@ body.recents.recents-from-home .dock {
 	transition: none;
 }
 
+/* the switcher's own controls (tab count, new tab, Close all, the dock) go
+   at once too: the panel is drawn over every page, so fading them painted
+   them over the opening card. Their parts as well, which the universal
+   `transition: all` would otherwise keep visible for 0.2s */
+body.recents.recents-closing .recents > :not(.recentsLabels),
+body.recents.recents-closing .recents > :not(.recentsLabels) * {
+	visibility: hidden;
+	transition: none;
+}
+
 body.recents .frames .frame {
 	display: block !important;
 	position: absolute;

@@ -47,6 +47,12 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- Opening a card in the demo's tab manager also hides the manager's own
+  controls at once (the tab count, the new-tab button, Close all and the
+  quick-link dock). They faded out over about 250 ms above the opening page,
+  as the other cards did; only the backdrop still fades, under the card
+  (switcher-geometry suite, desktop and phone widths, entered from the home
+  screen and from a tab).
 - Opening a card in the demo's tab manager hides the other cards at once,
   as One UI's switcher does. They used to fade out over about 250 ms above
   the opening page (every card's bar and close button is drawn over every

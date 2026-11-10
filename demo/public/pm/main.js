@@ -778,12 +778,14 @@ function hideRecents(expand = null) {
 	if (!expand || !tabs.includes(expand)) return teardownRecents();
 
 	recentsClosing = true;
-	// controls fade with the card. The dock is pinned solid while the manager
-	// was entered from home (it slid out of the tiles); unpin it here, or it
-	// stays put and vanishes when the stage goes instead of fading
+	// the backdrop fades under the card; the dock is no longer pinned above
+	// the cards (it is while the manager was entered from home, having slid
+	// out of the tiles)
 	document.body.classList.remove('recents-visible', 'recents-from-home');
-	// the labels container stays solid: the expanding card's bar copy is what
-	// the user sees until the real bar takes over at teardown
+	// the controls go at once (they are drawn over every page, so fading
+	// painted them over the opening card); the labels container stays solid:
+	// the expanding card's bar copy is what the user sees until the real bar
+	// takes over at teardown
 	document.body.classList.add('recents-closing');
 	const label = labelFor.get(expand);
 	// a frame created while the stage is up (new tab from the dock) has no box

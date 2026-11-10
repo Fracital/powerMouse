@@ -310,9 +310,11 @@ await sleep(600);
 /**
  * Open the centred card and watch every frame of the animation: a grid of
  * points over the opening card must never hit another card's label (its bar
- * copy, close button or body), and no other tab's frame may still be visible within
- * the card's box. Every label is drawn over every frame, so a neighbour that
- * merely faded out painted its bar over the opening page for ~150 ms.
+ * copy, close button or body) or one of the switcher's controls, no other
+ * tab's frame may still be visible within the card's box, and no control
+ * (tab count, new tab, Close all, a dock button) that overlaps the box may
+ * still show. Labels and controls are drawn over every frame, so anything
+ * that merely faded out painted over the opening page for ~150 ms.
  */
 const sampleOpen = () =>
 	page.evaluate(
@@ -321,6 +323,22 @@ const sampleOpen = () =>
 				const labels = [...document.querySelectorAll('.cardLabel')];
 				const label = labels.find((l) => l.style.opacity === '1');
 				const frames = [...document.querySelectorAll('.frames .frame')];
+				const panel = document.getElementById('recentsPanel');
+				const controls = [
+					'#recentsCount',
+					'#newTab',
+					'#closeAll',
+					'.dockButton',
+				].flatMap((sel) => [...panel.querySelectorAll(sel)]);
+				// what the element paints with: its own opacity times its
+				// ancestors' up to the panel (the panel's children fade)
+				const shown = (el) => {
+					if (getComputedStyle(el).visibility === 'hidden') return 0;
+					let opacity = 1;
+					for (let n = el; n && n !== panel; n = n.parentElement)
+						opacity *= +getComputedStyle(n).opacity;
+					return opacity;
+				};
 				label.click();
 				const own = document.querySelector('.frame:not(.hidden)');
 				const bad = [];
@@ -334,15 +352,36 @@ const sampleOpen = () =>
 					painted++;
 					const t = Math.round(performance.now() - start);
 					const r = label.getBoundingClientRect();
-					for (let i = 1; i < 8; i++)
-						for (let j = 1; j < 8; j++) {
-							const x = r.left + (r.width * i) / 8;
-							const y = r.top + (r.height * j) / 8;
+					// 12 x 12 points, out to the edges, where the dock and the top
+					// controls sit
+					for (let i = 0; i < 12; i++)
+						for (let j = 0; j < 12; j++) {
+							const x = r.left + (r.width * (i + 0.5)) / 12;
+							const y = r.top + (r.height * (j + 0.5)) / 12;
 							const hit = document.elementFromPoint(x, y);
 							const other = hit?.closest('.cardLabel');
 							if (other && other !== label)
 								bad.push([t, 'label', hit.className, x | 0, y | 0]);
+							else if (!other && hit?.closest('#recentsPanel'))
+								bad.push([t, 'control', hit.className, x | 0, y | 0]);
 						}
+					for (const el of controls) {
+						const c = el.getBoundingClientRect();
+						const overlaps =
+							c.width > 0 &&
+							c.right > r.left &&
+							c.left < r.right &&
+							c.bottom > r.top &&
+							c.top < r.bottom;
+						const opacity = shown(el);
+						if (overlaps && opacity > 0.01)
+							bad.push([
+								t,
+								'control',
+								el.id || el.className,
+								+opacity.toFixed(2),
+							]);
+					}
 					for (const frame of frames) {
 						if (frame === own) continue;
 						const f = frame.getBoundingClientRect();
@@ -384,55 +423,25 @@ for (const [which, centre] of [
 	}
 	const open = await sampleOpen();
 	ok(
-		`opening the ${which} card: no other card shows over it`,
+		`opening the ${which} card: nothing else shows over it`,
 		open.frames > 3 && !open.stuck && open.bad.length === 0,
 		JSON.stringify(open),
 	);
 	await sleep(400);
 }
 
-// the dock fades out whichever way the switcher was entered
+// the controls go at once whichever way the switcher was entered (from
+// home the dock is pinned solid above the cards, having slid out of the
+// tiles)
 for (const from of ['home', 'browser']) {
 	if (from === 'home') await page.click('#home');
-	else {
-		await page.click('#recents');
-		await sleep(400);
-		await page.evaluate(() =>
-			[...document.querySelectorAll('.cardLabel')]
-				.find((l) => l.style.opacity === '1')
-				.click(),
-		);
-		await sleep(600);
-	}
 	await page.click('#recents');
 	await sleep(700);
-	const samples = await page.evaluate(
-		() =>
-			new Promise((resolve) => {
-				const out = [];
-				const dock = document.getElementById('dock');
-				const start = performance.now();
-				const tick = () => {
-					out.push([
-						Math.round(performance.now() - start),
-						+getComputedStyle(dock).opacity,
-						document.body.classList.contains('recents'),
-					]);
-					if (performance.now() - start < 300) requestAnimationFrame(tick);
-					else resolve(out);
-				};
-				// the centred card opens on one click; a side card would only centre
-				[...document.querySelectorAll('.cardLabel')]
-					.find((l) => l.style.opacity === '1')
-					.click();
-				tick();
-			}),
-	);
-	const whileOpen = samples.filter((s) => s[2]);
+	const open = await sampleOpen();
 	ok(
-		`dock fades out when opening a card (entered from ${from})`,
-		whileOpen.length > 3 && whileOpen.at(-1)[1] < 0.2 && whileOpen[0][1] > 0.8,
-		`${whileOpen[0]?.[1]} -> ${whileOpen.at(-1)?.[1]}`,
+		`no control shows over the opening card (entered from ${from})`,
+		open.frames > 3 && !open.stuck && open.bad.length === 0,
+		JSON.stringify(open),
 	);
 	await sleep(400);
 }
@@ -452,7 +461,7 @@ ok(
 );
 const phoneOpen = await sampleOpen();
 ok(
-	'phone: no other card shows over the opening card',
+	'phone: nothing else shows over the opening card',
 	phoneOpen.frames > 3 && !phoneOpen.stuck && phoneOpen.bad.length === 0,
 	JSON.stringify(phoneOpen),
 );
