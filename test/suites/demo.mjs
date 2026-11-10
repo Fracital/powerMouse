@@ -1,5 +1,6 @@
 // The demo end to end: landing, a proxied page, the address bar, Back, Home,
 // and a reload that restores the proxied page from the URL fragment.
+import { execFileSync } from 'node:child_process';
 import {
 	activeFrame,
 	done,
@@ -33,7 +34,7 @@ ok(
 		await page.$$eval('.sites a', (links) => links.map((a) => a.href)),
 	) === JSON.stringify(['https://fracit.al/', 'https://vibeos.fracit.al/']),
 );
-// the commits panel: GitHub's answer, or the note saying it gave none
+// the commits panel
 await page
 	.waitForFunction(
 		() =>
@@ -67,12 +68,17 @@ const fit = () =>
 				: null,
 		};
 	});
+// the server answers from its own checkout's git log, so GitHub's rate
+// limit (60 an hour per address) never empties the list
+const head = execFileSync('git', ['rev-parse', '--short=7', 'HEAD'], {
+	encoding: 'utf8',
+}).trim();
 ok(
-	'latest commits shown, or GitHub said why not',
-	(commits.items > 0 &&
-		commits.shas.every((sha) => /^[0-9a-f]{7}$/.test(sha))) ||
-		/GitHub did not answer/.test(commits.note),
-	JSON.stringify(commits),
+	"latest commits shown from the checkout's git log, newest first",
+	commits.items > 0 &&
+		commits.shas.every((sha) => /^[0-9a-f]{7}$/.test(sha)) &&
+		commits.shas[0] === head,
+	JSON.stringify({ head, ...commits }),
 );
 if (commits.items > 0) {
 	const fitted = await fit();

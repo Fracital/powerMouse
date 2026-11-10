@@ -19,16 +19,24 @@
 //                       or unset runs the same-origin controller (README,
 //                       "Origin isolation")
 //   WISP_ALLOW_LOOPBACK let the built-in wisp reach loopback/private hosts
+//   STOMP_REPO          the GitHub repository whose commits the home page
+//                       lists (default Fracital/powerMouse, read from this
+//                       checkout's own git log)
+//   GITHUB_TOKEN        optional; raises GitHub's limit for the commit list's
+//                       avatars from 60 to 5000 requests an hour
 //   STOMP_DEV           development mode (`npm run dev` sets it): /__dev is a
 //                       WebSocket that announces rebuilt bundles and edited
 //                       files to the page, which reloads what changed; see
 //                       demo/public/pm/dev.js
-import { watch } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { readFileSync, watch } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
-import { hostname } from 'node:os';
-import { dirname, sep } from 'node:path';
+import { hostname, tmpdir } from 'node:os';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { server as wisp } from '@mercuryworkshop/wisp-js/server';
 import express from 'express';
 // `with { type: 'json' }` requires Node 22+. That is deliberate: idiots
@@ -188,53 +196,168 @@ app.get('/api/status', (req, res) => {
 		node: process.version,
 	});
 });
-// the repository's latest commits, for the home page. GitHub's answer is
-// kept ten minutes (an address gets 60 requests an hour without a token);
-// through a failure the last answer is served and GitHub asked again after
-// five. STOMP_REPO names another repository.
-const commitsRepo = process.env.STOMP_REPO || 'Fracital/powerMouse';
-let commitsCache = { at: 0, body: null };
-app.get('/api/commits', async (req, res) => {
-	if (Date.now() - commitsCache.at > 600000) {
+// the repository's latest commits, for the home page. This checkout's own
+// git log answers: at once, never rate limited, and exactly what is deployed
+// (terp deploys a git checkout); avatars come from GitHub's avatar host by
+// email, which is not the API and has no limit. GitHub's API is asked only
+// when there is no checkout (an installed package, or STOMP_REPO naming
+// another repository): in the background, one request at a time, at most
+// every ten minutes, conditionally (an unchanged list is a 304), never again
+// before a refusal's reset time, and its last answer is kept on disk so a
+// restart (every deploy) starts from it. An address gets 60 API requests an
+// hour without GITHUB_TOKEN; reloads and many visitors at once cost none.
+const DEFAULT_REPO = 'Fracital/powerMouse';
+const commitsRepo = process.env.STOMP_REPO || DEFAULT_REPO;
+const COMMITS = 30;
+const githubToken = process.env.GITHUB_TOKEN;
+const commitsFile = join(
+	tmpdir(),
+	`stomp-demo-commits-${commitsRepo.replace(/[^\w.-]/g, '_')}.json`,
+);
+// what GitHub last said: its list, an avatar per author email, its ETag
+let github = {
+	checkedAt: 0,
+	retryAt: 0,
+	etag: null,
+	error: null,
+	commits: [],
+	avatars: {},
+};
+try {
+	github = { ...github, ...JSON.parse(readFileSync(commitsFile, 'utf8')) };
+} catch {
+	// nothing kept yet
+}
+let githubAsking = null;
+function askGitHub() {
+	const now = Date.now();
+	if (githubAsking || now - github.checkedAt < 600000 || now < github.retryAt)
+		return githubAsking;
+	githubAsking = (async () => {
 		try {
 			const answer = await fetch(
-				`https://api.github.com/repos/${commitsRepo}/commits?per_page=15`,
+				`https://api.github.com/repos/${commitsRepo}/commits?per_page=${COMMITS}`,
 				{
 					headers: {
 						'user-agent': 'stomp-demo',
 						accept: 'application/vnd.github+json',
+						...(github.etag && { 'if-none-match': github.etag }),
+						...(githubToken && { authorization: `Bearer ${githubToken}` }),
 					},
 					signal: AbortSignal.timeout(8000),
 				},
 			);
-			if (!answer.ok) throw new Error(`GitHub answered ${answer.status}`);
-			const list = await answer.json();
-			commitsCache = {
-				at: Date.now(),
-				body: {
-					repo: commitsRepo,
-					url: `https://github.com/${commitsRepo}`,
-					commits: list.map((entry) => {
-						const who = entry.commit.author || entry.commit.committer || {};
-						return {
-							sha: entry.sha.slice(0, 7),
-							url: entry.html_url,
-							message: entry.commit.message.split('\n')[0],
-							author: who.name || entry.author?.login || 'unknown',
-							avatar: entry.author?.avatar_url || null,
-							date: who.date || null,
-						};
-					}),
-				},
-			};
+			github.checkedAt = Date.now();
+			if (answer.status === 304) github.error = null;
+			else if (answer.ok) {
+				const list = await answer.json();
+				for (const entry of list) {
+					const email = entry.commit.author?.email;
+					if (email && entry.author?.avatar_url)
+						github.avatars[email] = entry.author.avatar_url;
+				}
+				github.commits = list.map((entry) => {
+					const who = entry.commit.author || entry.commit.committer || {};
+					return {
+						sha: entry.sha.slice(0, 7),
+						url: entry.html_url,
+						message: entry.commit.message.split('\n')[0],
+						author: who.name || entry.author?.login || 'unknown',
+						avatar: entry.author?.avatar_url || null,
+						date: who.date || null,
+					};
+				});
+				github.etag = answer.headers.get('etag');
+				github.error = null;
+			} else {
+				// rate limited (403/429) or refused: wait for its reset time
+				const reset = Number(answer.headers.get('x-ratelimit-reset')) * 1000;
+				const after = Number(answer.headers.get('retry-after')) * 1000;
+				github.retryAt =
+					reset > Date.now() ? reset : Date.now() + (after || 600000);
+				github.error = `GitHub answered ${answer.status}`;
+			}
+			await writeFile(commitsFile, JSON.stringify(github)).catch(() => {});
 		} catch (error) {
-			if (!commitsCache.body)
-				return res.status(502).json({ error: error.message });
-			commitsCache.at = Date.now() - 300000;
+			// unreachable: ask again in five minutes
+			github.checkedAt = Date.now() - 300000;
+			github.error = error.message;
+		} finally {
+			githubAsking = null;
 		}
+	})();
+	return githubAsking;
+}
+const run = promisify(execFile);
+const checkout = fileURLToPath(new URL('..', import.meta.url));
+let local = { at: 0, commits: null };
+async function localCommits() {
+	if (commitsRepo !== DEFAULT_REPO) return null;
+	if (Date.now() - local.at < 30000) return local.commits;
+	let commits = null;
+	try {
+		const { stdout } = await run(
+			'git',
+			[
+				'-C',
+				checkout,
+				'log',
+				`-${COMMITS}`,
+				'--format=%H%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e',
+			],
+			{ timeout: 5000 },
+		);
+		commits = stdout
+			.split('\x1e')
+			.map((line) => line.trim())
+			.filter(Boolean)
+			.map((line) => {
+				const [sha, author, email, date, message] = line.split('\x1f');
+				return { sha, author, email, date, message };
+			});
+	} catch {
+		// no git, or not a checkout
 	}
-	res.set('Cache-Control', 'public, max-age=300');
-	res.json(commitsCache.body);
+	local = { at: Date.now(), commits };
+	return commits;
+}
+// an author's avatar: GitHub's for that email (the page adds `&s=` for size)
+function avatarOf(email) {
+	if (github.avatars[email]) return github.avatars[email];
+	const noreply = /^(\d+)\+[^@]+@users\.noreply\.github\.com$/i.exec(email);
+	if (noreply)
+		return `https://avatars.githubusercontent.com/u/${noreply[1]}?v=4`;
+	return email
+		? `https://avatars.githubusercontent.com/u/e?email=${encodeURIComponent(email)}`
+		: null;
+}
+app.get('/api/commits', async (req, res) => {
+	const ours = await localCommits();
+	let commits;
+	if (ours?.length)
+		commits = ours.map((commit) => ({
+			sha: commit.sha.slice(0, 7),
+			url: `https://github.com/${commitsRepo}/commit/${commit.sha}`,
+			message: commit.message,
+			author: commit.author,
+			avatar: avatarOf(commit.email),
+			date: commit.date,
+		}));
+	else {
+		const asking = askGitHub();
+		if (!github.commits.length) await asking;
+		if (!github.commits.length)
+			return res
+				.status(502)
+				.json({ error: github.error || 'no answer from GitHub yet' });
+		commits = github.commits;
+	}
+	res.set('Cache-Control', 'public, max-age=60');
+	res.json({
+		repo: commitsRepo,
+		url: `https://github.com/${commitsRepo}`,
+		commits,
+	});
 });
 // The page, its scripts and the Stomp bundles change with every deploy and
 // are fetched once per visit anyway: no-cache makes browsers revalidate and

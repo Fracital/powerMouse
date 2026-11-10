@@ -33,9 +33,14 @@ The first release after a four-year gap. Everything below is breaking.
 
 - The demo's home page shows the repository's latest commits as a git log
   (avatar, message, author and age, short sha, each linking to the commit)
-  from `/api/commits`, the demo server's ten-minute copy of GitHub's answer
-  (`STOMP_REPO` names another repository), and links to Fracital and vibeOS
-  beside the title (demo suite).
+  from `/api/commits`, and links to Fracital and vibeOS beside the title
+  (demo suite). The list is the server's own checkout's git log, so
+  GitHub's rate limit (60 API requests an hour per address) never empties
+  it; avatars come from GitHub's avatar host by email. Without a checkout,
+  or with `STOMP_REPO` naming another repository, GitHub's API is asked in
+  the background at most every ten minutes, conditionally, never before a
+  refusal's reset time (`GITHUB_TOKEN` raises the limit), and its last
+  answer is kept on disk across restarts.
 - `membrane` (both controllers, on unless `false`): the setting for the
   window membrane, which will hand a page every window and every object of
   another window's realm through a proxy that checks on each use which site
