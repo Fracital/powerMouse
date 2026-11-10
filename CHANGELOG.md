@@ -352,6 +352,10 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   The CORS change had refused its answers to cross-origin requests and
   turned an opaque answer into a network fetch. The Cache API keeps a `cors`
   or opaque response's type. (sop-escapes suite, `?sw`.)
+- The worker reuses an output it just gave a document only for a request
+  the same-origin policy judges the same way (its copy marker, opaque
+  origin and preflight headers are in the key) and never for a hop of a
+  redirect chain. (sop-escapes suite.)
 - A request a host rule sends with another Origin (the host's own, for a
   site that answers only that) is checked against that origin by the CORS
   check, not the page's: the site's Access-Control-Allow-Origin names the

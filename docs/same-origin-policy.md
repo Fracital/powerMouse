@@ -218,6 +218,14 @@ Filled in commit by commit; see the CHANGELOG for each.
   its bytes (its realm reads nothing of them: an opaque response's body
   methods give nothing), and the Cache API keeps a `cors` or opaque
   response with its type, in a page and in a worker.
+- **Output reuse** (`recentOutputs`, master's speed series): the worker
+  gives a document the output it just gave it for the same request only
+  when everything the policy decides by is the same: the client (its
+  origin), mode, credentials, the inject's copy marker, the opaque-origin
+  marker and the page's headers that need a preflight; never for a hop of
+  a redirect chain, whose origin may be "null" by then. A refused request
+  is never kept. (sop-escapes: a script of another site plain then
+  `crossorigin` without CORS, and the other way.)
 
 ## Left
 

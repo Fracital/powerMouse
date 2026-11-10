@@ -289,6 +289,12 @@ function rememberRedirect(
 	}
 }
 
+/** whether this request is a later hop of a redirect chain the worker answered */
+function redirectPending(client: string, referrer: string, url: string) {
+	const entry = redirectHops.get(redirectKey(client, referrer, url));
+	return !!entry && Date.now() - entry.at <= REDIRECT_HOP_TTL;
+}
+
 /** what the previous hop of this request's redirect chain decided, if it was one */
 function takeRedirect(
 	client: string,
@@ -459,7 +465,16 @@ function genericForward(
 		const recentKey = transformBody
 			? recentOutputKey(serverRequest, context)
 			: null;
-		const recent = recentKey !== null ? takeRecentOutput(recentKey) : null;
+		// never a hop of a redirect chain: its origin may be "null" by then
+		const recent =
+			recentKey !== null &&
+			!redirectPending(
+				context?.clientId ?? '',
+				serverRequest.referrer,
+				serverRequest.url,
+			)
+				? takeRecentOutput(recentKey)
+				: null;
 		if (recent) {
 			rewriter.log?.({
 				url: reportURL(url),
@@ -1610,7 +1625,12 @@ function genericForward(
 				responseHeaders.delete('age');
 			}
 			const kept = encoded ?? (output instanceof Blob ? output : null);
-			if (recentKey !== null && kept !== null && response.status === 200)
+			if (
+				recentKey !== null &&
+				kept !== null &&
+				response.status === 200 &&
+				!previousHop
+			)
 				rememberOutput(recentKey, {
 					body: kept,
 					status: response.status,
@@ -1764,6 +1784,13 @@ function recentOutputKey(
 		request.destination,
 		request.mode,
 		request.credentials,
+		// what the same-origin policy decides by, past the client's origin
+		// (the client id) and the mode and credentials above: whether it is
+		// one of the inject's copies, of an opaque origin, and the page's
+		// headers that would need a preflight
+		request.headers.get(LOAD_HEADER) ?? '',
+		request.headers.has(OPAQUE_HEADER) ? 'opaque' : '',
+		unsafeHeaderNames(request.headers, notPagesHeader).join(','),
 	].join('\u0000');
 }
 

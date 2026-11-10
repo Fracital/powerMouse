@@ -661,6 +661,33 @@
 		);
 		return result.reports.map((report) => report.message);
 	});
+	// the worker reuses an output it just gave a document for the same
+	// request again: a load the policy lets through and the same URL as a
+	// load it refuses must each get their own verdict, both orders
+	add(
+		'script/the same script plain, then crossorigin without ACAO',
+		async () => {
+			const { url } = r(B, {
+				type: 'js',
+				js: 'window.__sopTwice = (window.__sopTwice || 0) + 1',
+			});
+			const first = await script(url);
+			const second = await script(url, 'anonymous');
+			return [first.how, second.how, window.__sopTwice];
+		},
+	);
+	add(
+		'script/the same script crossorigin without ACAO, then plain',
+		async () => {
+			const { url } = r(B, {
+				type: 'js',
+				js: 'window.__sopOnce = (window.__sopOnce || 0) + 1',
+			});
+			const first = await script(url, 'anonymous');
+			const second = await script(url);
+			return [first.how, second.how, window.__sopOnce];
+		},
+	);
 	add('script/crossorigin script without ACAO fails', () =>
 		script(r(B, { type: 'js', js: 'window.__sopRan = 1' }).url, 'anonymous'),
 	);
