@@ -52,10 +52,12 @@ const nativeResponseBody = Reflect.getOwnPropertyDescriptor(
  * The type a response the page holds has natively: every route is
  * same-origin to the browser, so its own says `basic` for all. Another
  * origin's is `cors`, or `opaque` for a no-cors request, which reads as the
- * browser's opaque response does. Kept for every realm of the bundle (a
- * service worker's answer, a response out of the Cache API)
+ * browser's opaque response does. A response the inject makes for one the
+ * browser would have had from the network (an emulated worker's navigation
+ * preload) is `basic`. Kept for every realm of the bundle (a service
+ * worker's answer, a response out of the Cache API)
  */
-const responseTypes = new WeakMap<Response, 'cors' | 'opaque'>();
+const responseTypes = new WeakMap<Response, 'basic' | 'cors' | 'opaque'>();
 /** the page's URL of a response, where the browser has the route */
 const responseURLs = new WeakMap<Response, string>();
 /** responses that came with RESPONSE_TYPE_HEADER, which the page never sees */
@@ -77,7 +79,7 @@ export function recordResponse(
 	type: 'basic' | 'cors' | 'opaque' | undefined,
 	url?: string,
 ) {
-	if (type === 'cors' || type === 'opaque') responseTypes.set(response, type);
+	if (type !== undefined) responseTypes.set(response, type);
 	if (url !== undefined) responseURLs.set(response, url);
 }
 
@@ -120,9 +122,9 @@ const nativeResponseStatusText = Reflect.getOwnPropertyDescriptor(
 )!.get!;
 
 /**
- * A response the Cache API is given, as it must keep it: one the page reads
- * as `cors` or `opaque` (the browser has a `basic` one) is kept with the
- * mark of what it is (RESPONSE_TYPE_HEADER), which a match reads back
+ * A response the Cache API is given, as it must keep it: one whose type is
+ * recorded (`cors` or `opaque` where the browser has a `basic` one, `basic`
+ * where it has a `default` one) is kept with the mark of what it is (RESPONSE_TYPE_HEADER), which a match reads back
  * (adoptTypeMark). Any other goes as it is
  */
 export function cacheableResponse(response: unknown): unknown {

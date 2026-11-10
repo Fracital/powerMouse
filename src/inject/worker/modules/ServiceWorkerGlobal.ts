@@ -11,12 +11,12 @@ import type {
 	ToEmulated,
 	WireServiceWorkerResponse,
 } from '../../../serviceWorkerTypes';
-import { sendBody } from '../../../transport/bodyPort';
+import { receiveBody, sendBody } from '../../../transport/bodyPort';
 import { postToPort, SW_RPC } from '../../../transport/messages';
 import { RpcHelper } from '../../../transport/rpc';
 import { cookieStoreMethods } from '../../cookieStoreMethods';
 import Module from '../../Module';
-import { nativeBodyOf } from '../../modules/Fetch';
+import { nativeBodyOf, recordResponse } from '../../modules/Fetch';
 import ProxyModule from '../../modules/Proxy';
 import ServiceWorkerObjects from '../../serviceWorkerObjects';
 import type WorkerClient from '../Client';
@@ -1125,6 +1125,62 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 			return request;
 		};
 
+		/**
+		 * The preload responses this worker was given, by their body as the
+		 * Response first had it: Stomp's service worker sends the body only
+		 * once something reads it, so a response passed to respondWith with
+		 * that body untouched (not read, locked or teed by a clone) is the
+		 * network's answer, which reaches the page without crossing over here
+		 */
+		const preloads = new WeakMap<
+			Response,
+			{ body: ReadableStream | null; pulled: () => boolean }
+		>();
+		const preloadOf = (event: string) =>
+			rpc.call('preloadResponse', { event }).then((wire) => {
+				if (!wire)
+					throw new global.DOMException(
+						'The service worker navigation preload request failed due to a network error. This may have been an actual network error, or caused by the browser shutting down, or the service worker crashing.',
+						'NetworkError',
+					);
+				let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+				let pulled = false;
+				const nullBody = [101, 103, 204, 205, 304].includes(wire.status);
+				const body = nullBody
+					? null
+					: new global.ReadableStream<Uint8Array>(
+							{
+								pull: async (controller) => {
+									if (!pulled) {
+										pulled = true;
+										const port = await rpc.call('preloadBody', { event });
+										if (!port) {
+											controller.error(new global.TypeError('Failed to fetch'));
+											return;
+										}
+										reader = receiveBody(port).getReader();
+									}
+									const chunk = await reader!.read();
+									if (chunk.done) controller.close();
+									else controller.enqueue(chunk.value);
+								},
+								cancel: (reason) => reader?.cancel(reason),
+							},
+							{ highWaterMark: 0 },
+						);
+				const response = new NativeResponse(body, {
+					status: wire.status,
+					statusText: wire.statusText,
+					headers: wire.headers,
+				});
+				recordResponse(response, 'basic', wire.url);
+				preloads.set(response, {
+					body: nativeBodyOf(response),
+					pulled: () => pulled,
+				});
+				return response;
+			});
+
 		const answerOf = async (
 			state: FetchState,
 			redirect: RequestRedirect,
@@ -1186,6 +1242,18 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 				];
 			}
 			if (type === 'opaqueredirect') return [{ kind: 'network' }, []];
+			const preload = preloads.get(response);
+			const stream = preload ? nativeBodyOf(response) : null;
+			if (
+				preload &&
+				!response.bodyUsed &&
+				!preload.pulled() &&
+				stream === preload.body &&
+				!stream?.locked
+			) {
+				stream?.cancel().catch(() => {});
+				return [{ kind: 'preload' }, []];
+			}
 			if (response.bodyUsed)
 				return [
 					{
@@ -1233,11 +1301,15 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 				},
 				fetch: async (init) => {
 					const request = requestOf(init.request);
+					const preloadResponse = init.preload ? preloadOf(init.id) : undefined;
+					// one the worker never reads rejects unseen
+					preloadResponse?.catch(() => {});
 					const event = new FetchEvent('fetch', {
 						request,
 						clientId: init.clientId,
 						resultingClientId: init.resultingClientId,
 						isReload: init.isReload,
+						...(preloadResponse ? { preloadResponse } : {}),
 					});
 					const state = fetches.get(event)!;
 					const extension = extensions.get(event)!;

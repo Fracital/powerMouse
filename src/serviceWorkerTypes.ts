@@ -163,6 +163,12 @@ export interface FetchInit {
 	clientId: string;
 	resultingClientId: string;
 	isReload: boolean;
+	/**
+	 * a navigation whose registration has navigation preload on: its
+	 * preload request went out with it, and `preloadResponse` asks for the
+	 * answer (FromEmulated.preloadResponse)
+	 */
+	preload?: boolean;
 }
 
 /** a Response on its way from the emulated worker */
@@ -187,7 +193,13 @@ export type FetchAnswer =
 	/** the page gets a network error */
 	| { kind: 'error'; message: string }
 	/** an opaque or opaque-redirect response: the network answers instead */
-	| { kind: 'network' };
+	| { kind: 'network' }
+	/**
+	 * the event's preload response itself, unread: the network's answer
+	 * reaches the page as Stomp's service worker has it, never through the
+	 * worker
+	 */
+	| { kind: 'preload' };
 
 export interface MessageInit {
 	data: unknown;
@@ -228,6 +240,10 @@ export type FromEmulated = {
 	/** the port arrived; whether the script's top level ran to its end */
 	hello: [{ evaluated: boolean; error?: string }];
 	respond: [{ event: string; answer: FetchAnswer }];
+	/** a fetch event's navigation preload answer; null when it failed */
+	preloadResponse: [{ event: string }, WireServiceWorkerResponse | null];
+	/** its body, once the worker reads it; null when it is gone */
+	preloadBody: [{ event: string }, PortBody | null];
 	skipWaiting: [];
 	claim: [null, ErrorInfo | null];
 	matchAll: [{ includeUncontrolled: boolean; type: string }, ClientInfo[]];

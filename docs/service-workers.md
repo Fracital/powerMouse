@@ -100,8 +100,23 @@ carries the registration that controls the new document, so
 `navigator.serviceWorker.controller` is set before the page's first script,
 as natively.
 
+Navigation preload: when the registration has it on, a GET navigation's
+request goes out from Stomp's service worker as soon as the navigation is
+routed, in parallel with the worker's start, as the navigation itself (its
+destination, mode and cookies) plus `Service-Worker-Navigation-Preload` with
+the registration's header value; its `Set-Cookie` fields are applied as its
+headers arrive. The FetchEvent's `preloadResponse` resolves to a `basic`
+Response of the real URL whose body crosses to the worker only when
+something reads it. A worker that passes that Response to `respondWith`
+unread (YouTube's does for every navigation outside its app shell) hands
+the page the network's answer as it is, rewritten like any network
+response, without the body going to the worker and back; one that reads it
+answers with its own copy; one that answers nothing leaves it unused and the
+navigation goes to the network again, as Chrome 152 does
+(service-worker-preload suite).
+
 Page API calls (`register`, `getRegistration`, `update`, `unregister`,
-`postMessage`, the navigation preload stub) are messages to the real worker
+`postMessage`, the navigation preload manager) are messages to the real worker
 with a reply port, handled under `event.waitUntil` so the real worker stays
 alive through an install. State changes go back to every document of the site
 as messages, which the page module turns into `statechange`, `updatefound`
@@ -191,8 +206,8 @@ origin, which is stricter than the membrane's site key.
   `startMessages()`, an `onmessage` assignment or the end of parsing.
 - `ServiceWorkerRegistration`: `installing`, `waiting`, `active`, `scope`,
   `updateViaCache`, `update()`, `unregister()`, `onupdatefound`,
-  `navigationPreload` (a stub that keeps its state per registration;
-  `preloadResponse` resolves `undefined`).
+  `navigationPreload` (its state kept per registration, and the preload
+  request sent as described under Request flow).
 - `ServiceWorker`: `scriptURL` (the real URL), `state`, `postMessage`,
   `onstatechange`, `onerror`.
 - The registration's managers are all there and behave as Chrome's do

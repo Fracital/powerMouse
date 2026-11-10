@@ -1160,9 +1160,58 @@ function genericForward(
 				: serverRequest.blob();
 		upload.catch(() => {});
 
+		// the fields go out in the order Chrome sends them (headerOrder.ts)
+		const shape: RequestShape = {
+			navigation: navigation && DOCUMENT_DESTINATIONS.has(destination),
+			destination: navigation && topLevel ? 'document' : destination,
+			mode:
+				load?.mode ??
+				(serverRequest.mode || (destination === 'empty' ? 'cors' : 'no-cors')),
+			method: serverRequest.method,
+			cache: serverRequest.cache,
+		};
+		const fetchUpstream = (headers: Headers) => {
+			const upstream = upload.then((body) =>
+				rewriter.bare.fetch(url.toString(), {
+					method: serverRequest.method,
+					redirect: 'manual',
+					// redirect: serverRequest.redirect,
+					body,
+					headers: chromeOrderedHeaders(headers, shape),
+				}),
+			);
+			// an answer that arrives after the page gave up is dropped unread, so
+			// the transport stops reading it
+			upstream.then(
+				(response) => {
+					if (signal?.aborted) response.body?.cancel().catch(() => {});
+				},
+				() => {},
+			);
+			return Promise.race([upstream, abortedSoon]);
+		};
+		// a navigation preload request (navigation preload on): the
+		// navigation's own, with the registration's header, sent while the
+		// emulated worker starts; its cookies are set as it arrives, as the
+		// browser's network stack does, whoever reads it
+		const startPreload = async (value: string) => {
+			const headers = new Headers(requestHeaders);
+			headers.set('service-worker-navigation-preload', value);
+			const preloaded = await fetchUpstream(headers);
+			const rest: [string, string][] = [];
+			for (const [header, field] of preloaded.rawHeaders ?? [])
+				if (header.toLowerCase() !== 'set-cookie') rest.push([header, field]);
+				else if (credentials) await rewriter.cookies.set(field, url.url);
+			preloaded.rawHeaders = rest;
+			return preloaded;
+		};
 		// the page's emulated service worker answers before the HTTP cache and
 		// the network, as a real one sits before them (docs/service-workers.md)
-		const { response: fromWorker, control } = await answerFromServiceWorker(
+		const {
+			response: fromWorker,
+			control,
+			network: preloaded,
+		} = await answerFromServiceWorker(
 			rewriter,
 			serverRequest,
 			url,
@@ -1170,6 +1219,7 @@ function genericForward(
 			upload,
 			referer ?? '',
 			navigation && topLevel ? 'document' : serverRequest.destination,
+			startPreload,
 		);
 		// the worker gave the page a network error
 		if (fromWorker?.type === 'error') return Response.error();
@@ -1260,6 +1310,7 @@ function genericForward(
 		const cache = rewriter.cache;
 		const hit =
 			!fromWorker &&
+			!preloaded &&
 			cache &&
 			!context?.bypassCache &&
 			(serverRequest.method === 'GET' || serverRequest.method === 'HEAD')
@@ -1269,36 +1320,6 @@ function genericForward(
 		let cached = false;
 		const within = (window: number | null) =>
 			!!hit && !hit.mustRevalidate && window !== null && hit.staleFor <= window;
-		// the fields go out in the order Chrome sends them (headerOrder.ts)
-		const shape: RequestShape = {
-			navigation: navigation && DOCUMENT_DESTINATIONS.has(destination),
-			destination: navigation && topLevel ? 'document' : destination,
-			mode:
-				load?.mode ??
-				(serverRequest.mode || (destination === 'empty' ? 'cors' : 'no-cors')),
-			method: serverRequest.method,
-			cache: serverRequest.cache,
-		};
-		const fetchUpstream = (headers: Headers) => {
-			const upstream = upload.then((body) =>
-				rewriter.bare.fetch(url.toString(), {
-					method: serverRequest.method,
-					redirect: 'manual',
-					// redirect: serverRequest.redirect,
-					body,
-					headers: chromeOrderedHeaders(headers, shape),
-				}),
-			);
-			// an answer that arrives after the page gave up is dropped unread, so
-			// the transport stops reading it
-			upstream.then(
-				(response) => {
-					if (signal?.aborted) response.body?.cancel().catch(() => {});
-				},
-				() => {},
-			);
-			return Promise.race([upstream, abortedSoon]);
-		};
 		const withValidators = (headers: Headers) => {
 			const conditional = new Headers(headers);
 			if (hit?.etag) conditional.set('if-none-match', hit.etag);
@@ -1341,7 +1362,8 @@ function genericForward(
 			let upstream: Awaited<ReturnType<typeof rewriter.bare.fetch>> | null =
 				null;
 			try {
-				upstream = await fetchUpstream(withValidators(requestHeaders));
+				upstream =
+					preloaded ?? (await fetchUpstream(withValidators(requestHeaders)));
 				// a Basic challenge is answered once with the request's own
 				// credentials, else the realm's kept ones; what succeeds is kept
 				const realm =
@@ -2499,7 +2521,7 @@ const OWN_HEADERS = [
  * by its real URL; what it answers is then rewritten like the origin's
  * answer. A request the worker itself makes is never its own.
  */
-async function answerFromServiceWorker(
+async function answerFromServiceWorker<N extends Response>(
 	rewriter: Rewriter,
 	serverRequest: Request,
 	url: StompURL,
@@ -2507,7 +2529,13 @@ async function answerFromServiceWorker(
 	upload: Promise<Blob | undefined>,
 	referrer: string,
 	destination: string,
-): Promise<{ response: Response | null; control?: ControlInfo }> {
+	startPreload: (value: string) => Promise<N>,
+): Promise<{
+	response: Response | null;
+	control?: ControlInfo;
+	/** the navigation preload's answer, for the page as the network's */
+	network?: N;
+}> {
 	if (!rewriter.config.serviceWorkers || context?.internal)
 		return { response: null };
 	// a navigation or a worker's script goes to the registration whose scope
@@ -2550,6 +2578,15 @@ async function answerFromServiceWorker(
 			.then(() => serviceWorkers.sweep());
 		context?.waitUntil?.(after);
 	}
+	// navigation preload: a GET navigation's request goes out now, in
+	// parallel with the worker's start, as the browser sends it
+	const preload =
+		serverRequest.mode === 'navigate' &&
+		serverRequest.method === 'GET' &&
+		routed.record.navigationPreload.enabled
+			? startPreload(routed.record.navigationPreload.headerValue)
+			: undefined;
+	preload?.catch(() => {});
 	let body: Blob | null;
 	try {
 		body = (await upload) ?? null;
@@ -2557,31 +2594,38 @@ async function answerFromServiceWorker(
 		// the page's body could not be read: as the network would have
 		return { response: null, control: routed.control };
 	}
-	const response = await serviceWorkers.dispatch(routed.record, host, {
-		request: {
-			url: url.url.href,
-			method: serverRequest.method,
-			headers: [...serverRequest.headers].filter(
-				([name]) => !OWN_HEADERS.includes(name),
-			),
-			body,
-			mode: serverRequest.mode,
-			credentials: serverRequest.credentials,
-			cache: serverRequest.cache,
-			redirect: serverRequest.redirect,
-			referrer,
-			referrerPolicy: serverRequest.referrerPolicy,
-			integrity: serverRequest.integrity,
-			keepalive: serverRequest.keepalive,
-			destination: destination as RequestDestination,
+	const answer = await serviceWorkers.dispatch(
+		routed.record,
+		host,
+		{
+			request: {
+				url: url.url.href,
+				method: serverRequest.method,
+				headers: [...serverRequest.headers].filter(
+					([name]) => !OWN_HEADERS.includes(name),
+				),
+				body,
+				mode: serverRequest.mode,
+				credentials: serverRequest.credentials,
+				cache: serverRequest.cache,
+				redirect: serverRequest.redirect,
+				referrer,
+				referrerPolicy: serverRequest.referrerPolicy,
+				integrity: serverRequest.integrity,
+				keepalive: serverRequest.keepalive,
+				destination: destination as RequestDestination,
+			},
+			clientId: clientId ?? '',
+			resultingClientId: nonSubresource
+				? (context?.resultingClientId ?? context?.clientId ?? '')
+				: '',
+			isReload: !!context?.isReload,
 		},
-		clientId: clientId ?? '',
-		resultingClientId: nonSubresource
-			? (context?.resultingClientId ?? context?.clientId ?? '')
-			: '',
-		isReload: !!context?.isReload,
-	});
-	return { response, control: routed.control };
+		preload,
+	);
+	if (answer !== null && 'network' in answer)
+		return { response: null, control: routed.control, network: answer.network };
+	return { response: answer, control: routed.control };
 }
 
 const SCRIPT_HEADERS = {

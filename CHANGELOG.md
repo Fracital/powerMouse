@@ -434,6 +434,19 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   site stored showed in this one's usage. IndexedDB is sized from its
   values, where Chrome counts the compressed size on disk.
   (sop-escapes and sop-partitions suites.)
+- An emulated service worker's navigation preload works: with
+  `navigationPreload.enable()`, a GET navigation's request goes out as soon
+  as it is routed, in parallel with the worker's start, with
+  `Service-Worker-Navigation-Preload` and the navigation's own destination,
+  mode and cookies, and `event.preloadResponse` resolves to its answer (a
+  `basic` Response of the real URL) where it resolved `undefined`. A worker
+  that passes it to `respondWith` unread, as YouTube's does for every
+  navigation outside its app shell, hands the page the network's answer
+  without the body crossing to the worker and back; YouTube's worker used
+  to fetch the page again without the header, as a `fetch` (Sec-Fetch-Dest
+  `empty`). One that answers nothing leaves the preload unused and the
+  navigation goes out again, as Chrome 152 does. (service-worker-preload
+  suite, against a real worker, both modes.)
 - A background fetch's downloads are the page's CORS requests, as
   natively: one of another site without Access-Control-Allow-Origin fails
   the fetch (`fetch-error`), one with it succeeds. (sop-escapes suite.)

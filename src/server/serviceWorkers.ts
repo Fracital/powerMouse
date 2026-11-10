@@ -26,7 +26,7 @@ import type {
 	WorkerState,
 	WorkerType,
 } from '../serviceWorkerTypes';
-import { receiveBody } from '../transport/bodyPort';
+import { receiveBody, sendBody } from '../transport/bodyPort';
 import {
 	postToPort,
 	RESPONSE_TYPE_HEADER,
@@ -241,6 +241,27 @@ interface PendingFetch {
 	resolve: (answer: FetchAnswer) => void;
 }
 
+/**
+ * A navigation's preload request (navigation preload): it goes out with the
+ * navigation, in parallel with the worker's start, and its answer is the
+ * fetch event's `preloadResponse`. Its body stays here until the worker
+ * reads it; a worker that passes it on unread hands the page the network's
+ * answer as it is, without the body crossing to the worker and back (a
+ * worker that answers nothing leaves it unused: the browser sends the
+ * navigation again, as Chrome does)
+ */
+interface Preload {
+	response: Promise<Response | null>;
+	/** the real URL */
+	url: string;
+	/** the worker took the body */
+	taken: boolean;
+}
+
+/** how long an answered event's unread preload body is kept for the worker (it may read it after it answered) */
+const PRELOAD_KEEP_MS = 30_000;
+const USE_PRELOAD = Symbol('preload');
+
 export class ServiceWorkers {
 	#env?: Environment;
 	#db?: Promise<IDBPDatabase>;
@@ -253,6 +274,7 @@ export class ServiceWorkers {
 	readonly #instances = new Map<string, Instance>();
 	readonly #jobs = new Map<string, Promise<unknown>>();
 	readonly #fetches = new Map<string, PendingFetch>();
+	readonly #preloads = new Map<string, Preload>();
 	/** registrations with an update check running or queued (one at a time) */
 	readonly #updating = new Set<string>();
 	#serial = 0;
@@ -1636,6 +1658,32 @@ export class ServiceWorkers {
 			hello: async (result) => {
 				instance.hello?.(result);
 			},
+			preloadResponse: async ({ event }) => {
+				const preload = this.#preloads.get(event);
+				const response = await preload?.response;
+				if (!preload || !response) return [null, []];
+				return [
+					{
+						status: response.status,
+						statusText: response.statusText,
+						headers: [...response.headers],
+						body: null,
+						url: preload.url,
+						redirected: false,
+						type: 'basic',
+					},
+					[],
+				];
+			},
+			preloadBody: async ({ event }) => {
+				const preload = this.#preloads.get(event);
+				const response = await preload?.response;
+				if (!preload || !response?.body || preload.taken) return [null, []];
+				preload.taken = true;
+				this.#preloads.delete(event);
+				const body = sendBody(response.body);
+				return [body, [body.$stompBodyPort]];
+			},
 			respond: async ({ event, answer }) => {
 				const pending = this.#fetches.get(event);
 				if (!pending) {
@@ -2018,11 +2066,60 @@ export class ServiceWorkers {
 	 * or null for the network (no respondWith, a worker that would not start
 	 * or answer in time, an opaque answer)
 	 */
-	async dispatch(
+	async dispatch<N extends Response>(
+		record: RegistrationRecord,
+		host: WorkerHost,
+		init: Omit<FetchInit, 'id' | 'preload'>,
+		preload?: Promise<N>,
+	): Promise<Response | { network: N } | null> {
+		const id = uid();
+		if (!preload) {
+			const answer = await this.#dispatch(id, record, host, init);
+			return answer === USE_PRELOAD ? null : answer;
+		}
+		const state: Preload = {
+			response: preload.catch(() => null),
+			url: init.request.url,
+			taken: false,
+		};
+		this.#preloads.set(id, state);
+		const answer = await this.#dispatch(id, record, host, {
+			...init,
+			preload: true,
+		});
+		const drop = () => {
+			if (this.#preloads.get(id) !== state) return;
+			this.#preloads.delete(id);
+			state.response.then((response) =>
+				response?.body?.cancel().catch(() => {}),
+			);
+		};
+		// no answer: the page's request goes to the network on its own, and the
+		// preload's answer is dropped (Chrome 152 sends the navigation again)
+		if (answer === null) {
+			drop();
+			return null;
+		}
+		if (answer === USE_PRELOAD) {
+			// the network's answer, unread by the worker: the page gets it
+			const response = state.taken ? null : await state.response;
+			this.#preloads.delete(id);
+			if (response && !state.taken) return { network: response as N };
+			return null;
+		}
+		// the worker answered with its own response, which may still read the
+		// preload's body as it streams
+		if (answer.type === 'error') drop();
+		else setTimeout(drop, PRELOAD_KEEP_MS);
+		return answer;
+	}
+
+	async #dispatch(
+		id: string,
 		record: RegistrationRecord,
 		host: WorkerHost,
 		init: Omit<FetchInit, 'id'>,
-	): Promise<Response | null> {
+	): Promise<Response | typeof USE_PRELOAD | null> {
 		const version = record.active;
 		if (!version) return null;
 		const { ack, response: answerWait } = this.#timeouts(host);
@@ -2032,7 +2129,6 @@ export class ServiceWorkers {
 		} catch (error) {
 			return null;
 		}
-		const id = uid();
 		let resolve!: (answer: FetchAnswer) => void;
 		const answered = new Promise<FetchAnswer>((done) => (resolve = done));
 		this.#fetches.set(id, { resolve });
@@ -2051,6 +2147,7 @@ export class ServiceWorkers {
 				if (!responded) return null;
 				const answer = await withTimeout(answered, answerWait, 'respondWith');
 				if (answer.kind === 'network') return null;
+				if (answer.kind === 'preload') return USE_PRELOAD;
 				if (answer.kind === 'error') return Response.error();
 				const wire = answer.response;
 				const body = wire.body ? receiveBody(wire.body) : null;

@@ -124,6 +124,93 @@ const PAGES = {
 </script>`),
 };
 
+/**
+ * preload.html: what the site sent for this load, and how (the navigation
+ * preload header, the request's destination and mode); step 1 registers a
+ * worker with navigation preload on, the later steps are loads it answers
+ * the way `how` says
+ */
+const preloadPage = (request) => {
+	const header = request.headers['service-worker-navigation-preload'] ?? '';
+	const sent = [
+		header || 'no preload header',
+		request.headers['sec-fetch-dest'],
+		request.headers['sec-fetch-mode'],
+	].join(' ');
+	return html(`<title>SERVED</title><meta name="sent" content="${sent}">${LOG}<script>
+	finish(async () => {
+		const c = navigator.serviceWorker;
+		const step = params.get('step');
+		if (step === '1') {
+			const reg = await c.register('sw-preload.js?run=' + run);
+			await until(() => c.controller && c.controller.state === 'activated');
+			for (let i = 0; i < 100 && !(await reg.navigationPreload.getState()).enabled; i++)
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			push('registered', await reg.navigationPreload.getState());
+			return;
+		}
+		push(
+			'load',
+			params.get('how'),
+			document.title,
+			document.querySelector('meta[name=sent]').content,
+			String(c.controller && c.controller.state),
+		);
+	});
+</script>`);
+};
+
+/** sw-preload.js: navigation preload on; passes the preload on, reads it, or leaves the load alone */
+const preloadWorker = `self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (event) =>
+	event.waitUntil(
+		Promise.all([
+			clients.claim(),
+			self.registration.navigationPreload.enable(),
+			self.registration.navigationPreload.setHeaderValue('stomp-test'),
+		]),
+	),
+);
+self.addEventListener('fetch', (event) => {
+	if (event.request.mode !== 'navigate') return;
+	const how = new URL(event.request.url).searchParams.get('how');
+	if (how === 'pass')
+		event.respondWith(
+			Promise.resolve(event.preloadResponse).then(
+				(response) => response || fetch(event.request),
+			),
+		);
+	else if (how === 'read')
+		event.respondWith(
+			(async () => {
+				const response = await event.preloadResponse;
+				const text = await response.text();
+				return new Response(text.replace('SERVED', 'SERVED READ'), {
+					headers: response.headers,
+				});
+			})(),
+		);
+	else if (how === 'kind')
+		event.respondWith(
+			(async () => {
+				const response = await event.preloadResponse;
+				const kind = [
+					String(response),
+					response.type,
+					response.url.replace(/run=[^&]*/, ''),
+					response.status,
+					response.redirected,
+					response.headers.get('content-type'),
+				].join(' ');
+				const text = await response.text();
+				return new Response(text.replace('SERVED', kind), {
+					headers: response.headers,
+				});
+			})(),
+		);
+});
+`;
+
 /** sw-iso.js: remembers every request it gets, answers /probe itself, and reports */
 const isolationWorker = `const seen = [];
 self.addEventListener('install', () => self.skipWaiting());
@@ -181,6 +268,8 @@ self.addEventListener('message', (event) => event.source.postMessage({ version: 
 
 export async function startSite() {
 	const versions = new Map();
+	/** the requests for preload.html, per run */
+	const preloads = new Map();
 	let online = true;
 	const server = createServer((req, res) => {
 		const url = new URL(req.url, 'http://x');
@@ -203,6 +292,19 @@ export async function startSite() {
 			res.setHeader('content-type', 'text/plain');
 			res.setHeader('cache-control', 'max-age=600');
 			return res.end('cacheable from A');
+		}
+		if (url.pathname === '/app/preload.html') {
+			const seen = preloads.get(run) ?? [];
+			seen.push(
+				`${url.searchParams.get('step')} ${req.headers['service-worker-navigation-preload'] ?? 'none'}`,
+			);
+			preloads.set(run, seen);
+			res.setHeader('content-type', 'text/html; charset=utf-8');
+			return res.end(preloadPage(req));
+		}
+		if (url.pathname === '/app/sw-preload.js') {
+			res.setHeader('content-type', 'text/javascript');
+			return res.end(preloadWorker);
 		}
 		if (url.pathname === '/app/sw-offline.js') {
 			res.setHeader('content-type', 'text/javascript');
@@ -232,6 +334,8 @@ export async function startSite() {
 	return {
 		origin,
 		bump: (run) => versions.set(run, (versions.get(run) ?? 0) + 1),
+		/** the requests preload.html got in `run`: its step and preload header */
+		preloadRequests: (run) => preloads.get(run) ?? [],
 		/** stop answering: every connection is dropped, as an unreachable site's */
 		offline: () => (online = false),
 		online: () => (online = true),
