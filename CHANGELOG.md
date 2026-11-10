@@ -521,6 +521,23 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   went by the name alone; they now take HTML templates only, which also
   keeps an XHTML document's own `<template>` content (its name is
   lowercase there, and the copy of the page dropped it).
+- Proxied requests look like the Chrome that runs them on the network
+  (docs/fingerprint.md). Through epoxy the TLS ClientHello, the HTTP/2
+  SETTINGS, window, priorities and pseudo-header order and the field order
+  are Chrome 152's: JA4, JA3n, peetprint, the Akamai HTTP/2 hash and JA4H
+  equal native Chrome's, where rustls's hello, hyper's SETTINGS and an
+  alphabetical field order stood out before. The epoxy build patches rustls
+  (`chrome_hello`: GREASE, Chrome's suites and extensions, ALPS, a GREASE
+  ECH), adds X25519MLKEM768, brotli certificates and deflate and zstd
+  bodies, and h2 and hyper patches carry Chrome's HTTP/2 and HTTP/1 shape.
+  The service worker hands every request to the transport in Chrome's
+  order for its kind, with Chrome's Accept-Encoding, Priority (HTTP/2
+  only), Cache-Control for the cache mode and Origin on module scripts; a
+  transport that does not declare `fieldSupport` (libcurl) keeps its own
+  Accept-Encoding and gets no Priority. stomp-h3's QUIC ClientHello and
+  transport parameters are Chrome's QUIC ones too (same rustls patch, a
+  quinn-proto patch; JA4 equal to Chrome's). libcurl's TLS and HTTP/2 are
+  unchanged (a rebuild of libcurl.js with BoringSSL is planned in the doc).
 - YouTube's watch page no longer kills the tab ("Aw, Snap!", error code 4).
   Chrome (152 to at least 159) crashes the renderer, a CHECK in
   `cc::draw_property_utils::CalculateDrawProperties`, when a view transition
