@@ -102,8 +102,31 @@
 	}
 
 	/**
+	 * A connection with a remote description and no remote candidate of its
+	 * own: the only candidates it checks are the ones the page adds, and
+	 * with nothing connected the browser checks them at full rate (on a
+	 * connection that already has a working pair it checks a late one at
+	 * most every 480 ms or so, shared with every other pair, and a busy
+	 * runner sent none in seconds)
+	 */
+	async function loneConnection(config = {}) {
+		const other = new RTCPeerConnection();
+		other.createDataChannel('x');
+		await other.setLocalDescription();
+		const sdp = other.localDescription.sdp
+			.split('\r\n')
+			.filter((line) => !line.startsWith('a=candidate'))
+			.join('\r\n');
+		other.close();
+		const lone = new RTCPeerConnection(config);
+		await lone.setRemoteDescription({ type: 'offer', sdp });
+		await lone.setLocalDescription();
+		return lone;
+	}
+
+	/**
 	 * two connections of this page over a data channel; `remote` candidates
-	 * (strings) are added to the first as well, before it connects
+	 * (strings) are added to a lone connection meanwhile
 	 */
 	async function pair(config = {}, { remote = [], ms = 15000 } = {}) {
 		const a = new RTCPeerConnection(config);
@@ -119,10 +142,11 @@
 		await b.setRemoteDescription(a.localDescription);
 		await b.setLocalDescription();
 		await a.setRemoteDescription(b.localDescription);
+		const lone = await loneConnection(config);
 		const added = [];
 		for (const candidate of remote)
 			added.push(
-				await a.addIceCandidate({ candidate, sdpMid: '0' }).then(
+				await lone.addIceCandidate({ candidate, sdpMid: '0' }).then(
 					() => 'ok',
 					(error) => error.name,
 				),
@@ -139,6 +163,8 @@
 			open,
 			message,
 			added,
+			remote: descriptionView(lone.remoteDescription),
+			loneStats: await statsOf(lone),
 			aRemote: descriptionView(a.remoteDescription),
 			aLocal: descriptionView(a.localDescription),
 			aStats: await statsOf(a),
@@ -148,6 +174,7 @@
 		};
 		a.close();
 		b.close();
+		lone.close();
 		return out;
 	}
 
@@ -585,6 +612,8 @@
 		await b.setRemoteDescription(a.localDescription);
 		await b.setLocalDescription();
 		await a.setRemoteDescription(b.localDescription);
+		// the page's own candidates go to a connection that checks them at once
+		const lone = await loneConnection();
 		await wait(1000);
 		// an event of its own, dispatched at a connection: the name it reads
 		// back for an address it chose must not reach that address
@@ -599,13 +628,13 @@
 			});
 			a.dispatchEvent(event);
 			const shown = seen.candidate;
-			await a.addIceCandidate({ candidate: shown, sdpMid: '0' });
+			await lone.addIceCandidate({ candidate: shown, sdpMid: '0' });
 			return shown;
 		});
 		// another document's members, on this realm's objects
 		const own = (proto, name) => Object.getOwnPropertyDescriptor(proto, name);
 		await step('borrowedAdd', async () => {
-			await other.RTCPeerConnection.prototype.addIceCandidate.call(a, {
+			await other.RTCPeerConnection.prototype.addIceCandidate.call(lone, {
 				candidate: target,
 				sdpMid: '0',
 			});
@@ -659,7 +688,7 @@
 				sdpMid: '0',
 			});
 			const shown = made.candidate;
-			await a.addIceCandidate({ candidate: shown, sdpMid: '0' });
+			await lone.addIceCandidate({ candidate: shown, sdpMid: '0' });
 			return shown;
 		});
 		// intrinsics patched to watch every string the proxy's code handles,
@@ -711,8 +740,8 @@
 			// the watch works: a page string seen through it
 			'watching'.split('t');
 			try {
-				await a.addIceCandidate({ sdpMid: '0' });
-				await a.addIceCandidate({
+				await lone.addIceCandidate({ sdpMid: '0' });
+				await lone.addIceCandidate({
 					candidate: `candidate:32 1 udp 2122260223 0b5a0e4a-3333-4000-8000-000000000000.local ${sink} typ host generation 0`,
 					sdpMid: '0',
 				});
@@ -731,6 +760,7 @@
 		await wait(2000);
 		a.close();
 		b.close();
+		lone.close();
 		frame.remove();
 		return out;
 	}

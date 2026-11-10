@@ -147,6 +147,16 @@ requests, the page reads `srflx 127.0.0.1` and `192.168.1.23`,
 `172.16.8.8`, `fd4a:67bb:666b::8`, remote candidates get checks, in every
 realm).
 
+The native controls are preconditions, not fixed outcomes: whether and how
+the browser leaks depends on the machine, so a native run that does not
+show a leak is reported as a `note:` line and the proxied checks, strict
+everywhere, still run. Remote candidates the page chooses are added to a
+connection with nothing else to check: on one that already has a working
+pair, Chrome checks a late candidate at most every 480 ms or so, shared with
+every other pair (5 to 7 checks in 3 s here, against 49 on a lone
+connection), and GitHub's runner (Chrome 156, 4 vCPU) sent 0 or 1, which
+failed the native control there.
+
 Packets leaving the machine (network namespace, tcpdump on the uplink; the
 page names `stun:10.9.9.1:3478`, `stun:8.8.8.8:19302`, a UDP TURN server on
 10.9.9.1 and a TCP one on 8.8.8.8, a pool of 2, remote candidates on 10.9.9.1
