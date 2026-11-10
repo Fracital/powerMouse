@@ -343,6 +343,25 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- Every constructor the inject replaces reads as the browser's
+  (native-shapes suite, both modes, window and worker): XMLHttpRequest and
+  its event target and upload, EventSource, WebSocket, WebSocketStream,
+  Worker, SharedWorker, Request, Blob, File, Storage, BroadcastChannel,
+  MutationObserver (and WebKitMutationObserver, the same constructor
+  natively), ReportingObserver, MediaMetadata, FontFace, Function and the
+  generator and async function constructors. Their `prototype` was
+  writable (natively neither writable, enumerable nor configurable);
+  EventSource had no `CONNECTING`, `OPEN` or `CLOSED`; most inherited from
+  Function.prototype instead of their parent (`EventTarget`, `Blob`,
+  `XMLHttpRequestEventTarget`, `Function` for the generator constructors);
+  `XMLHttpRequest.prototype.constructor`, `WebSocket`'s and `Storage`'s
+  were other functions, so an instance's `constructor` was not the global;
+  the generator constructors' prototypes had a writable `constructor`.
+  Called without `new`, with too few arguments, or (XMLHttpRequestEventTarget,
+  XMLHttpRequestUpload, Storage) at all, each now throws the browser's own
+  error from the native constructor, where they threw made-up messages
+  (`Failed to construct 'te'`, a `DOMException` for Request) or, for
+  EventSource, constructed anyway.
 - The page's `location` reads as natively member by member (native-shapes
   suite, both modes). `toString` and `valueOf` were copies of `assign`
   (`location.toString.name` was `'assign'`, its length 1, its source

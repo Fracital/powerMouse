@@ -507,6 +507,16 @@ export default class MutationObserverModule extends Module<DocumentClient> {
 			},
 			true,
 		);
+		// the prefixed name is the same constructor
+		const prefixed = Reflect.getOwnPropertyDescriptor(
+			global,
+			'WebKitMutationObserver',
+		);
+		if (prefixed?.value === NativeObserver)
+			Reflect.defineProperty(global, 'WebKitMutationObserver', {
+				...prefixed,
+				value: global.MutationObserver,
+			});
 
 		prototype.observe = proxyModule.wrapFunction(
 			nativeObserve,

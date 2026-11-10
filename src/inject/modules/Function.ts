@@ -40,7 +40,7 @@ export default class FunctionModule extends Module<Client> {
 						proxyModule.functionStrings.set(made, written);
 					return made;
 				},
-				true,
+				'callable',
 			);
 		};
 
@@ -58,7 +58,9 @@ export default class FunctionModule extends Module<Client> {
 		};
 		const AsyncFunction = constructorOf('return async () => {}');
 
-		const proxyFunction = functionFactory(Function);
+		// each constructor is its prototype's `constructor` and inherits from
+		// the page's Function, as natively (ProxyModule.standIn)
+		const proxyFunction = functionFactory(this.client.global.Function);
 		// the generator constructors are reachable the same way
 		const GeneratorFunction = constructorOf('return function* () {}');
 		const AsyncGeneratorFunction = constructorOf(
@@ -67,43 +69,9 @@ export default class FunctionModule extends Module<Client> {
 		for (const [ctor, prefix] of [
 			[GeneratorFunction, 'function*'],
 			[AsyncGeneratorFunction, 'async function*'],
-		] as const) {
-			if (!ctor) continue;
-			const proxy = functionFactory(ctor, prefix);
-			Reflect.defineProperty(ctor.prototype, 'constructor', {
-				configurable: true,
-				enumerable: false,
-				writable: true,
-				value: proxy,
-			});
-		}
-
-		Reflect.defineProperty(
-			this.client.global.Function.prototype,
-			'constructor',
-			{
-				configurable: true,
-				enumerable: false,
-				writable: true,
-				value: proxyFunction,
-			},
-		);
-
-		if (AsyncFunction) {
-			const proxyAsyncFunction = functionFactory(
-				AsyncFunction,
-				'async function',
-			);
-			Reflect.defineProperty(AsyncFunction.prototype, 'constructor', {
-				configurable: true,
-				enumerable: false,
-				writable: true,
-				value: proxyAsyncFunction,
-			});
-			AsyncFunction.prototype.constructor = proxyAsyncFunction;
-		}
-
-		this.client.global.Function.prototype.constructor = proxyFunction;
+			[AsyncFunction, 'async function'],
+		] as const)
+			if (ctor) functionFactory(ctor, prefix);
 
 		this.client.global.Function = proxyFunction;
 	}

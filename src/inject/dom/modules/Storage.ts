@@ -3,7 +3,6 @@ import Module from '../../Module';
 import ProxyModule, {
 	catchRequiredArguments,
 	contextThis,
-	newConstructor,
 	usePrototype,
 } from '../../modules/Proxy';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
@@ -489,7 +488,11 @@ export default class StorageModule extends Module<DocumentClient> {
 			}
 		}
 
-		const globalStorageProxy = newConstructor(StorageProxy);
+		const globalStorageProxy = proxyModule.standInClass(
+			StorageProxy,
+			this.client.global.Storage,
+			true,
+		);
 
 		const natives = new WeakMap<object, StorageProxy>();
 

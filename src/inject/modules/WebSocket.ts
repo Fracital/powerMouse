@@ -6,11 +6,7 @@ import { urlLike } from '../../StompURL';
 import Client from '../Client';
 import Module from '../Module';
 import { failsToParse, withStack } from '../nativeErrors';
-import ProxyModule, {
-	classConstant,
-	newConstructor,
-	onEventTarget,
-} from './Proxy';
+import ProxyModule, { classConstant, onEventTarget } from './Proxy';
 
 const wsProtocols = ['ws:', 'wss:'];
 
@@ -201,7 +197,10 @@ export default class WebSocketModule extends Module<Client> {
 			}
 		}
 
-		const globalWebSocketProxy = newConstructor(MockWebSocket);
+		const globalWebSocketProxy = proxyModule.standInClass(
+			MockWebSocket,
+			NativeWebSocket,
+		);
 		onEventTarget(globalWebSocketProxy.prototype, 'close');
 		onEventTarget(globalWebSocketProxy.prototype, 'open');
 		onEventTarget(globalWebSocketProxy.prototype, 'message');
@@ -349,7 +348,10 @@ export default class WebSocketModule extends Module<Client> {
 					this.#socket.close(options.closeCode, options.reason);
 				}
 			}
-			const streamProxy = newConstructor(MockWebSocketStream);
+			const streamProxy = proxyModule.standInClass(
+				MockWebSocketStream,
+				nativeStream,
+			);
 			proxyModule.mirrorClass(nativeStream, streamProxy, streamInstances);
 			(this.client.global as { WebSocketStream?: unknown }).WebSocketStream =
 				streamProxy;

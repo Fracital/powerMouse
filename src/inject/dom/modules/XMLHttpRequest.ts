@@ -6,11 +6,7 @@ import {
 	OPAQUE_HEADER,
 } from '../../../transport/messages';
 import Module from '../../Module';
-import ProxyModule, {
-	classConstant,
-	domObjectConstructor,
-	onEventTarget,
-} from '../../modules/Proxy';
+import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import {
 	decodeText,
@@ -684,9 +680,11 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			}
 		}
 
-		const globalProxy = domObjectConstructor(XMLHttpRequestProxy);
-		const globalTargetProxy = domObjectConstructor(
+		const globalProxy = proxyModule.standInClass(XMLHttpRequestProxy, RealmXHR);
+		const globalTargetProxy = proxyModule.standInClass(
 			XMLHttpRequestEventTargetProxy,
+			that.client.global.XMLHttpRequestEventTarget,
+			true,
 		);
 
 		onEventTarget(globalTargetProxy.prototype, 'abort');
@@ -701,8 +699,12 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 		const nativeUpload = (
 			that.client.global as { XMLHttpRequestUpload?: unknown }
 		).XMLHttpRequestUpload;
-		const globalUploadProxy = domObjectConstructor(XMLHttpRequestUploadProxy);
 		if (typeof nativeUpload === 'function') {
+			const globalUploadProxy = proxyModule.standInClass(
+				XMLHttpRequestUploadProxy,
+				nativeUpload,
+				true,
+			);
 			proxyModule.mirrorClass(nativeUpload, globalUploadProxy, instances);
 			(that.client.global as any).XMLHttpRequestUpload = globalUploadProxy;
 		}

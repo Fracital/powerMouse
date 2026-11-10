@@ -126,38 +126,6 @@ export function onEventTarget(target: any, event: string) {
 	});
 }
 
-export function newConstructor<T extends Function>(target: T) {
-	function result(...args: any[]) {
-		if (new.target) {
-			return Reflect.construct(target, args, new.target);
-		} else {
-			throw new TypeError(`Illegal constructor`);
-		}
-	}
-
-	result.prototype = target.prototype;
-	result.prototype.constructor = result;
-
-	return <T>(<unknown>result);
-}
-
-export function domObjectConstructor<T extends Function>(target: T): T {
-	function result(...args: any[]) {
-		if (new.target) {
-			return Reflect.construct(target, args, new.target);
-		} else {
-			throw new TypeError(
-				`Failed to construct '${target.name}': Please use the 'new' operator, this DOM object constructor cannot be called as a function.`,
-			);
-		}
-	}
-
-	result.prototype = target.prototype;
-	result.prototype.constructor = result;
-
-	return <T>(<unknown>result);
-}
-
 /**
  * Throws a generic argument error.
  * @example
@@ -200,6 +168,8 @@ const functionStrings = new WeakMap<Function, string>();
 
 export default class ProxyModule extends Module<Client> {
 	functionStrings = functionStrings;
+	/** the constructors the page has in place of the realm's own, by the native */
+	#standIns = new Map<Function, Function>();
 	apply() {
 		// what this bundle rewrites keeps its text here, for the hook below
 		keepSourcesHere();
@@ -265,6 +235,9 @@ export default class ProxyModule extends Module<Client> {
 			);
 
 		for (const prop of Object.getOwnPropertyNames(target)) {
+			// the stand-in itself (standIn), not a method of the instances
+			if (prop === 'constructor') continue;
+
 			const descriptor = Reflect.getOwnPropertyDescriptor(target, prop)!;
 
 			if (!descriptor?.configurable) continue;
@@ -290,6 +263,9 @@ export default class ProxyModule extends Module<Client> {
 		const mirrorDescriptors = Object.getOwnPropertyDescriptors(from.prototype);
 
 		for (const key in descriptors) {
+			// the stand-in's own (standIn), not a method of the instances
+			if (key === 'constructor') continue;
+
 			const descriptor = descriptors[key];
 
 			const mirrorDescriptor = mirrorDescriptors[key];
@@ -360,21 +336,121 @@ export default class ProxyModule extends Module<Client> {
 
 		return to;
 	}
+	/**
+	 * `wrapper` stands in for the realm's constructor `native` (the page's
+	 * global is the wrapper) and reads as it does: name, length and source,
+	 * the native's own properties in its order with its descriptors (its
+	 * statics, such as XMLHttpRequest.DONE, and a `prototype` that is neither
+	 * writable, enumerable nor configurable), the page's stand-in for the
+	 * native's parent as its prototype (Object.getPrototypeOf(XMLHttpRequest)
+	 * is the page's XMLHttpRequestEventTarget) and, unless
+	 * `prototypeConstructor` is false (a named constructor such as Audio,
+	 * whose prototype is its element's), itself as its prototype's
+	 * `constructor`.
+	 */
+	standIn(wrapper: Function, native: Function, prototypeConstructor = true) {
+		this.mirrorAttributes(native, wrapper);
+		for (const key of Reflect.ownKeys(wrapper))
+			if (
+				key !== 'length' &&
+				key !== 'name' &&
+				key !== 'prototype' &&
+				!Reflect.getOwnPropertyDescriptor(native, key)
+			)
+				Reflect.deleteProperty(wrapper, key);
+		for (const key of Reflect.ownKeys(native)) {
+			if (key === 'length' || key === 'name') continue;
+			const descriptor = Reflect.getOwnPropertyDescriptor(native, key)!;
+			if (key === 'prototype')
+				Reflect.defineProperty(wrapper, key, {
+					...descriptor,
+					value: (wrapper as { prototype?: unknown }).prototype,
+				});
+			else if (!Reflect.getOwnPropertyDescriptor(wrapper, key))
+				Reflect.defineProperty(wrapper, key, descriptor);
+		}
+
+		// whichever of a constructor and its parent is replaced first
+		const parent = Reflect.getPrototypeOf(native) as Function | null;
+		Reflect.setPrototypeOf(
+			wrapper,
+			(parent && this.#standIns.get(parent)) ?? parent,
+		);
+		for (const [other, otherWrapper] of this.#standIns)
+			if (Reflect.getPrototypeOf(other) === native)
+				Reflect.setPrototypeOf(otherWrapper, wrapper);
+		this.#standIns.set(native, wrapper);
+
+		const prototype = (wrapper as { prototype?: object }).prototype;
+		if (prototypeConstructor && prototype) {
+			const descriptor = (native as { prototype?: object }).prototype
+				? Reflect.getOwnPropertyDescriptor(
+						(native as { prototype: object }).prototype,
+						'constructor',
+					)
+				: undefined;
+			Reflect.defineProperty(prototype, 'constructor', {
+				writable: true,
+				enumerable: false,
+				configurable: true,
+				...descriptor,
+				value: wrapper,
+			});
+		}
+	}
+	/**
+	 * The page's constructor for the realm's `native`, made by the inject's
+	 * own class `Mock` (its instances are the Mock's): a stand-in (see
+	 * standIn) that leaves the browser's own error to the native, for a call
+	 * without `new`, too few arguments, or (`illegal`) an interface only the
+	 * browser constructs (XMLHttpRequestEventTarget, Storage).
+	 */
+	standInClass<T extends Function>(
+		Mock: T,
+		native: Function,
+		illegal = false,
+	): T {
+		const wrapper = function (this: unknown, ...args: unknown[]) {
+			if (!new.target) return Reflect.apply(native, this, args);
+			if (illegal || args.length < native.length)
+				return Reflect.construct(native, args, new.target);
+			return Reflect.construct(Mock, args, new.target);
+		};
+		wrapper.prototype = Mock.prototype;
+		this.standIn(wrapper, native);
+		return wrapper as unknown as T;
+	}
+	/**
+	 * `fn` wrapped: the page calls `wrap` where it called `fn`, which reads
+	 * as `fn` (mirrorAttributes). `construct`: `fn` is a constructor the page
+	 * gets the wrapper for (see standIn); a call without `new` and one with
+	 * fewer arguments than it takes get the browser's own error from `fn`
+	 * unless it is `'callable'` (Function, which `wrap` handles either way).
+	 */
 	wrapFunction<T extends Function>(
 		fn: T,
 		wrap: (target: T, that: any, args: any[], newTarget?: any) => any,
-		construct = false,
+		construct: boolean | 'callable' = false,
 	): T {
-		const wrapped =
+		const wrapped: Function =
 			'prototype' in fn
-				? function attach(this: any, ...args: any[]) {
+				? function attach(this: any, ...args: any[]): any {
 						let newTarget: Function = new.target;
 
-						if (construct && new.target === wrapped) {
-							newTarget = fn;
-							Reflect.setPrototypeOf(this, fn.prototype);
-							this.constructor = fn;
+						if (construct === true) {
+							if (!new.target) return Reflect.apply(fn, this, args);
+							if (args.length < fn.length)
+								return Reflect.construct(
+									fn,
+									args,
+									new.target === wrapped ? fn : new.target,
+								);
 						}
+
+						// `this` is never the instance (wrap constructs it from
+						// newTarget); a prototype's constructor may be read-only
+						// (GeneratorFunction's), so nothing is written to it
+						if (construct && new.target === wrapped) newTarget = fn;
 
 						// @ts-ignore
 						return wrap(fn, this, args, newTarget);
@@ -389,16 +465,7 @@ export default class ProxyModule extends Module<Client> {
 
 		if (construct) {
 			wrapped.prototype = fn.prototype;
-
-			const descriptor = Reflect.getOwnPropertyDescriptor(
-				wrapped.prototype,
-				'constructor',
-			)!;
-
-			Reflect.defineProperty(wrapped.prototype, 'constructor', {
-				...descriptor,
-				value: wrapped,
-			});
+			this.standIn(wrapped, fn);
 		}
 
 		return <T>(<unknown>wrapped);
