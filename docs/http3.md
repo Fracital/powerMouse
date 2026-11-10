@@ -153,7 +153,7 @@ relay UDP streams.
 
 | Server                                                                                          | UDP                                                                                                                                                                                 |
 | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| the demo's built-in `/wisp/` (wisp-js 0.5)                                                      | on (`allow_udp_streams` defaults to true); `WISP_NO_UDP=1` turns it off for testing                                                                                                 |
+| the demo's built-in `/wisp/` (holyWisp, a child process of the demo server)                     | on (`allowUDP`); `WISP_NO_UDP=1` turns it off for testing                                                                                                                           |
 | holyWisp, the public `wss://holywisp.fracit.al/` relay and the keyed Fracital path on the edges | on since abulxt 853761c7: `holywisp_allow_udp: true` and `holywisp_proxy_udp_direct: true` render `allow-udp = on` and `proxy-udp = direct` (the edge egress proxy only speaks TCP) |
 | holyWisp on amph (abulxt's own relay)                                                           | on, `proxy-udp = direct` (mullvad-pool is TCP only)                                                                                                                                 |
 

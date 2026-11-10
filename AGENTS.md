@@ -43,7 +43,7 @@ src/
 ├── inject/         page/worker clients and hook modules (dom/, worker/, modules/)
 ├── rewriteHTML.ts, rewriteCSS.ts, rewriteJS.ts, routeURL.ts, Codecs.ts, StompURL.ts
 └── bootstrapper/   SearchBuilder
-demo/               Express + wisp host app (npm run demo), documented in demo/README.md
+demo/               Express + holyWisp host app (npm run demo), documented in demo/README.md
 build.js            esbuild entry points (and the rewriter library, see below)
 ```
 
@@ -55,7 +55,7 @@ npm run check     # tsc --noEmit
 npm run lint      # eslint
 npm run build     # check + esbuild + declaration emit -> dist/
 npm run dev       # esbuild watch
-npm run demo      # http://localhost:8080 with wisp, epoxy and libcurl
+npm run demo      # http://localhost:8080 with holyWisp, epoxy and libcurl
 npm run format    # prettier --write .
 ```
 
@@ -210,7 +210,8 @@ on every save (use a `git worktree`).
   `max-message-size`, 262149 on the edges, 1009). The epoxy build writes
   DATA packets of at most 64 KiB and waits for each stream's CONTINUE
   credit; a wisp server that never refills TCP credit (wisp-js 0.5.2 and
-  older) stalls a stream after 128 packets, so the demo runs wisp-js 0.5.3.
+  older) stalls a stream after 128 packets. The demo runs holyWisp with
+  the edges' limit.
   `wisp-message-size` covers it with a relay that enforces the edges' limit.
 - Hosts install STomp from npm as `@sysce/stomp`. `.github/workflows/nightly.yml`
   publishes master as `@sysce/stomp@nightly` every night (and on manual
@@ -288,7 +289,9 @@ suite, and they run against the real thing:
 1. `npm run build && npm run lint && npx prettier --check .`
 2. `npm test`: every suite in `test/suites/` gets its own demo server
    (`WISP_ALLOW_LOOPBACK=1`) and fixture site on free ports, so runs never
-   collide with a dev server; four suites run at once by default
+   collide with a dev server (each demo server runs its own holyWisp child,
+   which exits with it; never kill `holywisp` by name, other runs have
+   theirs); four suites run at once by default
    (`PARALLEL=1` streams one at a time, `npm test -- back escapes` picks
    suites). It drives the system Chrome through playwright-core with
    `--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost` so any request

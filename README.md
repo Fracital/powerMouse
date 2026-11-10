@@ -50,8 +50,8 @@ await frame.go('https://example.com');
 `dist/Controller.js` and `dist/SearchBuilder.js` expose the same API as classic
 scripts through the `StompController` and `SearchBuilder` globals.
 
-Any `ProxyTransport` works. In testing against a `wisp-js` server, epoxy was
-the better choice for HTTP-heavy sites and libcurl for WebSockets; see the
+Any `ProxyTransport` works. In testing against a `wisp-js` 0.5 server (the
+demo's wisp server before it moved to holyWisp), epoxy was the better choice for HTTP-heavy sites and libcurl for WebSockets; see the
 changelog's known limitations before picking one.
 
 ## API
@@ -246,7 +246,8 @@ The pinned build patches both (`epoxy-concurrency` suite).
 ## Demo
 
 `npm run demo` serves a complete host application on http://localhost:8080,
-including a wisp server and both transports. It is documented in
+including a wisp server (holyWisp, the server the production relay runs) and
+both transports. It is documented in
 [`demo/README.md`](demo/README.md) and is the quickest way to see the API above
 in use. It is live at https://stomp.fracit.al, deployed from `master` by
 `.github/workflows/deploy.yml`.
@@ -257,6 +258,6 @@ in use. It is live at https://stomp.fracit.al, deployed from `master` by
 npm install
 npm run build   # type-check, bundle with esbuild, emit declarations
 npm run dev     # rebuild on change
-npm run demo    # http://localhost:8080 with a wisp server, epoxy and libcurl
+npm run demo    # http://localhost:8080 with holyWisp, epoxy and libcurl
 npm run lint
 ```

@@ -12,7 +12,7 @@
 // request takes over h3 against h2. Needs stomp-h3 in the epoxy build
 // (deploy/epoxy/h3); without it the suite says so and fails.
 import { createServer } from 'node:http';
-import { logging, server as wisp } from '@mercuryworkshop/wisp-js/server';
+import { holyWisp } from 'holywisp';
 import { done, launch, ok, PROXY } from '../lib.mjs';
 
 const EPOXY = '/epoxy/index.mjs';
@@ -20,13 +20,15 @@ const H3 = '/epoxy/h3/stomp_h3.js';
 const DEMO_WISP = PROXY.replace(/^http/, 'ws') + 'wisp/';
 
 // a wisp server of this suite's own that refuses UDP, as a holyWisp edge
-// with `allow-udp = off` does
-wisp.options.allow_udp_streams = false;
-logging.set_level(logging.ERROR);
+// with `allow-udp = off` does (it stops with this process)
+const wisp = await new holyWisp({
+	port: 0,
+	allowUDP: false,
+	floodProtection: { enabled: false },
+	logLevel: 'error',
+}).start(1);
 const noUdp = createServer((req, res) => res.end());
-noUdp.on('upgrade', (req, socket, head) =>
-	wisp.routeRequest(req, socket, head),
-);
+noUdp.on('upgrade', (req, socket, head) => wisp.route(req, socket, head));
 await new Promise((resolve) => noUdp.listen(0, '127.0.0.1', resolve));
 const NO_UDP_WISP = `ws://127.0.0.1:${noUdp.address().port}/`;
 

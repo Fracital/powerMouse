@@ -363,6 +363,16 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 - The demo server reads `STOMP_HTTP3=1` (HTTP/3 for the epoxy transport,
   `?http3` on the page for one visit) and `WISP_NO_UDP=1` (the built-in wisp
   refuses UDP streams, to see the fallback).
+- The demo server's built-in `/wisp/` is holyWisp (the `holywisp` package)
+  instead of `@mercuryworkshop/wisp-js`, so `npm run demo`, `npm run dev`
+  and every test run relay through the same server as stomp.fracit.al's
+  `wss://holywisp.fracit.al/`, set up like the edges (flood protection off,
+  messages of at most 256 KiB, a 64 MiB stream queue, UDP for HTTP/3).
+  `WISP_ALLOW_LOOPBACK` and `WISP_NO_UDP` work as before. holyWisp runs as a
+  child process on a free loopback port and never outlives the demo server
+  (exit, SIGINT, SIGTERM, SIGHUP, and a SIGKILL or crash through its stdin
+  pipe); `HOLYWISP_BIN` runs another build of it, `STOMP_WISP_URL` starts
+  none.
 - The package is `@sysce/stomp` on npm (it was `stomp-rewrite`, installed
   from this repository's `dist` branch, which is gone).
   `.github/workflows/nightly.yml` publishes master every night as

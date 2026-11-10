@@ -8,19 +8,25 @@
 //   /libcurl/    libcurl transport module
 //   /fonts/      Montserrat from @fontsource
 //   /config.js   deployment config for the page (see the environment below)
-//   /wisp/       wisp server the transports tunnel through, unless
-//                STOMP_WISP_URL names an external one
+//   /wisp/       wisp server the transports tunnel through (holyWisp, the
+//                server the production edges run, as a child process),
+//                unless STOMP_WISP_URL names an external one
 //
 // Environment (also read from a .env file next to package.json):
 //   PORT                listen port (default 8080)
 //   STOMP_WISP_URL      external wisp endpoint, e.g. wss://host/pipe/<key>/;
-//                       when set, the built-in /wisp/ is not served
+//                       when set, the built-in /wisp/ is not served and
+//                       no holyWisp is started
 //   STOMP_PROXY_ORIGIN  origin that serves the proxy for isolation mode; empty
 //                       or unset runs the same-origin controller (README,
 //                       "Origin isolation")
 //   WISP_ALLOW_LOOPBACK let the built-in wisp reach loopback/private hosts
 //   WISP_NO_UDP         the built-in wisp refuses UDP streams (HTTP/3 then
 //                       falls back to the transport's TCP connections)
+//   HOLYWISP_LOG_LEVEL  the built-in holyWisp's log level (default error;
+//                       debug shows every stream), printed on stdout
+//   HOLYWISP_BIN        a holyWisp executable to run instead of the one the
+//                       `holywisp` package ships for this platform
 //   STOMP_HTTP3         `1` turns on HTTP/3 (the epoxy descriptor's `http3`)
 //                       for every visit; `?http3` on the page does it for one
 //   STOMP_ECH_DNS       the DNS-over-HTTPS endpoint epoxy asks for HTTPS
@@ -49,8 +55,8 @@ import { hostname, tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { server as wisp } from '@mercuryworkshop/wisp-js/server';
 import express from 'express';
+import { holyWisp } from 'holywisp';
 // `with { type: 'json' }` requires Node 22+. That is deliberate: idiots
 // running an old, unpatched Node get a SyntaxError here instead of a running
 // proxy. Upgrade Node. Don't replace this with createRequire/readFileSync.
@@ -74,14 +80,47 @@ const dev = !!process.env.STOMP_DEV;
 const transportDir = (name) =>
 	dirname(fileURLToPath(import.meta.resolve(`@mercuryworkshop/${name}`)));
 
-// wisp refuses loopback/private destinations by default; opt in for local testing
-if (process.env.WISP_ALLOW_LOOPBACK) {
-	wisp.options.allow_loopback_ips = true;
-	wisp.options.allow_private_ips = true;
+// The built-in /wisp/ is holyWisp, the server behind wss://holywisp.fracit.al/,
+// so a local run relays the way stomp.fracit.al does. The settings that change
+// what a page sees are the edges' (abulxt roles/edge_wisp): flood protection
+// off (its per-destination limit closes the 101st stream a second to one
+// origin, which a page bursting to its own host reaches), messages of at
+// most 256 KiB (a larger one closes the WebSocket with 1009; epoxy writes
+// 64 KiB packets, wisp-message-size), a 64 MiB stream queue, literal IPs
+// allowed, IPv4 first.
+let wisp = null;
+if (!externalWisp) {
+	// loopback/private destinations are refused unless asked for (the test
+	// fixtures and `npm run dev` ask)
+	const local = !!process.env.WISP_ALLOW_LOOPBACK;
+	wisp = new holyWisp({
+		// any free port, on 127.0.0.1: route() below is the only way in, and
+		// test/run.mjs runs many demo servers at once
+		port: 0,
+		allowDirectIP: true,
+		allowLoopbackIPs: local,
+		allowPrivateIPs: local,
+		// UDP (HTTP/3) is relayed unless refused, as an edge with `allow-udp =
+		// off` does
+		allowUDP: !process.env.WISP_NO_UDP,
+		floodProtection: { enabled: false },
+		maxMessageSize: 262149,
+		streamQueueMax: 64 * 1024 * 1024,
+		dnsResultOrder: 'ipv4first',
+		tcpNoDelay: true,
+		logLevel: process.env.HOLYWISP_LOG_LEVEL || 'error',
+	});
+	// The child does not outlive this process: `holywisp` stops it on exit and
+	// on SIGINT/SIGTERM/SIGHUP, and it stops itself when its stdin pipe from
+	// here closes (SIGKILL, a crash).
+	try {
+		await wisp.start(1);
+	} catch (error) {
+		console.error(`${error.message}
+Set STOMP_WISP_URL to use an external wisp server instead.`);
+		process.exit(1);
+	}
 }
-// wisp-js relays UDP by default; a deployment can refuse it like a holyWisp
-// edge with `allow-udp = off`
-if (process.env.WISP_NO_UDP) wisp.options.allow_udp_streams = false;
 
 const started = Date.now();
 
@@ -415,7 +454,7 @@ app.use(
 
 // Development only: a WebSocket that tells the page what changed. build.js
 // POSTs each finished rebuild here, and demo/public is watched for edits.
-// Nothing of this exists without STOMP_DEV; `ws` comes with wisp-js.
+// Nothing of this exists without STOMP_DEV.
 let devSockets = null;
 if (dev) {
 	const { WebSocketServer } = await import('ws');
@@ -461,8 +500,7 @@ if (dev) {
 const server = createServer(app);
 
 server.on('upgrade', (req, socket, head) => {
-	if (!externalWisp && req.url.startsWith('/wisp/'))
-		wisp.routeRequest(req, socket, head);
+	if (wisp && req.url.startsWith('/wisp/')) wisp.route(req, socket, head);
 	else if (devSockets && req.url === '/__dev')
 		devSockets.handleUpgrade(req, socket, head, (ws) =>
 			devSockets.emit('connection', ws, req),
@@ -479,6 +517,8 @@ server.on('listening', () => {
 	console.log(`\thttp://localhost:${address.port}`);
 	console.log(`\thttp://${hostname()}:${address.port}`);
 	if (externalWisp) console.log(`Wisp: ${externalWisp}`);
+	else
+		console.log(`Wisp: holyWisp on 127.0.0.1:${wisp.port} (pid ${wisp.pid})`);
 	if (proxyOrigin) console.log(`Proxy origin: ${proxyOrigin}`);
 	if (dev) console.log('Development mode: live reload on /__dev');
 });

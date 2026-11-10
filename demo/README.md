@@ -25,10 +25,12 @@ Environment variables:
 | Variable               | Default        | Meaning                                                                                                                                                                |
 | ---------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PORT`                 | `8080`         | HTTP port                                                                                                                                                              |
-| `STOMP_WISP_URL`       | unset          | External wisp endpoint for the transports; when set, `/wisp/` is not served                                                                                            |
+| `STOMP_WISP_URL`       | unset          | External wisp endpoint for the transports; when set, `/wisp/` is not served and no holyWisp is started                                                                 |
 | `STOMP_PROXY_ORIGIN`   | unset          | Origin serving the proxy for isolation mode; empty means same origin                                                                                                   |
-| `WISP_ALLOW_LOOPBACK`  | unset          | Set to `1` to let the wisp server reach `127.0.0.1` / private networks (local QA)                                                                                      |
+| `WISP_ALLOW_LOOPBACK`  | unset          | Set to `1` to let the built-in wisp reach `127.0.0.1` / private networks (local QA)                                                                                    |
 | `WISP_NO_UDP`          | unset          | Set to `1` to make the built-in wisp refuse UDP streams (HTTP/3 fallback QA)                                                                                           |
+| `HOLYWISP_BIN`         | unset          | Path of a `holywisp` executable to run instead of the one the `holywisp` package ships for this platform                                                               |
+| `HOLYWISP_LOG_LEVEL`   | `error`        | Log level of the built-in holyWisp (`debug` shows every stream and why it closed), printed on stdout                                                                   |
 | `STOMP_HTTP3`          | unset          | Set to `1` to turn on HTTP/3 for the epoxy transport (`?http3` does one visit)                                                                                         |
 | `STOMP_ECH_DNS`        | Cloudflare DoH | DNS-over-HTTPS endpoint epoxy asks for HTTPS records to offer real Encrypted Client Hello (docs/fingerprint.md); `off` sends GREASE ECH only (`?noech` does one visit) |
 | `STOMP_TEST_TRANSPORT` | unset          | Set to `1` to use `/test/mixed-transport.mjs` (epoxy that reaches the mixed-content suite's fixture hosts); test runs only                                             |
@@ -78,12 +80,27 @@ server on the same port:
 | `/stomp/`      | `dist/` via `stompPath` from `@sysce/stomp/path`                                                  |
 | `/epoxy/`      | `@mercuryworkshop/epoxy-transport`'s `dist/`                                                      |
 | `/libcurl/`    | `@mercuryworkshop/libcurl-transport`'s `dist/`                                                    |
-| `/wisp/`       | WebSocket upgrade handled by `@mercuryworkshop/wisp-js`                                           |
+| `/wisp/`       | WebSocket upgrade handed to holyWisp (the `holywisp` package), see below                          |
 | `/api/status`  | `{ uptime, version, node }` for the landing page footer                                           |
 | `/api/commits` | `{ repo, url, commits }` for the landing page's latest commits: GitHub's answer, kept ten minutes |
 
 Nothing else is proxied by the server. All page traffic goes through the
 transport, which tunnels through `/wisp/`.
+
+The wisp server is [holyWisp](https://github.com/Fracital/holyWisp), the C
+server behind `wss://holywisp.fracit.al/`, so a local run relays the way
+stomp.fracit.al does. The `holywisp` package runs its prebuilt binary
+(Linux, macOS and Windows, x64 and arm64) as a child process on a free
+loopback port, and the server hands it every `/wisp/` upgrade. It is set up
+like the production edges (flood protection off, wisp messages of at most
+256 KiB, a 64 MiB stream queue, literal IP addresses allowed, UDP relayed
+for HTTP/3), except that `WISP_ALLOW_LOOPBACK` and `WISP_NO_UDP` apply. The
+child never outlives
+the server: it is stopped when the server exits or is ended by a signal, and
+stops by itself when the server is killed outright. On a platform the
+package has no binary for, build holyWisp and set `HOLYWISP_BIN`, or point
+`STOMP_WISP_URL` at a wisp server elsewhere. With `STOMP_WISP_URL` set no
+holyWisp is started.
 
 ## How the page works
 
@@ -192,8 +209,9 @@ console only.
 
 ## Transports
 
-Both bundled transports have a defect against `wisp-js` 0.5 (measured with and
-without STomp in the path, see the changelog's known limitations):
+Both bundled transports had a defect against `wisp-js` 0.5, the demo's wisp
+server before holyWisp (measured with and without STomp in the path, see the
+changelog's known limitations):
 
 - **epoxy** (default): HTTP is fast and reliable; incoming WebSocket frames
   stop after the first round trip.
@@ -207,7 +225,7 @@ Pick epoxy for browsing, libcurl when you need sockets.
 
 ```
 demo/
-├── server.js           Express + wisp host
+├── server.js           Express + holyWisp host
 ├── public/
 │   ├── index.html      landing + browser chrome markup
 │   ├── favicon.ico
