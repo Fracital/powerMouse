@@ -343,6 +343,24 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- An emulated service worker answers the subresource requests of the pages
+  it controls (`serviceWorkers: true`). Stomp's service worker hands each
+  request of a controlled page (any URL, other origins included, as
+  natively) to the worker as a `FetchEvent` whose request shows the page's
+  URL, method, headers, body, mode, destination, credentials, redirect mode
+  and referrer, after the host's request rules and before the HTTP cache.
+  `respondWith` is honoured with its checks: a body, headers and status the
+  worker makes, `Response.redirect` (a relative URL resolves against the
+  site, not the proxy), a stream (it arrives as the worker produces it),
+  `fetch(event.request)` passed through, `Response.error()` and a value that
+  is no Response (a network error, as natively). A request it leaves alone
+  goes to the network, and so does one whose worker does not start in 10 s,
+  does not say within 5 s whether it answers, or does not settle
+  `respondWith` in 30 s: the page never hangs on it. Scripts and
+  stylesheets it answers are rewritten like the origin's. A worker that is
+  not running (the browser stopped every service worker) starts again for
+  the next request (service-worker-fetch suite, against the same page
+  natively, both modes).
 - Proxied pages can have service workers, emulated, behind the new
   `serviceWorkers` controller option (off by default; the demo's `?sw`).
   `navigator.serviceWorker` used to be absent, because a page that

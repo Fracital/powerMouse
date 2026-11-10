@@ -1,0 +1,99 @@
+<!doctype html>
+<title>SW FETCH</title>
+<script>
+	// A page whose worker (sw-fetch.js) answers its subresource requests:
+	// once the worker claims it, every request below goes to the worker
+	// first, and the page logs what it got. Then the suite stops every
+	// service worker (the browser's own may stop them at any time) and the
+	// worker must start again for the next request. Under /pages/deep/swf/.
+	const log = [];
+	window.__sw = { log, done: false };
+	const push = (...parts) =>
+		log.push(
+			parts
+				.map((part) => (typeof part === 'string' ? part : JSON.stringify(part)))
+				.join(' '),
+		);
+	const until = async (test, ms = 15000) => {
+		for (let waited = 0; !test() && waited < ms; waited += 50)
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		return test();
+	};
+	const settle = async (name, call) => {
+		try {
+			push(name, await call());
+		} catch (error) {
+			push(name, `${error.name}: ${error.message}`);
+		}
+	};
+	const text = async (url, init) => {
+		const response = await fetch(url, init);
+		return [
+			response.status,
+			response.url,
+			response.redirected,
+			response.headers.get('x-from'),
+			await response.text(),
+		];
+	};
+	const image = (src) =>
+		new Promise((resolve) => {
+			const img = new Image();
+			img.onload = () => resolve([img.naturalWidth, img.naturalHeight]);
+			img.onerror = () => resolve('error');
+			img.src = src;
+		});
+	(async () => {
+		const c = navigator.serviceWorker;
+		await c.register('sw-fetch.js');
+		await until(() => c.controller);
+		push('controlled', !!c.controller);
+		await settle('greeting', () => text('greeting'));
+		await settle('outside the scope', () => text('/pages/outside'));
+		await settle('other origin', () =>
+			text(
+				`${location.origin.replace('127.0.0.1', 'localhost')}/pages/deep/swf/greeting`,
+			),
+		);
+		await settle(
+			'script',
+			() =>
+				new Promise((resolve) => {
+					const script = document.createElement('script');
+					script.src = 'sw-script.js';
+					script.onload = () => resolve(window.__script);
+					script.onerror = () => resolve('error');
+					document.head.append(script);
+				}),
+		);
+		await settle('redirect', () => text('redirect'));
+		await settle('stream', () => text('stream'));
+		await settle('passed through', () => text('sw-fetch-data.json'));
+		await settle('left alone', () => text('sw-fetch-target.txt?alone'));
+		await settle('network error', () => text('error'));
+		await settle('not a response', () => text('notresponse'));
+		await settle('post', () =>
+			text('echo', {
+				method: 'POST',
+				body: 'payload',
+				headers: { 'x-custom': 'yes' },
+			}),
+		);
+		await settle('image', () => image('sw-image.svg'));
+		// the browser's own favicon request may reach the worker natively,
+		// by timing; through the proxy it is the host page's
+		await settle('seen', async () => {
+			const seen = JSON.parse((await text('seen'))[4]);
+			delete seen['favicon.ico'];
+			return seen;
+		});
+		window.__sw.readyForRestart = true;
+		await until(() => window.__sw.restarted, 30000);
+		await settle('after a restart', () => text('greeting'));
+		await settle('image after a restart', () => image('sw-image.svg?again'));
+		window.__sw.done = true;
+	})().catch((error) => {
+		push('fail', String(error), error.stack);
+		window.__sw.done = true;
+	});
+</script>

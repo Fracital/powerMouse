@@ -1,0 +1,41 @@
+<!doctype html>
+<title>SW SLOW</title>
+<script>
+	// A page whose worker (sw-slow.js) never answers one request and hangs on
+	// the next: through the proxy each goes to the network once the worker's
+	// time is up, instead of hanging the page. Under /pages/deep/sws/.
+	const log = [];
+	window.__sw = { log, done: false };
+	const push = (...parts) =>
+		log.push(
+			parts
+				.map((part) => (typeof part === 'string' ? part : JSON.stringify(part)))
+				.join(' '),
+		);
+	const until = async (test, ms = 15000) => {
+		for (let waited = 0; !test() && waited < ms; waited += 50)
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		return test();
+	};
+	const timed = async (name, url) => {
+		const started = Date.now();
+		try {
+			const body = await (await fetch(url)).text();
+			push(name, body.trim(), Date.now() - started);
+		} catch (error) {
+			push(name, `${error.name}: ${error.message}`, Date.now() - started);
+		}
+	};
+	(async () => {
+		const c = navigator.serviceWorker;
+		await c.register('sw-slow.js');
+		await until(() => c.controller);
+		await timed('never answers', 'sw-fetch-target.txt?hang');
+		await timed('busy', 'sw-fetch-target.txt?busy');
+		await timed('still busy', 'sw-fetch-target.txt?after');
+		window.__sw.done = true;
+	})().catch((error) => {
+		push('fail', String(error), error.stack);
+		window.__sw.done = true;
+	});
+</script>

@@ -779,25 +779,6 @@ function genericForward(
 			applyHeaderRule(requestHeaders, rule.action.requestHeaders);
 		}
 
-		// the HTTP cache, unless the host turned it off: a fresh entry answers
-		// without the transport; a stale one with validators is revalidated
-		// and a 304 refreshes it; what comes back cacheable is stored (its
-		// body split in two, one copy for the store). Stale entries are used
-		// only as far as the origin allowed: within stale-while-revalidate
-		// they answer at once and one revalidation runs behind the page; within
-		// stale-if-error they answer for a 5xx or a failed request. Never any
-		// freshness the origin did not state.
-		const cache = rewriter.cache;
-		const hit =
-			cache &&
-			!context?.bypassCache &&
-			(serverRequest.method === 'GET' || serverRequest.method === 'HEAD')
-				? await cache.match(url.toString(), requestHeaders)
-				: null;
-		let response: Response & { rawHeaders?: [string, string][] };
-		let cached = false;
-		const within = (window: number | null) =>
-			!!hit && !hit.mustRevalidate && window !== null && hit.staleFor <= window;
 		// the body goes out whole, as a Blob (the browser keeps a large one
 		// out of the worker's memory): a fetch event's body is always a
 		// stream, whatever the page gave, and epoxy sends a stream as a chunked
@@ -809,6 +790,40 @@ function genericForward(
 				? Promise.resolve(undefined)
 				: serverRequest.blob();
 		upload.catch(() => {});
+
+		// the page's emulated service worker answers before the HTTP cache and
+		// the network, as a real one sits before them (docs/service-workers.md)
+		const fromWorker = await answerFromServiceWorker(
+			rewriter,
+			serverRequest,
+			url,
+			context,
+			upload,
+			referer ?? '',
+		);
+		// the worker gave the page a network error
+		if (fromWorker?.type === 'error') return Response.error();
+
+		// the HTTP cache, unless the host turned it off: a fresh entry answers
+		// without the transport; a stale one with validators is revalidated
+		// and a 304 refreshes it; what comes back cacheable is stored (its
+		// body split in two, one copy for the store). Stale entries are used
+		// only as far as the origin allowed: within stale-while-revalidate
+		// they answer at once and one revalidation runs behind the page; within
+		// stale-if-error they answer for a 5xx or a failed request. Never any
+		// freshness the origin did not state.
+		const cache = rewriter.cache;
+		const hit =
+			!fromWorker &&
+			cache &&
+			!context?.bypassCache &&
+			(serverRequest.method === 'GET' || serverRequest.method === 'HEAD')
+				? await cache.match(url.toString(), requestHeaders)
+				: null;
+		let response: Response & { rawHeaders?: [string, string][] };
+		let cached = false;
+		const within = (window: number | null) =>
+			!!hit && !hit.mustRevalidate && window !== null && hit.staleFor <= window;
 		// the fields go out in the order Chrome sends them (headerOrder.ts)
 		const shape: RequestShape = {
 			navigation: navigation && DOCUMENT_DESTINATIONS.has(destination),
@@ -855,7 +870,9 @@ function genericForward(
 				responseHeaders,
 			});
 
-		if (hit && hit.fresh && !hit.mustRevalidate) {
+		if (fromWorker) {
+			response = fromWorker;
+		} else if (hit && hit.fresh && !hit.mustRevalidate) {
 			response = hit.response;
 			cached = true;
 		} else if (hit && within(hit.staleWhileRevalidate)) {
@@ -950,7 +967,12 @@ function genericForward(
 			}
 		}
 
-		if (rule && rule.action !== 'block' && rule.action.responseHeaders) {
+		if (
+			!fromWorker &&
+			rule &&
+			rule.action !== 'block' &&
+			rule.action.responseHeaders
+		) {
 			const headers = new Headers(response.headers);
 			applyHeaderRule(headers, rule.action.responseHeaders);
 			const edited: typeof response = new Response(response.body, {
@@ -1577,6 +1599,76 @@ export function registerRewrites(
 			rewriter.rules = compileRules(rules);
 		},
 	};
+}
+
+/** the request headers that are Stomp's own, never a page's */
+const OWN_HEADERS = [
+	ABORT_HEADER,
+	LOAD_HEADER,
+	OPAQUE_HEADER,
+	CREDENTIALS_HEADER,
+];
+
+/**
+ * A request's answer from the emulated service worker of the page that made
+ * it (docs/service-workers.md), or null for the network: no registration
+ * controls the page, the worker did not call respondWith, or it would not
+ * start or answer in time. The worker sees the request as the page made it,
+ * by its real URL; what it answers is then rewritten like the origin's
+ * answer. A request the worker itself makes is never its own.
+ */
+async function answerFromServiceWorker(
+	rewriter: Rewriter,
+	serverRequest: Request,
+	url: StompURL,
+	context: RouteContext | undefined,
+	upload: Promise<Blob | undefined>,
+	referrer: string,
+): Promise<Response | null> {
+	if (!rewriter.config.serviceWorkers || context?.internal) return null;
+	const navigation =
+		serverRequest.mode === 'navigate' ||
+		serverRequest.destination === 'worker' ||
+		serverRequest.destination === 'sharedworker';
+	// navigations come with the next stage
+	if (navigation) return null;
+	const clientId = context?.requestClientId ?? context?.clientId;
+	const routed = await serviceWorkers.route({
+		url: url.url.href,
+		nonSubresource: false,
+		clientId,
+	});
+	const host = routed ? serviceWorkers.host(rewriter.directory) : undefined;
+	if (!routed || !host) return null;
+	let body: Blob | null;
+	try {
+		body = (await upload) ?? null;
+	} catch (error) {
+		// the page's body could not be read: as the network would have
+		return null;
+	}
+	return serviceWorkers.dispatch(routed.record, host, {
+		request: {
+			url: url.url.href,
+			method: serverRequest.method,
+			headers: [...serverRequest.headers].filter(
+				([name]) => !OWN_HEADERS.includes(name),
+			),
+			body,
+			mode: serverRequest.mode,
+			credentials: serverRequest.credentials,
+			cache: serverRequest.cache,
+			redirect: serverRequest.redirect,
+			referrer,
+			referrerPolicy: serverRequest.referrerPolicy,
+			integrity: serverRequest.integrity,
+			keepalive: serverRequest.keepalive,
+			destination: serverRequest.destination,
+		},
+		clientId: clientId ?? '',
+		resultingClientId: '',
+		isReload: !!context?.isReload,
+	});
 }
 
 const SCRIPT_HEADERS = {

@@ -244,6 +244,11 @@ export class ServiceWorkers {
 		return this.#loaded;
 	}
 
+	/** a live controller to host a worker, `directory`'s when it can */
+	host(directory?: string): WorkerHost | undefined {
+		return this.#env?.host(directory);
+	}
+
 	/** whether any site has a registration (the cheap test before any request is looked at) */
 	async any(): Promise<boolean> {
 		await this.#load();
@@ -1378,7 +1383,9 @@ export class ServiceWorkers {
 		resultingClientId?: string;
 	}): Promise<{ record: RegistrationRecord; control?: ControlInfo } | null> {
 		if (!(await this.any())) return null;
-		if (this.isEmulated(request.clientId, request.clientURL)) return null;
+		// an emulated worker's own requests are never its own (it is never a
+		// controlled client either)
+		if (request.clientId && this.#emulated.has(request.clientId)) return null;
 		if (request.nonSubresource) {
 			const record = this.match(request.url);
 			if (!record?.active) return null;
@@ -1426,7 +1433,12 @@ export class ServiceWorkers {
 					instance.rpc.call('fetch', { ...init, id }),
 					ack,
 					'the fetch event',
-				);
+				).catch((error) => {
+					// a worker that cannot even say whether it answers is stuck:
+					// the next event starts a new one
+					this.#kill(instance);
+					throw error;
+				});
 				if (!responded) return null;
 				const answer = await withTimeout(answered, answerWait, 'respondWith');
 				if (answer.kind === 'network') return null;
