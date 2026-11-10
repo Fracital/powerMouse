@@ -310,6 +310,10 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- An `XMLHttpRequest` `blob` response of an HTML type holds the bytes the
+  site sent. It was built with the page's `Blob`, which wraps HTML in the
+  inject's shell for blob: documents, so its size and contents were the
+  shell's (1224 bytes for a 68-byte page; xhr-parity suite).
 - An XML response to `XMLHttpRequest` with no charset in its type is read
   in the encoding its XML declaration names under the default response type,
   as natively (`responseText` of a windows-1252 feed was mojibake). The

@@ -16,6 +16,7 @@ import {
 	type MimeType,
 } from '../../xhrText';
 import DocumentClient from '../Client';
+import BlobDocumentsModule from './BlobDocuments';
 import SyncModule from './Sync';
 
 export default class XMLHttpRequestModule extends Module<DocumentClient> {
@@ -27,6 +28,11 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const syncModule = that.client.getModule(SyncModule)!;
+		// a blob response is the bytes the site sent: the page's Blob (wrapped
+		// by BlobDocuments) would turn an HTML one into the inject's shell
+		const NativeBlob =
+			that.client.getModule(BlobDocumentsModule)?.nativeBlob ??
+			that.client.global.Blob;
 
 		class XMLHttpRequestEventTargetProxy extends EventTarget {
 			constructor(key: symbol) {
@@ -323,7 +329,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 						this.#response = null;
 						break;
 					case 'blob':
-						this.#response = new that.client.global.Blob([buffer!], {
+						this.#response = new NativeBlob([buffer!], {
 							type: mime,
 						});
 						break;

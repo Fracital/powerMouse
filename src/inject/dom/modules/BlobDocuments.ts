@@ -37,9 +37,16 @@ function parsesAsScript(source: string): boolean {
 }
 
 export default class BlobDocumentsModule extends Module<DocumentClient> {
+	/**
+	 * The realm's own Blob, before this module wraps it: for the client's
+	 * own blobs (an XMLHttpRequest's blob response), which hold bytes the
+	 * page received and must not become a shell
+	 */
+	nativeBlob!: typeof Blob;
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const global = this.client.global;
+		this.nativeBlob = global.Blob;
 
 		// the markup the last wrap() made into a shell, kept with the blob
 		let wrappedSource: string | undefined;
