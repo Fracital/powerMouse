@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>view transition</title>
+		<style id="style"></style>
+	</head>
+	<body>
+		<p id="text">before</p>
+		<script>
+			// ?case= picks the page's shape; window.__vt is what happened.
+			// root: the root forces a scrollbar it has nothing to scroll for
+			// body: the body's does and propagates to the viewport (YouTube)
+			// grow: the scrollbar is forced in the transition's new state
+			// plain: no forced scrollbar
+			// xdoc: a cross-document transition to the next page (n=1)
+			const query = new URLSearchParams(location.search);
+			const kind = query.get('case') || 'plain';
+			const n = Number(query.get('n') || 0);
+			const vt = (window.__vt = { kind, n, done: false });
+			document.getElementById('style').textContent =
+				{
+					root: 'html { overflow-y: scroll; }',
+					body: 'body { overflow-y: scroll; }',
+					xdoc: '@view-transition { navigation: auto; } html { overflow-y: scroll; }',
+				}[kind] || '';
+			const text = document.getElementById('text');
+			if (kind === 'xdoc') {
+				if (n === 0)
+					setTimeout(() => {
+						query.set('n', '1');
+						location.href = '?' + query;
+					}, 300);
+				else setTimeout(() => (vt.done = true), 300);
+			} else
+				setTimeout(() => {
+					const transition = document.startViewTransition(() => {
+						text.textContent = 'after';
+						if (kind === 'grow')
+							document.documentElement.style.overflowY = 'scroll';
+					});
+					transition.ready.then(
+						() => (vt.ready = 'resolved'),
+						(error) => (vt.ready = error.name),
+					);
+					transition.finished.then(() => {
+						vt.updated = text.textContent === 'after';
+						// one more frame, drawn with the transition gone
+						requestAnimationFrame(() =>
+							requestAnimationFrame(() => (vt.done = true)),
+						);
+					});
+				}, 300);
+		</script>
+	</body>
+</html>

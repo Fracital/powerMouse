@@ -372,6 +372,19 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   went by the name alone; they now take HTML templates only, which also
   keeps an XHTML document's own `<template>` content (its name is
   lowercase there, and the copy of the page dropped it).
+- YouTube's watch page no longer kills the tab ("Aw, Snap!", error code 4).
+  Chrome (152 to at least 159) crashes the renderer, a CHECK in
+  `cc::draw_property_utils::CalculateDrawProperties`, when a view transition
+  that captures the root runs in a frame whose viewport forces a scrollbar
+  with nothing to scroll; at the top it animates. YouTube's body is
+  `overflow-y: scroll` and it starts a transition on every page load, and
+  the proxy frames every page. In a frame, a transition that could hit the
+  bug is skipped (the update callback still runs; `ready` rejects as for
+  any skipped transition): checked when it starts and when the update is
+  done. Cross-document transitions are skipped in frames, since the next
+  document's styles are not known when they start. The test suites now can
+  draw scrollbars (`launch(args, { scrollbars: true })`): Playwright hides
+  them in headless mode, which hid this crash.
 - `localStorage` and `sessionStorage` work in a srcdoc frame. Its inject
   resolved the proxy's own storage route against the frame's location,
   `about:srcdoc`, and every call threw "Failed to construct 'URL':

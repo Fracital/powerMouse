@@ -28,12 +28,15 @@ import SandboxModule from './modules/Sandbox';
 import StorageModule from './modules/Storage';
 import SyncModule from './modules/Sync';
 import TokenListsModule from './modules/TokenLists';
+import ViewTransitionModule from './modules/ViewTransition';
 import XMLHttpRequestModule from './modules/XMLHttpRequest';
 
 export function addClientModules(client: DocumentClient) {
 	baseModules(client);
 	client.addModule(HistoryModule);
 	client.addModule(NavigatorModule);
+	// before DOMAttributes: it takes the native getComputedStyle
+	client.addModule(ViewTransitionModule);
 	client.addModule(CredentialsModule);
 	client.addModule(LocationModule);
 	client.addModule(AnchorModule);
