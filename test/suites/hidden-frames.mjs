@@ -43,6 +43,8 @@ const summary = (reports) =>
 					held: report.ticks < 3,
 					measured: report.measured,
 					cancelledRan: report.cancelledRan,
+					order: report.order,
+					oneFrame: new Set(report.times).size <= 1,
 				},
 			];
 		}),
@@ -57,6 +59,8 @@ async function observe(frame) {
 		if (FRAMES.every((name) => names.includes(name))) break;
 		await sleep(250);
 	}
+	await sleep(1500);
+	await frame.evaluate(() => window.go()).catch(() => {});
 	await sleep(1500);
 	const before = summary(
 		await frame.evaluate(() => window.reports).catch(() => null),

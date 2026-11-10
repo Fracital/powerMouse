@@ -5,7 +5,8 @@
 <script>
 	// frames in a display:none box and a shown one, of this origin and
 	// another (the fixture's other host name), each reporting its animation
-	// frames to the top (hidden-frames-child.html); reveal() shows the box
+	// frames to the top (hidden-frames-child.html); go() starts their probes,
+	// reveal() shows the box
 	const child = '/pages/hidden-frames-child.html';
 	const other = location.origin.replace('127.0.0.1', 'localhost');
 	window.reports = {};
@@ -25,6 +26,11 @@
 		'hidden',
 		`${child}?inner=${encodeURIComponent(`${other}${child}#cross-in-hidden`)}#same-outer`,
 	);
+	// starts every frame's probe (each passes it on to its own frames)
+	window.go = () => {
+		for (let i = 0; i < frames.length; i++)
+			frames[i].postMessage('hidden-frames-go', '*');
+	};
 	window.reveal = () => {
 		document.getElementById('hidden').style.display = '';
 	};

@@ -365,9 +365,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   (`setTimeout(this.u, 50)`, an unbound method) threw. In a document of
   another origin than the proxied top (a sandboxed opaque one too), a
   callback that comes due while its frame, or a frame it is in, has no box
-  now waits until it is shown, and `cancelAnimationFrame` still cancels it
-  by the id the page was given (hidden-frames suite, against the page loaded
-  natively, both modes).
+  is now parked, and the parked callbacks run in one animation frame, in
+  order, once the frame is shown; `cancelAnimationFrame` still cancels one by
+  the id the page was given (hidden-frames suite, against the page loaded
+  natively, both modes). Whether a frame is rendered is followed by an
+  IntersectionObserver on each frame element, so a call only reads a flag:
+  a cross-origin game frame's rAF loop under a parent that relayouts every
+  frame costs what it did before (0.66 ms of in-frame work against master's
+  0.74, frame intervals equal).
 - Inline SVG holding a `<style>`, inserted into a page, no longer throws
   "Illegal invocation" from the page's `appendChild`, `append`, `innerHTML`
   or `insertAdjacentHTML` (Wikipedia, about one load in six). The insertion
@@ -2608,8 +2613,9 @@ Fixed while testing real sites and a feature fixture:
   it, including one of the page's own origin, which natively keeps running
   them (hidden-frames suite, which compares only the frames of another
   origin there). Chrome also holds a cross-origin frame that is scrolled out
-  of view; the inject holds only frames that are not rendered, and it
-  leaves `IntersectionObserver` and `ResizeObserver` delivery alone.
+  of view; the inject holds only frames that are not rendered (or clipped
+  away entirely by an ancestor), and it leaves `IntersectionObserver` and
+  `ResizeObserver` delivery alone.
 - Markup a page sets as an SVG or MathML element's `innerHTML` or
   `insertAdjacentHTML` is parsed as if its context were an HTML element, so
   `svg.innerHTML = '<style>...</style>'` makes an HTML `<style>` where

@@ -6,12 +6,15 @@
 		// 100 ms: how many ticks ran, what a measurement taken after a double
 		// animation frame read (Google Sign-In's button does that), and
 		// whether a callback cancelled while it waited ran anyway (one that
-		// is not held has run before it is cancelled)
+		// is not held has run before it is cancelled), and the order and the
+		// frames three callbacks requested together ran in
 		const report = {
 			frame: location.hash.slice(1),
 			ticks: 0,
 			measured: [],
 			cancelledRan: false,
+			order: '',
+			times: [],
 		};
 		const inner = new URLSearchParams(location.search).get('inner');
 		if (inner) {
@@ -19,8 +22,13 @@
 			frame.src = inner;
 			document.body.append(frame);
 		}
-		// after the first frames, which Chrome runs before it holds a hidden one
-		setTimeout(() => {
+		// started by a "go" from the top, which the suite sends once every
+		// frame has loaded and settled: Chrome runs a hidden frame's first
+		// frames before it holds it, later on a busy machine
+		let started = false;
+		const start = () => {
+			if (started) return;
+			started = true;
 			const tick = () => {
 				report.ticks++;
 				requestAnimationFrame(tick);
@@ -35,7 +43,18 @@
 				report.cancelledRan = true;
 			});
 			setTimeout(() => cancelAnimationFrame(cancelled), 200);
-		}, 300);
+			for (const name of ['a', 'b', 'c'])
+				requestAnimationFrame((time) => {
+					report.order += name;
+					report.times.push(time);
+				});
+		};
+		addEventListener('message', (event) => {
+			if (event.data !== 'hidden-frames-go') return;
+			for (let i = 0; i < frames.length; i++)
+				frames[i].postMessage('hidden-frames-go', '*');
+			start();
+		});
 		setInterval(() => top.postMessage({ ...report }, '*'), 100);
 	</script>
 </body>
