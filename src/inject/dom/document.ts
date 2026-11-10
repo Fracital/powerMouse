@@ -33,6 +33,7 @@ import StorageModule from './modules/Storage';
 import SyncModule from './modules/Sync';
 import TokenListsModule from './modules/TokenLists';
 import ViewTransitionModule from './modules/ViewTransition';
+import WebRTCModule from './modules/WebRTC';
 import XMLHttpRequestModule from './modules/XMLHttpRequest';
 
 export function addClientModules(client: DocumentClient) {
@@ -69,6 +70,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(DownloadModule);
 	client.addModule(CanvasTaintModule);
 	client.addModule(MediaSessionModule);
+	client.addModule(WebRTCModule);
 	client.addModule(AnimationFramesModule);
 	client.addModule(NavigateModule);
 	client.addModule(NavigationHintModule);

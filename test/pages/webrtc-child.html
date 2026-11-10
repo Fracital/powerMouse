@@ -1,0 +1,37 @@
+<!doctype html>
+<title>WEBRTC CHILD</title>
+<script>
+	// the other end of webrtc.js crossFrame: answers the parent's offer and
+	// echoes the parent's message back over the data channel
+	let pc = null;
+	let answered = null;
+	addEventListener('message', async (e) => {
+		const data = e.data;
+		if (!data || !data.rtc) return;
+		if (data.rtc === 'offer') {
+			pc = new RTCPeerConnection();
+			pc.onicecandidate = (event) => {
+				if (event.candidate)
+					parent.postMessage(
+						{ rtc: 'candidate', candidate: event.candidate.toJSON() },
+						'*',
+					);
+			};
+			pc.ondatachannel = (event) => {
+				event.channel.onmessage = (m) => event.channel.send(`pong:${m.data}`);
+			};
+			answered = (async () => {
+				await pc.setRemoteDescription(data.offer);
+				await pc.setLocalDescription();
+				parent.postMessage(
+					{ rtc: 'answer', answer: pc.localDescription.toJSON() },
+					'*',
+				);
+			})();
+		} else if (data.rtc === 'candidate') {
+			await answered;
+			await pc.addIceCandidate(data.candidate);
+		}
+	});
+	parent.postMessage('rtc-child-ready', '*');
+</script>

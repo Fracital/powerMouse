@@ -221,6 +221,20 @@ export interface InlineDocumentMessage {
 	url: string;
 }
 
+/**
+ * The BroadcastChannel (by its native, unpartitioned name, which no page can
+ * open) on which every inject bundle of the browser shares the host
+ * candidates its peer connections showed a page, so a remote candidate one
+ * proxied page hands another is recognised as this browser's own
+ * (docs/webrtc.md)
+ */
+export const WEBRTC_CHANNEL = '$stomp$webrtc';
+export type WebRTCChannelMessage =
+	/** a name a page was shown, and the address it stands for when it is not the browser's own mDNS name */
+	| { kind: 'name'; name: string; address?: string }
+	/** a new bundle asks the others to tell it every name again */
+	| { kind: 'sync' };
+
 export interface StorageChange {
 	store: string;
 	origin: string;

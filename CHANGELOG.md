@@ -726,6 +726,25 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   local default falls back to the same-origin controller with an
   `Isolation` console badge saying why; isolation a deployment asked for
   (`STOMP_PROXY_ORIGIN`) stays an error (storage-blocked suite).
+- WebRTC no longer shows a proxied page the user's address or sends a
+  packet where the page says. The browser's ICE agent sends its own packets,
+  past the proxy: a STUN server the page named heard from the user's address
+  and handed the page a `srflx` candidate with it (browserleaks.com/webrtc
+  showed the real address through the live site and the local demo), a TURN
+  server or a remote candidate the page chose got requests and connectivity
+  checks, and once the proxy origin had camera or microphone access host
+  candidates carried the machine's local addresses. `RTCPeerConnection`
+  stays the browser's own and behaves as on a network that drops UDP: each
+  STUN/TURN server is handed to the browser as `255.255.255.255` (a send the
+  kernel refuses), so it times out as natively, 701 errors and all, and reads
+  back as the page's; a remote candidate is handed over only when it is a
+  host name a connection of this browser showed a page, so two proxied pages
+  still open a data channel; real addresses read as mDNS names everywhere
+  (events, descriptions, `RTCIceTransport`, stats, errors), in every realm the
+  inject covers. A tcpdump of the uplink saw 156 packets to the page's
+  servers and candidates natively and none through either demo mode
+  (webrtc suite, 59 checks against the same pages loaded natively, both
+  modes, with and without media access; docs/webrtc.md).
 - Reading another window (`parent`, `top`, `frames[i]`) costs a few
   microseconds again. The Context module decided whether the reader may
   hold the window as it is by decoding both documents' routed URLs on every
