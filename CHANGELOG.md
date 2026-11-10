@@ -343,6 +343,18 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- The page's `location` reads as natively member by member (native-shapes
+  suite, both modes). `toString` and `valueOf` were copies of `assign`
+  (`location.toString.name` was `'assign'`, its length 1, its source
+  `function assign() { [native code] }`); `valueOf` is the realm's
+  `Object.prototype.valueOf` again, as natively, and the `ancestorOrigins`
+  getter, which was the proxy's own arrow function (its source showed),
+  is a wrapped native getter, not configurable. The stand-in has the real
+  location's own properties in their order with their descriptors,
+  `Symbol.toPrimitive` (undefined) included, which it lacked. A member
+  called on anything but a location throws "Illegal invocation" as
+  natively: `assign` and `replace` navigated and `href`'s getter answered
+  whatever they were called on.
 - An inline style with a URL in it reads as natively, however the page
   wrote it and however it reads it (native-shapes suite, both modes). After
   a CSSOM write (`el.style.x = ...`, `cssText`, `setProperty`,

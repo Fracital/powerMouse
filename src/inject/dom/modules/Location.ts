@@ -2,72 +2,68 @@ import { routeHTML } from '../../../rewriteHTML';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import { setGlobalProxy } from '../../modules/Access';
-import ProxyModule, { invokeGlobal } from '../../modules/Proxy';
+import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
 import NavigationHintModule from './NavigationHint';
 
-/**
-{
-	assign: {
-		value: 'function assign() {\n    [native code]\n}',
-		writable: false,
-		enumerable: true,
-		configurable: false,
-	},	
-	replace: {
-		value: 'function replace() {\n    [native code]\n}',
-		writable: false,
-		enumerable: true,
-		configurable: false,
-	},
-	reload: {
-		value: 'function reload() {\n    [native code]\n}',
-		writable: false,
-		enumerable: true,
-		configurable: false,
-	},
-	toString: {
-		value: 'function toString() {\n    [native code]\n}',
-		writable: false,
-		enumerable: true,
-		configurable: false,
-	},
-	valueOf: {
-		value: 'function valueOf() {\n    [native code]\n}',
-		writable: false,
-		enumerable: false,
-		configurable: false,
-	},
-}
- */
+// the parts of the URL a Location shares with URL.prototype
+const URL_PARTS = [
+	'href',
+	'origin',
+	'protocol',
+	'host',
+	'hostname',
+	'port',
+	'pathname',
+	'search',
+	'hash',
+];
 
+/**
+ * The page's `location` is a stand-in (rewritten code gets it from the access
+ * API; the bundle's own reads stay native): the real location's members,
+ * every one with the real one's descriptor, in its order, its functions with
+ * their names, lengths and sources, answering for the page's URL. A Location
+ * keeps all of them as own, unforgeable properties: `valueOf` is the realm's
+ * Object.prototype.valueOf and `Symbol.toPrimitive` is undefined, as on the
+ * real one. A member called on anything but a location is the native one, so
+ * it throws the browser's "Illegal invocation".
+ */
 export default class LocationModule extends Module<DocumentClient> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
+		const real = this.client.global.location;
 
 		const proxy = {};
+		// the page's location, or the real one it stands for
+		const ours = (that: unknown) => that === proxy || that === real;
+		/** `native` for the page: `own` when called on its location */
+		const member = <T extends Function>(
+			native: T,
+			own: (args: any[]) => unknown,
+		): T =>
+			proxyModule.wrapFunction(native, (target, that, args) =>
+				ours(that) ? own(args) : Reflect.apply(target, that, args),
+			);
+		const navigateTo = (destination: URL) =>
+			routeHTML(
+				new StompURL(destination, this.client.url),
+				this.client.url,
+				this.client.config,
+				false,
+				this.client.nestedRoute,
+			);
+
+		const members = new Map<string | symbol, PropertyDescriptor>();
 
 		// both URL.prototype and location share these descriptors
-		for (const common of [
-			'href',
-			'origin',
-			'protocol',
-			'host',
-			'hostname',
-			'port',
-			'pathname',
-			'search',
-			'hash',
-		]) {
+		for (const common of URL_PARTS) {
 			const urlDescriptor = Reflect.getOwnPropertyDescriptor(
 				this.client.global.URL.prototype,
 				common,
 			);
 
-			const locationDescriptor = Reflect.getOwnPropertyDescriptor(
-				this.client.global.location,
-				common,
-			);
+			const locationDescriptor = Reflect.getOwnPropertyDescriptor(real, common);
 
 			if (!urlDescriptor || !locationDescriptor) {
 				console.error(
@@ -76,54 +72,34 @@ export default class LocationModule extends Module<DocumentClient> {
 				continue;
 			}
 
-			Reflect.defineProperty(proxy, common, {
+			members.set(common, {
 				...locationDescriptor,
 				get: locationDescriptor.get
-					? proxyModule?.wrapFunction(
-							locationDescriptor.get,
-							(target, that, args) => {
-								if (common === 'hash')
-									return Reflect.apply(
-										target,
-										this.client.global.location,
-										args,
-									);
+					? member(locationDescriptor.get, (args) => {
+							if (common === 'hash')
+								return Reflect.apply(locationDescriptor.get!, real, args);
 
-								const temp = new URL(this.client.location.toString());
+							const temp = new URL(this.client.location.toString());
 
-								return Reflect.apply(urlDescriptor.get!, temp, args);
-							},
-						)
+							return Reflect.apply(urlDescriptor.get!, temp, args);
+						})
 					: undefined,
 				set: locationDescriptor.set
-					? proxyModule?.wrapFunction(
-							locationDescriptor.set,
-							(target, that, args) => {
-								if (common === 'hash')
-									return Reflect.apply(
-										target,
-										this.client.global.location,
-										args,
-									);
+					? member(locationDescriptor.set, (args) => {
+							if (common === 'hash')
+								return Reflect.apply(locationDescriptor.set!, real, args);
 
-								const temp = new URL(this.client.location.toString());
+							const temp = new URL(this.client.location.toString());
 
-								if (common === 'href') {
-									args[0] = new URL(args[0], this.client.url.toString());
-								}
+							if (common === 'href') {
+								args[0] = new URL(args[0], this.client.url.toString());
+							}
 
-								Reflect.apply(urlDescriptor.set!, temp, args);
+							Reflect.apply(urlDescriptor.set!, temp, args);
 
-								this.client.getModule(NavigationHintModule)?.hint(temp.href);
-								this.client.global.location.href = routeHTML(
-									new StompURL(temp, this.client.url),
-									this.client.url,
-									this.client.config,
-									false,
-									this.client.nestedRoute,
-								);
-							},
-						)
+							this.client.getModule(NavigationHintModule)?.hint(temp.href);
+							real.href = navigateTo(temp);
+						})
 					: undefined,
 			});
 		}
@@ -171,101 +147,56 @@ export default class LocationModule extends Module<DocumentClient> {
 				Object.create(this.client.global.DOMStringList.prototype, descriptors),
 			);
 		};
-		Reflect.defineProperty(proxy, 'ancestorOrigins', {
-			configurable: true,
-			enumerable: true,
-			get: ancestorList,
-		});
+		const ancestorDescriptor = Reflect.getOwnPropertyDescriptor(
+			real,
+			'ancestorOrigins',
+		);
+		if (ancestorDescriptor?.get)
+			members.set('ancestorOrigins', {
+				...ancestorDescriptor,
+				get: member(ancestorDescriptor.get, ancestorList),
+			});
 
-		Reflect.defineProperty(proxy, 'assign', {
-			value: proxyModule.wrapFunction(
-				this.client.global.location.assign,
-				(target, that, [url]) => {
-					const destination = new URL(url, this.client.url.toString());
-					this.client.getModule(NavigationHintModule)?.hint(destination.href);
-					return Reflect.apply(target, this.client.global.location, [
-						routeHTML(
-							new StompURL(destination, this.client.url),
-							this.client.url,
-							this.client.config,
-							false,
-							this.client.nestedRoute,
-						),
-					]);
-				},
-			),
-			writable: false,
-			enumerable: true,
-			configurable: false,
-		});
+		const navigation =
+			(method: 'assign' | 'replace') =>
+			([url]: any[]) => {
+				const destination = new URL(url, this.client.url.toString());
+				this.client.getModule(NavigationHintModule)?.hint(destination.href);
+				return Reflect.apply(real[method], real, [navigateTo(destination)]);
+			};
+		const methods: Record<string, (args: any[]) => unknown> = {
+			assign: navigation('assign'),
+			replace: navigation('replace'),
+			reload: () => Reflect.apply(real.reload, real, []),
+			toString: () => this.client.url.toString(),
+		};
+		for (const [name, own] of Object.entries(methods)) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(real, name);
+			if (typeof descriptor?.value === 'function')
+				members.set(name, {
+					...descriptor,
+					value: member(descriptor.value, own),
+				});
+		}
 
-		Reflect.defineProperty(proxy, 'replace', {
-			value: proxyModule.wrapFunction(
-				this.client.global.location.replace,
-				(target, that, [url]) => {
-					const destination = new URL(url, this.client.url.toString());
-					this.client.getModule(NavigationHintModule)?.hint(destination.href);
-					return Reflect.apply(target, this.client.global.location, [
-						routeHTML(
-							new StompURL(destination, this.client.url),
-							this.client.url,
-							this.client.config,
-							false,
-							this.client.nestedRoute,
-						),
-					]);
-				},
-			),
-			writable: false,
-			enumerable: true,
-			configurable: false,
-		});
-
-		// an own property of the real location, not of Location.prototype, so
-		// the proxy needs its own copy or `this.client.global.location.reload()` is undefined
-		Reflect.defineProperty(proxy, 'reload', {
-			value: proxyModule.wrapFunction(
-				this.client.global.location.reload,
-				(target) => Reflect.apply(target, this.client.global.location, []),
-			),
-			writable: false,
-			enumerable: true,
-			configurable: false,
-		});
-
-		Reflect.defineProperty(proxy, 'toString', {
-			value: proxyModule.wrapFunction(
-				this.client.global.location.assign,
-				(target, that) => {
-					invokeGlobal(that, proxy);
-					return this.client.url.toString();
-				},
-			),
-			writable: false,
-			enumerable: true,
-			configurable: false,
-		});
-
-		Reflect.defineProperty(proxy, 'valueOf', {
-			value: proxyModule.wrapFunction(
-				this.client.global.location.assign,
-				(target, that) => {
-					invokeGlobal(that, proxy);
-					return proxy;
-				},
-			),
-			writable: false,
-			enumerable: false,
-			configurable: false,
-		});
+		// every other member (valueOf, Symbol.toPrimitive) is the real one's,
+		// which answers for whatever it is called on
+		for (const key of Reflect.ownKeys(real)) {
+			const descriptor = members.get(key);
+			if (descriptor) Reflect.defineProperty(proxy, key, descriptor);
+			else if (
+				key !== this.client.names.globalProxy &&
+				key !== this.client.names.globalName
+			)
+				Reflect.defineProperty(
+					proxy,
+					key,
+					Reflect.getOwnPropertyDescriptor(real, key)!,
+				);
+		}
 
 		Reflect.setPrototypeOf(proxy, this.client.global.Location.prototype);
 
-		setGlobalProxy(
-			this.client.global.location,
-			'location',
-			proxy,
-			this.client.names,
-		);
+		setGlobalProxy(real, 'location', proxy, this.client.names);
 	}
 }
