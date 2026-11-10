@@ -59,11 +59,12 @@ export interface Config {
 	 */
 	membrane?: boolean;
 	/**
-	 * Emulated service workers (off unless `true`): a page's
+	 * Emulated service workers (on unless `false`): a page's
 	 * `navigator.serviceWorker` registers workers that run in a dedicated
 	 * Worker the controller starts, and Stomp's own service worker hands them
 	 * the page's requests (docs/service-workers.md). Off, pages have no
-	 * `navigator.serviceWorker`, as before.
+	 * `navigator.serviceWorker` (a proxy tell: every Chrome page in a secure
+	 * context has one).
 	 */
 	serviceWorkers?: boolean;
 	/** @internal ms an emulated service worker may take to say whether it answers a request (tests; default 5000, a start twice that, an answer six times) */

@@ -2053,6 +2053,7 @@ export class ServiceWorkers {
 				control: {
 					registration: this.snapshot(record),
 					worker: this.#worker(record.active)!,
+					...partitionOf(record),
 				},
 			};
 		}

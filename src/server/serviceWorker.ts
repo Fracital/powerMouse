@@ -65,7 +65,7 @@ interface ControllerRef {
 	owner?: string;
 	/** registration order: the newest live controller of a scope takes over an address whose controller is gone */
 	serial: number;
-	/** the emulated service workers' host in this controller, with `serviceWorkers` on */
+	/** the emulated service workers' host in this controller, unless `serviceWorkers` is off */
 	host?: WorkerHost;
 }
 
@@ -207,7 +207,7 @@ function registerController(
 	};
 	server.then((ready) => {
 		ref.ready = ready;
-		if (config.serviceWorkers) ref.host = workerHost(ref, ready);
+		if (config.serviceWorkers !== false) ref.host = workerHost(ref, ready);
 		if (config.serviceWorkerEventDelay)
 			serviceWorkers.setEventDelay(config.serviceWorkerEventDelay);
 	});

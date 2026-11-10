@@ -115,6 +115,8 @@ export interface BackgroundFetchRecordWire {
 export interface ControlInfo {
 	registration: RegistrationSnapshot;
 	worker: WorkerSnapshot;
+	/** its registration's storage partition (src/partition.ts), none for a first-party one */
+	partition?: string;
 }
 
 export interface ErrorInfo {

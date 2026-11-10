@@ -1991,7 +1991,7 @@ export function registerRewrites(
 				// every document's inject builds the window membrane from this
 				...(init.membrane === false ? { membrane: false } : {}),
 				// pages get emulated service workers (docs/service-workers.md)
-				...(init.serviceWorkers ? { serviceWorkers: true } : {}),
+				...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
 				...(init.assets ? { assets: init.assets } : {}),
 				// the deployment's helper names: the shell and every rewritten
 				// script use them, and the inject reads them from this config
@@ -2536,7 +2536,7 @@ async function answerFromServiceWorker<N extends Response>(
 	/** the navigation preload's answer, for the page as the network's */
 	network?: N;
 }> {
-	if (!rewriter.config.serviceWorkers || context?.internal)
+	if (rewriter.config.serviceWorkers === false || context?.internal)
 		return { response: null };
 	// a navigation or a worker's script goes to the registration whose scope
 	// its URL is in, and the document or worker it makes is controlled by it
@@ -2660,7 +2660,7 @@ function registerServiceWorkerScripts(router: Router, rewriter: Rewriter) {
 	router.routes.set(
 		/^\/sw:([A-Za-z0-9_-]+)\//,
 		async (request, path, context) => {
-			if (!rewriter.config.serviceWorkers)
+			if (rewriter.config.serviceWorkers === false)
 				return new Response(null, { status: 404 });
 			const version = /^\/sw:([A-Za-z0-9_-]+)\//.exec(path)![1];
 			if (await serviceWorkers.isProxiedClient(context?.requestClientId))

@@ -67,9 +67,9 @@ let ISOLATED = !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
 // visit
 const CACHE = !new URLSearchParams(location.search).has('nocache');
 // emulated service workers for the proxied pages (docs/service-workers.md),
-// off by default; ?sw turns them on for a visit (?sw=<ms> also sets how long
-// a worker may take to answer, for the suites)
-const SERVICE_WORKERS = new URLSearchParams(location.search).has('sw');
+// on by default; ?nosw turns them off for a visit (?sw=<ms> sets how long a
+// worker may take to answer, for the suites)
+const SERVICE_WORKERS = !new URLSearchParams(location.search).has('nosw');
 const SERVICE_WORKER_TIMEOUT =
 	Number(new URLSearchParams(location.search).get('sw')) || undefined;
 // ?swdelay=<ms>: every service worker event reaches the pages that much

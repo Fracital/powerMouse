@@ -14,6 +14,11 @@ import DocumentClient from '../Client';
 
 const UPDATE_VIA_CACHE: UpdateViaCache[] = ['imports', 'all', 'none'];
 
+interface Emulated {
+	container: object;
+	handle: (event: PageEvent, ports: MessagePort[]) => void;
+}
+
 interface ContainerState {
 	controller: object | null;
 	ready?: Promise<object>;
@@ -25,7 +30,7 @@ interface ContainerState {
 /**
  * `navigator.serviceWorker` for a proxied page, backed by the emulated
  * service workers Stomp's own worker runs (docs/service-workers.md). Only
- * with `serviceWorkers` on; otherwise the Navigator module removes the API.
+ * unless `serviceWorkers` is off; then the Navigator module removes the API.
  */
 export default class ServiceWorkerModule extends Module<DocumentClient> {
 	apply() {
@@ -58,6 +63,59 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 		const ownEvent = (event: PageEvent) =>
 			event.origin === origin() &&
 			(event.partition ?? '') === this.client.partition;
+		// the registration that controls this document, from its shell: only
+		// its own origin's and partition's
+		const own =
+			control &&
+			control.registration.scope.startsWith(origin()) &&
+			(control.partition ?? '') === this.client.partition
+				? control
+				: undefined;
+		// the objects, and the few hundred member hooks behind them, are made
+		// when the page first reads navigator.serviceWorker (or a worker of
+		// its site speaks to it), so a frame that never does pays nothing for
+		// them; a document a worker controls makes them at once
+		let emulated: Emulated | undefined;
+		const emulate = () =>
+			(emulated ??= this.#emulate(own, proxyModule, origin, ownEvent));
+		if (own) emulate();
+		this.client.onServiceWorkerEvent((message) => {
+			const data = message.data as Record<string, unknown> | null;
+			if (typeof data !== 'object' || data === null || !(SW_EVENT in data))
+				return;
+			const event = data[SW_EVENT] as PageEvent;
+			if (!ownEvent(event)) return;
+			emulate().handle(event, [...message.ports]);
+		});
+
+		// the native container's own calls never register anything: only
+		// this module's container answers them
+		const navigatorDescriptor = Reflect.getOwnPropertyDescriptor(
+			global.Navigator.prototype,
+			'serviceWorker',
+		)!;
+		Reflect.defineProperty(global.Navigator.prototype, 'serviceWorker', {
+			...navigatorDescriptor,
+			get: proxyModule.wrapFunction(navigatorDescriptor.get!, () => {
+				// an opaque origin has no service workers
+				if (this.client.opaqueRequests)
+					throw new global.DOMException(
+						"Failed to read the 'serviceWorker' property from 'Navigator': The document is sandboxed and lacks the 'allow-same-origin' flag.",
+						'SecurityError',
+					);
+				return emulate().container;
+			}),
+		});
+	}
+
+	/** the container and the objects behind it (see apply) */
+	#emulate(
+		control: ControlInfo | undefined,
+		proxyModule: ProxyModule,
+		origin: () => string,
+		ownEvent: (event: PageEvent) => boolean,
+	): Emulated {
+		const global = this.client.global;
 
 		// Calls in flight: every event that arrives meanwhile waits for the
 		// call's answer, in the order it came. The answer travels on a port of
@@ -225,7 +283,7 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 		const container = objects.eventTarget(Container);
 		const state: ContainerState = { controller: null, queue: [] };
 		const isContainer = (that: unknown) => that === container;
-		if (control && control.registration.scope.startsWith(origin())) {
+		if (control) {
 			objects.registration(control.registration);
 			state.controller = objects.worker(
 				control.worker,
@@ -325,12 +383,6 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 				}
 			}
 		};
-		this.client.onServiceWorkerEvent((message) => {
-			const data = message.data as Record<string, unknown> | null;
-			if (typeof data !== 'object' || data === null || !(SW_EVENT in data))
-				return;
-			handle(data[SW_EVENT] as PageEvent, [...message.ports]);
-		});
 
 		const proto = Container.prototype;
 		const failed = (verb: string, detail: string) =>
@@ -501,24 +553,7 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 			},
 		});
 
-		// the native container's own calls never register anything: only
-		// this module's container answers them
-		const navigatorDescriptor = Reflect.getOwnPropertyDescriptor(
-			global.Navigator.prototype,
-			'serviceWorker',
-		)!;
-		Reflect.defineProperty(global.Navigator.prototype, 'serviceWorker', {
-			...navigatorDescriptor,
-			get: proxyModule.wrapFunction(navigatorDescriptor.get!, () => {
-				// an opaque origin has no service workers
-				if (this.client.opaqueRequests)
-					throw new global.DOMException(
-						"Failed to read the 'serviceWorker' property from 'Navigator': The document is sandboxed and lacks the 'allow-same-origin' flag.",
-						'SecurityError',
-					);
-				return container;
-			}),
-		});
+		return { container, handle };
 	}
 
 	/** a container method: the emulated call for our container, a rejection for any other (the native one never registers) */

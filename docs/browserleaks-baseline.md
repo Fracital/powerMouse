@@ -40,7 +40,7 @@ commit that fixed them and their regression suite.
 | IP, TCP: hops, MTU, JA4T                                  | this machine's                                                                                                            | the wisp server's                                                                                               | no        | inherent (docs/fingerprint.md item 7)                                                                                        |                                                                                          |
 | JavaScript                                                | tab-separated table                                                                                                       | the "Rest of window.navigator" table ran together                                                               | yes       | fragment parsing in body context (below)                                                                                     | fixed, 2d892b1                                                                           |
 | JavaScript: outer size                                    | toolbar between outer and inner (real window)                                                                             | `outerHeight === innerHeight`, at 0,0                                                                           | yes       | Framing spoofed a toolbarless window                                                                                         | fixed, ce6610a, window-geometry                                                          |
-| JavaScript: `navigator.serviceWorker`, `navigator.login`  | present                                                                                                                   | missing                                                                                                         | yes       | deleted on purpose (Navigator and Credentials modules)                                                                       | left (emulated service workers behind `serviceWorkers`, off by default)                  |
+| JavaScript: `navigator.serviceWorker`, `navigator.login`  | present                                                                                                                   | missing                                                                                                         | yes       | deleted on purpose (Navigator and Credentials modules)                                                                       | `navigator.serviceWorker` fixed: emulated, on by default (`serviceWorkers`)              |
 | JavaScript: AudioContext state                            | `suspended`                                                                                                               | `running` (same-origin, live)                                                                                   | maybe     | the host's user activation from the address bar; a bare page matches native                                                  | left                                                                                     |
 | JavaScript, CSS: viewport                                 | 1280x900                                                                                                                  | 1280x803                                                                                                        | no        | inherent: the demo's toolbar takes height                                                                                    |                                                                                          |
 | JavaScript: screen (isolated)                             | 1280x900                                                                                                                  | 800x600                                                                                                         | no        | headless artifact: Playwright's emulation does not reach an out-of-process frame                                             |                                                                                          |
@@ -126,13 +126,13 @@ membrane agent's).
 
 ## Gaps left, most detectable first
 
-1. **`navigator.serviceWorker` and FedCM are missing by default**
-   (`'serviceWorker' in navigator` is false; `ServiceWorkerContainer`,
+1. **`navigator.serviceWorker` and FedCM were missing**
+   (`'serviceWorker' in navigator` was false; `ServiceWorkerContainer`,
    `navigator.login`, `IdentityCredential` undefined). Since this baseline,
-   a controller built with `serviceWorkers: true` (the demo's `?sw`) gives
-   pages emulated service workers (docs/service-workers.md), which closes
-   the feature test for a host that turns them on; the default, and the
-   live demo, still lack it. FedCM is still deleted.
+   pages get emulated service workers by default (docs/service-workers.md),
+   which closes the feature test; only a controller built with
+   `serviceWorkers: false` (the demo's `?nosw`) still lacks it. FedCM is
+   still deleted.
 2. **Client hints**: Accept-CH and Critical-CH are not honoured, so a site
    that asks for high-entropy hints gets none (server-side detectable, and
    bot scoring uses it). The worker can read the values

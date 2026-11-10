@@ -62,7 +62,7 @@ export default class Client {
 	allowInvalidJs: boolean;
 	/** the window membrane is on (config.membrane, on unless false) */
 	membrane: boolean;
-	/** pages get emulated service workers (config.serviceWorkers) */
+	/** pages get emulated service workers (config.serviceWorkers, on unless false) */
 	serviceWorkers: boolean;
 	/** the host's served file names (config.assets) */
 	assets?: Assets;
@@ -232,7 +232,7 @@ export default class Client {
 		this.build = init.build;
 		this.allowInvalidJs = init.allowInvalidJs !== false;
 		this.membrane = init.membrane !== false;
-		this.serviceWorkers = init.serviceWorkers === true;
+		this.serviceWorkers = init.serviceWorkers !== false;
 		this.assets = init.assets;
 		// a stale cached bundle next to a new service worker: say so once,
 		// the page still gets its best effort
@@ -266,7 +266,7 @@ export default class Client {
 			...(this.build ? { build: this.build } : {}),
 			...(this.allowInvalidJs ? {} : { allowInvalidJs: false }),
 			...(this.membrane ? {} : { membrane: false }),
-			...(this.serviceWorkers ? { serviceWorkers: true } : {}),
+			...(this.serviceWorkers ? {} : { serviceWorkers: false }),
 			...(this.assets ? { assets: this.assets } : {}),
 			...(this.#customNames ? { names: this.names } : {}),
 			...(this.hooks ? { hooks: this.hooks } : {}),

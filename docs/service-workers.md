@@ -1,7 +1,7 @@
 # Emulated service workers
 
-Proxied pages get a working `navigator.serviceWorker` when the controller is
-built with `serviceWorkers: true`. A page's service worker never becomes a
+Proxied pages get a working `navigator.serviceWorker` unless the controller
+is built with `serviceWorkers: false`. A page's service worker never becomes a
 real registration: every proxied site shares the proxy's one real origin, and
 a real worker registered there by page code could answer the proxy's own
 requests, its bundles and other sites' pages, which is an escape (the reason
@@ -11,8 +11,9 @@ Worker that the controller starts, with the worker inject and a global that
 reads as a `ServiceWorkerGlobalScope`, and Stomp's own service worker hands it
 the requests it would have received.
 
-The flag is off by default: with it off nothing below runs, and pages see
-`navigator.serviceWorker` absent as before.
+The flag is on by default. With it off nothing below runs, and pages see
+`navigator.serviceWorker` absent, which a page can read as a proxy tell:
+every Chrome page in a secure context has it.
 
 ## Pieces
 
@@ -251,6 +252,13 @@ denied`, `getSubscription()` resolves `null`. `showNotification()`
     site's.
 - An opaque document (sandboxed without `allow-same-origin`) throws the
   browser's `SecurityError` when it reads `navigator.serviceWorker`.
+- The container and the objects behind it (a few hundred hooked members of
+  the service worker interfaces and their managers) are made on the
+  document's first read of `navigator.serviceWorker`, or at once in a
+  document a worker controls or when a worker of its site messages it. A
+  frame that never reads it (an ad or cookie-sync frame) costs no more
+  memory than with the flag off (measure-frame-memory: 1,220 KB of heap
+  per frame either way, 1,276 KB when they were made in every frame).
 
 ## Timeouts
 
@@ -263,8 +271,8 @@ page never waits on a worker longer than that.
 ## Status and tests
 
 Landed in four stages, each measured against the same pages loaded
-natively in both demo modes (the demo turns the flag on with `?sw`; `?sw=<ms>`
-also sets `serviceWorkerTimeout`):
+natively in both demo modes (the suites still ask for the flag with `?sw`;
+`?sw=<ms>` also sets `serviceWorkerTimeout`):
 
 | Stage                                 | Suites                                                |
 | ------------------------------------- | ----------------------------------------------------- |
@@ -272,6 +280,7 @@ also sets `serviceWorkerTimeout`):
 | Fetch interception for subresources   | `service-worker-fetch` (with the timeout fallbacks)   |
 | Navigations and offline               | `service-worker-offline`, `service-worker-updates`    |
 | Cache API scoping, clients, messaging | `service-worker-messages`, `service-worker-isolation` |
+| Navigation preload                    | `service-worker-preload`                              |
 
 `test/sw-site.mjs` is a site of the suites' own on a free port, so a suite
 can change a worker script's bytes and take the site offline. Real sites
@@ -282,13 +291,33 @@ with element counts within 3% and no page errors; web.dev's worker runs on
 the appspot document the proxy lands on with or without the flag; x.com
 (logged out) and vite.dev register none, natively too.
 
-The flag stays off by default: it changes the request path of every page
-that registers a worker, and the hosts (Fracital among them) should opt in
-once it has run on real traffic.
+The flag is on by default since a sweep of 19 pages (2026-11-10, Chrome
+152 with a regular Chrome user agent and scrollbars, each loaded natively,
+through the demo with the flag on and with it off, then reloaded in place):
+YouTube's home and a /watch page, Google, Gmail and Google sign-in, x.com,
+Discord, Spotify, Reddit (a bot wall natively too), GitHub, MDN, web.dev,
+squoosh.app, Excalidraw, whatpwacando.today, Facebook, Wikipedia,
+developer.chrome.com and diagrams.net. The eight sites that register a
+worker register, activate and, where they are natively, are controlled
+after the reload (YouTube, web.dev, squoosh.app, Excalidraw,
+developer.chrome.com); element counts are within 4% of native either way;
+no page error comes with the flag on, while with it off squoosh.app and
+whatpwacando.today throw on the missing `navigator.serviceWorker`. Load
+times are the proxy's with or without the flag (YouTube /watch reloads, 8
+each, worker-controlled against flag off: 3,551 and 3,523 ms median); a
+site without a worker loads as fast (a fixture of 60 scripts, 60 images
+and 40 fetches: 416 ms to its load event with the flag on, 460 ms off), and
+a frame that never reads `navigator.serviceWorker` costs the same memory.
+Hosts should leave it on.
 
 ## Limitations
 
 - `event.isTrusted` is `false` for the emulated events (it cannot be set).
+- A member of `ServiceWorkerContainer.prototype`,
+  `ServiceWorkerRegistration.prototype` or a manager's prototype that a
+  page takes before its first read of `navigator.serviceWorker` is the
+  native one: it is another function than the one read after, and called on
+  an emulated object it throws `Illegal invocation`.
 - The worker is a dedicated Worker underneath, made to read as a
   service worker: its global's own names are a Chrome service worker's
   (the dedicated-only APIs, `URL.createObjectURL` and `postMessage` gone,

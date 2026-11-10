@@ -80,7 +80,7 @@ export interface RemoteControllerInit {
 	allowInvalidJs?: boolean;
 	/** the window membrane, on unless `false` (see StompController) */
 	membrane?: boolean;
-	/** emulated service workers, off unless `true` (see StompController) */
+	/** emulated service workers, on unless `false` (see StompController) */
 	serviceWorkers?: boolean;
 	/** @internal see StompController */
 	serviceWorkerTimeout?: number;
@@ -283,7 +283,7 @@ export class RemoteController extends EventTarget {
 					requestLog: !!init.onRequest,
 					...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 					...(init.membrane === false ? { membrane: false } : {}),
-					...(init.serviceWorkers === true ? { serviceWorkers: true } : {}),
+					...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
 					...(init.serviceWorkerTimeout !== undefined
 						? { serviceWorkerTimeout: init.serviceWorkerTimeout }
 						: {}),

@@ -170,13 +170,14 @@ export interface ControllerInit {
 	 */
 	membrane?: boolean;
 	/**
-	 * Emulated service workers, off unless `true` (docs/service-workers.md).
+	 * Emulated service workers, on unless `false` (docs/service-workers.md).
 	 * A proxied page's `navigator.serviceWorker` works: its worker script
 	 * runs in a dedicated Worker this controller starts (never a real
 	 * registration on the proxy origin, which would serve every site), and
 	 * the Stomp service worker hands it the requests of the pages it
 	 * controls, navigations included, so offline pages, caches and fetch
-	 * rewriting work. Off, `navigator.serviceWorker` is absent, as before.
+	 * rewriting work. `false` leaves pages without `navigator.serviceWorker`,
+	 * which a page can read as a proxy tell.
 	 */
 	serviceWorkers?: boolean;
 	/** @internal ms an emulated service worker may take to say whether it answers a request (tests) */
@@ -645,7 +646,7 @@ export class StompController extends EventTarget {
 			...(init.onRequest || init.requestLog ? { requestLog: true } : {}),
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 			...(init.membrane === false ? { membrane: false } : {}),
-			...(init.serviceWorkers === true ? { serviceWorkers: true } : {}),
+			...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
 			...(init.serviceWorkerTimeout
 				? { serviceWorkerTimeout: init.serviceWorkerTimeout }
 				: {}),

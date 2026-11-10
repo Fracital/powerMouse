@@ -448,6 +448,28 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   site stored showed in this one's usage. IndexedDB is sized from its
   values, where Chrome counts the compressed size on disk.
   (sop-escapes and sop-partitions suites.)
+- Emulated service workers are on by default (`serviceWorkers`, on unless
+  `false`; the demo turns them off with `?nosw`, and `?sw` still sets the
+  suites' timeouts). A proxied page without `navigator.serviceWorker` reads
+  as a proxy: every Chrome page in a secure context has it, and sites that
+  call `navigator.serviceWorker.register()` without checking threw
+  (squoosh.app, whatpwacando.today). Swept natively and through the demo
+  with the flag on and off (YouTube's home and a /watch page, Google,
+  Gmail and Google sign-in, x.com, Discord, Spotify, Reddit, GitHub, MDN,
+  web.dev, squoosh.app, Excalidraw, whatpwacando.today, Facebook,
+  Wikipedia, developer.chrome.com, diagrams.net): the eight sites that
+  register a worker register it, activate it and, where natively, are
+  controlled after a reload, element counts are the native ones, and no
+  page error comes with the flag on; a frame that never reads
+  `navigator.serviceWorker` costs no more memory, and a site without a
+  worker loads as fast. (docs/service-workers.md.)
+- Turning emulated service workers on costs a frame that never reads
+  `navigator.serviceWorker` nothing: the container and the few hundred
+  hooked members behind it were made in every document, 56 KB of heap per
+  frame (measure-frame-memory: 1,276 KB against 1,220 KB with them off), and
+  are now made on the first read, or at once in a document a worker
+  controls (1,220 KB). A page that keeps a member of a service worker
+  interface's prototype from before that read holds the native one.
 - An emulated service worker's navigation preload works: with
   `navigationPreload.enable()`, a GET navigation's request goes out as soon
   as it is routed, in parallel with the worker's start, with
@@ -837,7 +859,8 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   the next request (service-worker-fetch suite, against the same page
   natively, both modes).
 - Proxied pages can have service workers, emulated, behind the new
-  `serviceWorkers` controller option (off by default; the demo's `?sw`).
+  `serviceWorkers` controller option (on by default; `false` turns them
+  off, the demo's `?nosw`).
   `navigator.serviceWorker` used to be absent, because a page that
   registered a real worker on the proxy origin could serve itself and every
   other site. Now `register()` runs the page's worker script in a dedicated

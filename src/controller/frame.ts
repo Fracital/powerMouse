@@ -157,7 +157,7 @@ if (window === window.parent || !origins.length) {
 						...(init.cache === false ? { cache: false } : {}),
 						...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 						...(init.membrane === false ? { membrane: false } : {}),
-						...(init.serviceWorkers === true ? { serviceWorkers: true } : {}),
+						...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
 						...(typeof init.serviceWorkerTimeout === 'number'
 							? { serviceWorkerTimeout: init.serviceWorkerTimeout }
 							: {}),
