@@ -82,6 +82,17 @@ import {
 	partitionedKey,
 } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
+import {
+	acceptedHints,
+	applyClientHints,
+	applyMeta,
+	criticalRetry,
+	hintsDocument,
+	persistAcceptCH,
+	recordDocument as recordHintsDocument,
+	topDocument,
+	type HintsContext,
+} from './clientHints';
 import Cookies from './Cookies';
 import {
 	corpBlocks,
@@ -1050,6 +1061,37 @@ function genericForward(
 		if (cookie) requestHeaders.set('cookie', cookie);
 		else requestHeaders.delete('cookie');
 
+		// client hints between the real origins (clientHints.ts): a
+		// subresource by its document's accepted set and policy; a frame's
+		// navigation by its main frame's, judged from its parent (at its
+		// referrer) or the top it was routed under; a top-level navigation by
+		// what its origin accepted
+		const hintsTop = navigation
+			? topLevel
+				? url.url.origin
+				: nestedRoute
+			: null;
+		const hintsDoc = navigation
+			? topLevel
+				? null
+				: (hintsDocument(undefined, referrer) ??
+					(nestedRoute ? topDocument(nestedRoute) : null))
+			: hintsDocument(context?.clientId, clientRoute);
+		const hintsContext: HintsContext = {
+			target: url.url,
+			secure: potentiallyTrustworthy(url.url),
+			navigation,
+			topLevel,
+			doc: hintsDoc,
+			top: hintsTop,
+			directory: rewriter.directory,
+			pageRequest: !navigation && serverRequest.destination === '' && !internal,
+			...(navigation && !topLevel && hint?.allow !== undefined
+				? { allow: hint.allow }
+				: {}),
+		};
+		let sentHints = await applyClientHints(requestHeaders, hintsContext);
+
 		// HTTP authentication as the browser's auth cache does it (httpAuth):
 		// a request that may carry credentials and has no Authorization of the
 		// page's own sends the one an earlier answer under this directory
@@ -1471,6 +1513,26 @@ function genericForward(
 					if (upstream.status !== 401)
 						rememberAuthorization(url.url, realm!, answer);
 				}
+				// a top-level answer whose Critical-CH names a hint its own
+				// Accept-CH asks for and the request lacked: Chrome restarts the
+				// navigation once with the hints
+				if (navigation && topLevel && hintsContext.secure) {
+					const accepted = await persistAcceptCH(
+						url.url.origin,
+						upstream.headers.get('accept-ch'),
+					);
+					if (
+						criticalRetry(
+							upstream.headers.get('critical-ch'),
+							accepted,
+							sentHints,
+						)
+					) {
+						await upstream.body?.cancel().catch(() => {});
+						sentHints = await applyClientHints(requestHeaders, hintsContext);
+						upstream = await fetchUpstream(withValidators(requestHeaders));
+					}
+				}
 			} catch (error) {
 				if (error === ABORTED) {
 					reportAborted();
@@ -1569,6 +1631,37 @@ function genericForward(
 			await response.body?.cancel().catch(() => {});
 			reportAborted();
 			return Response.error();
+		}
+
+		// the document this navigation makes, as its requests' client hints
+		// go: what it may send (a top-level one's Accept-CH is kept for its
+		// origin first) and its Permissions-Policy, which the browser never
+		// sees
+		if (
+			navigation &&
+			DOCUMENT_DESTINATIONS.has(serverRequest.destination) &&
+			!(
+				REDIRECT_STATUSES.includes(response.status) &&
+				response.headers.has('location')
+			)
+		) {
+			const top = hintsTop ?? url.url.origin;
+			const enabled = !hintsContext.secure
+				? new Set<string>()
+				: topLevel
+					? await persistAcceptCH(top, response.headers.get('accept-ch'))
+					: await acceptedHints(top);
+			recordHintsDocument(serverRequest.url, context?.clientId, {
+				origin: url.url.origin,
+				top,
+				topLevel,
+				enabled,
+				permissionsPolicy: response.headers.get('permissions-policy'),
+				parent: hintsDoc,
+				...(hintsContext.allow !== undefined
+					? { allow: hintsContext.allow }
+					: {}),
+			});
 		}
 
 		// what the browser would not have let the page have: a cross-origin
@@ -2488,6 +2581,12 @@ export function registerRewrites(
 				// refresh in the markup lands in the written document instead, and
 				// the inject routes it like any meta refresh the page wrote.
 				let markup = decodeDocument(bytes, contentType);
+				// a top-level page's Accept-CH and delegate-ch metas count from
+				// its first subresource (the preload scanner's)
+				if (request.navigation) {
+					const hints = hintsDocument(request.clientId, request.routed);
+					if (hints) applyMeta(hints, markup);
+				}
 				const refresh = response.headers.get('refresh');
 				if (refresh !== null) {
 					responseHeaders.delete('refresh');
@@ -2581,6 +2680,12 @@ export function registerRewrites(
 				if (headers.has('x-frame-options')) {
 					filteredHeaders.delete('x-frame-options');
 				}
+
+				// the worker keeps the site's client hints for its real origin
+				// (clientHints.ts); the browser would keep them for the proxy
+				// origin, every site's, and restart the shell for a Critical-CH
+				filteredHeaders.delete('accept-ch');
+				filteredHeaders.delete('critical-ch');
 
 				// the page's own framing policy is gone (it would refuse our frame);
 				// ours lets the host application embed the proxy origin, and the

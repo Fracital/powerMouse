@@ -225,6 +225,30 @@ export interface NavigationHintMessage {
 	url: string;
 	/** the document had transient user activation when the navigation began */
 	activated: boolean;
+	/** an iframe's navigation: the element's allow attribute (its container policy) */
+	allow?: string;
+}
+/**
+ * What a proxied document (or the controller) sees that its requests'
+ * client hints carry (src/server/clientHints.ts): the worker has no window
+ * to read the pixel ratio, the viewport or the media preferences from. A
+ * top-level document also names the hints of the Accept-CH metas its
+ * script inserted. The worker files a
+ * document's report under the sender's client id, never one it names.
+ */
+export const CLIENT_HINTS = '$stomp$clientHints';
+export interface ClientHintsReport {
+	directory: string;
+	dpr: number;
+	colorScheme: 'light' | 'dark';
+	reducedMotion: 'no-preference' | 'reduce';
+	reducedTransparency: 'no-preference' | 'reduce';
+	/** the document's innerWidth and innerHeight */
+	viewport?: [number, number];
+	/** from the controller: `viewport` is a host frame's, about to navigate */
+	top?: boolean;
+	/** hints an Accept-CH meta the page's script inserted named */
+	accept?: string[];
 }
 export interface InlineDocumentMessage {
 	directory: string;

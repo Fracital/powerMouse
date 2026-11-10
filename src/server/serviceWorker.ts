@@ -7,6 +7,8 @@ import {
 	ABORT_REQUEST,
 	BLOB_MINTED,
 	BlobMintedMessage,
+	CLIENT_HINTS,
+	ClientHintsReport,
 	CONTROLLER_CLIENT,
 	CONTROLLER_CLOSE,
 	CONTROLLER_INIT,
@@ -32,6 +34,7 @@ import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
 import { recordBlobOrigin } from './blobOrigins';
+import { recordReport as recordClientHintsReport } from './clientHints';
 import { forScript, onJarChange } from './Cookies';
 import createServer, { addressCodec, StompServer } from './createServer';
 import { hostErrorPage } from './errorPage';
@@ -609,10 +612,34 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 			recordNavigationHint(target.href, {
 				origin: new URL(real).origin,
 				activated: message.activated === true,
+				...(typeof message.allow === 'string' && message.allow.length <= 4096
+					? { allow: message.allow }
+					: {}),
 			});
 		} catch (error) {
 			// not a URL: nothing to record
 		}
+	} else if (CLIENT_HINTS in data) {
+		// from a client of that controller: a routed document files its own
+		// view under its own client id; any other client (the controller's
+		// page) adds only what every window shares
+		const message = data[CLIENT_HINTS] as ClientHintsReport;
+		const source = event.source instanceof Client ? event.source : null;
+		if (
+			!message ||
+			typeof message.directory !== 'string' ||
+			!controllers.has(message.directory) ||
+			!source
+		)
+			return;
+		const routed = source.url.startsWith(
+			`${location.origin}${message.directory}`,
+		);
+		recordClientHintsReport(
+			message.directory,
+			routed ? source.id : undefined,
+			message,
+		);
 	} else if (SW_API in data) {
 		// a page's navigator.serviceWorker: from a routed document of that
 		// controller, whose site the worker reads from its own routed URL

@@ -1,5 +1,11 @@
 import type { RawHeaders } from '@mercuryworkshop/proxy-transports';
 import { capitalizeHeader } from '../headers';
+import { blinkHeaderMapOrder } from './blinkHeaderMap';
+import {
+	isHintName,
+	NAVIGATION_HINT_ORDER,
+	SUBRESOURCE_HINT_ORDER,
+} from './hintNames';
 
 /**
  * The request fields as Chrome puts them on the wire, so a request through
@@ -8,14 +14,16 @@ import { capitalizeHeader } from '../headers';
  * HTTP/2 (docs/fingerprint.md); the order is the same in both, HTTP/1.1
  * puts Host and Connection first (the transport adds those).
  *
- * A document's fields come from the browser process in a fixed order. A
- * subresource's first group comes from Blink's header map (client hints,
- * User-Agent, Accept and the page's own fields), the rest from the network
- * stack (Sec-Fetch-*, Referer, Accept-Encoding, Accept-Language, Cookie,
- * Priority). Blink's map iterates in hash order, so the page's own fields
- * land among the client hints in an order that depends on the whole set;
- * they go after sec-ch-ua here, which is exact for Content-Type alone (the
- * common case) and close otherwise.
+ * A document's fields come from the browser process in a fixed order, the
+ * client hints first in the order it adds them. A subresource's first group
+ * comes from Blink's header map (the page's own fields, client hints,
+ * User-Agent), then Accept, the rest from the network stack (Sec-Fetch-*,
+ * Referer, Accept-Encoding, Accept-Language, Cookie, Priority). Blink's map
+ * iterates in hash order (blinkHeaderMap.ts), so the page's own fields and
+ * the hints a site asked for land among the defaults in an order that
+ * depends on the whole set; the map is rebuilt here to get it. The page's
+ * own fields are taken to be set before the hints (only a collision of two
+ * hashes makes their order matter).
  */
 
 /** what a request is, as far as its field order goes */
@@ -35,18 +43,13 @@ export interface RequestShape {
 const LEAD = ['content-length', 'pragma', 'cache-control'];
 
 const NAVIGATION_FIRST = [
-	'sec-ch-ua',
-	'sec-ch-ua-mobile',
-	'sec-ch-ua-platform',
+	...NAVIGATION_HINT_ORDER,
 	'upgrade-insecure-requests',
 	'content-type',
 	'user-agent',
 	'origin',
 	'accept',
 ];
-
-const SUBRESOURCE_HINTS = ['sec-ch-ua-platform', 'user-agent', 'sec-ch-ua'];
-const SUBRESOURCE_TAIL = ['sec-ch-ua-mobile', 'accept'];
 
 // what the network stack adds, in its order, after everything else
 const NETWORK = [
@@ -99,7 +102,8 @@ export function chromePriority(shape: RequestShape): string | null {
 
 /** Chrome's spelling: client hints and Priority lowercase, the rest title case */
 function chromeCase(name: string): string {
-	if (name.startsWith('sec-ch-') || name === 'priority') return name;
+	if (isHintName(name) || name.startsWith('sec-ch-') || name === 'priority')
+		return name;
 	const standard = capitalizeHeader(name);
 	if (standard !== name) return standard;
 	return name.replace(/(^|-)([a-z])/g, (_, dash, c) => dash + c.toUpperCase());
@@ -140,33 +144,38 @@ export function chromeOrderedHeaders(
 		out.push([chromeCase(name), value]);
 		fields.delete(name);
 	};
-	const takeRest = (except: Set<string>) => {
-		for (const name of [...fields.keys()])
-			if (!except.has(name) && !name.startsWith('sec-ch-')) take(name);
-	};
+	const network = new Set(NETWORK);
 	LEAD.forEach(take);
 	if (shape.navigation) {
 		NAVIGATION_FIRST.forEach(take);
-		// the other client hints (the high-entropy ones a site asked for),
-		// then anything else, before the network stack's fields
-		for (const name of [...fields.keys()])
-			if (name.startsWith('sec-ch-')) take(name);
-		takeRest(new Set(NETWORK));
+		// anything else, before the network stack's fields
+		for (const name of [...fields.keys()]) if (!network.has(name)) take(name);
 	} else {
-		// Blink sets Origin first for a CORS load an element starts (a module
-		// script, a crossorigin image); for a fetch or an XHR (destination
-		// empty) and for any other method the network stack adds it, after
-		// Accept (measured: browserleaks' HTTP/2 page, field-order suite)
+		// Blink sets Origin in its map for a CORS load an element starts (a
+		// module script, a crossorigin image); for a fetch or an XHR
+		// (destination empty) and for any other method the network stack
+		// adds it, after Accept (measured: browserleaks' HTTP/2 page,
+		// field-order suite)
 		const blinkOrigin =
 			shape.mode === 'cors' &&
 			shape.destination !== 'empty' &&
 			(shape.method === 'GET' || shape.method === 'HEAD');
-		if (blinkOrigin) take('origin');
-		SUBRESOURCE_HINTS.forEach(take);
-		takeRest(new Set([...NETWORK, ...SUBRESOURCE_TAIL, 'origin']));
-		SUBRESOURCE_TAIL.forEach(take);
-		for (const name of [...fields.keys()])
-			if (name.startsWith('sec-ch-')) take(name);
+		const mapped: string[] = [];
+		if (blinkOrigin && fields.has('origin')) mapped.push('origin');
+		for (const name of fields.keys())
+			if (
+				!network.has(name) &&
+				name !== 'origin' &&
+				name !== 'accept' &&
+				name !== 'user-agent' &&
+				!isHintName(name)
+			)
+				mapped.push(name);
+		for (const name of SUBRESOURCE_HINT_ORDER)
+			if (fields.has(name)) mapped.push(name);
+		if (fields.has('user-agent')) mapped.push('user-agent');
+		blinkHeaderMapOrder(mapped).forEach(take);
+		take('accept');
 		take('origin');
 	}
 	NETWORK.forEach(take);

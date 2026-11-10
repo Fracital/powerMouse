@@ -548,6 +548,8 @@ export default class DocumentClient extends Client {
 	}
 	/** the windows this document opened (a sandboxed document may navigate them) */
 	readonly openedWindows = new WeakSet<object>();
+	/** tell the worker an Accept-CH meta named these hints (the ClientHints module sets it) */
+	reportAcceptCH: (hints: string[]) => void = () => {};
 	/**
 	 * Whether this document may navigate `target`, as the browser
 	 * decides it for a sandboxed document: itself, its descendants, the

@@ -6,6 +6,7 @@ import AnimationFramesModule from './modules/AnimationFrames';
 import AudioModule from './modules/Audio';
 import BlobDocumentsModule from './modules/BlobDocuments';
 import CanvasTaintModule from './modules/CanvasTaint';
+import ClientHintsModule from './modules/ClientHints';
 import ContextModule from './modules/Context';
 import { CookiesModule } from './modules/Cookies';
 import CookieStoreModule from './modules/CookieStore';
@@ -74,6 +75,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(AnimationFramesModule);
 	client.addModule(NavigateModule);
 	client.addModule(NavigationHintModule);
+	client.addModule(ClientHintsModule);
 	client.addModule(ReadbackModule);
 	client.addModule(CSSReadbackModule);
 	// last: the Navigate module's own observer keeps the native constructor

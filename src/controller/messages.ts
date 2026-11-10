@@ -103,6 +103,8 @@ export const STORAGE_BLOCKED = 'StorageBlockedError';
 export type FrameBound = {
 	init: [ControllerFrameInit, { config: Config; stale: StaleInfo | null }];
 	route: [string, string];
+	/** the size of a host frame about to navigate (StompController.reportViewport) */
+	viewport: [[number, number], null];
 	/** the real URL a routed one stands for, null for a non-route (see StompController.unroute) */
 	unroute: [string, string | null];
 	setTransport: [TransportDescriptor];

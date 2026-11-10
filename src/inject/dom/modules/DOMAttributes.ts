@@ -15,6 +15,7 @@ import {
 	routeXHR,
 } from '../../../routeURL';
 import { routeJS, ScriptType } from '../../../scriptRoutes';
+import { parseAcceptCH } from '../../../server/hintNames';
 import StompURL from '../../../StompURL';
 import { LOAD_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
@@ -1187,11 +1188,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					const opaque = opaqueDocument(resource);
 					if (opaque) this.client.opaqueFrames.add(element);
 					else this.client.opaqueFrames.delete(element);
-					// the frame navigates for this document, under its activation
+					// the frame navigates for this document, under its activation,
+					// with its element's allow attribute as its container policy
+					// (the worker's client hints for the frame read it)
 					if (!opaque)
 						this.client
 							.getModule(NavigationHintModule)
-							?.hint(resource.url.href);
+							?.hint(
+								resource.url.href,
+								element.nodeName === 'IFRAME'
+									? (element.getAttribute('allow') ?? undefined)
+									: undefined,
+							);
 					element.setAttribute(
 						'src',
 						opaque ??
@@ -1249,6 +1257,25 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							);
 							element.removeAttribute('content');
 							break;
+						// client hints are the worker's to send for the real
+						// origins (src/server/clientHints.ts, which reads a
+						// page's own metas from its markup): the browser must
+						// not apply them to the proxy origin
+						case 'accept-ch':
+						case 'delegate-ch': {
+							const content = element.getAttribute('content')!;
+							element.setAttributeOG('content', content);
+							element.removeAttribute('content');
+							// one the page's script inserts counts for its later
+							// requests; a scripted delegate-ch counts for nothing
+							// (measured)
+							if (
+								element.getAttribute('http-equiv')!.toLowerCase() ===
+								'accept-ch'
+							)
+								this.client.reportAcceptCH(parseAcceptCH(content) ?? []);
+							break;
+						}
 						case 'refresh':
 							element.setAttributeOG(
 								'content',

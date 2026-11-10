@@ -332,6 +332,13 @@ export class RemoteController extends EventTarget {
 		await this.#ready;
 		return this.#rpc.call('route', url);
 	}
+	/** @internal see StompController.reportViewport */
+	reportViewport(width: number, height: number) {
+		if (!(width > 0 && height > 0)) return;
+		this.#ready
+			.then(() => this.#rpc.call('viewport', [width, height]))
+			.catch(() => {});
+	}
 	/** the real URL a routed one stands for, null for a non-route (see StompController.unroute) */
 	async unroute(url: string): Promise<string | null> {
 		await this.#ready;
@@ -443,6 +450,10 @@ export class RemoteFrame extends EventTarget {
 	/** navigate the frame; resolves when the new document first reports (see Frame.go) */
 	async go(url: string): Promise<void> {
 		const reported = this.#nextReport();
+		this.controller.reportViewport(
+			this.element.clientWidth,
+			this.element.clientHeight,
+		);
 		this.element.src = await this.controller.route(url);
 		this.url = url;
 		await reported;

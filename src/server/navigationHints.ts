@@ -8,6 +8,8 @@ const TTL_MS = 5000;
 export interface NavigationHint {
 	origin: string;
 	activated: boolean;
+	/** a frame's: its element's allow attribute */
+	allow?: string;
 }
 
 const hints = new Map<string, NavigationHint & { at: number }>();

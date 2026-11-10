@@ -16,8 +16,8 @@ import DocumentClient, { addDocumentOpenListener } from '../Client';
  * when another window navigates this one), and a frame's src the page sets.
  */
 export default class NavigationHintModule extends Module<DocumentClient> {
-	/** tell the worker this document is about to navigate to `url` (the real URL): set by apply */
-	hint: (url: string) => void = () => {};
+	/** tell the worker this document is about to navigate to `url` (the real URL), a frame with its allow attribute: set by apply */
+	hint: (url: string, allow?: string) => void = () => {};
 	apply() {
 		const global = this.client.global as typeof globalThis & {
 			navigation?: EventTarget;
@@ -54,7 +54,7 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 				) as DocumentClient | undefined) ?? null
 			);
 		};
-		const send = (this.hint = (url: string) => {
+		const send = (this.hint = (url: string, allow?: string) => {
 			const routed = voucher();
 			if (!routed) return;
 			let activated = false;
@@ -64,7 +64,12 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 				// no user activation API
 			}
 			routed.postToWorker({
-				[NAVIGATION_HINT]: { directory: routed.directory, url, activated },
+				[NAVIGATION_HINT]: {
+					directory: routed.directory,
+					url,
+					activated,
+					...(allow !== undefined ? { allow } : {}),
+				},
 			});
 		});
 		navigation.addEventListener('navigate', (event) => {

@@ -26,6 +26,8 @@ import { isUrlLike, urlLike } from '../StompURL';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
 import type { RequestRule } from '../transport/messages';
 import {
+	CLIENT_HINTS,
+	ClientHintsReport,
 	CONTROLLER_CLOSE,
 	CONTROLLER_INIT,
 	CONTROLLER_RPC,
@@ -1163,6 +1165,49 @@ export class StompController extends EventTarget {
 		};
 
 		this.serviceworker.postMessage({ [CONTROLLER_INIT]: message }, transfer);
+		// what the pages' client hints carry before any page reported it
+		this.#postClientHints();
+	}
+	/**
+	 * Tell the worker what the browser's client hints carry that a worker
+	 * cannot read (src/server/clientHints.ts): the pixel ratio and the media
+	 * preferences, every window's; a `viewport` is the size of a frame
+	 * about to navigate (its top-level navigation's viewport hints)
+	 */
+	#postClientHints(viewport?: [number, number]) {
+		const query = (text: string) => {
+			try {
+				return window.matchMedia(text).matches;
+			} catch (error) {
+				return false;
+			}
+		};
+		const report: ClientHintsReport = {
+			directory: this.config.directory,
+			dpr: window.devicePixelRatio,
+			colorScheme: query('(prefers-color-scheme: dark)') ? 'dark' : 'light',
+			reducedMotion: query('(prefers-reduced-motion: reduce)')
+				? 'reduce'
+				: 'no-preference',
+			reducedTransparency: query('(prefers-reduced-transparency: reduce)')
+				? 'reduce'
+				: 'no-preference',
+			...(viewport ? { viewport, top: true } : {}),
+		};
+		try {
+			this.serviceworker.postMessage({ [CLIENT_HINTS]: report });
+		} catch (error) {
+			// no worker yet: the pages report it themselves
+		}
+	}
+	/**
+	 * @internal The size of a frame about to navigate (Frame.go, and the
+	 * host's frames in isolation mode): what its navigation's viewport
+	 * client hints name until its document reports its own
+	 */
+	reportViewport(width: number, height: number) {
+		if (width > 0 && height > 0)
+			this.#postClientHints([Math.round(width), Math.round(height)]);
 	}
 	/**
 	 * A page's WebSocket handshake carries the jar's Cookie header for the
@@ -1349,6 +1394,10 @@ export class Frame extends EventTarget {
 	 */
 	async go(url: string): Promise<void> {
 		const reported = this.#nextReport();
+		this.controller.reportViewport(
+			this.element.clientWidth,
+			this.element.clientHeight,
+		);
 		this.element.src = await this.controller.route(url);
 		await reported;
 	}

@@ -405,6 +405,21 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   context. The two interfaces stay unnamed until the page names them (a
   frame that never does pays nothing: frame-cost reads the same heap), and
   read as the data properties they natively are. (sop-escapes suite.)
+- Client hints follow Chrome per proxied origin. A top-level page's
+  `Accept-CH` is kept for its real origin (not the proxy's, which every
+  proxied site shares) and applies at once to its own subresources and to
+  the next visit; a `Critical-CH` hint it lacked makes the worker send the
+  navigation once more; another site gets the high-entropy hints only as the
+  page's `Permissions-Policy` (`ch-*`), an iframe's `allow` or a
+  `delegate-ch` meta delegates them, and an `Accept-CH` meta counts for its
+  own document. The values are the browser's (userAgentData, device memory,
+  network estimate, pixel ratio, media preferences, the requesting
+  document's viewport), and a subresource's fields come in the order of
+  Blink's header map, where the hints a site asks for sit among the
+  defaults. Before, a site that asked for hints got only the three the
+  browser adds by default (browserleaks' client-hints page showed "not
+  received"). docs/client-hints.md; client-hints and client-hints-unit
+  suites.
 - A site framed by a frame of another site under its own top-level page
   (B in A in B) gets storage of its own and its own Partitioned cookies, as
   Chrome keys it (the ancestor chain bit); it shared them with that page.
