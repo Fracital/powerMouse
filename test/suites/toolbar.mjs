@@ -57,6 +57,14 @@ ok(
 	JSON.stringify(await disabled()),
 );
 
+// the omnibox shows a typed URL at once, before the page is there; a second
+// URL typed while the first navigation has not committed yet cancels it and
+// leaves no entry for it, natively too (a loaded runner took over a second
+// to commit hist-1), so the second page is typed once the first is shown
+await waitActive(
+	page,
+	() => document.title === 'HIST 1' && document.readyState === 'complete',
+);
 await sleep(500);
 await submitOmni(page, TWO);
 ok('the second page opens', await omniIs(TWO), await omni(page));
