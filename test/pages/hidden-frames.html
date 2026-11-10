@@ -1,0 +1,31 @@
+<!doctype html>
+<title>HIDDEN FRAMES</title>
+<div id="hidden" style="display: none"></div>
+<div id="shown"></div>
+<script>
+	// frames in a display:none box and a shown one, of this origin and
+	// another (the fixture's other host name), each reporting its animation
+	// frames to the top (hidden-frames-child.html); reveal() shows the box
+	const child = '/pages/hidden-frames-child.html';
+	const other = location.origin.replace('127.0.0.1', 'localhost');
+	window.reports = {};
+	addEventListener('message', (event) => {
+		if (event.data && event.data.frame) reports[event.data.frame] = event.data;
+	});
+	const add = (box, src) => {
+		const frame = document.createElement('iframe');
+		frame.src = src;
+		document.getElementById(box).append(frame);
+	};
+	add('hidden', `${other}${child}#cross-hidden`);
+	add('hidden', `${child}#same-hidden`);
+	add('shown', `${other}${child}#cross-shown`);
+	// a frame of another origin shown in a frame of this one that is hidden
+	add(
+		'hidden',
+		`${child}?inner=${encodeURIComponent(`${other}${child}#cross-in-hidden`)}#same-outer`,
+	);
+	window.reveal = () => {
+		document.getElementById('hidden').style.display = '';
+	};
+</script>

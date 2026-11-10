@@ -2,6 +2,7 @@ import { createClientFactory } from '../Client';
 import baseModules from '../modules';
 import DocumentClient from './Client';
 import AnchorModule from './modules/Anchor';
+import AnimationFramesModule from './modules/AnimationFrames';
 import AudioModule from './modules/Audio';
 import BlobDocumentsModule from './modules/BlobDocuments';
 import ContextModule from './modules/Context';
@@ -61,6 +62,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(OpenModule);
 	client.addModule(DownloadModule);
 	client.addModule(MediaSessionModule);
+	client.addModule(AnimationFramesModule);
 	client.addModule(NavigateModule);
 	client.addModule(NavigationHintModule);
 	client.addModule(ReadbackModule);

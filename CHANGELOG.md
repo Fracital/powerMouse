@@ -353,6 +353,21 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   whole's rewrite byte for byte (function-source suite, both modes, against
   the page loaded natively; rewriter-unit checks the fixture's every form and
   three.js's 1,436 exported functions in node).
+- A hidden frame of another site runs no animation frame callbacks until it
+  is shown, as in Chrome. LinkedIn's sign-in page (one of its two variants)
+  threw "Cannot read properties of undefined (reading 'Db')" from Google
+  Sign-In's button library: the page keeps a second Sign-In button in a
+  `display:none` layout, and Chrome holds the `requestAnimationFrame`
+  callbacks of a frame cross-origin to the main frame while it is not
+  rendered, so natively that button's frame never measures it. Through the
+  proxy every frame is same-origin with the page, so the callbacks ran, the
+  unrendered button measured 0 wide, and the library's retry
+  (`setTimeout(this.u, 50)`, an unbound method) threw. In a document of
+  another origin than the proxied top (a sandboxed opaque one too), a
+  callback that comes due while its frame, or a frame it is in, has no box
+  now waits until it is shown, and `cancelAnimationFrame` still cancels it
+  by the id the page was given (hidden-frames suite, against the page loaded
+  natively, both modes).
 - Inline SVG holding a `<style>`, inserted into a page, no longer throws
   "Illegal invocation" from the page's `appendChild`, `append`, `innerHTML`
   or `insertAdjacentHTML` (Wikipedia, about one load in six). The insertion
@@ -2588,6 +2603,13 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- In isolated mode the whole proxied page is cross-origin to the host, so
+  Chrome itself holds the animation frame callbacks of every hidden frame in
+  it, including one of the page's own origin, which natively keeps running
+  them (hidden-frames suite, which compares only the frames of another
+  origin there). Chrome also holds a cross-origin frame that is scrolled out
+  of view; the inject holds only frames that are not rendered, and it
+  leaves `IntersectionObserver` and `ResizeObserver` delivery alone.
 - Markup a page sets as an SVG or MathML element's `innerHTML` or
   `insertAdjacentHTML` is parsed as if its context were an HTML element, so
   `svg.innerHTML = '<style>...</style>'` makes an HTML `<style>` where

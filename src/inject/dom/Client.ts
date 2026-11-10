@@ -232,6 +232,15 @@ export default class DocumentClient extends Client {
 		}
 		return flags;
 	}
+	/** the element of the frame this window is in, as the browser has it (null for none) */
+	nativeFrameElement(): Element | null {
+		if (!this.#frameElementGet) return null;
+		try {
+			return Reflect.apply(this.#frameElementGet, this.global, []);
+		} catch (error) {
+			return null;
+		}
+	}
 	/** decide this document's sandbox again: a new document of this window starts */
 	refreshSandbox() {
 		this.sandboxFlags = this.#sandbox();

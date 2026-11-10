@@ -1,0 +1,41 @@
+<!doctype html>
+<body style="margin: 0">
+	<div id="box" style="width: 400px; height: 40px"></div>
+	<script>
+		// what this frame's animation frames do, reported to the top every
+		// 100 ms: how many ticks ran, what a measurement taken after a double
+		// animation frame read (Google Sign-In's button does that), and
+		// whether a callback cancelled while it waited ran anyway (one that
+		// is not held has run before it is cancelled)
+		const report = {
+			frame: location.hash.slice(1),
+			ticks: 0,
+			measured: [],
+			cancelledRan: false,
+		};
+		const inner = new URLSearchParams(location.search).get('inner');
+		if (inner) {
+			const frame = document.createElement('iframe');
+			frame.src = inner;
+			document.body.append(frame);
+		}
+		// after the first frames, which Chrome runs before it holds a hidden one
+		setTimeout(() => {
+			const tick = () => {
+				report.ticks++;
+				requestAnimationFrame(tick);
+			};
+			requestAnimationFrame(tick);
+			requestAnimationFrame(() =>
+				requestAnimationFrame(() =>
+					report.measured.push(document.getElementById('box').offsetWidth),
+				),
+			);
+			const cancelled = requestAnimationFrame(() => {
+				report.cancelledRan = true;
+			});
+			setTimeout(() => cancelAnimationFrame(cancelled), 200);
+		}, 300);
+		setInterval(() => top.postMessage({ ...report }, '*'), 100);
+	</script>
+</body>
