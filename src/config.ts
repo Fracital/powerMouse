@@ -176,6 +176,8 @@ export interface Assets {
 	transportWorker?: string;
 	/** the dedicated Workers that rewrite scripts for the service worker */
 	rewriteWorker?: string;
+	/** the JS rewriter's wasm module (docs/rust-plan.md) */
+	rewriter?: string;
 }
 
 export const DEFAULT_ASSETS: Required<Assets> = {
@@ -186,6 +188,7 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 	controllerFrameScript: 'controllerFrame.js',
 	transportWorker: 'transportWorker.js',
 	rewriteWorker: 'rewriteWorker.js',
+	rewriter: 'rewriter.wasm',
 };
 
 /** a served file's name: the host's, else the default */

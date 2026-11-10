@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process';
 import { watch } from 'node:fs';
-import { copyFile, mkdir, readFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { build, context, formatMessages } from 'esbuild';
 import { rimraf } from 'rimraf';
@@ -232,6 +232,20 @@ await mkdir('dist', { recursive: true });
 // allowed-origins meta tag
 const FRAME_HTML = 'src/controller/controllerFrame.html';
 await copyFile(FRAME_HTML, 'dist/controllerFrame.html');
+// the wasm artifacts are built elsewhere (deploy/rust/build.sh, in a
+// container) and committed under assets/: the build copies them, so a
+// checkout with no Rust toolchain (CI, the deploy) ships the same bytes
+const ASSETS = 'assets';
+async function copyAssets() {
+	const copied = [];
+	for (const name of await readdir(ASSETS))
+		if (name.endsWith('.wasm') || name.endsWith('.js')) {
+			await copyFile(`${ASSETS}/${name}`, `dist/${name}`);
+			copied.push(`dist/${name}`);
+		}
+	return copied;
+}
+await copyAssets();
 
 /**
  * Tell the dev server what a build produced. The server may be down or
@@ -290,6 +304,7 @@ if (dev) {
 		await copyFile(FRAME_HTML, 'dist/controllerFrame.html');
 		notify(['dist/controllerFrame.html']);
 	});
+	watch(ASSETS, async () => notify(await copyAssets()));
 	console.log('Watching for changes...');
 } else {
 	await Promise.all(builds.map((options) => build(options)));

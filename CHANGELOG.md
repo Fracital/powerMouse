@@ -12,6 +12,16 @@ The first release after a four-year gap. Everything below is breaking.
   `Reflect.defineProperty` so it stays configurable.
 - An ESM entry (`dist/controller.mjs`) with declarations is published as the
   package main; `stomp-rewrite/path` keeps exporting `stompPath`.
+- Rust/wasm artifacts (`docs/rust-plan.md`): the crates under `rust/` are
+  built by `deploy/rust/build.sh` in a toolchain container pinned by image
+  digest and download checksums, checked for custom sections, undeclared
+  imports or exports and project tokens in the bytes, and committed under
+  `assets/`, which the build copies into `dist/`. The first is
+  `rewriter.wasm` (`init.assets.rewriter` names it), the JS rewriter's
+  boundary with a copying body, loaded through `src/wasm/module.ts`: one
+  compiled `WebAssembly.Module` from a URL, bytes or a module the host
+  compiled, never from `import.meta.url`. Nothing uses it yet; the
+  `rewriter: 'wasm'` option comes with the rewriter itself.
 
 ### Transport
 
