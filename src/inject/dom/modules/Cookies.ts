@@ -200,13 +200,12 @@ export class CookiesModule extends Module<DocumentClient> {
 	}
 	/**
 	 * A document without a browsing context (one a navigation replaced, one
-	 * from createHTMLDocument): its cookie is "" and a write does nothing, so
-	 * the native accessor answers for it. Anything that is not a document
-	 * stays an illegal invocation.
+	 * from createHTMLDocument, this one once the page removed its frame): its
+	 * cookie is "" and a write does nothing, so the native accessor answers
+	 * for it. Anything that is not a document stays an illegal invocation.
 	 */
 	#cookieAverse(that: unknown): boolean {
-		if (that === this.client.global.document || !this.#defaultView)
-			return false;
+		if (!this.#defaultView) return false;
 		try {
 			return Reflect.apply(this.#defaultView, that, []) === null;
 		} catch (error) {
@@ -216,12 +215,6 @@ export class CookiesModule extends Module<DocumentClient> {
 	/** this document's next read goes to the jar */
 	invalidate() {
 		this.#fresh = false;
-	}
-	get cookie() {
-		return this.cookieDescriptor.get!.call(this.client.global.document);
-	}
-	set cookie(value: string) {
-		this.cookieDescriptor.set!.call(this.client.global.document, value);
 	}
 	get pageCookies() {
 		const version = this.#version();

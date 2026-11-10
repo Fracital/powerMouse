@@ -6,7 +6,6 @@ import { ProcessData, SerializableRequestInit, SyncBody } from '../../../sync';
 import { headersRecord } from '../../../syncHeaders';
 import Module from '../../Module';
 import DocumentClient from '../Client';
-import { CookiesModule } from './Cookies';
 
 const statusEmpty: number[] = [101, 204, 205, 304];
 
@@ -66,6 +65,23 @@ const objectTag = Reflect.getOwnPropertyDescriptor(
 	'toString',
 )!.value as () => string;
 const isView = ArrayBuffer.isView;
+
+// The answer is read in the cookies of the document that sent the request:
+// this bundle's own (the snapshot `navigator` above is its). A client the
+// bundle runs in another window (an about:blank child, a popup) sees the same
+// jar while its frame is there, but a frame the page removed keeps a document
+// with no browsing context, whose cookie reads "" whatever the jar holds:
+// Sentry and rrweb on discord.com take functions from a hidden iframe they
+// remove at once, and every call through that realm spun to the limit.
+const nativeCookie = Reflect.getOwnPropertyDescriptor(
+	Document.prototype,
+	'cookie',
+)!;
+// `document` is unforgeable: the live one is the bundle's own
+const readCookies = (): string =>
+	Reflect.apply(nativeCookie.get!, globalThis.document, []);
+const writeCookie = (value: string) =>
+	Reflect.apply(nativeCookie.set!, globalThis.document, [value]);
 
 function createResponse(init: SyncResponseInit): SyncResponse {
 	if (init.error) {
@@ -227,7 +243,6 @@ export default class SyncModule extends Module<DocumentClient> {
 			return createResponse(JSON.parse(http.responseText));
 		}
 
-		const cookies = this.client.getModule(CookiesModule)!;
 		const id = 'sync-request-' + Math.random().toString(16).slice(2);
 
 		const payload = JSON.stringify({
@@ -260,16 +275,16 @@ export default class SyncModule extends Module<DocumentClient> {
 
 			// a piece missing would leave a cut answer, whose last escape decodes
 			// to a control character: wait for the whole of it
-			const answer = joinAnswer(cookies.cookie, id);
+			const answer = joinAnswer(readCookies(), id);
 			if (!answer) continue;
 
 			// same attributes as the service worker set, or a cross-site frame
 			// cannot delete them and they pile up until the next request to the
 			// proxy origin fails with 431
 			for (const cookieName of answer.names) {
-				cookies.cookie = `${cookieName}=; path=/; expires=${new Date(
-					0,
-				)}; SameSite=None; Secure`;
+				writeCookie(
+					`${cookieName}=; path=/; expires=${new Date(0)}; SameSite=None; Secure`,
+				);
 			}
 
 			return createResponse(JSON.parse(decodeCookie(answer.value)));

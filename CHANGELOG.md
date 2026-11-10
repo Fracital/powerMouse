@@ -301,6 +301,18 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   `about:srcdoc`, and every call threw "Failed to construct 'URL':
   Invalid URL" (an imgur ad script). A document a worker controls resolves
   the route against the proxy's scope where its location resolves nothing.
+- A frame the page removed no longer stalls a synchronous call made through
+  its realm. Sentry and rrweb on discord.com take functions from a hidden
+  iframe they remove at once, and pages keep a removed frame's `localStorage`
+  or `document` the same way. The synchronous bridge sent the request from
+  the bundle's own document but waited for the answer in the cookies of that
+  realm's document, which has no browsing context and reads "": the service
+  worker answered in milliseconds and every cookie read, storage call and
+  synchronous XHR through that realm spun to the bridge's limit (10 s, 30 s)
+  and threw RangeError. The answer is read in the bundle's own document, and
+  the removed frame's `document.cookie` reads "" and ignores writes, as
+  natively (removed-frame suite). Its storage and synchronous XHR still
+  answer where natively they throw SecurityError and NetworkError.
 - A `style` attribute on an SVG, MathML or other non-HTML element in a
   frame no service worker controls throws nothing. The copy of an inline
   style's loads read the element's declaration through HTMLElement's
