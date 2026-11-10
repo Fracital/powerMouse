@@ -343,6 +343,32 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- `cookieStore` is there, as natively in a secure context, over the
+  proxy's jar (native-shapes suite, both modes): the page's `cookieStore` is
+  the browser's own CookieStore (identity, prototype, `onchange` and the
+  event methods native), and `get`, `getAll`, `set` and `delete` read and
+  write the jar `document.cookie` uses, so either sees the other's writes
+  (a `set` shows in `document.cookie` once its promise settles, as
+  natively). What they answer is Chrome's: `secure` always, `sameSite`
+  `strict` by default, `path` `/` (a path without a trailing slash gets
+  one), `domain` null for a host-only cookie and an IP, `expires` in
+  milliseconds kept to the fraction and at most 400 days away,
+  `partitioned` kept apart from the unpartitioned cookie of the same name
+  (also for `document.cookie` and Set-Cookie, where Partitioned without
+  Secure is refused, as natively), and every error Chrome gives for its
+  arguments, word for word (an empty name and value, `=` in a name, a
+  domain that does not match, a leading dot, a relative path, the
+  `__Host-` rules, a malformed cookie, a missing member, a bad enum, a
+  non-finite expiry, a URL that is not the document's). Each change of the
+  cookies the document can see (its own writes, a response's Set-Cookie,
+  another document's write) fires a `change` CookieChangeEvent with the
+  `changed` or `deleted` cookie, one per cookie, and the browser's own
+  events about the proxy origin's cookies (which the sync bridge writes)
+  never reach the page. Before, `cookieStore` was deleted from every page,
+  where natively Chrome has it in every secure context; a document whose
+  real URL is not secure still has none of it, `CookieStore` and
+  `CookieChangeEvent` included. Dedicated workers have none natively and
+  none through the proxy.
 - `HTMLAudioElement.prototype.constructor` is `HTMLAudioElement` again, as
   natively; it was the proxy's `Audio`, so an `<audio>`'s `constructor`
   (made by `new Audio()`, `createElement` or markup) was `Audio`. `Audio`
@@ -3065,6 +3091,12 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- The Cookie Store API's change events are dispatched by the inject, so
+  their `isTrusted` is false where natively it is true (native-shapes
+  suite, recorded), as for the storage events of other documents' writes.
+  A change made before the page first reads `cookieStore` is not reported,
+  and neither is one between that read and the jar's first answer when the
+  page made no Cookie Store API call in between.
 - In isolated mode the whole proxied page is cross-origin to the host, so
   Chrome itself holds the animation frame callbacks of every hidden frame in
   it, including one of the page's own origin, which natively keeps running

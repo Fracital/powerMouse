@@ -33,10 +33,37 @@ export interface JarCookie {
 	secure: boolean;
 	httpOnly: boolean;
 	sameSite: SameSite;
+	/**
+	 * set without a SameSite attribute (`sameSite` is then lax): the Cookie
+	 * Store API reports no sameSite for it once it is deleted
+	 */
+	sameSiteDefault?: boolean;
+	/**
+	 * set with Partitioned (CHIPS): kept apart from the unpartitioned cookie
+	 * of the same name. The proxied page is the top of its own world, so
+	 * its partition is its own site and nothing else changes
+	 */
+	partitioned?: boolean;
 	/** ms since the epoch; a session cookie has none */
 	expires?: number;
 	/** ms since the epoch; kept across re-sets (RFC 6265 5.3 step 11) */
 	created: number;
+}
+
+/**
+ * A Cookie Store API write (`cookieStore.set`, or `delete` with an expiry
+ * in the past) the inject validated with the browser's messages: always
+ * Secure, a null domain for a host-only cookie
+ */
+export interface CookieStoreWrite {
+	name: string;
+	value: string;
+	domain: string | null;
+	path: string;
+	sameSite: SameSite;
+	partitioned: boolean;
+	/** ms since the epoch, or null for a session cookie */
+	expires: number | null;
 }
 
 /** the name the inject bundle imports the stored shape under */
@@ -91,7 +118,15 @@ function hasControlCharacter(text: string): boolean {
 	return false;
 }
 
-function isIP(host: string): boolean {
+/**
+ * a part of a Cookie Store API cookie Chrome refuses as malformed: one with a
+ * CTL character (a tab included) or a `;`
+ */
+export function malformedPart(text: string): boolean {
+	return hasControlCharacter(text) || text.includes('\t') || text.includes(';');
+}
+
+export function isIP(host: string): boolean {
 	return IPV4.test(host) || host.startsWith('[');
 }
 
@@ -132,8 +167,16 @@ export function pathMatches(requestPath: string, cookiePath: string): boolean {
 	return cookiePath.endsWith('/') || requestPath[cookiePath.length] === '/';
 }
 
-function cookieID(domain: string, path: string, name: string): string {
-	return [domain, path, name].map((value) => JSON.stringify(value)).join('@@');
+function cookieID(
+	domain: string,
+	path: string,
+	name: string,
+	partitioned = false,
+): string {
+	const id = [domain, path, name]
+		.map((value) => JSON.stringify(value))
+		.join('@@');
+	return partitioned ? `${id}@@partitioned` : id;
 }
 
 /** the stored cookie's domain covers `host` (RFC 6265bis 5.8.3 step 1) */
@@ -271,10 +314,14 @@ export function parseCookie(
 		return null;
 
 	const sameSiteAttribute = parsed.sameSite?.toLowerCase();
-	const sameSite: SameSite = SAME_SITES.includes(sameSiteAttribute as SameSite)
-		? (sameSiteAttribute as SameSite)
-		: 'lax';
+	const sameSiteDefault = !SAME_SITES.includes(sameSiteAttribute as SameSite);
+	const sameSite: SameSite = sameSiteDefault
+		? 'lax'
+		: (sameSiteAttribute as SameSite);
 	if (sameSite === 'none' && !secure) return null;
+	// Chrome refuses a Partitioned cookie that is not Secure
+	const partitioned = !!parsed.partitioned;
+	if (partitioned && !secure) return null;
 
 	let expires: number | undefined;
 	if (typeof parsed.maxAge === 'number' && !Number.isNaN(parsed.maxAge)) {
@@ -290,7 +337,7 @@ export function parseCookie(
 		expires = now + MAX_AGE_MS;
 
 	return {
-		id: cookieID(domain, path, name),
+		id: cookieID(domain, path, name, partitioned),
 		name,
 		value,
 		domain,
@@ -299,6 +346,77 @@ export function parseCookie(
 		secure,
 		httpOnly,
 		sameSite,
+		...(sameSiteDefault ? { sameSiteDefault } : {}),
+		...(partitioned ? { partitioned } : {}),
+		expires,
+		created: now,
+	};
+}
+
+/**
+ * The cookie a Cookie Store API write stores for a document at `url`, or
+ * null when a browser would refuse it. The inject refuses everything below
+ * first, with the browser's errors; this is the jar's own guard.
+ */
+export function storeCookie(
+	write: CookieStoreWrite,
+	url: URL,
+	publicSuffix: PublicSuffix,
+	now = Date.now(),
+): JarCookie | null {
+	if (typeof write !== 'object' || write === null || !isSecureURL(url))
+		return null;
+	const { name, value, path, sameSite } = write;
+	let expires: number | undefined;
+	if (write.expires !== null) {
+		expires = Number(write.expires);
+		if (!Number.isFinite(expires)) return null;
+		expires = Math.min(Math.max(0, expires), now + MAX_AGE_MS);
+	}
+	if (
+		typeof name !== 'string' ||
+		typeof value !== 'string' ||
+		typeof path !== 'string' ||
+		!SAME_SITES.includes(sameSite) ||
+		// a deletion names the cookie only
+		(name === '' &&
+			value === '' &&
+			!(expires !== undefined && expires <= now)) ||
+		name.includes('=') ||
+		malformedPart(name + value + path) ||
+		!path.startsWith('/') ||
+		encoder.encode(name).length + encoder.encode(value).length >
+			MAX_COOKIE_BYTES ||
+		encoder.encode(path).length > MAX_ATTRIBUTE_BYTES
+	)
+		return null;
+	const host = url.hostname;
+	let domain = host;
+	let hostOnly = true;
+	if (write.domain !== null) {
+		const attribute = String(write.domain).toLowerCase();
+		if (
+			attribute.startsWith('.') ||
+			!domainMatches(host, attribute) ||
+			(!isIP(attribute) && publicSuffix(attribute) === attribute)
+		)
+			return null;
+		domain = attribute;
+		hostOnly = false;
+	}
+	if (/^__host-/i.test(name) && (!hostOnly || path !== '/')) return null;
+	const partitioned = !!write.partitioned;
+	return {
+		id: cookieID(domain, path, name, partitioned),
+		name,
+		value,
+		domain,
+		hostOnly,
+		path,
+		secure: true,
+		httpOnly: false,
+		sameSite,
+		...(partitioned ? { partitioned } : {}),
 		expires,
 		created: now,
 	};
@@ -380,11 +498,14 @@ export default class Cookies {
 		const base = Number(params.get('base'));
 		if (sender === null || !Number.isInteger(seq) || !Number.isInteger(base))
 			return json(400, 'not an ordered cookie write');
-		const body = request.json() as Promise<[string, string]>;
+		const body = request.json() as Promise<[string | CookieStoreWrite, string]>;
 		body.catch(() => {});
 		const finished = this.#inTurn(sender, seq, base, async () => {
 			const [value, url] = await body;
-			await this.set(String(value), String(url), 'script');
+			// a Cookie Store API write, or a document.cookie string
+			if (typeof value === 'object' && value !== null)
+				await this.store(value, String(url));
+			else await this.set(String(value), String(url), 'script');
 		});
 		this.#heard.add(finished);
 		const forget = () => this.#heard.delete(finished);
@@ -506,6 +627,13 @@ export default class Cookies {
 			if (coversHost(cookie, host)) await this.db.delete(STORE, cookie.id);
 		this.onChange?.(host);
 	}
+	/** apply a Cookie Store API write of a document at `url` */
+	async store(write: CookieStoreWrite, url: URL | string): Promise<void> {
+		url = new URL(url);
+		const now = Date.now();
+		const cookie = storeCookie(write, url, this.#publicSuffix, now);
+		if (cookie) await this.#put(cookie, 'script', now);
+	}
 	/**
 	 * Apply Set-Cookie values from a response (or a script, when `source` says
 	 * so) for `url`, the way RFC 6265bis 5.6 stores them.
@@ -550,27 +678,31 @@ export default class Cookies {
 					continue;
 			}
 
-			const existing = (await this.db.get(STORE, cookie.id)) as
-				JarCookie | undefined;
-			// a script neither replaces nor deletes an HttpOnly cookie
-			if (existing?.httpOnly && source === 'script') continue;
-			if (expired(cookie, now)) {
-				// Max-Age=0 or a past Expires: the site is deleting it
-				await this.db.delete(STORE, cookie.id);
-				this.onChange?.(cookie.domain);
-				continue;
-			}
-			// Chrome keeps the old creation time only when the value is
-			// unchanged; a new value moves the cookie to the end of its path's
-			// group in the Cookie header (RFC 6265bis 5.7 would always keep it)
-			if (existing?.value === cookie.value) cookie.created = existing.created;
-			else {
-				cookie.created = Math.max(now, this.#lastCreated + 1);
-				this.#lastCreated = cookie.created;
-			}
-			await this.db.put(STORE, cookie);
-			this.onChange?.(cookie.domain);
+			await this.#put(cookie, source, now);
 		}
+	}
+	/** store `cookie`, or delete it when it is expired */
+	async #put(cookie: JarCookie, source: CookieSource, now: number) {
+		const existing = (await this.db.get(STORE, cookie.id)) as
+			JarCookie | undefined;
+		// a script neither replaces nor deletes an HttpOnly cookie
+		if (existing?.httpOnly && source === 'script') return;
+		if (expired(cookie, now)) {
+			// Max-Age=0 or a past Expires: the site is deleting it
+			await this.db.delete(STORE, cookie.id);
+			this.onChange?.(cookie.domain);
+			return;
+		}
+		// Chrome keeps the old creation time only when the value is
+		// unchanged; a new value moves the cookie to the end of its path's
+		// group in the Cookie header (RFC 6265bis 5.7 would always keep it)
+		if (existing?.value === cookie.value) cookie.created = existing.created;
+		else {
+			cookie.created = Math.max(now, this.#lastCreated + 1);
+			this.#lastCreated = cookie.created;
+		}
+		await this.db.put(STORE, cookie);
+		this.onChange?.(cookie.domain);
 	}
 }
 

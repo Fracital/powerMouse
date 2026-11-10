@@ -1,7 +1,7 @@
 // A WebSocket handshake carries the jar's cookies, HttpOnly ones included,
 // under the SameSite rules of the page's site, while page script never sees
 // an HttpOnly cookie (not through document.cookie, not through the sync
-// route behind it); the Cookie Store API is gone; a WebSocket URL may be
+// route behind it, not through the Cookie Store API); a WebSocket URL may be
 // relative or http(s), as in a browser.
 import {
 	done,
@@ -72,8 +72,10 @@ ok(
 	JSON.stringify(same.http),
 );
 ok(
-	'the Cookie Store API is not exposed',
-	same.cookieStore === false,
+	'the Cookie Store API never lists the HttpOnly cookie',
+	Array.isArray(same.cookieStore) &&
+		same.cookieStore.includes('js') &&
+		!same.cookieStore.includes('http'),
 	JSON.stringify(same.cookieStore),
 );
 

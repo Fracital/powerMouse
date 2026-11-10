@@ -7,6 +7,7 @@ import AudioModule from './modules/Audio';
 import BlobDocumentsModule from './modules/BlobDocuments';
 import ContextModule from './modules/Context';
 import { CookiesModule } from './modules/Cookies';
+import CookieStoreModule from './modules/CookieStore';
 import CredentialsModule from './modules/Credentials';
 import CSSOMModule from './modules/CSSOM';
 import CSSReadbackModule from './modules/CSSReadback';
@@ -55,6 +56,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(StorageModule);
 	client.addModule(XMLHttpRequestModule);
 	client.addModule(CookiesModule);
+	client.addModule(CookieStoreModule);
 	// after Storage, Cookies and IndexedDB: an opaque document's storage throws
 	client.addModule(SandboxModule);
 	// Framing before Context: it needs the native MessageEvent.source getter

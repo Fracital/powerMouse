@@ -3,6 +3,7 @@ import {
 	compareCookies,
 	cookieMatches,
 	parseCookie,
+	type CookieStoreWrite,
 	type FloatingCookie,
 	type JarCookie,
 } from '../../../server/Cookies';
@@ -80,6 +81,16 @@ export class CookiesModule extends Module<DocumentClient> {
 	#versions: Storage | null = null;
 	#getItem?: Storage['getItem'];
 	#setItem?: Storage['setItem'];
+	/**
+	 * called when the jar may have changed for this document: its own
+	 * writes, and the worker's broadcast of any change of its site's cookies
+	 * (a response's Set-Cookie, another document's write); the Cookie Store
+	 * module reads the jar again and reports what changed
+	 */
+	readonly changeListeners = new Set<() => void>();
+	#changed() {
+		for (const listener of this.changeListeners) listener();
+	}
 	constructor(client: DocumentClient) {
 		super(client);
 
@@ -199,6 +210,55 @@ export class CookiesModule extends Module<DocumentClient> {
 			.finally(settle);
 	}
 	/**
+	 * A Cookie Store API write, in this document's order with its other
+	 * writes the bridge could not carry (the same numbering), done when the
+	 * jar has it. Unlike a document.cookie write it is not applied to this
+	 * document's view before: natively document.cookie shows it only once
+	 * the promise of the write settles.
+	 */
+	async store(write: CookieStoreWrite): Promise<void> {
+		const seq = this.#seq++;
+		this.#inflight.add(seq);
+		let base = seq;
+		for (const other of this.#inflight) base = Math.min(base, other);
+		const url = new URL(`${routedPrefix(this.client)}cookies/ordered`);
+		url.searchParams.set('sender', this.#sender);
+		url.searchParams.set('seq', String(seq));
+		url.searchParams.set('base', String(base));
+		try {
+			const response = await this.client.routedFetch(url.href, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify([write, this.client.url.toString()]),
+			});
+			if (!response.ok)
+				throw new Error(`${response.status} ${response.statusText}`);
+		} finally {
+			this.#inflight.delete(seq);
+			this.#bump();
+			this.#changed();
+		}
+	}
+	/**
+	 * The jar's cookies for this document, as page script may see them
+	 * (no HttpOnly), with its writes the jar may not have yet: asked
+	 * asynchronously, for the Cookie Store API
+	 */
+	async jarCookies(): Promise<JarCookie[]> {
+		const response = await this.client.routedFetch(
+			`${routedPrefix(this.client)}cookies/get`,
+			{
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify([this.client.url.toString()]),
+			},
+		);
+		if (!response.ok)
+			throw new Error(`${response.status} ${response.statusText}`);
+		const list = (await response.json()) as JarCookie[];
+		return this.#withUnsettled(list.filter((cookie) => !cookie.httpOnly));
+	}
+	/**
 	 * A document without a browsing context (one a navigation replaced, one
 	 * from createHTMLDocument, this one once the page removed its frame): its
 	 * cookie is "" and a write does nothing, so the native accessor answers
@@ -278,19 +338,13 @@ export class CookiesModule extends Module<DocumentClient> {
 			const cookie = this.#known && this.#parse(value, now);
 			if (cookie) applyWrite(this.#known!, cookie, now);
 			this.#bump();
+			this.#changed();
 			return;
 		}
 		this.#later(value);
+		this.#changed();
 	}
 	apply() {
-		// the Cookie Store API would bypass the jar: pages see document.cookie
-		// only, like a browser without it
-		const global = this.client.global as unknown as Record<string, unknown>;
-		Reflect.deleteProperty(global, 'cookieStore');
-		const windowPrototype = (global.Window as { prototype?: object })
-			?.prototype;
-		if (windowPrototype) Reflect.deleteProperty(windowPrototype, 'cookieStore');
-
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
 		this.client.responseListeners.add(() => this.invalidate());
@@ -305,8 +359,10 @@ export class CookiesModule extends Module<DocumentClient> {
 				change.domain === '' ||
 				hostname === change.domain ||
 				hostname.endsWith(`.${change.domain}`)
-			)
+			) {
 				this.#bump();
+				this.#changed();
+			}
 		});
 
 		Reflect.defineProperty(this.client.global.Document.prototype, 'cookie', {

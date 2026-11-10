@@ -316,7 +316,16 @@
 		const handler = (e) => log.push(['onchange', event(e)]);
 		cookieStore.onchange = handler;
 		result.handler = cookieStore.onchange === handler;
-		const settle = () => new Promise((resolve) => setTimeout(resolve, 200));
+		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		// a step's events: 200 ms, and on while they keep coming
+		const settle = async () => {
+			let seen = log.length;
+			await sleep(200);
+			while (log.length !== seen) {
+				seen = log.length;
+				await sleep(100);
+			}
+		};
 		const step = async (name, f) => {
 			log.push(['step', name]);
 			let value;
@@ -587,7 +596,11 @@
 			await cookieStore.get
 				.call({}, 'a')
 				.catch((e) => `${e.name}: ${e.message}`),
-			attempt(() => typeof cookieStore.get.call({}, 'a')),
+			attempt(() => {
+				const answer = cookieStore.get.call({}, 'a');
+				answer.catch(() => {});
+				return typeof answer;
+			}),
 			typeof cookieStore.get('a').then,
 			attempt(() => new CookieStore()),
 			attempt(() => CookieStore()),
