@@ -13,7 +13,7 @@ export default class PartitionModule extends Module<Client> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const global = this.client.global;
-		const suffix = () => `@${this.client.url.url.origin}`;
+		const suffix = () => `@${this.client.storageKey}`;
 		const scoped = (name: unknown) => `${String(name)}${suffix()}`;
 		const unscoped = (name: string) =>
 			name.endsWith(suffix()) ? name.slice(0, -suffix().length) : name;
@@ -230,9 +230,10 @@ export default class PartitionModule extends Module<Client> {
 							that,
 							args,
 						);
-						// a directory per proxied origin, under the real root
+						// a directory per proxied origin (and partition), under the
+						// real root
 						return root.getDirectoryHandle(
-							encodeURIComponent(this.client.url.url.origin),
+							encodeURIComponent(this.client.storageKey),
 							{ create: true },
 						);
 					},

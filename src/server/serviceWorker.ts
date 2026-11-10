@@ -1,5 +1,6 @@
-import { getDomain } from 'tldts';
+import { getDomain, getPublicSuffix } from 'tldts';
 import { Config, ConfigCodec } from '../config';
+import { kindPartition, partitionSite } from '../partition';
 import { addRouteScope } from '../routeURL';
 import { SW_ROUTE, type ApiReply } from '../serviceWorkerTypes';
 import {
@@ -247,7 +248,8 @@ function workerHost(ref: ControllerRef, ready: StompServer): WorkerHost {
 				{ clientId, bypassCache, internal: true },
 			),
 		routeDocument: (url) => ready.route(url),
-		jarCookies: async (url) => forScript(await ready.cookies.get(url)),
+		jarCookies: async (url, partitionKey) =>
+			forScript(await ready.cookies.get(url, { partitionKey })),
 		fetchResource: (url, init, clientId) =>
 			ready.router.route(
 				new Request(ready.routeAs('binary', url), {
@@ -272,9 +274,11 @@ serviceWorkers.setEnvironment({
 		const route = ref?.ready?.routeOf(url);
 		if (!ref || !route) return null;
 		try {
+			const origin = new URL(route.url).origin;
 			return {
 				url: route.url,
-				origin: new URL(route.url).origin,
+				origin,
+				partition: routePartition(route.resource, origin),
 				resource: route.resource,
 				directory: ref.directory,
 			};
@@ -341,7 +345,7 @@ function forget(ref: ControllerRef, reason: string) {
 function serviceWorkerSender(
 	source: Client,
 	ref: ControllerRef | undefined,
-): { url: string; origin: string } | null {
+): { url: string; origin: string; partition: string } | null {
 	if (
 		!ref?.ready ||
 		!source.url.startsWith(`${location.origin}${ref.directory}`)
@@ -350,10 +354,28 @@ function serviceWorkerSender(
 	const route = ref.ready.routeOf(source.url);
 	if (!route || !route.resource.startsWith('html')) return null;
 	try {
-		return { url: route.url, origin: new URL(route.url).origin };
+		const origin = new URL(route.url).origin;
+		return {
+			url: route.url,
+			origin,
+			partition: routePartition(route.resource, origin),
+		};
 	} catch (error) {
 		return null;
 	}
+}
+
+/**
+ * The storage partition of a client of `origin` routed as `kind`: what its
+ * route names (a nested document's top, a partitioned worker's), or for an
+ * emulated service worker its registration's
+ */
+function routePartition(kind: string, origin: string): string {
+	if (kind.startsWith('sw:'))
+		return serviceWorkers.versionPartition(kind.slice(3));
+	return kindPartition(kind, origin, (host) =>
+		getPublicSuffix(host, { allowPrivateDomains: true }),
+	);
 }
 
 /** the first segment under the scope, and the rest of the path */
@@ -536,10 +558,15 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 		const real = ready.realURL(source);
 		if (real === source) return;
 		try {
+			const origin = new URL(real).origin;
+			// and its partition, from its route: the worker started from it
+			// is in it too
+			const route = ready.routeOf(source);
 			recordBlobOrigin(
 				message.url,
-				new URL(real).origin,
+				origin,
 				(event.source as Client).id,
+				route ? partitionSite(routePartition(route.resource, origin)) : null,
 			);
 		} catch (error) {
 			// not a URL: nothing to record

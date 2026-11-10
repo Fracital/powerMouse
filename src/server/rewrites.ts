@@ -2,7 +2,7 @@ import {
 	BareCompatibleClient,
 	type ProxyTransport,
 } from '@mercuryworkshop/proxy-transports';
-import { getDomain } from 'tldts';
+import { getDomain, getPublicSuffix } from 'tldts';
 import { acceptLanguage } from '../acceptLanguage';
 import GenericCodec from '../Codecs';
 import { codecType, Config, ParsedConfig } from '../config';
@@ -17,6 +17,12 @@ import {
 	upgradedURL,
 	upgradesInsecureRequests,
 } from '../mixedContent';
+import {
+	kindPartition,
+	partitionSite,
+	siteOf,
+	workerKindPartition,
+} from '../partition';
 import {
 	hasBase,
 	inlineSources,
@@ -57,7 +63,11 @@ import {
 	TAO_MARKER,
 } from '../transport/messages';
 import { BUILD } from '../version';
-import { knownOriginOf, recordInlineOrigin } from './blobOrigins';
+import {
+	knownOriginOf,
+	knownTopSiteOf,
+	recordInlineOrigin,
+} from './blobOrigins';
 import { HttpCache, isCacheable, mayKeep } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
 import Cookies from './Cookies';
@@ -163,6 +173,8 @@ const FETCH_METADATA = [
 const clientURLs = new Map<string, URL>();
 /** each client's routed URL, beside its real one: the route kind names its proxied top */
 const clientRoutes = new Map<string, string>();
+/** the top-level site of a client whose URL names none (a partitioned blob: worker's) */
+const clientTopSites = new Map<string, string>();
 const CLIENT_URLS_KEPT = 256;
 
 /**
@@ -409,6 +421,31 @@ interface Rewriter {
 /** the page aborted the request (its signal fired) */
 const ABORTED = Symbol('aborted');
 
+/** tldts getPublicSuffix with the private list, as the jar and the partitions take it */
+const publicSuffix = (host: string) =>
+	getPublicSuffix(host, { allowPrivateDomains: true });
+
+/**
+ * The top-level site a routed URL's kind names: a nested document's (its
+ * top origin's site), a partitioned worker's; null for any other
+ */
+function routeTopSite(routed: string, directory: string): string | null {
+	let pathname: string;
+	try {
+		pathname = new URL(routed).pathname;
+	} catch (error) {
+		return null;
+	}
+	const nested = nestedTopOf(pathname, directory);
+	if (nested) return siteOf(nested, publicSuffix);
+	if (!pathname.startsWith(directory)) return null;
+	const kind = pathname.slice(directory.length).split('/')[0];
+	// an emulated service worker's is its registration's
+	if (kind.startsWith('sw:'))
+		return partitionSite(serviceWorkers.versionPartition(kind.slice(3)));
+	return partitionSite(workerKindPartition(kind));
+}
+
 /** requests in flight the page may still abort, by the id it sent (ABORT_HEADER) */
 const pendingAborts = new Map<string, () => void>();
 /** the page posted that it aborted the request with this id */
@@ -653,10 +690,14 @@ function genericForward(
 		// a client whose URL names no origin this worker can read (an
 		// about:srcdoc document): judged by its Referer, else as an opaque one
 		let unknownClient = false;
+		// the top-level site of a partitioned blob: worker, which its URL does
+		// not name (its minter's, as the worker recorded it)
+		let clientTopSite: string | null = null;
 		if (!navigation && context?.clientId && typeof clients !== 'undefined') {
 			const id = context.clientId;
 			client = clientURLs.get(id) ?? null;
 			clientRoute = clientRoutes.get(id) ?? null;
+			clientTopSite = clientTopSites.get(id) ?? null;
 			if (!client)
 				try {
 					const found = await clients.get(id);
@@ -673,6 +714,8 @@ function genericForward(
 						: null;
 					unknownBlob = !client && !!found?.url.startsWith('blob:');
 					unknownClient = !client && !!found && !unknownBlob;
+					if (client && found?.url.startsWith('blob:'))
+						clientTopSite = await knownTopSiteOf(found.url);
 				} catch (error) {
 					// the client is gone
 				}
@@ -681,9 +724,11 @@ function genericForward(
 					const oldest = clientURLs.keys().next().value!;
 					clientURLs.delete(oldest);
 					clientRoutes.delete(oldest);
+					clientTopSites.delete(oldest);
 				}
 				clientURLs.set(id, client);
 				if (clientRoute) clientRoutes.set(id, clientRoute);
+				if (clientTopSite) clientTopSites.set(id, clientTopSite);
 			}
 		}
 
@@ -880,6 +925,26 @@ function genericForward(
 		const cookieSite = nestedTop
 			? widestSite(site, siteBetween(new URL(nestedTop), url.url))
 			: site;
+		// the partition of the request's Partitioned cookies (CHIPS): its
+		// top-level site, when that is not the target's own. A top-level
+		// navigation's is its own; a nested one's top is in its route; a
+		// subresource's in its client's route (a nested document's, a
+		// partitioned worker's), else it is the client's own site (a
+		// top-level document)
+		const topSite = navigation
+			? topLevel || !nestedRoute
+				? null
+				: siteOf(nestedRoute, publicSuffix)
+			: (clientTopSite ??
+				(clientRoute ? routeTopSite(clientRoute, rewriter.directory) : null) ??
+				(nestedTop ? siteOf(nestedTop, publicSuffix) : null) ??
+				(client && client.origin !== 'null'
+					? siteOf(client, publicSuffix)
+					: null));
+		const partitionKey =
+			topSite !== null && topSite !== siteOf(url.url, publicSuffix)
+				? topSite
+				: undefined;
 
 		// the chain's earlier hops count for the site (Sec-Fetch-Site only:
 		// the browser's site for cookies does not follow redirects)
@@ -927,6 +992,7 @@ function genericForward(
 						site: cookieSite,
 						navigation: topLevel,
 						method: serverRequest.method,
+						partitionKey,
 					})
 				).toString()
 			: '';
@@ -1457,7 +1523,7 @@ function genericForward(
 		let responseHeaders = filterResponseHeaders(
 			response.headers,
 			url,
-			transformRoute,
+			(target, base) => transformRoute(target, base, resource),
 			additionalResponseFilter,
 		);
 		// the type an emulated service worker's answer has is the worker's to
@@ -1559,7 +1625,8 @@ function genericForward(
 		for (const [header, value] of response.rawHeaders ?? []) {
 			if (header.toLowerCase() === 'set-cookie') {
 				// a response to a request without credentials sets nothing
-				if (credentials) await rewriter.cookies.set(value, url.url);
+				if (credentials)
+					await rewriter.cookies.set(value, url.url, 'http', partitionKey);
 			}
 		}
 
@@ -2108,7 +2175,15 @@ export function registerRewrites(
 				note.rewriteCache = 'miss';
 				return output;
 			},
-			(resource, url) => routeJS(resource, url, rewriter.config, type),
+			// a worker redirected stays in the partition it was started in
+			(resource, url, kind) =>
+				routeJS(
+					resource,
+					url,
+					rewriter.config,
+					type,
+					kind ? workerKindPartition(kind) : '',
+				),
 			undefined,
 			(headers, filteredHeaders) => {
 				for (const header of integrityHeaders) {
@@ -2122,8 +2197,11 @@ export function registerRewrites(
 		/^\/js:genericModule\//,
 		scriptTypeFactory('genericModule'),
 	);
-	router.routes.set(/^\/js:worker\//, scriptTypeFactory('worker'));
-	router.routes.set(/^\/js:workerModule\//, scriptTypeFactory('workerModule'));
+	router.routes.set(/^\/js:worker(:top:[^/]*)?\//, scriptTypeFactory('worker'));
+	router.routes.set(
+		/^\/js:workerModule(:top:[^/]*)?\//,
+		scriptTypeFactory('workerModule'),
+	);
 
 	router.routes.set(
 		/^\/css\//,
@@ -2444,6 +2522,16 @@ async function answerFromServiceWorker(
 	const routed = await serviceWorkers.route({
 		url: url.url.href,
 		nonSubresource,
+		// the partition the document or worker it makes is in, from its route
+		partition: nonSubresource
+			? kindPartition(
+					new URL(serverRequest.url).pathname
+						.slice(rewriter.directory.length)
+						.split('/')[0],
+					url.url.origin,
+					publicSuffix,
+				)
+			: undefined,
 		clientId,
 		resultingClientId: nonSubresource
 			? (context?.resultingClientId ?? context?.clientId)

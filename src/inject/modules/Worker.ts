@@ -1,7 +1,11 @@
 import { injectWorkerJS, pageBlobURL, proxyBlobURL } from '../../routeURL';
 import { routeJS } from '../../scriptRoutes';
 import StompURL from '../../StompURL';
-import { WORKER_BASE, WORKER_ERROR } from '../../transport/messages';
+import {
+	WORKER_BASE,
+	WORKER_ERROR,
+	WORKER_PARTITION,
+} from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
 import { failsToParse, withStack } from '../nativeErrors';
@@ -54,9 +58,16 @@ export default class WorkerModule extends Module<Client> {
 				}
 				// the page's URL first, so the client resolves relative URLs
 				// against it rather than against the blob
-				const base = `globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(
-					this.client.url.toString(),
-				)};`;
+				// and its partition, which the client reads before the page's
+				// script runs (a routed worker's route names it)
+				const partition = this.client.partition;
+				const base =
+					`globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(
+						this.client.url.toString(),
+					)};` +
+					(partition
+						? `globalThis[${JSON.stringify(WORKER_PARTITION)}] = ${JSON.stringify(partition)};`
+						: '');
 				const bootstrap =
 					base +
 					(isModule
@@ -88,6 +99,7 @@ export default class WorkerModule extends Module<Client> {
 				this.client.url,
 				this.client.config,
 				type,
+				this.client.partition,
 			);
 		};
 
@@ -291,8 +303,8 @@ export default class WorkerModule extends Module<Client> {
 					if (own)
 						setTimeout(() => global.URL.revokeObjectURL(own), PRIVATE_URL_MS);
 					// shared workers are found by name within an origin: keep
-					// proxied origins apart
-					const suffix = `@${this.client.url.url.origin}`;
+					// proxied origins, and partitions of one, apart
+					const suffix = `@${this.client.storageKey}`;
 					if (typeof args[1] === 'object' && args[1] !== null)
 						args[1] = { ...args[1], name: `${args[1].name ?? ''}${suffix}` };
 					else

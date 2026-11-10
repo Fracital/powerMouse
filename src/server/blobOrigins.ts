@@ -30,6 +30,11 @@ interface Entry {
 	/** the client that minted a blob: URL; '' for an inline document */
 	minter: string;
 	at: number;
+	/**
+	 * the minter's top-level site when it is in a partition (src/partition.ts):
+	 * a blob: worker's Partitioned cookies are that site's
+	 */
+	top?: string;
 }
 const origins = new Map<string, Entry>();
 let pruned = 0;
@@ -89,9 +94,14 @@ function record(url: string, entry: Entry) {
 	if (Date.now() - pruned > PRUNE_EVERY_MS) void prune();
 }
 
-/** record a blob: URL minted by the client `minter`, of real origin `origin` */
-export function recordBlobOrigin(url: string, origin: string, minter: string) {
-	record(url, { origin, minter, at: Date.now() });
+/** record a blob: URL minted by the client `minter`, of real origin `origin` (in the partition of top-level site `top`) */
+export function recordBlobOrigin(
+	url: string,
+	origin: string,
+	minter: string,
+	top: string | null = null,
+) {
+	record(url, { origin, minter, at: Date.now(), ...(top ? { top } : {}) });
 }
 
 /** record the URL an inline document is served at, of real origin `origin` */
@@ -99,11 +109,8 @@ export function recordInlineOrigin(url: string, origin: string) {
 	record(url.split('#')[0], { origin, minter: '', at: Date.now() });
 }
 
-/**
- * The real origin of a client URL (a blob: URL, an inline document's
- * route), as a URL, when it is known: from memory, else from the store
- */
-export async function knownOriginOf(url: string): Promise<URL | null> {
+/** what is known of a client URL, from memory, else from the store */
+async function entryOf(url: string): Promise<Entry | undefined> {
 	// a client's URL may carry a fragment the blob: URL did not
 	const key = url.split('#')[0];
 	let entry = origins.get(key);
@@ -114,6 +121,20 @@ export async function knownOriginOf(url: string): Promise<URL | null> {
 		} catch (error) {
 			// no store: unknown
 		}
+	return entry;
+}
+
+/** the top-level site of a client URL's partition, null for a first-party or unknown one */
+export async function knownTopSiteOf(url: string): Promise<string | null> {
+	return (await entryOf(url))?.top ?? null;
+}
+
+/**
+ * The real origin of a client URL (a blob: URL, an inline document's
+ * route), as a URL, when it is known: from memory, else from the store
+ */
+export async function knownOriginOf(url: string): Promise<URL | null> {
+	const entry = await entryOf(url);
 	if (!entry) return null;
 	// an opaque origin (a data: document's): a URL whose origin is "null"
 	return entry.origin === 'null' ? new URL('data:,') : new URL(entry.origin);

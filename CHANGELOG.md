@@ -405,6 +405,22 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   measure the same. Storage writes still go through the synchronous bridge:
   sending them asynchronously would let another frame of the site read the
   old value right after the write, which natively it never does.
+- A site framed by another site gets storage of its own, keyed by the
+  top-level site too, as Chrome partitions it: localStorage,
+  sessionStorage, IndexedDB, Cache Storage, the origin private file
+  system, BroadcastChannel, Web Locks, shared workers and emulated service
+  worker registrations. It shared all of them with the site's own
+  top-level pages. A worker is in its creator's partition before any of its
+  script runs (a routed worker's route names it, a blob: worker's bootstrap
+  sets it, an emulated service worker has its registration's). A
+  `Partitioned` cookie (CHIPS) is kept per top-level site, and a request
+  carries those of its own top-level site, a top-level page's request to
+  another site included; third-party cookies without Partitioned are sent
+  as before, as Chrome sends them by default. A first-party context keeps
+  the keys and cookie ids it had, so everything stored before is still
+  there (what a frame stored before stays its site's first-party data).
+  (sop-partitions suite: the 48 checks, 24 in each mode, that differed
+  read as natively.)
 - A background fetch's downloads are the page's CORS requests, as
   natively: one of another site without Access-Control-Allow-Origin fails
   the fetch (`fetch-error`), one with it succeeds. (sop-escapes suite.)
@@ -3442,11 +3458,12 @@ Fixed while testing real sites and a feature fixture:
 ### Known limitations
 
 - The same-origin policy between proxied sites is simulated by the proxy
-  (docs/same-origin-policy.md). Not yet: Chrome's third-party storage
-  partitioning (a site framed by another shares its stores, its shared
-  workers and its `Partitioned` cookies with its own top-level pages;
-  sop-partitions suite), a per-site `navigator.storage.estimate()`, and
-  `crossOriginIsolated` (COOP and COEP cannot isolate a proxied frame).
+  (docs/same-origin-policy.md). Not yet: a per-site
+  `navigator.storage.estimate()`, `crossOriginIsolated` (COOP and COEP
+  cannot isolate a proxied frame), and in partitioning the ancestor
+  chain bit (a site's frame under a frame of another site, under its own
+  top-level page, shares the first-party partition) and a top-level-site key
+  on the HTTP cache.
 - The Cookie Store API's change events are dispatched by the inject, so
   their `isTrusted` is false where natively it is true (native-shapes
   suite, recorded), as for the storage events of other documents' writes.

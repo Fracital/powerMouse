@@ -105,7 +105,7 @@ export default class WorkerLocationModule extends Module<WorkerClient> {
 				...name,
 				get: proxyModule.wrapFunction(name.get, (target, that, args) => {
 					const value = Reflect.apply(target, that, args);
-					const suffix = `@${this.client.url.url.origin}`;
+					const suffix = `@${this.client.storageKey}`;
 					return typeof value === 'string' && value.endsWith(suffix)
 						? value.slice(0, -suffix.length)
 						: value;

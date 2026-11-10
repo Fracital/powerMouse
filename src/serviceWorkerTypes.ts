@@ -54,8 +54,8 @@ export type StateStep =
 	| { serial: number; op: 'state'; worker: WorkerSnapshot }
 	| { serial: number; op: 'updatefound' };
 
-/** SW -> page (SW_EVENT) */
-export type PageEvent =
+/** SW -> page (SW_EVENT): of the registration of `origin` in `partition` (none: first-party) */
+export type PageEvent = { partition?: string } & (
 	| {
 			kind: 'steps';
 			origin: string;
@@ -75,7 +75,8 @@ export type PageEvent =
 			registration: RegistrationSnapshot;
 			source: WorkerSnapshot;
 			data: unknown;
-	  };
+	  }
+);
 
 /** the registration members that hold a manager (docs/service-workers.md) */
 export type ManagerKind =
@@ -137,6 +138,8 @@ export interface EmulateInfo {
 	version: WorkerSnapshot;
 	registration: RegistrationSnapshot;
 	type: WorkerType;
+	/** its registration's storage partition (src/partition.ts), none for a first-party one */
+	partition?: string;
 }
 
 /** a request as the emulated worker's FetchEvent shows it */

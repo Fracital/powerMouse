@@ -1,5 +1,7 @@
 import { ParsedConfig } from '../../config';
+import { workerKindPartition } from '../../partition';
 import type { EmulateInfo } from '../../serviceWorkerTypes';
+import { WORKER_PARTITION } from '../../transport/messages';
 import Client from '../Client';
 import ServiceWorkerGlobalModule from './modules/ServiceWorkerGlobal';
 
@@ -65,10 +67,44 @@ export default class WorkerClient extends Client {
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		this.isWorker = true;
+		// read before the worker's own script can change what it reads from
+		void this.partition;
+	}
+	#partition?: string;
+	/**
+	 * The partition of the context that started this worker: its route
+	 * names it (a blob: worker's bootstrap sets it), so it is known before
+	 * the worker's own script runs. An emulated service worker takes its
+	 * registration's.
+	 */
+	override get partition(): string {
+		if (this.#partition !== undefined) return this.#partition;
+		let partition = '';
+		const named = (this.global as Record<string, unknown>)[WORKER_PARTITION];
+		if (typeof named === 'string') {
+			partition = named;
+			Reflect.deleteProperty(this.global, WORKER_PARTITION);
+		} else
+			try {
+				const { pathname } = this.global.location;
+				if (pathname.startsWith(this.directory))
+					partition = workerKindPartition(
+						pathname.slice(this.directory.length).split('/')[0],
+					);
+			} catch (error) {
+				// no location to read: first-party
+			}
+		this.#partition = partition;
+		return partition;
+	}
+	/** an emulated service worker's partition is its registration's */
+	set partition(partition: string) {
+		this.#partition = partition;
 	}
 	/** the `sw:` route's preamble: this worker is a page's service worker */
 	emulateServiceWorker(info: EmulateInfo) {
 		this.serviceWorkerVersion = info.version.id;
+		this.partition = info.partition ?? '';
 		this.getModule(ServiceWorkerGlobalModule)!.emulate(info);
 	}
 	/** the `sw:` route's postamble: the script's top level ran to its end */

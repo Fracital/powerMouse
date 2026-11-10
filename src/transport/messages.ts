@@ -152,6 +152,12 @@ export interface NavigateInfo {
  */
 export const WORKER_BASE = '$stomp$workerBase';
 /**
+ * global set by the same bootstrap: the storage partition of the context
+ * that started it (src/partition.ts), which a routed worker reads from its
+ * route instead
+ */
+export const WORKER_PARTITION = '$stomp$workerPartition';
+/**
  * dedicated worker -> its Worker object: where an uncaught error the browser
  * located inside the inject really comes from (the page's call site), sent
  * before the browser's report of it, which follows on the same queue

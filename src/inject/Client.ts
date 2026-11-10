@@ -517,6 +517,23 @@ export default class Client {
 	get nestedRoute(): string | false {
 		return false;
 	}
+	/**
+	 * This context's storage partition (src/partition.ts): '' for a
+	 * first-party context, `^<top-level site>` for one under a top-level
+	 * document of another site. A document decides it, a worker takes its
+	 * creator's.
+	 */
+	get partition(): string {
+		return '';
+	}
+	/**
+	 * What this context's stores are keyed by: its origin, and its
+	 * partition after it (the name suffixes of the Partition, IndexedDB and
+	 * Storage modules, the shared workers' names)
+	 */
+	get storageKey(): string {
+		return `${this.url.url.origin}${this.partition}`;
+	}
 	/** @internal a response reached this context */
 	notifyResponse() {
 		for (const listener of this.responseListeners) listener();

@@ -2,12 +2,15 @@
 // fixture on localhost) is opened top-level, then as a frame in another
 // site's page (the fixture on 127.0.0.1), then top-level again; each time it
 // writes to and reads every store (test/pages/sop-part.html): localStorage,
-// sessionStorage, cookies with and without Partitioned (CHIPS), IndexedDB,
+// sessionStorage, cookies with and without Partitioned (CHIPS, set by script
+// and by a response, and the Cookie header a request carries), IndexedDB,
 // Cache Storage, the origin private file system, Web Locks,
-// BroadcastChannel and SharedWorker. Natively the frame's stores are keyed by
-// the top-level site too, so it shares none of them with the top-level page
-// of its own site (unpartitioned cookies aside). Each report is compared with
-// the same sequence loaded natively, in both modes.
+// BroadcastChannel, SharedWorker and service worker registrations, and what
+// its dedicated, blob: and shared workers see of them. Natively the frame's
+// stores are keyed by the top-level site too, so it shares none of them with
+// the top-level page of its own site (unpartitioned cookies aside: Chrome
+// sends third-party cookies by default). Each report is compared with the
+// same sequence loaded natively, in both modes.
 import {
 	done,
 	FIXTURE,
@@ -34,28 +37,7 @@ const steps = (t) => [
 
 // Cases known to differ from Chrome, by why (docs/same-origin-policy.md). A
 // case on the list that now reads as natively fails too: take it off.
-const KNOWN_BY_REASON = {
-	'stores are keyed by origin, not by the top-level site too': [
-		'frame/before: localStorage',
-		'frame/before: databases',
-		'frame/before: caches',
-		'frame/before: opfs',
-		'frame/before: locks',
-		'top/after: localStorage',
-		'top/after: databases',
-		'top/after: caches',
-		'top/after: opfs',
-		'top/after: locks',
-	],
-	'shared workers are keyed by origin, not by the top-level site too': [
-		'frame/before: workerCount',
-		'top/after: workerCount',
-	],
-	'the cookie jar keeps no partitioned cookies (CHIPS)': [
-		'frame/before: cookies',
-		'top/after: cookies',
-	],
-};
+const KNOWN_BY_REASON = {};
 const KNOWN = new Map(
 	Object.entries(KNOWN_BY_REASON).flatMap(([why, names]) =>
 		names.map((name) => [name, why]),
@@ -104,7 +86,8 @@ for (const [mode, base] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
 ]) {
-	const page = await openDemo(browser, base);
+	// with emulated service workers, for the registrations
+	const page = await openDemo(browser, `${base}?sw`);
 	const proxied = {};
 	for (const [key, url] of steps(mode.replace('-', ''))) {
 		await page.click('#home').catch(() => {});
@@ -116,6 +99,13 @@ for (const [mode, base] of [
 		const got = proxied[key] ?? {};
 		for (const field of ['heard', 'workerCount', 'error'])
 			check(mode, `${key}: ${field}`, want[field], got[field]);
+		for (const kind of ['dedicated', 'blob', 'shared'])
+			check(
+				mode,
+				`${key}: ${kind} worker`,
+				want.workers?.[kind],
+				got.workers?.[kind],
+			);
 		for (const store of Object.keys(want.seen ?? {}))
 			check(mode, `${key}: ${store}`, want.seen[store], got.seen?.[store]);
 	}

@@ -1,3 +1,4 @@
+import { partitionSite } from '../../../partition';
 import type { JarCookie } from '../../../server/Cookies';
 import type {
 	ClientInfo,
@@ -745,6 +746,12 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 		const jarRoute = (route: string) =>
 			`${new URL(String(global.location.href)).origin}${this.client.directory}cookies/${route}`;
 		const sender = `sw-${info.version.id}-${Math.random().toString(36).slice(2)}`;
+		// the registration's partition: its Partitioned cookies are that
+		// top-level site's
+		const partitionContext = () => {
+			const partitionKey = partitionSite(this.client.partition);
+			return partitionKey === null ? null : { partitionKey };
+		};
 		let sequence = 0;
 		const inflight = new Set<number>();
 		const cookieMethods = cookieStoreMethods({
@@ -759,7 +766,7 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 				const response = await this.client.nativeFetch(jarRoute('get'), {
 					method: 'POST',
 					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify([scriptURL().href]),
+					body: JSON.stringify([scriptURL().href, partitionContext()]),
 				});
 				if (!response.ok)
 					throw new Error(`${response.status} ${response.statusText}`);
@@ -780,7 +787,11 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 					const response = await this.client.nativeFetch(url.href, {
 						method: 'POST',
 						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify([write, scriptURL().href]),
+						body: JSON.stringify([
+							write,
+							scriptURL().href,
+							partitionSite(this.client.partition) ?? undefined,
+						]),
 					});
 					if (!response.ok)
 						throw new Error(`${response.status} ${response.statusText}`);

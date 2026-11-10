@@ -43,7 +43,8 @@ export default class StorageModule extends Module<DocumentClient> {
 
 		let building = true;
 
-		const getOrigin = () => this.client.url.url.origin;
+		// keyed by the origin and its partition (src/partition.ts)
+		const getOrigin = () => this.client.storageKey;
 		// this document, so it never hears its own changes
 		const sender = Math.random().toString(36).slice(2);
 		const here = () => this.client.url.toString();
@@ -379,7 +380,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			const cache = current(directory);
 			const keys: string[] =
 				cache?.keys?.slice() ??
-				syncModule.jsonAPI(`${directory}getKeys`, this.client.url.url.origin);
+				syncModule.jsonAPI(`${directory}getKeys`, getOrigin());
 			if (cache && !cache.keys) cache.keys = keys.slice();
 			if (!shadow?.values.size) return keys;
 			const merged = keys.filter(

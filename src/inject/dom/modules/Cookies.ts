@@ -1,8 +1,10 @@
+import { partitionSite } from '../../../partition';
 import {
 	BrowserCookieArray,
 	compareCookies,
 	cookieMatches,
 	parseCookie,
+	type CookieRequestContext,
 	type CookieStoreWrite,
 	type FloatingCookie,
 	type JarCookie,
@@ -116,6 +118,18 @@ export class CookiesModule extends Module<DocumentClient> {
 			// no storage (an opaque origin): every read goes to the jar
 		}
 	}
+	/**
+	 * The partition of this document's Partitioned cookies: its top-level
+	 * site when that is another site (src/partition.ts), else none
+	 */
+	get #partitionKey(): string | undefined {
+		return partitionSite(this.client.partition) ?? undefined;
+	}
+	/** what the jar is told of this document's partition with every call */
+	get #context(): CookieRequestContext | undefined {
+		const partitionKey = this.#partitionKey;
+		return partitionKey === undefined ? undefined : { partitionKey };
+	}
 	/** the key other documents of this site bump when they write a cookie */
 	get #versionKey() {
 		const { hostname } = this.client.url.url;
@@ -162,8 +176,9 @@ export class CookiesModule extends Module<DocumentClient> {
 	#show(list: JarCookie[]): string {
 		const now = Date.now();
 		const url = this.client.url.url;
+		const context = this.#context;
 		const shown = list.filter(
-			(cookie) => !expired(cookie, now) && cookieMatches(cookie, url),
+			(cookie) => !expired(cookie, now) && cookieMatches(cookie, url, context),
 		);
 		shown.sort(compareCookies);
 		return new BrowserCookieArray(...shown).toString();
@@ -198,7 +213,11 @@ export class CookiesModule extends Module<DocumentClient> {
 			.routedFetch(url.href, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify([value, this.client.url.toString()]),
+				body: JSON.stringify([
+					value,
+					this.client.url.toString(),
+					this.#partitionKey,
+				]),
 			})
 			.then((response) => {
 				if (!response.ok)
@@ -229,7 +248,11 @@ export class CookiesModule extends Module<DocumentClient> {
 			const response = await this.client.routedFetch(url.href, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify([write, this.client.url.toString()]),
+				body: JSON.stringify([
+					write,
+					this.client.url.toString(),
+					this.#partitionKey,
+				]),
 			});
 			if (!response.ok)
 				throw new Error(`${response.status} ${response.statusText}`);
@@ -250,7 +273,7 @@ export class CookiesModule extends Module<DocumentClient> {
 			{
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify([this.client.url.toString()]),
+				body: JSON.stringify([this.client.url.toString(), this.#context]),
 			},
 		);
 		if (!response.ok)
@@ -288,6 +311,7 @@ export class CookiesModule extends Module<DocumentClient> {
 			BEACON_QUOTA,
 			`${this.client.directory}cookies/get`,
 			this.client.url.toString(),
+			this.#context,
 		);
 		if (answer) {
 			this.#known = this.#withUnsettled(
@@ -317,6 +341,7 @@ export class CookiesModule extends Module<DocumentClient> {
 		return parseCookie(value, this.client.url.url, publicSuffix, {
 			source: 'script',
 			now,
+			partitionKey: this.#partitionKey,
 		});
 	}
 	set pageCookies(value: string) {
@@ -331,6 +356,7 @@ export class CookiesModule extends Module<DocumentClient> {
 				value,
 				this.client.url.toString(),
 				'script',
+				this.#partitionKey,
 			)
 		) {
 			// kept for a read the bridge cannot make later

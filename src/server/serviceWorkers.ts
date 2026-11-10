@@ -5,6 +5,7 @@
 // service worker.
 
 import { IDBPDatabase, openDB } from 'idb';
+import { partitionSite } from '../partition';
 import type {
 	BackgroundFetchRecordWire,
 	BackgroundFetchSnapshot,
@@ -49,6 +50,13 @@ interface RegistrationRecord {
 	id: string;
 	scope: string;
 	origin: string;
+	/**
+	 * the partition it was registered in (src/partition.ts): a site framed
+	 * by another has registrations of its own there, which control its
+	 * clients in that partition only. None for a first-party one, which is
+	 * every registration an earlier Stomp made
+	 */
+	partition?: string;
 	updateViaCache: UpdateViaCache;
 	installing: VersionRecord | null;
 	waiting: VersionRecord | null;
@@ -93,8 +101,8 @@ export interface WorkerHost {
 	): Promise<Response>;
 	/** a document's routed URL at this address (WindowClient.navigate) */
 	routeDocument(url: string): string;
-	/** the jar's cookies script at `url` may see (no HttpOnly ones) */
-	jarCookies(url: string): Promise<JarCookie[]>;
+	/** the jar's cookies script at `url` may see (no HttpOnly ones), in a partition (CookieRequestContext.partitionKey) */
+	jarCookies(url: string, partitionKey?: string): Promise<JarCookie[]>;
 	/** a resource fetched through the proxy for a page's background fetch: the raw response */
 	fetchResource(
 		url: string,
@@ -110,6 +118,8 @@ export interface ClientDescription {
 	/** the real URL */
 	url: string;
 	origin: string;
+	/** its storage partition, from its route (src/partition.ts) */
+	partition: string;
 	/** the route kind (`html`, `js:worker`, `sw:<version>`) */
 	resource: string;
 	directory: string;
@@ -127,6 +137,8 @@ export interface Sender {
 	clientId: string;
 	url: string;
 	origin: string;
+	/** its storage partition, from its route (src/partition.ts) */
+	partition: string;
 	directory: string;
 }
 
@@ -168,6 +180,23 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 /** the steps a page may have missed are not worth keeping past this many controlled-client records */
 const CONTROLLED_KEPT = 4096;
 
+/**
+ * The key a registration is kept under: its scope, and its partition after a
+ * space (no serialized URL has one), so a first-party registration keeps the
+ * key every earlier Stomp gave it
+ */
+function keyOf(scope: string, partition = ''): string {
+	return partition ? `${scope} ${partition}` : scope;
+}
+/** a page event's partition member (none for a first-party registration) */
+const partitionOf = (record: RegistrationRecord) =>
+	record.partition ? { partition: record.partition } : {};
+const recordKey = (record: RegistrationRecord) =>
+	keyOf(record.scope, record.partition);
+/** the storage key a registration, client or sender belongs to */
+const ownerOf = (of: { origin: string; partition?: string }) =>
+	`${of.origin}${of.partition ?? ''}`;
+
 const uid = () => {
 	const bytes = new Uint8Array(12);
 	crypto.getRandomValues(bytes);
@@ -189,6 +218,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, what: string) {
 interface Instance {
 	id: string;
 	version: string;
+	/** its registration's key (recordKey) */
 	scope: string;
 	host: WorkerHost;
 	rpc: RpcHelper<FromEmulated, ToEmulated>;
@@ -265,8 +295,8 @@ export class ServiceWorkers {
 				}
 				if (record.active?.state === 'activating')
 					record.active.state = 'activated';
-				this.#registrations.set(record.scope, record);
-				await db.put('registrations', record, record.scope);
+				this.#registrations.set(recordKey(record), record);
+				await db.put('registrations', record, recordKey(record));
 			}
 		})();
 		this.#loaded.catch(() => (this.#loaded = undefined));
@@ -327,17 +357,20 @@ export class ServiceWorkers {
 				steps.push({ serial, op: 'state', worker: this.#worker(change[1])! });
 			} else steps.push({ serial, op: 'updatefound' });
 		}
-		if (this.#registrations.get(record.scope) === record)
-			await (await this.#open()).put('registrations', record, record.scope);
+		if (this.#registrations.get(recordKey(record)) === record)
+			await (
+				await this.#open()
+			).put('registrations', record, recordKey(record));
 		const snapshot = this.snapshot(record);
-		await this.#broadcast(record.origin, {
+		await this.#broadcast(ownerOf(record), {
 			kind: 'steps',
 			origin: record.origin,
+			...partitionOf(record),
 			registration: snapshot,
 			steps,
 		});
 		for (const instance of this.#instances.values())
-			if (instance.scope === record.scope && !instance.dead)
+			if (instance.scope === recordKey(record) && !instance.dead)
 				instance.rpc
 					.call('steps', { registration: snapshot, steps })
 					.catch(() => {});
@@ -368,14 +401,14 @@ export class ServiceWorkers {
 			.catch(() => {});
 	}
 
-	/** every window client of `origin` (and those whose URL names no site, which drop it themselves) */
-	async #broadcast(origin: string, event: PageEvent) {
+	/** every window client of storage key `owner` (and those whose URL names no site, which drop it themselves) */
+	async #broadcast(owner: string, event: PageEvent) {
 		for (const client of await self.clients.matchAll({
 			type: 'window',
 			includeUncontrolled: true,
 		})) {
 			const described = this.#env?.describe(client.url);
-			if (described && described.origin !== origin) continue;
+			if (described && ownerOf(described) !== owner) continue;
 			if (!described && !/^about:(blank|srcdoc)/.test(client.url)) continue;
 			this.#send(client, event);
 		}
@@ -388,8 +421,8 @@ export class ServiceWorkers {
 
 	// ---- matching
 
-	/** the registration whose scope is the longest prefix of `url`, of its origin */
-	match(url: string): RegistrationRecord | null {
+	/** the registration whose scope is the longest prefix of `url`, of its origin and `partition` */
+	match(url: string, partition = ''): RegistrationRecord | null {
 		let found: RegistrationRecord | null = null;
 		let origin: string;
 		try {
@@ -400,6 +433,7 @@ export class ServiceWorkers {
 		for (const record of this.#registrations.values())
 			if (
 				record.origin === origin &&
+				(record.partition ?? '') === partition &&
 				!record.uninstalling &&
 				url.startsWith(record.scope) &&
 				(!found || record.scope.length > found.scope.length)
@@ -417,12 +451,12 @@ export class ServiceWorkers {
 	}
 
 	async #setControlled(clientId: string, record: RegistrationRecord) {
-		if (this.#controlled.get(clientId) === record.scope) return;
-		this.#controlled.set(clientId, record.scope);
+		if (this.#controlled.get(clientId) === recordKey(record)) return;
+		this.#controlled.set(clientId, recordKey(record));
 		const db = await this.#open();
 		await db.put(
 			'controlled',
-			{ scope: record.scope, at: Date.now() },
+			{ scope: recordKey(record), at: Date.now() },
 			clientId,
 		);
 		if (this.#controlled.size > CONTROLLED_KEPT) this.#prune();
@@ -451,7 +485,7 @@ export class ServiceWorkers {
 		});
 		return all.filter(
 			(client) =>
-				this.#controlled.get(client.id) === record.scope &&
+				this.#controlled.get(client.id) === recordKey(record) &&
 				!this.#emulated.has(client.id),
 		);
 	}
@@ -547,13 +581,14 @@ export class ServiceWorkers {
 			case 'getRegistration': {
 				const url = String(args.url);
 				if (!url.startsWith(`${sender.origin}/`)) return null;
-				const record = this.match(url);
+				const record = this.match(url, sender.partition);
 				return record ? this.snapshot(record) : null;
 			}
 			case 'getRegistrations':
 				return [...this.#registrations.values()]
 					.filter(
-						(record) => record.origin === sender.origin && !record.uninstalling,
+						(record) =>
+							ownerOf(record) === ownerOf(sender) && !record.uninstalling,
 					)
 					.map((record) => this.snapshot(record));
 			case 'update': {
@@ -571,9 +606,11 @@ export class ServiceWorkers {
 				return this.snapshot(record);
 			}
 			case 'unregister': {
-				const record = this.#registrations.get(String(args.scope));
-				if (!record || record.origin !== sender.origin) return false;
-				return this.#enqueue(record.scope, async () => ({
+				const record = this.#registrations.get(
+					keyOf(String(args.scope), sender.partition),
+				);
+				if (!record || ownerOf(record) !== ownerOf(sender)) return false;
+				return this.#enqueue(recordKey(record), async () => ({
 					value: await this.#unregister(record),
 				}));
 			}
@@ -621,8 +658,10 @@ export class ServiceWorkers {
 
 	/** a registration of the sender's own origin */
 	#own(sender: Sender, scope: unknown): RegistrationRecord {
-		const record = this.#registrations.get(String(scope));
-		if (!record || record.origin !== sender.origin || record.uninstalling)
+		const record = this.#registrations.get(
+			keyOf(String(scope), sender.partition),
+		);
+		if (!record || ownerOf(record) !== ownerOf(sender) || record.uninstalling)
 			throw new ApiError(
 				'InvalidStateError',
 				'Failed to update a ServiceWorker: The registration is no longer active.',
@@ -645,7 +684,7 @@ export class ServiceWorkers {
 		else if (op === 'disable') record.navigationPreload.enabled = false;
 		else if (op === 'setHeaderValue')
 			record.navigationPreload.headerValue = String(value);
-		await (await this.#open()).put('registrations', record, record.scope);
+		await (await this.#open()).put('registrations', record, recordKey(record));
 		return { ...record.navigationPreload };
 	}
 
@@ -689,8 +728,9 @@ export class ServiceWorkers {
 				'InvalidStateError',
 				failed('The document is in an invalid state.'),
 			);
-		return this.#enqueue(scope, async () => {
-			let record = this.#registrations.get(scope);
+		const key = keyOf(scope, sender.partition);
+		return this.#enqueue(key, async () => {
+			let record = this.#registrations.get(key);
 			if (record && !record.uninstalling) {
 				const newest = record.installing ?? record.waiting ?? record.active;
 				if (
@@ -709,6 +749,7 @@ export class ServiceWorkers {
 					id: uid(),
 					scope,
 					origin: sender.origin,
+					...(sender.partition ? { partition: sender.partition } : {}),
 					updateViaCache,
 					installing: null,
 					waiting: null,
@@ -716,7 +757,7 @@ export class ServiceWorkers {
 					navigationPreload: { enabled: false, headerValue: 'true' },
 					serial: ++this.#serial,
 				};
-				this.#registrations.set(scope, record);
+				this.#registrations.set(key, record);
 			}
 			const result = await this.#update(
 				record,
@@ -743,12 +784,13 @@ export class ServiceWorkers {
 		clientId: string | undefined,
 		force: boolean,
 	): Promise<void> {
-		if (!force && this.#updating.has(record.scope)) return Promise.resolve();
-		this.#updating.add(record.scope);
-		return this.#enqueue(record.scope, async () => {
-			this.#updating.delete(record.scope);
+		if (!force && this.#updating.has(recordKey(record)))
+			return Promise.resolve();
+		this.#updating.add(recordKey(record));
+		return this.#enqueue(recordKey(record), async () => {
+			this.#updating.delete(recordKey(record));
 			const newest = record.installing ?? record.waiting ?? record.active;
-			if (this.#registrations.get(record.scope) !== record || !newest)
+			if (this.#registrations.get(recordKey(record)) !== record || !newest)
 				throw new ApiError(
 					'InvalidStateError',
 					'Failed to update a ServiceWorker: The registration is no longer active.',
@@ -778,7 +820,7 @@ export class ServiceWorkers {
 		const empty = () => !record.installing && !record.waiting && !record.active;
 		const fail = (name: string, reason: string): never => {
 			// a registration that never got a version is gone again
-			if (empty()) this.#registrations.delete(record.scope);
+			if (empty()) this.#registrations.delete(recordKey(record));
 			throw new ApiError(name, failed(reason));
 		};
 		let response: Response;
@@ -880,7 +922,7 @@ export class ServiceWorkers {
 		} finally {
 			this.#evaluating.delete(version.id);
 		}
-		this.#registrations.set(record.scope, record);
+		this.#registrations.set(recordKey(record), record);
 		const changes: Change[] = [];
 		if (record.installing) {
 			this.#stop(record.installing.id);
@@ -931,7 +973,8 @@ export class ServiceWorkers {
 	/** the spec's Try Activate: a waiting version goes active when nothing holds the old one */
 	async #tryActivate(record: RegistrationRecord) {
 		const waiting = record.waiting;
-		if (!waiting || this.#registrations.get(record.scope) !== record) return;
+		if (!waiting || this.#registrations.get(recordKey(record)) !== record)
+			return;
 		if (
 			record.active &&
 			!waiting.skipWaiting &&
@@ -961,6 +1004,7 @@ export class ServiceWorkers {
 				await this.#post(client.id, {
 					kind: 'controller',
 					origin: record.origin,
+					...partitionOf(record),
 					registration: snapshot,
 					worker: this.#worker(next)!,
 				});
@@ -977,9 +1021,9 @@ export class ServiceWorkers {
 	}
 
 	async #unregister(record: RegistrationRecord): Promise<boolean> {
-		if (this.#registrations.get(record.scope) !== record) return false;
+		if (this.#registrations.get(recordKey(record)) !== record) return false;
 		record.uninstalling = true;
-		await (await this.#open()).put('registrations', record, record.scope);
+		await (await this.#open()).put('registrations', record, recordKey(record));
 		if (!(await this.#liveControlled(record)).length) await this.#clear(record);
 		return true;
 	}
@@ -998,18 +1042,19 @@ export class ServiceWorkers {
 		const db = await this.#open();
 		for (const version of [record.installing, record.waiting, record.active])
 			if (version) await db.delete('scripts', version.id);
-		if (this.#registrations.get(record.scope) === record) {
-			this.#registrations.delete(record.scope);
-			await db.delete('registrations', record.scope);
+		if (this.#registrations.get(recordKey(record)) === record) {
+			this.#registrations.delete(recordKey(record));
+			await db.delete('registrations', recordKey(record));
 		}
 		for (const [id, scope] of [...this.#controlled])
-			if (scope === record.scope) {
+			if (scope === recordKey(record)) {
 				this.#controlled.delete(id);
 				await db.delete('controlled', id);
 			}
-		await this.#broadcast(record.origin, {
+		await this.#broadcast(ownerOf(record), {
 			kind: 'removed',
 			origin: record.origin,
+			...partitionOf(record),
 			registration: record.id,
 		});
 	}
@@ -1023,13 +1068,13 @@ export class ServiceWorkers {
 		this.#resumeSyncs();
 		for (const record of this.#registrations.values()) {
 			if (record.uninstalling)
-				this.#enqueue(record.scope, async () => {
+				this.#enqueue(recordKey(record), async () => {
 					if (!(await this.#liveControlled(record)).length)
 						await this.#clear(record);
 					return { value: undefined };
 				}).catch(() => {});
 			else if (record.waiting && record.active)
-				this.#enqueue(record.scope, async () => {
+				this.#enqueue(recordKey(record), async () => {
 					await this.#tryActivate(record);
 					return { value: undefined };
 				}).catch(() => {});
@@ -1060,14 +1105,14 @@ export class ServiceWorkers {
 
 	#checkCookies(record: RegistrationRecord): Promise<void> {
 		// one comparison at a time; a change during it compares again after
-		const running = this.#cookieChecks.get(record.scope);
+		const running = this.#cookieChecks.get(recordKey(record));
 		const next = (running ?? Promise.resolve())
 			.catch(() => {})
 			.then(() => this.#compareCookies(record));
-		this.#cookieChecks.set(record.scope, next);
+		this.#cookieChecks.set(recordKey(record), next);
 		next.finally(() => {
-			if (this.#cookieChecks.get(record.scope) === next)
-				this.#cookieChecks.delete(record.scope);
+			if (this.#cookieChecks.get(recordKey(record)) === next)
+				this.#cookieChecks.delete(recordKey(record));
 		});
 		return next;
 	}
@@ -1077,12 +1122,12 @@ export class ServiceWorkers {
 		const host = this.#env?.host();
 		const subscriptions = record.cookieSubscriptions ?? [];
 		if (!host || !subscriptions.length) return;
-		let seen = this.#cookiesSeen.get(record.scope);
+		let seen = this.#cookiesSeen.get(recordKey(record));
 		// a registration this worker has not looked at yet (a restart):
 		// what the jar shows now is where its changes start
 		if (!seen) {
 			seen = new Map();
-			this.#cookiesSeen.set(record.scope, seen);
+			this.#cookiesSeen.set(recordKey(record), seen);
 			report = false;
 		}
 		const changed = new Map<string, JarCookie>();
@@ -1097,7 +1142,12 @@ export class ServiceWorkers {
 			a.hostOnly !== b.hostOnly;
 		for (const url of new Set(subscriptions.map((item) => item.url))) {
 			const now = new Map(
-				(await host.jarCookies(url)).map((cookie) => [cookie.id, cookie]),
+				(
+					await host.jarCookies(
+						url,
+						partitionSite(record.partition ?? '') ?? undefined,
+					)
+				).map((cookie) => [cookie.id, cookie]),
 			);
 			const before = seen.get(url);
 			seen.set(url, now);
@@ -1157,8 +1207,10 @@ export class ServiceWorkers {
 		},
 	): Promise<unknown> {
 		const persist = async () => {
-			if (this.#registrations.get(record.scope) === record)
-				await (await this.#open()).put('registrations', record, record.scope);
+			if (this.#registrations.get(recordKey(record)) === record)
+				await (
+					await this.#open()
+				).put('registrations', record, recordKey(record));
 		};
 		const failed = (on: string, method: string, message: string) =>
 			`Failed to execute '${method}' on '${on}': ${message}`;
@@ -1253,7 +1305,7 @@ export class ServiceWorkers {
 		attempt: number,
 		preferred?: WorkerHost,
 	) {
-		const key = `${record.scope} ${tag}`;
+		const key = `${recordKey(record)} ${tag}`;
 		if (this.#syncing.has(key) && attempt === 0) return;
 		this.#syncing.add(key);
 		const version = record.active;
@@ -1271,8 +1323,10 @@ export class ServiceWorkers {
 		if (ok || attempt >= 2) {
 			this.#syncing.delete(key);
 			record.syncTags = (record.syncTags ?? []).filter((kept) => kept !== tag);
-			if (this.#registrations.get(record.scope) === record)
-				await (await this.#open()).put('registrations', record, record.scope);
+			if (this.#registrations.get(recordKey(record)) === record)
+				await (
+					await this.#open()
+				).put('registrations', record, recordKey(record));
 			return;
 		}
 		setTimeout(
@@ -1287,7 +1341,7 @@ export class ServiceWorkers {
 	#resumeSyncs() {
 		for (const record of this.#registrations.values())
 			for (const tag of record.syncTags ?? [])
-				if (!this.#syncing.has(`${record.scope} ${tag}`))
+				if (!this.#syncing.has(`${recordKey(record)} ${tag}`))
 					this.#runSync(record, tag, 0).catch(() => {});
 	}
 
@@ -1301,9 +1355,9 @@ export class ServiceWorkers {
 			waitUntil?: (promise: Promise<unknown>) => void;
 		},
 	): Promise<unknown> {
-		let fetches = this.#backgroundFetches.get(record.scope);
+		let fetches = this.#backgroundFetches.get(recordKey(record));
 		if (!fetches)
-			this.#backgroundFetches.set(record.scope, (fetches = new Map()));
+			this.#backgroundFetches.set(recordKey(record), (fetches = new Map()));
 		const id = String(args.id ?? '');
 		const failed = (message: string) =>
 			`Failed to execute '${op}' on 'BackgroundFetchManager': ${message}`;
@@ -1446,7 +1500,7 @@ export class ServiceWorkers {
 				// the fetch ends whether its handler ran or not
 			}
 		entry.snapshot.recordsAvailable = false;
-		this.#backgroundFetches.get(record.scope)?.delete(entry.snapshot.id);
+		this.#backgroundFetches.get(recordKey(record))?.delete(entry.snapshot.id);
 	}
 
 	// ---- instances
@@ -1472,7 +1526,7 @@ export class ServiceWorkers {
 		const instance: Instance = {
 			id,
 			version: version.id,
-			scope: record.scope,
+			scope: recordKey(record),
 			host,
 			rpc: undefined as unknown as Instance['rpc'],
 			started: undefined as unknown as Promise<void>,
@@ -1596,7 +1650,7 @@ export class ServiceWorkers {
 				const own = record();
 				// not awaited: an install that waits on skipWaiting() would
 				// otherwise wait on itself
-				this.#enqueue(own.scope, async () => {
+				this.#enqueue(recordKey(own), async () => {
 					await this.#tryActivate(own);
 					return { value: undefined };
 				}).catch(() => {});
@@ -1612,13 +1666,15 @@ export class ServiceWorkers {
 				const client = await self.clients.get(id);
 				const described = client ? this.#describeClient(client) : null;
 				// another site's client never hears this worker
-				if (!client || !described || described.origin !== own.origin) return;
+				if (!client || !described || ownerOf(described) !== ownerOf(own))
+					return;
 				if (client.type !== 'window') return;
 				this.#send(
 					client,
 					{
 						kind: 'message',
 						origin: own.origin,
+						...partitionOf(own),
 						registration: this.snapshot(own),
 						source: this.#worker(version)!,
 						data,
@@ -1659,7 +1715,7 @@ export class ServiceWorkers {
 			unregister: async () => {
 				const own = record();
 				return [
-					await this.#enqueue(own.scope, async () => ({
+					await this.#enqueue(recordKey(own), async () => ({
 						value: await this.#unregister(own),
 					})),
 					[],
@@ -1714,14 +1770,15 @@ export class ServiceWorkers {
 			type: 'all',
 		})) {
 			const described = this.#describeClient(client);
-			if (!described || described.origin !== record.origin) continue;
-			if (this.match(described.url) !== record) continue;
-			if (this.#controlled.get(client.id) === record.scope) continue;
+			if (!described || ownerOf(described) !== ownerOf(record)) continue;
+			if (this.match(described.url, described.partition) !== record) continue;
+			if (this.#controlled.get(client.id) === recordKey(record)) continue;
 			await this.#setControlled(client.id, record);
 			if (client.type === 'window')
 				this.#send(client, {
 					kind: 'controller',
 					origin: record.origin,
+					...partitionOf(record),
 					registration: snapshot,
 					worker: this.#worker(version)!,
 				});
@@ -1741,10 +1798,10 @@ export class ServiceWorkers {
 		})) {
 			if (options.type !== 'all' && client.type !== options.type) continue;
 			const described = this.#describeClient(client);
-			if (!described || described.origin !== record.origin) continue;
+			if (!described || ownerOf(described) !== ownerOf(record)) continue;
 			if (
 				!options.includeUncontrolled &&
-				this.#controlled.get(client.id) !== record.scope
+				this.#controlled.get(client.id) !== recordKey(record)
 			)
 				continue;
 			found.push(this.#clientInfo(client, described, hostFocused));
@@ -1758,7 +1815,7 @@ export class ServiceWorkers {
 	): Promise<ClientInfo | null> {
 		const client = await self.clients.get(id);
 		const described = client ? this.#describeClient(client) : null;
-		if (!client || !described || described.origin !== record.origin)
+		if (!client || !described || ownerOf(described) !== ownerOf(record))
 			return null;
 		return this.#clientInfo(client, described, await this.#hostFocused());
 	}
@@ -1775,8 +1832,8 @@ export class ServiceWorkers {
 			!client ||
 			!described ||
 			client.type !== 'window' ||
-			described.origin !== record.origin ||
-			this.#controlled.get(id) !== record.scope ||
+			ownerOf(described) !== ownerOf(record) ||
+			this.#controlled.get(id) !== recordKey(record) ||
 			record.active?.id !== version.id
 		)
 			return {
@@ -1791,7 +1848,7 @@ export class ServiceWorkers {
 		);
 		if (!navigated) return null;
 		const again = this.#describeClient(navigated);
-		return again && again.origin === record.origin
+		return again && ownerOf(again) === ownerOf(record)
 			? this.#clientInfo(navigated, again, await this.#hostFocused())
 			: null;
 	}
@@ -1834,6 +1891,7 @@ export class ServiceWorkers {
 							version: this.#worker(version)!,
 							registration: this.snapshot(record),
 							type: version.type,
+							...(record.partition ? { partition: record.partition } : {}),
 						},
 					};
 				}
@@ -1849,6 +1907,9 @@ export class ServiceWorkers {
 				version: this.#worker(pending.version)!,
 				registration: this.snapshot(pending.record),
 				type: pending.version.type,
+				...(pending.record.partition
+					? { partition: pending.record.partition }
+					: {}),
 			},
 		};
 	}
@@ -1881,6 +1942,14 @@ export class ServiceWorkers {
 		const of = described.resource.slice(3);
 		this.#emulated.set(clientId, of);
 		return version === undefined || of === version;
+	}
+
+	/** the partition of a version's registration ('' when there is none) */
+	versionPartition(versionId: string): string {
+		for (const record of this.#registrations.values())
+			for (const version of [record.installing, record.waiting, record.active])
+				if (version?.id === versionId) return record.partition ?? '';
+		return this.#evaluating.get(versionId)?.record.partition ?? '';
 	}
 
 	/** the state of a version, for the `swimport:` route */
@@ -1919,13 +1988,15 @@ export class ServiceWorkers {
 		clientId?: string;
 		clientURL?: string;
 		resultingClientId?: string;
+		/** the partition of the document or worker a navigation or worker script makes */
+		partition?: string;
 	}): Promise<{ record: RegistrationRecord; control?: ControlInfo } | null> {
 		if (!(await this.any())) return null;
 		// an emulated worker's own requests are never its own (it is never a
 		// controlled client either)
 		if (request.clientId && this.#emulated.has(request.clientId)) return null;
 		if (request.nonSubresource) {
-			const record = this.match(request.url);
+			const record = this.match(request.url, request.partition ?? '');
 			if (!record?.active) return null;
 			if (request.resultingClientId)
 				await this.#setControlled(request.resultingClientId, record);

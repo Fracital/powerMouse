@@ -1,6 +1,7 @@
 import { ParsedConfig } from '../../config';
 import { rewriteCSSValueURLs } from '../../cssURLs';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
+import { partitionOf } from '../../partition';
 import {
 	PrewrittenTable,
 	scriptPreamble,
@@ -15,7 +16,12 @@ import StompURL from '../../StompURL';
 import { HOOK_ERROR, OPEN_TAB, WORKER_BASE } from '../../transport/messages';
 import { BUILD } from '../../version';
 import Client from '../Client';
-import { modifyCSS, modifyJS, shareRewriter } from '../rewriter';
+import {
+	getPublicSuffix,
+	modifyCSS,
+	modifyJS,
+	shareRewriter,
+} from '../rewriter';
 import cloneRawNode, {
 	inertDocumentOf,
 	nativeAttributes,
@@ -453,6 +459,31 @@ export default class DocumentClient extends Client {
 			}
 		}
 		return context;
+	}
+	#partition?: { document: Document; partition: string };
+	/**
+	 * This document's storage partition: its top-level document's site when
+	 * that is another site than its own (src/partition.ts). Decided once per
+	 * document, from the chain of proxied parents: a site framed by another
+	 * keeps to stores of its own from its first script on.
+	 */
+	override get partition(): string {
+		const document = this.global.document;
+		const kept = this.#partition;
+		if (kept && kept.document === document) return kept.partition;
+		let partition = '';
+		try {
+			if (this.proxiedTop !== this.global)
+				partition = partitionOf(
+					this.url.url.origin,
+					this.topOrigin,
+					getPublicSuffix,
+				);
+		} catch (error) {
+			// an origin without a site (opaque): it has no storage to key
+		}
+		this.#partition = { document, partition };
+		return partition;
 	}
 	/** the origin of the outermost proxied document above this one (its own when it is the top) */
 	get topOrigin(): string {

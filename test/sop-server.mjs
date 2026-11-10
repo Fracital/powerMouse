@@ -13,7 +13,9 @@
 //     js=<source>                       the script for type=js or mjs
 //     redirect=<url>                    a 302 to url, with the headers above
 //     status=<n>                        the status of a non-preflight answer
+//     cookie=<value>                    a Set-Cookie of the answer
 //   /sop/log?k=<key>     what reached /sop/r under k, in order
+//   /sop/cookies         the names of the cookies the request carried
 //
 // test/fixture.mjs calls `sop(req, res)` first and serves the rest.
 import { readFileSync } from 'node:fs';
@@ -45,6 +47,17 @@ export function sop(req, res) {
 		res.setHeader('cache-control', 'no-store');
 		res.setHeader('access-control-allow-origin', '*');
 		res.end(JSON.stringify(logs.get(key) ?? []));
+		return true;
+	}
+	if (url.pathname === '/sop/cookies') {
+		res.setHeader('content-type', 'application/json');
+		res.setHeader('cache-control', 'no-store');
+		const header = req.headers.cookie ?? '';
+		res.end(
+			JSON.stringify(
+				header ? header.split('; ').map((pair) => pair.split('=')[0]) : [],
+			),
+		);
 		return true;
 	}
 	if (url.pathname !== '/sop/r') {
@@ -87,6 +100,7 @@ export function sop(req, res) {
 	set('access-control-expose-headers', query.get('aceh'));
 	set('cross-origin-resource-policy', query.get('corp'));
 	set('timing-allow-origin', query.get('tao'));
+	set('set-cookie', query.get('cookie'));
 	if (query.get('st')) set('server-timing', 'db;dur=5, cache;desc="hit"');
 	res.setHeader('x-secret', 'S');
 	const redirect = query.get('redirect');

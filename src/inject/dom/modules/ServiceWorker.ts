@@ -53,6 +53,11 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 		}
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const origin = () => this.client.url.url.origin;
+		// an event of this document's registrations: its origin's, in its
+		// partition (a site framed by another has registrations of its own)
+		const ownEvent = (event: PageEvent) =>
+			event.origin === origin() &&
+			(event.partition ?? '') === this.client.partition;
 
 		// Calls in flight: every event that arrives meanwhile waits for the
 		// call's answer, in the order it came. The answer travels on a port of
@@ -81,7 +86,7 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 		const heldSteps = (id: string, serial: number) =>
 			held.flatMap(([event]) =>
 				event.kind === 'steps' &&
-				event.origin === origin() &&
+				ownEvent(event) &&
 				event.registration.id === id
 					? event.steps.filter((step) => step.serial <= serial)
 					: [],
@@ -284,7 +289,7 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 		let waiting = false;
 
 		const handle = (event: PageEvent, ports: MessagePort[] = []) => {
-			if (event.origin !== origin()) return;
+			if (!ownEvent(event)) return;
 			if (pending) {
 				held.push([event, ports]);
 				for (const attempt of [...answers]) attempt();

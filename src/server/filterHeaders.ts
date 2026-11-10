@@ -44,6 +44,8 @@ const removeHeaders: string[] = [
 export declare type RouteTransform = (
 	resource: StompURL,
 	url: StompURL,
+	/** the route kind of the request whose response is filtered */
+	kind?: string,
 ) => string;
 
 export declare type AdditionalFilter = (

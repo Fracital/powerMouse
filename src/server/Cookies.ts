@@ -40,10 +40,17 @@ export interface JarCookie {
 	sameSiteDefault?: boolean;
 	/**
 	 * set with Partitioned (CHIPS): kept apart from the unpartitioned cookie
-	 * of the same name. The proxied page is the top of its own world, so
-	 * its partition is its own site and nothing else changes
+	 * of the same name, and per top-level site (see partitionKey)
 	 */
 	partitioned?: boolean;
+	/**
+	 * A Partitioned cookie's top-level site when it was set in a context
+	 * whose top-level site is not the cookie URL's own (a site framed by
+	 * another, or a top-level page's request to another site); none when it
+	 * is that site (src/partition.ts). The jar of every Stomp before this
+	 * one has none on any cookie, which reads as set first-party, as it was.
+	 */
+	partitionKey?: string;
 	/** ms since the epoch; a session cookie has none */
 	expires?: number;
 	/** ms since the epoch; kept across re-sets (RFC 6265 5.3 step 11) */
@@ -83,6 +90,8 @@ export type PublicSuffix = (host: string) => string | null;
 export interface ParseOptions {
 	source?: CookieSource;
 	now?: number;
+	/** the context's partition key (CookieRequestContext.partitionKey) */
+	partitionKey?: string;
 }
 
 /** what the jar needs to know about a request to apply SameSite */
@@ -96,6 +105,13 @@ export interface CookieRequestContext {
 	/** a top-level navigation: a cross-site one with a safe method gets Lax cookies too */
 	navigation?: boolean;
 	method?: string;
+	/**
+	 * The request's top-level site when it is not the site of the URL
+	 * (src/partition.ts siteOf): the partition whose Partitioned cookies the
+	 * request carries. None (a first-party context, or a caller that does
+	 * not know) carries those set first-party.
+	 */
+	partitionKey?: string;
 }
 
 const SAME_SITES: SameSite[] = ['lax', 'strict', 'none'];
@@ -172,11 +188,24 @@ function cookieID(
 	path: string,
 	name: string,
 	partitioned = false,
+	partitionKey?: string,
 ): string {
 	const id = [domain, path, name]
 		.map((value) => JSON.stringify(value))
 		.join('@@');
-	return partitioned ? `${id}@@partitioned` : id;
+	if (!partitioned) return id;
+	// a first-party partition keeps the id every earlier jar gave it
+	return partitionKey === undefined
+		? `${id}@@partitioned`
+		: `${id}@@partitioned@@${JSON.stringify(partitionKey)}`;
+}
+
+/** a Partitioned cookie is sent in its own partition only */
+function partitionAllows(
+	cookie: JarCookie,
+	context: CookieRequestContext,
+): boolean {
+	return !cookie.partitioned || cookie.partitionKey === context.partitionKey;
 }
 
 /** the stored cookie's domain covers `host` (RFC 6265bis 5.8.3 step 1) */
@@ -214,7 +243,8 @@ export function cookieMatches(
 		coversHost(cookie, url.hostname) &&
 		pathMatches(url.pathname, cookie.path) &&
 		(!cookie.secure || isSecureURL(url)) &&
-		sameSiteAllows(cookie, context)
+		sameSiteAllows(cookie, context) &&
+		partitionAllows(cookie, context)
 	);
 }
 
@@ -236,7 +266,7 @@ export function parseCookie(
 	header: string,
 	url: URL,
 	publicSuffix: PublicSuffix,
-	{ source = 'http', now = Date.now() }: ParseOptions = {},
+	{ source = 'http', now = Date.now(), partitionKey }: ParseOptions = {},
 ): JarCookie | null {
 	// Chrome's HTTP parser ends a header at a bare CR or LF and reads a NUL
 	// as a space (a transport hands the raw value over); anywhere else in the
@@ -322,6 +352,7 @@ export function parseCookie(
 	// Chrome refuses a Partitioned cookie that is not Secure
 	const partitioned = !!parsed.partitioned;
 	if (partitioned && !secure) return null;
+	if (!partitioned) partitionKey = undefined;
 
 	let expires: number | undefined;
 	if (typeof parsed.maxAge === 'number' && !Number.isNaN(parsed.maxAge)) {
@@ -337,7 +368,7 @@ export function parseCookie(
 		expires = now + MAX_AGE_MS;
 
 	return {
-		id: cookieID(domain, path, name, partitioned),
+		id: cookieID(domain, path, name, partitioned, partitionKey),
 		name,
 		value,
 		domain,
@@ -348,6 +379,7 @@ export function parseCookie(
 		sameSite,
 		...(sameSiteDefault ? { sameSiteDefault } : {}),
 		...(partitioned ? { partitioned } : {}),
+		...(partitionKey !== undefined ? { partitionKey } : {}),
 		expires,
 		created: now,
 	};
@@ -363,6 +395,7 @@ export function storeCookie(
 	url: URL,
 	publicSuffix: PublicSuffix,
 	now = Date.now(),
+	partitionKey?: string,
 ): JarCookie | null {
 	if (typeof write !== 'object' || write === null || !isSecureURL(url))
 		return null;
@@ -406,8 +439,9 @@ export function storeCookie(
 	}
 	if (/^__host-/i.test(name) && (!hostOnly || path !== '/')) return null;
 	const partitioned = !!write.partitioned;
+	const key = partitioned ? partitionKey : undefined;
 	return {
-		id: cookieID(domain, path, name, partitioned),
+		id: cookieID(domain, path, name, partitioned, key),
 		name,
 		value,
 		domain,
@@ -417,6 +451,7 @@ export function storeCookie(
 		httpOnly: false,
 		sameSite,
 		...(partitioned ? { partitioned } : {}),
+		...(key !== undefined ? { partitionKey: key } : {}),
 		expires,
 		created: now,
 	};
@@ -467,6 +502,11 @@ interface Turns {
 const sleep = (ms: number) =>
 	new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** a partition key a page sent: a site string, or none */
+function partitionKeyOf(key: unknown): string | undefined {
+	return typeof key === 'string' && key !== '' ? key : undefined;
+}
+
 export default class Cookies {
 	private db: IDBPDatabase;
 	#publicSuffix: PublicSuffix;
@@ -498,14 +538,16 @@ export default class Cookies {
 		const base = Number(params.get('base'));
 		if (sender === null || !Number.isInteger(seq) || !Number.isInteger(base))
 			return json(400, 'not an ordered cookie write');
-		const body = request.json() as Promise<[string | CookieStoreWrite, string]>;
+		const body = request.json() as Promise<
+			[string | CookieStoreWrite, string, string | undefined]
+		>;
 		body.catch(() => {});
 		const finished = this.#inTurn(sender, seq, base, async () => {
-			const [value, url] = await body;
+			const [value, url, partitionKey] = await body;
 			// a Cookie Store API write, or a document.cookie string
 			if (typeof value === 'object' && value !== null)
-				await this.store(value, String(url));
-			else await this.set(String(value), String(url), 'script');
+				await this.store(value, String(url), partitionKey);
+			else await this.set(String(value), String(url), 'script', partitionKey);
 		});
 		this.#heard.add(finished);
 		const forget = () => this.#heard.delete(finished);
@@ -627,22 +669,35 @@ export default class Cookies {
 			if (coversHost(cookie, host)) await this.db.delete(STORE, cookie.id);
 		this.onChange?.(host);
 	}
-	/** apply a Cookie Store API write of a document at `url` */
-	async store(write: CookieStoreWrite, url: URL | string): Promise<void> {
+	/** apply a Cookie Store API write of a document at `url` (in `partitionKey`'s partition) */
+	async store(
+		write: CookieStoreWrite,
+		url: URL | string,
+		partitionKey?: string,
+	): Promise<void> {
 		url = new URL(url);
 		const now = Date.now();
-		const cookie = storeCookie(write, url, this.#publicSuffix, now);
+		const cookie = storeCookie(
+			write,
+			url,
+			this.#publicSuffix,
+			now,
+			partitionKeyOf(partitionKey),
+		);
 		if (cookie) await this.#put(cookie, 'script', now);
 	}
 	/**
 	 * Apply Set-Cookie values from a response (or a script, when `source` says
-	 * so) for `url`, the way RFC 6265bis 5.6 stores them.
+	 * so) for `url`, the way RFC 6265bis 5.6 stores them; a Partitioned one in
+	 * `partitionKey`'s partition (CookieRequestContext.partitionKey).
 	 */
 	async set(
 		cookies: string | string[],
 		url: URL | string,
 		source: CookieSource = 'http',
+		partitionKey?: string,
 	): Promise<void> {
+		partitionKey = partitionKeyOf(partitionKey);
 		url = new URL(url);
 		const now = Date.now();
 
@@ -654,6 +709,7 @@ export default class Cookies {
 			const cookie = parseCookie(header, url, this.#publicSuffix, {
 				source,
 				now,
+				partitionKey,
 			});
 			if (!cookie) continue;
 
@@ -818,11 +874,21 @@ export function registerCookies(router: Router, cookies: Cookies): Cookies {
 	// request path and the host's cookies API get the whole jar)
 	router.routes.set(
 		/^\/cookies\/get$/,
-		jsonAPI(async (url: string, context?: CookieRequestContext) =>
-			forScript(await cookies.get(url, context)),
+		jsonAPI(async (url: string, context?: CookieRequestContext | null) =>
+			forScript(await cookies.get(url, context ?? {})),
 		),
 	);
-	router.routes.set(/^\/cookies\/set$/, jsonAPI(cookies.set.bind(cookies)));
+	router.routes.set(
+		/^\/cookies\/set$/,
+		jsonAPI(
+			(
+				value: string | string[],
+				url: string,
+				source?: CookieSource,
+				partitionKey?: string | null,
+			) => cookies.set(value, url, source, partitionKey ?? undefined),
+		),
+	);
 	router.routes.set(/^\/cookies\/ordered$/, (request) =>
 		cookies.ordered(request),
 	);

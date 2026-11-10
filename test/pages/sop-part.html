@@ -6,7 +6,9 @@
 	// page (`?role=frame`): each writes to every store under its own name,
 	// then reports what it reads of both, so the suite can tell which stores
 	// the two share. A top-level page reports twice: before and after the
-	// frame wrote (`?role=top&phase=after`).
+	// frame wrote (`?role=top&phase=after`). Its workers (dedicated, blob:
+	// and shared) report what they see too, and the service worker
+	// registrations it has.
 	(async () => {
 		const query = new URLSearchParams(location.search);
 		const role = query.get('role');
@@ -32,6 +34,12 @@
 			sessionStorage.setItem(`${tag}-${role}`, '1');
 			document.cookie = `${tag}_${role}=1; path=/; SameSite=None; Secure`;
 			document.cookie = `${tag}_${role}_chips=1; path=/; SameSite=None; Secure; Partitioned`;
+			// and one the response sets
+			await fetch(
+				`/sop/r?k=part&cookie=${encodeURIComponent(
+					`${tag}_${role}_http_chips=1; Path=/; SameSite=None; Secure; Partitioned`,
+				)}`,
+			);
 			await new Promise((resolve) => {
 				const open = indexedDB.open(`${tag}-${role}`);
 				open.onsuccess = open.onerror = resolve;
@@ -39,7 +47,28 @@
 			await caches.open(`${tag}-${role}`);
 			const root = await navigator.storage.getDirectory();
 			await root.getFileHandle(`${tag}-${role}`, { create: true });
+			// a service worker registration (scoped to a path no page here is at)
+			await settle(
+				navigator.serviceWorker.register('sop-part-sw.js', {
+					scope: `${tag}-sw-${role}`,
+				}),
+				4000,
+			);
 		};
+		const seenBy = (list) =>
+			list && !list.error && typeof list === 'object'
+				? Object.fromEntries(
+						Object.entries(list).map(([store, names]) => [store, shown(names)]),
+					)
+				: list;
+		const fromWorker = (worker) =>
+			settle(
+				new Promise((resolve) => {
+					worker.onmessage = (event) => resolve(seenBy(event.data));
+					worker.onerror = (event) => resolve(`error: ${event.message}`);
+				}),
+				4000,
+			);
 		const read = async () => {
 			const opfs = [];
 			for await (const name of (await navigator.storage.getDirectory()).keys())
@@ -49,6 +78,7 @@
 				cookies: shown(
 					document.cookie.split('; ').map((pair) => pair.split('=')[0]),
 				),
+				sent: shown(await (await fetch('/sop/cookies')).json()),
 				databases: shown(
 					(await indexedDB.databases()).map((info) => info.name),
 				),
@@ -56,6 +86,12 @@
 				opfs: shown(opfs),
 				locks: shown(
 					(await navigator.locks.query()).held.map((lock) => lock.name),
+				),
+				registrations: shown(
+					(await navigator.serviceWorker.getRegistrations()).map(
+						(registration) =>
+							new URL(registration.scope).pathname.split('/').pop(),
+					),
 				),
 			};
 		};
@@ -72,12 +108,26 @@
 			const say = setInterval(() => channel.postMessage(role), 100);
 			// a shared worker counts the documents that connected to it
 			const worker = new SharedWorker('sop-part-worker.js', `${tag}-worker`);
-			out.workerCount = await settle(
-				new Promise((resolve) => {
-					worker.port.onmessage = (event) => resolve(event.data);
-					worker.port.postMessage('count');
-				}),
-			);
+			const ask = (what) =>
+				settle(
+					new Promise((resolve) => {
+						worker.port.onmessage = (event) => resolve(event.data);
+						worker.port.postMessage(what);
+					}),
+				);
+			out.workerCount = await ask('count');
+			// what each kind of worker sees of the stores: the document's
+			// partition, which it takes on before its own script runs
+			const blobSource = `importScripts(${JSON.stringify(
+				new URL('sop-part-list.js', location.href).href,
+			)}); self.listStores().then(postMessage, (error) => postMessage({ error: String(error) }));`;
+			out.workers = {
+				dedicated: await fromWorker(new Worker('sop-part-dedicated.js')),
+				blob: await fromWorker(
+					new Worker(URL.createObjectURL(new Blob([blobSource]))),
+				),
+				shared: seenBy(await ask('seen')),
+			};
 			await new Promise((resolve) => setTimeout(resolve, 1000));
 			clearInterval(say);
 			out.heard = [...heard].sort();

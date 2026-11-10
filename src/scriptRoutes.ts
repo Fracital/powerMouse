@@ -5,6 +5,7 @@
 // (src/inject/rewriter.ts), and reached from here through src/rewriters.ts.
 import type { Config } from './config';
 import { DEFAULT_NAMES } from './helperNames';
+import { workerKind } from './partition';
 import { rewriter } from './rewriters';
 import { createDataURI, parseDataURI, routeBinary, routeURL } from './routeURL';
 import StompURL from './StompURL';
@@ -65,11 +66,17 @@ export function routeImport(
 	return routeJS(resource, base, config, type);
 }
 
+/**
+ * The route of a script of `type`. A worker's names the partition of the
+ * context that starts it (src/partition.ts), which it takes on: a worker of
+ * a site framed by another keeps to that partition's stores.
+ */
 export function routeJS(
 	resource: StompURL,
 	url: StompURL,
 	config: Config,
 	type: ScriptType = 'generic',
+	partition = '',
 ) {
 	if (resource.url.protocol === 'data:') {
 		const { mime, data, attributes } = parseDataURI(
@@ -84,7 +91,12 @@ export function routeJS(
 		});
 	}
 
-	return routeURL('js:' + type, resource);
+	return routeURL(
+		type === 'worker' || type === 'workerModule'
+			? workerKind(type, partition)
+			: `js:${type}`,
+		resource,
+	);
 }
 
 /** a URL-like specifier: absolute, scheme-relative, or starting with `/`, `./`, `../` */
