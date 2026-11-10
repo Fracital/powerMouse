@@ -3,6 +3,7 @@ import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import { blobLoads } from '../blobLoads';
 import DocumentClient from '../Client';
+import { responseURLOf } from '../responseDocuments';
 import {
 	nativeDocumentFragment,
 	nativeHTMLScriptElement,
@@ -43,7 +44,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 			get: proxyModule.wrapFunction(documentURI.get!, (target, that, args) => {
 				// the native getter only throws for a non-document
 				Reflect.apply(target, that, args);
-				return this.client.location.toString();
+				return responseURLOf(that) ?? this.client.location.toString();
 			}),
 		});
 

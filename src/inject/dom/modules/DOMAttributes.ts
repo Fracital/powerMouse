@@ -22,6 +22,7 @@ import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { scopePrefix, unrouteURL } from '../../modules/Unroute';
 import { blobLoads } from '../blobLoads';
 import DocumentClient, { type StyleElement } from '../Client';
+import { responseURLOf } from '../responseDocuments';
 import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
 import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
 import { hookWrite } from './MutationObserver';
@@ -983,7 +984,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('href') !== '' &&
 						new URL(
 							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
-							this.client.url.toString(),
+							responseURLOf(element) ?? this.client.url.toString(),
 						).toString(),
 				],
 				// an image map's areas are links too
@@ -995,7 +996,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('href') !== '' &&
 						new URL(
 							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
-							this.client.url.toString(),
+							responseURLOf(element) ?? this.client.url.toString(),
 						).toString(),
 				],
 			],
@@ -1145,7 +1146,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('href') !== '' &&
 						new URL(
 							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
-							this.client.url.toString(),
+							responseURLOf(element) ?? this.client.url.toString(),
 						).toString(),
 				],
 				[this.client.global.HTMLLinkElement, 'rel', () => false],

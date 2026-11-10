@@ -24,6 +24,7 @@ import cloneRawNode, {
 	parseHTMLFragment,
 	templateContentDocument,
 } from '../cloneNode';
+import { responseURLOf } from '../responseDocuments';
 import WriteStream from '../WriteStream';
 import {
 	attributeName,
@@ -580,7 +581,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
-					return this.client.url.toString();
+					return responseURLOf(that) ?? this.client.url.toString();
 				},
 			),
 		});
@@ -596,7 +597,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
-					return this.client.location.toString();
+					return responseURLOf(that) ?? this.client.location.toString();
 				},
 			),
 		});

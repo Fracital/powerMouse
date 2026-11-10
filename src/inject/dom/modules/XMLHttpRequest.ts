@@ -16,6 +16,7 @@ import {
 	type MimeType,
 } from '../../xhrText';
 import DocumentClient from '../Client';
+import { responseURLs } from '../responseDocuments';
 import BlobDocumentsModule from './BlobDocuments';
 import SyncModule from './Sync';
 
@@ -48,6 +49,82 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 		class XMLHttpRequestUploadProxy extends XMLHttpRequestEventTargetProxy {}
 
 		const decoder = new TextDecoder('utf-8');
+
+		// A response's document is made by the browser itself: the realm's own
+		// XMLHttpRequest (taken before this module replaces it) reads the
+		// response's bytes from a data: URL of its final type, so the document
+		// is the one Chrome makes (its charset from a meta or an XML
+		// declaration, any XML type, null for XML that does not parse, an HTML
+		// one left 'interactive'), in the page's realm. Its URL is read back
+		// as the response's (responseDocuments).
+		const RealmXHR = that.client.global.XMLHttpRequest;
+		const realmAccessor = (name: string) =>
+			Reflect.getOwnPropertyDescriptor(RealmXHR.prototype, name)!;
+		const realmOpen = realmAccessor('open').value;
+		const realmSend = realmAccessor('send').value;
+		const realmSetType = realmAccessor('responseType').set!;
+		const realmResponse = realmAccessor('response').get!;
+		const realmResponseXML = realmAccessor('responseXML').get!;
+		const realmListen =
+			that.client.global.EventTarget.prototype.addEventListener;
+		const realmBtoa = that.client.global.btoa;
+		const toBase64 = (
+			Uint8Array.prototype as { toBase64?: (this: Uint8Array) => string }
+		).toBase64;
+		const base64 = (bytes: ArrayBuffer): string => {
+			const view = new Uint8Array(bytes);
+			if (typeof toBase64 === 'function')
+				return Reflect.apply(toBase64, view, []);
+			let binary = '';
+			for (let i = 0; i < view.length; i += 0x8000)
+				binary += String.fromCharCode(...view.subarray(i, i + 0x8000));
+			return Reflect.apply(realmBtoa, that.client.global, [binary]);
+		};
+		/**
+		 * The browser's document for `bytes` of type `essence` (`charset` as the
+		 * final charset): the `document` type's response, or (`asDocument`
+		 * false) the default type's responseXML; `done` gets it, at once for a
+		 * synchronous request
+		 */
+		const parseResponse = (
+			bytes: ArrayBuffer,
+			essence: string,
+			charset: string | null,
+			asDocument: boolean,
+			sync: boolean,
+			done: (document: Document | null) => void,
+		) => {
+			const xhr = new RealmXHR();
+			const read = () => {
+				let document: Document | null = null;
+				try {
+					document = Reflect.apply(
+						asDocument ? realmResponse : realmResponseXML,
+						xhr,
+						[],
+					);
+				} catch (error) {
+					// nothing to read: null, as for a body that does not parse
+				}
+				done(document ?? null);
+			};
+			try {
+				// a charset that is not a plain token cannot go in the data: URL
+				const parameter =
+					charset && /^[\w.:-]+$/.test(charset) ? `;charset=${charset}` : '';
+				Reflect.apply(realmOpen, xhr, [
+					'GET',
+					`data:${essence}${parameter};base64,${base64(bytes)}`,
+					!sync,
+				]);
+				if (asDocument) Reflect.apply(realmSetType, xhr, ['document']);
+				if (!sync) Reflect.apply(realmListen, xhr, ['loadend', read]);
+				Reflect.apply(realmSend, xhr, []);
+			} catch (error) {
+				return done(null);
+			}
+			if (sync) read();
+		};
 		// the realm's JSON.parse, before page code can replace it: a json
 		// response is the page realm's value
 		const realmJSON = that.client.global.JSON;
@@ -303,27 +380,20 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				// the bytes as the browser decodes them (JSON is always UTF-8)
 				const text = () =>
 					decodeText(buffer!, type.charset, isXML && this.#responseType === '');
+				// a document to make of the body (the document type's response, or
+				// the default type's responseXML)
+				let parse = false;
 
 				switch (this.#responseType) {
 					case 'arraybuffer':
 						this.#response = buffer!;
 						break;
-					case 'document': {
+					case 'document':
 						// an HTML document for text/html, an XML document for an XML
 						// type, null for anything else (as the browser does)
-						const Parser = that.client.global.DOMParser;
-						this.#response =
-							mime === 'text/html'
-								? new Parser().parseFromString(text(), 'text/html')
-								: isXML
-									? new Parser().parseFromString(
-											text(),
-											mime as DOMParserSupportedType,
-										)
-									: null;
-						this.#responseXML = this.#response as Document | null;
+						this.#response = null;
+						if (mime === 'text/html' || isXML) parse = true;
 						break;
-					}
 					case 'json':
 						// parsed on every read (the response getter), always as UTF-8
 						this.#response = null;
@@ -340,27 +410,39 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 						this.#responseText = text();
 						this.#response = this.#responseText;
 						// the default type gives an XML document for an XML response
-						if (this.#responseType === '' && isXML)
-							try {
-								this.#responseXML =
-									new that.client.global.DOMParser().parseFromString(
-										this.#responseText,
-										mime as DOMParserSupportedType,
-									);
-							} catch (parseError) {
-								this.#responseXML = null;
-							}
+						if (this.#responseType === '' && isXML) parse = true;
 						break;
 				}
 
-				if (buffer!.byteLength > 0) {
+				if (!parse) return this.#finish(response!, buffer!);
+				// an abort, a timeout or open() while the browser parses wins
+				const generation = this.#generation;
+				const signal = this.#abort.signal;
+				parseResponse(
+					buffer!,
+					mime,
+					type.charset,
+					this.#responseType === 'document',
+					!this.#async,
+					(document) => {
+						if (generation !== this.#generation || signal.aborted) return;
+						if (document) responseURLs.set(document, this.#responseURL);
+						this.#responseXML = document;
+						if (this.#responseType === 'document') this.#response = document;
+						this.#finish(response!, buffer!);
+					},
+				);
+			}
+			/** LOADING with the body, then DONE, load and loadend */
+			#finish(response: Response, buffer: ArrayBuffer) {
+				if (buffer.byteLength > 0) {
 					this.#readyState = LOADING;
 					this.#dispatchReadyState();
 					this.dispatchEvent(
 						new ProgressEvent('progress', {
 							lengthComputable: true,
-							loaded: buffer!.byteLength,
-							total: buffer!.byteLength,
+							loaded: buffer.byteLength,
+							total: buffer.byteLength,
 						}),
 					);
 				}
@@ -368,7 +450,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				this.#dispatchReadyState();
 
 				const parsedLen = parseInt(
-					response!.headers.get('content-length') || '',
+					response.headers.get('content-length') || '',
 				);
 				const length = isNaN(parsedLen) ? 1000 : parsedLen;
 

@@ -310,6 +310,18 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- The document an `XMLHttpRequest` gives (`responseType` `document`, and
+  `responseXML` of an XML response) is the one the browser makes: the
+  realm's own XMLHttpRequest reads the response's bytes from a data: URL of
+  its final type, where `DOMParser` used to parse the decoded text. Its
+  charset now comes from a meta or an XML declaration (a windows-1252 page
+  had a UTF-8 document with mojibake in its title), any XML type gives a
+  document (an RSS or Atom response was a failed request with status 0,
+  `DOMParser` refusing the type), XML that does not parse gives `null` (it
+  was a `parsererror` document), and `readyState`, `title` and the rest
+  follow. Its `URL`, `documentURI` and every node's `baseURI` read back the
+  response's URL, and a link in it (`a`, `area`, `link`) resolves against
+  that, as natively, where they all said the page's URL (xhr-parity suite).
 - An `XMLHttpRequest` `blob` response of an HTML type holds the bytes the
   site sent. It was built with the page's `Blob`, which wraps HTML in the
   inject's shell for blob: documents, so its size and contents were the
