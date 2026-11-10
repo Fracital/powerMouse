@@ -1,0 +1,65 @@
+<!doctype html>
+<title>STORAGE ESTIMATE</title>
+<script>
+	// storage-estimate suite: how much navigator.storage.estimate() counts
+	// for what the page stores in IndexedDB, value by value, each in a
+	// database of its own (a first one warms the store up)
+	(async () => {
+		const usage = async () =>
+			(await navigator.storage.estimate()).usageDetails?.indexedDB ?? 0;
+		/** a deterministic run of bytes no compressor shrinks much */
+		const noise = (n) => {
+			const bytes = new Uint8Array(n);
+			let x = 2463534242;
+			for (let i = 0; i < n; i++) {
+				x ^= x << 13;
+				x ^= x >>> 17;
+				x ^= x << 5;
+				bytes[i] = x & 0xff;
+			}
+			return bytes;
+		};
+		const cases = {
+			warm: () => [new Uint8Array(1)],
+			'zeros 1M': () => [new Uint8Array(1 << 20)],
+			'zeros 200K': () => [new Uint8Array(200000)],
+			'noise 300K': () => [noise(300000)],
+			'noise 60K': () => [noise(60000)],
+			'string 1M': () => ['x'.repeat(1 << 20)],
+			'wide string 100K': () => ['一'.repeat(100000)],
+			'1000 objects': () =>
+				Array.from({ length: 1000 }, (_, i) => ({
+					id: i,
+					name: `item ${i}`,
+					tags: ['a', 'b', 'c'],
+					score: i * 1.5,
+					text: `${i}`.padStart(40, 'k'),
+				})),
+		};
+		const out = {};
+		try {
+			for (const [name, make] of Object.entries(cases)) {
+				const before = await usage();
+				const values = make();
+				await new Promise((resolve, reject) => {
+					const open = indexedDB.open(`estimate ${name}`);
+					open.onupgradeneeded = () => open.result.createObjectStore('s');
+					open.onerror = () => reject(open.error);
+					open.onsuccess = () => {
+						const tx = open.result.transaction('s', 'readwrite');
+						values.forEach((value, i) => tx.objectStore('s').put(value, i));
+						tx.oncomplete = () => {
+							open.result.close();
+							resolve();
+						};
+						tx.onerror = () => reject(tx.error);
+					};
+				});
+				out[name] = (await usage()) - before;
+			}
+		} catch (error) {
+			out.error = `${error.name}: ${error.message}`;
+		}
+		window.__estimate = out;
+	})();
+</script>

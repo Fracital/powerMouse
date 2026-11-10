@@ -263,8 +263,16 @@ Filled in commit by commit; see the CHANGELOG for each.
   sop-partitions: 2 per mode). The StorageEstimate module answers with the
   usage of the context's own storage key: its Cache Storage bodies (a
   cached body is a blob, so its size is no read), its OPFS files, and its
-  IndexedDB values, 64 per object store sized and multiplied out by the
-  store's count. localStorage is not counted, as Chrome does not count it.
+  IndexedDB databases. A database counts what Chrome's takes on disk, as
+  measured in Chrome 152 with a profile on disk (`src/inject/idbSize.ts`):
+  592 bytes, 352 per object store, and per record about 210 past its key and
+  its value's serialized size, a value of more than 64 KiB counted at the
+  size snappy compresses it to (a megabyte of zeros: 50,456 bytes natively,
+  50,351 here; the storage-estimate suite compares seven shapes, all within
+  2%, where the raw sizes missed five by far). 64 records per object store
+  are sized and multiplied out by its
+  count. An off-the-record profile counts in pages instead, which this does
+  not follow. localStorage is not counted, as Chrome does not count it.
   The quota is that usage plus what the browser has left for the proxy
   origin, as natively a quota is the usage plus what is left; only the
   types in use are in `usageDetails`.

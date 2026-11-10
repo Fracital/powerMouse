@@ -1,56 +1,10 @@
 import Client from '../Client';
+import { DATABASE_BYTES, recordSize, STORE_BYTES } from '../idbSize';
 import Module from '../Module';
 import ProxyModule from './Proxy';
 
 /** values of an object store sized to estimate the rest of it */
 const SAMPLE = 64;
-/** how deep the sizing walks into a value */
-const DEPTH = 8;
-
-const tagOf = Object.prototype.toString;
-
-/**
- * What a stored value takes, roughly as its serialization does: the bytes
- * of binary data, the characters of a string, eight bytes a number, and
- * the keys and members of an object or array. Told apart by their tags: a
- * value read in a frame's realm is of that realm's classes.
- */
-function sizeOf(value: unknown, seen: Set<object>, depth = 0): number {
-	switch (typeof value) {
-		case 'string':
-			return value.length;
-		case 'number':
-		case 'bigint':
-			return 8;
-		case 'boolean':
-			return 1;
-		case 'object':
-			break;
-		default:
-			return 0;
-	}
-	if (value === null || seen.has(value) || depth > DEPTH) return 0;
-	seen.add(value);
-	if (ArrayBuffer.isView(value)) return value.byteLength;
-	const tag = Reflect.apply(tagOf, value, []) as string;
-	if (tag === '[object ArrayBuffer]') return (value as ArrayBuffer).byteLength;
-	if (tag === '[object Blob]' || tag === '[object File]')
-		return (value as Blob).size;
-	let size = 0;
-	if (tag === '[object Map]')
-		for (const [key, entry] of value as Map<unknown, unknown>)
-			size += sizeOf(key, seen, depth + 1) + sizeOf(entry, seen, depth + 1);
-	else if (tag === '[object Set]')
-		for (const entry of value as Set<unknown>)
-			size += sizeOf(entry, seen, depth + 1);
-	else
-		for (const key of Object.keys(value))
-			size +=
-				key.length +
-				sizeOf((value as Record<string, unknown>)[key], seen, depth + 1);
-	return size;
-}
-
 /** a request's result, or its error */
 function done<T>(request: IDBRequest<T>): Promise<T> {
 	return new Promise((resolve, reject) => {
@@ -66,9 +20,10 @@ function done<T>(request: IDBRequest<T>): Promise<T> {
  * in this one's) and Stomp's caches; natively a page sees its storage
  * key's usage only. The usage here is that of the stores this context's
  * key names (src/partition.ts): its Cache Storage bodies, its origin
- * private file system's files and its IndexedDB values, sampled per object
- * store (Chrome counts what its database takes on disk, compressed, which
- * no page can read). The quota keeps what the browser has left for the
+ * private file system's files and its IndexedDB databases, their records
+ * sampled per object store and sized as Chrome counts them on disk (the
+ * overheads and the compression of large values measured, src/inject/
+ * idbSize.ts). The quota keeps what the browser has left for the
  * proxy origin, as natively a quota is the usage plus what is left.
  * localStorage is not counted, as Chrome does not count it.
  */
@@ -112,14 +67,15 @@ export default class StorageEstimateModule extends Module<Client> {
 				} catch (error) {
 					continue;
 				}
+				total += DATABASE_BYTES;
 				try {
 					for (const name of db.objectStoreNames) {
+						total += STORE_BYTES;
 						const store = db.transaction(name, 'readonly').objectStore(name);
 						const count = await done(store.count());
 						if (!count) continue;
 						let sampled = 0;
 						let size = 0;
-						const seen = new Set<object>();
 						await new Promise<void>((resolve, reject) => {
 							const cursor = store.openCursor();
 							cursor.onerror = () => reject(cursor.error);
@@ -127,7 +83,7 @@ export default class StorageEstimateModule extends Module<Client> {
 								const at = cursor.result;
 								if (!at || sampled >= SAMPLE) return resolve();
 								sampled++;
-								size += sizeOf(at.key, seen) + sizeOf(at.value, seen);
+								size += recordSize(at.key, at.value);
 								at.continue();
 							};
 						});

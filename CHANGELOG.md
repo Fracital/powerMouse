@@ -389,6 +389,12 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   top-level site and frame site, as Chrome's network isolation key: a
   resource another site's page loaded was answered from the cache.
   (sop-partitions suite.)
+- `navigator.storage.estimate()` counts an IndexedDB database as Chrome
+  counts it on disk (measured: per database, store and record, and a value
+  over 64 KiB at its snappy-compressed size), within 2% for the shapes the
+  new storage-estimate suite compares; it counted the values' raw size (a
+  megabyte of zeros: a megabyte, natively 50 KB).
+
 - A site framed by another site gets storage of its own, keyed by the
   top-level site too, as Chrome partitions it: localStorage,
   sessionStorage, IndexedDB, Cache Storage, the origin private file
