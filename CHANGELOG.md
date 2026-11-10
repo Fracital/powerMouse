@@ -405,6 +405,24 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   context. The two interfaces stay unnamed until the page names them (a
   frame that never does pays nothing: frame-cost reads the same heap), and
   read as the data properties they natively are. (sop-escapes suite.)
+- Permissions are per proxied site. The browser keeps one permission for
+  the proxy origin, which every proxied site is, so the service worker keeps
+  each site's own state (by the real origin of the proxied top, as Chrome
+  delegates a frame's permission) and the page reads it as natively:
+  `permissions.query` (a real `PermissionStatus`), `Notification.permission`,
+  `prompt` for a site that has not decided. A request (geolocation,
+  `getUserMedia`, `Notification.requestPermission`) reaches the browser only
+  for a site granted before, or when neither the site nor the browser has
+  decided and the browser's own prompt asks; when the browser already holds
+  the permission for another site, the host asks the user through the new
+  `onPermissionRequest` (StompController and RemoteController), and without
+  one the request is dismissed. One site's grant never reaches another. A
+  page's Permissions-Policy and a frame's `allow` attribute are simulated: a
+  frame of another site gets a powerful feature only when its `allow` names
+  it. Before, the host's frame had no `allow` list and isolation mode denied
+  every proxied page at once (browserleaks' geolocation page). The demo's
+  frames carry an `allow` list and it shows its own prompt.
+  docs/permissions.md has the trade-off; permissions suite.
 - Client hints follow Chrome per proxied origin. A top-level page's
   `Accept-CH` is kept for its real origin (not the proxy's, which every
   proxied site shares) and applies at once to its own subresources and to

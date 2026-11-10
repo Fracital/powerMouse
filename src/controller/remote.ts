@@ -108,6 +108,21 @@ export interface RemoteControllerInit {
 	errorPage?: string;
 	/** one report per proxied request, with the RemoteFrame when known (see StompController.onRequest) */
 	onRequest?: (info: RemoteRequestEvent) => void;
+	/**
+	 * a proxied site asks for a permission the proxy origin holds for another
+	 * site (see StompController.onPermissionRequest); the frames that should
+	 * reach the browser's own prompts need an `allow` attribute in this mode
+	 */
+	onPermissionRequest?: (
+		request: RemotePermissionRequest,
+	) => boolean | null | Promise<boolean | null>;
+}
+
+/** a site's permission request (see StompController's PermissionRequest) */
+export interface RemotePermissionRequest {
+	origin: string;
+	permission: string;
+	frame: RemoteFrame | null;
 }
 
 /** a RequestInfo with the frame it belongs to, when the page reported its client id */
@@ -209,6 +224,21 @@ export class RemoteController extends EventTarget {
 					init.onRequest?.(event);
 					this.dispatchEvent(new CustomEvent('request', { detail: event }));
 				},
+				permission: async (info) => {
+					const ask = init.onPermissionRequest;
+					if (!ask) return [null, []];
+					try {
+						const answer = await ask({
+							origin: info.origin,
+							permission: info.permission,
+							frame:
+								(info.client && this.#clientFrames.get(info.client)) || null,
+						});
+						return [typeof answer === 'boolean' ? answer : null, []];
+					} catch (error) {
+						return [null, []];
+					}
+				},
 				stale: async (info) => {
 					const was = this.stale;
 					this.stale = info;
@@ -281,6 +311,7 @@ export class RemoteController extends EventTarget {
 					openTab: !!init.onOpen,
 					...(init.cache === false ? { cache: false } : {}),
 					requestLog: !!init.onRequest,
+					...(init.onPermissionRequest ? { permissionPrompt: true } : {}),
 					...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 					...(init.membrane === false ? { membrane: false } : {}),
 					...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),

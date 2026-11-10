@@ -1,6 +1,7 @@
 import { getDomain, getPublicSuffix } from 'tldts';
 import { Config, ConfigCodec } from '../config';
 import { kindPartition, partitionSite } from '../partition';
+import { nestedTopOf } from '../rewriteHTML';
 import { addRouteScope } from '../routeURL';
 import { SW_ROUTE, type ApiReply } from '../serviceWorkerTypes';
 import {
@@ -23,6 +24,8 @@ import {
 	InlineDocumentMessage,
 	NAVIGATION_HINT,
 	NavigationHintMessage,
+	PERMISSION,
+	PermissionMessage,
 	postToPort,
 	RequestInfo,
 	ServiceWorkerApiMessage,
@@ -34,12 +37,21 @@ import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
 import { recordBlobOrigin } from './blobOrigins';
-import { recordReport as recordClientHintsReport } from './clientHints';
+import {
+	hintsDocument,
+	recordReport as recordClientHintsReport,
+} from './clientHints';
 import { forScript, onJarChange } from './Cookies';
 import createServer, { addressCodec, StompServer } from './createServer';
 import { hostErrorPage } from './errorPage';
 import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
 import { recordNavigationHint } from './navigationHints';
+import {
+	decide,
+	documentStates,
+	settle,
+	SIMULATED_PERMISSIONS,
+} from './permissions';
 import { RewriteCache } from './rewriteCache';
 import { RewritePool } from './rewritePool';
 import { abortRequest } from './rewrites';
@@ -619,6 +631,73 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 		} catch (error) {
 			// not a URL: nothing to record
 		}
+	} else if (PERMISSION in data) {
+		// from a routed document of that controller: its site is the proxied
+		// top's real origin, read from its own routed URL (a frame's route
+		// names its top), and its policy is the one the worker recorded
+		const message = data[PERMISSION] as PermissionMessage;
+		const [reply] = event.ports;
+		const source = event.source instanceof Client ? event.source : null;
+		const ref =
+			message && typeof message.directory === 'string'
+				? controllers.get(message.directory)
+				: undefined;
+		const ready = ref?.ready;
+		if (
+			!reply ||
+			!ref ||
+			!ready ||
+			!source?.url.startsWith(`${location.origin}${ref.directory}`)
+		) {
+			reply?.postMessage(null);
+			return;
+		}
+		const real = ready.realURL(source.url);
+		let site: string;
+		try {
+			site =
+				nestedTopOf(new URL(source.url).pathname, ref.directory) ??
+				new URL(real).origin;
+		} catch (error) {
+			reply.postMessage(null);
+			return;
+		}
+		const name = 'name' in message ? String(message.name) : '';
+		const work = (async () => {
+			if (message.op === 'states')
+				return documentStates(site, hintsDocument(source.id, source.url));
+			if (!SIMULATED_PERMISSIONS.includes(name)) return null;
+			if (message.op === 'request')
+				return decide(
+					site,
+					name,
+					message.real === 'granted' || message.real === 'denied'
+						? message.real
+						: 'prompt',
+					() =>
+						ref.rpc.call('permission', {
+							origin: site,
+							permission: name,
+							client: source.id,
+						}),
+				);
+			if (message.op === 'result')
+				await settle(
+					site,
+					name,
+					String(message.token),
+					message.state === 'granted' || message.state === 'denied'
+						? message.state
+						: 'prompt',
+				);
+			return null;
+		})();
+		event.waitUntil(
+			work.then(
+				(value) => reply.postMessage(value),
+				() => reply.postMessage(null),
+			),
+		);
 	} else if (CLIENT_HINTS in data) {
 		// from a client of that controller: a routed document files its own
 		// view under its own client id; any other client (the controller's

@@ -105,10 +105,18 @@ transport, which tunnels through `/wisp/`.
    	codec: 'xor',
    	cache: CACHE,
    	onRequest: recordRequest,
+   	onPermissionRequest: askPermission,
    });
    await controller.wait();
    frame = controller.createFrame(document.getElementById('frame'));
    ```
+   Every tab's iframe carries an `allow` list (`FRAME_ALLOW`: geolocation,
+   camera, microphone, the clipboard and the other powerful features), which
+   isolation mode needs for a proxied page to reach the browser's
+   permission prompts at all. Stomp keeps each site's answer
+   (docs/permissions.md); when a site asks for a permission the browser
+   already gave the proxy for another site, `askPermission` shows the
+   demo's own prompt (`#permissionPrompt`: Allow, Block, Close).
    `wait()` resolves once the service worker has built a server for this
    controller. The controller is exposed as `window.controller` for devtools.
    The service worker's HTTP cache is on; `?nocache` on the demo URL turns it

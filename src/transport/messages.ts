@@ -250,6 +250,58 @@ export interface ClientHintsReport {
 	/** hints an Accept-CH meta the page's script inserted named */
 	accept?: string[];
 }
+/**
+ * A proxied document asks about its site's permissions
+ * (src/server/permissions.ts), with a port for the answer. The worker takes
+ * the site (the proxied top's real origin) and the document's policy from
+ * the sender's own routed URL and client, never from the message.
+ */
+export const PERMISSION = '$stomp$permission';
+export type PermissionState = 'granted' | 'denied' | 'prompt';
+export type PermissionMessage = { directory: string } & PermissionOp;
+export type PermissionOp =
+	| {
+			/** the site's state of every simulated permission, and the document's policy */
+			op: 'states';
+	  }
+	| {
+			/** the page asks for `name`; `real` is the proxy origin's own state */
+			op: 'request';
+			name: string;
+			real: PermissionState;
+	  }
+	| {
+			/** how the browser's own prompt the worker handed over ended */
+			op: 'result';
+			name: string;
+			token: string;
+			state: PermissionState;
+	  };
+export interface PermissionStates {
+	site: string;
+	states: Record<string, PermissionState>;
+	/** the policy-controlled features the document may use, when the worker knows the document */
+	features: Record<string, boolean> | null;
+}
+/**
+ * The worker's answer to a request: `granted` (call the browser's API),
+ * `browser` (the site has not decided and neither has the browser: call it,
+ * its prompt decides, and say how it ended with `token`), `denied`,
+ * `dismissed` (the host's prompt was closed without an answer) or
+ * `blocked` (the browser denies the proxy origin)
+ */
+export type PermissionDecision =
+	| { decision: 'granted' | 'denied' | 'dismissed' | 'blocked' }
+	| { decision: 'browser'; token: string };
+/** what the worker asks the host about a site's request (StompController onPermissionRequest) */
+export interface PermissionRequestInfo {
+	/** the site's real origin (the proxied top's) */
+	origin: string;
+	/** the permission's name, as permissions.query names it */
+	permission: string;
+	/** the requesting document's service worker client id */
+	client?: string;
+}
 export interface InlineDocumentMessage {
 	directory: string;
 	token: string;
@@ -449,6 +501,11 @@ export type Controllerbound = {
 	];
 	/** terminate the emulated worker started under `id` */
 	stopServiceWorker: [{ id: string }];
+	/**
+	 * a site asks for a permission the proxy origin already has: the host
+	 * asks the user (true grants, false denies, null: no answer)
+	 */
+	permission: [PermissionRequestInfo, boolean | null];
 };
 
 /** a transport's response on its way to a RemoteTransport: a streamed body travels on a port of its own (bodyPort.ts) */

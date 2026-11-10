@@ -243,6 +243,72 @@ export interface HintsDocument {
 	viewport?: [number, number];
 	/** a frame's parent's origin (its container's `self`) */
 	parentOrigin: string;
+	/**
+	 * whether the document itself may use each powerful feature
+	 * (permissions.ts): the browser decides it for the proxy origin, where
+	 * every frame is same-origin with its parent
+	 */
+	features: Map<string, boolean>;
+}
+
+/**
+ * The policy-controlled features behind the permissions a page asks for
+ * (default allowlist `self`): a frame of another origin gets one only when
+ * its element's allow attribute names it
+ */
+export const POLICY_FEATURES = [
+	'geolocation',
+	'camera',
+	'microphone',
+	'clipboard-read',
+	'clipboard-write',
+	'midi',
+	'local-fonts',
+	'idle-detection',
+	'window-management',
+	'display-capture',
+	'captured-surface-control',
+	'local-network-access',
+	'screen-wake-lock',
+];
+
+/** a document's powerful features, as Chrome's permissions policy decides them */
+function featuresOf(
+	origin: string,
+	topLevel: boolean,
+	declared: Map<string, Allowlist>,
+	parent: HintsDocument | null,
+	parentOrigin: string,
+	container: Map<string, Allowlist>,
+): Map<string, boolean> {
+	const features = new Map<string, boolean>();
+	for (const feature of POLICY_FEATURES) {
+		// its parent lets it have the feature: the parent has it, and the
+		// parent's header (when it names the feature) names this origin
+		const fromParent =
+			topLevel ||
+			((!parent || parent.features.get(feature) !== false) &&
+				(!parent?.policy.declared.has(feature) ||
+					allowlistMatches(
+						parent.policy.declared.get(feature)!,
+						origin,
+						parent.origin,
+					)));
+		// the container's allow attribute, else the default allowlist (self)
+		const named = container.get(feature);
+		const inherited =
+			topLevel ||
+			(fromParent &&
+				(named
+					? allowlistMatches(named, origin, parentOrigin)
+					: origin === parentOrigin));
+		const own = declared.get(feature);
+		features.set(
+			feature,
+			inherited && (!own || allowlistMatches(own, origin, origin)),
+		);
+	}
+	return features;
 }
 
 const documents = new Map<string, HintsDocument>();
@@ -444,6 +510,14 @@ export function recordDocument(
 		policy: { self: init.origin, disabled, declared },
 		delegated: new Map(),
 		parentOrigin,
+		features: featuresOf(
+			init.origin,
+			init.topLevel,
+			declared,
+			parent,
+			parentOrigin,
+			container,
+		),
 	};
 	keep(`url ${withoutHash(routed)}`, doc);
 	if (clientId) keep(`client ${clientId}`, doc);

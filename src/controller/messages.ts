@@ -5,6 +5,7 @@ import type { Http3DescriptorOptions } from '../transport/construct';
 import type {
 	CookieCommand,
 	CookieResult,
+	PermissionRequestInfo,
 	RequestInfo,
 	RequestRule,
 } from '../transport/messages';
@@ -50,6 +51,8 @@ export interface ControllerFrameInit {
 	cache?: boolean;
 	/** the host wants a RequestInfo per request (RemoteControllerInit.onRequest) */
 	requestLog?: boolean;
+	/** the host asks the user about a site's permission (RemoteControllerInit.onPermissionRequest) */
+	permissionPrompt?: boolean;
 	/** unparseable scripts fail instead of running raw (RemoteControllerInit.allowInvalidJs) */
 	allowInvalidJs?: boolean;
 	/** the window membrane off when false (RemoteControllerInit.membrane) */
@@ -133,4 +136,6 @@ export type HostBound = {
 	stale: [StaleInfo | null];
 	/** a host hook threw in a proxied realm, or a hook URL could not be fetched */
 	hookError: [HookErrorInfo];
+	/** a site asks for a permission the proxy origin holds for another (see StompController.onPermissionRequest) */
+	permission: [PermissionRequestInfo, boolean | null];
 };

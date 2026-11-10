@@ -11,7 +11,7 @@ import { constructTransport, resolveHttp3 } from '../transport/construct';
 import type { RequestInfo } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import { canTraverse, traverse } from './history';
-import { StompController } from './index';
+import { StompController, type PermissionRequest } from './index';
 import {
 	ControllerFrameInit,
 	FrameBound,
@@ -179,6 +179,19 @@ if (window === window.parent || !origins.length) {
 							rpc.call('hookError', info);
 						},
 						...(init.errorPage ? { errorPage: init.errorPage } : {}),
+						// a site's permission request the host asks the user about
+						...(init.permissionPrompt
+							? {
+									onPermissionRequest: (
+										request: PermissionRequest,
+									): Promise<boolean | null> =>
+										rpc.call('permission', {
+											origin: request.origin,
+											permission: request.permission,
+											...(request.client ? { client: request.client } : {}),
+										}),
+								}
+							: {}),
 						// the host's request log travels SW -> here -> host
 						...(init.requestLog
 							? {

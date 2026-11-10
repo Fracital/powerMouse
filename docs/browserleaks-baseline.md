@@ -48,7 +48,7 @@ commit that fixed them and their regression suite.
 | Canvas                                                    | tables with tabs                                                                                                          | cells ran together                                                                                              | yes       | fragment parsing                                                                                                             | fixed, 2d892b1 (identical to native now)                                                     |
 | WebGL                                                     | identical                                                                                                                 | identical; isolated: Power Preference low-power                                                                 | no        | inherent: the isolated frame is a cross-origin child frame                                                                   |                                                                                              |
 | WebGPU, Fonts, Chrome, Proxy, Do Not Track, Resource URLs | identical                                                                                                                 | identical                                                                                                       | no        |                                                                                                                              |                                                                                              |
-| Geolocation                                               | prompt pending                                                                                                            | `PERMISSION_DENIED` at once; isolated adds a permissions-policy violation                                       | yes       | the host's frame has no `allow` list, so the page cannot ask                                                                 | left (host policy)                                                                           |
+| Geolocation                                               | prompt pending                                                                                                            | `PERMISSION_DENIED` at once; isolated adds a permissions-policy violation                                       | yes       | the host's frame has no `allow` list, so the page cannot ask                                                                 | fixed: each site's own state, the demo's frames carry an allow list (docs/permissions.md)    |
 | Features                                                  | ServiceWorker API true; console quiet                                                                                     | false; seven "Failed to construct 'URL': Invalid URL" errors                                                    | yes       | serviceWorker deleted; the CSS rewriter logged every url() it could not resolve                                              | console fixed, 944ae8f, css-invalid-urls; serviceWorker left                                 |
 | TLS: JA4, JA3n, Akamai                                    | as native                                                                                                                 | match                                                                                                           | no        | docs/fingerprint.md                                                                                                          |                                                                                              |
 | TLS: mixed content                                        | Active: Blocked; Passive: Upgraded to HTTPS                                                                               | "Mixed Content Loaded" for both                                                                                 | yes       | every proxied page is https or loopback in proxy URL space, so Chrome's own check never fires                                | fixed, abb4c26, mixed-content (below)                                                        |
@@ -143,12 +143,15 @@ membrane agent's).
    is not proxied. Fixed: the browser never reaches a server or candidate
    the page chose and the page sees what a browser on a network that drops
    UDP sees (docs/webrtc.md, webrtc suite).
-4. **Permissions**: the proxied frame has no `allow` list, so geolocation,
-   camera, microphone and clipboard are denied at once (isolated mode also
-   reports a permissions-policy violation, and `permissions.query` says
-   denied); `storage-access` reads `prompt` where native reads `granted`. A
-   host decision: allowing them grants the host's origin for every proxied
-   site.
+4. **Permissions**: the proxied frame had no `allow` list, so geolocation,
+   camera, microphone and clipboard were denied at once (isolated mode also
+   reported a permissions-policy violation, and `permissions.query` said
+   denied). Fixed: each site has its own simulated state that reads as
+   native, a request reaches the browser only for a site that may have it,
+   and the host asks the user when the browser's grant belongs to another
+   site; the demo's frames carry an `allow` list (docs/permissions.md, which
+   has the trade-off, permissions suite). `storage-access` still reads
+   `prompt` where native reads `granted`.
 5. **Request fingerprint, live**: HTTP/3 SETTINGS and frame order are
    stomp-h3's, its Accept-Encoding over HTTP/3 is `gzip, br`; ECH is never
    used (epoxy sends GREASE ECH only); https to an IPv6 literal fails in

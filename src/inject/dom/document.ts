@@ -27,6 +27,7 @@ import NavigateModule from './modules/Navigate';
 import NavigationHintModule from './modules/NavigationHint';
 import NavigatorModule from './modules/Navigator';
 import OpenModule from './modules/Open';
+import PermissionsModule from './modules/Permissions';
 import ReadbackModule from './modules/Readback';
 import SandboxModule from './modules/Sandbox';
 import ServiceWorkerModule from './modules/ServiceWorker';
@@ -76,6 +77,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(NavigateModule);
 	client.addModule(NavigationHintModule);
 	client.addModule(ClientHintsModule);
+	client.addModule(PermissionsModule);
 	client.addModule(ReadbackModule);
 	client.addModule(CSSReadbackModule);
 	// last: the Navigate module's own observer keeps the native constructor

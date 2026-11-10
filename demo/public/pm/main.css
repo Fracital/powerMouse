@@ -1758,3 +1758,25 @@ input:focus-visible {
 		transition: none;
 	}
 }
+
+/* a site's permission request (askPermission in main.js) */
+.permissionPrompt {
+	position: fixed;
+	top: 64px;
+	left: 50%;
+	z-index: 20;
+	width: min(420px, calc(100% - 32px));
+	transform: translateX(-50%);
+	border: 1px solid #b6b6b6;
+	border-radius: 5px;
+	background: #111;
+	padding: 12px 14px;
+	box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+}
+.permissionPrompt p {
+	margin: 0 0 12px;
+}
+.permissionPrompt div {
+	display: flex;
+	gap: 8px;
+}

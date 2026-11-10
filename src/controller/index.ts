@@ -144,6 +144,18 @@ export interface ControllerInit {
 	/** @internal the service worker sends request reports; set by the controller frame */
 	requestLog?: boolean;
 	/**
+	 * Called when a proxied site asks for a permission (geolocation, camera,
+	 * microphone, notifications, ...) that the browser already gave the proxy
+	 * origin for another site: the browser will not ask the user again, so
+	 * the host does. Resolve true to grant it to this site, false to deny it,
+	 * null (or throw) when the user closed the prompt. Without it such a
+	 * request is dismissed; a site's own first request still gets the
+	 * browser's prompt. docs/permissions.md.
+	 */
+	onPermissionRequest?: (
+		request: PermissionRequest,
+	) => boolean | null | Promise<boolean | null>;
+	/**
 	 * HTTP cache in the service worker, on by default: GET/HEAD responses
 	 * with explicit freshness (max-age, Expires) are kept in a Cache API
 	 * store and revalidated when stale; `clearCache()` drops it. `false`
@@ -265,6 +277,18 @@ export interface ControllerInit {
 /** a RequestInfo with the frame it belongs to, when the page reported its client id */
 export interface RequestEvent extends RequestInfo {
 	frame: Frame | null;
+}
+
+/** a proxied site's permission request the host is asked about (onPermissionRequest) */
+export interface PermissionRequest {
+	/** the site: the real origin of the proxied page at the top of the frame */
+	origin: string;
+	/** the permission, as permissions.query names it (`geolocation`, `camera`, ...) */
+	permission: string;
+	/** the frame the request came from, when its page reported its client id */
+	frame: Frame | null;
+	/** the requesting document's service worker client id */
+	client?: string;
 }
 
 /** the host's view of the cookie jar (see StompController.cookies) */
@@ -1037,6 +1061,22 @@ export class StompController extends EventTarget {
 			{
 				replaced: async () => {
 					if (this.#port === port) this.#rpc?.abort('Controller replaced');
+				},
+				permission: async (info) => {
+					const ask = this.#init.onPermissionRequest;
+					if (!ask) return [null, []];
+					try {
+						const answer = await ask({
+							origin: info.origin,
+							permission: info.permission,
+							frame:
+								(info.client && this.#clientFrames.get(info.client)) || null,
+							...(info.client ? { client: info.client } : {}),
+						});
+						return [typeof answer === 'boolean' ? answer : null, []];
+					} catch (error) {
+						return [null, []];
+					}
 				},
 				ready: async (info) => {
 					const build = info?.build;

@@ -164,7 +164,85 @@ function rememberTransport(name) {
 }
 
 // the page's callbacks, the same for both controllers
+// what a proxied page may ask the browser for: the proxy origin is another
+// origin than this page in isolation mode, and its frame gets none of these
+// without being named (Stomp keeps each site's answer, docs/permissions.md)
+const FRAME_ALLOW = [
+	'geolocation',
+	'camera',
+	'microphone',
+	'clipboard-read',
+	'clipboard-write',
+	'midi',
+	'display-capture',
+	'screen-wake-lock',
+	'local-fonts',
+	'idle-detection',
+	'window-management',
+	'captured-surface-control',
+	'local-network-access',
+].join('; ');
+
+const PERMISSION_WORDS = {
+	geolocation: 'know your location',
+	camera: 'use your camera',
+	microphone: 'use your microphone',
+	notifications: 'show notifications',
+	'clipboard-read': 'see text and images copied to the clipboard',
+	midi: 'use your MIDI devices',
+};
+
+/**
+ * A proxied site asks for a permission the browser already gave this proxy
+ * for another site: ask the user for this one. Resolves true (Allow),
+ * false (Block) or null (closed); one prompt at a time, newest last.
+ */
+let permissionQueue = Promise.resolve();
+function askPermission({ origin, permission }) {
+	const asked = permissionQueue.then(
+		() =>
+			new Promise((resolve) => {
+				const box = document.createElement('div');
+				box.id = 'permissionPrompt';
+				box.className = 'permissionPrompt';
+				box.setAttribute('role', 'dialog');
+				const text = document.createElement('p');
+				let host = origin;
+				try {
+					host = new URL(origin).host;
+				} catch (error) {
+					// shown as it came
+				}
+				text.textContent = `${host} wants to ${
+					PERMISSION_WORDS[permission] ?? `use ${permission}`
+				}`;
+				const buttons = document.createElement('div');
+				const button = (label, className, answer) => {
+					const element = document.createElement('button');
+					element.type = 'button';
+					element.className = `btn ${className}`;
+					element.textContent = label;
+					element.addEventListener('click', () => {
+						box.remove();
+						resolve(answer);
+					});
+					buttons.append(element);
+				};
+				button('Block', 'block', false);
+				button('Allow', 'allow btn-blu', true);
+				button('Close', 'close', null);
+				box.append(text, buttons);
+				document.body.append(box);
+			}),
+	);
+	permissionQueue = asked.catch(() => {});
+	return asked;
+}
+
 const controllerCallbacks = {
+	// a site asks for a permission another site was given (the browser's own
+	// prompt asked for the first)
+	onPermissionRequest: askPermission,
 	// the demo's own page for a document the proxy could not produce
 	errorPage: '/error.html',
 	// every proxied request, for the request viewer
@@ -288,6 +366,7 @@ function createTab() {
 	const element = document.createElement('iframe');
 	element.className = 'frame hidden';
 	element.title = 'Proxied page';
+	element.allow = FRAME_ALLOW;
 	framesContainer.append(element);
 	const frame = controller.createFrame(element);
 	// Each tab keeps a list of the pages it reached, for browsers without the
