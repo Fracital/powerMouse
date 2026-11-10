@@ -10,7 +10,9 @@
 // - Error.prepareStackTrace is undefined on Error and on what inherits from
 //   it, by every reflective question, while stacks stay clean of routes; a
 //   formatter the page sets runs, reads back as itself and deletes as an own
-//   property does, and deleting the proxy's changes nothing.
+//   property does, and deleting the proxy's changes nothing;
+// - getInstalledRelatedApps() answers as a top-level page's (a frame's
+//   rejects, and the host shows every proxied page in one).
 // A read of the access API by its name is recorded, not compared.
 import {
 	done,
@@ -77,6 +79,10 @@ const GROUPS = [
 	[
 		'the page runs rewritten: its functions read as written, the real URL, itself as top',
 		['functionSource', 'rewritten'],
+	],
+	[
+		"getInstalledRelatedApps() answers as a top-level page's, not a frame's",
+		['relatedApps'],
 	],
 ];
 

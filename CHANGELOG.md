@@ -447,6 +447,12 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   `empty`). One that answers nothing leaves the preload unused and the
   navigation goes out again, as Chrome 152 does. (service-worker-preload
   suite, against a real worker, both modes.)
+- A proxied page's `navigator.getInstalledRelatedApps()` resolves to an
+  empty list, as a top-level page's with none of its related apps
+  installed. The browser rejects it in any frame ("only supported in
+  top-level browsing contexts"), and the host shows every proxied page in
+  one, so whatpwacando.today threw where natively it runs. A frame nested
+  in a proxied page still gets the rejection. (tells suite.)
 - A background fetch's downloads are the page's CORS requests, as
   natively: one of another site without Access-Control-Allow-Origin fails
   the fetch (`fetch-error`), one with it succeeds. (sop-escapes suite.)

@@ -53,7 +53,7 @@
 		first: String(error.stack).split('\n')[0],
 	});
 
-	window.__tells = {
+	const record = {
 		windowNames: names(window),
 		windowAsks: asks(window),
 		locationNames: names(location),
@@ -207,4 +207,16 @@
 		// the rewrite ran under these names: the real URL, the page as top
 		rewritten: top === window && location.href,
 	};
+	// a frame's getInstalledRelatedApps() rejects ("only supported in
+	// top-level browsing contexts"); a top-level page with none installed
+	// gets an empty list
+	navigator
+		.getInstalledRelatedApps()
+		.then(
+			(apps) => `resolved ${apps.length}`,
+			(error) => `rejected ${error.name}`,
+		)
+		.then((relatedApps) => {
+			window.__tells = { ...record, relatedApps };
+		});
 </script>

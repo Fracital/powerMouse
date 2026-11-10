@@ -62,6 +62,23 @@ export default class FramingModule extends Module<DocumentClient> {
 			}),
 		});
 
+		// getInstalledRelatedApps() rejects in any frame ("only supported in
+		// top-level browsing contexts"), which a page the host frames threw
+		// where natively it runs (whatpwacando.today): a top-level page with
+		// none of its related apps installed gets an empty list. A frame
+		// nested in a proxied page still gets the browser's rejection
+		const relatedApps = global.Navigator?.prototype as
+			{ getInstalledRelatedApps?: () => Promise<unknown[]> } | undefined;
+		if (typeof relatedApps?.getInstalledRelatedApps === 'function')
+			relatedApps.getInstalledRelatedApps = proxyModule.wrapFunction(
+				relatedApps.getInstalledRelatedApps,
+				(target, that, args) => {
+					if (this.client.nested || !(that instanceof global.Navigator))
+						return Reflect.apply(target, that, args);
+					return global.Promise.resolve(new global.Array());
+				},
+			);
+
 		// opener: a page opened by another Stomp page keeps it (restricted
 		// across origins by the Context module); anything else, the host
 		// included, is no opener a top-level page would have
