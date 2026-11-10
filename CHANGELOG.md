@@ -47,6 +47,12 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- The browser view's address bar has Back, Forward and Reload buttons with
+  the Tango icons vibeOS's web app uses (public domain, `demo/public/pm/icons/`).
+  They act on the active tab: Back and Forward step its history and are
+  greyed out with nowhere to go (the frame's Navigation API says, else the
+  tab's own list), and Back at the start stays in the tab where the
+  navigation bar's goes home (toolbar suite).
 - The demo's home page shows the repository's latest commits as a git log
   (avatar, message, author and age, short sha, each linking to the commit)
   from `/api/commits`, and links to Fracital and vibeOS beside the title

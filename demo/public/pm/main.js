@@ -342,6 +342,7 @@ function activateTab(tab) {
 	document.body.classList.add('browsing');
 	hideRecents(tab); // animates the card back to full screen if the manager is open
 	syncOmnibox(true);
+	syncToolbar();
 }
 
 function closeTab(tab, { stayInRecents = false } = {}) {
@@ -930,11 +931,30 @@ function syncOmnibox(force = false) {
 	if (!url) return;
 	activeTab.url = url;
 	recordUrl(activeTab);
+	syncToolbar();
 	if (!force && document.activeElement === omni.url) return;
 	if (omni.url.value !== url) omni.url.value = url;
 	const hash = `#${encodeURIComponent(url)}`;
 	if (location.hash !== hash) history.replaceState(null, '', hash);
 }
+// the address bar's Back and Forward are greyed out with nowhere to go: the
+// frame says where it can (Navigation API), else the tab's own list does
+function syncToolbar() {
+	const tab = activeTab;
+	const can = (direction) => {
+		if (!tab) return false;
+		const frame =
+			direction === 'back' ? tab.frame.canGoBack : tab.frame.canGoForward;
+		if (typeof frame === 'boolean') return frame;
+		return direction === 'back'
+			? tab.index > 0
+			: tab.index < tab.history.length - 1;
+	};
+	$('toolBack').disabled = !can('back');
+	$('toolForward').disabled = !can('forward');
+	$('toolReload').disabled = !tab;
+}
+
 // pages report navigation through onNavigate; this is only a safety net
 setInterval(() => syncOmnibox(), 5000);
 
@@ -1029,6 +1049,22 @@ $('back').addEventListener('click', async () => {
 		showLanding();
 });
 $('home').addEventListener('click', showLanding);
+// address bar: Back, Forward and Reload act on the active tab only (Back at
+// the start of its history stays put, unlike the navigation bar's)
+const stepActive = async (direction) => {
+	const tab = activeTab;
+	if (!tab) return;
+	if (direction === 'back') await goBack(tab);
+	else await goForward(tab);
+	if (tab === activeTab) syncToolbar();
+};
+$('toolBack').addEventListener('click', () => stepActive('back'));
+$('toolForward').addEventListener('click', () => stepActive('forward'));
+$('toolReload').addEventListener('click', () => {
+	if (!activeTab) return;
+	setStatus('Loading…');
+	activeTab.frame.reload();
+});
 $('recents').addEventListener('click', toggleRecents);
 $('newTab').addEventListener('click', showLanding);
 $('closeAll').addEventListener('click', () => {
