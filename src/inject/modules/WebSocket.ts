@@ -160,12 +160,10 @@ export default class WebSocketModule extends Module<Client> {
 					// initiated the close, report what it asked for like a browser
 					// (1005, no status, for a close() without a code)
 					if (this.#closeRequest) ({ code, reason } = this.#closeRequest);
-					// a close frame without a status reads 1005 natively
+					// a close frame without a status reads 1005 natively (the
+					// transport passes the server's status and reason on, and a
+					// transport that has neither reports nothing)
 					else if (!code) code = 1005;
-					// epoxy reports every close of the server's as 1000 with a
-					// reason of its own (it never reads the frame): the reason, at
-					// least, is not the site's
-					else if (code === 1000 && reason === 'Closed by remote') reason = '';
 
 					dispatchClose(code, reason);
 				});

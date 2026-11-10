@@ -8,8 +8,10 @@
 		<script>
 			// How a WebSocket ends, event by event, against the suite's server
 			// (?port): a connection refused (?refused, a port nothing listens
-			// on), a server that closes with no status, one that closes with a
-			// code, and the page closing with no code and with one.
+			// on), a server that closes with no status, with a code and a
+			// reason (4000, 1000, 1001 with none, a UTF-8 reason, a 123-byte
+			// one) and without a close frame at all, and the page closing with
+			// no code and with one.
 			const params = new URLSearchParams(location.search);
 			const base = 'ws://127.0.0.1:' + params.get('port');
 			const run = (url, onopen) =>
@@ -36,6 +38,11 @@
 				);
 				results.serverNoStatus = await run(base + '/quiet');
 				results.serverCode = await run(base + '/code');
+				results.serverNormal = await run(base + '/normal');
+				results.serverAway = await run(base + '/away');
+				results.serverUtf8 = await run(base + '/utf8');
+				results.serverLong = await run(base + '/long');
+				results.serverDrop = await run(base + '/drop');
 				results.pageNoCode = await run(base + '/hold', (ws) => ws.close());
 				results.pageCode = await run(base + '/hold', (ws) =>
 					ws.close(3001, 'bye'),

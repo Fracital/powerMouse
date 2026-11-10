@@ -13,7 +13,10 @@ the `malformed-headers` suite). And its WebSocket handshake goes out as
 Chrome's does: origin-form, with the port in Host, one User-Agent, Chrome's
 fields in Chrome's order, ALPN `http/1.1`, and the server's subprotocol
 reported (see the `ws-handshake` suite); TikTok's socket answered 400 to the
-absolute-form request line before. And its TLS ClientHello, HTTP/2 SETTINGS,
+absolute-form request line before. A close the server starts reaches the
+page with the server's code and reason (it read 1000 "Closed by remote"
+whatever the server sent; `websocket-close` suite), and an IPv6 literal
+(`https://[::1]:8443/`) connects (`epoxy-ipv6` suite). And its TLS ClientHello, HTTP/2 SETTINGS,
 priorities and pseudo-header order, and its HTTP/1 field order and spelling
 are Chrome's (JA4, Akamai and JA4H equal to Chrome 152's; see
 `docs/fingerprint.md`). The build also carries stomp-h3, HTTP/3 over wisp
@@ -56,6 +59,9 @@ fails the build at `git apply --check`.
 | MercuryWorkshop/epoxy-tls                                      | `0052` | Request fields go out in the caller's order behind Chrome's head (Content-Length, then the caller's; Connection last so HTTP/2 stripping keeps the order), Accept-Encoding `gzip, deflate, br, zstd` with deflate and zstd decoded too, HTTP/1 title case on.                                                                                                     |
 | MercuryWorkshop/epoxy-tls                                      | `0053` | HTTP and WebSocket connections use `chrome_hello`, Chrome's groups with X25519MLKEM768 (ring X25519 plus RustCrypto `ml-kem`) and brotli certificate decompression.                                                                                                                                                                                               |
 | MercuryWorkshop/EpoxyTransport                                 | `0050` | `fieldSupport` tells the host this build decodes every encoding Chrome offers and keeps Priority to HTTP/2 (stomp's serveTransport reads it).                                                                                                                                                                                                                     |
+| MercuryWorkshop/epoxy-tls                                      | `0054` | A WebSocket's `onclose` gets the server's close frame: its status and its reason (1005 for a frame without a status, 1006 for a connection that ended with no close frame, an empty reason when it is not UTF-8). The read loop dropped the frame and called `onclose` with nothing.                                                                              |
+| MercuryWorkshop/epoxy-tls                                      | `0055` | An IPv6 literal's host goes to the wisp server and to rustls without the brackets the URL writes around it: `[::1]` was neither a DNS name nor an address for rustls ("invalid DNS name") and the wisp server could not resolve it. Host keeps the brackets.                                                                                                      |
+| MercuryWorkshop/EpoxyTransport                                 | `0051` | `connect` passes that close code and reason on to `onclose` (it reported 1000 "Closed by remote" for every close).                                                                                                                                                                                                                                                |
 
 ## stomp-h3 (`h3/`)
 

@@ -357,6 +357,23 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A close the server starts reaches a proxied WebSocket with the server's
+  code and reason, as natively: epoxy never read the close frame and
+  reported every close as 1000 "Closed by remote", so a page saw 1000 for
+  4000 "srv", for 1001 and for a connection that ended without any close
+  frame alike. The epoxy build passes the frame's status and reason on
+  (1005 for none, 1006 for no frame, a UTF-8 reason intact). The
+  websocket-close suite now compares the server's closes with native too
+  (no status, 4000 with a reason, 1000, 1001, a UTF-8 reason, a 123-byte
+  one, a dropped connection), in both modes.
+- An IPv6 literal (`https://[::1]:8443/`, `wss://[2001:db8::1]/`) loads
+  through epoxy. Epoxy handed the host with the URL's brackets to rustls,
+  which refused `[::1]` as an invalid DNS name, and to the wisp server, which
+  could not resolve it, so http, https and wss to an IPv6 address all failed
+  (epoxy-ipv6 suite: a page, raw requests and a WebSocket against a server
+  on `::1` with a certificate for the address; Host reads `[::1]:port` as
+  Chrome sends it). epoxy's `pem_files` option is passed through for it.
+
 - A background fetch's downloads are the page's CORS requests, as
   natively: one of another site without Access-Control-Allow-Origin fails
   the fetch (`fetch-error`), one with it succeeds. (sop-escapes suite.)

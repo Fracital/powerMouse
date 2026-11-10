@@ -1,0 +1,30 @@
+From 56f1f8d97e2c85e416a49d61077748831eed605e Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 10 Nov 2026 14:29:59 -0500
+Subject: [PATCH 51/52] connect: pass the server's close code and reason to
+ onclose
+
+onclose reported every close as 1000 "Closed by remote", since epoxy-tls
+gave it nothing to report. epoxy-tls now hands it the close frame's status
+and reason (1005 for none, 1006 for a connection that ended without a close
+frame), and they go to the host as they are.
+---
+ src/main.ts | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/main.ts b/src/main.ts
+index 31f7fb8..abbdc6a 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -170,8 +170,9 @@ export default class EpoxyTransport implements ProxyTransport {
+ 			// epoxy-tls passes the protocol the server chose; it offers no
+ 			// extension, so none is ever negotiated
+ 			(protocol?: string) => onopen(protocol ?? "", ""),
+-			// epoxy does not support getting close code/reason
+-			() => onclose(1000, "Closed by remote"),
++			// the server's close frame: its status (1005 when it carried
++			// none, 1006 when the connection ended without one) and reason
++			(code?: number, reason?: string) => onclose(code ?? 1005, reason ?? ""),
+ 			onerror,
+ 			(data: Uint8Array | string) =>
+ 				//@ts-ignore

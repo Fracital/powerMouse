@@ -1,0 +1,75 @@
+From cf91812b4e7b12271a760e2676b81960731ba02f Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 10 Nov 2026 14:28:29 -0500
+Subject: [PATCH 54/56] websocket: hand onclose the server's close status and
+ reason
+
+The read loop dropped the server's close frame and called onclose with
+nothing, so every close a server started reached the page as whatever the
+caller made up (EpoxyTransport said 1000 "Closed by remote"): 4000 "srv",
+1001 and a connection that ended without any close frame read alike.
+
+onclose now gets the frame's status and its reason as a browser's close
+event reads them: 1005 for a frame without a status, 1006 when the
+connection ended with no close frame, an empty reason when it is not
+UTF-8.
+---
+ client/src/websocket.rs | 24 +++++++++++++++++++++++-
+ 1 file changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/client/src/websocket.rs b/client/src/websocket.rs
+index 9e98782..46ccb2f 100644
+--- a/client/src/websocket.rs
++++ b/client/src/websocket.rs
+@@ -136,6 +136,10 @@ impl EpoxyWebSocket {
+ 			let onerror_cloned = onerror.clone();
+ 
+ 			spawn_local(async move {
++				// the close the server sent (RFC 6455 7.1.5), as the page's
++				// close event reads it: no frame at all is 1006, a frame
++				// without a status 1005
++				let mut close = (1006, String::new());
+ 				loop {
+ 					match rx
+ 						.read_frame(&mut |arg| async {
+@@ -156,6 +160,7 @@ impl EpoxyWebSocket {
+ 								);
+ 							}
+ 							OpCode::Close => {
++								close = close_status(&frame.payload);
+ 								break;
+ 							}
+ 							// ping/pong/continue
+@@ -167,7 +172,11 @@ impl EpoxyWebSocket {
+ 						}
+ 					}
+ 				}
+-				let _ = onclose.call0(&JsValue::null());
++				let _ = onclose.call2(
++					&JsValue::null(),
++					&JsValue::from(close.0),
++					&JsValue::from(close.1),
++				);
+ 			});
+ 
+ 			let _ = onopen.call1(&JsValue::null(), &JsValue::from(protocol));
+@@ -242,6 +251,19 @@ impl EpoxyWebSocket {
+ 	}
+ }
+ 
++/// A close frame's status code and reason; a frame without a status
++/// reads 1005, as in a browser, and a reason that is not UTF-8 is empty
++/// (fastwebsockets has failed such a frame already)
++fn close_status(payload: &[u8]) -> (u16, String) {
++	match payload {
++		[a, b, reason @ ..] => (
++			u16::from_be_bytes([*a, *b]),
++			from_utf8(reason).unwrap_or_default().to_string(),
++		),
++		_ => (1005, String::new()),
++	}
++}
++
+ // The handshake's own fields, which a caller does not set: the browser
+ // forbids them to pages, and an extension epoxy cannot decode (it speaks
+ // none) would break the socket if the server took it.

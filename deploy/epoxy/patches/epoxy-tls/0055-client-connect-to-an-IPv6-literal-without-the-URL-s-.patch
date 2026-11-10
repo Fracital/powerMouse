@@ -1,0 +1,58 @@
+From dcb53e5611972111699b26654f5f200cf879ef1c Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 10 Nov 2026 14:28:53 -0500
+Subject: [PATCH 55/56] client: connect to an IPv6 literal without the URL's
+ brackets
+
+A URL's authority writes an IPv6 address in brackets (`https://[::1]:8443/`)
+and hyper's Uri::host keeps them. Epoxy handed `[::1]` as it was to the
+wisp server, which could not resolve it, and to rustls as the server name,
+which is neither a DNS name nor an address there ("invalid DNS name"): http,
+https and wss to an IPv6 address all failed. The stream and the server name
+now take the bare address; an address gets no SNI and its certificate is
+checked against the address, as in Chrome. Host keeps the brackets.
+---
+ client/src/stream_provider.rs | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/client/src/stream_provider.rs b/client/src/stream_provider.rs
+index b356248..4d6a409 100644
+--- a/client/src/stream_provider.rs
++++ b/client/src/stream_provider.rs
+@@ -52,6 +52,16 @@ pub type ProviderWispTransportGenerator = Box<
+ 		+ Send,
+ >;
+ 
++/// A host as a wisp stream and a TLS server name take it: an IPv6 literal
++/// without the brackets a URL's authority puts around it (`[::1]` is no
++/// DNS name and no address, so rustls refused it and the wisp server could
++/// not resolve it)
++pub fn bare_host(host: &str) -> &str {
++	host.strip_prefix('[')
++		.and_then(|x| x.strip_suffix(']'))
++		.unwrap_or(host)
++}
++
+ pub struct StreamProvider {
+ 	wisp_generator: ProviderWispTransportGenerator,
+ 
+@@ -208,7 +218,9 @@ impl StreamProvider {
+ 		Box::pin(async {
+ 			let locked = self.current_client.lock().await;
+ 			if let Some(mux) = locked.as_ref() {
+-				let stream = mux.new_stream(stream_type, host, port).await?;
++				let stream = mux
++					.new_stream(stream_type, bare_host(&host).to_string(), port)
++					.await?;
+ 				Ok(stream)
+ 			} else {
+ 				self.create_client(locked).await?;
+@@ -245,7 +257,7 @@ impl StreamProvider {
+ 			TlsAlpn::None => self.client_config.clone(),
+ 		});
+ 		let ret = connector
+-			.connect(host.try_into()?, stream)
++			.connect(bare_host(&host).to_string().try_into()?, stream)
+ 			.into_fallible()
+ 			.await;
+ 		match ret {
