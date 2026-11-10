@@ -63,6 +63,13 @@ export const LOAD_HEADER = 'x-stomp-load';
  * only takes privileges from itself
  */
 export const OPAQUE_HEADER = 'x-stomp-opaque';
+/**
+ * On an XMLHttpRequest with credentials (open()'s user and password, or the
+ * URL's): `user:password`, each percent-encoded as in a URL. The worker
+ * answers the site's Basic challenge with them, as the browser would
+ * (src/server/httpAuth.ts), and strips it
+ */
+export const CREDENTIALS_HEADER = 'x-stomp-credentials';
 /** SW -> every window: the cookie jar changed for `domain` (every host when empty); pages drop their document.cookie cache */
 export const COOKIES_CHANGED = '$stomp$cookiesChanged';
 export interface CookiesChange {

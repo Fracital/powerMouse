@@ -32,6 +32,7 @@ import type {
 } from '../transport/messages';
 import {
 	ABORT_HEADER,
+	CREDENTIALS_HEADER,
 	LOAD_HEADER,
 	OPAQUE_HEADER,
 } from '../transport/messages';
@@ -47,6 +48,13 @@ import {
 	filterResponseHeaders,
 	RouteTransform,
 } from './filterHeaders';
+import {
+	authorizationAhead,
+	authorizationForRealm,
+	basicAuthorization,
+	basicRealm,
+	rememberAuthorization,
+} from './httpAuth';
 import { takeInline } from './inline';
 import {
 	awaitNavigationHint,
@@ -401,6 +409,9 @@ function genericForward(
 			serverRequest.mode !== 'navigate' &&
 			serverRequest.headers.has(OPAQUE_HEADER);
 		requestHeaders.delete(OPAQUE_HEADER);
+		// an XMLHttpRequest's credentials, for a Basic challenge (httpAuth)
+		const urlCredentials = serverRequest.headers.get(CREDENTIALS_HEADER);
+		requestHeaders.delete(CREDENTIALS_HEADER);
 
 		requestHeaders.set('user-agent', navigator.userAgent);
 		// the browser's network stack adds it after this worker, so no request
@@ -664,6 +675,18 @@ function genericForward(
 		if (cookie) requestHeaders.set('cookie', cookie);
 		else requestHeaders.delete('cookie');
 
+		// HTTP authentication as the browser's auth cache does it (httpAuth):
+		// a request that may carry credentials and has no Authorization of the
+		// page's own sends the one an earlier answer under this directory
+		// kept, unless it brings credentials of its own, which wait for the
+		// challenge
+		const pageAuthorization = requestHeaders.has('authorization');
+		const mayAuthenticate = credentials && !pageAuthorization;
+		if (mayAuthenticate && !urlCredentials) {
+			const ahead = authorizationAhead(url.url);
+			if (ahead) requestHeaders.set('authorization', ahead);
+		}
+
 		// the host's rules, on the real request as it would go out: the first
 		// match blocks, answers, redirects or edits headers. Before the cache
 		// (a blocked or redirected request never touches it) and logged as such
@@ -841,6 +864,25 @@ function genericForward(
 				null;
 			try {
 				upstream = await fetchUpstream(withValidators(requestHeaders));
+				// a Basic challenge is answered once with the request's own
+				// credentials, else the realm's kept ones; what succeeds is kept
+				const realm =
+					upstream.status === 401 && mayAuthenticate
+						? basicRealm(upstream.headers.get('www-authenticate'))
+						: null;
+				const answer =
+					realm === null
+						? null
+						: urlCredentials
+							? basicAuthorization(urlCredentials)
+							: authorizationForRealm(url.url, realm);
+				if (answer && answer !== requestHeaders.get('authorization')) {
+					await upstream.body?.cancel().catch(() => {});
+					requestHeaders.set('authorization', answer);
+					upstream = await fetchUpstream(withValidators(requestHeaders));
+					if (upstream.status !== 401)
+						rememberAuthorization(url.url, realm!, answer);
+				}
 			} catch (error) {
 				if (error === ABORTED) {
 					reportAborted();

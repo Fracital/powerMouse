@@ -1,6 +1,6 @@
 import { routeXHR } from '../../../routeURL';
 import StompURL from '../../../StompURL';
-import { ABORT_HEADER } from '../../../transport/messages';
+import { ABORT_HEADER, CREDENTIALS_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule, {
 	classConstant,
@@ -126,8 +126,13 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			#method = '';
 			#url = '';
 			#async = true;
-			#username: string | void = undefined;
-			#password: string | void = undefined;
+			// open()'s user and password (null: the URL's own stand)
+			#username: string | null = null;
+			#password: string | null = null;
+			// the request's URL with its credentials (what responseURL shows for
+			// its response, as natively) and without (the route's), fragment
+			// dropped, when it has credentials
+			#credentialed: { shown: string; plain: string } | null = null;
 			#responseType = '';
 			#responseText = '';
 			#readyState = UNSENT;
@@ -303,7 +308,12 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				this.#statusText = response!.statusText;
 				// the fetch hook already reads a Response's URL as the page's; a
 				// routed one (the sync bridge's) is decoded, a real one kept
-				this.#responseURL = unrouteURL(that.client, url!) ?? url!;
+				const responseURL = unrouteURL(that.client, url!) ?? url!;
+				// the request's own URL shows its credentials, as natively
+				this.#responseURL =
+					this.#credentialed?.plain === responseURL
+						? this.#credentialed.shown
+						: responseURL;
 				this.#responseHeaders = response!.headers;
 				this.#dispatchReadyState();
 
@@ -492,17 +502,12 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					this.#async = false;
 				}
 
-				if (username) {
-					this.#username = String(password);
-				} else {
-					this.#username = undefined;
-				}
-
-				if (password) {
-					this.#password = String(password);
-				} else {
-					this.#password = undefined;
-				}
+				// set, they replace the URL's own user and password
+				this.#username =
+					username === undefined || username === null ? null : String(username);
+				this.#password =
+					password === undefined || password === null ? null : String(password);
+				this.#credentialed = null;
 
 				// readystatechange, even for a synchronous request, unless it
 				// was opened already
@@ -556,15 +561,28 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 						this.#end('timeout');
 					}, this.#timeout);
 
-				this.#fetch(
-					routeXHR(
-						new StompURL(
-							new URL(this.#url, that.client.url.toString()),
-							that.client.url,
-						),
-					),
-					options,
-				);
+				// credentials (open()'s or the URL's) go to the worker, which
+				// answers the site's challenge with them (they are never sent before
+				// one); the route is of the URL without them
+				const target = new URL(this.#url, that.client.url.toString());
+				if (this.#username !== null) target.username = this.#username;
+				if (this.#password !== null) target.password = this.#password;
+				this.#credentialed = null;
+				if (target.username !== '' || target.password !== '') {
+					this.#headers.set(
+						CREDENTIALS_HEADER,
+						`${target.username}:${target.password}`,
+					);
+					const shown = new URL(target.href);
+					shown.hash = '';
+					target.username = '';
+					target.password = '';
+					const plain = new URL(target.href);
+					plain.hash = '';
+					this.#credentialed = { shown: shown.href, plain: plain.href };
+				}
+
+				this.#fetch(routeXHR(new StompURL(target, that.client.url)), options);
 			}
 			getResponseHeader(header: string) {
 				return this.#responseHeaders.get(header);

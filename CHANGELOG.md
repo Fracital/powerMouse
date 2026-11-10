@@ -310,6 +310,17 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- `XMLHttpRequest`'s credentials work as natively. `open()` stored the
+  password as the user and both went nowhere, and a URL's own credentials
+  were dropped, so a request to a site that challenges came back 401. The
+  user and password (or the URL's) now reach the worker with the request
+  and answer the site's HTTP Basic challenge once, never before it; what
+  succeeds is kept for the realm and sent ahead with later requests under
+  the same directory, of any kind, as the browser's auth cache does, and a
+  page's own `Authorization` header is left alone. `responseURL` shows the
+  credentials, as natively. Pages and workers, async and sync (xhr-parity
+  suite, which compares the Authorization the site received for each
+  request with the native load's).
 - The document an `XMLHttpRequest` gives (`responseType` `document`, and
   `responseXML` of an XML response) is the one the browser makes: the
   realm's own XMLHttpRequest reads the response's bytes from a data: URL of
@@ -2651,6 +2662,10 @@ Fixed while testing real sites and a feature fixture:
   of view; the inject holds only frames that are not rendered (or clipped
   away entirely by an ancestor), and it leaves `IntersectionObserver` and
   `ResizeObserver` delivery alone.
+- HTTP authentication is Basic only: a Digest, NTLM or Negotiate challenge
+  reaches the page as its 401, and a challenge the page has no credentials
+  for never prompts (natively the browser asks the user). The credentials
+  the worker keeps for a realm last as long as the service worker does.
 - Markup a page sets as an SVG or MathML element's `innerHTML` or
   `insertAdjacentHTML` is parsed as if its context were an HTML element, so
   `svg.innerHTML = '<style>...</style>'` makes an HTML `<style>` where
