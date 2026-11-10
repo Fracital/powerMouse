@@ -839,9 +839,31 @@ console.warn = warn;
 		).join(',') +
 		'}]);' +
 		' '.repeat(4000);
+	// a Closure module bundle (YouTube's kevlar_base, Google Docs): split into
+	// runs of statements, here one sloppy, with statements a line break ends
+	// without a semicolon and function declarations in a try block
+	const closure = readFileSync(
+		`${root}test/pages/split-closure.js.bin`,
+		'utf8',
+	);
+	const sloppy =
+		'(function(_){var window=this;' +
+		Array.from({ length: 40 }, (_, i) =>
+			i % 5 === 0
+				? `_.a${i}=top\n`
+				: `_.b${i}=function(){return location.href+${i}};`,
+		).join('') +
+		'try{' +
+		Array.from(
+			{ length: 40 },
+			(_, i) => `function f${i}(){return eval("${i}")}_.c${i}=f${i};`,
+		).join('') +
+		'}catch(e){}}).call(this,{});';
 	for (const [name, script] of [
 		['the runtime form', runtime],
 		['a chunk', chunk],
+		['a Closure module', closure],
+		['a sloppy Closure-shaped module', sloppy],
 	])
 		for (const parts of [2, 4])
 			ok(

@@ -1,5 +1,5 @@
 // The service worker's side of the controller's rewrite workers: a port to
-// each, a script sent to the one with the fewest in hand. A rewrite comes
+// each, a script sent to the one with the least in hand. A rewrite comes
 // back from a worker or not at all: null tells the caller to make it
 // itself, which it does whenever no worker is ready (the controller started
 // none, a worker has not started yet or failed to load, its port closed
@@ -18,6 +18,8 @@ interface Member {
 	port: MessagePort;
 	/** rewrites sent and not yet answered */
 	busy: number;
+	/** the characters of script those rewrites hold */
+	load: number;
 	alive: boolean;
 	/** the worker said it serves this port (REWRITE_READY): until then nothing is sent */
 	ready: boolean;
@@ -32,6 +34,7 @@ export class RewritePool {
 			const member: Member = {
 				port,
 				busy: 0,
+				load: 0,
 				alive: true,
 				ready: false,
 				rpc: new RpcHelper<Record<string, never>, RewriteBound>(
@@ -65,26 +68,34 @@ export class RewritePool {
 	close() {
 		for (const member of this.#members) this.#drop(member, 'released');
 	}
-	/** the worker with the fewest scripts in hand */
+	/**
+	 * The worker with the least script in hand, then the fewest scripts: a
+	 * count alone sent two of a split bundle's 2.5 MB parts to one worker
+	 * while another had two small ones
+	 */
 	#pick(): Member | undefined {
 		let member: Member | undefined;
 		for (const candidate of this.#members)
 			if (
 				candidate.alive &&
 				candidate.ready &&
-				(!member || candidate.busy < member.busy)
+				(!member ||
+					candidate.load < member.load ||
+					(candidate.load === member.load && candidate.busy < member.busy))
 			)
 				member = candidate;
 		return member;
 	}
-	/** a call to the worker with the fewest in hand, null when none answered in time */
+	/** a call to the worker with the least in hand (`size` characters more), null when none answered in time */
 	async #call<K extends keyof RewriteBound>(
 		method: K,
 		request: RewriteBound[K][0],
+		size: number,
 	): Promise<RewriteBound[K][1] | null> {
 		const member = this.#pick();
 		if (!member) return null;
 		member.busy++;
+		member.load += size;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
 			return await Promise.race([
@@ -101,6 +112,7 @@ export class RewritePool {
 		} finally {
 			clearTimeout(timer);
 			member.busy--;
+			member.load -= size;
 		}
 	}
 	#rewriteOne(
@@ -111,23 +123,28 @@ export class RewritePool {
 		compact?: boolean,
 		source?: ScriptSource,
 	): Promise<string | null> {
-		return this.#call('rewrite', {
-			script,
-			url: url.toString(),
-			directory: url.directory,
-			codecKey: url.codec.key,
-			config,
-			type,
-			scopes: routeScopeList(),
-			...(compact === undefined ? {} : { compact }),
-			...(source === undefined ? {} : { source }),
-		});
+		return this.#call(
+			'rewrite',
+			{
+				script,
+				url: url.toString(),
+				directory: url.directory,
+				codecKey: url.codec.key,
+				config,
+				type,
+				scopes: routeScopeList(),
+				...(compact === undefined ? {} : { compact }),
+				...(source === undefined ? {} : { source }),
+			},
+			script.length,
+		);
 	}
 	/**
-	 * A large webpack bundle rewritten by every live worker at once
-	 * (splitRewrite): one plans the split, then the skeleton and each group
-	 * go to the one with the fewest in hand. Null when it is not split (not a
-	 * page's classic script, too small, not minified, fewer than two workers,
+	 * A large webpack or Closure bundle rewritten by every live worker at
+	 * once (splitRewrite): one plans the split, then the skeleton and each
+	 * group go, the largest first, to the one with the least in hand. Null
+	 * when it is not split (not a page's classic script, too small, not
+	 * minified, fewer than two workers,
 	 * a shape not recognised) or a part did not come back: the whole is then
 	 * rewritten as one.
 	 */
@@ -142,25 +159,46 @@ export class RewritePool {
 			(member) => member.alive && member.ready,
 		).length;
 		if (live < 2 || !minified(script)) return null;
-		const plan = await this.#call('plan', { script, parts: live });
+		const plan = await this.#call(
+			'plan',
+			{ script, parts: live },
+			script.length,
+		);
 		if (!plan) return null;
 		const { skeleton, parts, skeletonSource, partSources } = splitSources(
 			script,
 			plan,
 		);
-		const outputs = await Promise.all(
-			[skeleton, ...parts].map((text, i) =>
-				this.#rewriteOne(
-					text,
-					url,
-					config,
-					type,
-					true,
-					i === 0 ? skeletonSource : partSources[i - 1],
-				),
-			),
+		// the largest first, each to the worker with the least in hand, so
+		// the work evens out across them
+		const texts = [skeleton, ...parts];
+		const outputs: (string | null)[] = new Array(texts.length);
+		await Promise.all(
+			texts
+				.map((text, i) => i)
+				.sort((a, b) => texts[b]!.length - texts[a]!.length)
+				.map(async (i) => {
+					outputs[i] = await this.#rewriteOne(
+						texts[i]!,
+						url,
+						config,
+						type,
+						true,
+						i === 0 ? skeletonSource : partSources[i - 1],
+					);
+				}),
 		);
 		if (outputs.some((output) => output === null)) return null;
+		// a run of statements the rewriter could not parse on its own comes
+		// back as it went (the rewriter's fallback), which would put code
+		// that was never rewritten into the whole: the whole is rewritten
+		// instead (a rewritten run never equals its input, whose wrapper has
+		// line breaks the compact output does not)
+		if (
+			plan.kind === 'statements' &&
+			parts.some((part, i) => outputs[i + 1] === part)
+		)
+			return null;
 		return stitch(outputs[0]!, outputs.slice(1) as string[], plan);
 	}
 	/**

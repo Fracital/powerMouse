@@ -9,7 +9,9 @@
 // is rewritten the same wherever it stands (the rewriter decides by the code
 // inside it), so the result is byte for byte what one rewrite of the whole
 // would make, as long as everything is printed compact, as minified code is.
-// Only shapes recognised here are split; anything else is rewritten whole.
+// A Closure module bundle (YouTube, Google Docs) is cut into runs of its
+// function's statements instead (planStatements). Only shapes recognised
+// here are split; anything else is rewritten whole.
 import { parse } from 'meriyah';
 import { sourceKey } from './functionSource';
 import { PROVIDERS, UNDEFINABLE, type ScriptSource } from './rewriteJS';
@@ -18,6 +20,11 @@ import { PROVIDERS, UNDEFINABLE, type ScriptSource } from './rewriteJS';
 export const SPLIT_MIN = 512 * 1024;
 
 export interface SplitPlan {
+	/**
+	 * what the groups are: properties of a webpack module table (the
+	 * default), or runs of statements of a Closure module's function body
+	 */
+	kind?: 'statements';
 	/** the source ranges of the groups of the module table's properties */
 	groups: [number, number][];
 	/** the scope the modules stand in is strict */
@@ -121,7 +128,7 @@ export function planSplit(script: string, parts: number): SplitPlan | null {
 		return null;
 	}
 	if (tree.body.length !== 1 || tree.body[0].type !== 'ExpressionStatement')
-		return null;
+		return planStatements(script, tree, parts);
 	let expression = tree.body[0].expression;
 	if (expression.type === 'UnaryExpression') expression = expression.argument;
 	if (expression.type !== 'CallExpression') return null;
@@ -154,7 +161,8 @@ export function planSplit(script: string, parts: number): SplitPlan | null {
 		expression.arguments[0].elements[1]?.type === 'ObjectExpression'
 	)
 		table = expression.arguments[0].elements[1];
-	if (!table || table.properties.length < parts) return null;
+	if (!table) return planStatements(script, tree, parts);
+	if (table.properties.length < parts) return null;
 	if (!table.properties.every(isModule)) return null;
 	if (outer.some((name) => OUTER.has(name))) return null;
 
@@ -177,6 +185,114 @@ export function planSplit(script: string, parts: number): SplitPlan | null {
 	return { groups, strict: strictScope, token, key: sourceKey(script) };
 }
 
+/** a function expression's own, a function called directly or through .call or .apply */
+function calledFunction(expression: any): any {
+	if (expression?.type === 'UnaryExpression') expression = expression.argument;
+	if (expression?.type !== 'CallExpression') return null;
+	let callee = expression.callee;
+	if (
+		callee.type === 'MemberExpression' &&
+		!callee.computed &&
+		(callee.property.name === 'call' || callee.property.name === 'apply')
+	)
+		callee = callee.object;
+	// an async function or a generator is not: `await` and `yield` would not
+	// parse the same in the plain function a run is rewritten in
+	return (callee.type === 'FunctionExpression' ||
+		callee.type === 'ArrowFunctionExpression') &&
+		callee.body.type === 'BlockStatement' &&
+		!callee.async &&
+		!callee.generator
+		? callee
+		: null;
+}
+
+/**
+ * A Closure module (YouTube's kevlar_base, Google Docs): the program's
+ * largest statement calls a function (`(function(_){var window=this;
+ * try{...}catch(e){_._DumpException(e)}try{...}...}).call(this, ...)`)
+ * whose body is a long list of statements, each module of the build a try
+ * statement of its own. The groups are runs of sibling statements, a try
+ * block too large for one group giving runs of its own statements. The
+ * rewriter decides by the code itself and by names, never by the scope a
+ * statement stands in, so a run is rewritten the same on its own (inside a
+ * function and a block, under the same strictness) as in the whole.
+ */
+function planStatements(
+	script: string,
+	tree: any,
+	parts: number,
+): SplitPlan | null {
+	let call: any = null;
+	for (const statement of tree.body)
+		if (
+			statement.type === 'ExpressionStatement' &&
+			calledFunction(statement.expression) &&
+			(!call ||
+				statement.range[1] - statement.range[0] > call.range[1] - call.range[0])
+		)
+			call = statement;
+	if (!call || call.range[1] - call.range[0] < script.length / 2) return null;
+	const fn = calledFunction(call.expression);
+	// two runs per worker: a statement (a module's try block) is not cut,
+	// and smaller runs even out what each worker gets
+	const target = (fn.body.range[1] - fn.body.range[0]) / (parts * 2);
+	const groups: [number, number][] = [];
+	const take = (list: any[]) => {
+		let start = -1;
+		let end = -1;
+		const close = () => {
+			if (start !== -1) groups.push([start, end]);
+			start = -1;
+		};
+		for (const statement of list) {
+			if (
+				statement.type === 'TryStatement' &&
+				statement.block.range[1] - statement.block.range[0] > target
+			) {
+				close();
+				take(statement.block.body);
+				continue;
+			}
+			if (start === -1) start = statement.range[0];
+			end = statement.range[1];
+			if (end - start >= target) close();
+		}
+		close();
+	};
+	// a directive prologue of the function's own stays with the skeleton
+	const body: any[] = fn.body.body;
+	let first = 0;
+	while (
+		first < body.length &&
+		body[first].type === 'ExpressionStatement' &&
+		typeof body[first].directive === 'string'
+	)
+		first++;
+	take(body.slice(first));
+	if (groups.length < 2) return null;
+
+	let token = '$stomp$part';
+	while (script.includes(token)) token += '$';
+	return {
+		kind: 'statements',
+		groups,
+		strict: strict(tree.body) || strict(fn.body.body),
+		token,
+		key: sourceKey(script),
+	};
+}
+
+/**
+ * Where a run of statements is put to be rewritten on its own: in a function
+ * and a block, as it stood, between two marker statements. The line breaks
+ * keep a last statement that ends without a semicolon from running into the
+ * marker (`a=b` and `$stomp$partb` would be one identifier).
+ */
+const statementsOpen = (plan: SplitPlan) =>
+	`${plan.strict ? '"use strict";' : ''}(function(){try{${plan.token}a;\n`;
+const statementsClose = (plan: SplitPlan) => `\n${plan.token}b;}catch{}});`;
+
 /**
  * The skeleton (a placeholder where each group was) and the groups, each a
  * script of its own, with where each stands in the whole: their functions
@@ -191,22 +307,29 @@ export function splitSources(
 	skeletonSource: ScriptSource;
 	partSources: ScriptSource[];
 } {
+	const statements = plan.kind === 'statements';
 	let skeleton = '';
 	let at = 0;
 	const shifts: number[] = [];
 	plan.groups.forEach(([start, end], i) => {
-		skeleton += `${script.slice(at, start)}"${plan.token}${i}":0`;
+		skeleton += `${script.slice(at, start)}${
+			statements ? `${plan.token}${i};` : `"${plan.token}${i}":0`
+		}`;
 		// what follows the placeholder stands where the group ended
 		shifts.push(skeleton.length, end - skeleton.length);
 		at = end;
 	});
 	skeleton += script.slice(at);
 	const prologue = plan.strict ? '"use strict";' : '';
-	const open = prologue.length + '({'.length;
+	const open = statements
+		? statementsOpen(plan).length
+		: prologue.length + '({'.length;
 	return {
 		skeleton,
-		parts: plan.groups.map(
-			([start, end]) => `${prologue}({${script.slice(start, end)}});`,
+		parts: plan.groups.map(([start, end]) =>
+			statements
+				? `${statementsOpen(plan)}${script.slice(start, end)}${statementsClose(plan)}`
+				: `${prologue}({${script.slice(start, end)}});`,
 		),
 		skeletonSource: { key: plan.key, text: script, shifts },
 		partSources: plan.groups.map(([start]) => ({
@@ -226,8 +349,25 @@ export function stitch(
 	parts: string[],
 	plan: SplitPlan,
 ): string | null {
+	const statements = plan.kind === 'statements';
 	const pieces: string[] = [];
 	for (const part of parts) {
+		if (statements) {
+			// between the two marker statements, each there once
+			const before = `${plan.token}a;`;
+			const after = `${plan.token}b;`;
+			const open = part.indexOf(before);
+			const close = part.indexOf(after);
+			if (
+				open === -1 ||
+				close < open ||
+				part.indexOf(before, open + 1) !== -1 ||
+				part.indexOf(after, close + 1) !== -1
+			)
+				return null;
+			pieces.push(part.slice(open + before.length, close));
+			continue;
+		}
 		const open = part.indexOf('({');
 		if (open === -1 || !part.endsWith('});')) return null;
 		pieces.push(part.slice(open + 2, -3));
@@ -235,7 +375,7 @@ export function stitch(
 	let out = '';
 	let at = 0;
 	for (let i = 0; i < pieces.length; i++) {
-		const marker = `'${plan.token}${i}':0`;
+		const marker = statements ? `${plan.token}${i};` : `'${plan.token}${i}':0`;
 		const found = skeleton.indexOf(marker, at);
 		if (found === -1 || skeleton.indexOf(marker, found + 1) !== -1) return null;
 		out += skeleton.slice(at, found) + pieces[i];

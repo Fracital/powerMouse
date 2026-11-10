@@ -516,6 +516,31 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   non-configurable replaces the formatter (its realm's stacks are no longer
   cleaned), and one that freezes Error sees the accessor (tells suite, both
   modes, compared with the page loaded natively).
+- A large Closure module bundle is rewritten across the rewrite workers too.
+  The split knew webpack's module table only, and YouTube's 10 MB
+  kevlar_base (and its 2.7 MB player, and Google Docs' bundles) was one
+  worker's work: 2.5 s on the critical path of every first visit. A bundle
+  whose largest statement calls a function (directly or with `.call` or
+  `.apply`, an arrow too) is cut into runs of that function's statements, a
+  try block too large for one run (each Closure module is one) giving runs
+  of its own; each run is rewritten on its own inside a function and a
+  block between two marker statements, under the same strictness, and the
+  outputs replace placeholder statements in the rewritten skeleton. A run
+  that comes back unrewritten (the rewriter's fallback for what it cannot
+  parse) makes the whole be rewritten instead, never stitched in, and an
+  async function or a generator is not split. The result is byte for byte
+  the whole's rewrite (checked on YouTube's two bundles, five Google Docs
+  bundles and the suites' fixtures). The pool now sends a script to the
+  worker with the least script in hand rather than the fewest scripts, a
+  split's largest parts first: by count, one worker got two of
+  kevlar_base's 2.5 MB parts while another had two small ones. A first
+  visit to YouTube through the proxy shows its content after 4.4 s instead
+  of 5.1 s, the watch page its video after 3.0 s instead of 3.4 s
+  (split-rewrite suite, both shapes: a 2000-function Closure bundle with
+  statements a line break ends and function declarations in its blocks runs
+  as natively split across four workers, and whole with one; rewriter-unit:
+  a Closure bundle and a sloppy one split in 2 and 4 are the whole's
+  rewrite byte for byte).
 - A script kept in the rewrite cache costs the worker almost nothing to
   serve. Its key is now a digest of the body's bytes as they came, and a hit
   goes out as the store's Blob: the worker no longer decodes the origin's

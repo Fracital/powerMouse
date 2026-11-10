@@ -6,29 +6,20 @@
 // groups' output put back together. Its modules read location and top,
 // index an object, eval and use BigInts; the results hash the same as the
 // page loaded natively. The request log says the bundle was rewritten split
-// ("pool split") with four workers, and whole ("pool") with one. The suite
-// constructs its own controllers on the demo's service worker, as
-// rewrite-cache does.
+// ("pool split") with four workers, and whole ("pool") with one. The same
+// for a Closure module bundle (the shape of YouTube's kevlar_base and Google
+// Docs: a function called with `.call(this, ...)` whose modules are try
+// statements, one of them most of the script), split into runs of
+// statements, with statements that end at a line break without a semicolon
+// and function declarations in its blocks. The suite constructs its own
+// controllers on the demo's service worker, as rewrite-cache does.
 import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
-const PAGE = `${FIXTURE}pages/split-bundle.html`;
-
-const native = await (async () => {
-	const page = await browser.newPage();
-	await page.goto(PAGE);
-	const value = await page.evaluate(() => window.__split);
-	await page.close();
-	return value;
-})();
-ok(
-	'natively: the bundle ran every module',
-	native?.count === 2000,
-	JSON.stringify(native),
-);
 
 /** the bundle through a controller with `workers` rewrite workers: its results and its log entry */
-async function proxied(workers) {
+async function proxied(workers, name) {
+	const PAGE = `${FIXTURE}pages/${name}.html`;
 	const page = await openDemo(browser, PROXY);
 	await page.evaluate(
 		async ({ workers, url }) => {
@@ -60,29 +51,48 @@ async function proxied(workers) {
 			result ??= await frame
 				.evaluate(() => window.__split ?? null)
 				.catch(() => null);
-		entry = await page.evaluate(() =>
-			window.__log.find((info) => info.url.includes('split-bundle.js.bin')),
+		entry = await page.evaluate(
+			({ name }) =>
+				window.__log.find((info) => info.url.includes(`${name}.js.bin`)),
+			{ name },
 		);
 	}
 	await page.close();
 	return { result, entry };
 }
 
-for (const [workers, expected] of [
-	[4, 'pool split'],
-	[1, 'pool'],
+for (const [name, shape] of [
+	['split-bundle', 'webpack'],
+	['split-closure', 'Closure'],
 ]) {
-	const { result, entry } = await proxied(workers);
+	const native = await (async () => {
+		const page = await browser.newPage();
+		await page.goto(`${FIXTURE}pages/${name}.html`);
+		const value = await page.evaluate(() => window.__split);
+		await page.close();
+		return value;
+	})();
 	ok(
-		`${workers} rewrite worker${workers > 1 ? 's' : ''}: the bundle is rewritten ${expected === 'pool split' ? 'split across them' : 'whole'}`,
-		entry?.rewriteIn === expected,
-		JSON.stringify({ rewriteIn: entry?.rewriteIn, ms: entry?.ms }),
+		`natively: the ${shape} bundle ran every module`,
+		native?.count === 2000,
+		JSON.stringify(native),
 	);
-	ok(
-		`${workers} rewrite worker${workers > 1 ? 's' : ''}: every module ran as natively`,
-		JSON.stringify(result) === JSON.stringify(native),
-		`native ${JSON.stringify(native)} proxied ${JSON.stringify(result)}`,
-	);
+	for (const [workers, expected] of [
+		[4, 'pool split'],
+		[1, 'pool'],
+	]) {
+		const { result, entry } = await proxied(workers, name);
+		ok(
+			`${shape}, ${workers} rewrite worker${workers > 1 ? 's' : ''}: the bundle is rewritten ${expected === 'pool split' ? 'split across them' : 'whole'}`,
+			entry?.rewriteIn === expected,
+			JSON.stringify({ rewriteIn: entry?.rewriteIn, ms: entry?.ms }),
+		);
+		ok(
+			`${shape}, ${workers} rewrite worker${workers > 1 ? 's' : ''}: every module ran as natively`,
+			JSON.stringify(result) === JSON.stringify(native),
+			`native ${JSON.stringify(native)} proxied ${JSON.stringify(result)}`,
+		);
+	}
 }
 
 await done(browser);
