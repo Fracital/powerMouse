@@ -40,11 +40,11 @@ commit that fixed them and their regression suite.
 | IP, TCP: hops, MTU, JA4T                                  | this machine's                                                                                                            | the wisp server's                                                                                               | no        | inherent (docs/fingerprint.md item 7)                                                                                        |                                                                                          |
 | JavaScript                                                | tab-separated table                                                                                                       | the "Rest of window.navigator" table ran together                                                               | yes       | fragment parsing in body context (below)                                                                                     | fixed, 2d892b1                                                                           |
 | JavaScript: outer size                                    | toolbar between outer and inner (real window)                                                                             | `outerHeight === innerHeight`, at 0,0                                                                           | yes       | Framing spoofed a toolbarless window                                                                                         | fixed, ce6610a, window-geometry                                                          |
-| JavaScript: `navigator.serviceWorker`, `navigator.login`  | present                                                                                                                   | missing                                                                                                         | yes       | deleted on purpose (Navigator and Credentials modules)                                                                       | left                                                                                     |
+| JavaScript: `navigator.serviceWorker`, `navigator.login`  | present                                                                                                                   | missing                                                                                                         | yes       | deleted on purpose (Navigator and Credentials modules)                                                                       | left (emulated service workers behind `serviceWorkers`, off by default)                  |
 | JavaScript: AudioContext state                            | `suspended`                                                                                                               | `running` (same-origin, live)                                                                                   | maybe     | the host's user activation from the address bar; a bare page matches native                                                  | left                                                                                     |
 | JavaScript, CSS: viewport                                 | 1280x900                                                                                                                  | 1280x803                                                                                                        | no        | inherent: the demo's toolbar takes height                                                                                    |                                                                                          |
 | JavaScript: screen (isolated)                             | 1280x900                                                                                                                  | 800x600                                                                                                         | no        | headless artifact: Playwright's emulation does not reach an out-of-process frame                                             |                                                                                          |
-| WebRTC                                                    | No Leak, IP matches                                                                                                       | live: "WebRTC IP doesn't match your Remote IP"                                                                  | yes       | WebRTC is not proxied: STUN answers with the user's real IP, the page loaded from the wisp server's                          | left                                                                                     |
+| WebRTC                                                    | No Leak, IP matches                                                                                                       | live: "WebRTC IP doesn't match your Remote IP"                                                                  | yes       | WebRTC is not proxied: STUN answers with the user's real IP, the page loaded from the wisp server's                          | left (another agent)                                                                     |
 | Canvas                                                    | tables with tabs                                                                                                          | cells ran together                                                                                              | yes       | fragment parsing                                                                                                             | fixed, 2d892b1 (identical to native now)                                                 |
 | WebGL                                                     | identical                                                                                                                 | identical; isolated: Power Preference low-power                                                                 | no        | inherent: the isolated frame is a cross-origin child frame                                                                   |                                                                                          |
 | WebGPU, Fonts, Chrome, Proxy, Do Not Track, Resource URLs | identical                                                                                                                 | identical                                                                                                       | no        |                                                                                                                              |                                                                                          |
@@ -126,13 +126,13 @@ membrane agent's).
 
 ## Gaps left, most detectable first
 
-1. **`navigator.serviceWorker` and FedCM are missing** (`'serviceWorker' in
-navigator` is false; `ServiceWorkerContainer`, `navigator.login`,
-   `IdentityCredential` undefined). Deleted on purpose: a page's own
-   service worker would register on the proxy origin. A stand-in that
-   answers like a browser that never registers (an empty
-   `getRegistrations()`, a `register()` that rejects as a private window's
-   does) would close the feature test.
+1. **`navigator.serviceWorker` and FedCM are missing by default**
+   (`'serviceWorker' in navigator` is false; `ServiceWorkerContainer`,
+   `navigator.login`, `IdentityCredential` undefined). Since this baseline,
+   a controller built with `serviceWorkers: true` (the demo's `?sw`) gives
+   pages emulated service workers (docs/service-workers.md), which closes
+   the feature test for a host that turns them on; the default, and the
+   live demo, still lack it. FedCM is still deleted.
 2. **Client hints**: Accept-CH and Critical-CH are not honoured, so a site
    that asks for high-entropy hints gets none (server-side detectable, and
    bot scoring uses it). The worker can read the values
@@ -141,8 +141,7 @@ navigator` is false; `ServiceWorkerContainer`, `navigator.login`,
    to that origin's requests (third parties by the page's delegation), and
    restart a navigation for Critical-CH.
 3. **WebRTC** reveals the user's real IP next to the wisp server's: STUN
-   is not proxied. Blocking non-relay candidates, or relaying UDP over wisp,
-   would close it.
+   is not proxied. Another agent owns it now (not worked on here).
 4. **Permissions**: the proxied frame has no `allow` list, so geolocation,
    camera, microphone and clipboard are denied at once (isolated mode also
    reports a permissions-policy violation, and `permissions.query` says
