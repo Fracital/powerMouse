@@ -1,8 +1,36 @@
-import { TAO_MARKER } from '../../transport/messages';
+import { OPAQUE_MARKER, TAO_MARKER } from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
 import ProxyModule from './Proxy';
 import { unrouteURL } from './Unroute';
+
+// the browser's own members, taken when the bundle runs
+const serverTimingOf =
+	typeof PerformanceResourceTiming === 'function'
+		? Reflect.getOwnPropertyDescriptor(
+				PerformanceResourceTiming.prototype,
+				'serverTiming',
+			)?.get
+		: undefined;
+const metricNameOf =
+	typeof PerformanceServerTiming === 'function'
+		? Reflect.getOwnPropertyDescriptor(
+				PerformanceServerTiming.prototype,
+				'name',
+			)?.get
+		: undefined;
+
+/** whether a resource timing entry carries one of the proxy's own metrics */
+export function hasProxyMetric(entry: object, name: string): boolean {
+	if (!serverTimingOf || !metricNameOf) return false;
+	try {
+		return (Reflect.apply(serverTimingOf, entry, []) as object[]).some(
+			(metric) => Reflect.apply(metricNameOf, metric, []) === name,
+		);
+	} catch (error) {
+		return false;
+	}
+}
 
 /** what a resource of another origin without Timing-Allow-Origin shows as 0 */
 const RESTRICTED_TIMES = [
@@ -137,9 +165,10 @@ export default class ResourceTimingModule extends Module<Client> {
 			const metrics = native() as object[];
 			if (judge(entry).restricted) return [];
 			return metricName
-				? metrics.filter(
-						(metric) => Reflect.apply(metricName, metric, []) !== TAO_MARKER,
-					)
+				? metrics.filter((metric) => {
+						const name = Reflect.apply(metricName, metric, []);
+						return name !== TAO_MARKER && name !== OPAQUE_MARKER;
+					})
 				: metrics;
 		});
 

@@ -170,6 +170,12 @@ export interface WireServiceWorkerResponse {
 	/** the real URL */
 	url: string;
 	redirected: boolean;
+	/**
+	 * the response's type as the worker's page-facing Response reads it:
+	 * every route is same-origin to the browser, so the proxy says when it is
+	 * another origin's (`cors`) or opaque, and the page shows it so
+	 */
+	type?: 'basic' | 'cors' | 'opaque';
 }
 
 export type FetchAnswer =

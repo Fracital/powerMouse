@@ -26,7 +26,12 @@ import type {
 	WorkerType,
 } from '../serviceWorkerTypes';
 import { receiveBody } from '../transport/bodyPort';
-import { postToPort, SW_EVENT, SW_RPC } from '../transport/messages';
+import {
+	postToPort,
+	RESPONSE_TYPE_HEADER,
+	SW_EVENT,
+	SW_RPC,
+} from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 
 declare const self: ServiceWorkerGlobalScope;
@@ -1879,10 +1884,16 @@ export class ServiceWorkers {
 				const body = wire.body ? receiveBody(wire.body) : null;
 				const nullBody = [101, 103, 204, 205, 304].includes(wire.status);
 				if (nullBody) body?.cancel().catch(() => {});
+				const headers = new Headers(wire.headers);
+				// its type and URL, for the page (the inject reads them)
+				headers.set(
+					RESPONSE_TYPE_HEADER,
+					`${wire.type ?? 'basic'} ${wire.url}`,
+				);
 				return new Response(nullBody ? null : body, {
 					status: wire.status < 200 || wire.status > 599 ? 200 : wire.status,
 					statusText: wire.statusText,
-					headers: wire.headers,
+					headers,
 				});
 			});
 		} catch (error) {

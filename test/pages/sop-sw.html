@@ -1,0 +1,117 @@
+<!doctype html>
+<title>SOP SW</title>
+<script>
+	// The same-origin policy through a page's service worker (sop-escapes
+	// suite, second part): the page registers sop-sw.js, which claims it, and
+	// asks site B (`?b=`) for things the worker answers in its own ways. Each
+	// case's outcome is in window.__sopSW.cases, with what reached B's server.
+	// Served under /pages/deep/sopsw/, the worker's own scope.
+	(async () => {
+		const query = new URLSearchParams(location.search);
+		const A = location.origin;
+		const B = query.get('b');
+		const K = query.get('k') || 'k';
+		const out = (window.__sopSW = { cases: {}, done: false });
+		let serial = 0;
+		const r = (base, params = {}) => {
+			const key = `${K}-sw-${++serial}`;
+			const url = new URL('/sop/r', base);
+			url.searchParams.set('k', key);
+			for (const [name, value] of Object.entries(params))
+				url.searchParams.set(name, value);
+			return { url: url.href, key };
+		};
+		const failed = (error) => `${error.name}: ${error.message}`;
+		const reached = async (key) =>
+			(
+				await (await fetch(`${A}/sop/log?k=${encodeURIComponent(key)}`)).json()
+			).map(
+				(entry) =>
+					`${entry.method} ${entry.origin ?? '-'} ${entry.mode ?? '-'}`,
+			);
+		const read = async (url, init) => {
+			try {
+				const response = await fetch(url, init);
+				return {
+					type: response.type,
+					status: response.status,
+					body: response.body === null ? null : await response.text(),
+					made: response.headers.get('x-made'),
+				};
+			} catch (error) {
+				return failed(error);
+			}
+		};
+		/** a URL of the page's own scope that the worker answers by `sw` */
+		const via = (sw, target, base = A) => {
+			const url = new URL(`${base}/pages/deep/sopsw/x`);
+			url.searchParams.set('sw', sw);
+			if (target) url.searchParams.set('target', target);
+			return url.href;
+		};
+		const cases = {
+			'sw/opaque answer to a cors request': async () =>
+				read(via('opaque', r(B).url)),
+			'sw/opaque answer to a no-cors request': async () =>
+				read(via('opaque', r(B).url), { mode: 'no-cors' }),
+			'sw/cors answer the worker fetched': async () =>
+				read(via('cors', r(B, { acao: '*' }).url)),
+			"sw/the worker's own read of another site without ACAO": async () =>
+				read(via('own', r(B).url)),
+			"sw/the worker's own read of another site with ACAO": async () =>
+				read(via('own', r(B, { acao: '*' }).url)),
+			'sw/an image of another site the worker answers opaque': async () => {
+				const image = new Image();
+				await new Promise((resolve) => {
+					image.onload = image.onerror = resolve;
+					image.src = via('opaque', r(B, { type: 'png' }).url);
+				});
+				const canvas = document.createElement('canvas');
+				canvas.getContext('2d').drawImage(image, 0, 0);
+				let read;
+				try {
+					canvas.getContext('2d').getImageData(0, 0, 1, 1);
+					read = 'readable';
+				} catch (error) {
+					read = error.name;
+				}
+				return { width: image.naturalWidth, read };
+			},
+			"sw/another site's responses through the worker's cache": async () =>
+				read(via('cache', r(B).url)),
+			'sw/a made answer to a request of another site': async () =>
+				read(via('made', null, B)),
+			'sw/a preflighted request the worker passes on': async () => {
+				const { url, key } = r(B, { acao: '*', pacam: 'PUT', sw: 'pass' });
+				const result = await read(url, { method: 'PUT' });
+				return { result, reached: await reached(key) };
+			},
+			'sw/a refused preflight the worker passes on': async () => {
+				const { url, key } = r(B, { acao: '*', sw: 'pass' });
+				const result = await read(url, { method: 'PUT' });
+				return { result, reached: await reached(key) };
+			},
+			'sw/a page read without ACAO the worker passes on': async () => {
+				const { url, key } = r(B, { sw: 'pass' });
+				return { result: await read(url), reached: await reached(key) };
+			},
+		};
+		try {
+			const container = navigator.serviceWorker;
+			await container.register('sop-sw.js');
+			for (let i = 0; i < 300 && !container.controller; i++)
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			out.controlled = !!container.controller;
+			for (const [name, run] of Object.entries(cases))
+				try {
+					out.cases[name] = await run();
+				} catch (error) {
+					out.cases[name] = `case threw ${failed(error)}`;
+				}
+		} catch (error) {
+			out.error = failed(error);
+		}
+		out.cases = JSON.parse(JSON.stringify(out.cases).replaceAll(`${K}-`, 'K-'));
+		out.done = true;
+	})();
+</script>

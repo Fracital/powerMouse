@@ -1,5 +1,6 @@
 import Client from '../Client';
 import Module from '../Module';
+import { adoptTypeMark, cacheableResponse } from './Fetch';
 import ProxyModule from './Proxy';
 
 /**
@@ -113,7 +114,7 @@ export default class PartitionModule extends Module<Client> {
 				input instanceof global.Request
 					? input
 					: new global.Request(input as RequestInfo);
-			for (const method of ['match', 'matchAll', 'delete', 'keys'] as const)
+			for (const method of ['delete', 'keys'] as const)
 				cache[method] = proxyModule.wrapFunction(
 					cache[method] as Function,
 					(target, that, args) => {
@@ -122,9 +123,37 @@ export default class PartitionModule extends Module<Client> {
 						return Reflect.apply(target, that, args);
 					},
 				) as any;
+			// a kept cors or opaque response reads as one again (Fetch's
+			// cacheableResponse marked it when it was put)
+			cache.match = proxyModule.wrapFunction(
+				cache.match,
+				async (target, that, args) => {
+					if (args.length && args[0] !== undefined)
+						args[0] = asRequest(args[0]);
+					const hit = (await Reflect.apply(target, that, args)) as
+						Response | undefined;
+					if (hit) adoptTypeMark(hit);
+					return hit;
+				},
+			) as Cache['match'];
+			cache.matchAll = proxyModule.wrapFunction(
+				cache.matchAll,
+				async (target, that, args) => {
+					if (args.length && args[0] !== undefined)
+						args[0] = asRequest(args[0]);
+					const hits = (await Reflect.apply(
+						target,
+						that,
+						args,
+					)) as readonly Response[];
+					for (const hit of hits) adoptTypeMark(hit);
+					return hits;
+				},
+			) as Cache['matchAll'];
 			const put = cache.put;
 			cache.put = proxyModule.wrapFunction(put, (target, that, args) => {
 				if (args.length) args[0] = asRequest(args[0]);
+				if (args.length > 1) args[1] = cacheableResponse(args[1]);
 				return Reflect.apply(target, that, args);
 			});
 			cache.addAll = proxyModule.wrapFunction(
@@ -139,7 +168,10 @@ export default class PartitionModule extends Module<Client> {
 							throw new TypeError(
 								`Failed to execute 'addAll' on 'Cache': Request failed`,
 							);
-						await Reflect.apply(put, that, [requests[index], response]);
+						await Reflect.apply(put, that, [
+							requests[index],
+							cacheableResponse(response),
+						]);
 					}
 				},
 			);

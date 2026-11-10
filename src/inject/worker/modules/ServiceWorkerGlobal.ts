@@ -13,6 +13,7 @@ import { sendBody } from '../../../transport/bodyPort';
 import { postToPort, SW_RPC } from '../../../transport/messages';
 import { RpcHelper } from '../../../transport/rpc';
 import Module from '../../Module';
+import { nativeBodyOf } from '../../modules/Fetch';
 import ProxyModule from '../../modules/Proxy';
 import ServiceWorkerObjects from '../../serviceWorkerObjects';
 import type WorkerClient from '../Client';
@@ -1042,6 +1043,7 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 		const answerOf = async (
 			state: FetchState,
 			redirect: RequestRedirect,
+			mode: RequestMode,
 		): Promise<[FetchAnswer, Transferable[]]> => {
 			let response: unknown;
 			try {
@@ -1064,8 +1066,41 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 					{ kind: 'error', message: 'a Response whose "type" is "error"' },
 					[],
 				];
-			if (type === 'opaque' || type === 'opaqueredirect')
-				return [{ kind: 'network' }, []];
+			// an opaque response answers a no-cors request only; for any other
+			// mode the page gets a network error (the fetch spec's handle
+			// fetch). Through the proxy it is a response the worker sent
+			// nothing of (the inject's fetch shows it as opaque), passed on as
+			// one with nothing in it
+			if (type === 'opaque') {
+				if (mode !== 'no-cors')
+					return [
+						{
+							kind: 'error',
+							message: `an "opaque" response was used for a request whose type is not no-cors`,
+						},
+						[],
+					];
+				// its bytes go on (an image the page shows); the page reads
+				// nothing of them
+				const stream = nativeBodyOf(response);
+				const opaqueBody = stream ? sendBody(stream) : null;
+				return [
+					{
+						kind: 'response',
+						response: {
+							status: 200,
+							statusText: '',
+							headers: [],
+							body: opaqueBody,
+							url: '',
+							redirected: false,
+							type: 'opaque',
+						},
+					},
+					opaqueBody ? [opaqueBody.$stompBodyPort] : [],
+				];
+			}
+			if (type === 'opaqueredirect') return [{ kind: 'network' }, []];
 			if (response.bodyUsed)
 				return [
 					{
@@ -1092,6 +1127,7 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 				body,
 				url: response.url,
 				redirected: response.redirected,
+				type: type === 'cors' ? 'cors' : 'basic',
 			};
 			return [
 				{ kind: 'response', response: wire },
@@ -1131,20 +1167,22 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 						state.resolveHandled?.();
 						return [false, []];
 					}
-					answerOf(state, init.request.redirect).then(([answer, transfer]) => {
-						if (answer.kind === 'error') {
-							console.warn(
-								`The FetchEvent for "${init.request.url}" resulted in a network error response: ${answer.message}`,
-							);
-							state.rejectHandled?.(
-								new global.DOMException(
-									'The fetch was not handled.',
-									'NetworkError',
-								),
-							);
-						} else state.resolveHandled?.();
-						rpc.call('respond', { event: init.id, answer }, transfer);
-					});
+					answerOf(state, init.request.redirect, init.request.mode).then(
+						([answer, transfer]) => {
+							if (answer.kind === 'error') {
+								console.warn(
+									`The FetchEvent for "${init.request.url}" resulted in a network error response: ${answer.message}`,
+								);
+								state.rejectHandled?.(
+									new global.DOMException(
+										'The fetch was not handled.',
+										'NetworkError',
+									),
+								);
+							} else state.resolveHandled?.();
+							rpc.call('respond', { event: init.id, answer }, transfer);
+						},
+					);
 					return [true, []];
 				},
 				message: async (init) => {

@@ -343,6 +343,15 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A page's emulated service worker sees the same-origin policy as a real
+  one does: a request it answers is not preflighted or checked against the
+  page's origin, its own fetches are judged as its origin's, an opaque
+  answer to a request that is not no-cors is a network error and one to a
+  no-cors request reads as opaque (an image shows, a canvas that draws it
+  is tainted), a `cors` answer reads as `cors`, a body it made as `basic`.
+  The CORS change had refused its answers to cross-origin requests and
+  turned an opaque answer into a network fetch. The Cache API keeps a `cors`
+  or opaque response's type. (sop-escapes suite, `?sw`.)
 - A request a host rule sends with another Origin (the host's own, for a
   site that answers only that) is checked against that origin by the CORS
   check, not the page's: the site's Access-Control-Allow-Origin names the

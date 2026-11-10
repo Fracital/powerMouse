@@ -6,7 +6,11 @@ import {
 	OPAQUE_HEADER,
 } from '../../../transport/messages';
 import Module from '../../Module';
-import { isStompHeader, pageHeaderRecord } from '../../modules/Fetch';
+import {
+	adoptTypeMark,
+	isStompHeader,
+	pageHeaderRecord,
+} from '../../modules/Fetch';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
@@ -358,6 +362,8 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					this.#credentialed?.plain === responseURL
 						? this.#credentialed.shown
 						: responseURL;
+				// an emulated service worker's answer: its mark is the proxy's
+				adoptTypeMark(response!);
 				this.#responseHeaders = response!.headers;
 				this.#dispatchReadyState();
 

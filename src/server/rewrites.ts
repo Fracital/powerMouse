@@ -52,6 +52,8 @@ import {
 	CREDENTIALS_HEADER,
 	LOAD_HEADER,
 	OPAQUE_HEADER,
+	OPAQUE_MARKER,
+	RESPONSE_TYPE_HEADER,
 	TAO_MARKER,
 } from '../transport/messages';
 import { BUILD } from '../version';
@@ -537,7 +539,10 @@ function genericForward(
 		requestHeaders.delete(ABORT_HEADER);
 		// a load the inject fetched for the page says what it stands for; the
 		// page's own requests never carry the header (the inject drops it)
-		const internal = serverRequest.headers.has(LOAD_HEADER);
+		// (and a request the worker makes itself: an emulated service worker's
+		// script or the scripts it imports, no-cors loads natively)
+		const internal =
+			serverRequest.headers.has(LOAD_HEADER) || !!context?.internal;
 		const load = loadOf(serverRequest.headers.get(LOAD_HEADER));
 		requestHeaders.delete(LOAD_HEADER);
 		// a page's own request from an opaque origin (a document the page
@@ -1356,8 +1361,12 @@ function genericForward(
 		// what the browser would not have let the page have: a cross-origin
 		// cors response (or redirect) that does not pass the CORS check, a
 		// no-cors one its Cross-Origin-Resource-Policy keeps to its own origin
-		// or site
+		// or site. An answer of the page's emulated service worker is not the
+		// network's: the worker's own fetches were judged as the worker's, and
+		// what it hands the page goes as it is, with its type (handle fetch)
+		const fromNetwork = !fromWorker;
 		if (
+			fromNetwork &&
 			corsChecked &&
 			!corsCheck(response.headers, corsOrigin!, credentialsIncluded)
 		) {
@@ -1365,6 +1374,7 @@ function genericForward(
 			return refuse('blocked by CORS policy');
 		}
 		if (
+			fromNetwork &&
 			crossOrigin &&
 			policyMode === 'no-cors' &&
 			corpBlocks(
@@ -1434,6 +1444,16 @@ function genericForward(
 			transformRoute,
 			additionalResponseFilter,
 		);
+		// the type an emulated service worker's answer has is the worker's to
+		// say (serviceWorkers.dispatch); a site never says it
+		if (fromNetwork) responseHeaders.delete(RESPONSE_TYPE_HEADER);
+		// a load the page's emulated service worker answered with another
+		// origin's opaque response taints a canvas that draws it
+		else if (
+			serverRequest.destination !== '' &&
+			responseHeaders.get(RESPONSE_TYPE_HEADER)?.startsWith('opaque')
+		)
+			responseHeaders.append('server-timing', OPAQUE_MARKER);
 		const redirect =
 			REDIRECT_STATUSES.includes(response.status) &&
 			responseHeaders.has('location');
@@ -1442,12 +1462,19 @@ function genericForward(
 		// to follow); a page's own no-cors fetch of another origin is opaque,
 		// so nothing of the response reaches it (the inject shows it as one)
 		const opaqueFetch =
+			fromNetwork &&
 			crossOrigin &&
 			policyMode === 'no-cors' &&
 			!internal &&
 			serverRequest.destination === '' &&
 			!redirect;
-		if (corsChecked || opaqueFetch) {
+		// an emulated service worker's own no-cors fetch keeps the bytes (it
+		// may hand them to an image of its page, or to its cache): its realm
+		// shows the response as opaque and reads nothing of it
+		const keepOpaqueBody =
+			opaqueFetch &&
+			serviceWorkers.isEmulated(context?.clientId, clientRoute ?? undefined);
+		if ((fromNetwork && corsChecked) || opaqueFetch) {
 			const location = responseHeaders.get('location');
 			responseHeaders = opaqueFetch
 				? new Headers()
@@ -1459,6 +1486,7 @@ function genericForward(
 		// unless its Timing-Allow-Origin names the page: the inject reads this
 		// mark (never a fetch's or XHR's, whose headers the page reads)
 		if (
+			fromNetwork &&
 			crossOrigin &&
 			serverRequest.destination !== '' &&
 			timingAllowed(response.headers, policyOrigin!)
@@ -1523,7 +1551,7 @@ function genericForward(
 
 		if (statusEmpty.includes(+response.status)) {
 			body = undefined;
-		} else if (opaqueFetch) {
+		} else if (opaqueFetch && !keepOpaqueBody) {
 			await response.body?.cancel().catch(() => {});
 			body = undefined;
 		} else {

@@ -100,6 +100,66 @@ for (const [mode, base] of [
 	}, pageURL(mode));
 	const proxied = await report(page);
 	ok(`${mode}: the battery ran every case`, proxied !== null, normal(proxied));
+	compare(mode, native, proxied);
+	await page.context().close();
+}
+
+// The second part: a page whose service worker (an emulated one through
+// the proxy, the demo's `?sw`) answers its requests to the other site in its
+// own ways (test/pages/sop-sw.js): the worker's answers reach the page as
+// natively (an opaque one only to a no-cors request), and the worker's own
+// reads are judged as the worker's origin's, preflighted once
+if (!only || only.startsWith('sw/')) {
+	const swURL = (k) =>
+		`${FIXTURE}pages/deep/sopsw/sop-sw.html?b=${encodeURIComponent(other)}&k=${k}`;
+	const swReport = async (page) => {
+		for (let i = 0; i < 400; i++) {
+			await sleep(250);
+			for (const frame of page.frames()) {
+				const value = await frame
+					?.evaluate(() => window.__sopSW)
+					.catch(() => null);
+				if (value?.done) return value;
+			}
+		}
+		return null;
+	};
+	const swNativePage = await browser.newPage();
+	await swNativePage.goto(swURL('native'));
+	const swNative = await swReport(swNativePage);
+	await swNativePage.context().close();
+	ok(
+		'natively, the service worker controlled the page and ran every case',
+		swNative?.controlled === true && !swNative.error,
+		normal(swNative),
+	);
+	for (const [mode, base] of [
+		['same-origin', PROXY],
+		['isolated', HOST],
+	]) {
+		const page = await openDemo(browser, `${base}?sw`);
+		await page.evaluate((url) => {
+			const form = document.getElementById('mainForm');
+			form.url.value = url;
+			form.requestSubmit();
+		}, swURL(mode));
+		const proxied = await swReport(page);
+		ok(
+			`${mode}: the emulated service worker controlled the page and ran every case`,
+			proxied?.controlled === true && !proxied.error,
+			normal(
+				proxied && { controlled: proxied.controlled, error: proxied.error },
+			),
+		);
+		compare(mode, swNative?.cases, proxied?.cases);
+		await page.context().close();
+	}
+}
+
+await done(browser);
+
+/** each case natively against the proxy, a known difference against its list */
+function compare(mode, native, proxied) {
 	for (const name of Object.keys(native ?? {})) {
 		const want = normal(native[name]);
 		const got = normal(proxied?.[name]);
@@ -112,7 +172,4 @@ for (const [mode, base] of [
 			);
 		else ok(`${mode}: ${name} as natively`, want === got, detail);
 	}
-	await page.context().close();
 }
-
-await done(browser);

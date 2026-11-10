@@ -203,6 +203,21 @@ Filled in commit by commit; see the CHANGELOG for each.
   fetch or XMLHttpRequest (CORS-checked). The mark never reaches the page.
   `workerStart` is 0 on every entry, as for a page with no service worker
   (it was the time the proxy's worker started, a tell on every entry).
+- **Emulated service workers** (sop-escapes' second part, `test/pages/sop-sw.js`:
+  12 cases, natively against `?sw`). A request the page's emulated worker
+  answers is the worker's: the worker sends no preflight for it and checks
+  nothing of its answer against the page's origin; the worker's own
+  fetches are judged as the worker's origin's (one preflight, from the
+  worker's fetch). Its answer carries its type and URL
+  (`x-stomp-response`, never shown to the page): an opaque answer to a
+  request that is not no-cors is a network error, one to a no-cors request
+  reads as opaque (its bytes go on, so an image shows, and a canvas that
+  draws it is tainted through a Server-Timing mark on the load), a `cors`
+  answer reads as `cors` with the worker's URL, a body the worker made is
+  `basic` whatever the URL. An emulated worker's own no-cors fetch keeps
+  its bytes (its realm reads nothing of them: an opaque response's body
+  methods give nothing), and the Cache API keeps a `cors` or opaque
+  response with its type, in a page and in a worker.
 
 ## Left
 
@@ -259,13 +274,11 @@ suites' known lists with the same reason.
 8. An XMLHttpRequest with upload listeners is not preflighted for them
    (Chrome's CORS-preflight flag); the preflight cache is not keyed by the
    top-level site as Chrome's is.
-9. The Cache API keeps an opaque response as the empty one the worker sent:
-   read back from the cache it is `basic`, status 200, empty.
-10. `:visited`: Chrome never lets script read it, and partitions it by
-    top-level site and frame origin; through the proxy every link is a
-    proxy URL in one partition, so its timing side channels span every
-    proxied site.
-11. `crossOriginIsolated`: a page that sends COOP and COEP natively gets an
+9. `:visited`: Chrome never lets script read it, and partitions it by
+   top-level site and frame origin; through the proxy every link is a
+   proxy URL in one partition, so its timing side channels span every
+   proxied site.
+10. `crossOriginIsolated`: a page that sends COOP and COEP natively gets an
     isolated agent cluster (SharedArrayBuffer, precise timers); through the
     proxy the frame lives in the host's browsing context group, so it
     cannot.

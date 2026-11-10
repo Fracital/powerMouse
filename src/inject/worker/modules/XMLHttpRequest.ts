@@ -2,7 +2,11 @@ import { routeXHR } from '../../../routeURL';
 import StompURL from '../../../StompURL';
 import { ABORT_HEADER, CREDENTIALS_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
-import { isStompHeader, pageHeaderRecord } from '../../modules/Fetch';
+import {
+	adoptTypeMark,
+	isStompHeader,
+	pageHeaderRecord,
+} from '../../modules/Fetch';
 import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import {
@@ -316,6 +320,8 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					this.#credentialed?.plain === responseURL
 						? this.#credentialed.shown
 						: responseURL;
+				// an emulated service worker's answer: its mark is the proxy's
+				adoptTypeMark(response!);
 				this.#responseHeaders = response!.headers;
 				this.#dispatchReadyState();
 

@@ -63,6 +63,21 @@ export const LOAD_HEADER = 'x-stomp-load';
  */
 export const TAO_MARKER = 'stomp-tao';
 /**
+ * A Server-Timing metric the worker adds to a load (an image, a video) its
+ * page's emulated service worker answered with an opaque response: the URL
+ * is the page's own, the data another origin's, so a canvas that draws it is
+ * tainted (CanvasTaint reads it; the page never sees it)
+ */
+export const OPAQUE_MARKER = 'stomp-opaque';
+/**
+ * On the answer of a page's emulated service worker: `<type> <url>`, the
+ * response's type (basic, cors, opaque) and URL as the worker's Response
+ * had them. To the browser every route is same-origin and the URL is the
+ * request's; the inject's fetch shows the page the worker's type and URL
+ * and never this header. The worker deletes it from every other response
+ */
+export const RESPONSE_TYPE_HEADER = 'x-stomp-response';
+/**
  * On a request a page's fetch or XMLHttpRequest makes from a document the
  * page sandboxed without allow-same-origin (an opaque origin natively, the
  * site's through the proxy): the worker judges it as the browser judges an

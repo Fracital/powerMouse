@@ -5,7 +5,11 @@ import {
 	routeXHR,
 } from '../../routeURL';
 import StompURL, { urlLike } from '../../StompURL';
-import { ABORT_HEADER, OPAQUE_HEADER } from '../../transport/messages';
+import {
+	ABORT_HEADER,
+	OPAQUE_HEADER,
+	RESPONSE_TYPE_HEADER,
+} from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
 import { failsToParse } from '../nativeErrors';
@@ -33,6 +37,107 @@ const nativeRequestHeaders = Reflect.getOwnPropertyDescriptor(
 	Request.prototype,
 	'headers',
 )!.get!;
+
+const nativeHeadersGet = Headers.prototype.get;
+const nativeResponseHeaders = Reflect.getOwnPropertyDescriptor(
+	Response.prototype,
+	'headers',
+)!.get!;
+const nativeResponseBody = Reflect.getOwnPropertyDescriptor(
+	Response.prototype,
+	'body',
+)!.get!;
+
+/**
+ * The type a response the page holds has natively: every route is
+ * same-origin to the browser, so its own says `basic` for all. Another
+ * origin's is `cors`, or `opaque` for a no-cors request, which reads as the
+ * browser's opaque response does. Kept for every realm of the bundle (a
+ * service worker's answer, a response out of the Cache API)
+ */
+const responseTypes = new WeakMap<Response, 'cors' | 'opaque'>();
+/** the page's URL of a response, where the browser has the route */
+const responseURLs = new WeakMap<Response, string>();
+/** responses that came with RESPONSE_TYPE_HEADER, which the page never sees */
+const marked = new WeakSet<Response>();
+
+/** a response's body stream as the browser has it, whatever its type reads as */
+export const nativeBodyOf = (response: Response) =>
+	Reflect.apply(nativeResponseBody, response, []) as ReadableStream | null;
+
+/** the type a response reads as to the page */
+export const recordedType = (response: Response) => responseTypes.get(response);
+
+/** the page's URL a response reads as, when it is not the browser's */
+export const recordedURL = (response: Response) => responseURLs.get(response);
+
+/** record what a response reads as to the page */
+export function recordResponse(
+	response: Response,
+	type: 'basic' | 'cors' | 'opaque' | undefined,
+	url?: string,
+) {
+	if (type === 'cors' || type === 'opaque') responseTypes.set(response, type);
+	if (url !== undefined) responseURLs.set(response, url);
+}
+
+/**
+ * A response that says what it is (RESPONSE_TYPE_HEADER: an emulated
+ * service worker's answer, one the Cache API kept) is recorded so, the
+ * header hidden from the page; false for any other
+ */
+export function adoptTypeMark(response: Response): boolean {
+	const headers = Reflect.apply(nativeResponseHeaders, response, []) as Headers;
+	const mark = Reflect.apply(nativeHeadersGet, headers, [
+		RESPONSE_TYPE_HEADER,
+	]) as string | null;
+	if (mark === null) return false;
+	const space = mark.indexOf(' ');
+	const type = space === -1 ? mark : mark.slice(0, space);
+	const url = space === -1 ? '' : mark.slice(space + 1);
+	marked.add(response);
+	recordResponse(
+		response,
+		type === 'cors' || type === 'opaque' ? type : 'basic',
+		url || undefined,
+	);
+	return true;
+}
+
+const nativeResponseStatus = Reflect.getOwnPropertyDescriptor(
+	Response.prototype,
+	'status',
+)!.get!;
+const nativeResponseStatusText = Reflect.getOwnPropertyDescriptor(
+	Response.prototype,
+	'statusText',
+)!.get!;
+
+/**
+ * A response the Cache API is given, as it must keep it: one the page reads
+ * as `cors` or `opaque` (the browser has a `basic` one) is kept with the
+ * mark of what it is (RESPONSE_TYPE_HEADER), which a match reads back
+ * (adoptTypeMark). Any other goes as it is
+ */
+export function cacheableResponse(response: unknown): unknown {
+	if (!(response instanceof Response)) return response;
+	const type = responseTypes.get(response);
+	if (type === undefined) return response;
+	const headers = new Headers();
+	for (const [name, value] of entriesOf(
+		Reflect.apply(nativeResponseHeaders, response, []) as Headers,
+	))
+		if (name !== RESPONSE_TYPE_HEADER) headers.append(name, value);
+	headers.set(
+		RESPONSE_TYPE_HEADER,
+		`${type} ${responseURLs.get(response) ?? ''}`,
+	);
+	return new Response(nativeBodyOf(response), {
+		status: Reflect.apply(nativeResponseStatus, response, []) as number,
+		statusText: Reflect.apply(nativeResponseStatusText, response, []) as string,
+		headers,
+	});
+}
 
 /** the names and values of a real Headers, read by the browser's own method */
 function entriesOf(headers: Headers): [string, string][] {
@@ -93,15 +198,6 @@ export default class FetchModule extends Module<Client> {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
 		const eventSourceURLs = new WeakMap<EventSource, string>();
-		const responseURLs = new WeakMap<Response, string>();
-		/**
-		 * The type a response of the page's fetch has natively: every route
-		 * is same-origin to the browser, so its own says `basic` for all.
-		 * Another origin's is `cors`, or `opaque` for a no-cors request, which
-		 * the worker sent with nothing of the response (status, headers,
-		 * body), and which reads as the browser's opaque response does
-		 */
-		const responseTypes = new WeakMap<Response, 'cors' | 'opaque'>();
 
 		this.client.global.EventSource = proxyModule.wrapFunction(
 			this.client.global.EventSource,
@@ -164,7 +260,7 @@ export default class FetchModule extends Module<Client> {
 		});
 
 		// over the URL's readback above
-		this.hookResponses(responseTypes);
+		this.hookResponses();
 
 		this.client.global.Request = proxyModule.wrapFunction(
 			this.client.global.Request,
@@ -327,6 +423,9 @@ export default class FetchModule extends Module<Client> {
 				const routedURL = Reflect.apply(nativeResponseURL, res, []) as string;
 				const pageURL = unrouteURL(this.client, routedURL) ?? routedURL;
 				responseURLs.set(res, pageURL);
+				// an answer of the page's emulated service worker says its own
+				// type and URL (a body it made is basic, whatever the URL)
+				if (adoptTypeMark(res)) return res;
 
 				// another origin's response, after any redirects, or one that
 				// went through another origin (a redirect back is tainted too)
@@ -352,11 +451,13 @@ export default class FetchModule extends Module<Client> {
 	 * opaque one everything else the browser hides (status 0, no status
 	 * text, URL, headers or body, not redirected). A clone keeps its type
 	 */
-	hookResponses(types: WeakMap<Response, 'cors' | 'opaque'>) {
+	hookResponses() {
+		const types = responseTypes;
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const global = this.client.global;
 		const proto = global.Response.prototype;
 		const emptyHeaders = new WeakMap<Response, Headers>();
+		const shownHeaders = new WeakMap<Response, Headers>();
 		const opaque: Record<string, (that: Response) => unknown> = {
 			status: () => 0,
 			ok: () => false,
@@ -384,6 +485,19 @@ export default class FetchModule extends Module<Client> {
 						if (name === 'type') return type;
 						if (type === 'opaque') return opaque[name](that as Response);
 					}
+					// the proxy's mark of what a response is: never the page's
+					if (name === 'headers' && marked.has(that as Response)) {
+						let shown = shownHeaders.get(that as Response);
+						if (!shown) {
+							shown = new global.Headers();
+							for (const [key, value] of entriesOf(
+								Reflect.apply(target, that, args) as Headers,
+							))
+								if (key !== RESPONSE_TYPE_HEADER) shown.append(key, value);
+							shownHeaders.set(that as Response, shown);
+						}
+						return shown;
+					}
 					return Reflect.apply(target, that, args);
 				}),
 			});
@@ -394,8 +508,37 @@ export default class FetchModule extends Module<Client> {
 				const copy = Reflect.apply(target, that, args) as Response;
 				const type = types.get(that as Response);
 				if (type !== undefined) types.set(copy, type);
+				const url = responseURLs.get(that as Response);
+				if (url !== undefined) responseURLs.set(copy, url);
+				if (marked.has(that as Response)) marked.add(copy);
 				return copy;
 			},
 		) as Response['clone'];
+		// nothing of an opaque response's body reaches the page, however it
+		// asks (its bytes are there when an emulated service worker hands an
+		// opaque answer on, which an image may show)
+		const emptyBody: Record<string, () => unknown> = {
+			text: () => global.Promise.resolve(''),
+			arrayBuffer: () => global.Promise.resolve(new global.ArrayBuffer(0)),
+			bytes: () => global.Promise.resolve(new global.Uint8Array(0)),
+			blob: () => global.Promise.resolve(new global.Blob([])),
+			json: () => global.Promise.resolve().then(() => global.JSON.parse('')),
+			formData: () =>
+				global.Promise.reject(
+					new global.TypeError(
+						"Failed to execute 'formData' on 'Response': Failed to fetch",
+					),
+				),
+		};
+		for (const name of Object.keys(emptyBody)) {
+			const native = (proto as unknown as Record<string, unknown>)[name];
+			if (typeof native !== 'function') continue;
+			(proto as unknown as Record<string, unknown>)[name] =
+				proxyModule.wrapFunction(native, (target, that, args) =>
+					types.get(that as Response) === 'opaque'
+						? emptyBody[name]()
+						: Reflect.apply(target, that, args),
+				);
+		}
 	}
 }

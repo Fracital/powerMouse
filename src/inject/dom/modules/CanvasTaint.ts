@@ -1,5 +1,7 @@
+import { OPAQUE_MARKER } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { hasProxyMetric } from '../../modules/ResourceTiming';
 import { unrouteURL } from '../../modules/Unroute';
 import { blobLoads } from '../blobLoads';
 import type DocumentClient from '../Client';
@@ -114,6 +116,17 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 				return false;
 			}
 		};
+		const answeredOpaque = (loaded: string): boolean => {
+			if (!/^https?:/.test(loaded)) return false;
+			const real = unrouteURL(this.client, loaded) ?? loaded;
+			try {
+				return global.performance
+					.getEntriesByName(real)
+					.some((entry) => hasProxyMetric(entry, OPAQUE_MARKER));
+			} catch (error) {
+				return false;
+			}
+		};
 		/** per element: the URL it was judged by and the verdict */
 		const judged = new WeakMap<object, { url: string; taints: boolean }>();
 		const elementTaints = (
@@ -123,10 +136,15 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		): boolean => {
 			const last = judged.get(element);
 			if (last && last.url === url) return last.taints;
-			// a crossorigin load reached the page only past the CORS check
-			const taints =
-				crossOrigin(url) &&
-				(cors ? Reflect.apply(cors, element, []) === null : true);
+			// a crossorigin load reached the page only past the CORS check; a
+			// load of the page's own URL its emulated service worker answered
+			// with another origin's opaque response taints too (the worker
+			// marked its timing entry)
+			const taints = crossOrigin(url)
+				? cors
+					? Reflect.apply(cors, element, []) === null
+					: true
+				: answeredOpaque(url);
 			judged.set(element, { url, taints });
 			return taints;
 		};
