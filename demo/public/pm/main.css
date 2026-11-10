@@ -1479,7 +1479,7 @@ input:focus-visible {
 	display: inline-flex;
 	gap: 8px;
 	vertical-align: middle;
-	margin-left: 16px;
+	margin-left: 8px;
 }
 .sites a {
 	color: #fff;
