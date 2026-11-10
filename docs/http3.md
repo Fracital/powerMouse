@@ -179,6 +179,14 @@ only filters inbound). Nothing in stomp's deployment changes: terp's
 `STOMP_WISP_URL` stays the relay, and the page enables `http3` in its
 transport descriptor.
 
+A datagram crosses wisp whole, as one DATA packet. Epoxy refuses one over
+64 KiB (above the 65507 bytes an IPv4 datagram carries) with `EMSGSIZE`
+before it reaches the server, whose message bound would otherwise close
+the whole connection. Through `send(datagram)` on the stream `connect_udp`
+returns, that fails the one call and the stream stays usable; a rejected
+`write` errors the WritableStream, as any rejected write does. QUIC's
+1250-byte packets are far below it.
+
 ## Building and testing
 
 `deploy/epoxy/build.sh` builds stomp-h3 in the same container as epoxy

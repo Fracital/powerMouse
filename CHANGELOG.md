@@ -444,6 +444,27 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   not; 21 large scripts of Google, YouTube, Docs, CNN and Discord split and
   stitch to the whole's rewrite; prewrite: the streamed shell leaves no copy
   of the markup in the page.)
+- An upload to a plain `http://` site no longer kills every request and socket
+  the page has open. Epoxy sent a request body as one wisp message, and the
+  holyWisp relays (`wss://holywisp.fracit.al/`) close a connection with 1009,
+  every stream on it, when a message is over their `max-message-size` of
+  262149 bytes; a 300 KB upload was enough. HTTPS was spared because each TLS
+  record goes out as its own message. The epoxy build now writes DATA packets
+  of at most 64 KiB, and each packet waits for the stream's CONTINUE credit
+  (TCP writes never looked at it). No wisp extension carries a server's bound,
+  so the 64 KiB is fixed, far under any server's. A UDP datagram over it (more
+  than an IPv4 datagram carries) fails that send alone with `EMSGSIZE` through
+  the new `send(datagram)` on `connect_udp`'s stream; the connection and the
+  stream stay up. Measured live through wss://holywisp.fracit.al/: 300 KB, 3
+  MiB and 20 MiB uploads arrive while two downloads run on the same
+  connection, largest message 65541 bytes (the 300 KB one went out as a
+  300309-byte message and closed the connection before). The new
+  wisp-message-size suite puts a relay that enforces the edges' limit in front
+  of the demo's wisp: 300 KB, 3 MiB and 20 MiB uploads with responses
+  streaming across them, a 20 MiB upload whose CONTINUE the relay hands out
+  one window at a time (it stops at its credit and never sends past it), and
+  UDP datagrams of 1200, 60000 and 70000 bytes. libcurl's wisp client already
+  writes at most 64 KiB (curl's upload buffer).
 - The demo's wisp server, wisp-js, goes to 0.5.3. 0.5.2 sent its periodic
   CONTINUE to UDP streams only (the stream type test was inverted), so a TCP
   stream never got credit back after its first window of 128 packets, and a
@@ -3781,6 +3802,10 @@ Fixed while testing real sites and a feature fixture:
   stops answering HTTP after roughly 70 requests with its default pool and
   roughly 160 with a larger one, which breaks any page that fans out that many
   assets. The demo defaults to epoxy and raises libcurl's pool when selected.
+- A wisp server that never refills a TCP stream's credit (wisp-js 0.5.2 and
+  older send CONTINUE for UDP streams only) stalls an epoxy stream after
+  its first window, 128 packets there: an upload over 8 MiB, or a long-lived
+  connection's 128th write. Run wisp-js 0.5.3 or later.
 - Wisp has no flow control from the server to the client, and epoxy queues
   each stream's incoming data without a bound, so a response nobody reads
   (a paused media download) keeps arriving into the transport worker's

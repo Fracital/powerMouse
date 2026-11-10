@@ -21,7 +21,11 @@ priorities and pseudo-header order, and its HTTP/1 field order and spelling
 are Chrome's (JA4, Akamai and JA4H equal to Chrome 152's; see
 `docs/fingerprint.md`), and with `ech_dns` it offers real Encrypted Client
 Hello to a site whose HTTPS DNS record has a config, with Chrome's outer and
-inner hello and Chrome's retries. The build also carries stomp-h3, HTTP/3 over wisp
+inner hello and Chrome's retries. Its writes go out as wisp packets of at
+most 64 KiB within each stream's flow control credit, so a wisp server that
+bounds its messages (the holyWisp relays, 262149 bytes) no longer closes the
+whole connection over an upload (see the `wisp-message-size` suite).
+The build also carries stomp-h3, HTTP/3 over wisp
 UDP for stomp's `http3` option (`h3/`, below), whose QUIC ClientHello and
 transport parameters are Chrome's too.
 
@@ -68,6 +72,7 @@ fails the build at `git apply --check`.
 | rustls 0.23.29                                                 | `0052` | Real ECH in a `chrome_hello`: `ClientConfig::set_ech_mode` (keeps TLS 1.2 in the outer hello, as Chrome does), BoringSSL's inner hello (TLS 1.3 only, no TLS 1.2 extensions, the differing extensions first and the rest as one `ech_outer_extensions` in the outer order, BoringSSL's padding), a rejecting server verified as the public name, `EchConfig::from_retry_configs`. |
 | MercuryWorkshop/epoxy-tls                                      | `0056` | `ech_resolver` option: a DNS name's ECHConfigList, asked while the wisp stream opens; HTTP and WebSocket connections offer real ECH with it, retry once with a rejecting server's retry configs and connect without ECH when it sends none, as Chrome does.                                                                                                                       |
 | MercuryWorkshop/EpoxyTransport                                 | `0052` | `ech_dns`: HTTPS records over DNS-over-HTTPS through the client, their `ech` handed to `ech_resolver` (kept for the TTL, at most 1.5 s of waiting per connection); `pem_files` passed through.                                                                                                                                                                                    |
+| MercuryWorkshop/epoxy-tls                                      | `0057` | Writes go out as DATA packets of at most 64 KiB, each within the stream's CONTINUE credit (the transport flushed while it waits). A body was one packet, and holyWisp closes the connection past 262149 bytes (1009). A UDP datagram over it fails that send alone (EMSGSIZE, `send(datagram)`).                                                                                  |
 
 ## stomp-h3 (`h3/`)
 

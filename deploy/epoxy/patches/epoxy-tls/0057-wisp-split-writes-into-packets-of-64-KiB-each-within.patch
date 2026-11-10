@@ -1,0 +1,449 @@
+From 2cdac5742c6f6c1fa90b5f909f07ce03144c7098 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 10 Nov 2026 15:53:07 -0500
+Subject: [PATCH] wisp: split writes into packets of 64 KiB, each within flow
+ control
+
+A stream write went out as one DATA packet whatever its size: an http
+request body was one message of the whole body (hyper hands the socket
+the head and body in one buffer), and a wisp server that bounds its
+WebSocket messages closes the whole connection past the bound, every
+stream on it. The holyWisp relays take 262149 bytes (256 KiB of payload
+plus the header) and close with 1009, so one 300 KB upload to a plain
+http site killed every request and socket the page had open. HTTPS was
+spared only because each TLS record goes out as its own packet.
+
+Writes now go out as DATA packets of at most 64 KiB (MAX_DATA_PAYLOAD);
+no extension advertises a server's bound, and 64 KiB is far under any
+server's. AsyncWrite::poll_write sends one packet per call and returns
+what it took (hyper, rustls and write_all send the rest), and the Sink
+sends a large item as several packets. Each packet waits for flow
+control credit: the AsyncWrite side that every TCP stream uses never
+looked at CONTINUE and sent past the server's buffer. While a stream
+waits it flushes the transport, since a packet handed to it may only go
+out on its next poll and the server sends no CONTINUE before it has
+counted the window's last packet (an upload of 20 MiB through holyWisp
+stopped one packet short of its window without that).
+
+A UDP datagram cannot be split. One over the limit (it is above the
+65507 bytes an IPv4 datagram can carry) fails that send alone with
+DatagramTooLarge, as EMSGSIZE does on a native socket, and the stream
+stays open. A UDP stream from connect_udp gets send(datagram) for that,
+next to its read and write streams: a WritableStream errors as a whole
+when one write fails, so its write rejects with the same error.
+---
+ client/src/io_stream.rs   | 88 ++++++++++++++++++++++++++++++++----
+ client/src/lib.rs         |  2 +
+ wisp/src/lib.rs           |  5 +++
+ wisp/src/mux/inner.rs     | 11 ++++-
+ wisp/src/stream/compat.rs | 40 +++++++++++++----
+ wisp/src/stream/mod.rs    | 94 ++++++++++++++++++++++++++++++---------
+ 6 files changed, 198 insertions(+), 42 deletions(-)
+
+diff --git a/client/src/io_stream.rs b/client/src/io_stream.rs
+index 07279fb..693e268 100644
+--- a/client/src/io_stream.rs
++++ b/client/src/io_stream.rs
+@@ -1,21 +1,29 @@
+-use std::pin::Pin;
++use std::{
++	cell::RefCell,
++	future::poll_fn,
++	pin::Pin,
++	rc::Rc,
++	task::{Context, Poll},
++};
+ 
+ use bytes::Bytes;
+ use futures_util::{AsyncReadExt, AsyncWriteExt, Sink, SinkExt, Stream, TryStreamExt};
+-use js_sys::{Object, Uint8Array};
++use js_sys::{Object, Promise, Uint8Array};
+ use wasm_bindgen::prelude::*;
++use wasm_bindgen_futures::future_to_promise;
+ use wasm_streams::{ReadableStream, WritableStream};
++use wisp_mux::stream::MuxStreamWrite;
+ 
+ use crate::{
+-	stream_provider::{ProviderAsyncRW, ProviderUnencryptedStream},
++	stream_provider::{ProviderAsyncRW, ProviderUnencryptedStream, ProviderWispTransportWrite},
+ 	utils::{convert_body, object_set, ReaderStream},
+ 	EpoxyError, EpoxyIoStream,
+ };
+ 
+-fn create_iostream(
++fn create_iostream_object(
+ 	stream: Pin<Box<dyn Stream<Item = Result<Bytes, EpoxyError>>>>,
+ 	sink: Pin<Box<dyn Sink<Bytes, Error = EpoxyError>>>,
+-) -> EpoxyIoStream {
++) -> Object {
+ 	let read = ReadableStream::from_stream(
+ 		stream
+ 			.map_ok(|x| Uint8Array::from(x.as_ref()).into())
+@@ -36,7 +44,14 @@ fn create_iostream(
+ 	let out = Object::new();
+ 	object_set(&out, "read", read.into());
+ 	object_set(&out, "write", write.into());
+-	JsValue::from(out).into()
++	out
++}
++
++fn create_iostream(
++	stream: Pin<Box<dyn Stream<Item = Result<Bytes, EpoxyError>>>>,
++	sink: Pin<Box<dyn Sink<Bytes, Error = EpoxyError>>>,
++) -> EpoxyIoStream {
++	JsValue::from(create_iostream_object(stream, sink)).into()
+ }
+ 
+ pub fn iostream_from_asyncrw(asyncrw: ProviderAsyncRW, buffer_size: usize) -> EpoxyIoStream {
+@@ -47,10 +62,65 @@ pub fn iostream_from_asyncrw(asyncrw: ProviderAsyncRW, buffer_size: usize) -> Ep
+ 	)
+ }
+ 
++type SharedDatagramWrite = Rc<RefCell<MuxStreamWrite<ProviderWispTransportWrite>>>;
++
++/// A UDP stream's write side, shared by its WritableStream and `send`. The
++/// stream is never borrowed across a poll, and both run on the one thread.
++struct DatagramSink(SharedDatagramWrite);
++
++impl Sink<Bytes> for DatagramSink {
++	type Error = EpoxyError;
++
++	fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
++		self.0.borrow_mut().poll_ready_unpin(cx).map_err(EpoxyError::Wisp)
++	}
++
++	fn start_send(self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
++		self.0.borrow_mut().start_send_unpin(item).map_err(EpoxyError::Wisp)
++	}
++
++	fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
++		self.0.borrow_mut().poll_flush_unpin(cx).map_err(EpoxyError::Wisp)
++	}
++
++	fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
++		self.0.borrow_mut().poll_close_unpin(cx).map_err(EpoxyError::Wisp)
++	}
++}
++
++async fn send_datagram(write: SharedDatagramWrite, datagram: JsValue) -> Result<JsValue, JsValue> {
++	let bytes = convert_body(datagram)
++		.await
++		.map_err(|_| EpoxyError::InvalidPayload)?;
++	let bytes = Bytes::from(bytes.0.to_vec());
++	poll_fn(|cx| write.borrow_mut().poll_ready_unpin(cx))
++		.await
++		.map_err(EpoxyError::Wisp)?;
++	write
++		.borrow_mut()
++		.start_send_unpin(bytes)
++		.map_err(EpoxyError::Wisp)?;
++	poll_fn(|cx| write.borrow_mut().poll_flush_unpin(cx))
++		.await
++		.map_err(EpoxyError::Wisp)?;
++	Ok(JsValue::UNDEFINED)
++}
++
++// A UDP stream gets `send(datagram)` next to its streams: like sendto(2) on a
++// native socket, a datagram over the size one Wisp packet carries fails that
++// call alone (EMSGSIZE) and the socket keeps working. A WritableStream cannot
++// do that, since a rejected write errors the whole stream; its write rejects
++// with the same error.
+ pub fn iostream_from_stream(stream: ProviderUnencryptedStream) -> EpoxyIoStream {
+ 	let (rx, tx) = stream.into_split();
+-	create_iostream(
++	let tx: SharedDatagramWrite = Rc::new(RefCell::new(tx));
++	let out = create_iostream_object(
+ 		Box::pin(rx.map_ok(Bytes::from).map_err(EpoxyError::Wisp)),
+-		Box::pin(tx.sink_map_err(EpoxyError::Wisp)),
+-	)
++		Box::pin(DatagramSink(tx.clone())),
++	);
++	let send = Closure::<dyn Fn(JsValue) -> Promise>::new(move |datagram: JsValue| {
++		future_to_promise(send_datagram(tx.clone(), datagram))
++	});
++	object_set(&out, "send", send.into_js_value());
++	JsValue::from(out).into()
+ }
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index 25554b4..216d2ef 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -57,6 +57,8 @@ const EPOXYCLIENT_TYPES: &'static str = r#"
+ type EpoxyIoStream = {
+ 	read: ReadableStream<Uint8Array>,
+ 	write: WritableStream<Uint8Array>,
++	/** UDP streams only: sends one datagram; one over a Wisp packet's 64 KiB fails this call alone (EMSGSIZE) */
++	send?: (datagram: Uint8Array) => Promise<void>,
+ };
+ type EpoxyWispTransportResult = { read: ReadableStream<ArrayBuffer>, write: WritableStream<Uint8Array> };
+ type EpoxyWispTransport = string | (() => Promise<EpoxyWispTransportResult> | EpoxyWispTransportResult);
+diff --git a/wisp/src/lib.rs b/wisp/src/lib.rs
+index d78f22a..0dcb4bf 100644
+--- a/wisp/src/lib.rs
++++ b/wisp/src/lib.rs
+@@ -41,6 +41,11 @@ pub enum WispError {
+ 	/// The max stream count was reached.
+ 	#[error("Maximum stream count reached")]
+ 	MaxStreamCountReached,
++	/// A datagram was larger than one DATA packet may carry. A datagram
++	/// cannot be split, so only that send fails, as `EMSGSIZE` does for a
++	/// native UDP socket; the stream stays open.
++	#[error("Datagram too large (EMSGSIZE): {0} bytes, a Wisp DATA packet carries at most {1}")]
++	DatagramTooLarge(usize, usize),
+ 
+ 	/// Failed to parse bytes as UTF-8.
+ 	#[error("Invalid UTF-8: {0}")]
+diff --git a/wisp/src/mux/inner.rs b/wisp/src/mux/inner.rs
+index 428104d..c05ead6 100644
+--- a/wisp/src/mux/inner.rs
++++ b/wisp/src/mux/inner.rs
+@@ -56,6 +56,7 @@ pub(crate) enum FlowControl {
+ 
+ pub(crate) struct StreamInfo {
+ 	pub id: u32,
++	pub stream_type: StreamType,
+ 
+ 	pub flow_status: FlowControl,
+ 	pub target_flow_control: u32,
+@@ -65,7 +66,12 @@ pub(crate) struct StreamInfo {
+ }
+ 
+ impl StreamInfo {
+-	pub fn new(id: u32, flow_status: FlowControl, buffer_size: u32) -> Self {
++	pub fn new(
++		id: u32,
++		stream_type: StreamType,
++		flow_status: FlowControl,
++		buffer_size: u32,
++	) -> Self {
+ 		debug_assert_ne!(id, 0);
+ 
+ 		// 90%
+@@ -74,6 +80,7 @@ impl StreamInfo {
+ 
+ 		Self {
+ 			id,
++			stream_type,
+ 
+ 			flow_status,
+ 			target_flow_control: target,
+@@ -367,7 +374,7 @@ impl<R: TransportRead, W: TransportWrite, M: MultiplexorActor<W>> MuxInner<R, W,
+ 			flume::unbounded()
+ 		};
+ 
+-		let info = Arc::new(StreamInfo::new(id, flow, self.buffer_size));
++		let info = Arc::new(StreamInfo::new(id, ty, flow, self.buffer_size));
+ 		let val = StreamMapValue {
+ 			info: info.clone(),
+ 			stream: data_tx,
+diff --git a/wisp/src/stream/compat.rs b/wisp/src/stream/compat.rs
+index ccd6526..d3fab1f 100644
+--- a/wisp/src/stream/compat.rs
++++ b/wisp/src/stream/compat.rs
+@@ -18,7 +18,11 @@ use crate::{
+ 	WispError,
+ };
+ 
+-use super::{MuxStream, MuxStreamRead, MuxStreamWrite, StreamInfo, WsEvent};
++use super::{
++	poll_flow_credit, MuxStream, MuxStreamRead, MuxStreamWrite, StreamInfo, WsEvent,
++	MAX_DATA_PAYLOAD,
++};
++use crate::mux::inner::FlowControl;
+ 
+ struct MapToIo<W: TransportWrite>(MuxStreamRead<W>);
+ 
+@@ -115,22 +119,40 @@ impl<W: TransportWrite> MuxStreamAsyncWrite<W> {
+ }
+ 
+ impl<W: TransportWrite> AsyncWrite for MuxStreamAsyncWrite<W> {
++	// One DATA packet per call, of at most MAX_DATA_PAYLOAD bytes, and only
++	// with flow control credit: the caller (hyper, rustls, write_all) writes
++	// the rest in further calls. A whole request body went out as one packet
++	// before, and a server that bounds its messages (the holyWisp relays take
++	// 256 KiB) closed the connection, every stream on it, with 1009; and the
++	// packets went out whatever CONTINUE had allowed.
+ 	fn poll_write(
+ 		mut self: Pin<&mut Self>,
+ 		cx: &mut Context<'_>,
+ 		buf: &[u8],
+ 	) -> Poll<io::Result<usize>> {
++		if buf.is_empty() {
++			return Poll::Ready(Ok(0));
++		}
++		let this = &mut *self;
++		ready!(poll_flow_credit(&this.info, &mut this.write, cx)).map_err(io::Error::other)?;
+ 		ready!(self.write.poll_lock(cx));
+-		ready!(self.write.get().poll_ready(cx)).map_err(io::Error::other)?;
+-
+-		let packet = Packet::new_data(self.info.id, buf);
+-		self.write
+-			.get()
+-			.start_send(packet.encode())
+-			.map_err(io::Error::other)?;
++		if let Err(err) = ready!(self.write.get().poll_ready(cx)) {
++			self.write.unlock();
++			return Poll::Ready(Err(io::Error::other(err)));
++		}
+ 
++		let len = buf.len().min(MAX_DATA_PAYLOAD);
++		let packet = Packet::new_data(self.info.id, &buf[..len]);
++		if let Err(err) = self.write.get().start_send(packet.encode()) {
++			self.write.unlock();
++			return Poll::Ready(Err(io::Error::other(err)));
++		}
+ 		self.write.unlock();
+-		Poll::Ready(Ok(buf.len()))
++
++		if self.info.flow_status == FlowControl::EnabledTrackAmount {
++			self.info.flow_dec();
++		}
++		Poll::Ready(Ok(len))
+ 	}
+ 
+ 	fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+diff --git a/wisp/src/stream/mod.rs b/wisp/src/stream/mod.rs
+index 72e1f38..ba97b67 100644
+--- a/wisp/src/stream/mod.rs
++++ b/wisp/src/stream/mod.rs
+@@ -8,7 +8,7 @@ use futures::{channel::oneshot, FutureExt, Sink, SinkExt, Stream, StreamExt};
+ 
+ use crate::{
+ 	mux::inner::{FlowControl, StreamInfo, WsEvent},
+-	packet::{ClosePacket, CloseReason, Packet},
++	packet::{ClosePacket, CloseReason, Packet, StreamType},
+ 	ws::{Payload, TransportWrite},
+ 	LockedWebSocketWrite, WispError,
+ };
+@@ -18,6 +18,44 @@ mod handles;
+ pub use compat::*;
+ pub use handles::*;
+ 
++/// The largest payload this side puts in one DATA packet. A Wisp server
++/// bounds the WebSocket messages it accepts (holyWisp's `max-message-size`,
++/// 256 KiB plus the 5-byte header on the public relays) and closes the whole
++/// connection past it, every stream on it, with 1009. Nothing in the
++/// handshake says what the bound is (no extension carries it), so a write
++/// goes out as packets of at most this many bytes, far under any server's
++/// limit, each one counted against the stream's flow control window. It is
++/// also above the largest UDP datagram (65507 bytes over IPv4), so a
++/// datagram a native socket could send fits in one packet.
++pub const MAX_DATA_PAYLOAD: usize = 64 * 1024;
++
++/// Waits for flow control credit when the stream counts what it sends.
++/// The waker is registered before the second look, so a CONTINUE that
++/// lands in between is not missed. While it waits, the transport is
++/// flushed: a packet handed to it with `start_send` may only go out on the
++/// next poll, and the server sends no CONTINUE before it has counted the
++/// window's last packet, so an unflushed one stalled the stream for good.
++fn poll_flow_credit<W: TransportWrite>(
++	info: &StreamInfo,
++	write: &mut LockedWebSocketWrite<W>,
++	cx: &mut Context<'_>,
++) -> Poll<Result<(), WispError>> {
++	if info.flow_status != FlowControl::EnabledTrackAmount || !info.flow_empty() {
++		return Poll::Ready(Ok(()));
++	}
++	info.flow_register(cx);
++	if !info.flow_empty() {
++		return Poll::Ready(Ok(()));
++	}
++	ready!(write.poll_lock(cx));
++	let flushed = write.get().poll_flush(cx);
++	write.unlock();
++	if let Poll::Ready(Err(err)) = flushed {
++		return Poll::Ready(Err(err));
++	}
++	Poll::Pending
++}
++
+ macro_rules! unlock_some {
+ 	($unlock:expr, $x:expr) => {
+ 		if let Err(err) = $x {
+@@ -197,17 +235,35 @@ impl<W: TransportWrite> MuxStreamWrite<W> {
+ 		MuxStreamAsyncWrite::new(self)
+ 	}
+ 
+-	fn maybe_write(&mut self) -> Result<(), WispError> {
+-		if let Some(chunk) = self.chunk.take() {
+-			let packet = Packet::new_data(self.info.id, chunk).encode();
+-			self.write.get().start_send(packet)?;
++	/// Sends the pending chunk as DATA packets of at most
++	/// `MAX_DATA_PAYLOAD` bytes, each after flow control allows one more.
++	/// The write lock is let go between packets so other streams' packets
++	/// can go out between them.
++	fn poll_write_chunk(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), WispError>> {
++		while let Some(chunk) = self.chunk.as_ref() {
++			let last = chunk.len() <= MAX_DATA_PAYLOAD;
++			ready!(poll_flow_credit(&self.info, &mut self.write, cx))?;
++			ready!(self.write.poll_lock(cx));
++			unlock!(self.write, ready!(self.write.get().poll_ready(cx)));
++
++			let part = if last {
++				self.chunk.take().expect("chunk was checked above")
++			} else {
++				self.chunk
++					.as_mut()
++					.expect("chunk was checked above")
++					.split_to(MAX_DATA_PAYLOAD)
++			};
++			let packet = Packet::new_data(self.info.id, part).encode();
++			unlock!(self.write, self.write.get().start_send(packet));
++			self.write.unlock();
+ 
+ 			if self.info.flow_status == FlowControl::EnabledTrackAmount {
+ 				self.info.flow_dec();
+ 			}
+ 		}
+ 
+-		Ok(())
++		Poll::Ready(Ok(()))
+ 	}
+ }
+ 
+@@ -219,22 +275,19 @@ impl<W: TransportWrite> Sink<Payload> for MuxStreamWrite<W> {
+ 			return Poll::Ready(Err(WispError::StreamAlreadyClosed));
+ 		}
+ 
+-		if self.info.flow_status == FlowControl::EnabledTrackAmount && self.info.flow_empty() {
+-			self.info.flow_register(cx);
+-			return Poll::Pending;
+-		}
+-
+-		if self.chunk.is_some() {
+-			ready!(self.write.poll_lock(cx));
+-			unlock!(self.write, ready!(self.write.get().poll_ready(cx)));
+-			unlock!(self.write, self.maybe_write());
+-			self.write.unlock();
+-		}
++		let this = &mut *self;
++		ready!(this.poll_write_chunk(cx))?;
++		ready!(poll_flow_credit(&this.info, &mut this.write, cx))?;
+ 
+ 		Poll::Ready(Ok(()))
+ 	}
+ 
+ 	fn start_send(mut self: Pin<&mut Self>, item: Payload) -> Result<(), Self::Error> {
++		// a datagram is never split: one that does not fit in a packet fails
++		// this send alone and leaves the stream as it was
++		if self.info.stream_type == StreamType::Udp && item.len() > MAX_DATA_PAYLOAD {
++			return Err(WispError::DatagramTooLarge(item.len(), MAX_DATA_PAYLOAD));
++		}
+ 		debug_assert!(self.chunk.is_none());
+ 		self.chunk = Some(item);
+ 
+@@ -242,12 +295,9 @@ impl<W: TransportWrite> Sink<Payload> for MuxStreamWrite<W> {
+ 	}
+ 
+ 	fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+-		ready!(self.write.poll_lock(cx));
++		ready!(self.poll_write_chunk(cx))?;
+ 
+-		if self.chunk.is_some() {
+-			unlock!(self.write, ready!(self.write.get().poll_ready(cx)));
+-			unlock!(self.write, self.maybe_write());
+-		}
++		ready!(self.write.poll_lock(cx));
+ 		unlock!(self.write, ready!(self.write.get().poll_flush(cx)));
+ 
+ 		self.write.unlock();

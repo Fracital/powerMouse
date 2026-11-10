@@ -205,6 +205,13 @@ on every save (use a `git worktree`).
   `git+https://` URL. Read `deploy/epoxy/README.md` before touching any of it.
   Real ECH needs `ech_dns` (a DoH endpoint) in epoxy's options; the demo
   sets it, a host that does not gets GREASE ECH only.
+- A wisp server bounds the WebSocket messages it accepts and closes the
+  whole connection, every stream on it, past the bound (holyWisp's
+  `max-message-size`, 262149 on the edges, 1009). The epoxy build writes
+  DATA packets of at most 64 KiB and waits for each stream's CONTINUE
+  credit; a wisp server that never refills TCP credit (wisp-js 0.5.2 and
+  older) stalls a stream after 128 packets, so the demo runs wisp-js 0.5.3.
+  `wisp-message-size` covers it with a relay that enforces the edges' limit.
 - Hosts install stomp from npm as `@sysce/stomp`. `.github/workflows/nightly.yml`
   publishes master as `@sysce/stomp@nightly` every night (and on manual
   dispatch) once CI passed on that commit, through npm trusted publishing
