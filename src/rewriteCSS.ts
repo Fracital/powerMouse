@@ -115,7 +115,9 @@ export function modifyCSS(
 
 				edits.replace(node.loc!.start.offset, node.loc!.end.offset, generated);
 			} catch (error) {
-				console.error(error);
+				// a URL that does not parse loads nothing natively, and says
+				// nothing: left as written (the browser fails to parse it too)
+				if (!(error instanceof TypeError)) console.error(error);
 			}
 		} else if (node.type === 'Url')
 			try {
@@ -147,7 +149,8 @@ export function modifyCSS(
 
 				edits.replace(node.loc!.start.offset, node.loc!.end.offset, generated);
 			} catch (error) {
-				console.error(error);
+				// as for @import: a URL that does not parse is left as written
+				if (!(error instanceof TypeError)) console.error(error);
 			}
 	};
 

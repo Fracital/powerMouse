@@ -1004,6 +1004,10 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   error in the console (browserleaks' rects frame lost its positioned box).
   It carries the nonce now (sandbox-styles suite, both modes, against
   native).
+- A `url()` or `@import` that no URL parser takes no longer logs a
+  TypeError to the page's console ("Failed to construct 'URL': Invalid
+  URL", seven on browserleaks' features page); it is left as written and
+  loads nothing, as natively (css-invalid-urls suite).
 - `localStorage` and `sessionStorage` work in a srcdoc frame. Its inject
   resolved the proxy's own storage route against the frame's location,
   `about:srcdoc`, and every call threw "Failed to construct 'URL':

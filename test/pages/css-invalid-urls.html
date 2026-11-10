@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>CSS INVALID URLS</title>
+		<style>
+			@import 'http://[';
+			#a {
+				background-image: url('http://[');
+			}
+		</style>
+	</head>
+	<body>
+		<div id="a">a</div>
+		<div id="b" style="background-image: url('https://[::1')">b</div>
+		<script>
+			// url() and @import values no URL parser takes: natively they load
+			// nothing and the console says nothing
+			const c = document.createElement('div');
+			c.style.backgroundImage = 'url("http://exa mple.com:99999/")';
+			document.body.append(c);
+			const sheet = new CSSStyleSheet();
+			sheet.replaceSync('#d { cursor: url("http://[") , auto; }');
+			document.adoptedStyleSheets = [sheet];
+			setTimeout(() => (window.__cssInvalid = true), 500);
+		</script>
+	</body>
+</html>
