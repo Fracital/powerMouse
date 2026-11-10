@@ -251,16 +251,32 @@ suites' known lists with the same reason.
    megabyte another site stored shows in this one's). The browser keeps one
    quota for the proxy origin; a per-site figure would need the proxy to
    account each store's size itself.
-3. **The gate between page and worker is in the page.** The worker trusts
-   the `x-stomp-load` marker of the inject's copies (judged as the load they
-   stand for: a no-cors image is read whole) and the hooks drop it from the
-   page's own requests, reading the page's headers with the browser's own
-   Headers and Request members (taken before the page runs) and handing the
-   browser a record it reads by its own properties, so a replaced iterator,
-   getter or `Object.prototype.headers` adds nothing (sop-escapes measured
-   both ways in through them before this). A page that reached a realm no
-   hook runs in could still send it: the trust model of the rest of the
-   proxy (docs/scramjet-parity.md section 2a).
+3. **The gate between page and worker is in the page, and cannot move out
+   of it while the copies exist.** The worker exempts the inject's copies
+   from CORS by their `x-stomp-load` marker (judged as the load they stand
+   for: a no-cors image is read whole). The hooks drop the marker from the
+   page's own requests and hand the browser the page's headers as a record
+   read with the browser's own members, so a replaced iterator, getter or
+   `Object.prototype.headers` adds nothing (sop-escapes measured both ways
+   in before that). A realm no hook runs in could still send it. A secret
+   only the inject holds was considered: the worker would hand it, over a
+   MessagePort, once, to each client it served the shell to, before any of
+   the page's script runs, and trust only a marker that carries it. It
+   would stop a forged marker, but not what the marker grants. The copies
+   exist because Chrome gives a document no service worker controls (an
+   about:blank frame or popup the page builds) no worker at all, so the
+   inject fetches each of its loads through a controlled ancestor and hands
+   the element a `blob:` URL of the bytes. Those bytes are in the page's
+   realm by construction: a realm that can forge the marker can just as well
+   put another site's image into such a frame and read the `blob:` URL the
+   copy left in the element's attribute. Taking the bytes out of the page
+   needs those loads to reach the service worker themselves, which Chrome
+   does not do for those documents (measured in plain Chrome 152,
+   docs/scramjet-parity.md section 7),
+   or no such documents, which pages build constantly. So the marker stays
+   a page-side gate, hardened as above. (Also measured: a DevTools or
+   extension isolated world's fetch does not reach the service worker at
+   all; the proxy server answers it, 404.)
 4. Canvas: an image of the page's own origin that redirects to another is
    judged by its own URL (Chrome taints by the response's origin); a canvas
    tainted in one document's bundle is not known to another document's (a
