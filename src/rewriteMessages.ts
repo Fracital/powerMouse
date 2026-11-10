@@ -30,6 +30,8 @@ export interface RewriteRequest {
 	compact?: boolean;
 	/** where its functions' text is kept: a part of a split script */
 	source?: ScriptSource;
+	/** code to run first, after the directive prologue (an inline script's currentScript restore) */
+	preamble?: string;
 }
 
 /** a large script to plan a split of (splitRewrite) */

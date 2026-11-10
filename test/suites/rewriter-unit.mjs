@@ -27,6 +27,7 @@ export { modifyCSS } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 export { keepEmbedded, originalSource, sourceKey } from ${JSON.stringify(`${root}src/functionSource.ts`)};
+export { inlineSources, PrewrittenTable, scriptPreamble } from ${JSON.stringify(`${root}src/prewrite.ts`)};
 `,
 );
 const bundle = `${OUT}rewriter-unit.mjs`;
@@ -59,6 +60,9 @@ const {
 	keepEmbedded,
 	sourceKey,
 	originalSource,
+	inlineSources,
+	PrewrittenTable,
+	scriptPreamble,
 } = await import(`${bundle}?${Date.now()}`);
 
 const config = { directory: '/stomp/', codec: 'xor' };
@@ -984,6 +988,55 @@ console.warn = warn;
 			.slice(0, 3)
 			.map(([key]) => key)
 			.join(', '),
+	);
+}
+{
+	// a document's inline scripts and styles, found in its markup for the
+	// worker to rewrite (src/prewrite.ts): the client looks them up by kind
+	// and text, and a script the page inserts again gets the rewrite without
+	// the preamble, which must be what the rewriter makes of it bare
+	const markup = [
+		'<script>var a = location.href;</script>',
+		'<script type="module">import "./m.js"; top.x = 1;</script>',
+		'<SCRIPT TYPE="text/javascript">"use strict"; function f() { return top; }</SCRIPT>',
+		'<script type="text/template">location</script>',
+		'<script src="x.js"></script>',
+		'<script language="javascript">window.b = 2;</script>',
+		'<script type="importmap">{}</script>',
+		'<style>.a{background:url(a.png)}</style>',
+		'<script>var a = location.href;</script>',
+	].join('\n');
+	const found = inlineSources(markup);
+	ok(
+		'the inline scripts that run, by kind, each text once, and the styles',
+		JSON.stringify(found.scripts.map(([kind]) => kind)) ===
+			JSON.stringify(['c', 'm', 'c', 'c']) && found.styles.length === 1,
+		JSON.stringify(found),
+	);
+	const sources = [
+		'var a = location.href; function g(x) { return top[x]; }',
+		'"use strict"; function f() { return top; }',
+		"'use strict';\n'another';\nwindow.q = () => location;",
+	];
+	const table = new PrewrittenTable({
+		scripts: sources.map((source) => [
+			'c',
+			source,
+			modifyJS(source, url, config, 'generic', scriptPreamble(source)),
+		]),
+		styles: [],
+	});
+	const wrong = sources.filter(
+		(source) =>
+			table.script(false, source, true) !==
+				modifyJS(source, url, config, 'generic') ||
+			table.script(false, source) !==
+				modifyJS(source, url, config, 'generic', scriptPreamble(source)),
+	);
+	ok(
+		'a prewritten script without its preamble is the bare rewrite, byte for byte',
+		wrong.length === 0 && table.script(true, sources[0]) === undefined,
+		JSON.stringify(wrong),
 	);
 }
 await done();

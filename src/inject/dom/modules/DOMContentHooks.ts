@@ -250,6 +250,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 							script.textContent = `document.currentScript.outerHTML=${JSON.stringify(
 								style.outerHTML,
 							)}`;
+							// the client's own code, nothing of the page's to rewrite: the
+							// insertion and the written page's pass leave it as it is
+							// (rewriting a 3 MB stylesheet as a string literal took CNN
+							// half a second)
+							rewrittenScripts.set(script, script.text);
 						});
 
 						return script;
@@ -374,12 +379,15 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			/*document.currentScript.textContent = ${JSON.stringify(
 				script.textContent
 			)};*/
-			const rewritten = modifyJS(
-				script.text,
-				this.client.url,
-				this.client.config,
-				scriptType(script),
-			);
+			// a script of the document's own markup the page inserts again (it
+			// read the text back and made a script of it): the worker's rewrite
+			const type = scriptType(script);
+			const rewritten =
+				this.client.prewrittenScript(
+					type === 'genericModule',
+					script.text,
+					true,
+				) ?? modifyJS(script.text, this.client.url, this.client.config, type);
 			rewrittenScripts.set(script, rewritten);
 			script.text = rewritten;
 		};

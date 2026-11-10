@@ -1,0 +1,49 @@
+<!doctype html>
+<title>PREWRITE</title>
+<style>
+	.pw {
+		background: url(prewrite-missing.png) no-repeat;
+	}
+</style>
+<script>
+	window.__pw = window.__pw || { order: [] };
+	__pw.order.push('a');
+	__pw.currentA = document.currentScript.textContent.includes("push('a')");
+	__pw.topType = typeof top;
+	function namedA() {
+		return location.pathname;
+	}
+	__pw.fnSource = namedA.toString();
+	__pw.path = namedA();
+</script>
+<script type="module">
+	window.__pw.order.push('module');
+	function inModule() {
+		return location.pathname;
+	}
+	window.__pw.moduleSource = inModule.toString();
+	window.__pw.done = true;
+</script>
+<script>
+	'use strict';
+	__pw.order.push('strict');
+	__pw.strict = (function () {
+		return this === undefined;
+	})();
+</script>
+<script>
+	__pw.order.push('c');
+	__pw.closing = '<\/script>'.length;
+</script>
+<script type="text/template">
+	this is not code: location
+</script>
+<script>
+	// a page that reads a script of its markup back and runs a copy of it
+	// (CNN's loader does): the copy is the page's text again
+	var copy = document.createElement('script');
+	copy.text = document.scripts[0].text;
+	document.head.appendChild(copy);
+	__pw.copyText = copy.text === document.scripts[0].text;
+	__pw.styleText = document.querySelector('style').textContent.trim();
+</script>

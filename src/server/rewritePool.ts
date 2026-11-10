@@ -122,6 +122,7 @@ export class RewritePool {
 		type: ScriptType,
 		compact?: boolean,
 		source?: ScriptSource,
+		preamble?: string,
 	): Promise<string | null> {
 		return this.#call(
 			'rewrite',
@@ -135,8 +136,31 @@ export class RewritePool {
 				scopes: routeScopeList(),
 				...(compact === undefined ? {} : { compact }),
 				...(source === undefined ? {} : { source }),
+				...(preamble ? { preamble } : {}),
 			},
 			script.length,
+		);
+	}
+	/**
+	 * A document's inline script, rewritten as the document's client would
+	 * (with its preamble), by the worker with the least in hand: null when
+	 * none is ready or answered in time
+	 */
+	rewriteInline(
+		script: string,
+		url: StompURL,
+		config: Config,
+		type: ScriptType,
+		preamble: string,
+	): Promise<string | null> {
+		return this.#rewriteOne(
+			script,
+			url,
+			config,
+			type,
+			undefined,
+			undefined,
+			preamble,
 		);
 	}
 	/**

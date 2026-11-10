@@ -442,6 +442,34 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   document, also fetched every `<video>` and `<audio>` a second time. Each
   throwaway copy now lets its sources and images go (`releaseMarkup`), and
   the shell builds its copy in an inert document, as writes do.
+- A document's inline scripts and styles are rewritten by the service
+  worker and its rewrite workers, not on the page's main thread. The client
+  rewrote every one while it loaded the document, the page's longest task:
+  on Google with four times slower CPU the page answered a keystroke after
+  0.9 s at worst in the ten seconds after it showed (0.37 s natively), and
+  CNN's 3.7 MB of inline script and 3.3 MB of inline CSS took 1.7 s of a
+  2.9 s task. The worker finds them in the markup, has the rewrite workers
+  rewrite the scripts side by side (kept in the rewrite cache when the
+  document may be kept), rewrites the styles, and sends the outputs with the
+  markup; the client takes an output only for the exact same kind and text,
+  and rewrites anything else as before (a page with no live rewrite worker
+  gets none, nor one with a `<base href>`, whose URLs the client resolves
+  against it; the client uses the outputs only while its URL is the one
+  they were made for). A script the page makes from the text of one of its markup
+  scripts (CNN's loader) gets the same rewrite without the preamble. A
+  `<style>`'s stand-in script, the client's own code, is no longer rewritten
+  as a page script (CNN's 3 MB stylesheet as a string literal, half a
+  second), and a large style text routed once is not routed again, nor is
+  the routed text coming back. Google, same-origin, four times slower CPU:
+  total blocking time in the ten seconds after the search box shows 3.4 s
+  to 1.9 s (native 0.9 s), the worst keystroke delay 0.89 s to 0.68 s; at
+  full speed 0.20 s to 0.15 s and 0.17 s to 0.11 s. CNN's loading task 2.9 s
+  to 0.9 s (prewrite suite: a page of classic, module, strict and template
+  scripts, a style and a script copied from its own markup runs as natively
+  with rewrite workers and without, the worker's rewrites are the ones in
+  the page when there were workers, and unless SKIP_TIMING a page with 1 MB
+  of inline scripts has its longest task at most two thirds as long; 85 ms
+  against 895 here).
 - `XMLHttpRequest`'s credentials work as natively. `open()` stored the
   password as the user and both went nowhere, and a URL's own credentials
   were dropped, so a request to a site that challenges came back 401. The

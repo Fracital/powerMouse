@@ -1,6 +1,11 @@
 import { decodeHTML } from 'entities';
 import { ParsedConfig } from '../../config';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
+import {
+	PrewrittenTable,
+	scriptPreamble,
+	type Prewritten,
+} from '../../prewrite';
 import { refererFor, type ReferrerInfo } from '../../referrerPolicy';
 import { modifyCSS, rewriteCSSValueURLs } from '../../rewriteCSS';
 import { modifyHTML } from '../../rewriteHTML';
@@ -57,6 +62,11 @@ export function runDocumentOpenListeners(global: typeof globalThis) {
 	if (onDocumentOpen.has(global))
 		for (const callback of onDocumentOpen.get(global)!) callback();
 }
+
+/** style texts shorter than this are routed every time: a lookup costs as much */
+const STYLE_MEMO_MIN = 1024;
+/** characters of style text (in and out) a document keeps routed */
+const STYLE_MEMO_CHARS = 16 * 1024 * 1024;
 
 type ParsingState = 'parsingBeforeWrite' | void;
 
@@ -632,18 +642,22 @@ export default class DocumentClient extends Client {
 			}
 			if (!shouldRewriteScript(script)) continue;
 			const source = read();
+			// the client's own (a style's stand-in, DOMContentHooks)
+			if (isHTMLScript && this.rewrittenScripts.get(script) === source)
+				continue;
 			const isModule = scriptKind(script) === 'module';
 			// the restore runs after the script's directive prologue, so a strict
 			// script stays strict
-			const rewritten = modifyJS(
-				source,
-				this.url,
-				this.config,
-				isModule ? 'genericModule' : 'generic',
-				isModule
-					? ''
-					: `document.currentScript.textContent = ${JSON.stringify(source)};`,
-			);
+			// what the worker made of it already (prewrite.ts), else made here
+			const rewritten =
+				this.#table()?.script(isModule, source) ??
+				modifyJS(
+					source,
+					this.url,
+					this.config,
+					isModule ? 'genericModule' : 'generic',
+					isModule ? '' : scriptPreamble(source),
+				);
 			const named = /^\/\/[#@]\s*sourceURL=/m.test(rewritten)
 				? rewritten
 				: rewritten + sourceURL;
@@ -713,12 +727,15 @@ export default class DocumentClient extends Client {
 			return text;
 		}
 		if (!this.isConnected(script) || !shouldRewriteScript(script)) return text;
-		const rewritten = modifyJS(
-			text,
-			this.url,
-			this.config,
-			scriptKind(script) === 'module' ? 'genericModule' : 'generic',
-		);
+		const module = scriptKind(script) === 'module';
+		const rewritten =
+			this.prewrittenScript(module, text, true) ??
+			modifyJS(
+				text,
+				this.url,
+				this.config,
+				module ? 'genericModule' : 'generic',
+			);
 		this.rewrittenScripts.set(script, rewritten);
 		return rewritten;
 	}
@@ -730,11 +747,74 @@ export default class DocumentClient extends Client {
 	 * as it wrote it (CSSReadback).
 	 */
 	prepareStyleText(text: string): string {
+		const prewritten = this.#table()?.style(text);
+		if (prewritten !== undefined) {
+			if (text.length >= STYLE_MEMO_MIN) this.#rememberStyle(text, prewritten);
+			return prewritten;
+		}
+		// what this routed already, coming back (a style's stand-in writes the
+		// routed style in its place): routing it again is wasted, and not
+		// always a no-op (a data: URL's escapes)
+		if (this.#styleOutputs.has(text)) return text;
+		// the same text again (a style rewritten as it is inserted and again
+		// as its text node lands, the same sheet in another style): the
+		// routing of a text depends on nothing else, so the answer is known
+		const large = text.length >= STYLE_MEMO_MIN;
+		if (large) {
+			const known = this.#styleMemo.get(text);
+			if (known !== undefined) return known;
+		}
+		let output: string;
 		try {
-			return modifyCSS(text, this.url);
+			output = modifyCSS(text, this.url);
 		} catch (error) {
 			// unparsable: route what the regex can find
-			return rewriteCSSValueURLs(text, this.url);
+			output = rewriteCSSValueURLs(text, this.url);
+		}
+		if (large) this.#rememberStyle(text, output);
+		return output;
+	}
+	/** large routed style texts this client made, the oldest out first */
+	readonly #styleOutputs = new Set<string>();
+	#styleOutputChars = 0;
+	/** @internal the worker's rewrite of an inline script of this document's markup (PrewrittenTable.script) */
+	prewrittenScript(
+		module: boolean,
+		source: string,
+		bare = false,
+	): string | undefined {
+		return this.#table()?.script(module, source, bare);
+	}
+	/** the worker's table, while this client's URL is the one it was made for (a <base> the page adds changes it) */
+	#table(): PrewrittenTable | null {
+		const table = this.#prewritten;
+		if (!table) return null;
+		if (table.url === this.url.toString()) return table;
+		return null;
+	}
+	/** the inline scripts and styles of the document loadHTML wrote, rewritten by the worker */
+	#prewritten: PrewrittenTable | null = null;
+	/** large style texts and their routed text, the oldest out first */
+	readonly #styleMemo = new Map<string, string>();
+	#styleMemoChars = 0;
+	#rememberStyle(text: string, output: string) {
+		if (output.length > STYLE_MEMO_CHARS / 4) return;
+		if (!this.#styleOutputs.has(output)) {
+			this.#styleOutputs.add(output);
+			this.#styleOutputChars += output.length;
+			for (const kept of this.#styleOutputs) {
+				if (this.#styleOutputChars <= STYLE_MEMO_CHARS) break;
+				this.#styleOutputs.delete(kept);
+				this.#styleOutputChars -= kept.length;
+			}
+		}
+		if (this.#styleMemo.has(text)) return;
+		this.#styleMemo.set(text, output);
+		this.#styleMemoChars += text.length + output.length;
+		for (const [key, value] of this.#styleMemo) {
+			if (this.#styleMemoChars <= STYLE_MEMO_CHARS) break;
+			this.#styleMemo.delete(key);
+			this.#styleMemoChars -= key.length + value.length;
 		}
 	}
 	/**
@@ -786,7 +866,16 @@ export default class DocumentClient extends Client {
 	innerHTMLOf(element: Element): string {
 		return this.innerHTML(element);
 	}
-	loadHTML(script: string) {
+	loadHTML(script: string, prewritten?: string) {
+		// the document's inline scripts and styles as the worker rewrote them
+		if (prewritten !== undefined)
+			try {
+				this.#prewritten = new PrewrittenTable(
+					JSON.parse(decodeHTML(prewritten)) as Prewritten,
+				);
+			} catch (error) {
+				// not a table: everything is rewritten here
+			}
 		// the document is new: its sandbox is decided now, and a document
 		// without allow-scripts is guarded before any of its markup is touched
 		this.refreshSandbox();

@@ -2,6 +2,7 @@ import { escapeText } from 'entities';
 import { parse } from 'meriyah';
 import { Config } from './config';
 import { helperNames } from './helperNames';
+import type { Prewritten } from './prewrite';
 import type { ReferrerInfo } from './referrerPolicy';
 import { modifyJS } from './rewriteJS';
 import {
@@ -184,6 +185,8 @@ export function modifyHTML(
 	nonce?: string | null,
 	/** the emulated service worker registration that controls the document (docs/service-workers.md) */
 	control?: ControlInfo,
+	/** the document's inline scripts and styles, rewritten already (src/prewrite.ts) */
+	prewritten?: Prewritten | null,
 ): string {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	const names = helperNames(config);
@@ -205,7 +208,11 @@ ${referred(names.client, referrer)}
 	}
 
 	try {
-		${names.client}.loadHTML(${escapeText(JSON.stringify(script))});
+		${names.client}.loadHTML(${escapeText(JSON.stringify(script))}${
+			prewritten && (prewritten.scripts.length || prewritten.styles.length)
+				? `, ${escapeText(JSON.stringify(JSON.stringify(prewritten)))}`
+				: ''
+		});
 	} catch(error) {
 		document.write("Failure loading Stomp HTML. See devtools output for more information.");
 		throw error;

@@ -9,6 +9,12 @@ import { codecType, Config, ParsedConfig } from '../config';
 import { rewriteLinkHeader } from '../headers';
 import { helperNames } from '../helperNames';
 import {
+	hasBase,
+	inlineSources,
+	scriptPreamble,
+	type Prewritten,
+} from '../prewrite';
+import {
 	DEFAULT_REFERRER_POLICY,
 	refererFor,
 	type ReferrerInfo,
@@ -1516,6 +1522,75 @@ export function registerRewrites(
 			names: { ...config.names, client: undefined },
 		});
 	};
+	// a document's inline scripts and styles, rewritten here (src/prewrite.ts):
+	// the scripts by the rewrite workers, side by side, and kept in the
+	// rewrite cache when the document may be kept; null when no worker is
+	// live (the worker's own thread is not spent on them: the page rewrites
+	// them as before)
+	const prewrite = async (
+		markup: string,
+		url: StompURL,
+		keep: boolean,
+	): Promise<Prewritten | null> => {
+		const pool = rewriter.pool;
+		if (!pool?.live || hasBase(markup)) return null;
+		const { scripts, styles } = inlineSources(markup);
+		if (!scripts.length && !styles.length) return null;
+		const config = rewriter.config;
+		const rewrites = keep ? rewriter.rewrites : undefined;
+		const encoder = new TextEncoder();
+		const done = await Promise.all(
+			scripts.map(
+				async ([kind, source]): Promise<
+					[kind: 'c' | 'm', source: string, output: string] | null
+				> => {
+					const type: ScriptType = kind === 'm' ? 'genericModule' : 'generic';
+					const preamble = kind === 'm' ? '' : scriptPreamble(source);
+					const key = rewrites
+						? await rewrites.key(
+								[
+									BUILD,
+									url.toString(),
+									type,
+									'inline',
+									cacheConfig(config, type, (name) => source.includes(name)),
+									url.codec.key,
+								],
+								encoder.encode(source),
+							)
+						: null;
+					const kept = key !== null ? await rewrites!.match(key) : null;
+					if (kept !== null) return [kind, source, await kept.text()];
+					const output = await pool.rewriteInline(
+						source,
+						url,
+						config,
+						type,
+						preamble,
+					);
+					if (output === null || output === source) return null;
+					if (key !== null) void rewrites!.put(key, output);
+					return [kind, source, output];
+				},
+			),
+		);
+		const prewritten: Prewritten = {
+			url: url.toString(),
+			scripts: done.filter(
+				(entry): entry is [kind: 'c' | 'm', source: string, output: string] =>
+					entry !== null,
+			),
+			// as the client's prepareStyleText makes them
+			styles: styles.map((source) => {
+				try {
+					return [source, modifyCSS(source, url)];
+				} catch (error) {
+					return [source, rewriteCSSValueURLs(source, url)];
+				}
+			}),
+		};
+		return prewritten;
+	};
 	const scriptTypeFactory = (type: ScriptType) =>
 		genericForward(
 			rewriter,
@@ -1660,7 +1735,7 @@ export function registerRewrites(
 		/^\/html(:nested:[^/]*)?\//,
 		genericForward(
 			rewriter,
-			async (url, response, responseHeaders, referrer, _request, note) => {
+			async (url, response, responseHeaders, referrer, request, note) => {
 				const contentType = responseHeaders.get('content-type');
 				const mime = getMime(contentType || '');
 				if (!htmlMimes.includes(mime)) return false;
@@ -1697,6 +1772,16 @@ export function registerRewrites(
 					referrer,
 					undefined,
 					note.serviceWorker,
+					await prewrite(
+						markup,
+						url,
+						mayKeep({
+							method: request.method,
+							requestHeaders: request.headers,
+							status: response.status,
+							responseHeaders: response.headers,
+						}),
+					),
 				);
 			},
 			(resource, url) => routeHTML(resource, url, rewriter.config),

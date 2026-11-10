@@ -31,7 +31,7 @@ function rewrite(request: RewriteRequest): string {
 		url,
 		request.config,
 		request.type,
-		'',
+		request.preamble ?? '',
 		request.compact,
 		request.source,
 	);
