@@ -228,8 +228,9 @@ export function startFixture(port = 8084) {
 			res.setHeader('content-type', 'text/javascript');
 			if (query.get('cc')) res.setHeader('cache-control', query.get('cc'));
 			// `three=<n>`: n copies of three.js first, a script that takes a
-			// while to rewrite (rewrite-pool suite)
-			const three = Math.min(Number(query.get('three')) || 0, 4);
+			// while to rewrite (rewrite-pool suite) or whose output is large
+			// (rewrite-cache suite)
+			const three = Math.min(Number(query.get('three')) || 0, 8);
 			if (three)
 				res.write(
 					`${readFileSync(`${pagesDir}vendor-three.min.js`, 'utf8')};\n`.repeat(

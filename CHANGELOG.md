@@ -305,6 +305,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- The rewrite cache keeps a rewritten script of up to 48 MB, 512 MB in all.
+  An entry could be 8 MB at most, which never kept Discord's 13 MB bundle,
+  and since a rewritten script carries its text for its functions' sources
+  it kept no script of about 4 MB or more either (on Google Docs, five of
+  its seventeen scripts were rewritten again on every visit). It still keeps
+  300 entries at most; past 512 MB the oldest go first, each entry's size
+  kept with it (rewrite-cache suite: an 11 MB output is a miss, then a hit
+  byte for byte).
 - A function the page defines reads back as the page wrote it.
   `Function.prototype.toString` and `String(fn)` showed the rewriter's
   output (`$s$j.get(location, 'location')`, its own spacing), a tell, and a

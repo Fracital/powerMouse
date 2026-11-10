@@ -6,16 +6,25 @@
 // second tab, or the browser fetching the same script twice skips the
 // rewrite; anything that would change the output misses. It keeps only what
 // the HTTP cache's privacy rules allow (see mayKeep), at most LIMIT entries
-// (the oldest put go first: eviction by age, not use) of ENTRY_LIMIT each, and is cleared with the HTTP
-// cache.
+// of ENTRY_LIMIT each and TOTAL_LIMIT in all (the oldest put go first:
+// eviction by age, not use), and is cleared with the HTTP cache. Sizes are
+// counted in characters, which for a script is about its bytes. An entry
+// could be 8 MB at most, which kept no output of Discord's 13 MB bundle and,
+// since a rewritten script carries its text for its functions' sources
+// (src/functionSource.ts), none of a script of 4 MB or more.
 const STORE = 'stomp-rewrite-cache';
 const LIMIT = 300;
-const ENTRY_LIMIT = 8 * 1024 * 1024;
+const ENTRY_LIMIT = 48 * 1024 * 1024;
+const TOTAL_LIMIT = 512 * 1024 * 1024;
+/** the header an entry's size is kept in */
+const SIZE = 'x-stomp-size';
 
 export type RewriteCacheOutcome = 'hit' | 'miss' | 'skip';
 
 export class RewriteCache {
 	#store?: Promise<Cache>;
+	/** the size of each entry by its URL, read from the store once */
+	#sizes?: Map<string, number>;
 	#open(): Promise<Cache> {
 		return (this.#store ??= caches.open(STORE));
 	}
@@ -44,20 +53,45 @@ export class RewriteCache {
 		if (output.length > ENTRY_LIMIT) return;
 		try {
 			const store = await this.#open();
+			const request = this.#request(key);
 			await store.put(
-				this.#request(key),
-				new Response(output, { headers: { 'content-type': 'text/plain' } }),
+				request,
+				new Response(output, {
+					headers: {
+						'content-type': 'text/plain',
+						[SIZE]: String(output.length),
+					},
+				}),
 			);
 			// the oldest entries go first (a store lists them as they were put)
 			const keys = await store.keys();
-			for (const request of keys.slice(0, Math.max(0, keys.length - LIMIT)))
-				await store.delete(request);
+			if (!this.#sizes) {
+				this.#sizes = new Map();
+				for (const kept of keys) {
+					const response = await store.match(kept);
+					this.#sizes.set(kept.url, Number(response?.headers.get(SIZE)) || 0);
+				}
+			}
+			const sizes = this.#sizes;
+			sizes.set(request.url, output.length);
+			let total = 0;
+			for (const kept of keys) total += sizes.get(kept.url) ?? 0;
+			let count = keys.length;
+			for (const kept of keys) {
+				if (count <= LIMIT && total <= TOTAL_LIMIT) break;
+				if (kept.url === request.url) continue;
+				await store.delete(kept);
+				total -= sizes.get(kept.url) ?? 0;
+				sizes.delete(kept.url);
+				count--;
+			}
 		} catch (error) {
 			// a full or unavailable store: the output is simply not kept
 		}
 	}
 	async clear(): Promise<void> {
 		this.#store = undefined;
+		this.#sizes = undefined;
 		await caches.delete(STORE);
 	}
 }

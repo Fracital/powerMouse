@@ -53,7 +53,7 @@ const controller = (options = {}) =>
  * Load the test page with one more script (`/rewrite-js?<query>`), and wait
  * for that script's log entry: its rewriteCache outcome
  */
-async function load(query, { module = false } = {}) {
+async function load(query, { module = false, tries = 80 } = {}) {
 	const search = `s=${encodeURIComponent(query)}${module ? '&module' : ''}`;
 	const before = await page.evaluate(() => window.__log.length);
 	await page.evaluate(
@@ -61,7 +61,7 @@ async function load(query, { module = false } = {}) {
 		`${FIXTURE}pages/rewrite-cache.html?${search}`,
 	);
 	const target = `/rewrite-js?${query}`;
-	for (let i = 0; i < 80; i++) {
+	for (let i = 0; i < tries; i++) {
 		const entries = await page.evaluate(
 			({ before, target }) =>
 				window.__log.slice(before).filter((e) => e.url.endsWith(target)),
@@ -99,6 +99,29 @@ ok(
 		'the output from the cache is byte for byte what the rewrite made',
 		seen.length === 2 && seen[0] === seen[1],
 		JSON.stringify(seen.map((body) => body.length)),
+	);
+}
+
+// a script whose output is over the 8 MB an entry could be (eight copies
+// of three.js, 4.9 MB, whose text the output carries beside its code for
+// its functions' sources: about 11 MB) is kept like any other
+{
+	const big = [
+		await load('name=big&three=8', { tries: 600 }),
+		await load('name=big&three=8', { tries: 600 }),
+	];
+	// (a body this large takes a moment to read)
+	const large = () =>
+		bodies.filter((body) => body && body.length > 8 * 1024 * 1024);
+	for (let i = 0; i < 100 && large().length < 2; i++) await sleep(100);
+	const seen = large();
+	ok(
+		'a script whose output is over 8 MB is kept, and served from the cache byte for byte',
+		big[0] === 'miss' &&
+			big[1] === 'hit' &&
+			seen.length === 2 &&
+			seen[0] === seen[1],
+		JSON.stringify({ big, lengths: seen.map((body) => body.length) }),
 	);
 }
 
