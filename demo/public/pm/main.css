@@ -1552,9 +1552,14 @@ input:focus-visible {
 .commitList li {
 	position: relative;
 }
-.commitList li::before {
+.commitList li::before,
+.commitList li::after {
 	content: '';
 	position: absolute;
+	z-index: 1; /* over the row's hover background, which comes later */
+}
+/* the rail, from dot to dot: a row's middle is its dot's */
+.commitList li::before {
 	left: 10px;
 	top: 0;
 	bottom: 0;
@@ -1562,18 +1567,18 @@ input:focus-visible {
 	background: #3a3a3a;
 }
 .commitList li:first-child::before {
-	top: 22px;
+	top: 50%;
 }
 .commitList li:last-child::before {
-	bottom: calc(100% - 22px);
+	bottom: 50%;
 }
+/* the dot, centred on the row like the avatar beside it */
 .commitList li::after {
-	content: '';
-	position: absolute;
 	left: 6px;
-	top: 18px;
+	top: 50%;
 	width: 7px;
 	height: 7px;
+	margin-top: -4.5px;
 	border-radius: 50%;
 	background: #e8ed58;
 	border: 1px solid #000;
