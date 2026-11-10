@@ -141,6 +141,11 @@ Filled in commit by commit; see the CHANGELOG for each.
   XMLHttpRequest drop them). A synchronous XMLHttpRequest the policy
   refuses throws NetworkError, as natively. Cost: nothing on a same-origin
   request; a preflight is the round trip Chrome makes too.
+  A client whose URL names no origin is judged by the one the worker
+  recorded for it: a blob: worker's (its minting document's) and an inline
+  document's (a `javascript:` URL's, a blob: or data: document's, recorded
+  when the worker serves it), kept in IndexedDB so a service worker restart
+  does not turn them into opaque origins (`src/server/blobOrigins.ts`).
 
 - **Canvas tainting** (section 2, sop-escapes: the 8 cases read as natively
   in both modes, and three more that must not taint or must: an SVG

@@ -54,7 +54,7 @@ import {
 	OPAQUE_HEADER,
 } from '../transport/messages';
 import { BUILD } from '../version';
-import { blobOriginOf } from './blobOrigins';
+import { knownOriginOf, recordInlineOrigin } from './blobOrigins';
 import { HttpCache, isCacheable, mayKeep } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
 import Cookies from './Cookies';
@@ -637,13 +637,16 @@ function genericForward(
 			if (!client)
 				try {
 					const found = await clients.get(id);
-					// a blob: worker's URL is the blob: URL: judged as the
-					// document that minted it, when that one said so
+					// a blob: worker's URL is the blob: URL, an inline document's
+					// its route: judged as the document that minted it, or as the
+					// document served there, when the worker knows it
 					const decoded = found ? decode(found.url) : null;
 					if (decoded && found) clientRoute = found.url;
 					client = found
-						? (decoded ??
-							(found.url.startsWith('blob:') ? blobOriginOf(found.url) : null))
+						? ((found.url.startsWith('blob:') ||
+							found.url.startsWith(`${routedPrefix}inline:`)
+								? await knownOriginOf(found.url)
+								: null) ?? decoded)
 						: null;
 					unknownBlob = !client && !!found?.url.startsWith('blob:');
 					unknownClient = !client && !!found && !unknownBlob;
@@ -2082,6 +2085,15 @@ export function registerRewrites(
 		async (request, path) => {
 			const token = /^\/inline:([A-Za-z0-9_-]{22})\//.exec(path)![1];
 			const entry = await takeInline(token, rewriter.directory);
+			// the document's requests are judged by its origin (its creator's,
+			// or an opaque one for a data: document), which this route's URL
+			// does not name
+			if (entry)
+				try {
+					recordInlineOrigin(request.url, new URL(entry.url).origin);
+				} catch (error) {
+					// not a URL: judged by its route
+				}
 			const headers: Record<string, string> = {
 				'content-type': 'text/html; charset=utf-8',
 				'cache-control': 'no-store',

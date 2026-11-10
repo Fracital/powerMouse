@@ -291,17 +291,20 @@ export function startFixture(port = 8084) {
 		}
 		// the request headers the proxy sent, as JSON (headers suites); with
 		// `?k=<key>` they are kept for /echo-headers/recorded?k=<key> too, and
-		// `&js` answers an empty script instead (a script element's request)
+		// `&js` answers an empty script instead (a script element's request).
+		// Any origin may read it, with credentials too (the CORS answer names
+		// the request's Origin and allows credentials)
 		if (path === '/echo-headers') {
 			const query = new URL(req.url, 'http://x').searchParams;
 			if (query.get('k')) recorded.set(query.get('k'), req.headers);
+			res.setHeader('access-control-allow-origin', req.headers.origin ?? '*');
+			if (req.headers.origin)
+				res.setHeader('access-control-allow-credentials', 'true');
 			if (query.has('js')) {
 				res.setHeader('content-type', 'text/javascript');
-				res.setHeader('access-control-allow-origin', '*');
 				return res.end('');
 			}
 			res.setHeader('content-type', 'application/json');
-			res.setHeader('access-control-allow-origin', '*');
 			return res.end(JSON.stringify(req.headers));
 		}
 		// HTTP Basic auth (xhr-parity suite): /xhr-auth/<case>/<file>?k=<key>

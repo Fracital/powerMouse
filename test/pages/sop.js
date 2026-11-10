@@ -737,6 +737,45 @@
 					document.body.append(frame);
 				}),
 		);
+	// documents the page makes itself are of its origin (a data: one is
+	// opaque): their reads of the page's own origin need no CORS
+	const madeDocument = (src) =>
+		new Promise((resolve) => {
+			const frame = document.createElement('iframe');
+			const listen = (event) => {
+				if (!event.data || !('sopMade' in event.data)) return;
+				window.removeEventListener('message', listen);
+				frame.remove();
+				resolve(event.data.sopMade);
+			};
+			window.addEventListener('message', listen);
+			frame.src = src;
+			document.body.append(frame);
+		});
+	const madeMarkup = (url) =>
+		`<script>fetch(${JSON.stringify(url)}).then((response) => response.text()).then(
+			(text) => parent.postMessage({ sopMade: text }, '*'),
+			(error) => parent.postMessage({ sopMade: error.name + ': ' + error.message }, '*'),
+		);<\/script>`;
+	add('fetch/from a javascript: document to its own origin', () =>
+		madeDocument(
+			`javascript:'${madeMarkup(r(A, {}).url)
+				.replace(/\\/g, '\\\\')
+				.replace(/'/g, "\\'")}'`,
+		),
+	);
+	add('fetch/from a blob: document to its own origin', () =>
+		madeDocument(
+			URL.createObjectURL(
+				new Blob([madeMarkup(r(A, {}).url)], { type: 'text/html' }),
+			),
+		),
+	);
+	add('fetch/from a data: document to the page origin', () =>
+		madeDocument(
+			`data:text/html,${encodeURIComponent(madeMarkup(r(A, {}).url))}`,
+		),
+	);
 	let usageBefore = null;
 	add('storage/usage before another site writes', async () => {
 		usageBefore = (await navigator.storage.estimate()).usage;

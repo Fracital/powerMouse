@@ -118,18 +118,19 @@ for (const [mode, base] of [
 		blocked === null,
 		JSON.stringify(blocked && 'arrived'),
 	);
-	// a page's fetch claiming an embed's navigation goes out as that at
-	// most: the site sees the claim's dest and mode, and the worker treats
-	// it as the fetch it is (the site's body as it came, no Sec-Fetch-User,
-	// no wait for a navigation's hint)
+	// a page's fetch claiming an embed's navigation is the fetch it is: the
+	// page's own requests never carry the proxy's load header (the inject
+	// drops it, so a page cannot pass for one of the proxy's copies), and
+	// the worker answers it as a fetch (the site's body as it came, no
+	// Sec-Fetch-User, no wait for a navigation's hint)
 	const embedClaim = await keyed('blm-embedclaim');
 	const claimSeen = await frameOf(page)
 		?.evaluate(() => window.__embedClaim ?? null)
 		.catch(() => null);
 	ok(
-		`${mode}: a page's fetch claiming an embed's navigation goes out as navigate/embed at most, and is answered as a fetch`,
-		embedClaim?.['sec-fetch-dest'] === 'embed' &&
-			embedClaim?.['sec-fetch-mode'] === 'navigate' &&
+		`${mode}: a page's fetch claiming an embed's navigation goes out as the fetch it is, and is answered as one`,
+		embedClaim?.['sec-fetch-dest'] === 'empty' &&
+			embedClaim?.['sec-fetch-mode'] === 'cors' &&
 			embedClaim?.['sec-fetch-user'] === undefined &&
 			embedClaim?.['x-stomp-load'] === undefined &&
 			claimSeen?.json === true &&

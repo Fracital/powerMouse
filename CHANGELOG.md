@@ -343,6 +343,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A blob: worker and a document the page made itself (a `javascript:`
+  URL's, a blob: document, a data: one) are judged by their real origin,
+  after a service worker restart too: the worker keeps what it learns of
+  them in IndexedDB. A `javascript:` document's requests counted as an
+  opaque origin's, and after a restart so did a blob: worker's, so the
+  same-origin policy refused their CORS reads of their own site.
+  (sop-escapes, blob-worker-site and inline-documents suites.)
 - `document.domain`'s setter checks the value as Chrome does (parsed as a
   host, an IP host only to itself, a public suffix refused as a top-level
   domain, Chrome's messages) and then has no effect, as in the
