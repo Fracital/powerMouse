@@ -337,6 +337,14 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- Reading another window (`parent`, `top`, `frames[i]`) costs a few
+  microseconds again. The Context module decided whether the reader may
+  hold the window as it is by decoding both documents' routed URLs on every
+  read, about 20 us each; the ad frames of a crazygames game page (about
+  200, each walking the frame tree) kept the renderer's main thread busy
+  for good, so the tab stopped answering. It compares the documents' site
+  keys (`siteKey`, kept per document) instead: 5,000 reads take 20 ms
+  (100 ms before, 3 ms natively).
 - Markup the inject parses or copies only to rewrite or serialize it no
   longer stays in memory for the page's life, and the shell's copy of a
   page loads nothing. A `<source media>` listens to its media query in any

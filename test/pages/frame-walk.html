@@ -1,0 +1,44 @@
+<!doctype html>
+<title>frame walk</title>
+<!--
+	A chain of frames that alternates between two sites (localhost and
+	127.0.0.1 on the fixture's port), ?d=<frames below this one>. The deepest
+	walks the tree as ad scripts do: up through `parent` until it reaches
+	`top`, over every frame from `top` down, and `parent.top === top`
+	READS times, and records how long each took in window.__walk.
+-->
+<script>
+	const READS = 5000;
+	const depth = +(new URLSearchParams(location.search).get('d') || 0);
+	const other = location.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+	if (depth > 0) {
+		const frame = document.createElement('iframe');
+		frame.src = `${location.protocol}//${other}:${location.port}${location.pathname}?d=${depth - 1}`;
+		document.documentElement.append(frame);
+	} else
+		setTimeout(() => {
+			let start = performance.now();
+			let w = window;
+			let up = 0;
+			while (w !== w.top && up < 1000) {
+				w = w.parent;
+				up++;
+			}
+			const upMs = performance.now() - start;
+			start = performance.now();
+			let frames = 0;
+			const walk = (x, level) => {
+				frames++;
+				if (level > 20 || frames > 1000) return;
+				for (let i = 0; i < x.frames.length; i++) walk(x.frames[i], level + 1);
+			};
+			walk(window.top, 0);
+			const walkMs = performance.now() - start;
+			start = performance.now();
+			let same = 0;
+			for (let i = 0; i < READS; i++)
+				if (window.parent.top === window.top) same++;
+			const readsMs = performance.now() - start;
+			window.__walk = { up, upMs, frames, walkMs, same, reads: READS, readsMs };
+		}, 1000);
+</script>

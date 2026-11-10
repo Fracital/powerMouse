@@ -652,14 +652,19 @@ export default class ContextModule extends Module<DocumentClient> {
 			// a window being torn down
 		}
 
+		// the documents' site keys, kept per document: this runs on every read
+		// of another window, and decoding both routed URLs for each read
+		// (about 20 us) let the ad frames of a crazygames game page, about 200
+		// walking the frame tree, keep the renderer's main thread busy for
+		// good. An opaque URL (a data: document) has no key: its URLs decide.
+		const other = (context as any)[this.client.names.client] as DocumentClient;
+		const mine = this.client.siteKey;
+		const theirs = other.siteKey;
 		if (
 			!opaque &&
-			sameOrigin(
-				this.client.url.toString(),
-				(
-					(context as any)[this.client.names.client] as DocumentClient
-				).url.toString(),
-			)
+			(mine !== null && theirs !== null
+				? mine === theirs
+				: sameOrigin(this.client.url.toString(), other.url.toString()))
 		) {
 			this.held.add(context);
 			return context;
