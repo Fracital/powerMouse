@@ -1,0 +1,27 @@
+<!doctype html>
+<title>INSERT COST</title>
+<div id="root"></div>
+<script>
+	// a page that stamps a template many times (what Polymer does on
+	// YouTube), then inserts nodes no hook saw (a DOMParser's)
+	const parsed = new DOMParser().parseFromString(
+		'<div><a id="probe" href="/pages/insert-cost-target.html">x</a></div>',
+		'text/html',
+	);
+	const template = document.createElement('template');
+	template.innerHTML =
+		'<div class="row"><span class="a">x</span><span class="b" title="t">y</span><i></i><b data-x="1">z</b></div>'.repeat(
+			50,
+		);
+	const root = document.getElementById('root');
+	const start = performance.now();
+	for (let i = 0; i < 100; i++)
+		root.appendChild(template.content.cloneNode(true));
+	const ms = performance.now() - start;
+	document.body.appendChild(parsed.body.firstChild);
+	window.__insert = {
+		ms,
+		elements: root.getElementsByTagName('*').length,
+		href: document.getElementById('probe').getAttribute('href'),
+	};
+</script>

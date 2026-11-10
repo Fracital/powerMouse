@@ -516,6 +516,21 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   non-configurable replaces the formatter (its realm's stacks are no longer
   cleaned), and one that freezes Error sees the accessor (tells suite, both
   modes, compared with the page loaded natively).
+- Inserting nodes costs the page far less in the hooks. Every element of
+  every subtree inserted into a connected tree had its prototype swapped
+  twice so its attributes could be read and offered to the attribute hooks;
+  each insertion asked twice whether a missing parent was a `<style>`
+  through a getter that threw a TypeError for it, and learned whether a node
+  was an element by trying a `querySelector('*')` on it (two more swaps).
+  YouTube stamps Polymer templates by the thousand: those three were 0.6 s
+  of its main thread on a warm load. An element none of whose attributes a
+  hook watches is now passed over after a native read of its attribute
+  names, non-nodes are answered without the exception, and the node's type
+  says what interface it has (insert-cost suite, both modes: a page that
+  stamps a template of 250 elements 100 times and then inserts a
+  DOMParser's link gets the link routed and reading back as written, and
+  unless SKIP_TIMING stamps in at most 8 times the native time; it took 15
+  times, 75 ms against 5, and takes about 2).
 - A document that asks again for a script or stylesheet the worker just
   gave it gets the same output, without the worker fetching, reading or
   rewriting anything again. A rewritten body goes out no-cache, and Chrome

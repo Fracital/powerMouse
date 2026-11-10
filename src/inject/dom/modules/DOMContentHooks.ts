@@ -57,6 +57,8 @@ const parentNodeGet = Reflect.getOwnPropertyDescriptor(
 )!.get!;
 /** a node of any realm (`instanceof` knows only one), else null */
 function nodeTypeOf(value: unknown): number | null {
+	// a string or null is no node: answered without the getter's TypeError
+	if (typeof value !== 'object' || value === null) return null;
 	try {
 		return Reflect.apply(nodeTypeGet, value, []) as number;
 	} catch (error) {
@@ -64,6 +66,7 @@ function nodeTypeOf(value: unknown): number | null {
 	}
 }
 function parentOf(value: unknown): Node | null {
+	if (typeof value !== 'object' || value === null) return null;
 	try {
 		return Reflect.apply(parentNodeGet, value, []) as Node | null;
 	} catch (error) {
@@ -89,19 +92,14 @@ export function htmlName(node: Node): string {
 function getSupportedQueryInterface(
 	node: Node,
 ): DocumentFragment | Element | undefined {
-	if (node.nodeName === '#document-fragment') {
-		return nativeDocumentFragment;
-	}
-
-	try {
-		usePrototype(node, nativeElement, (element) => {
-			element.querySelector('*');
-		});
-
-		return nativeElement;
-	} catch (error) {
-		// unable to interface
-	}
+	// by the node's type: trying a querySelector('*') through the element
+	// interface (it throws for anything else) cost a query and two prototype
+	// swaps on every insertion, a fifth of the hooks' time on YouTube
+	const type = nodeTypeOf(node);
+	if (type === 11) return nativeDocumentFragment;
+	if (type === 1) return nativeElement;
+	// a Text, a comment, a document: no element interface
+	return undefined;
 }
 
 export default class DOMContentHooks extends Module<DocumentClient> {
@@ -488,6 +486,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			Reflect.getOwnPropertyDescriptor(nativeNode, name)!.get!;
 		const nativeIsConnected = nativeGetter('isConnected');
 		const nativeNodeType = nativeGetter('nodeType');
+		const nativeGetAttributeNames = nativeElement.getAttributeNames;
 
 		const insert = <T>(
 			insert: Node,
@@ -519,12 +518,29 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 								elements.push(...(queryable as Element).querySelectorAll('*'));
 						},
 					);
-					for (const element of elements)
+					for (const element of elements) {
+						// read natively first: an element none of whose attributes a
+						// hook watches is left alone, without the prototype swap
+						// (Polymer stamps thousands of such elements on YouTube)
+						const names = Reflect.apply(
+							nativeGetAttributeNames,
+							element,
+							[],
+						) as string[];
+						if (
+							!names.some(
+								(name) =>
+									!name.startsWith('s_o:') &&
+									domHooksModule.hooksAttribute(name),
+							)
+						)
+							continue;
 						usePrototype(element, CustomElement.prototype, (element) => {
 							for (const name of element.getAttributeNames())
 								if (!name.startsWith('s_o:') && !element.hasAttributeOG(name))
 									domHooksModule.updateAttributeHooks(element, name);
 						});
+					}
 				});
 
 			// we're about to render

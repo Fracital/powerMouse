@@ -346,6 +346,23 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				hook,
 			});
 		}
+		this.#hookedNames = null;
+	}
+	/** every attribute name an attribute hook watches, on any element */
+	#hookedNames: Set<string> | null = null;
+	/**
+	 * Whether an attribute hook watches `attribute` on some element: the
+	 * insertion pass asks before it looks at an element's hooks at all, since
+	 * most attributes of most elements (class, id, a template's bindings)
+	 * have none
+	 */
+	hooksAttribute(attribute: string): boolean {
+		if (!this.#hookedNames) {
+			this.#hookedNames = new Set();
+			for (const entry of this.hooks)
+				if (isAttributeHook(entry.hook)) this.#hookedNames.add(entry.hook[1]);
+		}
+		return this.#hookedNames.has(attribute);
 	}
 	/** the attribute hooks of `attribute` on `element` */
 	private attributeHooks(element: Element, attribute: string) {

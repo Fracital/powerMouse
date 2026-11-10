@@ -749,6 +749,9 @@ export default class DocumentClient extends Client {
 	}
 	/** @internal which kind of <style> `node` is (see styleElement), else null */
 	styleKind(node: unknown): 'html' | 'svg' | null {
+		// no node at all (a detached root's parent): answered without the
+		// native getter's TypeError, which every insertion paid for twice
+		if (typeof node !== 'object' || node === null) return null;
 		try {
 			if (
 				Reflect.apply(nodeTypeGet, node, []) !== 1 ||
