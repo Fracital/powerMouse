@@ -1,11 +1,9 @@
-import {
-	generate,
-	parse,
-	Url,
-	walk,
-	type CssNode,
-	type ParseOptions,
-} from 'css-tree';
+import type { CssNode, ParseOptions, Url } from 'css-tree';
+// the parser, walker and generator alone: the whole syntax builds a lexer
+// from css-tree's grammar data, which the rewriter never asks for
+import generate from 'css-tree/generator';
+import parse from 'css-tree/parser';
+import walk from 'css-tree/walker';
 import {
 	originalOf,
 	preserveValue,

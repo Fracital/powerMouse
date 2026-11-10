@@ -377,6 +377,17 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   frames load in 1.2 s instead of 1.8. The core no longer decodes the
   page's markup with entities' HTML decoder (the shell only escapes `&`,
   `<`, `>` and U+00A0).
+- The rewriters load less of css-tree and none of the source-map
+  libraries. The CSS rewriter imports css-tree's parser, walker and
+  generator instead of the whole syntax, which also built a lexer from the
+  grammar of every property, type and at-rule; `source-map` (escodegen)
+  and `source-map-js` (css-tree's generator), loaded only to print source
+  maps, are replaced at build time by `src/noSourceMaps.ts`. The rewriter
+  library a top or a sandboxed frame evaluates costs 223 KB of heap instead
+  of 263 and 1.0 MB of renderer memory instead of 1.1; the service worker
+  bundle is 510 KB instead of 665, the inject bundle 697 KB instead of 849.
+  The CSS rewriter's output over 220 stylesheets (6.5 MB) and the rewriter
+  library's answers over 499 calls are the same.
 - `caches.match()` looks in the page's own origin's caches only. It searched
   every cache of the proxy origin, so a page (or a service worker) could
   read another proxied site's cached responses, and Stomp's own HTTP cache,

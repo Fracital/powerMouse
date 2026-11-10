@@ -49,6 +49,22 @@ const common = {
 };
 
 /**
+ * `source-map` (escodegen) and `source-map-js` (css-tree's generator) are
+ * loaded only to print source maps, which the rewriters never ask for:
+ * every bundle that holds a rewriter gets src/noSourceMaps.ts instead.
+ *
+ * @type {import('esbuild').Plugin}
+ */
+const noSourceMaps = {
+	name: 'no-source-maps',
+	setup(pluginBuild) {
+		pluginBuild.onResolve({ filter: /^source-map(-js)?(\/.*)?$/ }, () => ({
+			path: resolve('src/noSourceMaps.ts'),
+		}));
+	},
+};
+
+/**
  * The rewriter library (src/rewriterLib.ts: meriyah, escodegen, css-tree,
  * tldts and the rewriters on them) for the inject bundles, which import it
  * as `stomp:rewriter-lib`: bundled on its own and handed over as a function
@@ -80,6 +96,7 @@ const rewriterLib = {
 					format: 'iife',
 					globalName: '__stompLib',
 					inject: [resolve('src/libGlobals.ts')],
+					plugins: [noSourceMaps],
 					sourcemap: false,
 					write: false,
 					metafile: true,
@@ -153,7 +170,11 @@ const builds = [
 		entryPoints: { SearchBuilder: 'src/bootstrapper/entry.ts' },
 		format: 'iife',
 	},
-].map((options) => ({ ...common, ...options }));
+].map((options) => ({
+	...common,
+	...options,
+	plugins: [noSourceMaps, ...(options.plugins ?? [])],
+}));
 
 await rimraf('dist');
 await mkdir('dist', { recursive: true });
