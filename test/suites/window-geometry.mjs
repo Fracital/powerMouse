@@ -36,14 +36,15 @@ async function measure(frames) {
 }
 
 const nativePage = await browser.newPage({ viewport: null });
-// the first page of a new browser can run its scripts before the window's
-// bounds reach it (a slow runner read 0 0 0 0 0 0 there); the proxied pages
-// load into a window that has been up for seconds, so the native one waits
-// for its window too
-const timeout = 30000;
-await nativePage.waitForFunction(() => outerWidth > 0, null, { timeout });
 await nativePage.goto(PAGE);
-const native = await measure(() => [nativePage.mainFrame()]);
+// a new top-level document can run its scripts before its window's bounds
+// reach it, and under load it does (CI and a loaded machine read 0 0 0 0 0 0
+// there); a proxied page is a frame of a top-level page that has had them
+// for seconds. The native reading is taken once the window has them
+await nativePage.waitForFunction(() => outerWidth > 0, null, {
+	timeout: 30000,
+});
+const native = await nativePage.evaluate(() => window.__measureGeometry());
 await nativePage.close();
 ok(
 	'natively: the window is taller than its viewport',

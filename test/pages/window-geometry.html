@@ -10,7 +10,8 @@
 			// to the viewport: what a fingerprinting script reads to tell a real
 			// window (a toolbar above the viewport) from a headless or
 			// fullscreen one.
-			window.__geometry = {
+			// (a function too, so the suite can read a native window again)
+			window.__measureGeometry = () => ({
 				outer: [
 					outerWidth,
 					outerHeight,
@@ -21,7 +22,8 @@
 				].join(' '),
 				toolbar: outerHeight > innerHeight,
 				wider: outerWidth >= innerWidth,
-			};
+			});
+			window.__geometry = window.__measureGeometry();
 		</script>
 	</body>
 </html>
