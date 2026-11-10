@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>SANDBOX STYLES</title>
+	</head>
+	<body>
+		<!--
+			A frame sandboxed without allow-scripts keeps its inline styles: no
+			script of its own runs, but its <style> elements apply. The parent
+			reads the computed style of each (allow-same-origin lets it).
+		-->
+		<iframe
+			id="child"
+			sandbox="allow-same-origin"
+			src="sandbox-styles-child.html"
+		></iframe>
+		<script>
+			const frame = document.getElementById('child');
+			frame.addEventListener('load', () => {
+				const doc = frame.contentDocument;
+				const read = (id) => {
+					const element = doc.getElementById(id);
+					return element
+						? doc.defaultView.getComputedStyle(element).color
+						: 'missing';
+				};
+				window.__sandboxStyles = {
+					head: read('head'),
+					body: read('body'),
+					styles: doc.querySelectorAll('style').length,
+				};
+			});
+		</script>
+	</body>
+</html>

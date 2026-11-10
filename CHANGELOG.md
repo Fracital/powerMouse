@@ -997,6 +997,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   (browserleaks' JavaScript page showed it; window-geometry suite, both
   modes, with real windows: Playwright's viewport emulation makes a
   native page's outer size its inner one too).
+- A frame sandboxed without allow-scripts keeps its inline styles. The
+  shell writes the page with each `<style>` held in a small script that
+  puts it back, and in such a frame only scripts with the inject's nonce
+  run: that script had none, so every inline style was lost, with a CSP
+  error in the console (browserleaks' rects frame lost its positioned box).
+  It carries the nonce now (sandbox-styles suite, both modes, against
+  native).
 - `localStorage` and `sessionStorage` work in a srcdoc frame. Its inject
   resolved the proxy's own storage route against the frame's location,
   `about:srcdoc`, and every call threw "Failed to construct 'URL':

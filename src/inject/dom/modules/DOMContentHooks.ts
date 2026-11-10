@@ -243,10 +243,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					// currentScript, and the style was lost from every page
 					if (inertClones.has(style) || this.client.styleKind(style) !== 'html')
 						return;
+					// a document without allow-scripts runs only the inject's
+					// nonce: the script carries it, or the style is lost
+					const nonce = this.client.scriptNonce;
 					compositeElement(style, () => {
-						const script = document.createElement('script');
+						const script = this.client.global.document.createElement('script');
 
 						usePrototype(script, nativeHTMLScriptElement, (script) => {
+							if (nonce) script.setAttribute('nonce', nonce);
 							script.textContent = `document.currentScript.outerHTML=${JSON.stringify(
 								style.outerHTML,
 							)}`;
