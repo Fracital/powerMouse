@@ -1,0 +1,34 @@
+<!doctype html>
+<title>FRAME STORAGE</title>
+<body>
+	<script>
+		// localStorage read and written from documents with no URL of their
+		// own to resolve against: a written about:blank frame, a srcdoc
+		// frame, a blob: frame. Each reports what it saw to the top.
+		window.__fs = {};
+		localStorage.setItem('fs-key', 'top');
+		const probe = (name) => `<script>
+			let result;
+			try {
+				localStorage.setItem('fs-${name}', '${name}');
+				result = localStorage.getItem('fs-key') + ',' + localStorage.getItem('fs-${name}');
+			} catch (error) {
+				result = 'threw ' + error.name + ': ' + error.message;
+			}
+			parent.__fs[${JSON.stringify(name)}] = result;
+		<\/script>`;
+		const blank = document.createElement('iframe');
+		document.body.append(blank);
+		blank.contentDocument.open();
+		blank.contentDocument.write(probe('blank'));
+		blank.contentDocument.close();
+		const srcdoc = document.createElement('iframe');
+		srcdoc.srcdoc = probe('srcdoc');
+		document.body.append(srcdoc);
+		const blob = document.createElement('iframe');
+		blob.src = URL.createObjectURL(
+			new Blob([probe('blob')], { type: 'text/html' }),
+		);
+		document.body.append(blob);
+	</script>
+</body>

@@ -181,8 +181,23 @@ export default class SyncModule extends Module<DocumentClient> {
 		// jsonAPI's content-type never reached the worker
 		processInit.headers = headersRecord(init.headers);
 
+		// against this bundle's location, or for a document a worker controls
+		// where that resolves nothing (a srcdoc document's location is
+		// about:srcdoc), the proxy's scope. One no worker controls (a popup's
+		// about:blank) has nothing to send a route to: it throws, as before,
+		// and its caller asks a controlled client.
+		let resolved: URL;
+		try {
+			resolved = new URL(url, location.toString());
+		} catch (error) {
+			if (!this.client.controlled) throw error;
+			resolved = new URL(
+				url,
+				`${this.client.baseURI.origin}${this.client.scope}`,
+			);
+		}
 		const data: ProcessData = {
-			url: new URL(url, location.toString()).toString(),
+			url: resolved.toString(),
 			init: processInit,
 		};
 

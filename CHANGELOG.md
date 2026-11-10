@@ -291,6 +291,11 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- `localStorage` and `sessionStorage` work in a srcdoc frame. Its inject
+  resolved the proxy's own storage route against the frame's location,
+  `about:srcdoc`, and every call threw "Failed to construct 'URL':
+  Invalid URL" (an imgur ad script). A document a worker controls resolves
+  the route against the proxy's scope where its location resolves nothing.
 - A `style` attribute on an SVG, MathML or other non-HTML element in a
   frame no service worker controls throws nothing. The copy of an inline
   style's loads read the element's declaration through HTMLElement's
