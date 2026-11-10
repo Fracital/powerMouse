@@ -1,0 +1,13 @@
+{
+	"imports": ["e.r"],
+	"exports": [
+		"memory:memory",
+		"a:function",
+		"f:function",
+		"c:function",
+		"r:function",
+		"p:function",
+		"n:function",
+		"b:function"
+	]
+}

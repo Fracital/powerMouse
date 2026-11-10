@@ -4,6 +4,10 @@
 /.vscode
 # container build output of deploy/epoxy/build.sh
 deploy/epoxy/out/
+# container build output of deploy/rust/build.sh (the artifacts go to assets/)
+deploy/rust/out/
+# a host cargo build of rust/ (the container builds in its own target/)
+rust/target/
 # screenshots from SHOTS=1 npm test
 test/out/
 /.claude/

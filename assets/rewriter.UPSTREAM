@@ -1,0 +1,10 @@
+crate rust/rwjs
+sources 4e538cc5862a
+toolchain stomp-rust-toolchain:d58dde3661d1
+RUST_IMAGE=rustlang/rust@sha256:dde6da7d1b5fa1ba0ebd311488ddc916f36311a2ce0038420ceba5ce76fdcc23
+RUST_NIGHTLY=2026-11-09
+BINARYEN=version_124
+BINARYEN_SHA256=0290c3779fedf592b8da0ded3032ff55c41a2b7bfa2d6bf7b7bac6f0e6e28963
+WASM_BINDGEN=0.2.100
+WASM_BINDGEN_SHA256=63d6a38deb65bd7023c02bdf382ab66b0d2c0241c8582fd3413b5a808b8aeb5b
+built 2026-11-10

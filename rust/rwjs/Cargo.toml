@@ -1,0 +1,12 @@
+[package]
+name = "rwjs"
+version = "0.1.0"
+edition = "2024"
+description = "the JS rewriter of stomp, built to wasm (docs/rust-plan.md)"
+license = "GPL-3.0-only"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]

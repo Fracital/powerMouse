@@ -1,0 +1,17 @@
+# The Rust side of stomp: every crate here is built to wasm32 by
+# deploy/rust/build.sh in the pinned toolchain container and shipped from
+# assets/ (docs/rust-plan.md). One release profile for all of them: whole
+# program optimization, one codegen unit, and panics that abort (a trap the
+# loader treats as a dead instance), so no unwinding tables and no panic
+# strings reach the artifact.
+[workspace]
+members = ["rwjs"]
+resolver = "2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
+strip = true
