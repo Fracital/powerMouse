@@ -357,6 +357,9 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- stomp-h3's HTTP/3 SETTINGS, control stream, QPACK streams, PRIORITY_UPDATE
+  frames, QUIC transport parameter order and 1250-byte Initials are Chrome
+  152's (docs/fingerprint.md); responses may use the QPACK dynamic table.
 - A site that publishes an ECH config in its HTTPS DNS record gets real
   Encrypted Client Hello through epoxy, as from Chrome: crypto.cloudflare.com
   reads `sni=encrypted`, tls-ech.dev "You are using ECH", defo.ie `SUCCESS`
@@ -384,7 +387,6 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   (epoxy-ipv6 suite: a page, raw requests and a WebSocket against a server
   on `::1` with a certificate for the address; Host reads `[::1]:port` as
   Chrome sends it). epoxy's `pem_files` option is passed through for it.
-
 - A background fetch's downloads are the page's CORS requests, as
   natively: one of another site without Access-Control-Allow-Origin fails
   the fetch (`fetch-error`), one with it succeeds. (sop-escapes suite.)
