@@ -1,10 +1,11 @@
-import { modifyJS, routeJS } from '../../rewriteJS';
 import { injectWorkerJS, pageBlobURL, proxyBlobURL } from '../../routeURL';
+import { routeJS } from '../../scriptRoutes';
 import StompURL from '../../StompURL';
 import { WORKER_BASE, WORKER_ERROR } from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
 import { failsToParse, withStack } from '../nativeErrors';
+import { modifyJS } from '../rewriter';
 import { blobsByURL, PRIVATE_URL_MS, WORKER_LOADED } from '../workerBlobs';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
 import { reportedLocations, unrouteURL, type ErrorLocation } from './Unroute';

@@ -1,10 +1,9 @@
-import { parse } from 'meriyah';
 import { modifyHTML, setInlineBlobResolver } from '../../../rewriteHTML';
-import { modifyJS } from '../../../rewriteJS';
 import { proxyBlobURL } from '../../../routeURL';
 import { htmlBlobs, htmlBlobURLs } from '../../htmlBlobs';
 import Module from '../../Module';
 import ProxyModule, { catchRequiredArguments } from '../../modules/Proxy';
+import { modifyJS, parsesAsScript } from '../../rewriter';
 import DocumentClient from '../Client';
 
 const HTML_TYPE = /^\s*text\/html\s*(;|$)/i;
@@ -26,16 +25,6 @@ const JS_TYPE =
  * script's src or imported by a worker) is rewritten the same way: as a
  * classic script, or as a module when only that parses.
  */
-/** whether `source` parses as a classic script (as the rewriter parses one) */
-function parsesAsScript(source: string): boolean {
-	try {
-		parse(source, { next: true, globalReturn: true, webcompat: true });
-		return true;
-	} catch (error) {
-		return false;
-	}
-}
-
 export default class BlobDocumentsModule extends Module<DocumentClient> {
 	/**
 	 * The realm's own Blob, before this module wraps it: for the client's

@@ -49,6 +49,56 @@ const common = {
 };
 
 /**
+ * The rewriter library (src/rewriterLib.ts: meriyah, escodegen, css-tree,
+ * tldts and the rewriters on them) for the inject bundles, which import it
+ * as `stomp:rewriter-lib`: bundled on its own and handed over as a function
+ * that evaluates it, so a frame evaluates none of it until it rewrites
+ * something, and a top can evaluate the same text in a realm of its own for
+ * the frames under it (src/inject/rewriter.ts). Its globals come from
+ * src/libGlobals.ts, which also names every global the inject bundles
+ * inject: the text names nothing of the bundle it is carried in.
+ *
+ * @type {import('esbuild').Plugin}
+ */
+const rewriterLib = {
+	name: 'rewriter-lib',
+	setup(pluginBuild) {
+		// a worker's has no stylesheets and no suffix list
+		const worker = 'injectWorker' in pluginBuild.initialOptions.entryPoints;
+		pluginBuild.onResolve({ filter: /^stomp:rewriter-lib$/ }, (args) => ({
+			path: args.path,
+			namespace: 'rewriter-lib',
+		}));
+		pluginBuild.onLoad(
+			{ filter: /.*/, namespace: 'rewriter-lib' },
+			async () => {
+				const result = await build({
+					...common,
+					entryPoints: [
+						worker ? 'src/rewriterLibWorker.ts' : 'src/rewriterLibDocument.ts',
+					],
+					format: 'iife',
+					globalName: '__stompLib',
+					inject: [resolve('src/libGlobals.ts')],
+					sourcemap: false,
+					write: false,
+					metafile: true,
+					logLevel: 'silent',
+				});
+				const text = result.outputFiles[0].text;
+				return {
+					contents: `export default function rewriterLib(__stompRealm) {\n${text}\nreturn __stompLib.api;\n}\n`,
+					loader: 'js',
+					watchFiles: Object.keys(result.metafile.inputs).map((input) =>
+						resolve(input),
+					),
+				};
+			},
+		);
+	},
+};
+
+/**
  * Bundles that expose a classic-script global do so through an entry shim
  * (`Reflect.defineProperty(globalThis, ...)`) rather than esbuild's
  * `globalName`, because `globalName` emits a top-level `var` that cannot be
@@ -61,11 +111,13 @@ const builds = [
 		entryPoints: { injectDocument: 'src/inject/dom/entry.ts' },
 		format: 'iife',
 		inject: [snapshot, domSnapshot],
+		plugins: [rewriterLib],
 	},
 	{
 		entryPoints: { injectWorker: 'src/inject/worker/entry.ts' },
 		format: 'iife',
 		inject: [snapshot],
+		plugins: [rewriterLib],
 	},
 	{
 		entryPoints: { serviceWorker: 'src/server/serviceWorker.ts' },
@@ -154,7 +206,11 @@ const reporter = {
 if (dev) {
 	const contexts = await Promise.all(
 		builds.map((options) =>
-			context({ ...options, metafile: true, plugins: [reporter] }),
+			context({
+				...options,
+				metafile: true,
+				plugins: [...(options.plugins ?? []), reporter],
+			}),
 		),
 	);
 	await Promise.all(contexts.map((ctx) => ctx.watch()));

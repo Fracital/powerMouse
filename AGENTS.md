@@ -44,7 +44,7 @@ src/
 ├── rewriteHTML.ts, rewriteCSS.ts, rewriteJS.ts, routeURL.ts, Codecs.ts, StompURL.ts
 └── bootstrapper/   SearchBuilder
 demo/               Express + wisp host app (npm run demo), documented in demo/README.md
-build.js            esbuild entry points (six bundles)
+build.js            esbuild entry points (and the rewriter library, see below)
 ```
 
 ## Commands
@@ -85,6 +85,16 @@ on every save (use a `git worktree`).
   bundles, so any unqualified use of those names anywhere in that bundle
   (including node_modules) gets the pristine copy taken before the page ran.
   Write `globalThis.X` when you really want the live global.
+- **The inject's rewriter is a library of its own, often in a detached
+  realm.** meriyah, escodegen, css-tree and tldts reach the inject only
+  through `src/inject/rewriter.ts` (light code reaches modifyJS/modifyCSS
+  through `src/rewriters.ts`). A proxied top evaluates the library in a
+  removed about:blank frame and its frames share that copy
+  (`src/inject/dom/rewriterRealm.ts`). A removed frame's realm still runs
+  code, but its DOM globals answer `undefined` (structuredClone silently
+  returned undefined there and broke every shorthand property): anything
+  the library reads from the window must be taken in `src/libGlobals.ts`.
+  Only strings, numbers and booleans cross; the library never calls out.
 - **Classic-script globals use `Reflect.defineProperty`, not `globalName`.**
   The inject bundles delete `createClient` after use; a top-level `var` from
   esbuild's `globalName` can't be deleted. See `src/*/entry.ts`.

@@ -1,5 +1,5 @@
-import { routeJS } from '../../../rewriteJS';
 import { routeURL } from '../../../routeURL';
+import { routeJS } from '../../../scriptRoutes';
 import { SW_IMPORT_ROUTE } from '../../../serviceWorkerTypes';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';

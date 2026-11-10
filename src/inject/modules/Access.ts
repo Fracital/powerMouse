@@ -3,14 +3,14 @@ import { HelperNames } from '../../helperNames';
 import { routeHTML } from '../../rewriteHTML';
 import {
 	isBareSpecifier,
-	modifyJS,
 	postMessageMethod,
 	routeImport,
 	UNDEFINABLE,
-} from '../../rewriteJS';
+} from '../../scriptRoutes';
 import StompURL, { urlLike } from '../../StompURL';
 import Client from '../Client';
 import Module from '../Module';
+import { modifyJS } from '../rewriter';
 import ProxyModule from './Proxy';
 import { unrouteText } from './Unroute';
 

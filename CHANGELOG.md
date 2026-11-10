@@ -357,6 +357,26 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   UTF-8) instead of the whole library, whose other ciphers and hashes cost
   each proxied frame about 100 KB of heap: 1,280 KB a frame instead of
   1,380 (measure-frame-memory). Encoded URLs are the same.
+- A proxied frame no longer evaluates the rewriter. meriyah, escodegen,
+  css-tree and tldts, with their tables (meriyah's 272 KB unicode table,
+  css-tree's grammar and token buffers, the public suffix list), are a
+  library of their own (`src/rewriterLib.ts`, built by `build.js`) that the
+  inject bundles carry as a function they do not call until a rewrite
+  needs it. A proxied top evaluates it once, before any page code runs, in
+  an about:blank frame's realm it removes again at once, and every frame
+  under it (of its own site or another) rewrites through that copy: no
+  page can reach the realm, so no page can change what its code reads, and
+  the library speaks only strings, numbers and booleans and keeps nothing
+  of one caller for the next (each call carries the document's URL, codec,
+  config, blob: origins and route scopes). A document sandboxed without
+  allow-same-origin, a frame whose top is gone or of another build, and a
+  worker evaluate their own copy the first time they rewrite something. A
+  frame costs 1,050 KB of heap instead of 1,280 and 2.3 MB of renderer
+  memory instead of 3.0 (native: 400 KB and 1.1 MB; measure-frame-memory,
+  60 ad-like frames, same-site and of another site alike), and the 60
+  frames load in 1.2 s instead of 1.8. The core no longer decodes the
+  page's markup with entities' HTML decoder (the shell only escapes `&`,
+  `<`, `>` and U+00A0).
 - `caches.match()` looks in the page's own origin's caches only. It searched
   every cache of the proxy origin, so a page (or a service worker) could
   read another proxied site's cached responses, and Stomp's own HTTP cache,

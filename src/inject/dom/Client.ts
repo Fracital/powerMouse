@@ -1,5 +1,5 @@
-import { decodeHTML } from 'entities';
 import { ParsedConfig } from '../../config';
+import { rewriteCSSValueURLs } from '../../cssURLs';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
 import {
 	PrewrittenTable,
@@ -7,13 +7,15 @@ import {
 	type Prewritten,
 } from '../../prewrite';
 import { refererFor, type ReferrerInfo } from '../../referrerPolicy';
-import { modifyCSS, rewriteCSSValueURLs } from '../../rewriteCSS';
 import { modifyHTML } from '../../rewriteHTML';
-import { modifyJS, rewriteImportMap } from '../../rewriteJS';
+import type { RewriterLib } from '../../rewriterLib';
 import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
+import { rewriteImportMap } from '../../scriptRoutes';
 import StompURL from '../../StompURL';
 import { HOOK_ERROR, OPEN_TAB, WORKER_BASE } from '../../transport/messages';
+import { BUILD } from '../../version';
 import Client from '../Client';
+import { modifyCSS, modifyJS, shareRewriter } from '../rewriter';
 import cloneRawNode, {
 	inertDocumentOf,
 	nativeAttributes,
@@ -26,6 +28,7 @@ import DOMAttributesModule, {
 } from './modules/DOMAttributes';
 import { MARKER } from './modules/MutationObserver';
 import SyncModule from './modules/Sync';
+import { createRewriterRealm } from './rewriterRealm';
 import {
 	documentNonce,
 	guardDocument,
@@ -103,6 +106,47 @@ const namespaceGet = Reflect.getOwnPropertyDescriptor(
 	Element.prototype,
 	'namespaceURI',
 )!.get!;
+
+/**
+ * The page's markup (and the worker's prewritten table) from the shell's
+ * copy (modifyHTML): the shell escapes them with entities' escapeText, which writes `&`, `<`, `>` and U+00A0 as
+ * `&amp;`, `&lt;`, `&gt;` and `&nbsp;` and nothing else, so every `&` in the
+ * copy starts one of those four. A full HTML entity decoder gave the same
+ * text, with the decode tables of every named entity in each frame.
+ */
+const ESCAPED = /&(amp|lt|gt|nbsp);/g;
+const UNESCAPED: Record<string, string> = {
+	amp: '&',
+	lt: '<',
+	gt: '>',
+	nbsp: '\u00a0',
+};
+function unescapeText(text: string): string {
+	return text.replace(ESCAPED, (_, name: string) => UNESCAPED[name]!);
+}
+
+/**
+ * The client of the proxied top `start` is under (`start` when it is one):
+ * up through parents that are Stomp documents of the same real origin. The
+ * host page, or a parent of another real origin (the host in isolation
+ * mode), ends it.
+ */
+function topClientOf(start: DocumentClient, name: string): DocumentClient {
+	let client = start;
+	for (let depth = 0; depth < 64; depth++) {
+		let next: unknown;
+		try {
+			const parent = client.parent;
+			if (parent === client.global) break;
+			next = (parent as unknown as Record<string, unknown>)[name];
+		} catch (error) {
+			break;
+		}
+		if (typeof next !== 'object' || next === null) break;
+		client = next as DocumentClient;
+	}
+	return client;
+}
 
 // runtime document !== document in 0.001 ms!?!?!?
 
@@ -197,6 +241,54 @@ export default class DocumentClient extends Client {
 		this.sandboxFlags = this.#sandbox();
 		this.isDOM = true;
 		this.guardScripts();
+		// The rewriter library this bundle's rewrites use (rewriter.ts). The
+		// bundle's first client is its realm's document; a top makes the realm
+		// it shares now, before any of our hooks or of the page's code exists
+		if (
+			shareRewriter(() => this.#rewriterLibrary()) &&
+			!this.sandboxedOpaque &&
+			this.#topClient() === this
+		)
+			this.#rewriter = createRewriterRealm(this.global.document);
+	}
+	/**
+	 * The rewriter library a top shares with the frames under it, in a realm
+	 * no page code runs in (rewriterRealm.ts); null when this document is no
+	 * top or could not make one. @internal
+	 */
+	get sharedRewriter(): RewriterLib | null {
+		return this.#rewriter ?? null;
+	}
+	/** a top's library (null: it could not make one), undefined for a frame under a top */
+	#rewriter: RewriterLib | null | undefined;
+	/** the library of this document's top, once looked up (null: none to share) */
+	#topRewriter: RewriterLib | null | undefined;
+	/**
+	 * The library for this document's next rewrite, or null for its realm's
+	 * own copy: its top's, unless it is sandboxed without allow-same-origin
+	 * (an opaque origin keeps everything to itself) or its top has none or
+	 * is of another build.
+	 */
+	#rewriterLibrary(): RewriterLib | null {
+		if (this.sandboxedOpaque) return null;
+		if (this.#rewriter !== undefined) return this.#rewriter;
+		if (this.#topRewriter === undefined) {
+			this.#topRewriter = null;
+			const top = this.#topClient();
+			if (top !== this)
+				try {
+					const lib = top.sharedRewriter;
+					if (typeof lib === 'object' && lib !== null && lib.build === BUILD)
+						this.#topRewriter = lib;
+				} catch (error) {
+					// a top of another kind
+				}
+		}
+		return this.#topRewriter;
+	}
+	/** the client of the proxied top this document is under (topClientOf) */
+	#topClient(): DocumentClient {
+		return topClientOf(this, this.names.client);
 	}
 	/** the page's flags of the document in `context`, or null */
 	#flagsOf(context: unknown): Set<string> | null {
@@ -871,7 +963,7 @@ export default class DocumentClient extends Client {
 		if (prewritten !== undefined)
 			try {
 				this.#prewritten = new PrewrittenTable(
-					JSON.parse(decodeHTML(prewritten)) as Prewritten,
+					JSON.parse(unescapeText(prewritten)) as Prewritten,
 				);
 			} catch (error) {
 				// not a table: everything is rewritten here
@@ -885,7 +977,7 @@ export default class DocumentClient extends Client {
 		// writes a no-break space as &nbsp;: an XML-level decode leaves that
 		// as text, and every U+00A0 in a script, a style or a JSON payload
 		// read "&nbsp;" (BBC's __NEXT_DATA__, so React's hydration failed)
-		const parsed = parseHTML(decodeHTML(script), this.global.document);
+		const parsed = parseHTML(unescapeText(script), this.global.document);
 		if (parsed.documentElement) {
 			if (this.allows('allow-scripts'))
 				textifyNoscript(parsed.documentElement, this.innerHTML);

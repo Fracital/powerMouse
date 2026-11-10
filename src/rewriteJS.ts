@@ -11,28 +11,36 @@ import {
 	keepsSourcesHere,
 	sourceKey,
 } from './functionSource';
-import { DEFAULT_NAMES, helperNames } from './helperNames';
+import { helperNames } from './helperNames';
+import { provideRewriters } from './rewriters';
+import { injectWorkerJS, routeBinary } from './routeURL';
 import {
-	createDataURI,
-	injectWorkerJS,
-	parseDataURI,
-	routeBinary,
-	routeURL,
-} from './routeURL';
+	BARE_SPECIFIER,
+	isBareSpecifier,
+	routeImport,
+	UNDEFINABLE,
+	type ScriptType,
+} from './scriptRoutes';
 import StompURL from './StompURL';
 
-// the default helper names; the rewriter and the inject read a config's own
-// (src/helperNames.ts), these are for code that has none to hand (tests)
-export const ACCESS_KEY = DEFAULT_NAMES.access;
-export const GLOBAL_PROXY = DEFAULT_NAMES.globalProxy;
-export const GLOBAL_NAME = DEFAULT_NAMES.globalName;
-export const CLIENT_KEY = DEFAULT_NAMES.client;
+export {
+	ACCESS_KEY,
+	BARE_SPECIFIER,
+	CLIENT_KEY,
+	GLOBAL_NAME,
+	GLOBAL_PROXY,
+	isBareSpecifier,
+	postMessageMethod,
+	PROVIDERS,
+	rewriteImportMap,
+	routeImport,
+	routeJS,
+	UNDEFINABLE,
+	type ScriptType,
+} from './scriptRoutes';
 
 // smaller range inside larger range = invalidates larger range
 // smaller modifications called later in script
-
-export const PROVIDERS = ['window', 'document'];
-export const UNDEFINABLE = ['eval', 'location', 'top'];
 
 /**
  * Whether a member access short-circuits because an earlier link of its
@@ -40,31 +48,6 @@ export const UNDEFINABLE = ['eval', 'location', 'top'];
  * to the chain's start. A nested ChainExpression is a parenthesised chain,
  * which ends the short-circuit (`(a?.b).location` throws on null).
  */
-/**
- * The function a rewritten `x.postMessage(...)` calls, read the way the
- * original call reads it: a null or undefined receiver throws the TypeError
- * the property read would have thrown (`fetch_tests_from_window(null)` after
- * a blocked `window.open`), not one from inside the access API's apply, and
- * so does a postMessage that is not callable. With `optional` (`x?.post...`)
- * a missing receiver or method answers undefined instead.
- */
-export function postMessageMethod(
-	target: any,
-	optional = false,
-): ((...args: any[]) => any) | undefined {
-	if (target === null || target === undefined) {
-		if (optional) return undefined;
-		throw new TypeError(
-			`Cannot read properties of ${target} (reading 'postMessage')`,
-		);
-	}
-	const method = target.postMessage;
-	if (optional && (method === null || method === undefined)) return undefined;
-	if (typeof method !== 'function')
-		throw new TypeError('postMessage is not a function');
-	return method;
-}
-
 /**
  * A call that posts a message: `x.postMessage(...)`, `x.postMessage.call(w,
  * ...)`, `x.postMessage.apply(w, args)` and `Reflect.apply(x.postMessage, w,
@@ -292,27 +275,6 @@ function generatePartial(script: string, ctx: AcornContext) {
 	return result;
 }
 
-export type ScriptType =
-	'generic' | 'genericModule' | 'worker' | 'workerModule';
-
-/**
- * The route of a module an import loads, by its `with { type }`: a JSON
- * module is no script and goes as it is (its body is the module, and its
- * MIME type the browser checks); a CSS module is a stylesheet, its url()s
- * routed; anything else is a module script, rewritten
- */
-export function routeImport(
-	resource: StompURL,
-	base: StompURL,
-	config: Config,
-	type: ScriptType,
-	moduleType: unknown,
-): string {
-	if (moduleType === 'json') return routeBinary(resource);
-	if (moduleType === 'css') return routeURL('css', resource);
-	return routeJS(resource, base, config, type);
-}
-
 /** the `type` a static import's `with { ... }` names, if any */
 function attributeType(node: { attributes?: unknown }): unknown {
 	const attributes = Array.isArray(node.attributes) ? node.attributes : [];
@@ -324,28 +286,6 @@ function attributeType(node: { attributes?: unknown }): unknown {
 		if (key === 'type') return attribute.value?.value;
 	}
 	return undefined;
-}
-
-export function routeJS(
-	resource: StompURL,
-	url: StompURL,
-	config: Config,
-	type: ScriptType = 'generic',
-) {
-	if (resource.url.protocol === 'data:') {
-		const { mime, data, attributes } = parseDataURI(
-			// the data is everything after `data:` but the fragment: a `?` in it
-			// is data too, which the URL parser filed under `search`
-			resource.url.pathname + resource.url.search,
-		);
-		return createDataURI({
-			mime,
-			data: modifyJS(data, url, config, type),
-			attributes,
-		});
-	}
-
-	return routeURL('js:' + type, resource);
 }
 
 export function modifyJS(
@@ -1521,66 +1461,6 @@ function hoistParamPatterns(
 	body.splice(at, 0, b.variableDeclaration('var', hoisted));
 }
 
-/** a URL-like specifier: absolute, scheme-relative, or starting with `/`, `./`, `../` */
-const BARE_SPECIFIER = /^(?!\/|\.\.?\/|[a-z][a-z0-9+.-]*:)/i;
-
-/** `react`, `#private`, `@scope/pkg`: not a URL, resolved by an import map */
-export function isBareSpecifier(specifier: string): boolean {
-	return BARE_SPECIFIER.test(specifier);
-}
-
-/**
- * An import map's targets, routed as modules: bare specifiers stay bare and
- * reach the browser's map, the URL they map to is proxied. Entries ending in
- * `/` (package prefixes) and scope keys are URL prefixes the browser matches
- * against module URLs, which a routed URL does not preserve, so they are
- * left as written (a known limitation). Invalid JSON is left alone too.
- */
-export function rewriteImportMap(
-	json: string,
-	url: StompURL,
-	config: Config,
-): string {
-	let map: {
-		imports?: Record<string, string>;
-		scopes?: Record<string, Record<string, string>>;
-		integrity?: Record<string, string>;
-	};
-	try {
-		map = JSON.parse(json);
-	} catch (error) {
-		return json;
-	}
-	if (typeof map !== 'object' || map === null) return json;
-	const route = (entries: Record<string, string> | undefined) => {
-		if (typeof entries !== 'object' || entries === null) return;
-		for (const [specifier, target] of Object.entries(entries)) {
-			if (
-				typeof target !== 'string' ||
-				specifier.endsWith('/') ||
-				target.endsWith('/') ||
-				// already routed (a second pass): the JS route is `js:<type>/`
-				target.includes(`${url.directory}js:`)
-			)
-				continue;
-			try {
-				entries[specifier] = routeJS(
-					new StompURL(new URL(target, url.toString()), url),
-					url,
-					config,
-					'genericModule',
-				);
-			} catch (error) {
-				// not a URL: the browser reports it
-			}
-		}
-	};
-	route(map.imports);
-	if (typeof map.scopes === 'object' && map.scopes !== null)
-		for (const scope of Object.values(map.scopes)) route(scope);
-	return JSON.stringify(map);
-}
-
 /**
  * Where the text a script's functions read back as is kept
  * (src/functionSource.ts). A whole script needs none of it: its own text is
@@ -1783,3 +1663,18 @@ function markFunctions(
 	}
 	return count;
 }
+
+/** whether `code` parses as a script of one expression statement (a javascript: URL's body) */
+export function singleExpression(code: string): boolean {
+	try {
+		const program = parse(code, { next: true });
+		return (
+			program.body.length === 1 &&
+			program.body[0].type === 'ExpressionStatement'
+		);
+	} catch (error) {
+		return false;
+	}
+}
+
+provideRewriters({ modifyJS, singleExpression });

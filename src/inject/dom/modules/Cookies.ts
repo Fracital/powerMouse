@@ -1,4 +1,3 @@
-import { getDomain, getPublicSuffix } from 'tldts';
 import {
 	BrowserCookieArray,
 	compareCookies,
@@ -11,11 +10,12 @@ import { COOKIES_CHANGED, CookiesChange } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule, { invokeGlobal } from '../../modules/Proxy';
 import { routedPrefix } from '../../modules/Unroute';
+import { getDomain, getPublicSuffix } from '../../rewriter';
 import DocumentClient from '../Client';
 import SyncModule, { BEACON_QUOTA, WRITE_BUDGET } from './Sync';
 
-const publicSuffix = (host: string) =>
-	getPublicSuffix(host, { allowPrivateDomains: true });
+// with private domains (the rewriter library asks for them)
+const publicSuffix = (host: string) => getPublicSuffix(host);
 
 const expired = (cookie: JarCookie, now: number) =>
 	cookie.expires !== undefined && cookie.expires <= now;

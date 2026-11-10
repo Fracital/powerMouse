@@ -1,13 +1,11 @@
 import { parseSrcset, stringifySrcset } from 'srcset';
-import { handlerMark, keepSource, sourceKey } from '../../../functionSource';
 import {
-	modifyCSS,
 	restoreCSSValueURLs,
 	rewriteCSSValueURLs,
 	routeCSS,
-} from '../../../rewriteCSS';
+} from '../../../cssURLs';
+import { handlerMark, keepSource, sourceKey } from '../../../functionSource';
 import { modifyHTML, modifyRefresh, routeHTML } from '../../../rewriteHTML';
-import { modifyJS, routeJS, ScriptType } from '../../../rewriteJS';
 import {
 	parseDataURI,
 	proxyBlobURL,
@@ -15,11 +13,13 @@ import {
 	routeBinary,
 	routeXHR,
 } from '../../../routeURL';
+import { routeJS, ScriptType } from '../../../scriptRoutes';
 import StompURL from '../../../StompURL';
 import { LOAD_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { scopePrefix, unrouteURL } from '../../modules/Unroute';
+import { modifyCSS, modifyJS } from '../../rewriter';
 import { blobLoads } from '../blobLoads';
 import DocumentClient, { type StyleElement } from '../Client';
 import { responseURLOf } from '../responseDocuments';

@@ -17,6 +17,7 @@
 //   8efa41b               1834     3629
 //   no ast-types          1379     3109
 //   crypto-js parts       1276     3023
+//   shared rewriter       1048     2299
 import { readFileSync } from 'node:fs';
 import {
 	done,

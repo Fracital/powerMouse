@@ -1,4 +1,4 @@
-import { getDomain } from 'tldts';
+import { getDomain } from '../rewriter';
 
 function removeBlob(protocol: string): string {
 	return protocol.startsWith('blob:') ? protocol.slice(5) : protocol;

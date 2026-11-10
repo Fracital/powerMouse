@@ -1,6 +1,7 @@
-import { modifyCSS, rewriteCSSValueURLs } from '../../../rewriteCSS';
+import { rewriteCSSValueURLs } from '../../../cssURLs';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { modifyCSS } from '../../rewriter';
 import DocumentClient from '../Client';
 import DOMAttributesModule from './DOMAttributes';
 

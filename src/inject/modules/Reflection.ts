@@ -1,4 +1,4 @@
-import { UNDEFINABLE } from '../../rewriteJS';
+import { UNDEFINABLE } from '../../scriptRoutes';
 import Client from '../Client';
 import Module from '../Module';
 import ProxyModule from './Proxy';

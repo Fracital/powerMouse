@@ -1,4 +1,3 @@
-import { getDomain } from 'tldts';
 import { routeHTML } from '../../../rewriteHTML';
 import StompURL, { urlLike } from '../../../StompURL';
 import Client from '../../Client';
@@ -11,6 +10,7 @@ import ProxyModule, {
 import { routedPrefix } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import { nativeFunction } from '../../nativeUtil';
+import { getDomain } from '../../rewriter';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { siteKeyOf } from '../site';
 

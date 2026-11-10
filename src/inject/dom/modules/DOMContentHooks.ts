@@ -1,5 +1,4 @@
-import { modifyCSS } from '../../../rewriteCSS';
-import { modifyJS, rewriteImportMap } from '../../../rewriteJS';
+import { rewriteImportMap } from '../../../scriptRoutes';
 import Module from '../../Module';
 import ProxyModule, {
 	applyDescriptors,
@@ -7,6 +6,7 @@ import ProxyModule, {
 	usePrototype,
 } from '../../modules/Proxy';
 import { unrouteCSS } from '../../modules/Unroute';
+import { modifyCSS, modifyJS } from '../../rewriter';
 import DocumentClient, {
 	getGlobalParsingState,
 	type StyleElement,

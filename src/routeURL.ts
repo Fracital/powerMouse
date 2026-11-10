@@ -19,6 +19,11 @@ export function setBlobOrigins(page: string, proxy: string) {
 	blobOrigins = page === proxy ? null : { page, proxy };
 }
 
+/** the origins setBlobOrigins took, `[page, proxy]`, or null (the rewriter library is told them per call) */
+export function blobOriginPair(): [string, string] | null {
+	return blobOrigins ? [blobOrigins.page, blobOrigins.proxy] : null;
+}
+
 /** a page-origin blob: URL as the proxy's; anything else as it is */
 export function proxyBlobURL(url: string): string {
 	if (!blobOrigins || !url.startsWith(`blob:${blobOrigins.page}/`)) return url;
@@ -50,6 +55,12 @@ export function routeScopeList(): string[] {
 /** take on route scopes as routeScopeList gave them */
 export function addRouteScopes(scopes: string[]) {
 	for (const scope of scopes) routeScopes.add(scope);
+}
+
+/** the route scopes as routeScopeList gave them, and no others (the rewriter library, for each caller) */
+export function setRouteScopes(scopes: string[]) {
+	routeScopes.clear();
+	addRouteScopes(scopes);
 }
 
 /**

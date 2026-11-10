@@ -79,6 +79,9 @@ export function holderStatement(access: string, key: string, text: string) {
 }
 
 let here = false;
+// the rewriter library's (src/rewriterLib.ts): it keeps no text, it tells
+// the realm that asked for the rewrite what to keep under which key
+let report: ((key: string, text: string) => void) | null = null;
 /**
  * Called by the inject: a script rewritten in this bundle keeps its text in
  * the bundle's table, not in its output (the page's realm runs it, and
@@ -88,6 +91,11 @@ export function keepSourcesHere() {
 	here = true;
 }
 export const keepsSourcesHere = () => here;
+/** keep nothing here: hand each text a rewrite keeps, and its key, to `to` */
+export function reportKeptSources(to: (key: string, text: string) => void) {
+	here = true;
+	report = to;
+}
 
 interface Kept {
 	/** the text, once known to be the one the key names */
@@ -108,6 +116,7 @@ const MAX_HOLDERS = 4;
 
 /** keep a script's text the inject rewrote (it rewrote that very text) */
 export function keepSource(key: string, text: string) {
+	if (report) return report(key, text);
 	const entry = kept.get(key);
 	if (entry?.text === undefined) kept.set(key, { text });
 }

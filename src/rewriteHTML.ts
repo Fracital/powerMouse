@@ -1,10 +1,9 @@
 import { escapeText } from 'entities';
-import { parse } from 'meriyah';
 import { Config } from './config';
 import { helperNames } from './helperNames';
 import type { Prewritten } from './prewrite';
 import type { ReferrerInfo } from './referrerPolicy';
-import { modifyJS } from './rewriteJS';
+import { rewriter } from './rewriters';
 import {
 	createDataURI,
 	injectDocumentJS,
@@ -33,17 +32,7 @@ import { SW_CONTROL, WORKER_BASE } from './transport/messages';
  * completion value as written.
  */
 function javascriptExpression(body: string, rewritten: string): string | null {
-	const single = (code: string) => {
-		try {
-			const program = parse(code, { next: true });
-			return (
-				program.body.length === 1 &&
-				program.body[0].type === 'ExpressionStatement'
-			);
-		} catch (error) {
-			return false;
-		}
-	};
+	const single = rewriter('singleExpression');
 	if (!single(body)) return null;
 	const expression = rewritten.trim().replace(/;$/, '');
 	return single(`(${expression})`) ? expression : null;
@@ -99,6 +88,7 @@ export function routeHTML(
 		// its functions' text is never written into a URL: kept by the inject
 		// when it rewrites the URL, otherwise they read as rewritten
 		const kept = { embed: false };
+		const modifyJS = rewriter('modifyJS');
 		const rewritten = modifyJS(
 			body,
 			url,
