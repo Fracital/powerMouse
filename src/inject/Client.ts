@@ -73,6 +73,8 @@ export default class Client {
 	cookieReads = 0;
 	isDOM: boolean;
 	isWorker: boolean;
+	/** the document's policy upgrades insecure requests (its shell says so; src/mixedContent.ts) */
+	upgradeInsecureRequests = false;
 	#bare?: BareCompatibleClient;
 	/** set by the Context module: maps the real `top` to the proxied world's top */
 	resolveTop?: (value: unknown) => unknown;

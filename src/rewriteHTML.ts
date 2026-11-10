@@ -164,7 +164,8 @@ function referred(client: string, referrer: ReferrerInfo | undefined): string {
  * the script policy's nonce of the document that builds the shell, when it
  * runs no script of the page (a sandbox without allow-scripts): an
  * about:srcdoc, about:blank, blob: or data: document inherits that policy,
- * and only the shell's own scripts carry the nonce.
+ * and only the shell's own scripts carry the nonce. `upgradeInsecure`: the
+ * document's policy upgrades insecure requests (src/mixedContent.ts).
  */
 export function modifyHTML(
 	script: string,
@@ -177,6 +178,7 @@ export function modifyHTML(
 	control?: ControlInfo,
 	/** the document's inline scripts and styles, rewritten already (src/prewrite.ts) */
 	prewritten?: Prewritten | null,
+	upgradeInsecure = false,
 ): string {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	const names = helperNames(config);
@@ -189,7 +191,12 @@ export function modifyHTML(
 	${controlled}if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 
-${referred(names.client, referrer)}
+${referred(names.client, referrer)}${
+		upgradeInsecure
+			? `
+	${names.client}.upgradeInsecureRequests = true;`
+			: ''
+	}
 	if (!${names.client}.applied) try {
 		${names.client}.apply(true);
 	} catch(error) {

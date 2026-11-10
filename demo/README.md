@@ -22,14 +22,15 @@ npm run demo           # http://localhost:8080
 
 Environment variables:
 
-| Variable              | Default | Meaning                                                                           |
-| --------------------- | ------- | --------------------------------------------------------------------------------- |
-| `PORT`                | `8080`  | HTTP port                                                                         |
-| `STOMP_WISP_URL`      | unset   | External wisp endpoint for the transports; when set, `/wisp/` is not served       |
-| `STOMP_PROXY_ORIGIN`  | unset   | Origin serving the proxy for isolation mode; empty means same origin              |
-| `WISP_ALLOW_LOOPBACK` | unset   | Set to `1` to let the wisp server reach `127.0.0.1` / private networks (local QA) |
-| `WISP_NO_UDP`         | unset   | Set to `1` to make the built-in wisp refuse UDP streams (HTTP/3 fallback QA)      |
-| `STOMP_HTTP3`         | unset   | Set to `1` to turn on HTTP/3 for the epoxy transport (`?http3` does one visit)    |
+| Variable               | Default | Meaning                                                                                                                    |
+| ---------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                 | `8080`  | HTTP port                                                                                                                  |
+| `STOMP_WISP_URL`       | unset   | External wisp endpoint for the transports; when set, `/wisp/` is not served                                                |
+| `STOMP_PROXY_ORIGIN`   | unset   | Origin serving the proxy for isolation mode; empty means same origin                                                       |
+| `WISP_ALLOW_LOOPBACK`  | unset   | Set to `1` to let the wisp server reach `127.0.0.1` / private networks (local QA)                                          |
+| `WISP_NO_UDP`          | unset   | Set to `1` to make the built-in wisp refuse UDP streams (HTTP/3 fallback QA)                                               |
+| `STOMP_HTTP3`          | unset   | Set to `1` to turn on HTTP/3 for the epoxy transport (`?http3` does one visit)                                             |
+| `STOMP_TEST_TRANSPORT` | unset   | Set to `1` to use `/test/mixed-transport.mjs` (epoxy that reaches the mixed-content suite's fixture hosts); test runs only |
 
 They can also live in a `.env` file next to `package.json` (not committed);
 the server reads it at startup. The page gets what it needs from `/config.js`.

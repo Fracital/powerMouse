@@ -940,6 +940,38 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   the close event. epoxy reports every close the server starts as 1000
   (it never reads the frame); its own reason, "Closed by remote", no longer
   reaches the page (websocket-close suite, both modes, against native).
+- Mixed content is enforced as Chrome 152 does it, by the proxied page's
+  own URL (src/mixedContent.ts). Every proxied page is https or loopback in
+  proxy URL space, so the browser's own check never fired and an https site
+  loaded http scripts, frames and fetches that Chrome refuses (browserleaks'
+  TLS page reported "Mixed Content Loaded"). On an https page, or under an
+  https proxied top, an http or ws URL that is not potentially trustworthy
+  is now: upgraded to https for an image, audio or video (a failed upgrade
+  is a network error, never a fallback; an IP address or localhost host
+  loads as is, with Chrome's warning), and blocked as a network error for
+  anything else: scripts, module scripts, stylesheets and `@import`, fonts,
+  preloads of active types, prefetches, srcset and picture candidates
+  (Chrome's image set, which it blocks), frames (the navigation is
+  cancelled, the frame keeps its document), objects and embeds, fetch, XHR
+  (synchronous too), EventSource (which fails for good), beacons
+  (`sendBeacon` answers false), a worker's fetch and `importScripts`, and
+  WebSockets (the constructor throws Chrome's SecurityError). A form that
+  targets http is warned about, cancelled in a nested frame and stopped at
+  Chrome's "Form is not secure" interstitial at the top (Send anyway, Go
+  back). `upgrade-insecure-requests` in the page's CSP header or meta, or
+  its parent's, upgrades every insecure request it makes, frames,
+  navigations and WebSockets included, whatever its own scheme; the worker
+  strips the page's CSP, so it applies it. The console gets Chrome's own
+  "Mixed Content" messages, naming the page Chrome names, and an upgraded
+  image's `currentSrc` reads https. The service worker decides from the
+  request's destination and its client's real URL; the inject decides only
+  what never reaches it (WebSocket, sendBeacon, synchronous XHR, an object's
+  or embed's copy). The mixed-content suite runs the same fixture natively
+  and in both modes from an https page and from an http one (no
+  restriction) and compares each load's outcome, the requests the two
+  fixture sites get and the console's messages; its sites need a TLS host,
+  which the demo reaches through a test-only transport
+  (`STOMP_TEST_TRANSPORT=1`, demo/public/test/mixed-transport.mjs).
 - `localStorage` and `sessionStorage` work in a srcdoc frame. Its inject
   resolved the proxy's own storage route against the frame's location,
   `about:srcdoc`, and every call threw "Failed to construct 'URL':

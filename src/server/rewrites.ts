@@ -9,6 +9,15 @@ import { codecType, Config, ParsedConfig } from '../config';
 import { rewriteLinkHeader } from '../headers';
 import { helperNames } from '../helperNames';
 import {
+	insecure,
+	metaUpgradesInsecureRequests,
+	mixedContentVerdict,
+	potentiallyTrustworthy,
+	restrictsMixedContent,
+	upgradedURL,
+	upgradesInsecureRequests,
+} from '../mixedContent';
+import {
 	hasBase,
 	inlineSources,
 	scriptPreamble,
@@ -65,6 +74,12 @@ import {
 	rememberAuthorization,
 } from './httpAuth';
 import { takeInline } from './inline';
+import { formFields, insecureFormPage } from './insecureForm';
+import {
+	postNotices,
+	rememberUpgradeInsecure,
+	upgradesInsecure,
+} from './insecureRequests';
 import {
 	awaitNavigationHint,
 	NavigationHint,
@@ -121,21 +136,9 @@ const FETCH_METADATA = [
 	'sec-fetch-user',
 ];
 
-/**
- * Chrome sends fetch metadata to potentially trustworthy URLs only: https
- * (and wss), and the loopback hosts it treats as secure. A plain http
- * origin anywhere else gets none.
- */
-function potentiallyTrustworthy(url: URL): boolean {
-	if (url.protocol === 'https:' || url.protocol === 'wss:') return true;
-	const host = url.hostname;
-	return (
-		host === 'localhost' ||
-		host.endsWith('.localhost') ||
-		host === '[::1]' ||
-		/^127(\.\d{1,3}){3}$/.test(host)
-	);
-}
+// Chrome sends fetch metadata to potentially trustworthy URLs only: https
+// (and wss), and the loopback hosts it treats as secure. A plain http
+// origin anywhere else gets none (potentiallyTrustworthy, src/mixedContent.ts)
 
 /**
  * The real URL of each service worker client, by id: a request's origin is
@@ -145,6 +148,8 @@ function potentiallyTrustworthy(url: URL): boolean {
  * life (pushState cannot change it), so one lookup per client is enough.
  */
 const clientURLs = new Map<string, URL>();
+/** each client's routed URL, beside its real one: the route kind names its proxied top */
+const clientRoutes = new Map<string, string>();
 const CLIENT_URLS_KEPT = 256;
 
 /**
@@ -210,6 +215,30 @@ function loadOf(
 	return { destination, mode };
 }
 
+/**
+ * Chrome's name for a request whose destination does not say what it is
+ * (src/mixedContent.ts typeName): an XMLHttpRequest (the inject marks its
+ * abort id), an EventSource (its Accept), a prefetch (its Sec-Purpose)
+ */
+function requestTypeOf(request: Request): string | undefined {
+	if (request.headers.get(ABORT_HEADER)?.startsWith('xhr-'))
+		return 'XMLHttpRequest endpoint';
+	if (
+		!request.destination &&
+		(request.headers.get('accept') || '').includes('text/event-stream')
+	)
+		return 'EventSource endpoint';
+	if (
+		/prefetch/i.test(
+			request.headers.get('sec-purpose') ??
+				request.headers.get('purpose') ??
+				'',
+		)
+	)
+		return 'prefetch resource';
+	return undefined;
+}
+
 /** how long a navigation with no referrer and no client waits for its document's NAVIGATION_HINT */
 const NAVIGATION_HINT_WAIT_MS = 100;
 const redirectHops = new Map<string, RedirectHop & { at: number }>();
@@ -263,7 +292,16 @@ type BodyTransform = (
 	responseHeaders: Headers,
 	referrer: ReferrerInfo,
 	/** the request as it went upstream (its method, its final headers) */
-	request: { method: string; headers: Headers },
+	request: {
+		method: string;
+		headers: Headers;
+		/** the routed URL the browser asked for, and its client (a navigation's: the document it makes) */
+		routed: string;
+		clientId?: string;
+		navigation: boolean;
+		/** the document's parent upgrades insecure requests (a nested document inherits it) */
+		upgradeInsecure: boolean;
+	},
 	/** what the transform tells the request log */
 	note: Note,
 ) => Promise<BodyInit | false>;
@@ -520,6 +558,8 @@ function genericForward(
 		// client id is the document being created, and asking for it would
 		// wait on this very response
 		let client: URL | null = null;
+		// its routed URL, when it is a routed document or worker
+		let clientRoute: string | null = null;
 		// a blob: worker whose minting page this worker does not know (it
 		// restarted since, which empties what it was told, or the blob was
 		// minted inside a worker): judged as another site, never as the
@@ -528,13 +568,16 @@ function genericForward(
 		if (!navigation && context?.clientId && typeof clients !== 'undefined') {
 			const id = context.clientId;
 			client = clientURLs.get(id) ?? null;
+			clientRoute = clientRoutes.get(id) ?? null;
 			if (!client)
 				try {
 					const found = await clients.get(id);
 					// a blob: worker's URL is the blob: URL: judged as the
 					// document that minted it, when that one said so
+					const decoded = found ? decode(found.url) : null;
+					if (decoded && found) clientRoute = found.url;
 					client = found
-						? (decode(found.url) ??
+						? (decoded ??
 							(found.url.startsWith('blob:') ? blobOriginOf(found.url) : null))
 						: null;
 					unknownBlob = !client && !!found?.url.startsWith('blob:');
@@ -542,9 +585,13 @@ function genericForward(
 					// the client is gone
 				}
 			if (client && !clientURLs.has(id)) {
-				if (clientURLs.size >= CLIENT_URLS_KEPT)
-					clientURLs.delete(clientURLs.keys().next().value!);
+				if (clientURLs.size >= CLIENT_URLS_KEPT) {
+					const oldest = clientURLs.keys().next().value!;
+					clientURLs.delete(oldest);
+					clientRoutes.delete(oldest);
+				}
 				clientURLs.set(id, client);
+				if (clientRoute) clientRoutes.set(id, clientRoute);
 			}
 		}
 
@@ -555,6 +602,88 @@ function genericForward(
 		let refererSource = referrer ? decode(referrer) : null;
 		if (!refererSource && referrer === `${oURL.origin}/`)
 			refererSource = client;
+
+		// mixed content (src/mixedContent.ts), decided by the real URL of the
+		// document that makes the request (for a nested navigation, the
+		// parent at its referrer) and the proxied top's, under the document's
+		// upgrade-insecure-requests. The browser sees https (or loopback)
+		// proxy URLs only and never decides it. A top-level navigation (the
+		// host's frame) is never mixed content
+		let upgradeInsecure = false;
+		let asked: URL | null = null;
+		let mediaUpgraded = false;
+		if (!(navigation && topLevel)) {
+			const contextRoute = navigation ? referrer : (clientRoute ?? referrer);
+			let top: string | null = navigation ? nestedRoute : null;
+			if (!navigation && contextRoute)
+				try {
+					top = nestedTopOf(new URL(contextRoute).pathname, rewriter.directory);
+				} catch (error) {
+					// not a URL: no top to name
+				}
+			upgradeInsecure = upgradesInsecure(
+				navigation ? undefined : context?.clientId,
+				navigation ? null : clientRoute,
+				referrer,
+			);
+			// the URL as the page asked for it (a stylesheet's url() keeps its
+			// own in a fragment the rewriter adds)
+			asked = new URL(reportURL(url));
+			const verdict = mixedContentVerdict({
+				url: asked,
+				destination,
+				imageSet: resource === 'binary:set',
+				type: requestTypeOf(serverRequest),
+				context: navigation ? refererSource : (client ?? refererSource),
+				top,
+				upgradeInsecure,
+			});
+			postNotices(
+				verdict.notices,
+				navigation ? undefined : context?.clientId,
+				navigation ? referrer : null,
+			);
+			if (verdict.action === 'block') {
+				rewriter.log?.({
+					url: reportURL(url),
+					method: serverRequest.method,
+					destination: serverRequest.destination || 'fetch',
+					status: 0,
+					ms: Date.now() - started,
+					cached: false,
+					bytes: null,
+					error: 'blocked: mixed content',
+					kind: 'blocked',
+					client: context?.clientId,
+				});
+				// a blocked frame navigation is cancelled (no document commits,
+				// the frame keeps the one it has), and an EventSource fails for
+				// good (a network error would make it reconnect); anything else
+				// is a network error
+				return navigation ||
+					requestTypeOf(serverRequest) === 'EventSource endpoint'
+					? new Response(null, { status: 204 })
+					: Response.error();
+			}
+			if (verdict.action === 'upgrade') {
+				// a navigation goes to its https route, so the document it makes
+				// is https; a subresource is fetched over https in its place, as
+				// the browser upgrades it before it goes out
+				if (navigation)
+					return new Response(null, {
+						status: 307,
+						headers: {
+							location: `${oURL.origin}${rewriter.directory}${resource}/${new StompURL(
+								verdict.url,
+								url,
+							).encode()}`,
+							'cache-control': 'no-store',
+						},
+					});
+				url.url = verdict.url;
+				mediaUpgraded = !!verdict.media;
+			}
+		}
 
 		// a redirect this worker answered earlier in the same chain decided
 		// the referrer already: the next hop starts from that (stripped) value
@@ -1058,6 +1187,24 @@ function genericForward(
 			report = null;
 		};
 
+		// the media player's own warning, naming what the response holds
+		if (mediaUpgraded && asked)
+			postNotices(
+				[
+					{
+						kind: 'should-also',
+						type: /^\s*video\//i.test(
+							response.headers.get('content-type') ?? '',
+						)
+							? 'video'
+							: 'audio file',
+						url: asked.href,
+					},
+				],
+				context?.clientId,
+				null,
+			);
+
 		const responseHeaders = filterResponseHeaders(
 			response.headers,
 			url,
@@ -1130,7 +1277,14 @@ function genericForward(
 							response,
 							responseHeaders,
 							referrerInfo,
-							{ method: serverRequest.method, headers: requestHeaders },
+							{
+								method: serverRequest.method,
+								headers: requestHeaders,
+								routed: serverRequest.url,
+								clientId: context?.clientId,
+								navigation,
+								upgradeInsecure,
+							},
 							note,
 						)
 					: false;
@@ -1457,8 +1611,9 @@ export function registerRewrites(
 		bare: new BareCompatibleClient(transport),
 	};
 
+	// binary:set is a srcset candidate (routeImageSet), loaded the same way
 	router.routes.set(
-		/^\/binary\//,
+		/^\/binary(?::set)?\//,
 		genericForward(
 			rewriter,
 			undefined,
@@ -1764,6 +1919,18 @@ export function registerRewrites(
 					responseHeaders.delete('refresh');
 					markup = withRefreshMeta(markup, refresh);
 				}
+				// the page's policy is stripped (it would refuse the proxy): an
+				// upgrade-insecure-requests in it, its meta or its parent's is
+				// applied by this worker to every request the document makes,
+				// and by the inject to its WebSockets and beacons
+				const upgradeInsecure =
+					request.upgradeInsecure ||
+					upgradesInsecureRequests(
+						response.headers.get('content-security-policy'),
+					) ||
+					metaUpgradesInsecureRequests(markup);
+				if (upgradeInsecure && request.navigation)
+					rememberUpgradeInsecure(request.routed, request.clientId);
 				return modifyHTML(
 					markup,
 					url,
@@ -1782,6 +1949,7 @@ export function registerRewrites(
 							responseHeaders: response.headers,
 						}),
 					),
+					upgradeInsecure,
 				);
 			},
 			(resource, url) => routeHTML(resource, url, rewriter.config),
@@ -1816,7 +1984,7 @@ export function registerRewrites(
 		),
 	);
 
-	router.routes.set(/^\/html:form(:nested:[^/]*)?\//, (serverRequest) => {
+	router.routes.set(/^\/html:form(:nested:[^/]*)?\//, async (serverRequest) => {
 		const oURL = new URL(serverRequest.url);
 		const { url } = parseRoutedURL(
 			`${oURL.origin}${oURL.pathname}${oURL.hash}`, // exclude query
@@ -1825,6 +1993,63 @@ export function registerRewrites(
 		);
 
 		url.url.search = oURL.search;
+
+		// a form an https page (or one under an https top) submits to http:
+		// warned about, blocked in a nested frame, stopped at Chrome's
+		// interstitial at the top; under upgrade-insecure-requests, upgraded
+		// (src/mixedContent.ts)
+		const nested = nestedTopOf(oURL.pathname, rewriter.directory);
+		if (insecure(url.url)) {
+			const referrer =
+				serverRequest.referrer && serverRequest.referrer !== 'about:client'
+					? serverRequest.referrer
+					: null;
+			let source: URL | null = null;
+			try {
+				if (referrer)
+					source = parseRoutedURL(
+						referrer,
+						rewriter.codec,
+						`${oURL.origin}${rewriter.directory}`,
+					).url.url;
+			} catch (error) {
+				// not a routed page: nothing to judge it by
+			}
+			if (upgradesInsecure(undefined, referrer)) url.url = upgradedURL(url.url);
+			else if (restrictsMixedContent(source) || restrictsMixedContent(nested)) {
+				// Chrome warns for the form's action and for the URL it submits;
+				// told before the answer, which unloads the page at the top
+				const action = new URL(url.url.href);
+				if (serverRequest.method === 'GET') action.search = '';
+				await postNotices(
+					[
+						{ kind: 'form', url: action.href },
+						{ kind: 'form', url: url.url.href },
+						...(nested
+							? [
+									{
+										kind: 'blocked' as const,
+										type: 'form action',
+										url: url.url.href,
+									},
+								]
+							: []),
+					],
+					undefined,
+					referrer,
+				);
+				if (nested) return new Response(null, { status: 204 });
+				// the page writes them before it unloads for the interstitial
+				await new Promise((resolve) => setTimeout(resolve, 100));
+				return insecureFormPage(
+					routeHTML(url, url, rewriter.config),
+					serverRequest.method,
+					await formFields(serverRequest),
+					serverRequest.headers.get('content-type')?.split(';')[0] ||
+						'application/x-www-form-urlencoded',
+				);
+			}
+		}
 
 		return new Response(undefined, {
 			headers: {

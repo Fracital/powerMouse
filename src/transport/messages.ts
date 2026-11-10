@@ -71,6 +71,12 @@ export const OPAQUE_HEADER = 'x-stomp-opaque';
  * (src/server/httpAuth.ts), and strips it
  */
 export const CREDENTIALS_HEADER = 'x-stomp-credentials';
+/**
+ * SW -> the client that made a request (or, for a navigation, its parent):
+ * the console notices Chrome prints for mixed content (src/mixedContent.ts),
+ * which the inject writes in Chrome's words
+ */
+export const MIXED_CONTENT_NOTICE = '$stomp$mixedContent';
 /** SW -> every window: the cookie jar changed for `domain` (every host when empty); pages drop their document.cookie cache */
 export const COOKIES_CHANGED = '$stomp$cookiesChanged';
 export interface CookiesChange {

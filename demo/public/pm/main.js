@@ -93,7 +93,11 @@ const wispURL = () =>
 // proxied page's synchronous XHR can be answered while it spins
 const transports = {
 	epoxy: () => ({
-		module: `${proxyBase()}/epoxy/index.mjs`,
+		// a test run's epoxy that also reaches the mixed-content suite's
+		// fixture hosts (demo/public/test/mixed-transport.mjs)
+		module: CFG.testTransport
+			? `${proxyBase()}/test/mixed-transport.mjs`
+			: `${proxyBase()}/epoxy/index.mjs`,
 		options: [{ wisp: wispURL() }],
 		...(HTTP3 && { http3: true }),
 	}),

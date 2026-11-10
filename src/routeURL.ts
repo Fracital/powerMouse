@@ -131,6 +131,19 @@ export function routeBinary(resource: StompURL) {
 }
 
 /**
+ * A srcset or picture candidate: binary data too, under its own kind, since
+ * Chrome blocks an insecure one where it upgrades an insecure `src`
+ * (src/mixedContent.ts) and the worker sees the destination `image` for both
+ */
+export function routeImageSet(resource: StompURL) {
+	if (resource.url.protocol === 'data:') {
+		return resource.toString();
+	}
+
+	return routeURL('binary:set', resource);
+}
+
+/**
  * navigator.postBeacon request
  */
 export function routeXHR(resource: StompURL) {

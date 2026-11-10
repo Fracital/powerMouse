@@ -1,0 +1,88 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<!--META-->
+		<title>MIXED CONTENT CHILD</title>
+	</head>
+	<body>
+		<script>
+			// A nested document of the mixed-content page: the same loads, each
+			// reported to the parent. With ?uir=1 or ?uirmeta=1 its policy is
+			// upgrade-insecure-requests (header or meta), with ?bamc=1
+			// block-all-mixed-content (header).
+			const params = new URLSearchParams(location.search);
+			const B = params.get('b');
+			const tag = params.get('tag');
+			const HA = 'http://' + location.host;
+			const HB = 'http://plain.mixed.test:' + B;
+			const q = (c) => '?c=' + tag + '.' + c;
+			const load = (name, attributes) =>
+				new Promise((resolve) => {
+					const el = document.createElement(name);
+					el.onload = () =>
+						resolve(name === 'img' ? 'load ' + el.naturalWidth : 'load');
+					el.onerror = () => resolve('error');
+					for (const [k, v] of Object.entries(attributes))
+						el.setAttribute(k, v);
+					document.body.append(el);
+					setTimeout(() => resolve('none'), 2500);
+				});
+			const get = (url) =>
+				fetch(url).then(
+					(r) => 'ok ' + r.status,
+					(e) => 'reject ' + e.name,
+				);
+			const socket = (url) =>
+				new Promise((resolve) => {
+					let ws;
+					try {
+						ws = new WebSocket(url);
+					} catch (e) {
+						resolve('throw ' + e.name);
+						return;
+					}
+					const events = [];
+					ws.onopen = () => {
+						events.push('open');
+						ws.close();
+					};
+					ws.onerror = () => events.push('error');
+					ws.onclose = (e) =>
+						resolve(events.concat('close ' + e.code).join(','));
+				});
+			(async () => {
+				const r = {};
+				r.imgUpgraded = await load('img', {
+					src: HA + '/img.png' + q('img-upgraded'),
+				});
+				r.imgFails = await load('img', {
+					src: HB + '/img.png' + q('img-fails'),
+				});
+				r.scriptSameHost = await load('script', {
+					src: HA + '/s.js' + q('script-same-host'),
+				});
+				r.scriptOtherPort = await load('script', {
+					src: HB + '/s.js' + q('script-other-port'),
+				});
+				r.fetchSameHost = await get(HA + '/data.txt' + q('fetch-same-host'));
+				r.fetchOtherPort = await get(HB + '/data.txt' + q('fetch-other-port'));
+				r.websocket = await socket(
+					'ws://plain.mixed.test:' + B + '/' + q('websocket'),
+				);
+				r.iframe = await new Promise((resolve) => {
+					const frame = document.createElement('iframe');
+					addEventListener('message', (e) => {
+						if (e.data && e.data.grandchild)
+							resolve('grandchild ' + e.data.grandchild);
+					});
+					frame.onload = () => setTimeout(() => resolve('load'), 500);
+					frame.src = HA + '/pages/mixed-content-grandchild.html' + q('iframe');
+					document.body.append(frame);
+					setTimeout(() => resolve('none'), 4000);
+				});
+				parent.postMessage({ mixedChild: r }, '*');
+			})();
+		</script>
+	</body>
+</html>

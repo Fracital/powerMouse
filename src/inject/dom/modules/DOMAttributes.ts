@@ -11,12 +11,14 @@ import {
 	proxyBlobURL,
 	ROUTE_PROTOCOLS,
 	routeBinary,
+	routeImageSet,
 	routeXHR,
 } from '../../../routeURL';
 import { routeJS, ScriptType } from '../../../scriptRoutes';
 import StompURL from '../../../StompURL';
 import { LOAD_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
+import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { scopePrefix, unrouteCSS, unrouteURL } from '../../modules/Unroute';
 import { modifyCSS, modifyJS } from '../../rewriter';
@@ -1339,7 +1341,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					for (const src of parsed) {
 						updated.push({
 							...src,
-							url: routeBinary(
+							url: routeImageSet(
 								new StompURL(
 									new URL(src.url, this.client.url.toString()),
 									this.client.url,
@@ -2089,16 +2091,44 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				new URL(written, this.client.url.toString()),
 				this.client.url,
 			);
-			const routed = routeHTML(
-				resource,
-				this.client.url,
-				this.client.config,
-				false,
-				this.client.topOrigin,
-			);
+			const routedOf = () =>
+				routeHTML(
+					resource,
+					this.client.url,
+					this.client.config,
+					false,
+					this.client.topOrigin,
+				);
+			let routed = routedOf();
 			if (!ROUTE_PROTOCOLS.includes(resource.url.protocol)) {
 				// data:, blob: and the like: as routeHTML leaves them
 				element.setAttribute(attribute, routed);
+				return;
+			}
+			// mixed content (src/mixedContent.ts): the resource is copied here,
+			// never reaching the worker as the element's, so the page's URL
+			// decides here. A blocked one fails to load, as natively (an object
+			// fires error); an upgraded one loads over https
+			const mixed = this.client
+				.getModule(MixedContentModule)
+				?.verdict(resource.url, attribute === 'data' ? 'object' : 'embed');
+			if (mixed?.action === 'upgrade') {
+				resource.url = mixed.url;
+				routed = routedOf();
+			}
+			if (mixed?.action === 'block') {
+				// told once: the insertion hooks run this again for the same value
+				if (loads.get(element)?.written !== resource.url.href) {
+					loads.set(element, {
+						written: resource.url.href,
+						generation: ++generations,
+					});
+					this.client.getModule(MixedContentModule)!.report(mixed.notices);
+				}
+				// a load that fails as the blocked one does: an object fires
+				// error, an embed nothing (a blob: URL of no origin, never minted;
+				// a revoked one of this origin would fire an embed's load)
+				element.setAttribute(attribute, 'blob:null/mixed-content-blocked');
 				return;
 			}
 			const current = loads.get(element);

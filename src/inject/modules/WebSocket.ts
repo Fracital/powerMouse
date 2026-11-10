@@ -6,6 +6,7 @@ import { urlLike } from '../../StompURL';
 import Client from '../Client';
 import Module from '../Module';
 import { failsToParse, withStack } from '../nativeErrors';
+import MixedContentModule from './MixedContent';
 import ProxyModule, { classConstant, onEventTarget } from './Proxy';
 
 const wsProtocols = ['ws:', 'wss:'];
@@ -59,6 +60,25 @@ export default class WebSocketModule extends Module<Client> {
 				// relative URLs resolve against the page, http(s) means ws(s)
 				if (parsed.protocol === 'http:') parsed.protocol = 'ws:';
 				else if (parsed.protocol === 'https:') parsed.protocol = 'wss:';
+
+				// mixed content: no worker sees a WebSocket, so the page's own
+				// URL decides here. Chrome refuses ws: from an https page before
+				// connecting, and upgrades it under upgrade-insecure-requests
+				const mixed = client
+					.getModule(MixedContentModule)
+					?.verdict(parsed, 'websocket');
+				if (mixed?.action === 'block') {
+					client
+						.getModule(MixedContentModule)!
+						.report([{ kind: 'websocket', url: parsed.href }]);
+					throw withStack(
+						new client.global.DOMException(
+							"Failed to construct 'WebSocket': An insecure WebSocket connection may not be initiated from a page loaded over HTTPS.",
+							'SecurityError',
+						),
+					);
+				}
+				if (mixed?.action === 'upgrade') parsed = mixed.url;
 
 				instances.add(this);
 

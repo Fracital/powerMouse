@@ -6,6 +6,7 @@ import {
 	OPAQUE_HEADER,
 } from '../../../transport/messages';
 import Module from '../../Module';
+import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import {
@@ -483,8 +484,9 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				if (this.#async) {
 					const generation = this.#generation;
 					init.signal = this.#abort.signal;
-					// abort() and a timeout reach the worker under this id
-					const id = `${Date.now()}-${Math.random()}`;
+					// abort() and a timeout reach the worker under this id; its
+					// prefix tells the worker the request is an XMLHttpRequest
+					const id = `xhr-${Date.now()}-${Math.random()}`;
 					(init.headers as Headers).set(ABORT_HEADER, id);
 					this.#abort.signal.addEventListener(
 						'abort',
@@ -664,7 +666,26 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					this.#credentialed = { shown: shown.href, plain: plain.href };
 				}
 
-				this.#fetch(routeXHR(new StompURL(target, that.client.url)), options);
+				// mixed content: a synchronous request reaches the worker without
+				// its page (the bridge's), so the page's URL decides here, as for
+				// an asynchronous one the worker does
+				let sent = target;
+				if (!this.#async) {
+					const mixed = that.client
+						.getModule(MixedContentModule)
+						?.verdict(target, 'empty', 'XMLHttpRequest endpoint');
+					if (mixed?.action === 'block') {
+						that.client.getModule(MixedContentModule)!.report(mixed.notices);
+						this.#end('error');
+						throw new that.client.global.DOMException(
+							`Failed to execute 'send' on 'XMLHttpRequest': Failed to load '${target.href}'.`,
+							'NetworkError',
+						);
+					}
+					if (mixed?.action === 'upgrade') sent = mixed.url;
+				}
+
+				this.#fetch(routeXHR(new StompURL(sent, that.client.url)), options);
 			}
 			getResponseHeader(header: string) {
 				return this.#responseHeaders.get(header);

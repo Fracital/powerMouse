@@ -23,6 +23,9 @@
 //                       falls back to the transport's TCP connections)
 //   STOMP_HTTP3         `1` turns on HTTP/3 (the epoxy descriptor's `http3`)
 //                       for every visit; `?http3` on the page does it for one
+//   STOMP_TEST_TRANSPORT `1` swaps epoxy for /test/mixed-transport.mjs, which
+//                       reaches the mixed-content suite's fixture hosts (test
+//                       runs only; test/run.mjs sets it for that suite)
 //   STOMP_REPO          the GitHub repository whose commits the home page
 //                       lists (default Fracital/powerMouse, read from this
 //                       checkout's own git log)
@@ -187,6 +190,7 @@ const pageConfig = {
 	...(externalWisp && { wisp: externalWisp }),
 	...(process.env.STOMP_PROXY_ORIGIN !== undefined && { proxyOrigin }),
 	...(process.env.STOMP_HTTP3 === '1' && { http3: true }),
+	...(process.env.STOMP_TEST_TRANSPORT === '1' && { testTransport: true }),
 	// startedAt lets the dev client tell a restarted server from a dropped
 	// connection: a different value on reconnect means new server code
 	...(dev && { dev: true, startedAt: started }),

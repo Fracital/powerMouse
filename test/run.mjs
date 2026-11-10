@@ -51,6 +51,11 @@ const SUITE_TIMEOUT_MINUTES = {
 	// waits for every frame's report, up to minutes on a busy runner
 	'sandbox-restrictions': 20,
 };
+// what a suite's demo server needs beyond the defaults
+const SUITE_ENV = {
+	// epoxy plus the fixture hosts of test/mixed-servers.mjs
+	'mixed-content': { STOMP_TEST_TRANSPORT: '1' },
+};
 const suiteTimeoutMs = (name) =>
 	(Number(process.env.SUITE_TIMEOUT) || SUITE_TIMEOUT_MINUTES[name] || 10) *
 	60 *
@@ -174,7 +179,12 @@ async function startServersOnce(name) {
 	// or not depending on how long the page before it took is noise there; the
 	// other suites keep node's default
 	if (name.startsWith('wpt-')) fixture.keepAliveTimeout = 10 * 60 * 1000;
-	const env = { ...process.env, PORT: port, WISP_ALLOW_LOOPBACK: '1' };
+	const env = {
+		...process.env,
+		PORT: port,
+		WISP_ALLOW_LOOPBACK: '1',
+		...SUITE_ENV[name],
+	};
 	delete env.STOMP_PROXY_ORIGIN;
 	delete env.STOMP_WISP_URL;
 	const server = spawn(process.execPath, [`${root}demo/server.js`], {

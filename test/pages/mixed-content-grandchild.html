@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>MIXED CONTENT GRANDCHILD</title>
+	</head>
+	<body>
+		<script>
+			// loaded as http from a nested document: blocked natively unless the
+			// document's policy upgraded it, in which case it reports its scheme
+			parent.postMessage({ grandchild: location.protocol }, '*');
+		</script>
+	</body>
+</html>

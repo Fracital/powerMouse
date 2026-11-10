@@ -1,6 +1,7 @@
 import { routeXHR } from '../../../routeURL';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
+import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
 
@@ -80,12 +81,25 @@ export default class NavigatorModule extends Module<DocumentClient> {
 				proxyModule.wrapFunction(
 					this.client.global.Navigator.prototype.sendBeacon,
 					(target, that, args) => {
-						args[0] = routeXHR(
-							new StompURL(
-								new URL(args[0], this.client.url.toString()),
-								this.client.url,
-							),
-						);
+						let url: URL;
+						try {
+							url = new URL(args[0], this.client.url.toString());
+						} catch (error) {
+							// the browser's own TypeError for a URL that does not parse
+							return Reflect.apply(target, that, args);
+						}
+						// mixed content: Chrome refuses an insecure beacon from an https
+						// page at once (sendBeacon answers false) and upgrades it under
+						// upgrade-insecure-requests
+						const mixed = this.client
+							.getModule(MixedContentModule)
+							?.verdict(url, 'empty', 'Beacon endpoint');
+						if (mixed?.action === 'block') {
+							this.client.getModule(MixedContentModule)!.report(mixed.notices);
+							return false;
+						}
+						if (mixed?.action === 'upgrade') url = mixed.url;
+						args[0] = routeXHR(new StompURL(url, this.client.url));
 
 						return Reflect.apply(target, that, args);
 					},

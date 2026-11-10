@@ -408,8 +408,9 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				if (this.#async) {
 					const generation = this.#generation;
 					init.signal = this.#abort.signal;
-					// abort() and a timeout reach the worker under this id
-					const id = `${Date.now()}-${Math.random()}`;
+					// abort() and a timeout reach the worker under this id; its
+					// prefix tells the worker the request is an XMLHttpRequest
+					const id = `xhr-${Date.now()}-${Math.random()}`;
 					(init.headers as Headers).set(ABORT_HEADER, id);
 					this.#abort.signal.addEventListener(
 						'abort',

@@ -4,6 +4,7 @@ import ConsoleModule from './modules/Console';
 import FetchModule from './modules/Fetch';
 import FunctionModule from './modules/Function';
 import IndexedDBModule from './modules/IndexedDB';
+import MixedContentModule from './modules/MixedContent';
 import ObjectURLModule from './modules/ObjectURL';
 import PartitionModule from './modules/Partition';
 import ProxyModule from './modules/Proxy';
@@ -24,6 +25,7 @@ export default function baseModules(client: Client) {
 	client.addModule(WorkerModule);
 	client.addModule(IndexedDBModule);
 	client.addModule(PartitionModule);
+	client.addModule(MixedContentModule);
 	client.addModule(WebSocketModule);
 	client.addModule(UnrouteModule);
 	client.addModule(ConsoleModule);

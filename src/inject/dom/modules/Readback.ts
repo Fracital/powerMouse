@@ -1,4 +1,5 @@
 import Module from '../../Module';
+import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import { blobLoads } from '../blobLoads';
@@ -59,8 +60,26 @@ export default class ReadbackModule extends Module<DocumentClient> {
 				}),
 			});
 
-		// a routed URL the browser stored comes back as the page's
-		const unrouteGetter = (target: object | undefined, key: string) => {
+		// a routed URL the browser stored comes back as the page's; an image's
+		// current source as the browser fetched it, upgraded to https when it
+		// was mixed content (the worker upgraded it, src/mixedContent.ts), where
+		// a srcset candidate (binary:set) was blocked instead
+		const upgradedImage = (routed: string, page: string): string => {
+			if (!/\/binary\//.test(routed)) return page;
+			try {
+				const verdict = this.client
+					.getModule(MixedContentModule)
+					?.verdict(new URL(page), 'image');
+				return verdict?.action === 'upgrade' ? verdict.url.href : page;
+			} catch (error) {
+				return page;
+			}
+		};
+		const unrouteGetter = (
+			target: object | undefined,
+			key: string,
+			image = false,
+		) => {
 			if (!target) return;
 			const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
 			if (!descriptor?.get) return;
@@ -72,7 +91,8 @@ export default class ReadbackModule extends Module<DocumentClient> {
 					// a copy the inject loaded for a document no worker controls
 					const copied = blobLoads.get(value);
 					if (copied !== undefined) return copied;
-					return unrouteURL(this.client, value) ?? value;
+					const page = unrouteURL(this.client, value) ?? value;
+					return image ? upgradedImage(value, page) : page;
 				}),
 			});
 		};
@@ -81,7 +101,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		unrouteGetter(global.NavigationHistoryEntry?.prototype, 'url');
 		unrouteGetter(global.NavigationDestination?.prototype, 'url');
 		// the candidate the browser picked from src / srcset, as the page wrote it
-		unrouteGetter(global.HTMLImageElement?.prototype, 'currentSrc');
+		unrouteGetter(global.HTMLImageElement?.prototype, 'currentSrc', true);
 		unrouteGetter(global.HTMLMediaElement?.prototype, 'currentSrc');
 	}
 	applyScriptSource() {

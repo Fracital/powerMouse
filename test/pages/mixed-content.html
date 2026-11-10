@@ -1,0 +1,355 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>MIXED CONTENT</title>
+	</head>
+	<body>
+		<div id="bg"></div>
+		<div id="imp">imported</div>
+		<div id="imp-up">imported</div>
+		<script>
+			// Every way a page loads a subresource, from a page whose URL is
+			// https (mixed content) or http (none), each case reporting what the
+			// page can see. The suite also reads which requests reached the two
+			// servers. ?b=<port> names the plain http server.
+			// ?only=<case> runs one case (a probe). The http targets use the hosts
+			// mixed.test (this page's server, which also speaks TLS: an upgraded
+			// load succeeds) and plain.mixed.test (?b, http only: an upgraded load
+			// fails, and anything not blocked shows in its log); neither is
+			// potentially trustworthy, so both are mixed content. 127.0.0.1 is, so
+			// a load from it never is.
+			const params = new URLSearchParams(location.search);
+			const B = params.get('b');
+			const only = params.get('only');
+			const tag = params.get('tag') || 'top';
+			// http on this page's own port: an upgraded load (https, same port)
+			// reaches this page's server and succeeds
+			const HA = 'http://' + location.host;
+			// the plain http server: an upgraded load fails there (no TLS), and a
+			// load that was not blocked shows in its log
+			const HB = 'http://plain.mixed.test:' + B;
+			const LB = 'http://127.0.0.1:' + B;
+			const WB = 'ws://plain.mixed.test:' + B;
+			const q = (c) => '?c=' + tag + '.' + c;
+			const results = {};
+			window.__mixed = { done: false, results };
+			const timeout = (ms) =>
+				new Promise((resolve) => setTimeout(() => resolve('timeout'), ms));
+			const element = (name, attributes, parent = document.body) =>
+				new Promise((resolve) => {
+					const el = document.createElement(name);
+					el.addEventListener('load', () =>
+						resolve(
+							name === 'img'
+								? 'load ' + el.naturalWidth + ' ' + el.currentSrc
+								: 'load',
+						),
+					);
+					el.addEventListener('error', () => resolve('error'));
+					el.addEventListener('loadedmetadata', () =>
+						resolve('loadedmetadata'),
+					);
+					for (const [k, v] of Object.entries(attributes))
+						el.setAttribute(k, v);
+					parent.append(el);
+					// an element that fires nothing (a blocked prefetch) reports none
+					setTimeout(() => resolve('none'), 2500);
+				});
+			const fetchResult = (url, init) =>
+				fetch(url, init).then(
+					async (r) => 'ok ' + r.status + ' ' + (await r.text()).slice(0, 20),
+					(e) => 'reject ' + e.name + ': ' + e.message,
+				);
+			const xhrResult = (url) =>
+				new Promise((resolve) => {
+					const x = new XMLHttpRequest();
+					x.open('GET', url);
+					x.onload = () => resolve('load ' + x.status);
+					x.onerror = () => resolve('error ' + x.status);
+					x.send();
+				});
+			const wsResult = (url) =>
+				new Promise((resolve) => {
+					let ws;
+					try {
+						ws = new WebSocket(url);
+					} catch (e) {
+						resolve('throw ' + e.name + ': ' + e.message);
+						return;
+					}
+					const events = [];
+					ws.onopen = () => {
+						events.push('open');
+						ws.close();
+					};
+					ws.onerror = () => events.push('error');
+					ws.onclose = (e) =>
+						resolve(events.concat('close ' + e.code).join(','));
+				});
+			const frameReport = (src, attributes = {}) =>
+				new Promise((resolve) => {
+					const frame = document.createElement('iframe');
+					const listener = (event) => {
+						if (event.source !== frame.contentWindow) return;
+						if (!event.data || !event.data.mixedChild) return;
+						removeEventListener('message', listener);
+						resolve(event.data.mixedChild);
+					};
+					addEventListener('message', listener);
+					for (const [k, v] of Object.entries(attributes))
+						frame.setAttribute(k, v);
+					frame.src = src;
+					document.body.append(frame);
+					setTimeout(() => resolve('no report'), 20000);
+				});
+			const workerResult = (src, options) =>
+				new Promise((resolve) => {
+					let worker;
+					try {
+						worker = new Worker(src, options);
+					} catch (e) {
+						resolve('throw ' + e.name);
+						return;
+					}
+					worker.onmessage = (e) => resolve(e.data);
+					worker.onerror = () => resolve('error');
+					setTimeout(() => resolve('timeout'), 8000);
+				});
+			const cases = {
+				'img-upgraded': () =>
+					element('img', { src: HA + '/img.png' + q('img-upgraded') }),
+				'img-upgrade-fails': () =>
+					element('img', { src: HB + '/img.png' + q('img-upgrade-fails') }),
+				'img-loopback': () =>
+					element('img', { src: LB + '/img.png' + q('img-loopback') }),
+				'srcset-upgraded': () =>
+					element('img', {
+						srcset: HA + '/img.png' + q('srcset-upgraded') + ' 1x',
+					}),
+				'picture-source-upgraded': () =>
+					new Promise((resolve) => {
+						const picture = document.createElement('picture');
+						const source = document.createElement('source');
+						source.srcset = HA + '/img.png' + q('picture-source-upgraded');
+						picture.append(source);
+						document.body.append(picture);
+						element('img', { src: 'data:,' }, picture).then(resolve);
+					}),
+				'input-image-upgraded': () =>
+					element('input', {
+						type: 'image',
+						src: HA + '/img.png' + q('input-image-upgraded'),
+					}),
+				'css-image-upgraded': async () => {
+					document.getElementById('bg').style.backgroundImage =
+						'url("' + HA + '/img.png' + q('css-image-upgraded') + '")';
+					getComputedStyle(document.getElementById('bg')).backgroundImage;
+					await timeout(800);
+					return 'set';
+				},
+				'css-import-blocked': async () => {
+					const style = document.createElement('style');
+					style.textContent =
+						'@import url("' +
+						HB +
+						'/import.css' +
+						q('css-import-blocked') +
+						'");';
+					document.head.append(style);
+					await timeout(1000);
+					return getComputedStyle(document.getElementById('imp')).color;
+				},
+				'css-import-not-upgraded': async () => {
+					const style = document.createElement('style');
+					style.textContent =
+						'@import url("' +
+						HA +
+						'/import-up.css' +
+						q('css-import-not-upgraded') +
+						'");';
+					document.head.append(style);
+					await timeout(1000);
+					return getComputedStyle(document.getElementById('imp-up')).color;
+				},
+				'audio-upgraded': () =>
+					element('audio', {
+						src: HA + '/tone.wav' + q('audio-upgraded'),
+						preload: 'auto',
+					}),
+				'audio-upgrade-fails': () =>
+					element('audio', {
+						src: HB + '/tone.wav' + q('audio-upgrade-fails'),
+						preload: 'auto',
+					}),
+				'video-upgraded': () =>
+					element('video', {
+						src: HA + '/tone.wav' + q('video-upgraded'),
+						preload: 'auto',
+					}),
+				'script-blocked': () =>
+					element('script', { src: HB + '/s.js' + q('script-blocked') }),
+				'script-not-upgraded': () =>
+					element('script', { src: HA + '/s.js' + q('script-not-upgraded') }),
+				'script-loopback': () =>
+					element('script', { src: LB + '/s.js' + q('script-loopback') }),
+				'module-blocked': () =>
+					element('script', {
+						type: 'module',
+						src: HB + '/s.js' + q('module-blocked'),
+					}),
+				'stylesheet-blocked': () =>
+					element('link', {
+						rel: 'stylesheet',
+						href: HB + '/s.css' + q('stylesheet-blocked'),
+					}),
+				'preload-image-upgraded': () =>
+					element('link', {
+						rel: 'preload',
+						as: 'image',
+						href: HA + '/img.png' + q('preload-image-upgraded'),
+					}),
+				'preload-script-blocked': () =>
+					element('link', {
+						rel: 'preload',
+						as: 'script',
+						href: HB + '/s.js' + q('preload-script-blocked'),
+					}),
+				'prefetch-blocked': () =>
+					element('link', {
+						rel: 'prefetch',
+						href: HB + '/s.js' + q('prefetch-blocked'),
+					}),
+				'iframe-blocked': async () => {
+					// a blocked frame stays on its initial document and fires no
+					// load (its window's readback is the window membrane's, which
+					// this does not measure)
+					const frame = document.createElement('iframe');
+					const loaded = new Promise((resolve) => {
+						frame.onload = () => resolve('load');
+						setTimeout(() => resolve('none'), 4000);
+					});
+					frame.src = HB + '/frame.html' + q('iframe-blocked');
+					document.body.append(frame);
+					return await loaded;
+				},
+				'object-blocked': () =>
+					element('object', {
+						data: HB + '/frame.html' + q('object-blocked'),
+						type: 'text/html',
+					}),
+				'embed-blocked': () =>
+					element('embed', {
+						src: HB + '/frame.html' + q('embed-blocked'),
+						type: 'text/html',
+					}),
+				'fetch-blocked': () =>
+					fetchResult(HB + '/data.txt' + q('fetch-blocked')),
+				'fetch-not-upgraded': () =>
+					fetchResult(HA + '/data.txt' + q('fetch-not-upgraded')),
+				'fetch-no-cors-blocked': () =>
+					fetch(HB + '/data.txt' + q('fetch-no-cors-blocked'), {
+						mode: 'no-cors',
+					}).then(
+						// its response type is the same-origin policy's (not measured here)
+						() => 'ok',
+						(e) => 'reject ' + e.name + ': ' + e.message,
+					),
+				'fetch-loopback': () =>
+					fetchResult(LB + '/data.txt' + q('fetch-loopback')),
+				'xhr-blocked': () => xhrResult(HB + '/data.txt' + q('xhr-blocked')),
+				'eventsource-blocked': () =>
+					new Promise((resolve) => {
+						const source = new EventSource(
+							HB + '/events' + q('eventsource-blocked'),
+						);
+						source.onopen = () => {
+							source.close();
+							resolve('open');
+						};
+						source.onerror = () => {
+							resolve('error ' + source.readyState);
+							source.close();
+						};
+						setTimeout(() => resolve('none'), 3000);
+					}),
+				'beacon-blocked': async () => {
+					const queued = navigator.sendBeacon(
+						HB + '/beacon' + q('beacon-blocked'),
+						'x',
+					);
+					await timeout(800);
+					return 'queued ' + queued;
+				},
+				'websocket-blocked': () => wsResult(WB + '/' + q('websocket-blocked')),
+				'websocket-loopback': () =>
+					wsResult('ws://127.0.0.1:' + B + '/' + q('websocket-loopback')),
+				'worker-fetch-blocked': () =>
+					workerResult('mixed-content-worker.js?b=' + B + '&tag=' + tag),
+				'module-worker-fetch-blocked': () =>
+					workerResult(
+						'mixed-content-worker.js?b=' + B + '&tag=' + tag + '-module',
+						{ type: 'module' },
+					),
+				'nested-frame': () =>
+					frameReport(
+						'mixed-content-child.html?b=' + B + '&tag=' + tag + '-nested',
+					),
+				'srcdoc-frame': () =>
+					frameReport('about:blank', {
+						srcdoc:
+							'<script>const B = ' +
+							JSON.stringify(B) +
+							'; const i = new Image(); i.onload = () => parent.postMessage({ mixedChild: "load " + i.naturalWidth }, "*"); i.onerror = () => parent.postMessage({ mixedChild: "error" }, "*"); i.src = "http://plain.mixed.test:" + B + "/img.png?c=' +
+							tag +
+							'.srcdoc-frame";<\/script>',
+					}),
+				'form-nested': () =>
+					new Promise((resolve) => {
+						// a form in a nested frame that targets http: blocked (the
+						// frame stays), where a top-level one stops at an interstitial
+						const frame = document.createElement('iframe');
+						frame.onload = () => {
+							frame.onload = () => resolve('navigated');
+							const form = frame.contentDocument.createElement('form');
+							form.action = HB + '/frame.html';
+							form.innerHTML =
+								'<input name="c" value="' + tag + '.form-nested">';
+							frame.contentDocument.body.append(form);
+							form.submit();
+							setTimeout(() => resolve('none'), 4000);
+						};
+						frame.src = 'mixed-content-grandchild.html';
+						document.body.append(frame);
+					}),
+				'upgrade-insecure-requests': () =>
+					frameReport(
+						'mixed-content-child.html?b=' + B + '&tag=' + tag + '-uir&uir=1',
+					),
+				'upgrade-insecure-requests-meta': () =>
+					frameReport(
+						'mixed-content-child.html?b=' +
+							B +
+							'&tag=' +
+							tag +
+							'-uirmeta&uirmeta=1',
+					),
+				'block-all-mixed-content': () =>
+					frameReport(
+						'mixed-content-child.html?b=' + B + '&tag=' + tag + '-bamc&bamc=1',
+					),
+			};
+			(async () => {
+				for (const [name, run] of Object.entries(cases)) {
+					if (only && only !== name) continue;
+					try {
+						results[name] = await Promise.race([run(), timeout(25000)]);
+					} catch (e) {
+						results[name] = 'threw ' + e.name + ': ' + e.message;
+					}
+				}
+				window.__mixed.done = true;
+			})();
+		</script>
+	</body>
+</html>
