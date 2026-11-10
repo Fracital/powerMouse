@@ -1,5 +1,11 @@
 # @sysce/stomp
 
+<div align="center">
+  <a href="https://www.npmjs.com/package/@sysce/stomp"><img src="https://img.shields.io/npm/v/@sysce/stomp/nightly.svg?maxAge=3600&label=npm%20nightly" alt="npm nightly version" /></a>
+  <a href="https://github.com/Fracital/powerMouse/issues"><img src="https://img.shields.io/github/issues/Fracital/powerMouse?style=flat&color=orange" alt="GitHub issues" /></a>
+  <a href="https://github.com/Fracital/powerMouse/stargazers"><img src="https://img.shields.io/github/stars/Fracital/powerMouse?style=flat&color=orange" alt="GitHub stars" /></a>
+</div>
+
 A rewrite of the Stomp proxy.
 
 Original implementation of https://github.com/tomphttp/specifications.
