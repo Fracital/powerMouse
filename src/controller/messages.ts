@@ -87,6 +87,16 @@ export type FrameCommand = 'back' | 'forward' | 'reload';
 /** rpc id on the host <-> controller-frame postMessage channel */
 export const REMOTE_RPC = 'stomp-remote';
 
+/**
+ * The `name` of the error RemoteController.wait() rejects with when the
+ * browser keeps the controller frame from storage, so it cannot register the
+ * service worker: the proxy origin is another site than the host, and the
+ * browser blocks third-party cookies (Brave and incognito windows by default,
+ * a setting in Chrome). RPC errors carry only a message, so the
+ * frame's message starts with it.
+ */
+export const STORAGE_BLOCKED = 'StorageBlockedError';
+
 /** implemented by the controller frame, called by the host */
 export type FrameBound = {
 	init: [ControllerFrameInit, { config: Config; stale: StaleInfo | null }];

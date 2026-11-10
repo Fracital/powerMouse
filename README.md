@@ -126,7 +126,7 @@ frame on the proxy origin:
 | `init.onNavigate`                            | as on `StompController`; the reports arrive from the proxy origin and are accepted only from this controller's own frames                                                                                               |
 | `NavigateInfo.icon`                          | the page's icon as it declared it (first `link rel="icon"` / `shortcut icon`, else `apple-touch-icon`), resolved against the real URL, or null; reported again when the page swaps it                                   |
 | `init.onOpen`                                | as on `StompController`: the request reaches the host from the proxy origin and is accepted only from this controller's own frames                                                                                      |
-| `wait()`                                     | resolves once the controller frame has registered the service worker and loaded the transport                                                                                                                           |
+| `wait()`                                     | resolves once the controller frame has registered the service worker and loaded the transport; rejects with an error named `StorageBlockedError` when the browser denies the frame storage (see "Origin isolation")     |
 | `createFrame(iframe?)`                       | returns a `RemoteFrame`; applies the sandbox attribute                                                                                                                                                                  |
 | `setTransport(descriptor)`                   | hot-swap the transport (loaded inside the controller frame)                                                                                                                                                             |
 | `clearCache()`                               | drop the HTTP cache (inside the controller frame)                                                                                                                                                                       |
@@ -168,6 +168,15 @@ page believe it is top-level: `top`, `parent`, `frameElement`, `window.name`,
 `outerWidth`/`outerHeight`, `screenX`/`screenY`, `document.referrer` and
 `location.ancestorOrigins` all answer as they would for a real top window,
 and `message` events from outside the proxied world never reach the page.
+
+Keep the two origins on one site where you can (`app.example.com` and
+`proxy.example.com` are one site; `localhost` and `127.0.0.1` are two). A
+browser that blocks third-party cookies (Brave and incognito windows by
+default, a setting in Chrome) gives a frame of another site no
+service worker and no storage, so a proxy origin on another site cannot run
+there: `wait()` rejects with an error named `StorageBlockedError` that says
+so, and the host decides what to do (the demo falls back to the same-origin
+controller when the isolation was its own local default).
 
 ## Embedding
 

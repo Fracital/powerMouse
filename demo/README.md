@@ -214,6 +214,15 @@ security boundary: a proxied page that breaks out of the rewriter shares the
 origin of the host page. The live demo at https://stomp.fracit.al runs this
 way on purpose, with one hostname.
 
+`localhost` and `127.0.0.1` are two sites, so the proxy frame is a
+third-party frame, and a browser that blocks third-party cookies (Brave and
+incognito windows by default, a setting in Chrome) gives it no service
+worker. The page then runs the same-origin controller on `localhost` and
+says why in an orange `Isolation` console badge. With `STOMP_PROXY_ORIGIN`
+set the failure is an error instead: that deployment asked for isolation.
+To see the isolated mode in such a browser, allow third-party cookies for
+`localhost:8080`.
+
 What the isolated mode consists of:
 
 - `dist/controllerFrame.html`, embedded hidden by `RemoteController`. It

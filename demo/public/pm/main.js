@@ -62,7 +62,7 @@ const PROXY_ORIGIN =
 		: location.hostname === 'localhost'
 			? location.origin.replace('localhost', '127.0.0.1')
 			: null;
-const ISOLATED = !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
+let ISOLATED = !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
 // HTTP cache in the service worker, on by default; ?nocache turns it off for a
 // visit
 const CACHE = !new URLSearchParams(location.search).has('nocache');
@@ -72,13 +72,14 @@ const CACHE = !new URLSearchParams(location.search).has('nocache');
 const SERVICE_WORKERS = new URLSearchParams(location.search).has('sw');
 const SERVICE_WORKER_TIMEOUT =
 	Number(new URLSearchParams(location.search).get('sw')) || undefined;
-const proxyBase = ISOLATED ? PROXY_ORIGIN : '';
 // HTTP/3 over wisp UDP for origins that offer it (docs/http3.md), off by
 // default; STOMP_HTTP3=1 on the server or ?http3 on this page turns it on
 const HTTP3 = !!CFG.http3 || new URLSearchParams(location.search).has('http3');
+// the transports and the built-in wisp live on the proxy origin
+const proxyBase = () => (ISOLATED ? PROXY_ORIGIN : '');
 // STOMP_WISP_URL points the transports at an external wisp server (in
 // production, the edge relay); otherwise the demo server's own /wisp/
-const wisp =
+const wispURL = () =>
 	CFG.wisp ||
 	`${(ISOLATED ? PROXY_ORIGIN : location.origin).replace(/^http/, 'ws')}/wisp/`;
 
@@ -88,15 +89,15 @@ const wisp =
 // proxied page's synchronous XHR can be answered while it spins
 const transports = {
 	epoxy: () => ({
-		module: `${proxyBase}/epoxy/index.mjs`,
-		options: [{ wisp }],
+		module: `${proxyBase()}/epoxy/index.mjs`,
+		options: [{ wisp: wispURL() }],
 		...(HTTP3 && { http3: true }),
 	}),
 	libcurl: () => ({
-		module: `${proxyBase}/libcurl/index.mjs`,
+		module: `${proxyBase()}/libcurl/index.mjs`,
 		// libcurl.js 0.7's default pool (50 total, 6 per host) deadlocks once a
 		// page fans out more requests than that; see CHANGELOG known limitations
-		options: [{ wisp, connections: [500, 400, 200] }],
+		options: [{ wisp: wispURL(), connections: [500, 400, 200] }],
 	}),
 };
 
@@ -109,15 +110,20 @@ let activeTab = null;
 // hooks for the live reload client (/pm/dev.js, loaded by index.html under
 // `npm run dev` only): it reloads the proxied frames when an inject bundle or
 // the service worker is rebuilt, and needs to know which controller runs
-if (CFG.dev)
+if (CFG.dev) {
 	window.__stompDev = Object.assign(window.__stompDev || {}, {
-		isolated: ISOLATED,
 		tabs: () => tabs,
 		reloadFrames: () => {
 			for (const tab of tabs) tab.frame.reload();
 			return tabs.length;
 		},
 	});
+	// read when used: boot() falls back to same origin where isolation cannot run
+	Object.defineProperty(window.__stompDev, 'isolated', {
+		get: () => ISOLATED,
+		configurable: true,
+	});
+}
 
 function setStatus(text, error = false) {
 	// the landing line, the live bar and every card's copy of the bar
@@ -143,13 +149,26 @@ function rememberTransport(name) {
 	transportSelect.value = name;
 }
 
-async function boot() {
-	if (!('serviceWorker' in navigator))
-		throw new Error('This browser does not support service workers.');
+// the page's callbacks, the same for both controllers
+const controllerCallbacks = {
+	// the demo's own page for a document the proxy could not produce
+	errorPage: '/error.html',
+	// every proxied request, for the request viewer
+	onRequest: recordRequest,
+	// a page's window.open / target=_blank becomes a tab here, never a
+	// bare proxied popup (the page sees null, like a popup blocker)
+	onOpen: (url) => navigate(url, { newTab: true }),
+	// the page reports its URL and title as they change
+	onNavigate: (info, frame) => {
+		const tab = tabs.find((t) => t.frame === frame);
+		if (!tab) return;
+		tab.url = info.url;
+		recordUrl(tab);
+		if (tab === activeTab) syncOmnibox();
+	},
+};
 
-	const name = preferredTransport();
-	rememberTransport(name);
-
+async function startController(name) {
 	badge(
 		'Mode',
 		ISOLATED
@@ -159,7 +178,7 @@ async function boot() {
 	);
 	badge(
 		'Transport',
-		`${name} over ${wisp}${HTTP3 && name === 'epoxy' ? ', HTTP/3 on' : ''}`,
+		`${name} over ${wispURL()}${HTTP3 && name === 'epoxy' ? ', HTTP/3 on' : ''}`,
 	);
 
 	if (ISOLATED) {
@@ -172,21 +191,7 @@ async function boot() {
 			cache: CACHE,
 			serviceWorkers: SERVICE_WORKERS,
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
-			// the demo's own page for a document the proxy could not produce
-			errorPage: '/error.html',
-			// every proxied request, for the request viewer
-			onRequest: recordRequest,
-			// a page's window.open / target=_blank becomes a tab here, never a
-			// bare proxied popup (the page sees null, like a popup blocker)
-			onOpen: (url) => navigate(url, { newTab: true }),
-			// the page reports its URL and title as they change
-			onNavigate: (info, frame) => {
-				const tab = tabs.find((t) => t.frame === frame);
-				if (!tab) return;
-				tab.url = info.url;
-				recordUrl(tab);
-				if (tab === activeTab) syncOmnibox();
-			},
+			...controllerCallbacks,
 		});
 	} else {
 		setStatus('Registering service worker…');
@@ -202,27 +207,42 @@ async function boot() {
 			cache: CACHE,
 			serviceWorkers: SERVICE_WORKERS,
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
-			// the demo's own page for a document the proxy could not produce
-			errorPage: '/error.html',
-			// every proxied request, for the request viewer
-			onRequest: recordRequest,
-			// a page's window.open / target=_blank becomes a tab here, never a
-			// bare proxied popup (the page sees null, like a popup blocker)
-			onOpen: (url) => navigate(url, { newTab: true }),
-			// the page reports its URL and title as they change
-			onNavigate: (info, frame) => {
-				const tab = tabs.find((t) => t.frame === frame);
-				if (!tab) return;
-				tab.url = info.url;
-				recordUrl(tab);
-				if (tab === activeTab) syncOmnibox();
-			},
+			...controllerCallbacks,
 		});
 	}
 	window.controller = controller; // handy from devtools
 
 	setStatus('Waiting for the service worker…');
 	await controller.wait();
+}
+
+async function boot() {
+	if (!('serviceWorker' in navigator))
+		throw new Error('This browser does not support service workers.');
+
+	const name = preferredTransport();
+	rememberTransport(name);
+
+	try {
+		await startController(name);
+	} catch (error) {
+		// localhost's proxy origin, 127.0.0.1, is another site: a browser that
+		// blocks third-party cookies (Brave and incognito windows by default)
+		// gives its frame no service worker, and nothing would load. Isolation
+		// the deployment asked for (STOMP_PROXY_ORIGIN) stays an error; the
+		// local default runs same origin instead, as 127.0.0.1 and the live
+		// demo do.
+		if (
+			!ISOLATED ||
+			error.name !== 'StorageBlockedError' ||
+			'proxyOrigin' in CFG
+		)
+			throw error;
+		badge('Isolation', error.message, 'orange');
+		controller.element.remove();
+		ISOLATED = false;
+		await startController(name);
+	}
 	// a deploy can leave an older service worker in charge for a moment: the
 	// controller keeps working on it and rebinds when the new one activates
 	controller.addEventListener('stale', () =>
@@ -239,7 +259,7 @@ async function switchTransport(name) {
 	try {
 		await controller.setTransport(transports[name]());
 		setStatus('Ready');
-		badge('Transport', `${name} over ${wisp}`);
+		badge('Transport', `${name} over ${wispURL()}`);
 	} catch (error) {
 		setStatus(`Transport failed: ${error.message}`, true);
 	}

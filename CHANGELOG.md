@@ -419,6 +419,16 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   absent, as in a browser without them (service-workers and
   service-worker-updates suites, line for line against the same pages
   loaded natively, both modes). docs/service-workers.md has the design.
+- The demo opened as `localhost` works in a browser that blocks third-party
+  cookies (Brave and incognito windows by default, a setting in Chrome). Its
+  proxy origin, `127.0.0.1`, is another site, so the browser gave the
+  controller frame no service worker ("The user denied permission to use
+  Service Worker") and nothing loaded, while the same-origin live demo and
+  `127.0.0.1` itself worked. `RemoteController.wait()` now rejects with an
+  error named `StorageBlockedError` that names the cause, and the demo's
+  local default falls back to the same-origin controller with an
+  `Isolation` console badge saying why; isolation a deployment asked for
+  (`STOMP_PROXY_ORIGIN`) stays an error (storage-blocked suite).
 - Reading another window (`parent`, `top`, `frames[i]`) costs a few
   microseconds again. The Context module decided whether the reader may
   hold the window as it is by decoding both documents' routed URLs on every

@@ -31,6 +31,7 @@ import {
 	HostBound,
 	REMOTE_RPC,
 	StaleInfo,
+	STORAGE_BLOCKED,
 	TransportDescriptor,
 } from './messages';
 
@@ -297,11 +298,21 @@ export class RemoteController extends EventTarget {
 					...(init.errorPage ? { errorPage: init.errorPage } : {}),
 				}),
 			)
-			.then(({ config, stale }) => {
-				this.config = config;
-				this.stale = stale ?? null;
-				this.isReady = true;
-			});
+			.then(
+				({ config, stale }) => {
+					this.config = config;
+					this.stale = stale ?? null;
+					this.isReady = true;
+				},
+				(error: Error) => {
+					// the frame's storage is blocked: an error a host can tell apart
+					if (error.message.startsWith(`${STORAGE_BLOCKED}: `)) {
+						error.name = STORAGE_BLOCKED;
+						error.message = error.message.slice(STORAGE_BLOCKED.length + 2);
+					}
+					throw error;
+				},
+			);
 
 		const every = init.pollInterval ?? 500;
 		if (every > 0)

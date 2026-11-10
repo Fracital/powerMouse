@@ -18,6 +18,7 @@ import {
 	HostBound,
 	REMOTE_RPC,
 	StaleInfo,
+	STORAGE_BLOCKED,
 	TransportDescriptor,
 } from './messages';
 
@@ -122,10 +123,26 @@ if (window === window.parent || !origins.length) {
 		const rpc = new RpcHelper<FrameBound, HostBound>(
 			{
 				init: async (init: ControllerFrameInit) => {
-					const registration = await navigator.serviceWorker.register(
-						`${init.directory}${assetName(init.assets, 'serviceWorker')}`,
-						{ scope: init.directory, updateViaCache: 'none' },
-					);
+					let registration: ServiceWorkerRegistration;
+					try {
+						registration = await navigator.serviceWorker.register(
+							`${init.directory}${assetName(init.assets, 'serviceWorker')}`,
+							{ scope: init.directory, updateViaCache: 'none' },
+						);
+					} catch (error) {
+						// a frame of another site than the top page gets no service
+						// worker (and no other storage) where the browser blocks
+						// third-party cookies; Chrome says only "The user denied
+						// permission to use Service Worker"
+						const access = await document
+							.hasStorageAccess?.()
+							.catch(() => true);
+						if (access !== false) throw error;
+						throw new Error(
+							`${STORAGE_BLOCKED}: the browser blocks storage for ${location.origin} inside ${hostOrigin} (third-party cookies are blocked), so the proxy cannot register its service worker. Allow third-party cookies for ${new URL(hostOrigin).host}, or serve the host page and the proxy from one site.`,
+							{ cause: error },
+						);
+					}
 					const serviceworker = await activated(registration);
 					// the descriptor goes to the controller as it is: it hosts the
 					// transport in its worker (or in this frame, `host: 'page'`)
