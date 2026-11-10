@@ -252,7 +252,8 @@ function workerHost(ref: ControllerRef, ready: StompServer): WorkerHost {
 					method: init.method,
 					headers: init.headers,
 				}),
-				{ clientId, internal: true },
+				// a background fetch's download is the page's CORS request
+				{ clientId, internal: true, cors: true },
 			),
 		timeout: ref.config.serviceWorkerTimeout,
 	};

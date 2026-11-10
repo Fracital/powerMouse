@@ -49,6 +49,21 @@
 			if (target) url.searchParams.set('target', target);
 			return url.href;
 		};
+		const background = async (id, url) => {
+			const registration = await navigator.serviceWorker.ready;
+			try {
+				await registration.backgroundFetch.fetch(id, [url], { title: id });
+			} catch (error) {
+				return failed(error);
+			}
+			const cache = await caches.open('sop-bg');
+			for (let i = 0; i < 200; i++) {
+				const hit = await cache.match(id);
+				if (hit) return JSON.parse(await hit.text());
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			}
+			return 'no event';
+		};
 		const cases = {
 			'sw/opaque answer to a cors request': async () =>
 				read(via('opaque', r(B).url)),
@@ -79,6 +94,11 @@
 			},
 			"sw/another site's responses through the worker's cache": async () =>
 				read(via('cache', r(B).url)),
+			// a background fetch downloads as the page's CORS requests
+			'sw/a background fetch of another site without ACAO': () =>
+				background('sop-bg-plain', r(B).url),
+			'sw/a background fetch of another site with ACAO': () =>
+				background('sop-bg-cors', r(B, { acao: '*' }).url),
 			'sw/a made answer to a request of another site': async () =>
 				read(via('made', null, B)),
 			'sw/a preflighted request the worker passes on': async () => {

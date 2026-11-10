@@ -557,7 +557,8 @@ function genericForward(
 		// (and a request the worker makes itself: an emulated service worker's
 		// script or the scripts it imports, no-cors loads natively)
 		const internal =
-			serverRequest.headers.has(LOAD_HEADER) || !!context?.internal;
+			serverRequest.headers.has(LOAD_HEADER) ||
+			(!!context?.internal && !context.cors);
 		const load = loadOf(serverRequest.headers.get(LOAD_HEADER));
 		requestHeaders.delete(LOAD_HEADER);
 		// a page's own request from an opaque origin (a document the page

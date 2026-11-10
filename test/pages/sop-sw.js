@@ -4,6 +4,39 @@
 // fetches itself (`target` names the URL it fetches)
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(clients.claim()));
+// a background fetch's outcome and what each record holds, kept for the page
+const settled = async (event, outcome) => {
+	const parts = [];
+	for (const record of await event.registration.matchAll()) {
+		const response = await record.responseReady.catch(() => null);
+		parts.push(
+			response
+				? [
+						response.type,
+						response.status,
+						await response.text().catch(() => ''),
+					]
+				: 'no response',
+		);
+	}
+	const cache = await caches.open('sop-bg');
+	await cache.put(
+		event.registration.id,
+		new Response(
+			JSON.stringify({
+				outcome,
+				reason: event.registration.failureReason,
+				parts,
+			}),
+		),
+	);
+};
+self.addEventListener('backgroundfetchsuccess', (event) =>
+	event.waitUntil(settled(event, 'success')),
+);
+self.addEventListener('backgroundfetchfail', (event) =>
+	event.waitUntil(settled(event, 'fail')),
+);
 self.addEventListener('fetch', (event) => {
 	const url = new URL(event.request.url);
 	const action = url.searchParams.get('sw');

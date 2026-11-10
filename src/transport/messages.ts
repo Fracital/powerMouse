@@ -373,6 +373,11 @@ export interface RouteContext {
 	bypassCache?: boolean;
 	/** a request the worker makes itself never goes to an emulated service worker */
 	internal?: boolean;
+	/**
+	 * a request the worker makes itself under CORS, as the client's own (a
+	 * background fetch's download); any other one it makes is a no-cors load
+	 */
+	cors?: boolean;
 }
 
 /** implemented by the controller, called by the SW */

@@ -1291,6 +1291,8 @@ export class ServiceWorkers {
 					{ method: item.request.method, headers: item.request.headers },
 					from.clientId,
 				);
+				// refused (CORS, CORP, mixed content) or unreachable
+				if (response.type === 'error') throw new Error('network error');
 				const body = await response.blob();
 				item.response = {
 					status: response.status,

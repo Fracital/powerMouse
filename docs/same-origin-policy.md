@@ -217,7 +217,9 @@ Filled in commit by commit; see the CHANGELOG for each.
   `basic` whatever the URL. An emulated worker's own no-cors fetch keeps
   its bytes (its realm reads nothing of them: an opaque response's body
   methods give nothing), and the Cache API keeps a `cors` or opaque
-  response with its type, in a page and in a worker.
+  response with its type, in a page and in a worker. A background fetch's
+  downloads go as the page's CORS requests (a refused one fails the
+  fetch with `fetch-error`, as natively).
 - **Output reuse** (`recentOutputs`, master's speed series): the worker
   gives a document the output it just gave it for the same request only
   when everything the policy decides by is the same: the client (its

@@ -343,6 +343,9 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A background fetch's downloads are the page's CORS requests, as
+  natively: one of another site without Access-Control-Allow-Origin fails
+  the fetch (`fetch-error`), one with it succeeds. (sop-escapes suite.)
 - A page's emulated service worker sees the same-origin policy as a real
   one does: a request it answers is not preflighted or checked against the
   page's origin, its own fetches are judged as its origin's, an opaque
