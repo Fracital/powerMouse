@@ -1474,7 +1474,6 @@ input:focus-visible {
 .head > h1 {
 	display: inline-block;
 	vertical-align: middle;
-	margin: 11px 0; /* the bar keeps its 60px */
 }
 .sites {
 	display: inline-flex;
