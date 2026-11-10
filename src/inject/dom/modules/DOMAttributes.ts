@@ -26,8 +26,12 @@ import { blobLoads } from '../blobLoads';
 import DocumentClient, { type StyleElement } from '../Client';
 import { responseURLOf } from '../responseDocuments';
 import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
-import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
-import { hookWrite } from './MutationObserver';
+import DOMHooksModule, {
+	CustomElement,
+	nativeElement,
+	pendingAttributes,
+} from './DOMHooks';
+import { hookWrite, MARKER } from './MutationObserver';
 import NavigationHintModule from './NavigationHint';
 import TokenListsModule from './TokenLists';
 
@@ -1549,11 +1553,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// attribute, so what the page wrote as the attribute (its marker)
 			// is no longer what the attribute holds: it goes, and the attribute
 			// reads as the browser serialised it, with the page's url()s
-			const dropMarker = (element: Element) =>
+			const dropMarker = (element: Element) => {
+				// most writes: no marker to drop, known without a prototype swap
+				if (
+					!pendingAttributes(element) &&
+					!nativeElement.hasAttribute.call(element, `${MARKER}style`)
+				)
+					return;
 				usePrototype(element, CustomElement.prototype, (element) => {
 					if (element.hasAttributeOG('style'))
 						element.removeAttributeOG('style');
 				});
+			};
 			const afterWrite = (declaration: unknown) => {
 				const owner = owners.get(declaration as CSSStyleDeclaration);
 				if (!owner) return;

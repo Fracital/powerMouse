@@ -387,6 +387,24 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   (epoxy-ipv6 suite: a page, raw requests and a WebSocket against a server
   on `::1` with a certificate for the address; Host reads `[::1]:port` as
   Chrome sends it). epoxy's `pem_files` option is passed through for it.
+- The DOM hooks cost less per keystroke. On Google, typing with a four
+  times slower CPU, they swapped an element's prototype several times for
+  every node the page inserted and every attribute it read or wrote, and
+  looked through the whole hook list on each write. Reads that need no hook
+  (an insertion's nodes, scripts and styles, `getAttribute` and
+  `hasAttribute` outside a hook, a write to an attribute no hook watches)
+  now call the browser's accessors on the node directly, the hook lists are
+  kept per element name and attribute, the client's URL is decoded only
+  when the base URL changes, and an inline style with nothing to route (or
+  one rewritten a moment ago) does not go to the rewriter library. Google,
+  same-origin, 4x slower CPU, 10 s of typing from the search box showing,
+  medians of 6 alternated runs: long tasks 21 to 10 (native 4), main-thread
+  time in them 2.27 s to 1.51 s (native 0.40 s), TBT 1.20 s to 1.03 s
+  (native 0.23 s); the worst keystroke (0.55 s, Google compiling the search
+  code it loads on the first key) is unchanged, and at full speed the two
+  measure the same. Storage writes still go through the synchronous bridge:
+  sending them asynchronously would let another frame of the site read the
+  old value right after the write, which natively it never does.
 - A background fetch's downloads are the page's CORS requests, as
   natively: one of another site without Access-Control-Allow-Origin fails
   the fetch (`fetch-error`), one with it succeeds. (sop-escapes suite.)

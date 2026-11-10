@@ -19,6 +19,7 @@ import DOMAttributesModule, {
 import DOMHooksModule, {
 	CustomElement,
 	nativeElement,
+	nativeGetter,
 	nativeNode,
 } from './DOMHooks';
 
@@ -55,6 +56,8 @@ const parentNodeGet = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
 	'parentNode',
 )!.get!;
+const nodeNameGet = nativeGetter(nativeNode, 'nodeName');
+const namespaceGet = nativeGetter(nativeElement, 'namespaceURI');
 /** a node of any realm (`instanceof` knows only one), else null */
 function nodeTypeOf(value: unknown): number | null {
 	// a string or null is no node: answered without the getter's TypeError
@@ -80,26 +83,15 @@ function parentOf(value: unknown): Node | null {
  * anything else (SVG, MathML) as is.
  */
 export function htmlName(node: Node): string {
+	// read by the browser's getters on the node (every insertion asks): no
+	// prototype swap
 	if (nodeTypeOf(node) !== 1)
-		return usePrototype(node, nativeNode, (node) => node.nodeName);
-	return usePrototype(node as Element, nativeElement, (element) =>
-		element.namespaceURI === 'http://www.w3.org/1999/xhtml'
-			? element.nodeName.toUpperCase()
-			: element.nodeName,
-	);
-}
-
-function getSupportedQueryInterface(
-	node: Node,
-): DocumentFragment | Element | undefined {
-	// by the node's type: trying a querySelector('*') through the element
-	// interface (it throws for anything else) cost a query and two prototype
-	// swaps on every insertion, a fifth of the hooks' time on YouTube
-	const type = nodeTypeOf(node);
-	if (type === 11) return nativeDocumentFragment;
-	if (type === 1) return nativeElement;
-	// a Text, a comment, a document: no element interface
-	return undefined;
+		return Reflect.apply(nodeNameGet, node, []) as string;
+	const name = Reflect.apply(nodeNameGet, node, []) as string;
+	return Reflect.apply(namespaceGet, node, []) ===
+		'http://www.w3.org/1999/xhtml'
+		? name.toUpperCase()
+		: name;
 }
 
 export default class DOMContentHooks extends Module<DocumentClient> {
@@ -338,16 +330,10 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			rewrittenScripts.set(script as HTMLScriptElement, rewritten);
 			script.textContent = rewritten;
 		};
-		// `node` arrives with its prototype swapped (the insert hook reads it
-		// as a plain Node), so the kind is read natively: an HTML script gets
-		// the script prototype, an SVG one (inline SVG, an SVG document) the
-		// element's
+		// the kind is read natively: an HTML script gets the script prototype,
+		// an SVG one (inline SVG, an SVG document) the element's
 		const rewriteAnyScript = (node: Node, willConnect: boolean) => {
-			const namespace = usePrototype(
-				node,
-				nativeElement,
-				(element) => element.namespaceURI,
-			);
+			const namespace = Reflect.apply(namespaceGet, node, []);
 			if (namespace === 'http://www.w3.org/1999/xhtml')
 				usePrototype(node, nativeHTMLScriptElement, (script) =>
 					rewriteScript(script, willConnect),
@@ -494,11 +480,28 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// in does not reach a getter the page put on the instance itself, and
 		// that getter would run with its prototype chain gone (YouTube's
 		// Polymer logging getters threw from appendChild)
-		const nativeGetter = (name: string) =>
-			Reflect.getOwnPropertyDescriptor(nativeNode, name)!.get!;
-		const nativeIsConnected = nativeGetter('isConnected');
-		const nativeNodeType = nativeGetter('nodeType');
+		const nativeIsConnected = nativeGetter(nativeNode, 'isConnected');
 		const nativeGetAttributeNames = nativeElement.getAttributeNames;
+		// the elements in an element (1) or a fragment (11) that match, found
+		// by the browser's own query on the node, with no prototype swap: the
+		// swaps cost more than the queries on a Google keystroke. A node with
+		// no element in it (most insertions) is not queried at all.
+		const firstElementOf = {
+			1: nativeGetter(nativeElement, 'firstElementChild'),
+			11: nativeGetter(nativeDocumentFragment, 'firstElementChild'),
+		};
+		const queryOf = {
+			1: nativeElement.querySelectorAll,
+			11: nativeDocumentFragment.querySelectorAll,
+		};
+		const queryIn = (node: Node, type: 1 | 11, selector: string): Element[] =>
+			Reflect.apply(firstElementOf[type], node, []) === null
+				? []
+				: [
+						...(Reflect.apply(queryOf[type], node, [
+							selector,
+						]) as NodeListOf<Element>),
+					];
 
 		const insert = <T>(
 			insert: Node,
@@ -514,76 +517,61 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				? (Reflect.apply(nativeIsConnected, that, []) as boolean)
 				: false;
 
+			// the browser's nodeType (an insertion argument is a Node)
+			const nodeType = nodeTypeOf(insert);
+			const queryable = nodeType === 1 || nodeType === 11 ? nodeType : null;
+
 			// nodes the hooks never saw (DOMParser, createContextualFragment,
 			// importNode, another document): route their attributes now
-			if (willConnect)
-				usePrototype(insert, nativeNode, (node) => {
-					const nodeType = Reflect.apply(nativeNodeType, insert, []) as number;
-					if (nodeType !== 1 && nodeType !== 11) return;
-					const elements: Element[] = [];
-					if (nodeType === 1) elements.push(insert as Element);
-					usePrototype(
-						insert,
-						getSupportedQueryInterface(node) ?? nativeNode,
-						(queryable) => {
-							if ('querySelectorAll' in queryable)
-								elements.push(...(queryable as Element).querySelectorAll('*'));
-						},
-					);
-					for (const element of elements) {
-						// read natively first: an element none of whose attributes a
-						// hook watches is left alone, without the prototype swap
-						// (Polymer stamps thousands of such elements on YouTube)
-						const names = Reflect.apply(
-							nativeGetAttributeNames,
-							element,
-							[],
-						) as string[];
-						if (
-							!names.some(
-								(name) =>
-									!name.startsWith('s_o:') &&
-									domHooksModule.hooksAttribute(name),
-							)
+			if (willConnect && queryable !== null) {
+				const elements = queryIn(insert, queryable, '*');
+				if (queryable === 1) elements.unshift(insert as Element);
+				for (const element of elements) {
+					// read natively first: an element none of whose attributes a
+					// hook watches is left alone, without the prototype swap
+					// (Polymer stamps thousands of such elements on YouTube)
+					const names = Reflect.apply(
+						nativeGetAttributeNames,
+						element,
+						[],
+					) as string[];
+					if (
+						!names.some(
+							(name) =>
+								!name.startsWith('s_o:') && domHooksModule.hooksAttribute(name),
 						)
-							continue;
-						usePrototype(element, CustomElement.prototype, (element) => {
-							for (const name of element.getAttributeNames())
-								if (!name.startsWith('s_o:') && !element.hasAttributeOG(name))
-									domHooksModule.updateAttributeHooks(element, name);
-						});
-					}
-				});
+					)
+						continue;
+					usePrototype(element, CustomElement.prototype, (element) => {
+						for (const name of element.getAttributeNames())
+							if (!name.startsWith('s_o:') && !element.hasAttributeOG(name))
+								domHooksModule.updateAttributeHooks(element, name);
+					});
+				}
+			}
 
 			// we're about to render
 			const name = htmlName(insert);
 			// an HTML or an SVG <style>, inserted itself
 			const insertedStyle = this.client.styleElement(insert);
-			usePrototype(insert, nativeNode, (node) => {
-				if (name === 'SCRIPT') {
-					rewriteAnyScript(insert, willConnect);
-				} else if (insertedStyle) {
-					// before it connects and the browser parses it
-					if (willConnect) withStyle(insertedStyle, rewriteStyleText);
-				} else {
-					const queryInterface = getSupportedQueryInterface(node);
-
-					if (queryInterface)
-						usePrototype(node, queryInterface, (queryable) => {
-							// any element named style: an HTML one, an SVG one, or one
-							// of another namespace, which is no style (withStyle)
-							for (const element of queryable.querySelectorAll('style')) {
-								const style = this.client.styleElement(element);
-								if (!style) continue;
-								if (willConnect) withStyle(style, rewriteStyleText);
-								styles.push(style);
-							}
-
-							for (const script of queryable.querySelectorAll('script'))
-								rewriteAnyScript(script, willConnect);
-						});
+			if (name === 'SCRIPT') {
+				rewriteAnyScript(insert, willConnect);
+			} else if (insertedStyle) {
+				// before it connects and the browser parses it
+				if (willConnect) withStyle(insertedStyle, rewriteStyleText);
+			} else if (queryable !== null) {
+				// any element named style: an HTML one, an SVG one, or one of
+				// another namespace, which is no style (withStyle)
+				for (const element of queryIn(insert, queryable, 'style')) {
+					const style = this.client.styleElement(element);
+					if (!style) continue;
+					if (willConnect) withStyle(style, rewriteStyleText);
+					styles.push(style);
 				}
-			});
+
+				for (const script of queryIn(insert, queryable, 'script'))
+					rewriteAnyScript(script, willConnect);
+			}
 
 			const result = insertElement();
 			// a frame that just connected is injected before the page can

@@ -1,6 +1,6 @@
 import Module from '../../Module';
 import MixedContentModule from '../../modules/MixedContent';
-import ProxyModule, { usePrototype } from '../../modules/Proxy';
+import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import { blobLoads } from '../blobLoads';
 import DocumentClient from '../Client';
@@ -9,7 +9,7 @@ import {
 	nativeDocumentFragment,
 	nativeHTMLScriptElement,
 } from './DOMContentHooks';
-import { nativeElement, nativeNode } from './DOMHooks';
+import { nativeElement, nativeGetter, nativeNode } from './DOMHooks';
 
 /** what the page wrote into a script, and what the rewriter made of it */
 interface ScriptSource {
@@ -111,51 +111,57 @@ export default class ReadbackModule extends Module<DocumentClient> {
 
 		const HTML = 'http://www.w3.org/1999/xhtml';
 		const SVG = 'http://www.w3.org/2000/svg';
+		// Every insertion reads its nodes here, so they are read through the
+		// browser's accessors called on the node rather than with a prototype
+		// swapped in (usePrototype): the swaps were the largest part of the
+		// hooks' time on a Google keystroke. A getter the page put on the
+		// instance is passed by either way.
+		const nativeNodeType = nativeGetter(nativeNode, 'nodeType');
+		const nativeTextContent = nativeGetter(nativeNode, 'textContent');
+		const nativeNamespace = nativeGetter(nativeElement, 'namespaceURI');
+		const nativeLocalName = nativeGetter(nativeElement, 'localName');
+		const nativeScriptText = nativeGetter(nativeHTMLScriptElement, 'text');
+		const firstElementOf = {
+			1: nativeGetter(nativeElement, 'firstElementChild'),
+			11: nativeGetter(nativeDocumentFragment, 'firstElementChild'),
+		};
+		const queryOf = {
+			1: nativeElement.querySelectorAll,
+			11: nativeDocumentFragment.querySelectorAll,
+		};
 		// an SVG script has no `text`: its source is its textContent
 		const nativeText = (script: HTMLScriptElement): string =>
-			usePrototype(script, nativeElement, (element) => element.namespaceURI) ===
-			HTML
-				? usePrototype(script, nativeHTMLScriptElement, (script) => script.text)
-				: (usePrototype(script, nativeNode, (node) => node.textContent) ?? '');
+			Reflect.apply(nativeNamespace, script, []) === HTML
+				? (Reflect.apply(nativeScriptText, script, []) as string)
+				: ((Reflect.apply(nativeTextContent, script, []) as string | null) ??
+					'');
 		const parentNodeGet = Reflect.getOwnPropertyDescriptor(
 			global.Node.prototype,
 			'parentNode',
 		)!.get!;
 
 		// the script elements (HTML or SVG) an insertion argument brings along
-		const isScript = (element: Element) =>
-			usePrototype(
-				element,
-				nativeElement,
-				(element) =>
-					element.localName === 'script' &&
-					(element.namespaceURI === HTML || element.namespaceURI === SVG),
-			);
-		const nativeNodeType = Reflect.getOwnPropertyDescriptor(
-			nativeNode,
-			'nodeType',
-		)!.get!;
+		const isScript = (element: Element) => {
+			if (Reflect.apply(nativeLocalName, element, []) !== 'script')
+				return false;
+			const namespace = Reflect.apply(nativeNamespace, element, []);
+			return namespace === HTML || namespace === SVG;
+		};
 		const scriptsIn = (node: unknown): HTMLScriptElement[] => {
 			if (typeof node !== 'object' || node === null) return [];
 			try {
 				// the browser's nodeType, not a getter the page put on the node
 				const nodeType = Reflect.apply(nativeNodeType, node, []) as number;
-				return usePrototype(node as Node, nativeNode, () => {
-					if (nodeType === 1) {
-						if (isScript(node as Element)) return [node as HTMLScriptElement];
-						return usePrototype(node as Element, nativeElement, (element) =>
-							[...element.querySelectorAll('script')].filter(isScript),
-						) as HTMLScriptElement[];
-					}
-					if (nodeType === 11)
-						return usePrototype(
-							node as DocumentFragment,
-							nativeDocumentFragment,
-							(fragment) =>
-								[...fragment.querySelectorAll('script')].filter(isScript),
-						) as HTMLScriptElement[];
+				if (nodeType === 1 && isScript(node as Element))
+					return [node as HTMLScriptElement];
+				if (nodeType !== 1 && nodeType !== 11) return [];
+				// no element in it, no script (most insertions)
+				if (Reflect.apply(firstElementOf[nodeType], node, []) === null)
 					return [];
-				});
+				const found = Reflect.apply(queryOf[nodeType], node, [
+					'script',
+				]) as NodeListOf<Element>;
+				return [...found].filter(isScript) as HTMLScriptElement[];
 			} catch (error) {
 				return [];
 			}
@@ -297,8 +303,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 				return (
 					typeof that === 'object' &&
 					that !== null &&
-					usePrototype(that as Node, nativeNode, (node) => node.nodeType) ===
-						1 &&
+					Reflect.apply(nativeNodeType, that, []) === 1 &&
 					isScript(that as Element)
 				);
 			} catch (error) {

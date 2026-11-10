@@ -4,6 +4,7 @@ import type { CssNode, ParseOptions, Url } from 'css-tree';
 import generate from 'css-tree/generator';
 import parse from 'css-tree/parser';
 import walk from 'css-tree/walker';
+import { LAZY_CONTEXTS, MAY_ROUTE } from './cssURL';
 import {
 	originalOf,
 	preserveValue,
@@ -37,17 +38,6 @@ class Edits {
 		return this.#parts.join('') + this.text.slice(this.#at);
 	}
 }
-
-/**
- * What a declaration value, an at-rule prelude or a selector must contain
- * for the walk to route anything in it: a url() token, a string inside
- * image-set() or src(), an @import's string, or a CSS escape (`\75 rl(` is
- * a url() token as well).
- */
-const MAY_ROUTE = /url\(|image-set|src\(|import|\\/i;
-
-/** the contexts parsed lazily: values, preludes and selectors stay raw text */
-const LAZY_CONTEXTS = ['stylesheet', 'declarationList'];
 
 /** what css-tree's walker tells a visitor about where a node is */
 interface WalkContext {

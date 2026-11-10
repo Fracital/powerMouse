@@ -16,6 +16,7 @@
 // here as this realm's Error, and what the library logged is logged here.
 import rewriterLib from 'stomp:rewriter-lib';
 import { codecType, type Config } from '../config';
+import { LAZY_CONTEXTS, MAY_ROUTE } from '../cssURL';
 import { keepSource } from '../functionSource';
 import type { ScriptSource } from '../rewriteJS';
 import type { RewriterLib } from '../rewriterLib';
@@ -79,8 +80,8 @@ function contextOf(url: StompURL, config: Config | null): string {
 	]);
 }
 
-/** replay what the call logged, throw what it threw */
-function settle(lib: RewriterLib, failed: boolean) {
+/** replay what the call logged (whether it did), throw what it threw */
+function settle(lib: RewriterLib, failed: boolean): boolean {
 	const logged = lib.messages();
 	if (logged)
 		for (const [level, message] of JSON.parse(logged) as [string, string][])
@@ -91,6 +92,7 @@ function settle(lib: RewriterLib, failed: boolean) {
 					: nativeConsole.log
 			).call(nativeConsole, message);
 	if (failed) throw new Error(text(lib.error()) || 'Stomp: rewrite failed');
+	return !!logged;
 }
 
 function checked<T>(value: unknown, kind: 'string' | 'boolean'): T {
@@ -128,15 +130,45 @@ export function modifyCSS(
 	url: StompURL,
 	context = 'stylesheet',
 ): string {
+	// what the library does first (rewriteCSS.ts), done here: most inline
+	// styles a page writes hold nothing to route, and the call (the context
+	// serialised, the trip to the library's realm) cost more than the check
+	const source = text(script);
+	const kind = text(context);
+	if (LAZY_CONTEXTS.includes(kind) && !MAY_ROUTE.test(source)) return source;
+	const routing = contextOf(url, null);
+	// an inline style with a url() comes back each time its element is made
+	// again (Google's suggestion thumbnails, on every keystroke), and the
+	// library parses it in full: the same text in the same context is the
+	// same rewrite, kept unless the library logged something
+	const key = `${kind}\n${routing}\n${source}`;
+	const kept = cssMemo.get(key);
+	if (kept !== undefined) {
+		cssMemo.delete(key);
+		cssMemo.set(key, kept);
+		return kept;
+	}
 	const lib = library();
-	const result: unknown = lib.css(
-		contextOf(url, null),
-		text(script),
-		text(context),
-	);
-	settle(lib, result === null);
-	return checked<string>(result, 'string');
+	const result: unknown = lib.css(routing, source, kind);
+	const logged = settle(lib, result === null);
+	const output = checked<string>(result, 'string');
+	if (!logged && key.length + output.length <= CSS_MEMO_ENTRY) {
+		cssMemo.set(key, output);
+		cssMemoChars += key.length + output.length;
+		for (const [old, value] of cssMemo) {
+			if (cssMemoChars <= CSS_MEMO_CHARS) break;
+			cssMemo.delete(old);
+			cssMemoChars -= old.length + value.length;
+		}
+	}
+	return output;
 }
+
+/** recent CSS rewrites by kind, context and text (modifyCSS), oldest first */
+const cssMemo = new Map<string, string>();
+let cssMemoChars = 0;
+const CSS_MEMO_CHARS = 64 * 1024;
+const CSS_MEMO_ENTRY = 8 * 1024;
 
 /** whether `code` parses as a script of one expression statement */
 export function singleExpression(code: string): boolean {

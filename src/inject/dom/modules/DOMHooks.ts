@@ -50,6 +50,54 @@ const ORIGINAL_ATTRIBUTE = MARKER;
 const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink';
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
+/**
+ * Whether the hooks are working on `element` (inside usePrototype with the
+ * CustomElement prototype), where their view of its attributes holds writes
+ * the DOM has not had yet. Anywhere else the DOM is that view, and a read of
+ * it needs no prototype swap.
+ */
+export function pendingAttributes(element: unknown): boolean {
+	return attributeTab.has(element as CustomElement);
+}
+
+/** a value the hooks' view of `element` holds (null: removed) made real */
+function applyAttribute(
+	element: Element,
+	attribute: string,
+	value: string | null,
+) {
+	try {
+		if (value === null) {
+			const node = nativeElement.getAttributeNode.call(element, attribute);
+			if (node && attribute.includes(':')) {
+				if (!removedNamespaces.has(element))
+					removedNamespaces.set(element, new Map());
+				removedNamespaces.get(element)!.set(attribute, node.namespaceURI ?? '');
+			}
+			nativeElement.removeAttribute.call(element, attribute);
+		} else if (nativeElement.hasAttribute.call(element, attribute)) {
+			nativeElement.setAttribute.call(element, attribute, value);
+		} else {
+			// an SVG element's xlink: attribute the hooks set first (one
+			// the parser made from written markup that a hook held back)
+			// is in the xlink namespace, as the parser would have put it
+			const namespace =
+				removedNamespaces.get(element)?.get(attribute) ??
+				(attribute.startsWith('xlink:') &&
+				Reflect.get(nativeElement, 'namespaceURI', element) === SVG_NAMESPACE
+					? XLINK_NAMESPACE
+					: '');
+			if (namespace)
+				nativeElement.setAttributeNS.call(element, namespace, attribute, value);
+			else nativeElement.setAttribute.call(element, attribute, value);
+		}
+		if (!appliedTab.has(element)) appliedTab.set(element, new Map());
+		appliedTab.get(element)!.set(attribute, value);
+	} catch (error) {
+		console.warn('bad attribute', attribute, value, error);
+	}
+}
+
 export class CustomElement extends Element {
 	get attributeTab() {
 		if (!attributeTab.has(this)) {
@@ -82,6 +130,12 @@ export class CustomElement extends Element {
 		// called after the prototype is restored, so don't rely on `this.attributeTab`
 		const tab = attributeTab.get(this);
 		if (!tab) return;
+		// only read (getAttribute, a property hook that took nothing): no
+		// write, so no write for the page's observers to be kept from
+		if (!tab.size) {
+			attributeTab.delete(this);
+			return;
+		}
 
 		// outside a page write these are the hooks' own: no record for them
 		hookWrite(
@@ -90,45 +144,7 @@ export class CustomElement extends Element {
 			() => {
 				for (const [attribute, value] of tab) {
 					tab.delete(attribute);
-
-					try {
-						if (value === null) {
-							const node = nativeElement.getAttributeNode.call(this, attribute);
-							if (node && attribute.includes(':')) {
-								if (!removedNamespaces.has(this))
-									removedNamespaces.set(this, new Map());
-								removedNamespaces
-									.get(this)!
-									.set(attribute, node.namespaceURI ?? '');
-							}
-							nativeElement.removeAttribute.call(this, attribute);
-						} else if (nativeElement.hasAttribute.call(this, attribute)) {
-							nativeElement.setAttribute.call(this, attribute, value);
-						} else {
-							// an SVG element's xlink: attribute the hooks set first (one
-							// the parser made from written markup that a hook held back)
-							// is in the xlink namespace, as the parser would have put it
-							const namespace =
-								removedNamespaces.get(this)?.get(attribute) ??
-								(attribute.startsWith('xlink:') &&
-								Reflect.get(nativeElement, 'namespaceURI', this) ===
-									SVG_NAMESPACE
-									? XLINK_NAMESPACE
-									: '');
-							if (namespace)
-								nativeElement.setAttributeNS.call(
-									this,
-									namespace,
-									attribute,
-									value,
-								);
-							else nativeElement.setAttribute.call(this, attribute, value);
-						}
-						if (!appliedTab.has(this)) appliedTab.set(this, new Map());
-						appliedTab.get(this)!.set(attribute, value);
-					} catch (error) {
-						console.warn('bad attribute', attribute, value, error);
-					}
+					applyAttribute(this, attribute, value);
 				}
 			},
 		);
@@ -209,6 +225,24 @@ applyDescriptors(nativeHTMLTemplateElement, HTMLTemplateElement.prototype);
 
 Reflect.setPrototypeOf(CustomElement.prototype, nativeElement);
 
+/**
+ * The browser's getter of `key` on one of the native prototypes above (its
+ * own or an ancestor's), to call on a node with Reflect.apply: a read that
+ * needs no hook prototype costs no swap (usePrototype), and a getter the page
+ * put on the instance is passed by just the same
+ */
+export function nativeGetter(prototype: object, key: string): () => unknown {
+	for (
+		let object: object | null = prototype;
+		object;
+		object = Reflect.getPrototypeOf(object)
+	) {
+		const descriptor = Reflect.getOwnPropertyDescriptor(object, key);
+		if (descriptor?.get) return descriptor.get;
+	}
+	throw new TypeError(`Stomp: no native getter ${key}`);
+}
+
 /*
 do it statefully
 
@@ -246,6 +280,14 @@ type PropertyHook = [
 	getter: PropertyHookGetter,
 ];
 
+interface HookEntry {
+	hook: AttributeHook | PropertyHook;
+	callback: HookCallback;
+}
+
+/** what attributeHooks answers for an attribute no hook watches */
+const NO_HOOKS: readonly HookEntry[] = [];
+
 function isAttributeHook(
 	hook: AttributeHook | PropertyHook,
 ): hook is AttributeHook {
@@ -262,10 +304,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 	foldMarkup!: (html: string) => string;
 	/** a deep copy of `node` in a document with no window, where nothing loads */
 	inertCopy!: <T extends Node>(node: T) => T;
-	private hooks: {
-		hook: AttributeHook | PropertyHook;
-		callback: HookCallback;
-	}[];
+	private hooks: HookEntry[];
 	constructor(client: DocumentClient) {
 		super(client);
 
@@ -348,7 +387,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			});
 		}
 		this.#hookedNames = null;
+		this.#hooksByName.clear();
+		this.#readHooks.clear();
+		this.#writeHooks.clear();
 	}
+	/** the attribute hooks by element name and attribute (attributeHooks) */
+	#hooksByName = new Map<string, Map<string, readonly HookEntry[]>>();
 	/** every attribute name an attribute hook watches, on any element */
 	#hookedNames: Set<string> | null = null;
 	/**
@@ -366,39 +410,78 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		return this.#hookedNames.has(attribute);
 	}
 	/** the attribute hooks of `attribute` on `element` */
-	private attributeHooks(element: Element, attribute: string) {
+	private attributeHooks(
+		element: Element,
+		attribute: string,
+	): readonly HookEntry[] {
+		if (!this.hooksAttribute(attribute)) return NO_HOOKS;
 		// HTML hooks are keyed by the uppercase nodeName of an HTML document;
 		// an XHTML document's elements carry the same names in lowercase
 		const name =
 			element.namespaceURI === 'http://www.w3.org/1999/xhtml'
 				? element.nodeName.toUpperCase()
 				: element.nodeName;
-		return this.hooks.filter(
-			(entry) =>
-				isAttributeHook(entry.hook) &&
-				(entry.hook[0] === '*' || entry.hook[0] === name) &&
-				entry.hook[1] === attribute,
-		);
+		// every attribute write and insertion asks: the list is filtered once
+		// per name and watched attribute (useAttributes starts again)
+		let byAttribute = this.#hooksByName.get(name);
+		if (!byAttribute) {
+			byAttribute = new Map();
+			this.#hooksByName.set(name, byAttribute);
+		}
+		let hooks = byAttribute.get(attribute);
+		if (!hooks) {
+			hooks = this.hooks.filter(
+				(entry) =>
+					isAttributeHook(entry.hook) &&
+					(entry.hook[0] === '*' || entry.hook[0] === name) &&
+					entry.hook[1] === attribute,
+			);
+			byAttribute.set(attribute, hooks);
+		}
+		return hooks;
 	}
 	updateAttributeHooks(element: CustomElement, attribute: string) {
 		for (const entry of this.attributeHooks(element, attribute))
 			entry.callback(element);
+	}
+	/**
+	 * The property hooks by property (a read asks every constructor's), and
+	 * by constructor and property (a write's), in the hooks' order, until
+	 * useAttributes adds any: each read and write looked at every hook
+	 */
+	#readHooks = new Map<string, readonly HookEntry[]>();
+	#writeHooks = new Map<ElementCtor, Map<string, readonly HookEntry[]>>();
+	#propertyHooks(property: string): readonly HookEntry[] {
+		let entries = this.#readHooks.get(property);
+		if (!entries) {
+			entries = this.hooks.filter(
+				(entry) => !isAttributeHook(entry.hook) && entry.hook[1] === property,
+			);
+			this.#readHooks.set(property, entries);
+		}
+		return entries;
 	}
 	private updatePropertyHooks(
 		element: CustomElement,
 		ctor: ElementCtor,
 		property: string,
 	) {
-		for (const entry of this.hooks) {
-			if (
-				isAttributeHook(entry.hook) ||
-				entry.hook[0] !== ctor ||
-				entry.hook[1] !== property
-			)
-				continue;
-
-			entry.callback(element);
+		let byProperty = this.#writeHooks.get(ctor);
+		if (!byProperty) {
+			byProperty = new Map();
+			this.#writeHooks.set(ctor, byProperty);
 		}
+		let entries = byProperty.get(property);
+		if (!entries) {
+			entries = this.hooks.filter(
+				(entry) =>
+					!isAttributeHook(entry.hook) &&
+					entry.hook[0] === ctor &&
+					entry.hook[1] === property,
+			);
+			byProperty.set(property, entries);
+		}
+		for (const entry of entries) entry.callback(element);
 	}
 	apply() {
 		// all hooks are in, now apply them
@@ -1145,6 +1228,18 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					const attribute = attributeName(that, String(args[0]));
 					if (isMarker(attribute)) return null;
 
+					// no hook is working on the element: the DOM is the hooks'
+					// view, read natively without a prototype swap
+					if (!pendingAttributes(that)) {
+						const marker = ORIGINAL_ATTRIBUTE + attribute;
+						if (nativeElement.hasAttribute.call(that, marker))
+							return nativeElement.getAttribute.call(that, marker);
+						const value = nativeElement.getAttribute.call(that, attribute);
+						return attribute === 'style' && typeof value === 'string'
+							? unrouteCSS(this.client, value, true)
+							: value;
+					}
+
 					return usePrototype(that, CustomElement.prototype, (element) => {
 						if (element.hasAttributeOG(attribute)) {
 							return element.getAttributeOG(attribute);
@@ -1178,11 +1273,15 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					if (isMarkerOn(that, args[0])) return false;
 					// an attribute a hook dropped (iframe sandbox, an object's data)
 					// is still there for the page
-					return (
-						native ||
-						usePrototype(that, CustomElement.prototype, (element) =>
-							element.hasAttributeOG(attributeName(that, String(args[0]))),
-						)
+					if (native) return native;
+					const attribute = attributeName(that, String(args[0]));
+					if (!pendingAttributes(that))
+						return nativeElement.hasAttribute.call(
+							that,
+							ORIGINAL_ATTRIBUTE + attribute,
+						);
+					return usePrototype(that, CustomElement.prototype, (element) =>
+						element.hasAttributeOG(attribute),
 					);
 				},
 			);
@@ -1732,13 +1831,21 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							? attributeName(that, args[0])
 							: args[0];
 
-					pageWrite(that, attribute, () =>
+					pageWrite(that, attribute, () => {
+						// an attribute no hook watches (class, aria-*, data-*) is
+						// written as the hooks' view would write it, with no swap
+						if (
+							typeof attribute === 'string' &&
+							!pendingAttributes(that) &&
+							!this.hooksAttribute(attribute)
+						)
+							return applyAttribute(that, attribute, value);
 						usePrototype(that, CustomElement.prototype, (element) => {
 							element.setAttribute(attribute, value);
 
 							this.updateAttributeHooks(element, attribute);
-						}),
-					);
+						});
+					});
 				},
 			);
 
@@ -1755,13 +1862,23 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							? attributeName(that, args[0])
 							: args[0];
 
-					pageWrite(that, attribute, () =>
+					pageWrite(that, attribute, () => {
+						if (
+							typeof attribute === 'string' &&
+							!pendingAttributes(that) &&
+							!this.hooksAttribute(attribute)
+						) {
+							// in the order the hooks' view applies them
+							applyAttribute(that, attribute, null);
+							applyAttribute(that, ORIGINAL_ATTRIBUTE + attribute, null);
+							return;
+						}
 						usePrototype(that, CustomElement.prototype, (element) => {
 							element.removeAttribute(attribute);
 							element.removeAttributeOG(attribute);
 							this.updateAttributeHooks(element, attribute);
-						}),
-					);
+						});
+					});
 				},
 			);
 
@@ -1795,11 +1912,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						descriptor.get!,
 						(target, that, args) => {
 							return usePrototype(that, CustomElement.prototype, (element) => {
-								for (const entry of this.hooks) {
-									if (isAttributeHook(entry.hook) || entry.hook[1] !== property)
-										continue;
-
-									const result = entry.hook[2](element);
+								for (const entry of this.#propertyHooks(property)) {
+									const result = (entry.hook as PropertyHook)[2](element);
 
 									if (result === false) continue;
 

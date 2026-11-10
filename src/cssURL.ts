@@ -2,6 +2,17 @@
 // declaration readback (cssURLs) and the inject's (Unroute). It imports
 // nothing: neither may bring the CSS parser into a frame or a worker.
 
+/**
+ * What a declaration value, an at-rule prelude or a selector must contain
+ * for the walk to route anything in it: a url() token, a string inside
+ * image-set() or src(), an @import's string, or a CSS escape (`\75 rl(` is
+ * a url() token as well).
+ */
+export const MAY_ROUTE = /url\(|image-set|src\(|import|\\/i;
+
+/** the contexts parsed lazily: values, preludes and selectors stay raw text */
+export const LAZY_CONTEXTS = ['stylesheet', 'declarationList'];
+
 /** CSSOM's serialization of a string: quoted, `"` and `\` escaped, controls as code points */
 function serializeCSSString(value: string): string {
 	let result = '"';

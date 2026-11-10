@@ -669,11 +669,39 @@ export default class DocumentClient extends Client {
 	 * (IFrame sets it): called wherever a frame may have just connected
 	 */
 	sweepFrames?: () => void;
+	/** the document's base URL and what `url` made of it, last time */
+	#urlMemo: {
+		base: string;
+		named: unknown;
+		href: string;
+		directory: string;
+	} | null = null;
 	get url(): StompURL {
 		if (this.#parseBase) return this.#parseBase;
+		// Nearly every hook asks, and decoding the route each time was a
+		// tenth of the hooks' time on a Google keystroke: the answer is a
+		// function of the base URL and the shell's name for the page, so it
+		// is made again only when either changed (a new copy each time, as a
+		// caller may change what it is given)
+		const named = (this.global as Record<string, unknown>)[WORKER_BASE];
+		const base = this.baseURIDescriptor.get!.call(
+			this.global.document,
+		) as string;
+		const memo = this.#urlMemo;
+		if (memo && memo.base === base && memo.named === named)
+			return new StompURL(memo.href, this.codec, memo.directory);
+		const url = this.#readURL(named);
+		this.#urlMemo = {
+			base,
+			named,
+			href: url.url.href,
+			directory: url.directory,
+		};
+		return url;
+	}
+	#readURL(named: unknown): StompURL {
 		// a document the page made (a blob, a data: frame, an inline document
 		// the worker served): its shell named the URL it shows
-		const named = (this.global as Record<string, unknown>)[WORKER_BASE];
 		if (typeof named === 'string')
 			return new StompURL(
 				named,
