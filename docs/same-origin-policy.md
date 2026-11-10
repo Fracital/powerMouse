@@ -2,6 +2,10 @@
 
 **Measured 2026-11-10 against Chrome 152, both demo modes.**
 
+After the fixes below, every cross-site read the two suites try fails as it
+does natively, in both modes; what still differs is under Left, first of
+all third-party storage partitioning.
+
 Every proxied site shares one real origin: the proxy's. In same-origin mode
 that is also the host's; isolated mode (`RemoteController`) moves the host to
 an origin of its own, but the proxied sites still share the proxy's. So the
@@ -199,34 +203,62 @@ Filled in commit by commit; see the CHANGELOG for each.
 
 ## Left
 
-Ranked by what a page could learn or do.
+Ranked by what a page could learn or do. Measured ones are listed in the
+suites' known lists with the same reason.
 
-- Resource timing: a fetch's or XMLHttpRequest's entry of another origin
-  is restricted even when its Timing-Allow-Origin names the page (the mark
-  would show in the response headers the page reads); a response the
-  worker answers has no `transferSize` or `nextHopProtocol` of its own
-  (every entry, the page's own origin's too).
-- Canvas: an image of the page's own origin that redirects to another is
-  judged by its own URL (Chrome taints by the response's origin); a canvas
-  tainted in one document's bundle is not known to another document's (a
-  same-origin child frame's canvas drawn by its parent); a tainted
-  ImageBitmap sent to a worker is clean there; `new VideoFrame()` of a
-  tainting source is not refused.
-- An about:srcdoc document under a `no-referrer` policy is judged as an
-  opaque origin: its client URL names no origin the worker can read and no
-  Referer names one, so the worker fails closed. A CORS answer naming the
-  document's real origin is refused where Chrome accepts it (`*` works).
-- A no-cors response that went through another origin and came back (A to
-  B to A) is `basic` and readable; natively it is opaque. B's redirect
-  decides only that A's own resource is shown.
-- The Cache API keeps an opaque response as the empty one the worker sent:
-  read back from the cache it is `basic`, status 200, empty.
-- `navigator.storage.estimate()` counts every proxied site's usage. The
-  browser keeps one quota for the proxy origin; per-site usage would need
-  the proxy to account every store's size itself.
-- Third-party partitioning and CHIPS.
-- `:visited`: Chrome never lets script read it, but its timing side channels
-  span every proxied site.
-- `crossOriginIsolated`: a page that sends COOP and COEP natively gets an
-  isolated agent cluster (SharedArrayBuffer, precise timers); through the
-  proxy the frame lives in the host's browsing context group, so it cannot.
+1. **Third-party storage partitioning and CHIPS** (sop-partitions: 14
+   checks in each mode). A site framed by another shares localStorage,
+   sessionStorage, IndexedDB, Cache Storage, OPFS, Web Locks and its shared
+   workers with its own top-level pages, and a `Partitioned` cookie is kept
+   in one jar for every top-level site. Natively each is keyed by the
+   top-level site too. This is one site's own data seen across contexts
+   (tracking and fidelity), not one site reading another's. The shape of the
+   fix: one partition key per client (the origin, plus `^<top-level site>`
+   when that site differs, from the document's `topOrigin`) used by every
+   suffix the Partition, IndexedDB, Storage and Worker modules add today,
+   handed to dedicated and shared workers by their creator before any page
+   code runs in them (a blob: worker's bootstrap already carries its base;
+   a routed worker would need it in its route), and a partition key on
+   each jar cookie set with `Partitioned`, matched against the request's
+   top-level site, which the worker knows from the nested route.
+2. **`navigator.storage.estimate()`** counts every proxied site's usage (a
+   megabyte another site stored shows in this one's). The browser keeps one
+   quota for the proxy origin; a per-site figure would need the proxy to
+   account each store's size itself.
+3. **The gate between page and worker is in the page.** The worker trusts
+   the `x-stomp-load` marker of the inject's copies (judged as the load they
+   stand for: a no-cors image is read whole) and the hooks drop it from the
+   page's own requests. A page that reached a realm no hook runs in could
+   send it and read another site's no-cors resource. That is the trust model
+   of the rest of the proxy (docs/scramjet-parity.md section 2a).
+4. Canvas: an image of the page's own origin that redirects to another is
+   judged by its own URL (Chrome taints by the response's origin); a canvas
+   tainted in one document's bundle is not known to another document's (a
+   same-origin child frame's canvas drawn by its parent); a tainted
+   ImageBitmap sent to a worker is clean there; `new VideoFrame()` of a
+   tainting source is not refused.
+5. A no-cors response that went through another origin and came back (A to
+   B to A) is `basic` and readable; natively it is opaque. B's redirect
+   decides only that A's own resource is shown.
+6. Resource timing: a fetch's or XMLHttpRequest's entry of another origin
+   is restricted even when its Timing-Allow-Origin names the page (the mark
+   would show in the response headers the page reads); a response the
+   worker answers has no `transferSize` or `nextHopProtocol` of its own
+   (every entry, the page's own origin's too).
+7. An about:srcdoc document under a `no-referrer` policy is judged as an
+   opaque origin: its client URL names no origin the worker can read and no
+   Referer names one, so the worker fails closed. A CORS answer naming the
+   document's real origin is refused where Chrome accepts it (`*` works).
+8. An XMLHttpRequest with upload listeners is not preflighted for them
+   (Chrome's CORS-preflight flag); the preflight cache is not keyed by the
+   top-level site as Chrome's is.
+9. The Cache API keeps an opaque response as the empty one the worker sent:
+   read back from the cache it is `basic`, status 200, empty.
+10. `:visited`: Chrome never lets script read it, and partitions it by
+    top-level site and frame origin; through the proxy every link is a
+    proxy URL in one partition, so its timing side channels span every
+    proxied site.
+11. `crossOriginIsolated`: a page that sends COOP and COEP natively gets an
+    isolated agent cluster (SharedArrayBuffer, precise timers); through the
+    proxy the frame lives in the host's browsing context group, so it
+    cannot.

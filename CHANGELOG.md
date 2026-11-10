@@ -3266,6 +3266,12 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- The same-origin policy between proxied sites is simulated by the proxy
+  (docs/same-origin-policy.md). Not yet: Chrome's third-party storage
+  partitioning (a site framed by another shares its stores, its shared
+  workers and its `Partitioned` cookies with its own top-level pages;
+  sop-partitions suite), a per-site `navigator.storage.estimate()`, and
+  `crossOriginIsolated` (COOP and COEP cannot isolate a proxied frame).
 - The Cookie Store API's change events are dispatched by the inject, so
   their `isTrusted` is false where natively it is true (native-shapes
   suite, recorded), as for the storage events of other documents' writes.
