@@ -516,6 +516,20 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   non-configurable replaces the formatter (its realm's stacks are no longer
   cleaned), and one that freezes Error sees the accessor (tells suite, both
   modes, compared with the page loaded natively).
+- A document that asks again for a script or stylesheet the worker just
+  gave it gets the same output, without the worker fetching, reading or
+  rewriting anything again. A rewritten body goes out no-cache, and Chrome
+  never revalidates for a page a service worker controls: it asks again in
+  full. So every script and stylesheet the preload scanner fetched while
+  the parser was held up was fetched again when the parser reached it, and
+  on YouTube each of them, its 20 MB bundle and 3 MB stylesheet among them,
+  went through the worker twice per load (natively the document reuses what
+  its scanner fetched). The worker keeps what it gave each document for 30
+  s (64 M characters in all) and answers the same request of the same
+  document from it; never a navigation, nor a request that bypasses caches.
+  The host's rules changing drops it (preload-reuse suite, both modes: a
+  no-store script fetched by the scanner and again by the parser reaches
+  the origin once and is rewritten once).
 - A stylesheet is parsed with its values, at-rule preludes and selectors
   left as text, and only a piece that could hold a URL (a url(), a string in
   image-set() or src(), an @import, an escape) is parsed in full where it

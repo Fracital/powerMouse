@@ -347,6 +347,29 @@ function genericForward(
 			`${oURL.origin}${rewriter.directory}`,
 		);
 
+		// the same document asking again for an output it was just given
+		const recentKey = transformBody
+			? recentOutputKey(serverRequest, context)
+			: null;
+		const recent = recentKey !== null ? takeRecentOutput(recentKey) : null;
+		if (recent) {
+			rewriter.log?.({
+				url: reportURL(url),
+				method: serverRequest.method,
+				destination: serverRequest.destination || 'fetch',
+				status: recent.status,
+				ms: Date.now() - started,
+				cached: true,
+				bytes: recent.bytes,
+				client: context?.clientId,
+			});
+			return new Response(recent.body, {
+				status: recent.status,
+				statusText: recent.statusText,
+				headers: recent.headers,
+			});
+		}
+
 		// a route of a route (a page handed a hook its raw proxy URL, routed
 		// again): the real URL is the inner route's, so the request is sent to
 		// the single route of it, a document and a subresource alike
@@ -1135,6 +1158,18 @@ function genericForward(
 				responseHeaders.delete('expires');
 				responseHeaders.delete('age');
 			}
+			if (
+				recentKey !== null &&
+				typeof transformed === 'string' &&
+				response.status === 200
+			)
+				rememberOutput(recentKey, {
+					body: transformed,
+					status: response.status,
+					statusText: response.statusText,
+					headers: [...responseHeaders],
+					bytes: Number(responseHeaders.get('content-length')) || null,
+				});
 		}
 
 		sendReport();
@@ -1211,6 +1246,87 @@ function genericForward(
 }
 
 const htmlMimes = ['text/html', '', ...XML_DOCUMENT_MIMES];
+
+/**
+ * Rewritten outputs a document was just given, by what it asked for, so the
+ * same request from the same document a moment later gets the same answer
+ * without the worker reading, hashing or rewriting anything again. A
+ * rewritten body goes out no-cache, and the browser never revalidates for
+ * a page a service worker controls: it asks again in full. So every script
+ * and stylesheet the preload scanner fetched while the parser was held up
+ * (by a stylesheet, a slow script) was fetched again when the parser got
+ * there: on YouTube each of them, its 20 MB bundle and 3 MB stylesheet
+ * among them, went through the worker twice per load. Natively the
+ * document reuses what its preload scanner fetched. Kept for RECENT_MS, at
+ * most RECENT_CHARS in all, oldest out first; a navigation is never answered
+ * from here, and a request that bypasses caches is not either.
+ */
+interface RecentOutput {
+	body: string;
+	status: number;
+	statusText: string;
+	headers: [string, string][];
+	bytes: number | null;
+}
+const RECENT_MS = 30 * 1000;
+const RECENT_CHARS = 64 * 1024 * 1024;
+const recentOutputs = new Map<string, RecentOutput & { at: number }>();
+let recentChars = 0;
+
+/** what makes two requests the same request of the same document, or null for one that is never answered from what it was given before */
+function recentOutputKey(
+	request: Request,
+	context?: RouteContext,
+): string | null {
+	if (
+		request.method !== 'GET' ||
+		request.mode === 'navigate' ||
+		!context?.clientId ||
+		(request.cache !== undefined && request.cache !== 'default')
+	)
+		return null;
+	return [
+		context.clientId,
+		request.url,
+		request.destination,
+		request.mode,
+		request.credentials,
+	].join('\u0000');
+}
+
+function takeRecentOutput(key: string): RecentOutput | null {
+	const kept = recentOutputs.get(key);
+	if (!kept) return null;
+	if (Date.now() - kept.at > RECENT_MS) {
+		recentOutputs.delete(key);
+		recentChars -= kept.body.length;
+		return null;
+	}
+	return kept;
+}
+
+function rememberOutput(key: string, output: RecentOutput) {
+	if (output.body.length > RECENT_CHARS) return;
+	const old = recentOutputs.get(key);
+	if (old) {
+		recentOutputs.delete(key);
+		recentChars -= old.body.length;
+	}
+	recentOutputs.set(key, { ...output, at: Date.now() });
+	recentChars += output.body.length;
+	const now = Date.now();
+	for (const [kept, entry] of recentOutputs) {
+		if (recentChars <= RECENT_CHARS && now - entry.at <= RECENT_MS) break;
+		recentOutputs.delete(kept);
+		recentChars -= entry.body.length;
+	}
+}
+
+/** what the worker gave documents before stands for nothing now (the host's rules changed) */
+function forgetRecentOutputs() {
+	recentOutputs.clear();
+	recentChars = 0;
+}
 
 /** the bytes `body` goes out as, or null when that is not known before it is read */
 export function bodyLength(body: BodyInit): number | null {
@@ -1611,6 +1727,7 @@ export function registerRewrites(
 		route,
 		setRules(rules: RequestRule[]) {
 			rewriter.rules = compileRules(rules);
+			forgetRecentOutputs();
 		},
 	};
 }
