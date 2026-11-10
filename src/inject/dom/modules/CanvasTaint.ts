@@ -254,7 +254,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 			proto: object | undefined,
 			method: string,
 			tainted: WeakSet<object>,
-			message: string,
+			message: string | (() => Promise<string>),
 			async = false,
 		) => {
 			const native = proto && (proto as Record<string, unknown>)[method];
@@ -263,6 +263,10 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 				native,
 				(target, that, args) => {
 					if (that !== null && typeof that === 'object' && tainted.has(that)) {
+						if (typeof message !== 'string')
+							return message().then((text) => {
+								throw securityError(text);
+							});
 						const error = securityError(message);
 						if (async) return global.Promise.reject(error);
 						throw error;
@@ -300,11 +304,37 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 				taintedContexts,
 				"Failed to execute 'getImageData' on 'OffscreenCanvasRenderingContext2D': The canvas has been tainted by cross-origin data.",
 			);
+			// Chrome 153 reworded its OffscreenCanvas errors: 'Tainted
+			// "OffscreenCanvas" may not be exported.' became 'A tainted
+			// OffscreenCanvas may not be exported.'. No canvas is tainted natively
+			// in proxy space, so the wording is told by a sibling message of the
+			// same change: the no-context rejection quotes "OffscreenCanvas" only
+			// in the old one. Asked once, on the first tainted export.
+			const convertToBlob = global.OffscreenCanvas.prototype.convertToBlob;
+			let taintedWording: Promise<string> | undefined;
+			const convertTainted = () =>
+				(taintedWording ??= (
+					Reflect.apply(
+						convertToBlob,
+						new global.OffscreenCanvas(1, 1),
+						[],
+					).then(
+						() => '',
+						(error: unknown) => String((error as Error)?.message),
+					) as Promise<string>
+				).then(
+					(probe) =>
+						`Failed to execute 'convertToBlob' on 'OffscreenCanvas': ${
+							probe.includes('"OffscreenCanvas"')
+								? 'Tainted "OffscreenCanvas" may not be exported.'
+								: 'A tainted OffscreenCanvas may not be exported.'
+						}`,
+				));
 			hookRead(
 				global.OffscreenCanvas.prototype,
 				'convertToBlob',
 				taintedCanvases,
-				`Failed to execute 'convertToBlob' on 'OffscreenCanvas': Tainted "OffscreenCanvas" may not be exported.`,
+				convertTainted,
 				true,
 			);
 			// a bitmap of a tainted offscreen canvas carries its taint

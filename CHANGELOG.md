@@ -405,6 +405,10 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   the proxy, so a page could read the pixels of any other site's image,
   including through a pattern, an ImageBitmap, another canvas or a video.
   (sop-escapes suite; `drawImage` costs the same as natively.)
+- A tainted OffscreenCanvas's `convertToBlob` rejects with the message of
+  the Chrome it runs in. Chrome 153 reworded it ('A tainted OffscreenCanvas
+  may not be exported.' where 152 said 'Tainted "OffscreenCanvas" may not be
+  exported.'); the proxy answered with 152's wording everywhere.
 - A proxied page can no longer read another site's responses the browser
   would refuse it. Every route is same-origin to the browser, so a `fetch`
   or XMLHttpRequest of another site came back whole, every header and the
