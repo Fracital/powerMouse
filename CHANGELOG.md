@@ -310,6 +310,11 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- An XML response to `XMLHttpRequest` with no charset in its type is read
+  in the encoding its XML declaration names under the default response type,
+  as natively (`responseText` of a windows-1252 feed was mojibake). The
+  `text` type keeps UTF-8, as natively (xhr-parity suite, pages and
+  workers).
 - `XMLHttpRequest` steps through its states as the browser's does (pages
   and workers, xhr-parity suite). `open()` fires `readystatechange` (for a
   synchronous request too) and starts over: a request in flight is dropped

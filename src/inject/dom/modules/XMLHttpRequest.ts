@@ -11,6 +11,7 @@ import { unrouteURL } from '../../modules/Unroute';
 import {
 	decodeText,
 	finalMime,
+	isXMLType,
 	overrideMime,
 	type MimeType,
 } from '../../xhrText';
@@ -292,10 +293,10 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					response!.headers.get('content-type'),
 				);
 				const mime = type.essence;
-				const isXML =
-					/^(text|application)\/xml$/.test(mime) || /\+xml$/.test(mime);
+				const isXML = isXMLType(mime);
 				// the bytes as the browser decodes them (JSON is always UTF-8)
-				const text = () => decodeText(buffer!, type.charset);
+				const text = () =>
+					decodeText(buffer!, type.charset, isXML && this.#responseType === '');
 
 				switch (this.#responseType) {
 					case 'arraybuffer':

@@ -1,7 +1,8 @@
 // How an XMLHttpRequest turns its bytes into text, as the XHR standard says:
 // the charset of overrideMimeType() wins over the response's Content-Type
-// charset, a byte order mark wins over both, and with neither the text is
-// UTF-8. A page reading binary through responseText relies on this: it
+// charset, a byte order mark wins over both, with neither an XML response
+// under the default type ('', not 'text') is read in the encoding its XML
+// declaration names, and otherwise the text is UTF-8. A page reading binary through responseText relies on this: it
 // overrides the type with `charset=x-user-defined`, which maps every byte
 // past 0x7F to U+F780..U+F7FF so `charCodeAt(i) & 0xff` gives the byte back.
 
@@ -61,10 +62,34 @@ export function finalMime(
 	};
 }
 
-/** the response text for `bytes` under `charset`, as the browser decodes it */
-export function decodeText(bytes: ArrayBuffer, charset: string | null): string {
+/** whether a MIME type essence is an XML one (text/xml, application/xml, +xml) */
+export function isXMLType(essence: string): boolean {
+	return /^(text|application)\/xml$/.test(essence) || /\+xml$/.test(essence);
+}
+
+const XML_DECLARATION =
+	/^<\?xml\s+version\s*=\s*(["'])[^"']*\1\s+encoding\s*=\s*(["'])([A-Za-z][\w.-]*)\2/;
+
+/** the encoding an XML declaration at the start of `view` names, or null */
+function declaredEncoding(view: Uint8Array): string | null {
+	let head = '';
+	for (let i = 0; i < view.length && i < 1024; i++)
+		head += String.fromCharCode(view[i]);
+	return XML_DECLARATION.exec(head)?.[3] ?? null;
+}
+
+/**
+ * The response text for `bytes` under `charset`, as the browser decodes it;
+ * `xml`: an XML response under the default type, whose declaration may name
+ * the encoding
+ */
+export function decodeText(
+	bytes: ArrayBuffer,
+	charset: string | null,
+	xml = false,
+): string {
 	const view = new Uint8Array(bytes);
-	let label = charset ?? 'utf-8';
+	let label = charset ?? (xml ? declaredEncoding(view) : null) ?? 'utf-8';
 	if (view[0] === 0xef && view[1] === 0xbb && view[2] === 0xbf) label = 'utf-8';
 	else if (view[0] === 0xfe && view[1] === 0xff) label = 'utf-16be';
 	else if (view[0] === 0xff && view[1] === 0xfe) label = 'utf-16le';

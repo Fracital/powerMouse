@@ -11,6 +11,7 @@ import { unrouteURL } from '../../modules/Unroute';
 import {
 	decodeText,
 	finalMime,
+	isXMLType,
 	overrideMime,
 	type MimeType,
 } from '../../xhrText';
@@ -357,7 +358,11 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 						break;
 					default:
 					case 'text':
-						this.#responseText = decodeText(buffer!, type.charset);
+						this.#responseText = decodeText(
+							buffer!,
+							type.charset,
+							isXMLType(type.essence) && this.responseType === '',
+						);
 						this.#response = this.#responseText;
 						break;
 				}
