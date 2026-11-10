@@ -72,6 +72,44 @@ ok(
 	)),
 );
 
+// held part-way up: the card is dismissed as a whole, its bar copy (URL and
+// status chip) fading with the page rather than vanishing at the first pixel
+{
+	const c = await centred();
+	const label = await page.evaluateHandle(() =>
+		[...document.querySelectorAll('.cardLabel')].find(
+			(l) => l.style.opacity === '1',
+		),
+	);
+	await page.mouse.move(c.x, c.y);
+	await page.mouse.down();
+	for (let y = c.y; y > c.y - 80; y -= 8) {
+		await page.mouse.move(c.x, y);
+		await sleep(16);
+	}
+	await sleep(100);
+	const held = await page.evaluate((label) => {
+		const frame = [...document.querySelectorAll('.frame')].find(
+			(f) => f.style.opacity !== '',
+		);
+		return {
+			label: label.style.opacity,
+			frame: frame ? frame.style.opacity : null,
+			bar: getComputedStyle(label.querySelector('.cardChrome')).visibility,
+		};
+	}, label);
+	await page.mouse.up();
+	await sleep(400);
+	ok(
+		'a card held part-way up keeps its bar, fading with its page',
+		held.frame !== null &&
+			held.label === held.frame &&
+			Number(held.label) > 0.5 &&
+			held.bar === 'visible',
+		JSON.stringify(held),
+	);
+}
+
 await dragUp(40, 8, 30);
 ok(
 	'short upward drag keeps the tab',

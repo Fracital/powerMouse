@@ -490,10 +490,10 @@ function layoutRecents(animated = false) {
 			'dragging',
 			!animated && (recentsDrag !== 0 || lift !== 0),
 		);
-		// fade out as the card is pushed up
-		element.style.opacity = lift
-			? String(Math.max(0, 1 - Math.abs(lift) / h))
-			: '';
+		// the card fades as it is pushed up: the frame and its bar copy
+		// together, as one block (the bar going first left a half card)
+		const fade = lift ? Math.max(0, 1 - Math.abs(lift) / h) : 1;
+		element.style.opacity = lift ? String(fade) : '';
 
 		// the label is the block itself (bar copy on top, transparent below)
 		// with the block's transform, so it can never fall out of step with the
@@ -506,14 +506,13 @@ function layoutRecents(animated = false) {
 			label.style.borderRadius = radius;
 			label.style.setProperty('--k', String(k));
 			label.style.setProperty('--ch', `${ch}px`);
-			label.style.opacity = lift ? '0' : i === recentsIndex ? '1' : '0.6';
+			label.style.opacity = String((i === recentsIndex ? 1 : 0.6) * fade);
 			label.classList.toggle(
 				'dragging',
 				!animated && (recentsDrag !== 0 || lift !== 0),
 			);
 		}
 	});
-	void h;
 	recentsCardWidth = w + gap;
 
 	recentsCount.textContent = `${tabs.length} active tab${tabs.length === 1 ? '' : 's'}`;
