@@ -343,6 +343,14 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- `HTMLAudioElement.prototype.constructor` is `HTMLAudioElement` again, as
+  natively; it was the proxy's `Audio`, so an `<audio>`'s `constructor`
+  (made by `new Audio()`, `createElement` or markup) was `Audio`. `Audio`
+  is a named constructor whose `prototype` is HTMLAudioElement's, like
+  `Image` and `Option`, which the proxy does not replace and which already
+  read as natively (native-shapes suite, both modes). Called without `new`,
+  `Audio` threw a message naming Worker and an 'Image' operator; it throws
+  the browser's own error now.
 - Every constructor the inject replaces reads as the browser's
   (native-shapes suite, both modes, window and worker): XMLHttpRequest and
   its event target and upload, EventSource, WebSocket, WebSocketStream,
