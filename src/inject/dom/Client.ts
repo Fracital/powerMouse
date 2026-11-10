@@ -9,7 +9,12 @@ import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import StompURL from '../../StompURL';
 import { HOOK_ERROR, OPEN_TAB, WORKER_BASE } from '../../transport/messages';
 import Client from '../Client';
-import cloneRawNode, { nativeAttributes, parseHTML } from './cloneNode';
+import cloneRawNode, {
+	inertDocumentOf,
+	nativeAttributes,
+	parseHTML,
+	releaseMarkup,
+} from './cloneNode';
 import DOMAttributesModule, {
 	scriptKind,
 	shouldRewriteScript,
@@ -807,7 +812,13 @@ export default class DocumentClient extends Client {
 				// not a URL: the document's own stands
 			}
 
-		const node = this.global.document.createElement('div');
+		// the copy is made in an inert document (see inertDocumentOf), as a
+		// write's is: made in this one, every image, video and audio in it
+		// loaded a second time (each <video> of a page was downloaded twice),
+		// an autoplaying one could play, detached, and an image that listens
+		// to the viewport kept the whole copy alive
+		const inert = inertDocumentOf(this.global.document);
+		const node = inert.createElement('div');
 		// a document no worker controls (an <object>'s HTML document is a
 		// blob: copy) gets its loads as copies, and its own markup is written
 		// as markup the page writes is (WriteStream): a script copied at once,
@@ -820,7 +831,7 @@ export default class DocumentClient extends Client {
 			// workaround:
 			// we cannot append any descendants of parsed into any element (whether it is attached or detached) because it will pre-fetch the images in parsed
 			// pass the entirety of parsed into cloneRawNode
-			node.append(cloneRawNode([parsed.documentElement], this.global.document));
+			node.append(cloneRawNode([parsed.documentElement], inert));
 
 			setGlobalParsingState(this.global);
 
@@ -837,6 +848,8 @@ export default class DocumentClient extends Client {
 		const newDocument =
 			(parsed.doctype ? `<!DOCTYPE ${parsed.doctype.name}>` : '') +
 			this.innerHTML(node);
+		// the copy was made to be serialized (see releaseMarkup)
+		releaseMarkup(node);
 
 		// jump out of the DOM "write stream" so we can start loading our own HTML
 		const load = () => {

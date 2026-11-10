@@ -117,6 +117,61 @@ export function inertDocumentOf(document: Document): Document {
 	);
 }
 
+const nativeParentNode = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'parentNode',
+)!.get!;
+const nativeRemoveChild = Node.prototype.removeChild;
+const nativeQuerySelectorAll: Record<number, (selectors: string) => unknown> = {
+	1: Element.prototype.querySelectorAll,
+	9: Document.prototype.querySelectorAll,
+	11: DocumentFragment.prototype.querySelectorAll,
+};
+
+const nativeRemoveAttribute = Element.prototype.removeAttribute;
+
+/**
+ * Let go of markup parsed or copied only to be read: a parse the hooks clone
+ * the page's nodes from, a copy they serialize. Such a document is inert (no
+ * frame: nothing loads), but it is the window's: a `<source media>` listens
+ * to its media query there, and Blink keeps a MediaQueryList with a listener
+ * alive as a pending activity, and an `<img>` can listen to the viewport of
+ * a document that outlives the copy (a template's inert document lives as
+ * long as the page's). Either kept the whole tree and its document for the
+ * window's life: Wikipedia kept three copies of every page, Notion its whole
+ * markup, and each innerHTML written or read with a `<picture>` in it kept
+ * one more. So every source loses its media query and leaves its parent,
+ * and every image leaves its parent (removal is what drops its listener),
+ * in template contents too.
+ */
+export function releaseMarkup(root: Node | null | undefined): void {
+	if (!root) return;
+	try {
+		const type = Reflect.apply(nativeNodeType, root, []) as number;
+		const query = nativeQuerySelectorAll[type];
+		if (!query) return;
+		const nodes: Element[] = [
+			...(Reflect.apply(query, root, ['source, img, template']) as Element[]),
+		];
+		if (type === 1) nodes.push(root as Element);
+		for (const node of nodes) {
+			const name = Reflect.apply(nativeLocalName, node, []);
+			// an HTML template's content only: one of another namespace has none
+			if (isHTMLTemplate(node)) {
+				releaseMarkup(Reflect.apply(nativeTemplateContent, node, []) as Node);
+				continue;
+			}
+			if (name !== 'source' && name !== 'img') continue;
+			if (name === 'source')
+				Reflect.apply(nativeRemoveAttribute, node, ['media']);
+			const parent = Reflect.apply(nativeParentNode, node, []) as Node | null;
+			if (parent) Reflect.apply(nativeRemoveChild, parent, [node]);
+		}
+	} catch (error) {
+		// not a node of any realm: nothing to let go of
+	}
+}
+
 /**
  * Elements cloneRawNode made inside a template's content or a <noscript>.
  * Where the written page puts them, a script runs with no
@@ -142,7 +197,8 @@ type stackIterateData = [
 type stackFinalizeData = [parent: ParentNode, node: Node];
 
 /**
- * Clones or re-creates the node using the hooked DOM apis
+ * Clones or re-creates the node using the hooked DOM apis. `fragment` is
+ * markup parsed for this copy: once copied it is spent (releaseMarkup).
  * @param node Node to clone
  */
 export default function cloneRawNode(
@@ -287,6 +343,10 @@ export default function cloneRawNode(
 				break;
 		}
 	}
+
+	// the parsed markup has served: what the page gets is the copy
+	if (Array.isArray(fragment)) for (const node of fragment) releaseMarkup(node);
+	else releaseMarkup(fragment as Node);
 
 	return tempTarget;
 }

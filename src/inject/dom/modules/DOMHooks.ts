@@ -22,6 +22,7 @@ import cloneRawNode, {
 	inertDocumentOf,
 	isHTMLTemplate,
 	parseHTMLFragment,
+	releaseMarkup,
 	templateContentDocument,
 } from '../cloneNode';
 import { responseURLOf } from '../responseDocuments';
@@ -907,7 +908,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					inert,
 				),
 			);
-			return this.client.innerHTMLOf(div);
+			const html = this.client.innerHTMLOf(div);
+			releaseMarkup(div);
+			return html;
 		};
 		// Range.createContextualFragment parses in the page's document, so an
 		// element in the fragment starts its load as it is parsed, inserted or
@@ -997,7 +1000,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						);
 						for (const child of that.childNodes)
 							div.append(this.inertCopy(child));
-						return this.serializeOriginal(div, false);
+						const html = this.serializeOriginal(div, false);
+						releaseMarkup(div);
+						return html;
 					},
 				),
 				set: proxyModule.wrapFunction(
@@ -1365,9 +1370,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			usePrototype(element, nativeElement, (native) => {
 				const clone = inertCopy(native);
 				foldMarkers(clone);
-				return usePrototype(clone, nativeElement, (clone) =>
+				const html = usePrototype(clone, nativeElement, (clone) =>
 					outer ? clone.outerHTML : clone.innerHTML,
 				);
+				// a copy only to be serialized (see releaseMarkup)
+				releaseMarkup(clone);
+				return html;
 			});
 		this.serializeOriginal = serializeOriginal;
 
@@ -1386,9 +1394,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			options: ShadowOptions,
 			// the copies of the roots the page listed, for the native call
 			listed: ShadowRoot[],
+			// every copy and shadow root made, to let go of after (releaseMarkup)
+			made: Node[],
 		): T =>
 			usePrototype(node, nativeNode, (native) => {
 				const copy = inertCopy(native) as T;
+				made.push(copy);
 				const originals: Node[] = [
 					...(native.nodeType === 1 ? [native] : []),
 					...querySelectorAllOf(native),
@@ -1420,10 +1431,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						delegatesFocus: root.delegatesFocus,
 					});
 					if (options.shadowRoots?.includes(root)) listed.push(shadow);
+					made.push(shadow);
 					for (const child of root.childNodes)
 						shadow.append(
 							child.nodeType === 1
-								? copyWithShadows(child as Element, options, listed)
+								? copyWithShadows(child as Element, options, listed, made)
 								: inertCopy(child),
 						);
 					foldMarkers(shadow);
@@ -1454,11 +1466,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							shadowRoots: listed,
 						},
 					];
+					// every copy made, the shadow roots' too, for releaseMarkup
+					const made: Node[] = [];
 					if (that instanceof this.client.global.Element) {
-						const copy = copyWithShadows(that, options, listed);
-						return this.foldMarkup(
-							Reflect.apply(target, copy, call()) as string,
-						);
+						const copy = copyWithShadows(that, options, listed, made);
+						const html = Reflect.apply(target, copy, call()) as string;
+						for (const node of made) releaseMarkup(node);
+						return this.foldMarkup(html);
 					}
 					// a shadow root cannot be copied: its children are, under a
 					// holder in the inert document, serialized as the root's
@@ -1468,13 +1482,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					for (const child of (that as ShadowRoot).childNodes)
 						holder.append(
 							child.nodeType === 1
-								? copyWithShadows(child as Element, options, listed)
+								? copyWithShadows(child as Element, options, listed, made)
 								: inertCopy(child),
 						);
 					foldMarkers(holder);
-					return this.foldMarkup(
-						Reflect.apply(elementGetHTML!, holder, call()) as string,
-					);
+					const html = Reflect.apply(elementGetHTML!, holder, call()) as string;
+					releaseMarkup(holder);
+					for (const node of made) releaseMarkup(node);
+					return this.foldMarkup(html);
 				},
 			);
 		}
@@ -1489,10 +1504,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					return Reflect.apply(target, that, args);
 				const clone = inertCopy(node as Node);
 				foldMarkers(clone);
-				return unrouteCSS(
-					this.client,
-					Reflect.apply(target, that, [clone]) as string,
-				);
+				const xml = Reflect.apply(target, that, [clone]) as string;
+				releaseMarkup(clone);
+				return unrouteCSS(this.client, xml);
 			});
 
 		// attribute selectors match the page's values: `[href="/x"]` is

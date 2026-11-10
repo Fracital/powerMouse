@@ -1,5 +1,9 @@
 import type DocumentClient from './Client';
-import cloneRawNode, { inertDocumentOf, parseHTMLContainer } from './cloneNode';
+import cloneRawNode, {
+	inertDocumentOf,
+	parseHTMLContainer,
+	releaseMarkup,
+} from './cloneNode';
 import { completeLength } from './writeTokenizer';
 
 /**
@@ -120,6 +124,7 @@ export default class WriteStream {
 				cloneRawNode([...holder.childNodes], this.#client.global.document),
 			);
 			const serialized = this.#client.innerHTMLOf(div);
+			releaseMarkup(div);
 			const open = /^<div([^>]*)>/i.exec(serialized)?.[1] ?? '';
 			return `<${name}${open}>`;
 		};
@@ -235,6 +240,9 @@ export default class WriteStream {
 		const div = inert.createElement('div');
 		div.append(cloneRawNode(nodes, inert));
 		this.#client.rewriteInlineScripts(div);
-		return this.#client.innerHTMLOf(div);
+		const html = this.#client.innerHTMLOf(div);
+		// a copy only to be serialized (see releaseMarkup)
+		releaseMarkup(div);
+		return html;
 	}
 }

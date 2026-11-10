@@ -337,6 +337,21 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- Markup the inject parses or copies only to rewrite or serialize it no
+  longer stays in memory for the page's life, and the shell's copy of a
+  page loads nothing. A `<source media>` listens to its media query in any
+  document of the window (a DOMParser's, an inert template's, one from
+  `createHTMLDocument`) and Blink keeps a listened MediaQueryList alive as
+  a pending activity; an `<img>` listened to the viewport of the page's own
+  document, where the shell built its copy. Wikipedia kept three copies of
+  every page (18,700 nodes after a GC, 4,700 natively; now 5,300), Notion
+  its whole markup, Poki 10,000 nodes, and every innerHTML, outerHTML,
+  insertAdjacentHTML, getHTML, XMLSerializer or document.write with a
+  `<picture>` in it kept one more copy, so a page that rendered pictures
+  through innerHTML grew without bound. The shell's copy, in the page's
+  document, also fetched every `<video>` and `<audio>` a second time. Each
+  throwaway copy now lets its sources and images go (`releaseMarkup`), and
+  the shell builds its copy in an inert document, as writes do.
 - `XMLHttpRequest`'s credentials work as natively. `open()` stored the
   password as the user and both went nowhere, and a URL's own credentials
   were dropped, so a request to a site that challenges came back 401. The
