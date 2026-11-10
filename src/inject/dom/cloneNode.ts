@@ -117,6 +117,46 @@ export function inertDocumentOf(document: Document): Document {
 	);
 }
 
+// taken before the DOM hooks replace the setter
+const nativeInnerHTMLSet = Reflect.getOwnPropertyDescriptor(
+	Element.prototype,
+	'innerHTML',
+)!.set!;
+const nativeCreateElementNS = Document.prototype.createElementNS;
+const nativeChildNodes = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'childNodes',
+)!.get!;
+
+/**
+ * Parse markup as the browser parses it into `context` (innerHTML, the
+ * parent for outerHTML, insertAdjacentHTML's element or parent): a <tr> in
+ * a table section stays a row, an <svg>'s markup is SVG, a <textarea>'s or
+ * <title>'s is text, a <colgroup>'s columns. The browser's own innerHTML
+ * of a holder of the same name and namespace in an inert document, like
+ * parseHTMLFragment (whose body context is what a context of none gets):
+ * its scripts are marked as started, as the fragment parser marks them,
+ * so none of them ever runs.
+ */
+export function parseHTMLFragmentIn(
+	script: string,
+	context: Element | null,
+	document: Document = globalThis.document,
+): Node[] {
+	if (context === null) return parseHTMLFragment(script, document);
+	const inert = inertDocumentOf(document);
+	const holder = Reflect.apply(nativeCreateElementNS, inert, [
+		Reflect.apply(nativeNamespace, context, []),
+		Reflect.apply(nativeLocalName, context, []),
+	]) as Element;
+	Reflect.apply(nativeInnerHTMLSet, holder, [script]);
+	// a template's markup lands in its content
+	const parent = isHTMLTemplate(holder)
+		? Reflect.apply(nativeTemplateContent, holder, [])
+		: holder;
+	return [...(Reflect.apply(nativeChildNodes, parent, []) as NodeList)];
+}
+
 const nativeParentNode = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
 	'parentNode',

@@ -11,7 +11,7 @@ import DocumentClient, {
 	getGlobalParsingState,
 	type StyleElement,
 } from '../Client';
-import cloneRawNode, { inertClones, parseHTMLFragment } from '../cloneNode';
+import cloneRawNode, { inertClones, parseHTMLFragmentIn } from '../cloneNode';
 import DOMAttributesModule, {
 	scriptType,
 	shouldRewriteScript,
@@ -682,71 +682,69 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				);
 			}
 
-		function insertAdjacentTarget(
+		// The insertAdjacent methods, as the spec writes them: a position in
+		// any case (Chrome's error for another), the node put in through the
+		// hooked insertBefore of the element or its parent (so the hooks see
+		// it as for any insertion), what Chrome returns. insertAdjacentHTML
+		// parses in the context the browser would: the element, or the parent
+		// for a sibling position (a fragment's or the root's is the body's)
+		const hookedInsertBefore = this.client.global.Node.prototype.insertBefore;
+		const nativeFirstChild = Reflect.getOwnPropertyDescriptor(
+			Node.prototype,
+			'firstChild',
+		)!.get!;
+		const nativeNextSibling = Reflect.getOwnPropertyDescriptor(
+			Node.prototype,
+			'nextSibling',
+		)!.get!;
+		const nativeOwnerDocument = Reflect.getOwnPropertyDescriptor(
+			Node.prototype,
+			'ownerDocument',
+		)!.get!;
+		const POSITIONS = ['beforebegin', 'afterbegin', 'beforeend', 'afterend'];
+		const adjacentPosition = (value: unknown, api: string): string => {
+			const given = String(value);
+			const position = given.replace(/[A-Z]/g, (c) => c.toLowerCase());
+			if (!POSITIONS.includes(position))
+				throw new this.client.global.DOMException(
+					`Failed to execute '${api}' on 'Element': The value provided ('${given}') is not one of 'beforeBegin', 'afterBegin', 'beforeEnd', or 'afterEnd'.`,
+					'SyntaxError',
+				);
+			return position;
+		};
+		/** put `node` at `position` of `element`; false when a sibling position has no parent */
+		const insertAdjacent = (
+			element: Element,
 			position: string,
-			relative: Element,
-			on: string,
-			api: string,
-		): Element | null {
-			switch (position) {
-				case 'afterbegin':
-				case 'beforeend':
-					return relative;
-				case 'beforebegin':
-				case 'afterend':
-					return relative.parentElement;
-				default:
-					throw new DOMException(
-						`Failed to execute '${api}' on '${on}': The value provided ('${position}') is not one of 'beforeBegin', 'afterBegin', 'beforeEnd', or 'afterEnd'.`,
-					);
-			}
-		}
-
-		function insertAdjacent(
-			targetElement: Element,
-			position: string,
-			relative: Element,
 			node: Node,
-		) {
-			if (!targetElement) {
-				return;
-			}
-
+		): boolean => {
 			switch (position) {
+				case 'beforebegin': {
+					const parent = parentOf(element);
+					if (parent === null) return false;
+					Reflect.apply(hookedInsertBefore, parent, [node, element]);
+					return true;
+				}
 				case 'afterbegin':
-					if (targetElement.childNodes.length) {
-						targetElement.insertBefore(node, targetElement.childNodes[0]);
-					} else {
-						targetElement.append(node, targetElement.childNodes[0]);
-					}
-					break;
-				case 'beforebegin':
-					targetElement.insertBefore(node, relative);
-					break;
+					Reflect.apply(hookedInsertBefore, element, [
+						node,
+						Reflect.apply(nativeFirstChild, element, []),
+					]);
+					return true;
 				case 'beforeend':
-					targetElement.append(node);
-					break;
-				case 'afterend':
-					{
-						if (targetElement.childNodes.length) {
-							const childNodes = [...targetElement.childNodes];
-							const afterRelative =
-								childNodes[childNodes.indexOf(relative) + 1];
-
-							if (afterRelative) {
-								console.log(afterRelative);
-								targetElement.insertBefore(node, afterRelative);
-							} else {
-								// maybe the target ends with relative
-								targetElement.append(node);
-							}
-						} else {
-							targetElement.append(node);
-						}
-					}
-					break;
+					Reflect.apply(hookedInsertBefore, element, [node, null]);
+					return true;
+				default: {
+					const parent = parentOf(element);
+					if (parent === null) return false;
+					Reflect.apply(hookedInsertBefore, parent, [
+						node,
+						Reflect.apply(nativeNextSibling, element, []),
+					]);
+					return true;
+				}
 			}
-		}
+		};
 
 		this.client.global.Element.prototype.insertAdjacentText =
 			proxyModule.wrapFunction(
@@ -758,23 +756,13 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						'Element',
 						'insertAdjacentText',
 					);
-
-					const position = String(args[0]);
-					const insertNode: Node = new Text(args[1]);
-					const targetElement = insertAdjacentTarget(
-						position,
-						that,
-						'Element',
-						'insertAdjacentText',
-					);
-
-					if (!targetElement) return;
-
-					insert(insertNode, targetElement, () =>
-						usePrototype(that, nativeElement, (element) =>
-							insertAdjacent(targetElement, position, element, insertNode),
-						),
-					);
+					const position = adjacentPosition(args[0], 'insertAdjacentText');
+					const text = Reflect.apply(
+						nativeCreateTextNode,
+						Reflect.apply(nativeOwnerDocument, that, []),
+						[String(args[1])],
+					) as Text;
+					insertAdjacent(that, position, text);
 				},
 			);
 
@@ -788,29 +776,15 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						'Element',
 						'insertAdjacentElement',
 					);
-
-					if (!(args[1] instanceof Element)) {
-						throw new TypeError(
+					// an element of any realm (instanceof knows only one)
+					if (nodeTypeOf(args[1]) !== 1)
+						throw new this.client.global.TypeError(
 							`Failed to execute 'insertAdjacentElement' on 'Element': parameter 2 is not of type 'Element'.`,
 						);
-					}
-
-					const position = String(args[0]);
-					const insertElement = args[1];
-					const targetElement = insertAdjacentTarget(
-						position,
-						that,
-						'Element',
-						'insertAdjacentElement',
-					);
-
-					if (!targetElement) return;
-
-					insert(insertElement, targetElement, () =>
-						usePrototype(that, nativeElement, (element) =>
-							insertAdjacent(targetElement, position, element, insertElement),
-						),
-					);
+					const position = adjacentPosition(args[0], 'insertAdjacentElement');
+					return insertAdjacent(that, position, args[1] as Element)
+						? args[1]
+						: null;
 				},
 			);
 
@@ -824,26 +798,33 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						'Element',
 						'insertAdjacentHTML',
 					);
-
-					const position = String(args[0]);
-					const insertFragment: DocumentFragment = cloneRawNode(
-						parseHTMLFragment(String(args[1]), this.client.global.document),
-						this.client.global.document,
-					);
-					const targetElement = insertAdjacentTarget(
-						position,
-						that,
-						'Element',
-						'insertAdjacentHTML',
-					);
-
-					if (!targetElement) return;
-
-					insert(insertFragment, targetElement, () =>
-						usePrototype(that, nativeElement, (element) =>
-							insertAdjacent(targetElement, position, element, insertFragment),
+					const position = adjacentPosition(args[0], 'insertAdjacentHTML');
+					let context: Node | null = that;
+					if (position === 'beforebegin' || position === 'afterend') {
+						context = parentOf(that);
+						if (context === null || nodeTypeOf(context) === 9)
+							throw new this.client.global.DOMException(
+								"Failed to execute 'insertAdjacentHTML' on 'Element': The element has no parent.",
+								'NoModificationAllowedError',
+							);
+					}
+					const document = this.client.global.document;
+					const fragment = cloneRawNode(
+						parseHTMLFragmentIn(
+							String(args[1]),
+							nodeTypeOf(context) === 1 &&
+								!(
+									(context as Element).localName === 'html' &&
+									(context as Element).namespaceURI ===
+										'http://www.w3.org/1999/xhtml'
+								)
+								? (context as Element)
+								: null,
+							document,
 						),
-					);
+						document,
+					) as DocumentFragment;
+					insertAdjacent(that, position, fragment);
 				},
 			);
 

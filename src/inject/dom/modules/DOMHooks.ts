@@ -21,7 +21,7 @@ import DocumentClient, {
 import cloneRawNode, {
 	inertDocumentOf,
 	isHTMLTemplate,
-	parseHTMLFragment,
+	parseHTMLFragmentIn,
 	releaseMarkup,
 	templateContentDocument,
 } from '../cloneNode';
@@ -829,14 +829,16 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			set: proxyModule.wrapFunction(
 				innerHTMLDescriptor.set!,
 				(target, that: Element, args) => {
+					// null is the empty string ([LegacyNullToEmptyString])
+					const markup = args[0] === null ? '' : String(args[0]);
 					const kind = this.client.styleKind(that);
-					if (kind === 'html') return setStyleText(that, String(args[0]));
+					if (kind === 'html') return setStyleText(that, markup);
 					// an SVG <style> parses its markup as markup (measured: an
 					// element in it stays one); what it makes goes in through the
 					// insertion hook, which routes the text going into a style
 					if (kind === 'svg') {
 						const nodes = cloneRawNode(
-							parseHTMLFragment(args[0], this.client.global.document),
+							parseHTMLFragmentIn(markup, that, this.client.global.document),
 							this.client.global.document,
 						);
 						usePrototype(that, nativeElement, (element) => {
@@ -854,10 +856,15 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 									node.remove();
 
 								// made in the content's own inert document, as the
-								// browser parses it: nothing in it is constructed
+								// browser parses it (in the template's context): nothing
+								// in it is constructed
 								element.content.append(
 									cloneRawNode(
-										parseHTMLFragment(args[0], this.client.global.document),
+										parseHTMLFragmentIn(
+											markup,
+											that,
+											this.client.global.document,
+										),
 										templateContentDocument(element),
 									),
 								);
@@ -868,11 +875,18 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							if (element.nodeName === 'SCRIPT') {
 								// allow the bad practice of setting the script's innerHTML
 								// scripts cannot support nodes as content
-								element.append(new Text(args[0]));
+								element.append(new Text(markup));
 							} else {
+								// parsed in the element's context, as the browser does:
+								// a table section's rows, an <svg>'s SVG, a <textarea>'s
+								// text
 								element.append(
 									cloneRawNode(
-										parseHTMLFragment(args[0], this.client.global.document),
+										parseHTMLFragmentIn(
+											markup,
+											that,
+											this.client.global.document,
+										),
 										this.client.global.document,
 									),
 								);
@@ -900,9 +914,32 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			set: proxyModule.wrapFunction(
 				outerHTMLDescriptor.set!,
 				(target, that: Element, args) => {
+					// as the browser: nothing without a parent, an error under the
+					// document, and the markup parsed in the parent's context (a
+					// fragment's is the body's)
+					const parent = usePrototype(
+						that,
+						nativeNode,
+						(node) => node.parentNode,
+					);
+					if (parent === null) return;
+					const parentType = usePrototype(
+						parent,
+						nativeNode,
+						(node) => node.nodeType,
+					);
+					if (parentType === 9)
+						throw new this.client.global.DOMException(
+							"Failed to set the 'outerHTML' property on 'Element': This element's parent is a Document, which may not be modified.",
+							'NoModificationAllowedError',
+						);
 					that.replaceWith(
 						cloneRawNode(
-							parseHTMLFragment(args[0], this.client.global.document),
+							parseHTMLFragmentIn(
+								args[0] === null ? '' : String(args[0]),
+								parentType === 1 ? (parent as Element) : null,
+								this.client.global.document,
+							),
 							this.client.global.document,
 						),
 					);
@@ -916,12 +953,21 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// hands over the serialisation, markers included. The fragment parser
 		// never runs a script, so none is rewritten here. The copy is made in
 		// an inert document (see inertDocumentOf).
-		const rewriteMarkup = (markup: unknown): string => {
+		const rewriteMarkup = (
+			markup: unknown,
+			context: Element | null,
+		): string => {
 			const inert = inertDocumentOf(this.client.global.document);
 			const div = inert.createElement('div');
+			// parsed in the context the browser parses it in next, so the
+			// serialisation keeps what that context keeps (a section's rows)
 			div.append(
 				cloneRawNode(
-					parseHTMLFragment(String(markup), this.client.global.document),
+					parseHTMLFragmentIn(
+						String(markup),
+						context,
+						this.client.global.document,
+					),
 					inert,
 				),
 			);
@@ -993,7 +1039,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						// shadow root is made in a style)
 						if (kind === 'svg')
 							return Reflect.apply(hookedInnerHTMLSet, that, [args[0]]);
-						if (args.length) args[0] = rewriteMarkup(args[0]);
+						if (args.length)
+							args[0] = rewriteMarkup(
+								args[0],
+								(that as Node).nodeType === 1
+									? (that as Element)
+									: ((that as ShadowRoot).host ?? null),
+							);
 						const result = Reflect.apply(target, that, args);
 						this.client.sweepFrames?.();
 						return result;
@@ -1025,7 +1077,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				set: proxyModule.wrapFunction(
 					shadowInnerHTML.set,
 					(target, that: ShadowRoot, args) => {
-						Reflect.apply(target, that, [rewriteMarkup(args[0])]);
+						Reflect.apply(target, that, [
+							rewriteMarkup(args[0], that.host ?? null),
+						]);
 						this.client.sweepFrames?.();
 					},
 				),

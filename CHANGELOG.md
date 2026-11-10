@@ -972,6 +972,23 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   fixture sites get and the console's messages; its sites need a TLS host,
   which the demo reaches through a test-only transport
   (`STOMP_TEST_TRANSPORT=1`, demo/public/test/mixed-transport.mjs).
+- Markup a page sets parses in the element's own context, as the
+  browser's fragment parser does. `innerHTML`, `outerHTML`,
+  `insertAdjacentHTML`, `setHTMLUnsafe` and a shadow root's `innerHTML`
+  parsed every string as the body's content: a `<tbody>`'s rows lost their
+  `<tr>` and `<td>` (only the text was left; browserleaks' tables ran their
+  cells together, and its ECH table lost the tabs between them), an
+  `<svg>`'s children were HTML elements, a `<textarea>`'s or `<title>`'s
+  markup became elements, a `<colgroup>` got no columns, a cell's
+  `outerHTML` left text. `outerHTML` does nothing without a parent and
+  throws Chrome's NoModificationAllowedError under the document; `null`
+  sets nothing. The insertAdjacent methods take the position in any case
+  (`beforeEnd`), `insertAdjacentElement` returns the element (or null with
+  no parent) where it returned nothing, `insertAdjacentText` into an empty
+  element no longer adds a text node reading "undefined", `afterend` no
+  longer writes the next sibling to the console, and a bad position, a
+  missing parent or a non-element throw Chrome's errors (fragment-context
+  suite, both modes, against native).
 - `localStorage` and `sessionStorage` work in a srcdoc frame. Its inject
   resolved the proxy's own storage route against the frame's location,
   `about:srcdoc`, and every call threw "Failed to construct 'URL':

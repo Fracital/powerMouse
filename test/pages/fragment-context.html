@@ -1,0 +1,120 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>FRAGMENT CONTEXT</title>
+	</head>
+	<body>
+		<script>
+			// Markup a page sets on an element parses in that element's context,
+			// as the browser's fragment parser does: rows in a table section,
+			// SVG in an <svg>, text in a <textarea> or <title>, columns in a
+			// <colgroup>, cells for a cell's outerHTML. And the insertAdjacent
+			// methods: any case of the position, what they return, an empty
+			// element, and the errors of a bad position or a missing parent.
+			const shape = (node) =>
+				[...node.childNodes]
+					.map((child) =>
+						child.nodeType === 1
+							? `${child.namespaceURI.split('/').pop()}:${child.localName}(${shape(child)})`
+							: child.nodeType === 3
+								? JSON.stringify(child.data)
+								: `#${child.nodeType}`,
+					)
+					.join(',');
+			const error = (run) => {
+				try {
+					const value = run();
+					return value === undefined
+						? 'undefined'
+						: value === null
+							? 'null'
+							: typeof value === 'object'
+								? (value.nodeName ?? String(value))
+								: String(value);
+				} catch (e) {
+					return `${e.name}: ${e.message}`;
+				}
+			};
+			const r = {};
+			const table = document.createElement('table');
+			const body = table.createTBody();
+			body.innerHTML = '<tr><td>a</td><td>b</td></tr>';
+			r.tbody = shape(body);
+			const row = body.rows[0];
+			row.cells[0].outerHTML = '<td>1</td><td>2</td>';
+			r.cellOuter = shape(row);
+			row.innerHTML = '<td>x</td>';
+			r.tr = shape(row);
+			const colgroup = document.createElement('colgroup');
+			colgroup.innerHTML = '<col><col span=2>';
+			r.colgroup = shape(colgroup);
+			const select = document.createElement('select');
+			select.innerHTML = '<option>a<optgroup label=g><option>b';
+			r.select = shape(select);
+			const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+			svg.innerHTML = '<circle r="1"/><foreignObject><b>x</b></foreignObject>';
+			r.svg = shape(svg);
+			const textarea = document.createElement('textarea');
+			textarea.innerHTML = '<b>x</b>';
+			r.textarea = shape(textarea) + ' value ' + textarea.value;
+			const title = document.createElement('title');
+			title.innerHTML = '<i>t</i>';
+			r.title = shape(title);
+			const div = document.createElement('div');
+			div.innerHTML = '<tr><td>loose</td></tr>';
+			r.divRows = shape(div);
+			const template = document.createElement('template');
+			template.innerHTML = '<tr><td>t</td></tr>';
+			r.template = shape(template.content);
+			// insertAdjacent*
+			const list = document.createElement('tbody');
+			list.insertAdjacentHTML('beforeEnd', '<tr><td>1</td></tr>');
+			list.insertAdjacentHTML('AFTERBEGIN', '<tr><td>0</td></tr>');
+			r.adjacentRows = shape(list);
+			const empty = document.createElement('div');
+			r.adjacentTextReturn = error(() =>
+				empty.insertAdjacentText('afterbegin', 'x'),
+			);
+			r.adjacentEmpty = shape(empty);
+			const host = document.createElement('div');
+			const child = document.createElement('span');
+			host.append(child);
+			r.adjacentElementReturn = error(() =>
+				child.insertAdjacentElement('afterEnd', document.createElement('i')),
+			);
+			r.adjacentElementBefore = error(() =>
+				child.insertAdjacentElement('beforebegin', document.createElement('b')),
+			);
+			r.adjacentHost = shape(host);
+			const orphan = document.createElement('p');
+			r.orphanElement = error(() =>
+				orphan.insertAdjacentElement(
+					'beforebegin',
+					document.createElement('b'),
+				),
+			);
+			r.orphanText = error(() => orphan.insertAdjacentText('afterend', 'x'));
+			r.orphanHTML = error(() =>
+				orphan.insertAdjacentHTML('afterend', '<b>x</b>'),
+			);
+			r.badPosition = error(() => host.insertAdjacentHTML('middle', 'x'));
+			r.badPositionElement = error(() =>
+				host.insertAdjacentElement('middle', document.createElement('b')),
+			);
+			r.notElement = error(() => host.insertAdjacentElement('beforeend', 'x'));
+			r.orphanOuter = error(() => {
+				orphan.outerHTML = '<b>x</b>';
+			});
+			r.documentOuter = error(() => {
+				document.documentElement.outerHTML = '<html></html>';
+			});
+			const fragment = document.createDocumentFragment();
+			const inFragment = document.createElement('td');
+			fragment.append(inFragment);
+			inFragment.outerHTML = '<tr><td>f</td></tr>';
+			r.fragmentOuter = shape(fragment);
+			window.__fragment = r;
+		</script>
+	</body>
+</html>
