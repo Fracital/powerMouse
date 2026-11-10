@@ -1,0 +1,16 @@
+<!doctype html>
+<title>SOP PARTITION A</title>
+<body>
+	<script>
+		// another site's page framing B (sop-partitions suite): keeps what the
+		// frame reports
+		const query = new URLSearchParams(location.search);
+		const b = query.get('b');
+		addEventListener('message', (event) => {
+			if (event.data?.sopPart) window.__part = event.data.sopPart;
+		});
+		const frame = document.createElement('iframe');
+		frame.src = `${b}/pages/sop-part.html?role=frame&t=${query.get('t')}`;
+		document.body.append(frame);
+	</script>
+</body>

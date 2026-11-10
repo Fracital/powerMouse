@@ -1,0 +1,21 @@
+<!doctype html>
+<title>SOP NAV</title>
+<script>
+	// a frame's history across two sites (sop battery): this page navigates
+	// on to `?next=`, and the last one tells its parent which entries of the
+	// frame's history it can see
+	const next = new URLSearchParams(location.search).get('next');
+	if (next) setTimeout(() => location.assign(next), 50);
+	else
+		parent.postMessage(
+			{
+				sop: 'nav',
+				seen: {
+					entries: navigation.entries().map((entry) => entry.url),
+					index: navigation.currentEntry.index,
+					canGoBack: navigation.canGoBack,
+				},
+			},
+			'*',
+		);
+</script>

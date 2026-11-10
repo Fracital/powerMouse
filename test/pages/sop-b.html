@@ -1,0 +1,43 @@
+<!doctype html>
+<title>SOP B</title>
+<script>
+	// the other site's document in the sop battery: it writes to every store
+	// and holds a lock, then reports to its framing page, which must see none
+	// of it; it repeats what it is asked to say and broadcasts on request
+	(async () => {
+		const a = new URLSearchParams(location.search).get('a');
+		const wrote = [];
+		try {
+			localStorage.setItem('sop', 'B');
+			sessionStorage.setItem('sop', 'B');
+			wrote.push('storage');
+		} catch (error) {
+			wrote.push(`storage ${error.name}`);
+		}
+		document.cookie = 'sopb=1; path=/';
+		await new Promise((resolve) => {
+			const open = indexedDB.open('sop-b');
+			open.onsuccess = open.onerror = resolve;
+		});
+		// a megabyte the framing page's usage must not count
+		await caches
+			.open('sop-b')
+			.then((cache) =>
+				cache.put('/sop-b-megabyte', new Response(new Uint8Array(1 << 20))),
+			)
+			.catch(() => {});
+		if (navigator.locks)
+			navigator.locks.request('sop-lock', () => new Promise(() => {}));
+		wrote.push('done');
+		const channel = new BroadcastChannel('sop');
+		addEventListener('message', (event) => {
+			if (event.data?.sop === 'broadcast') channel.postMessage('B speaks');
+			if (event.data?.sop === 'say')
+				parent.postMessage({ sop: 'heard', what: event.data.what }, '*');
+		});
+		parent.postMessage(
+			{ sop: 'ready', wrote, referrer: document.referrer },
+			'*',
+		);
+	})();
+</script>
