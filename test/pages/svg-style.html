@@ -1,0 +1,245 @@
+<!doctype html>
+<title>SVG STYLE</title>
+<!-- An SVG <style> in inline SVG, in an HTML page. Part one inserts
+     <div><svg><style>rect{fill:red}</style><rect/></svg></div> into a
+     connected parent each way (natively nothing throws and the rect is red).
+     Part two puts CSS text with an @import and a background url() into an
+     SVG <style> each way a script can, each marked ?style=<way> (the import
+     <way>-import): through the proxy a raw request to this origin is a
+     bypass. The page records what throws and what each style reads back. -->
+<body>
+	<svg width="4" height="4">
+		<style id="s-parsed">
+			@import url('imp.css?style=parsed-import');
+			.w-parsed {
+				background-image: url('sprite.svg?style=parsed');
+			}
+		</style>
+	</svg>
+	<div class="w-parsed" style="width: 4px; height: 4px"></div>
+	<script>
+		const SVG = 'http://www.w3.org/2000/svg';
+		const errors = {};
+		const uncaught = [];
+		window.addEventListener('error', (event) =>
+			uncaught.push(String(event.message)),
+		);
+
+		// part one: the shape that threw on Wikipedia, each rect its own class
+		// so one way's style cannot paint another's rect
+		const fills = {};
+		const shape = (way) =>
+			`<svg><style>rect.f-${way}{fill:red}</style><rect class="f-${way}" width="4" height="4"/></svg>`;
+		// built top-down, so only the last insertion carries a style inside
+		// an element
+		const built = (way) => {
+			const div = document.createElement('div');
+			const svg = document.createElementNS(SVG, 'svg');
+			div.appendChild(svg);
+			const style = document.createElementNS(SVG, 'style');
+			style.textContent = `rect.f-${way}{fill:red}`;
+			svg.appendChild(style);
+			const rect = document.createElementNS(SVG, 'rect');
+			rect.setAttribute('class', `f-${way}`);
+			rect.setAttribute('width', '4');
+			rect.setAttribute('height', '4');
+			svg.appendChild(rect);
+			return div;
+		};
+		const shapes = {
+			'append-child': () => document.body.appendChild(built('append-child')),
+			append: () => document.body.append(built('append')),
+			'inner-html': () => {
+				const div = document.createElement('div');
+				div.innerHTML = shape('inner-html');
+				document.body.append(div);
+			},
+			'insert-adjacent-html': () =>
+				document.body.insertAdjacentHTML(
+					'beforeend',
+					`<div>${shape('insert-adjacent-html')}</div>`,
+				),
+		};
+		for (const [way, run] of Object.entries(shapes)) {
+			try {
+				run();
+			} catch (error) {
+				errors[`shape-${way}`] = String(error).slice(0, 80);
+			}
+		}
+
+		// part two: CSS text that loads, into an SVG <style>
+		const mark = (name) =>
+			new URL(`sprite.svg?style=${name}`, location.href).href;
+		const imp = (name) =>
+			new URL(`imp.css?style=${name}-import`, location.href).href;
+		const rule = (name) =>
+			`.w-${name} { background-image: url('${mark(name)}'); }`;
+		const css = (name) => `@import url('${imp(name)}');\n${rule(name)}`;
+		const styles = {};
+		// a connected <svg> for `name`, and a box its rule paints
+		const host = (name) => {
+			const svg = document.createElementNS(SVG, 'svg');
+			svg.setAttribute('width', '4');
+			svg.setAttribute('height', '4');
+			document.body.append(svg);
+			const box = document.createElement('div');
+			box.className = `w-${name}`;
+			box.style.cssText = 'width: 4px; height: 4px';
+			document.body.append(box);
+			return svg;
+		};
+		const svgStyle = (text) => {
+			const style = document.createElementNS(SVG, 'style');
+			if (text) style.textContent = text;
+			return style;
+		};
+		// an empty SVG <style>, connected
+		const connected = (name) => {
+			const style = svgStyle();
+			host(name).appendChild(style);
+			return style;
+		};
+		const ways = {
+			'append-child': (name) => host(name).appendChild(svgStyle(css(name))),
+			append: (name) => {
+				const style = svgStyle(css(name));
+				host(name).append(style);
+				return style;
+			},
+			'insert-before': (name) =>
+				host(name).insertBefore(svgStyle(css(name)), null),
+			// an element holding the style goes in: the query path
+			'container-append': (name) => {
+				const svg = document.createElementNS(SVG, 'svg');
+				const div = document.createElement('div');
+				div.appendChild(svg);
+				svg.appendChild(svgStyle(css(name)));
+				host(name);
+				document.body.append(div);
+				return svg.firstChild;
+			},
+			'inner-html': (name) => {
+				host(name);
+				const div = document.createElement('div');
+				document.body.append(div);
+				div.innerHTML = `<svg><style>${css(name)}</style></svg>`;
+				return div.firstChild.firstChild;
+			},
+			'insert-adjacent-html': (name) => {
+				host(name).insertAdjacentHTML(
+					'afterend',
+					`<svg><style>${css(name)}</style></svg>`,
+				);
+				return document.body.lastChild.firstChild;
+			},
+			// markup parsed in an SVG element's context: natively an SVG
+			// <style>, through the proxy an HTML one (the fragment is parsed in
+			// an HTML context, a known gap); its text loads through the proxy
+			// either way
+			'svg-inner-html': (name) => {
+				const svg = host(name);
+				svg.innerHTML = `<style>${css(name)}</style>`;
+				return svg.firstChild;
+			},
+			'svg-insert-adjacent-html': (name) => {
+				const svg = host(name);
+				svg.insertAdjacentHTML('beforeend', `<style>${css(name)}</style>`);
+				return svg.lastChild;
+			},
+			'text-content': (name) => {
+				const style = connected(name);
+				style.textContent = css(name);
+				return style;
+			},
+			'style-inner-html': (name) => {
+				const style = connected(name);
+				style.innerHTML = css(name);
+				return style;
+			},
+			'style-set-html-unsafe': (name) => {
+				const style = connected(name);
+				style.setHTMLUnsafe(css(name));
+				return style;
+			},
+			'append-text': (name) => {
+				const style = connected(name);
+				style.append(css(name));
+				return style;
+			},
+			'append-child-text': (name) => {
+				const style = connected(name);
+				style.appendChild(document.createTextNode(css(name)));
+				return style;
+			},
+			'text-data': (name) => {
+				const style = connected(name);
+				const text = document.createTextNode('');
+				style.appendChild(text);
+				text.data = css(name);
+				return style;
+			},
+			'append-data': (name) => {
+				const style = connected(name);
+				const text = document.createTextNode('');
+				style.appendChild(text);
+				text.appendData(css(name));
+				return style;
+			},
+			'insert-rule': (name) => {
+				const style = connected(name);
+				style.sheet.insertRule(rule(name), 0);
+				style.sheet.insertRule(`@import url('${imp(name)}');`, 0);
+				return style;
+			},
+		};
+		for (const [name, run] of Object.entries(ways)) {
+			try {
+				styles[name] = run(name);
+			} catch (error) {
+				errors[name] = String(error).slice(0, 80);
+			}
+		}
+		styles.parsed = document.getElementById('s-parsed');
+
+		const finish = () => {
+			for (const way of Object.keys(shapes)) {
+				const rect = document.querySelector(`rect.f-${way}`);
+				fills[way] = rect && getComputedStyle(rect).fill;
+			}
+			const read = {};
+			for (const [name, style] of Object.entries(styles)) {
+				if (!style) {
+					read[name] = null;
+					continue;
+				}
+				let rules = null;
+				try {
+					rules = [...style.sheet.cssRules].map((rule) => rule.cssText);
+				} catch (error) {
+					rules = String(error).slice(0, 80);
+				}
+				read[name] = {
+					namespace: style.namespaceURI,
+					textContent: style.textContent.trim(),
+					rules,
+				};
+			}
+			window.__svgStyle = {
+				done: true,
+				errors,
+				uncaught,
+				fills,
+				ways: ['parsed', ...Object.keys(ways)],
+				read,
+			};
+		};
+		setTimeout(() => {
+			try {
+				finish();
+			} catch (error) {
+				window.__svgStyle = { done: true, fatal: String(error) };
+			}
+		}, 1500);
+	</script>
+</body>
