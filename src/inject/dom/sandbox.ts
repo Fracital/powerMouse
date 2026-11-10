@@ -117,10 +117,12 @@ const nativeChildNodes = Reflect.getOwnPropertyDescriptor(
 	'childNodes',
 )!.get!;
 
-const nativeTextContentSet = Reflect.getOwnPropertyDescriptor(
+const nativeTextContent = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
 	'textContent',
-)!.set!;
+)!;
+const nativeTextContentSet = nativeTextContent.set!;
+const nativeTextContentGet = nativeTextContent.get!;
 
 /**
  * Keep what `<noscript>` holds as its text, as a document that runs scripts
@@ -139,6 +141,42 @@ export function textifyNoscript(
 		'noscript',
 	]) as Iterable<Element>)
 		Reflect.apply(nativeTextContentSet, element, [innerHTML(element)]);
+}
+
+/**
+ * The markup of `root`'s children as a document that runs scripts
+ * serializes them: a noscript element's text (textifyNoscript) raw. A copy
+ * made in an inert document, where scripting is disabled, escapes it, and
+ * the parser of the document it is written into would read `&lt;style&gt;`
+ * where the page wrote `<style>`. Each noscript's text stands in as a token
+ * while the copy is serialized and goes back raw.
+ */
+export function serializeScripted(
+	root: Element,
+	innerHTML: (element: Element) => string,
+): string {
+	const noscripts = [
+		...(Reflect.apply(nativeQuerySelectorAll, root, [
+			'noscript',
+		]) as Iterable<Element>),
+	];
+	if (!noscripts.length) return innerHTML(root);
+	const token = `$stomp$noscript${Math.random().toString(36).slice(2)}`;
+	const texts: string[] = [];
+	for (const element of noscripts) {
+		texts.push(Reflect.apply(nativeTextContentGet, element, []) as string);
+		Reflect.apply(nativeTextContentSet, element, [
+			`${token}:${texts.length - 1};`,
+		]);
+	}
+	const html = innerHTML(root);
+	noscripts.forEach((element, index) =>
+		Reflect.apply(nativeTextContentSet, element, [texts[index]]),
+	);
+	return html.replace(
+		new RegExp(`${token.replace(/\$/g, '\\$')}:(\\d+);`, 'g'),
+		(match, index) => texts[Number(index)],
+	);
 }
 
 /**

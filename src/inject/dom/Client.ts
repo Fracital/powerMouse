@@ -26,6 +26,7 @@ import {
 	guardDocument,
 	pageSandbox,
 	sandboxTokens,
+	serializeScripted,
 	stripScripts,
 	textifyNoscript,
 	unwrapNoscript,
@@ -847,7 +848,7 @@ export default class DocumentClient extends Client {
 
 		const newDocument =
 			(parsed.doctype ? `<!DOCTYPE ${parsed.doctype.name}>` : '') +
-			this.innerHTML(node);
+			serializeScripted(node, this.innerHTML);
 		// the copy was made to be serialized (see releaseMarkup)
 		releaseMarkup(node);
 
