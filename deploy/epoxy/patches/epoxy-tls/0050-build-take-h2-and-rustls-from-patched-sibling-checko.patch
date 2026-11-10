@@ -1,0 +1,29 @@
+From eb3039aec537c2d75926e8cc8f5a25cd7781064e Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 23:10:42 -0500
+Subject: [PATCH 50/53] build: take h2 and rustls from patched sibling
+ checkouts
+
+---
+ Cargo.toml | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 87aaab3..00741c6 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -11,7 +11,13 @@ codegen-units = 1
+ opt-level = 3
+ 
+ [patch.crates-io]
+-h2 = { git = "https://github.com/r58Playz/h2-wasm" }
++# The sibling checkout is r58Playz/h2-wasm at the revision Cargo.lock pinned,
++# carrying deploy/epoxy/patches/h2-wasm (Chrome's pseudo-header order and
++# HEADERS priority).
++h2 = { path = "../h2-wasm" }
++# The sibling checkout is the rustls release Cargo.lock pinned, carrying
++# deploy/epoxy/patches/rustls (a Chrome-shaped ClientHello).
++rustls = { path = "../rustls" }
+ # The sibling checkout carries deploy/epoxy/patches/hyper (reads a lone CR
+ # in an HTTP/1 response head as Chrome does instead of refusing the response).
+ hyper = { path = "../hyper" }

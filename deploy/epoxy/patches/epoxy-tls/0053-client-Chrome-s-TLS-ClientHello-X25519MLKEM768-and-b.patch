@@ -1,0 +1,194 @@
+From 6ceb02d0ff6910de66f915d514fc944e467c38d1 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 23:21:20 -0500
+Subject: [PATCH 53/53] client: Chrome's TLS ClientHello, X25519MLKEM768 and
+ brotli certificates
+
+HTTP and WebSocket connections turn on rustls's chrome_hello (patched
+rustls), offer Chrome's groups in its order with X25519MLKEM768 first (ring's
+X25519 with the RustCrypto ml-kem crate; rustls has the hybrid only on
+aws-lc-rs) and decompress brotli certificates, the one compression Chrome
+offers.
+---
+ client/Cargo.toml             |  6 ++-
+ client/src/stream_provider.rs | 25 ++++++++++
+ client/src/utils/mlkem.rs     | 92 +++++++++++++++++++++++++++++++++++
+ client/src/utils/mod.rs       |  2 +
+ 4 files changed, 124 insertions(+), 1 deletion(-)
+ create mode 100644 client/src/utils/mlkem.rs
+
+diff --git a/client/Cargo.toml b/client/Cargo.toml
+index b930c43..20dac3b 100644
+--- a/client/Cargo.toml
++++ b/client/Cargo.toml
+@@ -37,6 +37,10 @@ web-sys = { version = "0.3.70", features = ["BinaryType", "Headers", "MessageEve
+ webpki-roots = "1.0.10"
+ wisp-mux = { version = "*", path = "../wisp", features = ["wasm"], default-features = false }
+ 
++ml-kem = { version = "0.2.1", optional = true }
++rand_core = { version = "0.6.4", features = ["getrandom"], optional = true }
++rustls = { version = "0.23.29", default-features = false, features = ["brotli"], optional = true }
++
+ [dependencies.getrandom]
+ version = "*"
+ features = ["js"]
+@@ -59,5 +63,5 @@ features = ["wasm-bindgen"]
+ 
+ [features]
+ default = ["full"]
+-full = ["dep:fastwebsockets", "dep:async-compression", "dep:rustls-webpki", "dep:rustls-pemfile", "hyper-util-wasm/http2"]
++full = ["dep:fastwebsockets", "dep:async-compression", "dep:rustls-webpki", "dep:rustls-pemfile", "hyper-util-wasm/http2", "dep:ml-kem", "dep:rand_core", "dep:rustls"]
+ 
+diff --git a/client/src/stream_provider.rs b/client/src/stream_provider.rs
+index 7b46a8e..b356248 100644
+--- a/client/src/stream_provider.rs
++++ b/client/src/stream_provider.rs
+@@ -80,6 +80,21 @@ impl StreamProvider {
+ 		wisp_generator: ProviderWispTransportGenerator,
+ 		options: &EpoxyClientOptions,
+ 	) -> Result<Self, EpoxyError> {
++		// Chrome's groups in its order: X25519MLKEM768 (with a separate
++		// X25519 share), X25519, P-256, P-384
++		#[cfg(feature = "full")]
++		let provider = {
++			use futures_rustls::rustls::crypto::ring::kx_group;
++			let mut provider = futures_rustls::rustls::crypto::ring::default_provider();
++			provider.kx_groups = vec![
++				crate::utils::mlkem::X25519_MLKEM768,
++				kx_group::X25519,
++				kx_group::SECP256R1,
++				kx_group::SECP384R1,
++			];
++			Arc::new(provider)
++		};
++		#[cfg(not(feature = "full"))]
+ 		let provider = Arc::new(futures_rustls::rustls::crypto::ring::default_provider());
+ 		let client_config = ClientConfig::builder_with_provider(provider.clone())
+ 			.with_safe_default_protocol_versions()?;
+@@ -109,6 +124,16 @@ impl StreamProvider {
+ 		}
+ 		.with_no_client_auth();
+ 		let no_alpn_client_config = Arc::new(client_config.clone());
++		#[cfg(feature = "full")]
++		{
++			// what a page's requests go out with should be what the browser
++			// it runs in sends: Chrome's ClientHello (GREASE, its suites,
++			// extensions and their random order, ALPS, GREASE ECH) and the
++			// one certificate compression it offers, brotli
++			client_config.chrome_hello = true;
++			client_config.cert_decompressors =
++				vec![futures_rustls::rustls::compress::BROTLI_DECOMPRESSOR];
++		}
+ 		let mut ws_config = client_config.clone();
+ 		#[cfg(feature = "full")]
+ 		{
+diff --git a/client/src/utils/mlkem.rs b/client/src/utils/mlkem.rs
+new file mode 100644
+index 0000000..b31d2f8
+--- /dev/null
++++ b/client/src/utils/mlkem.rs
+@@ -0,0 +1,92 @@
++//! X25519MLKEM768 (draft-ietf-tls-ecdhe-mlkem), the key exchange Chrome
++//! offers first. rustls has it only on aws-lc-rs, which does not build for
++//! wasm32-unknown-unknown; this one pairs ring's X25519 with the RustCrypto
++//! `ml-kem` crate (pure Rust). Shares and the secret put ML-KEM first.
++
++use futures_rustls::rustls::{
++	crypto::{ring::kx_group::X25519, ActiveKeyExchange, SharedSecret, SupportedKxGroup},
++	Error, NamedGroup, PeerMisbehaved, ProtocolVersion,
++};
++use ml_kem::{kem::Decapsulate, Ciphertext, EncodedSizeUser, KemCore, MlKem768};
++
++const MLKEM768_ENCAPSULATION_KEY_LEN: usize = 1184;
++const MLKEM768_CIPHERTEXT_LEN: usize = 1088;
++const X25519_LEN: usize = 32;
++
++#[derive(Debug)]
++struct X25519MlKem768;
++
++pub static X25519_MLKEM768: &dyn SupportedKxGroup = &X25519MlKem768;
++
++impl SupportedKxGroup for X25519MlKem768 {
++	fn start(&self) -> Result<Box<dyn ActiveKeyExchange>, Error> {
++		let classical = X25519.start()?;
++		let (decapsulation_key, encapsulation_key) = MlKem768::generate(&mut rand_core::OsRng);
++		let mut combined_pub_key = encapsulation_key.as_bytes().to_vec();
++		debug_assert_eq!(combined_pub_key.len(), MLKEM768_ENCAPSULATION_KEY_LEN);
++		combined_pub_key.extend_from_slice(classical.pub_key());
++		Ok(Box::new(Active {
++			classical,
++			decapsulation_key,
++			combined_pub_key,
++		}))
++	}
++
++	fn name(&self) -> NamedGroup {
++		NamedGroup::X25519MLKEM768
++	}
++
++	fn usable_for_version(&self, version: ProtocolVersion) -> bool {
++		version == ProtocolVersion::TLSv1_3
++	}
++}
++
++struct Active {
++	classical: Box<dyn ActiveKeyExchange>,
++	decapsulation_key: <MlKem768 as KemCore>::DecapsulationKey,
++	combined_pub_key: Vec<u8>,
++}
++
++fn invalid_share() -> Error {
++	PeerMisbehaved::InvalidKeyShare.into()
++}
++
++impl ActiveKeyExchange for Active {
++	fn complete(self: Box<Self>, peer_pub_key: &[u8]) -> Result<SharedSecret, Error> {
++		if peer_pub_key.len() != MLKEM768_CIPHERTEXT_LEN + X25519_LEN {
++			return Err(invalid_share());
++		}
++		let (ciphertext, classical_share) = peer_pub_key.split_at(MLKEM768_CIPHERTEXT_LEN);
++		let ciphertext =
++			Ciphertext::<MlKem768>::try_from(ciphertext).map_err(|_| invalid_share())?;
++		let post_quantum = self
++			.decapsulation_key
++			.decapsulate(&ciphertext)
++			.map_err(|()| invalid_share())?;
++		let classical = self.classical.complete(classical_share)?;
++
++		let mut secret = post_quantum.to_vec();
++		secret.extend_from_slice(classical.secret_bytes());
++		Ok(SharedSecret::from(secret))
++	}
++
++	/// Chrome also sends a plain X25519 share; rustls sends this one
++	fn hybrid_component(&self) -> Option<(NamedGroup, &[u8])> {
++		Some((self.classical.group(), self.classical.pub_key()))
++	}
++
++	fn complete_hybrid_component(
++		self: Box<Self>,
++		peer_pub_key: &[u8],
++	) -> Result<SharedSecret, Error> {
++		self.classical.complete(peer_pub_key)
++	}
++
++	fn pub_key(&self) -> &[u8] {
++		&self.combined_pub_key
++	}
++
++	fn group(&self) -> NamedGroup {
++		NamedGroup::X25519MLKEM768
++	}
++}
+diff --git a/client/src/utils/mod.rs b/client/src/utils/mod.rs
+index 776c3fb..eb0421e 100644
+--- a/client/src/utils/mod.rs
++++ b/client/src/utils/mod.rs
+@@ -1,5 +1,7 @@
+ mod js;
+ mod rustls;
++#[cfg(feature = "full")]
++pub mod mlkem;
+ pub use js::*;
+ use js_sys::Uint8Array;
+ pub use rustls::*;

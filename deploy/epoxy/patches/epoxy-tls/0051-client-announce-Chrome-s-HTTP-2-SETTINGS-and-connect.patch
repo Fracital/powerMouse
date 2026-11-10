@@ -1,0 +1,32 @@
+From f0c478926c2d1b01b504f7311d5f4ff176661368 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 23:10:49 -0500
+Subject: [PATCH 51/53] client: announce Chrome's HTTP/2 SETTINGS and
+ connection window
+
+---
+ client/src/lib.rs | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index 0cb3dd2..276b0e6 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -471,6 +471,17 @@ impl EpoxyClient {
+ 		// (cookies, report-only policies). Chrome allows 256 KiB; match it.
+ 		#[cfg(feature = "full")]
+ 		builder.http2_max_header_list_size(256 * 1024);
++		// the rest of Chrome's SETTINGS and its first WINDOW_UPDATE (the
++		// Akamai HTTP/2 fingerprint 1:65536;2:0;4:6291456;6:262144|15663105):
++		// a 64 KiB HPACK table, 6 MiB stream windows, a 15 MiB connection
++		// window, and no MAX_FRAME_SIZE (hyper announced 16384, the default)
++		#[cfg(feature = "full")]
++		builder
++			.http2_header_table_size(65536)
++			.http2_initial_stream_window_size(6 * 1024 * 1024)
++			.http2_initial_connection_window_size(15 * 1024 * 1024)
++			.http2_adaptive_window(false)
++			.http2_max_frame_size(None);
+ 		let client = builder.build(service);
+ 
+ 		Ok(Self {

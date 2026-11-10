@@ -13,11 +13,15 @@ the `malformed-headers` suite). And its WebSocket handshake goes out as
 Chrome's does: origin-form, with the port in Host, one User-Agent, Chrome's
 fields in Chrome's order, ALPN `http/1.1`, and the server's subprotocol
 reported (see the `ws-handshake` suite); TikTok's socket answered 400 to the
-absolute-form request line before. The build also carries stomp-h3, HTTP/3
-over wisp UDP for stomp's `http3` option (`h3/`, below).
+absolute-form request line before. And its TLS ClientHello, HTTP/2 SETTINGS,
+priorities and pseudo-header order, and its HTTP/1 field order and spelling
+are Chrome's (JA4, Akamai and JA4H equal to Chrome 152's; see
+`docs/fingerprint.md`). The build also carries stomp-h3, HTTP/3 over wisp
+UDP for stomp's `http3` option (`h3/`, below), whose QUIC ClientHello and
+transport parameters are Chrome's too.
 
 Nothing is forked in the sense of a diverging tree. `upstream.env` pins the
-four upstream revisions, `patches/` holds `git format-patch` output applied
+six upstream revisions, `patches/` holds `git format-patch` output applied
 on top of them, and `build.sh` does the rest in a container. Bumping upstream
 means changing a revision and rebuilding; a patch that no longer applies
 fails the build at `git apply --check`.
@@ -40,6 +44,18 @@ fails the build at `git apply --check`.
 | MercuryWorkshop/EpoxyTransport                                 | `0001` | Builds against the sibling epoxy-tls (`file:`), makes it a devDependency (it is bundled), pins TypeScript 5 for the type bundler, version `3.0.2-fracital.1`, stops ignoring `dist/`.                                                                                                                                                                             |
 | MercuryWorkshop/EpoxyTransport                                 | `0002` | `init()` loads the wasm module once per realm and builds one client per transport, however many calls overlap. Two concurrent inits instantiated the module twice and the client built on the replaced instance never answered.                                                                                                                                   |
 | MercuryWorkshop/EpoxyTransport                                 | `0003` | `connect` passes that subprotocol on to `onopen` (it reported `""`).                                                                                                                                                                                                                                                                                              |
+| r58Playz/h2-wasm (h2 for wasm, the revision Cargo.lock pins)   | `0050` | The client sends its pseudo-headers in Chrome's order, `:method :authority :scheme :path` (h2 wrote `:scheme` before `:authority`).                                                                                                                                                                                                                               |
+| r58Playz/h2-wasm                                               | `0051` | Every request's HEADERS frame carries a priority, exclusive, weighted by the request's `priority` field urgency as Chrome weighs it (u=0 is 256, u=1 220, none 147).                                                                                                                                                                                              |
+| r58Playz/h2-wasm                                               | `0052` | The priority's parent is the newest open stream of the same or a higher urgency, Chrome's HTTP/2 priority tree.                                                                                                                                                                                                                                                   |
+| rustls 0.23.29 (the crates.io release Cargo.lock pins)         | `0050` | `ClientConfig::chrome_hello`: Chrome's ClientHello (its cipher suites, GREASE everywhere Chrome puts it, SCT, renegotiation_info, ALPS with the client's EncryptedExtensions, a GREASE ECH, trust anchor ids, random extension order); SCT and trust anchor answers in certificate entries are skipped, ECH retry configs answering the GREASE ignored.           |
+| hyperium/hyper                                                 | `0050` | HTTP/1 title case spells field names as Chrome does: `sec-ch-*` lowercase, `Sec-WebSocket-*`, `DNT`.                                                                                                                                                                                                                                                              |
+| r58Playz/hyper-util-wasm                                       | `0050` | Exposes `http2_header_table_size` on the legacy client builder.                                                                                                                                                                                                                                                                                                   |
+| r58Playz/hyper-util-wasm                                       | `0051` | An HTTP/1 request starts with Host and Connection, as Chrome's does (Host went last), and leaves out the HTTP/2-only Priority field.                                                                                                                                                                                                                              |
+| MercuryWorkshop/epoxy-tls                                      | `0050` | `[patch.crates-io]` so h2 and rustls come from the sibling checkouts.                                                                                                                                                                                                                                                                                             |
+| MercuryWorkshop/epoxy-tls                                      | `0051` | Chrome's HTTP/2 SETTINGS (`1:65536;2:0;4:6291456;6:262144`, no MAX_FRAME_SIZE) and connection window (WINDOW_UPDATE 15663105).                                                                                                                                                                                                                                    |
+| MercuryWorkshop/epoxy-tls                                      | `0052` | Request fields go out in the caller's order behind Chrome's head (Content-Length, then the caller's; Connection last so HTTP/2 stripping keeps the order), Accept-Encoding `gzip, deflate, br, zstd` with deflate and zstd decoded too, HTTP/1 title case on.                                                                                                     |
+| MercuryWorkshop/epoxy-tls                                      | `0053` | HTTP and WebSocket connections use `chrome_hello`, Chrome's groups with X25519MLKEM768 (ring X25519 plus RustCrypto `ml-kem`) and brotli certificate decompression.                                                                                                                                                                                               |
+| MercuryWorkshop/EpoxyTransport                                 | `0050` | `fieldSupport` tells the host this build decodes every encoding Chrome offers and keeps Priority to HTTP/2 (stomp's serveTransport reads it).                                                                                                                                                                                                                     |
 
 ## stomp-h3 (`h3/`)
 
@@ -58,7 +74,16 @@ on and an origin offers h3 (docs/http3.md).
   checksum and applies `h3/patches/<crate>/*.patch` in order; `Cargo.toml`'s
   `[patch.crates-io]` points at `vendor/`. `h3/0001` writes request
   pseudo-headers in Chrome's order (`:method`, `:authority`, `:scheme`,
-  `:path`).
+  `:path`). It also vendors rustls 0.23.29 with epoxy's own
+  `patches/rustls` (`EPOXY_PATCHES`, `/patches` in the image), whose
+  `chrome_hello` gives the QUIC ClientHello Chrome's shape (no GREASE,
+  Chrome's QUIC extensions, ALPS for h3, a GREASE ECH), and quinn-proto
+  0.11.19 with `h3/patches/quinn-proto/0001` (Chrome's client transport
+  parameters: no min_ack_delay, a 65536 max_datagram_frame_size,
+  version_information and google_connection_options). `src/lib.rs` adds
+  X25519MLKEM768 (`src/mlkem.rs`, as in epoxy), brotli certificates, empty
+  source connection ids, an 8-byte first destination id and no greased
+  fixed bit, as Chrome's client.
 - `out/UPSTREAM` ends with a `stomp-h3 <hash>` line naming the sources that
   went in.
 
@@ -75,7 +100,8 @@ deploy/epoxy/build.sh          # docker or podman; 10 to 20 minutes
 
 The container installs the Rust nightly, wasm32 target, `wasm-bindgen 0.2.100`
 (epoxy's build script checks the exact version), binaryen and Node, clones the
-four repos at the pinned revisions, applies the patches in numeric order and
+four repos and h2-wasm at the pinned revisions, downloads the rustls crate (checked
+against its checksum), applies the patches in numeric order and
 runs epoxy-tls's `publish.sh` (full and minimal, `RELEASE=1`) followed by
 EpoxyTransport's `npm run build`, then builds stomp-h3 into its `dist/h3/`.
 Where docker's bridge network cannot reach the Rust and npm mirrors, set

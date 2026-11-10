@@ -1,0 +1,126 @@
+From 1f9bd51ec2689b8b7a6f102fb9418ae33e259b33 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 23:34:53 -0500
+Subject: [PATCH 51/52] client: open each request with a HEADERS priority, as
+ Chrome does
+
+---
+ src/client.rs         | 23 ++++++++++++++++++++++-
+ src/frame/headers.rs  | 23 +++++++++++++++++++----
+ src/frame/priority.rs |  9 ++++++++-
+ 3 files changed, 49 insertions(+), 6 deletions(-)
+
+diff --git a/src/client.rs b/src/client.rs
+index 51488fa..693ec4b 100644
+--- a/src/client.rs
++++ b/src/client.rs
+@@ -137,7 +137,7 @@
+ 
+ use crate::codec::{Codec, SendError, UserError};
+ use crate::ext::Protocol;
+-use crate::frame::{Headers, Pseudo, Reason, Settings, StreamId};
++use crate::frame::{Headers, Pseudo, Reason, Settings, StreamDependency, StreamId};
+ use crate::proto::{self, Error};
+ use crate::{FlowControl, PingPong, RecvStream, SendStream};
+ 
+@@ -1638,8 +1638,29 @@ impl Peer {
+             }
+         }
+ 
++        // Chrome opens every request stream with a HEADERS frame that carries
++        // a priority: exclusive, on the root, weighted by the request's
++        // urgency (the `priority` header it also sends, u=0 highest), as
++        // 256, 220, 183, 147, 110 for u=0..4
++        let urgency = headers
++            .get("priority")
++            .and_then(|value| value.to_str().ok())
++            .and_then(|value| {
++                value
++                    .split(',')
++                    .map(str::trim)
++                    .find_map(|item| item.strip_prefix("u="))
++                    .and_then(|u| u.parse::<u8>().ok())
++            })
++            // no field is the default urgency, 3 (RFC 9218), which is how
++            // Chrome sends a script it does not raise
++            .unwrap_or(3)
++            .min(7);
++        let weight = [255u8, 219, 182, 146, 109, 73, 36, 0][urgency as usize];
++
+         // Create the HEADERS frame
+         let mut frame = Headers::new(id, pseudo, headers);
++        frame.set_stream_dependency(StreamDependency::new(StreamId::zero(), weight, true));
+ 
+         if end_of_stream {
+             frame.set_end_stream()
+diff --git a/src/frame/headers.rs b/src/frame/headers.rs
+index eabe29f..efb74a6 100644
+--- a/src/frame/headers.rs
++++ b/src/frame/headers.rs
+@@ -280,15 +280,26 @@ impl Headers {
+         debug_assert!(self.flags.is_end_headers());
+ 
+         // Get the HEADERS frame head
+-        let head = self.head();
++        let mut flags = self.flags;
++        if self.stream_dep.is_some() {
++            flags.set_priority();
++        }
++        let head = Head::new(Kind::Headers, flags.into(), self.stream_id);
++        let stream_dep = self.stream_dep;
+ 
+         self.header_block
+             .into_encoding(encoder)
+-            .encode(&head, dst, |_| {})
++            .encode(&head, dst, |dst| {
++                if let Some(dep) = stream_dep {
++                    dep.encode(dst);
++                }
++            })
+     }
+ 
+-    fn head(&self) -> Head {
+-        Head::new(Kind::Headers, self.flags.into(), self.stream_id)
++    /// Send the HEADERS frame with the PRIORITY flag and this dependency, as
++    /// Chrome does for every request it opens
++    pub fn set_stream_dependency(&mut self, dep: StreamDependency) {
++        self.stream_dep = Some(dep);
+     }
+ }
+ 
+@@ -771,6 +782,10 @@ impl HeadersFlag {
+     pub fn is_priority(&self) -> bool {
+         self.0 & PRIORITY == PRIORITY
+     }
++
++    pub fn set_priority(&mut self) {
++        self.0 |= PRIORITY;
++    }
+ }
+ 
+ impl Default for HeadersFlag {
+diff --git a/src/frame/priority.rs b/src/frame/priority.rs
+index d7d47db..48444de 100644
+--- a/src/frame/priority.rs
++++ b/src/frame/priority.rs
+@@ -6,7 +6,7 @@ pub struct Priority {
+     dependency: StreamDependency,
+ }
+ 
+-#[derive(Debug, Eq, PartialEq)]
++#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+ pub struct StreamDependency {
+     /// The ID of the stream dependency target
+     dependency_id: StreamId,
+@@ -69,4 +69,11 @@ impl StreamDependency {
+     pub fn dependency_id(&self) -> StreamId {
+         self.dependency_id
+     }
++
++    pub fn encode<B: bytes::BufMut>(&self, dst: &mut B) {
++        let id: u32 = self.dependency_id.into();
++        let exclusive = if self.is_exclusive { 1u32 << 31 } else { 0 };
++        dst.put_u32(id | exclusive);
++        dst.put_u8(self.weight);
++    }
+ }

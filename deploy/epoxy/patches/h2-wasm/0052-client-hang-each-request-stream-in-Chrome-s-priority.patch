@@ -1,0 +1,130 @@
+From f717d157de15ca0cd6ae77a0e3f0f8bbfe0cc66a Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 23:34:53 -0500
+Subject: [PATCH 52/52] client: hang each request stream in Chrome's priority
+ tree
+
+A new stream depends, exclusively, on the newest open stream of the same
+or a higher urgency (Chrome's Http2PriorityDependencies), or on the root.
+---
+ src/client.rs                | 42 ++++++++++++++++++++----------------
+ src/proto/streams/streams.rs | 30 +++++++++++++++++++++++++-
+ 2 files changed, 53 insertions(+), 19 deletions(-)
+
+diff --git a/src/client.rs b/src/client.rs
+index 693ec4b..97fdd52 100644
+--- a/src/client.rs
++++ b/src/client.rs
+@@ -1639,24 +1639,9 @@ impl Peer {
+         }
+ 
+         // Chrome opens every request stream with a HEADERS frame that carries
+-        // a priority: exclusive, on the root, weighted by the request's
+-        // urgency (the `priority` header it also sends, u=0 highest), as
+-        // 256, 220, 183, 147, 110 for u=0..4
+-        let urgency = headers
+-            .get("priority")
+-            .and_then(|value| value.to_str().ok())
+-            .and_then(|value| {
+-                value
+-                    .split(',')
+-                    .map(str::trim)
+-                    .find_map(|item| item.strip_prefix("u="))
+-                    .and_then(|u| u.parse::<u8>().ok())
+-            })
+-            // no field is the default urgency, 3 (RFC 9218), which is how
+-            // Chrome sends a script it does not raise
+-            .unwrap_or(3)
+-            .min(7);
+-        let weight = [255u8, 219, 182, 146, 109, 73, 36, 0][urgency as usize];
++        // a priority: exclusive, weighted by the request's urgency (the
++        // `priority` header it also sends); the parent is set by the caller
++        let weight = URGENCY_WEIGHTS[request_urgency(&headers) as usize];
+ 
+         // Create the HEADERS frame
+         let mut frame = Headers::new(id, pseudo, headers);
+@@ -1670,6 +1655,27 @@ impl Peer {
+     }
+ }
+ 
++/// Chrome's HTTP/2 weight for each urgency (u=0 highest), as sent on the
++/// wire (weight - 1): 256, 220, 183, 147, 110, 74, 37, 1
++pub(crate) const URGENCY_WEIGHTS: [u8; 8] = [255, 219, 182, 146, 109, 73, 36, 0];
++
++/// The urgency of a request's `priority` field (RFC 9218); none is the
++/// default, 3, which is how Chrome sends a script it does not raise
++pub(crate) fn request_urgency(headers: &HeaderMap) -> u8 {
++    headers
++        .get("priority")
++        .and_then(|value| value.to_str().ok())
++        .and_then(|value| {
++            value
++                .split(',')
++                .map(str::trim)
++                .find_map(|item| item.strip_prefix("u="))
++                .and_then(|u| u.parse::<u8>().ok())
++        })
++        .unwrap_or(3)
++        .min(7)
++}
++
+ impl proto::Peer for Peer {
+     type Poll = Response<()>;
+ 
+diff --git a/src/proto/streams/streams.rs b/src/proto/streams/streams.rs
+index 875b610..dedb5dc 100644
+--- a/src/proto/streams/streams.rs
++++ b/src/proto/streams/streams.rs
+@@ -78,6 +78,10 @@ struct Inner {
+ 
+     /// The number of stream refs to this shared state.
+     refs: usize,
++
++    /// The request streams opened, by urgency (0 to 7), oldest first, for
++    /// Chrome's priority tree (see `send_request`).
++    priority_lists: [Vec<StreamId>; 8],
+ }
+ 
+ #[derive(Debug)]
+@@ -272,9 +276,32 @@ where
+             stream.content_length = ContentLength::Head;
+         }
+ 
++        // Chrome's HTTP/2 priority tree (Http2PriorityDependencies): a new
++        // stream depends, exclusively, on the newest open stream of the same
++        // or a higher urgency, or on the root when there is none
++        let urgency = client::request_urgency(request.headers());
++        for list in me.priority_lists.iter_mut() {
++            list.retain(|id| {
++                me.store
++                    .find_mut(id)
++                    .map_or(false, |stream| !stream.state.is_closed())
++            });
++        }
++        let parent = me.priority_lists[..=urgency as usize]
++            .iter()
++            .rev()
++            .find_map(|list| list.last().copied())
++            .unwrap_or_else(StreamId::zero);
++        me.priority_lists[urgency as usize].push(stream_id);
++
+         // Convert the message
+-        let headers =
++        let mut headers =
+             client::Peer::convert_send_message(stream_id, request, protocol, end_of_stream)?;
++        headers.set_stream_dependency(frame::StreamDependency::new(
++            parent,
++            client::URGENCY_WEIGHTS[urgency as usize],
++            true,
++        ));
+ 
+         let mut stream = me.store.insert(stream.id, stream);
+ 
+@@ -411,6 +438,7 @@ impl Inner {
+             },
+             store: Store::new(),
+             refs: 1,
++            priority_lists: Default::default(),
+         }))
+     }
+ 

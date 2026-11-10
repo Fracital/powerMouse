@@ -1,0 +1,31 @@
+From 18807fa8bffe89ad26451a8c700c77e5ed5f00fd Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 23:17:01 -0500
+Subject: [PATCH] Say which Chrome request fields the build handles
+ (fieldSupport)
+
+Hosts that send Chrome's Accept-Encoding and Priority read it to know the
+transport decodes gzip, deflate, br and zstd and keeps Priority to HTTP/2.
+---
+ src/main.ts | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/main.ts b/src/main.ts
+index 2a20178..31f7fb8 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -57,6 +57,14 @@ function loadEpoxy(): Promise<void> {
+ 
+ export default class EpoxyTransport implements ProxyTransport {
+ 	ready = false;
++	// What this build does with the request fields a host sends in Chrome's
++	// shape: it decodes every encoding Chrome offers (and answers with that
++	// Accept-Encoding whatever it is given), and it sends a Priority field
++	// over HTTP/2 only, as Chrome does, leaving it out of HTTP/1 requests.
++	readonly fieldSupport = {
++		acceptEncoding: "gzip, deflate, br, zstd",
++		priority: true,
++	};
+ 	private initializing: Promise<void> | null = null;
+ 
+ 	client_version: typeof epoxyInfo;

@@ -1,0 +1,581 @@
+From 4f078a227bb8ea97870c7adc57c944bbc519c9c4 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 23:21:27 -0500
+Subject: [PATCH] client: optional Chrome-shaped ClientHello
+ (ClientConfig::chrome_hello)
+
+Chrome's cipher suite list and order, GREASE in the cipher suites,
+extensions, groups, key shares, versions and signature algorithms, the
+extensions BoringSSL adds for Chrome (signed_certificate_timestamp,
+renegotiation_info instead of the SCSV, ALPS for h2 answered with the
+client's EncryptedExtensions when the server takes it, a GREASE
+encrypted_client_hello, trust_anchors), random extension order between a
+leading empty and a trailing one-byte GREASE extension, the PSK offer last.
+Certificate entries may carry the SCTs and trust anchor answers this asks
+for; they are skipped.
+---
+ src/client/builder.rs     |   1 +
+ src/client/chrome.rs      | 163 ++++++++++++++++++++++++++++++++++++++
+ src/client/client_conn.rs |  16 ++++
+ src/client/hs.rs          |  46 ++++++++++-
+ src/client/tls13.rs       |  20 +++++
+ src/lib.rs                |   1 +
+ src/msgs/handshake.rs     | 139 +++++++++++++++++++++++++++++++-
+ 7 files changed, 383 insertions(+), 3 deletions(-)
+ create mode 100644 src/client/chrome.rs
+
+diff --git a/src/client/builder.rs b/src/client/builder.rs
+index b301e75..3e4ae79 100644
+--- a/src/client/builder.rs
++++ b/src/client/builder.rs
+@@ -181,6 +181,7 @@ impl ConfigBuilder<ClientConfig, WantsClientCert> {
+             cert_compression_cache: Arc::new(compress::CompressionCache::default()),
+             cert_decompressors: compress::default_cert_decompressors().to_vec(),
+             ech_mode: self.state.client_ech_mode,
++            chrome_hello: false,
+         }
+     }
+ }
+diff --git a/src/client/chrome.rs b/src/client/chrome.rs
+new file mode 100644
+index 0000000..0b9efe8
+--- /dev/null
++++ b/src/client/chrome.rs
+@@ -0,0 +1,163 @@
++//! A ClientHello shaped like Chrome's (measured against Chrome 152, November
++//! 2026, with tls.peet.ws and tls.browserleaks.com).
++//!
++//! A TLS client that runs inside Chrome on behalf of a page (a proxy that
++//! tunnels the page's requests) should not present a ClientHello no browser
++//! sends. With [`ClientConfig::chrome_hello`] set, the hello carries Chrome's
++//! cipher suite list, GREASE (RFC 8701) in the cipher suites, extensions,
++//! supported groups, key shares, versions and signature algorithms, and the
++//! extensions BoringSSL adds for Chrome: signed certificate timestamps,
++//! renegotiation_info, ALPS (answered with the client's EncryptedExtensions
++//! after the server's Finished), a GREASE ECH and trust anchor ids. Extension
++//! order is random per connection with GREASE first and last, as Chrome's.
++//!
++//! Suites and signature schemes this crate cannot use are only offered: a
++//! server that picks one fails the handshake, as it failed before when they
++//! were absent from the hello.
++//!
++//! [`ClientConfig::chrome_hello`]: crate::client::ClientConfig::chrome_hello
++
++use alloc::vec;
++use alloc::vec::Vec;
++
++use crate::crypto::SecureRandom;
++use crate::error::Error;
++use crate::rand::GetRandomFailed;
++
++/// application_settings (ALPS), the codepoint Chrome has used since 2025
++pub(crate) const ALPS: u16 = 0x44cd;
++const SIGNED_CERTIFICATE_TIMESTAMP: u16 = 0x0012;
++const RENEGOTIATION_INFO: u16 = 0xff01;
++const ENCRYPTED_CLIENT_HELLO: u16 = 0xfe0d;
++/// trust_anchors (draft-ietf-tls-trust-anchor-ids), experimental codepoint
++const TRUST_ANCHORS: u16 = 0xca34;
++
++/// Chrome's cipher suites in its order, after its GREASE suite
++pub(crate) const CIPHER_SUITES: &[u16] = &[
++    0x1301, 0x1302, 0x1303, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8, 0xc013, 0xc014,
++    0x009c, 0x009d, 0x002f, 0x0035,
++];
++
++/// Chrome's signature algorithms in its order, after its GREASE value
++/// (ML-DSA-44/65/87 first)
++pub(crate) const SIGNATURE_ALGORITHMS: &[u16] = &[
++    0x0904, 0x0905, 0x0906, 0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601,
++];
++
++/// Chrome's QUIC hello is QUICHE's: TLS 1.3 suites only, no GREASE, these
++/// signature algorithms (no ML-DSA, rsa_pkcs1_sha1 last)
++pub(crate) const QUIC_CIPHER_SUITES: &[u16] = &[0x1301, 0x1302, 0x1303];
++pub(crate) const QUIC_SIGNATURE_ALGORITHMS: &[u16] = &[
++    0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601, 0x0201,
++];
++
++/// The body of the trust_anchors extension: an empty list. Chrome 152 sends
++/// the ids of the Chrome Root Store anchors (204 bytes), and a server that
++/// supports the draft then picks a chain for one of those anchors; Google's
++/// QUIC servers did, with a chain webpki-roots (Mozilla's store) could not
++/// verify (UnknownIssuer). Sent empty, the extension is there (JA4 counts
++/// it) and the server sends its default chain.
++const TRUST_ANCHOR_IDS: &[u8] = &[0x00, 0x00];
++
++/// The client's EncryptedExtensions message body Chrome sends once a server
++/// negotiated ALPS for h2: one application_settings extension, empty
++pub(crate) const CLIENT_ALPS_ENCRYPTED_EXTENSIONS: &[u8] = &[0x00, 0x04, 0x44, 0xcd, 0x00, 0x00];
++
++/// Which GREASE value goes where (BoringSSL's `ssl_grease_index_t`)
++#[derive(Clone, Copy)]
++pub(crate) enum Grease {
++    Cipher = 0,
++    Group = 1,
++    Extension1 = 2,
++    Extension2 = 3,
++    Version = 4,
++    SignatureAlgorithm = 5,
++}
++
++/// One connection's Chrome-only parts of the hello. Made once per
++/// connection and kept for a HelloRetryRequest's second hello, which keeps
++/// the GREASE values and the extra extensions as Chrome's does.
++#[derive(Clone, Debug)]
++pub(crate) struct ChromeHello {
++    seed: [u8; 6],
++    /// extensions rustls has no type for, by codepoint, with their bodies
++    pub(crate) extra: Vec<(u16, Vec<u8>)>,
++    /// this is the second hello, after a HelloRetryRequest
++    pub(crate) retry: bool,
++    /// the hello Chrome sends over QUIC: no GREASE, no TCP-only extensions
++    pub(crate) quic: bool,
++}
++
++impl ChromeHello {
++    pub(crate) fn new(
++        secure_random: &dyn SecureRandom,
++        alpn: &[&[u8]],
++        quic: bool,
++    ) -> Result<Self, Error> {
++        let mut seed = [0u8; 6];
++        secure_random.fill(&mut seed)?;
++
++        let mut extra = Vec::new();
++        if !quic {
++            extra.push((SIGNED_CERTIFICATE_TIMESTAMP, Vec::new()));
++            extra.push((RENEGOTIATION_INFO, vec![0x00]));
++        }
++        extra.push((TRUST_ANCHORS, TRUST_ANCHOR_IDS.to_vec()));
++        extra.push((ENCRYPTED_CLIENT_HELLO, grease_ech(secure_random)?));
++        // ALPS goes with the protocol it carries settings for: Chrome lists
++        // h2 over TCP and h3 over QUIC, and only in a hello that offers it
++        // (not a WebSocket's)
++        let alps = if quic { &b"h3"[..] } else { &b"h2"[..] };
++        if alpn.contains(&alps) {
++            let mut body = vec![0x00, 0x03, 0x02];
++            body.extend_from_slice(alps);
++            extra.push((ALPS, body));
++        }
++
++        Ok(Self {
++            seed,
++            extra,
++            retry: false,
++            quic,
++        })
++    }
++
++    /// BoringSSL's `ssl_get_grease_value`: 0x?a?a from one random byte per
++    /// slot, the two extension values never equal
++    pub(crate) fn grease(&self, which: Grease) -> u16 {
++        let value = |index: usize| {
++            let byte = (self.seed[index] & 0xf0) | 0x0a;
++            u16::from_be_bytes([byte, byte])
++        };
++        let mut ret = value(which as usize);
++        if matches!(which, Grease::Extension2) && ret == value(Grease::Extension1 as usize) {
++            ret ^= 0x1010;
++        }
++        ret
++    }
++
++    pub(crate) fn extra_types(&self) -> impl Iterator<Item = u16> + '_ {
++        self.extra.iter().map(|(typ, _)| *typ)
++    }
++}
++
++/// A GREASE encrypted_client_hello as BoringSSL builds it: an outer hello
++/// for HKDF-SHA256/AES-128-GCM, a random config id, a 32-byte random
++/// encapsulated key and a random payload of 128 to 224 bytes (in steps of
++/// 32) plus the AEAD tag
++fn grease_ech(secure_random: &dyn SecureRandom) -> Result<Vec<u8>, GetRandomFailed> {
++    let mut pick = [0u8; 2];
++    secure_random.fill(&mut pick)?;
++    let payload_len = 32 * (4 + usize::from(pick[1] % 4)) + 16;
++
++    let mut out = Vec::with_capacity(10 + 32 + payload_len);
++    out.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x01, pick[0], 0x00, 0x20]);
++    let mut enc = [0u8; 32];
++    secure_random.fill(&mut enc)?;
++    out.extend_from_slice(&enc);
++    out.extend_from_slice(&(payload_len as u16).to_be_bytes());
++    let mut payload = vec![0u8; payload_len];
++    secure_random.fill(&mut payload)?;
++    out.extend_from_slice(&payload);
++    Ok(out)
++}
+diff --git a/src/client/client_conn.rs b/src/client/client_conn.rs
+index d214c2a..3d04ddc 100644
+--- a/src/client/client_conn.rs
++++ b/src/client/client_conn.rs
+@@ -281,6 +281,18 @@ pub struct ClientConfig {
+ 
+     /// How to offer Encrypted Client Hello (ECH). The default is to not offer ECH.
+     pub(super) ech_mode: Option<EchMode>,
++
++    /// Send Chrome's ClientHello: its cipher suites, GREASE, extension set
++    /// and random extension order, ALPS for h2 (answered with the client's
++    /// EncryptedExtensions when the server negotiates it), a GREASE ECH and
++    /// trust anchor ids. For a client that runs inside Chrome on a page's
++    /// behalf and must not stand out from it. Offers suites and signature
++    /// schemes this crate cannot use; a server that picks one fails the
++    /// handshake. The provider's key exchange groups are still the ones
++    /// offered (Chrome's are X25519MLKEM768, X25519, secp256r1, secp384r1),
++    /// as are its certificate decompressors (Chrome's is brotli). Not used
++    /// for QUIC. The default is `false`.
++    pub chrome_hello: bool,
+ }
+ 
+ impl ClientConfig {
+@@ -1048,6 +1060,9 @@ impl std::error::Error for EarlyDataError {}
+ pub struct ClientConnectionData {
+     pub(super) early_data: EarlyData,
+     pub(super) ech_status: EchStatus,
++    /// the server negotiated ALPS with a Chrome-shaped hello: the client's
++    /// EncryptedExtensions go out before its Finished
++    pub(super) chrome_alps: bool,
+ }
+ 
+ impl ClientConnectionData {
+@@ -1055,6 +1070,7 @@ impl ClientConnectionData {
+         Self {
+             early_data: EarlyData::new(),
+             ech_status: EchStatus::NotOffered,
++            chrome_alps: false,
+         }
+     }
+ }
+diff --git a/src/client/hs.rs b/src/client/hs.rs
+index 4669f33..9084f83 100644
+--- a/src/client/hs.rs
++++ b/src/client/hs.rs
+@@ -74,6 +74,9 @@ pub(super) struct ClientHelloInput {
+     pub(super) session_id: SessionId,
+     pub(super) server_name: ServerName<'static>,
+     pub(super) prev_ech_ext: Option<EncryptedClientHello>,
++    /// the Chrome-only parts of the hello (`ClientConfig::chrome_hello`),
++    /// kept for a second hello after a HelloRetryRequest
++    pub(super) chrome: Option<super::chrome::ChromeHello>,
+ }
+ 
+ impl ClientHelloInput {
+@@ -124,6 +127,19 @@ impl ClientHelloInput {
+             crate::rand::random_u16(config.provider.secure_random)?,
+         );
+ 
++        let chrome = match config.chrome_hello {
++            true => Some(super::chrome::ChromeHello::new(
++                config.provider.secure_random,
++                &hello
++                    .alpn_protocols
++                    .iter()
++                    .map(|protocol| protocol.as_ref())
++                    .collect::<Vec<_>>(),
++                cx.common.is_quic(),
++            )?),
++            false => None,
++        };
++
+         Ok(Self {
+             resuming,
+             random: Random::new(config.provider.secure_random)?,
+@@ -132,6 +148,7 @@ impl ClientHelloInput {
+             session_id,
+             server_name,
+             prev_ech_ext: None,
++            chrome,
+             config,
+         })
+     }
+@@ -356,6 +373,11 @@ fn emit_client_hello_for_retry(
+     // but they also need to keep the same order as the previous ClientHello
+     exts.order_seed = input.hello.extension_order_seed;
+ 
++    if let Some(chrome) = &mut input.chrome {
++        chrome.retry = retryreq.is_some();
++        exts.chrome = Some(chrome.clone());
++    }
++
+     let mut cipher_suites: Vec<_> = config
+         .provider
+         .cipher_suites
+@@ -366,11 +388,27 @@ fn emit_client_hello_for_retry(
+         })
+         .collect();
+ 
+-    if supported_versions.tls12 {
++    if supported_versions.tls12 && input.chrome.is_none() {
+         // We don't do renegotiation at all, in fact.
+         cipher_suites.push(CipherSuite::TLS_EMPTY_RENEGOTIATION_INFO_SCSV);
+     }
+ 
++    // Chrome's list, in its order, GREASE first (it sends the empty
++    // renegotiation_info extension instead of the SCSV)
++    if let Some(chrome) = &input.chrome {
++        cipher_suites = match chrome.quic {
++            true => super::chrome::QUIC_CIPHER_SUITES
++                .iter()
++                .copied()
++                .map(CipherSuite::from)
++                .collect(),
++            false => core::iter::once(chrome.grease(super::chrome::Grease::Cipher))
++                .chain(super::chrome::CIPHER_SUITES.iter().copied())
++                .map(CipherSuite::from)
++                .collect(),
++        };
++    }
++
+     let mut chp_payload = ClientHelloPayload {
+         client_version: ProtocolVersion::TLSv1_2,
+         random: input.random,
+@@ -422,6 +460,12 @@ fn emit_client_hello_for_retry(
+ 
+     // Note what extensions we sent.
+     input.hello.sent_extensions = chp_payload.collect_used();
++    if let Some(chrome) = &input.chrome {
++        input
++            .hello
++            .sent_extensions
++            .extend(chrome.extra_types().map(ExtensionType::from));
++    }
+ 
+     let mut chp = HandshakeMessagePayload(HandshakePayload::ClientHello(chp_payload));
+ 
+diff --git a/src/client/tls13.rs b/src/client/tls13.rs
+index fe8495c..4348756 100644
+--- a/src/client/tls13.rs
++++ b/src/client/tls13.rs
+@@ -500,6 +500,13 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
+         self.transcript.add_message(&m);
+ 
+         validate_encrypted_extensions(cx.common, &self.hello, exts)?;
++        // a Chrome-shaped hello offered ALPS; a server that took it waits
++        // for the client's EncryptedExtensions (BoringSSL fails the
++        // handshake without them)
++        cx.data.chrome_alps = self.config.chrome_hello
++            && exts
++                .unknown_extensions
++                .contains(&super::chrome::ALPS);
+         hs::process_alpn_protocol(
+             cx.common,
+             &self.hello.alpn_protocols,
+@@ -519,6 +526,10 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
+         )?;
+ 
+         let ech_retry_configs = match (cx.data.ech_status, &exts.encrypted_client_hello_ack) {
++            // A Chrome-shaped hello sent a GREASE ECH: a server with ECH
++            // answers it with retry configs, which a GREASE client ignores
++            // (RFC 9849, section 6.2)
++            (EchStatus::NotOffered, Some(_)) if self.config.chrome_hello => None,
+             // If we didn't offer ECH, or ECH was accepted, but the server sent an ECH encrypted
+             // extension with retry configs, we must error.
+             (EchStatus::NotOffered | EchStatus::Accepted, Some(_)) => {
+@@ -1362,6 +1373,15 @@ impl State<ClientConnectionData> for ExpectFinished {
+ 
+         let mut flight = HandshakeFlightTls13::new(&mut st.transcript);
+ 
++        /* ALPS: Chrome answers a server's application settings with its own,
++         * empty, in an EncryptedExtensions message before anything else. */
++        if core::mem::take(&mut cx.data.chrome_alps) {
++            flight.add(HandshakeMessagePayload(HandshakePayload::Unknown((
++                HandshakeType::EncryptedExtensions,
++                Payload::new(super::chrome::CLIENT_ALPS_ENCRYPTED_EXTENSIONS),
++            ))));
++        }
++
+         /* Send our authentication/finished messages.  These are still encrypted
+          * with our handshake keys. */
+         if let Some(client_auth) = st.client_auth {
+diff --git a/src/lib.rs b/src/lib.rs
+index 845f4e9..4fd8e37 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -580,6 +580,7 @@ pub use crate::webpki::RootCertStore;
+ /// Items for use in a client.
+ pub mod client {
+     pub(super) mod builder;
++    pub(crate) mod chrome;
+     mod client_conn;
+     mod common;
+     mod ech;
+diff --git a/src/msgs/handshake.rs b/src/msgs/handshake.rs
+index 093f2d1..ac8eb39 100644
+--- a/src/msgs/handshake.rs
++++ b/src/msgs/handshake.rs
+@@ -933,6 +933,10 @@ extension_struct! {
+ 
+         /// Extensions that must appear contiguously.
+         pub(crate) contiguous_extensions: Vec<ExtensionType>,
++
++        /// Chrome's GREASE and extra extensions, when the hello is Chrome's
++        /// (`ClientConfig::chrome_hello`)
++        pub(crate) chrome: Option<crate::client::chrome::ChromeHello>,
+     }
+ }
+ 
+@@ -964,6 +968,7 @@ impl ClientExtensions<'_> {
+             encrypted_client_hello_outer,
+             order_seed,
+             contiguous_extensions,
++            chrome,
+         } = self;
+         ClientExtensions {
+             server_name: server_name.map(|x| x.into_owned()),
+@@ -991,6 +996,7 @@ impl ClientExtensions<'_> {
+             encrypted_client_hello_outer,
+             order_seed,
+             contiguous_extensions,
++            chrome,
+         }
+     }
+ 
+@@ -1048,8 +1054,132 @@ impl ClientExtensions<'_> {
+     }
+ }
+ 
++impl ClientExtensions<'_> {
++    /// Chrome's layout: an empty GREASE extension, every other extension
++    /// (rustls's and Chrome's extra ones) in random order, a one-byte GREASE
++    /// extension, then the PSK offer, which must be last. Groups, key shares,
++    /// versions and signature algorithms carry a GREASE value first; the
++    /// signature algorithms are Chrome's list.
++    fn encode_chrome(&self, chrome: &crate::client::chrome::ChromeHello, bytes: &mut Vec<u8>) {
++        use crate::client::chrome::{Grease, QUIC_SIGNATURE_ALGORITHMS, SIGNATURE_ALGORITHMS};
++
++        // over QUIC Chrome sends no GREASE and none of these
++        let tcp_only = [
++            ExtensionType::StatusRequest,
++            ExtensionType::ECPointFormats,
++            ExtensionType::ExtendedMasterSecret,
++            ExtensionType::SessionTicket,
++        ];
++        let mut order: Vec<u16> = self
++            .collect_used()
++            .into_iter()
++            .filter(|ext| *ext != ExtensionType::PreSharedKey)
++            .filter(|ext| !(chrome.quic && tcp_only.contains(ext)))
++            .map(u16::from)
++            .collect();
++        order.extend(chrome.extra_types());
++        order.sort_by_cached_key(|ext| {
++            low_quality_integer_hash(((self.order_seed as u32) << 16) | (*ext as u32))
++        });
++
++        let body = LengthPrefixedBuffer::new(ListLength::U16, bytes);
++        let out = &mut *body.buf;
++        let grease = |out: &mut Vec<u8>, which: Grease| {
++            if !chrome.quic {
++                chrome.grease(which).encode(out);
++            }
++        };
++
++        if !chrome.quic {
++            grease(out, Grease::Extension1);
++            0u16.encode(out);
++        }
++
++        for typ in order {
++            if let Some((_, data)) = chrome
++                .extra
++                .iter()
++                .find(|(extra, _)| *extra == typ)
++            {
++                typ.encode(out);
++                (data.len() as u16).encode(out);
++                out.extend_from_slice(data);
++                continue;
++            }
++            let ext = ExtensionType::from(typ);
++            match ext {
++                ExtensionType::EllipticCurves => {
++                    ext.encode(out);
++                    let body = LengthPrefixedBuffer::new(ListLength::U16, out);
++                    let list = LengthPrefixedBuffer::new(ListLength::U16, body.buf);
++                    grease(list.buf, Grease::Group);
++                    for group in self.named_groups.iter().flatten() {
++                        group.encode(list.buf);
++                    }
++                }
++                ExtensionType::KeyShare => {
++                    ext.encode(out);
++                    let body = LengthPrefixedBuffer::new(ListLength::U16, out);
++                    let list = LengthPrefixedBuffer::new(ListLength::U16, body.buf);
++                    // the second hello answers the group the server asked
++                    // for, with no GREASE share
++                    if !chrome.retry && !chrome.quic {
++                        grease(list.buf, Grease::Group);
++                        list.buf.extend_from_slice(&[0x00, 0x01, 0x00]);
++                    }
++                    for share in self.key_shares.iter().flatten() {
++                        share.encode(list.buf);
++                    }
++                }
++                ExtensionType::SupportedVersions => {
++                    ext.encode(out);
++                    let mut list = Vec::new();
++                    grease(&mut list, Grease::Version);
++                    if let Some(versions) = &self.supported_versions {
++                        if versions.tls13 {
++                            ProtocolVersion::TLSv1_3.encode(&mut list);
++                        }
++                        if versions.tls12 {
++                            ProtocolVersion::TLSv1_2.encode(&mut list);
++                        }
++                    }
++                    ((list.len() + 1) as u16).encode(out);
++                    out.push(list.len() as u8);
++                    out.extend_from_slice(&list);
++                }
++                ExtensionType::SignatureAlgorithms => {
++                    ext.encode(out);
++                    let body = LengthPrefixedBuffer::new(ListLength::U16, out);
++                    let list = LengthPrefixedBuffer::new(ListLength::U16, body.buf);
++                    grease(list.buf, Grease::SignatureAlgorithm);
++                    let schemes = match chrome.quic {
++                        true => QUIC_SIGNATURE_ALGORITHMS,
++                        false => SIGNATURE_ALGORITHMS,
++                    };
++                    for scheme in schemes {
++                        scheme.encode(list.buf);
++                    }
++                }
++                _ => self.encode_one(ext, out),
++            }
++        }
++
++        if !chrome.quic {
++            grease(out, Grease::Extension2);
++            1u16.encode(out);
++            out.push(0x00);
++        }
++
++        self.encode_one(ExtensionType::PreSharedKey, out);
++    }
++}
++
+ impl<'a> Codec<'a> for ClientExtensions<'a> {
+     fn encode(&self, bytes: &mut Vec<u8>) {
++        if let Some(chrome) = &self.chrome {
++            return self.encode_chrome(chrome, bytes);
++        }
++
+         let order = self.used_extensions_in_encoding_order();
+ 
+         if order.is_empty() {
+@@ -1703,8 +1833,13 @@ impl<'a> Codec<'a> for CertificateExtensions<'a> {
+         let mut sub = r.sub(len)?;
+ 
+         while sub.any_left() {
+-            out.read_one(&mut sub, |_unk| {
+-                Err(InvalidMessage::UnknownCertificateExtension)
++            // a Chrome-shaped hello asks for signed certificate timestamps
++            // and offers trust anchor ids, which a server answers in its
++            // certificate entries; skip what this crate does not use, as
++            // Chrome reads past it
++            out.read_one(&mut sub, |unk| match u16::from(unk) {
++                0x0012 | 0xca34 => Ok(()),
++                _ => Err(InvalidMessage::UnknownCertificateExtension),
+             })?;
+         }
+ 

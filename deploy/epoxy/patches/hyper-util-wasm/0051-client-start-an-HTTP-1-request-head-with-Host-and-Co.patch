@@ -1,0 +1,40 @@
+From 02c1703b34b216bc13115f60241781670cb8d06c Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 23:12:31 -0500
+Subject: [PATCH 51/51] client: start an HTTP/1 request head with Host and
+ Connection, as Chrome does
+
+Host was appended last. A Priority field, which Chrome sends over HTTP/2
+and HTTP/3 only, is left out of HTTP/1 requests.
+---
+ src/client/legacy/client.rs | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/src/client/legacy/client.rs b/src/client/legacy/client.rs
+index e33b76b..5987902 100644
+--- a/src/client/legacy/client.rs
++++ b/src/client/legacy/client.rs
+@@ -297,6 +297,23 @@ where
+                 });
+             }
+ 
++            // Chrome's HTTP/1.1 head starts Host, Connection, and carries no
++            // Priority field (it sends that over HTTP/2 and HTTP/3 only); the
++            // rest keeps the order it was given in
++            let old = std::mem::take(req.headers_mut());
++            let headers = req.headers_mut();
++            for first in [HOST, hyper::header::CONNECTION] {
++                for value in old.get_all(&first) {
++                    headers.append(first.clone(), value.clone());
++                }
++            }
++            for (name, value) in old.iter() {
++                if name == HOST || name == hyper::header::CONNECTION || name.as_str() == "priority" {
++                    continue;
++                }
++                headers.append(name.clone(), value.clone());
++            }
++
+             // CONNECT always sends authority-form, so check it first...
+             if req.method() == Method::CONNECT {
+                 authority_form(req.uri_mut());

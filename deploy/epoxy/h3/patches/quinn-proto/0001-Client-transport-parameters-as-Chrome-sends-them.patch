@@ -1,0 +1,85 @@
+From 641e0e9757e2c8cb5203e743157a924a00a856b6 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 10 Nov 2026 00:18:03 -0500
+Subject: [PATCH] Client transport parameters as Chrome sends them
+
+No min_ack_delay, max_datagram_frame_size past the u16 cap, and Chrome's
+version_information and google_connection_options.
+---
+ src/transport_parameters.rs | 41 +++++++++++++++++++++++++++++++------
+ 1 file changed, 35 insertions(+), 6 deletions(-)
+
+diff --git a/src/transport_parameters.rs b/src/transport_parameters.rs
+index 75462ae..846c1de 100644
+--- a/src/transport_parameters.rs
++++ b/src/transport_parameters.rs
+@@ -110,6 +110,10 @@ macro_rules! make_struct {
+             /// This field is initialized only for outgoing `TransportParameters` instances and
+             /// is set to `None` for `TransportParameters` received from a peer.
+             pub(crate) write_order: Option<[u8; TransportParameterId::SUPPORTED.len()]>,
++
++            /// Ours, as a client: also write Chrome's version_information and
++            /// google_connection_options (never set for a peer's or a server's)
++            pub(crate) chrome_client: bool,
+         }
+ 
+         // We deliberately don't implement the `Default` trait, since that would be public, and
+@@ -133,6 +137,7 @@ macro_rules! make_struct {
+                     preferred_address: None,
+                     grease_transport_parameter: None,
+                     write_order: None,
++                    chrome_client: false,
+                 }
+             }
+         }
+@@ -167,13 +172,24 @@ impl TransportParameters {
+                 CidQueue::LEN as u32
+             }
+             .into(),
+-            max_datagram_frame_size: config
+-                .datagram_receive_buffer_size
+-                .map(|x| (x.min(u16::MAX.into()) as u16).into()),
++            // a client's parameters are Chrome's (QUICHE's): max_datagram_frame_size
++            // as configured (Chrome's 65536, past quinn's u16 cap), no
++            // ack-frequency min_ack_delay, which Chrome does not offer
++            max_datagram_frame_size: config.datagram_receive_buffer_size.map(|x| {
++                match server_config {
++                    Some(_) => (x.min(u16::MAX.into()) as u16).into(),
++                    None => VarInt::from_u64(x as u64).unwrap_or(VarInt::MAX),
++                }
++            }),
+             grease_quic_bit: endpoint_config.grease_quic_bit,
+-            min_ack_delay: Some(
+-                VarInt::from_u64(u64::try_from(TIMER_GRANULARITY.as_micros()).unwrap()).unwrap(),
+-            ),
++            min_ack_delay: match server_config {
++                Some(_) => Some(
++                    VarInt::from_u64(u64::try_from(TIMER_GRANULARITY.as_micros()).unwrap())
++                        .unwrap(),
++                ),
++                None => None,
++            },
++            chrome_client: server_config.is_none(),
+             grease_transport_parameter: Some(ReservedTransportParameter::random(rng)),
+             write_order: Some({
+                 let mut order = std::array::from_fn(|i| i as u8);
+@@ -318,6 +334,19 @@ impl TransportParameters {
+                     if let Some(param) = self.grease_transport_parameter {
+                         param.write(w);
+                     }
++                    // Chrome's client also sends version_information (RFC 9368:
++                    // chosen version 1, available a GREASE version and 1) and
++                    // google_connection_options "ORIG"; quinn reads neither
++                    if self.chrome_client {
++                        w.write_var(0x11);
++                        w.write_var(12);
++                        w.put_u32(1);
++                        w.put_u32(0x5a5a_6a9a);
++                        w.put_u32(1);
++                        w.write_var(0x3128);
++                        w.write_var(4);
++                        w.put_slice(b"ORIG");
++                    }
+                 }
+                 TransportParameterId::StatelessResetToken => {
+                     if let Some(ref x) = self.stateless_reset_token {

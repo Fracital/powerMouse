@@ -1,0 +1,39 @@
+From 684f95500c64f85d54e96ab744cb9aa4930f87df Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 23:12:21 -0500
+Subject: [PATCH] client: title case HTTP/1 field names as Chrome spells them
+
+Client hints (sec-ch-*) stay lowercase, Sec-WebSocket-* and DNT keep
+Chrome's capitals; everything else is title cased as before.
+---
+ src/proto/h1/role.rs | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/src/proto/h1/role.rs b/src/proto/h1/role.rs
+index 2b6772e4..f5d88337 100644
+--- a/src/proto/h1/role.rs
++++ b/src/proto/h1/role.rs
+@@ -1605,6 +1605,23 @@ fn record_header_indices(
+ fn title_case(dst: &mut Vec<u8>, name: &[u8]) {
+     dst.reserve(name.len());
+ 
++    // Chrome's spelling where it is not plain title case: client hints go
++    // out lowercase as their specs name them, the WebSocket fields and DNT
++    // as Chrome writes them
++    if name.starts_with(b"sec-ch-") {
++        dst.extend_from_slice(name);
++        return;
++    }
++    if name == b"dnt" {
++        dst.extend_from_slice(b"DNT");
++        return;
++    }
++    if let Some(rest) = name.strip_prefix(b"sec-websocket-") {
++        dst.extend_from_slice(b"Sec-WebSocket-");
++        title_case(dst, rest);
++        return;
++    }
++
+     // Ensure first character is uppercased
+     let mut prev = b'-';
+     for &(mut c) in name {

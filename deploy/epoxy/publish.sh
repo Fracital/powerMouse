@@ -29,7 +29,7 @@ publish() {
 	git -C "$work/$repo" rev-parse HEAD
 }
 
-summary=$(head -4 out/UPSTREAM | tr '\n' ' ')
+summary=$(head -6 out/UPSTREAM | tr '\n' ' ')
 tls=$(publish epoxy-tls out/epoxy-tls "dist: epoxy-tls from upstream + patches ($summary)")
 # the transport bundles epoxy-tls, so consumers never fetch it; the manifest
 # only records which build this was

@@ -26,6 +26,9 @@ tag="epoxy-fracital:${EPOXY_TLS_REV:0:12}-$(cat patches/*/*.patch h3/Cargo.* h3/
 	--build-arg "EPOXY_TLS_REV=$EPOXY_TLS_REV" \
 	--build-arg "EPOXY_TRANSPORT_REV=$EPOXY_TRANSPORT_REV" \
 	--build-arg "HYPER_REV=$HYPER_REV" \
+	--build-arg "H2_WASM_REV=$H2_WASM_REV" \
+	--build-arg "RUSTLS_VERSION=$RUSTLS_VERSION" \
+	--build-arg "RUSTLS_SHA256=$RUSTLS_SHA256" \
 	-t "$tag" .
 
 rm -rf out

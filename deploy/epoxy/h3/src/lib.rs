@@ -28,6 +28,7 @@ use wasm_bindgen::{prelude::*, JsCast};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{ReadableStream, ReadableStreamDefaultReader, WritableStream};
 
+mod mlkem;
 mod runtime;
 mod socket;
 
@@ -91,6 +92,14 @@ fn client_config(pem: &str) -> Result<ClientConfig, JsValue> {
 		}
 	}
 	let mut provider = provider::default_provider();
+	// Chrome's groups in its order: X25519MLKEM768 (with a separate X25519
+	// share), X25519, P-256, P-384
+	provider.kx_groups = vec![
+		mlkem::X25519_MLKEM768,
+		provider::kx_group::X25519,
+		provider::kx_group::SECP256R1,
+		provider::kx_group::SECP384R1,
+	];
 	// Chrome's TLS 1.3 order: AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305
 	provider.cipher_suites = vec![
 		provider::cipher_suite::TLS13_AES_128_GCM_SHA256,
@@ -103,14 +112,44 @@ fn client_config(pem: &str) -> Result<ClientConfig, JsValue> {
 		.with_root_certificates(roots)
 		.with_no_client_auth();
 	tls.alpn_protocols = vec![b"h3".to_vec()];
+	// Chrome's QUIC ClientHello (patched rustls): its extension set and
+	// random order, ALPS for h3, a GREASE ECH, trust anchor ids, its
+	// signature algorithms, and brotli certificates, the one compression it
+	// offers
+	tls.chrome_hello = true;
+	tls.cert_decompressors = vec![rustls::compress::BROTLI_DECOMPRESSOR];
 	// 0-RTT replays a request the server cannot tell from the original; a
 	// proxy does not know which requests are safe to replay, so never
 	tls.enable_early_data = false;
 	let quic = QuicClientConfig::try_from(tls).map_err(js_error)?;
 	let mut config = ClientConfig::new(Arc::new(quic));
 	config.transport_config(Arc::new(transport_config()));
+	// Chrome's first destination connection id is 8 random bytes (quinn's 20)
+	config.initial_dst_cid_provider(Arc::new(|| {
+		let mut id = [0u8; 8];
+		let _ = getrandom02::getrandom(&mut id);
+		quinn::ConnectionId::new(&id)
+	}));
 	CONFIG.with(|c| *c.borrow_mut() = Some((pem.to_string(), config.clone())));
 	Ok(config)
+}
+
+/// Zero-length local connection ids, as Chrome's client uses: one
+/// connection per endpoint here, so nothing needs them to demultiplex.
+struct EmptyConnectionIds;
+
+impl quinn::ConnectionIdGenerator for EmptyConnectionIds {
+	fn generate_cid(&mut self) -> quinn::ConnectionId {
+		quinn::ConnectionId::new(&[])
+	}
+
+	fn cid_len(&self) -> usize {
+		0
+	}
+
+	fn cid_lifetime(&self) -> Option<Duration> {
+		None
+	}
 }
 
 type SendRequest = h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>;
@@ -159,6 +198,11 @@ pub async fn connect(
 	endpoint_config
 		.max_udp_payload_size(1472)
 		.map_err(js_error)?;
+	// Chrome's client uses an empty source connection id (so no
+	// active_connection_id_limit either) and does not grease the fixed bit
+	endpoint_config
+		.grease_quic_bit(false)
+		.cid_generator(|| Box::new(EmptyConnectionIds));
 	let endpoint = Endpoint::new_with_abstract_socket(
 		endpoint_config,
 		None,

@@ -1,0 +1,195 @@
+From c5cebaf8caa69474e0279e0efa73119885c8ffc9 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 23:12:44 -0500
+Subject: [PATCH 52/53] client: send request fields in the caller's order with
+ Chrome's head and encodings
+
+The caller's fields go out in the order given (a host passes Chrome's),
+after Connection and a known Content-Length, as Chrome's do; a missing
+User-Agent leads and a missing Accept-Encoding goes before Accept-Language,
+Cookie and Priority. Accept-Encoding is Chrome's gzip, deflate, br, zstd and
+deflate (zlib) and zstd responses are decoded too. HTTP/1 field names are
+title cased by default.
+---
+ client/Cargo.toml |  2 +-
+ client/src/lib.rs | 99 +++++++++++++++++++++++++++++++++++------------
+ 2 files changed, 76 insertions(+), 25 deletions(-)
+
+diff --git a/client/Cargo.toml b/client/Cargo.toml
+index 4d4bc29..b930c43 100644
+--- a/client/Cargo.toml
++++ b/client/Cargo.toml
+@@ -10,7 +10,7 @@ workspace = true
+ crate-type = ["cdylib"]
+ 
+ [dependencies]
+-async-compression = { version = "0.4.12", features = ["futures-io", "gzip", "brotli"], optional = true }
++async-compression = { version = "0.4.12", features = ["futures-io", "gzip", "brotli", "zlib", "zstd"], optional = true }
+ bytes = "1.7.1"
+ cfg-if = "1.0.0"
+ event-listener = "5.3.1"
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index 276b0e6..66c47de 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -9,7 +9,7 @@ use cfg_if::cfg_if;
+ use futures_util::{future::Either, StreamExt, TryStreamExt};
+ use http::{
+ 	header::{
+-		InvalidHeaderName, InvalidHeaderValue, ACCEPT_ENCODING, CONNECTION, CONTENT_LENGTH,
++		InvalidHeaderName, InvalidHeaderValue, ACCEPT_ENCODING, CONNECTION, CONTENT_LENGTH, HOST,
+ 		CONTENT_TYPE, LOCATION, USER_AGENT,
+ 	},
+ 	method::InvalidMethod,
+@@ -232,6 +232,8 @@ enum EpoxyResponse {
+ enum EpoxyCompression {
+ 	Brotli,
+ 	Gzip,
++	Deflate,
++	Zstd,
+ }
+ 
+ // ugly hack. switch to serde-wasm-bindgen or a knockoff
+@@ -285,7 +287,9 @@ impl Default for EpoxyClientOptions {
+ 		Self {
+ 			wisp_v2: false,
+ 			udp_extension_required: false,
+-			title_case_headers: false,
++			// Chrome's HTTP/1 field names are title case (client hints
++			// lowercase, see the hyper patch)
++			title_case_headers: true,
+ 			#[cfg(feature = "full")]
+ 			ws_title_case_headers: true,
+ 			websocket_protocols: Vec::new(),
+@@ -669,39 +673,74 @@ impl EpoxyClient {
+ 
+ 		cfg_if! {
+ 			if #[cfg(feature = "full")] {
+-				headers_map.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip, br"));
++				// Chrome's, and what the response decoder below reads
++				let accept_encoding = HeaderValue::from_static("gzip, deflate, br, zstd");
+ 			} else {
+-				headers_map.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
++				let accept_encoding = HeaderValue::from_static("identity");
+ 			}
+ 		}
+-		headers_map.insert(CONNECTION, HeaderValue::from_static("keep-alive"));
+-		headers_map.insert(USER_AGENT, HeaderValue::from_str(&self.user_agent)?);
+-
+-		if let Some(content_type) = body_content_type {
+-			headers_map.insert(CONTENT_TYPE, HeaderValue::from_str(&content_type)?);
+-		}
+ 
++		// The fields go out in the caller's order, which is how a browser's
++		// request looks (a host passes Chrome's order); epoxy's own go where
++		// Chrome's do: Content-Length leads (the HTTP/1 client puts Host and
++		// Connection before it), a missing User-Agent comes
++		// next, a missing Accept-Encoding goes where Chrome puts it, before
++		// Accept-Language, Cookie and Priority. Accept-Encoding always says
++		// what this build decodes.
++		let mut fields: Vec<(HeaderName, HeaderValue)> = Vec::new();
+ 		if let Some(headers) = headers {
+ 			for hdr in headers {
+-				if ["host"].contains(&hdr[0].to_lowercase().as_str()) {
++				let name = HeaderName::from_str(&hdr[0])?;
++				if name == HOST || name == CONNECTION || name == CONTENT_LENGTH {
+ 					continue;
+ 				}
+-				headers_map.insert(
+-					HeaderName::from_str(&hdr[0])?,
+-					HeaderValue::from_str(&hdr[1])?,
+-				);
++				let value = if name == ACCEPT_ENCODING {
++					accept_encoding.clone()
++				} else {
++					HeaderValue::from_str(&hdr[1])?
++				};
++				fields.push((name, value));
+ 			}
+ 		}
++		if let Some(content_type) = body_content_type
++			&& !fields.iter().any(|(name, _)| *name == CONTENT_TYPE)
++		{
++			fields.push((CONTENT_TYPE, HeaderValue::from_str(&content_type)?));
++		}
++		if !fields.iter().any(|(name, _)| *name == ACCEPT_ENCODING) {
++			let at = fields
++				.iter()
++				.position(|(name, _)| {
++					matches!(name.as_str(), "accept-language" | "cookie" | "priority")
++				})
++				.unwrap_or(fields.len());
++			fields.insert(at, (ACCEPT_ENCODING, accept_encoding));
++		}
++		if !fields.iter().any(|(name, _)| *name == USER_AGENT) {
++			fields.insert(0, (USER_AGENT, HeaderValue::from_str(&self.user_agent)?));
++		}
+ 
+-		let body_empty = if let http_body_util::Either::Right(ref x) = body {
+-			x.size_hint().exact().unwrap_or(1) == 0
+-		} else {
+-			false
++		let body_size = match body {
++			http_body_util::Either::Right(ref x) => x.size_hint().exact(),
++			http_body_util::Either::Left(_) => None,
+ 		};
+ 
+-		if matches!(request_method, Method::POST | Method::PUT | Method::PATCH) && body_empty {
+-			headers_map.insert(CONTENT_LENGTH, 0.into());
++		match body_size {
++			// a body of known size names it, as Chrome's does, right after
++			// Connection; an empty POST, PUT or PATCH says 0
++			Some(0) if !matches!(request_method, Method::POST | Method::PUT | Method::PATCH) => {}
++			Some(size) => {
++				headers_map.insert(CONTENT_LENGTH, size.into());
++			}
++			None => {}
++		}
++		for (name, value) in fields {
++			headers_map.append(name, value);
+ 		}
++		// last, so taking it out for HTTP/2 (HeaderMap removes by swapping
++		// the last field in) leaves the order alone; the HTTP/1 client moves
++		// it up behind Host
++		headers_map.insert(CONNECTION, HeaderValue::from_static("keep-alive"));
+ 
+ 		let (mut response, response_uri, redirected) = self
+ 			.send_req(request_builder.body(body)?, request_redirect)
+@@ -736,22 +775,34 @@ impl EpoxyClient {
+ 						.get("Content-Encoding")
+ 						.and_then(|val| val.to_str().ok())
+ 						.unwrap_or_default()
++						.trim()
++						.to_ascii_lowercase()
++						.as_str()
+ 					{
+-						"gzip" => Some(EpoxyCompression::Gzip),
++						"gzip" | "x-gzip" => Some(EpoxyCompression::Gzip),
+ 						"br" => Some(EpoxyCompression::Brotli),
++						"deflate" => Some(EpoxyCompression::Deflate),
++						"zstd" => Some(EpoxyCompression::Zstd),
+ 						_ => None,
+ 					};
+ 
+ 					let response_body = BodyDataStream::new(response.into_body()).map_err(std::io::Error::other).into_async_read();
+ 					let decompressed_body = match compression {
+-						Some(alg) => match alg {
++						Some(alg) => Either::Left(match alg {
+ 							EpoxyCompression::Gzip => {
+ 								Either::Left(Either::Left(async_comp::GzipDecoder::new(response_body)))
+ 							}
+ 							EpoxyCompression::Brotli => {
+ 								Either::Left(Either::Right(async_comp::BrotliDecoder::new(response_body)))
+ 							}
+-						},
++							// HTTP's deflate is the zlib format
++							EpoxyCompression::Deflate => {
++								Either::Right(Either::Left(async_comp::ZlibDecoder::new(response_body)))
++							}
++							EpoxyCompression::Zstd => {
++								Either::Right(Either::Right(async_comp::ZstdDecoder::new(response_body)))
++							}
++						}),
+ 						None => Either::Right(response_body),
+ 					};
+ 					Some(asyncread_to_readablestream(Box::pin(decompressed_body), self.buffer_size))

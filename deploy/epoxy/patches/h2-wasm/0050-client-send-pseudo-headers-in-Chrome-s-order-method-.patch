@@ -1,0 +1,35 @@
+From a839b1ef4fae40b7789a78cc03be5b0b5989a2f4 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Mon, 9 Nov 2026 23:34:53 -0500
+Subject: [PATCH 50/52] client: send pseudo-headers in Chrome's order (:method
+ :authority :scheme :path)
+
+---
+ src/frame/headers.rs | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/src/frame/headers.rs b/src/frame/headers.rs
+index a0f282e..eabe29f 100644
+--- a/src/frame/headers.rs
++++ b/src/frame/headers.rs
+@@ -706,14 +706,16 @@ impl Iterator for Iter {
+                 return Some(Method(method));
+             }
+ 
+-            if let Some(scheme) = pseudo.scheme.take() {
+-                return Some(Scheme(scheme));
+-            }
+-
++            // Chrome's order: :method :authority :scheme :path (the Akamai
++            // HTTP/2 fingerprint's last field, "m,a,s,p")
+             if let Some(authority) = pseudo.authority.take() {
+                 return Some(Authority(authority));
+             }
+ 
++            if let Some(scheme) = pseudo.scheme.take() {
++                return Some(Scheme(scheme));
++            }
++
+             if let Some(path) = pseudo.path.take() {
+                 return Some(Path(path));
+             }
