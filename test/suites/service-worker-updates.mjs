@@ -5,7 +5,10 @@
 // registration again, calls update() with the bytes unchanged (no new
 // worker), then once the suite changed them, again: updatefound, and the
 // new version runs installing, installed, activating, activated while the
-// old goes redundant. Natively and through the proxy, in both demo modes,
+// old goes redundant. The suite changes the bytes once more and navigates
+// (step 3): the update check after the navigation installs them, and the new
+// worker claims the page: the page asks the worker that controls it
+// which version it is. Natively and through the proxy, in both demo modes,
 // the logs must match.
 import {
 	done,
@@ -25,10 +28,14 @@ const ROUTED = /\/stomp\/[\w-]+\/html\//;
 const url = (run, step) =>
 	`${site.origin}/app/update.html?run=${run}&step=${step}`;
 
-/** wait for the frame `find` gives to say `key` */
-async function wait(find, key, tries = 160) {
+/** wait for the frame `find` gives to say `key` (on the page of `step`) */
+async function wait(find, key, step, tries = 160) {
 	let value = null;
-	for (let i = 0; i < tries && !value?.[key]; i++) {
+	for (
+		let i = 0;
+		i < tries && !(value?.[key] && value.step === String(step));
+		i++
+	) {
 		await sleep(250);
 		value = await find()
 			?.evaluate(() => window.__sw)
@@ -40,13 +47,16 @@ async function wait(find, key, tries = 160) {
 /** both steps through `go` (a navigation) and `find` (the page's frame) */
 async function both(run, go, find) {
 	await go(url(run, 1));
-	const first = await wait(find, 'done');
+	const first = await wait(find, 'done', 1);
 	await go(url(run, 2));
-	await wait(find, 'readyForBump');
+	await wait(find, 'readyForBump', 2);
 	site.bump(run);
 	await find()?.evaluate(() => (window.__sw.bumped = true));
-	const second = await wait(find, 'done');
-	return [...first.log, ...second.log];
+	const second = await wait(find, 'done', 2);
+	site.bump(run);
+	await go(`${url(run, 3)}&expect=2`);
+	const third = await wait(find, 'done', 3);
+	return [...first.log, ...second.log, ...third.log];
 }
 
 const nativeBrowser = await launch();
@@ -59,7 +69,7 @@ const native = await both(
 await nativeBrowser.close();
 ok(
 	'natively, the update fixture runs to its end',
-	native.length === 5 && !native.some((line) => line.startsWith('fail')),
+	native.length === 6 && !native.some((line) => line.startsWith('fail')),
 	JSON.stringify(native),
 );
 

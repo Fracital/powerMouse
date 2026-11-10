@@ -10,8 +10,9 @@ import {
 	parseDataURI,
 	routeURL,
 } from './routeURL';
+import type { ControlInfo } from './serviceWorkerTypes';
 import StompURL from './StompURL';
-import { WORKER_BASE } from './transport/messages';
+import { SW_CONTROL, WORKER_BASE } from './transport/messages';
 
 /**
  * The route of a document. `form`: a GET form's action, whose query the
@@ -181,13 +182,18 @@ export function modifyHTML(
 	base = false,
 	referrer?: ReferrerInfo,
 	nonce?: string | null,
+	/** the emulated service worker registration that controls the document (docs/service-workers.md) */
+	control?: ControlInfo,
 ): string {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	const names = helperNames(config);
+	const controlled = control
+		? `globalThis[${JSON.stringify(SW_CONTROL)}] = ${JSON.stringify(control).replace(/</g, '\\u003c')};\n\t`
+		: '';
 	const inject = `if (typeof globalThis.createClient !== 'function') {
 	document.write("Stomp bundle did not load. See devtools output for more information.");
 } else {
-	if (!(${JSON.stringify(names.client)} in globalThis))
+	${controlled}if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 
 ${referred(names.client, referrer)}

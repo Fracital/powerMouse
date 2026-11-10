@@ -343,6 +343,22 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- An emulated service worker takes the navigations within its scope
+  (`serviceWorkers: true`), so a cache-first app opens while its site is
+  unreachable. A document (or a worker's script) whose URL is in a
+  registration's scope is controlled by it from its first script: the
+  shell carries the registration, so `navigator.serviceWorker.controller`
+  is set on a reload as natively, and its subresources go to the worker.
+  The worker gets the navigation as a `FetchEvent` (mode `navigate`,
+  redirect `manual`, `resultingClientId` the new document's); what it
+  answers, from its cache or the network, is wrapped in Stomp's shell like
+  any document, so the page still has the inject. Once the navigation is
+  answered, the registration checks its script for new bytes (the spec's
+  soft update), and a waiting worker whose old version no longer controls a
+  page goes on (service-worker-offline: a reload, then a load with the
+  site's server dropping every connection, against the same app natively;
+  service-worker-updates: new bytes found by the check after a navigation,
+  and the new worker controls the page; both modes).
 - An emulated service worker answers the subresource requests of the pages
   it controls (`serviceWorkers: true`). Stomp's service worker hands each
   request of a controlled page (any URL, other origins included, as

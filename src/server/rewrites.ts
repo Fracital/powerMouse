@@ -24,6 +24,7 @@ import {
 } from '../rewriteHTML';
 import { modifyJS, routeJS, ScriptType } from '../rewriteJS';
 import { parseRoutedURL, routeBinary, unwrapRoute } from '../routeURL';
+import type { ControlInfo } from '../serviceWorkerTypes';
 import StompURL from '../StompURL';
 import type {
 	RequestErrorKind,
@@ -261,8 +262,10 @@ type BodyTransform = (
 	note: Note,
 ) => Promise<BodyInit | false>;
 
-/** what a body's transform tells the request log */
+/** what a body's transform tells the request log (and the shell) */
 interface Note {
+	/** the emulated registration that controls the document (docs/service-workers.md) */
+	serviceWorker?: ControlInfo;
 	rewriteCache?: RewriteCacheOutcome;
 	rewriteIn?: 'pool' | 'pool split' | 'service-worker';
 }
@@ -793,13 +796,14 @@ function genericForward(
 
 		// the page's emulated service worker answers before the HTTP cache and
 		// the network, as a real one sits before them (docs/service-workers.md)
-		const fromWorker = await answerFromServiceWorker(
+		const { response: fromWorker, control } = await answerFromServiceWorker(
 			rewriter,
 			serverRequest,
 			url,
 			context,
 			upload,
 			referer ?? '',
+			navigation && topLevel ? 'document' : serverRequest.destination,
 		);
 		// the worker gave the page a network error
 		if (fromWorker?.type === 'error') return Response.error();
@@ -997,7 +1001,9 @@ function genericForward(
 
 		// the report is made now (its time is to the headers) and sent once the
 		// body's transform has said how it went
-		const note: Note = {};
+		// the registration that controls the document this navigation makes:
+		// its shell says so before the page's first script
+		const note: Note = control ? { serviceWorker: control } : {};
 		let report: RequestInfo | null = null;
 		if (rewriter.log) {
 			const length = Number(response.headers.get('content-length'));
@@ -1498,7 +1504,7 @@ export function registerRewrites(
 		/^\/html(:nested:[^/]*)?\//,
 		genericForward(
 			rewriter,
-			async (url, response, responseHeaders, referrer) => {
+			async (url, response, responseHeaders, referrer, _request, note) => {
 				const contentType = responseHeaders.get('content-type');
 				const mime = getMime(contentType || '');
 				if (!htmlMimes.includes(mime)) return false;
@@ -1527,7 +1533,15 @@ export function registerRewrites(
 					responseHeaders.delete('refresh');
 					markup = withRefreshMeta(markup, refresh);
 				}
-				return modifyHTML(markup, url, rewriter.config, false, referrer);
+				return modifyHTML(
+					markup,
+					url,
+					rewriter.config,
+					false,
+					referrer,
+					undefined,
+					note.serviceWorker,
+				);
 			},
 			(resource, url) => routeHTML(resource, url, rewriter.config),
 			undefined,
@@ -1624,30 +1638,48 @@ async function answerFromServiceWorker(
 	context: RouteContext | undefined,
 	upload: Promise<Blob | undefined>,
 	referrer: string,
-): Promise<Response | null> {
-	if (!rewriter.config.serviceWorkers || context?.internal) return null;
-	const navigation =
+	destination: string,
+): Promise<{ response: Response | null; control?: ControlInfo }> {
+	if (!rewriter.config.serviceWorkers || context?.internal)
+		return { response: null };
+	// a navigation or a worker's script goes to the registration whose scope
+	// its URL is in, and the document or worker it makes is controlled by it
+	const nonSubresource =
 		serverRequest.mode === 'navigate' ||
 		serverRequest.destination === 'worker' ||
 		serverRequest.destination === 'sharedworker';
-	// navigations come with the next stage
-	if (navigation) return null;
-	const clientId = context?.requestClientId ?? context?.clientId;
+	const clientId = nonSubresource
+		? (context?.requestClientId ?? '')
+		: (context?.requestClientId ?? context?.clientId);
 	const routed = await serviceWorkers.route({
 		url: url.url.href,
-		nonSubresource: false,
+		nonSubresource,
 		clientId,
+		resultingClientId: nonSubresource
+			? (context?.resultingClientId ?? context?.clientId)
+			: undefined,
 	});
 	const host = routed ? serviceWorkers.host(rewriter.directory) : undefined;
-	if (!routed || !host) return null;
+	if (!routed || !host) return { response: null };
+	if (nonSubresource) {
+		// the spec's soft update, once the navigation was answered; a worker
+		// that waits for the page this one replaces goes on once that one is
+		// gone
+		const record = routed.record;
+		const after = new Promise((resolve) => setTimeout(resolve, 1000))
+			.then(() => serviceWorkers.softUpdate(record, host))
+			.then(() => new Promise((resolve) => setTimeout(resolve, 1000)))
+			.then(() => serviceWorkers.sweep());
+		context?.waitUntil?.(after);
+	}
 	let body: Blob | null;
 	try {
 		body = (await upload) ?? null;
 	} catch (error) {
 		// the page's body could not be read: as the network would have
-		return null;
+		return { response: null, control: routed.control };
 	}
-	return serviceWorkers.dispatch(routed.record, host, {
+	const response = await serviceWorkers.dispatch(routed.record, host, {
 		request: {
 			url: url.url.href,
 			method: serverRequest.method,
@@ -1663,12 +1695,15 @@ async function answerFromServiceWorker(
 			referrerPolicy: serverRequest.referrerPolicy,
 			integrity: serverRequest.integrity,
 			keepalive: serverRequest.keepalive,
-			destination: serverRequest.destination,
+			destination: destination as RequestDestination,
 		},
 		clientId: clientId ?? '',
-		resultingClientId: '',
+		resultingClientId: nonSubresource
+			? (context?.resultingClientId ?? context?.clientId ?? '')
+			: '',
 		isReload: !!context?.isReload,
 	});
+	return { response, control: routed.control };
 }
 
 const SCRIPT_HEADERS = {
