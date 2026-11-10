@@ -1,0 +1,66 @@
+<!doctype html>
+<title>REMOVED FRAME</title>
+<script>
+	// Sentry and rrweb on discord.com take functions from a hidden iframe
+	// they remove at once (`iframe.contentWindow.setTimeout`, `fetch`, ...),
+	// and other scripts keep a removed frame's localStorage or document the
+	// same way. A removed frame's document has no browsing context: its
+	// cookie reads "" natively. Through the proxy that frame's client asked
+	// the service worker over the synchronous bridge, then waited for the
+	// answer in that dead document's cookies, which never show it, so every
+	// such call spun to the bridge's limit (10 s, 30 s for an XHR) and threw.
+	// This page stores a value and a cookie, takes a frame's storage,
+	// document and XMLHttpRequest, removes the frame, then uses them and
+	// times each call, one per task.
+	window.__rf = { results: {} };
+	localStorage.setItem('kept', 'yes');
+	document.cookie = 'kept=1; path=/';
+	const frame = document.createElement('iframe');
+	frame.hidden = true;
+	document.head.appendChild(frame);
+	const removed = frame.contentWindow;
+	const storage = removed.localStorage;
+	const doc = removed.document;
+	const XHR = removed.XMLHttpRequest;
+	document.head.removeChild(frame);
+	const steps = [
+		['cookie', () => doc.cookie],
+		[
+			'cookieWrite',
+			() => {
+				doc.cookie = 'lost=1; path=/';
+				return document.cookie;
+			},
+		],
+		['getItem', () => storage.getItem('kept')],
+		[
+			'syncXHR',
+			() => {
+				const xhr = new XHR();
+				xhr.open('GET', new URL('apis.html', location.href).href, false);
+				xhr.send();
+				return xhr.status;
+			},
+		],
+	];
+	const next = () => {
+		const step = steps.shift();
+		if (!step) {
+			__rf.cookie = document.cookie;
+			__rf.done = true;
+			return;
+		}
+		const [name, run] = step;
+		const start = performance.now();
+		let outcome;
+		try {
+			outcome = { value: run() };
+		} catch (error) {
+			outcome = { threw: error.name, message: String(error.message) };
+		}
+		outcome.ms = Math.round(performance.now() - start);
+		__rf.results[name] = outcome;
+		setTimeout(next);
+	};
+	setTimeout(next);
+</script>
