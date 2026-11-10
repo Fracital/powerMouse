@@ -1,0 +1,17 @@
+<!doctype html>
+<title>focus</title>
+<p>Focus probe (focus suite).</p>
+<script>
+	window.__focus = {
+		n: new URLSearchParams(location.search).get('n'),
+		keys: '',
+		loaded: false,
+	};
+	addEventListener('keydown', (event) => {
+		if (event.key.length === 1) window.__focus.keys += event.key;
+	});
+	addEventListener('load', () => {
+		window.__focus.atLoad = document.hasFocus();
+		window.__focus.loaded = true;
+	});
+</script>

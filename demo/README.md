@@ -133,7 +133,9 @@ transport, which tunnels through `/wisp/`.
    most common first; clicking one swaps it into the address bar.
 5. **Navigate** with `frame.go(url)` on the active tab. Input goes through `SearchBuilder`, so
    anything that doesn't look like a host becomes a search. The proxied URL is
-   mirrored into `location.hash`, so a refresh restores the page.
+   mirrored into `location.hash`, so a refresh restores the page. Focus moves
+   from the address bar into the tab's frame, as a browser gives the page it
+   navigates to focus (`document.hasFocus()`, the keys typed next).
 6. **Keep the address bar honest.** `frame.url` reads the real location of the
    proxied document (through its inject client), and the page polls it so
    `pushState` navigations inside the frame show up too.

@@ -1073,6 +1073,14 @@ let recentsSwiped = false;
 
 // ---- navigation ----------------------------------------------------------
 
+/** move focus from the host's controls into a tab's page */
+function focusFrame(tab) {
+	if (!tab || tab.element.classList.contains('hidden')) return;
+	if (document.activeElement instanceof HTMLElement)
+		document.activeElement.blur();
+	tab.element.focus({ preventScroll: true });
+}
+
 async function navigate(input, { newTab = false } = {}) {
 	const url = normalizeUrl(SEARCH.query(input.trim()));
 	if (!controller) {
@@ -1091,6 +1099,10 @@ async function navigate(input, { newTab = false } = {}) {
 	const tab = activeTab;
 	tab.url = url;
 	omni.url.value = url;
+	// the page a browser navigates to from its address bar has focus (its
+	// document.hasFocus() is true, its keyboard events arrive), not the
+	// address bar: the frame takes it, and the document it loads keeps it
+	focusFrame(tab);
 	setStatus('Loading…');
 	try {
 		await tab.frame.go(url);

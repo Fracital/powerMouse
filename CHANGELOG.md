@@ -405,6 +405,14 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   context. The two interfaces stay unnamed until the page names them (a
   frame that never does pays nothing: frame-cost reads the same heap), and
   read as the data properties they natively are. (sop-escapes suite.)
+- A page reached from the demo's address bar has focus, as a page a browser
+  navigates to does: `document.hasFocus()` read false and the keys typed
+  next went to the address bar (browserleaks' JavaScript page). The demo
+  moves focus into the tab's frame when it navigates, and a `RemoteFrame`
+  that has focus keeps it when its first proxied document commits: Chrome
+  drops a focused frame's focus when its document moves to another process
+  (the host origin's about:blank to the proxy origin), so the frame takes
+  it back as soon as its document turns cross-origin. (focus suite.)
 - Permissions are per proxied site. The browser keeps one permission for
   the proxy origin, which every proxied site is, so the service worker keeps
   each site's own state (by the real origin of the proxied top, as Chrome

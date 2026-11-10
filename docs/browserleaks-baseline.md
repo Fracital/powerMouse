@@ -156,9 +156,11 @@ membrane agent's).
    stomp-h3's, its Accept-Encoding over HTTP/3 is `gzip, br`; ECH is never
    used (epoxy sends GREASE ECH only); https to an IPv6 literal fails in
    epoxy.
-6. **`document.hasFocus()`** is false after a navigation from the demo's
-   address bar (natively the page gets focus): the demo could focus the
-   frame after navigating.
+6. **`document.hasFocus()`** was false after a navigation from the demo's
+   address bar (natively the page gets focus). Fixed: the demo moves focus
+   from its address bars into the tab's frame, and a RemoteFrame gives it
+   back when its first proxied document commits in another process (focus
+   suite).
 7. **WebSocket**: a close the server starts reads 1000 whatever its code
    (epoxy never reads the frame).
 

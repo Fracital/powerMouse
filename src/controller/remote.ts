@@ -486,8 +486,41 @@ export class RemoteFrame extends EventTarget {
 			this.element.clientHeight,
 		);
 		this.element.src = await this.controller.route(url);
+		this.#keepFocusAcrossCommit();
 		this.url = url;
 		await reported;
+	}
+	/**
+	 * A focused frame still showing a document of the host's origin (its
+	 * initial about:blank) loses focus when the proxy origin's document
+	 * commits in another process, and the page would read
+	 * document.hasFocus() false and miss the keys typed next, where a tab's
+	 * page has focus. The commit shows here as the frame's document turning
+	 * cross-origin: focus is given back at once, before the page runs. A
+	 * frame already on the proxy origin keeps focus by itself (measured)
+	 */
+	#keepFocusAcrossCommit() {
+		const element = this.element;
+		if (document.activeElement !== element) return;
+		const sameOrigin = () => {
+			try {
+				return element.contentDocument !== null;
+			} catch (error) {
+				return false;
+			}
+		};
+		if (!sameOrigin()) return;
+		const until = Date.now() + NAVIGATION_WAIT_MS;
+		const check = () => {
+			if (document.activeElement !== element) return;
+			if (sameOrigin()) {
+				if (Date.now() < until) setTimeout(check, 4);
+				return;
+			}
+			element.blur();
+			element.focus({ preventScroll: true });
+		};
+		setTimeout(check, 4);
 	}
 	/** @internal */
 	report(info: NavigateInfo) {
