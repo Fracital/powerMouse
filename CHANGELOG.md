@@ -317,6 +317,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 - The demo server reads `STOMP_HTTP3=1` (HTTP/3 for the epoxy transport,
   `?http3` on the page for one visit) and `WISP_NO_UDP=1` (the built-in wisp
   refuses UDP streams, to see the fallback).
+- The package is `@sysce/stomp` on npm (it was `stomp-rewrite`, installed
+  from this repository's `dist` branch, which is gone).
+  `.github/workflows/nightly.yml` publishes master every night as
+  `@sysce/stomp@nightly`, version `<next patch>-nightly.<UTC
+yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
+  the commit is not published yet, through npm trusted publishing (no token
+  stored) with provenance. Import from `@sysce/stomp` and
+  `@sysce/stomp/path`.
 
 ### Dependencies
 

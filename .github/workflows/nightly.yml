@@ -1,0 +1,96 @@
+# Publish master to npm as @sysce/stomp@nightly, once a night and on manual
+# dispatch. Only a commit whose CI passed is published, and only once.
+#
+# Same posture as ci.yml: pinned actions, no pull_request trigger, and no
+# secret. npm trusted publishing authenticates this workflow (OIDC,
+# `id-token: write`; the trust is set on npmjs.com for Fracital/powerMouse
+# and nightly.yml), and the package carries provenance.
+
+name: Nightly
+
+on:
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: read
+  checks: read
+  id-token: write
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish @sysce/stomp@nightly
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: master
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      # trusted publishing needs npm 11.5.1 or newer
+      - name: npm for trusted publishing
+        run: npm install -g npm@11.13.0
+
+      - name: Not published yet?
+        id: fresh
+        run: |
+          commit=$(node scripts/nightly-version.mjs --commit)
+          if npm view @sysce/stomp versions --json 2>/dev/null | grep -q "\.$commit\""; then
+            echo "::notice::$commit is published already"
+            echo publish=false >>"$GITHUB_OUTPUT"
+          else
+            echo publish=true >>"$GITHUB_OUTPUT"
+          fi
+
+      # CI on this commit must have run its suites and passed (not been
+      # superseded); wait for it while it runs, up to 45 minutes
+      - name: CI passed on this commit
+        if: steps.fresh.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          for _ in $(seq 1 90); do
+            run=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$sha&event=push" \
+              --jq '.workflow_runs[0] | "\(.status) \(.conclusion) \(.id)"')
+            read -r status conclusion id <<<"$run"
+            if [[ $status == completed ]]; then
+              [[ $conclusion == success ]] || { echo "::error::CI on $sha: $conclusion"; exit 1; }
+              # a superseded job passes too; its notice is an annotation
+              for job in $(gh api "repos/$REPO/actions/runs/$id/jobs" --jq '.jobs[].id'); do
+                if gh api "repos/$REPO/check-runs/$job/annotations" --jq '.[].message' | grep -q '^superseded'; then
+                  echo "::error::CI on $sha was superseded, not run"; exit 1
+                fi
+              done
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::CI on $sha did not finish in 45 minutes"
+          exit 1
+
+      - name: Install
+        if: steps.fresh.outputs.publish == 'true'
+        run: npm ci --ignore-scripts
+
+      - name: Publish
+        if: steps.fresh.outputs.publish == 'true'
+        run: |
+          version=$(node scripts/nightly-version.mjs)
+          npm version "$version" --no-git-tag-version
+          npm publish --tag nightly --provenance --access public
+          echo "::notice::published @sysce/stomp@$version"

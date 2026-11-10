@@ -73,7 +73,7 @@ server on the same port:
 | Path           | Serves                                                                                            |
 | -------------- | ------------------------------------------------------------------------------------------------- |
 | `/`            | `demo/public` (the page, stylesheet, script, images)                                              |
-| `/stomp/`      | `dist/` via `stompPath` from `stomp-rewrite/path`                                                 |
+| `/stomp/`      | `dist/` via `stompPath` from `@sysce/stomp/path`                                                  |
 | `/epoxy/`      | `@mercuryworkshop/epoxy-transport`'s `dist/`                                                      |
 | `/libcurl/`    | `@mercuryworkshop/libcurl-transport`'s `dist/`                                                    |
 | `/wisp/`       | WebSocket upgrade handled by `@mercuryworkshop/wisp-js`                                           |

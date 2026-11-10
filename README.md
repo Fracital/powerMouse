@@ -1,4 +1,4 @@
-# stomp-rewrite
+# @sysce/stomp
 
 A rewrite of the Stomp proxy.
 
@@ -13,14 +13,14 @@ the page that owns the proxy. Proxied content is shown in frames.
 
 ## Usage
 
-Serve `dist/` (its path is exported from `stomp-rewrite/path` as `stompPath`)
+Serve `dist/` (its path is exported from `@sysce/stomp/path` as `stompPath`)
 from a directory of your site, register the service worker from that directory
 (`register()` uses it as the scope and resolves once the worker is activated),
 and hand the registration to a controller together with a transport:
 
 ```js
 import EpoxyTransport from '@mercuryworkshop/epoxy-transport';
-import { StompController } from 'stomp-rewrite';
+import { StompController } from '@sysce/stomp';
 
 const registration = await StompController.register('/stomp/');
 
@@ -169,15 +169,17 @@ and `message` events from outside the proxied world never reach the page.
 
 ## Embedding
 
-Depend on the built package through the repository's `dist` branch, which
-holds what `npm pack` would ship and nothing to build:
+Install the package from npm. Nightly builds of master are published as
+`@sysce/stomp@nightly` (versions like `4.2.1-nightly.202611100717.g1a2b3c4`:
+the next patch, the UTC time, the commit), each only after CI passed on that
+commit, with npm provenance:
 
-```json
-"stomp-rewrite": "git+https://github.com/Fracital/powerMouse.git#<sha of the dist branch>"
+```sh
+npm install @sysce/stomp@nightly
 ```
 
-`deploy/publish-dist.sh` publishes master's build there and prints the sha to
-pin (`stompPath` from `stomp-rewrite/path` is the directory to serve).
+Pin the exact version a host was tested with. `stompPath` from
+`@sysce/stomp/path` is the directory to serve.
 
 [`examples/minimal-host.html`](examples/minimal-host.html) is the smallest
 host application: plain HTML and one module script, with a comment per step.

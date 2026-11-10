@@ -1,4 +1,4 @@
-# Agent guide for stomp-rewrite
+# Agent guide for @sysce/stomp
 
 This file is for AI coding agents (and humans) working in this repository.
 Read it before changing anything.
@@ -193,10 +193,11 @@ on every save (use a `git worktree`).
   the result to the `dist` branches of `Fracital/epoxy-tls` and
   `Fracital/EpoxyTransport`, and `package.json` pins that commit by
   `git+https://` URL. Read `deploy/epoxy/README.md` before touching any of it.
-- Hosts depend on stomp the same way: `deploy/publish-dist.sh` builds master
-  and pushes the package files to this repository's `dist` branch (run by
-  hand from a clean checkout that is on GitHub; CI never pushes), and the
-  host pins the printed sha as a `git+https://` dependency.
+- Hosts install stomp from npm as `@sysce/stomp`. `.github/workflows/nightly.yml`
+  publishes master as `@sysce/stomp@nightly` every night (and on manual
+  dispatch) once CI passed on that commit, through npm trusted publishing
+  (OIDC, no token in the repository) with provenance. There is no `dist`
+  branch any more; hosts pin an exact nightly version.
 - libcurl-transport 2.0.6: WebSockets fine, HTTP stops answering after ~70
   requests (default pool) or ~160 (`connections: [500, 400, 200]`).
 - HTTP/3 is opt-in (`TransportDescriptor.http3`, `src/transport/http3/`):
