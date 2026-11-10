@@ -171,8 +171,10 @@ transport, which tunnels through `/wisp/`.
 11. **Request viewer.** The controller's `onRequest(info)` reports every
     proxied request; the page keeps the last 300 per tab (matched on
     `info.frame`, dropped with the tab) and nothing else while the panel is
-    closed. Long-press Recents (500 ms) or press Ctrl+Shift+R in the demo page
-    (not inside a proxied frame) and a panel slides up from above the
+    closed. Long-press Recents (500 ms) or press Ctrl+Shift+X (in a proxied
+    page too: a host hook in every proxied document, `KEY_HOOK`, hands the
+    demo's keys over, Escape and Alt+Left/Right as well) and a panel slides
+    up from above the
     navigation bar, in the switcher's style, with the active tab's requests,
     newest first: method, status (0 and the error in red on a transport
     failure), the real URL (host bold, path dimmed and ellipsised in the

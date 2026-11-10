@@ -239,7 +239,50 @@ function askPermission({ origin, permission }) {
 	return asked;
 }
 
+// The demo's own keys (Ctrl+Shift+X, Escape, Alt+Left and Alt+Right) while
+// a proxied page has focus: its key events never reach this window, so a
+// host hook in every proxied document hands them over, as a browser's own
+// shortcuts work whatever page has focus. Registered after the inject's
+// hooks and the document's open, before the page's first script; the page
+// still gets the keys (Ctrl+Shift+X with its default prevented, as here)
+const KEY_MESSAGE = '$stompDemo$key';
+const KEY_HOOK = `
+if (stomp.kind === 'document')
+	stomp.window.addEventListener('keydown', (event) => {
+		const shortcut = event.ctrlKey && event.shiftKey && !event.altKey && event.code === 'KeyX';
+		const arrow = event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight');
+		if (!shortcut && !arrow && event.key !== 'Escape') return;
+		if (shortcut) event.preventDefault();
+		stomp.window.top.postMessage({ ${JSON.stringify(KEY_MESSAGE)}: {
+			key: event.key, code: event.code, ctrlKey: event.ctrlKey,
+			shiftKey: event.shiftKey, altKey: event.altKey,
+		} }, '*');
+	}, true);`;
+addEventListener('message', (event) => {
+	const key = event.data?.[KEY_MESSAGE];
+	if (!key || !tabs.some((tab) => isFrameOf(tab.element, event.source))) return;
+	dispatchEvent(
+		new KeyboardEvent('keydown', {
+			key: String(key.key),
+			code: String(key.code),
+			ctrlKey: !!key.ctrlKey,
+			shiftKey: !!key.shiftKey,
+			altKey: !!key.altKey,
+		}),
+	);
+});
+/** whether `source` is the window of `element` or a frame inside it */
+function isFrameOf(element, source) {
+	for (let window = source, depth = 0; window && depth < 16; depth++) {
+		if (window === element.contentWindow) return true;
+		if (window === window.parent) return false;
+		window = window.parent;
+	}
+	return false;
+}
+
 const controllerCallbacks = {
+	hooks: { init: { post: { source: KEY_HOOK } } },
 	// a site asks for a permission another site was given (the browser's own
 	// prompt asked for the first)
 	onPermissionRequest: askPermission,

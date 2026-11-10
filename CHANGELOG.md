@@ -412,7 +412,10 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   that has focus keeps it when its first proxied document commits: Chrome
   drops a focused frame's focus when its document moves to another process
   (the host origin's about:blank to the proxy origin), so the frame takes
-  it back as soon as its document turns cross-origin. (focus suite.)
+  it back as soon as its document turns cross-origin. The demo's own keys
+  (Ctrl+Shift+X, Escape, Alt+Left and Alt+Right) still work while a page
+  has focus: a host hook in every proxied document hands them to the demo.
+  (focus and request-viewer suites.)
 - Permissions are per proxied site. The browser keeps one permission for
   the proxy origin, which every proxied site is, so the service worker keeps
   each site's own state (by the real origin of the proxied top, as Chrome
