@@ -753,10 +753,11 @@ function teardownRecents() {
 	recentsLift = { index: -1, dy: 0 };
 	recentsDrag = 0;
 	recentsClosing = false;
-	for (const label of labelFor.values()) label.classList.remove('expanding');
+	for (const label of labelFor.values())
+		label.classList.remove('expanding', 'gone');
 	for (const tab of tabs) {
 		tab.element.style.cssText = '';
-		tab.element.classList.remove('shade', 'dragging');
+		tab.element.classList.remove('shade', 'dragging', 'gone');
 	}
 	if (recentsReturn === 'landing' && browser.classList.contains('hidden'))
 		mainForm.url.focus();
@@ -799,10 +800,20 @@ function hideRecents(expand = null) {
 		label.style.setProperty('--k', '1');
 		label.style.opacity = '1';
 	}
-	// the other cards fade out underneath
-	for (const tab of tabs) if (tab !== expand) tab.element.style.opacity = '0';
-	for (const other of labelFor.values())
-		if (other !== label) other.style.opacity = '0';
+	// the other cards go at once, as in One UI. They cannot stay under the
+	// opening card: every label (bar copy, close button) is drawn over every
+	// frame, so a neighbour fading out painted its bar over the opening page,
+	// and a later tab's frame faded over it too.
+	for (const tab of tabs) {
+		if (tab === expand) continue;
+		tab.element.classList.add('gone');
+		tab.element.style.opacity = '0';
+	}
+	for (const other of labelFor.values()) {
+		if (other === label) continue;
+		other.classList.add('gone');
+		other.style.opacity = '0';
+	}
 
 	setTimeout(teardownRecents, 260);
 }

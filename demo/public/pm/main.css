@@ -880,6 +880,16 @@ body.recents .frames .frame.shade {
 	opacity: 0.45;
 }
 
+/* a card opening: the others are hidden at once, never fading over it. The
+   label's parts too: under the universal `transition: all` they would take
+   0.2s to inherit the hidden state, and paint the bar and close button */
+body.recents .frames .frame.gone,
+.cardLabel.gone,
+.cardLabel.gone * {
+	visibility: hidden;
+	transition: none;
+}
+
 .recents,
 .navbar {
 	user-select: none;

@@ -47,6 +47,12 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- Opening a card in the demo's tab manager hides the other cards at once,
+  as One UI's switcher does. They used to fade out over about 250 ms above
+  the opening page (every card's bar and close button is drawn over every
+  page), so a neighbour's bar and close button showed through it, and a
+  later tab's page faded over it (switcher-geometry suite, desktop and phone
+  widths).
 - A card in the demo's tab manager shows the whole tab as the browser view
   does: its bar has Back, Forward and Reload, greyed out as they would be for
   that tab, beside the tab's own URL and the status, above the page. The bar
