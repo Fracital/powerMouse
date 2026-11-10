@@ -76,6 +76,39 @@ export type PageEvent =
 			data: unknown;
 	  };
 
+/** the registration members that hold a manager (docs/service-workers.md) */
+export type ManagerKind =
+	'sync' | 'periodicSync' | 'backgroundFetch' | 'paymentManager' | 'cookies';
+
+/** a background fetch, as its BackgroundFetchRegistration shows it */
+export interface BackgroundFetchSnapshot {
+	id: string;
+	uploadTotal: number;
+	uploaded: number;
+	downloadTotal: number;
+	downloaded: number;
+	result: '' | 'success' | 'failure';
+	failureReason:
+		| ''
+		| 'aborted'
+		| 'bad-status'
+		| 'fetch-error'
+		| 'quota-exceeded'
+		| 'download-total-exceeded';
+	recordsAvailable: boolean;
+}
+
+/** one record of a background fetch, on its way to a realm */
+export interface BackgroundFetchRecordWire {
+	request: { url: string; method: string; headers: [string, string][] };
+	response: {
+		status: number;
+		statusText: string;
+		headers: [string, string][];
+		body: Blob;
+	} | null;
+}
+
 /** what the HTML shell tells a new document about its controller (SW_CONTROL) */
 export interface ControlInfo {
 	registration: RegistrationSnapshot;
@@ -163,6 +196,19 @@ export type ToEmulated = {
 	message: [MessageInit];
 	/** the registration changed: the worker's objects follow it */
 	steps: [{ registration: RegistrationSnapshot; steps: StateStep[] }];
+	/** a SyncEvent for `tag`; whether its extend lifetime promises fulfilled */
+	sync: [{ tag: string; lastChance: boolean }, boolean];
+	/** a background fetch ended: backgroundfetchsuccess, backgroundfetchfail or backgroundfetchabort */
+	backgroundFetch: [
+		{
+			type:
+				| 'backgroundfetchsuccess'
+				| 'backgroundfetchfail'
+				| 'backgroundfetchabort';
+			fetch: BackgroundFetchSnapshot;
+		},
+		boolean,
+	];
 };
 
 /** implemented by Stomp's service worker, called by an emulated worker */
@@ -180,6 +226,11 @@ export type FromEmulated = {
 	update: [null, ErrorInfo | null];
 	unregister: [null, boolean];
 	preload: [{ op: string; value?: unknown }, unknown];
+	/** a call of one of the registration's managers */
+	manager: [
+		{ kind: ManagerKind; op: string; args: Record<string, unknown> },
+		{ value: unknown } | { error: ErrorInfo },
+	];
 };
 
 /** a page API call's reply */

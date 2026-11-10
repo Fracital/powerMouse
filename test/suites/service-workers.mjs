@@ -8,10 +8,11 @@
 // way (registered, updatefound, statechange, ready, controllerchange), what
 // the worker's global looked like (it puts that in a cache the page reads),
 // update() with the same bytes, getRegistration(s), the navigation preload
-// stub and unregister(). The proxied log must be the native one, line for
-// line, except where the emulation documents a choice: sync, periodicSync
-// and backgroundFetch are absent (natively present), and push behaves as
-// with the permission denied. Both demo modes.
+// stub, the registration's managers (a sync whose event reaches the worker,
+// periodic sync refused, the payment manager, cookie change subscriptions,
+// push as without the permission, a background fetch whose end event and
+// records reach the worker) and unregister(). The proxied log must be the
+// native one, line for line. Both demo modes.
 import {
 	done,
 	FIXTURE,
@@ -51,9 +52,6 @@ ok(
 	JSON.stringify(native.log),
 );
 
-// what the emulation chose differently, on purpose (docs/service-workers.md)
-const CHOSEN = new Set(['absent']);
-
 const browser = await launch();
 for (const [mode, base, query = ''] of [
 	['same-origin', PROXY],
@@ -79,23 +77,12 @@ for (const [mode, base, query = ''] of [
 		const want = native.log[i];
 		const got = proxied.log[i];
 		if (want === got) continue;
-		if (CHOSEN.has(String(want).split(' ')[0])) continue;
 		differences.push({ native: want, proxied: got });
 	}
 	ok(
 		`${mode}: every call, event and state reads as natively, in the same order`,
 		differences.length === 0,
 		JSON.stringify(differences),
-	);
-	ok(
-		`${mode}: sync, periodicSync and backgroundFetch are absent, as in a browser without them`,
-		proxied.log.includes('absent false false false undefined'),
-		JSON.stringify(proxied.log.find((line) => line.startsWith('absent'))),
-	);
-	ok(
-		`${mode}: push subscribes as with the permission denied`,
-		proxied.push === 'NotAllowedError: Registration failed - permission denied',
-		JSON.stringify(proxied.push),
 	);
 	ok(
 		`${mode}: no proxied page error`,

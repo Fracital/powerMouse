@@ -6,6 +6,8 @@
 
 import { IDBPDatabase, openDB } from 'idb';
 import type {
+	BackgroundFetchRecordWire,
+	BackgroundFetchSnapshot,
 	ClientInfo,
 	ControlInfo,
 	ErrorInfo,
@@ -48,6 +50,19 @@ interface RegistrationRecord {
 	navigationPreload: NavigationPreloadState;
 	serial: number;
 	uninstalling?: boolean;
+	/** sync tags whose event has not run to success yet */
+	syncTags?: string[];
+	/** cookie change subscriptions (registration.cookies) */
+	cookieSubscriptions?: { name?: string; url: string }[];
+	/** paymentManager.userHint */
+	userHint?: string;
+}
+
+/** a background fetch and what it downloaded */
+interface BackgroundFetch {
+	snapshot: BackgroundFetchSnapshot;
+	records: BackgroundFetchRecordWire[];
+	aborted: boolean;
 }
 
 interface ScriptRecord {
@@ -72,6 +87,12 @@ export interface WorkerHost {
 	): Promise<Response>;
 	/** a document's routed URL at this address (WindowClient.navigate) */
 	routeDocument(url: string): string;
+	/** a resource fetched through the proxy for a page's background fetch: the raw response */
+	fetchResource(
+		url: string,
+		init: { method: string; headers: [string, string][] },
+		clientId: string | undefined,
+	): Promise<Response>;
 	/** ms an emulated worker may take to say whether it answers (config.serviceWorkerTimeout) */
 	timeout?: number;
 }
@@ -576,6 +597,16 @@ export class ServiceWorkers {
 				const record = this.#own(sender, args.scope);
 				return this.#preload(record, String(args.op), args.value);
 			}
+			case 'manager': {
+				const record = this.#own(sender, args.scope);
+				return this.manager(
+					record,
+					String(args.kind),
+					String(args.op),
+					(args.args ?? {}) as Record<string, unknown>,
+					{ host, clientId: sender.clientId, waitUntil },
+				);
+			}
 		}
 		throw new ApiError('NotSupportedError', `Unknown call ${method}`);
 	}
@@ -981,6 +1012,7 @@ export class ServiceWorkers {
 	 * left. Run on the page's calls and on navigations
 	 */
 	sweep() {
+		this.#resumeSyncs();
 		for (const record of this.#registrations.values()) {
 			if (record.uninstalling)
 				this.#enqueue(record.scope, async () => {
@@ -994,6 +1026,321 @@ export class ServiceWorkers {
 					return { value: undefined };
 				}).catch(() => {});
 		}
+	}
+
+	// ---- the registration's managers (docs/service-workers.md)
+
+	/** background fetches, by scope and id; kept while this worker runs */
+	readonly #backgroundFetches = new Map<string, Map<string, BackgroundFetch>>();
+	/** sync tags whose event is running or waiting for its retry */
+	readonly #syncing = new Set<string>();
+
+	/**
+	 * A call of one of a registration's managers, from a page of its site or
+	 * from its own worker (`inWorker`). Sync runs; periodic sync is refused as
+	 * Chrome refuses it without the permission; background fetch downloads
+	 * through the proxy and tells the worker; the payment manager and cookie
+	 * change subscriptions keep what they are given
+	 */
+	async manager(
+		record: RegistrationRecord,
+		kind: string,
+		op: string,
+		args: Record<string, unknown>,
+		from: {
+			host?: WorkerHost;
+			clientId?: string;
+			inWorker?: boolean;
+			waitUntil?: (promise: Promise<unknown>) => void;
+		},
+	): Promise<unknown> {
+		const persist = async () => {
+			if (this.#registrations.get(record.scope) === record)
+				await (await this.#open()).put('registrations', record, record.scope);
+		};
+		const failed = (on: string, method: string, message: string) =>
+			`Failed to execute '${method}' on '${on}': ${message}`;
+		if (kind === 'sync') {
+			record.syncTags ??= [];
+			if (op === 'getTags') return [...record.syncTags];
+			if (op !== 'register') return undefined;
+			if (!record.active)
+				throw new ApiError(
+					'InvalidStateError',
+					'Registration failed - no active Service Worker',
+				);
+			const tag = String(args.tag);
+			if (!record.syncTags.includes(tag)) record.syncTags.push(tag);
+			await persist();
+			const run = this.#runSync(record, tag, 0, from.host);
+			from.waitUntil?.(run);
+			return undefined;
+		}
+		if (kind === 'periodicSync') {
+			if (op === 'register')
+				throw new ApiError('NotAllowedError', 'Permission denied.');
+			if (op === 'getTags') return [];
+			return undefined;
+		}
+		if (kind === 'paymentManager') {
+			if (op === 'userHint') {
+				record.userHint = String(args.value);
+				await persist();
+				return undefined;
+			}
+			if (op === 'enableDelegations') return true;
+			return undefined;
+		}
+		if (kind === 'cookies') {
+			record.cookieSubscriptions ??= [];
+			const list = (
+				(args.subscriptions as { name?: string; url?: string }[]) ?? []
+			).map((item) => {
+				let url: string;
+				try {
+					url = new URL(item.url ?? '', record.scope).href;
+				} catch (error) {
+					throw new ApiError(
+						'TypeError',
+						failed('CookieStoreManager', op, 'Invalid URL.'),
+					);
+				}
+				if (!url.startsWith(record.scope))
+					throw new ApiError(
+						'TypeError',
+						failed(
+							'CookieStoreManager',
+							op,
+							'URL must be within Service Worker scope',
+						),
+					);
+				return { ...(item.name !== undefined ? { name: item.name } : {}), url };
+			});
+			const same = (
+				a: { name?: string; url: string },
+				b: { name?: string; url: string },
+			) => a.name === b.name && a.url === b.url;
+			if (op === 'getSubscriptions')
+				return record.cookieSubscriptions.map((item) => ({ ...item }));
+			if (op === 'subscribe')
+				for (const item of list)
+					if (!record.cookieSubscriptions.some((kept) => same(kept, item)))
+						record.cookieSubscriptions.push(item);
+			if (op === 'unsubscribe')
+				record.cookieSubscriptions = record.cookieSubscriptions.filter(
+					(kept) => !list.some((item) => same(kept, item)),
+				);
+			await persist();
+			return undefined;
+		}
+		if (kind === 'backgroundFetch')
+			return this.#backgroundFetch(record, op, args, from);
+		throw new ApiError('NotSupportedError', `Unknown manager ${kind}`);
+	}
+
+	/**
+	 * A SyncEvent for `tag` in the registration's active worker; done, the
+	 * tag goes. One that fails is tried again as Chrome does it, after 5 and
+	 * then 15 minutes, the last with lastChance
+	 */
+	async #runSync(
+		record: RegistrationRecord,
+		tag: string,
+		attempt: number,
+		preferred?: WorkerHost,
+	) {
+		const key = `${record.scope} ${tag}`;
+		if (this.#syncing.has(key) && attempt === 0) return;
+		this.#syncing.add(key);
+		const version = record.active;
+		const host = preferred ?? this.#env?.host();
+		let ok = false;
+		if (version && host)
+			try {
+				const instance = await this.#instance(record, version, host);
+				ok = await this.#event(instance, () =>
+					instance.rpc.call('sync', { tag, lastChance: attempt >= 2 }),
+				);
+			} catch (error) {
+				ok = false;
+			}
+		if (ok || attempt >= 2) {
+			this.#syncing.delete(key);
+			record.syncTags = (record.syncTags ?? []).filter((kept) => kept !== tag);
+			if (this.#registrations.get(record.scope) === record)
+				await (await this.#open()).put('registrations', record, record.scope);
+			return;
+		}
+		setTimeout(
+			() => {
+				this.#runSync(record, tag, attempt + 1).catch(() => {});
+			},
+			attempt === 0 ? 5 * 60_000 : 15 * 60_000,
+		);
+	}
+
+	/** pending sync tags this worker is not running (after a restart) */
+	#resumeSyncs() {
+		for (const record of this.#registrations.values())
+			for (const tag of record.syncTags ?? [])
+				if (!this.#syncing.has(`${record.scope} ${tag}`))
+					this.#runSync(record, tag, 0).catch(() => {});
+	}
+
+	async #backgroundFetch(
+		record: RegistrationRecord,
+		op: string,
+		args: Record<string, unknown>,
+		from: {
+			host?: WorkerHost;
+			clientId?: string;
+			waitUntil?: (promise: Promise<unknown>) => void;
+		},
+	): Promise<unknown> {
+		let fetches = this.#backgroundFetches.get(record.scope);
+		if (!fetches)
+			this.#backgroundFetches.set(record.scope, (fetches = new Map()));
+		const id = String(args.id ?? '');
+		const failed = (message: string) =>
+			`Failed to execute '${op}' on 'BackgroundFetchManager': ${message}`;
+		if (op === 'getIds') return [...fetches.keys()];
+		if (op === 'get') return fetches.get(id)?.snapshot ?? null;
+		const entry = fetches.get(id);
+		if (op === 'abort') {
+			if (!entry || entry.snapshot.result) return false;
+			entry.aborted = true;
+			entry.snapshot.result = 'failure';
+			entry.snapshot.failureReason = 'aborted';
+			const ended = this.#endFetch(
+				record,
+				entry,
+				'backgroundfetchabort',
+				from.host,
+			);
+			from.waitUntil?.(ended);
+			return true;
+		}
+		if (op === 'records') {
+			if (!entry) return [];
+			const url = args.url === undefined ? undefined : String(args.url);
+			return entry.records.filter(
+				(item) => url === undefined || item.request.url === url,
+			);
+		}
+		if (op !== 'fetch') return undefined;
+		const requests =
+			(args.requests as BackgroundFetchRecordWire['request'][]) ?? [];
+		if (!id)
+			throw new ApiError('TypeError', failed('The provided id is empty.'));
+		if (!requests.length)
+			throw new ApiError(
+				'TypeError',
+				failed('At least one request must be given.'),
+			);
+		if (!record.active)
+			throw new ApiError(
+				'TypeError',
+				failed(
+					'No active registration available on the ServiceWorkerRegistration.',
+				),
+			);
+		if (entry)
+			throw new ApiError(
+				'TypeError',
+				failed('There already is a registration for the given id.'),
+			);
+		const created: BackgroundFetch = {
+			snapshot: {
+				id,
+				uploadTotal: 0,
+				uploaded: 0,
+				downloadTotal: Number(args.downloadTotal) || 0,
+				downloaded: 0,
+				result: '',
+				failureReason: '',
+				recordsAvailable: true,
+			},
+			records: requests.map((request) => ({ request, response: null })),
+			aborted: false,
+		};
+		fetches.set(id, created);
+		const download = this.#download(record, created, from);
+		from.waitUntil?.(download);
+		return { ...created.snapshot };
+	}
+
+	/** a background fetch's requests through the proxy, then its event in the worker */
+	async #download(
+		record: RegistrationRecord,
+		entry: BackgroundFetch,
+		from: { host?: WorkerHost; clientId?: string },
+	) {
+		const host = from.host ?? this.#env?.host();
+		let failure: BackgroundFetchSnapshot['failureReason'] = '';
+		for (const item of entry.records) {
+			if (entry.aborted) return;
+			try {
+				if (!host) throw new Error('no controller');
+				const response = await host.fetchResource(
+					item.request.url,
+					{ method: item.request.method, headers: item.request.headers },
+					from.clientId,
+				);
+				const body = await response.blob();
+				item.response = {
+					status: response.status,
+					statusText: response.statusText,
+					headers: [...response.headers],
+					body,
+				};
+				entry.snapshot.downloaded += body.size;
+				if (!response.ok && !failure) failure = 'bad-status';
+			} catch (error) {
+				if (!failure) failure = 'fetch-error';
+			}
+			if (
+				entry.snapshot.downloadTotal &&
+				entry.snapshot.downloaded > entry.snapshot.downloadTotal
+			) {
+				failure = 'download-total-exceeded';
+				break;
+			}
+		}
+		if (entry.aborted) return;
+		entry.snapshot.result = failure ? 'failure' : 'success';
+		entry.snapshot.failureReason = failure;
+		await this.#endFetch(
+			record,
+			entry,
+			failure ? 'backgroundfetchfail' : 'backgroundfetchsuccess',
+			host,
+		);
+	}
+
+	/** the fetch's event in the worker; once it is done the fetch and its records go */
+	async #endFetch(
+		record: RegistrationRecord,
+		entry: BackgroundFetch,
+		type:
+			'backgroundfetchsuccess' | 'backgroundfetchfail' | 'backgroundfetchabort',
+		preferred?: WorkerHost,
+	) {
+		const version = record.active;
+		const host = preferred ?? this.#env?.host();
+		if (version && host)
+			try {
+				const instance = await this.#instance(record, version, host);
+				await this.#event(instance, () =>
+					instance.rpc.call('backgroundFetch', {
+						type,
+						fetch: { ...entry.snapshot },
+					}),
+				);
+			} catch (error) {
+				// the fetch ends whether its handler ran or not
+			}
+		entry.snapshot.recordsAvailable = false;
+		this.#backgroundFetches.get(record.scope)?.delete(entry.snapshot.id);
 	}
 
 	// ---- instances
@@ -1217,6 +1564,29 @@ export class ServiceWorkers {
 					return [await this.#preload(record(), op, value), []];
 				} catch (error) {
 					return [{ ...record().navigationPreload }, []];
+				}
+			},
+			manager: async ({ kind, op, args }) => {
+				try {
+					return [
+						{
+							value: await this.manager(record(), kind, op, args ?? {}, {
+								host: instance.host,
+								inWorker: true,
+							}),
+						},
+						[],
+					];
+				} catch (error) {
+					return [
+						{
+							error:
+								error instanceof ApiError
+									? error.info
+									: { name: 'TypeError', message: String(error) },
+						},
+						[],
+					];
 				}
 			},
 		};

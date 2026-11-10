@@ -37,3 +37,34 @@ self.addEventListener('install', (event) => {
 	);
 });
 self.addEventListener('activate', (event) => event.waitUntil(clients.claim()));
+// what the registration's managers bring to the worker: a sync event, and
+// a background fetch's end with its records
+const note = (key, value) =>
+	caches.open('swl-shape').then((cache) => cache.put(key, new Response(value)));
+self.addEventListener('sync', (event) =>
+	event.waitUntil(
+		note(
+			'synced',
+			[event.tag, event.lastChance, event instanceof SyncEvent].join(' '),
+		),
+	),
+);
+const fetched = (event) =>
+	event.waitUntil(
+		(async () => {
+			const records = await event.registration.matchAll();
+			const response = await records[0].responseReady;
+			await note(
+				'fetched',
+				[
+					event.type,
+					event.registration.id,
+					event.registration.result,
+					records.length,
+					(await response.text()).trim(),
+				].join(' '),
+			);
+		})(),
+	);
+self.addEventListener('backgroundfetchsuccess', fetched);
+self.addEventListener('backgroundfetchfail', fetched);

@@ -195,15 +195,32 @@ origin, which is stricter than the membrane's site key.
   `preloadResponse` resolves `undefined`).
 - `ServiceWorker`: `scriptURL` (the real URL), `state`, `postMessage`,
   `onstatechange`, `onerror`.
-- Push, sync and the rest: `pushManager` is present and behaves as with the
-  notification permission denied (`subscribe()` rejects with
-  `NotAllowedError`, `getSubscription()` resolves `null`,
-  `permissionState()` resolves `denied`), which every push library handles.
-  `sync`, `periodicSync`, `backgroundFetch`, `paymentManager` and `cookies`
-  are absent, with their constructors, as in a browser without those
-  features (Firefox has none of the first three). `showNotification()`
-  rejects as without the permission and `getNotifications()` resolves `[]`:
-  the proxy origin's one notification permission would be every site's.
+- The registration's managers are all there and behave as Chrome's do
+  (measured in Chrome 152, page and worker), every API simulated rather
+  than left out:
+  - `sync.register()` runs: the tag is kept with the registration, the
+    worker gets a `SyncEvent` (once more after 5 and then 15 minutes, the
+    last with `lastChance`, when its `waitUntil` rejects), and `getTags()`
+    lists what has not run to success.
+  - `periodicSync.register()` rejects `NotAllowedError: Permission
+denied.`, as Chrome does without the site engagement it asks for.
+  - `backgroundFetch.fetch()` downloads through the proxy (as the page,
+    with its cookies), then the worker gets `backgroundfetchsuccess` or
+    `backgroundfetchfail` (`backgroundfetchabort` after `abort()`) with a
+    `BackgroundFetchRegistration` whose `matchAll()` gives the records; in
+    the worker `fetch()` rejects as natively. The fetches live as long as
+    Stomp's service worker runs, and no `progress` event fires.
+  - `paymentManager` keeps `userHint` and `enableDelegations()` answers
+    `true`; the payment events exist and never fire.
+  - `cookies` keeps the cookie change subscriptions (`subscribe`,
+    `getSubscriptions`, `unsubscribe`, URLs within the scope).
+  - Push answers as Chrome without the notification permission:
+    `permissionState()` is `prompt` in a page and `denied` in the worker,
+    `subscribe()` rejects `AbortError: Registration failed - permission
+denied`, `getSubscription()` resolves `null`. `showNotification()`
+    rejects as without the permission and `getNotifications()` resolves
+    `[]`: the proxy origin's one notification permission would be every
+    site's.
 - An opaque document (sandboxed without `allow-same-origin`) throws the
   browser's `SecurityError` when it reads `navigator.serviceWorker`.
 
@@ -244,9 +261,15 @@ once it has run on real traffic.
 ## Limitations
 
 - `event.isTrusted` is `false` for the emulated events (it cannot be set).
-- The worker is a dedicated Worker underneath: `self instanceof
-ServiceWorkerGlobalScope` is true and the dedicated-only members are gone,
-  but a determined script can still find its real prototype chain.
+- The worker is a dedicated Worker underneath, made to read as a
+  service worker: its global's own names are a Chrome service worker's
+  (the dedicated-only APIs, `URL.createObjectURL` and `postMessage` gone,
+  the push, sync, background fetch, payment and cookie interfaces and
+  their handlers there), each interface's prototype is read-only and an
+  event constructor called without `new` throws the browser's error
+  (service-worker-global suite). A determined script can still find its
+  real prototype chain. `cookieStore` comes with the page's, which builds
+  it over Stomp's cookie jar.
 - Responses the worker passes through keep the shape the proxy gives them: a
   `no-cors` request across origins is readable in the worker (the proxy
   makes every request same-origin to the browser), not opaque. A truly

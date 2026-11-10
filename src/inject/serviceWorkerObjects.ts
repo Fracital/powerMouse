@@ -7,7 +7,10 @@
 // dedicated worker) gets one that looks like it.
 
 import type {
+	BackgroundFetchRecordWire,
+	BackgroundFetchSnapshot,
 	ErrorInfo,
+	ManagerKind,
 	NavigationPreloadState,
 	RegistrationSnapshot,
 	StateStep,
@@ -34,7 +37,50 @@ export interface ObjectsBackend {
 		op: 'enable' | 'disable' | 'setHeaderValue' | 'getState',
 		value?: unknown,
 	): Promise<unknown>;
+	/** a call of one of the registration's managers (sync, periodicSync, backgroundFetch, paymentManager, cookies) */
+	manager(
+		registration: RegistrationSnapshot,
+		kind: ManagerKind,
+		op: string,
+		args: Record<string, unknown>,
+	): Promise<unknown>;
 }
+
+export interface ObjectsOptions {
+	/** the realm is the emulated worker's (push answers and backgroundFetch.fetch differ there) */
+	inWorker?: boolean;
+}
+
+/** ServiceWorkerRegistration.prototype's members in Chrome 152's order */
+const REGISTRATION_ORDER = [
+	'installing',
+	'waiting',
+	'active',
+	'navigationPreload',
+	'scope',
+	'updateViaCache',
+	'onupdatefound',
+	'unregister',
+	'update',
+	'paymentManager',
+	'constructor',
+	'backgroundFetch',
+	'periodicSync',
+	'sync',
+	'cookies',
+	'pushManager',
+	'getNotifications',
+	'showNotification',
+];
+
+/** a manager a registration has, by the member that holds it */
+const MANAGERS = {
+	sync: 'SyncManager',
+	periodicSync: 'PeriodicSyncManager',
+	backgroundFetch: 'BackgroundFetchManager',
+	paymentManager: 'PaymentManager',
+	cookies: 'CookieStoreManager',
+} as const;
 
 interface RegistrationState {
 	snapshot: RegistrationSnapshot;
@@ -43,33 +89,21 @@ interface RegistrationState {
 	active: object | null;
 	preload: object;
 	push: object;
+	managers: Map<ManagerKind, object>;
+	/** paymentManager.userHint, as the page last set it */
+	userHint: string;
 	removed: boolean;
+}
+
+interface FetchState {
+	snapshot: BackgroundFetchSnapshot;
+	registration: RegistrationSnapshot;
 }
 
 interface WorkerObjectState {
 	snapshot: WorkerSnapshot;
 	registration: string;
 }
-
-/** the registration members a browser without the feature lacks (with their interfaces) */
-const ABSENT_MEMBERS = [
-	'sync',
-	'periodicSync',
-	'backgroundFetch',
-	'paymentManager',
-	'cookies',
-	'index',
-];
-const ABSENT_GLOBALS = [
-	'SyncManager',
-	'PeriodicSyncManager',
-	'BackgroundFetchManager',
-	'BackgroundFetchRecord',
-	'BackgroundFetchRegistration',
-	'PaymentManager',
-	'CookieStoreManager',
-	'ContentIndex',
-];
 
 export default class ServiceWorkerObjects {
 	readonly global: typeof globalThis;
@@ -81,6 +115,23 @@ export default class ServiceWorkerObjects {
 	readonly #workerStates = new WeakMap<object, WorkerObjectState>();
 	readonly #preloads = new WeakMap<object, RegistrationState>();
 	readonly #pushes = new WeakSet<object>();
+	readonly #managers = new WeakMap<
+		object,
+		{ kind: ManagerKind; state: RegistrationState }
+	>();
+	readonly #fetches = new WeakMap<object, FetchState>();
+	readonly #records = new WeakMap<
+		object,
+		{ request: Request; response: Promise<Response> }
+	>();
+	readonly #inWorker: boolean;
+	/** the interfaces this realm uses, its own or stand-ins (the worker exposes the ones a service worker has) */
+	readonly classes = new Map<string, Function>();
+	/** a background fetch registration object of this realm (the worker's events carry one) */
+	backgroundFetch?: (
+		snapshot: BackgroundFetchSnapshot,
+		registration: RegistrationSnapshot,
+	) => object;
 	readonly #handlers = new WeakMap<object, Map<string, unknown>>();
 	readonly #addEventListener: typeof EventTarget.prototype.addEventListener;
 	readonly #dispatchEvent: typeof EventTarget.prototype.dispatchEvent;
@@ -90,10 +141,12 @@ export default class ServiceWorkerObjects {
 		global: typeof globalThis,
 		proxy: ProxyModule,
 		backend: ObjectsBackend,
+		options: ObjectsOptions = {},
 	) {
 		this.global = global;
 		this.#proxy = proxy;
 		this.#backend = backend;
+		this.#inWorker = !!options.inWorker;
 		this.#addEventListener = global.EventTarget.prototype.addEventListener;
 		this.#dispatchEvent = global.EventTarget.prototype.dispatchEvent;
 		this.#Registration = global.ServiceWorkerRegistration;
@@ -104,7 +157,54 @@ export default class ServiceWorkerObjects {
 		this.#hookServiceWorker();
 		this.#hookPreload();
 		this.#hookPush();
-		for (const name of ABSENT_GLOBALS) Reflect.deleteProperty(global, name);
+		this.#hookManagers();
+	}
+
+	/**
+	 * The realm's interface `name`, or a stand-in that reads as one: an
+	 * illegal constructor whose source reads as native code, with a
+	 * read-only prototype under `parent`'s. Kept in `classes`, never put on
+	 * the global here
+	 */
+	classFor(name: string, parent?: Function): Function {
+		const known = this.classes.get(name);
+		if (known) return known;
+		const own = (this.global as unknown as Record<string, unknown>)[name];
+		const ctor =
+			typeof own === 'function'
+				? (own as Function)
+				: this.fakeClass(name, parent);
+		this.classes.set(name, ctor);
+		return ctor;
+	}
+
+	/** an illegal constructor named `name` (see classFor) */
+	fakeClass(name: string, parent?: Function): Function {
+		const global = this.global;
+		const ctor = this.native(function () {
+			throw new global.TypeError('Illegal constructor');
+		}, name);
+		const proto = Object.create(
+			parent ? parent.prototype : global.Object.prototype,
+		);
+		Reflect.defineProperty(proto, 'constructor', {
+			configurable: true,
+			writable: true,
+			value: ctor,
+		});
+		Reflect.defineProperty(proto, Symbol.toStringTag, {
+			configurable: true,
+			value: name,
+		});
+		// natively an interface's prototype is read-only
+		Reflect.defineProperty(ctor, 'prototype', {
+			value: proto,
+			writable: false,
+			enumerable: false,
+			configurable: false,
+		});
+		if (parent) Reflect.setPrototypeOf(ctor, parent);
+		return ctor;
 	}
 
 	/** an error of this realm for what Stomp's service worker reported */
@@ -271,11 +371,21 @@ export default class ServiceWorkerObjects {
 			active: this.worker(snapshot.active, snapshot.id),
 			preload,
 			push,
+			managers: new Map(),
+			userHint: '',
 			removed: false,
 		};
 		this.#registrationStates.set(object, state);
 		this.#preloads.set(preload, state);
 		this.#pushes.add(push);
+		for (const [kind, name] of Object.entries(MANAGERS) as [
+			ManagerKind,
+			string,
+		][]) {
+			const manager = Object.create(this.classFor(name).prototype);
+			state.managers.set(kind, manager);
+			this.#managers.set(manager, { kind, state });
+		}
 		this.#registrations.set(snapshot.id, object);
 		return object;
 	}
@@ -356,22 +466,12 @@ export default class ServiceWorkerObjects {
 	}
 
 	#fakeServiceWorker(): Function {
-		const global = this.global;
-		const ServiceWorker = this.native(function () {
-			throw new global.TypeError('Illegal constructor');
-		}, 'ServiceWorker');
-		ServiceWorker.prototype = Object.create(global.EventTarget.prototype);
-		Reflect.defineProperty(ServiceWorker.prototype, 'constructor', {
-			configurable: true,
-			writable: true,
-			value: ServiceWorker,
-		});
-		Reflect.defineProperty(ServiceWorker.prototype, Symbol.toStringTag, {
-			configurable: true,
-			value: 'ServiceWorker',
-		});
-		Reflect.setPrototypeOf(ServiceWorker, global.EventTarget);
-		Reflect.defineProperty(global, 'ServiceWorker', {
+		const ServiceWorker = this.fakeClass(
+			'ServiceWorker',
+			this.global.EventTarget,
+		);
+		this.classes.set('ServiceWorker', ServiceWorker);
+		Reflect.defineProperty(this.global, 'ServiceWorker', {
 			configurable: true,
 			writable: true,
 			value: ServiceWorker,
@@ -424,7 +524,23 @@ export default class ServiceWorkerObjects {
 		this.hook(proto, 'getNotifications', brand, {
 			call: async () => [],
 		});
-		for (const name of ABSENT_MEMBERS) Reflect.deleteProperty(proto, name);
+		for (const kind of Object.keys(MANAGERS) as ManagerKind[])
+			this.hook(proto, kind, brand, {
+				get: (that) => state(that).managers.get(kind),
+			});
+		// a member the realm lacked was added last: the members in Chrome's
+		// order, as the prototype lists them natively
+		const order = Reflect.ownKeys(proto).filter(
+			(key): key is string => typeof key === 'string',
+		);
+		const wanted = REGISTRATION_ORDER.filter((key) => order.includes(key));
+		const current = order.filter((key) => REGISTRATION_ORDER.includes(key));
+		if (wanted.join() !== current.join())
+			for (const key of wanted) {
+				const descriptor = Reflect.getOwnPropertyDescriptor(proto, key)!;
+				Reflect.deleteProperty(proto, key);
+				Reflect.defineProperty(proto, key, descriptor);
+			}
 	}
 
 	#hookServiceWorker() {
@@ -509,10 +625,12 @@ export default class ServiceWorkerObjects {
 		});
 	}
 
-	/** push as with the notification permission denied */
+	/**
+	 * push as Chrome answers without the notification permission (measured:
+	 * `prompt` in a page, `denied` in a worker, and a subscribe that fails)
+	 */
 	#hookPush() {
-		const Push = (this.global as { PushManager?: Function }).PushManager;
-		if (!Push) return;
+		const Push = this.classFor('PushManager');
 		const brand = (that: unknown) =>
 			typeof that === 'object' && that !== null && this.#pushes.has(that);
 		const proto = Push.prototype;
@@ -520,13 +638,267 @@ export default class ServiceWorkerObjects {
 			call: async () => {
 				throw new this.global.DOMException(
 					'Registration failed - permission denied',
-					'NotAllowedError',
+					'AbortError',
 				);
 			},
 		});
 		this.hook(proto, 'getSubscription', brand, { call: async () => null });
 		this.hook(proto, 'permissionState', brand, {
-			call: async () => 'denied',
+			call: async () => (this.#inWorker ? 'denied' : 'prompt'),
+		});
+	}
+
+	/** a manager method's missing-argument error, as the browser words it */
+	#required(method: string, on: string, count: number, got: number) {
+		if (got >= count) return;
+		throw new this.global.TypeError(
+			`Failed to execute '${method}' on '${on}': ${count} argument${count > 1 ? 's' : ''} required, but only ${got} present.`,
+		);
+	}
+
+	/**
+	 * The registration's managers, each over Stomp's service worker
+	 * (docs/service-workers.md): sync runs (its event reaches the worker),
+	 * periodic sync is refused as Chrome refuses it without the permission,
+	 * background fetch downloads through the proxy and tells the worker,
+	 * the payment manager and cookie change subscriptions keep what they
+	 * are given
+	 */
+	#hookManagers() {
+		const global = this.global;
+		const of = (that: object) => this.#managers.get(that)!;
+		const brandOf = (kind: ManagerKind) => (that: unknown) =>
+			typeof that === 'object' &&
+			that !== null &&
+			this.#managers.get(that)?.kind === kind;
+		const run = (
+			that: object,
+			op: string,
+			args: Record<string, unknown> = {},
+		) => {
+			const { kind, state } = of(that);
+			return this.#backend.manager(state.snapshot, kind, op, args);
+		};
+		const method = (
+			kind: ManagerKind,
+			name: string,
+			required: number,
+			call: (that: object, args: unknown[]) => Promise<unknown>,
+		) => {
+			const on = MANAGERS[kind];
+			this.hook(this.classFor(on).prototype, name, brandOf(kind), {
+				length: required,
+				call: async (that, args) => {
+					this.#required(name, on, required, args.length);
+					return call(that, args);
+				},
+			});
+		};
+
+		method('sync', 'register', 1, (that, [tag]) =>
+			run(that, 'register', { tag: String(tag) }),
+		);
+		method('sync', 'getTags', 0, (that) => run(that, 'getTags'));
+
+		method('periodicSync', 'register', 1, (that, [tag, options]) =>
+			run(that, 'register', {
+				tag: String(tag),
+				minInterval: Number(
+					(options as { minInterval?: unknown } | undefined)?.minInterval ?? 0,
+				),
+			}),
+		);
+		method('periodicSync', 'getTags', 0, (that) => run(that, 'getTags'));
+		method('periodicSync', 'unregister', 1, (that, [tag]) =>
+			run(that, 'unregister', { tag: String(tag) }),
+		);
+
+		this.hook(
+			this.classFor('PaymentManager').prototype,
+			'userHint',
+			brandOf('paymentManager'),
+			{
+				get: (that) => of(that).state.userHint,
+				set: (that, value) => {
+					const state = of(that).state;
+					state.userHint = String(value);
+					run(that, 'userHint', { value: state.userHint }).catch(() => {});
+				},
+			},
+		);
+		method('paymentManager', 'enableDelegations', 1, (that, [list]) =>
+			run(that, 'enableDelegations', {
+				delegations: [...((list as Iterable<unknown>) ?? [])].map(String),
+			}),
+		);
+
+		const subscriptions = (list: unknown) =>
+			[...((list as Iterable<{ name?: unknown; url?: unknown }>) ?? [])].map(
+				(item) => ({
+					...(item?.name !== undefined ? { name: String(item.name) } : {}),
+					...(item?.url !== undefined ? { url: String(item.url) } : {}),
+				}),
+			);
+		method('cookies', 'subscribe', 1, (that, [list]) =>
+			run(that, 'subscribe', { subscriptions: subscriptions(list) }),
+		);
+		method('cookies', 'getSubscriptions', 0, (that) =>
+			run(that, 'getSubscriptions'),
+		);
+		method('cookies', 'unsubscribe', 1, (that, [list]) =>
+			run(that, 'unsubscribe', { subscriptions: subscriptions(list) }),
+		);
+
+		// background fetch: the registrations it makes, and their records
+		const Registration = this.classFor(
+			'BackgroundFetchRegistration',
+			global.EventTarget,
+		);
+		const Record = this.classFor('BackgroundFetchRecord');
+		const fetchOf = (that: object) => this.#fetches.get(that)!;
+		const isFetch = (that: unknown) =>
+			typeof that === 'object' && that !== null && this.#fetches.has(that);
+		const made = new Map<string, object>();
+		const fetchObject = (
+			snapshot: BackgroundFetchSnapshot,
+			registration: RegistrationSnapshot,
+		) => {
+			const key = `${registration.id} ${snapshot.id}`;
+			let object = made.get(key);
+			if (!object) {
+				object = this.eventTarget(Registration);
+				made.set(key, object);
+				this.#fetches.set(object, { snapshot, registration });
+			} else this.#fetches.get(object)!.snapshot = snapshot;
+			return object;
+		};
+		this.backgroundFetch = fetchObject;
+		const requestsOf = (value: unknown) =>
+			(Array.isArray(value) ? value : [value]).map((item) => {
+				const request =
+					item instanceof global.Request
+						? item
+						: new global.Request(String(item));
+				return {
+					url: request.url,
+					method: request.method,
+					headers: [...request.headers] as [string, string][],
+				};
+			});
+		method(
+			'backgroundFetch',
+			'fetch',
+			2,
+			async (that, [id, requests, options]) => {
+				if (this.#inWorker)
+					throw new global.DOMException(
+						"Failed to execute 'fetch' on 'BackgroundFetchManager': backgroundFetch.fetch() is not allowed in service worker environments.",
+						'NotAllowedError',
+					);
+				const opts = (options ?? {}) as {
+					title?: unknown;
+					downloadTotal?: unknown;
+				};
+				const snapshot = (await run(that, 'fetch', {
+					id: String(id),
+					requests: requestsOf(requests),
+					title: opts.title === undefined ? '' : String(opts.title),
+					downloadTotal: Number(opts.downloadTotal ?? 0),
+				})) as BackgroundFetchSnapshot;
+				return fetchObject(snapshot, of(that).state.snapshot);
+			},
+		);
+		method('backgroundFetch', 'get', 1, async (that, [id]) => {
+			const snapshot = (await run(that, 'get', {
+				id: String(id),
+			})) as BackgroundFetchSnapshot | null;
+			return snapshot
+				? fetchObject(snapshot, of(that).state.snapshot)
+				: undefined;
+		});
+		method('backgroundFetch', 'getIds', 0, (that) => run(that, 'getIds'));
+
+		const proto = Registration.prototype;
+		for (const key of [
+			'id',
+			'uploadTotal',
+			'uploaded',
+			'downloadTotal',
+			'downloaded',
+			'result',
+			'failureReason',
+			'recordsAvailable',
+		] as const)
+			this.hook(proto, key, isFetch, {
+				get: (that) => fetchOf(that).snapshot[key],
+			});
+		this.handler(proto, 'progress', isFetch);
+		const fetchCall = (
+			that: object,
+			op: string,
+			args: Record<string, unknown>,
+		) => {
+			const { snapshot, registration } = fetchOf(that);
+			return this.#backend.manager(registration, 'backgroundFetch', op, {
+				...args,
+				id: snapshot.id,
+			});
+		};
+		this.hook(proto, 'abort', isFetch, {
+			call: (that) => fetchCall(that, 'abort', {}),
+		});
+		const records = async (that: object, args: unknown[], all: boolean) => {
+			if (!fetchOf(that).snapshot.recordsAvailable)
+				throw new global.DOMException(
+					'The records associated with this background fetch are no longer available.',
+					'InvalidStateError',
+				);
+			const filter = args[0] === undefined ? undefined : requestsOf(args[0])[0];
+			const found = (await fetchCall(that, 'records', {
+				...(filter ? { url: filter.url } : {}),
+			})) as BackgroundFetchRecordWire[];
+			const objects = found.map((record) => {
+				const object = Object.create(Record.prototype);
+				const response = record.response
+					? Promise.resolve(
+							new global.Response(record.response.body, {
+								status: record.response.status,
+								statusText: record.response.statusText,
+								headers: record.response.headers,
+							}),
+						)
+					: Promise.reject(
+							new global.DOMException(
+								'The response is not available.',
+								'UnknownError',
+							),
+						);
+				response.catch(() => {});
+				this.#records.set(object, {
+					request: new global.Request(record.request.url, {
+						method: record.request.method,
+						headers: record.request.headers,
+					}),
+					response,
+				});
+				return object;
+			});
+			return all ? objects : objects[0];
+		};
+		this.hook(proto, 'match', isFetch, {
+			length: 1,
+			call: (that, args) => records(that, args, false),
+		});
+		this.hook(proto, 'matchAll', isFetch, {
+			call: (that, args) => records(that, args, true),
+		});
+		const isRecord = (that: unknown) =>
+			typeof that === 'object' && that !== null && this.#records.has(that);
+		this.hook(Record.prototype, 'request', isRecord, {
+			get: (that) => this.#records.get(that)!.request,
+		});
+		this.hook(Record.prototype, 'responseReady', isRecord, {
+			get: (that) => this.#records.get(that)!.response,
 		});
 	}
 }

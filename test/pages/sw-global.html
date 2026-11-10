@@ -1,0 +1,27 @@
+<!doctype html>
+<title>SW GLOBAL</title>
+<script>
+	// What a service worker's global holds (sw-global.js reports it into a
+	// cache), so a suite can compare the emulated global with a real one.
+	// Sets a cookie first: the worker's cookieStore lists it. Under
+	// /pages/deep/swg/.
+	window.__swg = { done: false };
+	document.cookie = 'swg=1; path=/';
+	(async () => {
+		await navigator.serviceWorker.register('sw-global.js');
+		const reg = await navigator.serviceWorker.ready;
+		for (let i = 0; i < 200; i++) {
+			const hit = await (await caches.open('swg')).match('report');
+			if (hit) {
+				window.__swg.report = await hit.json();
+				break;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		await reg.unregister();
+		window.__swg.done = true;
+	})().catch((error) => {
+		window.__swg.error = String(error);
+		window.__swg.done = true;
+	});
+</script>

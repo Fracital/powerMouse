@@ -246,6 +246,14 @@ function workerHost(ref: ControllerRef, ready: StompServer): WorkerHost {
 				{ clientId, bypassCache, internal: true },
 			),
 		routeDocument: (url) => ready.route(url),
+		fetchResource: (url, init, clientId) =>
+			ready.router.route(
+				new Request(ready.routeAs('binary', url), {
+					method: init.method,
+					headers: init.headers,
+				}),
+				{ clientId, internal: true },
+			),
 		timeout: ref.config.serviceWorkerTimeout,
 	};
 }

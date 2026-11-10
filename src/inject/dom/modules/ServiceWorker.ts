@@ -212,6 +212,8 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 			},
 			preload: (registration, op, value) =>
 				call('preload', { scope: registration.scope, op, value }),
+			manager: (registration, kind, op, args) =>
+				call('manager', { scope: registration.scope, kind, op, args }),
 		});
 
 		const Container = global.ServiceWorkerContainer;

@@ -1,6 +1,7 @@
 import type {
 	ClientInfo,
 	EmulateInfo,
+	ErrorInfo,
 	FetchAnswer,
 	FetchInit,
 	FromEmulated,
@@ -55,7 +56,84 @@ const DEDICATED_ONLY = [
 	'FileReaderSync',
 ];
 
-/** the event handler attributes a service worker's global has (those of the features it lacks are absent) */
+/**
+ * What a dedicated worker's global has and a service worker's lacks
+ * besides (measured against Chrome 152's service worker global): device and
+ * media APIs, WebCodecs, the RTC script transform, the old file system API
+ */
+const DEDICATED_ONLY_INTERFACES = [
+	'AudioData',
+	'AudioDecoder',
+	'AudioEncoder',
+	'EncodedAudioChunk',
+	'EncodedVideoChunk',
+	'FileSystemObserver',
+	'FileSystemSyncAccessHandle',
+	'HID',
+	'HIDConnectionEvent',
+	'HIDDevice',
+	'HIDInputReportEvent',
+	'IdleDetector',
+	'ImageDecoder',
+	'ImageTrack',
+	'ImageTrackList',
+	'MediaSource',
+	'MediaSourceHandle',
+	'PressureObserver',
+	'PressureRecord',
+	'ProgressEvent',
+	'RTCDataChannel',
+	'RTCEncodedAudioFrame',
+	'RTCEncodedVideoFrame',
+	'RTCRtpScriptTransformer',
+	'RTCTransformEvent',
+	'Serial',
+	'SerialPort',
+	'SourceBuffer',
+	'SourceBufferList',
+	'USB',
+	'USBAlternateInterface',
+	'USBConfiguration',
+	'USBConnectionEvent',
+	'USBDevice',
+	'USBEndpoint',
+	'USBInTransferResult',
+	'USBInterface',
+	'USBIsochronousInTransferPacket',
+	'USBIsochronousInTransferResult',
+	'USBIsochronousOutTransferPacket',
+	'USBIsochronousOutTransferResult',
+	'USBOutTransferResult',
+	'VideoColorSpace',
+	'VideoDecoder',
+	'VideoEncoder',
+	'VideoFrame',
+	'onrtctransform',
+	'webkitRequestFileSystem',
+	'webkitRequestFileSystemSync',
+	'webkitResolveLocalFileSystemSyncURL',
+	'webkitResolveLocalFileSystemURL',
+	'PaymentManager',
+	'ContentIndex',
+];
+
+/** members the inject assigns on the global, which natively live on its prototype chain */
+const INHERITED = ['fetch', 'importScripts', 'setTimeout', 'setInterval'];
+
+/** the interfaces a service worker's global has that the object layer may stand in for */
+const SERVICE_WORKER_INTERFACES = [
+	'ServiceWorkerRegistration',
+	'NavigationPreloadManager',
+	'PushManager',
+	'SyncManager',
+	'PeriodicSyncManager',
+	'BackgroundFetchManager',
+	'BackgroundFetchRecord',
+	'BackgroundFetchRegistration',
+	'CookieStoreManager',
+];
+
+/** the event handler attributes a service worker's global has */
 const HANDLERS = [
 	'install',
 	'activate',
@@ -64,6 +142,16 @@ const HANDLERS = [
 	'pushsubscriptionchange',
 	'notificationclick',
 	'notificationclose',
+	'sync',
+	'periodicsync',
+	'backgroundfetchsuccess',
+	'backgroundfetchfail',
+	'backgroundfetchabort',
+	'backgroundfetchclick',
+	'canmakepayment',
+	'paymentrequest',
+	'abortpayment',
+	'cookiechange',
 ];
 
 /**
@@ -114,33 +202,51 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 			},
 		]);
 
-		const objects = new ServiceWorkerObjects(global, proxy, {
-			update: async () => {
-				const error = await rpc.call('update', null);
-				if (error) throw objects.error(error);
+		const objects: ServiceWorkerObjects = new ServiceWorkerObjects(
+			global,
+			proxy,
+			{
+				update: async () => {
+					const error = await rpc.call('update', null);
+					if (error) throw objects.error(error);
+				},
+				unregister: () => rpc.call('unregister', null),
+				postMessage: (worker, _registration, message, transfer) => {
+					checkClone(global, message, transfer);
+					const ports = portsOf(transfer);
+					rpc.call(
+						'postToWorker',
+						{ worker: worker.id, data: message, ports },
+						ports,
+					);
+				},
+				preload: (_registration, op, value) =>
+					rpc.call('preload', { op, value }),
+				manager: async (_registration, kind, op, args) => {
+					const answer: { value: unknown } | { error: ErrorInfo } =
+						await rpc.call('manager', { kind, op, args });
+					if ('error' in answer) throw objects.error(answer.error);
+					return answer.value;
+				},
 			},
-			unregister: () => rpc.call('unregister', null),
-			postMessage: (worker, _registration, message, transfer) => {
-				checkClone(global, message, transfer);
-				const ports = portsOf(transfer);
-				rpc.call(
-					'postToWorker',
-					{ worker: worker.id, data: message, ports },
-					ports,
-				);
-			},
-			preload: (_registration, op, value) => rpc.call('preload', { op, value }),
-		});
+			{ inWorker: true },
+		);
 		const registration = objects.registration(info.registration);
 		const self = objects.worker(info.version, info.registration.id)!;
 
+		/**
+		 * Put `cls` on the global as interface `name`: behind a stand-in
+		 * constructor that reads as native code, throws the browser's error
+		 * when called without `new` (a class's own error names the minified
+		 * class) and has a read-only prototype, the class's own
+		 */
+		const exposed = new Map<Function, Function>();
 		const nativeClass = (
 			cls: Function,
 			name: string,
 			length: number,
 			parent?: Function,
 		) => {
-			objects.native(cls, name, length);
 			for (const key of Reflect.ownKeys(cls.prototype)) {
 				if (typeof key !== 'string' || key === 'constructor') continue;
 				const descriptor = Reflect.getOwnPropertyDescriptor(
@@ -156,11 +262,39 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 				configurable: true,
 				value: name,
 			});
-			if (parent) Reflect.setPrototypeOf(cls, parent);
+			const StandIn = objects.native(
+				function (this: unknown, ...args: unknown[]) {
+					if (!new.target)
+						throw new global.TypeError(
+							`Failed to construct '${name}': Please use the 'new' operator, this DOM object constructor cannot be called as a function.`,
+						);
+					return Reflect.construct(
+						cls,
+						args,
+						new.target === StandIn ? cls : new.target,
+					);
+				},
+				name,
+				length,
+			);
+			Reflect.defineProperty(StandIn, 'prototype', {
+				value: cls.prototype,
+				writable: false,
+				enumerable: false,
+				configurable: false,
+			});
+			Reflect.defineProperty(cls.prototype, 'constructor', {
+				configurable: true,
+				writable: true,
+				value: StandIn,
+			});
+			const above = parent && (exposed.get(parent) ?? parent);
+			if (above) Reflect.setPrototypeOf(StandIn, above);
+			exposed.set(cls, StandIn);
 			Reflect.defineProperty(global, name, {
 				configurable: true,
 				writable: true,
-				value: cls,
+				value: StandIn,
 			});
 		};
 		const invalidState = (method: string, on: string, message: string) =>
@@ -337,6 +471,276 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 			ExtendableEvent,
 		);
 
+		// the events of the features a service worker has: they run (sync,
+		// background fetch) or never fire here (push, notifications,
+		// payments), and a page can construct each as natively
+		const required = (name: string, member: string) =>
+			new global.TypeError(
+				`Failed to construct '${name}': required member ${member} is undefined.`,
+			);
+		const initOf = (init: unknown) =>
+			(typeof init === 'object' && init !== null ? init : {}) as Record<
+				string,
+				unknown
+			>;
+		const fields = new WeakMap<Event, Record<string, unknown>>();
+		const field = (event: Event, key: string) => fields.get(event)?.[key];
+
+		class SyncEvent extends ExtendableEvent {
+			constructor(type: string, init?: unknown) {
+				const own = initOf(init);
+				if (own.tag === undefined) throw required('SyncEvent', 'tag');
+				super(type, own as EventInit);
+				fields.set(this, {
+					tag: String(own.tag),
+					lastChance: !!own.lastChance,
+				});
+			}
+			get tag() {
+				return field(this, 'tag');
+			}
+			get lastChance() {
+				return field(this, 'lastChance');
+			}
+		}
+		nativeClass(SyncEvent, 'SyncEvent', 2, ExtendableEvent);
+
+		class PeriodicSyncEvent extends ExtendableEvent {
+			constructor(type: string, init?: unknown) {
+				const own = initOf(init);
+				if (own.tag === undefined) throw required('PeriodicSyncEvent', 'tag');
+				super(type, own as EventInit);
+				fields.set(this, { tag: String(own.tag) });
+			}
+			get tag() {
+				return field(this, 'tag');
+			}
+		}
+		nativeClass(PeriodicSyncEvent, 'PeriodicSyncEvent', 2, ExtendableEvent);
+
+		const PushMessageData = objects.fakeClass('PushMessageData');
+		const pushBytes = new WeakMap<object, Uint8Array>();
+		const isPushData = (that: unknown) =>
+			typeof that === 'object' && that !== null && pushBytes.has(that);
+		const bytesOf = (that: object) => pushBytes.get(that)!;
+		objects.hook(PushMessageData.prototype, 'arrayBuffer', isPushData, {
+			call: (that) => bytesOf(that).slice().buffer,
+		});
+		objects.hook(PushMessageData.prototype, 'blob', isPushData, {
+			call: (that) =>
+				new global.Blob([bytesOf(that) as Uint8Array<ArrayBuffer>]),
+		});
+		objects.hook(PushMessageData.prototype, 'bytes', isPushData, {
+			call: (that) => bytesOf(that).slice(),
+		});
+		objects.hook(PushMessageData.prototype, 'json', isPushData, {
+			call: (that) => JSON.parse(new TextDecoder().decode(bytesOf(that))),
+		});
+		objects.hook(PushMessageData.prototype, 'text', isPushData, {
+			call: (that) => new TextDecoder().decode(bytesOf(that)),
+		});
+		class PushEvent extends ExtendableEvent {
+			constructor(type: string, init?: unknown) {
+				const own = initOf(init);
+				super(type, own as EventInit);
+				let data: object | null = null;
+				if (own.data !== undefined && own.data !== null) {
+					data = Object.create(PushMessageData.prototype);
+					const value = own.data;
+					pushBytes.set(
+						data!,
+						typeof value === 'string'
+							? new TextEncoder().encode(value)
+							: ArrayBuffer.isView(value)
+								? new Uint8Array(
+										value.buffer.slice(
+											value.byteOffset,
+											value.byteOffset + value.byteLength,
+										),
+									)
+								: new Uint8Array(value as ArrayBuffer),
+					);
+				}
+				fields.set(this, { data });
+			}
+			get data() {
+				return field(this, 'data');
+			}
+		}
+		nativeClass(PushEvent, 'PushEvent', 1, ExtendableEvent);
+
+		class PushSubscriptionChangeEvent extends ExtendableEvent {
+			constructor(type: string, init?: unknown) {
+				const own = initOf(init);
+				super(type, own as EventInit);
+				fields.set(this, {
+					newSubscription: own.newSubscription ?? null,
+					oldSubscription: own.oldSubscription ?? null,
+				});
+			}
+			get newSubscription() {
+				return field(this, 'newSubscription');
+			}
+			get oldSubscription() {
+				return field(this, 'oldSubscription');
+			}
+		}
+		nativeClass(
+			PushSubscriptionChangeEvent,
+			'PushSubscriptionChangeEvent',
+			1,
+			ExtendableEvent,
+		);
+
+		class NotificationEvent extends ExtendableEvent {
+			constructor(type: string, init?: unknown) {
+				const own = initOf(init);
+				if (own.notification === undefined)
+					throw required('NotificationEvent', 'notification');
+				super(type, own as EventInit);
+				fields.set(this, {
+					notification: own.notification,
+					action: String(own.action ?? ''),
+					reply: own.reply ?? null,
+				});
+			}
+			get notification() {
+				return field(this, 'notification');
+			}
+			get action() {
+				return field(this, 'action');
+			}
+			get reply() {
+				return field(this, 'reply');
+			}
+		}
+		nativeClass(NotificationEvent, 'NotificationEvent', 2, ExtendableEvent);
+
+		class BackgroundFetchEvent extends ExtendableEvent {
+			constructor(type: string, init?: unknown) {
+				const own = initOf(init);
+				if (own.registration === undefined)
+					throw required('BackgroundFetchEvent', 'registration');
+				super(type, own as EventInit);
+				fields.set(this, { registration: own.registration });
+			}
+			get registration() {
+				return field(this, 'registration');
+			}
+		}
+		nativeClass(
+			BackgroundFetchEvent,
+			'BackgroundFetchEvent',
+			2,
+			ExtendableEvent,
+		);
+
+		class BackgroundFetchUpdateUIEvent extends BackgroundFetchEvent {
+			async updateUI() {
+				return undefined;
+			}
+		}
+		nativeClass(
+			BackgroundFetchUpdateUIEvent,
+			'BackgroundFetchUpdateUIEvent',
+			2,
+			BackgroundFetchEvent,
+		);
+
+		// payments never reach a proxied page's worker: their events exist
+		// to be constructed, answering with what they were given
+		class CanMakePaymentEvent extends ExtendableEvent {
+			respondWith(response: unknown) {
+				this.waitUntil(response);
+			}
+		}
+		nativeClass(CanMakePaymentEvent, 'CanMakePaymentEvent', 1, ExtendableEvent);
+		class AbortPaymentEvent extends ExtendableEvent {
+			respondWith(response: unknown) {
+				this.waitUntil(response);
+			}
+		}
+		nativeClass(AbortPaymentEvent, 'AbortPaymentEvent', 1, ExtendableEvent);
+		class PaymentRequestEvent extends ExtendableEvent {
+			constructor(type: string, init?: unknown) {
+				const own = initOf(init);
+				super(type, own as EventInit);
+				fields.set(this, own);
+			}
+			get topOrigin() {
+				return String(field(this, 'topOrigin') ?? '');
+			}
+			get paymentRequestOrigin() {
+				return String(field(this, 'paymentRequestOrigin') ?? '');
+			}
+			get paymentRequestId() {
+				return String(field(this, 'paymentRequestId') ?? '');
+			}
+			get methodData() {
+				return field(this, 'methodData') ?? [];
+			}
+			get total() {
+				return field(this, 'total') ?? null;
+			}
+			get modifiers() {
+				return field(this, 'modifiers') ?? [];
+			}
+			get paymentOptions() {
+				return field(this, 'paymentOptions') ?? null;
+			}
+			get shippingOptions() {
+				return field(this, 'shippingOptions') ?? null;
+			}
+			async openWindow() {
+				return null;
+			}
+			async changePaymentMethod() {
+				return null;
+			}
+			async changeShippingAddress() {
+				return null;
+			}
+			async changeShippingOption() {
+				return null;
+			}
+			respondWith(response: unknown) {
+				this.waitUntil(response);
+			}
+		}
+		nativeClass(PaymentRequestEvent, 'PaymentRequestEvent', 2, ExtendableEvent);
+
+		class ExtendableCookieChangeEvent extends ExtendableEvent {
+			constructor(type: string, init?: unknown) {
+				const own = initOf(init);
+				super(type, own as EventInit);
+				fields.set(this, {
+					changed: global.Object.freeze([
+						...((own.changed as unknown[]) ?? []),
+					]),
+					deleted: global.Object.freeze([
+						...((own.deleted as unknown[]) ?? []),
+					]),
+				});
+			}
+			get changed() {
+				return field(this, 'changed');
+			}
+			get deleted() {
+				return field(this, 'deleted');
+			}
+		}
+		nativeClass(
+			ExtendableCookieChangeEvent,
+			'ExtendableCookieChangeEvent',
+			1,
+			ExtendableEvent,
+		);
+		Reflect.defineProperty(global, 'PushMessageData', {
+			configurable: true,
+			writable: true,
+			value: PushMessageData,
+		});
+
 		/** dispatch on the global and wait for its extend lifetime promises; whether none rejected */
 		const run = async (event: Event): Promise<boolean> => {
 			const extension = extensions.get(event)!;
@@ -358,48 +762,19 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 		const illegal = () => {
 			throw new global.TypeError('Illegal constructor');
 		};
-		const Client = objects.native(
-			function Client() {
-				illegal();
-			} as unknown as Function,
-			'Client',
-		);
-		const WindowClient = objects.native(
-			function WindowClient() {
-				illegal();
-			} as unknown as Function,
-			'WindowClient',
-		);
-		const Clients = objects.native(
-			function Clients() {
-				illegal();
-			} as unknown as Function,
-			'Clients',
-		);
-		Client.prototype = {};
-		WindowClient.prototype = Object.create(Client.prototype);
-		Reflect.setPrototypeOf(WindowClient, Client);
-		Clients.prototype = {};
+		const Client = objects.fakeClass('Client');
+		const WindowClient = objects.fakeClass('WindowClient', Client);
+		const Clients = objects.fakeClass('Clients');
 		for (const [ctor, name] of [
 			[Client, 'Client'],
 			[WindowClient, 'WindowClient'],
 			[Clients, 'Clients'],
-		] as const) {
-			Reflect.defineProperty(ctor.prototype, 'constructor', {
-				configurable: true,
-				writable: true,
-				value: ctor,
-			});
-			Reflect.defineProperty(ctor.prototype, Symbol.toStringTag, {
-				configurable: true,
-				value: name,
-			});
+		] as const)
 			Reflect.defineProperty(global, name, {
 				configurable: true,
 				writable: true,
 				value: ctor,
 			});
-		}
 		const isClient = (that: unknown) =>
 			typeof that === 'object' && that !== null && clientStates.has(that);
 		const clientOf = (info: ClientInfo): object => {
@@ -522,12 +897,43 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 					1,
 				),
 			});
-		for (const name of DEDICATED_ONLY) Reflect.deleteProperty(global, name);
+		for (const name of [...DEDICATED_ONLY, ...DEDICATED_ONLY_INTERFACES])
+			Reflect.deleteProperty(global, name);
+		// a service worker cannot mint blob: URLs
+		Reflect.deleteProperty(global.URL, 'createObjectURL');
+		Reflect.deleteProperty(global.URL, 'revokeObjectURL');
+		for (const name of SERVICE_WORKER_INTERFACES)
+			if (typeof global[name] !== 'function')
+				Reflect.defineProperty(global, name, {
+					configurable: true,
+					writable: true,
+					value: objects.classFor(name),
+				});
+		// the hooks assigned these on the global itself; natively they are
+		// inherited, so the global's own names read as a service worker's
+		for (const name of INHERITED) {
+			const own = Reflect.getOwnPropertyDescriptor(global, name);
+			if (!own) continue;
+			let holder = Reflect.getPrototypeOf(global);
+			while (holder && !Reflect.getOwnPropertyDescriptor(holder, name))
+				holder = Reflect.getPrototypeOf(holder);
+			if (!holder) continue;
+			Reflect.defineProperty(holder, name, {
+				...Reflect.getOwnPropertyDescriptor(holder, name),
+				value: own.value,
+			});
+			Reflect.deleteProperty(global, name);
+		}
 		const scope = Reflect.getPrototypeOf(global)!;
 		const ServiceWorkerGlobalScope = objects.native(function () {
 			illegal();
 		}, 'ServiceWorkerGlobalScope');
-		ServiceWorkerGlobalScope.prototype = scope;
+		Reflect.defineProperty(ServiceWorkerGlobalScope, 'prototype', {
+			value: scope,
+			writable: false,
+			enumerable: false,
+			configurable: false,
+		});
 		Reflect.defineProperty(scope, 'constructor', {
 			configurable: true,
 			writable: true,
@@ -752,6 +1158,21 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 				},
 				steps: async ({ registration: snapshot, steps }) => {
 					objects.apply(snapshot, steps);
+				},
+				sync: async ({ tag, lastChance }) => [
+					await run(new SyncEvent('sync', { tag, lastChance })),
+					[],
+				],
+				backgroundFetch: async ({ type, fetch }) => {
+					const object = objects.backgroundFetch!(
+						fetch,
+						objects.snapshotOf(registration),
+					);
+					const Event =
+						type === 'backgroundfetchabort'
+							? BackgroundFetchEvent
+							: BackgroundFetchUpdateUIEvent;
+					return [await run(new Event(type, { registration: object })), []];
 				},
 			},
 			SW_RPC,

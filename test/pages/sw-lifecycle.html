@@ -104,18 +104,65 @@
 		await reg.navigationPreload.setHeaderValue('hello');
 		push('preload after', await reg.navigationPreload.getState());
 		push(
-			'absent',
+			'managers',
 			'sync' in reg,
 			'periodicSync' in reg,
 			'backgroundFetch' in reg,
 			typeof SyncManager,
 		);
-		try {
-			await reg.pushManager.subscribe({ userVisibleOnly: true });
-			window.__sw.push = 'subscribed';
-		} catch (error) {
-			window.__sw.push = `${error.name}: ${error.message}`;
-		}
+		const cache = await caches.open('swl-shape');
+		const waitFor = async (key) => {
+			for (let i = 0; i < 200; i++) {
+				const hit = await cache.match(key);
+				if (hit) return hit.text();
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			}
+			return null;
+		};
+		await settle('sync', () => reg.sync.register('swl-tag'));
+		push('synced', await waitFor('synced'));
+		await settle('sync tags', async () =>
+			JSON.stringify(await reg.sync.getTags()),
+		);
+		await settle('periodic', () =>
+			reg.periodicSync.register('p', { minInterval: 1000 }),
+		);
+		await settle('periodic tags', async () =>
+			JSON.stringify(await reg.periodicSync.getTags()),
+		);
+		await settle('payment', async () => [
+			reg.paymentManager.userHint,
+			await reg.paymentManager.enableDelegations(['shippingAddress']),
+		]);
+		await settle('subscribe', () =>
+			reg.cookies.subscribe([{ name: 'a', url: reg.scope }]),
+		);
+		await settle('subscriptions', async () =>
+			JSON.stringify(await reg.cookies.getSubscriptions()),
+		);
+		await settle('push state', () =>
+			reg.pushManager.permissionState({ userVisibleOnly: true }),
+		);
+		await settle('push subscribe', () =>
+			reg.pushManager.subscribe({
+				userVisibleOnly: true,
+				applicationServerKey: new Uint8Array(65).fill(4),
+			}),
+		);
+		await settle('background fetch', async () => {
+			const fetch = await reg.backgroundFetch.fetch(
+				'swl-bg',
+				['sw-fetch-target.txt'],
+				{ title: 'fixture' },
+			);
+			return JSON.stringify([
+				fetch.id,
+				fetch.uploadTotal,
+				fetch.recordsAvailable,
+				await reg.backgroundFetch.getIds(),
+			]);
+		});
+		push('background fetch event', await waitFor('fetched'));
 		push('unregister', await reg.unregister());
 		push(
 			'after',
