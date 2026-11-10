@@ -15,6 +15,7 @@
 // the next but the parsed form of the last context, which is the next one's
 // only when the next one sends the same text.
 import { parse } from 'meriyah';
+import { printExpression } from './callPrinter';
 import { parseConfig, type Config, type ConfigCodec } from './config';
 import { reportKeptSources } from './functionSource';
 import { messages } from './libGlobals';
@@ -144,6 +145,10 @@ export function library(parts: LibraryParts) {
 		},
 		parsesAsScript(code: string): boolean {
 			return run(() => parsesAsScript(code), false);
+		},
+		/** printExpression (callPrinter.ts): null when the source does not parse */
+		print(source: string, part: string): string | null {
+			return run(() => printExpression(source, part), null);
 		},
 		domain(host: string): string | null {
 			return run(() => (parts.getDomain ?? missing('getDomain'))(host), null);

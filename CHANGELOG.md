@@ -978,6 +978,30 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   non-configurable replaces the formatter (its realm's stacks are no longer
   cleaned), and one that freezes Error sees the accessor (tells suite, both
   modes, compared with the page loaded natively).
+- An error thrown by code the proxy rewrote has V8's message for the
+  page's expression: `o[k] is not a function`, `location.foo is not a
+function`, `o[k] is not a constructor`, `top is not iterable`, `Cannot
+destructure property 'a' of 'o[k]' as it is undefined.`. V8 names the
+  failing callee or value by printing it back from the code, which was the
+  access API's (`$s$j.get2(...).x is not a function`, a tell that also
+  reached sites' error reporting), or the message of the helper's own apply
+  ("Function.prototype.apply was called on undefined"). A call,
+  construction, iteration or destructuring of a value a helper made is now
+  the access API's too, and fails naming the page's expression printed the
+  way V8 prints it (src/callPrinter.ts) in the words of the running V8 (a
+  real failure of the same shape on a marker expression), with the page
+  realm's TypeError and a stack without the inject's frames or the
+  rewriter's write arrows. Fixed on the way: `o?.[k]()` and `o?.[k].x` with
+  `o[k]` undefined threw nothing, `o[k]?.()` with `o` null threw nothing,
+  and `top = v` in strict code of an isolated frame threw a SecurityError
+  naming a helper key. Left: a tagged template whose tag a helper reads,
+  and `a?.b[k]` with `a.b` undefined (error-messages suite, 132 cases, both
+  modes, a worker and an about:blank child, against native; the same on
+  Chrome 156). Over the 46 MB corpus 44 of 98 scripts rewrite differently
+  (0.1% more output; the rewrite takes as long, within the noise); in a
+  proxied page `o[k].f(i)` costs 11.6 ns where it cost 10.2, a call whose
+  arguments do work (`o[k].f(r.x)`, the lazy form that reads the method
+  first) 28.5 where it cost 12, and nothing else moved beyond the noise.
 - A large Closure module bundle is rewritten across the rewrite workers too.
   The split knew webpack's module table only, and YouTube's 10 MB
   kevlar_base (and its 2.7 MB player, and Google Docs' bundles) was one

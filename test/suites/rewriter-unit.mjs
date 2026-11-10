@@ -273,11 +273,14 @@ const parses = (code) => {
 	);
 	ok(
 		'postMessage calls in every shape go through the access API',
-		/\$s\$j\.post\(w,\s*\[\s*m,\s*'\*'\s*\]\)/.test(out) &&
-			/\$s\$j\.post\(w,\s*\[\s*m\s*\],\s*true\)/.test(out) &&
-			/\$s\$j\.post\(w2,\s*\[\s*m,\s*o\s*\]\)/.test(out) &&
-			(out.match(/\$s\$j\.post\(w2,\s*list\)/g) || []).length === 2 &&
-			/\$s\$j\.post\(port,\s*\[\s*m\s*\]\)/.test(out) &&
+		/\$s\$j\.post\(w,\s*\[\s*m,\s*'\*'\s*\],\s*false,\s*'w\.postMessage\(0, 0\)'\)/.test(
+			out,
+		) &&
+			/\$s\$j\.post\(w,\s*\[\s*m\s*\],\s*true,\s*'/.test(out) &&
+			/\$s\$j\.post\(w2,\s*\[\s*m,\s*o\s*\],\s*false,\s*'/.test(out) &&
+			(out.match(/\$s\$j\.post\(w2,\s*list,\s*false,\s*'/g) || []).length ===
+				2 &&
+			/\$s\$j\.post\(port,\s*\[\s*m\s*\],\s*false,\s*'/.test(out) &&
 			/x\.postmessage\(m\)/.test(out) &&
 			parses(out),
 		out,
@@ -609,9 +612,50 @@ const parses = (code) => {
 	const out = rewrite('const { a: { top: t } } = o;');
 	ok(
 		'a nested pattern wraps its source with the keys to follow',
-		/\$s\$j\.pattern\(o, \{\s*'a': \{\s*'top': true\s*\}\s*\}\)/.test(out) &&
-			parses(out),
+		/\$s\$j\.pattern\(o, \{\s*'a': \{\s*'top': true\s*\}\s*\}, '\{ a: \{ top: t \} \} = o'\)/.test(
+			out,
+		) && parses(out),
 		out,
+	);
+}
+{
+	// an operation V8 would name in its message by printing a helper's call
+	// (`$s$j.get(...).foo is not a function`) is the access API's, given the
+	// page's text to name instead; anything else is left as it was
+	const shapes = {
+		'location.foo()': `$s$j.call2($s$j.get(location, 'location'), 'foo', [], 'location.foo()');`,
+		'o[k].x(a)': `$s$j.call3(o, k, 'x', [a], 'o[k].x(0)');`,
+		'location.x.y(a)': `$s$j.call2($s$j.get(location, 'location').x, 'y', [a], 'location.x.y(0)');`,
+		'top.x(f())': `$s$j.method($s$j.get(top, 'top'), false, false, 'top.x(0)')?.('x')?.(f());`,
+		'top()': `$s$j.fcall($s$j.get(top, 'top'), [], 'top()');`,
+		'o[k](a)(b)': `$s$j.fcall($s$j.call2(o, k, [a], 'o[k](0)'), [b], 'o[k](a)(0)');`,
+		'new location.x()': `$s$j.new2($s$j.get(location, 'location'), 'x', [], 'new (location.x)()');`,
+		'new top()': `$s$j.fnew($s$j.get(top, 'top'), [], 'new (top)()');`,
+		'[...location]': `[...$s$j.iter($s$j.get(location, 'location'), 'spread', 'location')];`,
+		'f(...o[k])': `f(...$s$j.iter($s$j.get2(o, k, '(o[k])'), 'args', 'o[k]'));`,
+		'for (x of top);': `for (x of $s$j.iter($s$j.get(top, 'top'), 'of', 'top'));`,
+		'const [a] = o[k];': `const [a] = $s$j.iter($s$j.get2(o, k, '(o[k])'), 'array', 'o[k]');`,
+		'[a] = o[k];': `[a] = $s$j.iter($s$j.get2(o, k, '(o[k])'), 'assign', 'o[k]');`,
+		'const { a } = top.x;': `const {a} = $s$j.coerce($s$j.get(top, 'top').x, '{ a } = top.x');`,
+		// which links of a chain short-circuit (1 the object's, 2 the call's)
+		'o?.[k]();': `$s$j.call2(o, k, [], 'o?.[k]()', 1);`,
+		'o[k]?.();': `$s$j.call2(o, k, [], 'o[k]?.()', 2);`,
+		// a?.[k].x: an undefined a[k] throws reading x, as natively
+		'o?.[k].x;': `$s$j.lazy(o)?.(k).x;`,
+		// untouched: nothing in them is a helper's
+		'a.b.c(d); new A.B(); [...a.b]; for (x of a()); const { a } = b.c;': `a.b.c(d);\nnew A.B();\n[...a.b];\nfor (x of a());\nconst {a} = b.c;`,
+	};
+	const got = Object.fromEntries(
+		Object.keys(shapes).map((source) => [source, rewrite(source)]),
+	);
+	const wrong = Object.keys(shapes).filter(
+		(source) =>
+			got[source].replace(/\s+/g, ' ') !== shapes[source].replace(/\s+/g, ' '),
+	);
+	ok(
+		'an operation that would name a helper in its error is the access API',
+		wrong.length === 0,
+		wrong.map((source) => `${source} => ${got[source]}`).join(' | '),
 	);
 }
 {

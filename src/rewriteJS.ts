@@ -54,21 +54,34 @@ export {
  * args)`. The receiver, the arguments (an array expression or the array
  * given) and whether the chain is optional; null for any other call.
  */
+const isPostMessage = (member: any) =>
+	member?.type === 'MemberExpression' &&
+	(member.computed
+		? member.property.type === 'Literal' &&
+			member.property.value === 'postMessage'
+		: member.property.type === 'Identifier' &&
+			member.property.name === 'postMessage');
+
+/** whether postMessageCall finds a call that posts, without building its parts */
+function postsMessage(node: any): boolean {
+	const { callee } = node;
+	return (
+		callee?.type === 'MemberExpression' &&
+		(isPostMessage(callee) ||
+			isPostMessage(callee.object) ||
+			isPostMessage(node.arguments[0])) &&
+		postMessageCall(node) !== null
+	);
+}
+
 function postMessageCall(
 	node: any,
 ): { target: any; args: any; optional: boolean } | null {
-	const isPostMessage = (member: any) =>
-		member?.type === 'MemberExpression' &&
-		(member.computed
-			? member.property.type === 'Literal' &&
-				member.property.value === 'postMessage'
-			: member.property.type === 'Identifier' &&
-				member.property.name === 'postMessage');
 	const { callee } = node;
 	if (isPostMessage(callee))
 		return {
 			target: callee.object,
-			args: b.arrayExpression(node.arguments),
+			args: argumentsArray(node.arguments),
 			optional:
 				!!node.optional || !!callee.optional || inOptionalChain(callee.object),
 		};
@@ -85,7 +98,7 @@ function postMessageCall(
 			target,
 			args:
 				callee.property.name === 'call'
-					? b.arrayExpression(rest)
+					? argumentsArray(rest)
 					: (rest[0] ?? b.arrayExpression([])),
 			optional: false,
 		};
@@ -107,6 +120,15 @@ function postMessageCall(
 			optional: false,
 		};
 	return null;
+}
+
+/** whether the chain goes on past this node (`a?.[k].x`, `a?.[k]()`) */
+function continuesChain(ctx: AcornContext): boolean {
+	const parent = ctx.parent?.node;
+	return (
+		(parent?.type === 'MemberExpression' && ctx.parentKey === 'object') ||
+		(parent?.type === 'CallExpression' && ctx.parentKey === 'callee')
+	);
 }
 
 function inOptionalChain(node: any): boolean {
@@ -180,6 +202,116 @@ function indexRead(ctx: AcornContext): boolean {
 		(parent?.type === 'AssignmentExpression' && ctx.parentKey === 'left')
 	);
 }
+
+/**
+ * Whether the rewriter routes a member read through the access API: a
+ * computed key that is no literal, an unforgeable's name, an index (read
+ * anywhere but as a callee: `callee`)
+ */
+function routesMember(
+	node: any,
+	routed: readonly string[],
+	callee = false,
+): boolean {
+	if (node.object.type === 'Super') return false;
+	const { property } = node;
+	if (node.computed)
+		return (
+			property.type !== 'Literal' ||
+			routed.includes(property.value) ||
+			(!callee &&
+				(typeof property.value === 'number'
+					? Number.isInteger(property.value) && property.value >= 0
+					: typeof property.value === 'string' &&
+						/^(0|[1-9]\d*)$/.test(property.value)))
+		);
+	return property.type === 'Identifier' && routed.includes(property.name);
+}
+
+/**
+ * Whether V8, naming `node` in an error's message (it prints the failing
+ * callee or value back from the code: CallPrinter), would print a call of
+ * the access API the rewriter puts in its place or in a part it prints
+ * (`$s$j.get(...).foo is not a function` for `location.foo()`). Such an
+ * operation is done by a helper, which fails with the page's expression.
+ */
+function printsHelper(node: any, routed: readonly string[]): boolean {
+	// asked again for each call of a chain (`a.b().c().d()`): kept on the node
+	const known = node?.[PRINTS_HELPER];
+	if (known !== undefined) return known;
+	const prints = printsHelperOf(node, routed);
+	if (node && typeof node === 'object') node[PRINTS_HELPER] = prints;
+	return prints;
+}
+const PRINTS_HELPER = Symbol('printsHelper');
+
+function printsHelperOf(node: any, routed: readonly string[]): boolean {
+	switch (node?.type) {
+		case 'Identifier':
+			return routed.includes(node.name);
+		case 'MemberExpression':
+			return (
+				routesMember(node, routed) ||
+				(node.object.type !== 'Super' && printsHelper(node.object, routed))
+			);
+		case 'CallExpression':
+			return (
+				postsMessage(node) ||
+				(node.callee.type === 'MemberExpression' &&
+					routesMember(node.callee, routed, true)) ||
+				(!(node.callee.type === 'Identifier' && node.callee.name === 'eval') &&
+					printsHelper(node.callee, routed))
+			);
+		case 'ChainExpression':
+			return printsHelper(node.expression, routed);
+		case 'TaggedTemplateExpression':
+			return printsHelper(node.tag, routed);
+		case 'BinaryExpression':
+			// `k in o` is the access API's `has` (but for most literal keys)
+			if (
+				node.operator === 'in' &&
+				node.left.type !== 'PrivateIdentifier' &&
+				node.left.type !== 'Literal'
+			)
+				return true;
+		// fallthrough
+		case 'LogicalExpression':
+			return (
+				printsHelper(node.left, routed) || printsHelper(node.right, routed)
+			);
+		case 'UnaryExpression':
+			return (
+				!(node.operator === 'typeof' && node.argument.type === 'Identifier') &&
+				printsHelper(node.argument, routed)
+			);
+		case 'UpdateExpression':
+		case 'AssignmentExpression': {
+			const target = node.argument ?? node.left;
+			return (
+				(target.type === 'Identifier' && routed.includes(target.name)) ||
+				(target.type === 'MemberExpression' &&
+					(routesMember(target, routed) || printsHelper(target, routed)))
+			);
+		}
+		case 'SequenceExpression':
+			return node.expressions.some((child: any) => printsHelper(child, routed));
+		case 'ArrayExpression':
+			return node.elements.some((child: any) => printsHelper(child, routed));
+		case 'SpreadElement':
+			return printsHelper(node.argument, routed);
+		case 'TemplateLiteral':
+			return node.expressions.some((child: any) => printsHelper(child, routed));
+	}
+	return false;
+}
+
+/** marks an array of call arguments the rewriter made (`call2(o, k, [...a])`) */
+const ARGUMENTS = Symbol('arguments');
+const argumentsArray = (args: any[]) => {
+	const array: any = b.arrayExpression(args);
+	array[ARGUMENTS] = true;
+	return array;
+};
 
 /**
  * Whether a node is a target an assignment pattern or a loop head writes
@@ -314,6 +446,64 @@ export function modifyJS(
 		names.globalProxy,
 		names.globalName,
 	];
+	/** `$s$j.name(...args)` */
+	const access = (name: string, args: any[]) =>
+		b.callExpression(
+			b.memberExpression(b.identifier(names.access), b.identifier(name)),
+			args,
+		);
+	/** the page's text of an expression, for a helper to name it in an error */
+	const sourceOf = (node: any): string =>
+		node.range
+			? script.slice(node.range[0], node.range[1])
+			: generate(node, COMPACT);
+	/**
+	 * A call's or construction's text for a helper's error: what it calls,
+	 * as written, and its arguments as placeholders (only where a spread
+	 * stands matters to the message), so a function written in the
+	 * arguments is not written into the output twice
+	 */
+	const callText = (node: any): string => {
+		const { callee } = node;
+		const plain =
+			node.type === 'CallExpression' &&
+			(callee.type === 'MemberExpression' ||
+				callee.type === 'Identifier' ||
+				callee.type === 'CallExpression' ||
+				callee.type === 'ChainExpression' ||
+				callee.type === 'ThisExpression');
+		const head = plain ? sourceOf(callee) : `(${sourceOf(callee)})`;
+		const args = node.arguments
+			.map((argument: any) =>
+				argument.type === 'SpreadElement' ? '...0' : '0',
+			)
+			.join(', ');
+		return `${node.type === 'NewExpression' ? 'new ' : ''}${head}${node.optional ? '?.' : ''}(${args})`;
+	};
+	/**
+	 * The text of a destructuring (`{ a } = o`), for the error its source
+	 * throws when null or undefined (a destructured parameter's is the
+	 * declaration hoistParamPatterns made, from the parameter it named)
+	 */
+	const destructured = (ctx: AcornContext) =>
+		b.literal(generatePartial(script, ctx));
+	/** a pattern whose source is a helper's value (`const [a] = location`) */
+	const checksSource = (pattern: any, source: any) =>
+		(pattern.type === 'ObjectPattern' || pattern.type === 'ArrayPattern') &&
+		printsHelper(source, routed);
+	/**
+	 * That source, checked by the access API before the pattern reads it
+	 * (`shape`: a declaration's array pattern, 'array', or an assignment's,
+	 * 'assign')
+	 */
+	const sourceCheck = (pattern: any, source: any, text: any, shape: string) =>
+		pattern.type === 'ArrayPattern'
+			? access('iter', [
+					result(source),
+					b.literal(shape),
+					b.literal(sourceOf(source)),
+				])
+			: access('coerce', [result(source), text]);
 	try {
 		const isModule = type === 'genericModule' || type === 'workerModule';
 		const isWorker = type === 'workerModule' || type === 'worker';
@@ -469,31 +659,54 @@ export function modifyJS(
 					// reads `o.top` without a member expression to rewrite, so the
 					// source is wrapped and the reads resolve through it, at every
 					// depth the pattern names an unforgeable
+					// (and a pattern whose source is a helper's value checks it
+					// first, so an error names the page's expression)
 					{
-						const spec =
-							ctx.node.init && !isPatternCall(ctx.node.init, names.access)
-								? patternSpec(ctx.node.id, routed)
-								: null;
+						const { id, init } = ctx.node;
+						if (!init || isPatternCall(init, names.access)) break;
+						const source = destructured(ctx);
+						const spec = patternSpec(id, routed);
 						if (spec)
 							ctx.replaceWith(
 								b.variableDeclarator(
-									ctx.node.id,
-									patternCall(result(ctx.node.init), spec, names.access),
+									id,
+									patternCall(result(init), spec, names.access, source),
+								),
+							);
+						else if (checksSource(id, init))
+							ctx.replaceWith(
+								b.variableDeclarator(
+									id,
+									sourceCheck(id, init, source, 'array'),
 								),
 							);
 					}
 					break;
 				case 'AssignmentExpression':
 					{
-						const spec = patternSpec(ctx.node.left, routed);
+						const { left, right } = ctx.node;
+						const spec = patternSpec(left, routed);
 						if (spec)
 							ctx.replaceWith(
 								b.assignmentExpression(
 									'=',
 									// visited too: a location target and the defaults
 									// (`({ location = top } = o)`) are rewritten there
-									result(ctx.node.left),
-									patternCall(result(ctx.node.right), spec, names.access),
+									result(left),
+									patternCall(
+										result(right),
+										spec,
+										names.access,
+										destructured(ctx),
+									),
+								),
+							);
+						else if (ctx.node.operator === '=' && checksSource(left, right))
+							ctx.replaceWith(
+								b.assignmentExpression(
+									'=',
+									result(left),
+									sourceCheck(left, right, destructured(ctx), 'assign'),
 								),
 							);
 					}
@@ -629,13 +842,15 @@ export function modifyJS(
 											b.identifier(names.access),
 											b.identifier('poster'),
 										),
-										[result(post.target)],
+										[result(post.target), b.literal(callText(ctx.node))],
 									),
 									ctx.node.arguments.map((argument: any) => result(argument)),
 								),
 							);
 							break typeLoop;
 						}
+						// (the call's text names it in the error a postMessage that is
+						// no function throws)
 						if (post) {
 							ctx.replaceWith(
 								b.callExpression(
@@ -646,7 +861,8 @@ export function modifyJS(
 									[
 										result(post.target),
 										result(post.args),
-										...(post.optional ? [b.literal(true)] : []),
+										b.literal(post.optional),
+										b.literal(callText(ctx.node)),
 									],
 								),
 							);
@@ -689,8 +905,156 @@ export function modifyJS(
 									),
 								),
 							);
+							break typeLoop;
 						}
+
+						// a call V8 would name with a helper's call in its message
+						// when it fails (`location.foo()`, `o[k].x()`, `top()`): the
+						// call is the access API's, which fails naming the page's
+						// expression. A member call reads its method before its
+						// arguments: when they can do something, in the lazy form
+						const args = ctx.node.arguments;
+						const partial = () => b.literal(callText(ctx.node));
+						if (
+							callee.type === 'MemberExpression' &&
+							callee.object.type !== 'Super' &&
+							callee.property.type !== 'PrivateIdentifier' &&
+							!routesMember(callee, routed, true) &&
+							printsHelper(callee.object, routed)
+						) {
+							const chained =
+								!!callee.optional || inOptionalChain(callee.object);
+							const key = callee.computed
+								? result(callee.property)
+								: b.literal(callee.property.name);
+							const object = callee.object;
+							if (
+								!chained &&
+								!ctx.node.optional &&
+								args.every((argument: any) => pure(argument))
+							)
+								ctx.replaceWith(
+									// `o[k].m(a)`: the read and the call in one helper
+									object.type === 'MemberExpression' &&
+										routesMember(object, routed)
+										? access('call3', [
+												result(object.object),
+												object.computed
+													? result(object.property)
+													: b.literal(object.property.name),
+												key,
+												result(argumentsArray(args)),
+												partial(),
+											])
+										: access('call2', [
+												result(object),
+												key,
+												result(argumentsArray(args)),
+												partial(),
+											]),
+								);
+							else
+								ctx.replaceWith(
+									optionalCall(
+										optionalCall(
+											access('method', [
+												result(callee.object),
+												b.literal(chained),
+												b.literal(!!ctx.node.optional),
+												partial(),
+											]),
+											[key],
+										),
+										args.map((argument: any) => result(argument)),
+									),
+								);
+							break typeLoop;
+						}
+						if (
+							callee.type !== 'MemberExpression' &&
+							!ctx.node.optional &&
+							printsHelper(callee, routed)
+						)
+							ctx.replaceWith(
+								access('fcall', [
+									result(callee),
+									result(argumentsArray(args)),
+									partial(),
+								]),
+							);
 					}
+					break;
+				case 'NewExpression': {
+					// `new location.x()`, `new top()`: as a call above (a member's
+					// constructor is read before the arguments: only plain ones)
+					const { callee } = ctx.node;
+					const args = ctx.node.arguments;
+					if (
+						callee.type === 'MemberExpression' &&
+						callee.object.type !== 'Super' &&
+						callee.property.type !== 'PrivateIdentifier' &&
+						!routesMember(callee, routed, true) &&
+						printsHelper(callee.object, routed) &&
+						args.every((argument: any) => pure(argument))
+					)
+						ctx.replaceWith(
+							access('new2', [
+								result(callee.object),
+								callee.computed
+									? result(callee.property)
+									: b.literal(callee.property.name),
+								result(argumentsArray(args)),
+								b.literal(callText(ctx.node)),
+							]),
+						);
+					else if (
+						callee.type !== 'MemberExpression' &&
+						printsHelper(callee, routed)
+					)
+						ctx.replaceWith(
+							access('fnew', [
+								result(callee),
+								result(argumentsArray(args)),
+								b.literal(callText(ctx.node)),
+							]),
+						);
+					break;
+				}
+				case 'SpreadElement':
+					// `[...location]`, `f(...o[k])`: iterated by the access API
+					// first, which fails as the page's expression would
+					if (
+						printsHelper(ctx.node.argument, routed) &&
+						(ctx.parent?.node.type === 'ArrayExpression' ||
+							ctx.parent?.node.type === 'CallExpression' ||
+							ctx.parent?.node.type === 'NewExpression')
+					)
+						ctx.replaceWith({
+							type: 'SpreadElement',
+							argument: access('iter', [
+								result(ctx.node.argument),
+								b.literal(
+									ctx.parent.node.type !== 'ArrayExpression' ||
+										ctx.parent.node[ARGUMENTS]
+										? 'args'
+										: 'spread',
+								),
+								b.literal(sourceOf(ctx.node.argument)),
+							]),
+						});
+					break;
+				case 'ForOfStatement':
+					if (!ctx.node.await && printsHelper(ctx.node.right, routed))
+						ctx.replaceWith({
+							...ctx.node,
+							left: result(ctx.node.left),
+							right: access('iter', [
+								result(ctx.node.right),
+								b.literal('of'),
+								b.literal(sourceOf(ctx.node.right)),
+							]),
+							body: result(ctx.node.body),
+						});
 					break;
 				case 'Identifier':
 					{
@@ -959,8 +1323,8 @@ export function modifyJS(
 									[
 										result(ctx.node.object),
 										propertyArgument,
-										result(b.arrayExpression(ctx.parent!.node.arguments)),
-										b.literal(generatePartial(script, ctx.parent!)),
+										result(argumentsArray(ctx.parent!.node.arguments)),
+										b.literal(callText(ctx.parent!.node)),
 									],
 								),
 							);
@@ -971,7 +1335,10 @@ export function modifyJS(
 								((chained || ctx.parent.node.optional) &&
 									!ctx.parent.node.arguments.every((argument: any) =>
 										pure(argument),
-									)))
+									)) ||
+								// a?.[k]().x: only a nullish `a` skips the rest of the
+								// chain, which goes on in the lazy form's own chain
+								(ctx.node.optional && continuesChain(ctx.parent)))
 						) {
 							// a?.b[k()](f()) / a[k]?.(f()): the key and the arguments are
 							// evaluated only past the links that can short-circuit
@@ -987,6 +1354,7 @@ export function modifyJS(
 												result(ctx.node.object),
 												b.literal(chained),
 												b.literal(!!ctx.parent!.node.optional),
+												b.literal(callText(ctx.parent!.node)),
 											],
 										),
 										[propertyArgument],
@@ -1002,15 +1370,11 @@ export function modifyJS(
 						) {
 							// the rest of the chain past the call short-circuits too
 							const call = ctx.parent;
-							if (
-								chained &&
-								call.parent &&
-								((call.parent.node.type === 'MemberExpression' &&
-									call.parentKey === 'object') ||
-									(call.parent.node.type === 'CallExpression' &&
-										call.parentKey === 'callee'))
-							)
-								call.parent.node.optional = true;
+							if (chained && continuesChain(call))
+								call.parent!.node.optional = true;
+							// which links short-circuit: 1 the object's, 2 the call's
+							const links =
+								(chained ? 1 : 0) | (ctx.parent!.node.optional ? 2 : 0);
 							ctx.parent!.replaceWith(
 								b.callExpression(
 									b.memberExpression(
@@ -1020,11 +1384,9 @@ export function modifyJS(
 									[
 										result(ctx.node.object),
 										propertyArgument,
-										result(b.arrayExpression(ctx.parent!.node.arguments)),
-										b.literal(generatePartial(script, ctx.parent!)),
-										...(chained || ctx.parent!.node.optional
-											? [b.literal(true)]
-											: []),
+										result(argumentsArray(ctx.parent!.node.arguments)),
+										b.literal(callText(ctx.parent!.node)),
+										...(links ? [b.literal(links)] : []),
 									],
 								),
 							);
@@ -1079,9 +1441,13 @@ export function modifyJS(
 									],
 								),
 							);
-						} else if (chained && !pure(propertyArgument)) {
+						} else if (
+							(chained && !pure(propertyArgument)) ||
+							(ctx.node.optional && continuesChain(ctx))
+						) {
 							// a?.b[k()]: the key is evaluated only past the links that can
-							// short-circuit, and the rest of the chain follows in it
+							// short-circuit, and the rest of the chain follows in it (a?.[k].x:
+							// a nullish `a` skips it, an undefined a[k] throws reading x)
 							ctx.replaceWith(
 								optionalCall(
 									b.callExpression(
@@ -1293,11 +1659,16 @@ function specLiteral(spec: PatternSpec): any {
 	);
 }
 
-/** `$s$j.pattern(source, spec)` */
-function patternCall(source: any, spec: PatternSpec, access: string): any {
+/** `$s$j.pattern(source, spec, text)`: `text` is the destructuring's source */
+function patternCall(
+	source: any,
+	spec: PatternSpec,
+	access: string,
+	text: any,
+): any {
 	return b.callExpression(
 		b.memberExpression(b.identifier(access), b.identifier('pattern')),
-		[source, specLiteral(spec)],
+		[source, specLiteral(spec), text],
 	);
 }
 

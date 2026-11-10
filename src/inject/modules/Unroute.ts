@@ -210,6 +210,13 @@ export interface ErrorLocation {
 	colno: number;
 }
 
+/**
+ * The access API's helpers that call a function the rewriter wrote into the
+ * page's script to do the page's write (src/inject/modules/Access.ts): V8
+ * names their frames by their keys, which the minified bundle keeps
+ */
+const WRITERS = ['set1', 'set2'];
+
 const NO_LOCATION: ErrorLocation = {
 	routed: null,
 	filename: '',
@@ -919,7 +926,20 @@ export default class UnrouteModule extends Module<Client> {
 			if (!Array.isArray(sites)) sites = [];
 			let shown: CallSite[];
 			try {
-				shown = sites.filter((site) => !isInternal(site));
+				const internal = sites.map(isInternal);
+				shown = sites.filter(
+					(site, index) =>
+						!internal[index] &&
+						// the arrow the rewriter hands set1 / set2 to write with
+						// (`(t$t, t$p, t$v) => t$t[t$p] = t$v`) is in the page's
+						// script, and a write it does that throws (a setter, a
+						// strict-mode write) has it as a frame of the page's: natively
+						// the write is in the page's own function
+						!(
+							internal[index + 1] &&
+							WRITERS.includes(sites[index + 1].getFunctionName() ?? '')
+						),
+				);
 			} catch (error) {
 				shown = sites;
 			}

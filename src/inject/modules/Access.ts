@@ -1,14 +1,10 @@
 import { keepEmbedded } from '../../functionSource';
 import { HelperNames } from '../../helperNames';
 import { routeHTML } from '../../rewriteHTML';
-import {
-	isBareSpecifier,
-	postMessageMethod,
-	routeImport,
-	UNDEFINABLE,
-} from '../../scriptRoutes';
+import { isBareSpecifier, routeImport, UNDEFINABLE } from '../../scriptRoutes';
 import StompURL, { urlLike } from '../../StompURL';
 import Client from '../Client';
+import ErrorMessages from '../errorMessages';
 import Module from '../Module';
 import { modifyJS } from '../rewriter';
 import ProxyModule from './Proxy';
@@ -116,6 +112,11 @@ export default class AccessModule extends Module<Client> {
 						'genericModule',
 						moduleType,
 					);
+		// the errors a helper throws in the page's place, with the message V8
+		// gives the page's expression (`partial`, its source)
+		const errors = new ErrorMessages(this.client);
+		const nullish = (value: unknown): value is null | undefined =>
+			value === null || value === undefined;
 		const api = {
 			get2: (
 				target: any,
@@ -123,9 +124,11 @@ export default class AccessModule extends Module<Client> {
 				_partial?: string,
 				optional?: boolean,
 			): unknown => {
-				// a?.[k]
-				if (optional && (target === null || target === undefined))
-					return undefined;
+				if (nullish(target)) {
+					// a?.[k]
+					if (optional) return undefined;
+					throw errors.read(target, key);
+				}
 
 				return api.get(target[key], key, target);
 			},
@@ -244,11 +247,19 @@ export default class AccessModule extends Module<Client> {
 				// the page, forever when the write is in its own script
 				if (!assigned) return result;
 
-				if (
-					typeof target === 'object' &&
-					target !== null &&
-					target[this.client.names.globalName] === 'location'
-				) {
+				// (`top = v` reads this off the real top, which may be of another
+				// origin: the read throws a SecurityError naming the key, where the
+				// page's write throws its own TypeError)
+				let isLocation = false;
+				try {
+					isLocation =
+						typeof target === 'object' &&
+						target !== null &&
+						target[this.client.names.globalName] === 'location';
+				} catch (error) {
+					// a cross-origin window: no location of ours
+				}
+				if (isLocation) {
 					set(
 						routeHTML(
 							new StompURL(
@@ -317,10 +328,49 @@ export default class AccessModule extends Module<Client> {
 				}
 				return this.client.hidesName?.(target, key) ? false : key in target;
 			},
-			new2: (target: any, key: any, args: any): any => {
-				// key = normalizeKey(key);
-				return Reflect.construct(api.get(target[key], key), args);
+			new2: (target: any, key: any, args: any, partial?: string): any => {
+				if (nullish(target)) throw errors.read(target, key);
+				return errors.construct(api.get(target[key], key), args, partial);
 			},
+			/**
+			 * `o[k].name(...)`: get2 and the call of its value's method in one
+			 * (the call is the access API's so that its error names `o[k]`, and
+			 * one helper costs half of two)
+			 */
+			call3: (
+				target: any,
+				key: any,
+				name: any,
+				args: any[],
+				partial?: string,
+			): any => {
+				if (nullish(target)) throw errors.read(target, key);
+				const object = api.get(target[key], key, target);
+				if (nullish(object)) throw errors.read(object, name);
+				const method = object[name];
+				if (typeof method === 'function')
+					return Reflect.apply(method, object, args);
+				return errors.call(method, object, args, partial);
+			},
+			/**
+			 * `f(...)` and `new f(...)` of a value a helper made (`location()`,
+			 * `o[k](a)(b)`, `new top.x()`): the browser's message would print
+			 * the helper's call where the page's expression is
+			 */
+			fcall: (callee: any, args: any[], partial?: string): any =>
+				errors.callValue(callee, args, partial),
+			fnew: (callee: any, args: any[], partial?: string): any =>
+				errors.construct(callee, args, partial),
+			/**
+			 * The value a page's code iterates (`for (x of v)`, `[...v]`,
+			 * `f(...v)`, `[a] = v`) or destructures (`{ a } = v`), when it came
+			 * out of a helper: one that cannot be fails here, with the message
+			 * the page's expression gets
+			 */
+			iter: (value: unknown, shape: string, partial?: string): unknown =>
+				errors.iterate(value, shape, partial),
+			coerce: (value: unknown, partial?: string): unknown =>
+				errors.coerce(value, partial),
 			/**
 			 * `x.postMessage(...)` (the rewriter routes every such call here, and
 			 * the .call / .apply / Reflect.apply forms): a Stomp window gets the
@@ -330,9 +380,20 @@ export default class AccessModule extends Module<Client> {
 			 * anything else (a port, a worker, a plain object, a restricted
 			 * window) is called as written.
 			 */
-			post: (target: any, args: any[], optional?: boolean): any => {
-				const method = postMessageMethod(target, optional);
-				if (method === undefined) return undefined;
+			post: (
+				target: any,
+				args: any[],
+				optional?: boolean,
+				partial?: string,
+			): any => {
+				if (nullish(target)) {
+					if (optional) return undefined;
+					throw errors.read(target, 'postMessage');
+				}
+				const method = target.postMessage;
+				if (optional && nullish(method)) return undefined;
+				if (typeof method !== 'function')
+					return errors.post(method, target, args, partial);
 				if (this.client.postToWindow) {
 					let receiver: Client | undefined;
 					try {
@@ -360,19 +421,24 @@ export default class AccessModule extends Module<Client> {
 				target: any,
 				key: any,
 				args: any,
-				_partial?: string,
-				optional?: boolean,
+				partial?: string,
+				optional?: boolean | number,
 			): any => {
-				// a?.[k](...) / a[k]?.(...)
-				if (optional && (target === null || target === undefined))
-					return undefined;
+				// which links short-circuit: 1 the object's (a?.[k](...)), 2 the
+				// call's (a[k]?.(...)); `true` (code rewritten before the two were
+				// told apart) for both
+				const links = optional === true ? 3 : optional || 0;
+				if (nullish(target)) {
+					if (links & 1) return undefined;
+					throw errors.read(target, key);
+				}
 
 				const method = api.get(target[key], key);
 
-				if (optional && (method === null || method === undefined))
-					return undefined;
-
-				return Reflect.apply(method, target, args);
+				if (typeof method === 'function')
+					return Reflect.apply(method, target, args);
+				if (links & 2 && nullish(method)) return undefined;
+				return errors.call(method, target, args, partial);
 			},
 			// The lazy forms of get2, call2 and post, for a chain that can
 			// short-circuit when its computed key or its arguments do work: the
@@ -389,20 +455,31 @@ export default class AccessModule extends Module<Client> {
 				target: any,
 				chained: boolean,
 				optionalCall: boolean,
+				partial?: string,
 			): ((key: any) => ((...args: any[]) => any) | undefined) | undefined => {
-				if (chained && (target === null || target === undefined))
-					return undefined;
+				if (nullish(target)) {
+					if (chained) return undefined;
+					// the read throws once the key is known, as natively
+					return (key: any) => {
+						throw errors.read(target, key);
+					};
+				}
 				return (key: any) => {
 					const method = api.get(target[key], key);
-					if (optionalCall && (method === null || method === undefined))
-						return undefined;
-					return (...args: any[]) => Reflect.apply(method, target, args);
+					if (optionalCall && nullish(method)) return undefined;
+					return (...args: any[]) =>
+						typeof method === 'function'
+							? Reflect.apply(method, target, args)
+							: errors.call(method, target, args, partial);
 				};
 			},
-			poster: (target: any): ((...args: any[]) => any) | undefined =>
-				postMessageMethod(target, true) === undefined
+			poster: (
+				target: any,
+				partial?: string,
+			): ((...args: any[]) => any) | undefined =>
+				nullish(target) || nullish(target.postMessage)
 					? undefined
-					: (...args: any[]) => api.post(target, args, true),
+					: (...args: any[]) => api.post(target, args, true, partial),
 			evalScope: (code: unknown) => {
 				// `eval(x)` with anything but a string returns x: handed back as it
 				// is, the direct eval then returns it
@@ -442,8 +519,15 @@ export default class AccessModule extends Module<Client> {
 			// so the source is wrapped and every read of an unforgeable through
 			// it resolves like a member read would. `spec` names the keys whose
 			// values are destructured further (`{ a: { top } }`): those are
-			// wrapped again, everything else is handed out as it is
-			pattern: (object: unknown, spec?: PatternSpec): unknown => {
+			// wrapped again, everything else is handed out as it is. `partial`:
+			// the destructuring's source (`{ top } = o`, '' for a parameter's),
+			// for the error a null or undefined source throws
+			pattern: (
+				object: unknown,
+				spec?: PatternSpec,
+				partial?: string,
+			): unknown => {
+				if (partial !== undefined) errors.coerce(object, partial);
 				if (
 					(typeof object !== 'object' && typeof object !== 'function') ||
 					object === null

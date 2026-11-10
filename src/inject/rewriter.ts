@@ -190,6 +190,17 @@ function nullableString(value: unknown): string | null {
 	return value === null ? null : checked<string>(value, 'string');
 }
 
+/**
+ * What V8 names a part of a page's expression by in an error's message
+ * (src/callPrinter.ts), or null when the source does not parse
+ */
+export function printExpression(source: string, part: string): string | null {
+	const lib = library();
+	const result: unknown = lib.print(text(source), text(part));
+	settle(lib, false);
+	return nullableString(result);
+}
+
 /** tldts getDomain: the registrable domain of `host`, or null */
 export function getDomain(host: string): string | null {
 	const lib = library();
