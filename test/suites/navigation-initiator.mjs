@@ -176,7 +176,8 @@ for (const [mode, base] of [
 			});
 			await controller.wait();
 			const element = document.createElement('iframe');
-			element.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh';
+			element.style.cssText =
+				'position:fixed;inset:0;width:100vw;height:100vh;z-index:2147483647';
 			document.body.append(element);
 			window.__frame = controller.createFrame(element);
 		});
