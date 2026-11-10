@@ -1,4 +1,9 @@
-import CryptoJS from 'crypto-js';
+// the three parts the codecs use, not the whole library: every realm that
+// loads the bundle (each proxied frame) evaluates what is imported, and the
+// rest (SHA-3, RIPEMD, TripleDES, Blowfish, ...) was about 100 KB of heap
+import AES from 'crypto-js/aes';
+import Base64 from 'crypto-js/enc-base64';
+import Utf8 from 'crypto-js/enc-utf8';
 
 const encodeChar = '$';
 const validChars =
@@ -110,12 +115,12 @@ export class AESCodec extends GenericCodec {
 		return Math.random().toString(36).slice(2);
 	}
 	encode(input: string): string {
-		const result = CryptoJS.AES.encrypt(input, this.key).toString();
+		const result = AES.encrypt(input, this.key).toString();
 		return encodeCodecURI(result);
 	}
 	decode(input: string): string {
 		input = decodeCodecURI(input);
-		return CryptoJS.AES.decrypt(input, this.key).toString(CryptoJS.enc.Utf8);
+		return AES.decrypt(input, this.key).toString(Utf8);
 	}
 }
 
@@ -128,12 +133,10 @@ export class Base64Codec {
 		return '';
 	}
 	encode(input: string): string {
-		return encodeCodecURI(
-			CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(input)),
-		);
+		return encodeCodecURI(Base64.stringify(Utf8.parse(input)));
 	}
 	decode(input: string): string {
 		input = decodeCodecURI(input);
-		return CryptoJS.enc.Utf8.stringify(CryptoJS.enc.Base64.parse(input));
+		return Utf8.stringify(Base64.parse(input));
 	}
 }

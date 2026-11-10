@@ -353,6 +353,10 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   byte for byte the same). A proxied frame costs 1,380 KB of heap instead of
   1,830 (native: 400) and 3.1 MB of renderer memory instead of 3.6
   (measure-frame-memory suite, 60 frames of an ad-like page).
+- The codecs import the three parts of crypto-js they use (AES, Base64,
+  UTF-8) instead of the whole library, whose other ciphers and hashes cost
+  each proxied frame about 100 KB of heap: 1,280 KB a frame instead of
+  1,380 (measure-frame-memory). Encoded URLs are the same.
 - `caches.match()` looks in the page's own origin's caches only. It searched
   every cache of the proxy origin, so a page (or a service worker) could
   read another proxied site's cached responses, and Stomp's own HTTP cache,
