@@ -87,7 +87,13 @@ export function recordResponse(
  * header hidden from the page; false for any other
  */
 export function adoptTypeMark(response: Response): boolean {
-	const headers = Reflect.apply(nativeResponseHeaders, response, []) as Headers;
+	let headers: Headers;
+	try {
+		headers = Reflect.apply(nativeResponseHeaders, response, []) as Headers;
+	} catch (error) {
+		// not a Response (a worker's synchronous XMLHttpRequest makes its own)
+		return false;
+	}
 	const mark = Reflect.apply(nativeHeadersGet, headers, [
 		RESPONSE_TYPE_HEADER,
 	]) as string | null;
