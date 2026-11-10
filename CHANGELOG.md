@@ -343,6 +343,27 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- `caches.match()` looks in the page's own origin's caches only. It searched
+  every cache of the proxy origin, so a page (or a service worker) could
+  read another proxied site's cached responses, and Stomp's own HTTP cache,
+  whose entries are keyed by the real URLs and hold the origin's raw,
+  unrewritten bodies; `cacheName` named another site's cache too. It now
+  looks in the origin's caches in the order they were made, as the browser
+  does (service-worker-isolation suite).
+- Pages and their emulated service workers talk as natively
+  (`serviceWorkers: true`). `ServiceWorker.postMessage` reaches the worker as
+  an `ExtendableMessageEvent` (origin, a `WindowClient` source, transferred
+  ports, `waitUntil` only while it runs); `Client.postMessage` reaches the
+  page's `navigator.serviceWorker` as a `MessageEvent` whose source is the
+  worker's `ServiceWorker`, held until `startMessages()`, an `onmessage`
+  handler or the end of parsing. `clients.matchAll()`, `clients.get()`,
+  `clients.claim()` and `WindowClient.navigate()` see the site's own pages
+  only, a proxied page as the top-level page it stands for;
+  `clients.openWindow()` and `focus()` refuse as without a user's click
+  (service-worker-messages suite, against the same page natively, both
+  modes). One site's worker never sees another site's requests, clients or
+  caches, and the only real registration is Stomp's own
+  (service-worker-isolation suite).
 - An emulated service worker takes the navigations within its scope
   (`serviceWorkers: true`), so a cache-first app opens while its site is
   unreachable. A document (or a worker's script) whose URL is in a

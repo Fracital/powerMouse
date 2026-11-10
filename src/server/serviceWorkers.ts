@@ -410,17 +410,48 @@ export class ServiceWorkers {
 		return described;
 	}
 
-	#clientInfo(client: Client, described: ClientDescription): ClientInfo {
+	/**
+	 * A client as the site's worker sees it. A proxied page the host shows
+	 * is an iframe to the browser: it reads as the top-level page it stands
+	 * for (its route is not a nested one), focused while the host page is
+	 */
+	#clientInfo(
+		client: Client,
+		described: ClientDescription,
+		hostFocused: boolean,
+	): ClientInfo {
 		const window = client as WindowClient;
+		const isWindow = client.type === 'window';
+		const top =
+			isWindow &&
+			client.frameType === 'nested' &&
+			!described.resource.startsWith('html:nested');
 		return {
 			id: client.id,
 			url: described.url,
 			type: client.type as ClientInfo['type'],
-			frameType: client.frameType as ClientInfo['frameType'],
-			focused: client.type === 'window' ? window.focused : false,
-			visibilityState:
-				client.type === 'window' ? window.visibilityState : 'hidden',
+			frameType: (top
+				? 'top-level'
+				: isWindow
+					? client.frameType
+					: 'none') as ClientInfo['frameType'],
+			focused: isWindow
+				? window.focused ||
+					(top && hostFocused && window.visibilityState === 'visible')
+				: false,
+			visibilityState: isWindow ? window.visibilityState : 'hidden',
 		};
+	}
+
+	/** whether a window that is no proxied page (the host's) has focus */
+	async #hostFocused(): Promise<boolean> {
+		for (const client of await self.clients.matchAll({
+			type: 'window',
+			includeUncontrolled: true,
+		}))
+			if (!this.#env?.describe(client.url) && (client as WindowClient).focused)
+				return true;
+		return false;
 	}
 
 	// ---- the job queue
@@ -502,7 +533,13 @@ export class ServiceWorkers {
 				const deliver = this.#message(record, version, host, {
 					data: args.data,
 					origin: sender.origin,
-					source: { client: this.#clientInfo(window, described) },
+					source: {
+						client: this.#clientInfo(
+							window,
+							described,
+							await this.#hostFocused(),
+						),
+					},
 					ports,
 				});
 				waitUntil(deliver.catch(() => {}));
@@ -1197,6 +1234,7 @@ export class ServiceWorkers {
 		options: { includeUncontrolled: boolean; type: string },
 	): Promise<ClientInfo[]> {
 		const found: ClientInfo[] = [];
+		const hostFocused = await this.#hostFocused();
 		for (const client of await self.clients.matchAll({
 			includeUncontrolled: true,
 			type: 'all',
@@ -1209,7 +1247,7 @@ export class ServiceWorkers {
 				this.#controlled.get(client.id) !== record.scope
 			)
 				continue;
-			found.push(this.#clientInfo(client, described));
+			found.push(this.#clientInfo(client, described, hostFocused));
 		}
 		return found;
 	}
@@ -1222,7 +1260,7 @@ export class ServiceWorkers {
 		const described = client ? this.#describeClient(client) : null;
 		if (!client || !described || described.origin !== record.origin)
 			return null;
-		return this.#clientInfo(client, described);
+		return this.#clientInfo(client, described, await this.#hostFocused());
 	}
 
 	async #navigate(
@@ -1254,7 +1292,7 @@ export class ServiceWorkers {
 		if (!navigated) return null;
 		const again = this.#describeClient(navigated);
 		return again && again.origin === record.origin
-			? this.#clientInfo(navigated, again)
+			? this.#clientInfo(navigated, again, await this.#hostFocused())
 			: null;
 	}
 

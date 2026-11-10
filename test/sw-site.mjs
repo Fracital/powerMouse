@@ -98,7 +98,53 @@ const PAGES = {
 		push('registration', reg.active === c.controller, (await c.ready) === reg);
 	});
 </script>`),
+	// site A of the isolation suite: a worker that takes the whole origin
+	// (step 1), then a report of what it saw (step 2)
+	'/a/iso.html': html(`<title>SW ISOLATION A</title>${LOG}<script>
+	finish(async () => {
+		const c = navigator.serviceWorker;
+		if (params.get('step') === '1') {
+			await c.register('/a/sw-iso.js', { scope: '/' });
+			await until(() => c.controller);
+			// passed through the worker to the network, where Stomp's HTTP
+			// cache keeps it (max-age): the worker's caches must not see it
+			push('cacheable', (await (await fetch('/a/cacheable.txt')).text()).trim());
+			return;
+		}
+		const report = new Promise((resolve) =>
+			c.addEventListener('message', (event) => resolve(event.data)),
+		);
+		c.controller.postMessage({ secret: params.get('secret') });
+		window.__sw.report = await report;
+	});
+</script>`),
 };
+
+/** sw-iso.js: remembers every request it gets, answers /probe itself, and reports */
+const isolationWorker = `const seen = [];
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (event) => event.waitUntil(clients.claim()));
+self.addEventListener('fetch', (event) => {
+	seen.push(event.request.url);
+	if (event.request.url.includes('probe')) event.respondWith(new Response('from A'));
+});
+self.addEventListener('message', (event) =>
+	event.waitUntil(
+		(async () => {
+			const all = await clients.matchAll({ includeUncontrolled: true, type: 'all' });
+			const shared = await caches.match(event.data.secret);
+			const stomp = await caches.match(new URL('/a/cacheable.txt', location.href).href);
+			event.source.postMessage({
+				seen,
+				clients: all.map((client) => client.url),
+				keys: await caches.keys(),
+				shared: shared ? await shared.text() : null,
+				stomp: stomp ? await stomp.text() : null,
+			});
+		})(),
+	),
+);
+`;
 
 /** sw-offline.js: precaches the app, network first for documents, cache first for the rest */
 const offlineWorker = `const CACHE = 'offline-v1';
@@ -143,6 +189,16 @@ export async function startSite() {
 		if (url.pathname === '/bump') {
 			versions.set(run, (versions.get(run) ?? 0) + 1);
 			return res.end('bumped');
+		}
+		if (url.pathname === '/a/sw-iso.js') {
+			res.setHeader('content-type', 'text/javascript');
+			res.setHeader('service-worker-allowed', '/');
+			return res.end(isolationWorker);
+		}
+		if (url.pathname === '/a/cacheable.txt') {
+			res.setHeader('content-type', 'text/plain');
+			res.setHeader('cache-control', 'max-age=600');
+			return res.end('cacheable from A');
 		}
 		if (url.pathname === '/app/sw-offline.js') {
 			res.setHeader('content-type', 'text/javascript');

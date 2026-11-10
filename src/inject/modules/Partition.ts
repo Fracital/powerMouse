@@ -42,6 +42,10 @@ export default class PartitionModule extends Module<Client> {
 			});
 		}
 
+		// the native members, before the hooks below replace them
+		const keysOf = global.CacheStorage?.prototype.keys;
+		const openOf = global.CacheStorage?.prototype.open;
+		const hasOf = global.CacheStorage?.prototype.has;
 		if (typeof global.CacheStorage === 'function') {
 			const storage = global.CacheStorage.prototype;
 			for (const method of ['open', 'has', 'delete'] as const)
@@ -104,18 +108,45 @@ export default class PartitionModule extends Module<Client> {
 				(that as Cache).addAll([args[0] as RequestInfo]),
 			);
 		}
-		if (typeof global.CacheStorage === 'function')
-			global.CacheStorage.prototype.match = proxyModule.wrapFunction(
-				global.CacheStorage.prototype.match,
-				(target, that, args) => {
+		// caches.match() looks in this origin's caches only, in the order they
+		// were made, as the browser looks in the origin's: natively it would
+		// search every proxied site's caches and Stomp's own HTTP cache, whose
+		// entries are keyed by the real URLs and hold the origin's raw bodies
+		if (typeof global.CacheStorage === 'function') {
+			const storage = global.CacheStorage.prototype;
+			const nativeKeys = keysOf;
+			const nativeOpen = openOf;
+			const nativeHas = hasOf;
+			storage.match = proxyModule.wrapFunction(
+				storage.match,
+				async (target, that, args) => {
 					if (args.length && args[0] !== undefined)
 						args[0] =
 							args[0] instanceof global.Request
 								? args[0]
 								: new global.Request(args[0] as RequestInfo);
-					return Reflect.apply(target, that, args);
+					const options = args[1] as MultiCacheQueryOptions | undefined;
+					const names =
+						options?.cacheName !== undefined
+							? (await Reflect.apply(nativeHas, that, [
+									scoped(options.cacheName),
+								]))
+								? [scoped(options.cacheName)]
+								: []
+							: (
+									(await Reflect.apply(nativeKeys, that, [])) as string[]
+								).filter((name) => name.endsWith(suffix()));
+					for (const name of names) {
+						const cache = (await Reflect.apply(nativeOpen, that, [
+							name,
+						])) as Cache;
+						const hit = await cache.match(args[0] as RequestInfo, options);
+						if (hit) return hit;
+					}
+					return undefined;
 				},
 			);
+		}
 
 		if (typeof global.StorageManager === 'function') {
 			const manager = global.StorageManager.prototype;

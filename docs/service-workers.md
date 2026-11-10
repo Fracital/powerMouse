@@ -215,6 +215,32 @@ A worker that does not start in 10 s, does not say within 5 s whether
 A dead port (the hosting controller went) is noticed by the same timers. The
 page never waits on a worker longer than that.
 
+## Status and tests
+
+Landed in four stages, each measured against the same pages loaded
+natively in both demo modes (the demo turns the flag on with `?sw`; `?sw=<ms>`
+also sets `serviceWorkerTimeout`):
+
+| Stage                                 | Suites                                                |
+| ------------------------------------- | ----------------------------------------------------- |
+| API surface and lifecycle             | `service-workers`, `service-worker-updates`           |
+| Fetch interception for subresources   | `service-worker-fetch` (with the timeout fallbacks)   |
+| Navigations and offline               | `service-worker-offline`, `service-worker-updates`    |
+| Cache API scoping, clients, messaging | `service-worker-messages`, `service-worker-isolation` |
+
+`test/sw-site.mjs` is a site of the suites' own on a free port, so a suite
+can change a worker script's bytes and take the site offline. Real sites
+checked headless (2026-11-10), natively and with `?sw`: squoosh.app,
+excalidraw.com, developer.chrome.com (Workbox) and app.diagrams.net
+register, activate and (after a reload) are controlled exactly as natively,
+with element counts within 3% and no page errors; web.dev's worker runs on
+the appspot document the proxy lands on with or without the flag; x.com
+(logged out) and vite.dev register none, natively too.
+
+The flag stays off by default: it changes the request path of every page
+that registers a worker, and the hosts (Fracital among them) should opt in
+once it has run on real traffic.
+
 ## Limitations
 
 - `event.isTrusted` is `false` for the emulated events (it cannot be set).
@@ -237,3 +263,7 @@ ServiceWorkerGlobalScope` is true and the dedicated-only members are gone,
 - One instance per version across tabs while a controller hosts it; with no
   shared host the instances of two tabs can be two.
 - Only the main script is byte-compared on update, not its imported scripts.
+- `WindowClient.focused` of a proxied page follows the host page's focus
+  (the browser sees an iframe), not the frame's own.
+- An instance's in-memory state goes when it idles for 30 s or the browser
+  restarts Stomp's service worker, as a real worker's may at any time.

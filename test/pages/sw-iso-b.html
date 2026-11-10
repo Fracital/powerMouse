@@ -1,0 +1,48 @@
+<!doctype html>
+<title>SW ISOLATION B</title>
+<script>
+	// Site B of the service-worker isolation suite: it has no worker of its
+	// own while site A (`?a=<origin>`) has one that takes A's whole origin.
+	// B's requests (to itself and to A), its cache and its registrations
+	// must stay its own.
+	window.__sw = { done: false };
+	const a = new URLSearchParams(location.search).get('a');
+	(async () => {
+		const result = {};
+		const read = async (url, init) => {
+			try {
+				return (await (await fetch(url, init)).text()).trim();
+			} catch (error) {
+				return error.name;
+			}
+		};
+		result.own = await read('/pages/probe');
+		result.toA = await read(`${a}/a/probe`, { mode: 'no-cors' });
+		await (
+			await caches.open('shared')
+		).put(`${location.origin}/pages/secret`, new Response('B secret'));
+		result.registrations = (
+			await navigator.serviceWorker.getRegistrations()
+		).length;
+		result.registration = String(
+			await navigator.serviceWorker.getRegistration(),
+		);
+		result.controller = String(navigator.serviceWorker.controller);
+		try {
+			await navigator.serviceWorker.register(`${a}/a/sw-iso.js`, {
+				scope: `${a}/`,
+			});
+			result.registerA = 'registered';
+		} catch (error) {
+			result.registerA = error.name;
+		}
+		try {
+			await navigator.serviceWorker.getRegistration(`${a}/`);
+			result.getA = 'answered';
+		} catch (error) {
+			result.getA = error.name;
+		}
+		window.__sw.result = result;
+		window.__sw.done = true;
+	})();
+</script>

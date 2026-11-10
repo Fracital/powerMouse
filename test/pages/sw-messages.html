@@ -1,0 +1,67 @@
+<!doctype html>
+<title>SW MESSAGES</title>
+<script>
+	// Messages between a page and its worker (sw-messages.js): a ping
+	// answered to its sender and broadcast to every client, a MessageChannel
+	// port, what the worker sees of its clients, a window it may not open,
+	// waitUntil after the handler, and a message that cannot be cloned.
+	// Under /pages/deep/swm/.
+	const log = [];
+	window.__sw = { log, done: false };
+	const push = (...parts) =>
+		log.push(
+			parts
+				.map((part) => (typeof part === 'string' ? part : JSON.stringify(part)))
+				.join(' '),
+		);
+	const until = async (test, ms = 15000) => {
+		for (let waited = 0; !test() && waited < ms; waited += 50)
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		return test();
+	};
+	(async () => {
+		const c = navigator.serviceWorker;
+		const received = [];
+		c.addEventListener('message', (event) =>
+			received.push({
+				data: event.data,
+				origin: event.origin,
+				fromController: event.source === c.controller,
+				ports: event.ports.length,
+				event: event.constructor.name,
+				scriptURL: event.source && event.source.scriptURL,
+			}),
+		);
+		await c.register('sw-messages.js');
+		await until(() => c.controller);
+		const next = async (count) => {
+			await until(() => received.length >= count);
+			return received[count - 1];
+		};
+		c.controller.postMessage({ kind: 'ping', n: 1 });
+		push('pong', await next(1));
+		push('broadcast', await next(2));
+		const channel = new MessageChannel();
+		const viaPort = new Promise((resolve) => {
+			channel.port1.onmessage = (event) => resolve(event.data);
+		});
+		c.controller.postMessage({ kind: 'port' }, [channel.port2]);
+		push('port', await viaPort);
+		c.controller.postMessage({ kind: 'clients' });
+		push('clients', await next(3));
+		c.controller.postMessage({ kind: 'open' });
+		push('open', await next(4));
+		c.controller.postMessage({ kind: 'late' });
+		push('late', await next(5));
+		try {
+			c.controller.postMessage(() => {});
+			push('uncloneable', 'sent');
+		} catch (error) {
+			push('uncloneable', error.name);
+		}
+		window.__sw.done = true;
+	})().catch((error) => {
+		push('fail', String(error), error.stack);
+		window.__sw.done = true;
+	});
+</script>
