@@ -16,9 +16,10 @@ on:
     branches: [master]
   workflow_dispatch: {}
 
-concurrency:
-  group: terp-deploy
-  cancel-in-progress: true
+# No concurrency group: a cancelled run shows as a failed check on its
+# commit. The gate on terp serializes deploys (flock), a job whose commit is
+# no longer master's head skips and passes, and a deploy the gate refuses
+# because a newer commit is already live passes as superseded too.
 
 permissions:
   contents: read
@@ -31,26 +32,58 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Still master's head?
+        id: head
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          head=$(gh api "repos/$REPO/commits/master" --jq .sha 2>/dev/null) || head=$GITHUB_SHA
+          if [[ $head != "$GITHUB_SHA" ]]; then
+            echo "::notice::superseded by $head, skipped"
+            echo superseded=true >>"$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        if: steps.head.outputs.superseded != 'true'
         with:
           persist-credentials: false
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        if: steps.head.outputs.superseded != 'true'
         with:
           node-version: 26
           cache: npm
 
       - run: npm ci --ignore-scripts
+        if: steps.head.outputs.superseded != 'true'
 
       - run: npm run build
+        if: steps.head.outputs.superseded != 'true'
 
       - run: test -f dist/serviceWorker.js
+        if: steps.head.outputs.superseded != 'true'
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: Still master's head?
+        id: head
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          head=$(gh api "repos/$REPO/commits/master" --jq .sha 2>/dev/null) || head=$GITHUB_SHA
+          if [[ $head != "$GITHUB_SHA" ]]; then
+            echo "::notice::superseded by $head, skipped"
+            echo superseded=true >>"$GITHUB_OUTPUT"
+          fi
+
       - name: Configure SSH
+        if: steps.head.outputs.superseded != 'true'
         env:
           TERP_DEPLOY_KEY: ${{ secrets.TERP_DEPLOY_KEY }}
         run: |
@@ -64,10 +97,21 @@ jobs:
           echo "$TERP_HOST $TERP_HOST_KEY" > ~/.ssh/known_hosts
 
       - name: Deploy ${{ github.sha }} to terp
-        run: ssh -o BatchMode=yes "root@$TERP_HOST" deploy "$GITHUB_SHA"
+        if: steps.head.outputs.superseded != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          ssh -o BatchMode=yes "root@$TERP_HOST" deploy "$GITHUB_SHA" && exit 0
+          rc=$?
+          head=$(gh api "repos/$REPO/commits/master" --jq .sha 2>/dev/null) || exit $rc
+          [[ $head != "$GITHUB_SHA" ]] || exit $rc
+          echo "::notice::superseded by $head; the gate refused this older commit"
+          echo superseded=true >>"$GITHUB_ENV"
 
       # terp's :443 only admits the edge fleet; the gate already health-checked :8081 locally.
       - name: Verify site responds
+        if: steps.head.outputs.superseded != 'true' && env.superseded != 'true'
         run: |
           curl -fsS -m 20 -o /dev/null -w 'site %{http_code}\n' https://stomp.fracit.al/
           curl -fsS -m 20 https://stomp.fracit.al/api/status

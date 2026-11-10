@@ -24,9 +24,14 @@ on:
 permissions:
   contents: read
 
+# A push to master is never cancelled: GitHub shows a cancelled run as a
+# failed check on its commit. Each push gets a group of its own, and a job
+# whose commit is no longer master's head skips its work and passes
+# ("superseded", see the first step of each job). Pull requests still cancel
+# their older runs.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || 'latest' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_COLOR: 1
@@ -37,31 +42,52 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Still master's head?
+        id: head
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          head=$(gh api "repos/$REPO/commits/master" --jq .sha 2>/dev/null) || head=$GITHUB_SHA
+          if [[ $head != "$GITHUB_SHA" ]]; then
+            echo "::notice::superseded by $head, skipped"
+            echo superseded=true >>"$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        if: steps.head.outputs.superseded != 'true'
         with:
           persist-credentials: false
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        if: steps.head.outputs.superseded != 'true'
         with:
           node-version: 24
           cache: npm
 
       - name: Install (no lifecycle scripts)
+        if: steps.head.outputs.superseded != 'true'
         run: npm ci --ignore-scripts
 
       - name: Type check
+        if: steps.head.outputs.superseded != 'true'
         run: npm run check
 
       - name: Lint
+        if: steps.head.outputs.superseded != 'true'
         run: npm run lint
 
       - name: Format check
+        if: steps.head.outputs.superseded != 'true'
         run: npx prettier --check .
 
       - name: Prose check (no em dashes, no AI attribution in docs)
+        if: steps.head.outputs.superseded != 'true'
         run: npm run check:prose
 
       - name: Build
+        if: steps.head.outputs.superseded != 'true'
         run: node build.js && test -f dist/serviceWorker.js && test -f dist/controller.mjs
 
   # Browser suites on the runner's Chrome. Fixture-based suites only
@@ -72,22 +98,40 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - name: Still master's head?
+        id: head
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          head=$(gh api "repos/$REPO/commits/master" --jq .sha 2>/dev/null) || head=$GITHUB_SHA
+          if [[ $head != "$GITHUB_SHA" ]]; then
+            echo "::notice::superseded by $head, skipped"
+            echo superseded=true >>"$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        if: steps.head.outputs.superseded != 'true'
         with:
           persist-credentials: false
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        if: steps.head.outputs.superseded != 'true'
         with:
           node-version: 24
           cache: npm
 
       - name: Install
+        if: steps.head.outputs.superseded != 'true'
         run: npm ci --ignore-scripts
 
       - name: Build
+        if: steps.head.outputs.superseded != 'true'
         run: npm run build
 
       - name: Browser suites
+        if: steps.head.outputs.superseded != 'true'
         env:
           CHROME: /usr/bin/google-chrome
           SKIP_NETWORK: '1'
@@ -95,7 +139,28 @@ jobs:
           SKIP_MEASUREMENT: '1'
           PARALLEL: '2'
           NO_COLOR: '1'
-        run: npm test
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        # on a push, a newer commit on master mid-run stops the suites and
+        # the job passes as superseded
+        run: |
+          if [[ $GITHUB_EVENT_NAME != push ]]; then exec npm test; fi
+          setsid -w npm test &
+          pid=$!
+          while kill -0 "$pid" 2>/dev/null; do
+            for _ in $(seq 1 15); do
+              kill -0 "$pid" 2>/dev/null || break 2
+              sleep 2
+            done
+            head=$(gh api "repos/$REPO/commits/master" --jq .sha 2>/dev/null) || continue
+            if [[ $head != "$GITHUB_SHA" ]]; then
+              kill -TERM -- "-$pid" 2>/dev/null || true
+              wait "$pid" 2>/dev/null || true
+              echo "::notice::superseded by $head mid-run, stopped"
+              exit 0
+            fi
+          done
+          wait "$pid"
 
   commits:
     name: commit messages
