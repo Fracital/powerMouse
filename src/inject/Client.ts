@@ -624,10 +624,15 @@ export default class Client {
 	 * it is logged here and reported to the host (`hookerror`); a promise it
 	 * returns is not awaited, its rejection is reported the same way.
 	 */
+	/** whether the host's hooks run here (a document whose scripts are off runs none) */
+	protected runsHooks(): boolean {
+		return true;
+	}
 	runHook(phase: HookPhase) {
 		const source = this.hooks?.[phase];
 		if (!source) return;
 		if (this.isWorker && !this.hooks?.workers) return;
+		if (!this.runsHooks()) return;
 		const context = this.hookContext(phase);
 		const report = (error: unknown) => {
 			const message = error instanceof Error ? error.message : String(error);

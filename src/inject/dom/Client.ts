@@ -674,6 +674,14 @@ export default class DocumentClient extends Client {
 	 * Post to the host application through the real top's postMessage taken
 	 * before any page code ran; returns whether it was sent.
 	 */
+	/**
+	 * A document sandboxed without allow-scripts runs no page script, and
+	 * the policy that holds its scripts back (guardScripts) refuses the
+	 * hook's evaluation too: it runs no hook rather than report a refusal
+	 */
+	protected override runsHooks(): boolean {
+		return this.allows('allow-scripts');
+	}
 	protected override hookContext(phase: HookPhase): HookContext {
 		const nested = this.nested;
 		return {
