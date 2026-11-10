@@ -37,10 +37,6 @@ const KNOWN_BY_REASON = {
 	'navigation.entries() lists the other origin': [
 		'navigation/another site sees only its own entries',
 	],
-	'Web Locks are shared by every proxied site': [
-		'storage/another site wrote nothing here',
-		'storage/a lock another site holds is not held here',
-	],
 	'navigator.storage.estimate() counts every proxied site': [
 		'storage/usage does not count another site',
 	],

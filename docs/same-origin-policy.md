@@ -157,6 +157,10 @@ Filled in commit by commit; see the CHANGELOG for each.
   already, else a WeakMap lookup and a native getter call; 200,000
   `drawImage` calls of a same-origin image took 280 to 340 ms natively and
   295 to 320 ms proxied (noise).
+- **Web Locks** (section 3, sop-escapes: 2 cases). The Partition module
+  scopes a lock's name by the proxied origin as it does a BroadcastChannel's:
+  `request()` takes the scoped name, `query()` lists only the origin's locks
+  by their own names, and a `Lock` reads its own name back.
 
 ## Left
 

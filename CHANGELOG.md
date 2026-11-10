@@ -343,6 +343,9 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- Web Locks are per proxied site. They were one namespace for every site
+  behind the proxy: a lock another site held was held for this one, and
+  `navigator.locks.query()` listed its names. (sop-escapes suite.)
 - A canvas that drew another site's image without CORS is tainted, as
   natively: `toDataURL`, `toBlob`, `getImageData` and an OffscreenCanvas's
   `convertToBlob` throw the browser's SecurityError, and WebGL refuses such

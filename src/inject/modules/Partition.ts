@@ -5,8 +5,8 @@ import ProxyModule from './Proxy';
 /**
  * Every proxied origin shares the proxy's real origin, so what the browser
  * keys by origin must be keyed by the proxied origin here: BroadcastChannel
- * names, Cache API cache names and the origin private file system's root.
- * The page reads its own names back.
+ * names, Cache API cache names, Web Locks and the origin private file
+ * system's root. The page reads its own names back.
  */
 export default class PartitionModule extends Module<Client> {
 	apply() {
@@ -40,6 +40,45 @@ export default class PartitionModule extends Module<Client> {
 					unscoped(String(Reflect.apply(target, that, []))),
 				),
 			});
+		}
+
+		// a lock of another site is not this one's to wait for, and its name
+		// is not this one's to read
+		if (typeof global.LockManager === 'function') {
+			const manager = global.LockManager.prototype;
+			manager.request = proxyModule.wrapFunction(
+				manager.request,
+				(target, that, args) => {
+					if (args.length) args[0] = scoped(args[0]);
+					return Reflect.apply(target, that, args);
+				},
+			) as LockManager['request'];
+			type Info = { name?: string };
+			const own = (list: Info[] | undefined) =>
+				(list ?? [])
+					.filter((lock) => lock.name?.endsWith(suffix()))
+					.map((lock) => ({ ...lock, name: unscoped(lock.name!) }));
+			manager.query = proxyModule.wrapFunction(
+				manager.query,
+				async (target, that, args) => {
+					const snapshot = (await Reflect.apply(target, that, args)) as {
+						held?: Info[];
+						pending?: Info[];
+					};
+					return { held: own(snapshot.held), pending: own(snapshot.pending) };
+				},
+			) as LockManager['query'];
+			const lockName = Reflect.getOwnPropertyDescriptor(
+				global.Lock.prototype,
+				'name',
+			);
+			if (lockName?.get)
+				Reflect.defineProperty(global.Lock.prototype, 'name', {
+					...lockName,
+					get: proxyModule.wrapFunction(lockName.get, (target, that) =>
+						unscoped(String(Reflect.apply(target, that, []))),
+					),
+				});
 		}
 
 		// the native members, before the hooks below replace them
