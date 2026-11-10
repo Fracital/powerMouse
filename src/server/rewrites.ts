@@ -6,7 +6,7 @@ import { getDomain } from 'tldts';
 import { acceptLanguage } from '../acceptLanguage';
 import GenericCodec from '../Codecs';
 import { codecType, Config, ParsedConfig } from '../config';
-import { capitalizeHeaders, rewriteLinkHeader } from '../headers';
+import { rewriteLinkHeader } from '../headers';
 import {
 	DEFAULT_REFERRER_POLICY,
 	refererFor,
@@ -48,6 +48,7 @@ import {
 	filterResponseHeaders,
 	RouteTransform,
 } from './filterHeaders';
+import { chromeOrderedHeaders, type RequestShape } from './headerOrder';
 import {
 	authorizationAhead,
 	authorizationForRealm,
@@ -585,10 +586,12 @@ function genericForward(
 			initiator.origin === url.url.origin;
 
 		// the browser sends Origin on cross-origin CORS requests and on every
-		// request with a body
+		// request with a body; Chrome also on a module script's, same-origin
+		// or not
 		if (
 			(initiator || opaque) &&
 			((!sameOrigin && serverRequest.mode === 'cors') ||
+				(serverRequest.mode === 'cors' && destination === 'script') ||
 				!BODY_ILLEGAL.includes(serverRequest.method))
 		)
 			requestHeaders.set('origin', opaque ? 'null' : initiator!.origin);
@@ -803,6 +806,16 @@ function genericForward(
 				? Promise.resolve(undefined)
 				: serverRequest.blob();
 		upload.catch(() => {});
+		// the fields go out in the order Chrome sends them (headerOrder.ts)
+		const shape: RequestShape = {
+			navigation: navigation && DOCUMENT_DESTINATIONS.has(destination),
+			destination: navigation && topLevel ? 'document' : destination,
+			mode:
+				load?.mode ??
+				(serverRequest.mode || (destination === 'empty' ? 'cors' : 'no-cors')),
+			method: serverRequest.method,
+			cache: serverRequest.cache,
+		};
 		const fetchUpstream = (headers: Headers) => {
 			const upstream = upload.then((body) =>
 				rewriter.bare.fetch(url.toString(), {
@@ -810,7 +823,7 @@ function genericForward(
 					redirect: 'manual',
 					// redirect: serverRequest.redirect,
 					body,
-					headers: capitalizeHeaders(headers),
+					headers: chromeOrderedHeaders(headers, shape),
 				}),
 			);
 			// an answer that arrives after the page gave up is dropped unread, so

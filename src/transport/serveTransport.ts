@@ -19,6 +19,41 @@ export type DecorateHandshake = (
 	headers: RawHeaders,
 ) => Promise<RawHeaders>;
 
+/**
+ * What a transport says it does with the request fields the service worker
+ * sends in Chrome's shape (src/server/headerOrder.ts): the Accept-Encoding
+ * it decodes, and whether it keeps Priority to HTTP/2 as Chrome does. Our
+ * epoxy build declares both. A transport that does not gets no
+ * Accept-Encoding (it sends its own, for what it decodes: libcurl's is
+ * deflate, gzip, br, and a zstd answer would fail it) and no Priority
+ * (Chrome sends none over HTTP/1.1).
+ */
+interface FieldSupport {
+	acceptEncoding?: string;
+	priority?: boolean;
+}
+
+/** `headers` as `transport` can send them */
+export function fitHeaders(
+	transport: ProxyTransport,
+	headers: RawHeaders,
+): RawHeaders {
+	// a host calling the transport itself may hand anything the transport
+	// takes (an object of fields); the worker always sends pairs
+	if (!Array.isArray(headers)) return headers;
+	const support = (transport as { fieldSupport?: FieldSupport }).fieldSupport;
+	const out: RawHeaders = [];
+	for (const [name, value] of headers) {
+		const lower = name.toLowerCase();
+		if (lower === 'accept-encoding') {
+			if (support?.acceptEncoding) out.push([name, support.acceptEncoding]);
+		} else if (lower === 'priority') {
+			if (support?.priority) out.push([name, value]);
+		} else out.push([name, value]);
+	}
+	return out;
+}
+
 /** how long a decorate hook may take before the handshake goes out without it */
 const DECORATE_TIMEOUT_MS = 2000;
 
@@ -72,7 +107,7 @@ export default function serveTransport(
 					new URL(remote),
 					method,
 					body,
-					headers,
+					fitHeaders(transport, headers),
 					undefined,
 				);
 				// a streamed body goes on a port of its own (bodyPort.ts)
