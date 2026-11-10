@@ -13,7 +13,8 @@ the `malformed-headers` suite). And its WebSocket handshake goes out as
 Chrome's does: origin-form, with the port in Host, one User-Agent, Chrome's
 fields in Chrome's order, ALPN `http/1.1`, and the server's subprotocol
 reported (see the `ws-handshake` suite); TikTok's socket answered 400 to the
-absolute-form request line before.
+absolute-form request line before. The build also carries stomp-h3, HTTP/3
+over wisp UDP for stomp's `http3` option (`h3/`, below).
 
 Nothing is forked in the sense of a diverging tree. `upstream.env` pins the
 four upstream revisions, `patches/` holds `git format-patch` output applied
@@ -40,6 +41,32 @@ fails the build at `git apply --check`.
 | MercuryWorkshop/EpoxyTransport                                 | `0002` | `init()` loads the wasm module once per realm and builds one client per transport, however many calls overlap. Two concurrent inits instantiated the module twice and the client built on the replaced instance never answered.                                                                                                                                   |
 | MercuryWorkshop/EpoxyTransport                                 | `0003` | `connect` passes that subprotocol on to `onopen` (it reported `""`).                                                                                                                                                                                                                                                                                              |
 
+## stomp-h3 (`h3/`)
+
+Our own crate, not an upstream patch: QUIC (quinn) and HTTP/3 (h3) for the
+browser, over a datagram channel stomp hands in (epoxy's `connect_udp`, a
+wisp UDP stream). It touches nothing in epoxy-tls or EpoxyTransport; the
+Dockerfile builds it after them (`h3/build.sh`) into
+`out/epoxy-transport/dist/h3/` (`stomp_h3.js`, `stomp_h3_bg.wasm`,
+`stomp_h3.d.ts`), so it ships on the same `dist` branch and the demo serves
+it as `/epoxy/h3/`. Stomp's `Http3Transport` imports it only when `http3` is
+on and an origin offers h3 (docs/http3.md).
+
+- `Cargo.lock` is committed and the build is `--locked`; `wasm-bindgen` is
+  pinned to `=0.2.100`, the CLI the image installs.
+- `vendor.sh` fetches the crates it patches (h3 0.0.8), checks the crates.io
+  checksum and applies `h3/patches/<crate>/*.patch` in order; `Cargo.toml`'s
+  `[patch.crates-io]` points at `vendor/`. `h3/0001` writes request
+  pseudo-headers in Chrome's order (`:method`, `:authority`, `:scheme`,
+  `:path`).
+- `out/UPSTREAM` ends with a `stomp-h3 <hash>` line naming the sources that
+  went in.
+
+To work on it without the whole image, run `h3/build.sh <out dir>` in a
+container of the image `build.sh` tagged (it has the toolchain), copying the
+crate in with `docker cp` (docker's filesystem here is not this machine's, so
+bind mounts come up empty).
+
 ## Build
 
 ```sh
@@ -50,11 +77,12 @@ The container installs the Rust nightly, wasm32 target, `wasm-bindgen 0.2.100`
 (epoxy's build script checks the exact version), binaryen and Node, clones the
 four repos at the pinned revisions, applies the patches in numeric order and
 runs epoxy-tls's `publish.sh` (full and minimal, `RELEASE=1`) followed by
-EpoxyTransport's `npm run build`. Where docker's bridge network cannot reach
-the Rust and npm mirrors, set `ENGINE` to a wrapper that adds `--network host`
-to `docker build`. Output: `out/epoxy-tls` (the npm package
-layout) and `out/epoxy-transport` (with `dist/`), plus `out/UPSTREAM` naming
-the revisions and patches that went in.
+EpoxyTransport's `npm run build`, then builds stomp-h3 into its `dist/h3/`.
+Where docker's bridge network cannot reach the Rust and npm mirrors, set
+`ENGINE` to a wrapper that adds `--network host` to `docker build`. Output:
+`out/epoxy-tls` (the npm package layout) and `out/epoxy-transport` (with
+`dist/`, `dist/h3/` included), plus `out/UPSTREAM` naming the revisions and
+patches that went in.
 
 ## Test a build before publishing
 

@@ -1,0 +1,6 @@
+# build.sh's own output and the local stomp-h3 build directories stay out of
+# the image's build context
+out/
+h3/vendor/
+h3/target/
+h3/out/

@@ -58,10 +58,18 @@ RUN rm -f pnpm-lock.yaml pnpm-workspace.yaml \
  && npm run build \
  && ls -la dist
 
+# --- stomp-h3: HTTP/3 over wisp UDP, shipped in epoxy-transport's dist/h3/ ----
+# Our own crate (deploy/epoxy/h3, quinn + h3), not an upstream patch; stomp's
+# Http3Transport loads it next to the transport module when `http3` is on.
+COPY h3 /src/stomp-h3
+RUN bash /src/stomp-h3/build.sh /src/epoxy-transport/dist/h3 \
+ && rm -f /src/epoxy-transport/dist/h3/stomp_h3_bg.wasm.d.ts
+
 # --- outputs ------------------------------------------------------------------
 RUN mkdir -p /out/epoxy-tls /out/epoxy-transport \
  && cd /src/epoxy-tls/client && cp -r full minimal package.json README.md LICENSE /out/epoxy-tls/ \
  && cd /src/epoxy-transport && cp -r dist lib package.json package-lock.json README.md .gitignore /out/epoxy-transport/ \
  && cp LICENSE /out/epoxy-transport/ 2>/dev/null || true \
  && printf 'hyper-util-wasm %s\nepoxy-tls %s\nepoxy-transport %s\nhyper %s\n' "$HYPER_UTIL_WASM_REV" "$EPOXY_TLS_REV" "$EPOXY_TRANSPORT_REV" "$HYPER_REV" > /out/UPSTREAM \
- && (cd /patches && find . -name '*.patch' | sort) >> /out/UPSTREAM
+ && (cd /patches && find . -name '*.patch' | sort) >> /out/UPSTREAM \
+ && (cd /src/stomp-h3 && printf 'stomp-h3 %s\n' "$(cat Cargo.toml Cargo.lock src/*.rs patches/*/*.patch | sha256sum | cut -c1-12)") >> /out/UPSTREAM

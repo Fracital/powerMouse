@@ -1,0 +1,25 @@
+Request pseudo-headers in Chrome's order: :method, :authority, :scheme, :path
+(h3 0.0.8 writes :method, :scheme, :authority, :path).
+
+--- a/src/proto/headers.rs
++++ b/src/proto/headers.rs
+@@ -165,14 +165,15 @@
+                 return Some((":method", method.as_str()).into());
+             }
+
+-            if let Some(scheme) = pseudo.scheme.take() {
+-                return Some((":scheme", scheme.as_str().as_bytes()).into());
+-            }
+-
++            // Chrome's order: :method, :authority, :scheme, :path
+             if let Some(authority) = pseudo.authority.take() {
+                 return Some((":authority", authority.as_str().as_bytes()).into());
+             }
+
++            if let Some(scheme) = pseudo.scheme.take() {
++                return Some((":scheme", scheme.as_str().as_bytes()).into());
++            }
++
+             if let Some(path) = pseudo.path.take() {
+                 return Some((":path", path.as_str().as_bytes()).into());
+             }

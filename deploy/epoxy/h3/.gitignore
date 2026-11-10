@@ -1,0 +1,4 @@
+# vendor.sh and build.sh output
+/vendor/
+/target/
+/out/

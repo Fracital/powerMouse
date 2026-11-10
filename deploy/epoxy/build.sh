@@ -19,7 +19,7 @@ if [[ -z $engine ]]; then
 fi
 [[ -n $engine ]] || { echo "no working container engine (docker or podman)" >&2; exit 1; }
 
-tag="epoxy-fracital:${EPOXY_TLS_REV:0:12}-$(cat patches/*/*.patch | sha256sum | cut -c1-12)"
+tag="epoxy-fracital:${EPOXY_TLS_REV:0:12}-$(cat patches/*/*.patch h3/Cargo.* h3/*.sh h3/src/*.rs h3/patches/*/*.patch | sha256sum | cut -c1-12)"
 
 "$engine" build \
 	--build-arg "HYPER_UTIL_WASM_REV=$HYPER_UTIL_WASM_REV" \
