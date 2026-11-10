@@ -13,6 +13,7 @@ import type {
 	RawHeaders,
 	TransferrableResponse,
 } from '@mercuryworkshop/proxy-transports';
+import { wispGone } from '../RevivingTransport';
 import { AltSvcCache, type AltService } from './altSvc';
 import { base64url, httpsQuery, parseHttpsAnswer } from './dnsHttps';
 
@@ -432,16 +433,48 @@ export default class Http3Transport implements ProxyTransport {
 		try {
 			channel = await udp(alt.host, alt.port);
 		} catch (error) {
+			// the wisp connection itself is gone: the base transport opens a
+			// new one, and UDP is as available as it was
+			if (wispGone(error)) return null;
 			// the wisp server has no UDP (wisp v2 without the UDP extension)
 			this.#udpBlockedUntil = Date.now() + UDP_BLOCKED_MS;
 			console.warn('Stomp: HTTP/3 is off for now, no UDP over wisp:', error);
 			return null;
 		}
+		// A channel that ends under a live connection (its wisp stream closed,
+		// or the whole wisp connection was lost) ends the connection now.
+		// stomp-h3 only marks it dead, and the requests on it would wait for
+		// the 30 s idle timeout before failing over to the base transport.
+		let conn: H3Connection | null = null;
+		let ended = false;
+		const end = () => {
+			if (ended) return;
+			ended = true;
+			if (!conn) return;
+			conn.close();
+			this.#lost(origin, conn);
+		};
+		const watch = new TransformStream<Uint8Array, Uint8Array>({ flush: end });
+		channel.read.pipeTo(watch.writable).catch(end);
+		// A datagram that cannot go out means the same. stomp-h3 closes its
+		// writer when the connection goes without waiting on it, and closing
+		// an errored stream rejects with no one to catch it, so a failed write
+		// ends the connection here and leaves this stream open.
+		const out = channel.write.getWriter();
+		const write = new WritableStream<Uint8Array>({
+			write: (chunk) => out.write(chunk).catch(end),
+			close: () => out.close().catch(() => {}),
+			abort: (reason) => out.abort(reason).catch(() => {}),
+		});
 		try {
-			const conn = await module.connect(alt.host, channel.read, channel.write, {
+			conn = await module.connect(alt.host, watch.readable, write, {
 				...(this.#options.pem ? { pem: this.#options.pem } : {}),
 				timeoutMs: this.#options.timeout ?? DEFAULT_TIMEOUT_MS,
 			});
+			if (ended) {
+				conn.close();
+				return null;
+			}
 			this.#connections.set(origin, conn);
 			this.#confirmed.add(origin);
 			this.#cache.confirm(origin);

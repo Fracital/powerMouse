@@ -59,6 +59,9 @@ const scenario = async ({ module, channel, options, steps }) => {
 		const read = new ReadableStream({
 			start(controller) {
 				if (channel === 'close') controller.close();
+				// up long enough for a handshake, then gone (its wisp stream,
+				// or the whole wisp connection, was lost)
+				if (channel === 'endLater') setTimeout(() => controller.close(), 300);
 			},
 		});
 		const write = new WritableStream({ write() {} });
@@ -76,7 +79,12 @@ const scenario = async ({ module, channel, options, steps }) => {
 		if (step.alt) url.searchParams.set('alt', step.alt);
 		const t0 = performance.now();
 		try {
-			const response = await transport.request(url, 'GET', null, [], undefined);
+			const response = await Promise.race([
+				transport.request(url, 'GET', null, [], undefined),
+				new Promise((resolve, reject) =>
+					setTimeout(() => reject(new Error('HUNG')), 15000),
+				),
+			]);
 			out.push({
 				ms: Math.round(performance.now() - t0),
 				status: response.status,
@@ -282,6 +290,50 @@ if (!present) {
 			JSON.stringify(r.out),
 		);
 	}
+}
+
+// ---- a channel that ends under a live connection ends it now -----------------
+{
+	// a stand-in for stomp-h3: the handshake succeeds at once and a request
+	// waits until the connection is closed. stomp-h3 only marks a connection
+	// over an ended channel dead, and its requests waited for the 30 s idle
+	// timeout (a dropped wisp connection under a YouTube load held the app's
+	// script that long).
+	const standIn = `data:text/javascript,${encodeURIComponent(`
+		export default async function init() {}
+		export async function connect() {
+			let closed = false;
+			const waiting = [];
+			const gone = () => new Error('h3 response: connection closed');
+			return {
+				get alive() { return !closed; },
+				handshake_ms: 1,
+				stats() { return {}; },
+				close() {
+					closed = true;
+					for (const reject of waiting.splice(0)) reject(gone());
+				},
+				request() {
+					return new Promise((resolve, reject) =>
+						closed ? reject(gone()) : waiting.push(reject),
+					);
+				},
+			};
+		}
+	`)}`;
+	const r = await run({
+		module: standIn,
+		channel: 'endLater',
+		options: { force: ['ends.test:443'] },
+		steps: [{ url: 'https://ends.test/' }],
+	});
+	ok(
+		'a QUIC connection whose datagram channel ends is closed at once: its GET goes over the base transport',
+		r.out[0]?.status === 200 &&
+			r.out[0].via === 'base-after-h3' &&
+			r.out[0].ms < 2000,
+		JSON.stringify(r.out ?? r),
+	);
 }
 
 await context.close();

@@ -44,6 +44,9 @@ page (demo/README.md).
    request reconnects. When QUIC already worked for the origin in this
    session, a request waits up to `wait` (300 ms) for that reconnect before
    it goes over the base transport instead.
+   A connection whose wisp UDP stream ends (the stream closed, or the
+   whole wisp connection was lost) is closed at once, so the requests on
+   it fail over to the base transport now rather than at the idle timeout.
 4. A handshake that fails (a TLS or QUIC error, the channel closed, nothing
    back within `timeout`, 10 s) marks the origin broken: 5 minutes, doubling
    on each consecutive failure up to 2 days, reset when QUIC works again.

@@ -54,8 +54,10 @@ The first release after a four-year gap. Everything below is breaking.
   request reports the connection gone, and sends again the requests that
   never went out and the GET, HEAD and OPTIONS requests without a body that
   lost their connection before the response head, including those still
-  waiting on the old connection, as Chrome does on a reused connection
-  (wisp-reconnect suite).
+  waiting on the old connection, as Chrome does on a reused connection. A
+  QUIC connection whose wisp stream ends is closed at once, so its requests
+  go over the base transport instead of waiting 30 s for the idle timeout
+  (wisp-reconnect and http3-fallback suites).
 
 ### Demo and API
 
