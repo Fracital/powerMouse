@@ -335,7 +335,7 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 ### Dependencies
 
 - meriyah 7, parse5 8, css-tree 3, entities 9, idb 8, set-cookie-parser 3,
-  ast-types 0.16, crypto-js 4.2.
+  crypto-js 4.2.
 - `effective-domain-name-parser` is replaced by `tldts`; `sameHost` now
   compares registrable domains rather than second-level labels.
 - `meriyah-loose` (a 4.x fork) is dropped; scripts that fail to parse are
@@ -343,6 +343,16 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- `ast-types` is dropped. The JS rewriter built its new nodes with its
+  builders, and loading it builds its definitions of every node kind of
+  every dialect (Flow, TypeScript, Babel, JSX): about 450 KB of heap in
+  each realm that evaluates it, which is every proxied frame and worker.
+  `src/builders.ts` builds the twenty kinds the rewriter makes as plain
+  objects with the fields, defaults and key order ast-types gave them (the
+  rewriter's output over the speed corpus and the test pages' scripts is
+  byte for byte the same). A proxied frame costs 1,380 KB of heap instead of
+  1,830 (native: 400) and 3.1 MB of renderer memory instead of 3.6
+  (measure-frame-memory suite, 60 frames of an ad-like page).
 - `caches.match()` looks in the page's own origin's caches only. It searched
   every cache of the proxy origin, so a page (or a service worker) could
   read another proxied site's cached responses, and Stomp's own HTTP cache,

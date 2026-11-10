@@ -1,8 +1,8 @@
 import { generate } from '@javascript-obfuscator/escodegen';
-import { builders as b } from 'ast-types';
 import { parse } from 'meriyah';
 import type { ESTree } from 'meriyah';
 import { AcornContext, AcornIterator, result } from './acornUtil';
+import { builders as b } from './builders';
 import { Config } from './config';
 import {
 	functionMark,

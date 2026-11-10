@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+	<head>
+		<title>frame memory</title>
+		<style>
+			body {
+				margin: 0;
+			}
+			.pixel {
+				background: url(/pages/frame-memory.html?bg);
+			}
+		</style>
+	</head>
+	<body>
+		<div class="pixel">x</div>
+		<script>
+			// what a cookie-sync or ad frame runs: one inline script
+			(function () {
+				var image = document.createElement('img');
+				image.width = 1;
+				image.height = 1;
+				image.src = '/pages/frame-memory.html?sync=' + Math.random();
+				document.body.appendChild(image);
+				window.__ranAt = performance.now();
+			})();
+		</script>
+	</body>
+</html>
