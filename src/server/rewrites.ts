@@ -52,6 +52,7 @@ import {
 	CREDENTIALS_HEADER,
 	LOAD_HEADER,
 	OPAQUE_HEADER,
+	TAO_MARKER,
 } from '../transport/messages';
 import { BUILD } from '../version';
 import { knownOriginOf, recordInlineOrigin } from './blobOrigins';
@@ -65,6 +66,7 @@ import {
 	needsPreflight,
 	preflightAllows,
 	preflightCached,
+	timingAllowed,
 	unsafeHeaderNames,
 } from './cors';
 import { DOCUMENT_DESTINATIONS, hostErrorPage } from './errorPage';
@@ -1444,6 +1446,15 @@ function genericForward(
 			if (redirect && location !== null)
 				responseHeaders.set('location', location);
 		}
+		// the page's resource timing of another origin's load is restricted
+		// unless its Timing-Allow-Origin names the page: the inject reads this
+		// mark (never a fetch's or XHR's, whose headers the page reads)
+		if (
+			crossOrigin &&
+			serverRequest.destination !== '' &&
+			timingAllowed(response.headers, policyOrigin!)
+		)
+			responseHeaders.append('server-timing', TAO_MARKER);
 
 		// the browser follows the redirect in proxy URL space, where every hop
 		// is same-origin and the referrer never narrows: remember what this hop

@@ -132,6 +132,16 @@ export function exposedHeaders(
 	return result;
 }
 
+/**
+ * Whether a resource's Timing-Allow-Origin lets `origin` see its timing
+ * (https://w3c.github.io/resource-timing/#sec-timing-allow-origin)
+ */
+export function timingAllowed(headers: Headers, origin: string): boolean {
+	return list(headers.get('timing-allow-origin')).some(
+		(value) => value === '*' || value === origin,
+	);
+}
+
 interface PreflightEntry {
 	expires: number;
 	methods: Set<string>;

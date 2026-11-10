@@ -343,6 +343,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- Resource timing of another site's resources is restricted unless its
+  Timing-Allow-Origin names the page, as natively: timings, sizes and
+  Server-Timing read 0 or empty, in the entry and its `toJSON()`, and
+  another site's status and content type need CORS. Every entry showed
+  every detail before, since every route is same-origin to the browser.
+  `workerStart` is 0 on every entry (it was the proxy worker's start time).
+  (sop-escapes suite.)
 - A blob: worker and a document the page made itself (a `javascript:`
   URL's, a blob: document, a data: one) are judged by their real origin,
   after a service worker restart too: the worker keeps what it learns of

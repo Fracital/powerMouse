@@ -28,11 +28,8 @@ const KNOWN_BY_REASON = {
 	'an about:srcdoc document under no-referrer is judged as an opaque origin': [
 		'fetch/from a srcdoc frame that sends no referrer, ACAO A',
 	],
-	'resource timing is not gated by Timing-Allow-Origin': [
-		'timing/another site without Timing-Allow-Origin',
-		'timing/another site with Timing-Allow-Origin *',
-		'timing/another site with ACAO, without TAO',
-	],
+	"a fetch's or XMLHttpRequest's timing of another origin is restricted even with Timing-Allow-Origin":
+		['timing/a fetch of another site with ACAO and TAO'],
 	'navigator.storage.estimate() counts every proxied site': [
 		'storage/usage does not count another site',
 	],

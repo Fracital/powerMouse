@@ -4,7 +4,8 @@
 // one that was refused before it left (a failed preflight).
 //
 //   /sop/r?k=<key>&...   the resource; every request is logged under k
-//     acao, acac=1, aceh, corp, tao     headers of the answer
+//     acao, acac=1, aceh, corp, tao     headers of the answer; st=1 adds
+//                                       a Server-Timing
 //     pacao, pacac=1, pacam, pacah, pmaxage, pstatus
 //                                       the answer to a preflight (OPTIONS);
 //                                       pacao defaults to acao, pacac to acac
@@ -86,6 +87,7 @@ export function sop(req, res) {
 	set('access-control-expose-headers', query.get('aceh'));
 	set('cross-origin-resource-policy', query.get('corp'));
 	set('timing-allow-origin', query.get('tao'));
+	if (query.get('st')) set('server-timing', 'db;dur=5, cache;desc="hit"');
 	res.setHeader('x-secret', 'S');
 	const redirect = query.get('redirect');
 	if (redirect) {

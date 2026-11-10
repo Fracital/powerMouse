@@ -182,11 +182,30 @@ Filled in commit by commit; see the CHANGELOG for each.
   does nothing: a document is in an origin-keyed agent cluster by default
   (`window.originAgentCluster`), where Chrome's setter has no effect. It
   used to accept a parent domain and read it back.
+- **Resource timing** (section 2, sop-escapes: 3 cases, and 3 new ones
+  that read as natively). Only the worker sees a response's
+  Timing-Allow-Origin: when it names the page (or `*`) on a load of another
+  origin, the worker adds a Server-Timing metric of its own (`stomp-tao`) to
+  the response, and the ResourceTiming module
+  (`src/inject/modules/ResourceTiming.ts`, pages and workers) shows the entry
+  of another origin's resource without that mark as Chrome's restricted one:
+  every timing between `redirectStart` and `responseStart` and the three
+  sizes 0, `nextHopProtocol` and `deliveryType` empty, no Server-Timing
+  metrics, in the getters and in `toJSON`. `responseStatus` and
+  `contentType` of another origin's load are 0 and empty unless it was a
+  fetch or XMLHttpRequest (CORS-checked). The mark never reaches the page.
+  `workerStart` is 0 on every entry, as for a page with no service worker
+  (it was the time the proxy's worker started, a tell on every entry).
 
 ## Left
 
 Ranked by what a page could learn or do.
 
+- Resource timing: a fetch's or XMLHttpRequest's entry of another origin
+  is restricted even when its Timing-Allow-Origin names the page (the mark
+  would show in the response headers the page reads); a response the
+  worker answers has no `transferSize` or `nextHopProtocol` of its own
+  (every entry, the page's own origin's too).
 - Canvas: an image of the page's own origin that redirects to another is
   judged by its own URL (Chrome taints by the response's origin); a canvas
   tainted in one document's bundle is not known to another document's (a

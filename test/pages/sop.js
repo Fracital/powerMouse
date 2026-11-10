@@ -618,29 +618,52 @@
 	};
 	add('font/another site without ACAO', () => font({ type: 'font' }));
 	add('font/another site with ACAO', () => font({ type: 'font', acao: '*' }));
-	const timing = async (params) => {
-		const { url } = r(B, { type: 'png', ...params });
-		await image(url);
+	const timing = async (base, params, load = image) => {
+		const { url } = r(base, { type: 'png', st: '1', ...params });
+		await load(url);
 		await sleep(100);
 		const entry = performance.getEntriesByName(url)[0];
 		if (!entry) return 'no entry';
+		const json = entry.toJSON();
 		return {
-			transferSize: entry.transferSize > 0,
+			// a response the service worker answers has no transfer size or
+			// protocol of its own, natively it has: whether it is restricted
+			// shows in the rest
 			encodedBodySize: entry.encodedBodySize > 0,
 			decodedBodySize: entry.decodedBodySize > 0,
 			requestStart: entry.requestStart > 0,
 			responseStart: entry.responseStart > 0,
+			connectStart: entry.connectStart > 0,
 			domainLookupStart: entry.domainLookupStart > 0,
+			workerStart: entry.workerStart,
 			responseStatus: entry.responseStatus,
-			serverTiming: entry.serverTiming.length,
+			serverTiming: entry.serverTiming.map((metric) => metric.name),
+			json: {
+				requestStart: json.requestStart > 0,
+				encodedBodySize: json.encodedBodySize > 0,
+				workerStart: json.workerStart,
+				serverTiming: json.serverTiming.map((metric) => metric.name),
+			},
 		};
 	};
-	add('timing/another site without Timing-Allow-Origin', () => timing({}));
+	add('timing/its own origin', () => timing(A, {}));
+	add('timing/another site without Timing-Allow-Origin', () => timing(B, {}));
 	add('timing/another site with Timing-Allow-Origin *', () =>
-		timing({ tao: '*' }),
+		timing(B, { tao: '*' }),
+	);
+	add('timing/another site with Timing-Allow-Origin naming this origin', () =>
+		timing(B, { tao: A }),
+	);
+	add('timing/another site with Timing-Allow-Origin naming another', () =>
+		timing(B, { tao: 'http://other.test' }),
+	);
+	add('timing/a fetch of another site with ACAO and TAO', () =>
+		timing(B, { acao: '*', tao: '*' }, (url) =>
+			fetch(url).then((response) => response.arrayBuffer()),
+		),
 	);
 	add('timing/another site with ACAO, without TAO', () =>
-		timing({ acao: '*' }),
+		timing(B, { acao: '*' }),
 	);
 	add('isolation/crossOriginIsolated', () => self.crossOriginIsolated);
 

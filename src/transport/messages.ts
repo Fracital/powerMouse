@@ -56,6 +56,13 @@ export const ABORT_HEADER = 'x-stomp-abort';
  */
 export const LOAD_HEADER = 'x-stomp-load';
 /**
+ * A Server-Timing metric the worker adds to a response of another origin
+ * whose Timing-Allow-Origin lets the page see its timing: every route is
+ * same-origin to the browser, so only the worker knows. The inject's
+ * resource timing reads it and never shows it (ResourceTiming module)
+ */
+export const TAO_MARKER = 'stomp-tao';
+/**
  * On a request a page's fetch or XMLHttpRequest makes from a document the
  * page sandboxed without allow-same-origin (an opaque origin natively, the
  * site's through the proxy): the worker judges it as the browser judges an
