@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 async-compression = { version = "0.4", features = ["futures-io", "gzip", "brotli"] }
 bytes = "1"
+fastrand = "2"
 futures-util = { version = "0.3", features = ["io", "sink", "channel"] }
 futures-channel = "0.3"
 gloo-timers = { version = "0.3", features = ["futures"] }

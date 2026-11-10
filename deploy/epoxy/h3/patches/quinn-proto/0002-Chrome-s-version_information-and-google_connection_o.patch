@@ -1,0 +1,124 @@
+From 67995f5a98ae1d546a4d89b680ba0f83f8a7713c Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 10 Nov 2026 14:17:13 -0500
+Subject: [PATCH] Chrome's version_information and google_connection_options in
+ random places
+
+version_information and google_connection_options went out next to
+the GREASE parameter, always together, with a fixed reserved version
+(0x5a5a6a9a) after version 1. Chrome (QUICHE) puts every parameter in its
+own random place, and its available versions are version 1 and a random
+reserved version 0x?a?a?a?a in random order (measured over several
+connections).
+---
+ src/transport_parameters.rs | 59 ++++++++++++++++++++++++++++---------
+ 1 file changed, 45 insertions(+), 14 deletions(-)
+
+diff --git a/src/transport_parameters.rs b/src/transport_parameters.rs
+index 846c1de..0cfb861 100644
+--- a/src/transport_parameters.rs
++++ b/src/transport_parameters.rs
+@@ -109,11 +109,14 @@ macro_rules! make_struct {
+             ///
+             /// This field is initialized only for outgoing `TransportParameters` instances and
+             /// is set to `None` for `TransportParameters` received from a peer.
+-            pub(crate) write_order: Option<[u8; TransportParameterId::SUPPORTED.len()]>,
++            pub(crate) write_order: Option<[u8; WRITE_SLOTS]>,
+ 
+             /// Ours, as a client: also write Chrome's version_information and
+             /// google_connection_options (never set for a peer's or a server's)
+             pub(crate) chrome_client: bool,
++            /// The reserved version Chrome lists in version_information's
++            /// available versions, and whether it comes before version 1 there
++            pub(crate) chrome_grease_version: (u32, bool),
+         }
+ 
+         // We deliberately don't implement the `Default` trait, since that would be public, and
+@@ -138,6 +141,7 @@ macro_rules! make_struct {
+                     grease_transport_parameter: None,
+                     write_order: None,
+                     chrome_client: false,
++                    chrome_grease_version: (0, false),
+                 }
+             }
+         }
+@@ -146,6 +150,10 @@ macro_rules! make_struct {
+ 
+ apply_params!(make_struct);
+ 
++/// Serialization slots: every supported parameter, then Chrome's
++/// version_information and google_connection_options
++const WRITE_SLOTS: usize = TransportParameterId::SUPPORTED.len() + 2;
++
+ impl TransportParameters {
+     pub(crate) fn new(
+         config: &TransportConfig,
+@@ -190,6 +198,12 @@ impl TransportParameters {
+                 None => None,
+             },
+             chrome_client: server_config.is_none(),
++            // a reserved version (RFC 9000 section 15, 0x?a?a?a?a), random per
++            // connection, in random order next to version 1, as QUICHE's
++            chrome_grease_version: (
++                (rng.random::<u32>() & 0xf0f0_f0f0) | 0x0a0a_0a0a,
++                rng.random::<bool>(),
++            ),
+             grease_transport_parameter: Some(ReservedTransportParameter::random(rng)),
+             write_order: Some({
+                 let mut order = std::array::from_fn(|i| i as u8);
+@@ -328,25 +342,42 @@ impl TransportParameters {
+             .as_ref()
+             .unwrap_or(&std::array::from_fn(|i| i as u8))
+         {
++            // Chrome's client also sends version_information (RFC 9368: chosen
++            // version 1, available version 1 and a reserved one, in random
++            // order) and google_connection_options "ORIG", each in its own
++            // random place among the others; quinn reads neither
++            if *idx as usize >= TransportParameterId::SUPPORTED.len() {
++                if !self.chrome_client {
++                    continue;
++                }
++                if *idx as usize == TransportParameterId::SUPPORTED.len() {
++                    let (grease, first) = self.chrome_grease_version;
++                    w.write_var(0x11);
++                    w.write_var(12);
++                    w.put_u32(1);
++                    match first {
++                        true => {
++                            w.put_u32(grease);
++                            w.put_u32(1);
++                        }
++                        false => {
++                            w.put_u32(1);
++                            w.put_u32(grease);
++                        }
++                    }
++                } else {
++                    w.write_var(0x3128);
++                    w.write_var(4);
++                    w.put_slice(b"ORIG");
++                }
++                continue;
++            }
+             let id = TransportParameterId::SUPPORTED[*idx as usize];
+             match id {
+                 TransportParameterId::ReservedTransportParameter => {
+                     if let Some(param) = self.grease_transport_parameter {
+                         param.write(w);
+                     }
+-                    // Chrome's client also sends version_information (RFC 9368:
+-                    // chosen version 1, available a GREASE version and 1) and
+-                    // google_connection_options "ORIG"; quinn reads neither
+-                    if self.chrome_client {
+-                        w.write_var(0x11);
+-                        w.write_var(12);
+-                        w.put_u32(1);
+-                        w.put_u32(0x5a5a_6a9a);
+-                        w.put_u32(1);
+-                        w.write_var(0x3128);
+-                        w.write_var(4);
+-                        w.put_slice(b"ORIG");
+-                    }
+                 }
+                 TransportParameterId::StatelessResetToken => {
+                     if let Some(ref x) = self.stateless_reset_token {

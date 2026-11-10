@@ -1,0 +1,60 @@
+From 3cc5a0f36b6139e80ea03de8eec29cc1d1347db8 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 10 Nov 2026 14:22:41 -0500
+Subject: [PATCH 4/4] PRIORITY_UPDATE on the control stream for a request with
+ a Priority field
+
+Chrome sends a PRIORITY_UPDATE frame (RFC 9218) on the control
+stream for every request that carries a Priority field, with the same
+value, before the request's HEADERS (measured: a document, a style sheet,
+a script, an image and fetches, each with its own). h3 sent none.
+---
+ src/client/connection.rs | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/src/client/connection.rs b/src/client/connection.rs
+index 4090d02..8160ddf 100644
+--- a/src/client/connection.rs
++++ b/src/client/connection.rs
+@@ -20,7 +20,7 @@ use crate::{
+         ConnectionError, StreamError,
+     },
+     frame::FrameStream,
+-    proto::{frame::Frame, headers::Header, push::PushId},
++    proto::{coding::BufMutExt as _, frame::Frame, headers::Header, push::PushId},
+     qpack,
+     quic::{self, StreamId},
+     shared_state::{ConnectionState, SharedState},
+@@ -160,6 +160,12 @@ where
+             extensions,
+             ..
+         } = parts;
++        // Chrome announces a request's priority (RFC 9218) on the control
++        // stream as well, in a PRIORITY_UPDATE frame carrying the same value
++        // as the request's Priority field, before the request goes out
++        let priority = headers
++            .get(http::header::HeaderName::from_static("priority"))
++            .map(|value| value.as_bytes().to_vec());
+         let headers = Header::request(method, uri, headers, extensions).map_err(|_e| {
+             self.handle_connection_error_on_stream(InternalConnectionError {
+                 code: Code::H3_INTERNAL_ERROR,
+@@ -210,6 +216,19 @@ where
+             });
+         }
+ 
++        if let Some(priority) = priority {
++            let id = quic::SendStream::<B>::send_id(&stream).into_inner();
++            let mut element = BytesMut::new();
++            element.write_var(id);
++            element.extend_from_slice(&priority);
++            let mut frame = BytesMut::new();
++            // PRIORITY_UPDATE for a request stream (RFC 9218 section 7.2)
++            frame.write_var(0xf0700);
++            frame.write_var(element.len() as u64);
++            frame.extend_from_slice(&element);
++            self.conn_state.push_control(&frame);
++        }
++
+         stream::write(&mut stream, Frame::Headers(block.freeze()))
+             .await
+             .map_err(|e| self.handle_quic_stream_error(e))?;

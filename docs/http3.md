@@ -29,7 +29,7 @@ page (demo/README.md).
 | the datagram channel                                     | epoxy's `client.connect_udp('udp://host:port')`                            | A wisp UDP stream: one wisp DATA packet per datagram each way, so datagram boundaries survive. It shares the transport's one wisp connection; no new socket to the server.                                                                                                                                                                              |
 | `Http3Transport`                                         | `src/transport/http3/`                                                     | Wraps the base transport (a `ProxyTransport`). Learns h3 origins, keeps one QUIC connection per origin, decides per request whether h3 is used, falls back. Exported from `dist/controller.mjs` for hosts that construct transports themselves (`new Http3Transport(base, options, moduleUrl)`; `options.udp` can supply another channel opener there). |
 | `TransportDescriptor.http3`                              | `src/transport/construct.ts`                                               | The transport worker, the page host and the controller frame wrap the constructed transport when the descriptor asks for it. The module defaults to `h3/stomp_h3.js` next to the transport module (`/epoxy/h3/stomp_h3.js`).                                                                                                                            |
-| `stomp_h3.js` + `stomp_h3_bg.wasm` (1.1 MB, 540 KB gzip) | fetched by the transport worker the first time an origin offers h3         | Nothing loads while no origin has offered h3.                                                                                                                                                                                                                                                                                                           |
+| `stomp_h3.js` + `stomp_h3_bg.wasm` (2.1 MB, 540 KB gzip) | fetched by the transport worker the first time an origin offers h3         | Nothing loads while no origin has offered h3.                                                                                                                                                                                                                                                                                                           |
 
 ## How a request goes
 
@@ -77,18 +77,33 @@ with their RTT and datagram counts, and how the last 64 requests went.
   so it races connections the same way from the other side: the base
   transport serves until the QUIC connection is up, never the other way
   round, and no request waits on a handshake that has not worked yet.
-- QUIC transport parameters: `max_idle_timeout` 30 s,
-  `initial_max_data` 15 MiB, `initial_max_stream_data_*` 6 MiB,
-  `initial_max_streams_bidi` 100, `initial_max_streams_uni` 103,
-  `max_udp_payload_size` 1472, `max_datagram_frame_size` (HTTP datagrams),
-  the grease bit, 8-byte connection IDs, a 1250-byte first flight, path MTU
-  discovery up to 1450, initial RTT 100 ms, Cubic.
+- QUIC transport parameters: Chrome's 13, each in a random place:
+  `max_idle_timeout` 30 s, `initial_max_data` 15 MiB,
+  `initial_max_stream_data_*` 6 MiB, `initial_max_streams_bidi` 100,
+  `initial_max_streams_uni` 103, `max_udp_payload_size` 1472,
+  `max_datagram_frame_size` 65536, an empty `initial_source_connection_id`,
+  `version_information` (version 1, then version 1 and a random reserved
+  version in random order), `google_connection_options` `ORIG` and a GREASE
+  parameter of 0 to 15 random bytes. No greased fixed bit, an 8-byte first
+  destination connection ID, every Initial datagram 1250 bytes and no path
+  MTU probes (Chrome sends none; the packets stay at 1250), initial RTT
+  100 ms, Cubic. Measured against Chrome 152 (docs/fingerprint.md).
 - TLS inside QUIC: TLS 1.3 only, ALPN `h3`, Chrome's cipher order
   (AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305), session resumption (one
   rustls config per worker), webpki roots.
-- HTTP/3: SETTINGS `MAX_FIELD_SECTION_SIZE` 262144 (256 KiB, the limit the
-  epoxy HTTP/2 patch sets, so a 20 KB YouTube header block works on both),
-  `H3_DATAGRAM` 1, a GREASE setting, frame and stream; pseudo-headers in Chrome's order
+- HTTP/3: Chrome's SETTINGS in its order, `QPACK_MAX_TABLE_CAPACITY` 65536,
+  `MAX_FIELD_SECTION_SIZE` 262144 (256 KiB, the limit the epoxy HTTP/2 patch
+  sets, so a 20 KB YouTube header block works on both),
+  `QPACK_BLOCKED_STREAMS` 100, `H3_DATAGRAM` 1 and a GREASE setting (id
+  `0x1f * N + 0x21` with a random 32-bit N, a random 32-bit value) last,
+  then a GREASE frame of 0 to 3 random bytes, then a PRIORITY_UPDATE for
+  every request with a Priority field (its value, before the request's
+  HEADERS). No GREASE stream and no GREASE frames on request streams, as
+  Chrome. Unidirectional streams open in Chrome's order (control, QPACK
+  decoder, QPACK encoder) and a QPACK stream's type goes out with its first
+  instruction. Responses decode with the server's QPACK dynamic table
+  (patched h3: blocked streams wait for their entries, sections that used
+  the table are acknowledged); pseudo-headers in Chrome's order
   (`:method`, `:authority`, `:scheme`, `:path`; h3 0.0.8 writes `:scheme`
   before `:authority`, patched in `deploy/epoxy/h3/patches/h3/`);
   connection-specific fields (`connection`, `keep-alive`, `transfer-encoding`,
@@ -106,13 +121,16 @@ with their RTT and datagram counts, and how the last 64 requests went.
 
 - Only transports with `client.connect_udp` (epoxy) can carry it. libcurl.js
   has no UDP API; with libcurl the option does nothing.
-- No QPACK dynamic table: h3 0.0.8 encodes and decodes with the static table
-  only, so the client advertises `QPACK_MAX_TABLE_CAPACITY` 0 (Chrome: 65536)
-  and `QPACK_BLOCKED_STREAMS` 0 (Chrome: 100). Header blocks are bigger on
-  the wire, never wrong.
-- The TLS ClientHello is rustls's, not BoringSSL's: no X25519MLKEM768 (ring
-  has no ML-KEM), no GREASE values in it, rustls's extension order. A server
-  that fingerprints QUIC ClientHellos can tell.
+- The client's QPACK encoder uses the static table only: Chrome inserts
+  its request fields into the server's dynamic table when the server allows
+  one (encoder stream instructions, then HEADERS that reference them), so
+  a server that looks at how requests are compressed can tell. Responses
+  decode with the dynamic table (above).
+- An abandoned request whose response section waits on the dynamic table
+  sends no Stream Cancellation instruction; the server's encoder keeps
+  counting it as blocked.
+- Chrome's packets to an IPv6 address are 20 bytes shorter (1230); the wisp
+  server picks the address family, so stomp-h3 always sends 1250.
 - No connection migration or port changes: the wisp stream is the path.
 - Bulk downloads are slower over h3 than over h2 through wisp: every 1.4 KB
   datagram is its own wisp frame and crosses into JS and back twice, where

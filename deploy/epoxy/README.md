@@ -74,16 +74,26 @@ on and an origin offers h3 (docs/http3.md).
   checksum and applies `h3/patches/<crate>/*.patch` in order; `Cargo.toml`'s
   `[patch.crates-io]` points at `vendor/`. `h3/0001` writes request
   pseudo-headers in Chrome's order (`:method`, `:authority`, `:scheme`,
-  `:path`). It also vendors rustls 0.23.29 with epoxy's own
+  `:path`); `h3/0002` sends Chrome's SETTINGS (order, QPACK values, a
+  GREASE setting last with a random value) and its GREASE frame on the
+  control stream, and no GREASE stream or request-stream GREASE; `h3/0003`
+  decodes responses with the server's QPACK dynamic table (h3 0.0.8 only
+  had the static table) and opens the QPACK streams in Chrome's order,
+  typing them on first use; `h3/0004` sends a PRIORITY_UPDATE for each
+  request with a Priority field, as Chrome does. It also vendors rustls 0.23.29 with epoxy's own
   `patches/rustls` (`EPOXY_PATCHES`, `/patches` in the image), whose
   `chrome_hello` gives the QUIC ClientHello Chrome's shape (no GREASE,
   Chrome's QUIC extensions, ALPS for h3, a GREASE ECH), and quinn-proto
   0.11.19 with `h3/patches/quinn-proto/0001` (Chrome's client transport
   parameters: no min_ack_delay, a 65536 max_datagram_frame_size,
-  version_information and google_connection_options). `src/lib.rs` adds
+  version_information and google_connection_options) and `0002` (those
+  two each in a random place, a random reserved version in random order
+  next to version 1). `src/lib.rs` adds
   X25519MLKEM768 (`src/mlkem.rs`, as in epoxy), brotli certificates, empty
-  source connection ids, an 8-byte first destination id and no greased
-  fixed bit, as Chrome's client.
+  source connection ids, an 8-byte first destination id, no greased
+  fixed bit, every Initial padded to 1250 bytes and no path MTU probes, as
+  Chrome's client, and seeds fastrand (h3's GREASE source, a fixed seed on
+  wasm32-unknown-unknown otherwise).
 - `out/UPSTREAM` ends with a `stomp-h3 <hash>` line naming the sources that
   went in.
 

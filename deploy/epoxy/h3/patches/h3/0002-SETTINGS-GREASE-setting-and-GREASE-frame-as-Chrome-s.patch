@@ -1,0 +1,259 @@
+From 477c53e3bf9a55f77a3ba89453b6ba1e9625a986 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 10 Nov 2026 14:19:35 -0500
+Subject: [PATCH 2/4] SETTINGS, GREASE setting and GREASE frame as Chrome sends
+ them
+
+Chrome 152's HTTP/3 SETTINGS are QPACK_MAX_TABLE_CAPACITY,
+MAX_FIELD_SECTION_SIZE, QPACK_BLOCKED_STREAMS, H3_DATAGRAM and one GREASE
+setting, in that order (measured against a local aioquic server). h3 sent
+its GREASE setting first with the value 0, and ENABLE_CONNECT_PROTOCOL,
+ENABLE_WEBTRANSPORT and WEBTRANSPORT_MAX_SESSIONS at 0 that Chrome leaves
+out. Now: settings at their default are not sent, the QPACK ones can be set
+from the client builder, and the GREASE setting comes last with a random
+32-bit value.
+
+GREASE ids are 0x1f * N + 0x21 for a random 32-bit N, as Chrome's (h3 drew N
+from the whole varint range). Chrome follows SETTINGS with one GREASE frame
+of zero to three random bytes on the control stream and sends neither a
+GREASE stream nor GREASE frames on request streams; h3 sent a GREASE stream
+and a 6-byte "grease" frame at the end of the first request.
+---
+ src/client/builder.rs | 16 +++++++++-
+ src/config.rs         | 73 ++++++++++++++++++++++++++++++++-----------
+ src/connection.rs     | 16 ++++++++--
+ src/proto/frame.rs    | 14 ++++++---
+ 4 files changed, 92 insertions(+), 27 deletions(-)
+
+diff --git a/src/client/builder.rs b/src/client/builder.rs
+index 5ae628d..da0655e 100644
+--- a/src/client/builder.rs
++++ b/src/client/builder.rs
+@@ -88,6 +88,19 @@ impl Builder {
+         self
+     }
+ 
++    /// SETTINGS_QPACK_MAX_TABLE_CAPACITY (RFC 9204): how large a dynamic
++    /// table the server's encoder may use for the responses
++    pub fn qpack_max_table_capacity(&mut self, value: u64) -> &mut Self {
++        self.config.settings.qpack_max_table_capacity = value;
++        self
++    }
++
++    /// SETTINGS_QPACK_BLOCKED_STREAMS (RFC 9204)
++    pub fn qpack_max_blocked_streams(&mut self, value: u64) -> &mut Self {
++        self.config.settings.qpack_max_blocked_streams = value;
++        self
++    }
++
+     /// Just like in HTTP/2, HTTP/3 also uses the concept of "grease"
+     /// to prevent potential interoperability issues in the future.
+     /// In HTTP/3, the concept of grease is used to ensure that the protocol can evolve
+@@ -132,7 +145,8 @@ impl Builder {
+             conn_state,
+             max_field_section_size: self.config.settings.max_field_section_size,
+             sender_count: Arc::new(AtomicUsize::new(1)),
+-            send_grease_frame: self.config.send_grease,
++            // the GREASE frame goes on the control stream, as Chrome's
++            send_grease_frame: false,
+             _buf: PhantomData,
+         };
+ 
+diff --git a/src/config.rs b/src/config.rs
+index c2a6fe6..4a3c754 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -41,6 +41,12 @@ pub struct Settings {
+     pub(crate) enable_datagram: bool,
+     /// The maximum number of concurrent streams that can be opened by the peer.
+     pub(crate) max_webtransport_sessions: u64,
++    /// SETTINGS_QPACK_MAX_TABLE_CAPACITY: the largest dynamic table the
++    /// peer's encoder may use for what it sends us (0: none)
++    pub(crate) qpack_max_table_capacity: u64,
++    /// SETTINGS_QPACK_BLOCKED_STREAMS: how many streams may wait on the
++    /// dynamic table at once
++    pub(crate) qpack_max_blocked_streams: u64,
+ }
+ 
+ impl From<&frame::Settings> for Settings {
+@@ -65,6 +71,12 @@ impl From<&frame::Settings> for Settings {
+                 .get(frame::SettingId::ENABLE_CONNECT_PROTOCOL)
+                 .map(|value| value != 0)
+                 .unwrap_or(defaults.enable_extended_connect),
++            qpack_max_table_capacity: settings
++                .get(frame::SettingId::QPACK_MAX_TABLE_CAPACITY)
++                .unwrap_or(defaults.qpack_max_table_capacity),
++            qpack_max_blocked_streams: settings
++                .get(frame::SettingId::QPACK_MAX_BLOCKED_STREAMS)
++                .unwrap_or(defaults.qpack_max_blocked_streams),
+         }
+     }
+ }
+@@ -85,9 +97,46 @@ impl TryFrom<Config> for frame::Settings {
+                     enable_extended_connect,
+                     enable_datagram,
+                     max_webtransport_sessions,
++                    qpack_max_table_capacity,
++                    qpack_max_blocked_streams,
+                 },
+         } = value;
+ 
++        // Chrome's SETTINGS, in its order: QPACK_MAX_TABLE_CAPACITY,
++        // MAX_FIELD_SECTION_SIZE, QPACK_BLOCKED_STREAMS, H3_DATAGRAM, then one
++        // GREASE setting; a setting left at its default is not sent
++        if qpack_max_table_capacity != 0 {
++            settings.insert(
++                frame::SettingId::QPACK_MAX_TABLE_CAPACITY,
++                qpack_max_table_capacity,
++            )?;
++        }
++        settings.insert(
++            frame::SettingId::MAX_HEADER_LIST_SIZE,
++            max_field_section_size,
++        )?;
++        if qpack_max_blocked_streams != 0 {
++            settings.insert(
++                frame::SettingId::QPACK_MAX_BLOCKED_STREAMS,
++                qpack_max_blocked_streams,
++            )?;
++        }
++        if enable_extended_connect {
++            settings.insert(frame::SettingId::ENABLE_CONNECT_PROTOCOL, 1)?;
++        }
++        if enable_webtransport {
++            settings.insert(frame::SettingId::ENABLE_WEBTRANSPORT, 1)?;
++        }
++        if enable_datagram {
++            settings.insert(frame::SettingId::H3_DATAGRAM, 1)?;
++        }
++        if enable_webtransport {
++            settings.insert(
++                frame::SettingId::WEBTRANSPORT_MAX_SESSIONS,
++                max_webtransport_sessions,
++            )?;
++        }
++
+         if send_grease {
+             //  Grease Settings (https://www.rfc-editor.org/rfc/rfc9114.html#name-defined-settings-parameters)
+             //= https://www.rfc-editor.org/rfc/rfc9114#section-7.2.4.1
+@@ -103,7 +152,9 @@ impl TryFrom<Config> for frame::Settings {
+             //# (Section 11.2.2).  These reserved settings MUST NOT be sent, and
+             //# their receipt MUST be treated as a connection error of type
+             //# H3_SETTINGS_ERROR.
+-            match settings.insert(frame::SettingId::grease(), 0) {
++            // Chrome's: 0x1f * N + 0x21 for a random 32-bit N, a random
++            // 32-bit value, last
++            match settings.insert(frame::SettingId::grease(), fastrand::u32(..) as u64) {
+                 Ok(_) => (),
+                 Err(_err) => {
+                     #[cfg(feature = "tracing")]
+@@ -112,24 +163,6 @@ impl TryFrom<Config> for frame::Settings {
+             }
+         }
+ 
+-        settings.insert(
+-            frame::SettingId::MAX_HEADER_LIST_SIZE,
+-            max_field_section_size,
+-        )?;
+-        settings.insert(
+-            frame::SettingId::ENABLE_CONNECT_PROTOCOL,
+-            enable_extended_connect as u64,
+-        )?;
+-        settings.insert(
+-            frame::SettingId::ENABLE_WEBTRANSPORT,
+-            enable_webtransport as u64,
+-        )?;
+-        settings.insert(frame::SettingId::H3_DATAGRAM, enable_datagram as u64)?;
+-        settings.insert(
+-            frame::SettingId::WEBTRANSPORT_MAX_SESSIONS,
+-            max_webtransport_sessions,
+-        )?;
+-
+         Ok(settings)
+     }
+ }
+@@ -142,6 +175,8 @@ impl Default for Settings {
+             enable_extended_connect: false,
+             enable_datagram: false,
+             max_webtransport_sessions: 0,
++            qpack_max_table_capacity: 0,
++            qpack_max_blocked_streams: 0,
+         }
+     }
+ }
+diff --git a/src/connection.rs b/src/connection.rs
+index 275e4c9..cab926c 100644
+--- a/src/connection.rs
++++ b/src/connection.rs
+@@ -214,6 +214,15 @@ where
+         self.qpack_streams.decoder_send = decoder_send;
+         self.qpack_streams.encoder_send = encoder_send;
+ 
++        // Chrome follows its SETTINGS with one GREASE frame on the control
++        // stream (and sends none on request streams, and no GREASE stream)
++        let control = match control {
++            Ok(()) if self.config.send_grease => {
++                stream::write(&mut self.control_send, Frame::Grease).await
++            }
++            other => other,
++        };
++
+         match control {
+             Ok(control) => Ok(control),
+             Err(StreamErrorIncoming::ConnectionErrorIncoming { connection_error }) => {
+@@ -310,11 +319,12 @@ where
+             handled_connection_error: None,
+             pending_recv_streams: Vec::with_capacity(3),
+             got_peer_settings: false,
+-            send_grease_frame: config.send_grease,
++            // the GREASE frame goes on the control stream, as Chrome's
++            send_grease_frame: false,
+             config,
+             accepted_streams: Default::default(),
+-            // send grease stream if configured
+-            send_grease_stream_flag: config.send_grease,
++            // Chrome opens no GREASE stream
++            send_grease_stream_flag: false,
+             // start at first step
+             grease_step: GreaseStatus::NotStarted(PhantomData),
+         };
+diff --git a/src/proto/frame.rs b/src/proto/frame.rs
+index a09520b..ef524fe 100644
+--- a/src/proto/frame.rs
++++ b/src/proto/frame.rs
+@@ -168,9 +168,13 @@ where
+             Frame::Goaway(id) => simple_frame_encode(FrameType::GOAWAY, *id, buf),
+             Frame::MaxPushId(id) => simple_frame_encode(FrameType::MAX_PUSH_ID, (*id).into(), buf),
+             Frame::Grease => {
++                // Chrome's GREASE frame: zero to three random bytes
+                 FrameType::grease().encode(buf);
+-                buf.write_var(6);
+-                buf.put_slice(b"grease");
++                let len = fastrand::usize(0..4);
++                buf.write_var(len as u64);
++                for _ in 0..len {
++                    buf.put_u8(fastrand::u8(..));
++                }
+             }
+             Frame::WebTransportStream(id) => {
+                 FrameType::WEBTRANSPORT_BI_STREAM.encode(buf);
+@@ -315,7 +319,8 @@ impl FrameType {
+     /// returns a FrameType type with random number of the 0x1f * N + 0x21
+     /// format within the range of the Varint implementation
+     pub fn grease() -> Self {
+-        FrameType(fastrand::u64(0..0x210842108421083) * 0x1f + 0x21)
++        // Chrome's: N is a random 32-bit number
++        FrameType(fastrand::u32(..) as u64 * 0x1f + 0x21)
+     }
+ }
+ 
+@@ -394,7 +399,8 @@ impl SettingId {
+     /// returns a SettingId type with random number of the 0x1f * N + 0x21
+     /// format within the range of the Varint implementation
+     pub fn grease() -> Self {
+-        SettingId(fastrand::u64(0..0x210842108421083) * 0x1f + 0x21)
++        // Chrome's: N is a random 32-bit number
++        SettingId(fastrand::u32(..) as u64 * 0x1f + 0x21)
+     }
+ 
+     fn is_supported(self) -> bool {

@@ -19,7 +19,7 @@ use futures_util::{
 use http::{HeaderName, HeaderValue, Method, Request, Uri};
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use quinn::{
-	crypto::rustls::QuicClientConfig, ClientConfig, Endpoint, EndpointConfig, MtuDiscoveryConfig,
+	crypto::rustls::QuicClientConfig, ClientConfig, Endpoint, EndpointConfig,
 	TransportConfig, VarInt,
 };
 use rustls::{crypto::ring as provider, RootCertStore};
@@ -38,6 +38,11 @@ use socket::{ChannelSocket, Stats, PEER};
 /// Chrome's HTTP/3 SETTINGS_MAX_FIELD_SECTION_SIZE (and the HTTP/2 header
 /// list limit epoxy is patched to): 256 KiB.
 const MAX_FIELD_SECTION_SIZE: u64 = 256 * 1024;
+/// Chrome's SETTINGS_QPACK_MAX_TABLE_CAPACITY and SETTINGS_QPACK_BLOCKED_STREAMS:
+/// the server may compress responses with a 64 KiB dynamic table, which the
+/// patched h3 decodes (patches/h3/0004)
+const QPACK_MAX_TABLE_CAPACITY: u64 = 64 * 1024;
+const QPACK_BLOCKED_STREAMS: u64 = 100;
 const CHUNK: usize = 64 * 1024;
 
 fn js_error(message: impl std::fmt::Display) -> JsValue {
@@ -64,11 +69,12 @@ fn transport_config() -> TransportConfig {
 	t.max_concurrent_uni_streams(VarInt::from_u32(103));
 	// max_datagram_frame_size: Chrome advertises HTTP datagrams
 	t.datagram_receive_buffer_size(Some(65536));
-	// Chrome's first flight is 1250 bytes; path MTU discovery up to 1450
+	// Chrome's packets are 1250 bytes, every Initial padded to that (quinn
+	// pads the ones after the first to 1200 unless 1250 is the floor), and
+	// it sends no path MTU probes (measured: none in a 300 KB download)
 	t.initial_mtu(1250);
-	let mut mtu = MtuDiscoveryConfig::default();
-	mtu.upper_bound(1450);
-	t.mtu_discovery_config(Some(mtu));
+	t.min_mtu(1250);
+	t.mtu_discovery_config(None);
 	t.initial_rtt(Duration::from_millis(100));
 	t
 }
@@ -238,8 +244,18 @@ pub async fn connect(
 	};
 	let handshake_ms = start.elapsed().as_secs_f64() * 1000.0;
 
+	// h3 draws its GREASE ids and values from fastrand, whose global
+	// generator has a fixed seed on wasm32-unknown-unknown: every realm
+	// would send the same GREASE setting and frame
+	let mut seed = [0u8; 8];
+	let _ = getrandom02::getrandom(&mut seed);
+	fastrand::seed(u64::from_le_bytes(seed));
+
 	let (mut driver, send) = h3::client::builder()
 		.max_field_section_size(MAX_FIELD_SECTION_SIZE)
+		.qpack_max_table_capacity(QPACK_MAX_TABLE_CAPACITY)
+		.qpack_max_blocked_streams(QPACK_BLOCKED_STREAMS)
+		// a GREASE setting and a GREASE frame on the control stream (patches/h3/0002)
 		.send_grease(true)
 		// SETTINGS_H3_DATAGRAM 1, as Chrome sends it (RFC 9297)
 		.enable_datagram(true)
