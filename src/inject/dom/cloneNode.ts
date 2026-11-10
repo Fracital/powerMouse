@@ -53,6 +53,39 @@ const nativeTemplateContent = Reflect.getOwnPropertyDescriptor(
 	HTMLTemplateElement.prototype,
 	'content',
 )!.get!;
+const nativeNodeType = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'nodeType',
+)!.get!;
+const nativeLocalName = Reflect.getOwnPropertyDescriptor(
+	Element.prototype,
+	'localName',
+)!.get!;
+const nativeNamespace = Reflect.getOwnPropertyDescriptor(
+	Element.prototype,
+	'namespaceURI',
+)!.get!;
+
+/**
+ * Whether `node` is an HTML <template>, whose children live in its content.
+ * Its name alone does not tell: an XHTML document's is `template`, and an
+ * element of another namespace may be named `TEMPLATE` (createElementNS, or
+ * an XML document), which has no content and whose HTMLTemplateElement
+ * accessors throw "Illegal invocation".
+ */
+export function isHTMLTemplate(node: unknown): node is HTMLTemplateElement {
+	try {
+		return (
+			Reflect.apply(nativeNodeType, node, []) === 1 &&
+			Reflect.apply(nativeLocalName, node, []) === 'template' &&
+			Reflect.apply(nativeNamespace, node, []) ===
+				'http://www.w3.org/1999/xhtml'
+		);
+	} catch (error) {
+		// not a node
+		return false;
+	}
+}
 
 /**
  * The document a template's content lives in: inert, with no window and so
@@ -225,7 +258,7 @@ export default function cloneRawNode(
 
 					// a template's children live in its content fragment, not in
 					// childNodes; clone them into the new template's fragment
-					const isTemplate = d[0].nodeName === 'TEMPLATE';
+					const isTemplate = isHTMLTemplate(d[0]);
 					const inert = d[3] || isTemplate || d[0].nodeName === 'NOSCRIPT';
 					const children = isTemplate
 						? (d[0] as HTMLTemplateElement).content.childNodes

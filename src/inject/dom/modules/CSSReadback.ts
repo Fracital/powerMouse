@@ -68,21 +68,17 @@ export default class CSSReadbackModule extends Module<DocumentClient> {
 				});
 			}
 
-		// the text of a style element, read from it or from its text node
-		const nodeNameGet = Reflect.getOwnPropertyDescriptor(
-			global.Node.prototype,
-			'nodeName',
-		)!.get!;
+		// the text of a style element (an HTML or an SVG one, see
+		// Client.styleElement), read from it or from its text node
 		const parentNodeGet = Reflect.getOwnPropertyDescriptor(
 			global.Node.prototype,
 			'parentNode',
 		)!.get!;
 		const inStyle = (that: unknown): boolean => {
+			if (this.client.styleElement(that)) return true;
 			try {
-				if (Reflect.apply(nodeNameGet, that, []) === 'STYLE') return true;
-				const parent = Reflect.apply(parentNodeGet, that, []);
-				return (
-					parent !== null && Reflect.apply(nodeNameGet, parent, []) === 'STYLE'
+				return !!this.client.styleElement(
+					Reflect.apply(parentNodeGet, that, []),
 				);
 			} catch (error) {
 				return false;

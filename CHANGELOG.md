@@ -348,6 +348,30 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   whole's rewrite byte for byte (function-source suite, both modes, against
   the page loaded natively; rewriter-unit checks the fixture's every form and
   three.js's 1,436 exported functions in node).
+- Inline SVG holding a `<style>`, inserted into a page, no longer throws
+  "Illegal invocation" from the page's `appendChild`, `append`, `innerHTML`
+  or `insertAdjacentHTML` (Wikipedia, about one load in six). The insertion
+  hook found the SVG `<style>` with `querySelectorAll('style')` and read its
+  sheet through HTMLStyleElement's getter, which throws on any other kind
+  of element. Each kind of style is read through its own accessors, and an
+  element of another namespace that is only named `STYLE` is no style.
+- The CSS in an SVG `<style>` loads through the proxy. An SVG `<style>` in
+  an HTML page applies to the page like an HTML one, but only HTML ones
+  were routed: its `url()`s and `@import`s loaded straight from the site
+  in 11 of the 16 ways a script can put the text in (svg-style suite; the
+  CSSOM's `insertRule` was routed already). Its text is now routed before it lands,
+  as an HTML style's is, and reads back as the page wrote it. An SVG
+  `<style>` in the page's own markup was replaced by a script that could
+  not put it back (the parser makes a script inside SVG an SVG one, which
+  has no `document.currentScript`), so it was missing from every proxied
+  page; it is kept, its text routed.
+- An element of another namespace named `TEMPLATE` (an SVG one made with
+  `createElementNS`, or in an XML document) no longer throws "Illegal
+  invocation" when its markup is set or an ancestor's is read, and no
+  longer stops an XHTML or SVG document from loading. The template hooks
+  went by the name alone; they now take HTML templates only, which also
+  keeps an XHTML document's own `<template>` content (its name is
+  lowercase there, and the copy of the page dropped it).
 - `localStorage` and `sessionStorage` work in a srcdoc frame. Its inject
   resolved the proxy's own storage route against the frame's location,
   `about:srcdoc`, and every call threw "Failed to construct 'URL':
@@ -2546,6 +2570,12 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- Markup a page sets as an SVG or MathML element's `innerHTML` or
+  `insertAdjacentHTML` is parsed as if its context were an HTML element, so
+  `svg.innerHTML = '<style>...</style>'` makes an HTML `<style>` where
+  natively it is an SVG one (svg-style suite, left out of its kind check;
+  its CSS loads through the proxy either way). Markup holding the `<svg>`
+  element itself is parsed as natively.
 - A proxied page can still reach another proxied site's window raw in these
   ways (window-references suite, which asserts them raw so a fix shows up):
   a window it reached while the window was of its own origin (a frame read

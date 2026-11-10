@@ -54,6 +54,9 @@ export function runDocumentOpenListeners(global: typeof globalThis) {
 
 type ParsingState = 'parsingBeforeWrite' | void;
 
+/** a <style> whose text is CSS: an HTML one or an SVG one */
+export type StyleElement = HTMLStyleElement | SVGStyleElement;
+
 const globalParsingState = new WeakMap<typeof globalThis, ParsingState>();
 
 export function getGlobalParsingState(global: typeof globalThis) {
@@ -719,24 +722,41 @@ export default class DocumentClient extends Client {
 			return rewriteCSSValueURLs(text, this.url);
 		}
 	}
-	/** @internal `node` if it is an HTML <style> element, else null */
-	styleElement(node: unknown): HTMLStyleElement | null {
+	/**
+	 * @internal `node` if it is a <style> element whose text is CSS the
+	 * document applies, else null: an HTML one, or an SVG one (inline SVG in
+	 * an HTML page applies its CSS to the whole page, like an HTML style).
+	 * The kinds share no native accessor (`sheet` is each kind's own and
+	 * throws "Illegal invocation" on the other), see `styleKind`.
+	 */
+	styleElement(node: unknown): StyleElement | null {
+		return this.styleKind(node) ? (node as StyleElement) : null;
+	}
+	/** @internal which kind of <style> `node` is (see styleElement), else null */
+	styleKind(node: unknown): 'html' | 'svg' | null {
 		try {
-			return Reflect.apply(nodeTypeGet, node, []) === 1 &&
-				Reflect.apply(localNameGet, node, []) === 'style' &&
-				Reflect.apply(namespaceGet, node, []) === 'http://www.w3.org/1999/xhtml'
-				? (node as HTMLStyleElement)
-				: null;
+			if (
+				Reflect.apply(nodeTypeGet, node, []) !== 1 ||
+				Reflect.apply(localNameGet, node, []) !== 'style'
+			)
+				return null;
+			const namespace = Reflect.apply(namespaceGet, node, []);
+			return namespace === 'http://www.w3.org/1999/xhtml'
+				? 'html'
+				: namespace === 'http://www.w3.org/2000/svg'
+					? 'svg'
+					: null;
 		} catch (error) {
 			// not a node
 			return null;
 		}
 	}
 	/**
-	 * @internal The HTML <style> whose text a Text node is part of (its
-	 * parent), else null: comments and elements in a style are not its text
+	 * @internal The <style> (see styleElement) whose text a Text node is part
+	 * of (its parent), else null: comments and elements in a style are not
+	 * its text
 	 */
-	styleOfText(node: unknown): HTMLStyleElement | null {
+	styleOfText(node: unknown): StyleElement | null {
 		try {
 			if (Reflect.apply(nodeTypeGet, node, []) !== 3) return null;
 			return this.styleElement(Reflect.apply(parentNodeGet, node, []));

@@ -20,6 +20,7 @@ import DocumentClient, {
 } from '../Client';
 import cloneRawNode, {
 	inertDocumentOf,
+	isHTMLTemplate,
 	parseHTMLFragment,
 	templateContentDocument,
 } from '../cloneNode';
@@ -677,10 +678,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			},
 		);
 
-		// A style's markup is its text: the browser parses what innerHTML or
-		// setHTMLUnsafe give a <style> as raw text, so it is set as the text,
-		// through the insertion hook of DOMContentHooks (applied before this
-		// module), which routes text going into a style before it lands
+		// An HTML style's markup is its text: the browser parses what
+		// innerHTML or setHTMLUnsafe give an HTML <style> as raw text, so it
+		// is set as the text, through the insertion hook of DOMContentHooks
+		// (applied before this module), which routes text going into a style
+		// before it lands
 		const hookedAppend = this.client.global.Element.prototype.append;
 		const setStyleText = (style: Element, text: string) => {
 			usePrototype(style, nativeElement, (element) => {
@@ -808,10 +810,24 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			set: proxyModule.wrapFunction(
 				innerHTMLDescriptor.set!,
 				(target, that: Element, args) => {
-					if (this.client.styleElement(that))
-						return setStyleText(that, String(args[0]));
+					const kind = this.client.styleKind(that);
+					if (kind === 'html') return setStyleText(that, String(args[0]));
+					// an SVG <style> parses its markup as markup (measured: an
+					// element in it stays one); what it makes goes in through the
+					// insertion hook, which routes the text going into a style
+					if (kind === 'svg') {
+						const nodes = cloneRawNode(
+							parseHTMLFragment(args[0], this.client.global.document),
+							this.client.global.document,
+						);
+						usePrototype(that, nativeElement, (element) => {
+							for (const node of [...element.childNodes]) node.remove();
+						});
+						Reflect.apply(hookedAppend, that, [nodes]);
+						return;
+					}
 					usePrototype(that, nativeElement, (element) => {
-						if (element.nodeName === 'TEMPLATE')
+						if (isHTMLTemplate(that))
 							usePrototype(that, nativeHTMLTemplateElement, (element) => {
 								// snapshot: removing while iterating the live list skips
 								// every other node and leaves it next to the new markup
@@ -930,6 +946,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					return fragment;
 				},
 			);
+		const hookedInnerHTMLSet = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Element.prototype,
+			'innerHTML',
+		)!.set!;
 		const shadowRootPrototype = (
 			this.client.global as { ShadowRoot?: typeof ShadowRoot }
 		).ShadowRoot?.prototype;
@@ -944,8 +964,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				proxyModule.wrapFunction(
 					native as (html: string) => void,
 					(target, that, args) => {
-						if (args.length && this.client.styleElement(that))
+						const kind = args.length ? this.client.styleKind(that) : null;
+						if (kind === 'html')
 							return setStyleText(that as Element, String(args[0]));
+						// an SVG <style>'s markup is markup, its text routed as it
+						// goes in, which the native call would not (no declarative
+						// shadow root is made in a style)
+						if (kind === 'svg')
+							return Reflect.apply(hookedInnerHTMLSet, that, [args[0]]);
 						if (args.length) args[0] = rewriteMarkup(args[0]);
 						const result = Reflect.apply(target, that, args);
 						this.client.sweepFrames?.();
@@ -1292,7 +1318,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								node.removeAttributeNode(attr);
 								node.setAttributeNode(attr);
 							}
-						if (node.nodeName === 'TEMPLATE')
+						if (isHTMLTemplate(node))
 							queue.push(Reflect.apply(templateContent, node, []));
 					});
 			}

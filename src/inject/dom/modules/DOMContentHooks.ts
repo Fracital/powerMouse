@@ -7,7 +7,10 @@ import ProxyModule, {
 	usePrototype,
 } from '../../modules/Proxy';
 import { unrouteCSS } from '../../modules/Unroute';
-import DocumentClient, { getGlobalParsingState } from '../Client';
+import DocumentClient, {
+	getGlobalParsingState,
+	type StyleElement,
+} from '../Client';
 import cloneRawNode, { inertClones, parseHTMLFragment } from '../cloneNode';
 import DOMAttributesModule, {
 	scriptType,
@@ -22,6 +25,10 @@ import DOMHooksModule, {
 export const nativeHTMLElement: HTMLElement = Object.create(nativeElement);
 export const nativeHTMLStyleElement: HTMLStyleElement =
 	Object.create(nativeHTMLElement);
+// an SVG <style> (inline SVG in an HTML page applies its CSS like an HTML
+// one): its own `sheet`, which HTMLStyleElement's throws on
+export const nativeSVGStyleElement: SVGStyleElement =
+	Object.create(nativeElement);
 export const nativeHTMLFormElement: HTMLFormElement =
 	Object.create(nativeHTMLElement);
 export const nativeHTMLScriptElement: HTMLScriptElement =
@@ -35,6 +42,8 @@ applyDescriptors(nativeCharacterData, Text.prototype);
 applyDescriptors(nativeDocumentFragment, DocumentFragment.prototype);
 applyDescriptors(nativeHTMLElement, HTMLElement.prototype);
 applyDescriptors(nativeHTMLStyleElement, HTMLStyleElement.prototype);
+applyDescriptors(nativeSVGStyleElement, SVGElement.prototype);
+applyDescriptors(nativeSVGStyleElement, SVGStyleElement.prototype);
 applyDescriptors(nativeHTMLScriptElement, HTMLScriptElement.prototype);
 applyDescriptors(nativeHTMLFormElement, HTMLFormElement.prototype);
 const nativeCreateTextNode = Document.prototype.createTextNode;
@@ -138,10 +147,30 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			compositeElements.set(element, createComposite);
 		}
 
+		// `node` read through its own kind's native accessors, if it is a
+		// <style> whose text is CSS (Client.styleKind): HTMLStyleElement's
+		// `sheet` throws "Illegal invocation" on an SVG <style>, which
+		// `querySelectorAll('style')` finds too (Wikipedia's inline SVG threw
+		// from the page's appendChild); any other element is no style
+		const withStyle = (
+			node: unknown,
+			callback: (style: StyleElement) => void,
+		) => {
+			const kind = this.client.styleKind(node);
+			if (kind === 'html')
+				usePrototype(
+					node as HTMLStyleElement,
+					nativeHTMLStyleElement,
+					callback,
+				);
+			else if (kind === 'svg')
+				usePrototype(node as SVGStyleElement, nativeSVGStyleElement, callback);
+		};
+
 		// styles whose text was rewritten before the browser parsed it; the
 		// CSSOM pass would only redo the same work (modifyCSS is idempotent)
-		const prewritten = new WeakSet<HTMLStyleElement>();
-		const rewriteStyleText = (style: HTMLStyleElement) => {
+		const prewritten = new WeakSet<StyleElement>();
+		const rewriteStyleText = (style: StyleElement) => {
 			const text = style.textContent;
 			if (!text) return;
 			style.textContent = this.client.prepareStyleText(text);
@@ -201,7 +230,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			return result;
 		};
 
-		const rewriteStyle = (style: HTMLStyleElement) => {
+		const rewriteStyle = (style: StyleElement) => {
 			if (getGlobalParsingState(this.client.global) === 'parsingBeforeWrite') {
 				// once everything is finalized and off the alternative parse stack
 
@@ -211,8 +240,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					rewriteStyleText(style);
 					// in a template or a noscript the script could not put it back
 					// (MDN's declarative shadow roots threw on currentScript);
-					// its text is rewritten already
-					if (inertClones.has(style)) return;
+					// its text is rewritten already. In SVG it could not either:
+					// the parser makes the script an SVG one, which has no
+					// currentScript, and the style was lost from every page
+					if (inertClones.has(style) || this.client.styleKind(style) !== 'html')
+						return;
 					compositeElement(style, () => {
 						const script = document.createElement('script');
 
@@ -357,13 +389,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		function cdUpdated(element: CharacterData, parent?: Element | null) {
 			if (!parent) return;
 
-			usePrototype(parent, nativeElement, (element) => {
-				if (element.nodeName !== 'STYLE') return;
-
-				usePrototype(element, nativeHTMLStyleElement, (style) =>
-					rewriteStyle(style),
-				);
-			});
+			withStyle(parent, rewriteStyle);
 		}
 
 		for (const triggersRender of ['replaceWith', 'remove']) {
@@ -390,11 +416,9 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// a style's text rewritten before the browser parsed it: the CSSOM
 		// pass only marks its rules (and copies their loads for a document no
 		// worker controls)
-		const prewrote = (style: HTMLStyleElement) => {
+		const prewrote = (style: StyleElement) => {
 			prewritten.add(style);
-			usePrototype(style, nativeHTMLStyleElement, (style) =>
-				rewriteStyle(style),
-			);
+			withStyle(style, rewriteStyle);
 		};
 
 		for (const edit of [
@@ -447,35 +471,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		 * Called after a function with side-effects that may trigger a style to re-render.
 		 * @param target Text. Possibly a child of a Style.
 		 */
-		function textUpdatesStyle(target: CharacterData) {
-			try {
-				usePrototype(target, nativeHTMLElement, (element) => {
-					// only applies to .replaceWith where a #text is being replaced with a different text
-					if (element.parentElement?.nodeName === 'STYLE') {
-						usePrototype(
-							target.parentElement!,
-							nativeHTMLStyleElement,
-							(style) => rewriteStyle(style),
-						);
-					}
-
-					// general inserting things into style
-					if (element.nodeName === 'STYLE') {
-						// usePrototype(inserted, nativeHTMLElement, (element: HTMLElement) => {
-						usePrototype(element, nativeHTMLStyleElement, (style) =>
-							rewriteStyle(style),
-						);
-					}
-				});
-			} catch (error) {
-				if (
-					!(error instanceof Error) ||
-					!error.message.includes('.querySelectorAll')
-				) {
-					console.error(error, target);
-				}
-			}
-		}
+		const textUpdatesStyle = (target: Node | null) => {
+			// only applies to .replaceWith where a #text is being replaced with a different text
+			withStyle(parentOf(target), rewriteStyle);
+			// general inserting things into style
+			withStyle(target, rewriteStyle);
+		};
 
 		const domAttributesModule = this.client.getModule(DOMAttributesModule)!;
 		const domHooksModule = this.client.getModule(DOMHooksModule)!;
@@ -495,7 +496,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		): T => {
 			// if insert is a DocumentFragment, its childNodes will be cleared upon insertion
 			// we need to snapshot the childNodes or run a query before its childNodes are cleared
-			const styles: HTMLStyleElement[] = [];
+			const styles: StyleElement[] = [];
 
 			// scripts inside `insert` run as soon as it lands in a connected tree
 			const willConnect = that
@@ -528,27 +529,25 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 			// we're about to render
 			const name = htmlName(insert);
+			// an HTML or an SVG <style>, inserted itself
+			const insertedStyle = this.client.styleElement(insert);
 			usePrototype(insert, nativeNode, (node) => {
 				if (name === 'SCRIPT') {
 					rewriteAnyScript(insert, willConnect);
-				} else if (name === 'STYLE') {
+				} else if (insertedStyle) {
 					// before it connects and the browser parses it
-					if (willConnect)
-						usePrototype(insert, nativeHTMLStyleElement, (style) =>
-							rewriteStyleText(style),
-						);
+					if (willConnect) withStyle(insertedStyle, rewriteStyleText);
 				} else {
 					const queryInterface = getSupportedQueryInterface(node);
 
 					if (queryInterface)
 						usePrototype(node, queryInterface, (queryable) => {
-							for (const style of (insert as Element).querySelectorAll(
-								'style',
-							)) {
-								if (willConnect)
-									usePrototype(style, nativeHTMLStyleElement, (style) =>
-										rewriteStyleText(style),
-									);
+							// any element named style: an HTML one, an SVG one, or one
+							// of another namespace, which is no style (withStyle)
+							for (const element of queryable.querySelectorAll('style')) {
+								const style = this.client.styleElement(element);
+								if (!style) continue;
+								if (willConnect) withStyle(style, rewriteStyleText);
 								styles.push(style);
 							}
 
@@ -563,27 +562,17 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// reach it by a literal name (IFrame's sweepFrames)
 			if (willConnect) this.client.sweepFrames?.();
 
-			usePrototype(insert, nativeNode, () => {
-				switch (name) {
-					case 'FORM':
-						usePrototype(insert, CustomElement.prototype, (form) => {
-							domAttributesModule.formHook!(form);
-						});
-						break;
-					case 'STYLE':
-						usePrototype(insert, nativeHTMLStyleElement, (style) =>
-							rewriteStyle(style),
-						);
-				}
-			});
-
-			for (const style of styles) {
-				usePrototype(style, nativeHTMLStyleElement, (style) =>
-					rewriteStyle(style),
+			if (name === 'FORM')
+				usePrototype(insert, nativeNode, () =>
+					usePrototype(insert, CustomElement.prototype, (form) => {
+						domAttributesModule.formHook!(form);
+					}),
 				);
-			}
+			if (insertedStyle) withStyle(insertedStyle, rewriteStyle);
 
-			textUpdatesStyle(that as CharacterData);
+			for (const style of styles) withStyle(style, rewriteStyle);
+
+			textUpdatesStyle(that);
 
 			return result;
 		};

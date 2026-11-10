@@ -21,7 +21,7 @@ import Module from '../../Module';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { scopePrefix, unrouteURL } from '../../modules/Unroute';
 import { blobLoads } from '../blobLoads';
-import DocumentClient from '../Client';
+import DocumentClient, { type StyleElement } from '../Client';
 import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
 import DOMHooksModule, { CustomElement, nativeElement } from './DOMHooks';
 import { hookWrite } from './MutationObserver';
@@ -82,7 +82,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 	/** @internal whether this document is one no service worker controls, whose routed loads miss the worker */
 	uncontrolled: () => boolean = () => false;
 	/** @internal copy a <style>'s routed loads in a document no service worker controls (DOMContentHooks) */
-	copySheet?: (style: HTMLStyleElement, mark: (rule: CSSRule) => void) => void;
+	copySheet?: (style: StyleElement, mark: (rule: CSSRule) => void) => void;
 	/** @internal copy a constructed sheet's routed loads in a document no service worker controls (CSSOM) */
 	copyConstructed?: (sheet: CSSStyleSheet) => void;
 	/** @internal the page's view of a CSSStyleDeclaration: reads unrouted, writes routed (CSSReadback) */
