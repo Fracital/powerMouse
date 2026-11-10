@@ -1,0 +1,633 @@
+<!doctype html>
+<title>NATIVE SHAPES</title>
+<div id="parsed" style="background-image: url(img/a.png); color: red"></div>
+<div
+	id="parsedQuoted"
+	style="background: url('/img/b.png?x=1#y') no-repeat"
+></div>
+<script src="native-shapes.js"></script>
+<script>
+	// What a page reads of the things the proxy replaces, each compared with
+	// the page loaded natively (test/suites/native-shapes.mjs)
+	const { attempt, fn, descriptor, descriptors, constructors, prototypes } =
+		self.__shapes;
+	const record = {};
+
+	// an inline style attribute with a URL in it, however it was written,
+	// read back every way a page can
+	const styleReads = (element) => {
+		const node = element.getAttributeNode('style');
+		return {
+			getAttribute: element.getAttribute('style'),
+			attributes: [...element.attributes].map(
+				(attribute) => `${attribute.name}=${attribute.value}`,
+			),
+			namedItem: element.attributes.getNamedItem('style')?.value ?? null,
+			index: element.attributes[element.attributes.length - 1]?.value ?? null,
+			node: node && [node.value, node.nodeValue, node.textContent],
+			nodeNS: element.getAttributeNodeNS(null, 'style')?.value ?? null,
+			getAttributeNS: element.getAttributeNS(null, 'style'),
+			outerHTML: element.outerHTML,
+			cssText: element.style.cssText,
+			styleProperty: [
+				element.style.backgroundImage,
+				element.style.getPropertyValue('background-image'),
+				element.style.background,
+			],
+		};
+	};
+	const made = (write) => {
+		const element = document.createElement('div');
+		document.body.append(element);
+		write(element);
+		const reads = styleReads(element);
+		element.remove();
+		return reads;
+	};
+	record.styleParsed = styleReads(document.getElementById('parsed'));
+	record.styleParsedQuoted = styleReads(
+		document.getElementById('parsedQuoted'),
+	);
+	record.styleSetAttribute = made((element) =>
+		element.setAttribute('style', 'background-image: url(img/c.png)'),
+	);
+	record.styleCssText = made((element) => {
+		element.style.cssText = 'background-image: url("img/d.png"); color: blue';
+	});
+	record.styleNamed = made((element) => {
+		element.style.backgroundImage = "url('img/e.png')";
+	});
+	record.styleSetProperty = made((element) =>
+		element.style.setProperty(
+			'background-image',
+			'url(https://example.com/f.png)',
+		),
+	);
+	record.styleNode = made((element) => {
+		element.setAttribute('style', 'color: red');
+		element.getAttributeNode('style').value = 'background: url(img/g.png)';
+	});
+	record.styleInnerHTML = (() => {
+		const holder = document.createElement('div');
+		holder.innerHTML = `<p style="background-image: url(img/h.png)">x</p>`;
+		document.body.append(holder);
+		const reads = [styleReads(holder.firstChild), holder.innerHTML];
+		holder.remove();
+		return reads;
+	})();
+	// a CSSOM write on a style the page wrote as an attribute
+	record.styleMixed = made((element) => {
+		element.setAttribute('style', 'background-image: url(img/i.png)');
+		element.style.color = 'red';
+	});
+	record.styleMixedParsed = (() => {
+		const element = document.getElementById('parsed');
+		element.style.color = 'blue';
+		const reads = styleReads(element);
+		element.style.color = 'red';
+		return reads;
+	})();
+	record.styleRemoved = made((element) => {
+		element.style.backgroundImage = 'url(img/j.png)';
+		element.style.removeProperty('background-image');
+		element.style.backgroundImage = 'url("img/k.png?a=1&b=2")';
+	});
+	record.styleCloned = (() => {
+		const clone = document.getElementById('parsed').cloneNode(true);
+		document.body.append(clone);
+		const reads = styleReads(clone);
+		clone.remove();
+		return reads;
+	})();
+
+	// the Location object: every member's descriptor and function, the
+	// prototype's, and how its methods answer
+	record.locationOwn = descriptors(location);
+	record.locationPrototype = descriptors(Location.prototype);
+	record.locationIdentity = [
+		Object.getPrototypeOf(location) === Location.prototype,
+		location.valueOf === Object.prototype.valueOf,
+		location.valueOf() === location,
+		location.toString() === location.href,
+		String(location) === location.href,
+		`${location}` === location.href,
+		location + '' === location.href,
+		Object.prototype.toString.call(location),
+		Object.isExtensible(location),
+		location[Symbol.toPrimitive],
+		Object.prototype.hasOwnProperty.call(location, Symbol.toPrimitive),
+	];
+	record.locationCalls = [
+		attempt(() => location.toString.call({})),
+		attempt(() => typeof location.valueOf.call({})),
+		attempt(() => location.assign.call({}, '#nowhere')),
+		attempt(() => location.replace.call({}, '#nowhere')),
+		attempt(() =>
+			Object.getOwnPropertyDescriptor(location, 'href').get.call({}),
+		),
+		attempt(() =>
+			Object.getOwnPropertyDescriptor(location, 'ancestorOrigins').get.call({}),
+		),
+	];
+	record.locationFunctions = Object.fromEntries(
+		Reflect.ownKeys(location).flatMap((key) => {
+			const d = Object.getOwnPropertyDescriptor(location, key);
+			return [
+				['value', d.value],
+				['get', d.get],
+				['set', d.set],
+			]
+				.filter(([, f]) => typeof f === 'function')
+				.map(([kind, f]) => [`${String(key)} ${kind}`, fn(f)]);
+		}),
+	);
+
+	// every constructor on the window, and the instances of the named ones
+	record.constructors = constructors(window);
+	record.prototypes = prototypes(window, [
+		'XMLHttpRequest',
+		'XMLHttpRequestEventTarget',
+		'XMLHttpRequestUpload',
+		'EventSource',
+		'WebSocket',
+		'WebSocketStream',
+		'Request',
+		'Storage',
+		'BroadcastChannel',
+		'Worker',
+		'SharedWorker',
+		'MutationObserver',
+		'ReportingObserver',
+		'MediaMetadata',
+		'FontFace',
+		'Function',
+		'Error',
+		'HTMLAudioElement',
+		'HTMLImageElement',
+		'HTMLOptionElement',
+	]);
+	record.namedConstructors = [
+		['Audio', 'HTMLAudioElement', () => new Audio()],
+		['Image', 'HTMLImageElement', () => new Image()],
+		['Option', 'HTMLOptionElement', () => new Option()],
+	].map(([named, element, make]) => {
+		const instance = make();
+		return {
+			sharesPrototype: window[named].prototype === window[element].prototype,
+			constructor: window[element].prototype.constructor.name,
+			isElement: window[element].prototype.constructor === window[element],
+			instanceConstructor: instance.constructor === window[element],
+			instanceOf: [
+				instance instanceof window[named],
+				instance instanceof window[element],
+			],
+			prototypeOf:
+				Object.getPrototypeOf(instance) === window[element].prototype,
+			created:
+				document.createElement(instance.localName).constructor ===
+				window[element],
+			named: fn(window[named]),
+			element: fn(window[element]),
+		};
+	});
+	record.instances = [
+		() => new XMLHttpRequest(),
+		() => new BroadcastChannel('shapes'),
+		() => new Request('a'),
+		() => new MutationObserver(() => {}),
+	].map((make) => {
+		const instance = make();
+		const C = instance.constructor;
+		const result = [
+			C.name,
+			window[C.name] === C,
+			Object.getPrototypeOf(instance) === C.prototype,
+			Object.prototype.toString.call(instance),
+		];
+		instance.close?.();
+		return result;
+	});
+	// the constructors no global names: a function's kinds
+	record.hiddenConstructors = Object.fromEntries(
+		[
+			['GeneratorFunction', function* () {}],
+			['AsyncFunction', async () => {}],
+			['AsyncGeneratorFunction', async function* () {}],
+		].map(([name, f]) => {
+			const C = Object.getPrototypeOf(f).constructor;
+			return [
+				name,
+				{
+					...self.__shapes.constructor(C, window),
+					made: attempt(() => typeof C('return 1')),
+					isFunction: [
+						Object.getPrototypeOf(C) === Function,
+						f instanceof Function,
+						Object.getPrototypeOf(Object.getPrototypeOf(f)) ===
+							Function.prototype,
+					],
+				},
+			];
+		}),
+	);
+	// what only the browser makes
+	record.illegal = [
+		'XMLHttpRequestEventTarget',
+		'XMLHttpRequestUpload',
+		'Storage',
+		'Location',
+		'EventTarget',
+	].map((name) => [
+		attempt(() => typeof new window[name]()),
+		attempt(() => typeof window[name]()),
+	]);
+	record.subclass = (() => {
+		class Mine extends XMLHttpRequest {}
+		const mine = new Mine();
+		return [
+			mine instanceof XMLHttpRequest,
+			mine.readyState,
+			Object.getPrototypeOf(Mine) === XMLHttpRequest,
+			Mine.UNSENT,
+			Mine.DONE,
+		];
+	})();
+
+	// the Cookie Store API: its shape, then what it reads and writes, with
+	// document.cookie, its errors and its change events, step by step
+	const cookies = async () => {
+		const result = {};
+		if (typeof cookieStore === 'undefined') return 'no cookieStore';
+		result.shape = [
+			typeof cookieStore,
+			Object.prototype.toString.call(cookieStore),
+			cookieStore instanceof CookieStore,
+			cookieStore instanceof EventTarget,
+			cookieStore === window.cookieStore,
+			'cookieStore' in window,
+			Object.hasOwn(window, 'cookieStore'),
+			descriptor(Object.getOwnPropertyDescriptor(window, 'cookieStore')),
+			descriptor(
+				Object.getOwnPropertyDescriptor(Window.prototype, 'cookieStore'),
+			),
+			Object.keys(window).includes('cookieStore'),
+			descriptors(cookieStore),
+			cookieStore.onchange,
+			attempt(() =>
+				Object.getOwnPropertyDescriptor(window, 'cookieStore').get.call({}),
+			),
+		];
+		result.prototypes = prototypes(window, [
+			'CookieStore',
+			'CookieChangeEvent',
+		]);
+		const log = [];
+		const item = (cookie) =>
+			cookie && {
+				keys: Object.keys(cookie),
+				...cookie,
+				// a time away from the one the step gave; one clamped to 400 days
+				// from now is not a time a page can know
+				expires:
+					cookie.expires === null
+						? null
+						: typeof cookie.expires === 'number'
+							? Math.abs(cookie.expires - result.at) > 24 * 3600 * 1000
+								? 'far'
+								: cookie.expires - result.at
+							: typeof cookie.expires,
+			};
+		const event = (e) => ({
+			type: e.type,
+			constructor: e.constructor.name,
+			instance: e instanceof CookieChangeEvent,
+			target: e.target === cookieStore,
+			changed: e.changed.map(item),
+			deleted: e.deleted.map(item),
+			frozen: [Object.isFrozen(e.changed), Array.isArray(e.changed)],
+		});
+		// whether the browser made each event, recorded apart
+		record.cookieTrusted = [];
+		const listener = (e) => {
+			record.cookieTrusted.push(e.isTrusted);
+			log.push(['listener', event(e)]);
+		};
+		cookieStore.addEventListener('change', listener);
+		const handler = (e) => log.push(['onchange', event(e)]);
+		cookieStore.onchange = handler;
+		result.handler = cookieStore.onchange === handler;
+		const settle = () => new Promise((resolve) => setTimeout(resolve, 200));
+		const step = async (name, f) => {
+			log.push(['step', name]);
+			let value;
+			try {
+				value = await f();
+				value = Array.isArray(value)
+					? value.map(item)
+					: value && typeof value === 'object'
+						? item(value)
+						: value === undefined
+							? 'undefined'
+							: value;
+			} catch (error) {
+				value = `${error?.constructor?.name} ${error?.name}: ${error?.message}`;
+			}
+			await settle();
+			log.push(['result', name, value, document.cookie]);
+		};
+		// a time a whole second away, as a cookie keeps it
+		result.at = Math.ceil(Date.now() / 1000) * 1000 + 3600 * 1000;
+		await step('set', () => cookieStore.set('a', '1'));
+		await step('get', () => cookieStore.get('a'));
+		await step('document.cookie', () => {
+			document.cookie = 'b=2';
+		});
+		await step('get written', () => cookieStore.get('b'));
+		await step('getAll', () => cookieStore.getAll());
+		await step('getAll name', () => cookieStore.getAll('b'));
+		await step('getAll options', () => cookieStore.getAll({ name: 'a' }));
+		await step('get options', () => cookieStore.get({ name: 'a' }));
+		await step('get none', () => cookieStore.get('none'));
+		await step('get nothing', () => cookieStore.get());
+		await step('get empty', () => cookieStore.get({}));
+		await step('get url', () =>
+			cookieStore.get({ name: 'a', url: location.href }),
+		);
+		await step('get relative url', () =>
+			cookieStore.get({ name: 'a', url: 'native-shapes.html' }),
+		);
+		await step('get other url', () =>
+			cookieStore.get({ name: 'a', url: 'http://elsewhere.test/' }),
+		);
+		await step('get other path', () =>
+			cookieStore.get({ name: 'a', url: '/other/' }),
+		);
+		await step('set options', () =>
+			cookieStore.set({
+				name: 'c',
+				value: '3',
+				expires: result.at,
+				sameSite: 'lax',
+			}),
+		);
+		await step('get options set', () => cookieStore.get('c'));
+		await step('set path', () =>
+			cookieStore.set({ name: 'd', value: '4', path: '/pages/' }),
+		);
+		await step('set path no slash', () =>
+			cookieStore.set({ name: 'd2', value: '4', path: '/pages' }),
+		);
+		await step('set other path', () =>
+			cookieStore.set({ name: 'e', value: '5', path: '/elsewhere/' }),
+		);
+		await step('getAll paths', () => cookieStore.getAll());
+		await step('set domain', () =>
+			cookieStore.set({ name: 'f', value: '6', domain: location.hostname }),
+		);
+		await step('set other domain', () =>
+			cookieStore.set({ name: 'f2', value: '6', domain: 'example.com' }),
+		);
+		await step('set dot domain', () =>
+			cookieStore.set({
+				name: 'f3',
+				value: '6',
+				domain: `.${location.hostname}`,
+			}),
+		);
+		await step('set none', () =>
+			cookieStore.set({ name: 'g', value: '7', sameSite: 'none' }),
+		);
+		await step('set strict', () =>
+			cookieStore.set({ name: 'g2', value: '7', sameSite: 'strict' }),
+		);
+		await step('set bad sameSite', () =>
+			cookieStore.set({ name: 'g3', value: '7', sameSite: 'bogus' }),
+		);
+		await step('set partitioned', () =>
+			cookieStore.set({ name: 'p', value: '8', partitioned: true }),
+		);
+		await step('get partitioned', () => cookieStore.get('p'));
+		await step('set empty', () => cookieStore.set('', ''));
+		await step('set empty name', () => cookieStore.set('', 'x'));
+		await step('set empty name with =', () => cookieStore.set('', 'x=y'));
+		await step('set name with =', () => cookieStore.set('h=i', '1'));
+		await step('set value with ;', () => cookieStore.set('h', 'a;b'));
+		await step('set name with newline', () => cookieStore.set('h\n', '1'));
+		await step('set value with tab', () => cookieStore.set('h', 'a\tb'));
+		await step('set no value', () => cookieStore.set({ name: 'h' }));
+		await step('set no name', () => cookieStore.set({ value: 'h' }));
+		await step('set one argument', () => cookieStore.set('h'));
+		await step('set nothing', () => cookieStore.set());
+		await step('set large', () => cookieStore.set('h', 'x'.repeat(5000)));
+		await step('set host prefix', () => cookieStore.set('__Host-h', '1'));
+		await step('set host prefix path', () =>
+			cookieStore.set({ name: '__Host-h2', value: '1', path: '/pages/' }),
+		);
+		await step('set secure prefix', () => cookieStore.set('__Secure-h', '1'));
+		await step('set relative path', () =>
+			cookieStore.set({ name: 'h3', value: '1', path: 'pages/' }),
+		);
+		await step('set host prefix domain', () =>
+			cookieStore.set({
+				name: '__Host-h5',
+				value: '1',
+				domain: location.hostname,
+			}),
+		);
+		await step('set lowercase host prefix', () =>
+			cookieStore.set({ name: '__host-h4', value: '1', path: '/pages/' }),
+		);
+		await step('set name with space', () => cookieStore.set(' h6', '1'));
+		await step('set value with space', () => cookieStore.set('h7', ' 1'));
+		await step('set value inner space', () => cookieStore.set('h8', '1 2'));
+		await step('set value with quote', () => cookieStore.set('h9', '"1"'));
+		await step('set value non-ASCII', () =>
+			cookieStore.set('h10', 'caf\u00e9'),
+		);
+		await step('set value with comma', () => cookieStore.set('h11', 'a,b'));
+		await step('set expires Date', () =>
+			cookieStore.set({
+				name: 'h12',
+				value: '1',
+				expires: new Date(result.at),
+			}),
+		);
+		await step('get expires Date', () => cookieStore.get('h12'));
+		await step('set expires null', () =>
+			cookieStore.set({ name: 'h13', value: '1', expires: null }),
+		);
+		await step('set expires NaN', () =>
+			cookieStore.set({ name: 'h14', value: '1', expires: NaN }),
+		);
+		await step('set expires fraction', () =>
+			cookieStore.set({ name: 'h15', value: '1', expires: result.at + 0.5 }),
+		);
+		await step('get expires fraction', () => cookieStore.get('h15'));
+		await step('set expires far', () =>
+			cookieStore.set({
+				name: 'h16',
+				value: '1',
+				expires: result.at + 1000 * 24 * 3600 * 1000,
+			}),
+		);
+		await step('get expires far', async () => {
+			const cookie = await cookieStore.get('h16');
+			// at most 400 days, from about now
+			return cookie && cookie.expires - Date.now() <= 400 * 24 * 3600 * 1000;
+		});
+		await step('set path with ;', () =>
+			cookieStore.set({ name: 'h17', value: '1', path: '/a;b/' }),
+		);
+		await step('set long path', () =>
+			cookieStore.set({
+				name: 'h18',
+				value: '1',
+				path: `/${'p'.repeat(1100)}/`,
+			}),
+		);
+		await step('set long domain', () =>
+			cookieStore.set({
+				name: 'h19',
+				value: '1',
+				domain: `${'d'.repeat(1100)}.test`,
+			}),
+		);
+		await step('set long name', () => cookieStore.set('n'.repeat(4097), ''));
+		await step('set object name', () =>
+			cookieStore.set({ toString: () => 'h20' }, '1'),
+		);
+		await step('get h20', () => cookieStore.get('h20'));
+		await step('getAll other url', () =>
+			cookieStore.getAll({ url: 'http://elsewhere.test/' }),
+		);
+		await step('getAll url', () => cookieStore.getAll({ url: location.href }));
+		await step('get url only', () => cookieStore.get({ url: location.href }));
+		await step('get url with hash', () =>
+			cookieStore.get({ name: 'a', url: `${location.href}#x` }),
+		);
+		await step('get url with query', () =>
+			cookieStore.get({ name: 'a', url: `${location.href}?x` }),
+		);
+		await step('delete other domain', () =>
+			cookieStore.delete({ name: 'f', domain: 'example.com' }),
+		);
+		await step('delete relative path', () =>
+			cookieStore.delete({ name: 'g', path: 'pages/' }),
+		);
+		await step('delete partitioned', () =>
+			cookieStore.delete({ name: 'p', partitioned: true }),
+		);
+		await step('document.cookie partitioned', () => {
+			document.cookie = 'q=1; Secure; Partitioned';
+		});
+		await step('get document.cookie partitioned', () => cookieStore.get('q'));
+		await step('document.cookie partitioned insecure', () => {
+			document.cookie = 'q2=1; Partitioned';
+		});
+		await step('get document.cookie partitioned insecure', () =>
+			cookieStore.get('q2'),
+		);
+		await step('document.cookie strict', () => {
+			document.cookie = 's=1; SameSite=Strict';
+		});
+		await step('document.cookie strict expired', () => {
+			document.cookie = 's=; max-age=0';
+		});
+		await step('document.cookie domain', () => {
+			document.cookie = `t=1; domain=${location.hostname}; path=/`;
+		});
+		await step('get document.cookie domain', () => cookieStore.get('t'));
+		await step('document.cookie expires', () => {
+			document.cookie = `u=1; path=/; expires=${new Date(result.at).toUTCString()}`;
+		});
+		await step('get document.cookie expires', () => cookieStore.get('u'));
+		await step('document.cookie two in a row', () => {
+			document.cookie = 'v=1; path=/';
+			document.cookie = 'w=1; path=/';
+		});
+		await step('set and read at once', async () => {
+			const set = cookieStore.set('x1', '1');
+			const before = document.cookie.includes('x1=');
+			await set;
+			return [before, document.cookie.includes('x1=')];
+		});
+		await step('write and get at once', async () => {
+			document.cookie = 'x2=1; path=/';
+			return (await cookieStore.get('x2'))?.value;
+		});
+		await step('set unchanged', () => cookieStore.set('a', '1'));
+		await step('set changed', () => cookieStore.set('a', '11'));
+		await step('document.cookie changed', () => {
+			document.cookie = 'b=22';
+		});
+		await step('document.cookie expired', () => {
+			document.cookie = 'b=; max-age=0';
+		});
+		await step('response cookie', async () => {
+			await (await fetch('native-shapes-cookie.txt')).text();
+		});
+		await step('get response cookie', () => cookieStore.get('r'));
+		await step('expire', () =>
+			cookieStore.set({ name: 'a', value: '1', expires: Date.now() - 1000 }),
+		);
+		await step('delete', () => cookieStore.delete('c'));
+		await step('delete none', () => cookieStore.delete('none'));
+		await step('delete path', () =>
+			cookieStore.delete({ name: 'd', path: '/pages/' }),
+		);
+		await step('delete nothing', () => cookieStore.delete());
+		await step('delete empty', () => cookieStore.delete({}));
+		await step('getAll left', () => cookieStore.getAll());
+		await step('handler removed', () => {
+			cookieStore.onchange = null;
+			cookieStore.removeEventListener('change', listener);
+			return cookieStore.set('z', '1');
+		});
+		result.calls = [
+			await cookieStore.get
+				.call({}, 'a')
+				.catch((e) => `${e.name}: ${e.message}`),
+			attempt(() => typeof cookieStore.get.call({}, 'a')),
+			typeof cookieStore.get('a').then,
+			attempt(() => new CookieStore()),
+			attempt(() => CookieStore()),
+			attempt(() => new CookieChangeEvent()),
+			attempt(() => event(new CookieChangeEvent('change'))),
+			attempt(() =>
+				event(
+					new CookieChangeEvent('change', {
+						changed: [{ name: 'x', value: 'y' }],
+					}),
+				),
+			),
+		];
+		// nothing left for the next load
+		for (const cookie of await cookieStore.getAll())
+			await cookieStore.delete({
+				name: cookie.name,
+				path: cookie.path,
+				partitioned: cookie.partitioned,
+			});
+		for (const name of ['b', 'd2', 'h3', 'q2', 's'])
+			for (const path of ['/', '/pages', '/pages/'])
+				document.cookie = `${name}=; max-age=0; path=${path}`;
+		result.left = [document.cookie, (await cookieStore.getAll()).length];
+		result.log = log;
+		delete result.at;
+		return result;
+	};
+
+	// a worker's constructors
+	const worker = new Promise((resolve) => {
+		const worker = new Worker('native-shapes-worker.js');
+		worker.onmessage = ({ data }) => resolve(data);
+		worker.onerror = (event) => resolve(`error: ${event.message}`);
+	});
+	(async () => {
+		record.cookieStore = await cookies().catch(
+			(error) => `threw ${error?.stack}`,
+		);
+		record.worker = await worker;
+		window.__shapesRecord = record;
+	})();
+</script>
