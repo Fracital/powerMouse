@@ -17,8 +17,9 @@ import {
 import { addRouteScopes } from './routeURL';
 import { planSplit } from './splitRewrite';
 import StompURL from './StompURL';
-import { REWRITE_PORT } from './transport/messages';
+import { REWRITE_MODULES, REWRITE_PORT } from './transport/messages';
 import { RpcHelper } from './transport/rpc';
+import { adoptModules, heldModules } from './wasm/thread';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -53,4 +54,9 @@ function serve(port: MessagePort) {
 
 self.addEventListener('message', (event) => {
 	if (event.data?.[REWRITE_PORT] && event.ports[0]) serve(event.ports[0]);
+	else if (event.data?.[REWRITE_MODULES])
+		// the controller hears which modules this thread holds now
+		adoptModules(event.data[REWRITE_MODULES])
+			.then(heldModules)
+			.then((held) => self.postMessage({ [REWRITE_MODULES]: held }));
 });

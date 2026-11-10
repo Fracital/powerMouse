@@ -130,6 +130,22 @@ The first release after a four-year gap. Everything below is breaking.
   every open tab at its next reload, gets a new one), and they go with the
   host origin's site data. There is no new API and no option for it.
   (controller-ids suite.)
+- `init.rewriter` on `StompController` and `RemoteController` (`Config.rewriter`,
+  `'js'` by default) chooses the rewriter backend (docs/rust-plan.md). With
+  `'wasm'` the controller loads the Rust modules named by `init.assets` once
+  and compiles them once: every rewrite worker gets the compiled
+  `WebAssembly.Module` beside its port, and the service worker gets the bytes
+  with its handshake (or as soon as they are loaded) and compiles them on its
+  own thread, because a message holding a `WebAssembly.Module` never reaches
+  a service worker (it is an agent cluster of its own; Chrome fires
+  `messageerror`, and a handshake that carried one would be lost). Each
+  thread instantiates a module on first use (`src/wasm/thread.ts`): one that
+  is missing, declines a call or traps is answered by the JavaScript rewriter
+  for that call, so the option changes speed, never output. Nothing answers
+  from a module yet; the Rust rewriter and scanner come behind it. The demo
+  reads `STOMP_REWRITER=wasm` (`?wasm` for one visit, `?js` for the
+  JavaScript rewriters), and the `wasm-share` suite checks that every thread
+  holds the modules.
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

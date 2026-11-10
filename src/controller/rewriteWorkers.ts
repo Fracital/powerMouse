@@ -1,4 +1,4 @@
-import { REWRITE_PORT } from '../transport/messages';
+import { REWRITE_MODULES, REWRITE_PORT } from '../transport/messages';
 
 /** rewrite workers when the host does not say: half the cores, one to four */
 export function defaultRewriteWorkers(): number {
@@ -20,6 +20,8 @@ export const DEFAULT_REWRITE_TIMEOUT_MS = 10000;
  */
 export default class RewriteWorkers {
 	#workers: Worker[] = [];
+	/** the wasm modules each worker said it holds (src/wasm/thread.ts) */
+	#held = new Map<Worker, string[]>();
 	constructor(url: URL, size: number) {
 		for (let i = 0; i < size; i++) {
 			let worker: Worker;
@@ -32,9 +34,27 @@ export default class RewriteWorkers {
 			worker.addEventListener('error', () => {
 				worker.terminate();
 				this.#workers = this.#workers.filter((other) => other !== worker);
+				this.#held.delete(worker);
+			});
+			worker.addEventListener('message', (event) => {
+				const held = event.data?.[REWRITE_MODULES];
+				if (Array.isArray(held)) this.#held.set(worker, held);
 			});
 			this.#workers.push(worker);
 		}
+	}
+	/**
+	 * The compiled wasm modules, to every worker now (`rewriter: 'wasm'`). A
+	 * dedicated worker shares this page's agent cluster, so the compiled
+	 * module itself crosses and no worker compiles anything.
+	 */
+	adopt(modules: Record<string, WebAssembly.Module>) {
+		for (const worker of this.#workers)
+			worker.postMessage({ [REWRITE_MODULES]: modules });
+	}
+	/** the modules each running worker holds, as it last said */
+	held(): string[][] {
+		return this.#workers.map((worker) => this.#held.get(worker) ?? []);
 	}
 	/** a port to each running worker, for the service worker's end of a handshake */
 	ports(): MessagePort[] {

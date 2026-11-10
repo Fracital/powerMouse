@@ -66,6 +66,8 @@ export default class Client {
 	membrane: boolean;
 	/** pages get emulated service workers (config.serviceWorkers, on unless false) */
 	serviceWorkers: boolean;
+	/** the wasm rewriters answer where this realm holds them (config.rewriter) */
+	wasmRewriter: boolean;
 	/** the host's served file names (config.assets) */
 	assets?: Assets;
 	applied: boolean;
@@ -249,6 +251,7 @@ export default class Client {
 		this.allowInvalidJs = init.allowInvalidJs !== false;
 		this.membrane = init.membrane !== false;
 		this.serviceWorkers = init.serviceWorkers !== false;
+		this.wasmRewriter = init.rewriter === 'wasm';
 		this.assets = init.assets;
 		// a stale cached bundle next to a new service worker: say so once,
 		// the page still gets its best effort
@@ -283,6 +286,7 @@ export default class Client {
 			...(this.allowInvalidJs ? {} : { allowInvalidJs: false }),
 			...(this.membrane ? {} : { membrane: false }),
 			...(this.serviceWorkers ? {} : { serviceWorkers: false }),
+			...(this.wasmRewriter ? { rewriter: 'wasm' } : {}),
 			...(this.assets ? { assets: this.assets } : {}),
 			...(this.#customNames ? { names: this.names } : {}),
 			...(this.hooks ? { hooks: this.hooks } : {}),

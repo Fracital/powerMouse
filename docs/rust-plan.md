@@ -257,12 +257,17 @@ and falls back to the JavaScript rewriter for that script.
 ### One module, many realms
 
 `WebAssembly.Module` is structured cloneable and can be posted to a worker in
-the same agent cluster. So:
+the same agent cluster. A service worker is not in the controller's: it is
+an agent cluster of its own, and a message holding a module reaches it as a
+`messageerror` with no data (measured, Chrome 152), which in the handshake
+would lose the controller. So:
 
-- the controller compiles the module once (from a URL, bytes or a module the
-  host hands over) and posts it to the service worker with the handshake and
-  to every rewrite worker when it starts them.
-- the service worker keeps one instance for its own thread.
+- the controller loads the module's bytes once and compiles them once. It
+  posts the compiled module to every rewrite worker, and the bytes to the
+  service worker with the handshake (`ControllerInitMessage.modules`, or
+  `CONTROLLER_MODULES` when the load finished after it).
+- the service worker compiles the bytes on its own thread (once: the same
+  bytes from another handshake are the module it has) and keeps one instance.
 - each rewrite worker keeps one instance.
 - in the page, the instance lives in the shared rewriter library realm
   (`src/inject/dom/rewriterRealm.ts`), which a top makes once and its frames
@@ -500,8 +505,8 @@ paths.
   `src/config.ts`, `src/controller/index.ts`, `remote.ts` and `frame.ts`.
 - **New suites.** `rewriter-parity` (the corpora through both backends: the
   untouched-bytes invariant, the edit log round trip, and a behavioural
-  comparison), `wasm-share` (one `WebAssembly.Module` across realms and
-  workers, and no instance per frame), `wasm-artifact` (no name or producers
+  comparison), `wasm-share` (every thread that rewrites holds the modules
+  the controller loaded once, and no instance per frame), `wasm-artifact` (no name or producers
   section, no project token in the bytes, every export renamable), and in
   phase 4 the three blocker suites.
 - **Differential harness.** `rust/host` is a native binary that runs the

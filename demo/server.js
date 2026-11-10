@@ -37,6 +37,9 @@
 //                       site publishes a config, as Chrome does (default
 //                       https://cloudflare-dns.com/dns-query; `off` sends only
 //                       GREASE ECH; `?noech` on the page does that for a visit)
+//   STOMP_REWRITER      `wasm` runs the Rust rewriters where a thread holds
+//                       them (the controller's `rewriter` option); the
+//                       JavaScript rewriters otherwise
 //   STOMP_TEST_TRANSPORT `1` swaps epoxy for /test/mixed-transport.mjs, which
 //                       reaches the mixed-content suite's fixture hosts (test
 //                       runs only; test/run.mjs sets it for that suite)
@@ -244,6 +247,7 @@ const pageConfig = {
 			? null
 			: process.env.STOMP_ECH_DNS || 'https://cloudflare-dns.com/dns-query',
 	...(process.env.STOMP_TEST_TRANSPORT === '1' && { testTransport: true }),
+	...(process.env.STOMP_REWRITER === 'wasm' && { rewriter: 'wasm' }),
 	// startedAt lets the dev client tell a restarted server from a dropped
 	// connection: a different value on reconnect means new server code
 	...(dev && { dev: true, startedAt: started }),

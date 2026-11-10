@@ -9,6 +9,7 @@ import {
 	Config,
 	ConfigCodec,
 	DEFAULT_ASSETS,
+	WASM_ASSETS,
 } from '../config';
 import {
 	helperNames,
@@ -30,9 +31,11 @@ import {
 	ClientHintsReport,
 	CONTROLLER_CLOSE,
 	CONTROLLER_INIT,
+	CONTROLLER_MODULES,
 	CONTROLLER_RPC,
 	Controllerbound,
 	ControllerInitMessage,
+	ControllerModulesMessage,
 	CookieCommand,
 	CookieRecord,
 	CookieResult,
@@ -52,6 +55,7 @@ import { RpcHelper } from '../transport/rpc';
 import serveTransport from '../transport/serveTransport';
 import TransportWorker from '../transport/TransportWorker';
 import { BUILD } from '../version';
+import { compileModule } from '../wasm/module';
 import { canTraverse, traverse } from './history';
 import { controllerId, forgetControllerIds, keptControllerId } from './id';
 import type { StaleInfo, TransportDescriptor } from './messages';
@@ -188,6 +192,16 @@ export interface ControllerInit {
 	 * behave alike.)
 	 */
 	membrane?: boolean;
+	/**
+	 * The rewriter backend, `'js'` by default. `'wasm'` loads the Rust
+	 * modules under `init.assets` (`rewriter`; docs/rust-plan.md) once and
+	 * hands them to the rewrite workers (compiled) and the service worker
+	 * (as bytes it compiles itself), which answer from them wherever a
+	 * module takes the input and from the JavaScript rewriters otherwise, so
+	 * a module that is missing, declines or traps never changes what a page
+	 * gets.
+	 */
+	rewriter?: 'wasm' | 'js';
 	/**
 	 * Emulated service workers, on unless `false` (docs/service-workers.md).
 	 * A proxied page's `navigator.serviceWorker` works: its worker script
@@ -603,6 +617,8 @@ export class StompController extends EventTarget {
 	#worker?: TransportWorker;
 	#rewriteWorkers?: RewriteWorkers;
 	#rewriteTimeout: number;
+	/** the bytes of the wasm modules loaded for `rewriter: 'wasm'`, once they are; every handshake carries them */
+	#modules: Record<string, ArrayBuffer> | null = null;
 	/** settles once the transport exists where it is hosted; the handshake waits for it */
 	#hostReady: Promise<void>;
 	/** every hook error so far (a hook that threw, a hook URL that failed), newest last; also `hookerror` events */
@@ -741,6 +757,7 @@ export class StompController extends EventTarget {
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 			...(init.membrane === false ? { membrane: false } : {}),
 			...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
+			...(init.rewriter === 'wasm' ? { rewriter: 'wasm' } : {}),
 			...(init.serviceWorkerTimeout
 				? { serviceWorkerTimeout: init.serviceWorkerTimeout }
 				: {}),
@@ -769,6 +786,7 @@ export class StompController extends EventTarget {
 				new URL(assetName(this.config.assets, 'rewriteWorker'), this.directory),
 				rewriteWorkers,
 			);
+		if (init.rewriter === 'wasm') void this.#compileModules();
 
 		// a described transport is started where it is hosted before the first
 		// handshake; a failure there never leaves the controller dead
@@ -1114,6 +1132,54 @@ export class StompController extends EventTarget {
 	#handshake() {
 		this.#hostReady.then(() => this.#handshakeNow());
 	}
+	/**
+	 * The wasm artifacts, loaded once and compiled once, here. The rewrite
+	 * workers share this page's agent cluster and get the compiled modules,
+	 * which they only instantiate. The service worker does not (a message
+	 * holding a WebAssembly.Module never reaches it), so it gets the bytes
+	 * and compiles them on its own thread: with the next handshake, or now
+	 * when it already shook hands. One that fails to load or compile is left
+	 * out, and its JavaScript rewriter answers.
+	 */
+	async #compileModules() {
+		const compiled: Record<string, WebAssembly.Module> = {};
+		const loaded: Record<string, ArrayBuffer> = {};
+		await Promise.all(
+			WASM_ASSETS.map(async (name) => {
+				try {
+					const response = await fetch(
+						new URL(assetName(this.config.assets, name), this.directory),
+					);
+					if (!response.ok) throw new Error(`HTTP ${response.status}`);
+					const bytes = await response.arrayBuffer();
+					compiled[name] = await compileModule(bytes);
+					loaded[name] = bytes;
+				} catch (error) {
+					console.warn(`Stomp: the ${name} module did not load`, error);
+				}
+			}),
+		);
+		this.#modules = loaded;
+		this.#rewriteWorkers?.adopt(compiled);
+		if (this.#port) {
+			const message: ControllerModulesMessage = {
+				directory: this.config.directory,
+				modules: loaded,
+			};
+			this.serviceworker.postMessage({ [CONTROLLER_MODULES]: message });
+		}
+	}
+	/** @internal the wasm modules each thread holds, by Assets key (tests: `rewriter: 'wasm'` reached every thread) */
+	async wasmModules(): Promise<{
+		serviceWorker: string[];
+		rewriteWorkers: string[][];
+	}> {
+		await this.wait();
+		return {
+			serviceWorker: await this.#rpc!.call('modules', undefined),
+			rewriteWorkers: this.#rewriteWorkers?.held() ?? [],
+		};
+	}
 	/** (re)register with the service worker over a fresh MessageChannel */
 	#handshakeNow() {
 		if (this.#port) {
@@ -1292,6 +1358,7 @@ export class StompController extends EventTarget {
 						},
 					}
 				: {}),
+			...(this.#modules ? { modules: this.#modules } : {}),
 		};
 
 		this.serviceworker.postMessage({ [CONTROLLER_INIT]: message }, transfer);

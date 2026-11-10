@@ -158,6 +158,7 @@ if (window === window.parent || !origins.length) {
 						...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 						...(init.membrane === false ? { membrane: false } : {}),
 						...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
+						...(init.rewriter === 'wasm' ? { rewriter: 'wasm' } : {}),
 						...(typeof init.serviceWorkerTimeout === 'number'
 							? { serviceWorkerTimeout: init.serviceWorkerTimeout }
 							: {}),

@@ -451,10 +451,27 @@ export interface ControllerInitMessage {
 	 * `timeout` ms is made in the service worker instead
 	 */
 	rewritePool?: { ports: number; timeout: number };
+	/**
+	 * The wasm modules the controller loaded (`rewriter: 'wasm'`), by Assets
+	 * key, for the service worker's thread (src/wasm/thread.ts). Their bytes,
+	 * not the compiled modules: a service worker is an agent cluster of its
+	 * own, and a message holding a WebAssembly.Module never reaches it. A
+	 * load that finishes after the handshake sends CONTROLLER_MODULES.
+	 */
+	modules?: Record<string, ArrayBuffer>;
+}
+
+/** controller -> SW: the wasm modules' bytes, when they were not loaded at the handshake */
+export const CONTROLLER_MODULES = '$stomp$controllerModules';
+export interface ControllerModulesMessage {
+	directory: string;
+	modules: Record<string, ArrayBuffer>;
 }
 
 /** the message that hands a rewrite worker a port to serve (the service worker holds the other end) */
 export const REWRITE_PORT = '$stomp$rewritePort';
+/** controller -> rewrite worker: the compiled wasm modules by Assets key (src/wasm/thread.ts); the worker answers with the names it holds */
+export const REWRITE_MODULES = '$stomp$rewriteModules';
 export interface InitRemoteTransportMessage {
 	directory: string;
 }
@@ -503,6 +520,8 @@ export type SWbound = {
 	unroute: [string, string | null];
 	/** drop every entry of the HTTP cache */
 	clearCache: [];
+	/** the wasm modules the service worker's thread holds, by Assets key (src/wasm/thread.ts) */
+	modules: [undefined, string[]];
 	/** the host reading, importing or wiping the cookie jar */
 	cookies: [CookieCommand, CookieResult];
 };

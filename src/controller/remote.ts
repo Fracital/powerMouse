@@ -83,6 +83,8 @@ export interface RemoteControllerInit {
 	membrane?: boolean;
 	/** emulated service workers, on unless `false` (see StompController) */
 	serviceWorkers?: boolean;
+	/** the rewriter backend, `'js'` by default (see StompController) */
+	rewriter?: 'wasm' | 'js';
 	/** @internal see StompController */
 	serviceWorkerTimeout?: number;
 	/** @internal see StompController */
@@ -342,6 +344,7 @@ export class RemoteController extends EventTarget {
 					...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 					...(init.membrane === false ? { membrane: false } : {}),
 					...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
+					...(init.rewriter === 'wasm' ? { rewriter: 'wasm' } : {}),
 					...(init.serviceWorkerTimeout !== undefined
 						? { serviceWorkerTimeout: init.serviceWorkerTimeout }
 						: {}),

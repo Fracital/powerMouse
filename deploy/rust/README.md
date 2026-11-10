@@ -106,7 +106,8 @@ loads each artifact through `src/wasm/module.ts`.
 `src/wasm/module.ts`: `compileModule` takes a URL, bytes, a Response or a
 module the host compiled itself (a host that decrypts or renames its wasm
 hands the result over), never reads `import.meta.url`, and compiles once;
-the compiled `WebAssembly.Module` is what crosses to the service worker, the
-rewrite workers and the page's library realm, each of which instantiates it
-synchronously. `BufferInstance` speaks the buffer ABI: strings in and out,
+the compiled `WebAssembly.Module` is what crosses to the rewrite workers and
+the page's library realm, each of which instantiates it synchronously. The
+service worker is an agent cluster of its own and cannot be posted a
+module: it is handed the bytes and compiles them (`src/wasm/thread.ts`). `BufferInstance` speaks the buffer ABI: strings in and out,
 one `configure` per change, a routing import the host answers.

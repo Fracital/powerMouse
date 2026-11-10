@@ -82,6 +82,13 @@ const SERVICE_WORKER_EVENT_DELAY =
 const HTTP3 = new URLSearchParams(location.search).has('http3')
 	? new URLSearchParams(location.search).get('http3') !== '0'
 	: CFG.http3 !== false;
+// the Rust rewriters (docs/rust-plan.md): STOMP_REWRITER=wasm on the server
+// or ?wasm on this page; ?js keeps the JavaScript ones for one load
+const REWRITER = new URLSearchParams(location.search).has('js')
+	? 'js'
+	: CFG.rewriter === 'wasm' || new URLSearchParams(location.search).has('wasm')
+		? 'wasm'
+		: '';
 // real Encrypted Client Hello where a site's HTTPS DNS record has a config,
 // looked up over DoH by epoxy (STOMP_ECH_DNS on the server; ?noech sends
 // GREASE ECH only, as before)
@@ -341,6 +348,7 @@ async function startController(name) {
 			serviceWorkers: SERVICE_WORKERS,
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
 			serviceWorkerEventDelay: SERVICE_WORKER_EVENT_DELAY,
+			...(REWRITER && { rewriter: REWRITER }),
 			...controllerCallbacks,
 		});
 	} else {
@@ -358,6 +366,7 @@ async function startController(name) {
 			serviceWorkers: SERVICE_WORKERS,
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
 			serviceWorkerEventDelay: SERVICE_WORKER_EVENT_DELAY,
+			...(REWRITER && { rewriter: REWRITER }),
 			...controllerCallbacks,
 		});
 	}

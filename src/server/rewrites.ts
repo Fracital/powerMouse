@@ -2575,6 +2575,8 @@ export function registerRewrites(
 				...(init.membrane === false ? { membrane: false } : {}),
 				// pages get emulated service workers (docs/service-workers.md)
 				...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
+				// the wasm rewriters answer where a thread holds them
+				...(init.rewriter === 'wasm' ? { rewriter: 'wasm' as const } : {}),
 				...(init.assets ? { assets: init.assets } : {}),
 				// the deployment's helper names: the shell and every rewritten
 				// script use them, and the inject reads them from this config

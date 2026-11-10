@@ -67,6 +67,14 @@ export interface Config {
 	 * context has one).
 	 */
 	serviceWorkers?: boolean;
+	/**
+	 * Which rewriter backend the service worker, the rewrite workers and the
+	 * inject use: `'js'` (default) the JavaScript rewriters, `'wasm'` the
+	 * Rust modules in `assets/` (docs/rust-plan.md) wherever a thread holds
+	 * them, with the JavaScript rewriter answering for whatever a module
+	 * declines or has not reached yet
+	 */
+	rewriter?: 'wasm' | 'js';
 	/** @internal ms an emulated service worker may take to say whether it answers a request (tests; default 5000, a start twice that, an answer six times) */
 	serviceWorkerTimeout?: number;
 	/** @internal ms every emulated service worker event waits before it reaches the pages (tests: the events trail the answers to the pages' calls) */
@@ -190,6 +198,13 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 	rewriteWorker: 'rewriteWorker.js',
 	rewriter: 'rewriter.wasm',
 };
+
+/**
+ * The wasm artifacts, by Assets key: what a controller running
+ * `rewriter: 'wasm'` loads and hands to the service worker and its rewrite
+ * workers (src/wasm/thread.ts)
+ */
+export const WASM_ASSETS = ['rewriter'] as const satisfies (keyof Assets)[];
 
 /** a served file's name: the host's, else the default */
 export function assetName(

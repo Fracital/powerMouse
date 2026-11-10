@@ -13,11 +13,13 @@ import {
 	CONTROLLER_CLIENT,
 	CONTROLLER_CLOSE,
 	CONTROLLER_INIT,
+	CONTROLLER_MODULES,
 	CONTROLLER_RPC,
 	Controllerbound,
 	ControllerClientMessage,
 	ControllerCloseMessage,
 	ControllerInitMessage,
+	ControllerModulesMessage,
 	INIT_REMOTE_TRANSPORT,
 	InitRemoteTransportMessage,
 	INLINE_DOCUMENT,
@@ -39,6 +41,7 @@ import {
 import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
+import { adoptModules, heldModules } from '../wasm/thread';
 import { knownOriginOf, knownTopSiteOf, recordBlobOrigin } from './blobOrigins';
 import {
 	hintsDocument,
@@ -122,10 +125,13 @@ const controllers = new Map<string, ControllerRef>();
 let serials = 0;
 
 function registerController(
-	{ directory, config: given, rewritePool }: ControllerInitMessage,
+	{ directory, config: given, rewritePool, modules }: ControllerInitMessage,
 	ports: MessagePort[],
 	client?: string,
 ) {
+	// the controller's wasm modules, for this thread (src/wasm/thread.ts):
+	// compiled behind the handshake, the JavaScript rewriters answer until then
+	void adoptModules(modules);
 	// the handshake's ports: the rpc's, the transport's when it lives in the
 	// controller's worker, then one per rewrite worker
 	const poolPorts =
@@ -179,6 +185,7 @@ function registerController(
 			clearCache: async () => {
 				await (await server).clearCache();
 			},
+			modules: async () => [await heldModules(), []],
 			cookies: async (command) => {
 				const { cookies } = await server;
 				switch (command.op) {
@@ -838,6 +845,14 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 		const { directory } = data[CONTROLLER_CLOSE] as ControllerCloseMessage;
 		const ref = controllers.get(directory);
 		if (ref && ref.owner === sender) forget(ref, 'Controller closed');
+	} else if (CONTROLLER_MODULES in data) {
+		// the modules compiled after the handshake: from the registering tab
+		// only, as for every other message that acts on a controller
+		const { directory, modules } = data[
+			CONTROLLER_MODULES
+		] as ControllerModulesMessage;
+		const ref = controllers.get(directory);
+		if (ref && ref.owner === sender) void adoptModules(modules);
 	} else if (CONTROLLER_CLIENT in data) {
 		const { directory, client } = data[
 			CONTROLLER_CLIENT
