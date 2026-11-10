@@ -1,11 +1,13 @@
 // A rewritten body must not outlive the worker that made it: the browser's
 // HTTP cache would otherwise keep a rewritten script for as long as the origin
 // allowed (a year, here), with an old rewriter's output or old helper names
-// in it. Rewritten responses go out `cache-control: no-cache` with the
-// origin's validators kept, so the browser asks the worker again and the
-// worker answers from its own cache of the upstream bytes: a reload revalidates
-// without an upstream request. A body the worker did not rewrite (the image)
-// keeps the origin's headers.
+// in it. Rewritten responses go out `cache-control: no-cache`, so the browser
+// asks the worker again and the worker answers from its own caches: a reload
+// asks the worker without an upstream request. What a renderer's memory
+// cache keeps (the script, the image, rewritten or not) goes out no-cache
+// without validators as well: the worker keeps that cache per site
+// (cache.ts MemoryCache), and the browser must neither hand it to another
+// site's document nor revalidate another site's copy.
 import {
 	done,
 	FIXTURE,
@@ -56,18 +58,18 @@ const script = firstResponses.find((r) => r.kind === 'js:generic');
 const html = firstResponses.find((r) => r.kind === 'html');
 const image = firstResponses.find((r) => r.kind === 'binary');
 ok(
-	'a rewritten script served with a year of immutable freshness reaches the browser no-cache, validators kept',
+	'a rewritten script served with a year of immutable freshness reaches the browser no-cache, without validators',
 	first === `${FIXTURE}pages/cached.html` &&
 		script?.fromWorker === true &&
 		script?.cacheControl === 'no-cache' &&
-		script?.etag === '"cached-1"',
+		script?.etag === null,
 	JSON.stringify([first, script]),
 );
 ok(
-	'the rewritten document is no-cache too; the image the worker did not rewrite keeps the origin headers',
+	`the rewritten document is no-cache too, and so is the image the worker did not rewrite (the origin sent ${UPSTREAM})`,
 	html?.cacheControl === 'no-cache' &&
-		image?.cacheControl === UPSTREAM &&
-		image?.etag === '"cached-svg-1"',
+		image?.cacheControl === 'no-cache' &&
+		image?.etag === null,
 	JSON.stringify([html, image]),
 );
 const hitsBefore = await upstreamHits();

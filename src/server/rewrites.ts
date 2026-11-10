@@ -72,7 +72,15 @@ import {
 	knownTopSiteOf,
 	recordInlineOrigin,
 } from './blobOrigins';
-import { HttpCache, isCacheable, mayKeep, partitionedKey } from './cache';
+import {
+	HttpCache,
+	isCacheable,
+	mayKeep,
+	MEMORY_DESTINATIONS,
+	MemoryCache,
+	memoryCache,
+	partitionedKey,
+} from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
 import Cookies from './Cookies';
 import {
@@ -1364,7 +1372,33 @@ function genericForward(
 				? null
 				: partitionedKey(url.toString(), topSite ?? frameSite, frameSite);
 		const cache = cacheKey === null ? undefined : rewriter.cache;
+		// The renderer's memory cache (cache.ts MemoryCache), asked first for
+		// what a renderer keeps there: what this site's documents loaded is
+		// theirs, per site of the document that asks. The browser is handed
+		// these as no-cache without validators (below), so it comes back here
+		// for each document and never revalidates another site's copy: the
+		// conditional headers it adds are dropped (a page cannot set them on
+		// these loads).
+		const memoryDestination =
+			!navigation && MEMORY_DESTINATIONS.has(destination);
+		if (memoryDestination) {
+			requestHeaders.delete('if-none-match');
+			requestHeaders.delete('if-modified-since');
+		}
+		const memoryKey =
+			memoryDestination &&
+			frameSite !== null &&
+			serverRequest.method === 'GET' &&
+			!context?.bypassCache &&
+			!['no-store', 'reload', 'no-cache'].includes(serverRequest.cache)
+				? MemoryCache.key(frameSite, credentials, url.toString())
+				: null;
+		const remembered =
+			memoryKey !== null && !fromWorker && !preloaded
+				? memoryCache.match(memoryKey, requestHeaders)
+				: null;
 		const hit =
+			!remembered &&
 			!fromWorker &&
 			!preloaded &&
 			cache &&
@@ -1394,6 +1428,9 @@ function genericForward(
 
 		if (fromWorker) {
 			response = fromWorker;
+		} else if (remembered) {
+			response = remembered;
+			cached = true;
 		} else if (hit && hit.fresh && !hit.mustRevalidate) {
 			response = hit.response;
 			cached = true;
@@ -1483,6 +1520,27 @@ function genericForward(
 			} else {
 				response = upstream;
 			}
+		}
+
+		// what the renderer would keep, from the network or the HTTP cache
+		if (
+			memoryKey !== null &&
+			!remembered &&
+			!fromWorker &&
+			response.body &&
+			MemoryCache.keeps(response.status, response.headers)
+		) {
+			const [kept, forPage] = response.body.tee();
+			memoryCache
+				.put(memoryKey, requestHeaders, response, kept)
+				.catch(() => {});
+			const teed: typeof response = new Response(forPage, {
+				status: response.status,
+				statusText: response.statusText,
+				headers: response.headers,
+			});
+			teed.rawHeaders = response.rawHeaders;
+			response = teed;
 		}
 
 		if (
@@ -1779,6 +1837,16 @@ function genericForward(
 					headers: [...responseHeaders],
 					bytes: Number(responseHeaders.get('content-length')) || null,
 				});
+		}
+
+		// what the renderer keeps in its memory cache is the worker's to hand
+		// out again, per site (MemoryCache): the browser asks for it each
+		// document, and has no validators to make it a revalidation of a copy
+		// another site's document loaded
+		if (memoryDestination) {
+			responseHeaders.set('cache-control', 'no-cache');
+			for (const name of ['expires', 'age', 'etag', 'last-modified'])
+				responseHeaders.delete(name);
 		}
 
 		sendReport();

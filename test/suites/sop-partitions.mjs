@@ -55,16 +55,7 @@ const steps = (t) => [
 
 // Cases known to differ from Chrome, by why (docs/same-origin-policy.md). A
 // case on the list that now reads as natively fails too: take it off.
-const KNOWN_BY_REASON = {
-	// natively each site's documents are in a renderer process of their own,
-	// whose memory cache answers a resource loaded before; through the proxy
-	// every site's are in one, so a resource another site loaded is there
-	"the renderer's memory cache is one for every proxied site": [
-		'other/before: image cache',
-		'third/before: image cache',
-		'frame/after: image cache',
-	],
-};
+const KNOWN_BY_REASON = {};
 const KNOWN = new Map(
 	Object.entries(KNOWN_BY_REASON).flatMap(([why, names]) =>
 		names.map((name) => [name, why]),

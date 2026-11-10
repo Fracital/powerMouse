@@ -137,7 +137,7 @@ export class HttpCache {
 		return (this.cache ??= caches.open(STORE));
 	}
 	/** the request headers an entry was stored for, the ones its Vary names */
-	private static varyKey(vary: string | null, headers: Headers): string {
+	static varyKey(vary: string | null, headers: Headers): string {
 		const names = (vary || '')
 			.split(',')
 			.map((name) => name.trim().toLowerCase())
@@ -310,3 +310,151 @@ export class HttpCache {
 		}
 	}
 }
+
+/**
+ * The request destinations whose responses the browser keeps in a renderer's
+ * memory cache and hands to another document of that renderer without asking
+ * (images, scripts, stylesheets, fonts, text tracks)
+ */
+export const MEMORY_DESTINATIONS = new Set([
+	'image',
+	'script',
+	'style',
+	'font',
+	'track',
+]);
+
+/** what the memory cache keeps in all, and of one response */
+const MEMORY_BUDGET = 96 * 1024 * 1024;
+const MEMORY_ENTRY_LIMIT = 24 * 1024 * 1024;
+
+interface MemoryEntry {
+	status: number;
+	statusText: string;
+	headers: [string, string][];
+	body: ArrayBuffer;
+	storedAt: number;
+	/** seconds it stays fresh */
+	lifetime: number;
+	/** the request headers its Vary names, as HttpCache.varyKey has them */
+	vary: string | null;
+}
+
+/**
+ * The renderer's memory cache, as the worker keeps it for the proxied sites.
+ * Natively each site's documents are in a renderer process of their own, and
+ * its memory cache answers a fresh resource that site loaded before without
+ * asking anyone; through the proxy every site's documents are in one
+ * renderer, so the browser is handed these responses as `no-cache` (and
+ * without validators) and comes back to the worker for each document, which
+ * answers from here: per site of the document that asks, in memory, fresh
+ * entries only, the least recently used going first past the budget. A miss
+ * goes on to the HTTP cache (keyed by the network partition) and the
+ * network.
+ */
+export class MemoryCache {
+	#entries = new Map<string, MemoryEntry>();
+	#bytes = 0;
+	/**
+	 * the key of `url` for documents of `site`, loaded with credentials or
+	 * not (the renderer does not hand one to a load of the other mode)
+	 */
+	static key(site: string, credentials: boolean, url: string): string {
+		return `${site} ${credentials ? 'c' : 'a'} ${url}`;
+	}
+	/** a fresh entry for `key` that the request's headers match, as a response */
+	match(key: string, requestHeaders: Headers): Response | null {
+		const entry = this.#entries.get(key);
+		if (!entry) return null;
+		const age = (Date.now() - entry.storedAt) / 1000;
+		if (age >= entry.lifetime) {
+			this.#drop(key, entry);
+			return null;
+		}
+		const headers = new Headers(entry.headers);
+		if (
+			entry.vary !== null &&
+			entry.vary !== HttpCache.varyKey(headers.get('vary'), requestHeaders)
+		)
+			return null;
+		// the most recently used last
+		this.#entries.delete(key);
+		this.#entries.set(key, entry);
+		headers.set('age', String(Math.max(0, Math.round(age))));
+		return new Response(entry.body, {
+			status: entry.status,
+			statusText: entry.statusText,
+			headers,
+		});
+	}
+	/** whether a response is one to keep: a fresh 200 of a size it takes */
+	static keeps(status: number, headers: Headers): boolean {
+		if (status !== 200) return false;
+		const control = parseCacheControl(headers.get('cache-control'));
+		if (control.has('no-store') || control.has('no-cache')) return false;
+		if ((headers.get('vary') || '').trim() === '*') return false;
+		const lifetime = freshnessLifetime(headers);
+		if (lifetime === null || lifetime <= 0) return false;
+		return !(Number(headers.get('content-length')) > MEMORY_ENTRY_LIMIT);
+	}
+	/** keep `body` (a branch of the response's) under `key`, once it is read */
+	async put(
+		key: string,
+		requestHeaders: Headers,
+		response: Response,
+		body: ReadableStream<Uint8Array>,
+	): Promise<void> {
+		const chunks: Uint8Array[] = [];
+		let size = 0;
+		const reader = body.getReader();
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			size += value.byteLength;
+			if (size > MEMORY_ENTRY_LIMIT) {
+				await reader.cancel();
+				return;
+			}
+			chunks.push(value);
+		}
+		const bytes = new Uint8Array(size);
+		let offset = 0;
+		for (const chunk of chunks) {
+			bytes.set(chunk, offset);
+			offset += chunk.byteLength;
+		}
+		const headers = new Headers(response.headers);
+		headers.delete('set-cookie');
+		const old = this.#entries.get(key);
+		if (old) this.#drop(key, old);
+		this.#entries.set(key, {
+			status: response.status,
+			statusText: response.statusText,
+			headers: [...headers],
+			body: bytes.buffer,
+			storedAt: Date.now(),
+			// what is left of it: an HTTP cache hit has aged already
+			lifetime:
+				(freshnessLifetime(headers) ?? 0) - (Number(headers.get('age')) || 0),
+			vary: headers.has('vary')
+				? HttpCache.varyKey(headers.get('vary'), requestHeaders)
+				: null,
+		});
+		this.#bytes += size;
+		for (const [oldest, entry] of this.#entries) {
+			if (this.#bytes <= MEMORY_BUDGET) break;
+			this.#drop(oldest, entry);
+		}
+	}
+	#drop(key: string, entry: MemoryEntry) {
+		this.#entries.delete(key);
+		this.#bytes -= entry.body.byteLength;
+	}
+	clear() {
+		this.#entries.clear();
+		this.#bytes = 0;
+	}
+}
+
+/** the renderer's memory cache, one for every controller of this worker */
+export const memoryCache = new MemoryCache();

@@ -11,7 +11,7 @@ import {
 import { parseRoutedURL } from '../routeURL';
 import StompURL from '../StompURL';
 import type { RequestInfo, RequestRule } from '../transport/messages';
-import { HttpCache } from './cache';
+import { HttpCache, memoryCache } from './cache';
 import Cookies, { openCookies, registerCookies } from './Cookies';
 import { hostErrorPage } from './errorPage';
 import { RewriteCache } from './rewriteCache';
@@ -184,6 +184,7 @@ export default async function createServer(
 	// routed URLs change with the key; nothing cached is reachable anymore
 	if (newKey) {
 		await new HttpCache().clear();
+		memoryCache.clear();
 		await new RewriteCache().clear();
 	}
 

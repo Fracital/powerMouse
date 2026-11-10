@@ -289,8 +289,8 @@ Filled in commit by commit; see the CHANGELOG for each.
 - **Partitions under a frame of another site, inline documents, the HTTP
   cache** (sop-partitions: an A-in-B-in-A step, blob: and `javascript:`
   documents and the caches; against the code before, 36 cases per mode
-  differ, and 33 read as natively now, the 3 left being the memory cache,
-  Left 9). Natively a site framed by a frame of another site under
+  differ, and all read as natively now, the memory cache's 3 with the
+  bullet below). Natively a site framed by a frame of another site under
   its own top-level page (B in A in B) shares nothing with that page: its
   storage key and its cookie partition key have the ancestor chain bit.
   Its partition is now `^<top-level site>` like any third-party context's
@@ -314,6 +314,27 @@ Filled in commit by commit; see the CHANGELOG for each.
   isolation key (measured: another top-level site, or another frame site
   under the same top, fetches again; B in A in B gets B's top-level
   entry); a request of an opaque or unknown client is not cached.
+- **The renderer's memory cache** (sop-partitions: 3 cases per mode).
+  Natively each site's documents are in a renderer process of their own,
+  whose memory cache hands a fresh image, script, stylesheet, font or text
+  track that site loaded before to its next document without asking
+  anyone; through the proxy every site's documents are in one process and
+  every site's routed URL of a resource is the same, so an image another
+  site loaded was answered from memory (another site's page, a third
+  site's frame: 1 load reached the site where Chrome makes 2 and 3). The
+  worker now hands the browser those responses as `no-cache` without
+  validators (and drops the conditional headers the browser adds), so the
+  browser asks it again for each document and never revalidates another
+  site's copy, and answers from a memory cache of its own
+  (`src/server/cache.ts` MemoryCache): per site of the asking document and
+  credentials mode, fresh 200s only, 96 MB, least recently used first. A
+  miss goes to the HTTP cache (network partition) and the network; with the
+  `cache` option on a same-site document's resource never goes to the
+  network again while fresh, and with it off the memory cache still
+  answers. Cost, measured on YouTube, CNN, Discord and Google (4 runs of
+  each build, alternated, medians of the time to the page's main content,
+  cold, warm and revisit): within a few hundred ms either way, the noise
+  of the runs (see the CHANGELOG).
 - **Output reuse** (`recentOutputs`, master's speed series): the worker
   gives a document the output it just gave it for the same request only
   when everything the policy decides by is the same: the client (its
@@ -387,15 +408,3 @@ suites' known lists with the same reason.
    isolated agent cluster (SharedArrayBuffer, precise timers); through the
    proxy the frame lives in the host's browsing context group, so it
    cannot.
-9. The renderer's memory cache is one for every proxied site
-   (sop-partitions: 3 cases per mode). Natively each site's documents are
-   in a renderer process of their own, whose memory cache answers a
-   resource that site loaded before; through the proxy every site's
-   documents are in one process, so an image another site loaded is
-   answered from memory (another site's page, a third site's frame: 1 load
-   reached the site where Chrome makes 2 and 3). A routed URL is the same
-   for every site, and the browser never asks the worker. Fixing it would
-   take the browser coming back to the worker for each document's
-   subresources (a `no-cache` on what it is handed) and a memory cache per
-   site in the worker, a round trip per subresource, and a refetch when
-   the HTTP cache is off.

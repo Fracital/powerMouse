@@ -383,6 +383,21 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A proxied site's documents no longer get a resource another site loaded
+  from the renderer's memory cache: natively each site has a renderer of its
+  own, through the proxy every site shares one, so an image, script,
+  stylesheet, font or text track another site's page loaded was handed to
+  this one without a request. The worker now hands the browser those as
+  `no-cache` without validators, so it asks again for each document, and
+  answers from a memory cache of its own per site of the document (and
+  credentials mode): a same-site document's fresh resource comes from
+  memory, as natively, with the `cache` option on or off.
+  (sop-partitions suite.) Cost, alternated runs of the build before and
+  this one (4 each, median ms to the main content, cold / warm / revisit):
+  YouTube home 3979/1635/2250 before, 3661/1595/2259 now; CNN
+  6089/3480/3624, 6019/3393/3475; Discord 6075/4597/5314, 6458/4752/5115;
+  Google 759/334, 633/314 (its revisit pass does not finish in the probe
+  for either build): none past the noise of the runs.
 - A page that takes `WebGLRenderingContext.prototype.texImage2D` (or
   `texSubImage2D`, or WebGL 2's) before any WebGL context exists gets the
   taint-checked method, as natively it gets one that refuses another site's
@@ -3676,8 +3691,7 @@ Fixed while testing real sites and a feature fixture:
 
 - The same-origin policy between proxied sites is simulated by the proxy
   (docs/same-origin-policy.md). Not yet: `crossOriginIsolated` (COOP and
-  COEP cannot isolate a proxied frame), and the renderer's memory cache,
-  which is one for every proxied site (natively one per site's process).
+  COEP cannot isolate a proxied frame).
 - The Cookie Store API's change events are dispatched by the inject, so
   their `isTrusted` is false where natively it is true (native-shapes
   suite, recorded), as for the storage events of other documents' writes.
