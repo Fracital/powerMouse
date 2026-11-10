@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>WINDOW GEOMETRY</title>
+	</head>
+	<body>
+		<script>
+			// The window's outer size and screen position, and how they relate
+			// to the viewport: what a fingerprinting script reads to tell a real
+			// window (a toolbar above the viewport) from a headless or
+			// fullscreen one.
+			window.__geometry = {
+				outer: [
+					outerWidth,
+					outerHeight,
+					screenX,
+					screenY,
+					screenLeft,
+					screenTop,
+				].join(' '),
+				toolbar: outerHeight > innerHeight,
+				wider: outerWidth >= innerWidth,
+			};
+		</script>
+	</body>
+</html>

@@ -190,7 +190,16 @@ ok(
 	JSON.stringify(r.referrer),
 );
 ok('window.name is empty', r.name === '', JSON.stringify(r.name));
-ok('outer size equals inner size', r.outerEqualsInner === true);
+// the browser's window, as in any frame natively (not the frame's inner
+// size at 0,0, a window with no toolbar)
+const hostOuter = await page.evaluate(() =>
+	[outerWidth, outerHeight, screenX, screenY].join(' '),
+);
+ok(
+	"outer size and position are the browser window's",
+	r.outerSize === hostOuter,
+	JSON.stringify([r.outerSize, hostOuter]),
+);
 ok(
 	'parent.document / top.document resolve to the page itself',
 	r.parentDocTitle === 'escape fixture' && r.topDocTitle === 'escape fixture',

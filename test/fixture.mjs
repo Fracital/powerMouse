@@ -31,7 +31,7 @@ t('frameElement', () => frameElement);
 t('ancestorOrigins', () => location.ancestorOrigins.length);
 t('referrer', () => document.referrer);
 t('name', () => window.name);
-t('outerEqualsInner', () => outerWidth === innerWidth && outerHeight === innerHeight);
+t('outerSize', () => [outerWidth, outerHeight, screenX, screenY].join(' '));
 t('parentDocTitle', () => parent.document.title);
 t('topDocTitle', () => top.document.title);
 t('topLocationHref', () => top.location.href);

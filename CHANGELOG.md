@@ -989,6 +989,14 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   longer writes the next sibling to the console, and a bad position, a
   missing parent or a non-element throw Chrome's errors (fragment-context
   suite, both modes, against native).
+- `outerWidth`, `outerHeight`, `screenX`, `screenY`, `screenLeft` and
+  `screenTop` read the browser window's, as in any frame natively. They
+  were the frame's inner size at 0,0: a window with no toolbar
+  (`outerHeight === innerHeight`), which a real one never is outside
+  fullscreen and which fingerprinting scripts take for headless
+  (browserleaks' JavaScript page showed it; window-geometry suite, both
+  modes, with real windows: Playwright's viewport emulation makes a
+  native page's outer size its inner one too).
 - `localStorage` and `sessionStorage` work in a srcdoc frame. Its inject
   resolved the proxy's own storage route against the frame's location,
   `about:srcdoc`, and every call threw "Failed to construct 'URL':

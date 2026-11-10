@@ -113,23 +113,11 @@ export default class FramingModule extends Module<DocumentClient> {
 			});
 		}
 
-		// outer size and screen position of a "maximised top-level window"
-		const sizes: [string, () => number][] = [
-			['outerWidth', () => global.innerWidth],
-			['outerHeight', () => global.innerHeight],
-			['screenX', () => 0],
-			['screenY', () => 0],
-			['screenLeft', () => 0],
-			['screenTop', () => 0],
-		];
-		for (const [name, value] of sizes) {
-			const descriptor = Reflect.getOwnPropertyDescriptor(global, name);
-			if (!descriptor?.get) continue;
-			Reflect.defineProperty(global, name, {
-				...descriptor,
-				get: proxyModule.wrapFunction(descriptor.get, value),
-			});
-		}
+		// outerWidth, outerHeight, screenX/Y and screenLeft/Top stay the
+		// browser's: in any frame they are the top-level window's, which is
+		// what a top-level page reads natively. They were the frame's inner
+		// size at 0,0, a window with no toolbar at all (outerHeight equal to
+		// innerHeight), which a real one never is outside fullscreen.
 
 		// document.referrer: the host page is never the referrer
 		const referrerDescriptor = Reflect.getOwnPropertyDescriptor(
