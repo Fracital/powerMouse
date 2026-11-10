@@ -57,6 +57,8 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(SyncModule);
 	client.addModule(AudioModule);
 	client.addModule(BlobDocumentsModule);
+	// before Storage: it reads the proxy origin's own localStorage
+	client.addModule(PermissionsModule);
 	client.addModule(StorageModule);
 	client.addModule(XMLHttpRequestModule);
 	client.addModule(CookiesModule);
@@ -77,7 +79,6 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(NavigateModule);
 	client.addModule(NavigationHintModule);
 	client.addModule(ClientHintsModule);
-	client.addModule(PermissionsModule);
 	client.addModule(ReadbackModule);
 	client.addModule(CSSReadbackModule);
 	// last: the Navigate module's own observer keeps the native constructor

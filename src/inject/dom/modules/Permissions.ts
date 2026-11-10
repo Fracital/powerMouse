@@ -122,8 +122,11 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			known = {};
 		}
 		const remember = (name: string, state: PermissionState) => {
-			known[name] = state;
+			if ((known[name] ?? 'prompt') === state) return;
+			if (state === 'prompt') delete known[name];
+			else known[name] = state;
 			try {
+				// only a site that decided something has a copy
 				if (mirror && setItem)
 					Reflect.apply(setItem, mirror, [mirrorKey, JSON.stringify(known)]);
 			} catch (error) {
