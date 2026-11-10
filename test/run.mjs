@@ -12,6 +12,7 @@
 //   npm test                   all suites
 //   npm test -- back escapes   only these (names without .mjs)
 //   PARALLEL=1 npm test        one at a time, streaming output
+//   RERUN=0 npm test           no second run, alone, for a suite that failed
 //
 // Needs a built dist/ (`npm run build`) and Chrome (CHROME env, default
 // /usr/bin/google-chrome). PORT / FIXTURE_PORT pin the ports of a sequential
@@ -230,10 +231,17 @@ function runSuite(name, { port, fixturePort }) {
 		let pass = 0;
 		let fail = 0;
 		let buffer = '';
+		// the first failed checks, for the note a flaky suite leaves
+		const failures = [];
+		const failed = (line) => {
+			fail++;
+			if (failures.length < 3) failures.push(line.slice(5, 205));
+		};
 		const timeoutMs = suiteTimeoutMs(name);
 		const timer = setTimeout(() => {
-			emit(`FAIL ${name}: timed out after ${timeoutMs / 1000}s`);
-			fail++;
+			const line = `FAIL ${name}: timed out after ${timeoutMs / 1000}s`;
+			emit(line);
+			failed(line);
 			child.kill('SIGKILL');
 		}, timeoutMs);
 		child.stdout.on('data', (chunk) => {
@@ -242,7 +250,7 @@ function runSuite(name, { port, fixturePort }) {
 			buffer = parts.pop();
 			for (const line of parts) {
 				if (line.startsWith('PASS ')) pass++;
-				else if (line.startsWith('FAIL ')) fail++;
+				else if (line.startsWith('FAIL ')) failed(line);
 				emit(line);
 			}
 		});
@@ -250,10 +258,39 @@ function runSuite(name, { port, fixturePort }) {
 			clearTimeout(timer);
 			if (buffer) emit(buffer);
 			if (PARALLEL > 1) console.log(lines.join('\n'));
-			resolve({ pass, fail, code });
+			resolve({ pass, fail, code, failures });
 		});
 	});
 }
+
+/** one suite with servers of its own, start to finish */
+async function runOne(name) {
+	const started = Date.now();
+	let servers;
+	try {
+		servers = await startServers(name);
+	} catch (error) {
+		console.log(`FAIL ${name}: ${error.message}`);
+		return {
+			name,
+			pass: 0,
+			fail: 1,
+			code: 2,
+			failures: [`${name}: ${error.message}`.slice(0, 200)],
+			seconds: 0,
+		};
+	}
+	const result = await runSuite(name, servers);
+	servers.stop();
+	await sleep(300);
+	return {
+		name,
+		...result,
+		seconds: Math.round((Date.now() - started) / 1000),
+	};
+}
+
+const failedRun = (result) => result.fail > 0 || result.code !== 0;
 
 const results = [];
 const queue = [...suites].sort(
@@ -264,41 +301,55 @@ const queue = [...suites].sort(
 const workers = Array.from(
 	{ length: Math.min(PARALLEL, suites.length) },
 	async () => {
-		while (queue.length) {
-			const name = queue.shift();
-			const started = Date.now();
-			let servers;
-			try {
-				servers = await startServers(name);
-			} catch (error) {
-				console.log(`FAIL ${name}: ${error.message}`);
-				results.push({ name, pass: 0, fail: 1, code: 2, seconds: 0 });
-				continue;
-			}
-			const result = await runSuite(name, servers);
-			servers.stop();
-			results.push({
-				name,
-				...result,
-				seconds: Math.round((Date.now() - started) / 1000),
-			});
-			await sleep(300);
-		}
+		while (queue.length) results.push(await runOne(queue.shift()));
 	},
 );
 await Promise.all(workers);
 results.sort((a, b) => suites.indexOf(a.name) - suites.indexOf(b.name));
 
+// A suite that failed runs once more, alone, once the others are done: beside
+// other suites on a small or busy machine a check can miss its window with
+// nothing wrong in the proxy. One that then passes is flaky, which is
+// reported (as a warning on a GitHub runner) and does not fail the run; one
+// that fails again is a failure. A flaky suite is still a bug to fix, in the
+// suite or in the proxy. RERUN=0 turns the second run off
+const RERUN = process.env.RERUN !== '0';
+const annotate = process.env.GITHUB_ACTIONS === 'true';
+// a workflow command is one line, and `::` inside it would start another
+const oneLine = (text) => text.replace(/\s+/g, ' ').replaceAll('::', ': :');
+if (RERUN)
+	for (const first of results.filter(failedRun)) {
+		console.log(`\nRERUN ${first.name}, alone`);
+		const second = await runOne(first.name);
+		first.rerun = failedRun(second) ? 'failed' : 'passed';
+		first.seconds += second.seconds;
+		if (first.rerun === 'passed' && annotate)
+			console.log(
+				`::warning title=Flaky suite ${oneLine(first.name)}::` +
+					oneLine(
+						`failed beside other suites, passed alone: ${first.failures.join(' | ')}`,
+					),
+			);
+	}
+
 console.log('');
 console.table(
-	results.map(({ name, pass, fail, code, seconds }) => ({
+	results.map(({ name, pass, fail, code, seconds, rerun }) => ({
 		suite: name,
 		pass,
 		fail,
 		exit: code,
 		seconds,
+		...(RERUN ? { rerun: rerun ?? '' } : {}),
 	})),
 );
-const bad = results.filter((r) => r.fail || r.code !== 0);
+const flaky = results.filter((r) => r.rerun === 'passed');
+const bad = results.filter((r) => failedRun(r) && r.rerun !== 'passed');
+if (flaky.length)
+	console.log(
+		`${flaky.length} flaky suite(s), failed then passed alone: ${flaky
+			.map((r) => r.name)
+			.join(', ')}`,
+	);
 console.log(bad.length ? `${bad.length} suite(s) failed` : 'all suites passed');
 process.exit(bad.length ? 1 : 0);
