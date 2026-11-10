@@ -60,7 +60,17 @@ export default class FunctionModule extends Module<Client> {
 
 		// each constructor is its prototype's `constructor` and inherits from
 		// the page's Function, as natively (ProxyModule.standIn)
-		const proxyFunction = functionFactory(this.client.global.Function);
+		// the bundle's own Function: a document the parent's bundle was
+		// injected into (a frame the parent read before it loaded) reaches
+		// the parent's realm through `api.constructor.constructor`, which
+		// must make the child's functions too (helper-seal suite)
+		const proxyFunction = functionFactory(Function);
+		const realmPrototype = this.client.global.Function.prototype;
+		if (realmPrototype !== Function.prototype)
+			Reflect.defineProperty(realmPrototype, 'constructor', {
+				...Reflect.getOwnPropertyDescriptor(realmPrototype, 'constructor'),
+				value: proxyFunction,
+			});
 		// the generator constructors are reachable the same way
 		const GeneratorFunction = constructorOf('return function* () {}');
 		const AsyncGeneratorFunction = constructorOf(
