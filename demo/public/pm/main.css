@@ -700,7 +700,8 @@ body {
 	background: rgba(255, 255, 255, 0.22);
 }
 
-.toolbtn:disabled {
+.toolbtn:disabled,
+.toolbtn.disabled {
 	cursor: default;
 	opacity: 0.35;
 	filter: grayscale(1);
@@ -971,11 +972,20 @@ body.recents .frames .frame.shade {
 	pointer-events: none;
 }
 
+/* Back, Forward and Reload as pictures: spans with the buttons' box (a
+   button is border-box by default, a span is not) */
+.cardChrome .toolbtn {
+	box-sizing: border-box;
+	cursor: inherit;
+}
+
+/* the box of the live bar's form: it grows into the room the buttons and
+   the status chip leave, never below 120px */
 .cardChrome .url {
 	flex: 1 1 auto;
 	float: none;
 	width: auto;
-	min-width: 0;
+	min-width: 120px;
 	height: 36px;
 	box-sizing: border-box;
 	padding: 0 0.75rem;
@@ -985,9 +995,10 @@ body.recents .frames .frame.shade {
 	text-overflow: ellipsis;
 }
 
-/* the status chip, same box as .chrome .select on the live bar */
+/* the status chip, same box as .chrome .select on the live bar, which never
+   shrinks below its text: the address box gives way, not the chip */
 .cardLabel .status {
-	flex: 0 1 auto;
+	flex: 0 0 auto;
 	max-width: 50%;
 	height: 28px;
 	box-sizing: border-box;

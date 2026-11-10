@@ -3,17 +3,109 @@
 // box without a jump or a resize, non-focused cards appear in place, the bar
 // copy stays visible while a card expands, and the dock fades out when a
 // card is opened from a switcher that was entered from the home screen.
-import { done, launch, ok, openDemo, sleep, submitLanding } from '../lib.mjs';
+// Each card's bar copy is the live bar as that tab would show it (Back,
+// Forward and Reload in their places and states, the tab's URL), at desktop
+// and phone widths.
+import {
+	done,
+	FIXTURE,
+	launch,
+	ok,
+	openDemo,
+	sleep,
+	submitLanding,
+	submitOmni,
+	waitActive,
+} from '../lib.mjs';
 
 const browser = await launch();
 const page = await openDemo(browser);
-const open = async (url) => {
-	await page.click('#home');
-	await submitLanding(page, url);
-	await sleep(2500);
-};
-await open('https://example.com/?a');
-await open('https://example.org/?b');
+const ONE = `${FIXTURE}pages/hist-1.html`;
+const TWO = `${FIXTURE}pages/hist-2.html`;
+const shows = (title) =>
+	waitActive(
+		page,
+		`document.title === ${JSON.stringify(title)} &&
+			document.readyState === 'complete'`,
+	).then(() => sleep(500));
+// tab A: two pages in, on the second (Back on, Forward off)
+await submitLanding(page, ONE);
+await shows('HIST 1');
+await submitOmni(page, TWO);
+await shows('HIST 2');
+// tab B: two pages in, back on the first (Back off, Forward on)
+await page.click('#home');
+await submitLanding(page, `${ONE}?b`);
+await shows('HIST 1');
+await submitOmni(page, `${TWO}?b`);
+await shows('HIST 2');
+await page.click('#toolBack');
+await shows('HIST 1');
+const toolStates = () =>
+	page.evaluate(() =>
+		['toolBack', 'toolForward', 'toolReload'].map(
+			(id) => document.getElementById(id).disabled,
+		),
+	);
+for (let i = 0; i < 40; i++) {
+	if (JSON.stringify(await toolStates()) === '[true,false,false]') break;
+	await sleep(250);
+}
+
+/**
+ * Every card's bar copy against the live bar: its pieces (Back, Forward,
+ * Reload, the address box, the status chip) measured in the card and scaled
+ * back to page pixels must sit where the live bar's are, so expanding a card
+ * lands each one on its counterpart. Also each card's URL and button states.
+ */
+const cardBars = () =>
+	page.evaluate(() => {
+		const chrome = document.querySelector('.chrome');
+		const c = chrome.getBoundingClientRect();
+		const live = [
+			'#toolBack',
+			'#toolForward',
+			'#toolReload',
+			'#omni input',
+			'#chromeStatus',
+		].map((sel) => {
+			const r = document.querySelector(sel).getBoundingClientRect();
+			return [r.left - c.left, r.top - c.top, r.width, r.height];
+		});
+		const cards = [...document.querySelectorAll('.cardLabel')].map((label) => {
+			const l = label.getBoundingClientRect();
+			const k = l.width / innerWidth;
+			const bar = label.querySelector('.cardChrome');
+			const pieces = [
+				...bar.querySelectorAll('.toolbtn'),
+				bar.querySelector('.url'),
+				bar.querySelector('.status'),
+			].map((el) => {
+				const r = el.getBoundingClientRect();
+				return [
+					(r.left - l.left) / k,
+					(r.top - l.top) / k,
+					r.width / k,
+					r.height / k,
+				];
+			});
+			return {
+				url: bar.querySelector('.url').textContent,
+				tools: [...bar.querySelectorAll('.toolbtn')].map((t) => [
+					t.dataset.tool,
+					t.classList.contains('disabled'),
+					!!t.querySelector('img')?.complete,
+				]),
+				// furthest any piece is from its place on the live bar, page px
+				off: Math.max(
+					...pieces.flatMap((p, i) =>
+						p.map((v, j) => Math.abs(v - live[i][j])),
+					),
+				),
+			};
+		});
+		return { live: live.map((p) => p.map(Math.round)), cards };
+	});
 
 const boxes = () =>
 	page.evaluate(() => {
@@ -82,6 +174,36 @@ ok(
 );
 await sleep(400);
 
+const bars = await cardBars();
+ok(
+	"each card's bar copy has Back, Forward and Reload with its tab's states",
+	JSON.stringify(bars.cards.map((c) => c.tools)) ===
+		JSON.stringify([
+			[
+				['toolBack', false, true],
+				['toolForward', true, true],
+				['toolReload', false, true],
+			],
+			[
+				['toolBack', true, true],
+				['toolForward', false, true],
+				['toolReload', false, true],
+			],
+		]),
+	JSON.stringify(bars.cards.map((c) => c.tools)),
+);
+ok(
+	"each card's bar copy shows its own tab's URL",
+	JSON.stringify(bars.cards.map((c) => c.url)) ===
+		JSON.stringify([TWO, `${ONE}?b`]),
+	JSON.stringify(bars.cards.map((c) => c.url)),
+);
+ok(
+	"every piece of a card's bar sits where the live bar's does",
+	bars.cards.every((c) => c.off <= 1),
+	`${bars.cards.map((c) => c.off.toFixed(2))} live ${JSON.stringify(bars.live)}`,
+);
+
 const inSwitcher = await boxes();
 const k = inSwitcher.label[3] / (800 - 48);
 ok(
@@ -146,6 +268,45 @@ ok(
 	JSON.stringify(after.frame),
 );
 
+// opening the other tab's card: its bar copy shows what the live bar will
+// (that tab's URL and states) from the first frame, not the tab it left
+await page.click('#recents');
+await sleep(500);
+await page.evaluate(() =>
+	[...document.querySelectorAll('.cardLabel')]
+		.find((l) => l.style.opacity !== '1')
+		.click(),
+);
+await sleep(500);
+const opened = await page.evaluate(() => {
+	const label = [...document.querySelectorAll('.cardLabel')].find(
+		(l) => l.style.opacity === '1',
+	);
+	label.click();
+	const bar = label.querySelector('.cardChrome');
+	return {
+		copy: [
+			bar.querySelector('.url').textContent,
+			...[...bar.querySelectorAll('.toolbtn')].map((t) =>
+				t.classList.contains('disabled'),
+			),
+		],
+		live: [
+			document.querySelector('#omni input').value,
+			...['toolBack', 'toolForward', 'toolReload'].map(
+				(id) => document.getElementById(id).disabled,
+			),
+		],
+	};
+});
+ok(
+	'an opening card shows the live bar it lands on',
+	JSON.stringify(opened.copy) === JSON.stringify(opened.live) &&
+		JSON.stringify(opened.live) === JSON.stringify([TWO, false, true, false]),
+	JSON.stringify(opened),
+);
+await sleep(600);
+
 // the dock fades out whichever way the switcher was entered
 for (const from of ['home', 'browser']) {
 	if (from === 'home') await page.click('#home');
@@ -191,6 +352,33 @@ for (const from of ['home', 'browser']) {
 	);
 	await sleep(400);
 }
+
+// a phone: the bar is cramped (the address box gives way), and the copy
+// still matches it piece by piece and lands on it
+await page.setViewportSize({ width: 390, height: 844 });
+await sleep(500);
+const phoneRest = await boxes();
+await page.click('#recents');
+await sleep(600);
+const phoneBars = await cardBars();
+ok(
+	"phone: every piece of a card's bar sits where the live bar's does",
+	phoneBars.cards.every((c) => c.off <= 1),
+	`${phoneBars.cards.map((c) => c.off.toFixed(2))} live ${JSON.stringify(phoneBars.live)}`,
+);
+await page.evaluate(() =>
+	[...document.querySelectorAll('.cardLabel')]
+		.find((l) => l.style.opacity === '1')
+		.click(),
+);
+await sleep(700);
+const phoneAfter = await boxes();
+ok(
+	'phone: frame and bar back at rest after opening a card',
+	JSON.stringify(phoneAfter.frame) === JSON.stringify(phoneRest.frame) &&
+		JSON.stringify(phoneAfter.chrome) === JSON.stringify(phoneRest.chrome),
+	JSON.stringify([phoneRest, phoneAfter]),
+);
 
 await done(
 	browser,

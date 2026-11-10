@@ -47,6 +47,14 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- A card in the demo's tab manager shows the whole tab as the browser view
+  does: its bar has Back, Forward and Reload, greyed out as they would be for
+  that tab, beside the tab's own URL and the status, above the page. The bar
+  is a picture (a press anywhere on the card opens the tab), laid out like
+  the live bar piece by piece at any width, so opening a card lands each
+  button and the address box on its live counterpart without a jump. An
+  opening card no longer shows the previously active tab's URL while it
+  expands (switcher-geometry suite, desktop and phone widths).
 - The browser view's address bar has Back, Forward and Reload buttons with
   the Tango icons vibeOS's web app uses (public domain, `demo/public/pm/icons/`).
   They act on the active tab: Back and Forward step its history and are

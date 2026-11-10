@@ -173,6 +173,7 @@ const controllerCallbacks = {
 		tab.url = info.url;
 		recordUrl(tab);
 		if (tab === activeTab) syncOmnibox();
+		syncCardBar(tab); // its card in the switcher, if there is one
 	},
 };
 
@@ -306,6 +307,7 @@ function createTab() {
 			setStatus(frame.url ? 'Ready' : 'Loaded');
 			syncOmnibox();
 		}
+		syncCardBar(tab);
 	});
 	tabs.push(tab);
 	return tab;
@@ -380,9 +382,10 @@ function activateTab(tab) {
 	landing.classList.add('hidden');
 	browser.classList.remove('hidden');
 	document.body.classList.add('browsing');
-	hideRecents(tab); // animates the card back to full screen if the manager is open
+	// the live bar first: an expanding card's bar copy is a copy of it
 	syncOmnibox(true);
 	syncToolbar();
+	hideRecents(tab); // animates the card back to full screen if the manager is open
 }
 
 function closeTab(tab, { stayInRecents = false } = {}) {
@@ -569,6 +572,28 @@ function layoutRecents(animated = false) {
 // one label element per tab, kept across renders so it can transition in
 // step with its frame (rebuilding labels made them jump into place)
 const labelFor = new Map();
+const TOOL_IDS = ['toolBack', 'toolForward', 'toolReload'];
+
+/** the card's bar copy shows what the live bar would for this tab */
+function syncCardBar(tab) {
+	const label = labelFor.get(tab);
+	if (!label) return;
+	// landing on the live bar: it must match that, whatever the tab does
+	if (label.classList.contains('expanding')) return mirrorLiveBar(label);
+	const tools = label.querySelectorAll('.toolbtn');
+	tools[0].classList.toggle('disabled', !canStep(tab, 'back'));
+	tools[1].classList.toggle('disabled', !canStep(tab, 'forward'));
+	label.querySelector('.url').textContent = tab.url || '';
+}
+
+/** the expanding card's bar copy shows exactly what the live bar does */
+function mirrorLiveBar(label) {
+	const tools = label.querySelectorAll('.toolbtn');
+	TOOL_IDS.forEach((id, i) =>
+		tools[i].classList.toggle('disabled', $(id).disabled),
+	);
+	label.querySelector('.url').textContent = omni.url.value;
+}
 
 function createLabel(tab) {
 	const label = document.createElement('div');
@@ -578,10 +603,20 @@ function createLabel(tab) {
 	hit.className = 'hit';
 
 	// a copy of the chrome bar, built from the same classes so it renders
-	// exactly like the real one it will land on: the address box shows the
-	// tab's URL, the chip the same service worker status as the live bar
+	// exactly like the real one it will land on: Back, Forward and Reload
+	// greyed out as they would be for this tab, the address box with the
+	// tab's URL, the chip the same service worker status as the live bar.
+	// Only a picture: a press anywhere on it opens the tab.
 	const chrome = document.createElement('div');
 	chrome.className = 'cardChrome';
+	chrome.setAttribute('aria-hidden', 'true');
+	for (const id of TOOL_IDS) {
+		const tool = document.createElement('span');
+		tool.className = 'toolbtn';
+		tool.dataset.tool = id;
+		tool.append($(id).querySelector('img').cloneNode());
+		chrome.append(tool);
+	}
 	const url = document.createElement('div');
 	url.className = 'form-text omnibox url';
 	const status = document.createElement('span');
@@ -628,7 +663,7 @@ function renderRecents(fromFullScreen = false) {
 			labelFor.set(tab, label);
 			recentsLabels.append(label);
 		}
-		label.querySelector('.url').textContent = tab.url || '';
+		syncCardBar(tab);
 		label.querySelector('.hit').title = tabTitle(tab);
 	}
 
@@ -718,6 +753,7 @@ function teardownRecents() {
 	recentsLift = { index: -1, dy: 0 };
 	recentsDrag = 0;
 	recentsClosing = false;
+	for (const label of labelFor.values()) label.classList.remove('expanding');
 	for (const tab of tabs) {
 		tab.element.style.cssText = '';
 		tab.element.classList.remove('shade', 'dragging');
@@ -754,8 +790,10 @@ function hideRecents(expand = null) {
 	expand.element.style.clipPath = 'inset(0 round 0px)';
 	if (label) {
 		label.classList.remove('dragging');
-		// the bar copy lands on the real bar: show what the real bar will show
-		label.querySelector('.url').textContent = omni.url.value;
+		// the bar copy lands on the real bar: show what the real bar will show,
+		// and keep showing it while the page moves on underneath
+		label.classList.add('expanding');
+		mirrorLiveBar(label);
 		label.style.transform = 'translate(0px, 0px) scale(1)';
 		label.style.borderRadius = '0px';
 		label.style.setProperty('--k', '1');
@@ -979,19 +1017,20 @@ function syncOmnibox(force = false) {
 }
 // the address bar's Back and Forward are greyed out with nowhere to go: the
 // frame says where it can (Navigation API), else the tab's own list does
+function canStep(tab, direction) {
+	if (!tab) return false;
+	const frame =
+		direction === 'back' ? tab.frame.canGoBack : tab.frame.canGoForward;
+	if (typeof frame === 'boolean') return frame;
+	return direction === 'back'
+		? tab.index > 0
+		: tab.index < tab.history.length - 1;
+}
+
 function syncToolbar() {
 	const tab = activeTab;
-	const can = (direction) => {
-		if (!tab) return false;
-		const frame =
-			direction === 'back' ? tab.frame.canGoBack : tab.frame.canGoForward;
-		if (typeof frame === 'boolean') return frame;
-		return direction === 'back'
-			? tab.index > 0
-			: tab.index < tab.history.length - 1;
-	};
-	$('toolBack').disabled = !can('back');
-	$('toolForward').disabled = !can('forward');
+	$('toolBack').disabled = !canStep(tab, 'back');
+	$('toolForward').disabled = !canStep(tab, 'forward');
 	$('toolReload').disabled = !tab;
 }
 
