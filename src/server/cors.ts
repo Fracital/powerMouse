@@ -115,7 +115,10 @@ function list(value: string | null): string[] {
  * those Access-Control-Expose-Headers names (`*`, without credentials,
  * exposes all). Set-Cookie never reaches a page
  */
-export function exposedHeaders(headers: Headers, credentials: boolean): Headers {
+export function exposedHeaders(
+	headers: Headers,
+	credentials: boolean,
+): Headers {
 	const expose = list(headers.get('access-control-expose-headers')).map(
 		(name) => name.toLowerCase(),
 	);
