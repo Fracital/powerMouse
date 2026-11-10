@@ -34,6 +34,10 @@ async function measure(frames) {
 	return null;
 }
 
+// the frames report in whichever order they load: compare by key
+const canonical = (value) =>
+	JSON.stringify(value && Object.fromEntries(Object.entries(value).sort()));
+
 const nativePage = await browser.newPage();
 await nativePage.goto(PAGE);
 const native = await measure(() => [nativePage.mainFrame()]);
@@ -55,7 +59,7 @@ for (const [mode, base] of [
 	const proxied = await measure(() => page.frames());
 	ok(
 		`${mode}: localStorage in a written, srcdoc and blob: frame answers as natively`,
-		JSON.stringify(proxied) === JSON.stringify(native),
+		canonical(proxied) === canonical(native),
 		`native ${JSON.stringify(native)} proxied ${JSON.stringify(proxied)}`,
 	);
 	await page.close();
