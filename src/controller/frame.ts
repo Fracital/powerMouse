@@ -7,6 +7,7 @@ import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { assetName } from '../config';
 import { helperNames } from '../helperNames';
 import type { HookErrorInfo } from '../hooks';
+import { constructTransport, resolveHttp3 } from '../transport/construct';
 import type { RequestInfo } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import { canTraverse, traverse } from './history';
@@ -70,15 +71,25 @@ if (window === window.parent || !origins.length) {
 			const url = new URL(descriptor.module, location.href);
 			if (url.origin !== location.origin)
 				throw new Error('Transport modules must live on the proxy origin');
-			return { ...descriptor, module: url.href };
+			const resolved = resolveHttp3(
+				{ ...descriptor, module: url.href },
+				location.href,
+			);
+			const http3 = resolved.http3;
+			if (
+				http3 &&
+				http3 !== true &&
+				http3.module &&
+				new URL(http3.module).origin !== location.origin
+			)
+				throw new Error('The HTTP/3 module must live on the proxy origin');
+			return resolved;
 		}
 
-		async function loadTransport(
+		function loadTransport(
 			descriptor: TransportDescriptor,
 		): Promise<ProxyTransport> {
-			const { module, options } = onProxyOrigin(descriptor);
-			const { default: Transport } = await import(/* @vite-ignore */ module);
-			return new Transport(...(options || []));
+			return constructTransport(onProxyOrigin(descriptor));
 		}
 
 		/**

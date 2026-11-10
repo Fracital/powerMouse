@@ -67,6 +67,9 @@ const ISOLATED = !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
 // visit
 const CACHE = !new URLSearchParams(location.search).has('nocache');
 const proxyBase = ISOLATED ? PROXY_ORIGIN : '';
+// HTTP/3 over wisp UDP for origins that offer it (docs/http3.md), off by
+// default; STOMP_HTTP3=1 on the server or ?http3 on this page turns it on
+const HTTP3 = !!CFG.http3 || new URLSearchParams(location.search).has('http3');
 // STOMP_WISP_URL points the transports at an external wisp server (in
 // production, the edge relay); otherwise the demo server's own /wisp/
 const wisp =
@@ -81,6 +84,7 @@ const transports = {
 	epoxy: () => ({
 		module: `${proxyBase}/epoxy/index.mjs`,
 		options: [{ wisp }],
+		...(HTTP3 && { http3: true }),
 	}),
 	libcurl: () => ({
 		module: `${proxyBase}/libcurl/index.mjs`,
@@ -147,7 +151,10 @@ async function boot() {
 			: `same origin (${location.origin}); not a security boundary`,
 		ISOLATED ? 'green' : 'orange',
 	);
-	badge('Transport', `${name} over ${wisp}`);
+	badge(
+		'Transport',
+		`${name} over ${wisp}${HTTP3 && name === 'epoxy' ? ', HTTP/3 on' : ''}`,
+	);
 
 	if (ISOLATED) {
 		setStatus('Starting controller frame…');

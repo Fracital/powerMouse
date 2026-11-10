@@ -23,6 +23,7 @@ import {
 	type InitHooks,
 } from '../hooks';
 import { isUrlLike, urlLike } from '../StompURL';
+import { constructTransport, resolveHttp3 } from '../transport/construct';
 import type { RequestRule } from '../transport/messages';
 import {
 	CONTROLLER_CLOSE,
@@ -63,6 +64,14 @@ export type { Config, ConfigCodec } from '../config';
 export { RemoteController, RemoteFrame, DEFAULT_SANDBOX } from './remote';
 export type { RemoteControllerInit } from './remote';
 export type { TransportDescriptor, FrameInfo } from './messages';
+export { default as Http3Transport } from '../transport/http3/Http3Transport';
+export type {
+	DatagramChannel,
+	Http3Info,
+	Http3Options,
+	UdpOpener,
+} from '../transport/http3/Http3Transport';
+export type { Http3DescriptorOptions } from '../transport/construct';
 export type {
 	NavigateInfo,
 	CookieRecord,
@@ -411,23 +420,20 @@ function isTransportDescriptor(
 
 /** the descriptor with its module URL resolved against this page (the worker would resolve it against its own) */
 function resolvedModule(descriptor: TransportDescriptor): TransportDescriptor {
-	return {
-		...descriptor,
-		module: new URL(descriptor.module, location.href).href,
-	};
+	return resolveHttp3(
+		{
+			...descriptor,
+			module: new URL(descriptor.module, location.href).href,
+		},
+		location.href,
+	);
 }
 
 /** import a descriptor's module in this page and construct it */
-async function importTransport(
+function importTransport(
 	descriptor: TransportDescriptor,
 ): Promise<ProxyTransport> {
-	const { module, options } = resolvedModule(descriptor);
-	const { default: Transport } = (await import(/* @vite-ignore */ module)) as {
-		default: new (...args: unknown[]) => ProxyTransport;
-	};
-	if (typeof Transport !== 'function')
-		throw new TypeError(`${module} has no default export to construct`);
-	return new Transport(...(options || []));
+	return constructTransport(resolvedModule(descriptor));
 }
 
 /**

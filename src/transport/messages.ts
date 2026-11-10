@@ -5,6 +5,7 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import type { Config } from '../config';
 import type { PortBody } from './bodyPort';
+import type { Http3DescriptorOptions } from './construct';
 
 // postMessage keys (controller <-> service worker <-> proxied contexts)
 
@@ -366,6 +367,8 @@ export const TRANSPORT_WORKER_RPC = 'stomp-transport-worker';
 export interface TransportModule {
 	module: string;
 	options?: unknown[];
+	/** TransportDescriptor.http3 */
+	http3?: boolean | Http3DescriptorOptions;
 }
 
 /** implemented by the transport worker (src/transport/worker.ts), called by the controller */

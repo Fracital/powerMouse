@@ -7,6 +7,7 @@
 // has to answer it. The WebSocket handshake cookies stay the controller's:
 // the worker asks for them over its control channel.
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
+import { constructTransport, resolveHttp3 } from './construct';
 import {
 	TRANSPORT_WORKER_RPC,
 	TransportModule,
@@ -23,16 +24,16 @@ let transport: ProxyTransport | undefined;
 let first!: () => void;
 const ready = new Promise<void>((resolve) => (first = resolve));
 
-async function construct({
-	module,
-	options,
-}: TransportModule): Promise<ProxyTransport> {
-	const { default: Transport } = (await import(
-		/* @vite-ignore */ new URL(module, location.href).href
-	)) as { default: new (...args: unknown[]) => ProxyTransport };
-	if (typeof Transport !== 'function')
-		throw new TypeError(`${module} has no default export to construct`);
-	return new Transport(...(options || []));
+function construct(descriptor: TransportModule): Promise<ProxyTransport> {
+	return constructTransport(
+		resolveHttp3(
+			{
+				...descriptor,
+				module: new URL(descriptor.module, location.href).href,
+			},
+			location.href,
+		),
+	);
 }
 
 const rpc = new RpcHelper<WorkerBound, WorkerToController>(

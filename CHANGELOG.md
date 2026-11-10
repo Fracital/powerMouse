@@ -28,6 +28,22 @@ The first release after a four-year gap. Everything below is breaking.
   The `/process` and `/client` routes are removed.
 - `Set-Cookie` headers on WebSocket handshakes are no longer applied to the
   page: proxy-transports does not expose them.
+- HTTP/3 (`TransportDescriptor.http3`, off by default): an origin that
+  advertises h3 (`Alt-Svc`, an HTTPS DNS record when `dns` names a
+  DNS-over-HTTPS server, or `force`) gets its requests over QUIC once a
+  connection is up, as Chrome does; quic.nginx.org reports h3 through the
+  proxy. The QUIC datagrams ride a wisp UDP stream from epoxy's
+  `connect_udp`, through stomp-h3 (quinn and h3 in wasm, built from
+  `deploy/epoxy/h3/` into epoxy-transport's `dist/h3/`, loaded only when an
+  origin offers h3). Requests never wait on a handshake that has not worked;
+  a failed one marks the origin broken (5 minutes, doubling), a wisp server
+  that refuses UDP turns QUIC off for a while, and the request goes over the
+  transport as before. Chrome's QUIC transport parameters, 256 KiB header
+  sections, Chrome's pseudo-header order, no 0-RTT. `Http3Transport` is
+  exported for hosts that construct transports themselves. Needs a wisp
+  server that relays UDP (the demo's does; holyWisp on the edges does not
+  yet). docs/http3.md has the design and the limits (http3 and
+  http3-fallback suites).
 
 ### Demo and API
 
@@ -298,6 +314,9 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   or a `.env` file and hands the page its settings through `/config.js`; with
   an external wisp URL the built-in `/wisp/` is not served. See
   `demo/README.md`, "Deploying somewhere real".
+- The demo server reads `STOMP_HTTP3=1` (HTTP/3 for the epoxy transport,
+  `?http3` on the page for one visit) and `WISP_NO_UDP=1` (the built-in wisp
+  refuses UDP streams, to see the fallback).
 
 ### Dependencies
 

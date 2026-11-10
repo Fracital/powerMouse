@@ -199,6 +199,11 @@ on every save (use a `git worktree`).
   host pins the printed sha as a `git+https://` dependency.
 - libcurl-transport 2.0.6: WebSockets fine, HTTP stops answering after ~70
   requests (default pool) or ~160 (`connections: [500, 400, 200]`).
+- HTTP/3 is opt-in (`TransportDescriptor.http3`, `src/transport/http3/`):
+  QUIC over epoxy's wisp UDP streams through stomp-h3 (`deploy/epoxy/h3/`,
+  our own crate built into epoxy-transport's `dist/h3/`, not an upstream
+  patch). The wisp server must relay UDP; the holyWisp edges do not.
+  docs/http3.md.
 
 When a site hangs or a socket goes quiet, suspect the transport before the
 rewriter: reproduce with a raw `controller.transport.request()` /

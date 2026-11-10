@@ -19,6 +19,10 @@
 //                       or unset runs the same-origin controller (README,
 //                       "Origin isolation")
 //   WISP_ALLOW_LOOPBACK let the built-in wisp reach loopback/private hosts
+//   WISP_NO_UDP         the built-in wisp refuses UDP streams (HTTP/3 then
+//                       falls back to the transport's TCP connections)
+//   STOMP_HTTP3         `1` turns on HTTP/3 (the epoxy descriptor's `http3`)
+//                       for every visit; `?http3` on the page does it for one
 //   STOMP_REPO          the GitHub repository whose commits the home page
 //                       lists (default Fracital/powerMouse, read from this
 //                       checkout's own git log)
@@ -67,6 +71,9 @@ if (process.env.WISP_ALLOW_LOOPBACK) {
 	wisp.options.allow_loopback_ips = true;
 	wisp.options.allow_private_ips = true;
 }
+// wisp-js relays UDP by default; a deployment can refuse it like a holyWisp
+// edge with `allow-udp = off`
+if (process.env.WISP_NO_UDP) wisp.options.allow_udp_streams = false;
 
 const started = Date.now();
 
@@ -179,6 +186,7 @@ app.get('/suggestions', (req, res) => {
 const pageConfig = {
 	...(externalWisp && { wisp: externalWisp }),
 	...(process.env.STOMP_PROXY_ORIGIN !== undefined && { proxyOrigin }),
+	...(process.env.STOMP_HTTP3 === '1' && { http3: true }),
 	// startedAt lets the dev client tell a restarted server from a dropped
 	// connection: a different value on reconnect means new server code
 	...(dev && { dev: true, startedAt: started }),

@@ -1,6 +1,7 @@
 import type { Assets, Config, ConfigCodec } from '../config';
 import type { HelperNames } from '../helperNames';
 import type { HookErrorInfo, InitHooks } from '../hooks';
+import type { Http3DescriptorOptions } from '../transport/construct';
 import type {
 	CookieCommand,
 	CookieResult,
@@ -26,6 +27,14 @@ export interface TransportDescriptor {
 	 * ProxyTransport instance would be.
 	 */
 	host?: 'worker' | 'page';
+	/**
+	 * HTTP/3 over QUIC for origins that offer it (Alt-Svc, an HTTPS record
+	 * when `dns` is set, or `force`), over the transport's wisp UDP streams;
+	 * off unless set. `true` takes the defaults. Needs a transport with
+	 * `client.connect_udp` (epoxy) and a wisp server that relays UDP; without
+	 * either, every request goes over the transport as before. docs/http3.md.
+	 */
+	http3?: boolean | Http3DescriptorOptions;
 }
 
 export interface ControllerFrameInit {
