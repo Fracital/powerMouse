@@ -1,5 +1,6 @@
 // A cache of the rewriter's output for scripts, in a Cache API store keyed
-// by a digest of everything the output depends on: the response body, the
+// by a digest of everything the output depends on: the response body's
+// bytes (a hit decodes nothing, and its output goes out as a Blob), the
 // URL (the output names it), the script type, the config the page gets
 // (helper names, flags) with the codec's key, and the build; a new worker
 // clears it on activation besides. A repeat visit, a
@@ -31,25 +32,41 @@ export class RewriteCache {
 	#request(key: string) {
 		return new Request(`https://rewrite-cache.invalid/${key}`);
 	}
-	/** the digest the output for `body` is kept under, given everything else it depends on */
-	async key(parts: string[], body: string): Promise<string> {
-		const bytes = new TextEncoder().encode(
-			`${parts.join('\u0000')}\u0000${body}`,
-		);
+	/** puts not finished yet, by key: a match for one of them waits for it */
+	#pending = new Map<string, Promise<void>>();
+	/** the digest the output for `body` (its bytes as they came) is kept under, given everything else it depends on */
+	async key(parts: string[], body: Uint8Array): Promise<string> {
+		const head = new TextEncoder().encode(`${parts.join('\u0000')}\u0000`);
+		const bytes = new Uint8Array(head.length + body.length);
+		bytes.set(head);
+		bytes.set(body, head.length);
 		const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
 		let hex = '';
 		for (const byte of digest) hex += byte.toString(16).padStart(2, '0');
 		return hex;
 	}
-	async match(key: string): Promise<string | null> {
+	/**
+	 * The output kept under `key`, as the store's Blob: it goes to the page
+	 * as it is, never decoded into a string here
+	 */
+	async match(key: string): Promise<Blob | null> {
 		try {
+			await this.#pending.get(key);
 			const response = await (await this.#open()).match(this.#request(key));
-			return response ? await response.text() : null;
+			return response ? await response.blob() : null;
 		} catch (error) {
 			return null;
 		}
 	}
-	async put(key: string, output: string): Promise<void> {
+	/** keep `output` under `key`; the caller need not wait (a match does) */
+	put(key: string, output: string): Promise<void> {
+		const done: Promise<void> = this.#put(key, output).finally(() => {
+			if (this.#pending.get(key) === done) this.#pending.delete(key);
+		});
+		this.#pending.set(key, done);
+		return done;
+	}
+	async #put(key: string, output: string): Promise<void> {
 		if (output.length > ENTRY_LIMIT) return;
 		try {
 			const store = await this.#open();

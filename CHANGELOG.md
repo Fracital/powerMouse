@@ -516,6 +516,19 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   non-configurable replaces the formatter (its realm's stacks are no longer
   cleaned), and one that freezes Error sees the accessor (tells suite, both
   modes, compared with the page loaded natively).
+- A script kept in the rewrite cache costs the worker almost nothing to
+  serve. Its key is now a digest of the body's bytes as they came, and a hit
+  goes out as the store's Blob: the worker no longer decodes the origin's
+  body, re-encodes it to hash it, decodes the kept output into a string and
+  encodes it again for the page (YouTube's bundle is 10 MB in and 20 MB
+  out). Every rewritten body is encoded once, natively, and its length
+  taken from the bytes: counting it in JS took 0.2 s for that bundle alone.
+  The rewrite cache's write no longer holds up the page either (a match for
+  the same key waits for it). On a warm YouTube load the worker's own time
+  went from 0.88 s to 0.47 s (rewrite-cache-bytes suite: a UTF-8 script
+  with a byte order mark and two-, three- and four-byte characters runs
+  the same rewritten and from the cache, byte for byte the same body, its
+  Content-Length its own).
 - Inserting nodes costs the page far less in the hooks. Every element of
   every subtree inserted into a connected tree had its prototype swapped
   twice so its attributes could be read and offered to the attribute hooks;
@@ -540,7 +553,7 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   on YouTube each of them, its 20 MB bundle and 3 MB stylesheet among them,
   went through the worker twice per load (natively the document reuses what
   its scanner fetched). The worker keeps what it gave each document for 30
-  s (64 M characters in all) and answers the same request of the same
+  s (64 MB in all) and answers the same request of the same
   document from it; never a navigation, nor a request that bypasses caches.
   The host's rules changing drops it (preload-reuse suite, both modes: a
   no-store script fetched by the scanner and again by the parser reaches

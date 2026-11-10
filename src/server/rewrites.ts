@@ -1116,9 +1116,9 @@ function genericForward(
 		if (statusEmpty.includes(+response.status)) {
 			body = undefined;
 		} else {
-			let transformed: BodyInit | false;
+			let output: BodyInit | false;
 			try {
-				transformed = transformBody
+				output = transformBody
 					? await transformBody(
 							url,
 							response,
@@ -1132,6 +1132,11 @@ function genericForward(
 				sendReport();
 				throw error;
 			}
+			// text goes out as its UTF-8 bytes, encoded once, natively: the
+			// length is theirs (counting it in JS took 0.2 s for YouTube's 20 MB
+			// bundle) and the Response has nothing left to encode
+			const encoded = typeof output === 'string' ? UTF8.encode(output) : null;
+			const transformed = encoded ?? output;
 
 			body = transformed !== false ? transformed : response.body!;
 
@@ -1158,13 +1163,10 @@ function genericForward(
 				responseHeaders.delete('expires');
 				responseHeaders.delete('age');
 			}
-			if (
-				recentKey !== null &&
-				typeof transformed === 'string' &&
-				response.status === 200
-			)
+			const kept = encoded ?? (output instanceof Blob ? output : null);
+			if (recentKey !== null && kept !== null && response.status === 200)
 				rememberOutput(recentKey, {
-					body: transformed,
+					body: kept,
 					status: response.status,
 					statusText: response.statusText,
 					headers: [...responseHeaders],
@@ -1245,6 +1247,27 @@ function genericForward(
 	};
 }
 
+/**
+ * Whether the UTF-8 `bytes` contain the ASCII `text` (a helper name): an
+ * ASCII byte is never part of a multi-byte sequence, so this is whether the
+ * decoded text contains it.
+ */
+function includesASCII(bytes: Uint8Array, text: string): boolean {
+	if (!text) return true;
+	const first = text.charCodeAt(0);
+	const last = bytes.length - text.length;
+	for (
+		let at = bytes.indexOf(first);
+		at !== -1 && at <= last;
+		at = bytes.indexOf(first, at + 1)
+	) {
+		let i = 1;
+		while (i < text.length && bytes[at + i] === text.charCodeAt(i)) i++;
+		if (i === text.length) return true;
+	}
+	return false;
+}
+
 const htmlMimes = ['text/html', '', ...XML_DOCUMENT_MIMES];
 
 /**
@@ -1258,20 +1281,24 @@ const htmlMimes = ['text/html', '', ...XML_DOCUMENT_MIMES];
  * there: on YouTube each of them, its 20 MB bundle and 3 MB stylesheet
  * among them, went through the worker twice per load. Natively the
  * document reuses what its preload scanner fetched. Kept for RECENT_MS, at
- * most RECENT_CHARS in all, oldest out first; a navigation is never answered
+ * most RECENT_BYTES in all, oldest out first; a navigation is never answered
  * from here, and a request that bypasses caches is not either.
  */
 interface RecentOutput {
-	body: string;
+	/** the bytes (a new Response copies them), or the rewrite cache's Blob */
+	body: Uint8Array<ArrayBuffer> | Blob;
 	status: number;
 	statusText: string;
 	headers: [string, string][];
 	bytes: number | null;
 }
 const RECENT_MS = 30 * 1000;
-const RECENT_CHARS = 64 * 1024 * 1024;
+const outputSize = (body: Uint8Array<ArrayBuffer> | Blob) =>
+	body instanceof Blob ? body.size : body.byteLength;
+const RECENT_BYTES = 64 * 1024 * 1024;
+const UTF8 = new TextEncoder();
 const recentOutputs = new Map<string, RecentOutput & { at: number }>();
-let recentChars = 0;
+let recentBytes = 0;
 
 /** what makes two requests the same request of the same document, or null for one that is never answered from what it was given before */
 function recentOutputKey(
@@ -1299,33 +1326,33 @@ function takeRecentOutput(key: string): RecentOutput | null {
 	if (!kept) return null;
 	if (Date.now() - kept.at > RECENT_MS) {
 		recentOutputs.delete(key);
-		recentChars -= kept.body.length;
+		recentBytes -= outputSize(kept.body);
 		return null;
 	}
 	return kept;
 }
 
 function rememberOutput(key: string, output: RecentOutput) {
-	if (output.body.length > RECENT_CHARS) return;
+	if (outputSize(output.body) > RECENT_BYTES) return;
 	const old = recentOutputs.get(key);
 	if (old) {
 		recentOutputs.delete(key);
-		recentChars -= old.body.length;
+		recentBytes -= outputSize(old.body);
 	}
 	recentOutputs.set(key, { ...output, at: Date.now() });
-	recentChars += output.body.length;
+	recentBytes += outputSize(output.body);
 	const now = Date.now();
 	for (const [kept, entry] of recentOutputs) {
-		if (recentChars <= RECENT_CHARS && now - entry.at <= RECENT_MS) break;
+		if (recentBytes <= RECENT_BYTES && now - entry.at <= RECENT_MS) break;
 		recentOutputs.delete(kept);
-		recentChars -= entry.body.length;
+		recentBytes -= outputSize(entry.body);
 	}
 }
 
 /** what the worker gave documents before stands for nothing now (the host's rules changed) */
 function forgetRecentOutputs() {
 	recentOutputs.clear();
-	recentChars = 0;
+	recentBytes = 0;
 }
 
 /** the bytes `body` goes out as, or null when that is not known before it is read */
@@ -1471,13 +1498,17 @@ export function registerRewrites(
 	// its id across a reload would miss every script). A page script's
 	// output names it only where the body mentions it (the rewriter routes
 	// it); a worker's preamble always does
-	const cacheConfig = (config: Config, type: ScriptType, text: string) => {
+	const cacheConfig = (
+		config: Config,
+		type: ScriptType,
+		mentions: (name: string) => boolean,
+	) => {
 		const client = config.names?.client;
 		if (
 			client === undefined ||
 			type === 'worker' ||
 			type === 'workerModule' ||
-			text.includes(client)
+			mentions(client)
 		)
 			return JSON.stringify(config);
 		return JSON.stringify({
@@ -1490,7 +1521,6 @@ export function registerRewrites(
 			rewriter,
 			async (url, response, _headers, _referrer, request, note) => {
 				if (!response.ok) return false;
-				const text = await response.text();
 				const rewrites = rewriter.rewrites;
 				if (
 					!rewrites ||
@@ -1502,25 +1532,35 @@ export function registerRewrites(
 					})
 				) {
 					note.rewriteCache = 'skip';
-					return rewriteScript(text, url, type, note);
+					return rewriteScript(await response.text(), url, type, note);
 				}
+				// The key is a digest of the bytes as they came, and a script kept
+				// rewritten goes out as the store's Blob: a hit decodes nothing and
+				// makes no string of the output (YouTube's bundle is 10 MB in and
+				// 20 MB out, read, decoded and encoded again on every load).
+				const bytes = new Uint8Array(await response.arrayBuffer());
 				const key = await rewrites.key(
 					[
 						BUILD,
 						url.toString(),
 						type,
-						cacheConfig(rewriter.config, type, text),
+						cacheConfig(rewriter.config, type, (name) =>
+							includesASCII(bytes, name),
+						),
 						url.codec.key,
 					],
-					text,
+					bytes,
 				);
 				const kept = await rewrites.match(key);
 				if (kept !== null) {
 					note.rewriteCache = 'hit';
 					return kept;
 				}
+				// as Response.text() decodes (a BOM goes, bad bytes are U+FFFD)
+				const text = new TextDecoder().decode(bytes);
 				const output = await rewriteScript(text, url, type, note);
-				await rewrites.put(key, output);
+				// stored behind the page: a match for the same key waits for it
+				void rewrites.put(key, output);
 				note.rewriteCache = 'miss';
 				return output;
 			},
