@@ -25,6 +25,7 @@ import {
 	textifyNoscript,
 	unwrapNoscript,
 } from './sandbox';
+import { siteKeyOf } from './site';
 
 type OpenCallback = () => void;
 
@@ -243,6 +244,25 @@ export default class DocumentClient extends Client {
 	 */
 	get sandboxedOpaque(): boolean {
 		return !this.allows('allow-same-origin');
+	}
+	#siteKey?: { document: Document; opaque: boolean; key: string | null };
+	/**
+	 * The site this document belongs to (siteKeyOf), which the window
+	 * membrane compares a caller's with a window's by on every use: null for
+	 * an opaque origin (a sandbox without allow-same-origin), which is another
+	 * site to every document. Computed once per document: a window keeps its
+	 * client across a document of its own origin (an about:blank its next
+	 * document reuses), and a site never changes within one document.
+	 */
+	get siteKey(): string | null {
+		const document = this.global.document;
+		const opaque = this.sandboxedOpaque;
+		const kept = this.#siteKey;
+		if (kept && kept.document === document && kept.opaque === opaque)
+			return kept.key;
+		const key = opaque ? null : siteKeyOf(this.url.toString());
+		this.#siteKey = { document, opaque, key };
+		return key;
 	}
 	/** the nonce the inject's own scripts carry in a document without allow-scripts, else null */
 	get scriptNonce(): string | null {

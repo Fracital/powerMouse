@@ -36,6 +36,15 @@ The first release after a four-year gap. Everything below is breaking.
   from `/api/commits`, the demo server's ten-minute copy of GitHub's answer
   (`STOMP_REPO` names another repository), and links to Fracital and vibeOS
   beside the title (demo suite).
+- `membrane` (both controllers, on unless `false`): the setting for the
+  window membrane, which will hand a page every window and every object of
+  another window's realm through a proxy that checks on each use which site
+  the window shows now. The setting travels with the config into every
+  document the page makes (the top page, frames of its own and of another
+  site, about:blank and srcdoc children), and each document's client knows
+  the site it compares windows by (scheme, registrable domain and port, none
+  for an opaque origin). Nothing uses it yet: both values behave alike until
+  the membrane lands (membrane-flag suite, both modes).
 - `names.error`: the global the worker writes into the host's error page
   (`globalThis.stompError = { url, status, error, kind }`) is the fifth
   configurable helper name, default `stompError`, validated like the others.

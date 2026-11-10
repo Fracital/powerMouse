@@ -52,6 +52,12 @@ export interface Config {
 	 * a broken rewrite is loud while developing.
 	 */
 	allowInvalidJs?: boolean;
+	/**
+	 * The window membrane (on unless `false`): every window and object of
+	 * another proxied site's realm reaches a page through a proxy that checks,
+	 * on each use, which site the window shows now (see StompController)
+	 */
+	membrane?: boolean;
 	/** @internal build id of the service worker that serves the page (src/version.ts) */
 	build?: string;
 	/** @internal ms a routed request may take before the service worker answers 504 (tests; default by destination) */

@@ -144,6 +144,20 @@ export interface ControllerInit {
 	 * rewrite is loud while developing.
 	 */
 	allowInvalidJs?: boolean;
+	/**
+	 * The window membrane, on by default. Every proxied site shares the
+	 * proxy's one real origin, so the browser never keeps one proxied site
+	 * from another's windows: the inject hands a page every window, and every
+	 * object of another window's realm, through a proxy that checks on each
+	 * use which site that window shows now, and behaves as the browser's
+	 * cross-origin window when it is another. `false` turns it off, for a
+	 * site it breaks: windows of another site are then restricted only where
+	 * the page reads them, and one held while it was of the page's own site
+	 * stays the window itself. (The setting reaches every document now; the
+	 * membrane it switches is being built, and until it lands both values
+	 * behave alike.)
+	 */
+	membrane?: boolean;
 	/** @internal ms before the service worker answers a routed request with 504 (tests) */
 	fetchTimeout?: number;
 	/** @internal ms a navigation with no referrer waits for its document's hint (tests) */
@@ -606,6 +620,7 @@ export class StompController extends EventTarget {
 			...(init.cache === false ? { cache: false } : {}),
 			...(init.onRequest || init.requestLog ? { requestLog: true } : {}),
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
+			...(init.membrane === false ? { membrane: false } : {}),
 			...(init.fetchTimeout ? { fetchTimeout: init.fetchTimeout } : {}),
 			...(init.navigationHintWait
 				? { navigationHintWait: init.navigationHintWait }

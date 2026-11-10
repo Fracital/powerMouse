@@ -12,6 +12,7 @@ import { routedPrefix } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import { nativeFunction } from '../../nativeUtil';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { siteKeyOf } from '../site';
 
 export function sameHost(first: string, second: string): boolean {
 	const a = getDomain(first);
@@ -32,17 +33,6 @@ export function sameOrigin(first: string, second: string): boolean {
 		firstURL.port === secondURL.port &&
 		sameHost(firstURL.host, secondURL.host)
 	);
-}
-
-/**
- * The key `sameOrigin` compares by: windows whose documents share it hold
- * each other as themselves, so they must also share their stand-ins for
- * every other window (null for an opaque document, which shares nothing).
- */
-function originKey(url: string): string | null {
-	const parsed = new URL(url);
-	if (parsed.origin === 'null') return null;
-	return `${removeBlob(parsed.protocol)}//${getDomain(parsed.host) ?? parsed.host}:${parsed.port}`;
 }
 
 // taken before the page runs: a page may replace the global
@@ -689,7 +679,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			// limits, which another document of the site does not share)
 			const key =
 				this.client.sandboxFlags === null
-					? originKey(this.client.url.toString())
+					? siteKeyOf(this.client.url.toString())
 					: null;
 			let restricted = key === null ? undefined : standIns?.get(key)?.deref();
 			if (!restricted) {

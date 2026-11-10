@@ -128,6 +128,7 @@ if (window === window.parent || !origins.length) {
 						openTab: !!init.openTab,
 						...(init.cache === false ? { cache: false } : {}),
 						...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
+						...(init.membrane === false ? { membrane: false } : {}),
 						// numbers only: the controller clamps them
 						...(typeof init.rewriteWorkers === 'number'
 							? { rewriteWorkers: init.rewriteWorkers }

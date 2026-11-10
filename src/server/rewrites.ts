@@ -1196,6 +1196,8 @@ export function registerRewrites(
 				// a document no worker controls is copied at once)
 				...(init.workerTransport ? { workerTransport: true } : {}),
 				...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
+				// every document's inject builds the window membrane from this
+				...(init.membrane === false ? { membrane: false } : {}),
 				...(init.assets ? { assets: init.assets } : {}),
 				// the deployment's helper names: the shell and every rewritten
 				// script use them, and the inject reads them from this config

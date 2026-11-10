@@ -1,0 +1,29 @@
+<!doctype html>
+<title>MEMBRANE FLAG</title>
+<body>
+	<script src="window-refs.js"></script>
+	<script>
+		// Every kind of document a proxied page makes: a frame of its own site,
+		// a frame of another site, an about:blank child the page writes into,
+		// and a srcdoc child. The suite reads each one's client for the
+		// membrane setting and the site key it compares windows by.
+		const frame = (name, set) => {
+			const element = document.createElement('iframe');
+			element.name = name;
+			set(element);
+			document.body.append(element);
+			return element;
+		};
+		frame('same', (element) => (element.src = 'membrane-flag-child.html'));
+		frame(
+			'cross',
+			(element) => (element.src = refsCross('membrane-flag-child.html')),
+		);
+		frame('srcdoc', (element) => (element.srcdoc = '<p>srcdoc</p>'));
+		const blank = frame('blank', () => {});
+		blank.contentDocument.open();
+		blank.contentDocument.write('<p>written</p>');
+		blank.contentDocument.close();
+		window.__flagReady = true;
+	</script>
+</body>
