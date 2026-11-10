@@ -1075,9 +1075,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						}
 						const value = element.getAttribute(attribute);
 						// a style the browser serialised from a CSSOM write carries no
-						// marker: its routed url()s keep the page's token
+						// marker: its routed url()s read as the browser serialises
+						// the page's
 						return attribute === 'style' && typeof value === 'string'
-							? unrouteCSS(this.client, value)
+							? unrouteCSS(this.client, value, true)
 							: value;
 					});
 				},
@@ -1149,14 +1150,17 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					visibleNames(Reflect.apply(target, that, args) as string[]),
 			);
 
-		// Attr.value: the page's value when the element keeps one for it
+		// Attr.value: the page's value when the element keeps one for it, and
+		// a style the CSSOM wrote as getAttribute reads it
 		const attrValue = (attr: Attr, native: string | null) => {
 			const owner = attr.ownerElement;
 			if (!owner) return native;
 			return usePrototype(owner, CustomElement.prototype, (element) =>
 				element.hasAttributeOG(attr.name)
 					? element.getAttributeOG(attr.name)
-					: native,
+					: attr.name === 'style' && typeof native === 'string'
+						? unrouteCSS(this.client, native, true)
+						: native,
 			);
 		};
 		for (const [proto, property] of [

@@ -18,7 +18,7 @@ import StompURL from '../../../StompURL';
 import { LOAD_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
-import { scopePrefix, unrouteURL } from '../../modules/Unroute';
+import { scopePrefix, unrouteCSS, unrouteURL } from '../../modules/Unroute';
 import { modifyCSS, modifyJS } from '../../rewriter';
 import { blobLoads } from '../blobLoads';
 import DocumentClient, { type StyleElement } from '../Client';
@@ -1487,7 +1487,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.hasAttribute('style') &&
 					element.getAttribute('style') !== ''
 				) {
-					element.setAttributeOG('style', element.getAttribute('style')!);
+					// a style the browser serialised from a CSSOM write (a copy of
+					// such an element, inserted) holds routes: the page's is the
+					// browser's serialisation of the url()s it wrote
+					element.setAttributeOG(
+						'style',
+						unrouteCSS(this.client, element.getAttribute('style')!, true),
+					);
 					element.setAttribute(
 						'style',
 						modifyCSS(
@@ -1535,9 +1541,20 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					);
 				});
 			};
+			// A CSSOM write makes the browser serialise the declaration into the
+			// attribute, so what the page wrote as the attribute (its marker)
+			// is no longer what the attribute holds: it goes, and the attribute
+			// reads as the browser serialised it, with the page's url()s
+			const dropMarker = (element: Element) =>
+				usePrototype(element, CustomElement.prototype, (element) => {
+					if (element.hasAttributeOG('style'))
+						element.removeAttributeOG('style');
+				});
 			const afterWrite = (declaration: unknown) => {
 				const owner = owners.get(declaration as CSSStyleDeclaration);
-				if (owner) copyInlineSoon(owner);
+				if (!owner) return;
+				dropMarker(owner);
+				copyInlineSoon(owner);
 			};
 
 			const rewriteValue = (value: unknown) =>
@@ -1612,18 +1629,32 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					'style',
 				);
 				if (!descriptor?.get) continue;
+				const get = descriptor.get;
 
 				Reflect.defineProperty(ctor.prototype, 'style', {
 					...descriptor,
-					get: proxyModule.wrapFunction(
-						descriptor.get,
-						(target, that, args) => {
-							const declaration = Reflect.apply(target, that, args);
-							if (declaration && typeof declaration === 'object')
-								owners.set(declaration, that as Element);
-							return wrapDeclaration(declaration);
-						},
-					),
+					get: proxyModule.wrapFunction(get, (target, that, args) => {
+						const declaration = Reflect.apply(target, that, args);
+						if (declaration && typeof declaration === 'object')
+							owners.set(declaration, that as Element);
+						return wrapDeclaration(declaration);
+					}),
+					// `el.style = text` is a write of its cssText
+					...(descriptor.set
+						? {
+								set: proxyModule.wrapFunction(
+									descriptor.set,
+									(target, that, args) => {
+										const declaration = Reflect.apply(get, that, []);
+										if (!declaration || typeof declaration !== 'object')
+											return Reflect.apply(target, that, args);
+										owners.set(declaration, that as Element);
+										Reflect.apply(target, that, [rewriteCssText(args[0])]);
+										afterWrite(declaration);
+									},
+								),
+							}
+						: {}),
 				});
 			}
 
@@ -1694,7 +1725,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 										args[i] = rewriteValue(args[i]);
 								const result = Reflect.apply(target, that, args);
 								const owner = mapOwners.get(that);
-								if (owner) copyInlineSoon(owner);
+								if (owner) {
+									dropMarker(owner);
+									copyInlineSoon(owner);
+								}
 								return result;
 							},
 						);
@@ -1706,6 +1740,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					const result = Reflect.apply(target, that, args);
 					afterWrite(that);
 					return result;
+				},
+			);
+			styleProto.removeProperty = proxyModule.wrapFunction(
+				styleProto.removeProperty,
+				(target, that, args) => {
+					const result = Reflect.apply(target, that, args);
+					afterWrite(that);
+					return restoreCSSValueURLs(result);
 				},
 			);
 

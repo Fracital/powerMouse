@@ -1,3 +1,4 @@
+import { serializeCSSURL } from '../../cssURL';
 import { pageBlobURL, parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
 import { WORKER_ERROR } from '../../transport/messages';
 import Client from '../Client';
@@ -127,12 +128,28 @@ export function unrouteText(
 const ROUTED_CSS_URL =
 	/url\((&quot;|["']|)([^"')\s]*?)#url(\\?)\(((?:\\.|&quot;|[^\\)])*?)\3\)\1\)/g;
 
+// what the markup serializer escapes in an attribute value, and back
+const ATTRIBUTE_ESCAPES: Record<string, string> = {
+	'&': '&amp;',
+	'"': '&quot;',
+	'\u00a0': '&nbsp;',
+	'<': '&lt;',
+	'>': '&gt;',
+};
+const ATTRIBUTE_ENTITIES = Object.fromEntries(
+	Object.entries(ATTRIBUTE_ESCAPES).map(([char, entity]) => [entity, char]),
+);
+
 /**
  * CSS text (a rule's cssText, a style element's text, serialised markup) with
  * every routed url() replaced by the url() the page wrote, which the rewriter
  * keeps after `#url(` for idempotence. `serialized`: as the browser
- * serialises a parsed url() (a rule's cssText), `url("...")` whatever quotes
- * the page wrote; otherwise the page's own token (the text it wrote).
+ * serialises a parsed url() (a rule's cssText, a style attribute the CSSOM
+ * wrote), `url("...")` whatever quotes the page wrote; otherwise the page's
+ * own token (the text it wrote). A url() in a serialised attribute (quoted
+ * with `&quot;`) is one the CSSOM wrote, since the markers of an attribute
+ * the page wrote are folded back before: serialised, and escaped as the
+ * markup serializer escapes an attribute value.
  */
 export function unrouteCSS(
 	client: Client,
@@ -147,19 +164,24 @@ export function unrouteCSS(
 			// a route, or the copy of one the inject made for a document no
 			// service worker controls (the token stays after the marker)
 			if (!target.startsWith(prefix) && !blobLoads.has(target)) return match;
-			let token = inner.replace(/&quot;/g, '"').replace(/\\(.)/g, '$1');
+			const markup = quote === '&quot;';
+			let token = markup
+				? inner.replace(
+						/&(?:amp|quot|nbsp|lt|gt);/g,
+						(entity) => ATTRIBUTE_ENTITIES[entity],
+					)
+				: inner;
+			token = token.replace(/\\(.)/g, '$1');
 			try {
 				token = decodeURIComponent(token);
 			} catch (error) {
 				// not percent-encoded
 			}
-			if (!serialized) return `url(${token})`;
-			const quoted = /^\s*(["'])([^]*)\1\s*$/.exec(token);
-			const value = quoted ? quoted[2] : token.trim();
-			return `url("${value
-				.replace(/\\/g, '\\\\')
-				.replace(/"/g, '\\"')
-				.replace(/\n/g, '\\a ')}")`;
+			if (!serialized && !markup) return `url(${token})`;
+			const css = serializeCSSURL(`url(${token.trim()})`);
+			return markup
+				? css.replace(/[&"\u00a0<>]/g, (char) => ATTRIBUTE_ESCAPES[char])
+				: css;
 		},
 	);
 }

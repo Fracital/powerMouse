@@ -343,6 +343,21 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- An inline style with a URL in it reads as natively, however the page
+  wrote it and however it reads it (native-shapes suite, both modes). After
+  a CSSOM write (`el.style.x = ...`, `cssText`, `setProperty`,
+  `removeProperty`, `el.style = text`, the Typed OM) the element's
+  attribute views (`attributes`, its attribute node, `getAttributeNode`,
+  `outerHTML`) showed the routed URL, and `getAttribute('style')` kept the
+  value the page had written before the write: the browser rewrites the
+  attribute on such a write, so the page's copy of it now goes and every
+  view reads the browser's serialisation with the page's url()s. `cssText`,
+  `getPropertyValue` and the named properties gave the page's url() token
+  as typed (`url(a.png)`, `url('a.png')`) where the CSSOM serialises
+  `url("a.png")`; `outerHTML` of a CSSOM-written style put raw quotes inside
+  the attribute (`style="...url("a.png")"`), where the browser writes
+  `&quot;` and escapes `&`; and a copy of such an element (cloneNode,
+  inserted) read the routes back.
 - `ast-types` is dropped. The JS rewriter built its new nodes with its
   builders, and loading it builds its definitions of every node kind of
   every dialect (Flow, TypeScript, Babel, JSX): about 450 KB of heap in

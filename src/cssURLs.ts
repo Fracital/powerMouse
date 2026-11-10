@@ -2,6 +2,7 @@
 // stylesheet and the url() routing a regex can do. The inject's core uses
 // these on every style it touches; modifyCSS (rewriteCSS.ts, with css-tree)
 // is reached through src/rewriters.ts.
+import { serializeCSSURL } from './cssURL';
 import { rewriter } from './rewriters';
 import { createDataURI, parseDataURI, routeBinary, routeURL } from './routeURL';
 import StompURL from './StompURL';
@@ -44,9 +45,9 @@ function restoreValue(url: string) {
 	// the browser percent-encodes the quotes of a serialised url() token
 	const token = url.slice(hashi + 1);
 	try {
-		return decodeURIComponent(token);
+		return serializeCSSURL(decodeURIComponent(token));
 	} catch (error) {
-		return token;
+		return serializeCSSURL(token);
 	}
 }
 
@@ -102,7 +103,10 @@ export function rewriteCSSValueURLs(value: string, url: StompURL): string {
 const QUOTED_URL =
 	/url\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^)]*?))\s*\)/gs;
 
-/** inverse of rewriteCSSValueURLs for values the page reads back */
+/**
+ * inverse of rewriteCSSValueURLs for values the page reads back: the CSSOM's
+ * serialization of the url() the page wrote
+ */
 export function restoreCSSValueURLs(value: string): string {
 	return value.replace(
 		QUOTED_URL,
