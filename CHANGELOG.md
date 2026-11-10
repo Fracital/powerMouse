@@ -310,6 +310,20 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Fixes
 
+- `XMLHttpRequest` steps through its states as the browser's does (pages
+  and workers, xhr-parity suite). `open()` fires `readystatechange` (for a
+  synchronous request too) and starts over: a request in flight is dropped
+  without events, and the last response's status, headers, body and
+  request headers are gone, where they used to carry over to the next
+  `send()`. `response` is `''` for a text type and `null` for the others
+  until the body is there; `LOADING` and `progress` come with the body's
+  bytes (an empty body has neither, as in Chrome); `responseText` under
+  another type throws an `InvalidStateError` (it was a plain `Error`); a
+  `json` response is parsed again on every read, as Chrome does. A document
+  that set a response type or a timeout before `open(..., false)` gets the
+  browser's `InvalidAccessError` from `open()` instead of a synchronous
+  request, and a worker ignores the type `document`, which it has no
+  documents for.
 - The rewrite cache keeps a rewritten script of up to 48 MB, 512 MB in all.
   An entry could be 8 MB at most, which never kept Discord's 13 MB bundle,
   and since a rewritten script carries its text for its functions' sources

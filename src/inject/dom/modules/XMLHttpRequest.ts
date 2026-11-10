@@ -41,6 +41,10 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 		class XMLHttpRequestUploadProxy extends XMLHttpRequestEventTargetProxy {}
 
 		const decoder = new TextDecoder('utf-8');
+		// the realm's JSON.parse, before page code can replace it: a json
+		// response is the page realm's value
+		const realmJSON = that.client.global.JSON;
+		const parseJSON = realmJSON.parse;
 
 		const XMLHttpRequestResponseType = [
 			'',
@@ -79,6 +83,10 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			#responseURL = '';
 			#responseXML: Document | null = null;
 			#response: unknown = null;
+			// the response's bytes once it is done (json is parsed from them)
+			#body: ArrayBuffer | null = null;
+			// bumped by open(): a response of an earlier request is dropped
+			#generation = 0;
 			#status = 0;
 			#statusText = '';
 			#abort = new AbortController();
@@ -118,6 +126,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				this.#readyState = DONE;
 				this.#status = 0;
 				this.#statusText = '';
+				this.#body = null;
 				// an empty string for a text type, null for the others, as the browser
 				this.#response =
 					this.#responseType === '' || this.#responseType === 'text'
@@ -154,6 +163,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 						`Failed to read the 'responseText' property from 'XMLHttpRequest': The value is only accessible if the object's 'responseType' is '' or 'text' (was '${
 							this.#responseType
 						}').`,
+						'InvalidStateError',
 					);
 
 				return this.#responseText;
@@ -200,6 +210,21 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				return this.#responseURL;
 			}
 			get response() {
+				if (this.#responseType === '' || this.#responseType === 'text')
+					return this.#loadingOrDone ? this.#responseText : '';
+				if (this.#readyState !== DONE) return null;
+				// Chrome parses a json response again on every read: two reads are
+				// two objects
+				if (this.#responseType === 'json') {
+					if (this.#body === null || this.#body.byteLength === 0) return null;
+					try {
+						return Reflect.apply(parseJSON, realmJSON, [
+							decoder.decode(this.#body),
+						]);
+					} catch (parseError) {
+						return null;
+					}
+				}
 				return this.#response;
 			}
 			#onHeaders(error: Error): void;
@@ -235,9 +260,6 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				this.#responseHeaders = response!.headers;
 				this.#dispatchReadyState();
 
-				this.#readyState = LOADING;
-				this.#dispatchReadyState();
-
 				/*
 				// chrome doesn't dispatch loadstart
 				this.dispatchEvent(new ProgressEvent('loadstart', {
@@ -263,7 +285,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				}
 
 				clearTimeout(this.#timer);
-				this.#readyState = DONE;
+				this.#body = buffer!;
 				this.#response = buffer!;
 				const type = finalMime(
 					this.#override,
@@ -296,11 +318,8 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 						break;
 					}
 					case 'json':
-						try {
-							this.#response = JSON.parse(decoder.decode(buffer!));
-						} catch (parseError) {
-							this.#response = null;
-						}
+						// parsed on every read (the response getter), always as UTF-8
+						this.#response = null;
 						break;
 					case 'blob':
 						this.#response = new that.client.global.Blob([buffer!], {
@@ -327,6 +346,18 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 						break;
 				}
 
+				if (buffer!.byteLength > 0) {
+					this.#readyState = LOADING;
+					this.#dispatchReadyState();
+					this.dispatchEvent(
+						new ProgressEvent('progress', {
+							lengthComputable: true,
+							loaded: buffer!.byteLength,
+							total: buffer!.byteLength,
+						}),
+					);
+				}
+				this.#readyState = DONE;
 				this.#dispatchReadyState();
 
 				const parsedLen = parseInt(
@@ -334,13 +365,6 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				);
 				const length = isNaN(parsedLen) ? 1000 : parsedLen;
 
-				this.dispatchEvent(
-					new ProgressEvent('progress', {
-						lengthComputable: true,
-						loaded: buffer!.byteLength,
-						total: buffer!.byteLength,
-					}),
-				);
 				this.dispatchEvent(
 					new ProgressEvent('load', {
 						total: length,
@@ -358,6 +382,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				if (that.client.opaqueRequests)
 					(init.headers as Headers).set(OPAQUE_HEADER, '1');
 				if (this.#async) {
+					const generation = this.#generation;
 					init.signal = this.#abort.signal;
 					// abort() and a timeout reach the worker under this id
 					const id = `${Date.now()}-${Math.random()}`;
@@ -373,11 +398,15 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					that.client
 						.routedFetch(url, init)
 						.then(async (response) => {
+							if (generation !== this.#generation) return;
 							this.#onHeaders(undefined, response, response.url);
 							const buffer = await response.arrayBuffer();
+							if (generation !== this.#generation) return;
 							this.#onDone(undefined, response, buffer);
 						})
-						.catch((error) => this.#onDone(error));
+						.catch((error) => {
+							if (generation === this.#generation) this.#onDone(error);
+						});
 				} else {
 					try {
 						// the controlled client's own bridge (it may be of another
@@ -417,7 +446,35 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				username: string | void,
 				password: string | void,
 			) {
-				this.#readyState = OPENED;
+				// a document may not make a synchronous request with a response
+				// type or a timeout set beforehand
+				if (!async && (this.#timeout !== 0 || this.#responseType !== ''))
+					throw new DOMException(
+						"Failed to execute 'open' on 'XMLHttpRequest': Synchronous requests from a document must not set a response type or timeout.",
+						'InvalidAccessError',
+					);
+				// a request in flight is dropped without events, and everything of
+				// the last response is gone: status 0, no headers, no body
+				this.#generation++;
+				clearTimeout(this.#timer);
+				if (
+					this.#sent &&
+					this.#readyState !== DONE &&
+					!this.#abort.signal.aborted
+				)
+					this.#abort.abort();
+				this.#abort = new AbortController();
+				this.#sent = false;
+				this.#bodySize = 0;
+				this.#headers = new Headers({ 'sec-fetch-dest': 'empty' });
+				this.#responseHeaders = new Headers();
+				this.#status = 0;
+				this.#statusText = '';
+				this.#responseURL = '';
+				this.#response = null;
+				this.#body = null;
+				this.#responseText = '';
+				this.#responseXML = null;
 				this.#method = String(method).toUpperCase();
 
 				this.#url = String(url);
@@ -440,7 +497,12 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					this.#password = undefined;
 				}
 
-				// this.#dispatchReadyState();
+				// readystatechange, even for a synchronous request, unless it
+				// was opened already
+				if (this.#readyState !== OPENED) {
+					this.#readyState = OPENED;
+					this.dispatchEvent(new Event('readystatechange'));
+				}
 			}
 			setRequestHeader(header: string, value: string) {
 				if (this.#readyState !== OPENED) {
