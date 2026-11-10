@@ -58,6 +58,15 @@ import { blobOriginOf } from './blobOrigins';
 import { HttpCache, isCacheable, mayKeep } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
 import Cookies from './Cookies';
+import {
+	corpBlocks,
+	corsCheck,
+	exposedHeaders,
+	needsPreflight,
+	preflightAllows,
+	preflightCached,
+	unsafeHeaderNames,
+} from './cors';
 import { DOCUMENT_DESTINATIONS, hostErrorPage } from './errorPage';
 import {
 	AdditionalFilter,
@@ -171,6 +180,11 @@ interface RedirectHop {
 	user?: boolean;
 	/** the origin that started the chain, when only a hint named it (a later hop has no referrer either) */
 	initiator?: string;
+	/**
+	 * the chain went from another origin to a third: the request's origin is
+	 * "null" from here on (the fetch spec's tainted origin)
+	 */
+	tainted?: boolean;
 }
 
 /** the destinations and modes a LOAD_HEADER may name: a page's subresource loads, never a navigation */
@@ -285,6 +299,52 @@ function takeRedirect(
 }
 
 const BODY_ILLEGAL = ['GET', 'HEAD'];
+
+/**
+ * Request headers that are not the page's own for the CORS protocol: the
+ * proxy's markers and what the browser adds or forbids a page to set
+ * (https://fetch.spec.whatwg.org/#forbidden-request-header)
+ */
+const FORBIDDEN_REQUEST_HEADERS = new Set([
+	'accept-charset',
+	'accept-encoding',
+	'access-control-request-headers',
+	'access-control-request-method',
+	'connection',
+	'content-length',
+	'cookie',
+	'cookie2',
+	'date',
+	'dnt',
+	'expect',
+	'host',
+	'keep-alive',
+	'origin',
+	'referer',
+	'set-cookie',
+	'te',
+	'trailer',
+	'transfer-encoding',
+	'upgrade',
+	'upgrade-insecure-requests',
+	'user-agent',
+	'via',
+]);
+const notPagesHeader = (name: string) =>
+	FORBIDDEN_REQUEST_HEADERS.has(name) ||
+	name.startsWith('sec-') ||
+	name.startsWith('proxy-') ||
+	name.startsWith('x-stomp-');
+
+/** whether a redirect's Location leaves the origin of the URL it answered */
+function crossOriginLocation(location: string | null, from: StompURL): boolean {
+	if (location === null) return false;
+	try {
+		return new URL(location, from.toString()).origin !== from.url.origin;
+	} catch (error) {
+		return false;
+	}
+}
 
 type BodyTransform = (
 	url: StompURL,
@@ -473,7 +533,9 @@ function genericForward(
 		);
 		// ours, never the origin's (nor a cache key's)
 		requestHeaders.delete(ABORT_HEADER);
-		// a load the inject fetched for the page says what it stands for
+		// a load the inject fetched for the page says what it stands for; the
+		// page's own requests never carry the header (the inject drops it)
+		const internal = serverRequest.headers.has(LOAD_HEADER);
 		const load = loadOf(serverRequest.headers.get(LOAD_HEADER));
 		requestHeaders.delete(LOAD_HEADER);
 		// a page's own request from an opaque origin (a document the page
@@ -565,6 +627,9 @@ function genericForward(
 		// minted inside a worker): judged as another site, never as the
 		// target's own, so it gets no same-origin credentials or Strict cookies
 		let unknownBlob = false;
+		// a client whose URL names no origin this worker can read (an
+		// about:srcdoc document): judged by its Referer, else as an opaque one
+		let unknownClient = false;
 		if (!navigation && context?.clientId && typeof clients !== 'undefined') {
 			const id = context.clientId;
 			client = clientURLs.get(id) ?? null;
@@ -581,6 +646,7 @@ function genericForward(
 							(found.url.startsWith('blob:') ? blobOriginOf(found.url) : null))
 						: null;
 					unknownBlob = !client && !!found?.url.startsWith('blob:');
+					unknownClient = !client && !!found && !unknownBlob;
 				} catch (error) {
 					// the client is gone
 				}
@@ -853,6 +919,47 @@ function genericForward(
 			if (ahead) requestHeaders.set('authorization', ahead);
 		}
 
+		// The same-origin policy between the real origins (cors.ts). The mode
+		// is the request's own; an inject's copy of a page's load is that load
+		// (LOAD_HEADER), and any other copy (a download, a load whose kind the
+		// worker takes no metadata from) the browser's own no-cors load of it.
+		// The origin compared is the initiator's: "null" for an opaque one, a
+		// blob: worker or client this worker cannot place, and after a
+		// redirect from another origin to a third
+		const policyMode = navigation
+			? 'navigate'
+			: (load?.mode ?? (internal ? 'no-cors' : serverRequest.mode));
+		const policyOrigin =
+			opaque || unknownBlob || previousHop?.tainted
+				? 'null'
+				: (initiator?.origin ??
+					(unknownClient && !refererSource ? 'null' : null));
+		const crossOrigin =
+			!navigation &&
+			policyOrigin !== null &&
+			(policyOrigin === 'null' || policyOrigin !== url.url.origin);
+		const corsChecked = crossOrigin && policyMode === 'cors';
+		const credentialsIncluded = serverRequest.credentials === 'include';
+		if (previousHop?.tainted && requestHeaders.has('origin'))
+			requestHeaders.set('origin', 'null');
+		/** a request the browser would refuse: a network error to the page */
+		const refuse = (error: string, method = serverRequest.method) => {
+			rewriter.log?.({
+				url: reportURL(url),
+				method,
+				destination: serverRequest.destination || 'fetch',
+				status: 0,
+				ms: Date.now() - started,
+				cached: false,
+				bytes: null,
+				error,
+				client: context?.clientId,
+			});
+			return Response.error();
+		};
+		if (crossOrigin && policyMode === 'same-origin')
+			return refuse('blocked: a same-origin request to another origin');
+
 		// the host's rules, on the real request as it would go out: the first
 		// match blocks, answers, redirects or edits headers. Before the cache
 		// (a blocked or redirected request never touches it) and logged as such
@@ -965,6 +1072,81 @@ function genericForward(
 		);
 		// the worker gave the page a network error
 		if (fromWorker?.type === 'error') return Response.error();
+
+		// a cross-origin request the CORS protocol does not let go out as it
+		// is asks first (when it reaches the network: a request the page's
+		// emulated service worker answers is that worker's to make): an OPTIONS with the method and the page's headers
+		// that are not safelisted, without credentials; its answer must allow
+		// both, and is kept for its max-age
+		if (corsChecked && !fromWorker) {
+			const unsafe = unsafeHeaderNames(serverRequest.headers, notPagesHeader);
+			if (
+				needsPreflight(serverRequest.method, unsafe) &&
+				!preflightCached(
+					policyOrigin!,
+					url.toString(),
+					credentialsIncluded,
+					serverRequest.method,
+					unsafe,
+				)
+			) {
+				const preflightHeaders = new Headers({
+					accept: '*/*',
+					'access-control-request-method': serverRequest.method,
+					origin: policyOrigin!,
+					'user-agent': requestHeaders.get('user-agent') ?? '',
+				});
+				if (unsafe.length)
+					preflightHeaders.set(
+						'access-control-request-headers',
+						unsafe.join(','),
+					);
+				for (const name of ['accept-language', 'referer'])
+					if (requestHeaders.has(name))
+						preflightHeaders.set(name, requestHeaders.get(name)!);
+				if (potentiallyTrustworthy(url.url)) {
+					preflightHeaders.set('sec-fetch-mode', 'cors');
+					preflightHeaders.set('sec-fetch-site', site);
+					preflightHeaders.set('sec-fetch-dest', destination);
+				}
+				let allowed = false;
+				try {
+					const answer = await Promise.race([
+						rewriter.bare.fetch(url.toString(), {
+							method: 'OPTIONS',
+							redirect: 'manual',
+							headers: chromeOrderedHeaders(preflightHeaders, {
+								navigation: false,
+								destination,
+								mode: 'cors',
+								method: 'OPTIONS',
+								cache: 'no-store',
+							}),
+						}),
+						abortedSoon,
+					]);
+					await answer.body?.cancel().catch(() => {});
+					allowed = preflightAllows(
+						answer,
+						policyOrigin!,
+						url.toString(),
+						credentialsIncluded,
+						serverRequest.method,
+						unsafe,
+					);
+				} catch (error) {
+					if (error === ABORTED) {
+						reportAborted();
+						return Response.error();
+					}
+				}
+				if (!allowed)
+					return refuse(
+						'blocked by CORS policy: the preflight failed',
+						'OPTIONS',
+					);
+			}
+		}
 
 		// the HTTP cache, unless the host turned it off: a fresh entry answers
 		// without the transport; a stale one with validators is revalidated
@@ -1157,6 +1339,33 @@ function genericForward(
 			return Response.error();
 		}
 
+		// what the browser would not have let the page have: a cross-origin
+		// cors response (or redirect) that does not pass the CORS check, a
+		// no-cors one its Cross-Origin-Resource-Policy keeps to its own origin
+		// or site
+		if (
+			corsChecked &&
+			!corsCheck(response.headers, policyOrigin!, credentialsIncluded)
+		) {
+			await response.body?.cancel().catch(() => {});
+			return refuse('blocked by CORS policy');
+		}
+		if (
+			crossOrigin &&
+			policyMode === 'no-cors' &&
+			corpBlocks(
+				response.headers,
+				policyOrigin!,
+				url.url,
+				policyOrigin !== 'null' &&
+					initiator !== null &&
+					siteBetween(initiator, url.url) !== 'cross-site',
+			)
+		) {
+			await response.body?.cancel().catch(() => {});
+			return refuse('blocked by Cross-Origin-Resource-Policy');
+		}
+
 		// the report is made now (its time is to the headers) and sent once the
 		// body's transform has said how it went
 		// the registration that controls the document this navigation makes:
@@ -1205,20 +1414,38 @@ function genericForward(
 				null,
 			);
 
-		const responseHeaders = filterResponseHeaders(
+		let responseHeaders = filterResponseHeaders(
 			response.headers,
 			url,
 			transformRoute,
 			additionalResponseFilter,
 		);
+		const redirect =
+			REDIRECT_STATUSES.includes(response.status) &&
+			responseHeaders.has('location');
+		// a cors response of another origin shows the page only the headers
+		// the protocol exposes (a redirect keeps its Location for the browser
+		// to follow); a page's own no-cors fetch of another origin is opaque,
+		// so nothing of the response reaches it (the inject shows it as one)
+		const opaqueFetch =
+			crossOrigin &&
+			policyMode === 'no-cors' &&
+			!internal &&
+			serverRequest.destination === '' &&
+			!redirect;
+		if (corsChecked || opaqueFetch) {
+			const location = responseHeaders.get('location');
+			responseHeaders = opaqueFetch
+				? new Headers()
+				: exposedHeaders(responseHeaders, credentialsIncluded);
+			if (redirect && location !== null)
+				responseHeaders.set('location', location);
+		}
 
 		// the browser follows the redirect in proxy URL space, where every hop
 		// is same-origin and the referrer never narrows: remember what this hop
 		// sent and its site, so a chain through another origin keeps both
-		if (
-			REDIRECT_STATUSES.includes(response.status) &&
-			responseHeaders.has('location')
-		)
+		if (redirect)
 			rememberRedirect(
 				hopClient,
 				serverRequest.referrer,
@@ -1230,6 +1457,11 @@ function genericForward(
 					user: activated,
 					// a chain only a hint named the initiator of keeps it
 					...(!known && initiator ? { initiator: initiator.origin } : {}),
+					...(crossOrigin &&
+					(previousHop?.tainted ||
+						crossOriginLocation(response.headers.get('location'), url))
+						? { tainted: true }
+						: {}),
 				},
 			);
 
@@ -1267,6 +1499,9 @@ function genericForward(
 		let body: BodyInit | undefined;
 
 		if (statusEmpty.includes(+response.status)) {
+			body = undefined;
+		} else if (opaqueFetch) {
+			await response.body?.cancel().catch(() => {});
 			body = undefined;
 		} else {
 			let output: BodyInit | false;

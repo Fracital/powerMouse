@@ -1,5 +1,6 @@
 import { routeBinary } from '../../../routeURL';
 import StompURL from '../../../StompURL';
+import { LOAD_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
@@ -125,7 +126,9 @@ export default class DownloadModule extends Module<DocumentClient> {
 	async save(url: URL, named: string) {
 		const response = await this.client.routedFetch(
 			routeBinary(new StompURL(url, this.client.url)),
-			{ credentials: 'include' },
+			// the browser's own download, not a page's read: no CORS (a value
+			// the worker takes no metadata from)
+			{ credentials: 'include', headers: { [LOAD_HEADER]: 'download' } },
 		);
 		const last = decodeURIComponent(
 			url.pathname.slice(url.pathname.lastIndexOf('/') + 1),

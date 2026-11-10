@@ -238,6 +238,26 @@
 		};
 	});
 
+	// the proxy's own copies of a page's loads carry a marker header the
+	// worker exempts from CORS: a page that sends it gains nothing
+	add('fetch/a header that names a load', async () => {
+		const marker = { 'x-stomp-load': 'image no-cors' };
+		const request = new Request(r(B, {}).url);
+		request.headers.set('x-stomp-load', 'image no-cors');
+		const result = (value) =>
+			typeof value === 'string' ? value : `${value.type} ${value.body}`;
+		return [
+			result(await tryFetch(r(B, {}).url, { headers: marker })),
+			result(await tryFetch(request)),
+			result(
+				await tryFetch(r(B, {}).url, {
+					headers: new Headers(marker),
+					mode: 'no-cors',
+				}),
+			),
+		];
+	});
+
 	// --- network reads: XMLHttpRequest -----------------------------------
 	const xhr = (url, setup = () => {}) =>
 		new Promise((resolve) => {

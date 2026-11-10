@@ -2,6 +2,7 @@ import { routeXHR } from '../../../routeURL';
 import StompURL from '../../../StompURL';
 import { ABORT_HEADER, CREDENTIALS_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
+import { isStompHeader } from '../../modules/Fetch';
 import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import {
@@ -520,6 +521,8 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					);
 				}
 
+				// the proxy's markers are never the page's to send (see Fetch)
+				if (isStompHeader(String(header))) return;
 				// behavior is equal to append
 				this.#headers.append(header, value);
 			}

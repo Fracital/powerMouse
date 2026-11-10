@@ -343,6 +343,21 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A proxied page can no longer read another site's responses the browser
+  would refuse it. Every route is same-origin to the browser, so a `fetch`
+  or XMLHttpRequest of another site came back whole, every header and the
+  body, whatever its CORS answer, and a `no-cors` fetch was readable too.
+  The service worker now applies the CORS protocol between the real
+  origins as Chrome does: preflights for non-simple methods and headers,
+  the Access-Control-Allow-Origin, -Credentials, -Methods and -Headers
+  checks (a failure is a network error, as natively), only the exposed
+  headers on a `cors` response, `mode: 'same-origin'` refused before the
+  network, Cross-Origin-Resource-Policy on `no-cors` loads, and nothing of a
+  page's `no-cors` fetch of another origin, which reads as an opaque
+  response. `crossorigin` images, scripts and fonts of another site without
+  CORS now fail to load, and `Response.type` is `cors` or `opaque` where the
+  browser says so. Access-Control-* response headers are no longer
+  stripped. (sop-escapes suite, docs/same-origin-policy.md.)
 - `cookieStore` is there, as natively in a secure context, over the
   proxy's jar (native-shapes suite, both modes): the page's `cookieStore` is
   the browser's own CookieStore (identity, prototype, `onchange` and the

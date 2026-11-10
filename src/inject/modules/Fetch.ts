@@ -12,6 +12,30 @@ import { failsToParse } from '../nativeErrors';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
 import { unrouteURL } from './Unroute';
 
+/**
+ * Whether a request header name is one of the proxy's markers (x-stomp-*):
+ * the worker trusts those to come from the inject (a copy of a page's load
+ * is exempt from CORS as the load it stands for), so a page's own request
+ * never carries one
+ */
+export const isStompHeader = (name: string) =>
+	name.length > 8 && name.slice(0, 8).toLowerCase() === 'x-stomp-';
+
+/** `headers` without the proxy's markers, or null when it had none */
+function withoutStompHeaders(headers: Headers): Headers | null {
+	let found = false;
+	for (const name of headers.keys())
+		if (isStompHeader(name)) {
+			found = true;
+			break;
+		}
+	if (!found) return null;
+	const clean = new Headers();
+	for (const [name, value] of headers)
+		if (!isStompHeader(name)) clean.append(name, value);
+	return clean;
+}
+
 /** an id for a request the page may abort */
 const abortId = () =>
 	typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -24,6 +48,14 @@ export default class FetchModule extends Module<Client> {
 
 		const eventSourceURLs = new WeakMap<EventSource, string>();
 		const responseURLs = new WeakMap<Response, string>();
+		/**
+		 * The type a response of the page's fetch has natively: every route
+		 * is same-origin to the browser, so its own says `basic` for all.
+		 * Another origin's is `cors`, or `opaque` for a no-cors request, which
+		 * the worker sent with nothing of the response (status, headers,
+		 * body), and which reads as the browser's opaque response does
+		 */
+		const responseTypes = new WeakMap<Response, 'cors' | 'opaque'>();
 
 		this.client.global.EventSource = proxyModule.wrapFunction(
 			this.client.global.EventSource,
@@ -85,6 +117,9 @@ export default class FetchModule extends Module<Client> {
 			}),
 		});
 
+		// over the URL's readback above
+		this.hookResponses(responseTypes);
+
 		this.client.global.Request = proxyModule.wrapFunction(
 			this.client.global.Request,
 			(target, _that, args, newTarget) => {
@@ -124,6 +159,15 @@ export default class FetchModule extends Module<Client> {
 			this.client.global.Request.prototype,
 			'url',
 		)!.get!;
+		const nativeRequestMode = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Request.prototype,
+			'mode',
+		)!.get!;
+
+		const nativeResponseType = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Response.prototype,
+			'type',
+		)!.get!;
 
 		this.client.global.fetch = proxyModule.wrapFunction(
 			this.client.global.fetch,
@@ -131,9 +175,12 @@ export default class FetchModule extends Module<Client> {
 				let init: RequestInit;
 				let url: urlLike;
 
-				const request = args[0] instanceof Request ? args[0] : null;
+				let request = args[0] instanceof Request ? args[0] : null;
 				if (request) {
 					url = new URL(Reflect.apply(nativeRequestURL, request, []) as string);
+					// the proxy's markers are never the page's to send
+					const clean = withoutStompHeaders(request.headers);
+					if (clean) request = new Request(request, { headers: clean });
 					init = request;
 				} else {
 					// a URL that does not parse: the browser's own rejection, which
@@ -143,7 +190,18 @@ export default class FetchModule extends Module<Client> {
 						return await Reflect.apply(target, that, [text, ...args.slice(1)]);
 					url = new URL(text, this.client.url.toString());
 					init = args[1];
+					const clean =
+						init?.headers !== undefined && init.headers !== null
+							? withoutStompHeaders(new Headers(init.headers))
+							: null;
+					if (clean) init = { ...init, headers: clean };
 				}
+				// the request's mode, which decides the response's type
+				const mode =
+					(args[1] as RequestInit | undefined)?.mode ??
+					(request
+						? (Reflect.apply(nativeRequestMode, request, []) as RequestMode)
+						: 'cors');
 
 				if (!ROUTE_PROTOCOLS.includes(url.protocol)) {
 					// a page-origin blob: URL is fetched as the browser's
@@ -227,10 +285,77 @@ export default class FetchModule extends Module<Client> {
 				// the page's URL for the routed one (unrouteURL reads the routed
 				// prefix off the client, not this bundle's free `location`)
 				const routedURL = Reflect.apply(nativeResponseURL, res, []) as string;
-				responseURLs.set(res, unrouteURL(this.client, routedURL) ?? routedURL);
+				const pageURL = unrouteURL(this.client, routedURL) ?? routedURL;
+				responseURLs.set(res, pageURL);
+
+				// another origin's response, after any redirects, or one that
+				// went through another origin (a redirect back is tainted too)
+				const own = this.client.opaqueRequests
+					? 'null'
+					: this.client.url.url.origin;
+				let finalOrigin = 'null';
+				try {
+					finalOrigin = new URL(pageURL).origin;
+				} catch (error) {
+					// no URL: as another origin's
+				}
+				const type = Reflect.apply(nativeResponseType, res, []);
+				if (type === 'basic' && (finalOrigin !== own || url.origin !== own))
+					responseTypes.set(res, mode === 'no-cors' ? 'opaque' : 'cors');
 
 				return res;
 			},
 		);
+	}
+	/**
+	 * Responses read as their recorded type: `type` itself, and for an
+	 * opaque one everything else the browser hides (status 0, no status
+	 * text, URL, headers or body, not redirected). A clone keeps its type
+	 */
+	hookResponses(types: WeakMap<Response, 'cors' | 'opaque'>) {
+		const proxyModule = this.client.getModule(ProxyModule)!;
+		const global = this.client.global;
+		const proto = global.Response.prototype;
+		const emptyHeaders = new WeakMap<Response, Headers>();
+		const opaque: Record<string, (that: Response) => unknown> = {
+			status: () => 0,
+			ok: () => false,
+			statusText: () => '',
+			url: () => '',
+			redirected: () => false,
+			body: () => null,
+			headers: (that) => {
+				let headers = emptyHeaders.get(that);
+				if (!headers) {
+					headers = new global.Headers();
+					emptyHeaders.set(that, headers);
+				}
+				return headers;
+			},
+		};
+		for (const name of ['type', ...Object.keys(opaque)]) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(proto, name);
+			if (!descriptor?.get) continue;
+			Reflect.defineProperty(proto, name, {
+				...descriptor,
+				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
+					const type = types.get(that as Response);
+					if (type !== undefined) {
+						if (name === 'type') return type;
+						if (type === 'opaque') return opaque[name](that as Response);
+					}
+					return Reflect.apply(target, that, args);
+				}),
+			});
+		}
+		proto.clone = proxyModule.wrapFunction(
+			proto.clone,
+			(target, that, args) => {
+				const copy = Reflect.apply(target, that, args) as Response;
+				const type = types.get(that as Response);
+				if (type !== undefined) types.set(copy, type);
+				return copy;
+			},
+		) as Response['clone'];
 	}
 }

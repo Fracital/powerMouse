@@ -1,6 +1,7 @@
 import { decodeBase64, encodeBase64 } from '../base64';
 import { encodeCookie, splitAnswer } from '../encodeCookie';
 import { ProcessData, ProcessResult, SyncBody } from '../sync';
+import { RouteContext } from '../transport/messages';
 import Router from './Router';
 
 // a body that is valid UTF-8 travels as its text (no bigger than the bytes in
@@ -23,6 +24,7 @@ const statusRedirect = [301, 302, 303, 307, 308];
 async function process(
 	router: Router,
 	data: ProcessData,
+	context?: RouteContext,
 ): Promise<ProcessResult> {
 	const init: RequestInit = <RequestInit>{ ...data.init };
 
@@ -44,7 +46,9 @@ async function process(
 				throw new Error('Not found');
 			}
 
-			const response = await router.route(request);
+			// as the page's own request: the policy between the real origins
+			// is judged by the document that made it (the beacon's client)
+			const response = await router.route(request, context);
 			// a network error (the connection failed): the page's synchronous
 			// request throws, as it does natively
 			if (response.type === 'error') throw new Error('network error');
@@ -79,16 +83,16 @@ async function process(
 }
 
 export function registerXhr(router: Router) {
-	router.routes.set(/\/gxhr/, async (request) => {
+	router.routes.set(/\/gxhr/, async (request, _url, context) => {
 		return new Response(
-			JSON.stringify(await process(router, await request.json())),
+			JSON.stringify(await process(router, await request.json(), context)),
 		);
 	});
 
-	router.routes.set(/\/xhr/, async (request) => {
+	router.routes.set(/\/xhr/, async (request, _url, context) => {
 		const { id, data } = await request.json();
 
-		const response = await process(router, data);
+		const response = await process(router, data, context);
 		// counted from the answer, not from the request: an answer that took
 		// longer than this to come was set already expired, and the page spun
 		// to its limit waiting for it

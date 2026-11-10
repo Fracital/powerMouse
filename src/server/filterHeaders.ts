@@ -9,20 +9,11 @@ const cspHeaders: string[] = [
 	'X-WebKit-CSP-Report-Only',
 ];
 
+// Access-Control-* answers pass: the worker applies the CORS protocol itself
+// (cors.ts) and a page reads them as it would natively
 const corsHeaders: string[] = [
 	'Cross-Origin-Resource-Policy',
 	'Cross-Origin-Opener-Policy',
-];
-
-const accessControlHeaders: string[] = [
-	'Access-Control-Allow-Credentials',
-	'Access-Control-Allow-Headers',
-	'Access-Control-Allow-Methods',
-	'Access-Control-Allow-Origin',
-	'Access-Control-Expose-Headers',
-	'Access-Control-Max-Age',
-	'Access-Control-Request-Headers',
-	'Access-Control-Request-Method',
 ];
 
 // headers that would bind the page to the proxy origin or reach past the
@@ -47,7 +38,6 @@ const bindingHeaders: string[] = [
 const removeHeaders: string[] = [
 	...cspHeaders,
 	...corsHeaders,
-	...accessControlHeaders,
 	...bindingHeaders,
 ];
 

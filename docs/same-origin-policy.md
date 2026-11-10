@@ -119,10 +119,42 @@ would not give it).
 
 Filled in commit by commit; see the CHANGELOG for each.
 
+- **CORS, CORP and request modes** (sections 1, 2 and 5, sop-escapes: the
+  46 cases that differed read as natively in both modes, one srcdoc case
+  now differs the other way, see Left). The service worker (`src/server/cors.ts`,
+  `genericForward`) judges every non-navigation request by its mode and
+  its real initiator: a `cors` request of another origin is preflighted when
+  its method or the page's headers are not safelisted (OPTIONS with
+  Access-Control-Request-Method and -Headers, no credentials, checked for
+  status, origin, credentials, methods and headers, kept for its max-age up
+  to Chrome's two hours), its response (redirects included) must pass the
+  CORS check or the page gets a network error, and only the exposed headers
+  reach it; a `same-origin` request of another origin is refused before the
+  network; a `no-cors` response of another origin is refused when its
+  Cross-Origin-Resource-Policy says so, and a page's own `no-cors` fetch
+  gets nothing of it. A redirect from one other origin to a third sends
+  `Origin: null`. The inject's fetch records each response's type (`cors`,
+  `opaque`) and an opaque one reads as the browser's (status 0, no headers,
+  no body, no URL). The inject's own copies of a page's loads say which load
+  they stand for (`x-stomp-load`) and are judged as that load; the page's
+  own requests never carry the proxy's headers (fetch, Request and
+  XMLHttpRequest drop them). A synchronous XMLHttpRequest the policy
+  refuses throws NetworkError, as natively. Cost: nothing on a same-origin
+  request; a preflight is the round trip Chrome makes too.
+
 ## Left
 
 Ranked by what a page could learn or do.
 
+- An about:srcdoc document under a `no-referrer` policy is judged as an
+  opaque origin: its client URL names no origin the worker can read and no
+  Referer names one, so the worker fails closed. A CORS answer naming the
+  document's real origin is refused where Chrome accepts it (`*` works).
+- A no-cors response that went through another origin and came back (A to
+  B to A) is `basic` and readable; natively it is opaque. B's redirect
+  decides only that A's own resource is shown.
+- The Cache API keeps an opaque response as the empty one the worker sent:
+  read back from the cache it is `basic`, status 200, empty.
 - `navigator.storage.estimate()` counts every proxied site's usage. The
   browser keeps one quota for the proxy origin; per-site usage would need
   the proxy to account every store's size itself.

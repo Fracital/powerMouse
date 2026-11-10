@@ -6,6 +6,7 @@ import {
 	OPAQUE_HEADER,
 } from '../../../transport/messages';
 import Module from '../../Module';
+import { isStompHeader } from '../../modules/Fetch';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
@@ -167,6 +168,9 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			// its response, as natively) and without (the route's), fragment
 			// dropped, when it has credentials
 			#credentialed: { shown: string; plain: string } | null = null;
+			// the URL send() requested, as the page named it (a synchronous
+			// request's NetworkError names it)
+			#sentURL = '';
 			#responseType = '';
 			#responseText = '';
 			#readyState = UNSENT;
@@ -519,6 +523,23 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 						this.#onHeaders(undefined, response, response.rawUrl);
 						this.#onDone(undefined, response, response.rawArrayBuffer);
 					} catch (error) {
+						// a network error (the site unreachable, the request refused
+						// by CORS) ends a synchronous request with no event: send()
+						// throws, as natively
+						if (error instanceof TypeError) {
+							this.#readyState = DONE;
+							this.#status = 0;
+							this.#statusText = '';
+							this.#response =
+								this.#responseType === '' || this.#responseType === 'text'
+									? ''
+									: null;
+							this.#responseText = '';
+							throw new that.client.global.DOMException(
+								`Failed to execute 'send' on 'XMLHttpRequest': Failed to load '${this.#sentURL}'.`,
+								'NetworkError',
+							);
+						}
 						this.#onDone(error);
 					}
 				}
@@ -607,6 +628,8 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					);
 				}
 
+				// the proxy's markers are never the page's to send (see Fetch)
+				if (isStompHeader(String(header))) return;
 				// behavior is equal to append
 				this.#headers.append(header, value);
 			}
@@ -685,6 +708,9 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					if (mixed?.action === 'upgrade') sent = mixed.url;
 				}
 
+				const shown = new URL(sent.href);
+				shown.hash = '';
+				this.#sentURL = shown.href;
 				this.#fetch(routeXHR(new StompURL(sent, that.client.url)), options);
 			}
 			getResponseHeader(header: string) {

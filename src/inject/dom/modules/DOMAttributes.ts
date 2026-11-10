@@ -418,7 +418,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				hash === -1 ? routed : routed.slice(0, hash),
 				{
 					credentials: 'include',
-					...(load ? { headers: { [LOAD_HEADER]: load } } : {}),
+					// the copy stands for the element's load, never a page's read
+					// (a load the worker takes no metadata from is `copy`)
+					headers: { [LOAD_HEADER]: load ?? 'copy' },
 				},
 			);
 			if (!response.ok && response.status !== 0)
@@ -463,7 +465,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					{
 						credentials: 'include',
 						// a Headers: the bridge passes on no other kind
-						...(load ? { headers: new Headers({ [LOAD_HEADER]: load }) } : {}),
+						headers: new Headers({ [LOAD_HEADER]: load ?? 'copy' }),
 					},
 					false,
 					5000,
