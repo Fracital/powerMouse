@@ -2,6 +2,7 @@ import { NAVIGATE, NavigateInfo } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import HistoryModule from './History';
 
 /**
  * Tells the host application where the page is (URL, title, whether its
@@ -13,10 +14,9 @@ export default class NavigateModule extends Module<DocumentClient> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const global = this.client.global;
-		// the page's own history, before anything the page does to the API
-		const navigation = (
-			global as { navigation?: { canGoBack: boolean; canGoForward: boolean } }
-		).navigation;
+		// the frame's own history, all of it, whatever the page does to the
+		// API (the page's view of it stops at its own origin)
+		const history = this.client.getModule(HistoryModule)!;
 
 		// this document's service worker client id, from the service worker
 		// itself (a page cannot read it); the host attributes requests with it
@@ -59,8 +59,8 @@ export default class NavigateModule extends Module<DocumentClient> {
 			const info: NavigateInfo = {
 				url: this.client.url.toString(),
 				title: global.document.title,
-				canGoBack: navigation ? !!navigation.canGoBack : null,
-				canGoForward: navigation ? !!navigation.canGoForward : null,
+				canGoBack: history.canStep(-1),
+				canGoForward: history.canStep(1),
 				icon: icon(),
 				...(client ? { client } : {}),
 			};

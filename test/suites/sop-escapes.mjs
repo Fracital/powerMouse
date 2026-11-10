@@ -34,9 +34,6 @@ const KNOWN_BY_REASON = {
 		'timing/another site with ACAO, without TAO',
 	],
 	'the setter does not parse the domain as a host': ['document/domain setter'],
-	'navigation.entries() lists the other origin': [
-		'navigation/another site sees only its own entries',
-	],
 	'navigator.storage.estimate() counts every proxied site': [
 		'storage/usage does not count another site',
 	],

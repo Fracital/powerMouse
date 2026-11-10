@@ -343,6 +343,12 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- The Navigation API shows a document only its own origin's entries:
+  `navigation.entries()` listed the entries of every site the frame had
+  shown, their full URLs and keys included, and `canGoBack` said yes into
+  another site. History (`history.length`, `back()`, `go()`) and the
+  host's Back and Forward buttons keep the frame's whole list, as natively.
+  (sop-escapes suite.)
 - Web Locks are per proxied site. They were one namespace for every site
   behind the proxy: a lock another site held was held for this one, and
   `navigator.locks.query()` listed its names. (sop-escapes suite.)

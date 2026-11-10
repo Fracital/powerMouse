@@ -161,6 +161,14 @@ Filled in commit by commit; see the CHANGELOG for each.
   scopes a lock's name by the proxied origin as it does a BroadcastChannel's:
   `request()` takes the scoped name, `query()` lists only the origin's locks
   by their own names, and a `Lock` reads its own name back.
+- **The Navigation API across origins** (section 4, sop-escapes: 1 case).
+  The History module narrows the page's view to the run of the frame's
+  entries of the document's own origin around the current one, as Chrome
+  does: `entries()`, an entry's `index` (-1 outside the run), `canGoBack`,
+  `canGoForward`, and `back()` and `forward()`, which fail with Chrome's
+  InvalidStateError past the run. `history.length`, `back()`, `forward()`
+  and `go()` keep the frame's whole list (natively they cross origins too),
+  and so does what the host's Back and Forward buttons are told.
 
 ## Left
 
