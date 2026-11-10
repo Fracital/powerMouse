@@ -27,7 +27,15 @@ const read = () => (window.__sm?.done ? window.__sm : null);
 const sorted = (list) =>
 	list && [...list].map((entry) => JSON.stringify(entry)).sort();
 
-const browser = await launch();
+// the sandboxed frame collects garbage once it has loaded and the page
+// holds its own load 1.5 s longer (sandbox-messages.html): an element
+// wrapper nothing references is made again by whatever reaches the element
+// next, in that code's realm. The sandboxed frame's own inject did, from an
+// IntersectionObserver entry's target (AnimationFrames), and the page's
+// iframe.contentWindow then ran the frame's hooks: its messages reached the
+// page from a window that matched no frame. That took a busy machine (about
+// 1 run in 3 here, more on CI); this makes it every run
+const browser = await launch(['--js-flags=--expose-gc']);
 const nativePage = await browser.newPage();
 const nativeErrors = trackErrors(nativePage);
 await nativePage.goto(target);

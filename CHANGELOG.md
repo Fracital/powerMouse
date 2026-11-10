@@ -409,6 +409,19 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   the Chrome it runs in. Chrome 153 reworded it ('A tainted OffscreenCanvas
   may not be exported.' where 152 said 'Tainted "OffscreenCanvas" may not be
   exported.'); the proxy answered with 152's wording everywhere.
+- A frame of another site no longer takes over its frame element in the
+  page above it. Its inject follows whether the frame is rendered with an
+  IntersectionObserver on that element and read each entry's `target`; when
+  the page's wrapper for the element had been garbage collected (the page
+  held no reference to it), that read made a new one in the frame's realm,
+  with the frame's `HTMLIFrameElement.prototype`. From then on the page's
+  `iframe.contentWindow` ran the frame's hooks and returned another stand-in
+  than `event.source` did, so a sandboxed frame's messages reached its
+  parent from a window that matched none of its frames (sandbox-messages
+  failed in about 1 run in 3, more on a busy machine). The observer now
+  names its element itself and keeps it referenced, so the page's wrapper is
+  never made again elsewhere (sandbox-messages suite, which now collects
+  garbage in the frame and holds the page's load, so it hit this every run).
 - A proxied page can no longer read another site's responses the browser
   would refuse it. Every route is same-origin to the browser, so a `fetch`
   or XMLHttpRequest of another site came back whole, every header and the

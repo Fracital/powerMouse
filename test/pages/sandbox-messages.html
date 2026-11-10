@@ -80,3 +80,12 @@
 	document.getElementById('doc').srcdoc = srcdoc('doc');
 	document.getElementById('plain').srcdoc = srcdoc('plain');
 </script>
+<!--
+	holds this page's load (and its "go") for 1.5 s after the frames have
+	loaded: the sandboxed frame collects garbage once it has (the suite runs
+	Chrome with --expose-gc), so nothing but this page's own code makes the
+	frame elements' wrappers again. Under load the frames waited for this
+	page that long anyway, and the box's messages reached it as from another
+	window (its iframe element's wrapper was made in the box's realm)
+-->
+<img src="/slow-js?ms=1500" alt="" />

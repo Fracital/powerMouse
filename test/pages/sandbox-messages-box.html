@@ -16,6 +16,14 @@
 			out.threw.push(`${name}: ${error.name}: ${error.message}`);
 		}
 	};
+	// a collection once loaded, where Chrome runs with --expose-gc (the
+	// suite's): what this page's parent holds of its frames is only what its
+	// own code keeps (sandbox-messages.html)
+	addEventListener('load', () => {
+		if (typeof gc !== 'function') return;
+		gc({ type: 'minor' });
+		gc();
+	});
 	addEventListener('message', (event) => {
 		if (event.data === 'go') {
 			// the site's origin, as a page would name its parent's

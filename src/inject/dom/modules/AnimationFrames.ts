@@ -64,12 +64,25 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 		// frame counts as shown (Chrome too runs a hidden frame's first frames)
 		const unrendered = new Set<Element>();
 		let watching = false;
-		const observed = (entries: IntersectionObserverEntry[]) => {
-			for (const entry of entries)
-				if (entry.isIntersecting) unrendered.delete(entry.target);
-				else unrendered.add(entry.target);
-			if (unrendered.size === 0) flushSoon();
-		};
+		// One observer per element, which its callback names from here, never
+		// by `entry.target`: an entry is an object of this realm, and its
+		// target getter makes the element's wrapper in this realm when the
+		// one of the element's own page was collected (nothing of the page
+		// referenced it). That wrapper is the page's from then on, with this
+		// realm's HTMLIFrameElement.prototype, so the page's
+		// `iframe.contentWindow` ran this frame's hooks and handed out this
+		// frame's stand-in for its own window, not the page's: a sandboxed
+		// frame's messages reached its parent from a window that was none of
+		// its frames (sandbox-messages). Holding the element here keeps the
+		// page's wrapper alive besides.
+		const observed =
+			(frame: Element) => (entries: IntersectionObserverEntry[]) => {
+				const last = entries[entries.length - 1];
+				if (!last) return;
+				if (last.isIntersecting) unrendered.delete(frame);
+				else unrendered.add(frame);
+				if (unrendered.size === 0) flushSoon();
+			};
 		const watch = () => {
 			if (watching) return;
 			watching = true;
@@ -80,7 +93,7 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 				// each element against its own document: the observer of this
 				// realm, so a page that replaced its IntersectionObserver
 				// changes nothing
-				new NativeObserver(observed, {
+				new NativeObserver(observed(frame), {
 					root: frame.ownerDocument,
 					rootMargin: '100000px',
 				}).observe(frame);
