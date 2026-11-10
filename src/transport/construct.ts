@@ -1,10 +1,12 @@
-// Import a transport module and construct it, wrapped in Http3Transport when
-// the descriptor asks for HTTP/3. The transport worker, the controller page
-// (`host: 'page'` and the worker fallback) and the controller frame all
-// construct descriptors through here, so the option means the same
-// wherever the transport runs.
+// Import a transport module and construct it, wrapped so that it comes back
+// after its wisp connection is lost (RevivingTransport), and in
+// Http3Transport when the descriptor asks for HTTP/3. The transport worker,
+// the controller page (`host: 'page'` and the worker fallback) and the
+// controller frame all construct descriptors through here, so the options
+// mean the same wherever the transport runs.
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import Http3Transport, { type Http3Options } from './http3/Http3Transport';
+import RevivingTransport from './RevivingTransport';
 
 /** `http3` in a descriptor: a function (`udp`) cannot be cloned into a worker */
 export type Http3DescriptorOptions = Omit<Http3Options, 'udp'>;
@@ -39,7 +41,9 @@ export async function constructTransport({
 	};
 	if (typeof Transport !== 'function')
 		throw new TypeError(`${module} has no default export to construct`);
-	const transport = new Transport(...(options || []));
+	const transport = new RevivingTransport(
+		() => new Transport(...(options || [])),
+	);
 	if (!http3) return transport;
 	// stomp-h3 ships in epoxy-transport's dist/h3/ (deploy/epoxy/h3)
 	return new Http3Transport(

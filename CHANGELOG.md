@@ -44,6 +44,18 @@ The first release after a four-year gap. Everything below is breaking.
   server that relays UDP (the demo's does; holyWisp on the edges does not
   yet). docs/http3.md has the design and the limits (http3 and
   http3-fallback suites).
+- A lost wisp connection no longer leaves the proxy dead until the page is
+  reloaded. Epoxy keeps a wisp multiplexor whose WebSocket went away (a
+  port forward or a proxy dropping it) as its connection: every request
+  after that failed at once with MuxTaskEnded, and one handed a pooled
+  connection over it could wait forever. One drop 1.5 s into a YouTube load
+  left the page half drawn. A transport built from a descriptor now builds
+  itself again (a new wisp connection, an empty pool) the first time a
+  request reports the connection gone, and sends again the requests that
+  never went out and the GET, HEAD and OPTIONS requests without a body that
+  lost their connection before the response head, including those still
+  waiting on the old connection, as Chrome does on a reused connection
+  (wisp-reconnect suite).
 
 ### Demo and API
 
