@@ -31,6 +31,11 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- The demo's home page shows the repository's latest commits as a git log
+  (avatar, message, author and age, short sha, each linking to the commit)
+  from `/api/commits`, the demo server's ten-minute copy of GitHub's answer
+  (`STOMP_REPO` names another repository), and links to Fracital and vibeOS
+  beside the title (demo suite).
 - `names.error`: the global the worker writes into the host's error page
   (`globalThis.stompError = { url, status, error, kind }`) is the fifth
   configurable helper name, default `stompError`, validated like the others.

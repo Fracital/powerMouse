@@ -68,14 +68,15 @@ has no `dev`, and `dev.js` is never fetched.
 `demo/server.js` is an Express app plus a [wisp](https://github.com/MercuryWorkshop/wisp-protocol)
 server on the same port:
 
-| Path          | Serves                                                  |
-| ------------- | ------------------------------------------------------- |
-| `/`           | `demo/public` (the page, stylesheet, script, images)    |
-| `/stomp/`     | `dist/` via `stompPath` from `stomp-rewrite/path`       |
-| `/epoxy/`     | `@mercuryworkshop/epoxy-transport`'s `dist/`            |
-| `/libcurl/`   | `@mercuryworkshop/libcurl-transport`'s `dist/`          |
-| `/wisp/`      | WebSocket upgrade handled by `@mercuryworkshop/wisp-js` |
-| `/api/status` | `{ uptime, version, node }` for the landing page footer |
+| Path           | Serves                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------- |
+| `/`            | `demo/public` (the page, stylesheet, script, images)                                              |
+| `/stomp/`      | `dist/` via `stompPath` from `stomp-rewrite/path`                                                 |
+| `/epoxy/`      | `@mercuryworkshop/epoxy-transport`'s `dist/`                                                      |
+| `/libcurl/`    | `@mercuryworkshop/libcurl-transport`'s `dist/`                                                    |
+| `/wisp/`       | WebSocket upgrade handled by `@mercuryworkshop/wisp-js`                                           |
+| `/api/status`  | `{ uptime, version, node }` for the landing page footer                                           |
+| `/api/commits` | `{ repo, url, commits }` for the landing page's latest commits: GitHub's answer, kept ten minutes |
 
 Nothing else is proxied by the server. All page traffic goes through the
 transport, which tunnels through `/wisp/`.
@@ -122,7 +123,10 @@ transport, which tunnels through `/wisp/`.
 7. **Tabs.** Each tab is its own `controller.createFrame()`; only the active
    frame is visible. The landing page doubles as the new-tab page: submitting
    there or clicking a quick link opens a new tab. Closing the last tab goes
-   back to the landing page.
+   back to the landing page. Below the address bar it shows the repository's
+   latest commits, from `/api/commits` (the server's ten-minute copy of
+   GitHub's answer; `STOMP_REPO` names another repository), and the header
+   links to Fracital and vibeOS.
 8. **Navigation bar** at the bottom of the screen, styled after the early
    Android bar: Back steps through the active tab's own history (the frame
    reports whether it can step, from the browser's Navigation API, so mashing

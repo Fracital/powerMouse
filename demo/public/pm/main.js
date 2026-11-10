@@ -1191,6 +1191,79 @@ pollStatus();
 setInterval(pollStatus, 10000);
 setInterval(renderUptime, 1000);
 
+// the repository's latest commits (/api/commits, the server's copy of
+// GitHub's answer), drawn as a git log: a rail with a dot per commit, the
+// author's avatar, the message's first line, who and when, the short sha
+const AGO_UNITS = [
+	[31536000, 'year'],
+	[2592000, 'month'],
+	[604800, 'week'],
+	[86400, 'day'],
+	[3600, 'hour'],
+	[60, 'minute'],
+];
+function ago(iso) {
+	const seconds = (Date.now() - new Date(iso)) / 1000;
+	for (const [unit, name] of AGO_UNITS) {
+		const n = Math.floor(seconds / unit);
+		if (n >= 1) return `${n} ${name}${n > 1 ? 's' : ''} ago`;
+	}
+	return 'just now';
+}
+function element(tag, className, text) {
+	const node = document.createElement(tag);
+	if (className) node.className = className;
+	if (text !== undefined) node.textContent = text;
+	return node;
+}
+async function showCommits() {
+	const list = $('commitList');
+	const note = $('commitsNote');
+	try {
+		const response = await fetch('/api/commits');
+		const data = await response.json();
+		if (!response.ok)
+			throw new Error(data.error || `status ${response.status}`);
+		const repoLink = $('commitsRepo');
+		repoLink.textContent = data.repo;
+		repoLink.href = data.url;
+		for (const commit of data.commits) {
+			const link = element('a', 'commit');
+			link.href = commit.url;
+			link.target = '_blank';
+			link.rel = 'noopener';
+			if (commit.avatar) {
+				const avatar = element('img', 'commitAvatar');
+				avatar.src = `${commit.avatar}&s=48`;
+				avatar.alt = '';
+				avatar.width = 24;
+				avatar.height = 24;
+				link.append(avatar);
+			} else link.append(element('span', 'commitAvatar'));
+			const body = element('div', 'commitBody');
+			const message = element('div', 'commitMsg', commit.message);
+			message.title = commit.message;
+			const meta = element('div', 'commitMeta');
+			meta.append(`${commit.author}, `);
+			if (commit.date) {
+				const when = element('time', null, ago(commit.date));
+				when.dateTime = commit.date;
+				when.title = new Date(commit.date).toLocaleString();
+				meta.append(when);
+			}
+			body.append(message, meta);
+			link.append(body, element('code', 'commitSha', commit.sha));
+			const item = element('li');
+			item.append(link);
+			list.append(item);
+		}
+		note.textContent = data.commits.length ? '' : 'No commits yet';
+	} catch (error) {
+		note.textContent = `GitHub did not answer (${error.message}). The repository is linked above.`;
+	}
+}
+showCommits();
+
 // ---- request viewer ---------------------------------------------------------
 // The controller reports every proxied request (onRequest). Closed, the viewer
 // costs one ring buffer push per request: rows are only built while the panel

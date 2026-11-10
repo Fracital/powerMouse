@@ -27,6 +27,35 @@ ok(
 	await page.textContent('#uptime'),
 );
 ok('quick links rendered', (await page.$$('.btn-fancy')).length === 4);
+ok(
+	'home links to Fracital and vibeOS',
+	JSON.stringify(
+		await page.$$eval('.sites a', (links) => links.map((a) => a.href)),
+	) === JSON.stringify(['https://fracit.al/', 'https://vibeos.fracit.al/']),
+);
+// the commits panel: GitHub's answer, or the note saying it gave none
+await page
+	.waitForFunction(
+		() =>
+			document.querySelectorAll('#commitList li').length > 0 ||
+			document.getElementById('commitsNote').textContent.trim() !==
+				'Loading commits from GitHub',
+		null,
+		{ timeout: 20000 },
+	)
+	.catch(() => {});
+const commits = await page.evaluate(() => ({
+	items: document.querySelectorAll('#commitList li').length,
+	note: document.getElementById('commitsNote').textContent.trim(),
+	shas: [...document.querySelectorAll('.commitSha')].map((c) => c.textContent),
+}));
+ok(
+	'latest commits shown, or GitHub said why not',
+	(commits.items > 0 &&
+		commits.shas.every((sha) => /^[0-9a-f]{7}$/.test(sha))) ||
+		/GitHub did not answer/.test(commits.note),
+	JSON.stringify(commits),
+);
 await screenshot(page, 'landing');
 
 await page.fill('#mainForm input[name=url]', 'en.wikipedia.org/wiki/Web_proxy');

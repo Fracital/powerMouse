@@ -188,6 +188,54 @@ app.get('/api/status', (req, res) => {
 		node: process.version,
 	});
 });
+// the repository's latest commits, for the home page. GitHub's answer is
+// kept ten minutes (an address gets 60 requests an hour without a token);
+// through a failure the last answer is served and GitHub asked again after
+// five. STOMP_REPO names another repository.
+const commitsRepo = process.env.STOMP_REPO || 'Fracital/powerMouse';
+let commitsCache = { at: 0, body: null };
+app.get('/api/commits', async (req, res) => {
+	if (Date.now() - commitsCache.at > 600000) {
+		try {
+			const answer = await fetch(
+				`https://api.github.com/repos/${commitsRepo}/commits?per_page=8`,
+				{
+					headers: {
+						'user-agent': 'stomp-demo',
+						accept: 'application/vnd.github+json',
+					},
+					signal: AbortSignal.timeout(8000),
+				},
+			);
+			if (!answer.ok) throw new Error(`GitHub answered ${answer.status}`);
+			const list = await answer.json();
+			commitsCache = {
+				at: Date.now(),
+				body: {
+					repo: commitsRepo,
+					url: `https://github.com/${commitsRepo}`,
+					commits: list.map((entry) => {
+						const who = entry.commit.author || entry.commit.committer || {};
+						return {
+							sha: entry.sha.slice(0, 7),
+							url: entry.html_url,
+							message: entry.commit.message.split('\n')[0],
+							author: who.name || entry.author?.login || 'unknown',
+							avatar: entry.author?.avatar_url || null,
+							date: who.date || null,
+						};
+					}),
+				},
+			};
+		} catch (error) {
+			if (!commitsCache.body)
+				return res.status(502).json({ error: error.message });
+			commitsCache.at = Date.now() - 300000;
+		}
+	}
+	res.set('Cache-Control', 'public, max-age=300');
+	res.json(commitsCache.body);
+});
 // The page, its scripts and the Stomp bundles change with every deploy and
 // are fetched once per visit anyway: no-cache makes browsers revalidate and
 // keeps CDNs (Cloudflare caches .js by default) from serving a stale service

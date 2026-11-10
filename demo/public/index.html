@@ -25,6 +25,10 @@
 		<div class="wrapper" id="landing">
 			<div class="head">
 				<h1><a class="noStyle ns" href="/">powerMouse</a></h1>
+				<nav class="sites" aria-label="Fracital sites">
+					<a href="https://fracit.al/">Fracital</a>
+					<a href="https://vibeos.fracit.al/">vibeOS</a>
+				</nav>
 				<a draggable="false" href="https://github.com/Fracital/powerMouse"
 					><div class="ns git">Fork us on GitHub</div></a
 				>
@@ -46,6 +50,18 @@
 					</form>
 					<div id="button-container"></div>
 					<p id="logMsg">Starting…</p>
+					<section class="commits" aria-labelledby="commitsTitle">
+						<div class="commitsHead">
+							<span id="commitsTitle">Latest commits</span>
+							<a id="commitsRepo" href="https://github.com/Fracital/powerMouse"
+								>Fracital/powerMouse</a
+							>
+						</div>
+						<ol class="commitList" id="commitList"></ol>
+						<p class="commitsNote" id="commitsNote">
+							Loading commits from GitHub
+						</p>
+					</section>
 				</div>
 				<div class="lbottom">
 					Uptime: <span id="uptime">…</span><span id="version"></span>
