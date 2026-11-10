@@ -13,9 +13,16 @@
 		const deep = (name) => `/pages/deep/${run}/${name}/`;
 		document.cookie = 'srck=1; path=/';
 		window.__sr = { reports: {}, parentReads: {}, done: false };
+		// each probe posts its report until it is acknowledged (a message can
+		// be lost while a frame shows a modal dialog, see the probe)
 		addEventListener('message', (event) => {
-			if (event.data && typeof event.data.sr === 'string')
-				__sr.reports[event.data.sr] = event.data.report;
+			if (!event.data || typeof event.data.sr !== 'string') return;
+			__sr.reports[event.data.sr] = event.data.report;
+			try {
+				event.source.postMessage({ sr: 'ack', key: event.data.sr }, '*');
+			} catch (error) {
+				// no source to answer: the probe posts again until it gives up
+			}
 		});
 		const frame = (id, sandbox, src) => {
 			const element = document.createElement('iframe');

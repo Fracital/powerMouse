@@ -36,16 +36,29 @@
 					`rejected ${error && error.name}: ${error && error.message}`;
 			}
 		};
+		// A report posted to the top can be lost: Chrome drops a message from
+		// a frame of another process (an opaque origin's) that reaches a page
+		// while one of its frames shows a modal dialog or prints, as p-all and
+		// p-plain do while the others report. So a report is posted again
+		// every half second until the page acknowledges it.
+		const acknowledged = new Set();
 		const send = (key, value) => {
 			if (query.get('report') === 'beacon')
-				fetch(
+				return fetch(
 					`/sr-report/${run}/${key}/${encodeURIComponent(JSON.stringify(value))}`,
 				).catch(() => {});
-			else top.postMessage({ sr: key, report: value }, '*');
+			const post = (tries) => {
+				if (acknowledged.has(key) || tries === 0) return;
+				top.postMessage({ sr: key, report: value }, '*');
+				setTimeout(() => post(tries - 1), 500);
+			};
+			post(60);
 		};
 		let prints = 0;
 		addEventListener('beforeprint', () => prints++);
 		addEventListener('message', (event) => {
+			if (event.data && event.data.sr === 'ack')
+				acknowledged.add(event.data.key);
 			if (event.data && event.data.sr === 'again')
 				send(`${name}-again`, {
 					origin: self.origin,
