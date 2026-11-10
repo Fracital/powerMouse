@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>FIELD ORDER</title>
+	</head>
+	<body>
+		<script>
+			// Cross-origin CORS loads of each kind to the suite's recorder
+			// (?r=<origin>), which keeps the field names in the order they came:
+			// a fetch and an XHR (Origin from the network stack, after Accept),
+			// a POST, a module script and a crossorigin image (Origin from
+			// Blink, first).
+			const recorder = new URLSearchParams(location.search).get('r');
+			const run = new URLSearchParams(location.search).get('run');
+			const at = (kind) => `${recorder}/record?k=${run}-${kind}`;
+			const load = (element, attributes) =>
+				new Promise((resolve) => {
+					const el = document.createElement(element);
+					el.onload = el.onerror = () => resolve();
+					for (const [k, v] of Object.entries(attributes))
+						el.setAttribute(k, v);
+					document.body.append(el);
+				});
+			(async () => {
+				await fetch(at('fetch')).catch(() => {});
+				await fetch(at('post'), { method: 'POST', body: 'x' }).catch(() => {});
+				await new Promise((resolve) => {
+					const xhr = new XMLHttpRequest();
+					xhr.open('GET', at('xhr'));
+					xhr.onloadend = resolve;
+					xhr.send();
+				});
+				await load('script', { type: 'module', src: at('module') });
+				await load('img', { crossorigin: 'anonymous', src: at('image') });
+				window.__fieldOrder = true;
+			})();
+		</script>
+	</body>
+</html>

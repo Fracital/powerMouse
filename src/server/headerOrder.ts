@@ -153,10 +153,13 @@ export function chromeOrderedHeaders(
 			if (name.startsWith('sec-ch-')) take(name);
 		takeRest(new Set(NETWORK));
 	} else {
-		// Blink sets Origin for a CORS load it starts (a module script, a
-		// crossorigin image); the network stack adds it for any other method
+		// Blink sets Origin first for a CORS load an element starts (a module
+		// script, a crossorigin image); for a fetch or an XHR (destination
+		// empty) and for any other method the network stack adds it, after
+		// Accept (measured: browserleaks' HTTP/2 page, field-order suite)
 		const blinkOrigin =
 			shape.mode === 'cors' &&
+			shape.destination !== 'empty' &&
 			(shape.method === 'GET' || shape.method === 'HEAD');
 		if (blinkOrigin) take('origin');
 		SUBRESOURCE_HINTS.forEach(take);

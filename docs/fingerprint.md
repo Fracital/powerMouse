@@ -89,9 +89,10 @@ Connection first; HTTP/2 has the pseudo-headers there).
   Sec-Fetch-Site, Sec-Fetch-Mode, `[Sec-Fetch-User]`, Sec-Fetch-Dest,
   `[Referer]`, Accept-Encoding, Accept-Language, `[Cookie]`, priority.
 - Subresource (script, style, image, fetch, XHR): `[Content-Length] [Pragma]
-[Cache-Control] [Origin of a CORS GET Blink starts, e.g. a module script]`
-  sec-ch-ua-platform, User-Agent, sec-ch-ua, `[the page's fields]`,
-  sec-ch-ua-mobile, Accept, `[Origin]`, Sec-Fetch-Site, Sec-Fetch-Mode,
+[Cache-Control] [Origin of a CORS GET an element starts: a module script,
+a crossorigin image]` sec-ch-ua-platform, User-Agent, sec-ch-ua, `[the page's
+fields]`, sec-ch-ua-mobile, Accept, `[Origin of a fetch or XHR, or of any
+other method]`, Sec-Fetch-Site, Sec-Fetch-Mode,
   Sec-Fetch-Dest, `[Sec-Fetch-Storage-Access]`, Referer, Accept-Encoding,
   Accept-Language, `[Cookie]`, `[priority]`.
 - Blink keeps a subresource's first group in a hash map, so the page's own

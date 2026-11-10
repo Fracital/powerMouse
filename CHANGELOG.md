@@ -1008,6 +1008,11 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   TypeError to the page's console ("Failed to construct 'URL': Invalid
   URL", seven on browserleaks' features page); it is left as written and
   loads nothing, as natively (css-invalid-urls suite).
+- A cross-origin `fetch` or XHR GET sends Origin after Accept, where
+  Chrome's network stack puts it; the worker put it first, as Blink does
+  for a module script or a crossorigin image (browserleaks' HTTP/2 page
+  showed it; field-order suite, a recorder of field names on another
+  origin, both modes, against native).
 - `localStorage` and `sessionStorage` work in a srcdoc frame. Its inject
   resolved the proxy's own storage route against the frame's location,
   `about:srcdoc`, and every call threw "Failed to construct 'URL':
