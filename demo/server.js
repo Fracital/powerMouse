@@ -198,7 +198,7 @@ app.get('/api/commits', async (req, res) => {
 	if (Date.now() - commitsCache.at > 600000) {
 		try {
 			const answer = await fetch(
-				`https://api.github.com/repos/${commitsRepo}/commits?per_page=8`,
+				`https://api.github.com/repos/${commitsRepo}/commits?per_page=15`,
 				{
 					headers: {
 						'user-agent': 'stomp-demo',

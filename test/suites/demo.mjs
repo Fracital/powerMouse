@@ -49,6 +49,24 @@ const commits = await page.evaluate(() => ({
 	note: document.getElementById('commitsNote').textContent.trim(),
 	shas: [...document.querySelectorAll('.commitSha')].map((c) => c.textContent),
 }));
+const fit = () =>
+	page.evaluate(() => {
+		const list = document.getElementById('commitList');
+		const shown = [...list.children].filter(
+			(li) => !li.classList.contains('hidden'),
+		);
+		const bottom = list.getBoundingClientRect().bottom;
+		return {
+			shown: shown.length,
+			hidden: list.children.length - shown.length,
+			overflow: list.scrollHeight - list.clientHeight,
+			cut: shown.filter((li) => li.getBoundingClientRect().bottom > bottom + 1)
+				.length,
+			lastMarked: shown.length
+				? shown[shown.length - 1].classList.contains('last')
+				: null,
+		};
+	});
 ok(
 	'latest commits shown, or GitHub said why not',
 	(commits.items > 0 &&
@@ -56,6 +74,17 @@ ok(
 		/GitHub did not answer/.test(commits.note),
 	JSON.stringify(commits),
 );
+if (commits.items > 0) {
+	const fitted = await fit();
+	ok(
+		'the commit list shows whole rows only, with no scrollbar',
+		fitted.shown > 0 &&
+			fitted.overflow <= 0 &&
+			fitted.cut === 0 &&
+			fitted.lastMarked,
+		JSON.stringify(fitted),
+	);
+}
 await screenshot(page, 'landing');
 
 await page.fill('#mainForm input[name=url]', 'en.wikipedia.org/wiki/Web_proxy');
@@ -142,6 +171,18 @@ await waitActive(page, () => document.title === 'Example Domain').then(
 
 await page.setViewportSize({ width: 390, height: 800 });
 await page.click('#home');
+await sleep(300);
+if (commits.items > 0) {
+	const fitted = await fit();
+	ok(
+		'on a phone the commit list refits to whole rows, with no scrollbar',
+		fitted.shown > 0 &&
+			fitted.overflow <= 0 &&
+			fitted.cut === 0 &&
+			fitted.lastMarked,
+		JSON.stringify(fitted),
+	);
+}
 await screenshot(page, 'mobile');
 
 await done(browser, page.errors.filter((e) => !e.includes('404')).slice(0, 5));

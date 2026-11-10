@@ -1546,8 +1546,11 @@ input:focus-visible {
 	list-style: none;
 	margin: 0;
 	padding: 0;
-	overflow: auto;
+	overflow: hidden; /* whole rows only, fitted by script: no scrollbar */
 	min-height: 0;
+}
+.commits.none {
+	visibility: hidden; /* not even one row fits */
 }
 .commitList li {
 	position: relative;
@@ -1569,8 +1572,9 @@ input:focus-visible {
 .commitList li:first-child::before {
 	top: 50%;
 }
-.commitList li:last-child::before {
-	bottom: 50%;
+.commitList li:last-child::before,
+.commitList li.last::before {
+	bottom: 50%; /* the rail ends at the last row shown */
 }
 /* the dot, centred on the row like the avatar beside it */
 .commitList li::after {

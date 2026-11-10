@@ -1257,11 +1257,34 @@ async function showCommits() {
 			list.append(item);
 		}
 		note.textContent = data.commits.length ? '' : 'No commits yet';
+		fitCommits();
 	} catch (error) {
 		note.textContent = `GitHub did not answer (${error.message}). The repository is linked above.`;
 	}
 }
 showCommits();
+// as many commits as the room holds, whole rows only: the rest are hidden
+// (and shown again when the window grows), so the list never scrolls
+function fitCommits() {
+	const list = $('commitList');
+	const items = [...list.children];
+	if (!items.length) return;
+	for (const item of items) item.classList.remove('hidden', 'last');
+	const room = list.clientHeight;
+	if (!room) return; // the home page is not showing: fitted when it is
+	let used = 0;
+	let last = null;
+	for (const item of items) {
+		used += item.offsetHeight;
+		if (used > room) item.classList.add('hidden');
+		else last = item;
+	}
+	if (last) last.classList.add('last');
+	list.closest('.commits').classList.toggle('none', !last);
+}
+// the list's size changes with the window, and from nothing when the home
+// page comes back; hiding rows leaves its box as it is, so this settles
+new ResizeObserver(fitCommits).observe($('commitList'));
 
 // ---- request viewer ---------------------------------------------------------
 // The controller reports every proxied request (onRequest). Closed, the viewer
