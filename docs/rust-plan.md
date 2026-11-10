@@ -75,21 +75,31 @@ A workspace under `rust/`, built in a container by `deploy/rust/` the way
 
 ```
 rust/
-├── Cargo.toml          workspace, pinned oxc, the release profile
-├── rust-toolchain.toml nightly pinned by date, wasm32 target, rust-src
+├── Cargo.toml          workspace, the release profile; Cargo.lock committed
 ├── edits/              the span edit model and the splice engine (no oxc AST)
-├── rwjs/               the JS rewriter: oxc parse, visitor, edits
+├── rwjs/               the JS rewriter: abi.rs (the wasm boundary, wasm32
+│                       only), rewrite.rs (oxc parse, visitor), source.rs
+│                       (function marks and keys), abi.json (what the
+│                       artifact may import and export)
 ├── rwcss/              the CSS and markup scanners, one module (phase 3)
 ├── block/              adblock-rust wrapped for the service worker (phase 4)
+├── rtc/                WebRTC over wisp (the other agent's crate, wasip1)
 ├── coverage-macro/     the build time walk proof
-├── abi/                the hand written wasm glue side: exports and one import
-└── host/               a native binary: differential tests and benchmarks
+└── host/               Node scripts: the differential harness and benchmarks
 deploy/rust/
-├── Dockerfile          pinned base image, rust, wasm-bindgen free, binaryen
-├── build.sh            builds in the container, copies artifacts out
-├── pins.env            every version that goes in
+├── Dockerfile          the image: rust by digest, binaryen and wasm-bindgen
+│                       by checksum, wasm32-unknown-unknown and wasm32-wasip1
+├── pins.env            every version and checksum that goes in
+├── build.sh            builds one crate in the container into assets/
+├── compile.sh          what runs inside: build-std, wasm-opt, strip
+├── check.mjs           the artifact checks (sections, abi.json, tokens)
+├── test.sh             cargo test in the container
 └── README.md
 ```
+
+The toolchain is pinned by the image digest rather than a
+`rust-toolchain.toml`: the pins in one file, and no toolchain download at
+build time.
 
 Three artifacts, built separately so a deployment that wants none pays for
 none:
@@ -192,7 +202,12 @@ tests assert:
 3. **Function marks are unchanged.** `/*key.start36.len36*/` after the first
    token of each function of the page's, as `src/functionSource.ts` defines
    it, with the offsets taken from the input text. Since the kept text _is_
-   the input, the offsets are exact rather than reconstructed.
+   the input, the offsets are exact rather than reconstructed. The offsets
+   are UTF-16 code unit indices (`originalSource` slices the kept text as a
+   JavaScript string) while oxc's spans are byte offsets, so every mark goes
+   through a byte-to-UTF-16 conversion (`rust/rwjs/src/source.rs`); the key
+   is the same two hashes over the UTF-16 code units, pinned to the
+   TypeScript's values in its tests.
 4. **Line and column positions improve.** An unedited line keeps its line
    number; a column shifts only by the edits earlier on that line. Today
    escodegen reprinted everything, so a stack position was only near the
@@ -248,6 +263,9 @@ second source of truth for the thing most likely to leak an origin.
 
 `configure` is called once when the config changes, never per rewrite: the
 helper names, the routed name list, the flags and the directory cross once.
+The payload is lines of `key<TAB>value`, not JSON: every value is an
+identifier, a URL or a flag, a JSON parser is a measurable share of the
+artifact, and the host side builds the text from the config it already has.
 `rewrite` takes the script bytes and a flag word (module, worker, compact,
 allow invalid, keep sources here) and answers the output bytes plus, when
 asked, the edit log for the round trip test.
@@ -450,6 +468,15 @@ answers for a script or declines it; declining falls back to the JavaScript
 rewriter, so nothing can regress into a broken page. The split planner stays
 in JavaScript this phase. Lands when the full set passes with the option
 forced on as well as off.
+
+The option is one selector for every rewriter, not the JS rewriter's own:
+`'wasm'` means each rewriter that has a wasm backend uses it (JS in this
+phase, CSS and the markup scan when phase 3 lands), each from its own
+artifact (`rewriter.wasm`, later `css.wasm`), each declining per input to
+its JavaScript twin. The blocker is a separate option (`blocker`), since it
+is a feature and not a backend. The config field reaches the service
+worker, the rewrite workers and the inject together (section 10: three
+places, one backend), and the rewrite cache keys on it.
 
 **Phase 2. The inject's main-thread paths.** The library realm instantiates
 the module and `src/inject/rewriter.ts` routes `modifyJS` to it: inline

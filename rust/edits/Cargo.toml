@@ -1,0 +1,9 @@
+[package]
+name = "edits"
+version = "0.1.0"
+edition = "2024"
+description = "the span edit model and splice engine the rewriters build their output with (docs/rust-plan.md, section 4)"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]

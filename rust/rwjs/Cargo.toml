@@ -10,3 +10,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
+edits = { path = "../edits" }
+# the parser and the AST walk alone: no semantic pass, no codegen, no
+# regular expression parsing (a pattern's text is kept as written)
+oxc = { version = "=0.158.0", default-features = false, features = ["ast_visit"] }

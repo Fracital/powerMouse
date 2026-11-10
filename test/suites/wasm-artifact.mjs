@@ -66,6 +66,34 @@ for (const name of artifacts) {
 	ok(`${name} carries no token`, tokensIn(shipped).length === 0);
 }
 
+// the checks refuse what they should: a module with a name section and a
+// project token in its data, and an export the abi does not declare
+{
+	const bytes = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+	const section = (id, body) => bytes.push(id, body.length, ...body);
+	// a memory, exported as "memory" plus an undeclared "x"
+	section(5, [0x01, 0x00, 0x01]);
+	const str = (text) => [text.length, ...Buffer.from(text)];
+	section(7, [0x02, ...str('memory'), 0x02, 0x00, ...str('x'), 0x02, 0x00]);
+	// an active data segment holding the token
+	const data = Buffer.from('made by stomp');
+	section(11, [0x01, 0x00, 0x41, 0x00, 0x0b, data.length, ...data]);
+	// a custom "name" section
+	section(0, [...str('name'), 0x00, 0x00]);
+	const found = problems(new Uint8Array(bytes), {
+		imports: [],
+		exports: ['memory:memory'],
+	});
+	ok(
+		'a module with a name section, a token and a stray export is refused',
+		found.length === 3 &&
+			found.some((p) => p.includes('custom sections: name')) &&
+			found.some((p) => p.includes('stomp x1')) &&
+			found.some((p) => p.includes('x:memory')),
+		found.join('; '),
+	);
+}
+
 // the loader, bundled from src so the suite runs what the bundles run
 mkdirSync(OUT, { recursive: true });
 const entry = `${OUT}wasm-artifact-entry.mjs`;
@@ -103,7 +131,8 @@ if (artifacts.includes('rewriter.wasm')) {
 		'',
 		'a',
 		'const x = location.href;',
-		'über straße   \u{1F600} ' + 'x'.repeat(100000),
+		// non-ASCII identifiers, a line separator, an astral character
+		'über; straße; const s = "\u{1F600}' + 'x'.repeat(100000) + '";',
 	];
 	for (const text of texts) {
 		const result = instance.call(text, 0);
@@ -132,17 +161,17 @@ if (artifacts.includes('rewriter.wasm')) {
 		'status' in declined && declined.status === 2,
 		JSON.stringify(declined),
 	);
-	const after = instance.call('still alive', 0);
+	const after = instance.call('still.alive;', 0);
 	ok(
 		'the instance answers after a declined call',
-		'output' in after && after.output === 'still alive',
+		'output' in after && after.output === 'still.alive;',
 	);
 	// a second instance from the same compiled module, as every realm makes
 	const second = new BufferInstance(module);
-	const other = second.call('other realm', 0);
+	const other = second.call('other.realm;', 0);
 	ok(
 		'a second instance of the same module is independent',
-		'output' in other && other.output === 'other realm',
+		'output' in other && other.output === 'other.realm;',
 	);
 	ok(
 		'the instance reports its memory',
