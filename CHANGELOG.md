@@ -343,6 +343,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A page can no longer pass its own read for one of the proxy's copies by
+  replacing `Headers.prototype[Symbol.iterator]` or the `Request.prototype`
+  `headers` getter: the browser read the request's headers through them
+  after the inject had dropped the proxy's marker, so a page could add it
+  back and read another site's response whole. fetch and XMLHttpRequest now
+  hand the browser the page's headers as a record read with the browser's
+  own members. (sop-escapes suite.)
 - Resource timing of another site's resources is restricted unless its
   Timing-Allow-Origin names the page, as natively: timings, sizes and
   Server-Timing read 0 or empty, in the entry and its `toJSON()`, and

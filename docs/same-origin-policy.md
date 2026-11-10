@@ -228,9 +228,13 @@ suites' known lists with the same reason.
 3. **The gate between page and worker is in the page.** The worker trusts
    the `x-stomp-load` marker of the inject's copies (judged as the load they
    stand for: a no-cors image is read whole) and the hooks drop it from the
-   page's own requests. A page that reached a realm no hook runs in could
-   send it and read another site's no-cors resource. That is the trust model
-   of the rest of the proxy (docs/scramjet-parity.md section 2a).
+   page's own requests, reading the page's headers with the browser's own
+   Headers and Request members (taken before the page runs) and handing the
+   browser a record it reads by its own properties, so a replaced iterator,
+   getter or `Object.prototype.headers` adds nothing (sop-escapes measured
+   both ways in through them before this). A page that reached a realm no
+   hook runs in could still send it: the trust model of the rest of the
+   proxy (docs/scramjet-parity.md section 2a).
 4. Canvas: an image of the page's own origin that redirects to another is
    judged by its own URL (Chrome taints by the response's origin); a canvas
    tainted in one document's bundle is not known to another document's (a

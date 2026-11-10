@@ -6,7 +6,7 @@ import {
 	OPAQUE_HEADER,
 } from '../../../transport/messages';
 import Module from '../../Module';
-import { isStompHeader } from '../../modules/Fetch';
+import { isStompHeader, pageHeaderRecord } from '../../modules/Fetch';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
@@ -168,6 +168,8 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			// its response, as natively) and without (the route's), fragment
 			// dropped, when it has credentials
 			#credentialed: { shown: string; plain: string } | null = null;
+			// open()'s or the URL's user:password, for the worker's Basic answer
+			#urlCredentials: string | null = null;
 			// the URL send() requested, as the page named it (a synchronous
 			// request's NetworkError names it)
 			#sentURL = '';
@@ -482,16 +484,23 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				);
 			}
 			#fetch(url: string | URL, init: RequestInit) {
+				// the page's headers as a record the browser reads by its own
+				// properties, without the proxy's markers (see Fetch)
+				const headers = pageHeaderRecord(init.headers as Headers);
+				init.headers = headers;
+				// open()'s or the URL's credentials, for the worker (stripped
+				// with the page's markers above, so added back here)
+				if (this.#urlCredentials !== null)
+					headers[CREDENTIALS_HEADER] = this.#urlCredentials;
 				// a request of an opaque origin goes as one (OPAQUE_HEADER)
-				if (that.client.opaqueRequests)
-					(init.headers as Headers).set(OPAQUE_HEADER, '1');
+				if (that.client.opaqueRequests) headers[OPAQUE_HEADER] = '1';
 				if (this.#async) {
 					const generation = this.#generation;
 					init.signal = this.#abort.signal;
 					// abort() and a timeout reach the worker under this id; its
 					// prefix tells the worker the request is an XMLHttpRequest
 					const id = `xhr-${Date.now()}-${Math.random()}`;
-					(init.headers as Headers).set(ABORT_HEADER, id);
+					headers[ABORT_HEADER] = id;
 					this.#abort.signal.addEventListener(
 						'abort',
 						() => that.client.abortRequest(id),
@@ -613,6 +622,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				this.#password =
 					password === undefined || password === null ? null : String(password);
 				this.#credentialed = null;
+				this.#urlCredentials = null;
 
 				// readystatechange, even for a synchronous request, unless it
 				// was opened already
@@ -676,10 +686,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				if (this.#password !== null) target.password = this.#password;
 				this.#credentialed = null;
 				if (target.username !== '' || target.password !== '') {
-					this.#headers.set(
-						CREDENTIALS_HEADER,
-						`${target.username}:${target.password}`,
-					);
+					this.#urlCredentials = `${target.username}:${target.password}`;
 					const shown = new URL(target.href);
 					shown.hash = '';
 					target.username = '';

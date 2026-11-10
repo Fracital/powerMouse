@@ -2,7 +2,7 @@ import { routeXHR } from '../../../routeURL';
 import StompURL from '../../../StompURL';
 import { ABORT_HEADER, CREDENTIALS_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
-import { isStompHeader } from '../../modules/Fetch';
+import { isStompHeader, pageHeaderRecord } from '../../modules/Fetch';
 import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import {
@@ -68,12 +68,15 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			Reflect.apply(nativeOpen, xhr, [init.method, url, false]);
 			Reflect.apply(nativeResponseType, xhr, ['arraybuffer']);
 			Reflect.apply(nativeCredentials, xhr, [init.credentials === 'include']);
-			for (const [name, value] of init.headers as Headers)
+			const sent = init.headers as Record<string, string>;
+			for (const name of Object.keys(sent)) {
+				const value = sent[name];
 				try {
 					Reflect.apply(nativeSetHeader, xhr, [name, value]);
 				} catch (error) {
 					// a header the browser does not let a page set
 				}
+			}
 			Reflect.apply(nativeSend, xhr, [init.body ?? null]);
 			const headers = new Headers();
 			const lines = String(Reflect.apply(nativeAllHeaders, xhr, [])).split(
@@ -130,6 +133,8 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			// its response, as natively) and without (the route's), fragment
 			// dropped, when it has credentials
 			#credentialed: { shown: string; plain: string } | null = null;
+			// open()'s or the URL's user:password, for the worker's Basic answer
+			#urlCredentials: string | null = null;
 			#responseType = '';
 			#responseText = '';
 			#readyState = UNSENT;
@@ -406,13 +411,21 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				);
 			}
 			#fetch(url: string | URL, init: RequestInit) {
+				// the page's headers as a record the browser reads by its own
+				// properties, without the proxy's markers (see Fetch)
+				const headers = pageHeaderRecord(init.headers as Headers);
+				init.headers = headers;
+				// open()'s or the URL's credentials, for the worker (stripped
+				// with the page's markers above, so added back here)
+				if (this.#urlCredentials !== null)
+					headers[CREDENTIALS_HEADER] = this.#urlCredentials;
 				if (this.#async) {
 					const generation = this.#generation;
 					init.signal = this.#abort.signal;
 					// abort() and a timeout reach the worker under this id; its
 					// prefix tells the worker the request is an XMLHttpRequest
 					const id = `xhr-${Date.now()}-${Math.random()}`;
-					(init.headers as Headers).set(ABORT_HEADER, id);
+					headers[ABORT_HEADER] = id;
 					this.#abort.signal.addEventListener(
 						'abort',
 						() => that.client.abortRequest(id),
@@ -506,6 +519,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				this.#password =
 					password === undefined || password === null ? null : String(password);
 				this.#credentialed = null;
+				this.#urlCredentials = null;
 
 				// readystatechange, even for a synchronous request, unless it
 				// was opened already
@@ -569,10 +583,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				if (this.#password !== null) target.password = this.#password;
 				this.#credentialed = null;
 				if (target.username !== '' || target.password !== '') {
-					this.#headers.set(
-						CREDENTIALS_HEADER,
-						`${target.username}:${target.password}`,
-					);
+					this.#urlCredentials = `${target.username}:${target.password}`;
 					const shown = new URL(target.href);
 					shown.hash = '';
 					target.username = '';

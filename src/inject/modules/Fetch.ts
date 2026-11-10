@@ -21,19 +21,65 @@ import { unrouteURL } from './Unroute';
 export const isStompHeader = (name: string) =>
 	name.length > 8 && name.slice(0, 8).toLowerCase() === 'x-stomp-';
 
-/** `headers` without the proxy's markers, or null when it had none */
-function withoutStompHeaders(headers: Headers): Headers | null {
-	let found = false;
-	for (const name of headers.keys())
-		if (isStompHeader(name)) {
-			found = true;
-			break;
-		}
-	if (!found) return null;
-	const clean = new Headers();
-	for (const [name, value] of headers)
-		if (!isStompHeader(name)) clean.append(name, value);
-	return clean;
+// The browser's own Headers and Request members, taken when the bundle runs
+// (before any page code): a page can replace the prototypes' iterators,
+// getters and methods, and the browser reads a request's headers through
+// them when it converts an init (`init.headers`, a Request's `headers`
+// getter, a Headers' @@iterator)
+const nativeHeadersForEach = Headers.prototype.forEach;
+const nativeHeadersSet = Headers.prototype.set;
+const nativeHeadersDelete = Headers.prototype.delete;
+const nativeRequestHeaders = Reflect.getOwnPropertyDescriptor(
+	Request.prototype,
+	'headers',
+)!.get!;
+
+/** the names and values of a real Headers, read by the browser's own method */
+function entriesOf(headers: Headers): [string, string][] {
+	const entries: [string, string][] = [];
+	Reflect.apply(nativeHeadersForEach, headers, [
+		(value: string, name: string) => entries.push([name, value]),
+	]);
+	return entries;
+}
+
+/**
+ * A request's headers as the page made them, without the proxy's markers,
+ * as a record with no prototype: the browser converts a record by its own
+ * properties, so nothing the page replaced adds a header to it
+ */
+export function pageHeaderRecord(
+	headers: Headers,
+	add: Record<string, string> = {},
+): Record<string, string> {
+	const record = Object.create(null) as Record<string, string>;
+	for (const [name, value] of entriesOf(headers))
+		if (!isStompHeader(name)) record[name] = value;
+	for (const name of Object.keys(add)) record[name] = add[name];
+	return record;
+}
+
+/**
+ * A copy of a page's Request whose headers are the page's without the
+ * proxy's markers, plus `add`: inside (where a Request made from it reads
+ * them) and as its own `headers` (where an init dictionary is read, past
+ * the prototype's getter the page may have replaced)
+ */
+export function pageRequest(
+	request: Request,
+	add: Record<string, string> = {},
+): Request {
+	const copy = new Request(request);
+	const inside = Reflect.apply(nativeRequestHeaders, copy, []) as Headers;
+	for (const [name] of entriesOf(inside))
+		if (isStompHeader(name)) Reflect.apply(nativeHeadersDelete, inside, [name]);
+	for (const name of Object.keys(add))
+		Reflect.apply(nativeHeadersSet, inside, [name, add[name]]);
+	Reflect.defineProperty(copy, 'headers', {
+		value: pageHeaderRecord(inside),
+		configurable: true,
+	});
+	return copy;
 }
 
 /** an id for a request the page may abort */
@@ -175,12 +221,9 @@ export default class FetchModule extends Module<Client> {
 				let init: RequestInit;
 				let url: urlLike;
 
-				let request = args[0] instanceof Request ? args[0] : null;
+				const request = args[0] instanceof Request ? args[0] : null;
 				if (request) {
 					url = new URL(Reflect.apply(nativeRequestURL, request, []) as string);
-					// the proxy's markers are never the page's to send
-					const clean = withoutStompHeaders(request.headers);
-					if (clean) request = new Request(request, { headers: clean });
 					init = request;
 				} else {
 					// a URL that does not parse: the browser's own rejection, which
@@ -190,11 +233,6 @@ export default class FetchModule extends Module<Client> {
 						return await Reflect.apply(target, that, [text, ...args.slice(1)]);
 					url = new URL(text, this.client.url.toString());
 					init = args[1];
-					const clean =
-						init?.headers !== undefined && init.headers !== null
-							? withoutStompHeaders(new Headers(init.headers))
-							: null;
-					if (clean) init = { ...init, headers: clean };
 				}
 				// the request's mode, which decides the response's type
 				const mode =
@@ -241,17 +279,28 @@ export default class FetchModule extends Module<Client> {
 						init = rest;
 					}
 				}
-				// an abort never reaches the worker on its own: the request carries
-				// an id and the abort is posted to the worker under it
+				// the proxy's own headers: an abort never reaches the worker on its
+				// own, so the request carries an id and the abort is posted to the
+				// worker under it; a request of an opaque origin goes as one
+				const add: Record<string, string> = {};
 				const signal = init?.signal;
-				if (signal) {
-					const id = abortId();
-					const headers = new Headers(init.headers ?? undefined);
-					headers.set(ABORT_HEADER, id);
-					init =
-						init instanceof Request
-							? new Request(init, { headers })
-							: { ...init, headers };
+				let aborted: string | null = null;
+				if (signal) aborted = add[ABORT_HEADER] = abortId();
+				if (this.client.opaqueRequests) add[OPAQUE_HEADER] = '1';
+				// what goes out: the page's headers without the proxy's markers
+				// (the worker trusts those), the proxy's own added
+				init =
+					init instanceof Request
+						? pageRequest(init, add)
+						: {
+								...init,
+								headers: pageHeaderRecord(
+									new Headers(init?.headers ?? undefined),
+									add,
+								),
+							};
+				if (signal && aborted !== null) {
+					const id = aborted;
 					if (signal.aborted) this.client.abortRequest(id);
 					else
 						signal.addEventListener(
@@ -261,15 +310,6 @@ export default class FetchModule extends Module<Client> {
 								once: true,
 							},
 						);
-				}
-				// a request of an opaque origin goes as one (OPAQUE_HEADER)
-				if (this.client.opaqueRequests) {
-					const headers = new Headers(init?.headers ?? undefined);
-					headers.set(OPAQUE_HEADER, '1');
-					init =
-						init instanceof Request
-							? new Request(init, { headers })
-							: { ...init, headers };
 				}
 				// [input, init]
 				//TODO: COOKIES

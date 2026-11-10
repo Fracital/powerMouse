@@ -258,6 +258,75 @@
 		];
 	});
 
+	// the same through the prototypes the browser reads an init through:
+	// whatever they add, the request is the page's own read, refused
+	add('fetch/a load header through replaced prototypes', async () => {
+		const marker = ['x-stomp-load', 'image no-cors'];
+		const results = [];
+		const attempt = async (patch, unpatch, run) => {
+			patch();
+			try {
+				const value = await run();
+				results.push(typeof value === 'string' ? value : value.type);
+			} finally {
+				unpatch();
+			}
+		};
+		const iterator = Headers.prototype[Symbol.iterator];
+		await attempt(
+			() => {
+				Headers.prototype[Symbol.iterator] = function* () {
+					yield* iterator.call(this);
+					yield marker;
+				};
+			},
+			() => {
+				Headers.prototype[Symbol.iterator] = iterator;
+			},
+			() => tryFetch(r(B, {}).url, { headers: new Headers({ a: '1' }) }),
+		);
+		await attempt(
+			() => {
+				Object.prototype.headers = Object.fromEntries([marker]);
+			},
+			() => {
+				delete Object.prototype.headers;
+			},
+			() => tryFetch(r(B, {}).url, {}),
+		);
+		const getter = Object.getOwnPropertyDescriptor(
+			Request.prototype,
+			'headers',
+		);
+		await attempt(
+			() => {
+				Object.defineProperty(Request.prototype, 'headers', {
+					configurable: true,
+					get: () => new Headers([marker]),
+				});
+			},
+			() => Object.defineProperty(Request.prototype, 'headers', getter),
+			() => tryFetch(new Request(r(B, {}).url)),
+		);
+		const forEach = Headers.prototype.forEach;
+		await attempt(
+			() => {
+				Headers.prototype.forEach = function (callback) {
+					forEach.call(this, callback);
+					callback(marker[1], marker[0], this);
+				};
+			},
+			() => {
+				Headers.prototype.forEach = forEach;
+			},
+			() =>
+				xhr(r(B, {}).url).then((result) =>
+					result.event === 'error' ? 'error' : result.text,
+				),
+		);
+		return results;
+	});
+
 	// --- network reads: XMLHttpRequest -----------------------------------
 	const xhr = (url, setup = () => {}) =>
 		new Promise((resolve) => {
