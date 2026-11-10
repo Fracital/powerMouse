@@ -20,6 +20,34 @@ Where docker's bridge network cannot reach the Rust mirrors, set `ENGINE` to
 a wrapper that adds `--network host` to `docker build`, as for
 `deploy/epoxy`.
 
+## Adding a crate
+
+Three crates share this toolchain (the rewriter, the blocker, WebRTC), and
+the recipe is the same for each:
+
+1. A directory `rust/<crate>/` with a `cdylib` crate, added to the
+   workspace `members` in `rust/Cargo.toml`, and `LOCK=1 build.sh <crate>
+<name>` once to resolve its dependencies into the committed
+   `rust/Cargo.lock`.
+2. `rust/<crate>/abi.json`: the imports (`module.field`) and exports
+   (`name:kind`) the artifact may have, and nothing else. A crate that
+   speaks the buffer ABI (`rust/rwjs/src/abi.rs` is the model) is loaded by
+   `src/wasm/module.ts`'s `BufferInstance` with no glue of its own; one
+   that needs WASI names those imports here and answers them in its worker.
+3. The markers, if any: `wasm-target`, `bindgen` (below).
+4. A key in `Assets` and `DEFAULT_ASSETS` (`src/config.ts`) naming
+   `<name>.wasm`, so a host that renames files can say what it called it,
+   and a line in `README.md`'s `init.assets` row.
+5. `build.sh <crate> <name>`. `build.js` copies everything in `assets/`
+   into `dist/`, and the `wasm-artifact` suite checks every artifact it
+   finds there against its crate's `abi.json`, so nothing else registers
+   the artifact.
+
+What the crates share in Rust is `rust/edits`: the span edit model and the
+splice engine (`Edit::wrap`, `Edit::replace`, `Edit::insert`, `apply`), for
+any rewriter that edits text at byte spans. Its API is the handful of items
+its `lib.rs` documents; it depends on nothing.
+
 ## What is pinned, and how
 
 `pins.env` holds all of it:
