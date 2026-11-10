@@ -444,6 +444,11 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   not; 21 large scripts of Google, YouTube, Docs, CNN and Discord split and
   stitch to the whole's rewrite; prewrite: the streamed shell leaves no copy
   of the markup in the page.)
+- The demo's wisp server, wisp-js, goes to 0.5.3. 0.5.2 sent its periodic
+  CONTINUE to UDP streams only (the stream type test was inverted), so a TCP
+  stream never got credit back after its first window of 128 packets, and a
+  client that honours credit stalled there: libcurl.js took 19.6 s for 400
+  sequential requests through it, 1.6 s through 0.5.3.
 - stomp-h3's HTTP/3 SETTINGS, control stream, QPACK streams, PRIORITY_UPDATE
   frames, QUIC transport parameter order and 1250-byte Initials are Chrome
   152's (docs/fingerprint.md); responses may use the QPACK dynamic table.

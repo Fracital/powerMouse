@@ -75,7 +75,7 @@
 		"@ianvs/prettier-plugin-sort-imports": "^4.4.0",
 		"@mercuryworkshop/epoxy-transport": "git+https://github.com/Fracital/EpoxyTransport.git#0bca2ecc2e2fe721c82125bc17ea8dbe1847f60c",
 		"@mercuryworkshop/libcurl-transport": "^2.0.6",
-		"@mercuryworkshop/wisp-js": "^0.5.2",
+		"@mercuryworkshop/wisp-js": "^0.5.3",
 		"@types/crypto-js": "^4.2.2",
 		"@types/css-tree": "^3.2.0",
 		"@types/serviceworker": "^0.0.204",
