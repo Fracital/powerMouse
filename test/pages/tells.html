@@ -2,7 +2,8 @@
 <title>TELLS</title>
 <script>
 	// the deployment's helper names: the defaults, or the four the suite
-	// passed (`?names=access,client,globalProxy,globalName`)
+	// passed (`?names=access,client,globalProxy,globalName`). Every value
+	// below is compared with the page loaded natively
 	const helpers = (
 		new URLSearchParams(location.search).get('names') || '$s$j,$P$s,$s$L,$s$N'
 	).split(',');
@@ -18,6 +19,40 @@
 				Reflect.has(object, key) ||
 				Object.prototype.propertyIsEnumerable.call(object, key),
 		);
+	const attempt = (f) => {
+		try {
+			return f();
+		} catch (error) {
+			return `${error.name}: ${error.message}`;
+		}
+	};
+	// `'<name>' in o` as a page would write it, the name a literal
+	const literalIn = (object, label) =>
+		helpers.filter((key) =>
+			new Function('o', `return ${JSON.stringify(key)} in o`)(object),
+		).length +
+		':' +
+		label;
+	const forIn = (object) => {
+		const found = [];
+		for (const key in object) if (helpers.includes(key)) found.push(key);
+		return found;
+	};
+	const descriptors = (object) =>
+		helpers.filter(
+			(key) =>
+				Object.getOwnPropertyDescriptor(object, key) !== undefined ||
+				Reflect.getOwnPropertyDescriptor(object, key) !== undefined ||
+				key in Object.getOwnPropertyDescriptors(object),
+		);
+	const shown = (keys) => keys.filter((key) => helpers.includes(key));
+	const stack = (error) => ({
+		// the page's own URL, never a route of the proxy's
+		names: String(error.stack).includes('/pages/tells.html'),
+		routed: /\/stomp\//.test(String(error.stack)),
+		first: String(error.stack).split('\n')[0],
+	});
+
 	window.__tells = {
 		windowNames: names(window),
 		windowAsks: asks(window),
@@ -26,13 +61,148 @@
 		evalNames: names(eval),
 		evalAsks: asks(eval),
 		documentNames: names(document),
-		// documented tells, recorded, not asserted
+
+		// the `in` operator: a computed key, a literal one, a template, a
+		// key that converts to the name, on every object that has helpers
 		inOperator: helpers.filter((key) => key in window),
+		inOthers: [self, globalThis, document, location, eval].map(
+			(object) => helpers.filter((key) => key in object).length,
+		),
+		inLiteral: [
+			literalIn(window, 'window'),
+			literalIn(location, 'location'),
+			literalIn(eval, 'eval'),
+		],
+		inTemplate: helpers.filter((key) => `${key}` in window),
+		inConverted: helpers.filter((key) => ({ toString: () => key }) in window),
+		inPlain: helpers.map((key) => key in { [key]: 1 }),
+		inNative: ['document', 'location', 'Error', 'nope'].map(
+			(key) => key in window,
+		),
+		inPrimitive: attempt(() => helpers[0] in 5),
+		// the other reflective surfaces of the window
+		windowKeys: shown(Object.keys(window)),
+		windowForIn: forIn(window),
+		windowEntries: shown(Object.entries(window).map(([key]) => key)),
+		windowDescriptors: descriptors(window),
+		// a read of the name, recorded, not compared: the access API's is
+		// still there to a page that names it
+		reads: helpers.map((key) => typeof window[key]),
+		readStatic: [
+			typeof window.$s$j,
+			typeof window.$P$s,
+			typeof $s$j,
+			new Function(`return typeof window.${helpers[0]}`)(),
+		],
+
+		// Error.prepareStackTrace: nothing, as natively, on Error and on what
+		// inherits from it, by every reflective question
 		prepare: typeof Error.prepareStackTrace,
+		prepareInherited: [TypeError, RangeError, class extends Error {}].map(
+			(ctor) => typeof ctor.prepareStackTrace,
+		),
+		prepareIn: 'prepareStackTrace' in Error,
+		prepareOwn: [
+			Object.hasOwn(Error, 'prepareStackTrace'),
+			Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace'),
+			'prepareStackTrace' in Object.getOwnPropertyDescriptors(Error),
+		],
+		errorKeys: Reflect.ownKeys(Error).map(String),
+		errorNames: Object.getOwnPropertyNames(Error),
+		errorIdentity: [
+			Error.prototype.constructor === Error,
+			Object.getPrototypeOf(TypeError) === Error,
+			Object.getPrototypeOf(new TypeError()) === TypeError.prototype,
+			new RangeError() instanceof Error,
+			Function.prototype.toString.call(Error),
+			Error.name,
+			Error.length,
+		],
+		stackDefault: stack(new Error('plain')),
+		stackThrown: stack(
+			(() => {
+				try {
+					null.x;
+				} catch (error) {
+					return error;
+				}
+			})(),
+		),
+		stackSubclass: stack(new (class Mine extends Error {})('mine')),
+		// the page's own formatter: V8 calls it, it reads back as itself, it
+		// is an own enumerable property, and deleting it restores the default
+		pageFormatter: (() => {
+			const formatter = (error, sites) =>
+				`mine ${error.message} ${Array.isArray(sites)} ${typeof sites[0]?.getFileName}`;
+			Error.prepareStackTrace = formatter;
+			const result = {
+				stack: new Error('own').stack,
+				subclassStack: new TypeError('own').stack,
+				same: Error.prepareStackTrace === formatter,
+				inherited: TypeError.prepareStackTrace === formatter,
+				descriptor: JSON.stringify(
+					Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace'),
+					(key, value) => (value === formatter ? 'formatter' : value),
+				),
+				keys: Object.keys(Error),
+				names: Object.getOwnPropertyNames(Error).slice(-1),
+				has: 'prepareStackTrace' in Error,
+			};
+			result.deleted = delete Error.prepareStackTrace;
+			result.after = typeof Error.prepareStackTrace;
+			result.afterIn = 'prepareStackTrace' in Error;
+			result.afterStack = stack(new Error('after'));
+			// set to undefined: an own property, the default formatting
+			Error.prepareStackTrace = undefined;
+			result.undefinedIn = 'prepareStackTrace' in Error;
+			result.undefinedStack = stack(new Error('undefined'));
+			delete Error.prepareStackTrace;
+			// the save and restore pattern of source-map-support and depd
+			const saved = Error.prepareStackTrace;
+			Error.prepareStackTrace = (_, sites) => sites;
+			const sites = new Error('sites').stack;
+			Error.prepareStackTrace = saved;
+			result.saved = typeof saved;
+			result.sites = Array.isArray(sites) && sites.length > 0;
+			result.restored = [
+				typeof Error.prepareStackTrace,
+				'prepareStackTrace' in Error,
+				stack(new Error('restored')),
+			];
+			delete Error.prepareStackTrace;
+			// one defined as an accessor
+			Object.defineProperty(Error, 'prepareStackTrace', {
+				configurable: true,
+				get() {
+					return this === Error ? formatter : undefined;
+				},
+			});
+			result.accessor = new Error('accessor').stack;
+			delete Error.prepareStackTrace;
+			// a subclass of the page's own gets an own property, and V8 keeps
+			// reading Error's
+			class Sub extends Error {}
+			Sub.prepareStackTrace = formatter;
+			result.subclassOwn = [
+				Object.hasOwn(Sub, 'prepareStackTrace'),
+				Object.hasOwn(Error, 'prepareStackTrace'),
+				stack(new Sub('sub')),
+			];
+			return result;
+		})(),
+		// deleting the formatter V8 reads is deleting nothing of the page's:
+		// stacks stay clean
+		deleteDefault: [
+			delete Error.prepareStackTrace,
+			Reflect.deleteProperty(Error, 'prepareStackTrace'),
+			stack(new Error('deleted')),
+		],
+
 		// the source of a rewritten function names the access helper
 		functionSource: (() => location.href).toString(),
 		// a page's own object answers natively
 		plainHasOwn: Object.hasOwn({ [helpers[0]]: 1 }, helpers[0]),
+		plainAsks: asks(Object.fromEntries(helpers.map((key) => [key, 1]))),
 		plainNames: Object.getOwnPropertyNames({ [helpers[1]]: 1 }),
 		// the rewrite ran under these names: the real URL, the page as top
 		rewritten: top === window && location.href,

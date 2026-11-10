@@ -280,6 +280,29 @@ const parses = (code) => {
 	);
 }
 {
+	// an `in` whose key is or may be a helper name asks the access API (the
+	// helpers are on the window, natively nothing is); a literal key of
+	// anything else, a private name and for...in are left as they are
+	const out = rewrite(
+		"'$s$j' in window; k in o; `${k}` in o; o.k in top; '$P$s' in w; 'x' in o; 0 in a; class C { #p; m(o) { return #p in o; } } for (k in o);",
+	);
+	ok(
+		'an in that may find a helper name goes through the access API',
+		/\$s\$j\.has\('\$s\$j',\s*window\)/.test(out) &&
+			/\$s\$j\.has\(k,\s*o\)/.test(out) &&
+			/\$s\$j\.has\(`[^`]*`,\s*o\)/.test(out) &&
+			/\$s\$j\.has\(o\.k,\s*\$s\$j\.get\(top,\s*'top'\)\)/.test(out) &&
+			/\$s\$j\.has\('\$P\$s',\s*w\)/.test(out) &&
+			/'x' in o/.test(out) &&
+			/\b0 in a/.test(out) &&
+			/#p in o/.test(out) &&
+			/for \(k in o\)/.test(out) &&
+			(out.match(/\.has\(/g) || []).length === 5 &&
+			parses(out),
+		out,
+	);
+}
+{
 	// a top-level `var` binding location in a classic script assigns the
 	// window's location: bound to a temporary and routed like `location = v`;
 	// inside a function, or in a module, left alone
