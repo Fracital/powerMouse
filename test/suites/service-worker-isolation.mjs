@@ -25,6 +25,8 @@ const site = await startSite();
 const b = new URL(FIXTURE).origin;
 const ROUTED = /\/stomp\/[\w-]+\/html\//;
 
+// `key` is one only the awaited page sets: right after a submit the newest
+// routed frame can still be the last page's, which is done
 async function wait(page, key) {
 	let value = null;
 	for (let i = 0; i < 160 && !value?.[key]; i++) {
@@ -65,7 +67,7 @@ for (const [mode, base] of [
 		page,
 		`${FIXTURE}pages/sw-iso-b.html?a=${encodeURIComponent(site.origin)}`,
 	);
-	const other = (await wait(page, 'done')).result ?? {};
+	const other = (await wait(page, 'result')).result ?? {};
 	ok(
 		`${mode}: A's worker answers none of B's requests, to B or to A`,
 		!!other.own && other.own !== 'from A' && other.toA !== 'from A',
@@ -86,7 +88,7 @@ for (const [mode, base] of [
 		page,
 		`${site.origin}/a/iso.html?run=${mode}&step=2&secret=${encodeURIComponent(secret)}`,
 	);
-	const report = (await wait(page, 'done')).report ?? {};
+	const report = (await wait(page, 'report')).report ?? {};
 	ok(
 		`${mode}: A's worker saw requests of A only`,
 		Array.isArray(report.seen) &&
