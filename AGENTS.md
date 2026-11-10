@@ -215,7 +215,8 @@ on every save (use a `git worktree`).
 - HTTP/3 is opt-in (`TransportDescriptor.http3`, `src/transport/http3/`):
   QUIC over epoxy's wisp UDP streams through stomp-h3 (`deploy/epoxy/h3/`,
   our own crate built into epoxy-transport's `dist/h3/`, not an upstream
-  patch). The wisp server must relay UDP; the holyWisp edges do not.
+  patch). The wisp server must relay UDP; the holyWisp edges do since
+  abulxt 853761c7 (`holywisp_allow_udp`, `proxy-udp = direct`).
   docs/http3.md.
 
 When a site hangs or a socket goes quiet, suspect the transport before the

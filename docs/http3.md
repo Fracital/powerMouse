@@ -151,16 +151,15 @@ with their RTT and datagram counts, and how the last 64 requests went.
 The QUIC packets leave from the wisp server as UDP, so the server has to
 relay UDP streams.
 
-| Server                                                                                          | UDP                                                                                                                                                                 |
-| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| the demo's built-in `/wisp/` (wisp-js 0.5)                                                      | on (`allow_udp_streams` defaults to true); `WISP_NO_UDP=1` turns it off for testing                                                                                 |
-| holyWisp, the public `wss://holywisp.fracit.al/` relay and the keyed Fracital path on the edges | off: abulxt's `edge_wisp` role renders `allow-udp = off` on the edges (`holywisp_allow_udp: false`), because the edge egress proxy (edge-router.py) only speaks TCP |
-| holyWisp on amph (abulxt's own relay)                                                           | on, `proxy-udp = direct` (mullvad-pool is TCP only)                                                                                                                 |
+| Server                                                                                          | UDP                                                                                                                                                                                 |
+| ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| the demo's built-in `/wisp/` (wisp-js 0.5)                                                      | on (`allow_udp_streams` defaults to true); `WISP_NO_UDP=1` turns it off for testing                                                                                                 |
+| holyWisp, the public `wss://holywisp.fracit.al/` relay and the keyed Fracital path on the edges | on since abulxt 853761c7: `holywisp_allow_udp: true` and `holywisp_proxy_udp_direct: true` render `allow-udp = on` and `proxy-udp = direct` (the edge egress proxy only speaks TCP) |
+| holyWisp on amph (abulxt's own relay)                                                           | on, `proxy-udp = direct` (mullvad-pool is TCP only)                                                                                                                                 |
 
 With UDP off the option costs nothing: the first UDP stream is refused at
-once and QUIC stays off for 5 minutes at a time. To turn it on for
-stomp.fracit.al, abulxt's ansible needs, in
-`deploy/ansible/inventory/group_vars/edge.yml`:
+once and QUIC stays off for 5 minutes at a time. The edges turned it on
+(abulxt 853761c7) with, in `deploy/ansible/inventory/group_vars/edge.yml`:
 
 ```yaml
 holywisp_allow_udp: true
@@ -169,7 +168,7 @@ holywisp_allow_udp: true
 holywisp_proxy_udp_direct: true
 ```
 
-then `ansible-playbook playbooks/edges.yml --tags wisp --vault-password-file ~/.abulxt-vault-pass`.
+applied with `ansible-playbook playbooks/edges.yml --tags wisp --vault-password-file ~/.abulxt-vault-pass`.
 That renders `allow-udp = on` and `proxy-udp = direct`; holyWisp then
 resolves the name itself (`dns-server`, 1.1.1.1), applies the same egress
 policy (no private, loopback or link-local addresses) and sends the

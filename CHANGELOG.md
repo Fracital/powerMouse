@@ -41,8 +41,8 @@ The first release after a four-year gap. Everything below is breaking.
   transport as before. Chrome's QUIC transport parameters, 256 KiB header
   sections, Chrome's pseudo-header order, no 0-RTT. `Http3Transport` is
   exported for hosts that construct transports themselves. Needs a wisp
-  server that relays UDP (the demo's does; holyWisp on the edges does not
-  yet). docs/http3.md has the design and the limits (http3 and
+  server that relays UDP (the demo's does, and the holyWisp edges do since
+  abulxt 853761c7). docs/http3.md has the design and the limits (http3 and
   http3-fallback suites).
 - A lost wisp connection no longer leaves the proxy dead until the page is
   reloaded. Epoxy keeps a wisp multiplexor whose WebSocket went away (a
