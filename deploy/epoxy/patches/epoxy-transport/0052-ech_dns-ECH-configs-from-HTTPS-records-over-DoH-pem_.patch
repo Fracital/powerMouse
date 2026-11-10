@@ -1,0 +1,235 @@
+From 07b42a5aa3969f49003b2db3ab8a9dcedd4825eb Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 10 Nov 2026 14:30:06 -0500
+Subject: [PATCH 52/52] ech_dns: ECH configs from HTTPS records over DoH;
+ pem_files
+
+With `ech_dns` set to a DNS-over-HTTPS endpoint (RFC 8484, e.g.
+https://cloudflare-dns.com/dns-query), the transport gives epoxy-tls an
+ech_resolver that asks it for each name's HTTPS record (RFC 9460) through
+the client itself and hands over the record's ech config list, so a
+connection to a site that publishes one offers real Encrypted Client Hello
+as Chrome does. One query per name at a time, kept for the record's TTL (60
+s to a day; 5 minutes without a record); a connection waits at most 1.5 s
+for the answer and then goes out with GREASE. The DoH server's own name,
+addresses and names that are never public are not asked. Unset, nothing
+changes.
+
+`pem_files` (epoxy's own option for extra trusted certificates) is passed
+through too, so a test can trust its own CA.
+---
+ src/ech.ts  | 144 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/main.ts |  28 ++++++++++
+ 2 files changed, 172 insertions(+)
+ create mode 100644 src/ech.ts
+
+diff --git a/src/ech.ts b/src/ech.ts
+new file mode 100644
+index 0000000..557df04
+--- /dev/null
++++ b/src/ech.ts
+@@ -0,0 +1,144 @@
++// Encrypted Client Hello configs from HTTPS resource records (RFC 9460),
++// read over DNS-over-HTTPS (RFC 8484). Chrome looks up a name's HTTPS record
++// next to its addresses and, when the record carries an `ech` config list,
++// encrypts its ClientHello to it (RFC 9849); without one it sends a GREASE
++// ECH. The wisp server resolves addresses only, so the record is asked of a
++// DoH server through the client itself.
++
++const TYPE_HTTPS = 65;
++const KEY_ECH = 5;
++/** how long a name without a usable record is not asked again */
++const NEGATIVE_MS = 5 * 60 * 1000;
++/** a record's TTL is kept at least this long, at most a day */
++const MIN_TTL_MS = 60 * 1000;
++const MAX_TTL_MS = 24 * 60 * 60 * 1000;
++/**
++ * how long a connection waits for the answer: Chrome waits for the HTTPS
++ * record a little past the address lookup; after this the connection goes
++ * out with GREASE and the answer is kept for the next one
++ */
++const WAIT_MS = 1500;
++
++/** the wire-format query for `name` IN HTTPS, id 0 as RFC 8484 asks */
++export function httpsQuery(name: string): Uint8Array {
++	const out: number[] = [0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
++	for (const label of name.split(".")) {
++		const bytes = new TextEncoder().encode(label);
++		if (!bytes.length || bytes.length > 63) throw new Error("bad DNS name");
++		out.push(bytes.length, ...bytes);
++	}
++	out.push(0, 0, TYPE_HTTPS, 0, 1);
++	return new Uint8Array(out);
++}
++
++function base64url(bytes: Uint8Array): string {
++	let binary = "";
++	for (const b of bytes) binary += String.fromCharCode(b);
++	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
++}
++
++/** offset just past the (possibly compressed) name at `offset` */
++function skipName(view: DataView, offset: number): number {
++	for (;;) {
++		const len = view.getUint8(offset);
++		if (len === 0) return offset + 1;
++		if ((len & 0xc0) === 0xc0) return offset + 2;
++		offset += len + 1;
++	}
++}
++
++/**
++ * The `ech` of the first ServiceMode HTTPS record in a DoH answer (a record
++ * for the CNAME target the resolver followed counts as the name's), with
++ * the answer's TTL; `null` when there is none.
++ */
++export function parseEch(
++	message: ArrayBuffer
++): { ech: Uint8Array; ttl: number } | null {
++	const view = new DataView(message);
++	if (view.byteLength < 12 || (view.getUint8(3) & 0x0f) !== 0) return null;
++	const questions = view.getUint16(4);
++	const answers = view.getUint16(6);
++	let offset = 12;
++	for (let i = 0; i < questions; i++) offset = skipName(view, offset) + 4;
++	for (let i = 0; i < answers; i++) {
++		offset = skipName(view, offset);
++		const type = view.getUint16(offset);
++		const ttl = view.getUint32(offset + 4);
++		const start = offset + 10;
++		const end = start + view.getUint16(offset + 8);
++		offset = end;
++		if (type !== TYPE_HTTPS || end > view.byteLength) continue;
++		// AliasMode (priority 0) names no parameters
++		if (view.getUint16(start) === 0) continue;
++		// the target name is never compressed in RDATA (RFC 9460 2.2)
++		for (let at = skipName(view, start + 2); at + 4 <= end; ) {
++			const key = view.getUint16(at);
++			const len = view.getUint16(at + 2);
++			if (key === KEY_ECH && at + 4 + len <= end)
++				return { ech: new Uint8Array(message.slice(at + 4, at + 4 + len)), ttl };
++			at += 4 + len;
++		}
++		return null;
++	}
++	return null;
++}
++
++type Fetch = (url: string, accept: string) => Promise<ArrayBuffer>;
++
++/** ECH config lists by host name, from one DoH endpoint, with their TTLs */
++export class EchResolver {
++	#dns: URL;
++	#fetch: Fetch;
++	#cache = new Map<string, { until: number; value: Promise<Uint8Array | null> }>();
++
++	constructor(dns: string, fetch: Fetch) {
++		this.#dns = new URL(dns);
++		this.#fetch = fetch;
++	}
++
++	/** what epoxy-tls's `ech_resolver` is given */
++	resolve = (host: string): Promise<Uint8Array | null> => {
++		const name = host.toLowerCase().replace(/\.$/, "");
++		// the DoH server's own name is never asked (its lookup would wait on
++		// itself), and neither is an address or a name that is never public
++		if (
++			name === this.#dns.hostname ||
++			!name.includes(".") ||
++			/^[\d.]+$|:|^\[/.test(name) ||
++			/(^|\.)(localhost|local|internal|test|invalid)$/.test(name)
++		)
++			return Promise.resolve(null);
++		const cached = this.#cache.get(name);
++		if (cached && cached.until > Date.now()) return wait(cached.value);
++		const entry = { until: Date.now() + NEGATIVE_MS, value: this.#ask(name) };
++		this.#cache.set(name, entry);
++		return wait(entry.value);
++	};
++
++	async #ask(name: string): Promise<Uint8Array | null> {
++		const url = new URL(this.#dns);
++		url.searchParams.set("dns", base64url(httpsQuery(name)));
++		try {
++			const found = parseEch(
++				await this.#fetch(url.href, "application/dns-message")
++			);
++			if (!found) return null;
++			const entry = this.#cache.get(name);
++			if (entry)
++				entry.until =
++					Date.now() + Math.min(Math.max(found.ttl * 1000, MIN_TTL_MS), MAX_TTL_MS);
++			return found.ech;
++		} catch {
++			return null;
++		}
++	}
++}
++
++/** the answer, or `null` once the connection has waited long enough */
++function wait(value: Promise<Uint8Array | null>): Promise<Uint8Array | null> {
++	return Promise.race([
++		value,
++		new Promise<null>((resolve) => setTimeout(() => resolve(null), WAIT_MS)),
++	]);
++}
+diff --git a/src/main.ts b/src/main.ts
+index abbdc6a..c107430 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -9,6 +9,7 @@ import initEpoxy, {
+ 	EpoxyHandlers,
+ 	info as epoxyInfo,
+ } from "@mercuryworkshop/epoxy-tls";
++import { EchResolver } from "./ech";
+ 
+ export { epoxyInfo };
+ 
+@@ -24,6 +25,18 @@ export type EpoxyOptions = {
+ 	redirect_limit?: number;
+ 	header_limit?: number;
+ 	buffer_size?: number;
++
++	/** PEM certificates trusted next to the web roots (a test's own CA) */
++	pem_files?: string[];
++
++	/**
++	 * A DNS-over-HTTPS endpoint (RFC 8484, e.g.
++	 * `https://cloudflare-dns.com/dns-query`) asked for each name's HTTPS
++	 * record before a TLS connection to it: with an `ech` config list there
++	 * the connection offers real Encrypted Client Hello, as Chrome does.
++	 * Unset, every connection sends a GREASE ECH.
++	 */
++	ech_dns?: string;
+ };
+ const opts = [
+ 	"wisp_v2",
+@@ -34,6 +47,7 @@ const opts = [
+ 	"redirect_limit",
+ 	"header_limit",
+ 	"buffer_size",
++	"pem_files",
+ ];
+ 
+ // wasm-bindgen's init skips instantiating only once the module has loaded,
+@@ -93,6 +107,20 @@ export default class EpoxyTransport implements ProxyTransport {
+ 			let options = new EpoxyClientOptions();
+ 			options.user_agent = navigator.userAgent;
+ 			opts.forEach((x) => this.setopt(options, x));
++			if (this.opts.ech_dns) {
++				// the lookups go through this client: the resolver skips the
++				// DoH server's own name, so its connection never waits on itself
++				const resolver = new EchResolver(this.opts.ech_dns, async (url, accept) => {
++					const res = await this.client.fetch(url, {
++						method: "GET",
++						headers: { accept },
++						redirect: "manual",
++					});
++					if (res.status !== 200) throw new Error(`DoH answered ${res.status}`);
++					return await res.arrayBuffer();
++				});
++				options.ech_resolver = resolver.resolve;
++			}
+ 			this.client = new EpoxyClient(this.wisp, options);
+ 
+ 			this.ready = true;

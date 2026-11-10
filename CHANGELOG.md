@@ -357,6 +357,17 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A site that publishes an ECH config in its HTTPS DNS record gets real
+  Encrypted Client Hello through epoxy, as from Chrome: crypto.cloudflare.com
+  reads `sni=encrypted`, tls-ech.dev "You are using ECH", defo.ie `SUCCESS`
+  (they read plaintext SNI and GREASE before). EpoxyTransport's new `ech_dns`
+  option names a DNS-over-HTTPS endpoint asked for each name's record; the
+  demo sets Cloudflare's (`STOMP_ECH_DNS`, `?noech`). The outer and inner
+  hello are Chrome's (compared with a local ECH server: same extensions,
+  order and 144-byte payload), a server's retry configs get one more
+  connection and a server with ECH off one without it, as Chrome does
+  (docs/fingerprint.md). Sites without a config see the same GREASE ECH and
+  JA4 as before.
 - A close the server starts reaches a proxied WebSocket with the server's
   code and reason, as natively: epoxy never read the close frame and
   reported every close as 1000 "Closed by remote", so a page saw 1000 for

@@ -216,6 +216,49 @@ all 50 before and after; Stack Overflow and Quora now answer with the same
 403 bot wall native Chrome gets from this machine, where rustls's hello
 had been let through.
 
+## Encrypted Client Hello
+
+Chrome reads a name's HTTPS DNS record (RFC 9460) next to its addresses
+and, when the record carries an `ech` config list, encrypts its
+ClientHello to it (RFC 9849): the network sees an outer hello naming the
+config's public name, and the server reads the inner one. Without a config
+it sends a GREASE ECH. Epoxy only ever sent the GREASE one.
+
+With the epoxy option `ech_dns` (a DNS-over-HTTPS endpoint; the demo sets
+`https://cloudflare-dns.com/dns-query`, `STOMP_ECH_DNS` on its server),
+EpoxyTransport asks it for each name's HTTPS record through epoxy itself
+while the wisp stream to the name opens, and epoxy-tls offers real ECH with
+the config (rustls's ECH client, HPKE on ring, the X25519 suites
+BoringSSL's client offers). Answers are kept for the record's TTL; a
+connection waits at most 1.5 s for one and otherwise sends GREASE.
+
+Sites that report it, natively and through the demo (`ech.mjs`):
+
+| Check                                   | Native Chrome 152                      | epoxy before            | epoxy after                            |
+| --------------------------------------- | -------------------------------------- | ----------------------- | -------------------------------------- |
+| crypto.cloudflare.com/cdn-cgi/trace     | `sni=encrypted`                        | `sni=plaintext`         | `sni=encrypted`                        |
+| tls-ech.dev                             | "You are using ECH"                    | "You are not using ECH" | "You are using ECH"                    |
+| defo.ie/ech-check.php                   | `SUCCESS`, outer SNI `cover.defo.ie`   | `GREASE`, no outer SNI  | `SUCCESS`, outer SNI `cover.defo.ie`   |
+| tls.peet.ws, tls.browserleaks.com (JA4) | `t13d1517h2_8daaf6152771_cb7bf5808d99` | the same                | the same (no ECH config there: GREASE) |
+
+Both hellos were compared with a local ECH server: Go's crypto/tls with an
+ECH key (it reads the inner hello after decrypting it; the outer one was
+taken from the wire), a DNS server and a DoH endpoint answering an HTTPS
+record with its config, and native Chrome in a network namespace whose
+resolver is that DNS server (`echlab`). Two connections each:
+
+| Field                                     | Native Chrome 152                                                                                                                                                                                                        | epoxy after                                                        |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| ECH accepted                              | yes                                                                                                                                                                                                                      | yes                                                                |
+| Outer hello                               | Chrome's usual hello: 16 suites, 19 extensions (2 GREASE) in random order, versions GREASE, 1.3, 1.2, SNI the public name                                                                                                | the same                                                           |
+| ECH payload                               | 144 bytes (a 21-byte name, no maximum_name_length)                                                                                                                                                                       | 144 bytes                                                          |
+| Outer record                              | 1947 bytes                                                                                                                                                                                                               | 1743 bytes: trust_anchors goes out empty (204 bytes, What is left) |
+| Inner hello                               | GREASE and the three TLS 1.3 suites; 15 extensions: the ECH marker, supported_versions (GREASE, 1.3) and SNI first, then the outer hello's others in its order (GREASE first and last), sent as one ech_outer_extensions | the same                                                           |
+| Stale config (server sends retry configs) | a second connection with the server's configs, accepted                                                                                                                                                                  | the same                                                           |
+| ECH off at the server (no retry configs)  | a second connection without ECH (GREASE), SNI the real name                                                                                                                                                              | the same                                                           |
+
+"Before" is the pinned build, which never offered a real config.
+
 ## After (libcurl)
 
 libcurl.js takes no TLS or HTTP/2 options, so its ClientHello and SETTINGS
@@ -295,6 +338,15 @@ next to their own UA.
 6. trust_anchors goes out empty (see above). Sending Chrome's ids needs a
    verifier that trusts the Chrome Root Store anchors they name, not
    webpki-roots; until then a fingerprinter reading the extension body sees
-   the difference, JA4 does not.
+   the difference (and an ECH offer's outer hello is 204 bytes shorter than
+   Chrome's), JA4 does not.
 7. Out of reach here: the TCP/IP fingerprint (peet.ws `tcpip`) is the wisp
    server's (Linux), not the user's OS.
+8. ECH over QUIC: Chrome offers real ECH over HTTP/3 too; stomp-h3 sends
+   the GREASE one. Its rustls carries the same patches (HPKE included), so
+   it needs the config handed in with the connection (the lookup is
+   EpoxyTransport's) and the same retry; about half a day.
+9. One HTTPS record per name: Chrome reads one lookup for both h3 (`alpn`)
+   and ECH. With both `http3.dns` and `ech_dns` set, the name is asked
+   twice, by Http3Transport and by EpoxyTransport, each with its own cache.
+10. libcurl has no ECH (mbedTLS); it sends no ECH extension at all.

@@ -1,0 +1,249 @@
+From 7d5a51dd889fa48ea6813af841c1cf02a71c2618 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 10 Nov 2026 14:29:30 -0500
+Subject: [PATCH 56/56] client: real ECH from the host's HTTPS record, retried
+ as Chrome does
+
+Chrome reads a name's HTTPS DNS record next to its addresses and, when the
+record carries an ech config list, encrypts its ClientHello to it (RFC
+9849): crypto.cloudflare.com/cdn-cgi/trace reads sni=encrypted, tls-ech.dev
+"You are using ECH". Epoxy only ever sent the GREASE ECH of the Chrome hello.
+
+EpoxyClientOptions takes an ech_resolver, `(host) => Promise<Uint8Array |
+null>`, asked for a DNS name's ECHConfigList while the wisp stream to it
+opens (an address is never asked). With a list rustls can use (the X25519
+suites of rustls's ring HPKE), the HTTP and WebSocket connection offers
+real ECH through ClientConfig::set_ech_mode, with Chrome's outer and inner
+hello. A server that rejects the offer and sends retry configs gets one
+more connection with those; one that rejects without them (ECH is off
+there, or it answered with TLS 1.2) gets one without ECH, as Chrome
+reconnects. Raw connect_tls streams offer no ECH.
+---
+ client/src/lib.rs             |   8 ++
+ client/src/stream_provider.rs | 155 +++++++++++++++++++++++++++++++---
+ 2 files changed, 151 insertions(+), 12 deletions(-)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index 66c47de..25554b4 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -255,6 +255,12 @@ cfg_if! {
+ 			pub pem_files: Vec<String>,
+ 			pub disable_certificate_validation: bool,
+ 			pub buffer_size: usize,
++			/// `(host) => Promise<Uint8Array | null>`: the ECHConfigList of
++			/// the host's HTTPS DNS record (RFC 9460 `ech`), asked before a
++			/// TLS connection to a DNS name opens. With one, the connection
++			/// offers real ECH (RFC 9849) as Chrome does; without, GREASE.
++			#[wasm_bindgen(getter_with_clone)]
++			pub ech_resolver: Option<Function>,
+ 		}
+ 	} else {
+ 		#[wasm_bindgen]
+@@ -300,6 +306,8 @@ impl Default for EpoxyClientOptions {
+ 			pem_files: Vec::new(),
+ 			disable_certificate_validation: false,
+ 			buffer_size: 16384,
++			#[cfg(feature = "full")]
++			ech_resolver: None,
+         }
+ 	}
+ }
+diff --git a/client/src/stream_provider.rs b/client/src/stream_provider.rs
+index 4d6a409..7c0610c 100644
+--- a/client/src/stream_provider.rs
++++ b/client/src/stream_provider.rs
+@@ -1,10 +1,15 @@
+ use std::{io::ErrorKind, pin::Pin, sync::Arc, task::Poll};
+ 
+ use cfg_if::cfg_if;
++#[cfg(feature = "full")]
++use futures_rustls::rustls::client::{EchConfig, EchMode};
+ use futures_rustls::{
+-	rustls::{ClientConfig, RootCertStore},
++	rustls::{pki_types::ServerName, ClientConfig, RootCertStore},
+ 	TlsConnector,
+ };
++use js_sys::{Function, Promise, Uint8Array};
++use wasm_bindgen::{JsCast, JsValue};
++use wasm_bindgen_futures::JsFuture;
+ use futures_util::{
+ 	future::Either,
+ 	lock::{Mutex, MutexGuard},
+@@ -73,6 +78,40 @@ pub struct StreamProvider {
+ 	h2_config: Arc<ClientConfig>,
+ 	ws_config: Arc<ClientConfig>,
+ 	client_config: Arc<ClientConfig>,
++
++	/// asked for a host's ECH config list (the `ech` of its HTTPS DNS
++	/// record) before a TLS connection to it opens
++	ech_resolver: Option<SendWrapper<Function>>,
++}
++
++/// What a TLS handshake that offered ECH ended with when the server
++/// rejected the offer (RFC 9849 6.1.6)
++#[cfg(feature = "full")]
++enum EchRejection {
++	/// it sent configs to retry with
++	Retry(EchConfig),
++	/// it sent none (ECH is off there) or answered with TLS 1.2
++	Disabled,
++}
++
++#[cfg(feature = "full")]
++fn ech_rejection(err: &std::io::Error) -> Option<EchRejection> {
++	use futures_rustls::rustls::{
++		crypto::ring::hpke::ALL_SUPPORTED_SUITES, Error, PeerIncompatible,
++	};
++	match err.get_ref()?.downcast_ref::<Error>()? {
++		Error::PeerIncompatible(PeerIncompatible::ServerRejectedEncryptedClientHello(
++			configs,
++		)) => Some(
++			configs
++				.as_deref()
++				.and_then(|configs| {
++					EchConfig::from_retry_configs(configs, ALL_SUPPORTED_SUITES).ok()
++				})
++				.map_or(EchRejection::Disabled, EchRejection::Retry),
++		),
++		_ => None,
++	}
+ }
+ 
+ /// What a TLS connection offers in ALPN.
+@@ -164,6 +203,10 @@ impl StreamProvider {
+ 			h2_config: client_config,
+ 			ws_config,
+ 			client_config: no_alpn_client_config,
++			#[cfg(feature = "full")]
++			ech_resolver: options.ech_resolver.clone().map(SendWrapper::new),
++			#[cfg(not(feature = "full"))]
++			ech_resolver: None,
+ 		})
+ 	}
+ 
+@@ -248,18 +291,97 @@ impl StreamProvider {
+ 		port: u16,
+ 		alpn: TlsAlpn,
+ 	) -> Result<ProviderTlsAsyncRW, EpoxyError> {
+-		let stream = self
+-			.get_asyncread(StreamType::Tcp, host.clone(), port)
+-			.await?;
+-		let connector = TlsConnector::from(match alpn {
+-			TlsAlpn::Http => self.h2_config.clone(),
+-			TlsAlpn::WebSocket => self.ws_config.clone(),
+-			TlsAlpn::None => self.client_config.clone(),
+-		});
+-		let ret = connector
+-			.connect(bare_host(&host).to_string().try_into()?, stream)
+-			.into_fallible()
++		let config = match alpn {
++			TlsAlpn::Http => &self.h2_config,
++			TlsAlpn::WebSocket => &self.ws_config,
++			TlsAlpn::None => &self.client_config,
++		};
++		// Chrome reads a name's HTTPS record next to its addresses and
++		// offers real ECH when the record carries a config list; the lookup
++		// runs while the wisp stream opens
++		#[cfg(feature = "full")]
++		{
++			let ech = match alpn {
++				TlsAlpn::None => None,
++				_ => Some(self.ech_config(&host)),
++			};
++			let (stream, ech) = futures_util::future::join(
++				self.get_asyncread(StreamType::Tcp, host.clone(), port),
++				async move {
++					match ech {
++						Some(ech) => ech.await,
++						None => None,
++					}
++				},
++			)
+ 			.await;
++			let Some(ech) = ech else {
++				return self.handshake(stream?, &host, config.clone()).await;
++			};
++			let ret = self
++				.handshake(stream?, &host, with_ech(config, ech))
++				.await;
++			// a server that rejects ECH sends configs to retry with once
++			// (Chrome does, then fails), or none when ECH is off there, and
++			// Chrome connects again without it
++			let retry = match &ret {
++				Err(EpoxyError::Io(err)) => ech_rejection(err),
++				_ => None,
++			};
++			match retry {
++				None => ret,
++				Some(rejection) => {
++					let stream = self
++						.get_asyncread(StreamType::Tcp, host.clone(), port)
++						.await?;
++					let config = match rejection {
++						EchRejection::Retry(ech) => with_ech(config, ech),
++						EchRejection::Disabled => config.clone(),
++					};
++					self.handshake(stream, &host, config).await
++				}
++			}
++		}
++		#[cfg(not(feature = "full"))]
++		{
++			let stream = self
++				.get_asyncread(StreamType::Tcp, host.clone(), port)
++				.await?;
++			self.handshake(stream, &host, config.clone()).await
++		}
++	}
++
++	/// The host's ECH config list from `ech_resolver`, when it gives one
++	/// this build can use
++	#[cfg(feature = "full")]
++	fn ech_config(&self, host: &str) -> impl Future<Output = Option<EchConfig>> + use<> {
++		use futures_rustls::rustls::{
++			crypto::ring::hpke::ALL_SUPPORTED_SUITES, pki_types::EchConfigListBytes,
++		};
++		// an address has no HTTPS record (and gets no SNI either)
++		let call = match (&self.ech_resolver, ServerName::try_from(bare_host(host))) {
++			(Some(resolver), Ok(ServerName::DnsName(_))) => {
++				resolver.call1(&JsValue::NULL, &JsValue::from_str(host)).ok()
++			}
++			_ => None,
++		};
++		let call = call.map(|x| SendWrapper::new(JsFuture::from(Promise::resolve(&x))));
++		async move {
++			let list = call?.await.ok()?;
++			let list = list.dyn_into::<Uint8Array>().ok()?.to_vec();
++			EchConfig::new(EchConfigListBytes::from(list), ALL_SUPPORTED_SUITES).ok()
++		}
++	}
++
++	async fn handshake(
++		&self,
++		stream: ProviderUnencryptedAsyncRW,
++		host: &str,
++		config: Arc<ClientConfig>,
++	) -> Result<ProviderTlsAsyncRW, EpoxyError> {
++		let connector = TlsConnector::from(config);
++		let name = ServerName::try_from(bare_host(host).to_string())?;
++		let ret = connector.connect(name, stream).into_fallible().await;
+ 		match ret {
+ 			Ok(stream) => {
+ 				let h2_negotiated = stream
+@@ -285,6 +407,15 @@ impl StreamProvider {
+ 	}
+ }
+ 
++/// `config` offering ECH with `ech` (one config per connection: the list
++/// comes from the server's DNS record)
++#[cfg(feature = "full")]
++fn with_ech(config: &Arc<ClientConfig>, ech: EchConfig) -> Arc<ClientConfig> {
++	let mut config = ClientConfig::clone(config);
++	config.set_ech_mode(Some(EchMode::Enable(ech)));
++	Arc::new(config)
++}
++
+ pin_project! {
+ 	pub struct HyperIo {
+ 		#[pin]

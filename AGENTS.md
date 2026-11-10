@@ -203,6 +203,8 @@ on every save (use a `git worktree`).
   the result to the `dist` branches of `Fracital/epoxy-tls` and
   `Fracital/EpoxyTransport`, and `package.json` pins that commit by
   `git+https://` URL. Read `deploy/epoxy/README.md` before touching any of it.
+  Real ECH needs `ech_dns` (a DoH endpoint) in epoxy's options; the demo
+  sets it, a host that does not gets GREASE ECH only.
 - Hosts install stomp from npm as `@sysce/stomp`. `.github/workflows/nightly.yml`
   publishes master as `@sysce/stomp@nightly` every night (and on manual
   dispatch) once CI passed on that commit, through npm trusted publishing

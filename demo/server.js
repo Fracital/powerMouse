@@ -23,6 +23,11 @@
 //                       falls back to the transport's TCP connections)
 //   STOMP_HTTP3         `1` turns on HTTP/3 (the epoxy descriptor's `http3`)
 //                       for every visit; `?http3` on the page does it for one
+//   STOMP_ECH_DNS       the DNS-over-HTTPS endpoint epoxy asks for HTTPS
+//                       records, to offer real Encrypted Client Hello where a
+//                       site publishes a config, as Chrome does (default
+//                       https://cloudflare-dns.com/dns-query; `off` sends only
+//                       GREASE ECH; `?noech` on the page does that for a visit)
 //   STOMP_TEST_TRANSPORT `1` swaps epoxy for /test/mixed-transport.mjs, which
 //                       reaches the mixed-content suite's fixture hosts (test
 //                       runs only; test/run.mjs sets it for that suite)
@@ -190,6 +195,10 @@ const pageConfig = {
 	...(externalWisp && { wisp: externalWisp }),
 	...(process.env.STOMP_PROXY_ORIGIN !== undefined && { proxyOrigin }),
 	...(process.env.STOMP_HTTP3 === '1' && { http3: true }),
+	echDns:
+		process.env.STOMP_ECH_DNS === 'off'
+			? null
+			: process.env.STOMP_ECH_DNS || 'https://cloudflare-dns.com/dns-query',
 	...(process.env.STOMP_TEST_TRANSPORT === '1' && { testTransport: true }),
 	// startedAt lets the dev client tell a restarted server from a dropped
 	// connection: a different value on reconnect means new server code

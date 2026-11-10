@@ -1,0 +1,622 @@
+From 701caa43da05054bad0ca698eefc767555a5c517 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 10 Nov 2026 14:29:49 -0500
+Subject: [PATCH 52/52] client: real ECH in a Chrome-shaped hello, as BoringSSL
+ sends it
+
+With chrome_hello set, ECH was only ever a GREASE extension. A config may
+now offer real ECH (ClientConfig::set_ech_mode, for a config list that
+comes from a DNS lookup per server), and both hellos are BoringSSL's,
+measured against Chrome 152 with a local ECH server:
+
+- the outer hello is Chrome's usual one with the public name in SNI and the
+  real ECH in place of the GREASE one; it still offers TLS 1.2, as Chrome's
+  does (with_ech restricts a whole config to TLS 1.3), and a server that
+  answers with TLS 1.2 has rejected the offer;
+- the inner hello has the same GREASE values and extension order, TLS 1.3
+  suites and version alone, no renegotiation_info, extended_master_secret,
+  session_ticket or ec_point_formats, the ECH marker, the real SNI; the
+  ECH marker, supported_versions and SNI come first and every other
+  extension follows in the outer hello's order, sent as one
+  ech_outer_extensions, so the payload is BoringSSL's size (144 bytes for a
+  21-byte name where the whole inner hello took 1510);
+- the inner hello is padded as BoringSSL pads it (a maximum_name_length of
+  0 means none, where rustls padded to 255).
+
+A server that rejects the offer is verified as the config's public name
+(RFC 9849 6.1.7; rustls checked the inner name, so a rejection ended in a
+certificate error instead of the rejection and its retry configs), and
+EchConfig::from_retry_configs turns the configs it sent into an EchConfig
+for the one retry a client makes.
+---
+ src/client/chrome.rs      |  35 ++++++-
+ src/client/client_conn.rs |  18 ++++
+ src/client/ech.rs         |  58 ++++++++++-
+ src/client/hs.rs          |  17 ++-
+ src/client/tls13.rs       |  13 ++-
+ src/msgs/handshake.rs     | 212 +++++++++++++++++++++++++-------------
+ 6 files changed, 274 insertions(+), 79 deletions(-)
+
+diff --git a/src/client/chrome.rs b/src/client/chrome.rs
+index 0b9efe8..060cdc9 100644
+--- a/src/client/chrome.rs
++++ b/src/client/chrome.rs
+@@ -8,8 +8,16 @@
+ //! supported groups, key shares, versions and signature algorithms, and the
+ //! extensions BoringSSL adds for Chrome: signed certificate timestamps,
+ //! renegotiation_info, ALPS (answered with the client's EncryptedExtensions
+-//! after the server's Finished), a GREASE ECH and trust anchor ids. Extension
+-//! order is random per connection with GREASE first and last, as Chrome's.
++//! after the server's Finished), ECH (a GREASE one, or a real one when the
++//! config offers ECH) and trust anchor ids. Extension order is random per
++//! connection with GREASE first and last, as Chrome's.
++//!
++//! With real ECH the hello the server reads is the inner one, BoringSSL's
++//! ClientHelloInner: TLS 1.3 suites and version only (after GREASE), no
++//! TLS 1.2-only extensions (renegotiation_info, extended_master_secret,
++//! session_ticket, ec_point_formats), the inner ECH marker, the real SNI,
++//! and the outer hello's extension order. The outer hello is Chrome's usual
++//! one with the public name in SNI and the real ECH in place of the GREASE.
+ //!
+ //! Suites and signature schemes this crate cannot use are only offered: a
+ //! server that picks one fails the handshake, as it failed before when they
+@@ -29,6 +37,8 @@ pub(crate) const ALPS: u16 = 0x44cd;
+ const SIGNED_CERTIFICATE_TIMESTAMP: u16 = 0x0012;
+ const RENEGOTIATION_INFO: u16 = 0xff01;
+ const ENCRYPTED_CLIENT_HELLO: u16 = 0xfe0d;
++/// TLS 1.3 suites: what an inner hello offers after its GREASE suite
++pub(crate) const TLS13_CIPHER_SUITES: &[u16] = &[0x1301, 0x1302, 0x1303];
+ /// trust_anchors (draft-ietf-tls-trust-anchor-ids), experimental codepoint
+ const TRUST_ANCHORS: u16 = 0xca34;
+ 
+@@ -86,6 +96,8 @@ pub(crate) struct ChromeHello {
+     pub(crate) retry: bool,
+     /// the hello Chrome sends over QUIC: no GREASE, no TCP-only extensions
+     pub(crate) quic: bool,
++    /// the ClientHelloInner of a real ECH offer: no TLS 1.2-only parts
++    pub(crate) ech_inner: bool,
+ }
+ 
+ impl ChromeHello {
+@@ -93,6 +105,7 @@ impl ChromeHello {
+         secure_random: &dyn SecureRandom,
+         alpn: &[&[u8]],
+         quic: bool,
++        real_ech: bool,
+     ) -> Result<Self, Error> {
+         let mut seed = [0u8; 6];
+         secure_random.fill(&mut seed)?;
+@@ -103,7 +116,10 @@ impl ChromeHello {
+             extra.push((RENEGOTIATION_INFO, vec![0x00]));
+         }
+         extra.push((TRUST_ANCHORS, TRUST_ANCHOR_IDS.to_vec()));
+-        extra.push((ENCRYPTED_CLIENT_HELLO, grease_ech(secure_random)?));
++        // a real ECH offer is rustls's own extension (ech.rs), in its place
++        if !real_ech {
++            extra.push((ENCRYPTED_CLIENT_HELLO, grease_ech(secure_random)?));
++        }
+         // ALPS goes with the protocol it carries settings for: Chrome lists
+         // h2 over TCP and h3 over QUIC, and only in a hello that offers it
+         // (not a WebSocket's)
+@@ -119,9 +135,22 @@ impl ChromeHello {
+             extra,
+             retry: false,
+             quic,
++            ech_inner: false,
+         })
+     }
+ 
++    /// This hello's parts for the ClientHelloInner of a real ECH offer: the
++    /// same GREASE values and order, without the TLS 1.2-only
++    /// renegotiation_info (BoringSSL's inner hello requires TLS 1.3)
++    pub(crate) fn ech_inner(&self) -> Self {
++        let mut inner = self.clone();
++        inner.ech_inner = true;
++        inner
++            .extra
++            .retain(|(typ, _)| *typ != RENEGOTIATION_INFO && *typ != ENCRYPTED_CLIENT_HELLO);
++        inner
++    }
++
+     /// BoringSSL's `ssl_get_grease_value`: 0x?a?a from one random byte per
+     /// slot, the two extension values never equal
+     pub(crate) fn grease(&self, which: Grease) -> u16 {
+diff --git a/src/client/client_conn.rs b/src/client/client_conn.rs
+index 3d04ddc..b78aeba 100644
+--- a/src/client/client_conn.rs
++++ b/src/client/client_conn.rs
+@@ -380,6 +380,20 @@ impl ClientConfig {
+     /// Return true if connections made with this `ClientConfig` will
+     /// operate in FIPS mode.
+     ///
++    /// Offer Encrypted Client Hello with `mode`, or stop offering it, on a
++    /// config already built, keeping its protocol versions.
++    ///
++    /// For a config with [`ClientConfig::chrome_hello`], whose ECH config
++    /// comes from a DNS lookup per server: Chrome's outer hello offers TLS
++    /// 1.2 next to ECH and its inner hello TLS 1.3 alone, where
++    /// [`ConfigBuilder::with_ech`] restricts the whole config to TLS 1.3.
++    /// Without `chrome_hello` an ECH offer still forbids TLS 1.2.
++    ///
++    /// [`ConfigBuilder::with_ech`]: crate::ConfigBuilder::with_ech
++    pub fn set_ech_mode(&mut self, mode: Option<EchMode>) {
++        self.ech_mode = mode;
++    }
++
+     /// This is different from [`CryptoProvider::fips()`]: [`CryptoProvider::fips()`]
+     /// is concerned only with cryptography, whereas this _also_ covers TLS-level
+     /// configuration that NIST recommends, as well as ECH HPKE suites if applicable.
+@@ -1063,6 +1077,9 @@ pub struct ClientConnectionData {
+     /// the server negotiated ALPS with a Chrome-shaped hello: the client's
+     /// EncryptedExtensions go out before its Finished
+     pub(super) chrome_alps: bool,
++    /// the ECH config's public name, once ECH is offered: a server that
++    /// rejects the offer authenticates as it (RFC 9849 6.1.7)
++    pub(super) ech_public_name: Option<pki_types::DnsName<'static>>,
+ }
+ 
+ impl ClientConnectionData {
+@@ -1071,6 +1088,7 @@ impl ClientConnectionData {
+             early_data: EarlyData::new(),
+             ech_status: EchStatus::NotOffered,
+             chrome_alps: false,
++            ech_public_name: None,
+         }
+     }
+ }
+diff --git a/src/client/ech.rs b/src/client/ech.rs
+index 616ebbf..c3a1c75 100644
+--- a/src/client/ech.rs
++++ b/src/client/ech.rs
+@@ -19,7 +19,7 @@ use crate::msgs::handshake::{
+     ClientExtensions, ClientHelloPayload, EchConfigContents, EchConfigPayload, Encoding,
+     EncryptedClientHello, EncryptedClientHelloOuter, HandshakeMessagePayload, HandshakePayload,
+     HelloRetryRequest, HpkeKeyConfig, HpkeSymmetricCipherSuite, PresharedKeyBinder,
+-    PresharedKeyOffer, Random, ServerHelloPayload, ServerNamePayload,
++    PresharedKeyOffer, Random, ServerHelloPayload, ServerNamePayload, SupportedProtocolVersions,
+ };
+ use crate::msgs::message::{Message, MessagePayload};
+ use crate::msgs::persist;
+@@ -157,6 +157,21 @@ impl EchConfig {
+         Err(EncryptedClientHelloError::NoCompatibleConfig.into())
+     }
+ 
++    /// Construct an EchConfig from the retry configs a server sent when it
++    /// rejected an ECH offer (the contents of
++    /// [`PeerIncompatible::ServerRejectedEncryptedClientHello`]), for the
++    /// one retry a client makes with them (RFC 9849 6.1.6).
++    ///
++    /// [`PeerIncompatible::ServerRejectedEncryptedClientHello`]: crate::PeerIncompatible::ServerRejectedEncryptedClientHello
++    pub fn from_retry_configs(
++        retry_configs: &[EchConfigPayload],
++        hpke_suites: &[&'static dyn Hpke],
++    ) -> Result<Self, Error> {
++        let mut list = Vec::new();
++        retry_configs.to_vec().encode(&mut list);
++        Self::new(EchConfigListBytes::from(list), hpke_suites)
++    }
++
+     pub(super) fn state(
+         &self,
+         server_name: ServerName<'static>,
+@@ -597,6 +612,23 @@ impl EchState {
+         // See Section 6.1 rule 4.
+         inner_hello.encrypted_client_hello = Some(EncryptedClientHello::Inner);
+ 
++        // A Chrome-shaped outer hello gets BoringSSL's ClientHelloInner: the
++        // same GREASE values and extension order, TLS 1.3 suites alone after
++        // the GREASE suite, and every extension the outer hello carries the
++        // same compressed into ech_outer_extensions (the Chrome encoding lays
++        // that out itself, so rustls's own list stays empty).
++        let chrome = outer_hello
++            .chrome
++            .as_ref()
++            .map(|chrome| chrome.ech_inner());
++        if let Some(chrome) = &chrome {
++            use crate::client::chrome::{Grease, TLS13_CIPHER_SUITES};
++            inner_hello.cipher_suites = core::iter::once(chrome.grease(Grease::Cipher))
++                .chain(TLS13_CIPHER_SUITES.iter().copied())
++                .map(crate::CipherSuite::from)
++                .collect();
++        }
++
+         let inner_sni = match &self.inner_name {
+             // The inner hello only gets a SNI value if enable_sni is true and the inner name
+             // is a domain name (not an IP address).
+@@ -635,13 +667,24 @@ impl EchState {
+ 
+             // Compressed extensions need to be put aside to include in one contiguous block.
+             // Uncompressed extensions get added directly to the inner hello.
+-            if ext.ech_compress() {
++            if ext.ech_compress() && chrome.is_none() {
+                 compressed_exts.push(ext);
+             }
+ 
+             inner_hello.clone_one(outer_hello, ext);
+         }
+ 
++        if let Some(chrome) = chrome {
++            // the outer hello may offer TLS 1.2; the inner one never does
++            if inner_hello.supported_versions.is_some() {
++                inner_hello.supported_versions = Some(SupportedProtocolVersions {
++                    tls12: false,
++                    tls13: true,
++                });
++            }
++            inner_hello.chrome = Some(chrome);
++        }
++
+         // We've added all the uncompressed extensions. Now we need to add the contiguous
+         // block of to-be-compressed extensions.
+         inner_hello.contiguous_extensions = compressed_exts.clone();
+@@ -650,6 +693,10 @@ impl EchState {
+         // the outer hello (e.g. the inner hello may omit SNI while the outer hello will
+         // always have the ECH cover name in SNI).
+         self.sent_extensions = inner_hello.collect_used();
++        if let Some(chrome) = &inner_hello.chrome {
++            self.sent_extensions
++                .extend(chrome.extra_types().map(ExtensionType::from));
++        }
+ 
+         // If we're resuming, we need to update the PSK binder in the inner hello.
+         if let Some(resuming) = resuming.as_ref() {
+@@ -684,6 +731,13 @@ impl EchState {
+         let max_name_len = if max_name_len > 0 { max_name_len } else { 255 };
+ 
+         let padding_len = match &self.inner_name {
++            // BoringSSL pads a name up to the config's maximum_name_length
++            // and takes 0 as no padding (where rustls pads to 255)
++            ServerName::DnsName(name) if inner_hello.chrome.is_some() => self
++                .maximum_name_length
++                .saturating_sub(name.as_ref().len() as u8)
++                as usize,
++            _ if inner_hello.chrome.is_some() => self.maximum_name_length as usize + 9,
+             ServerName::DnsName(name) => {
+                 // name.len() = D
+                 // max(0, L - D)
+diff --git a/src/client/hs.rs b/src/client/hs.rs
+index 9084f83..727a386 100644
+--- a/src/client/hs.rs
++++ b/src/client/hs.rs
+@@ -136,6 +136,7 @@ impl ClientHelloInput {
+                     .map(|protocol| protocol.as_ref())
+                     .collect::<Vec<_>>(),
+                 cx.common.is_quic(),
++                matches!(config.ech_mode, Some(EchMode::Enable(_))),
+             )?),
+             false => None,
+         };
+@@ -215,7 +216,11 @@ fn emit_client_hello_for_retry(
+     let config = &input.config;
+     // Defense in depth: the ECH state should be None if ECH is disabled based on config
+     // builder semantics.
+-    let forbids_tls12 = cx.common.is_quic() || ech_state.is_some();
++    //
++    // A Chrome-shaped hello keeps TLS 1.2 in the outer hello of an ECH offer,
++    // as Chrome's does; its inner hello offers TLS 1.3 alone (ech.rs).
++    let forbids_tls12 =
++        cx.common.is_quic() || (ech_state.is_some() && input.chrome.is_none());
+ 
+     let supported_versions = SupportedProtocolVersions {
+         tls12: config.supports_version(ProtocolVersion::TLSv1_2) && !forbids_tls12,
+@@ -437,6 +442,7 @@ fn emit_client_hello_for_retry(
+             // Replace the client hello payload with an ECH client hello payload.
+             chp_payload = ech_state.ech_hello(chp_payload, retryreq, &tls13_session)?;
+             cx.data.ech_status = EchStatus::Offered;
++            cx.data.ech_public_name = Some(ech_state.outer_name.clone());
+             // Store the ECH extension in case we need to carry it forward in a subsequent hello.
+             input.prev_ech_ext = chp_payload
+                 .encrypted_client_hello
+@@ -727,6 +733,15 @@ impl State<ClientConnectionData> for ExpectServerHello {
+         let version = match server_version {
+             TLSv1_3 if tls13_supported => TLSv1_3,
+             TLSv1_2 if config.supports_version(TLSv1_2) => {
++                // a Chrome-shaped outer hello offers TLS 1.2 next to ECH: a
++                // server that picks it cannot have accepted ECH (RFC 9849
++                // 6.1.6), so the offer was rejected, without retry configs
++                if self.ech_state.is_some() {
++                    return Err(cx.common.send_fatal_alert(
++                        AlertDescription::EncryptedClientHelloRequired,
++                        PeerIncompatible::ServerRejectedEncryptedClientHello(None),
++                    ));
++                }
+                 if cx.data.early_data.is_enabled() && cx.common.early_traffic {
+                     // The client must fail with a dedicated error code if the server
+                     // responds with TLS 1.2 when offering 0-RTT.
+diff --git a/src/client/tls13.rs b/src/client/tls13.rs
+index 4348756..65bc500 100644
+--- a/src/client/tls13.rs
++++ b/src/client/tls13.rs
+@@ -1177,13 +1177,24 @@ impl State<ClientConnectionData> for ExpectCertificateVerify<'_> {
+ 
+         let now = self.config.current_time()?;
+ 
++        // A server that rejected ECH answered the outer hello, as the ECH
++        // config's public name (RFC 9849 6.1.7): its certificate is checked
++        // against that name, and the handshake still ends in the rejection
++        // error, with any retry configs
++        let rejected_as = match (cx.data.ech_status, &cx.data.ech_public_name) {
++            (EchStatus::Rejected, Some(name)) => Some(ServerName::DnsName(name.clone())),
++            _ => None,
++        };
++
+         let cert_verified = self
+             .config
+             .verifier
+             .verify_server_cert(
+                 end_entity,
+                 intermediates,
+-                &self.server_name,
++                rejected_as
++                    .as_ref()
++                    .unwrap_or(&self.server_name),
+                 &self.server_cert.ocsp_response,
+                 now,
+             )
+diff --git a/src/msgs/handshake.rs b/src/msgs/handshake.rs
+index ac8eb39..7c0bf51 100644
+--- a/src/msgs/handshake.rs
++++ b/src/msgs/handshake.rs
+@@ -1060,8 +1060,20 @@ impl ClientExtensions<'_> {
+     /// extension, then the PSK offer, which must be last. Groups, key shares,
+     /// versions and signature algorithms carry a GREASE value first; the
+     /// signature algorithms are Chrome's list.
+-    fn encode_chrome(&self, chrome: &crate::client::chrome::ChromeHello, bytes: &mut Vec<u8>) {
+-        use crate::client::chrome::{Grease, QUIC_SIGNATURE_ALGORITHMS, SIGNATURE_ALGORITHMS};
++    ///
++    /// The ClientHelloInner of a real ECH offer is BoringSSL's: the
++    /// extensions that differ from the outer hello's (the ECH marker,
++    /// supported_versions, SNI) first, then every other one in the outer
++    /// hello's order, GREASE included, then the PSK. With `compress` (the
++    /// EncodedClientHelloInner) that second block is one
++    /// ech_outer_extensions naming them, as BoringSSL sends it.
++    fn encode_chrome(
++        &self,
++        chrome: &crate::client::chrome::ChromeHello,
++        compress: bool,
++        bytes: &mut Vec<u8>,
++    ) {
++        use crate::client::chrome::Grease;
+ 
+         // over QUIC Chrome sends no GREASE and none of these
+         let tcp_only = [
+@@ -1078,106 +1090,153 @@ impl ClientExtensions<'_> {
+             .map(u16::from)
+             .collect();
+         order.extend(chrome.extra_types());
++        // one key for the inner and the outer hello, so the extensions both
++        // carry keep one relative order
+         order.sort_by_cached_key(|ext| {
+             low_quality_integer_hash(((self.order_seed as u32) << 16) | (*ext as u32))
+         });
++        if !chrome.quic {
++            order.insert(0, chrome.grease(Grease::Extension1));
++            order.push(chrome.grease(Grease::Extension2));
++        }
+ 
+         let body = LengthPrefixedBuffer::new(ListLength::U16, bytes);
+         let out = &mut *body.buf;
++
++        if chrome.ech_inner {
++            let differs = |ext: &u16| {
++                [
++                    ExtensionType::EncryptedClientHello,
++                    ExtensionType::SupportedVersions,
++                    ExtensionType::ServerName,
++                ]
++                .contains(&ExtensionType::from(*ext))
++            };
++            let (own, shared): (Vec<u16>, Vec<u16>) = order.into_iter().partition(differs);
++            for typ in own {
++                self.encode_chrome_one(chrome, typ, out);
++            }
++            if compress {
++                u16::from(ExtensionType::EncryptedClientHelloOuterExtensions).encode(out);
++                ((shared.len() * 2 + 1) as u16).encode(out);
++                out.push((shared.len() * 2) as u8);
++                for typ in shared {
++                    typ.encode(out);
++                }
++            } else {
++                for typ in shared {
++                    self.encode_chrome_one(chrome, typ, out);
++                }
++            }
++        } else {
++            for typ in order {
++                self.encode_chrome_one(chrome, typ, out);
++            }
++        }
++
++        self.encode_one(ExtensionType::PreSharedKey, out);
++    }
++
++    fn encode_chrome_one(
++        &self,
++        chrome: &crate::client::chrome::ChromeHello,
++        typ: u16,
++        out: &mut Vec<u8>,
++    ) {
++        use crate::client::chrome::{Grease, QUIC_SIGNATURE_ALGORITHMS, SIGNATURE_ALGORITHMS};
++
+         let grease = |out: &mut Vec<u8>, which: Grease| {
+             if !chrome.quic {
+                 chrome.grease(which).encode(out);
+             }
+         };
+ 
+-        if !chrome.quic {
+-            grease(out, Grease::Extension1);
++        // the two GREASE extensions: the first empty, the last one byte
++        if !chrome.quic && typ == chrome.grease(Grease::Extension1) {
++            typ.encode(out);
+             0u16.encode(out);
++            return;
++        }
++        if !chrome.quic && typ == chrome.grease(Grease::Extension2) {
++            typ.encode(out);
++            1u16.encode(out);
++            out.push(0x00);
++            return;
+         }
+ 
+-        for typ in order {
+-            if let Some((_, data)) = chrome
+-                .extra
+-                .iter()
+-                .find(|(extra, _)| *extra == typ)
+-            {
+-                typ.encode(out);
+-                (data.len() as u16).encode(out);
+-                out.extend_from_slice(data);
+-                continue;
++        if let Some((_, data)) = chrome
++            .extra
++            .iter()
++            .find(|(extra, _)| *extra == typ)
++        {
++            typ.encode(out);
++            (data.len() as u16).encode(out);
++            out.extend_from_slice(data);
++            return;
++        }
++        let ext = ExtensionType::from(typ);
++        match ext {
++            ExtensionType::EllipticCurves => {
++                ext.encode(out);
++                let body = LengthPrefixedBuffer::new(ListLength::U16, out);
++                let list = LengthPrefixedBuffer::new(ListLength::U16, body.buf);
++                grease(list.buf, Grease::Group);
++                for group in self.named_groups.iter().flatten() {
++                    group.encode(list.buf);
++                }
+             }
+-            let ext = ExtensionType::from(typ);
+-            match ext {
+-                ExtensionType::EllipticCurves => {
+-                    ext.encode(out);
+-                    let body = LengthPrefixedBuffer::new(ListLength::U16, out);
+-                    let list = LengthPrefixedBuffer::new(ListLength::U16, body.buf);
++            ExtensionType::KeyShare => {
++                ext.encode(out);
++                let body = LengthPrefixedBuffer::new(ListLength::U16, out);
++                let list = LengthPrefixedBuffer::new(ListLength::U16, body.buf);
++                // the second hello answers the group the server asked
++                // for, with no GREASE share
++                if !chrome.retry && !chrome.quic {
+                     grease(list.buf, Grease::Group);
+-                    for group in self.named_groups.iter().flatten() {
+-                        group.encode(list.buf);
+-                    }
++                    list.buf.extend_from_slice(&[0x00, 0x01, 0x00]);
+                 }
+-                ExtensionType::KeyShare => {
+-                    ext.encode(out);
+-                    let body = LengthPrefixedBuffer::new(ListLength::U16, out);
+-                    let list = LengthPrefixedBuffer::new(ListLength::U16, body.buf);
+-                    // the second hello answers the group the server asked
+-                    // for, with no GREASE share
+-                    if !chrome.retry && !chrome.quic {
+-                        grease(list.buf, Grease::Group);
+-                        list.buf.extend_from_slice(&[0x00, 0x01, 0x00]);
+-                    }
+-                    for share in self.key_shares.iter().flatten() {
+-                        share.encode(list.buf);
+-                    }
++                for share in self.key_shares.iter().flatten() {
++                    share.encode(list.buf);
+                 }
+-                ExtensionType::SupportedVersions => {
+-                    ext.encode(out);
+-                    let mut list = Vec::new();
+-                    grease(&mut list, Grease::Version);
+-                    if let Some(versions) = &self.supported_versions {
+-                        if versions.tls13 {
+-                            ProtocolVersion::TLSv1_3.encode(&mut list);
+-                        }
+-                        if versions.tls12 {
+-                            ProtocolVersion::TLSv1_2.encode(&mut list);
+-                        }
++            }
++            ExtensionType::SupportedVersions => {
++                ext.encode(out);
++                let mut list = Vec::new();
++                grease(&mut list, Grease::Version);
++                if let Some(versions) = &self.supported_versions {
++                    if versions.tls13 {
++                        ProtocolVersion::TLSv1_3.encode(&mut list);
+                     }
+-                    ((list.len() + 1) as u16).encode(out);
+-                    out.push(list.len() as u8);
+-                    out.extend_from_slice(&list);
+-                }
+-                ExtensionType::SignatureAlgorithms => {
+-                    ext.encode(out);
+-                    let body = LengthPrefixedBuffer::new(ListLength::U16, out);
+-                    let list = LengthPrefixedBuffer::new(ListLength::U16, body.buf);
+-                    grease(list.buf, Grease::SignatureAlgorithm);
+-                    let schemes = match chrome.quic {
+-                        true => QUIC_SIGNATURE_ALGORITHMS,
+-                        false => SIGNATURE_ALGORITHMS,
+-                    };
+-                    for scheme in schemes {
+-                        scheme.encode(list.buf);
++                    if versions.tls12 {
++                        ProtocolVersion::TLSv1_2.encode(&mut list);
+                     }
+                 }
+-                _ => self.encode_one(ext, out),
++                ((list.len() + 1) as u16).encode(out);
++                out.push(list.len() as u8);
++                out.extend_from_slice(&list);
+             }
++            ExtensionType::SignatureAlgorithms => {
++                ext.encode(out);
++                let body = LengthPrefixedBuffer::new(ListLength::U16, out);
++                let list = LengthPrefixedBuffer::new(ListLength::U16, body.buf);
++                grease(list.buf, Grease::SignatureAlgorithm);
++                let schemes = match chrome.quic {
++                    true => QUIC_SIGNATURE_ALGORITHMS,
++                    false => SIGNATURE_ALGORITHMS,
++                };
++                for scheme in schemes {
++                    scheme.encode(list.buf);
++                }
++            }
++            _ => self.encode_one(ext, out),
+         }
+-
+-        if !chrome.quic {
+-            grease(out, Grease::Extension2);
+-            1u16.encode(out);
+-            out.push(0x00);
+-        }
+-
+-        self.encode_one(ExtensionType::PreSharedKey, out);
+     }
+ }
+ 
+ impl<'a> Codec<'a> for ClientExtensions<'a> {
+     fn encode(&self, bytes: &mut Vec<u8>) {
+         if let Some(chrome) = &self.chrome {
+-            return self.encode_chrome(chrome, bytes);
++            return self.encode_chrome(chrome, false, bytes);
+         }
+ 
+         let order = self.used_extensions_in_encoding_order();
+@@ -1428,6 +1487,15 @@ impl ClientHelloPayload {
+         self.cipher_suites.encode(bytes);
+         self.compression_methods.encode(bytes);
+ 
++        // a Chrome-shaped inner hello compresses as BoringSSL's does
++        if let (Encoding::EchInnerHello { .. }, Some(chrome)) = (&purpose, &self.extensions.chrome) {
++            if chrome.ech_inner {
++                return self
++                    .extensions
++                    .encode_chrome(chrome, true, bytes);
++            }
++        }
++
+         let to_compress = match purpose {
+             Encoding::EchInnerHello { to_compress } if !to_compress.is_empty() => to_compress,
+             _ => {

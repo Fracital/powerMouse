@@ -1,0 +1,350 @@
+From e391b73e2bde4ae0b6f64f7782db4e614b027ab9 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 10 Nov 2026 14:29:38 -0500
+Subject: [PATCH 51/52] crypto: HPKE on ring for Encrypted Client Hello (the
+ sender's side)
+
+rustls's ECH client needs an HPKE implementation, and only the aws-lc-rs
+provider has one; aws-lc-rs does not build for wasm32-unknown-unknown.
+crypto::ring::hpke implements RFC 9180 base mode with the suites
+BoringSSL's ECH client offers: DHKEM(X25519, HKDF-SHA256) with HKDF-SHA256
+and AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305 (ALL_SUPPORTED_SUITES).
+Only sealing is here: ring keeps X25519 private keys ephemeral, so the
+recipient's calls return an error. The key schedule and first seal match
+RFC 9180 A.1.1.
+---
+ src/crypto/ring/hpke.rs | 310 ++++++++++++++++++++++++++++++++++++++++
+ src/crypto/ring/mod.rs  |   3 +
+ 2 files changed, 313 insertions(+)
+ create mode 100644 src/crypto/ring/hpke.rs
+
+diff --git a/src/crypto/ring/hpke.rs b/src/crypto/ring/hpke.rs
+new file mode 100644
+index 0000000..c148a4a
+--- /dev/null
++++ b/src/crypto/ring/hpke.rs
+@@ -0,0 +1,310 @@
++//! HPKE (RFC 9180) base mode for Encrypted Client Hello, on *ring*.
++//!
++//! The suites are the ones BoringSSL's ECH client (Chrome's) offers:
++//! DHKEM(X25519, HKDF-SHA256) and HKDF-SHA256 with AES-128-GCM, AES-256-GCM
++//! or ChaCha20-Poly1305. Only the sender's side is here, which is all a TLS
++//! client needs: *ring* keeps X25519 private keys ephemeral, so a recipient
++//! (`open`, `setup_opener`, `generate_key_pair`) is not available.
++
++use alloc::boxed::Box;
++use alloc::vec::Vec;
++use core::fmt;
++
++use super::ring_like::rand::SystemRandom;
++use super::ring_like::{aead, agreement, hkdf};
++use crate::Error;
++use crate::crypto::hpke::{
++    EncapsulatedSecret, Hpke, HpkeOpener, HpkePrivateKey, HpkePublicKey, HpkeSealer, HpkeSuite,
++};
++use crate::msgs::enums::{HpkeAead, HpkeKdf, HpkeKem};
++use crate::msgs::handshake::HpkeSymmetricCipherSuite;
++
++/// DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-128-GCM
++pub static DH_KEM_X25519_HKDF_SHA256_AES_128: &RingHpke = &RingHpke(HpkeAead::AES_128_GCM);
++/// DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-256-GCM
++pub static DH_KEM_X25519_HKDF_SHA256_AES_256: &RingHpke = &RingHpke(HpkeAead::AES_256_GCM);
++/// DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305
++pub static DH_KEM_X25519_HKDF_SHA256_CHACHA20_POLY1305: &RingHpke =
++    &RingHpke(HpkeAead::CHACHA20_POLY_1305);
++
++/// Every suite here, in BoringSSL's order of preference
++pub static ALL_SUPPORTED_SUITES: &[&'static dyn Hpke] = &[
++    DH_KEM_X25519_HKDF_SHA256_AES_128,
++    DH_KEM_X25519_HKDF_SHA256_AES_256,
++    DH_KEM_X25519_HKDF_SHA256_CHACHA20_POLY1305,
++];
++
++const KEM_ID: u16 = 0x0020;
++const KDF_ID: u16 = 0x0001;
++const MODE_BASE: u8 = 0x00;
++/// Nsecret, Nh for HKDF-SHA256
++const N_SECRET: usize = 32;
++const N_NONCE: usize = 12;
++
++/// One HPKE suite with the X25519 KEM and HKDF-SHA256, by its AEAD
++pub struct RingHpke(HpkeAead);
++
++impl fmt::Debug for RingHpke {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_tuple("RingHpke")
++            .field(&self.0)
++            .finish()
++    }
++}
++
++impl RingHpke {
++    fn aead(&self) -> (&'static aead::Algorithm, u16) {
++        match self.0 {
++            HpkeAead::AES_256_GCM => (&aead::AES_256_GCM, 0x0002),
++            HpkeAead::CHACHA20_POLY_1305 => (&aead::CHACHA20_POLY1305, 0x0003),
++            _ => (&aead::AES_128_GCM, 0x0001),
++        }
++    }
++
++    /// `"HPKE" || kem_id || kdf_id || aead_id`
++    fn suite_id(&self) -> [u8; 10] {
++        let mut id = *b"HPKE\0\0\0\0\0\0";
++        id[4..6].copy_from_slice(&KEM_ID.to_be_bytes());
++        id[6..8].copy_from_slice(&KDF_ID.to_be_bytes());
++        id[8..10].copy_from_slice(&self.aead().1.to_be_bytes());
++        id
++    }
++
++    /// Encap(pkR): an ephemeral key, its public half and the shared secret
++    fn encap(&self, pk_r: &[u8]) -> Result<(Vec<u8>, [u8; N_SECRET]), Error> {
++        let rng = SystemRandom::new();
++        let sk_e = agreement::EphemeralPrivateKey::generate(&agreement::X25519, &rng)
++            .map_err(|_| Error::General("HPKE: no ephemeral key".into()))?;
++        let pk_e = sk_e
++            .compute_public_key()
++            .map_err(|_| Error::General("HPKE: no ephemeral public key".into()))?
++            .as_ref()
++            .to_vec();
++        let peer = agreement::UnparsedPublicKey::new(&agreement::X25519, pk_r);
++        let mut kem_context = Vec::with_capacity(pk_e.len() + pk_r.len());
++        kem_context.extend_from_slice(&pk_e);
++        kem_context.extend_from_slice(pk_r);
++        let kem_suite = {
++            let mut id = *b"KEM\0\0";
++            id[3..5].copy_from_slice(&KEM_ID.to_be_bytes());
++            id
++        };
++        let shared = agreement::agree_ephemeral(sk_e, &peer, |dh| {
++            // ExtractAndExpand(dh, kem_context)
++            let eae_prk = labeled_extract(&kem_suite, &[], b"eae_prk", dh);
++            let mut shared = [0u8; N_SECRET];
++            labeled_expand(
++                &kem_suite,
++                &eae_prk,
++                b"shared_secret",
++                &kem_context,
++                &mut shared,
++            );
++            shared
++        })
++        .map_err(|_| Error::General("HPKE: X25519 failed".into()))?;
++        Ok((pk_e, shared))
++    }
++
++    /// KeySchedule for mode_base with no PSK
++    fn key_schedule(&self, shared: &[u8], info: &[u8]) -> Result<RingSealer, Error> {
++        let suite_id = self.suite_id();
++        let psk_id_hash = prk_bytes(&suite_id, b"psk_id_hash", &[]);
++        let info_hash = prk_bytes(&suite_id, b"info_hash", info);
++        let mut context = Vec::with_capacity(1 + 2 * N_SECRET);
++        context.push(MODE_BASE);
++        context.extend_from_slice(&psk_id_hash);
++        context.extend_from_slice(&info_hash);
++        let secret = labeled_extract(&suite_id, shared, b"secret", &[]);
++
++        let (algorithm, _) = self.aead();
++        let mut key = alloc::vec![0u8; algorithm.key_len()];
++        labeled_expand(&suite_id, &secret, b"key", &context, &mut key);
++        let mut base_nonce = [0u8; N_NONCE];
++        labeled_expand(&suite_id, &secret, b"base_nonce", &context, &mut base_nonce);
++        let key = aead::UnboundKey::new(algorithm, &key)
++            .map_err(|_| Error::General("HPKE: bad AEAD key".into()))?;
++        Ok(RingSealer {
++            key: aead::LessSafeKey::new(key),
++            base_nonce,
++            seq: 0,
++        })
++    }
++}
++
++impl Hpke for RingHpke {
++    fn seal(
++        &self,
++        info: &[u8],
++        aad: &[u8],
++        plaintext: &[u8],
++        pub_key: &HpkePublicKey,
++    ) -> Result<(EncapsulatedSecret, Vec<u8>), Error> {
++        let (enc, mut sealer) = self.setup_sealer(info, pub_key)?;
++        Ok((enc, sealer.seal(aad, plaintext)?))
++    }
++
++    fn setup_sealer(
++        &self,
++        info: &[u8],
++        pub_key: &HpkePublicKey,
++    ) -> Result<(EncapsulatedSecret, Box<dyn HpkeSealer + 'static>), Error> {
++        let (enc, shared) = self.encap(&pub_key.0)?;
++        let sealer = self.key_schedule(&shared, info)?;
++        Ok((EncapsulatedSecret(enc), Box::new(sealer)))
++    }
++
++    fn open(
++        &self,
++        _enc: &EncapsulatedSecret,
++        _info: &[u8],
++        _aad: &[u8],
++        _ciphertext: &[u8],
++        _secret_key: &HpkePrivateKey,
++    ) -> Result<Vec<u8>, Error> {
++        Err(Error::General("HPKE: no recipient on ring".into()))
++    }
++
++    fn setup_opener(
++        &self,
++        _enc: &EncapsulatedSecret,
++        _info: &[u8],
++        _secret_key: &HpkePrivateKey,
++    ) -> Result<Box<dyn HpkeOpener + 'static>, Error> {
++        Err(Error::General("HPKE: no recipient on ring".into()))
++    }
++
++    fn generate_key_pair(&self) -> Result<(HpkePublicKey, HpkePrivateKey), Error> {
++        Err(Error::General("HPKE: no recipient on ring".into()))
++    }
++
++    fn suite(&self) -> HpkeSuite {
++        HpkeSuite {
++            kem: HpkeKem::DHKEM_X25519_HKDF_SHA256,
++            sym: HpkeSymmetricCipherSuite {
++                kdf_id: HpkeKdf::HKDF_SHA256,
++                aead_id: self.0,
++            },
++        }
++    }
++}
++
++struct RingSealer {
++    key: aead::LessSafeKey,
++    base_nonce: [u8; N_NONCE],
++    seq: u64,
++}
++
++impl fmt::Debug for RingSealer {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("RingSealer")
++            .field("seq", &self.seq)
++            .finish_non_exhaustive()
++    }
++}
++
++impl HpkeSealer for RingSealer {
++    fn seal(&mut self, aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, Error> {
++        // ComputeNonce(seq): base_nonce XOR I2OSP(seq, Nn)
++        let mut nonce = self.base_nonce;
++        for (byte, seq) in nonce[N_NONCE - 8..]
++            .iter_mut()
++            .zip(self.seq.to_be_bytes())
++        {
++            *byte ^= seq;
++        }
++        self.seq = self
++            .seq
++            .checked_add(1)
++            .ok_or_else(|| Error::General("HPKE: message limit".into()))?;
++        let mut in_out = plaintext.to_vec();
++        self.key
++            .seal_in_place_append_tag(
++                aead::Nonce::assume_unique_for_key(nonce),
++                aead::Aad::from(aad),
++                &mut in_out,
++            )
++            .map_err(|_| Error::General("HPKE: seal failed".into()))?;
++        Ok(in_out)
++    }
++}
++
++/// An output length for *ring*'s HKDF expand
++struct Len(usize);
++
++impl hkdf::KeyType for Len {
++    fn len(&self) -> usize {
++        self.0
++    }
++}
++
++/// LabeledExtract(salt, label, ikm) = Extract(salt, "HPKE-v1" || suite_id || label || ikm)
++fn labeled_extract(suite_id: &[u8], salt: &[u8], label: &[u8], ikm: &[u8]) -> hkdf::Prk {
++    let mut labeled = Vec::with_capacity(7 + suite_id.len() + label.len() + ikm.len());
++    labeled.extend_from_slice(b"HPKE-v1");
++    labeled.extend_from_slice(suite_id);
++    labeled.extend_from_slice(label);
++    labeled.extend_from_slice(ikm);
++    hkdf::Salt::new(hkdf::HKDF_SHA256, salt).extract(&labeled)
++}
++
++/// LabeledExtract with an empty salt, as raw bytes (the key schedule hashes)
++fn prk_bytes(suite_id: &[u8], label: &[u8], ikm: &[u8]) -> [u8; N_SECRET] {
++    // Extract's output is HMAC(salt, ikm); *ring* hides a Prk's bytes, so
++    // compute it with HMAC directly
++    use super::ring_like::hmac;
++    let mut labeled = Vec::with_capacity(7 + suite_id.len() + label.len() + ikm.len());
++    labeled.extend_from_slice(b"HPKE-v1");
++    labeled.extend_from_slice(suite_id);
++    labeled.extend_from_slice(label);
++    labeled.extend_from_slice(ikm);
++    // an empty salt is a string of Nh zeros (RFC 5869 2.2)
++    let key = hmac::Key::new(hmac::HMAC_SHA256, &[0u8; N_SECRET]);
++    let tag = hmac::sign(&key, &labeled);
++    let mut out = [0u8; N_SECRET];
++    out.copy_from_slice(tag.as_ref());
++    out
++}
++
++/// LabeledExpand(prk, label, info, L) =
++/// Expand(prk, I2OSP(L, 2) || "HPKE-v1" || suite_id || label || info, L)
++fn labeled_expand(suite_id: &[u8], prk: &hkdf::Prk, label: &[u8], info: &[u8], out: &mut [u8]) {
++    let length = (out.len() as u16).to_be_bytes();
++    let parts: [&[u8]; 5] = [&length, b"HPKE-v1", suite_id, label, info];
++    // lengths here are at most 32 bytes, far under HKDF's 255 * Nh
++    prk.expand(&parts, Len(out.len()))
++        .and_then(|okm| okm.fill(out))
++        .expect("HKDF expand within its limit");
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// RFC 9180 A.1.1: the key schedule from a known shared secret
++    #[test]
++    fn rfc9180_a_1_1_key_schedule() {
++        let hex = |s: &str| -> Vec<u8> {
++            (0..s.len())
++                .step_by(2)
++                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
++                .collect()
++        };
++        let shared = hex("fe0e18c9f024ce43799ae393c7e8fe8fce9d218875e8227b0187c04e7d2ea1fc");
++        let info = hex("4f6465206f6e2061204772656369616e2055726e");
++        let mut sealer = DH_KEM_X25519_HKDF_SHA256_AES_128
++            .key_schedule(&shared, &info)
++            .unwrap();
++        assert_eq!(sealer.base_nonce.to_vec(), hex("56d890e5accaaf011cff4b7d"));
++        let ct = sealer
++            .seal(
++                &hex("436f756e742d30"),
++                &hex("4265617574792069732074727574682c20747275746820626561757479"),
++            )
++            .unwrap();
++        assert_eq!(
++            ct,
++            hex("f938558b5d72f1a23810b4be2ab4f84331acc02fc97babc53a52ae8218a355a96d8770ac83d07bea87e13c512a")
++        );
++    }
++}
+diff --git a/src/crypto/ring/mod.rs b/src/crypto/ring/mod.rs
+index 3ce99b1..08ee365 100644
+--- a/src/crypto/ring/mod.rs
++++ b/src/crypto/ring/mod.rs
+@@ -14,6 +14,9 @@ use crate::webpki::WebPkiSupportedAlgorithms;
+ /// Using software keys for authentication.
+ pub mod sign;
+ 
++/// HPKE for Encrypted Client Hello (the sender's side).
++pub mod hpke;
++
+ pub(crate) mod hash;
+ #[cfg(any(test, feature = "tls12"))]
+ pub(crate) mod hmac;

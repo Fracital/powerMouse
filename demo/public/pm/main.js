@@ -79,6 +79,12 @@ const SERVICE_WORKER_EVENT_DELAY =
 // HTTP/3 over wisp UDP for origins that offer it (docs/http3.md), off by
 // default; STOMP_HTTP3=1 on the server or ?http3 on this page turns it on
 const HTTP3 = !!CFG.http3 || new URLSearchParams(location.search).has('http3');
+// real Encrypted Client Hello where a site's HTTPS DNS record has a config,
+// looked up over DoH by epoxy (STOMP_ECH_DNS on the server; ?noech sends
+// GREASE ECH only, as before)
+const ECH_DNS = new URLSearchParams(location.search).has('noech')
+	? null
+	: CFG.echDns;
 // the transports and the built-in wisp live on the proxy origin
 const proxyBase = () => (ISOLATED ? PROXY_ORIGIN : '');
 // STOMP_WISP_URL points the transports at an external wisp server (in
@@ -98,7 +104,7 @@ const transports = {
 		module: CFG.testTransport
 			? `${proxyBase()}/test/mixed-transport.mjs`
 			: `${proxyBase()}/epoxy/index.mjs`,
-		options: [{ wisp: wispURL() }],
+		options: [{ wisp: wispURL(), ...(ECH_DNS && { ech_dns: ECH_DNS }) }],
 		...(HTTP3 && { http3: true }),
 	}),
 	libcurl: () => ({
