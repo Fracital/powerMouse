@@ -127,10 +127,14 @@ const nginxCheck = async ({ module, wisp: wispUrl }) => {
 }
 
 /** raw requests through an Http3Transport instance around epoxy */
-const raw = async ({ module, h3, wisp: wispUrl, plan }) => {
+const raw = async ({ module, h3, wisp: wispUrl, plan, options = {} }) => {
 	const { Http3Transport } = await import('/stomp/controller.mjs');
 	const { default: Epoxy } = await import(module);
-	const transport = new Http3Transport(new Epoxy({ wisp: wispUrl }), {}, h3);
+	const transport = new Http3Transport(
+		new Epoxy({ wisp: wispUrl }),
+		options,
+		h3,
+	);
 	await transport.init();
 	const results = [];
 	const run = async ({ url, method = 'GET', body = null, headers = [] }) => {
@@ -318,6 +322,37 @@ const sites = [
 	});
 	console.log('timings (ms to response head):', JSON.stringify(timing));
 	console.log('connections:', JSON.stringify(info.connections ?? info));
+	await close();
+}
+
+// an HTTPS record instead of an Alt-Svc: Cloudflare's /cdn-cgi/trace never
+// sends one, but cloudflare-quic.com's record (alpn h3,h2) names h3
+{
+	const { p, close } = await page();
+	const url = 'https://cloudflare-quic.com/cdn-cgi/trace';
+	const { results, info } = await p
+		.evaluate(raw, {
+			module: EPOXY,
+			h3: H3,
+			wisp: DEMO_WISP,
+			options: { dns: 'https://cloudflare-dns.com/dns-query' },
+			plan: [
+				{ url },
+				{ wait: 10000, origin: 'https://cloudflare-quic.com' },
+				{ url },
+			],
+		})
+		.catch((error) => ({ results: [], info: String(error).slice(0, 300) }));
+	const entry = info.altSvc?.find(
+		(e) => e.origin === 'https://cloudflare-quic.com',
+	);
+	ok(
+		'an HTTPS DNS record (dns option) is enough: the trace goes over h3 with no Alt-Svc seen',
+		results[0]?.trace === 'http=http/2' &&
+			results[1]?.trace === 'http=http/3' &&
+			entry?.source === 'dns',
+		JSON.stringify({ results, entry }),
+	);
 	await close();
 }
 
