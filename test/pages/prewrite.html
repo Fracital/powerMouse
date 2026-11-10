@@ -47,3 +47,35 @@
 	__pw.copyText = copy.text === document.scripts[0].text;
 	__pw.styleText = document.querySelector('style').textContent.trim();
 </script>
+<table>
+	<tbody>
+		<tr>
+			<td>
+				<script>
+					// a function, so the worker's rewrite carries its holder statement
+					function inCell() {
+						return 'cell';
+					}
+					__pw.order.push(inCell());
+				</script>
+			</td>
+		</tr>
+	</tbody>
+</table>
+<script>
+	// the cell's script parsed again in a table section's context (a tbody's
+	// innerHTML keeps its row and cell), then run as a copy: its text is the
+	// markup's, so the copy is the worker's rewrite; a copy of other text is
+	// rewritten in the page
+	var section = document.createElement('tbody');
+	section.innerHTML =
+		'<tr><td>' + document.querySelector('td script').outerHTML + '</td></tr>';
+	var parsed = section.querySelector('script');
+	__pw.tableParsed = !!parsed && parsed.parentNode.nodeName === 'TD';
+	var run = document.createElement('script');
+	run.text = parsed.text;
+	document.body.appendChild(run);
+	var other = document.createElement('script');
+	other.text = parsed.text + '\n__pw.order.push("other");';
+	document.body.appendChild(other);
+</script>

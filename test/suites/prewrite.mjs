@@ -10,7 +10,10 @@
 // script the page copies from its own markup runs as natively in both, and
 // the worker's rewrites are the ones in the page when it made them. Unless
 // SKIP_TIMING, a page with 1 MB of inline scripts has its longest task at
-// most two thirds as long prewritten. Same-origin mode (the real text is
+// most two thirds as long prewritten. A script inside a table, parsed again
+// in a table section's context by innerHTML (fragment-context) and run as a
+// copy, still finds the worker's rewrite by its exact text, and a copy of
+// other text falls back to the page's. Same-origin mode (the real text is
 // read through the host's realm).
 import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
 
@@ -34,7 +37,8 @@ const native = await (async () => {
 })();
 ok(
 	'natively: every script ran, the module last',
-	native?.order?.join() === 'a,strict,c,a,module',
+	native?.order?.join() === 'a,strict,c,a,cell,cell,cell,other,module' &&
+		native?.tableParsed === true,
 	JSON.stringify(native),
 );
 
@@ -107,7 +111,10 @@ for (const [name, result] of [
 const holds = (text) => /\.src\("[0-9a-z]+",/.test(text ?? '');
 const moduleText = (result) =>
 	result?.texts.find((text) => text.includes('inModule'));
-const copyText = (result) => result?.texts.at(-1);
+// the copy of a markup script the page appended to the head (the last of
+// the head's, before the body's table and the copies of its cell script)
+const copyText = (result) =>
+	result?.texts.filter((text) => text.includes("push('a')")).at(-1);
 ok(
 	"prewritten, the module and the copy of a markup script are the worker's rewrites; rewritten in the page, they are not",
 	holds(moduleText(withWorkers)) &&
@@ -118,6 +125,26 @@ ok(
 		moduleText(withWorkers)?.slice(0, 120),
 		copyText(withWorkers)?.slice(0, 120),
 		moduleText(inPage)?.slice(0, 120),
+	]),
+);
+
+// a script of the markup inside a table, parsed again in a table section's
+// context and run as a copy: the same text, so the worker's rewrite when it
+// made one; a copy of other text is the page's rewrite either way
+const runText = (result) => result?.texts.at(-2);
+const otherText = (result) => result?.texts.at(-1);
+ok(
+	"a table cell's script parsed in a table context matches the worker's rewrite by its text, and other text is rewritten in the page",
+	holds(runText(withWorkers)) &&
+		!holds(runText(inPage)) &&
+		!holds(otherText(withWorkers)) &&
+		!holds(otherText(inPage)) &&
+		withWorkers?.pw?.tableParsed === true &&
+		inPage?.pw?.tableParsed === true,
+	JSON.stringify([
+		runText(withWorkers)?.slice(0, 120),
+		otherText(withWorkers)?.slice(0, 120),
+		runText(inPage)?.slice(0, 120),
 	]),
 );
 
