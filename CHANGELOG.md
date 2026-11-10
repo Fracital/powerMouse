@@ -440,7 +440,9 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   `delegate-ch` meta delegates them, and an `Accept-CH` meta counts for its
   own document. The values are the browser's (userAgentData, device memory,
   network estimate, pixel ratio, media preferences, the requesting
-  document's viewport), and a subresource's fields come in the order of
+  document's viewport; `sec-ch-ua` and its two companions as the browser
+  sent them, none when its user-agent override sends none), and a
+  subresource's fields come in the order of
   Blink's header map, where the hints a site asks for sit among the
   defaults. Before, a site that asked for hints got only the three the
   browser adds by default (browserleaks' client-hints page showed "not

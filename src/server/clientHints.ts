@@ -1,4 +1,5 @@
 import { openDB, type IDBPDatabase } from 'idb';
+import { potentiallyTrustworthy } from '../mixedContent';
 import type { ClientHintsReport } from '../transport/messages';
 import {
 	ENABLED_FOR_ALL,
@@ -623,6 +624,16 @@ export async function applyClientHints(
 	headers: Headers,
 	context: HintsContext,
 ): Promise<Set<string>> {
+	// the browser's own user-agent hints: when the proxy origin is one it
+	// sends hints to and it sent none, it has them turned off (a DevTools
+	// user-agent override without metadata; the --user-agent switch keeps
+	// them, measured), and the site gets none either; when it sent them,
+	// they are the ones to send
+	const browserUA = headers.get('sec-ch-ua');
+	const browserMobile = headers.get('sec-ch-ua-mobile');
+	const browserPlatform = headers.get('sec-ch-ua-platform');
+	const uaOff =
+		browserUA === null && potentiallyTrustworthy(new URL(location.href));
 	for (const name of [...headers.keys()]) {
 		if (!isHintName(name)) continue;
 		// a page may name a legacy hint (DPR, ECT) on a fetch of its own,
@@ -651,9 +662,10 @@ export async function applyClientHints(
 	const deviceMemory = (navigator as Navigator & { deviceMemory?: number })
 		.deviceMemory;
 	const values: Record<string, string | null> = {
-		'sec-ch-ua': ua ? brandList(ua.brands) : null,
-		'sec-ch-ua-mobile': ua ? sfBoolean(ua.mobile) : null,
-		'sec-ch-ua-platform': ua ? sfString(ua.platform) : null,
+		'sec-ch-ua': browserUA ?? (ua ? brandList(ua.brands) : null),
+		'sec-ch-ua-mobile': browserMobile ?? (ua ? sfBoolean(ua.mobile) : null),
+		'sec-ch-ua-platform':
+			browserPlatform ?? (ua ? sfString(ua.platform) : null),
 		'sec-ch-ua-arch': ua ? sfString(ua.architecture) : null,
 		'sec-ch-ua-bitness': ua ? sfString(ua.bitness) : null,
 		'sec-ch-ua-model': ua ? sfString(ua.model) : null,
@@ -689,6 +701,7 @@ export async function applyClientHints(
 	for (const name of Object.keys(HINT_FEATURES)) {
 		if (!SENT_BY_DEFAULT.has(name) && !enabled.has(name)) continue;
 		if (!allows(HINT_FEATURES[name])) continue;
+		if (uaOff && name.startsWith('sec-ch-ua')) continue;
 		const value = values[name];
 		if (value === null || value === undefined) continue;
 		headers.set(name, value);

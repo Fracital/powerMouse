@@ -33,7 +33,11 @@ acts on them for the proxy origin.
 | Field order                                                   | a navigation in the browser process's fixed order; a subresource in Blink's header map hash order (`src/server/blinkHeaderMap.ts`)                                                    |
 
 The worker reads userAgentData, `deviceMemory` and `navigator.connection`
-itself. The pixel ratio, the media preferences and each document's
+itself. `sec-ch-ua`, `-mobile` and `-platform` are the browser's own, as it
+sent them to the proxy origin; a browser that sends none to a secure proxy
+origin has its user-agent hints off (a DevTools user-agent override without
+metadata, as Playwright's `userAgent` option sets), and then the site gets
+no `sec-ch-ua*` hint at all. The pixel ratio, the media preferences and each document's
 viewport come from the pages (`CLIENT_HINTS`, the ClientHints inject
 module) and, before any page reported, from the controller: its own window
 at the handshake, and a frame's size when `frame.go()` navigates it. A
