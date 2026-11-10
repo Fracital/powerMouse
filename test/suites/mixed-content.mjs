@@ -8,7 +8,9 @@
 // (test/pages/mixed-content.html, served by test/mixed-servers.mjs) runs
 // each load and says what the page saw; the sites' logs say which requests
 // arrived. Compared with the same page loaded natively over https and over
-// http, in both modes, with the console's "Mixed Content" messages.
+// http, in both modes, with the console's "Mixed Content" messages. Then a
+// page with a service worker: natively a real one, through the demo an
+// emulated one (`?sw`), whose own fetches of http are blocked too.
 import {
 	done,
 	HOST,
@@ -115,6 +117,34 @@ for (const [scheme, url] of Object.entries(pages)) {
 	};
 	await page.close();
 }
+// a service worker in the way (mixed-content-sw.html): natively a real one
+const swPage = (tag) =>
+	`https://mixed.test:${A}/pages/mixed-content-sw.html?b=${B}&tag=${tag}`;
+async function swResults(frames) {
+	for (let i = 0; i < 240; i++) {
+		for (const frame of frames()) {
+			const value = await frame
+				.evaluate(() => window.__mixedSW ?? null)
+				.catch(() => null);
+			if (value) return value;
+		}
+		await sleep(250);
+	}
+	return null;
+}
+const nativeSW = await (async () => {
+	const page = await nativeBrowser.newPage();
+	await page.goto(swPage('sw'));
+	const results = await swResults(() => [page.mainFrame()]);
+	await page.close();
+	return { results, arrived: arrived('sw') };
+})();
+ok(
+	'natively, a worker of an https scope sees the upgraded image, never the blocked fetch, and its own http fetches are blocked',
+	nativeSW.results?.controlled === true &&
+		nativeSW.results?.worker?.fetchPlain === 'reject TypeError',
+	JSON.stringify(nativeSW),
+);
 await nativeBrowser.close();
 
 ok(
@@ -206,6 +236,36 @@ for (const [mode, base] of [
 		);
 		await page.close();
 	}
+}
+
+// the same with the demo's emulated service workers (`?sw`): the page's
+// requests are judged before the worker gets them, and the worker's own as
+// any secure context's (docs/service-workers.md)
+for (const [mode, base] of [
+	['same-origin', PROXY],
+	['isolated', HOST],
+]) {
+	const tag = `sw-${mode}`;
+	const page = await openDemo(browser, `${base}?sw`);
+	await submitLanding(page, swPage(tag));
+	const results = await swResults(() =>
+		page.frames().filter((f) => /\/stomp\/[\w-]+\/html\//.test(f.url())),
+	);
+	const seen = JSON.parse(
+		JSON.stringify(results ?? null).replaceAll(`=${tag}`, '=sw'),
+	);
+	ok(
+		`${mode}: with an emulated service worker, the page and its worker are judged as natively`,
+		JSON.stringify(seen) === JSON.stringify(nativeSW.results),
+		JSON.stringify({ native: nativeSW.results, proxied: seen }),
+	);
+	const reached = arrived(tag).map((line) => line.replace(tag, 'sw'));
+	ok(
+		`${mode}: with an emulated service worker, the sites get the requests they get natively`,
+		JSON.stringify(reached) === JSON.stringify(nativeSW.arrived),
+		JSON.stringify({ native: nativeSW.arrived, proxied: reached }),
+	);
+	await page.close();
 }
 
 servers.close();

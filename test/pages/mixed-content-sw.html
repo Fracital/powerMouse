@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>MIXED CONTENT SW</title>
+	</head>
+	<body>
+		<script>
+			// Mixed content with a service worker in the way: the page's http
+			// image is upgraded before its worker sees it, the page's http fetch
+			// is blocked before it reaches the worker, and the worker's own
+			// fetches of http (a service worker of an https scope is a secure
+			// context) are blocked too. ?b=<port> names the plain http server.
+			const params = new URLSearchParams(location.search);
+			const B = params.get('b');
+			const tag = params.get('tag') || 'top';
+			const HA = 'http://' + location.host;
+			const HB = 'http://plain.mixed.test:' + B;
+			const q = (c) => '?c=' + tag + '.' + c;
+			const r = {};
+			const until = async (test, ms = 15000) => {
+				for (let waited = 0; !test() && waited < ms; waited += 50)
+					await new Promise((resolve) => setTimeout(resolve, 50));
+				return test();
+			};
+			(async () => {
+				const sw = navigator.serviceWorker;
+				await sw.register('mixed-content-sw.js');
+				await sw.ready;
+				r.controlled = await until(() => !!sw.controller);
+				r.image = await new Promise((resolve) => {
+					const image = new Image();
+					image.onload = () => resolve('load ' + image.naturalWidth);
+					image.onerror = () => resolve('error');
+					image.src = HA + '/img.png' + q('sw-image');
+				});
+				r.pageFetch = await fetch(HB + '/data.txt' + q('sw-page-fetch')).then(
+					(response) => 'ok ' + response.status,
+					(error) => 'reject ' + error.name,
+				);
+				r.worker = await new Promise((resolve) => {
+					const channel = new MessageChannel();
+					channel.port1.onmessage = (event) => resolve(event.data);
+					sw.controller.postMessage({ B, tag }, [channel.port2]);
+					setTimeout(() => resolve('no answer'), 15000);
+				});
+				window.__mixedSW = r;
+			})().catch((error) => (window.__mixedSW = { failed: String(error) }));
+		</script>
+	</body>
+</html>
