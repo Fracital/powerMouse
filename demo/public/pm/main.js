@@ -166,7 +166,7 @@ function rememberTransport(name) {
 // the page's callbacks, the same for both controllers
 // what a proxied page may ask the browser for: the proxy origin is another
 // origin than this page in isolation mode, and its frame gets none of these
-// without being named (Stomp keeps each site's answer, docs/permissions.md)
+// without being named (STomp keeps each site's answer, docs/permissions.md)
 const FRAME_ALLOW = [
 	'geolocation',
 	'camera',

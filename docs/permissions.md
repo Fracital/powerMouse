@@ -10,7 +10,7 @@ every proxied site is the proxy origin (in isolation mode, a frame of the
 host's origin, whose permission Chrome delegates from the host). So the
 browser has exactly one answer for all proxied sites: once the user lets
 one site use the camera, the browser lets every proxied site use it, and
-once the user blocks one, it blocks them all. Stomp cannot give each site a
+once the user blocks one, it blocks them all. STomp cannot give each site a
 real permission of its own. What it does instead:
 
 - **Each site has its own state**, kept by the service worker in IndexedDB
@@ -24,7 +24,7 @@ real permission of its own. What it does instead:
   decided, and the browser's own prompt asks the user (its answer becomes
   the site's).
 - **When the browser already holds the permission for another site**, it
-  would not ask again, and Stomp never lets that grant pass to a site the
+  would not ask again, and STomp never lets that grant pass to a site the
   user did not answer for: the host asks the user in its own UI
   (`onPermissionRequest` on `StompController` and `RemoteController`;
   resolve true, false or null). Without a host prompt the request is
