@@ -104,7 +104,7 @@ for (const [mode, base] of [
 		JSON.stringify(report.clients),
 	);
 	ok(
-		`${mode}: A's worker's caches hold neither B's cache nor Stomp's own HTTP cache`,
+		`${mode}: A's worker's caches hold neither B's cache nor STomp's own HTTP cache`,
 		Array.isArray(report.keys) &&
 			report.keys.length === 0 &&
 			report.shared === null &&
@@ -112,7 +112,7 @@ for (const [mode, base] of [
 		JSON.stringify(report),
 	);
 	ok(
-		`${mode}: the only real registration is Stomp's own`,
+		`${mode}: the only real registration is STomp's own`,
 		scopes.size > 0 && [...scopes].every((scope) => scope.endsWith('/stomp/')),
 		JSON.stringify([...scopes]),
 	);

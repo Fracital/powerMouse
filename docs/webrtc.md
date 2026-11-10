@@ -4,7 +4,7 @@ WebRTC is the one network API a proxied page can use that never goes through
 the service worker or the transport: the browser's own ICE agent sends UDP
 (and TCP) packets from the user's machine, to addresses the page names.
 Through the proxy that was a straight leak of the user's real address
-(browserleaks.com/webrtc showed it on the live site and locally). Stomp keeps
+(browserleaks.com/webrtc showed it on the live site and locally). STomp keeps
 `RTCPeerConnection` the browser's own and makes it behave as it does on a
 network that drops every UDP packet: no packet goes to a server or a
 candidate the page chose, and no address of the user's machine reaches the
@@ -52,7 +52,7 @@ This is what the page should see, so it was measured as the browser does it
 - gathering completes with the last of these (40.0 s); no `srflx` or `relay`
   candidate, ever.
 
-## What Stomp does
+## What STomp does
 
 The page's connection is the browser's, constructed with the page's own
 configuration (so every error is the browser's), and then the browser is
@@ -211,8 +211,8 @@ so nothing in a page or a service worker can carry them over wisp. Two ways
 remain:
 
 1. **An operator TURN server** (recommended next step). The host gives
-   stomp TURN servers of its own (coturn next to the wisp server on the
-   holyWisp edges, short-lived credentials from the host page) and stomp
+   STomp TURN servers of its own (coturn next to the wisp server on the
+   holyWisp edges, short-lived credentials from the host page) and STomp
    forces `iceTransportPolicy: 'relay'` with those servers in place of the
    page's. The browser then sends only to the operator's server (which sees
    the user's address, as the wisp server already does), gathers no host
@@ -220,7 +220,7 @@ remain:
    like HTTP traffic. Remote candidates could then be handed over as they
    are (the relay reaches them), so real peers work. The relay candidate's
    `raddr` (the user's public address) must stay hidden (the hooks already
-   show `0.0.0.0`). Stomp's side is small (a config field through the two
+   show `0.0.0.0`). STomp's side is small (a config field through the two
    config getters, `src/inject/Client.ts` and `src/server/rewrites.ts`, and a
    branch in `configure`); the server, its credentials and its bandwidth are
    the work, so it is not built yet.

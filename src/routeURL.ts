@@ -105,7 +105,7 @@ export function unwrapRoute(url: URL, codec: GenericCodec): URL | null {
 
 export function routeURL(resourceType: string, url: StompURL) {
 	if (!ROUTE_PROTOCOLS.includes(url.url.protocol)) {
-		// url is out of the scope of Stomp (a page-origin blob: URL becomes
+		// url is out of the scope of STomp (a page-origin blob: URL becomes
 		// the proxy's, which is the one the browser knows)
 		return proxyBlobURL(url.toString());
 	}

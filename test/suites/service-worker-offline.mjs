@@ -6,7 +6,7 @@
 // app (step 1), loads again with the site up (step 2: controlled from the
 // start, `ready`, its stylesheet and data through the worker), then with
 // the site's server dropping every connection (step 3): the worker answers
-// the document from its cache, and the proxied page still runs with Stomp's
+// the document from its cache, and the proxied page still runs with STomp's
 // inject (it reads its real URL, its stylesheet applies, its data comes out
 // of the cache). Natively and through the proxy, both demo modes; the logs
 // must match.

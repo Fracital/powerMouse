@@ -161,7 +161,7 @@ const HANDLERS = [
 /**
  * The global of a page's emulated service worker (docs/service-workers.md):
  * a dedicated Worker that the `sw:` route's preamble turns into what reads
- * as a ServiceWorkerGlobalScope, talking to Stomp's service worker over the
+ * as a ServiceWorkerGlobalScope, talking to STomp's service worker over the
  * port its controller hands it.
  */
 export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
@@ -178,7 +178,7 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 		const nativeAddEventListener =
 			global.EventTarget.prototype.addEventListener;
 
-		// the rpc to Stomp's service worker: what is called before the port
+		// the rpc to STomp's service worker: what is called before the port
 		// arrives (the script's top level runs first) waits for it, in order
 		let port: MessagePort | undefined;
 		const outbox: [unknown, Transferable[]][] = [];
@@ -1127,7 +1127,7 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 
 		/**
 		 * The preload responses this worker was given, by their body as the
-		 * Response first had it: Stomp's service worker sends the body only
+		 * Response first had it: STomp's service worker sends the body only
 		 * once something reads it, so a response passed to respondWith with
 		 * that body untouched (not read, locked or teed by a clone) is the
 		 * network's answer, which reaches the page without crossing over here

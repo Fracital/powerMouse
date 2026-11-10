@@ -26,7 +26,7 @@ most 64 KiB within each stream's flow control credit, so a wisp server that
 bounds its messages (the holyWisp relays, 262149 bytes) no longer closes the
 whole connection over an upload (see the `wisp-message-size` suite).
 The build also carries stomp-h3, HTTP/3 over wisp
-UDP for stomp's `http3` option (`h3/`, below), whose QUIC ClientHello and
+UDP for STomp's `http3` option (`h3/`, below), whose QUIC ClientHello and
 transport parameters are Chrome's too.
 
 Nothing is forked in the sense of a diverging tree. `upstream.env` pins the
@@ -64,7 +64,7 @@ fails the build at `git apply --check`.
 | MercuryWorkshop/epoxy-tls                                      | `0051` | Chrome's HTTP/2 SETTINGS (`1:65536;2:0;4:6291456;6:262144`, no MAX_FRAME_SIZE) and connection window (WINDOW_UPDATE 15663105).                                                                                                                                                                                                                                                    |
 | MercuryWorkshop/epoxy-tls                                      | `0052` | Request fields go out in the caller's order behind Chrome's head (Content-Length, then the caller's; Connection last so HTTP/2 stripping keeps the order), Accept-Encoding `gzip, deflate, br, zstd` with deflate and zstd decoded too, HTTP/1 title case on.                                                                                                                     |
 | MercuryWorkshop/epoxy-tls                                      | `0053` | HTTP and WebSocket connections use `chrome_hello`, Chrome's groups with X25519MLKEM768 (ring X25519 plus RustCrypto `ml-kem`) and brotli certificate decompression.                                                                                                                                                                                                               |
-| MercuryWorkshop/EpoxyTransport                                 | `0050` | `fieldSupport` tells the host this build decodes every encoding Chrome offers and keeps Priority to HTTP/2 (stomp's serveTransport reads it).                                                                                                                                                                                                                                     |
+| MercuryWorkshop/EpoxyTransport                                 | `0050` | `fieldSupport` tells the host this build decodes every encoding Chrome offers and keeps Priority to HTTP/2 (STomp's serveTransport reads it).                                                                                                                                                                                                                                     |
 | MercuryWorkshop/epoxy-tls                                      | `0054` | A WebSocket's `onclose` gets the server's close frame: its status and its reason (1005 for a frame without a status, 1006 for a connection that ended with no close frame, an empty reason when it is not UTF-8). The read loop dropped the frame and called `onclose` with nothing.                                                                                              |
 | MercuryWorkshop/epoxy-tls                                      | `0055` | An IPv6 literal's host goes to the wisp server and to rustls without the brackets the URL writes around it: `[::1]` was neither a DNS name nor an address for rustls ("invalid DNS name") and the wisp server could not resolve it. Host keeps the brackets.                                                                                                                      |
 | MercuryWorkshop/EpoxyTransport                                 | `0051` | `connect` passes that close code and reason on to `onclose` (it reported 1000 "Closed by remote" for every close).                                                                                                                                                                                                                                                                |
@@ -77,12 +77,12 @@ fails the build at `git apply --check`.
 ## stomp-h3 (`h3/`)
 
 Our own crate, not an upstream patch: QUIC (quinn) and HTTP/3 (h3) for the
-browser, over a datagram channel stomp hands in (epoxy's `connect_udp`, a
+browser, over a datagram channel STomp hands in (epoxy's `connect_udp`, a
 wisp UDP stream). It touches nothing in epoxy-tls or EpoxyTransport; the
 Dockerfile builds it after them (`h3/build.sh`) into
 `out/epoxy-transport/dist/h3/` (`stomp_h3.js`, `stomp_h3_bg.wasm`,
 `stomp_h3.d.ts`), so it ships on the same `dist` branch and the demo serves
-it as `/epoxy/h3/`. Stomp's `Http3Transport` imports it only when `http3` is
+it as `/epoxy/h3/`. STomp's `Http3Transport` imports it only when `http3` is
 on and an origin offers h3 (docs/http3.md).
 
 - `Cargo.lock` is committed and the build is `--locked`; `wasm-bindgen` is

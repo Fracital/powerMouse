@@ -47,7 +47,7 @@ export interface JarCookie {
 	 * A Partitioned cookie's top-level site when it was set in a context
 	 * whose top-level site is not the cookie URL's own (a site framed by
 	 * another, or a top-level page's request to another site); none when it
-	 * is that site (src/partition.ts). The jar of every Stomp before this
+	 * is that site (src/partition.ts). The jar of every STomp before this
 	 * one has none on any cookie, which reads as set first-party, as it was.
 	 */
 	partitionKey?: string;

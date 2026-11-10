@@ -141,13 +141,13 @@ server that records every byte of every stream the client opens, and at
   `:method :authority :scheme :path` and the Priority field. The Priority
   values over HTTP/3 are not HTTP/2's for every destination (measured:
   document `u=0, i`, style `u=0`, script `u=1`, image `u=2, i`, fetch
-  `u=1, i`; over HTTP/2 a script sends none and an image `i`); stomp sends
+  `u=1, i`; over HTTP/2 a script sends none and an image `i`); STomp sends
   the HTTP/2 values over both.
 
 ## What changed
 
 All epoxy changes are patches in `deploy/epoxy/patches` (numbered from 0050);
-the stomp side is `src/server/headerOrder.ts` and `src/transport/serveTransport.ts`.
+the STomp side is `src/server/headerOrder.ts` and `src/transport/serveTransport.ts`.
 
 - TLS (rustls patch, `ClientConfig::chrome_hello`, epoxy-tls 0053): Chrome's
   cipher list and order, GREASE in the suites, extensions, groups, key share,
@@ -166,7 +166,7 @@ the stomp side is `src/server/headerOrder.ts` and `src/transport/serveTransport.
 - HTTP/2 (h2-wasm 0050 to 0052, hyper-util-wasm 0050, epoxy-tls 0051):
   Chrome's SETTINGS values and order, connection window, pseudo-header order,
   HEADERS priority weight by urgency and Chrome's dependency tree.
-- Fields (stomp `headerOrder.ts`): every request goes to the transport in
+- Fields (STomp `headerOrder.ts`): every request goes to the transport in
   Chrome's order for its kind, with Accept-Encoding, the Priority field
   (Chrome's per destination), Cache-Control/Pragma for the cache mode, and
   Origin on a module script. `serveTransport` keeps Accept-Encoding and
@@ -265,7 +265,7 @@ libcurl.js takes no TLS or HTTP/2 options, so its ClientHello and SETTINGS
 are unchanged (JA4 `t13d10910h2_85781606486d_cf80c7f419ad`, Akamai
 `55cb2bd667724e6d46cc3c8dd15d50de`). Its fields now arrive in Chrome's
 order; curl still puts its own Accept-Encoding (`deflate, gzip, br`) first,
-and there is no Priority field (stomp sends it only to a transport that
+and there is no Priority field (STomp sends it only to a transport that
 keeps it off HTTP/1.1).
 
 | Field              | Native Chrome 152           | libcurl before              | libcurl after               |

@@ -1,7 +1,7 @@
 {
 	"name": "@sysce/stomp",
 	"version": "4.2.0",
-	"description": "A rewrite of the Stomp proxy.",
+	"description": "A rewrite of the STomp proxy.",
 	"keywords": [
 		"proxy",
 		"web-proxy",

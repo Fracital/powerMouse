@@ -1,7 +1,7 @@
-# browserleaks.com: native Chrome vs Chrome through stomp
+# browserleaks.com: native Chrome vs Chrome through STomp
 
 Every test page of browserleaks.com, loaded in native Chrome and through
-stomp, field by field. What differs is either a gap (something a site can
+STomp, field by field. What differs is either a gap (something a site can
 see that native Chrome does not show), an inherent difference (the egress
 is the wisp server's, the page sits in the host's frame), or a headless
 artifact. Measured 2026-11-10; the gaps fixed since are marked with the
@@ -16,7 +16,7 @@ commit that fixed them and their regression suite.
   differs between the two native loads is volatile (timestamps, the
   connection's JA3 with Chrome's extension shuffling, DNS resolver IPs,
   `downlink`) and is ignored.
-- Through stomp: the local demo (`npm run demo`) in same-origin mode
+- Through STomp: the local demo (`npm run demo`) in same-origin mode
   (`127.0.0.1`) and isolated mode (`localhost`, proxy origin `127.0.0.1`),
   and the live https://stomp.fracit.al (resolver rule mapping it and
   holywisp.fracit.al to the edge). The page was opened from the landing

@@ -68,7 +68,7 @@ RUN rm -f pnpm-lock.yaml pnpm-workspace.yaml \
  && ls -la dist
 
 # --- stomp-h3: HTTP/3 over wisp UDP, shipped in epoxy-transport's dist/h3/ ----
-# Our own crate (deploy/epoxy/h3, quinn + h3), not an upstream patch; stomp's
+# Our own crate (deploy/epoxy/h3, quinn + h3), not an upstream patch; STomp's
 # Http3Transport loads it next to the transport module when `http3` is on.
 COPY h3 /src/stomp-h3
 # rustls's patch is epoxy's (/patches/rustls), applied by vendor.sh

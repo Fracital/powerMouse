@@ -79,7 +79,7 @@ export default class FramingModule extends Module<DocumentClient> {
 				},
 			);
 
-		// opener: a page opened by another Stomp page keeps it (restricted
+		// opener: a page opened by another STomp page keeps it (restricted
 		// across origins by the Context module); anything else, the host
 		// included, is no opener a top-level page would have
 		const openerDescriptor = Reflect.getOwnPropertyDescriptor(global, 'opener');

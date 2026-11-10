@@ -1,4 +1,4 @@
-// Emulated service workers, the part that runs in Stomp's own service worker
+// Emulated service workers, the part that runs in STomp's own service worker
 // (docs/service-workers.md): the registrations of every proxied site, their
 // job queue and lifecycle, the instances the controllers host, and the
 // dispatch of the requests they answer. Nothing here ever registers a real
@@ -54,7 +54,7 @@ interface RegistrationRecord {
 	 * the partition it was registered in (src/partition.ts): a site framed
 	 * by another has registrations of its own there, which control its
 	 * clients in that partition only. None for a first-party one, which is
-	 * every registration an earlier Stomp made
+	 * every registration an earlier STomp made
 	 */
 	partition?: string;
 	updateViaCache: UpdateViaCache;
@@ -113,7 +113,7 @@ export interface WorkerHost {
 	timeout?: number;
 }
 
-/** what Stomp's service worker knows of one of its clients */
+/** what STomp's service worker knows of one of its clients */
 export interface ClientDescription {
 	/** the real URL */
 	url: string;
@@ -183,7 +183,7 @@ const CONTROLLED_KEPT = 4096;
 /**
  * The key a registration is kept under: its scope, and its partition after a
  * space (no serialized URL has one), so a first-party registration keeps the
- * key every earlier Stomp gave it
+ * key every earlier STomp gave it
  */
 function keyOf(scope: string, partition = ''): string {
 	return partition ? `${scope} ${partition}` : scope;
@@ -1114,7 +1114,7 @@ export class ServiceWorkers {
 	readonly #cookieChecks = new Map<string, Promise<void>>();
 
 	/**
-	 * The jar changed (Stomp's cookie module tells): every registration with
+	 * The jar changed (STomp's cookie module tells): every registration with
 	 * cookie change subscriptions compares what its URLs show now with what
 	 * they showed, and its worker gets one ExtendableCookieChangeEvent per
 	 * cookie a subscription covers, as Chrome sends them
@@ -2183,5 +2183,5 @@ export class ServiceWorkers {
 	}
 }
 
-/** the one instance of Stomp's service worker */
+/** the one instance of STomp's service worker */
 export const serviceWorkers = new ServiceWorkers();

@@ -105,7 +105,7 @@ export default class LocationModule extends Module<DocumentClient> {
 		}
 
 		// The real origins of the proxied documents above this one, nearest
-		// first like the browser's list; the host (not a Stomp context) ends
+		// first like the browser's list; the host (not a STomp context) ends
 		// the walk and is never revealed. DOMStringList.prototype.length is a
 		// getter, so define own properties rather than assigning.
 		const ancestorOrigins = (): string[] => {

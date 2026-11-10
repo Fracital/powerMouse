@@ -1,4 +1,4 @@
-// Stomp demo: Powermouse-styled landing page, a browser view with tabs, and
+// STomp demo: Powermouse-styled landing page, a browser view with tabs, and
 // an early-Android style navigation bar. Everything uses the public
 // StompController / Frame API from dist/Controller.js.
 
@@ -1317,10 +1317,10 @@ async function pollStatus() {
 		const { uptime, version } = await (await fetch('/api/status')).json();
 		uptimeAt = [uptime, Date.now()];
 		renderUptime();
-		$('version').textContent = `stomp ${version}`;
+		$('version').textContent = `STomp ${version}`;
 		if (!loggedVersion) {
 			loggedVersion = true;
-			badge('Stomp', `${version}, up ${Math.floor(uptime / 3600)}h`);
+			badge('STomp', `${version}, up ${Math.floor(uptime / 3600)}h`);
 		}
 	} catch {
 		uptimeAt = null;

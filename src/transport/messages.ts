@@ -183,9 +183,9 @@ export interface ServiceWorkerApiMessage {
 }
 /** SW -> proxied documents: an emulated registration changed, a message from an emulated worker, a new controller */
 export const SW_EVENT = '$stomp$swEvent';
-/** controller -> an emulated service worker, with [port]: its port to Stomp's service worker */
+/** controller -> an emulated service worker, with [port]: its port to STomp's service worker */
 export const SW_PORT = '$stomp$swPort';
-/** rpc id on the port between Stomp's service worker and an emulated worker */
+/** rpc id on the port between STomp's service worker and an emulated worker */
 export const SW_RPC = '$stomp$swRpc';
 /** global the HTML shell sets before the client is made: the emulated registration that controls the new document */
 export const SW_CONTROL = '$stomp$swControl';
@@ -417,7 +417,7 @@ export type Controllerbound = {
 	/**
 	 * start a page's emulated service worker (docs/service-workers.md): a
 	 * dedicated Worker at `url` (its `sw:` route); answers with the port the
-	 * worker talks to Stomp's service worker over
+	 * worker talks to STomp's service worker over
 	 */
 	startServiceWorker: [
 		{ id: string; url: string; type: 'classic' | 'module' },

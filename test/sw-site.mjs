@@ -110,7 +110,7 @@ const PAGES = {
 		if (params.get('step') === '1') {
 			await c.register('/a/sw-iso.js', { scope: '/' });
 			await until(() => c.controller);
-			// passed through the worker to the network, where Stomp's HTTP
+			// passed through the worker to the network, where STomp's HTTP
 			// cache keeps it (max-age): the worker's caches must not see it
 			push('cacheable', (await (await fetch('/a/cacheable.txt')).text()).trim());
 			return;

@@ -1,6 +1,6 @@
 # Fracital and stomp-rewrite: integration handoff
 
-Work list for stomp-rewrite so Fracital can embed stomp as a second proxy
+Work list for stomp-rewrite so Fracital can embed STomp as a second proxy
 engine beside Scramjet. Fracital-side wiring (engine adapter, lazy boot,
 the settings row) is tracked in the Fracital repo, not here.
 
@@ -8,7 +8,7 @@ the settings row) is tracked in the Fracital repo, not here.
 
 | Workstream                           | State                                                                                                                                                                                                                                                                                                                                                                                                             | Where                         |
 | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| WS1 request-header policy            | done: `rules` / `setRules` on both controllers (URLPattern match, header set and delete, block, redirect, status), applied after stomp rebuilds Origin and Referer so a host rule wins, `onRequest` reports `rule`; acceptance checks in `test/suites/rules.mjs`                                                                                                                                                  | shipped                       |
+| WS1 request-header policy            | done: `rules` / `setRules` on both controllers (URLPattern match, header set and delete, block, redirect, status), applied after STomp rebuilds Origin and Referer so a host rule wins, `onRequest` reports `rule`; acceptance checks in `test/suites/rules.mjs`                                                                                                                                                  | shipped                       |
 | WS2 epoxy as the supported transport | done: `examples/minimal-host.html` boots a same-origin `StompController` on epoxy and proxies Wikipedia; README "Embedding" carries the transport guidance                                                                                                                                                                                                                                                        | shipped                       |
 | WS3 relocatable asset paths          | done: `assets` on both controllers names every served file (defaults to today's names), the controller frame learns its script name from `?script=`; the assets suite boots a fully renamed bundle under `/neutral/` and sees no URL with the package name                                                                                                                                                        | parity session                |
 | WS4 same-origin hook coverage        | measured: scramjet's adversarial corpus runs as nine measurement suites (`test/suites/adversarial-*.mjs`); 14 failing checks left from 180, all documented in the parity doc's corpus row (eight probes reporting the browser's own result, MutationObserver records of the marker writes, `navigator.serviceWorker` absent by design); the blob: URL leak is closed (page-origin object URLs, blob-origin suite) | shipped; still not a boundary |
@@ -20,8 +20,8 @@ the settings row) is tracked in the Fracital repo, not here.
 
 ## Goal and shape
 
-- Fracital adds stomp as a selectable engine, gated behind an "Enable
-  experimental proxies" setting. Off by default; when on, stomp shows up as a
+- Fracital adds STomp as a selectable engine, gated behind an "Enable
+  experimental proxies" setting. Off by default; when on, STomp shows up as a
   pick in the existing engine selector. It is never in the selector while the
   setting is off.
 - Transport: **epoxy** (Fracital's EpoxyTransport fork).
@@ -34,7 +34,7 @@ the settings row) is tracked in the Fracital repo, not here.
   `RemoteController` mode is out of scope for this integration. Same-origin is
   accepted.
 - **Honesty rule for implementers.** Same-origin hooks are best-effort, not a
-  security boundary; stomp already says this in `ControllerInit.sandbox` and
+  security boundary; STomp already says this in `ControllerInit.sandbox` and
   the README. WS4 tightens coverage; it does **not** turn same-origin into
   isolation, and nothing in docs or API may claim it does. "Perfect" is not a
   reachable target on one origin; that is expected, state it plainly.
@@ -42,11 +42,11 @@ the settings row) is tracked in the Fracital repo, not here.
 ## WS1: host-configurable outbound request-header policy [new feature]
 
 **Why.** Fracital needs proxied first-party service calls to carry the host
-app's own `Origin`/`Referer`, chosen by the host, rather than the value stomp
+app's own `Origin`/`Referer`, chosen by the host, rather than the value STomp
 derives from the proxied page. This is the standard reverse-proxy
 "set header on upstream request" knob (cf. nginx `proxy_set_header`).
 
-**Today.** stomp rebuilds `Origin`/`Referer` in the service worker from the
+**Today.** STomp rebuilds `Origin`/`Referer` in the service worker from the
 initiator (`src/server/rewrites.ts`, the Referer and Origin block) and deletes the browser's.
 An internal `additionalRequestFilter` hook (`AdditionalFilter` in
 `src/server/filterHeaders.ts`) exists but `createServer()` never passes one
@@ -60,7 +60,7 @@ API.
    `{ match: hostGlob | predicate, set?: Record<string,string>, remove?: string[] }`.
 2. Thread it through `ControllerInitMessage` (`src/transport/messages.ts`), then
    `createServer`, then `registerRewrites`, and apply in the outbound request path in
-   `rewrites.ts`, **after** stomp's own `Origin`/`Referer` reconstruction so
+   `rewrites.ts`, **after** STomp's own `Origin`/`Referer` reconstruction so
    the host rule wins.
 3. Scope by destination host: only configured targets are touched; every other
    request stays byte-identical to today.
@@ -170,7 +170,7 @@ documented behaviour.
 
 ## Since the gap list (as of 2026-11-07)
 
-What changed on master that a host embedding stomp should know, newest
+What changed on master that a host embedding STomp should know, newest
 first; each item has its suite and its CHANGELOG bullet.
 
 - **Transport in a worker.** `init.transport` accepts a `TransportDescriptor`
@@ -223,7 +223,7 @@ first; each item has its suite and its CHANGELOG bullet.
   error page with kind `controller`. A host that keeps tabs stores one id per
   tab and passes it back, so the tab's history entries keep resolving.
 
-## Config stomp will receive from Fracital (reference)
+## Config STomp will receive from Fracital (reference)
 
 - `codec`: `aes` (or `xor`) for routed-URL encoding
 - `directory`: a renamed neutral path (WS3); the service worker's scope and

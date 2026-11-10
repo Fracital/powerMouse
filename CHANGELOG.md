@@ -61,6 +61,12 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- The project is written STomp in prose: the READMEs and docs, code comments,
+  the package description, and the demo's page text (its error page, page
+  description and version line). Machine-read names (the npm name, files,
+  routes, URLs, environment variables, storage and message keys) and every
+  string in `dist/` stay as they were. README.md links holyWisp, the wisp
+  relay stomp.fracit.al runs on.
 - Opening a card in the demo's tab manager also hides the manager's own
   controls at once (the tab count, the new-tab button, Close all and the
   quick-link dock). They faded out over about 250 ms above the opening page,

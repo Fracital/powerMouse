@@ -21,7 +21,7 @@ import type {
 import type ProxyModule from './modules/Proxy';
 import { nativeFunction } from './nativeUtil';
 
-/** what the objects ask of whoever talks to Stomp's service worker */
+/** what the objects ask of whoever talks to STomp's service worker */
 export interface ObjectsBackend {
 	update(registration: RegistrationSnapshot): Promise<void>;
 	unregister(registration: RegistrationSnapshot): Promise<boolean>;
@@ -207,7 +207,7 @@ export default class ServiceWorkerObjects {
 		return ctor;
 	}
 
-	/** an error of this realm for what Stomp's service worker reported */
+	/** an error of this realm for what STomp's service worker reported */
 	error(info: ErrorInfo): Error {
 		const { global } = this;
 		if (info.name === 'TypeError') return new global.TypeError(info.message);
@@ -657,7 +657,7 @@ export default class ServiceWorkerObjects {
 	}
 
 	/**
-	 * The registration's managers, each over Stomp's service worker
+	 * The registration's managers, each over STomp's service worker
 	 * (docs/service-workers.md): sync runs (its event reaches the worker),
 	 * periodic sync is refused as Chrome refuses it without the permission,
 	 * background fetch downloads through the proxy and tells the worker,

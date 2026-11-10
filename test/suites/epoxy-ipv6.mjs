@@ -7,7 +7,7 @@
 // ::1 speaks http, https (a certificate for the address, from a CA the
 // controller's epoxy is told to trust) and wss; the suite loads a page from
 // each through the proxy, checks the Host field the server read (Chrome
-// sends `[::1]:port`), and makes raw transport requests with no Stomp in
+// sends `[::1]:port`), and makes raw transport requests with no STomp in
 // the path. A machine with no IPv6 loopback skips it.
 import { createServer as createHttp } from 'node:http';
 import { createServer as createHttps } from 'node:https';

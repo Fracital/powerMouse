@@ -61,7 +61,7 @@ export interface Config {
 	/**
 	 * Emulated service workers (on unless `false`): a page's
 	 * `navigator.serviceWorker` registers workers that run in a dedicated
-	 * Worker the controller starts, and Stomp's own service worker hands them
+	 * Worker the controller starts, and STomp's own service worker hands them
 	 * the page's requests (docs/service-workers.md). Off, pages have no
 	 * `navigator.serviceWorker` (a proxy tell: every Chrome page in a secure
 	 * context has one).

@@ -113,11 +113,11 @@ with their RTT and datagram counts, and how the last 64 requests went.
   `upgrade`, `host`, a `te` other than `trailers`) are dropped as RFC 9114
   requires; `user-agent` and `accept-encoding: gzip, br` added when absent, as
   epoxy does, and gzip and br bodies decoded the same way, so either path
-  hands stomp the same response.
+  hands STomp the same response.
 - 0-RTT is off. Early data can be replayed by an attacker and the proxy
   cannot tell which of a page's requests are safe to replay, so every
   connection does the full 1-RTT handshake (resumed when it can).
-- Response bodies stream (a `ReadableStream` straight to stomp's body port),
+- Response bodies stream (a `ReadableStream` straight to STomp's body port),
   request bodies go up as they are read, and both directions run at once.
 
 ## Limits
@@ -175,7 +175,7 @@ policy (no private, loopback or link-local addresses) and sends the
 datagrams from the edge's own address. UDP streams bypass edge-router.py's
 adult and shady-name classification, which is a policy choice for abulxt to
 make, and the edges' outbound UDP must not be filtered (the edge firewall
-only filters inbound). Nothing in stomp's deployment changes: terp's
+only filters inbound). Nothing in STomp's deployment changes: terp's
 `STOMP_WISP_URL` stays the relay, and the page enables `http3` in its
 transport descriptor.
 

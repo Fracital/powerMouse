@@ -94,7 +94,7 @@ export default class Client {
 	nativePostMessage?: PostMessage;
 	/** @internal the Context module's wrapper over window.postMessage: a page that replaced it is called as written */
 	hookedPostMessage?: unknown;
-	/** @internal set by the Context module: post `args` to a Stomp window from this realm, so this context is the incumbent (source and origin are its own) */
+	/** @internal set by the Context module: post `args` to a STomp window from this realm, so this context is the incumbent (source and origin are its own) */
 	postToWindow?: (target: object, args: unknown[]) => unknown;
 	readonly #callIn: CallIn;
 	readonly #ownCallback: (callback: () => void) => () => void;

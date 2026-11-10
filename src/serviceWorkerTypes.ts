@@ -1,4 +1,4 @@
-// What Stomp's service worker, the controller, the emulated workers and the
+// What STomp's service worker, the controller, the emulated workers and the
 // page module say to each other about emulated service workers
 // (docs/service-workers.md).
 
@@ -198,7 +198,7 @@ export type FetchAnswer =
 	| { kind: 'network' }
 	/**
 	 * the event's preload response itself, unread: the network's answer
-	 * reaches the page as Stomp's service worker has it, never through the
+	 * reaches the page as STomp's service worker has it, never through the
 	 * worker
 	 */
 	| { kind: 'preload' };
@@ -211,7 +211,7 @@ export interface MessageInit {
 	ports: MessagePort[];
 }
 
-/** implemented by the emulated worker, called by Stomp's service worker */
+/** implemented by the emulated worker, called by STomp's service worker */
 export type ToEmulated = {
 	install: [null, boolean];
 	activate: [null];
@@ -237,7 +237,7 @@ export type ToEmulated = {
 	];
 };
 
-/** implemented by Stomp's service worker, called by an emulated worker */
+/** implemented by STomp's service worker, called by an emulated worker */
 export type FromEmulated = {
 	/** the port arrived; whether the script's top level ran to its end */
 	hello: [{ evaluated: boolean; error?: string }];

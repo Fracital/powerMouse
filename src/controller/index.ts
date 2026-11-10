@@ -82,7 +82,7 @@ export type {
 
 export interface ControllerInit {
 	/**
-	 * The registered Stomp service worker, or its registration (from
+	 * The registered STomp service worker, or its registration (from
 	 * `StompController.register()` or `navigator.serviceWorker.register()`):
 	 * then the controller takes its worker and waits for it to activate.
 	 */
@@ -174,7 +174,7 @@ export interface ControllerInit {
 	 * A proxied page's `navigator.serviceWorker` works: its worker script
 	 * runs in a dedicated Worker this controller starts (never a real
 	 * registration on the proxy origin, which would serve every site), and
-	 * the Stomp service worker hands it the requests of the pages it
+	 * the STomp service worker hands it the requests of the pages it
 	 * controls, navigations included, so offline pages, caches and fetch
 	 * rewriting work. `false` leaves pages without `navigator.serviceWorker`,
 	 * which a page can read as a proxy tell.
@@ -549,7 +549,7 @@ export class StompController extends EventTarget {
 	#healing = false;
 	#rules: RequestRule[];
 	/**
-	 * Register the Stomp service worker served from `directory` (the
+	 * Register the STomp service worker served from `directory` (the
 	 * constructor's default when omitted: the directory of the current script)
 	 * and resolve once it is activated. The registration goes straight into
 	 * `serviceworker` of the constructor.

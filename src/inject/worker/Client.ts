@@ -14,12 +14,12 @@ export function setWorkerTransportPort(port: Promise<MessagePort>) {
 
 let serviceWorkerPort: Promise<MessagePort> | undefined;
 
-/** Called by the worker entry once it has started listening for SW_PORT (an emulated service worker's port to Stomp's) */
+/** Called by the worker entry once it has started listening for SW_PORT (an emulated service worker's port to STomp's) */
 export function setServiceWorkerPort(port: Promise<MessagePort>) {
 	serviceWorkerPort = port;
 }
 
-/** the port an emulated service worker talks to Stomp's service worker over */
+/** the port an emulated service worker talks to STomp's service worker over */
 export function getServiceWorkerPort(): Promise<MessagePort> | undefined {
 	return serviceWorkerPort;
 }

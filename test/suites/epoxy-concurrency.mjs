@@ -10,7 +10,7 @@
 // race the transport's init: N navigations of N frames at once, N fetches at
 // once from a proxied page, the same again after the fixture has closed the
 // idle connections, and (worker host) N raw transport requests at once with
-// no Stomp in the path.
+// no STomp in the path.
 // libcurl is the control, on a real site: it answers nothing for a loopback
 // server through wisp (curl error 52, see transport-worker), so against the
 // fixture its frames load the error page. That round needs the internet and

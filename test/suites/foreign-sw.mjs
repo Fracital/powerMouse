@@ -1,8 +1,8 @@
 // A host application with a service worker of its own (a root worker in
 // control of the host page) boots a StompController next to it. The foreign
-// worker posts to its clients a message shaped like Stomp's revive broadcast
+// worker posts to its clients a message shaped like STomp's revive broadcast
 // (and a plain one) while the controller is starting and again later, and
-// the transport module is slow to arrive, so the stomp worker's own startup
+// the transport module is slow to arrive, so the STomp worker's own startup
 // revive lands before the first handshake; the controller must stay on its
 // own worker, resolve wait(), and keep serving its frames.
 import { done, FIXTURE, launch, ok, PROXY, waitForServer } from '../lib.mjs';
@@ -13,7 +13,7 @@ const page = await browser.newPage();
 const errors = [];
 page.on('pageerror', (error) => errors.push(error.message));
 // the transport module arrives slowly (the 2.2 MB epoxy module over a real
-// network), so the first handshake waits while the stomp worker's own
+// network), so the first handshake waits while the STomp worker's own
 // startup revive lands: the window in which the controller used to adopt
 // the foreign worker in control of the page
 await page.route('**/epoxy/index.mjs', async (route) => {
@@ -76,7 +76,7 @@ ok(
 	JSON.stringify(result.foreign),
 );
 ok(
-	'wait() resolves on the stomp worker, not the foreign one',
+	'wait() resolves on the STomp worker, not the foreign one',
 	result.wait === 'resolved' &&
 		result.workerBefore?.startsWith(`${result.proxy}/stomp/`),
 	JSON.stringify([result.wait, result.workerBefore]),

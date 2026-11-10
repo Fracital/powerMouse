@@ -29,7 +29,7 @@ interface ContainerState {
 
 /**
  * `navigator.serviceWorker` for a proxied page, backed by the emulated
- * service workers Stomp's own worker runs (docs/service-workers.md). Only
+ * service workers STomp's own worker runs (docs/service-workers.md). Only
  * unless `serviceWorkers` is off; then the Navigator module removes the API.
  */
 export default class ServiceWorkerModule extends Module<DocumentClient> {
@@ -119,7 +119,7 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 
 		// Calls in flight: every event that arrives meanwhile waits for the
 		// call's answer, in the order it came. The answer travels on a port of
-		// its own, so it can overtake events Stomp's service worker sent
+		// its own, so it can overtake events STomp's service worker sent
 		// before it (and a register's `updatefound` must follow its
 		// resolution). An answer that includes steps a registration object of
 		// this page has not applied resolves only once those steps are here

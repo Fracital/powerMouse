@@ -8,7 +8,7 @@ requests, its bundles and other sites' pages, which is an escape (the reason
 `navigator.serviceWorker` was absent until now, docs/scramjet-parity.md
 section 10 item 1). Instead the page's worker script runs in a dedicated
 Worker that the controller starts, with the worker inject and a global that
-reads as a `ServiceWorkerGlobalScope`, and Stomp's own service worker hands it
+reads as a `ServiceWorkerGlobalScope`, and STomp's own service worker hands it
 the requests it would have received.
 
 The flag is on by default. With it off nothing below runs, and pages see
@@ -61,7 +61,7 @@ worker must expect natively).
 ## Request flow
 
 ```
-page (proxied site S, client C)              Stomp's service worker                      controller (host page / controller frame)
+page (proxied site S, client C)              STomp's service worker                      controller (host page / controller frame)
 ------------------------------              ----------------------                      ------------------------------------------
 fetch('/api') or <img>, or a navigation
   --> routed request /stomp/<id>/<kind>/...
@@ -89,7 +89,7 @@ fetch('/api') or <img>, or a navigation
 ```
 
 The worker's own requests (`fetch`, `importScripts`, `cache.add`) come back
-to Stomp's service worker from the worker's client, which is recognised by
+to STomp's service worker from the worker's client, which is recognised by
 its `sw:` route and never intercepted, so they go to the network as a
 service worker's own fetches do.
 
@@ -102,7 +102,7 @@ carries the registration that controls the new document, so
 as natively.
 
 Navigation preload: when the registration has it on, a GET navigation's
-request goes out from Stomp's service worker as soon as the navigation is
+request goes out from STomp's service worker as soon as the navigation is
 routed, in parallel with the worker's start, as the navigation itself (its
 destination, mode and cookies) plus `Service-Worker-Navigation-Preload` with
 the registration's header value; its `Set-Cookie` fields are applied as its
@@ -186,7 +186,7 @@ A proxied site's emulated worker sees only its own site's requests:
   message for another origin).
 - The worker's `caches` are the site's (cache names carry the origin, and
   `caches.match()` looks in the site's caches only, never in another site's
-  or Stomp's own HTTP cache); its IndexedDB is the site's as any worker's.
+  or STomp's own HTTP cache); its IndexedDB is the site's as any worker's.
 - The `sw:` and `swimport:` routes answer the controller's Worker and the
   emulated worker itself only; a proxied page that asks gets a 403.
 - Nothing real is registered: the page's `navigator.serviceWorker` is the
@@ -225,7 +225,7 @@ denied.`, as Chrome does without the site engagement it asks for.
     `backgroundfetchfail` (`backgroundfetchabort` after `abort()`) with a
     `BackgroundFetchRegistration` whose `matchAll()` gives the records; in
     the worker `fetch()` rejects as natively. The fetches live as long as
-    Stomp's service worker runs, and no `progress` event fires.
+    STomp's service worker runs, and no `progress` event fires.
   - `paymentManager` keeps `userHint` and `enableDelegations()` answers
     `true`; the payment events exist and never fire.
   - `cookies` keeps the cookie change subscriptions (`subscribe`,
@@ -233,8 +233,8 @@ denied.`, as Chrome does without the site engagement it asks for.
     worker gets an `ExtendableCookieChangeEvent` (`cookiechange`) for each
     change of a cookie a subscription covers, whoever made it (a page's
     `document.cookie` or `cookieStore`, a response's `Set-Cookie`, the
-    worker itself): Stomp's service worker compares what each subscription
-    URL shows in the jar with what it showed. Changes while Stomp's worker
+    worker itself): STomp's service worker compares what each subscription
+    URL shows in the jar with what it showed. Changes while STomp's worker
     was stopped are not reported; its comparison starts again from the jar.
 - The worker's `cookieStore` is the page's over the same jar (the methods,
   dictionaries and errors are shared, `cookieStoreMethods`), with a
@@ -345,4 +345,4 @@ Hosts should leave it on.
 - `WindowClient.focused` of a proxied page follows the host page's focus
   (the browser sees an iframe), not the frame's own.
 - An instance's in-memory state goes when it idles for 30 s or the browser
-  restarts Stomp's service worker, as a real worker's may at any time.
+  restarts STomp's service worker, as a real worker's may at any time.

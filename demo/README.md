@@ -1,6 +1,6 @@
-# Stomp demo
+# STomp demo
 
-A small host application for Stomp: a landing page with an address bar and
+A small host application for STomp: a landing page with an address bar and
 quick links that turns into a browser view (address bar and transport switch
 on top, an early-Android style navigation bar at the bottom) around a proxied
 frame. The look is adapted
@@ -181,7 +181,7 @@ console only.
 ## Transports
 
 Both bundled transports have a defect against `wisp-js` 0.5 (measured with and
-without Stomp in the path, see the changelog's known limitations):
+without STomp in the path, see the changelog's known limitations):
 
 - **epoxy** (default): HTTP is fast and reliable; incoming WebSocket frames
   stop after the first round trip.

@@ -373,7 +373,7 @@ export default class AccessModule extends Module<Client> {
 				errors.coerce(value, partial),
 			/**
 			 * `x.postMessage(...)` (the rewriter routes every such call here, and
-			 * the .call / .apply / Reflect.apply forms): a Stomp window gets the
+			 * the .call / .apply / Reflect.apply forms): a STomp window gets the
 			 * message through its own native postMessage called from this realm,
 			 * so this context is the incumbent the browser reports as the
 			 * source, with an envelope carrying this context's real origin;

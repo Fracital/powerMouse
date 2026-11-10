@@ -133,7 +133,7 @@ function unescapeText(text: string): string {
 
 /**
  * The client of the proxied top `start` is under (`start` when it is one):
- * up through parents that are Stomp documents of the same real origin. The
+ * up through parents that are STomp documents of the same real origin. The
  * host page, or a parent of another real origin (the host in isolation
  * mode), ends it.
  */

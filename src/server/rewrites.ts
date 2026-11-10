@@ -2637,7 +2637,7 @@ export function registerRewrites(
 	};
 }
 
-/** the request headers that are Stomp's own, never a page's */
+/** the request headers that are STomp's own, never a page's */
 const OWN_HEADERS = [
 	ABORT_HEADER,
 	LOAD_HEADER,

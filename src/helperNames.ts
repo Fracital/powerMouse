@@ -15,7 +15,7 @@ export interface HelperNames {
 	access: string;
 	/** the stand-in marker on `location` and `eval` (default `$s$L`) */
 	globalProxy: string;
-	/** the stand-in's name marker, and the key of a Stomp message envelope (default `$s$N`) */
+	/** the stand-in's name marker, and the key of a STomp message envelope (default `$s$N`) */
 	globalName: string;
 	/**
 	 * the client on the window and on workers: a controller mints its own

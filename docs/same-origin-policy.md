@@ -11,7 +11,7 @@ that is also the host's; isolated mode (`RemoteController`) moves the host to
 an origin of its own, but the proxied sites still share the proxy's. So the
 browser enforces nothing between two proxied sites: to Chrome a request from
 one to the other is same-origin, an image of one drawn by the other is
-same-origin, and their storage is one origin's. Stomp has to simulate the
+same-origin, and their storage is one origin's. STomp has to simulate the
 whole same-origin policy, so that two proxied sites (and the host) are as
 separated from each other as they would be natively, and a page sees exactly
 the cross-origin behaviour Chrome gives it.

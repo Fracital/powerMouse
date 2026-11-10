@@ -89,7 +89,7 @@ const leaked = (value, { loopback = true } = {}) => {
 			const prefix = `${address.split('.').slice(0, 3).join('.')}.x`;
 			if (text.includes(prefix)) found.push(prefix);
 		}
-	// a candidate on loopback, or the address stomp sends the browser to
+	// a candidate on loopback, or the address STomp sends the browser to
 	if (loopback && / 127\.0\.0\.1 \d+ typ |"address":"127\.0\.0\.1"/.test(text))
 		found.push('127.0.0.1 candidate');
 	if (text.includes('255.255.255.255')) found.push('255.255.255.255');

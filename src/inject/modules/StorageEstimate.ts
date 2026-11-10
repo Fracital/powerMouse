@@ -17,7 +17,7 @@ function done<T>(request: IDBRequest<T>): Promise<T> {
  * navigator.storage.estimate() for the proxied origin's partition alone.
  * The browser keeps one quota for the proxy origin, so its own answer
  * counts every proxied site's stores (a megabyte another site stored shows
- * in this one's) and Stomp's caches; natively a page sees its storage
+ * in this one's) and STomp's caches; natively a page sees its storage
  * key's usage only. The usage here is that of the stores this context's
  * key names (src/partition.ts): its Cache Storage bodies, its origin
  * private file system's files and its IndexedDB databases, their records

@@ -1,6 +1,6 @@
 /* global add_completion_callback, setup */
 
-// Stomp's testharnessreport.js: when a page's tests finish, keep the results
+// STomp's testharnessreport.js: when a page's tests finish, keep the results
 // on the window (window.__wptResults) and post them to the fixture
 // (/_wpt/report, same origin as the test, so through the proxy they travel the
 // proxied path too), where test/wpt.mjs collects them.

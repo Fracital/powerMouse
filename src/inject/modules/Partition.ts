@@ -181,7 +181,7 @@ export default class PartitionModule extends Module<Client> {
 		}
 		// caches.match() looks in this origin's caches only, in the order they
 		// were made, as the browser looks in the origin's: natively it would
-		// search every proxied site's caches and Stomp's own HTTP cache, whose
+		// search every proxied site's caches and STomp's own HTTP cache, whose
 		// entries are keyed by the real URLs and hold the origin's raw bodies
 		if (typeof global.CacheStorage === 'function') {
 			const storage = global.CacheStorage.prototype;

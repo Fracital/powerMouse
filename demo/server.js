@@ -1,8 +1,8 @@
-// Minimal host for the Stomp demo:
+// Minimal host for the STomp demo:
 //   /            demo page (demo/public)
 //   /suggestions TLD autocomplete for the address bar
 //   /api/status  uptime + version for the landing page
-//   /stomp/      Stomp dist (service worker, inject bundles, controller)
+//   /stomp/      STomp dist (service worker, inject bundles, controller)
 //   /examples/   embedding examples (examples/minimal-host.html)
 //   /epoxy/      epoxy transport module
 //   /libcurl/    libcurl transport module
@@ -380,7 +380,7 @@ app.get('/api/commits', async (req, res) => {
 		commits,
 	});
 });
-// The page, its scripts and the Stomp bundles change with every deploy and
+// The page, its scripts and the STomp bundles change with every deploy and
 // are fetched once per visit anyway: no-cache makes browsers revalidate and
 // keeps CDNs (Cloudflare caches .js by default) from serving a stale service
 // worker or shell against a new build. The transports are too: their URLs

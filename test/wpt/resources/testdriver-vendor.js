@@ -1,4 +1,4 @@
-// Stomp's testdriver-vendor.js: no WebDriver behind it, just enough for the
+// STomp's testdriver-vendor.js: no WebDriver behind it, just enough for the
 // vendored cookie and fetch-metadata tests to run to a verdict.
 //
 // - delete_all_cookies expires every cookie document.cookie can see, for the

@@ -47,7 +47,7 @@ export function initialBlank(context: typeof globalThis): boolean {
 	}
 }
 
-/** whether a window runs Stomp (a cross-origin one throws on the check) */
+/** whether a window runs STomp (a cross-origin one throws on the check) */
 export function isStomp(value: unknown, client: string): boolean {
 	try {
 		return (
@@ -82,7 +82,7 @@ function childNamed(context: Context, name: string): Context | undefined {
 function findTop(global: typeof globalThis, client: string): Context {
 	let context: Context = global;
 
-	// walk up while the parent is still a Stomp context; the controller page
+	// walk up while the parent is still a STomp context; the controller page
 	// (or anything cross-origin) ends the proxied world
 	while (true) {
 		try {
@@ -113,7 +113,7 @@ function isPostMessageArgs2(
 
 type Context = typeof globalThis;
 
-/** the nested route marker of a Stomp window (its top origin when it is a child of a proxied page) */
+/** the nested route marker of a STomp window (its top origin when it is a child of a proxied page) */
 function nestedRouteOf(context: Context, client: string): string | false {
 	try {
 		return (
@@ -130,7 +130,7 @@ const nativeMessageEvent: MessageEvent = Object.create({});
 
 applyDescriptors(nativeMessageEvent, MessageEvent.prototype);
 
-/** a message between Stomp contexts: the envelope key is the deployment's globalName helper */
+/** a message between STomp contexts: the envelope key is the deployment's globalName helper */
 interface MessageData {
 	data: any;
 	origin: string;
@@ -475,7 +475,7 @@ export default class ContextModule extends Module<DocumentClient> {
 	}
 	restrictContext(context: Context): RestrictedContext {
 		const proxyModule = this.client.getModule(ProxyModule)!;
-		// a child that runs no Stomp yet (an iframe still on its initial
+		// a child that runs no STomp yet (an iframe still on its initial
 		// about:blank) is still that child, of the frame's origin: never the
 		// top, which a walk down the tree would visit again forever
 		const restrictChild = (child: Context) =>
@@ -626,7 +626,7 @@ export default class ContextModule extends Module<DocumentClient> {
 	}
 	newRestricted(context: Context): RestrictedContext {
 		// a cross-origin window (the host application in isolation mode) throws
-		// on the `in` check; it is never a Stomp context
+		// on the `in` check; it is never a STomp context
 		if (!isStomp(context, this.client.names.client))
 			// the proxied world ends here (the host, or anything it opened):
 			// present ourselves as the top, as this page sees it (a frame of
@@ -851,7 +851,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		});
 
 		// window.top is unforgeable, so the JS rewriter routes `top` reads here:
-		// the proxied world's top is the outermost Stomp context
+		// the proxied world's top is the outermost STomp context
 		// only windows qualify: set2 also routes `obj['top'] = v` through here
 		// the client of a window this page reached (its own, a frame's), for
 		// a read off it; nothing for anything else
@@ -1036,7 +1036,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			),
 		});
 
-		// the tagger: messages from other Stomp windows arrive in an envelope
+		// the tagger: messages from other STomp windows arrive in an envelope
 		// (see postMessage below) which the data and origin getters unwrap.
 		// Registered now and again after every document.open(), which drops
 		// window listeners.

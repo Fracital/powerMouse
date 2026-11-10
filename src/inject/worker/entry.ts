@@ -47,7 +47,7 @@ setWorkerTransportPort(
 	}),
 );
 
-// An emulated service worker's controller posts its port to Stomp's service
+// An emulated service worker's controller posts its port to STomp's service
 // worker right after the transport's (docs/service-workers.md); kept from
 // the worker's own handlers the same way. Only a dedicated worker gets one.
 if (

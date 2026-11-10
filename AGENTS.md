@@ -24,7 +24,7 @@ Read it before changing anything.
 
 ## What this project is
 
-Stomp is a web proxy. The service worker (`src/server/`) rewrites HTML, CSS and
+STomp is a web proxy. The service worker (`src/server/`) rewrites HTML, CSS and
 JavaScript; an inject bundle (`src/inject/`) runs inside every proxied page and
 worker and hooks the DOM and JS globals so the page believes it is on its real
 origin; and a controller (`src/controller/`) running in the host page owns the
@@ -212,7 +212,7 @@ on every save (use a `git worktree`).
   credit; a wisp server that never refills TCP credit (wisp-js 0.5.2 and
   older) stalls a stream after 128 packets, so the demo runs wisp-js 0.5.3.
   `wisp-message-size` covers it with a relay that enforces the edges' limit.
-- Hosts install stomp from npm as `@sysce/stomp`. `.github/workflows/nightly.yml`
+- Hosts install STomp from npm as `@sysce/stomp`. `.github/workflows/nightly.yml`
   publishes master as `@sysce/stomp@nightly` every night (and on manual
   dispatch) once CI passed on that commit, through npm trusted publishing
   (OIDC, no token in the repository) with provenance. There is no `dist`
@@ -228,7 +228,7 @@ on every save (use a `git worktree`).
 
 When a site hangs or a socket goes quiet, suspect the transport before the
 rewriter: reproduce with a raw `controller.transport.request()` /
-`.connect()` loop from the controller page, with no Stomp in the path.
+`.connect()` loop from the controller page, with no STomp in the path.
 
 ## CI
 
@@ -310,7 +310,7 @@ suite, and they run against the real thing:
    a fixture site that exercises cookies, headers, redirects, XHR, history,
    storage, iframes, workers, EventSource, forms and inline styles; then real
    sites (Wikipedia, GitHub, MDN, Hacker News render; many others bot-block
-   headless browsers, which is not a Stomp bug).
+   headless browsers, which is not a STomp bug).
 4. For "did the proxy leak the origin", read attributes with the parent
    realm's `Element.prototype.getAttribute.call(el, name)`: the page's own
    `getAttribute` is hooked to return the original value.

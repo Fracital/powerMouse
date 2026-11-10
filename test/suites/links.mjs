@@ -55,7 +55,7 @@ ok(
 	JSON.stringify(seen),
 );
 
-// the URL attributes scramjet rewrites and Stomp did not, read from the host
+// the URL attributes scramjet rewrites and STomp did not, read from the host
 // realm: every one must be routed
 const attributes = await page.evaluate(() => {
 	const doc = window.__el.contentDocument;
