@@ -342,6 +342,13 @@ ok(
 	nativeMissing.join(' '),
 );
 /** compare `name` only when both sides reported it; say which did not */
+/** a pointer lock answer, kept only when it is the sandbox's own refusal */
+const sandboxRefusal = (answer) =>
+	typeof answer === 'string' &&
+	answer.includes("'allow-pointer-lock' permission is not set")
+		? answer
+		: 'not refused by the sandbox';
+
 const reported = (mode, name, native, proxied) => {
 	if (!native) return false;
 	if (!proxied) {
@@ -454,14 +461,20 @@ for (const [mode, base] of [
 		)
 			continue;
 		for (const key of PROBE_KEYS) {
-			// a lock the sandbox allows can meet Chrome's limit on pointer lock
-			// requests in a short window (frames of one page share it): only
-			// the refusals the sandbox makes are compared
-			if (
-				key === 'pointerLock' &&
-				native.sr?.reports?.[name]?.[key] === 'locked'
-			)
+			// a lock the sandbox allows can still be refused: the frames of
+			// one page share the lock and Chrome limits requests in a short
+			// window, so whether another frame holds it when this one asks is
+			// a race in either run (natively WrongDocumentError where the
+			// proxied frame locked, on a slow runner). What is compared is the
+			// refusal the sandbox itself makes
+			if (key === 'pointerLock') {
+				same(
+					`${name} pointerLock, refused by the sandbox or not,`,
+					sandboxRefusal(native.sr.reports[name][key]),
+					sandboxRefusal(proxied.sr.reports[name][key]),
+				);
 				continue;
+			}
 			same(
 				`${name} ${key}`,
 				native.sr.reports[name][key],
