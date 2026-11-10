@@ -10,7 +10,10 @@ FROM ${RUST_IMAGE}
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
  && rm -rf /var/lib/apt/lists/*
-RUN rustup target add wasm32-unknown-unknown && rustup component add rust-src
+# wasm32-wasip1 too: a crate that needs a clock and randomness from the
+# host (WebRTC's str0m stack) takes them through a small WASI shim in its
+# worker rather than wasm-bindgen glue (rust/<crate>/wasm-target names it)
+RUN rustup target add wasm32-unknown-unknown wasm32-wasip1 && rustup component add rust-src
 
 ARG BINARYEN
 ARG BINARYEN_SHA256

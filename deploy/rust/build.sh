@@ -43,7 +43,10 @@ fi
 
 # the workspace goes in by copy (no bind mounts: docker's filesystem here
 # is not this machine's), without a target/ a host build may have left
-id=$("$engine" create --network host -e "RUST_NIGHTLY=$RUST_NIGHTLY" "$tag" \
+# the crate registry is a named volume, a cache across builds and crates:
+# --locked makes the build the same with or without it
+id=$("$engine" create --network host -e "RUST_NIGHTLY=$RUST_NIGHTLY" \
+	-e "LOCK=${LOCK:-0}" -v stomp-cargo-registry:/usr/local/cargo/registry "$tag" \
 	bash /work/compile.sh "$crate" "$name")
 trap '"$engine" rm -f "$id" >/dev/null' EXIT
 tmp=$(mktemp -d)
@@ -58,6 +61,11 @@ out="$here/out"
 rm -rf "$out"
 mkdir -p "$out"
 "$engine" cp "$id:/work/out/." "$out/"
+# LOCK=1: the lockfile the build resolved comes back (a dependency changed)
+if [[ ${LOCK:-0} == 1 ]]; then
+	"$engine" cp "$id:/work/rust/Cargo.lock" "$root/rust/Cargo.lock"
+	echo "rust/Cargo.lock updated"
+fi
 
 node "$here/check.mjs" "$out/$name.wasm" "$root/rust/$crate/abi.json"
 

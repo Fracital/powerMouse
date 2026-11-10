@@ -43,13 +43,20 @@ source path or Debug formatting reaches the bytes; the workspace profile is
 Then `wasm-opt -Oz` with the debug, producers and target-features sections
 stripped.
 
-A crate that uses wasm-bindgen puts an empty file named `bindgen` in its
-directory: `compile.sh` then runs `wasm-bindgen --target web` and ships the
-glue beside the module with every `import.meta.url` in it replaced, because
-the glue must never name its own file. The rewriter does not use it: its
-boundary is byte buffers under single-letter names (`rust/rwjs/src/lib.rs`,
-`src/wasm/module.ts`), which a host can rename and substitute at the same
-length.
+Two per-crate markers, each a file in `rust/<crate>/`:
+
+- `wasm-target`, holding a target triple, builds for that target instead of
+  `wasm32-unknown-unknown`. The image has `wasm32-wasip1` too, for a crate
+  that needs a clock and randomness from the host (the WebRTC stack): its
+  worker answers the few WASI imports with a small shim, and its `abi.json`
+  lists them.
+- `bindgen`, empty, runs `wasm-bindgen --target web` on the output and ships
+  the glue beside the module with every `import.meta.url` in it replaced,
+  because the glue must never name its own file.
+
+The rewriter uses neither: its boundary is byte buffers under single-letter
+names (`rust/rwjs/src/lib.rs`, `src/wasm/module.ts`), which a host can
+rename and substitute at the same length.
 
 ## What an artifact may look like
 

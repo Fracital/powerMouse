@@ -20,12 +20,26 @@ case "$version" in
 	;;
 esac
 
+# LOCK=1 lets cargo resolve a changed dependency and write the lockfile,
+# which build.sh copies back to be committed with the change
+locked=--locked
+if [[ ${LOCK:-0} == 1 ]]; then locked=; fi
+
+# the target triple: wasm32-unknown-unknown unless the crate names another
+# in rust/<crate>/wasm-target (wasm32-wasip1 for one that takes a clock and
+# randomness through a WASI shim)
+triple=wasm32-unknown-unknown
+if [[ -f "$crate/wasm-target" ]]; then
+	triple=$(tr -d '[:space:]' < "$crate/wasm-target")
+fi
+
 export RUSTFLAGS='-Zlocation-detail=none -Zfmt-debug=none'
-cargo build --locked --release --target wasm32-unknown-unknown \
+# shellcheck disable=SC2086
+cargo build $locked --release --target "$triple" \
 	-Z build-std=std,panic_abort -Z build-std-features=optimize_for_size \
 	-p "$crate"
 
-built="target/wasm32-unknown-unknown/release/${crate//-/_}.wasm"
+built="target/$triple/release/${crate//-/_}.wasm"
 mkdir -p /work/out
 if [[ -f "$crate/bindgen" ]]; then
 	# a crate built with wasm-bindgen: the glue and the module, the module's
