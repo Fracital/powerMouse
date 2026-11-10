@@ -1,0 +1,130 @@
+<!doctype html>
+<title>SW LIFECYCLE</title>
+<script>
+	// The ServiceWorkerContainer API and a registration's lifecycle, as the
+	// page sees them: the errors register() gives for a bad script, then a
+	// worker that installs, activates and claims the page, its events in
+	// order, update(), getRegistration(s), the navigation preload stub,
+	// unregister(). The worker puts what its global looks like in a cache.
+	// Served under /pages/deep/swl/ so the scope is the suite's own.
+	const log = [];
+	window.__sw = { log, done: false, push: null };
+	const push = (...parts) =>
+		log.push(
+			parts
+				.map((part) => (typeof part === 'string' ? part : JSON.stringify(part)))
+				.join(' '),
+		);
+	const settle = async (name, call) => {
+		try {
+			push(name, 'ok', String(await call()));
+		} catch (error) {
+			push(name, `${error.name}: ${error.message}`);
+		}
+	};
+	(async () => {
+		const c = navigator.serviceWorker;
+		push(
+			'shape',
+			typeof c,
+			String(c),
+			c instanceof ServiceWorkerContainer,
+			c === navigator.serviceWorker,
+			String(c.controller),
+		);
+		push(
+			'container',
+			Object.getOwnPropertyNames(ServiceWorkerContainer.prototype),
+		);
+		push('worker', Object.getOwnPropertyNames(ServiceWorker.prototype));
+		push('register source', String(c.register));
+		await settle('mime', () => c.register('sw-bad-mime.txt'));
+		await settle('404', () => c.register('sw-missing.js'));
+		await settle('scope', () =>
+			c.register('sw-lifecycle.js', { scope: '../' }),
+		);
+		await settle('eval', () => c.register('sw-throws.js'));
+		await settle('cross', () => c.register('http://localhost:1/sw.js'));
+		await settle('scheme', () => c.register('data:text/javascript,1'));
+		await settle('none yet', () => c.getRegistration());
+		c.addEventListener('controllerchange', () =>
+			push('controllerchange', c.controller.state, c.controller.scriptURL),
+		);
+		const reg = await c.register('sw-lifecycle.js');
+		push(
+			'registered',
+			String(reg),
+			reg.scope,
+			reg.updateViaCache,
+			reg.installing && reg.installing.state,
+			!!reg.waiting,
+			!!reg.active,
+			reg.installing.scriptURL,
+		);
+		reg.addEventListener('updatefound', () =>
+			push('updatefound', reg.installing && reg.installing.state),
+		);
+		const sw = reg.installing;
+		sw.addEventListener('statechange', () =>
+			push(
+				'statechange',
+				sw.state,
+				!!reg.installing,
+				!!reg.waiting,
+				!!reg.active,
+			),
+		);
+		const ready = await c.ready;
+		push('ready', ready === reg, ready.active === sw);
+		await new Promise((resolve) => setTimeout(resolve, 1000));
+		push(
+			'controller',
+			c.controller === reg.active,
+			c.controller && c.controller.state,
+		);
+		const shape = await (await caches.open('swl-shape')).match('shape');
+		push('global', shape ? await shape.json() : null);
+		push(
+			'update',
+			String(await reg.update()),
+			reg.active === sw,
+			!!reg.installing,
+		);
+		push(
+			'registrations',
+			(await c.getRegistrations()).length,
+			(await c.getRegistration()) === reg,
+			(await c.getRegistration('inner/page')) === reg,
+			String(await c.getRegistration('/elsewhere')),
+		);
+		await settle('getRegistration cross', () =>
+			c.getRegistration('http://localhost:1/'),
+		);
+		push('preload', await reg.navigationPreload.getState());
+		await reg.navigationPreload.setHeaderValue('hello');
+		push('preload after', await reg.navigationPreload.getState());
+		push(
+			'absent',
+			'sync' in reg,
+			'periodicSync' in reg,
+			'backgroundFetch' in reg,
+			typeof SyncManager,
+		);
+		try {
+			await reg.pushManager.subscribe({ userVisibleOnly: true });
+			window.__sw.push = 'subscribed';
+		} catch (error) {
+			window.__sw.push = `${error.name}: ${error.message}`;
+		}
+		push('unregister', await reg.unregister());
+		push(
+			'after',
+			String(await c.getRegistration()),
+			reg.active && reg.active.state,
+		);
+		window.__sw.done = true;
+	})().catch((error) => {
+		push('fail', String(error), error.stack);
+		window.__sw.done = true;
+	});
+</script>

@@ -79,6 +79,10 @@ export interface RemoteControllerInit {
 	allowInvalidJs?: boolean;
 	/** the window membrane, on unless `false` (see StompController) */
 	membrane?: boolean;
+	/** emulated service workers, off unless `true` (see StompController) */
+	serviceWorkers?: boolean;
+	/** @internal see StompController */
+	serviceWorkerTimeout?: number;
 	/** Workers that rewrite scripts for the service worker; `0` starts none (see StompController) */
 	rewriteWorkers?: number;
 	/** ms the service worker waits on a rewrite worker before rewriting itself (see StompController) */
@@ -276,6 +280,10 @@ export class RemoteController extends EventTarget {
 					requestLog: !!init.onRequest,
 					...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 					...(init.membrane === false ? { membrane: false } : {}),
+					...(init.serviceWorkers === true ? { serviceWorkers: true } : {}),
+					...(init.serviceWorkerTimeout !== undefined
+						? { serviceWorkerTimeout: init.serviceWorkerTimeout }
+						: {}),
 					...(init.rewriteWorkers !== undefined
 						? { rewriteWorkers: init.rewriteWorkers }
 						: {}),

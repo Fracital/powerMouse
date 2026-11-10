@@ -7,6 +7,7 @@ import { acceptLanguage } from '../acceptLanguage';
 import GenericCodec from '../Codecs';
 import { codecType, Config, ParsedConfig } from '../config';
 import { rewriteLinkHeader } from '../headers';
+import { helperNames } from '../helperNames';
 import {
 	DEFAULT_REFERRER_POLICY,
 	refererFor,
@@ -66,6 +67,7 @@ import type { RewriteCache, RewriteCacheOutcome } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
 import Router from './Router';
 import { applyHeaderRule, CompiledRule, compileRules } from './rules';
+import { serviceWorkers } from './serviceWorkers';
 
 export const statusEmpty = [101, 204, 205, 304];
 
@@ -788,6 +790,7 @@ function genericForward(
 		const cache = rewriter.cache;
 		const hit =
 			cache &&
+			!context?.bypassCache &&
 			(serverRequest.method === 'GET' || serverRequest.method === 'HEAD')
 				? await cache.match(url.toString(), requestHeaders)
 				: null;
@@ -1253,6 +1256,8 @@ export function registerRewrites(
 				...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 				// every document's inject builds the window membrane from this
 				...(init.membrane === false ? { membrane: false } : {}),
+				// pages get emulated service workers (docs/service-workers.md)
+				...(init.serviceWorkers ? { serviceWorkers: true } : {}),
 				...(init.assets ? { assets: init.assets } : {}),
 				// the deployment's helper names: the shell and every rewritten
 				// script use them, and the inject reads them from this config
@@ -1558,6 +1563,8 @@ export function registerRewrites(
 		});
 	});
 
+	registerServiceWorkerScripts(router, rewriter);
+
 	// todo: parse more request headers
 	router.routes.set(
 		/^\/xhr\//,
@@ -1570,4 +1577,96 @@ export function registerRewrites(
 			rewriter.rules = compileRules(rules);
 		},
 	};
+}
+
+const SCRIPT_HEADERS = {
+	'content-type': 'text/javascript; charset=utf-8',
+	'cache-control': 'no-store',
+};
+const JS_MIME =
+	/^(text|application)\/(x-)?(javascript|ecmascript)$|^text\/(jscript|livescript|javascript1\.[0-5])$/;
+
+/**
+ * The scripts of the pages' emulated service workers
+ * (docs/service-workers.md): `sw:<version>/<url>` is a version's main
+ * script, from storage, rewritten as a worker's with the preamble that makes
+ * its global a service worker's; `swimport:<version>/<url>` is what it
+ * imports, fetched and kept while it installs and served from storage after.
+ * Only the controller's Worker gets the first and only the version's own
+ * worker the second.
+ */
+function registerServiceWorkerScripts(router: Router, rewriter: Rewriter) {
+	const refused = () =>
+		new Response('Stomp: this route is not for this client', {
+			status: 403,
+			headers: { 'content-type': 'text/plain; charset=utf-8' },
+		});
+	const parse = (request: Request) =>
+		parseRoutedURL(
+			request.url,
+			rewriter.codec,
+			`${new URL(request.url).origin}${rewriter.directory}`,
+		).url;
+
+	router.routes.set(
+		/^\/sw:([A-Za-z0-9_-]+)\//,
+		async (request, path, context) => {
+			if (!rewriter.config.serviceWorkers)
+				return new Response(null, { status: 404 });
+			const version = /^\/sw:([A-Za-z0-9_-]+)\//.exec(path)![1];
+			if (await serviceWorkers.isProxiedClient(context?.requestClientId))
+				return refused();
+			const found = await serviceWorkers.script(version);
+			if (!found) return new Response(null, { status: 404 });
+			serviceWorkers.markEmulated(context?.resultingClientId, version);
+			const url = parse(request);
+			const client = helperNames(rewriter.config).client;
+			const script =
+				modifyJS(
+					found.script,
+					url,
+					rewriter.config,
+					found.info.type === 'module' ? 'workerModule' : 'worker',
+					`${client}.emulateServiceWorker(${JSON.stringify(found.info)});`,
+				) + `\n;${client}.serviceWorkerEvaluated();`;
+			return new Response(script, { headers: SCRIPT_HEADERS });
+		},
+	);
+
+	router.routes.set(
+		/^\/swimport:([A-Za-z0-9_-]+)\//,
+		async (request, path, context) => {
+			const version = /^\/swimport:([A-Za-z0-9_-]+)\//.exec(path)![1];
+			const clientId = context?.requestClientId ?? context?.clientId;
+			const client =
+				clientId && typeof clients !== 'undefined'
+					? await clients.get(clientId)
+					: undefined;
+			if (!serviceWorkers.isEmulated(clientId, client?.url, version))
+				return refused();
+			const url = parse(request);
+			const real = url.url.href;
+			const state = serviceWorkers.versionState(version);
+			let text: string | null = null;
+			if (state === 'parsed' || state === 'installing') {
+				// what it imports now is kept for its later starts
+				const response = await router.route(new Request(routeBinary(url)), {
+					clientId,
+					internal: true,
+				});
+				const mime = (response.headers.get('content-type') ?? '')
+					.split(';')[0]
+					.trim()
+					.toLowerCase();
+				if (!response.ok || !JS_MIME.test(mime)) return response;
+				text = await response.text();
+				await serviceWorkers.storeImport(version, real, text);
+			} else if (state) text = await serviceWorkers.storedImport(version, real);
+			// after install, a script it did not import then is a network error
+			if (text === null) return Response.error();
+			return new Response(modifyJS(text, url, rewriter.config, 'generic'), {
+				headers: SCRIPT_HEADERS,
+			});
+		},
+	);
 }

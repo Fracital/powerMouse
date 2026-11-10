@@ -54,6 +54,10 @@ export interface ControllerFrameInit {
 	allowInvalidJs?: boolean;
 	/** the window membrane off when false (RemoteControllerInit.membrane) */
 	membrane?: boolean;
+	/** emulated service workers on when true (RemoteControllerInit.serviceWorkers) */
+	serviceWorkers?: boolean;
+	/** @internal RemoteControllerInit.serviceWorkerTimeout */
+	serviceWorkerTimeout?: number;
 	/** how many rewrite workers the controller starts (RemoteControllerInit.rewriteWorkers) */
 	rewriteWorkers?: number;
 	/** ms the service worker waits on a rewrite worker (RemoteControllerInit.rewriteTimeout) */

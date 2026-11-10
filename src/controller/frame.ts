@@ -140,6 +140,10 @@ if (window === window.parent || !origins.length) {
 						...(init.cache === false ? { cache: false } : {}),
 						...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 						...(init.membrane === false ? { membrane: false } : {}),
+						...(init.serviceWorkers === true ? { serviceWorkers: true } : {}),
+						...(typeof init.serviceWorkerTimeout === 'number'
+							? { serviceWorkerTimeout: init.serviceWorkerTimeout }
+							: {}),
 						// numbers only: the controller clamps them
 						...(typeof init.rewriteWorkers === 'number'
 							? { rewriteWorkers: init.rewriteWorkers }

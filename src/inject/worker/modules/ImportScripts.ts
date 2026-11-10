@@ -1,4 +1,6 @@
 import { routeJS } from '../../../rewriteJS';
+import { routeURL } from '../../../routeURL';
+import { SW_IMPORT_ROUTE } from '../../../serviceWorkerTypes';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
@@ -17,16 +19,24 @@ export default class ImportScriptsModule extends Module<WorkerClient> {
 				if (args.some((arg) => failsToParse(this.client, String(arg))))
 					return Reflect.apply(target, that, args);
 
-				for (let i = 0; i < args.length; i++)
-					args[i] = routeJS(
-						new StompURL(
-							new URL(String(args[i]), this.client.url.toString()),
-							this.client.url,
-						),
+				// an emulated service worker's imports are kept with its version,
+				// so it starts again without the network (docs/service-workers.md)
+				const version = this.client.serviceWorkerVersion;
+				for (let i = 0; i < args.length; i++) {
+					const resource = new StompURL(
+						new URL(String(args[i]), this.client.url.toString()),
 						this.client.url,
-						this.client.config,
-						'generic',
 					);
+					args[i] =
+						version && /^https?:$/.test(resource.url.protocol)
+							? routeURL(`${SW_IMPORT_ROUTE}:${version}`, resource)
+							: routeJS(
+									resource,
+									this.client.url,
+									this.client.config,
+									'generic',
+								);
+				}
 
 				return Reflect.apply(target, that, args);
 			},

@@ -1,11 +1,25 @@
 import { ParsedConfig } from '../../config';
+import type { EmulateInfo } from '../../serviceWorkerTypes';
 import Client from '../Client';
+import ServiceWorkerGlobalModule from './modules/ServiceWorkerGlobal';
 
 let transportPort: Promise<MessagePort> | undefined;
 
 /** Called by the worker entry once it has started listening for TRANSPORT_INIT. */
 export function setWorkerTransportPort(port: Promise<MessagePort>) {
 	transportPort = port;
+}
+
+let serviceWorkerPort: Promise<MessagePort> | undefined;
+
+/** Called by the worker entry once it has started listening for SW_PORT (an emulated service worker's port to Stomp's) */
+export function setServiceWorkerPort(port: Promise<MessagePort>) {
+	serviceWorkerPort = port;
+}
+
+/** the port an emulated service worker talks to Stomp's service worker over */
+export function getServiceWorkerPort(): Promise<MessagePort> | undefined {
+	return serviceWorkerPort;
 }
 
 // taken when the bundle loads, before the page's code (or our own hooks)
@@ -46,9 +60,20 @@ function releasePreambleHeld() {
 }
 
 export default class WorkerClient extends Client {
+	/** the version id when this worker is a page's emulated service worker (docs/service-workers.md) */
+	serviceWorkerVersion?: string;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		this.isWorker = true;
+	}
+	/** the `sw:` route's preamble: this worker is a page's service worker */
+	emulateServiceWorker(info: EmulateInfo) {
+		this.serviceWorkerVersion = info.version.id;
+		this.getModule(ServiceWorkerGlobalModule)!.emulate(info);
+	}
+	/** the `sw:` route's postamble: the script's top level ran to its end */
+	serviceWorkerEvaluated() {
+		this.getModule(ServiceWorkerGlobalModule)!.evaluated();
 	}
 	protected override ownTransportPort(): MessagePort | Promise<MessagePort> {
 		if (!transportPort)

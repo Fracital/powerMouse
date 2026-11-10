@@ -62,6 +62,8 @@ export default class Client {
 	allowInvalidJs: boolean;
 	/** the window membrane is on (config.membrane, on unless false) */
 	membrane: boolean;
+	/** pages get emulated service workers (config.serviceWorkers) */
+	serviceWorkers: boolean;
 	/** the host's served file names (config.assets) */
 	assets?: Assets;
 	applied: boolean;
@@ -228,6 +230,7 @@ export default class Client {
 		this.build = init.build;
 		this.allowInvalidJs = init.allowInvalidJs !== false;
 		this.membrane = init.membrane !== false;
+		this.serviceWorkers = init.serviceWorkers === true;
 		this.assets = init.assets;
 		// a stale cached bundle next to a new service worker: say so once,
 		// the page still gets its best effort
@@ -261,6 +264,7 @@ export default class Client {
 			...(this.build ? { build: this.build } : {}),
 			...(this.allowInvalidJs ? {} : { allowInvalidJs: false }),
 			...(this.membrane ? {} : { membrane: false }),
+			...(this.serviceWorkers ? { serviceWorkers: true } : {}),
 			...(this.assets ? { assets: this.assets } : {}),
 			...(this.#customNames ? { names: this.names } : {}),
 			...(this.hooks ? { hooks: this.hooks } : {}),
@@ -393,14 +397,23 @@ export default class Client {
 					: { ...init, referrer: '' };
 		return client.nativeFetch(input, init);
 	}
-	/** post to the service worker that controls this document; whether it went */
-	postToWorker(message: object): boolean {
+	/**
+	 * post to the service worker that controls this document; whether it
+	 * went. With `throws`, a message that cannot be cloned throws (the page's
+	 * own postMessage to an emulated service worker)
+	 */
+	postToWorker(
+		message: object,
+		transfer: Transferable[] = [],
+		throws = false,
+	): boolean {
 		const controller = this.#serviceWorkerContainer?.controller;
 		if (!controller || !this.#serviceWorkerPostMessage) return false;
 		try {
-			this.#serviceWorkerPostMessage.call(controller, message, []);
+			this.#serviceWorkerPostMessage.call(controller, message, transfer);
 			return true;
 		} catch (error) {
+			if (throws) throw error;
 			return false;
 		}
 	}
@@ -505,6 +518,15 @@ export default class Client {
 	/** @internal a response reached this context */
 	notifyResponse() {
 		for (const listener of this.responseListeners) listener();
+	}
+	/** the same, with the whole event (its ports): the emulated service workers' messages */
+	onServiceWorkerEvent(listener: (event: MessageEvent) => void) {
+		const container = this.#serviceWorkerContainer;
+		if (!container) return;
+		container.addEventListener('message', (event) =>
+			listener(event as MessageEvent),
+		);
+		container.startMessages?.();
 	}
 	onServiceWorkerMessage(listener: (data: unknown) => void) {
 		const container = this.#serviceWorkerContainer;

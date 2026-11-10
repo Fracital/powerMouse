@@ -130,6 +130,26 @@ export const WORKER_BASE = '$stomp$workerBase';
  */
 export const WORKER_ERROR = '$stomp$workerError';
 /**
+ * proxied page -> SW, with [replyPort]: a call of the page's emulated
+ * `navigator.serviceWorker` (docs/service-workers.md); the reply on the port
+ * is `{ value }` or `{ error: { name, message } }`
+ */
+export const SW_API = '$stomp$swApi';
+export interface ServiceWorkerApiMessage {
+	/** the sender's controller address */
+	directory: string;
+	method: string;
+	args: unknown;
+}
+/** SW -> proxied documents: an emulated registration changed, a message from an emulated worker, a new controller */
+export const SW_EVENT = '$stomp$swEvent';
+/** controller -> an emulated service worker, with [port]: its port to Stomp's service worker */
+export const SW_PORT = '$stomp$swPort';
+/** rpc id on the port between Stomp's service worker and an emulated worker */
+export const SW_RPC = '$stomp$swRpc';
+/** global the HTML shell sets before the client is made: the emulated registration that controls the new document */
+export const SW_CONTROL = '$stomp$swControl';
+/**
  * page -> SW: markup to serve once as an inline document (src/server/inline.ts)
  * at the controller address `directory`, under `token`
  */
@@ -313,6 +333,18 @@ export interface RequestInfo {
 /** what the service worker knows about the client that made a request */
 export interface RouteContext {
 	clientId?: string;
+	/** the fetch event's own client id (empty for a navigation) */
+	requestClientId?: string;
+	/** the client a navigation or a worker script creates */
+	resultingClientId?: string;
+	/** FetchEvent.isReload */
+	isReload?: boolean;
+	/** extends the fetch event's lifetime (an update check after a navigation) */
+	waitUntil?: (promise: Promise<unknown>) => void;
+	/** a request the worker makes itself (an emulated worker's script) skips the HTTP cache */
+	bypassCache?: boolean;
+	/** a request the worker makes itself never goes to an emulated service worker */
+	internal?: boolean;
 }
 
 /** implemented by the controller, called by the SW */
@@ -323,6 +355,17 @@ export type Controllerbound = {
 	initRemoteTransport: [MessagePort];
 	/** a proxied request completed; only sent when the host asked (config.requestLog) */
 	request: [RequestInfo];
+	/**
+	 * start a page's emulated service worker (docs/service-workers.md): a
+	 * dedicated Worker at `url` (its `sw:` route); answers with the port the
+	 * worker talks to Stomp's service worker over
+	 */
+	startServiceWorker: [
+		{ id: string; url: string; type: 'classic' | 'module' },
+		MessagePort,
+	];
+	/** terminate the emulated worker started under `id` */
+	stopServiceWorker: [{ id: string }];
 };
 
 /** a transport's response on its way to a RemoteTransport: a streamed body travels on a port of its own (bodyPort.ts) */

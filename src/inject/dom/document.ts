@@ -26,6 +26,7 @@ import NavigatorModule from './modules/Navigator';
 import OpenModule from './modules/Open';
 import ReadbackModule from './modules/Readback';
 import SandboxModule from './modules/Sandbox';
+import ServiceWorkerModule from './modules/ServiceWorker';
 import StorageModule from './modules/Storage';
 import SyncModule from './modules/Sync';
 import TokenListsModule from './modules/TokenLists';
@@ -59,6 +60,8 @@ export function addClientModules(client: DocumentClient) {
 	// Framing before Context: it needs the native MessageEvent.source getter
 	client.addModule(FramingModule);
 	client.addModule(ContextModule);
+	// after Context: wraps the MessageEvent.source getter it defined
+	client.addModule(ServiceWorkerModule);
 	client.addModule(OpenModule);
 	client.addModule(DownloadModule);
 	client.addModule(MediaSessionModule);

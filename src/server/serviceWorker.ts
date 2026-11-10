@@ -1,6 +1,7 @@
 import { getDomain } from 'tldts';
 import { Config, ConfigCodec } from '../config';
 import { addRouteScope } from '../routeURL';
+import { SW_ROUTE, type ApiReply } from '../serviceWorkerTypes';
 import {
 	ABORT_REQUEST,
 	BLOB_MINTED,
@@ -21,6 +22,8 @@ import {
 	NavigationHintMessage,
 	postToPort,
 	RequestInfo,
+	ServiceWorkerApiMessage,
+	SW_API,
 	SW_REVIVE,
 	SWbound,
 } from '../transport/messages';
@@ -35,6 +38,7 @@ import { recordNavigationHint } from './navigationHints';
 import { RewriteCache } from './rewriteCache';
 import { RewritePool } from './rewritePool';
 import { abortRequest } from './rewrites';
+import { ApiError, serviceWorkers, type WorkerHost } from './serviceWorkers';
 
 interface ControllerRef {
 	/** the controller's address: its scope plus its id */
@@ -59,6 +63,8 @@ interface ControllerRef {
 	owner?: string;
 	/** registration order: the newest live controller of a scope takes over an address whose controller is gone */
 	serial: number;
+	/** the emulated service workers' host in this controller, with `serviceWorkers` on */
+	host?: WorkerHost;
 }
 
 /** the fetch-metadata site of a request from `initiator` to `url` */
@@ -197,7 +203,10 @@ function registerController(
 		owner: client,
 		serial: ++serials,
 	};
-	server.then((ready) => (ref.ready = ready));
+	server.then((ready) => {
+		ref.ready = ready;
+		if (config.serviceWorkers) ref.host = workerHost(ref, ready);
+	});
 	controllers.set(directory, ref);
 	for (const wake of [...registrationWaiters]) wake();
 	// the controller's side of the port went away (it shook hands again over
@@ -211,6 +220,59 @@ function registerController(
 		(error) => console.error('Stomp: failed to create server', error),
 	);
 }
+
+/**
+ * What a controller does for the pages' emulated service workers
+ * (docs/service-workers.md): it starts and stops their Workers, and its
+ * server fetches their scripts and routes their navigations
+ */
+function workerHost(ref: ControllerRef, ready: StompServer): WorkerHost {
+	return {
+		directory: ref.directory,
+		start: (id, url, type) =>
+			ref.rpc.call('startServiceWorker', { id, url, type }),
+		stop: (id) => {
+			ref.rpc.call('stopServiceWorker', { id }).catch(() => {});
+		},
+		scriptRoute: (version, scriptURL) =>
+			ready.routeAs(`${SW_ROUTE}:${version}`, scriptURL),
+		fetchScript: (url, clientId, bypassCache) =>
+			ready.router.route(
+				new Request(ready.routeAs('binary', url), {
+					headers: { 'service-worker': 'script' },
+				}),
+				{ clientId, bypassCache, internal: true },
+			),
+		routeDocument: (url) => ready.route(url),
+		timeout: ref.config.serviceWorkerTimeout,
+	};
+}
+
+serviceWorkers.setEnvironment({
+	describe(url) {
+		if (!url.startsWith(`${location.origin}/`)) return null;
+		const ref = controllerFor(new URL(url).pathname);
+		const route = ref?.ready?.routeOf(url);
+		if (!ref || !route) return null;
+		try {
+			return {
+				url: route.url,
+				origin: new URL(route.url).origin,
+				resource: route.resource,
+				directory: ref.directory,
+			};
+		} catch (error) {
+			return null;
+		}
+	},
+	host(directory) {
+		const own = directory ? controllers.get(directory)?.host : undefined;
+		if (own) return own;
+		return [...controllers.values()]
+			.filter((ref) => ref.host)
+			.sort((a, b) => b.serial - a.serial)[0]?.host;
+	},
+});
 
 function controllerFor(pathname: string): ControllerRef | undefined {
 	let match: ControllerRef | undefined;
@@ -250,11 +312,31 @@ async function newestAlive(
  * address is free (unless a later registration already took it over).
  */
 function forget(ref: ControllerRef, reason: string) {
+	serviceWorkers.dropHost(ref.directory);
 	ref.rpc.abort(reason);
 	ref.transport.close(reason);
 	ref.pool?.close();
 	ref.port.close();
 	if (controllers.get(ref.directory) === ref) controllers.delete(ref.directory);
+}
+
+/** a page API call's sender: a document routed under `ref`'s address, by its real URL */
+function serviceWorkerSender(
+	source: Client,
+	ref: ControllerRef | undefined,
+): { url: string; origin: string } | null {
+	if (
+		!ref?.ready ||
+		!source.url.startsWith(`${location.origin}${ref.directory}`)
+	)
+		return null;
+	const route = ref.ready.routeOf(source.url);
+	if (!route || !route.resource.startsWith('html')) return null;
+	try {
+		return { url: route.url, origin: new URL(route.url).origin };
+	} catch (error) {
+		return null;
+	}
 }
 
 /** the first segment under the scope, and the rest of the path */
@@ -476,6 +558,56 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 		} catch (error) {
 			// not a URL: nothing to record
 		}
+	} else if (SW_API in data) {
+		// a page's navigator.serviceWorker: from a routed document of that
+		// controller, whose site the worker reads from its own routed URL
+		const message = data[SW_API] as ServiceWorkerApiMessage;
+		const [reply, ...ports] = event.ports;
+		const source = event.source instanceof Client ? event.source : null;
+		const answer = (value: ApiReply) => {
+			try {
+				reply?.postMessage(value);
+			} catch (error) {
+				reply?.postMessage({
+					error: { name: 'DataCloneError', message: String(error) },
+				});
+			}
+		};
+		const ref =
+			message && typeof message.directory === 'string'
+				? controllers.get(message.directory)
+				: undefined;
+		const described = source ? serviceWorkerSender(source, ref) : null;
+		if (!reply || !ref?.host || !described || !source) {
+			answer({
+				error: {
+					name: 'InvalidStateError',
+					message: 'The document is in an invalid state.',
+				},
+			});
+			return;
+		}
+		event.waitUntil(
+			serviceWorkers
+				.api(
+					{ clientId: source.id, ...described, directory: ref.directory },
+					String(message.method),
+					(message.args ?? {}) as Record<string, unknown>,
+					ports,
+					(promise) => event.waitUntil(promise),
+				)
+				.then(
+					(value) => answer({ value }),
+					(error) =>
+						answer({
+							error:
+								error instanceof ApiError
+									? error.info
+									: { name: 'TypeError', message: String(error) },
+						}),
+				)
+				.finally(() => serviceWorkers.sweep()),
+		);
 	} else if (ABORT_REQUEST in data) {
 		abortRequest((data as Record<string, unknown>)[ABORT_REQUEST]);
 	} else if (CONTROLLER_CLOSE in data) {
@@ -603,7 +735,13 @@ async function serve(event: FetchEvent, ref: ControllerRef): Promise<Response> {
 	}
 	const server = ref.ready ?? (await ref.server);
 	return server.router.willRoute(request.url)
-		? server.router.route(request, { clientId })
+		? server.router.route(request, {
+				clientId,
+				requestClientId: event.clientId,
+				resultingClientId: event.resultingClientId,
+				isReload: (event as FetchEvent & { isReload?: boolean }).isReload,
+				waitUntil: (promise) => event.waitUntil(promise),
+			})
 		: fetch(request);
 }
 

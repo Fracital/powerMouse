@@ -58,6 +58,16 @@ export interface Config {
 	 * on each use, which site the window shows now (see StompController)
 	 */
 	membrane?: boolean;
+	/**
+	 * Emulated service workers (off unless `true`): a page's
+	 * `navigator.serviceWorker` registers workers that run in a dedicated
+	 * Worker the controller starts, and Stomp's own service worker hands them
+	 * the page's requests (docs/service-workers.md). Off, pages have no
+	 * `navigator.serviceWorker`, as before.
+	 */
+	serviceWorkers?: boolean;
+	/** @internal ms an emulated service worker may take to say whether it answers a request (tests; default 5000, a start twice that, an answer six times) */
+	serviceWorkerTimeout?: number;
 	/** @internal build id of the service worker that serves the page (src/version.ts) */
 	build?: string;
 	/** @internal ms a routed request may take before the service worker answers 504 (tests; default by destination) */

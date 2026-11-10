@@ -40,8 +40,10 @@ import {
 	OPEN_TAB,
 	postToPort,
 	RequestInfo,
+	SW_PORT,
 	SW_REVIVE,
 	SWbound,
+	TRANSPORT_INIT,
 } from '../transport/messages';
 import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
@@ -167,6 +169,18 @@ export interface ControllerInit {
 	 * behave alike.)
 	 */
 	membrane?: boolean;
+	/**
+	 * Emulated service workers, off unless `true` (docs/service-workers.md).
+	 * A proxied page's `navigator.serviceWorker` works: its worker script
+	 * runs in a dedicated Worker this controller starts (never a real
+	 * registration on the proxy origin, which would serve every site), and
+	 * the Stomp service worker hands it the requests of the pages it
+	 * controls, navigations included, so offline pages, caches and fetch
+	 * rewriting work. Off, `navigator.serviceWorker` is absent, as before.
+	 */
+	serviceWorkers?: boolean;
+	/** @internal ms an emulated service worker may take to say whether it answers a request (tests) */
+	serviceWorkerTimeout?: number;
 	/** @internal ms before the service worker answers a routed request with 504 (tests) */
 	fetchTimeout?: number;
 	/** @internal ms a navigation with no referrer waits for its document's hint (tests) */
@@ -522,6 +536,8 @@ export class StompController extends EventTarget {
 	#sandbox: string | null;
 	#port?: MessagePort;
 	#rpc?: RpcHelper<Controllerbound, SWbound>;
+	/** the pages' emulated service workers this controller hosts, by the worker's id for them */
+	#serviceWorkers = new Map<string, Worker>();
 	#stopServing?: () => void;
 	#ready: Promise<void>;
 	#readyResolve!: () => void;
@@ -627,6 +643,10 @@ export class StompController extends EventTarget {
 			...(init.onRequest || init.requestLog ? { requestLog: true } : {}),
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 			...(init.membrane === false ? { membrane: false } : {}),
+			...(init.serviceWorkers === true ? { serviceWorkers: true } : {}),
+			...(init.serviceWorkerTimeout
+				? { serviceWorkerTimeout: init.serviceWorkerTimeout }
+				: {}),
 			...(init.fetchTimeout ? { fetchTimeout: init.fetchTimeout } : {}),
 			...(init.navigationHintWait
 				? { navigationHintWait: init.navigationHintWait }
@@ -989,6 +1009,11 @@ export class StompController extends EventTarget {
 
 		this.isReady = false;
 		this.lastHandshake = Date.now();
+		// a new handshake is a new (or restarted) service worker: it holds no
+		// port to the emulated workers this controller hosts, and starts them
+		// again when it needs them
+		for (const worker of this.#serviceWorkers.values()) worker.terminate();
+		this.#serviceWorkers.clear();
 
 		const channel = new MessageChannel();
 		const port = channel.port1;
@@ -1030,6 +1055,35 @@ export class StompController extends EventTarget {
 					}
 					this.isReady = true;
 					this.#readyResolve();
+				},
+				startServiceWorker: async ({ id, url, type }) => {
+					// a page's emulated service worker (docs/service-workers.md):
+					// only this controller holds its Worker, no page reaches it
+					const worker = new Worker(url, {
+						type: type === 'module' ? 'module' : 'classic',
+					});
+					// a service worker's uncaught error is its own console's, never
+					// the host page's (one that throws at its top level fails its
+					// registration instead)
+					worker.addEventListener('error', (event) => event.preventDefault());
+					const transport = new MessageChannel();
+					if (this.#worker) this.#worker.servePort(transport.port1);
+					else
+						serveTransport(
+							transport.port1,
+							() => this.transport,
+							this.#handshakeHeaders,
+						);
+					worker.postMessage({ [TRANSPORT_INIT]: true }, [transport.port2]);
+					const channel = new MessageChannel();
+					worker.postMessage({ [SW_PORT]: true }, [channel.port2]);
+					this.#serviceWorkers.get(id)?.terminate();
+					this.#serviceWorkers.set(id, worker);
+					return [channel.port1, [channel.port1]];
+				},
+				stopServiceWorker: async ({ id }) => {
+					this.#serviceWorkers.get(id)?.terminate();
+					this.#serviceWorkers.delete(id);
 				},
 				initRemoteTransport: async (port) => {
 					// a page's own transport port (its WebSockets): served from the

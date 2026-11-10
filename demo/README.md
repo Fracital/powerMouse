@@ -110,7 +110,9 @@ transport, which tunnels through `/wisp/`.
    `wait()` resolves once the service worker has built a server for this
    controller. The controller is exposed as `window.controller` for devtools.
    The service worker's HTTP cache is on; `?nocache` on the demo URL turns it
-   off for that visit. `onRequest` feeds the request viewer (below).
+   off for that visit. `?sw` turns on emulated service workers
+   (`serviceWorkers: true`, docs/service-workers.md) for that visit.
+   `onRequest` feeds the request viewer (below).
 4. **Autocomplete.** Each keystroke in an address bar asks
    `/suggestions?input=...` for public suffixes matching what was typed after
    the last dot (the server loads the public suffix list at startup, with a

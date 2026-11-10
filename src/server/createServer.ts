@@ -9,6 +9,7 @@ import {
 	parseConfig,
 } from '../config';
 import { parseRoutedURL } from '../routeURL';
+import StompURL from '../StompURL';
 import type { RequestInfo, RequestRule } from '../transport/messages';
 import { HttpCache } from './cache';
 import Cookies, { openCookies, registerCookies } from './Cookies';
@@ -32,6 +33,10 @@ export interface StompServer {
 	setRules(rules: RequestRule[]): void;
 	/** the real URL of a routed one; the input when it is not routed */
 	realURL(routed: string): string;
+	/** the route kind and real URL of a routed one, or null */
+	routeOf(routed: string): { resource: string; url: string } | null;
+	/** the routed URL of a real one under a route kind (`binary`, `sw:<version>`) */
+	routeAs(kind: string, url: string): string;
 }
 
 /**
@@ -238,5 +243,21 @@ export default async function createServer(
 		},
 		setRules,
 		realURL,
+		routeOf: (routed) => {
+			try {
+				const { resource, url } = parseRoutedURL(
+					routed,
+					init.codec,
+					`${location.origin}${init.directory}`,
+				);
+				return { resource, url: url.toString() };
+			} catch (error) {
+				return null;
+			}
+		},
+		routeAs: (kind, url) => {
+			const prefix = `${location.origin}${init.directory}`;
+			return `${prefix}${kind}/${new StompURL(url, init.codec, prefix).encode()}`;
+		},
 	};
 }

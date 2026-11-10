@@ -66,6 +66,9 @@ const ISOLATED = !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
 // HTTP cache in the service worker, on by default; ?nocache turns it off for a
 // visit
 const CACHE = !new URLSearchParams(location.search).has('nocache');
+// emulated service workers for the proxied pages (docs/service-workers.md),
+// off by default; ?sw turns them on for a visit
+const SERVICE_WORKERS = new URLSearchParams(location.search).has('sw');
 const proxyBase = ISOLATED ? PROXY_ORIGIN : '';
 // HTTP/3 over wisp UDP for origins that offer it (docs/http3.md), off by
 // default; STOMP_HTTP3=1 on the server or ?http3 on this page turns it on
@@ -164,6 +167,7 @@ async function boot() {
 			transport: transports[name](),
 			codec: 'xor',
 			cache: CACHE,
+			serviceWorkers: SERVICE_WORKERS,
 			// the demo's own page for a document the proxy could not produce
 			errorPage: '/error.html',
 			// every proxied request, for the request viewer
@@ -192,6 +196,7 @@ async function boot() {
 			directory: DIRECTORY,
 			codec: 'xor',
 			cache: CACHE,
+			serviceWorkers: SERVICE_WORKERS,
 			// the demo's own page for a document the proxy could not produce
 			errorPage: '/error.html',
 			// every proxied request, for the request viewer

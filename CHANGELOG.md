@@ -343,6 +343,27 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- Proxied pages can have service workers, emulated, behind the new
+  `serviceWorkers` controller option (off by default; the demo's `?sw`).
+  `navigator.serviceWorker` used to be absent, because a page that
+  registered a real worker on the proxy origin could serve itself and every
+  other site. Now `register()` runs the page's worker script in a dedicated
+  Worker the controller starts, with the worker inject and a global that
+  reads as a `ServiceWorkerGlobalScope` (`registration`, `serviceWorker`,
+  `clients`, `skipWaiting()`, `install` and `activate` events with
+  `waitUntil`, `clients.claim()`), and nothing real is ever registered.
+  Registrations persist per site in Stomp's service worker, the lifecycle
+  runs in the spec's order (`installing`, `installed`, `activating`,
+  `activated`, `redundant`, with `updatefound`, `statechange` and
+  `controllerchange` in their places), `register()` rejects a bad script with
+  the browser's own errors, and `update()` installs a new version only when
+  the script's bytes changed. `ServiceWorkerRegistration` has `installing`,
+  `waiting`, `active`, `scope`, `updateViaCache`, `update()`,
+  `unregister()` and a navigation preload stub; push answers as with the
+  permission denied, and sync, periodic sync and background fetch are
+  absent, as in a browser without them (service-workers and
+  service-worker-updates suites, line for line against the same pages
+  loaded natively, both modes). docs/service-workers.md has the design.
 - Reading another window (`parent`, `top`, `frames[i]`) costs a few
   microseconds again. The Context module decided whether the reader may
   hold the window as it is by decoding both documents' routed URLs on every

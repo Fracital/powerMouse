@@ -1,6 +1,9 @@
 import { helperNames } from '../../helperNames';
-import { TRANSPORT_INIT } from '../../transport/messages';
-import WorkerClient, { setWorkerTransportPort } from './Client';
+import { SW_PORT, TRANSPORT_INIT } from '../../transport/messages';
+import WorkerClient, {
+	setServiceWorkerPort,
+	setWorkerTransportPort,
+} from './Client';
 import createWorkerClient from './worker';
 
 // The page that constructed this worker posts a transport port before any of
@@ -43,6 +46,30 @@ setWorkerTransportPort(
 		addEventListener('message', handler);
 	}),
 );
+
+// An emulated service worker's controller posts its port to Stomp's service
+// worker right after the transport's (docs/service-workers.md); kept from
+// the worker's own handlers the same way. Only a dedicated worker gets one.
+if (
+	typeof SharedWorkerGlobalScope === 'undefined' ||
+	!(globalThis instanceof SharedWorkerGlobalScope)
+)
+	setServiceWorkerPort(
+		new Promise<MessagePort>((resolve) => {
+			const handler = (event: MessageEvent) => {
+				if (
+					typeof event.data !== 'object' ||
+					event.data === null ||
+					!(SW_PORT in event.data)
+				)
+					return;
+				event.stopImmediatePropagation();
+				removeEventListener('message', handler);
+				resolve(event.ports[0]);
+			};
+			addEventListener('message', handler);
+		}),
+	);
 
 // Classic-script global consumed (and deleted) by the inject snippet in
 // rewriteJS.ts. See ../dom/entry.ts. A module worker's preamble hands over

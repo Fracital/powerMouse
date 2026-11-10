@@ -6,7 +6,13 @@ import DocumentClient from '../Client';
 
 export default class NavigatorModule extends Module<DocumentClient> {
 	apply() {
-		if ('serviceWorker' in this.client.global.Navigator.prototype) {
+		// with emulated service workers the ServiceWorker module answers
+		// instead (docs/service-workers.md); without, a page could register a
+		// real worker on the proxy origin, which would serve every site
+		if (
+			!this.client.serviceWorkers &&
+			'serviceWorker' in this.client.global.Navigator.prototype
+		) {
 			delete (this.client.global as any).ServiceWorkerContainer;
 			delete (this.client.global as any).ServiceWorkerRegistration;
 			delete (this.client.global.Navigator.prototype as any).serviceWorker;
