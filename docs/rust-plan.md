@@ -101,9 +101,17 @@ neither:
 
 Both are committed under `assets/` with a `.sha256` and an `UPSTREAM` file
 naming the toolchain and crate versions that produced them, and `build.js`
-copies them into `dist/` like any other asset. They have to be in the
-published npm package: unlike epoxy, there is no separate repository to pin
-by `git+https://`.
+copies them into `dist/` as it copies `controllerFrame.html` (with a watch
+of their own in dev mode, since esbuild watches only what it bundles). They
+have to be in the published npm package: unlike epoxy, there is no separate
+repository to pin by `git+https://`, and CI, the deploy and terp all run
+`npm ci --ignore-scripts && npm run build` with no Rust toolchain and wipe
+`dist/` on every build. Each gets a key in `Assets` and `DEFAULT_ASSETS`
+(`src/config.ts`) so a host that renames files can name them, and its URL is
+built from `assetBase` like the inject bundles' (`src/routeURL.ts`): the
+service worker answers nothing at the scope's own level, so the file is
+served by the host like every other asset in `dist/`, and the demo's
+existing `/stomp/` mount serves it with no change.
 
 ## 4. The edit model
 
@@ -263,6 +271,37 @@ the same agent cluster. So:
   without `allow-same-origin`, a worker) instantiates its own on first use,
   exactly where it evaluates its own JavaScript library copy today.
 
+How the page's realm gets the module, given how that realm is made: the top
+evaluates the library's own source text in an about:blank frame and removes
+the frame in the same task, so the library can name nothing of the outer
+bundle and its DOM globals are captured while it is still attached
+(`src/libGlobals.ts`). Two consequences:
+
+- the module's bytes are never inlined into the library text. The text is
+  embedded in `injectDocument.js` and counts against its 850 KB budget, and
+  600 KB of base64 would blow it. The module is handed in.
+- `WebAssembly` joins the globals the library captures from the realm, and
+  the client hands the realm a compiled `WebAssembly.Module`, not bytes:
+  instantiation is synchronous and cheap (`new WebAssembly.Instance`), while
+  a synchronous compile of a 600 KB module on the main thread is what Chrome
+  limits. The module is posted to the top's client over the channel the
+  controller already speaks to its frames on (a `WebAssembly.Module` clones
+  within the agent cluster, and the controller frame and the proxied frames
+  share the proxy origin in both modes), with the rest of the inject
+  bootstrap. Until it has arrived, and in any realm it cannot reach, the
+  JavaScript backend answers: the inject's rewrites are synchronous, and a
+  script that needs rewriting before the module is there cannot wait for it.
+  That is the same per-script fallback the workers use, so a document whose
+  first inline script runs before the module lands is rewritten correctly,
+  just by the slower backend.
+
+The rewrite workers hold no config between requests today (every
+`RewriteRequest` carries the whole config). The worker keeps the last
+config's JSON, as `src/rewriterLib.ts`'s `enter` does, and calls `configure`
+only when it changes, so the once-per-change rule holds without a new
+message. The rewrite cache keys on the config, so the backend choice becomes
+part of the key on its own, as it must: the two backends' outputs differ.
+
 Per-frame cost therefore goes down, not up: the frame stops paying for
 meriyah's and escodegen's tables. The `frame-cost` ceiling (1,120 KB per
 frame, `injectDocument.js` at most 850 KB) is a gate on every phase, and the
@@ -362,9 +401,13 @@ Where each part runs:
   container built, pinned to the crate version, are ever loaded. Resources
   are not in the DAT: `use_resources` is called again from the resource JSON.
 - **The option.** `blocker: false` by default. `true` or an object with list
-  URLs, a prebuilt engine URL, a resource URL and the trusted list set. A
-  demo toggle, docs in `docs/` and suites (`adblock-network`,
-  `adblock-cosmetic`, `adblock-tells`).
+  URLs, a prebuilt engine URL, a resource URL and the trusted list set. In
+  the demo it is set the way every controller option is set there (the page
+  has no option UI beyond the transport select): a URL parameter
+  (`?adblock`, `?noadblock`) and a server variable (`STOMP_ADBLOCK`)
+  rendered into `/config.js`, as `http3` and `serviceWorkers` are, plus a
+  remembered toggle next to the transport select. Docs in `docs/` and
+  suites (`adblock-network`, `adblock-cosmetic`, `adblock-tells`).
 
 Known gaps to document rather than fix: the crate does not apply procedural
 cosmetic filters (we interpret them), does not do HTML filtering (`##^`),
@@ -522,7 +565,12 @@ Reported every phase:
 - So the build is containerized from the start, like `deploy/epoxy/`: a
   pinned base image, a pinned nightly, a pinned binaryen, every revision in
   `pins.env`, `--locked` builds, a committed `Cargo.lock`, and a source hash
-  written into `UPSTREAM` beside the artifact.
+  written into `UPSTREAM` beside the artifact. Two things the epoxy build
+  does not do and this one does: the base image is pinned by digest and the
+  nightly by date (epoxy's `rustlang/rust:nightly-bookworm` floats, so its
+  Rust version is whatever the tag points to on build day), and every
+  downloaded tool (binaryen, and wasm-snip if it is used) is checked against
+  a recorded checksum (epoxy's are not).
 - Where docker's bridge cannot reach the crate and npm mirrors, the build
   takes `ENGINE` pointing at a wrapper that adds `--network host` to
   `docker build`, exactly as the epoxy build does. Nothing is ever piped
