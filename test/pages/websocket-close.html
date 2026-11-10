@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>WEBSOCKET CLOSE</title>
+	</head>
+	<body>
+		<script>
+			// How a WebSocket ends, event by event, against the suite's server
+			// (?port): a connection refused (?refused, a port nothing listens
+			// on), a server that closes with no status, one that closes with a
+			// code, and the page closing with no code and with one.
+			const params = new URLSearchParams(location.search);
+			const base = 'ws://127.0.0.1:' + params.get('port');
+			const run = (url, onopen) =>
+				new Promise((resolve) => {
+					const events = [];
+					const ws = new WebSocket(url);
+					ws.onopen = () => {
+						events.push('open ' + ws.readyState);
+						onopen?.(ws);
+					};
+					ws.onerror = () => events.push('error ' + ws.readyState);
+					ws.onclose = (e) => {
+						events.push(
+							['close', e.code, e.reason, e.wasClean, ws.readyState].join(' '),
+						);
+						resolve(events.join(', '));
+					};
+					setTimeout(() => resolve(events.concat('timeout').join(', ')), 8000);
+				});
+			(async () => {
+				const results = {};
+				results.refused = await run(
+					'ws://127.0.0.1:' + params.get('refused') + '/',
+				);
+				results.serverNoStatus = await run(base + '/quiet');
+				results.serverCode = await run(base + '/code');
+				results.pageNoCode = await run(base + '/hold', (ws) => ws.close());
+				results.pageCode = await run(base + '/hold', (ws) =>
+					ws.close(3001, 'bye'),
+				);
+				window.__wsClose = results;
+			})();
+		</script>
+	</body>
+</html>

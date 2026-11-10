@@ -930,6 +930,16 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   `/watch` with an image's headers that natively never happens
   (stringified-urls suite: the page is requested once in both modes, empty
   values stay empty, an object that reads as a path loads that path).
+- A proxied WebSocket ends as a native one does. A connection that fails
+  (refused, a TLS handshake that ends) fires `error` and then `close` with
+  1006; the transport reports the error only, and the page waited for a
+  close that never came. `close()` without a code reads 1005 (no status),
+  not 1000, and a close with a code or a reason comes back with both, where
+  epoxy never answered it and the page waited for good (the event now comes
+  once the server had half a second to answer). `readyState` is `CLOSED` in
+  the close event. epoxy reports every close the server starts as 1000
+  (it never reads the frame); its own reason, "Closed by remote", no longer
+  reaches the page (websocket-close suite, both modes, against native).
 - `localStorage` and `sessionStorage` work in a srcdoc frame. Its inject
   resolved the proxy's own storage route against the frame's location,
   `about:srcdoc`, and every call threw "Failed to construct 'URL':

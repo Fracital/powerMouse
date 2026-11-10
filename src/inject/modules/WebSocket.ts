@@ -9,6 +9,8 @@ import { failsToParse, withStack } from '../nativeErrors';
 import ProxyModule, { classConstant, onEventTarget } from './Proxy';
 
 const wsProtocols = ['ws:', 'wss:'];
+/** how long a close the page started waits for the transport's word */
+const CLOSE_ANSWER_MS = 500;
 
 export default class WebSocketModule extends Module<Client> {
 	apply() {
@@ -23,6 +25,9 @@ export default class WebSocketModule extends Module<Client> {
 			#socket: BareCompatibleWebSocket;
 			#opened: Promise<void>;
 			#closeRequest?: { code: number; reason: string };
+			#closeNow?: (code: number, reason: string) => void;
+			/** the close event fired: CLOSED, whatever the transport says */
+			#closed = false;
 			#binaryType: BinaryType = 'blob';
 			#url = '';
 			constructor(...args: [url: urlLike, protocol?: string | string[]]) {
@@ -108,8 +113,24 @@ export default class WebSocketModule extends Module<Client> {
 					);
 				});
 
+				// one close event, as the browser fires it
+				let closed = false;
+				const dispatchClose = (code: number, reason: string) => {
+					if (closed) return;
+					closed = true;
+					this.#closed = true;
+					this.dispatchEvent(
+						new CloseEvent('close', { code, reason, wasClean: code !== 1006 }),
+					);
+				};
+				this.#closeNow = dispatchClose;
+
+				// a connection that fails (refused, a TLS handshake that ends)
+				// gets an error and then a close with 1006 natively; the transport
+				// reports the error only
 				this.#socket.addEventListener('error', () => {
 					this.dispatchEvent(new Event('error'));
+					setTimeout(() => dispatchClose(1006, ''), 0);
 				});
 
 				this.#socket.addEventListener('close', (event) => {
@@ -117,17 +138,16 @@ export default class WebSocketModule extends Module<Client> {
 
 					// transports don't relay the close handshake; when the page
 					// initiated the close, report what it asked for like a browser
-					if (this.#closeRequest && !code) {
-						({ code, reason } = this.#closeRequest);
-					}
+					// (1005, no status, for a close() without a code)
+					if (this.#closeRequest) ({ code, reason } = this.#closeRequest);
+					// a close frame without a status reads 1005 natively
+					else if (!code) code = 1005;
+					// epoxy reports every close of the server's as 1000 with a
+					// reason of its own (it never reads the frame): the reason, at
+					// least, is not the site's
+					else if (code === 1000 && reason === 'Closed by remote') reason = '';
 
-					this.dispatchEvent(
-						new CloseEvent('close', {
-							code,
-							reason,
-							wasClean: code === 1000 || !!this.#closeRequest,
-						}),
-					);
+					dispatchClose(code, reason);
 				});
 			}
 			get url() {
@@ -140,6 +160,7 @@ export default class WebSocketModule extends Module<Client> {
 				return this.#socket.extensions;
 			}
 			get readyState() {
+				if (this.#closed) return CLOSED;
 				if (this.#closeRequest && this.#socket.readyState === OPEN)
 					return CLOSING;
 				return this.#socket.readyState;
@@ -184,15 +205,20 @@ export default class WebSocketModule extends Module<Client> {
 				}
 
 				if (this.#closeRequest) return;
-				this.#closeRequest = { code: code ?? 1000, reason: reason ?? '' };
+				// no code is a close frame without a status, which the server
+				// echoes and the page reads as 1005; the transport is given 1000,
+				// since it takes no empty close
+				this.#closeRequest = { code: code ?? 1005, reason: reason ?? '' };
 
 				// the transport connection may not exist yet
 				this.#opened.then(() => {
-					if (this.#socket.readyState === OPEN)
-						this.#socket.close(
-							this.#closeRequest!.code,
-							this.#closeRequest!.reason,
-						);
+					if (this.#socket.readyState !== OPEN) return;
+					const { code, reason } = this.#closeRequest!;
+					this.#socket.close(code === 1005 ? 1000 : code, reason);
+					// epoxy reports no close for a close that carries anything but
+					// 1000 and no reason (measured): the page's close event comes
+					// once the server had time to answer, as the browser's would
+					setTimeout(() => this.#closeNow?.(code, reason), CLOSE_ANSWER_MS);
 				});
 			}
 		}
