@@ -32,7 +32,8 @@ interface Entry {
 	at: number;
 	/**
 	 * the minter's top-level site when it is in a partition (src/partition.ts):
-	 * a blob: worker's Partitioned cookies are that site's
+	 * a blob: worker's or an inline document's Partitioned cookies are that
+	 * site's
 	 */
 	top?: string;
 }
@@ -104,9 +105,18 @@ export function recordBlobOrigin(
 	record(url, { origin, minter, at: Date.now(), ...(top ? { top } : {}) });
 }
 
-/** record the URL an inline document is served at, of real origin `origin` */
-export function recordInlineOrigin(url: string, origin: string) {
-	record(url.split('#')[0], { origin, minter: '', at: Date.now() });
+/** record the URL an inline document is served at, of real origin `origin` (in the partition of top-level site `top`) */
+export function recordInlineOrigin(
+	url: string,
+	origin: string,
+	top: string | null = null,
+) {
+	record(url.split('#')[0], {
+		origin,
+		minter: '',
+		at: Date.now(),
+		...(top ? { top } : {}),
+	});
 }
 
 /** what is known of a client URL, from memory, else from the store */

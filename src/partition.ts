@@ -42,13 +42,20 @@ export function siteOf(
 
 /**
  * The partition of a context of `origin` whose top-level document is of
- * `topOrigin`: '' when the two are one site, else `^<top-level site>`
+ * `topOrigin`: '' when the two are one site and no frame between them is of
+ * another site (`crossAncestor`), else `^<top-level site>`. A site framed by
+ * a frame of another site under its own top-level page (A in B in A) is
+ * keyed apart from that page, as Chrome keys it (the ancestor chain bit of
+ * its storage key): its key names its own site as the top-level one, which
+ * no first-party key does.
  */
 export function partitionOf(
 	origin: string,
 	topOrigin: string,
 	publicSuffix: PublicSuffix,
+	crossAncestor = false,
 ): string {
+	if (crossAncestor) return `^${siteOf(topOrigin, publicSuffix)}`;
 	if (origin === topOrigin) return '';
 	const top = new URL(topOrigin);
 	const own = new URL(origin);
@@ -93,6 +100,31 @@ export function workerKindPartition(kind: string): string {
 
 const NESTED = /^html(?::form)?:nested:(.*)$/;
 
+/** what a nested route's marker adds to the top origin when a frame above the document is of another site than the top */
+const CROSS_ANCESTOR = '/x';
+
+/**
+ * A nested document's route marker: the top origin, and `/x` after it when
+ * a frame between the document and the top is of another site than the top
+ * (its partition then names the top's site whatever its own: see
+ * partitionOf). Read as an origin, the marker is the top origin either way.
+ */
+export function nestedMark(topOrigin: string, crossAncestor: boolean): string {
+	return crossAncestor ? `${topOrigin}${CROSS_ANCESTOR}` : topOrigin;
+}
+
+/** a nested route's marker as nestedMark made it, or null */
+export function parseNestedMark(
+	mark: string,
+): { top: string; crossAncestor: boolean } | null {
+	try {
+		const url = new URL(mark);
+		return { top: url.origin, crossAncestor: url.pathname === CROSS_ANCESTOR };
+	} catch (error) {
+		return null;
+	}
+}
+
 /**
  * The partition a route kind names for a context of `origin`: a nested
  * document's (its top origin is in the kind) or a partitioned worker's; ''
@@ -105,13 +137,13 @@ export function kindPartition(
 ): string {
 	const nested = NESTED.exec(kind);
 	if (!nested) return workerKindPartition(kind);
+	let mark: ReturnType<typeof parseNestedMark>;
 	try {
-		return partitionOf(
-			origin,
-			new URL(decodeURIComponent(nested[1])).origin,
-			publicSuffix,
-		);
+		mark = parseNestedMark(decodeURIComponent(nested[1]));
 	} catch (error) {
 		return '';
 	}
+	return mark
+		? partitionOf(origin, mark.top, publicSuffix, mark.crossAncestor)
+		: '';
 }

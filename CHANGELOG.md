@@ -377,6 +377,41 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A site framed by a frame of another site under its own top-level page
+  (B in A in B) gets storage of its own and its own Partitioned cookies, as
+  Chrome keys it (the ancestor chain bit); it shared them with that page.
+  A framed document that redirects stays a nested one in its partition: the
+  redirect made it a top-level document. A blob: or `javascript:` document
+  a page makes is in the page's partition for its requests' Partitioned
+  cookies (they were the site's first-party ones), and its document.cookie
+  reads "" and ignores writes, as Chrome has it for a document whose URL
+  is not http(s). The HTTP cache (`cache` option) keeps an entry per
+  top-level site and frame site, as Chrome's network isolation key: a
+  resource another site's page loaded was answered from the cache.
+  (sop-partitions suite.)
+- A site framed by another site gets storage of its own, keyed by the
+  top-level site too, as Chrome partitions it: localStorage,
+  sessionStorage, IndexedDB, Cache Storage, the origin private file
+  system, BroadcastChannel, Web Locks, shared workers and emulated service
+  worker registrations. It shared all of them with the site's own
+  top-level pages. A worker is in its creator's partition before any of its
+  script runs (a routed worker's route names it, a blob: worker's bootstrap
+  sets it, an emulated service worker has its registration's). A
+  `Partitioned` cookie (CHIPS) is kept per top-level site, and a request
+  carries those of its own top-level site, a top-level page's request to
+  another site included; third-party cookies without Partitioned are sent
+  as before, as Chrome sends them by default. A first-party context keeps
+  the keys and cookie ids it had, so everything stored before is still
+  there (what a frame stored before stays its site's first-party data).
+  (sop-partitions suite: the 48 checks, 24 in each mode, that differed
+  read as natively.)
+- `navigator.storage.estimate()` counts the page's own storage only: its
+  partition's Cache Storage, origin private file system and IndexedDB, as
+  the browser counts its origin's (localStorage is not counted). It counted
+  every proxied site's stores and Stomp's own caches, so a megabyte another
+  site stored showed in this one's usage. IndexedDB is sized from its
+  values, where Chrome counts the compressed size on disk.
+  (sop-escapes and sop-partitions suites.)
 - stomp-h3's HTTP/3 SETTINGS, control stream, QPACK streams, PRIORITY_UPDATE
   frames, QUIC transport parameter order and 1250-byte Initials are Chrome
   152's (docs/fingerprint.md); responses may use the QPACK dynamic table.
@@ -3552,10 +3587,8 @@ Fixed while testing real sites and a feature fixture:
 
 - The same-origin policy between proxied sites is simulated by the proxy
   (docs/same-origin-policy.md). Not yet: `crossOriginIsolated` (COOP and
-  COEP cannot isolate a proxied frame), and in partitioning the ancestor
-  chain bit (a site's frame under a frame of another site, under its own
-  top-level page, shares the first-party partition) and a top-level-site key
-  on the HTTP cache.
+  COEP cannot isolate a proxied frame), and the renderer's memory cache,
+  which is one for every proxied site (natively one per site's process).
 - The Cookie Store API's change events are dispatched by the inject, so
   their `isTrusted` is false where natively it is true (native-shapes
   suite, recorded), as for the storage events of other documents' writes.

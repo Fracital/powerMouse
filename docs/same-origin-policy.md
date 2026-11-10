@@ -268,6 +268,34 @@ Filled in commit by commit; see the CHANGELOG for each.
   The quota is that usage plus what the browser has left for the proxy
   origin, as natively a quota is the usage plus what is left; only the
   types in use are in `usageDetails`.
+- **Partitions under a frame of another site, inline documents, the HTTP
+  cache** (sop-partitions: an A-in-B-in-A step, blob: and `javascript:`
+  documents and the caches; against the code before, 36 cases per mode
+  differ, and 33 read as natively now, the 3 left being the memory cache,
+  Left 9). Natively a site framed by a frame of another site under
+  its own top-level page (B in A in B) shares nothing with that page: its
+  storage key and its cookie partition key have the ancestor chain bit.
+  Its partition is now `^<top-level site>` like any third-party context's
+  (`partitionOf`), its own site being the top's: a nested route's marker
+  says so (`<top origin>/x`, `nestedMark`; read as an origin it is the top
+  origin as before), set by a document for the frames it makes when it is
+  in a partition itself, and kept across a redirect, which used to drop the
+  marker and make a redirected frame a top-level document. Chrome's cookie
+  partition key is cross-site for every context in a partition and for a
+  top-level page's request to another site (measured: B framed by A reads
+  what B set for A's own request): the worker takes the requesting
+  context's partition from its route. A document the page makes itself (a
+  blob: document, a `javascript:` URL's) is in its creator's partition: the
+  worker records it with the document's origin when the creator registers
+  it (from the creator's route, never from the message), so its requests
+  carry that partition's cookies; its document.cookie reads "" and its
+  writes do nothing, as Chrome has it for a document whose URL is not
+  http(s), and so does an about:blank such a document makes. The HTTP
+  cache (`cache` option) keeps an entry under the request's top-level site
+  and the site of the frame or worker that makes it, as Chrome's network
+  isolation key (measured: another top-level site, or another frame site
+  under the same top, fetches again; B in A in B gets B's top-level
+  entry); a request of an opaque or unknown client is not cached.
 - **Output reuse** (`recentOutputs`, master's speed series): the worker
   gives a document the output it just gave it for the same request only
   when everything the policy decides by is the same: the client (its
@@ -337,14 +365,15 @@ suites' known lists with the same reason.
    isolated agent cluster (SharedArrayBuffer, precise timers); through the
    proxy the frame lives in the host's browsing context group, so it
    cannot.
-9. Partitions: a frame of the top-level site under a frame of another
-   site (A in B in A) is keyed as first-party; Chrome keys it apart (the
-   ancestor chain bit of its storage key and cookie partition key). The
-   worker places a request's Partitioned cookies by its client's route, so
-   the requests of a document the page made itself (a blob: or
-   `javascript:` document in a frame) carry its first-party ones, though
-   its document.cookie reads its partition's. `estimate()` counts IndexedDB
-   values as they are, where Chrome counts what its database takes
-   compressed on disk (a string of a megabyte of one character: 73,728
-   bytes natively, a megabyte here). The HTTP cache is not keyed by the
-   top-level site as Chrome's is.
+9. The renderer's memory cache is one for every proxied site
+   (sop-partitions: 3 cases per mode). Natively each site's documents are
+   in a renderer process of their own, whose memory cache answers a
+   resource that site loaded before; through the proxy every site's
+   documents are in one process, so an image another site loaded is
+   answered from memory (another site's page, a third site's frame: 1 load
+   reached the site where Chrome makes 2 and 3). A routed URL is the same
+   for every site, and the browser never asks the worker. Fixing it would
+   take the browser coming back to the worker for each document's
+   subresources (a `no-cache` on what it is handed) and a memory cache per
+   site in the worker, a round trip per subresource, and a refetch when
+   the HTTP cache is off.

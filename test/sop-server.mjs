@@ -14,6 +14,7 @@
 //     redirect=<url>                    a 302 to url, with the headers above
 //     status=<n>                        the status of a non-preflight answer
 //     cookie=<value>                    a Set-Cookie of the answer
+//     cc=<value>                        its Cache-Control (default no-store)
 //   /sop/log?k=<key>     what reached /sop/r under k, in order
 //   /sop/cookies         the names of the cookies the request carried
 //
@@ -79,7 +80,7 @@ export function sop(req, res) {
 		acrh: h['access-control-request-headers'] ?? null,
 		custom: h['x-custom'] ?? null,
 	});
-	res.setHeader('cache-control', 'no-store');
+	res.setHeader('cache-control', query.get('cc') ?? 'no-store');
 	const set = (name, value) => {
 		if (value !== null && value !== undefined) res.setHeader(name, value);
 	};

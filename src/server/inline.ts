@@ -25,6 +25,13 @@ export interface InlineDocument {
 	markup: string;
 	/** the document's URL as its readbacks show it (the shell's base) */
 	url: string;
+	/**
+	 * the partition of the document that registered it (src/partition.ts),
+	 * as the worker read it from that document's route: a document a page
+	 * makes is of the page's origin and in the page's frame tree, so it is
+	 * in the page's partition
+	 */
+	partition?: string;
 }
 
 const entries = new Map<string, InlineDocument & { expires: number }>();

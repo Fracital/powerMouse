@@ -9,7 +9,10 @@
 	// frame wrote (`?role=top&phase=after`). Its workers (dedicated, blob:
 	// and shared) report what they see too, navigator.storage.estimate() how
 	// much of the partition's storage it counts, and the service worker
-	// registrations it has.
+	// registrations it has. A blob: and a `javascript:` document it makes say
+	// which cookies their requests carry, and an image of site A (`?c=`) that
+	// may be cached says whether the HTTP cache had it already.
+	// `?role=nested` is B framed by A framed by B.
 	(async () => {
 		const query = new URLSearchParams(location.search);
 		const role = query.get('role');
@@ -43,6 +46,15 @@
 					`${tag}_${role}_http_chips=1; Path=/; SameSite=None; Secure; Partitioned`,
 				)}`,
 			);
+			// and one another site's response sets for its request (`?x=`)
+			const cross = query.get('x');
+			if (cross)
+				await fetch(
+					`${cross}/sop/r?k=part&acao=${encodeURIComponent(location.origin)}&acac=1&cookie=${encodeURIComponent(
+						`${tag}_${role}_cross_chips=1; Path=/; SameSite=None; Secure; Partitioned`,
+					)}`,
+					{ credentials: 'include' },
+				);
 			await new Promise((resolve) => {
 				const open = indexedDB.open(`${tag}-${role}`);
 				open.onsuccess = open.onerror = resolve;
@@ -81,6 +93,55 @@
 				}),
 				4000,
 			);
+		// a document the page makes itself: the cookies its request carries
+		// and those it reads
+		const inlineSent = (kind) =>
+			settle(
+				new Promise((resolve) => {
+					const report = (event) => {
+						if (event.data?.inlineSent !== kind) return;
+						removeEventListener('message', report);
+						resolve({
+							sent: shown(event.data.sent),
+							cookies: shown(event.data.cookies),
+						});
+					};
+					addEventListener('message', report);
+					const script = `fetch(${JSON.stringify(
+						`${location.origin}/sop/cookies`,
+					)}).then((response) => response.json()).then((sent) => parent.postMessage({ inlineSent: ${JSON.stringify(
+						kind,
+					)}, sent, cookies: document.cookie.split('; ').map((pair) => pair.split('=')[0]) }, '*'));`;
+					const html = `<!doctype html><script>${script}<\/script>`;
+					const frame = document.createElement('iframe');
+					frame.src =
+						kind === 'blob'
+							? URL.createObjectURL(new Blob([html], { type: 'text/html' }))
+							: `javascript:${encodeURIComponent(JSON.stringify(html))}`;
+					document.body.append(frame);
+				}),
+				4000,
+			);
+		// a resource of site A that may be kept for an hour, as an image
+		// (which the renderer's memory cache may answer) and with fetch (the
+		// HTTP cache only): how many of its loads reached the site so far,
+		// from every step of the run
+		const cachedLoad = async (kind) => {
+			const site = query.get('c');
+			if (!site) return null;
+			const k = `${tag}-cache-${kind}`;
+			const url = `${site}/sop/r?k=${k}&type=png&acao=*&cc=${encodeURIComponent(
+				'max-age=3600',
+			)}`;
+			if (kind === 'fetch') await (await fetch(url)).arrayBuffer();
+			else
+				await new Promise((resolve) => {
+					const image = new Image();
+					image.onload = image.onerror = resolve;
+					image.src = url;
+				});
+			return (await (await fetch(`${site}/sop/log?k=${k}`)).json()).length;
+		};
 		const read = async () => {
 			const opfs = [];
 			for await (const name of (await navigator.storage.getDirectory()).keys())
@@ -146,6 +207,14 @@
 					new Worker(URL.createObjectURL(new Blob([blobSource]))),
 				),
 				shared: seenBy(await ask('seen')),
+			};
+			out.inline = {
+				blob: await inlineSent('blob'),
+				javascript: await inlineSent('javascript'),
+			};
+			out.cacheLoads = {
+				image: await cachedLoad('image'),
+				fetch: await cachedLoad('fetch'),
 			};
 			await new Promise((resolve) => setTimeout(resolve, 1000));
 			clearInterval(say);

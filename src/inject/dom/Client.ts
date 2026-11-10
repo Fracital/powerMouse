@@ -1,7 +1,7 @@
 import { ParsedConfig } from '../../config';
 import { rewriteCSSValueURLs } from '../../cssURLs';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
-import { partitionOf } from '../../partition';
+import { nestedMark, partitionOf } from '../../partition';
 import {
 	PrewrittenTable,
 	scriptPreamble,
@@ -463,9 +463,10 @@ export default class DocumentClient extends Client {
 	#partition?: { document: Document; partition: string };
 	/**
 	 * This document's storage partition: its top-level document's site when
-	 * that is another site than its own (src/partition.ts). Decided once per
-	 * document, from the chain of proxied parents: a site framed by another
-	 * keeps to stores of its own from its first script on.
+	 * that is another site than its own, or when a frame between them is of
+	 * another site (src/partition.ts). Decided once per document, from the
+	 * chain of proxied parents: a site framed by another keeps to stores of
+	 * its own from its first script on.
 	 */
 	override get partition(): string {
 		const document = this.global.document;
@@ -478,12 +479,64 @@ export default class DocumentClient extends Client {
 					this.url.url.origin,
 					this.topOrigin,
 					getPublicSuffix,
+					this.#crossAncestor(),
 				);
 		} catch (error) {
 			// an origin without a site (opaque): it has no storage to key
 		}
 		this.#partition = { document, partition };
 		return partition;
+	}
+	/**
+	 * Whether this document's document.cookie reads "" and its writes do
+	 * nothing, as Chrome has it for a document whose URL is not http(s): a
+	 * blob: document and a `javascript:` URL's (whose URL is about:blank),
+	 * which the worker serves at an `inline:` route, and an about:blank or
+	 * srcdoc document such a document makes (measured in Chrome 152; a plain
+	 * about:blank frame of an http page reads its parent's cookies). Their
+	 * requests carry cookies as any other's. A data: document is an opaque
+	 * origin, and stays as it is.
+	 */
+	get cookieAverse(): boolean {
+		try {
+			const location = this.global.location;
+			if (location.protocol === 'about:') {
+				if (!this.nested) return false;
+				const parent = (this.parent as Record<string, any>)[
+					this.names.client
+				] as DocumentClient | undefined;
+				return !!parent && parent.cookieAverse;
+			}
+			return (
+				location.pathname.startsWith(`${this.directory}inline:`) &&
+				this.url.url.protocol !== 'data:'
+			);
+		} catch (error) {
+			return false;
+		}
+	}
+	/**
+	 * Whether a proxied frame between this document and its top is of another
+	 * site than the top: its parent is in a partition (src/partition.ts)
+	 */
+	#crossAncestor(): boolean {
+		if (!this.nested) return false;
+		try {
+			const parent = (this.parent as Record<string, any>)[this.names.client] as
+				DocumentClient | undefined;
+			return !!parent && parent.partition !== '';
+		} catch (error) {
+			return false;
+		}
+	}
+	/**
+	 * The nested route marker of a frame this document makes (an iframe's
+	 * src): its top origin, flagged when this document is in a partition, so
+	 * the frame's document is keyed apart from its top's even when it is of
+	 * the top's site (src/partition.ts nestedMark)
+	 */
+	get childRoute(): string {
+		return nestedMark(this.topOrigin, this.partition !== '');
 	}
 	/** the origin of the outermost proxied document above this one (its own when it is the top) */
 	get topOrigin(): string {
@@ -549,7 +602,9 @@ export default class DocumentClient extends Client {
 	}
 	/** what a navigation from this context routes as: the top origin when nested, else a top-level document */
 	get nestedRoute(): string | false {
-		return this.nested ? this.topOrigin : false;
+		return this.nested
+			? nestedMark(this.topOrigin, this.#crossAncestor())
+			: false;
 	}
 	/**
 	 * Called by the shell the service worker served with `document`, before

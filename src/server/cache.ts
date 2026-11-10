@@ -1,5 +1,5 @@
 // An HTTP cache in front of the transport, in a Cache API store keyed by the
-// real URL. Deliberately narrow: only GET/HEAD responses with explicit
+// real URL and the request's network partition (partitionedKey). Deliberately narrow: only GET/HEAD responses with explicit
 // freshness, never for requests with credentials unless the response says
 // `public`, no heuristics; stale entries revalidate with the validators the
 // server gave, and a 304 refreshes them. Entries keep the upstream
@@ -12,6 +12,23 @@ const CACHEABLE_STATUS = [200, 203, 204, 300, 301, 404, 410];
 const STORED_AT = 'x-stomp-stored-at';
 const SIZE = 'x-stomp-size';
 const VARY = 'x-stomp-vary';
+
+/**
+ * The key an entry is kept under: the real URL, with the request's top-level
+ * site and the site of the frame (or worker) that makes it, as Chrome keys
+ * its HTTP cache (its network isolation key, measured in Chrome 152: a
+ * resource another top-level site, or another frame site under the same top,
+ * loaded is fetched again; B framed by A framed by B gets what B's top-level
+ * page loaded). A Cache API key is a URL, so the three are put in one under
+ * a host nothing resolves.
+ */
+export function partitionedKey(
+	url: string,
+	topSite: string,
+	frameSite: string,
+): string {
+	return `https://partition.stomp.invalid/${encodeURIComponent(topSite)}/${encodeURIComponent(frameSite)}/${encodeURIComponent(url)}`;
+}
 
 export function parseCacheControl(value: string | null): Map<string, string> {
 	const directives = new Map<string, string>();

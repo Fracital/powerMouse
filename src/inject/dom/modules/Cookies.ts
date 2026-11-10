@@ -399,6 +399,7 @@ export class CookiesModule extends Module<DocumentClient> {
 				(target, that) => {
 					if (this.#cookieAverse(that)) return Reflect.apply(target, that, []);
 					invokeGlobal(that, this.client.global.document);
+					if (this.client.cookieAverse) return '';
 					return this.pageCookies;
 				},
 			),
@@ -407,6 +408,7 @@ export class CookiesModule extends Module<DocumentClient> {
 				(target, that, args) => {
 					if (this.#cookieAverse(that)) return;
 					invokeGlobal(that, this.client.global.document);
+					if (this.client.cookieAverse) return;
 					this.pageCookies = String(args[0]);
 				},
 			),

@@ -39,6 +39,8 @@ import {
 	modifyHTML,
 	modifyRefresh,
 	modifyXML,
+	nestedMarkOf,
+	nestedMarkOfKind,
 	nestedTopOf,
 	routeHTML,
 	XML_DOCUMENT_MIMES,
@@ -68,7 +70,7 @@ import {
 	knownTopSiteOf,
 	recordInlineOrigin,
 } from './blobOrigins';
-import { HttpCache, isCacheable, mayKeep } from './cache';
+import { HttpCache, isCacheable, mayKeep, partitionedKey } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
 import Cookies from './Cookies';
 import {
@@ -173,7 +175,7 @@ const FETCH_METADATA = [
 const clientURLs = new Map<string, URL>();
 /** each client's routed URL, beside its real one: the route kind names its proxied top */
 const clientRoutes = new Map<string, string>();
-/** the top-level site of a client whose URL names none (a partitioned blob: worker's) */
+/** the top-level site of a client whose URL names none (a partitioned blob: worker's, an inline document's) */
 const clientTopSites = new Map<string, string>();
 const CLIENT_URLS_KEPT = 256;
 
@@ -446,6 +448,25 @@ function routeTopSite(routed: string, directory: string): string | null {
 	return partitionSite(workerKindPartition(kind));
 }
 
+/** the partition of a client of `origin` at a routed URL, from its route kind (src/partition.ts) */
+function routePartition(
+	routed: string,
+	directory: string,
+	origin: string,
+): string {
+	let pathname: string;
+	try {
+		pathname = new URL(routed).pathname;
+	} catch (error) {
+		return '';
+	}
+	if (!pathname.startsWith(directory)) return '';
+	const kind = pathname.slice(directory.length).split('/')[0];
+	if (kind.startsWith('sw:'))
+		return serviceWorkers.versionPartition(kind.slice(3));
+	return kindPartition(kind, origin, publicSuffix);
+}
+
 /** requests in flight the page may still abort, by the id it sent (ABORT_HEADER) */
 const pendingAborts = new Map<string, () => void>();
 /** the page posted that it aborted the request with this id */
@@ -690,8 +711,8 @@ function genericForward(
 		// a client whose URL names no origin this worker can read (an
 		// about:srcdoc document): judged by its Referer, else as an opaque one
 		let unknownClient = false;
-		// the top-level site of a partitioned blob: worker, which its URL does
-		// not name (its minter's, as the worker recorded it)
+		// the top-level site of a partitioned blob: worker or inline document,
+		// which its URL does not name (its creator's, as the worker recorded it)
 		let clientTopSite: string | null = null;
 		if (!navigation && context?.clientId && typeof clients !== 'undefined') {
 			const id = context.clientId;
@@ -714,7 +735,11 @@ function genericForward(
 						: null;
 					unknownBlob = !client && !!found?.url.startsWith('blob:');
 					unknownClient = !client && !!found && !unknownBlob;
-					if (client && found?.url.startsWith('blob:'))
+					if (
+						client &&
+						(found?.url.startsWith('blob:') ||
+							found?.url.startsWith(`${routedPrefix}inline:`))
+					)
 						clientTopSite = await knownTopSiteOf(found.url);
 				} catch (error) {
 					// the client is gone
@@ -941,10 +966,26 @@ function genericForward(
 				(client && client.origin !== 'null'
 					? siteOf(client, publicSuffix)
 					: null));
+		// A context in a partition (a site framed by another, or framed under
+		// a frame of another site) keeps its Partitioned cookies under its top
+		// site whatever it asks for; a first-party one only those of another
+		// site, as Chrome's cookie partition key has the ancestor chain bit
+		// (measured: B framed by A reads what B set for A's own request, and B
+		// framed by A framed by B none of B's top-level page's)
+		const contextPartition = navigation
+			? topLevel
+				? ''
+				: kindPartition(resource, url.url.origin, publicSuffix)
+			: clientTopSite
+				? `^${clientTopSite}`
+				: clientRoute && client
+					? routePartition(clientRoute, rewriter.directory, client.origin)
+					: '';
 		const partitionKey =
-			topSite !== null && topSite !== siteOf(url.url, publicSuffix)
+			partitionSite(contextPartition) ??
+			(topSite !== null && topSite !== siteOf(url.url, publicSuffix)
 				? topSite
-				: undefined;
+				: undefined);
 
 		// the chain's earlier hops count for the site (Sec-Fetch-Site only:
 		// the browser's site for cookies does not follow redirects)
@@ -1131,7 +1172,7 @@ function genericForward(
 							url,
 							rewriter.config,
 							false,
-							nestedTopOf(oURL.pathname, rewriter.directory) ?? false,
+							nestedMarkOf(oURL.pathname, rewriter.directory) ?? false,
 						),
 					},
 					'redirected by a rule',
@@ -1307,14 +1348,27 @@ function genericForward(
 		// they answer at once and one revalidation runs behind the page; within
 		// stale-if-error they answer for a 5xx or a failed request. Never any
 		// freshness the origin did not state.
-		const cache = rewriter.cache;
+		// Kept per network partition (cache.ts partitionedKey): the top-level
+		// site and the site of the frame or worker that asks (a navigation's
+		// is its destination's); a request whose client has no site of its
+		// own (opaque, unknown) is not cached at all.
+		const frameSite = navigation
+			? siteOf(url.url, publicSuffix)
+			: client && client.origin !== 'null' && !opaque
+				? siteOf(client, publicSuffix)
+				: null;
+		const cacheKey =
+			frameSite === null
+				? null
+				: partitionedKey(url.toString(), topSite ?? frameSite, frameSite);
+		const cache = cacheKey === null ? undefined : rewriter.cache;
 		const hit =
 			!fromWorker &&
 			!preloaded &&
 			cache &&
 			!context?.bypassCache &&
 			(serverRequest.method === 'GET' || serverRequest.method === 'HEAD')
-				? await cache.match(url.toString(), requestHeaders)
+				? await cache.match(cacheKey!, requestHeaders)
 				: null;
 		let response: Response & { rawHeaders?: [string, string][] };
 		let cached = false;
@@ -1345,17 +1399,12 @@ function genericForward(
 			response = hit.response;
 			cached = true;
 			// one revalidation per URL, however many stale hits arrive together
-			cache!.revalidateOnce(url.toString(), async () => {
+			cache!.revalidateOnce(cacheKey!, async () => {
 				const upstream = await fetchUpstream(withValidators(requestHeaders));
 				if (upstream.status === 304)
-					await cache!.refresh(url.toString(), hit, upstream.headers);
+					await cache!.refresh(cacheKey!, hit, upstream.headers);
 				else if (upstream.body && storable(upstream.status, upstream.headers))
-					await cache!.put(
-						url.toString(),
-						requestHeaders,
-						upstream,
-						upstream.body,
-					);
+					await cache!.put(cacheKey!, requestHeaders, upstream, upstream.body);
 				else await upstream.body?.cancel();
 			});
 		} else {
@@ -1419,10 +1468,10 @@ function genericForward(
 				response = hit!.response;
 				cached = true;
 			} else if (hit && upstream.status === 304) {
-				response = await cache!.refresh(url.toString(), hit, upstream.headers);
+				response = await cache!.refresh(cacheKey!, hit, upstream.headers);
 			} else if (upstream.body && storable(upstream.status, upstream.headers)) {
 				const [forStore, forPage] = upstream.body.tee();
-				cache!.put(url.toString(), requestHeaders, upstream, forStore);
+				cache!.put(cacheKey!, requestHeaders, upstream, forStore);
 				response = new Response(forPage, {
 					status: upstream.status,
 					statusText: upstream.statusText,
@@ -2266,7 +2315,11 @@ export function registerRewrites(
 			// does not name
 			if (entry)
 				try {
-					recordInlineOrigin(request.url, new URL(entry.url).origin);
+					recordInlineOrigin(
+						request.url,
+						new URL(entry.url).origin,
+						partitionSite(entry.partition ?? ''),
+					);
 				} catch (error) {
 					// not a URL: judged by its route
 				}
@@ -2375,7 +2428,15 @@ export function registerRewrites(
 					upgradeInsecure,
 				);
 			},
-			(resource, url) => routeHTML(resource, url, rewriter.config),
+			// a nested document redirected stays nested, in its partition
+			(resource, url, kind) =>
+				routeHTML(
+					resource,
+					url,
+					rewriter.config,
+					false,
+					(kind && nestedMarkOfKind(kind)) ?? false,
+				),
 			undefined,
 			(headers, filteredHeaders, url) => {
 				if (headers.has('x-frame-options')) {
@@ -2481,7 +2542,7 @@ export function registerRewrites(
 					url,
 					rewriter.config,
 					false,
-					nestedTopOf(oURL.pathname, rewriter.directory) ?? false,
+					nestedMarkOf(oURL.pathname, rewriter.directory) ?? false,
 				),
 			},
 			status: 307,

@@ -532,10 +532,21 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 			typeof message.url !== 'string'
 		)
 			return;
+		// its partition is its creator's, read from the creator's route
+		// (never from the message)
+		const route = controllers.get(message.directory)?.ready?.routeOf(source);
+		let partition = '';
+		try {
+			if (route)
+				partition = routePartition(route.resource, new URL(route.url).origin);
+		} catch (error) {
+			// not a URL: first-party
+		}
 		putInline(message.token, {
 			directory: message.directory,
 			markup: message.markup,
 			url: message.url,
+			...(partition ? { partition } : {}),
 		});
 	} else if (BLOB_MINTED in data) {
 		// from a routed document of that controller, for a blob: URL of this

@@ -26,19 +26,45 @@ import {
 
 const A = new URL(FIXTURE).origin;
 const B = new URL(FIXTURE.replace('127.0.0.1', 'localhost')).origin;
-/** the three steps, their names under the run's own tag */
+// a third site, for the frame site in the HTTP cache's key
+const C = B.replace('localhost', 'c.localhost');
+/** the page in `role` on `site` (B's), under the run's tag `t` (`c`: site A's cached resource) */
+const part = (role, t, phase = 'before', site = B) =>
+	`${site}/pages/sop-part.html?role=${role}&phase=${phase}&t=${t}&c=${encodeURIComponent(A)}`;
+/** a page of `site` framing `src` */
+const framing = (site, src) =>
+	`${site}/pages/sop-part-a.html?src=${encodeURIComponent(src)}`;
+/** the steps, their names under the run's own tag */
 const steps = (t) => [
-	['top/before', `${B}/pages/sop-part.html?role=top&t=${t}`],
+	['top/before', part('top', t)],
+	['frame/before', framing(A, part('frame', t))],
+	['top/after', part('top', t, 'after')],
+	// B framed by A framed by B: its top-level site is its own, but an
+	// ancestor is another site's
+	['nested/before', framing(B, framing(A, part('nested', t)))],
+	// for the caches: site A top-level (which has B set a Partitioned cookie
+	// for its request), and a third site framed by A
 	[
-		'frame/before',
-		`${A}/pages/sop-part-a.html?b=${encodeURIComponent(B)}&t=${t}`,
+		'other/before',
+		`${part('other', t, 'before', A)}&x=${encodeURIComponent(B)}`,
 	],
-	['top/after', `${B}/pages/sop-part.html?role=top&phase=after&t=${t}`],
+	['third/before', framing(A, part('third', t, 'before', C))],
+	// B framed by A again: does it see the cookie B set for A's own request?
+	['frame/after', framing(A, part('frame', t, 'after'))],
 ];
 
 // Cases known to differ from Chrome, by why (docs/same-origin-policy.md). A
 // case on the list that now reads as natively fails too: take it off.
-const KNOWN_BY_REASON = {};
+const KNOWN_BY_REASON = {
+	// natively each site's documents are in a renderer process of their own,
+	// whose memory cache answers a resource loaded before; through the proxy
+	// every site's are in one, so a resource another site loaded is there
+	"the renderer's memory cache is one for every proxied site": [
+		'other/before: image cache',
+		'third/before: image cache',
+		'frame/after: image cache',
+	],
+};
 const KNOWN = new Map(
 	Object.entries(KNOWN_BY_REASON).flatMap(([why, names]) =>
 		names.map((name) => [name, why]),
@@ -111,12 +137,33 @@ for (const [mode, base] of [
 		const got = proxied[key] ?? {};
 		for (const field of ['heard', 'workerCount', 'error'])
 			check(mode, `${key}: ${field}`, want[field], got[field]);
+		// how many loads of site A's cacheable resource reached it so far: with
+		// fetch (the HTTP cache) and as an image (the memory cache first)
+		check(
+			mode,
+			`${key}: http cache`,
+			want.cacheLoads?.fetch,
+			got.cacheLoads?.fetch,
+		);
+		check(
+			mode,
+			`${key}: image cache`,
+			want.cacheLoads?.image,
+			got.cacheLoads?.image,
+		);
 		for (const kind of ['dedicated', 'blob', 'shared'])
 			check(
 				mode,
 				`${key}: ${kind} worker`,
 				want.workers?.[kind],
 				got.workers?.[kind],
+			);
+		for (const kind of ['blob', 'javascript'])
+			check(
+				mode,
+				`${key}: ${kind} document`,
+				want.inline?.[kind],
+				got.inline?.[kind],
 			);
 		for (const store of Object.keys(want.seen ?? {}))
 			check(mode, `${key}: ${store}`, want.seen[store], got.seen?.[store]);

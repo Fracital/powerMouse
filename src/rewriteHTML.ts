@@ -135,15 +135,38 @@ export function nestedTopOf(
 	pathname: string,
 	directory: string,
 ): string | null {
-	if (!pathname.startsWith(directory)) return null;
-	const kind = pathname.slice(directory.length).split('/')[0];
-	const match = /^html(?::form)?:nested:(.*)$/.exec(kind);
-	if (!match) return null;
+	const mark = nestedMarkOf(pathname, directory);
+	if (mark === null) return null;
 	try {
-		return new URL(decodeURIComponent(match[1])).origin;
+		return new URL(mark).origin;
 	} catch (error) {
 		return null;
 	}
+}
+
+/**
+ * A nested route kind's marker as routeHTML was given it (src/partition.ts
+ * nestedMark: the top origin, and whether a frame above the document is of
+ * another site), or null for any other kind. A route the worker makes for
+ * the same document (a redirect, a form's) passes it on.
+ */
+export function nestedMarkOfKind(kind: string): string | null {
+	const match = /^html(?::form)?:nested:(.*)$/.exec(kind);
+	if (!match) return null;
+	try {
+		return decodeURIComponent(match[1]);
+	} catch (error) {
+		return null;
+	}
+}
+
+/** nestedMarkOfKind of a routed path's kind */
+export function nestedMarkOf(
+	pathname: string,
+	directory: string,
+): string | null {
+	if (!pathname.startsWith(directory)) return null;
+	return nestedMarkOfKind(pathname.slice(directory.length).split('/')[0]);
 }
 
 /** the shell's statement that hands the client its document's referrer (none without one) */

@@ -1200,7 +1200,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								this.client.url,
 								this.client.config,
 								false,
-								this.client.topOrigin,
+								this.client.childRoute,
 							),
 					);
 				}
@@ -2110,7 +2110,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					this.client.url,
 					this.client.config,
 					false,
-					this.client.topOrigin,
+					this.client.childRoute,
 				);
 			let routed = routedOf();
 			if (!ROUTE_PROTOCOLS.includes(resource.url.protocol)) {

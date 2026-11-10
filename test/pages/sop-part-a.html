@@ -2,15 +2,15 @@
 <title>SOP PARTITION A</title>
 <body>
 	<script>
-		// another site's page framing B (sop-partitions suite): keeps what the
-		// frame reports
+		// a page framing `?src=` (sop-partitions suite): another site's page
+		// framing B, or one link of a longer chain; keeps what the frame
+		// reports
 		const query = new URLSearchParams(location.search);
-		const b = query.get('b');
 		addEventListener('message', (event) => {
 			if (event.data?.sopPart) window.__part = event.data.sopPart;
 		});
 		const frame = document.createElement('iframe');
-		frame.src = `${b}/pages/sop-part.html?role=frame&t=${query.get('t')}`;
+		frame.src = query.get('src');
 		document.body.append(frame);
 	</script>
 </body>
