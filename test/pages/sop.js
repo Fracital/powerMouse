@@ -449,6 +449,66 @@
 			return failed(error);
 		}
 	});
+	add('canvas/SVG image of another site', async () => {
+		const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+		const element = document.createElementNS(
+			'http://www.w3.org/2000/svg',
+			'image',
+		);
+		document.body.append(svg);
+		svg.append(element);
+		await new Promise((resolve) => {
+			element.onload = element.onerror = resolve;
+			element.setAttribute('href', r(B, { type: 'png' }).url);
+		});
+		const target = canvas();
+		target.getContext('2d').drawImage(element, 0, 0);
+		svg.remove();
+		return readback(target);
+	});
+	add(
+		'canvas/an image of another site in a written about:blank frame',
+		async () => {
+			const frame = document.createElement('iframe');
+			document.body.append(frame);
+			const written = frame.contentDocument;
+			written.open();
+			written.write('<img>');
+			written.close();
+			const element = written.querySelector('img');
+			await new Promise((resolve) => {
+				element.onload = element.onerror = resolve;
+				element.src = r(B, { type: 'png' }).url;
+			});
+			const target = canvas();
+			target.getContext('2d').drawImage(element, 0, 0);
+			frame.remove();
+			return readback(target);
+		},
+	);
+	add('canvas/a data: image and a blob: image do not taint', async () => {
+		const png = await (await fetch(r(A, { type: 'png' }).url)).blob();
+		const blobImage = await image(URL.createObjectURL(png));
+		const dataImage = await image(
+			'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==',
+		);
+		const target = canvas();
+		target.getContext('2d').drawImage(blobImage, 0, 0);
+		target.getContext('2d').drawImage(dataImage, 0, 0);
+		return readback(target);
+	});
+	// the cost of a draw (SOP_ONLY=bench/ only: its numbers differ by machine)
+	add('bench/drawImage', async () => {
+		const same = await image(r(A, { type: 'png' }).url);
+		const target = canvas().getContext('2d');
+		const time = (n) => {
+			const start = performance.now();
+			for (let i = 0; i < n; i++) target.drawImage(same, 0, 0);
+			return performance.now() - start;
+		};
+		time(10000);
+		return { ms: time(200000), draws: 200000 };
+	});
 	add('canvas/WebGL texture of a same-origin image', async () => {
 		const element = await image(r(A, { type: 'png' }).url);
 		const gl = canvas().getContext('webgl');
@@ -821,7 +881,7 @@
 
 	(async () => {
 		for (const [name, run] of cases) {
-			if (only && !name.startsWith(only)) continue;
+			if (only ? !name.startsWith(only) : name.startsWith('bench/')) continue;
 			try {
 				out.cases[name] = await Promise.race([
 					(async () => run())(),

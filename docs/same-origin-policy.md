@@ -142,10 +142,32 @@ Filled in commit by commit; see the CHANGELOG for each.
   refuses throws NetworkError, as natively. Cost: nothing on a same-origin
   request; a preflight is the round trip Chrome makes too.
 
+- **Canvas tainting** (section 2, sop-escapes: the 8 cases read as natively
+  in both modes, and three more that must not taint or must: an SVG
+  `<image>`, an image in a written about:blank frame, data: and blob:
+  images). `CanvasTaintModule` (`src/inject/dom/modules/CanvasTaint.ts`)
+  keeps which canvases, contexts, bitmaps and patterns hold another origin's
+  data: a 2D or OffscreenCanvas context that draws an image, video, SVG
+  image or canvas whose loaded URL is of another real origin and not a
+  `crossorigin` load (which the worker's CORS check let through) is
+  tainted, and so is a pattern or ImageBitmap made from one; a tainted
+  canvas refuses `toDataURL`, `toBlob`, `getImageData` and `convertToBlob`
+  with Chrome's SecurityError, and WebGL refuses a tainting source as a
+  texture. Cost: a draw is a WeakSet lookup on a canvas that is tainted
+  already, else a WeakMap lookup and a native getter call; 200,000
+  `drawImage` calls of a same-origin image took 280 to 340 ms natively and
+  295 to 320 ms proxied (noise).
+
 ## Left
 
 Ranked by what a page could learn or do.
 
+- Canvas: an image of the page's own origin that redirects to another is
+  judged by its own URL (Chrome taints by the response's origin); a canvas
+  tainted in one document's bundle is not known to another document's (a
+  same-origin child frame's canvas drawn by its parent); a tainted
+  ImageBitmap sent to a worker is clean there; `new VideoFrame()` of a
+  tainting source is not refused.
 - An about:srcdoc document under a `no-referrer` policy is judged as an
   opaque origin: its client URL names no origin the worker can read and no
   Referer names one, so the worker fails closed. A CORS answer naming the

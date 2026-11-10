@@ -28,16 +28,6 @@ const KNOWN_BY_REASON = {
 	'an about:srcdoc document under no-referrer is judged as an opaque origin': [
 		'fetch/from a srcdoc frame that sends no referrer, ACAO A',
 	],
-	'nothing taints a canvas': [
-		'canvas/cross-origin image',
-		'canvas/cross-origin image with ACAO, no crossorigin',
-		'canvas/cross-origin image drawn scaled',
-		'canvas/a tainted canvas drawn into another',
-		'canvas/pattern of a cross-origin image',
-		'canvas/ImageBitmap of a cross-origin image',
-		'canvas/OffscreenCanvas with a cross-origin image',
-		'canvas/WebGL texture of a cross-origin image',
-	],
 	'resource timing is not gated by Timing-Allow-Origin': [
 		'timing/another site without Timing-Allow-Origin',
 		'timing/another site with Timing-Allow-Origin *',

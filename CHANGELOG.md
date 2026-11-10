@@ -343,6 +343,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A canvas that drew another site's image without CORS is tainted, as
+  natively: `toDataURL`, `toBlob`, `getImageData` and an OffscreenCanvas's
+  `convertToBlob` throw the browser's SecurityError, and WebGL refuses such
+  an image as a texture. Every image is same-origin to the browser through
+  the proxy, so a page could read the pixels of any other site's image,
+  including through a pattern, an ImageBitmap, another canvas or a video.
+  (sop-escapes suite; `drawImage` costs the same as natively.)
 - A proxied page can no longer read another site's responses the browser
   would refuse it. Every route is same-origin to the browser, so a `fetch`
   or XMLHttpRequest of another site came back whole, every header and the

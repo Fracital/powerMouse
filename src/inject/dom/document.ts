@@ -5,6 +5,7 @@ import AnchorModule from './modules/Anchor';
 import AnimationFramesModule from './modules/AnimationFrames';
 import AudioModule from './modules/Audio';
 import BlobDocumentsModule from './modules/BlobDocuments';
+import CanvasTaintModule from './modules/CanvasTaint';
 import ContextModule from './modules/Context';
 import { CookiesModule } from './modules/Cookies';
 import CookieStoreModule from './modules/CookieStore';
@@ -66,6 +67,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(ServiceWorkerModule);
 	client.addModule(OpenModule);
 	client.addModule(DownloadModule);
+	client.addModule(CanvasTaintModule);
 	client.addModule(MediaSessionModule);
 	client.addModule(AnimationFramesModule);
 	client.addModule(NavigateModule);
