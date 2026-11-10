@@ -1013,6 +1013,11 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   for a module script or a crossorigin image (browserleaks' HTTP/2 page
   showed it; field-order suite, a recorder of field names on another
   origin, both modes, against native).
+- With HTTP/3 on (the live demo), requests carry Chrome's Priority field
+  again. The HTTP/3 wrapper declared no field support, so the host dropped
+  Priority from every request, over HTTP/3 and HTTP/2 alike (browserleaks'
+  IP page showed it missing); it now keeps it when its base does
+  (fields-unit suite).
 - `localStorage` and `sessionStorage` work in a srcdoc frame. Its inject
   resolved the proxy's own storage route against the frame's location,
   `about:srcdoc`, and every call threw "Failed to construct 'URL':

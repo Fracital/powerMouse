@@ -208,6 +208,19 @@ export default class Http3Transport implements ProxyTransport {
 		}
 	}
 
+	/**
+	 * What the host may send (serveTransport's fitHeaders): Priority when the
+	 * base keeps it to HTTP/2, which stomp-h3 sends over HTTP/3 as Chrome
+	 * does (without this the field was dropped from every request of a host
+	 * that turned HTTP/3 on); no Accept-Encoding, since stomp-h3 decodes gzip
+	 * and br only and names them itself
+	 */
+	get fieldSupport(): { priority?: boolean } {
+		const base = (this.base as { fieldSupport?: { priority?: boolean } })
+			.fieldSupport;
+		return { priority: !!base?.priority };
+	}
+
 	get ready(): boolean {
 		return this.base.ready;
 	}
