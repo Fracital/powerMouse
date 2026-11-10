@@ -1624,8 +1624,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// Reflect.apply(target, that, args);
 
 					// the hooks are keyed by the name the attribute gets:
-					// `setAttribute('HREF', x)` writes `href`
-					const value = args[1];
+					// `setAttribute('HREF', x)` writes `href`.
+					// The value is the string the browser makes of it (an object's
+					// toString, a TrustedScriptURL): the hooks compare it with '' and
+					// resolve it, and an object that reads as '' was taken for a URL,
+					// the document's own, which an image then loaded
+					const value = args.length < 2 ? args[1] : `${args[1]}`;
 					const attribute =
 						typeof args[0] === 'string'
 							? attributeName(that, args[0])
@@ -1763,7 +1767,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							// nor one a hook removed (a load whose proxied copy is still on
 							// its way): written back it would be an empty URL, which a
 							// script reports as an error and never loads again
-							if (typeof value === 'string' && args[0] !== '' && value !== '')
+							if (typeof value === 'string' && written !== '' && value !== '')
 								Reflect.apply(target, that, [value]);
 						}),
 					),

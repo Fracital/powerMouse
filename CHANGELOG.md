@@ -551,6 +551,15 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   document's styles are not known when they start. The test suites now can
   draw scrollbars (`launch(args, { scrollbars: true })`): Playwright hides
   them in headless mode, which hid this crash.
+- A URL attribute set to an object is the string the object reads as, and
+  one that reads as `''` loads nothing, as natively. The `setAttribute` hook
+  kept the object and compared it with `''`, so an object whose string is
+  empty passed for a URL and resolved to the document's own: an `<img>`
+  fetched the page again as an image. YouTube's logo did that on every watch
+  page (Polymer hands `setAttribute` such a value), a second GET of
+  `/watch` with an image's headers that natively never happens
+  (stringified-urls suite: the page is requested once in both modes, empty
+  values stay empty, an object that reads as a path loads that path).
 - `localStorage` and `sessionStorage` work in a srcdoc frame. Its inject
   resolved the proxy's own storage route against the frame's location,
   `about:srcdoc`, and every call threw "Failed to construct 'URL':
@@ -2761,6 +2770,23 @@ Fixed while testing real sites and a feature fixture:
   reaches the page as its 401, and a challenge the page has no credentials
   for never prompts (natively the browser asks the user). The credentials
   the worker keeps for a realm last as long as the service worker does.
+- A proxied YouTube video stops at about 45 seconds ("Something went wrong")
+  on roughly one load in four (headful Chrome 152, measured 2026-11-10:
+  about 17 of 80 loads in same-origin mode, isolated mode alike; natively 0
+  of over 100). YouTube's SABR stream answers every request with
+  `STREAM_PROTECTION_STATUS` 2 (attestation pending) until the player's
+  PoToken is accepted, then 1; on these loads it never accepts it and sends 3
+  (attestation required) at about 27 to 35 seconds with no media, so playback
+  ends when the buffer does. The transport, the request bodies (the PoToken is
+  attached), the cookies and visitor binding, the timing and the network
+  ad-block probes all match native. The token comes from BotGuard, whose
+  verdict depends on what its VM sees: run unrewritten under the proxy it is
+  rejected every time; rewritten, it is rejected when the program (a new one
+  each load, probing a random set of interfaces) checks something the proxy
+  shows differently. Natively planted proxy tells (wrapped interfaces,
+  stack formatter, outer size, shifted stack positions, no CSP, slower CPU)
+  are all accepted, so the check that rejects it is not identified yet. A
+  reload is a new draw.
 - Markup a page sets as an SVG or MathML element's `innerHTML` or
   `insertAdjacentHTML` is parsed as if its context were an HTML element, so
   `svg.innerHTML = '<style>...</style>'` makes an HTML `<style>` where

@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>stringified urls</title>
+	</head>
+	<body>
+		<script>
+			// URL attributes given objects, as a template library hands them over
+			// (YouTube's logo <img>: Polymer's setAttribute with a value whose
+			// string is ''). The browser stores what the object reads as: '' loads
+			// nothing, a path loads that path.
+			const empty = { toString: () => '' };
+			const marker = { toString: () => 'su-marker.png' };
+			const add = (el) => (document.body.append(el), el);
+			const attr = add(document.createElement('img'));
+			attr.setAttribute('src', empty);
+			const prop = add(document.createElement('img'));
+			prop.src = empty;
+			const input = add(document.createElement('input'));
+			input.type = 'image';
+			input.setAttribute('src', empty);
+			const video = add(document.createElement('video'));
+			video.setAttribute('poster', empty);
+			const routed = add(document.createElement('img'));
+			routed.setAttribute('src', marker);
+			setTimeout(() => {
+				window.__su = {
+					done: true,
+					attr: attr.getAttribute('src'),
+					prop: prop.getAttribute('src'),
+					input: input.getAttribute('src'),
+					poster: video.getAttribute('poster'),
+					routed: routed.getAttribute('src'),
+				};
+			}, 1500);
+		</script>
+	</body>
+</html>
