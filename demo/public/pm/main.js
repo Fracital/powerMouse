@@ -5,7 +5,7 @@
 const DIRECTORY = '/stomp/';
 const SEARCH = new SearchBuilder('https://search.brave.com/search?q=%s');
 const QUICK_LINKS = [
-	['Reddit', 'https://old.reddit.com/', 'orange'],
+	['Reddit', 'https://www.reddit.com/', 'orange'],
 	['Google', 'https://www.google.com/', 'green'],
 	['YouTube', 'https://www.youtube.com/', 'red'],
 	['Discord', 'https://discord.com/login', 'blue'],
