@@ -213,7 +213,20 @@ denied.`, as Chrome does without the site engagement it asks for.
   - `paymentManager` keeps `userHint` and `enableDelegations()` answers
     `true`; the payment events exist and never fire.
   - `cookies` keeps the cookie change subscriptions (`subscribe`,
-    `getSubscriptions`, `unsubscribe`, URLs within the scope).
+    `getSubscriptions`, `unsubscribe`, URLs within the scope), and the
+    worker gets an `ExtendableCookieChangeEvent` (`cookiechange`) for each
+    change of a cookie a subscription covers, whoever made it (a page's
+    `document.cookie` or `cookieStore`, a response's `Set-Cookie`, the
+    worker itself): Stomp's service worker compares what each subscription
+    URL shows in the jar with what it showed. Changes while Stomp's worker
+    was stopped are not reported; its comparison starts again from the jar.
+- The worker's `cookieStore` is the page's over the same jar (the methods,
+  dictionaries and errors are shared, `cookieStoreMethods`), with a
+  service worker's rule for `url`: Chrome 152 takes only the worker's own
+  script URL (query and fragment aside, relative ones resolved against
+  it) and refuses even its scope with "URL must be within Service Worker
+  scope". It has no `onchange`, as natively (service-worker-cookies
+  suite, against a real worker).
   - Push answers as Chrome without the notification permission:
     `permissionState()` is `prompt` in a page and `denied` in the worker,
     `subscribe()` rejects `AbortError: Registration failed - permission
@@ -268,8 +281,7 @@ once it has run on real traffic.
   their handlers there), each interface's prototype is read-only and an
   event constructor called without `new` throws the browser's error
   (service-worker-global suite). A determined script can still find its
-  real prototype chain. `cookieStore` comes with the page's, which builds
-  it over Stomp's cookie jar.
+  real prototype chain.
 - Responses the worker passes through keep the shape the proxy gives them: a
   `no-cors` request across origins is readable in the worker (the proxy
   makes every request same-origin to the browser), not opaque. A truly

@@ -1,3 +1,4 @@
+import type { JarCookie } from '../../../server/Cookies';
 import type {
 	ClientInfo,
 	EmulateInfo,
@@ -12,6 +13,7 @@ import type {
 import { sendBody } from '../../../transport/bodyPort';
 import { postToPort, SW_RPC } from '../../../transport/messages';
 import { RpcHelper } from '../../../transport/rpc';
+import { cookieStoreMethods } from '../../cookieStoreMethods';
 import Module from '../../Module';
 import { nativeBodyOf } from '../../modules/Fetch';
 import ProxyModule from '../../modules/Proxy';
@@ -236,12 +238,13 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 		const self = objects.worker(info.version, info.registration.id)!;
 
 		/**
-		 * Put `cls` on the global as interface `name`: behind a stand-in
-		 * constructor that reads as native code, throws the browser's error
-		 * when called without `new` (a class's own error names the minified
-		 * class) and has a read-only prototype, the class's own
+		 * Put `cls` on the global as interface `name`, through the Proxy
+		 * module's standInClass: a dedicated worker has no such interface, so
+		 * what the stand-in leaves to the browser is a function made here that
+		 * reads as the native one and throws its errors (a call without
+		 * `new`, too few arguments), with a read-only prototype, the class's
 		 */
-		const exposed = new Map<Function, Function>();
+		const natives = new Map<Function, Function>();
 		const nativeClass = (
 			cls: Function,
 			name: string,
@@ -263,39 +266,32 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 				configurable: true,
 				value: name,
 			});
-			const StandIn = objects.native(
+			const native = objects.native(
 				function (this: unknown, ...args: unknown[]) {
 					if (!new.target)
 						throw new global.TypeError(
 							`Failed to construct '${name}': Please use the 'new' operator, this DOM object constructor cannot be called as a function.`,
 						);
-					return Reflect.construct(
-						cls,
-						args,
-						new.target === StandIn ? cls : new.target,
+					throw new global.TypeError(
+						`Failed to construct '${name}': ${length} argument${length > 1 ? 's' : ''} required, but only ${args.length} present.`,
 					);
 				},
 				name,
 				length,
 			);
-			Reflect.defineProperty(StandIn, 'prototype', {
+			Reflect.defineProperty(native, 'prototype', {
 				value: cls.prototype,
 				writable: false,
 				enumerable: false,
 				configurable: false,
 			});
-			Reflect.defineProperty(cls.prototype, 'constructor', {
-				configurable: true,
-				writable: true,
-				value: StandIn,
-			});
-			const above = parent && (exposed.get(parent) ?? parent);
-			if (above) Reflect.setPrototypeOf(StandIn, above);
-			exposed.set(cls, StandIn);
+			const above = parent && (natives.get(parent) ?? parent);
+			if (above) Reflect.setPrototypeOf(native, above);
+			natives.set(cls, native);
 			Reflect.defineProperty(global, name, {
 				configurable: true,
 				writable: true,
-				value: StandIn,
+				value: proxy.standInClass(cls, native),
 			});
 		};
 		const invalidState = (method: string, on: string, message: string) =>
@@ -736,6 +732,83 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 			1,
 			ExtendableEvent,
 		);
+
+		// cookieStore over the proxy's jar, the one the site's pages read and
+		// write (cookieStoreMethods), with a service worker's URL rule: a
+		// `url` must be the worker's own script URL, query and fragment
+		// aside, as Chrome 152 checks it. It has no change events: the
+		// worker's are its registration's subscriptions (cookiechange)
+		const CookieStore = objects.fakeClass('CookieStore', global.EventTarget);
+		const cookieStore = objects.eventTarget(CookieStore);
+		const scriptURL = () => this.client.url.url;
+		const stripped = (url: URL) => `${url.origin}${url.pathname}`;
+		const jarRoute = (route: string) =>
+			`${new URL(String(global.location.href)).origin}${this.client.directory}cookies/${route}`;
+		const sender = `sw-${info.version.id}-${Math.random().toString(36).slice(2)}`;
+		let sequence = 0;
+		const inflight = new Set<number>();
+		const cookieMethods = cookieStoreMethods({
+			global,
+			base: () => scriptURL().href,
+			refuseURL: (url) =>
+				!url || stripped(url) !== stripped(scriptURL())
+					? 'URL must be within Service Worker scope'
+					: null,
+			host: () => scriptURL().hostname,
+			jar: async () => {
+				const response = await this.client.nativeFetch(jarRoute('get'), {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify([scriptURL().href]),
+				});
+				if (!response.ok)
+					throw new Error(`${response.status} ${response.statusText}`);
+				return ((await response.json()) as JarCookie[]).filter(
+					(cookie) => !cookie.httpOnly,
+				);
+			},
+			// in order with the worker's other writes (the jar's numbered
+			// turns, as a document's)
+			store: async (write) => {
+				const seq = sequence++;
+				inflight.add(seq);
+				const url = new URL(jarRoute('ordered'));
+				url.searchParams.set('sender', sender);
+				url.searchParams.set('seq', String(seq));
+				url.searchParams.set('base', String(Math.min(...inflight)));
+				try {
+					const response = await this.client.nativeFetch(url.href, {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify([write, scriptURL().href]),
+					});
+					if (!response.ok)
+						throw new Error(`${response.status} ${response.statusText}`);
+				} finally {
+					inflight.delete(seq);
+				}
+			},
+			refused: () => null,
+			look: async () => {},
+		});
+		const isCookieStore = (that: unknown) => that === cookieStore;
+		for (const method of ['delete', 'get', 'getAll', 'set'] as const)
+			objects.hook(CookieStore.prototype, method, isCookieStore, {
+				length: method === 'get' || method === 'getAll' ? 0 : 1,
+				call: (_that, args) => cookieMethods.methods[method](args),
+			});
+		// natively the prototype lists its methods, then constructor
+		const constructor = Reflect.getOwnPropertyDescriptor(
+			CookieStore.prototype,
+			'constructor',
+		)!;
+		Reflect.deleteProperty(CookieStore.prototype, 'constructor');
+		Reflect.defineProperty(CookieStore.prototype, 'constructor', constructor);
+		Reflect.defineProperty(global, 'CookieStore', {
+			configurable: true,
+			writable: true,
+			value: CookieStore,
+		});
 		Reflect.defineProperty(global, 'PushMessageData', {
 			configurable: true,
 			writable: true,
@@ -876,6 +949,7 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 		define('registration', () => registration);
 		define('serviceWorker', () => self);
 		define('clients', () => clients);
+		define('cookieStore', () => cookieStore);
 		Reflect.defineProperty(global, 'skipWaiting', {
 			configurable: true,
 			enumerable: true,
@@ -1197,6 +1271,15 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 				steps: async ({ registration: snapshot, steps }) => {
 					objects.apply(snapshot, steps);
 				},
+				cookieChange: async ({ changed, deleted }) => [
+					await run(
+						new ExtendableCookieChangeEvent('cookiechange', {
+							changed: changed.map(cookieMethods.item),
+							deleted: deleted.map(cookieMethods.deletedItem),
+						}),
+					),
+					[],
+				],
 				sync: async ({ tag, lastChance }) => [
 					await run(new SyncEvent('sync', { tag, lastChance })),
 					[],

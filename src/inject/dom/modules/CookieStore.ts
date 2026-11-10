@@ -1,27 +1,14 @@
+import { isSecureURL, type JarCookie } from '../../../server/Cookies';
 import {
-	domainMatches,
-	isIP,
-	isSecureURL,
-	malformedPart,
-	type CookieStoreWrite,
-	type JarCookie,
-	type SameSite,
-} from '../../../server/Cookies';
+	cookieStoreMethods,
+	type CookieStoreMethod,
+} from '../../cookieStoreMethods';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
 import { CookiesModule } from './Cookies';
 
-const SAME_SITES: SameSite[] = ['strict', 'lax', 'none'];
-/** RFC 6265bis 5.6 step 3: name plus value */
-const MAX_COOKIE_BYTES = 4096;
-/** RFC 6265bis 5.6: a longer attribute is refused */
-const MAX_ATTRIBUTE_BYTES = 1024;
-const MALFORMED =
-	'Cookie was malformed and could not be stored, due to problem(s) while parsing.';
-const encoder = new TextEncoder();
-
-type Method = 'get' | 'getAll' | 'set' | 'delete';
+type Method = CookieStoreMethod;
 
 /**
  * The Cookie Store API over the proxy's jar, the one document.cookie reads
@@ -75,51 +62,24 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 			},
 		]);
 
-		const fail = (method: Method, message: string) =>
-			new global.TypeError(
-				`Failed to execute '${method}' on 'CookieStore': ${message}`,
-			);
-		// WebIDL's USVString: a lone surrogate is U+FFFD
-		const toUSV = (value: unknown): string => {
-			const text = String(value);
-			const wellFormed = (
-				String.prototype as { toWellFormed?: (this: string) => string }
-			).toWellFormed;
-			return wellFormed ? Reflect.apply(wellFormed, text, []) : text;
-		};
-		const isObject = (value: unknown): value is Record<string, unknown> =>
-			(typeof value === 'object' && value !== null) ||
-			typeof value === 'function';
-		// a dictionary the browser makes is an object of the page's realm
-		const page = <T extends object>(object: T): T => {
-			Reflect.setPrototypeOf(object, global.Object.prototype);
-			return object;
-		};
-		const host = () => this.client.url.url.hostname;
 		const withoutHash = (url: URL) => url.href.replace(/#[^]*$/, '');
 
-		/** a cookie as the API lists it: the dictionary's members in order */
-		const item = (cookie: JarCookie) =>
-			page({
-				domain: cookie.hostOnly || isIP(cookie.domain) ? null : cookie.domain,
-				expires: cookie.expires ?? null,
-				name: cookie.name,
-				partitioned: !!cookie.partitioned,
-				path: cookie.path,
-				sameSite: cookie.sameSite,
-				secure: cookie.secure,
-				value: cookie.value,
-			});
-		/** a deleted cookie as a change event lists it: no value or expiry */
-		const deletedItem = (cookie: JarCookie) =>
-			page({
-				domain: cookie.hostOnly || isIP(cookie.domain) ? null : cookie.domain,
-				name: cookie.name,
-				partitioned: !!cookie.partitioned,
-				path: cookie.path,
-				...(cookie.sameSiteDefault ? {} : { sameSite: cookie.sameSite }),
-				secure: cookie.secure,
-			});
+		// the four methods and their dictionaries, as the browser answers
+		// them, over this document's view of the jar
+		const shared = cookieStoreMethods({
+			global,
+			base: () => this.client.url.toString(),
+			refuseURL: (url) =>
+				!url || withoutHash(url) !== withoutHash(this.client.url.url)
+					? 'URL must match the document URL'
+					: null,
+			host: () => this.client.url.url.hostname,
+			jar: () => cookies.jarCookies(),
+			store: (write) => cookies.store(write),
+			refused: (method) => opaque(method),
+			look: () => watch(),
+		});
+		const { methods, item, deletedItem } = shared;
 
 		// what the page has seen of the jar, from its first look at the API
 		let seen: Map<string, JarCookie> | null = null;
@@ -187,209 +147,6 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 					)
 				: null;
 
-		/** get's and getAll's argument: a name, or CookieStoreGetOptions */
-		const getOptions = (args: unknown[]) => {
-			const [arg] = args;
-			if (args.length && arg !== undefined && arg !== null && !isObject(arg))
-				return { name: toUSV(arg), url: undefined };
-			const options = (arg ?? {}) as Record<string, unknown>;
-			const name = options.name;
-			const url = options.url;
-			return {
-				name: name === undefined ? undefined : toUSV(name),
-				url: url === undefined ? undefined : toUSV(url),
-			};
-		};
-		const matching = async (method: Method, args: unknown[]) => {
-			const refused = opaque(method);
-			if (refused) throw refused;
-			const { name, url } = getOptions(args);
-			if (method === 'get' && name === undefined && url === undefined)
-				throw fail(method, 'CookieStoreGetOptions must not be empty');
-			if (url !== undefined) {
-				let parsed: URL | null = null;
-				try {
-					parsed = new URL(url, this.client.url.toString());
-				} catch (error) {
-					// as one that does not match
-				}
-				if (!parsed || withoutHash(parsed) !== withoutHash(this.client.url.url))
-					throw fail(method, 'URL must match the document URL');
-			}
-			await watch();
-			const list = await cookies.jarCookies();
-			return name === undefined
-				? list
-				: list.filter((cookie) => cookie.name === name);
-		};
-
-		/** `path` checked and given its trailing slash, as Chrome does */
-		const checkPath = (method: Method, path: string) => {
-			if (!path.startsWith('/'))
-				throw fail(method, 'Cookie path must start with "/"');
-			return path.endsWith('/') ? path : `${path}/`;
-		};
-		const checkDomain = (method: Method, domain: string | null) => {
-			if (domain === null) return null;
-			if (domain.startsWith('.'))
-				throw fail(method, 'Cookie domain cannot start with "."');
-			if (!domainMatches(host(), domain.toLowerCase()))
-				throw fail(method, 'Cookie domain must domain-match current host');
-			return domain;
-		};
-
-		/** set's arguments as a write, refused with the browser's errors */
-		const setWrite = (args: unknown[]): CookieStoreWrite => {
-			if (!args.length)
-				throw fail('set', '1 argument required, but only 0 present.');
-			let write: CookieStoreWrite;
-			if (args.length >= 2) {
-				write = {
-					name: toUSV(args[0]),
-					value: toUSV(args[1]),
-					domain: null,
-					expires: null,
-					partitioned: false,
-					path: '/',
-					sameSite: 'strict',
-				};
-			} else {
-				const [arg] = args;
-				if (arg !== undefined && arg !== null && !isObject(arg))
-					throw fail('set', "The provided value is not of type 'CookieInit'.");
-				const init = (arg ?? {}) as Record<string, unknown>;
-				const member = (key: string) =>
-					`Failed to read the '${key}' property from 'CookieInit'`;
-				// read in the dictionary's order, each converted as it is read
-				const domain = init.domain;
-				const expires = init.expires;
-				let expiry: number | null = null;
-				if (expires !== undefined && expires !== null) {
-					expiry = Number(expires);
-					if (!Number.isFinite(expiry))
-						throw fail(
-							'set',
-							`${member('expires')}: The provided double value is non-finite.`,
-						);
-				}
-				const name = init.name;
-				if (name === undefined)
-					throw fail('set', `${member('name')}: Required member is undefined.`);
-				const named = toUSV(name);
-				const partitioned = !!init.partitioned;
-				const path = init.path === undefined ? '/' : toUSV(init.path);
-				const sameSite =
-					init.sameSite === undefined ? 'strict' : String(init.sameSite);
-				if (!SAME_SITES.includes(sameSite as SameSite))
-					throw fail(
-						'set',
-						`${member('sameSite')}: The provided value '${sameSite}' is not a valid enum value of type CookieSameSite.`,
-					);
-				const value = init.value;
-				if (value === undefined)
-					throw fail(
-						'set',
-						`${member('value')}: Required member is undefined.`,
-					);
-				write = {
-					name: named,
-					value: toUSV(value),
-					domain:
-						domain === undefined || domain === null ? null : toUSV(domain),
-					expires: expiry,
-					partitioned,
-					path,
-					sameSite: sameSite as SameSite,
-				};
-			}
-			// what Chrome refuses before it makes the cookie, in its order
-			const name = write.name.replace(/^[ \t]+|[ \t]+$/g, '');
-			const value = write.value.replace(/^[ \t]+|[ \t]+$/g, '');
-			if (name === '' && value === '')
-				throw fail('set', 'Cookie name and value both cannot be empty');
-			if (name === '' && value.includes('='))
-				throw fail(
-					'set',
-					"Cookie value cannot contain '=' if the name is empty",
-				);
-			if (name.includes('='))
-				throw fail('set', "Cookie name cannot contain '='");
-			const domain = checkDomain('set', write.domain);
-			const path = checkPath('set', write.path);
-			if (/^__host-/i.test(name)) {
-				if (domain !== null)
-					throw fail(
-						'set',
-						'Cookies with "__Host-" prefix cannot have a domain',
-					);
-				if (path !== '/')
-					throw fail(
-						'set',
-						'Cookies with "__Host-" prefix cannot have a non-"/" path',
-					);
-			}
-			if (
-				malformedPart(name + value + path) ||
-				encoder.encode(name).length + encoder.encode(value).length >
-					MAX_COOKIE_BYTES ||
-				encoder.encode(path).length > MAX_ATTRIBUTE_BYTES
-			)
-				throw fail('set', MALFORMED);
-			return { ...write, name, value, domain, path };
-		};
-
-		/** delete's argument as a write that expires the cookie */
-		const deleteWrite = (args: unknown[]): CookieStoreWrite => {
-			if (!args.length)
-				throw fail('delete', '1 argument required, but only 0 present.');
-			const [arg] = args;
-			let domain: string | null = null;
-			let name: string;
-			let partitioned = false;
-			let path = '/';
-			if (arg !== undefined && arg !== null && !isObject(arg))
-				name = toUSV(arg);
-			else {
-				const options = (arg ?? {}) as Record<string, unknown>;
-				if (options.domain !== undefined && options.domain !== null)
-					domain = toUSV(options.domain);
-				if (options.name === undefined)
-					throw fail(
-						'delete',
-						"Failed to read the 'name' property from 'CookieStoreDeleteOptions': Required member is undefined.",
-					);
-				name = toUSV(options.name);
-				partitioned = !!options.partitioned;
-				if (options.path !== undefined) path = toUSV(options.path);
-			}
-			return {
-				name,
-				value: '',
-				domain: checkDomain('delete', domain),
-				path: checkPath('delete', path),
-				sameSite: 'strict',
-				partitioned,
-				expires: 0,
-			};
-		};
-		const write = async (method: Method, make: () => CookieStoreWrite) => {
-			const refused = opaque(method);
-			if (refused) throw refused;
-			const cookie = make();
-			await watch();
-			await cookies.store(cookie);
-		};
-
-		const methods: Record<Method, (args: unknown[]) => Promise<unknown>> = {
-			get: async (args) => {
-				const [first] = await matching('get', args);
-				return first ? item(first) : null;
-			},
-			getAll: async (args) =>
-				global.Array.from(await matching('getAll', args), item),
-			set: (args) => write('set', () => setWrite(args)),
-			delete: (args) => write('delete', () => deleteWrite(args)),
-		};
 		for (const [method, own] of Object.entries(methods) as [
 			Method,
 			(args: unknown[]) => Promise<unknown>,

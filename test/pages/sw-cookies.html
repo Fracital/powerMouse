@@ -1,0 +1,41 @@
+<!doctype html>
+<title>SW COOKIES</title>
+<script>
+	// A service worker's cookieStore and cookie change events
+	// (sw-cookies.js): the page sets cookies at three paths, asks the worker
+	// what it sees, then changes cookies the worker subscribed to (and one it
+	// did not) by document.cookie and by the page's own cookieStore, and asks
+	// which cookiechange events came. Under /pages/deep/swc/.
+	window.__swc = { done: false };
+	const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+	(async () => {
+		document.cookie = 'a=1; path=/';
+		document.cookie = 'b=2; path=/pages/deep/swc/';
+		document.cookie = 'c=3; path=/other/';
+		const reg = await navigator.serviceWorker.register('sw-cookies.js');
+		await navigator.serviceWorker.ready;
+		const ask = (data) =>
+			new Promise((resolve) => {
+				navigator.serviceWorker.onmessage = (event) => resolve(event.data);
+				reg.active.postMessage(data);
+			});
+		window.__swc.report = await ask('report');
+		document.cookie = 'e=5; path=/';
+		document.cookie = 'f=6; path=/';
+		await pause(500);
+		document.cookie = 'e=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+		await pause(500);
+		await cookieStore.set('g', '7');
+		let events = [];
+		for (let i = 0; i < 40 && events.length < 3; i++) {
+			await pause(250);
+			events = await ask('events');
+		}
+		window.__swc.events = events;
+		await reg.unregister();
+		window.__swc.done = true;
+	})().catch((error) => {
+		window.__swc.error = String(error);
+		window.__swc.done = true;
+	});
+</script>

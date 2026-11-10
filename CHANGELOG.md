@@ -420,6 +420,56 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   CORS now fail to load, and `Response.type` is `cors` or `opaque` where the
   browser says so. Access-Control-* response headers are no longer
   stripped. (sop-escapes suite, docs/same-origin-policy.md.)
+- An emulated service worker has `cookieStore`, over the same jar as the
+  site's pages, and its registration's cookie change subscriptions fire
+  (`serviceWorkers: true`). `get`, `getAll`, `set` and `delete` answer with
+  the page's dictionaries and errors (the four methods are now shared
+  between a document's `cookieStore` and the worker's), with a service
+  worker's `url` rule as Chrome 152 applies it: only the worker's own script
+  URL, query and fragment aside, and "URL must be within Service Worker
+  scope" for anything else, the scope included. A change of a cookie a
+  subscription covers, whoever made it, reaches the worker as an
+  `ExtendableCookieChangeEvent`, one per cookie, with Chrome's members
+  (service-worker-cookies suite, against a real worker in both modes; the
+  service worker global now compares `CookieStore` and `cookieStore` too).
+  The event constructors stand behind the Proxy module's `standInClass`.
+- An emulated service worker's global reads as a real one's, name for name
+  (service-worker-global suite, against a Chrome service worker). The push,
+  sync, periodic sync, background fetch, payment, notification and cookie
+  change interfaces and their `on...` handlers are there; the
+  dedicated-worker APIs a service worker lacks (WebCodecs, MediaSource,
+  WebUSB, WebHID, Web Serial, the RTC script transform, the old file system
+  API), `URL.createObjectURL` and `URL.revokeObjectURL` are gone; `fetch`,
+  `importScripts`, `setTimeout` and `setInterval` are inherited again
+  rather than the global's own; every service worker interface's
+  `prototype` is read-only; and `new`-less calls of `ExtendableEvent`,
+  `FetchEvent` and the rest throw the browser's "Please use the 'new'
+  operator" instead of naming a minified class. The registration's
+  `sync`, `periodicSync`, `backgroundFetch`, `paymentManager` and `cookies`
+  are no longer removed but simulated as Chrome 152 answers: a sync runs
+  and the worker gets its `SyncEvent`; periodic sync is refused for want of
+  the permission; a background fetch downloads through the proxy and the
+  worker gets `backgroundfetchsuccess` with its records; the payment manager
+  and cookie change subscriptions keep what they are given; push answers
+  `prompt` in a page, `denied` in the worker and `subscribe()` rejects
+  `AbortError`, as Chrome without the notification permission
+  (service-workers, line for line against the same page natively).
+- A page's emulated service worker registration object always shows the
+  state its events and promises say. Stomp's service worker answers a
+  page's call (`register`, `getRegistration`, `update`) on a port of its
+  own and sends state changes as messages, so an answer could overtake the
+  steps sent before it: `navigator.serviceWorker.ready` resolved while the
+  registration's `active` was still `null` (a slow page under load read
+  `reg.active.state` and threw), and steps were skipped as already applied
+  when the answer's snapshot ran ahead of them (an `updatefound` went
+  missing). An answer now resolves only once the steps it includes have
+  arrived and are applied (they are numbered per registration), every event
+  waits while a call is in flight so none overtakes another, `ready`
+  resolves only when the registration object itself has an active worker,
+  and `update()` answers with the registration it updated. The suites have
+  a mode in which every event reaches the page 300 ms after the answers
+  (`serviceWorkerEventDelay`, the demo's `?swdelay=300`), which made the
+  failure happen every time (service-workers, service-worker-updates).
 - `cookieStore` is there, as natively in a secure context, over the
   proxy's jar (native-shapes suite, both modes): the page's `cookieStore` is
   the browser's own CookieStore (identity, prototype, `onchange` and the

@@ -31,6 +31,7 @@ import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
 import { recordBlobOrigin } from './blobOrigins';
+import { forScript, onJarChange } from './Cookies';
 import createServer, { addressCodec, StompServer } from './createServer';
 import { hostErrorPage } from './errorPage';
 import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
@@ -246,6 +247,7 @@ function workerHost(ref: ControllerRef, ready: StompServer): WorkerHost {
 				{ clientId, bypassCache, internal: true },
 			),
 		routeDocument: (url) => ready.route(url),
+		jarCookies: async (url) => forScript(await ready.cookies.get(url)),
 		fetchResource: (url, init, clientId) =>
 			ready.router.route(
 				new Request(ready.routeAs('binary', url), {
@@ -258,6 +260,10 @@ function workerHost(ref: ControllerRef, ready: StompServer): WorkerHost {
 		timeout: ref.config.serviceWorkerTimeout,
 	};
 }
+
+// a page's emulated service worker hears the jar's changes its
+// registration subscribed to (registration.cookies)
+onJarChange(() => serviceWorkers.cookiesChanged());
 
 serviceWorkers.setEnvironment({
 	describe(url) {

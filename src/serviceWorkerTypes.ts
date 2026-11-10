@@ -2,6 +2,7 @@
 // page module say to each other about emulated service workers
 // (docs/service-workers.md).
 
+import type { JarCookie } from './server/Cookies';
 import type { PortBody } from './transport/bodyPort';
 
 export type WorkerState =
@@ -202,6 +203,8 @@ export type ToEmulated = {
 	message: [MessageInit];
 	/** the registration changed: the worker's objects follow it */
 	steps: [{ registration: RegistrationSnapshot; steps: StateStep[] }];
+	/** an ExtendableCookieChangeEvent for one cookie a subscription covers */
+	cookieChange: [{ changed: JarCookie[]; deleted: JarCookie[] }, boolean];
 	/** a SyncEvent for `tag`; whether its extend lifetime promises fulfilled */
 	sync: [{ tag: string; lastChance: boolean }, boolean];
 	/** a background fetch ended: backgroundfetchsuccess, backgroundfetchfail or backgroundfetchabort */

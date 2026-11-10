@@ -3,9 +3,9 @@
 // every own name of its global, whether each service worker interface's
 // `prototype` is writable, each interface's source, what calling an event
 // constructor without `new` throws, whether URL.createObjectURL is there,
-// and its registration's members (what its cookieStore lists is reported
-// too, compared once a service worker has one). The same fixture natively
-// and through the proxy (`?sw`), both demo modes; the reports must match.
+// its registration's members and what its cookieStore lists. The same
+// fixture natively and through the proxy (`?sw`), both demo modes; the
+// reports must match.
 import {
 	done,
 	FIXTURE,
@@ -19,15 +19,6 @@ import {
 } from '../lib.mjs';
 
 const target = `${FIXTURE}pages/deep/swg/sw-global.html`;
-// a service worker's cookieStore comes once the page's (over Stomp's cookie
-// jar) is on master: until then these are left out of the comparison
-const PENDING = new Set(['CookieStore', 'cookieStore']);
-const without = (value) =>
-	value && typeof value === 'object' && !Array.isArray(value)
-		? Object.fromEntries(
-				Object.entries(value).filter(([key]) => !PENDING.has(key)),
-			)
-		: value;
 const ROUTED = /\/stomp\/[\w-]+\/html\//;
 
 async function read(find) {
@@ -62,9 +53,7 @@ for (const [mode, base] of [
 	).report;
 	const names = new Set(proxied?.names ?? []);
 	const nativeNames = new Set(native?.names ?? []);
-	const missing = [...nativeNames].filter(
-		(name) => !names.has(name) && !PENDING.has(name),
-	);
+	const missing = [...nativeNames].filter((name) => !names.has(name));
 	const extra = [...names].filter((name) => !nativeNames.has(name));
 	ok(
 		`${mode}: the global has every name a service worker's has`,
@@ -82,11 +71,11 @@ for (const [mode, base] of [
 		'calls',
 		'objectURL',
 		'registration',
+		'cookies',
 	])
 		ok(
 			`${mode}: ${key} read as natively`,
-			JSON.stringify(without(proxied?.[key])) ===
-				JSON.stringify(without(native?.[key])),
+			JSON.stringify(proxied?.[key]) === JSON.stringify(native?.[key]),
 			JSON.stringify({ proxied: proxied?.[key], native: native?.[key] }),
 		);
 	await page.close();

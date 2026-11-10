@@ -33,6 +33,7 @@ import {
 	SW_RPC,
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
+import type { JarCookie } from './Cookies';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -92,6 +93,8 @@ export interface WorkerHost {
 	): Promise<Response>;
 	/** a document's routed URL at this address (WindowClient.navigate) */
 	routeDocument(url: string): string;
+	/** the jar's cookies script at `url` may see (no HttpOnly ones) */
+	jarCookies(url: string): Promise<JarCookie[]>;
 	/** a resource fetched through the proxy for a page's background fetch: the raw response */
 	fetchResource(
 		url: string,
@@ -1033,6 +1036,100 @@ export class ServiceWorkers {
 		}
 	}
 
+	// ---- cookie change subscriptions (registration.cookies)
+
+	/** what each registration has seen of the jar, by subscription URL, cookie id */
+	readonly #cookiesSeen = new Map<
+		string,
+		Map<string, Map<string, JarCookie>>
+	>();
+	/** registrations whose subscriptions are being compared with the jar */
+	readonly #cookieChecks = new Map<string, Promise<void>>();
+
+	/**
+	 * The jar changed (Stomp's cookie module tells): every registration with
+	 * cookie change subscriptions compares what its URLs show now with what
+	 * they showed, and its worker gets one ExtendableCookieChangeEvent per
+	 * cookie a subscription covers, as Chrome sends them
+	 */
+	cookiesChanged() {
+		for (const record of this.#registrations.values())
+			if (record.cookieSubscriptions?.length && record.active)
+				this.#checkCookies(record).catch(() => {});
+	}
+
+	#checkCookies(record: RegistrationRecord): Promise<void> {
+		// one comparison at a time; a change during it compares again after
+		const running = this.#cookieChecks.get(record.scope);
+		const next = (running ?? Promise.resolve())
+			.catch(() => {})
+			.then(() => this.#compareCookies(record));
+		this.#cookieChecks.set(record.scope, next);
+		next.finally(() => {
+			if (this.#cookieChecks.get(record.scope) === next)
+				this.#cookieChecks.delete(record.scope);
+		});
+		return next;
+	}
+
+	/** what each subscription URL shows now; `report` false records it without events */
+	async #compareCookies(record: RegistrationRecord, report = true) {
+		const host = this.#env?.host();
+		const subscriptions = record.cookieSubscriptions ?? [];
+		if (!host || !subscriptions.length) return;
+		let seen = this.#cookiesSeen.get(record.scope);
+		// a registration this worker has not looked at yet (a restart):
+		// what the jar shows now is where its changes start
+		if (!seen) {
+			seen = new Map();
+			this.#cookiesSeen.set(record.scope, seen);
+			report = false;
+		}
+		const changed = new Map<string, JarCookie>();
+		const deleted = new Map<string, JarCookie>();
+		const covers = (subscription: { name?: string }, cookie: JarCookie) =>
+			subscription.name === undefined || subscription.name === cookie.name;
+		const differs = (a: JarCookie, b: JarCookie) =>
+			a.value !== b.value ||
+			a.expires !== b.expires ||
+			a.secure !== b.secure ||
+			a.sameSite !== b.sameSite ||
+			a.hostOnly !== b.hostOnly;
+		for (const url of new Set(subscriptions.map((item) => item.url))) {
+			const now = new Map(
+				(await host.jarCookies(url)).map((cookie) => [cookie.id, cookie]),
+			);
+			const before = seen.get(url);
+			seen.set(url, now);
+			if (!before || !report) continue;
+			const wanted = subscriptions.filter((item) => item.url === url);
+			for (const [id, cookie] of before)
+				if (!now.has(id) && wanted.some((item) => covers(item, cookie)))
+					deleted.set(id, cookie);
+			for (const [id, cookie] of now) {
+				const old = before.get(id);
+				if (
+					(!old || differs(old, cookie)) &&
+					wanted.some((item) => covers(item, cookie))
+				)
+					changed.set(id, cookie);
+			}
+		}
+		for (const url of [...seen.keys()])
+			if (!subscriptions.some((item) => item.url === url)) seen.delete(url);
+		const version = record.active;
+		if (!version || (!changed.size && !deleted.size)) return;
+		const instance = await this.#instance(record, version, host);
+		for (const cookie of deleted.values())
+			await this.#event(instance, () =>
+				instance.rpc.call('cookieChange', { changed: [], deleted: [cookie] }),
+			);
+		for (const cookie of changed.values())
+			await this.#event(instance, () =>
+				instance.rpc.call('cookieChange', { changed: [cookie], deleted: [] }),
+			);
+	}
+
 	// ---- the registration's managers (docs/service-workers.md)
 
 	/** background fetches, by scope and id; kept while this worker runs */
@@ -1116,7 +1213,7 @@ export class ServiceWorkers {
 						failed(
 							'CookieStoreManager',
 							op,
-							'URL must be within Service Worker scope',
+							'URL must be within ServiceWorker scope',
 						),
 					);
 				return { ...(item.name !== undefined ? { name: item.name } : {}), url };
@@ -1136,6 +1233,8 @@ export class ServiceWorkers {
 					(kept) => !list.some((item) => same(kept, item)),
 				);
 			await persist();
+			// a new URL's cookies are where its changes start
+			await this.#checkCookies(record).catch(() => {});
 			return undefined;
 		}
 		if (kind === 'backgroundFetch')

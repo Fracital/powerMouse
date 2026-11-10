@@ -708,6 +708,12 @@ export default class Cookies {
 
 declare const clients: Clients | undefined;
 
+const jarListeners = new Set<(domain: string) => void>();
+/** hear every change of the jar (the emulated service workers' cookie change subscriptions) */
+export function onJarChange(listener: (domain: string) => void) {
+	jarListeners.add(listener);
+}
+
 /**
  * Tell every window the jar changed for `domain`, so the documents it
  * covers drop their document.cookie cache. Sent before the response that
@@ -800,6 +806,7 @@ export async function openCookies(): Promise<Cookies> {
 	);
 	cookies.onChange = (domain) => {
 		broadcastChange(domain);
+		for (const listener of jarListeners) listener(domain);
 	};
 
 	return cookies;
