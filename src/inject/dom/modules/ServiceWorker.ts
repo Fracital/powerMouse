@@ -54,11 +54,65 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const origin = () => this.client.url.url.origin;
 
-		// calls in flight: the registration's steps that arrive meanwhile wait
-		// for the call's answer (a register's `updatefound` follows its
-		// resolution, but the two travel on separate channels)
+		// Calls in flight: every event that arrives meanwhile waits for the
+		// call's answer, in the order it came. The answer travels on a port of
+		// its own, so it can overtake events Stomp's service worker sent
+		// before it (and a register's `updatefound` must follow its
+		// resolution). An answer that includes steps a registration object of
+		// this page has not applied resolves only once those steps are here
+		// (each registration's steps are numbered without gaps) and applied,
+		// so the object it hands over shows what natively it would (ready's
+		// `active`, update's `installing`); the later ones follow the
+		// resolution
 		let pending = 0;
-		const held: PageEvent[] = [];
+		const held: [PageEvent, MessagePort[]][] = [];
+		/** a call that never answers (the worker went) stops holding the events after this */
+		const CALL_GIVE_UP_MS = 120_000;
+		/** an answer waits at most this long for the steps it includes */
+		const STEPS_WAIT_MS = 3_000;
+		const isSnapshot = (value: unknown): value is RegistrationSnapshot =>
+			typeof value === 'object' &&
+			value !== null &&
+			typeof (value as RegistrationSnapshot).id === 'string' &&
+			typeof (value as RegistrationSnapshot).serial === 'number';
+		const snapshotsOf = (value: unknown) =>
+			(Array.isArray(value) ? value : [value]).filter(isSnapshot);
+		/** the held steps of a registration up to `serial` */
+		const heldSteps = (id: string, serial: number) =>
+			held.flatMap(([event]) =>
+				event.kind === 'steps' &&
+				event.origin === origin() &&
+				event.registration.id === id
+					? event.steps.filter((step) => step.serial <= serial)
+					: [],
+			);
+		/** whether every step `snapshot` includes is applied or held */
+		const complete = (snapshot: RegistrationSnapshot) => {
+			const object = objects.known(snapshot.id);
+			if (!object) return true;
+			const have = objects.snapshotOf(object).serial;
+			if (have >= snapshot.serial) return true;
+			const serials = new Set(
+				heldSteps(snapshot.id, snapshot.serial)
+					.map((step) => step.serial)
+					.filter((serial) => serial > have),
+			);
+			return serials.size >= snapshot.serial - have;
+		};
+		/** apply the held steps the snapshots already include, in one pass each */
+		const catchUp = (snapshots: RegistrationSnapshot[]) => {
+			for (const snapshot of snapshots) {
+				const steps = heldSteps(snapshot.id, snapshot.serial);
+				if (steps.length) objects.apply(snapshot, steps);
+			}
+		};
+		/** answers waiting for their steps */
+		const answers = new Set<() => boolean>();
+		const release = () => {
+			pending--;
+			if (pending) return;
+			for (const [event, ports] of held.splice(0)) handle(event, ports);
+		};
 
 		const call = (
 			method: string,
@@ -86,16 +140,46 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 					return;
 				}
 				pending++;
+				let answered = false;
+				const giveUp = global.setTimeout(() => {
+					if (answered) return;
+					answered = true;
+					channel.port1.close();
+					reject(
+						new global.DOMException(
+							'The document is in an invalid state.',
+							'InvalidStateError',
+						),
+					);
+					release();
+				}, CALL_GIVE_UP_MS);
 				channel.port1.onmessage = (event) => {
+					if (answered) return;
+					answered = true;
+					global.clearTimeout(giveUp);
 					channel.port1.close();
 					const reply = event.data as ApiReply;
-					if ('error' in reply) reject(objects.error(reply.error));
-					else resolve(reply.value);
-					// after the page's continuation (a microtask) has run
-					global.setTimeout(() => {
-						pending--;
-						if (!pending) for (const event of held.splice(0)) handle(event);
-					});
+					if ('error' in reply) {
+						reject(objects.error(reply.error));
+						// after the page's continuation (a microtask) has run
+						global.setTimeout(release);
+						return;
+					}
+					const snapshots = snapshotsOf(reply.value);
+					let settled = false;
+					const finish = () => {
+						if (settled) return true;
+						settled = true;
+						answers.delete(attempt);
+						global.clearTimeout(late);
+						catchUp(snapshots);
+						resolve(reply.value);
+						global.setTimeout(release);
+						return true;
+					};
+					const attempt = () => snapshots.every(complete) && finish();
+					const late = global.setTimeout(finish, STEPS_WAIT_MS);
+					if (!attempt()) answers.add(attempt);
 				};
 			});
 
@@ -145,12 +229,15 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 		const registrationOf = (snapshot: RegistrationSnapshot | null) =>
 			snapshot ? objects.registration(snapshot) : undefined;
 
-		// ready: the registration whose scope is the document's, once it has
-		// an active worker
+		// ready: the registration whose scope is the document's, once the
+		// registration object itself shows an active worker (a snapshot that
+		// says so ahead of the object's own steps waits for them)
 		const checkReady = (snapshot: RegistrationSnapshot) => {
 			if (!state.readyResolve || !snapshot.active) return;
 			if (!this.client.url.toString().startsWith(snapshot.scope)) return;
-			state.readyResolve(objects.registration(snapshot));
+			const registration = objects.registration(snapshot);
+			if (!objects.snapshotOf(registration).active) return;
+			state.readyResolve(registration);
 			state.readyResolve = undefined;
 		};
 
@@ -196,8 +283,9 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 
 		const handle = (event: PageEvent, ports: MessagePort[] = []) => {
 			if (event.origin !== origin()) return;
-			if (pending && event.kind === 'steps') {
-				held.push(event);
+			if (pending) {
+				held.push([event, ports]);
+				for (const attempt of [...answers]) attempt();
 				return;
 			}
 			switch (event.kind) {

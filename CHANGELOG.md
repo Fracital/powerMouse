@@ -423,6 +423,22 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   the attribute (`style="...url("a.png")"`), where the browser writes
   `&quot;` and escapes `&`; and a copy of such an element (cloneNode,
   inserted) read the routes back.
+- A page's emulated service worker registration object always shows the
+  state its events and promises say. Stomp's service worker answers a
+  page's call (`register`, `getRegistration`, `update`) on a port of its
+  own and sends state changes as messages, so an answer could overtake the
+  steps sent before it: `navigator.serviceWorker.ready` resolved while the
+  registration's `active` was still `null` (a slow page under load read
+  `reg.active.state` and threw), and steps were skipped as already applied
+  when the answer's snapshot ran ahead of them (an `updatefound` went
+  missing). An answer now resolves only once the steps it includes have
+  arrived and are applied (they are numbered per registration), every event
+  waits while a call is in flight so none overtakes another, `ready`
+  resolves only when the registration object itself has an active worker,
+  and `update()` answers with the registration it updated. The suites have
+  a mode in which every event reaches the page 300 ms after the answers
+  (`serviceWorkerEventDelay`, the demo's `?swdelay=300`), which made the
+  failure happen every time (service-workers, service-worker-updates).
 - `ast-types` is dropped. The JS rewriter built its new nodes with its
   builders, and loading it builds its definitions of every node kind of
   every dialect (Flow, TypeScript, Babel, JSX): about 450 KB of heap in

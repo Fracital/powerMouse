@@ -74,14 +74,21 @@ ok(
 );
 
 const browser = await launch();
-for (const [mode, base] of [
+for (const [mode, base, query = ''] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
+	// every state event reaches the page 300 ms after the answers to its
+	// calls: a registration object must already show what an event or a
+	// resolved promise says (ready, updatefound, statechange)
+	['same-origin, events 300 ms late', PROXY, '&swdelay=300'],
 ]) {
-	const page = await openDemo(browser, `${base}?sw`);
+	// a browser of its own: the same-origin run's registration stays in
+	// the proxy origin's storage
+	const own = query ? await launch() : browser;
+	const page = await openDemo(own, `${base}?sw${query}`);
 	let opened = false;
 	const proxied = await both(
-		mode,
+		query ? 'delayed' : mode,
 		async (target) => {
 			if (!opened) await submitLanding(page, target);
 			else await submitOmni(page, target);
@@ -101,6 +108,7 @@ for (const [mode, base] of [
 		JSON.stringify(page.errors),
 	);
 	await page.close();
+	if (own !== browser) await own.close();
 }
 await site.close();
 await done(browser);

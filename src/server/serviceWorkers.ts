@@ -314,6 +314,31 @@ export class ServiceWorkers {
 					.catch(() => {});
 	}
 
+	/** @internal ms every page-bound event waits before it goes (config.serviceWorkerEventDelay, tests) */
+	#eventDelay = 0;
+	/** the events on their way, in the order they were sent */
+	#outbox: Promise<void> = Promise.resolve();
+	setEventDelay(ms: number) {
+		this.#eventDelay = Math.max(0, ms);
+	}
+	/**
+	 * Every event for a page goes through here, in order. With a delay (the
+	 * suites' way of making the events trail the answers to the page's
+	 * calls, which travel on ports of their own) each waits that long
+	 */
+	#send(client: Client, event: PageEvent, ports: MessagePort[] = []) {
+		const go = () => client.postMessage({ [SW_EVENT]: event }, ports);
+		if (!this.#eventDelay) {
+			go();
+			return;
+		}
+		const delay = this.#eventDelay;
+		this.#outbox = this.#outbox
+			.then(() => new Promise((resolve) => setTimeout(resolve, delay)))
+			.then(go, go)
+			.catch(() => {});
+	}
+
 	/** every window client of `origin` (and those whose URL names no site, which drop it themselves) */
 	async #broadcast(origin: string, event: PageEvent) {
 		for (const client of await self.clients.matchAll({
@@ -323,13 +348,13 @@ export class ServiceWorkers {
 			const described = this.#env?.describe(client.url);
 			if (described && described.origin !== origin) continue;
 			if (!described && !/^about:(blank|srcdoc)/.test(client.url)) continue;
-			client.postMessage({ [SW_EVENT]: event });
+			this.#send(client, event);
 		}
 	}
 
 	async #post(clientId: string, event: PageEvent, ports: MessagePort[] = []) {
 		const client = await self.clients.get(clientId);
-		client?.postMessage({ [SW_EVENT]: event }, ports);
+		if (client) this.#send(client, event, ports);
 	}
 
 	// ---- matching
@@ -512,7 +537,9 @@ export class ServiceWorkers {
 				const done = this.update(record, host, sender.clientId, true);
 				waitUntil(done.catch(() => {}));
 				await done;
-				return null;
+				// the page's registration object catches up to this before the
+				// update() promise resolves (its installing, natively set by then)
+				return this.snapshot(record);
 			}
 			case 'unregister': {
 				const record = this.#registrations.get(String(args.scope));
@@ -1134,15 +1161,14 @@ export class ServiceWorkers {
 				// another site's client never hears this worker
 				if (!client || !described || described.origin !== own.origin) return;
 				if (client.type !== 'window') return;
-				client.postMessage(
+				this.#send(
+					client,
 					{
-						[SW_EVENT]: {
-							kind: 'message',
-							origin: own.origin,
-							registration: this.snapshot(own),
-							source: this.#worker(version)!,
-							data,
-						} satisfies PageEvent,
+						kind: 'message',
+						origin: own.origin,
+						registration: this.snapshot(own),
+						source: this.#worker(version)!,
+						data,
 					},
 					ports,
 				);
@@ -1217,13 +1243,11 @@ export class ServiceWorkers {
 			if (this.#controlled.get(client.id) === record.scope) continue;
 			await this.#setControlled(client.id, record);
 			if (client.type === 'window')
-				client.postMessage({
-					[SW_EVENT]: {
-						kind: 'controller',
-						origin: record.origin,
-						registration: snapshot,
-						worker: this.#worker(version)!,
-					} satisfies PageEvent,
+				this.#send(client, {
+					kind: 'controller',
+					origin: record.origin,
+					registration: snapshot,
+					worker: this.#worker(version)!,
 				});
 		}
 		return null;

@@ -72,6 +72,10 @@ const CACHE = !new URLSearchParams(location.search).has('nocache');
 const SERVICE_WORKERS = new URLSearchParams(location.search).has('sw');
 const SERVICE_WORKER_TIMEOUT =
 	Number(new URLSearchParams(location.search).get('sw')) || undefined;
+// ?swdelay=<ms>: every service worker event reaches the pages that much
+// later than the answers to their calls (the suites' race check)
+const SERVICE_WORKER_EVENT_DELAY =
+	Number(new URLSearchParams(location.search).get('swdelay')) || undefined;
 // HTTP/3 over wisp UDP for origins that offer it (docs/http3.md), off by
 // default; STOMP_HTTP3=1 on the server or ?http3 on this page turns it on
 const HTTP3 = !!CFG.http3 || new URLSearchParams(location.search).has('http3');
@@ -191,6 +195,7 @@ async function startController(name) {
 			cache: CACHE,
 			serviceWorkers: SERVICE_WORKERS,
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
+			serviceWorkerEventDelay: SERVICE_WORKER_EVENT_DELAY,
 			...controllerCallbacks,
 		});
 	} else {
@@ -207,6 +212,7 @@ async function startController(name) {
 			cache: CACHE,
 			serviceWorkers: SERVICE_WORKERS,
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
+			serviceWorkerEventDelay: SERVICE_WORKER_EVENT_DELAY,
 			...controllerCallbacks,
 		});
 	}

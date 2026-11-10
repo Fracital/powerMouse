@@ -161,6 +161,9 @@ if (window === window.parent || !origins.length) {
 						...(typeof init.serviceWorkerTimeout === 'number'
 							? { serviceWorkerTimeout: init.serviceWorkerTimeout }
 							: {}),
+						...(typeof init.serviceWorkerEventDelay === 'number'
+							? { serviceWorkerEventDelay: init.serviceWorkerEventDelay }
+							: {}),
 						// numbers only: the controller clamps them
 						...(typeof init.rewriteWorkers === 'number'
 							? { rewriteWorkers: init.rewriteWorkers }

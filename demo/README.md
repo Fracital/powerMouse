@@ -111,7 +111,10 @@ transport, which tunnels through `/wisp/`.
    controller. The controller is exposed as `window.controller` for devtools.
    The service worker's HTTP cache is on; `?nocache` on the demo URL turns it
    off for that visit. `?sw` turns on emulated service workers
-   (`serviceWorkers: true`, docs/service-workers.md) for that visit.
+   (`serviceWorkers: true`, docs/service-workers.md) for that visit;
+   `?sw=<ms>` sets how long a worker may take to answer and
+   `?swdelay=<ms>` makes its events reach the pages that much later (both
+   for the suites).
    `onRequest` feeds the request viewer (below).
 4. **Autocomplete.** Each keystroke in an address bar asks
    `/suggestions?input=...` for public suffixes matching what was typed after

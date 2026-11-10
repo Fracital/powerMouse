@@ -206,6 +206,8 @@ function registerController(
 	server.then((ready) => {
 		ref.ready = ready;
 		if (config.serviceWorkers) ref.host = workerHost(ref, ready);
+		if (config.serviceWorkerEventDelay)
+			serviceWorkers.setEventDelay(config.serviceWorkerEventDelay);
 	});
 	controllers.set(directory, ref);
 	for (const wake of [...registrationWaiters]) wake();

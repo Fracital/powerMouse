@@ -39,6 +39,10 @@ const PAGES = {
 		const step = params.get('step');
 		if (step === '1') {
 			const reg = await c.register('sw-update.js?run=' + run);
+			// a page busy elsewhere: the worker is active by the time it asks
+			// for ready, which must not resolve before the registration object
+			// itself shows the active worker
+			await new Promise((resolve) => setTimeout(resolve, 500));
 			await c.ready;
 			await until(() => reg.active.state === 'activated');
 			push('registered', reg.active.scriptURL.replace(/run=.*/, ''), reg.active.state);

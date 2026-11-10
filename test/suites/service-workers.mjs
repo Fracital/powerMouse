@@ -55,11 +55,15 @@ ok(
 const CHOSEN = new Set(['absent']);
 
 const browser = await launch();
-for (const [mode, base] of [
+for (const [mode, base, query = ''] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
+	// every state event reaches the page 300 ms after the answers to its
+	// calls: a registration object must already show what an event or a
+	// resolved promise says (ready, updatefound, statechange)
+	['same-origin, events 300 ms late', PROXY, '&swdelay=300'],
 ]) {
-	const page = await openDemo(browser, `${base}?sw`);
+	const page = await openDemo(browser, `${base}?sw${query}`);
 	await submitLanding(page, target);
 	const proxied = await readLog(page, (page) =>
 		page.frames().findLast((frame) => ROUTED.test(frame.url())),

@@ -68,6 +68,8 @@ export interface Config {
 	serviceWorkers?: boolean;
 	/** @internal ms an emulated service worker may take to say whether it answers a request (tests; default 5000, a start twice that, an answer six times) */
 	serviceWorkerTimeout?: number;
+	/** @internal ms every emulated service worker event waits before it reaches the pages (tests: the events trail the answers to the pages' calls) */
+	serviceWorkerEventDelay?: number;
 	/** @internal build id of the service worker that serves the page (src/version.ts) */
 	build?: string;
 	/** @internal ms a routed request may take before the service worker answers 504 (tests; default by destination) */

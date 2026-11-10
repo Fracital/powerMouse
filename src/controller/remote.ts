@@ -84,6 +84,8 @@ export interface RemoteControllerInit {
 	serviceWorkers?: boolean;
 	/** @internal see StompController */
 	serviceWorkerTimeout?: number;
+	/** @internal see StompController */
+	serviceWorkerEventDelay?: number;
 	/** Workers that rewrite scripts for the service worker; `0` starts none (see StompController) */
 	rewriteWorkers?: number;
 	/** ms the service worker waits on a rewrite worker before rewriting itself (see StompController) */
@@ -284,6 +286,9 @@ export class RemoteController extends EventTarget {
 					...(init.serviceWorkers === true ? { serviceWorkers: true } : {}),
 					...(init.serviceWorkerTimeout !== undefined
 						? { serviceWorkerTimeout: init.serviceWorkerTimeout }
+						: {}),
+					...(init.serviceWorkerEventDelay !== undefined
+						? { serviceWorkerEventDelay: init.serviceWorkerEventDelay }
 						: {}),
 					...(init.rewriteWorkers !== undefined
 						? { rewriteWorkers: init.rewriteWorkers }

@@ -58,6 +58,8 @@ export interface ControllerFrameInit {
 	serviceWorkers?: boolean;
 	/** @internal RemoteControllerInit.serviceWorkerTimeout */
 	serviceWorkerTimeout?: number;
+	/** @internal RemoteControllerInit.serviceWorkerEventDelay */
+	serviceWorkerEventDelay?: number;
 	/** how many rewrite workers the controller starts (RemoteControllerInit.rewriteWorkers) */
 	rewriteWorkers?: number;
 	/** ms the service worker waits on a rewrite worker (RemoteControllerInit.rewriteTimeout) */

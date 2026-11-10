@@ -181,6 +181,8 @@ export interface ControllerInit {
 	serviceWorkers?: boolean;
 	/** @internal ms an emulated service worker may take to say whether it answers a request (tests) */
 	serviceWorkerTimeout?: number;
+	/** @internal ms every emulated service worker event waits before it reaches the pages (tests) */
+	serviceWorkerEventDelay?: number;
 	/** @internal ms before the service worker answers a routed request with 504 (tests) */
 	fetchTimeout?: number;
 	/** @internal ms a navigation with no referrer waits for its document's hint (tests) */
@@ -646,6 +648,9 @@ export class StompController extends EventTarget {
 			...(init.serviceWorkers === true ? { serviceWorkers: true } : {}),
 			...(init.serviceWorkerTimeout
 				? { serviceWorkerTimeout: init.serviceWorkerTimeout }
+				: {}),
+			...(init.serviceWorkerEventDelay
+				? { serviceWorkerEventDelay: init.serviceWorkerEventDelay }
 				: {}),
 			...(init.fetchTimeout ? { fetchTimeout: init.fetchTimeout } : {}),
 			...(init.navigationHintWait
