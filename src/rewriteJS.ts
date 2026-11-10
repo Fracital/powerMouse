@@ -368,6 +368,12 @@ export function modifyJS(
 	// and the client's global, which holds the real windows (the access API
 	// answers nothing for it, so a page that learned the name cannot read it)
 	const routed = [...UNDEFINABLE, names.client];
+	const helperKeys = [
+		names.access,
+		names.client,
+		names.globalProxy,
+		names.globalName,
+	];
 	try {
 		const isModule = type === 'genericModule' || type === 'workerModule';
 		const isWorker = type === 'workerModule' || type === 'worker';
@@ -439,6 +445,26 @@ export function modifyJS(
 				case 'DebuggerStatement':
 					// a proxied site's anti-debugging trap, not the user's breakpoint
 					ctx.replaceWith(b.emptyStatement());
+					break;
+				case 'BinaryExpression':
+					// `key in o`: the helpers live on the window, where natively
+					// nothing has their names, so the access API answers an `in`
+					// whose key is one or may be one (any key but a literal)
+					if (
+						ctx.node.operator === 'in' &&
+						ctx.node.left.type !== 'PrivateIdentifier' &&
+						(ctx.node.left.type !== 'Literal' ||
+							helperKeys.includes(ctx.node.left.value))
+					)
+						ctx.replaceWith(
+							b.callExpression(
+								b.memberExpression(
+									b.identifier(names.access),
+									b.identifier('has'),
+								),
+								[result(ctx.node.left), result(ctx.node.right)],
+							),
+						);
 					break;
 				case 'ImportExpression': {
 					// todo: add tompc$.import(meta, url)

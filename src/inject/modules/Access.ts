@@ -298,6 +298,25 @@ export default class AccessModule extends Module<Client> {
 					);
 				},
 			}),
+			/**
+			 * `key in target`: the rewriter routes here every `in` whose key is
+			 * or may be a helper name. A helper name is not on the window, a
+			 * worker scope or a stand-in, as for `Reflect.has`; anything else is
+			 * the operator itself, its TypeError for a primitive target included.
+			 */
+			has: (key: any, target: any): boolean => {
+				if (
+					((typeof key === 'object' && key !== null) ||
+						typeof key === 'function') &&
+					((typeof target === 'object' && target !== null) ||
+						typeof target === 'function')
+				) {
+					// the key the operator would look up, converted once
+					const holder = { [key]: 0 };
+					key = Reflect.ownKeys(holder)[0];
+				}
+				return this.client.hidesName?.(target, key) ? false : key in target;
+			},
 			new2: (target: any, key: any, args: any): any => {
 				// key = normalizeKey(key);
 				return Reflect.construct(api.get(target[key], key), args);

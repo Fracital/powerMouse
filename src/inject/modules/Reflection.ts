@@ -36,8 +36,8 @@ export default class ReflectionModule extends Module<Client> {
 		// the helper names (the access API and client key on the window, the
 		// stand-in tags on location and eval) never show in an enumeration of
 		// those objects and are not "own" to any reflective question, nor have
-		// a descriptor; the bare `in` operator remains a tell (rewriting every
-		// `in` would cost more)
+		// a descriptor, nor are found by the `in` operator (which the rewriter
+		// routes to the access API's `has`)
 		const hidden = new Set<PropertyKey>([
 			this.client.names.access,
 			this.client.names.client,
@@ -245,7 +245,8 @@ export default class ReflectionModule extends Module<Client> {
 			},
 		);
 
-		const nativeHasOwn = global.Object.prototype.hasOwnProperty;
+		// a stand-in carries its name under the tag (setGlobalProxy), never
+		// enumerable, where a page's own object with that key has its own
 		const tagged = (target: unknown): boolean => {
 			if (
 				(typeof target !== 'object' && typeof target !== 'function') ||
@@ -253,14 +254,21 @@ export default class ReflectionModule extends Module<Client> {
 			)
 				return false;
 			try {
-				return Reflect.apply(nativeHasOwn, target, [
+				const tag = Reflect.getOwnPropertyDescriptor(
+					target,
 					this.client.names.globalName,
-				]) as boolean;
+				);
+				return (
+					tag !== undefined && !tag.enumerable && typeof tag.value === 'string'
+				);
 			} catch (error) {
 				return false;
 			}
 		};
 		const ours = (target: unknown) => windowLike(target) || tagged(target);
+		// the `in` operator asks the same (access API `has`)
+		this.client.hidesName = (target, key) =>
+			hidden.has(key as PropertyKey) && ours(target);
 		for (const [holder, name] of [
 			[global.Object, 'getOwnPropertyNames'],
 			[global.Reflect, 'ownKeys'],

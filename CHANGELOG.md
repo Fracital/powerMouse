@@ -356,6 +356,34 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   browser's `InvalidAccessError` from `open()` instead of a synchronous
   request, and a worker ignores the type `document`, which it has no
   documents for.
+- The `in` operator no longer finds the proxy's helpers:
+  `'$s$j' in window` and `key in window` for the access API's or the
+  client's name (a deployment's own names too) were true, natively false,
+  and so on `self` and `globalThis`. The
+  rewriter hands every `in` whose key is not a literal, or is a helper's
+  name, to the access API's `has`, which answers as `Reflect.has` already
+  did and otherwise is the operator itself (its TypeError for a primitive
+  included). A page's own object with such a key answers natively, by `in`
+  and by the reflective asks: an object with the stand-in tag's name used
+  to be taken for a stand-in. The rewrite costs nothing measurable (the 46
+  MB corpus, 13.7 s before and 13.8 s after, the median of five, within
+  the noise); an `in` with a computed key costs about 2 ns more.
+- `Error.prepareStackTrace` reads `undefined`, as natively, where it was
+  the proxy's stack formatter: by `typeof`, `in`, `hasOwnProperty`, its
+  descriptor and Error's key lists, on Error and on TypeError and every
+  other constructor that inherits from it. The page's `Error` is a Proxy
+  over the realm's own, which V8 reads the formatter off; the formatter
+  tells the two readers apart by receiver, so stacks stay clean while the
+  page sees only its own property. A formatter the page sets runs on
+  cleaned call sites, reads back as itself, is an own enumerable property
+  and deletes as one; deleting the proxy's (which made every stack after
+  it name the routes) deletes nothing. `new Error()`, `instanceof Error`,
+  `Error.prototype.constructor`, `Object.getPrototypeOf(TypeError)` and
+  `Function.prototype.toString` behave as natively; `instanceof Error`
+  takes about 55 ns where it took 4. A page that makes the property
+  non-configurable replaces the formatter (its realm's stacks are no longer
+  cleaned), and one that freezes Error sees the accessor (tells suite, both
+  modes, compared with the page loaded natively).
 - The rewrite cache keeps a rewritten script of up to 48 MB, 512 MB in all.
   An entry could be 8 MB at most, which never kept Discord's 13 MB bundle,
   and since a rewritten script carries its text for its functions' sources
@@ -2718,9 +2746,11 @@ Fixed while testing real sites and a feature fixture:
   answers `campaign_id=null` with an HTML refusal its script tag cannot
   parse. Nothing in the rewrite is involved: sloppy global writes, script
   order and GTM's inserted scripts behave as natively.
-- `Error.prepareStackTrace` reads back as a function (Stomp's formatter)
-  instead of `undefined`; scripts created from markup strings read back
-  rewritten.
+- Scripts created from markup strings read back rewritten.
+- A page that names the access API reads it: `window.$s$j`, `window[name]`
+  and `typeof $s$j` give an object where natively there is nothing (tells
+  suite, recorded). The client's name reads undefined, and nothing lists
+  or finds either name.
 - Error surfaces (error-surfaces suite): line and column numbers of rewritten
   code are the rewritten code's (stacks, ErrorEvent, onerror, report bodies),
   and an error the browser reported for a worker the page terminated mid

@@ -692,6 +692,8 @@ export default class UnrouteModule extends Module<Client> {
 			captureStackTrace?: Function;
 			prepareStackTrace?: PrepareStackTrace;
 		};
+		// a realm hooked already: its Error is the page's (below)
+		if (errorProxies.has(ErrorCtor)) return;
 		const clean = (value: unknown) =>
 			typeof value === 'string' ? unrouteText(this.client, value) : value;
 
@@ -864,7 +866,25 @@ export default class UnrouteModule extends Module<Client> {
 			}
 		};
 
-		let pagePrepare: unknown;
+		// The page's Error (see below) and its own `prepareStackTrace`, which
+		// lives here rather than on Error: whatever descriptor the page gave
+		// the key, as an own property would hold it
+		let pageError: typeof ErrorCtor = ErrorCtor;
+		const pageOwn = Object.create(null) as Record<string, unknown>;
+		// what an assignment walks past when Error inherits from nothing
+		const nothing = Object.create(null) as object;
+		const KEY = 'prepareStackTrace';
+		// where the page's Error.prepareStackTrace is found: its own, or what
+		// Error inherits (natively nothing)
+		const pageHolder = (): object | null =>
+			Reflect.getOwnPropertyDescriptor(pageOwn, KEY)
+				? pageOwn
+				: Reflect.getPrototypeOf(ErrorCtor);
+		// its value, read on `receiver` (the page's Error, or a subclass)
+		const pagePrepare = (receiver: unknown): unknown => {
+			const holder = pageHolder();
+			return holder === null ? undefined : Reflect.get(holder, KEY, receiver);
+		};
 		const prepare: PrepareStackTrace = (error, sites) => {
 			// V8 passes the error and its call sites. A page that calls the
 			// formatter it read, to hand off to the one installed before its own,
@@ -904,8 +924,9 @@ export default class UnrouteModule extends Module<Client> {
 					? skippedFrames.get(error)
 					: undefined;
 			if (skip) shown = shown.slice(skip);
-			if (fromV8 && typeof pagePrepare === 'function') {
-				const result = Reflect.apply(pagePrepare, ErrorCtor, [
+			const own = fromV8 ? pagePrepare(pageError) : undefined;
+			if (typeof own === 'function') {
+				const result = Reflect.apply(own, pageError, [
 					error,
 					shown.map((site, index) => cleanSite(site, index, shown)),
 				]);
@@ -922,16 +943,137 @@ export default class UnrouteModule extends Module<Client> {
 			);
 		};
 
-		// an accessor, so a formatter the page installs runs on cleaned frames
-		// and its result is cleaned too. V8 and the page read the same
-		// property, so the page sees this formatter rather than `undefined`.
-		Reflect.defineProperty(ErrorCtor, 'prepareStackTrace', {
+		// V8 reads the formatter off the realm's own Error, and natively the
+		// page reads the same property (`undefined` until it sets one). Here
+		// the page's Error is a Proxy over the real one, and every way a page
+		// reaches Error leads to it: the global, `Error.prototype.constructor`
+		// and the prototype of TypeError and its siblings. The accessor tells
+		// the two readers apart by receiver: V8's is the real Error and gets
+		// this formatter, so a formatter the page installs runs on cleaned
+		// frames and its result is cleaned too; the page's is the Proxy (or a
+		// constructor inheriting from it) and gets its own property or nothing.
+		// The Proxy answers for the key's existence the same way; construction,
+		// calls and every other property are the real Error's.
+		let pinned = false;
+		Reflect.defineProperty(ErrorCtor, KEY, {
 			configurable: true,
 			enumerable: false,
-			get: () => prepare,
-			set: (value: unknown) => {
-				pagePrepare = value === prepare ? undefined : value;
+			get(this: unknown) {
+				return this === ErrorCtor ? prepare : pagePrepare(this);
+			},
+			set(this: unknown, value: unknown) {
+				if (pinned) {
+					Reflect.set(pageOwn, KEY, value);
+					return;
+				}
+				// an assignment as to an object without the accessor: the page's
+				// own property, or one the receiver gets
+				Reflect.set(
+					pageHolder() ?? nothing,
+					KEY,
+					value,
+					this === ErrorCtor ? pageError : this,
+				);
 			},
 		});
+		const handler: ProxyHandler<typeof ErrorCtor> = {
+			has: (target, key) => {
+				if (key !== KEY || pinned) return Reflect.has(target, key);
+				const holder = pageHolder();
+				return holder !== null && Reflect.has(holder, key);
+			},
+			getOwnPropertyDescriptor: (target, key) =>
+				key !== KEY || pinned
+					? Reflect.getOwnPropertyDescriptor(target, key)
+					: Reflect.getOwnPropertyDescriptor(pageOwn, key),
+			defineProperty: (target, key, descriptor) => {
+				if (key !== KEY || pinned)
+					return Reflect.defineProperty(target, key, descriptor);
+				if (!Reflect.defineProperty(pageOwn, key, descriptor)) return false;
+				const defined = Reflect.getOwnPropertyDescriptor(pageOwn, key)!;
+				// a Proxy reports no non-configurable property its target does not
+				// have: the page's own replaces the formatter, and this realm's
+				// stacks are no longer cleaned
+				if (!defined.configurable) {
+					pinned = true;
+					Reflect.defineProperty(target, key, defined);
+				}
+				return true;
+			},
+			deleteProperty: (target, key) =>
+				key !== KEY || pinned
+					? Reflect.deleteProperty(target, key)
+					: Reflect.deleteProperty(pageOwn, key),
+			ownKeys: (target) => {
+				const keys = Reflect.ownKeys(target);
+				if (pinned) return keys;
+				const shown = keys.filter((key) => key !== KEY);
+				// a property the page made comes after the string keys Error had
+				if (Reflect.getOwnPropertyDescriptor(pageOwn, KEY)) {
+					const symbol = shown.findIndex((key) => typeof key === 'symbol');
+					shown.splice(symbol === -1 ? shown.length : symbol, 0, KEY);
+				}
+				return shown;
+			},
+			preventExtensions: (target) => {
+				// a non-extensible target's Proxy reports exactly the target's own
+				// properties: from here on the accessor shows (it still cleans, and
+				// reads and writes the page's own property)
+				pinned = true;
+				return Reflect.preventExtensions(target);
+			},
+		};
+		pageError = new Proxy(ErrorCtor, handler);
+		errorProxies.add(pageError);
+		proxyModule.functionStrings.set(pageError, ErrorCtor.toString());
+		const global = this.client.global as unknown as Record<string, unknown>;
+		const constructor = Reflect.getOwnPropertyDescriptor(
+			ErrorCtor.prototype,
+			'constructor',
+		);
+		if (constructor && 'value' in constructor)
+			Reflect.defineProperty(ErrorCtor.prototype, 'constructor', {
+				...constructor,
+				value: pageError,
+			});
+		const wasm = Reflect.getOwnPropertyDescriptor(global, 'WebAssembly')?.value;
+		for (const [holder, names] of [
+			[global, ERROR_SUBCLASSES],
+			[wasm, WASM_ERRORS],
+		] as const) {
+			if (typeof holder !== 'object' || holder === null) continue;
+			for (const name of names) {
+				const ctor = Reflect.getOwnPropertyDescriptor(holder, name)?.value;
+				if (
+					typeof ctor === 'function' &&
+					Reflect.getPrototypeOf(ctor) === ErrorCtor
+				)
+					Reflect.setPrototypeOf(ctor, pageError);
+			}
+		}
+		const own = Reflect.getOwnPropertyDescriptor(global, 'Error');
+		if (own && 'value' in own)
+			Reflect.defineProperty(global, 'Error', { ...own, value: pageError });
 	}
 }
+
+// the constructors whose prototype is Error (a page's `class extends Error`
+// is made after the inject, from the page's Error)
+const ERROR_SUBCLASSES = [
+	'EvalError',
+	'RangeError',
+	'ReferenceError',
+	'SyntaxError',
+	'TypeError',
+	'URIError',
+	'AggregateError',
+	'SuppressedError',
+];
+const WASM_ERRORS = [
+	'CompileError',
+	'LinkError',
+	'RuntimeError',
+	'SuspendError',
+];
+// the page's Error of every realm this bundle hooked: one never wraps another
+const errorProxies = new WeakSet<object>();

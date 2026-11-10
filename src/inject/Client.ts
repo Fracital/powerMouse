@@ -76,6 +76,8 @@ export default class Client {
 	resolveTop?: (value: unknown) => unknown;
 	/** set by the Context module: a window of another proxied origin, read through the access API (`frames[i]`, `window[name]`), becomes its restricted stand-in */
 	restrictForeign?: (value: unknown, container?: unknown) => unknown;
+	/** set by the Reflection module: `key` is a helper name, which the page never finds on `target` */
+	hidesName?: (target: unknown, key: unknown) => boolean;
 	/**
 	 * @internal set by the Sandbox module: what a read of another window's
 	 * location (`real`, its stand-in `standIn`) gives a sandboxed document,
