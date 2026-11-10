@@ -10,6 +10,7 @@ import PartitionModule from './modules/Partition';
 import ProxyModule from './modules/Proxy';
 import ReflectionModule from './modules/Reflection';
 import ResourceTimingModule from './modules/ResourceTiming';
+import StorageEstimateModule from './modules/StorageEstimate';
 import TimersModule from './modules/Timers';
 import UnrouteModule from './modules/Unroute';
 import WebSocketModule from './modules/WebSocket';
@@ -24,6 +25,8 @@ export default function baseModules(client: Client) {
 	client.addModule(FunctionModule);
 	client.addModule(TimersModule);
 	client.addModule(WorkerModule);
+	// before the IndexedDB and Partition modules: it takes their natives
+	client.addModule(StorageEstimateModule);
 	client.addModule(IndexedDBModule);
 	client.addModule(PartitionModule);
 	client.addModule(MixedContentModule);

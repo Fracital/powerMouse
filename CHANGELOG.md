@@ -421,6 +421,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   there (what a frame stored before stays its site's first-party data).
   (sop-partitions suite: the 48 checks, 24 in each mode, that differed
   read as natively.)
+- `navigator.storage.estimate()` counts the page's own storage only: its
+  partition's Cache Storage, origin private file system and IndexedDB, as
+  the browser counts its origin's (localStorage is not counted). It counted
+  every proxied site's stores and Stomp's own caches, so a megabyte another
+  site stored showed in this one's usage. IndexedDB is sized from its
+  values, where Chrome counts the compressed size on disk.
+  (sop-escapes and sop-partitions suites.)
 - A background fetch's downloads are the page's CORS requests, as
   natively: one of another site without Access-Control-Allow-Origin fails
   the fetch (`fetch-error`), one with it succeeds. (sop-escapes suite.)
@@ -3458,9 +3465,8 @@ Fixed while testing real sites and a feature fixture:
 ### Known limitations
 
 - The same-origin policy between proxied sites is simulated by the proxy
-  (docs/same-origin-policy.md). Not yet: a per-site
-  `navigator.storage.estimate()`, `crossOriginIsolated` (COOP and COEP
-  cannot isolate a proxied frame), and in partitioning the ancestor
+  (docs/same-origin-policy.md). Not yet: `crossOriginIsolated` (COOP and
+  COEP cannot isolate a proxied frame), and in partitioning the ancestor
   chain bit (a site's frame under a frame of another site, under its own
   top-level page, shares the first-party partition) and a top-level-site key
   on the HTTP cache.

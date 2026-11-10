@@ -30,9 +30,6 @@ const KNOWN_BY_REASON = {
 	],
 	"a fetch's or XMLHttpRequest's timing of another origin is restricted even with Timing-Allow-Origin":
 		['timing/a fetch of another site with ACAO and TAO'],
-	'navigator.storage.estimate() counts every proxied site': [
-		'storage/usage does not count another site',
-	],
 };
 const KNOWN = new Map(
 	Object.entries(KNOWN_BY_REASON).flatMap(([why, names]) =>

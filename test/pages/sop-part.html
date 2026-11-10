@@ -7,7 +7,8 @@
 	// then reports what it reads of both, so the suite can tell which stores
 	// the two share. A top-level page reports twice: before and after the
 	// frame wrote (`?role=top&phase=after`). Its workers (dedicated, blob:
-	// and shared) report what they see too, and the service worker
+	// and shared) report what they see too, navigator.storage.estimate() how
+	// much of the partition's storage it counts, and the service worker
 	// registrations it has.
 	(async () => {
 		const query = new URLSearchParams(location.search);
@@ -29,6 +30,8 @@
 				promise,
 				new Promise((resolve) => setTimeout(() => resolve('timeout'), ms)),
 			]);
+		// what each store holds is counted in units of this
+		const UNIT = 64 * 1024;
 		const write = async () => {
 			localStorage.setItem(`${tag}-${role}`, '1');
 			sessionStorage.setItem(`${tag}-${role}`, '1');
@@ -44,9 +47,18 @@
 				const open = indexedDB.open(`${tag}-${role}`);
 				open.onsuccess = open.onerror = resolve;
 			});
-			await caches.open(`${tag}-${role}`);
+			const cache = await caches.open(`${tag}-${role}`);
+			await cache.put(
+				`/pages/sop-part-${tag}`,
+				new Response(new Uint8Array(UNIT)),
+			);
 			const root = await navigator.storage.getDirectory();
-			await root.getFileHandle(`${tag}-${role}`, { create: true });
+			const file = await root.getFileHandle(`${tag}-${role}`, {
+				create: true,
+			});
+			const writable = await file.createWritable();
+			await writable.write(new Uint8Array(UNIT));
+			await writable.close();
 			// a service worker registration (scoped to a path no page here is at)
 			await settle(
 				navigator.serviceWorker.register('sop-part-sw.js', {
@@ -73,6 +85,8 @@
 			const opfs = [];
 			for await (const name of (await navigator.storage.getDirectory()).keys())
 				opfs.push(name);
+			const estimate = await navigator.storage.estimate();
+			const units = (bytes) => Math.round((bytes ?? 0) / UNIT);
 			return {
 				localStorage: shown(Object.keys(localStorage)),
 				cookies: shown(
@@ -93,6 +107,11 @@
 							new URL(registration.scope).pathname.split('/').pop(),
 					),
 				),
+				// the partition's own: a unit per role that wrote to it
+				estimate: {
+					caches: units(estimate.usageDetails?.caches),
+					fileSystem: units(estimate.usageDetails?.fileSystem),
+				},
 			};
 		};
 		try {

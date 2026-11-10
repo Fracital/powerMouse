@@ -5,12 +5,13 @@
 // sessionStorage, cookies with and without Partitioned (CHIPS, set by script
 // and by a response, and the Cookie header a request carries), IndexedDB,
 // Cache Storage, the origin private file system, Web Locks,
-// BroadcastChannel, SharedWorker and service worker registrations, and what
-// its dedicated, blob: and shared workers see of them. Natively the frame's
-// stores are keyed by the top-level site too, so it shares none of them with
-// the top-level page of its own site (unpartitioned cookies aside: Chrome
-// sends third-party cookies by default). Each report is compared with the
-// same sequence loaded natively, in both modes.
+// BroadcastChannel, SharedWorker, service worker registrations and
+// navigator.storage.estimate(), and what its dedicated, blob: and shared
+// workers see of them. Natively the frame's stores are keyed by the top-level
+// site too, so it shares none of them with the top-level page of its own
+// site (unpartitioned cookies aside: Chrome sends third-party cookies by
+// default). Each report is compared with the same sequence loaded natively,
+// in both modes.
 import {
 	done,
 	FIXTURE,
@@ -80,6 +81,17 @@ ok(
 	'natively, the frame shares no localStorage with its top-level site',
 	JSON.stringify(native['frame/before']?.seen?.localStorage) === '["p-frame"]',
 	JSON.stringify(native['frame/before']?.seen),
+);
+ok(
+	'natively, the frame estimates its own partition only',
+	JSON.stringify(native['frame/before']?.seen?.estimate) ===
+		'{"caches":1,"fileSystem":1}' &&
+		JSON.stringify(native['top/after']?.seen?.estimate) ===
+			'{"caches":1,"fileSystem":1}',
+	JSON.stringify([
+		native['frame/before']?.seen?.estimate,
+		native['top/after']?.seen?.estimate,
+	]),
 );
 
 for (const [mode, base] of [

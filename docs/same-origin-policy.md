@@ -39,12 +39,12 @@ that reached it, so a page can tell a request that was refused before it left
 - `sop-partitions` (test/pages/sop-part.html): site B top-level, then as a
   frame in site A's page, then top-level again; each writes to and reads
   every store (and its dedicated, blob: and shared workers read them), and
-  reports the Cookie header its requests carry and its service worker
-  registrations. Natively
-  the frame's stores are keyed by the top-level site too (Chrome's
-  third-party storage partitioning, which Playwright turns off; the suite
-  turns it back on), and Chrome 152 sends third-party cookies that are not
-  `Partitioned` (measured: the frame reads and sends B's top-level cookie).
+  reports the Cookie header its requests carry, its service worker
+  registrations and what `navigator.storage.estimate()` counts. Natively the
+  frame's stores are keyed by the top-level site too (Chrome's third-party
+  storage partitioning, which Playwright turns off; the suite turns it back
+  on), and Chrome 152 sends third-party cookies that are not `Partitioned`
+  (measured: the frame reads and sends B's top-level cookie).
 
 Both suites keep a list of the cases known to differ, each with its reason;
 a listed case that reads as natively fails the suite, so the list shrinks
@@ -92,16 +92,16 @@ would not give it).
 
 ### 3. Storage and messaging partitions
 
-| Store                                                                                                                                | Chrome                        | Before                                                                                                           | Fix                             |
-| ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| localStorage, sessionStorage                                                                                                         | per origin                    | per proxied origin (worker-side store keyed by origin)                                                           |                                 |
-| IndexedDB, Cache Storage, OPFS                                                                                                       | per origin                    | per proxied origin (names suffixed)                                                                              |                                 |
-| BroadcastChannel                                                                                                                     | per origin                    | per proxied origin                                                                                               |                                 |
-| Cookies, `document.cookie`                                                                                                           | per site/host                 | per real host in the worker's jar                                                                                |                                 |
-| Web Locks                                                                                                                            | per origin                    | **leak**: one namespace for every proxied site: a lock B holds is held for A, and `query()` lists B's lock names | names scoped by origin          |
-| `navigator.storage.estimate()`                                                                                                       | the origin's usage            | counts every proxied site's usage (a megabyte B wrote shows in A's)                                              | see Left                        |
-| Third-party partitioning: B framed by A shares nothing with B top-level (localStorage, IndexedDB, caches, OPFS, locks, SharedWorker) | partitioned by top-level site | shared                                                                                                           | keyed by top-level site too     |
-| CHIPS (`Partitioned` cookies)                                                                                                        | kept per top-level site       | one jar, `Partitioned` ignored                                                                                   | jar keys them by top-level site |
+| Store                                                                                                                                | Chrome                        | Before                                                                                                           | Fix                               |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| localStorage, sessionStorage                                                                                                         | per origin                    | per proxied origin (worker-side store keyed by origin)                                                           |                                   |
+| IndexedDB, Cache Storage, OPFS                                                                                                       | per origin                    | per proxied origin (names suffixed)                                                                              |                                   |
+| BroadcastChannel                                                                                                                     | per origin                    | per proxied origin                                                                                               |                                   |
+| Cookies, `document.cookie`                                                                                                           | per site/host                 | per real host in the worker's jar                                                                                |                                   |
+| Web Locks                                                                                                                            | per origin                    | **leak**: one namespace for every proxied site: a lock B holds is held for A, and `query()` lists B's lock names | names scoped by origin            |
+| `navigator.storage.estimate()`                                                                                                       | the origin's usage            | counts every proxied site's usage (a megabyte B wrote shows in A's)                                              | counts the partition's own stores |
+| Third-party partitioning: B framed by A shares nothing with B top-level (localStorage, IndexedDB, caches, OPFS, locks, SharedWorker) | partitioned by top-level site | shared                                                                                                           | keyed by top-level site too       |
+| CHIPS (`Partitioned` cookies)                                                                                                        | kept per top-level site       | one jar, `Partitioned` ignored                                                                                   | jar keys them by top-level site   |
 
 ### 4. Document-level policy
 
@@ -259,6 +259,15 @@ Filled in commit by commit; see the CHANGELOG for each.
   Third-party cookies that are not Partitioned are sent as before, as
   Chrome 152 and 156 send them by default. Cost: a frame walks its parents
   once per document; the rest is a longer string.
+- **`navigator.storage.estimate()`** (sop-escapes: 1 case;
+  sop-partitions: 2 per mode). The StorageEstimate module answers with the
+  usage of the context's own storage key: its Cache Storage bodies (a
+  cached body is a blob, so its size is no read), its OPFS files, and its
+  IndexedDB values, 64 per object store sized and multiplied out by the
+  store's count. localStorage is not counted, as Chrome does not count it.
+  The quota is that usage plus what the browser has left for the proxy
+  origin, as natively a quota is the usage plus what is left; only the
+  types in use are in `usageDetails`.
 - **Output reuse** (`recentOutputs`, master's speed series): the worker
   gives a document the output it just gave it for the same request only
   when everything the policy decides by is the same: the client (its
@@ -273,11 +282,7 @@ Filled in commit by commit; see the CHANGELOG for each.
 Ranked by what a page could learn or do. Measured ones are listed in the
 suites' known lists with the same reason.
 
-1. **`navigator.storage.estimate()`** counts every proxied site's usage (a
-   megabyte another site stored shows in this one's). The browser keeps one
-   quota for the proxy origin; a per-site figure would need the proxy to
-   account each store's size itself.
-2. **The gate between page and worker is in the page, and cannot move out
+1. **The gate between page and worker is in the page, and cannot move out
    of it while the copies exist.** The worker exempts the inject's copies
    from CORS by their `x-stomp-load` marker (judged as the load they stand
    for: a no-cors image is read whole). The hooks drop the marker from the
@@ -303,40 +308,43 @@ suites' known lists with the same reason.
    a page-side gate, hardened as above. (Also measured: a DevTools or
    extension isolated world's fetch does not reach the service worker at
    all; the proxy server answers it, 404.)
-3. Canvas: an image of the page's own origin that redirects to another is
+2. Canvas: an image of the page's own origin that redirects to another is
    judged by its own URL (Chrome taints by the response's origin); a canvas
    tainted in one document's bundle is not known to another document's (a
    same-origin child frame's canvas drawn by its parent); a tainted
    ImageBitmap sent to a worker is clean there; `new VideoFrame()` of a
    tainting source is not refused.
-4. A no-cors response that went through another origin and came back (A to
+3. A no-cors response that went through another origin and came back (A to
    B to A) is `basic` and readable; natively it is opaque. B's redirect
    decides only that A's own resource is shown.
-5. Resource timing: a fetch's or XMLHttpRequest's entry of another origin
+4. Resource timing: a fetch's or XMLHttpRequest's entry of another origin
    is restricted even when its Timing-Allow-Origin names the page (the mark
    would show in the response headers the page reads); a response the
    worker answers has no `transferSize` or `nextHopProtocol` of its own
    (every entry, the page's own origin's too).
-6. An about:srcdoc document under a `no-referrer` policy is judged as an
+5. An about:srcdoc document under a `no-referrer` policy is judged as an
    opaque origin: its client URL names no origin the worker can read and no
    Referer names one, so the worker fails closed. A CORS answer naming the
    document's real origin is refused where Chrome accepts it (`*` works).
-7. An XMLHttpRequest with upload listeners is not preflighted for them
+6. An XMLHttpRequest with upload listeners is not preflighted for them
    (Chrome's CORS-preflight flag); the preflight cache is not keyed by the
    top-level site as Chrome's is.
-8. `:visited`: Chrome never lets script read it, and partitions it by
+7. `:visited`: Chrome never lets script read it, and partitions it by
    top-level site and frame origin; through the proxy every link is a
    proxy URL in one partition, so its timing side channels span every
    proxied site.
-9. `crossOriginIsolated`: a page that sends COOP and COEP natively gets an
+8. `crossOriginIsolated`: a page that sends COOP and COEP natively gets an
    isolated agent cluster (SharedArrayBuffer, precise timers); through the
    proxy the frame lives in the host's browsing context group, so it
    cannot.
-10. Partitions: a frame of the top-level site under a frame of another
-    site (A in B in A) is keyed as first-party; Chrome keys it apart (the
-    ancestor chain bit of its storage key and cookie partition key). The
-    worker places a request's Partitioned cookies by its client's route, so
-    the requests of a document the page made itself (a blob: or
-    `javascript:` document in a frame) carry its first-party ones, though
-    its document.cookie reads its partition's. The HTTP cache is not keyed
-    by the top-level site as Chrome's is.
+9. Partitions: a frame of the top-level site under a frame of another
+   site (A in B in A) is keyed as first-party; Chrome keys it apart (the
+   ancestor chain bit of its storage key and cookie partition key). The
+   worker places a request's Partitioned cookies by its client's route, so
+   the requests of a document the page made itself (a blob: or
+   `javascript:` document in a frame) carry its first-party ones, though
+   its document.cookie reads its partition's. `estimate()` counts IndexedDB
+   values as they are, where Chrome counts what its database takes
+   compressed on disk (a string of a megabyte of one character: 73,728
+   bytes natively, a megabyte here). The HTTP cache is not keyed by the
+   top-level site as Chrome's is.
