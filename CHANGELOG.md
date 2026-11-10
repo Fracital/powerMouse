@@ -388,6 +388,14 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   bundle is 510 KB instead of 665, the inject bundle 697 KB instead of 849.
   The CSS rewriter's output over 220 stylesheets (6.5 MB) and the rewriter
   library's answers over 499 calls are the same.
+- meriyah's 272 KB table of Unicode identifier characters is built the
+  first time a script has a character past ASCII where an identifier may
+  start or go on, instead of when meriyah loads (build.js patches its
+  source as it bundles it, and fails the build if a meriyah upgrade
+  changes the shape it patches). Each realm that holds the rewriter (the
+  service worker, each rewrite worker, a top's rewriter realm, a sandboxed
+  frame's own copy) saves it: the library costs 0.8 MB of renderer memory
+  per realm instead of 1.0.
 - `caches.match()` looks in the page's own origin's caches only. It searched
   every cache of the proxy origin, so a page (or a service worker) could
   read another proxied site's cached responses, and Stomp's own HTTP cache,

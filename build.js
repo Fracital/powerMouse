@@ -65,6 +65,56 @@ const noSourceMaps = {
 };
 
 /**
+ * meriyah builds a 272 KB table of the Unicode identifier characters when it
+ * loads (a Uint32Array outside the heap), which it reads only for a
+ * character past ASCII where an identifier may start or go on. Every realm
+ * that holds the rewriter (the service worker, each rewrite worker, a top's
+ * rewriter realm, a sandboxed frame's own copy) paid it whether or not a
+ * script it rewrote had one. The table is built the first time it is read.
+ * A meriyah whose source no longer has the shape this expects fails the
+ * build, so an upgrade has to look at it.
+ *
+ * @type {import('esbuild').Plugin}
+ */
+const lazyUnicodeTable = {
+	name: 'lazy-unicode-table',
+	setup(pluginBuild) {
+		pluginBuild.onLoad(
+			{ filter: /[\\/]meriyah[\\/]dist[\\/]meriyah\.mjs$/ },
+			async (args) => {
+				let source = await readFile(args.path, 'utf8');
+				const edits = [
+					[
+						'const unicodeLookup = ((compressed, lookup) => {',
+						'let unicodeLookup;\nconst buildUnicodeLookup = () => ((compressed, lookup) => {',
+					],
+					[
+						'const isIDContinue = (code) => (unicodeLookup[',
+						'const isIDContinue = (code) => ((unicodeLookup ??= buildUnicodeLookup())[',
+					],
+					[
+						'const isIDStart = (code) => (unicodeLookup[',
+						'const isIDStart = (code) => ((unicodeLookup ??= buildUnicodeLookup())[',
+					],
+				];
+				for (const [from, to] of edits) {
+					if (source.split(from).length !== 2)
+						throw new Error(
+							`lazy-unicode-table: meriyah no longer has \`${from}\` once; see build.js`,
+						);
+					source = source.replace(from, to);
+				}
+				if (source.split('unicodeLookup[').length !== 1)
+					throw new Error(
+						'lazy-unicode-table: meriyah reads its table somewhere else too; see build.js',
+					);
+				return { contents: source, loader: 'js' };
+			},
+		);
+	},
+};
+
+/**
  * The rewriter library (src/rewriterLib.ts: meriyah, escodegen, css-tree,
  * tldts and the rewriters on them) for the inject bundles, which import it
  * as `stomp:rewriter-lib`: bundled on its own and handed over as a function
@@ -96,7 +146,7 @@ const rewriterLib = {
 					format: 'iife',
 					globalName: '__stompLib',
 					inject: [resolve('src/libGlobals.ts')],
-					plugins: [noSourceMaps],
+					plugins: [noSourceMaps, lazyUnicodeTable],
 					sourcemap: false,
 					write: false,
 					metafile: true,
@@ -173,7 +223,7 @@ const builds = [
 ].map((options) => ({
 	...common,
 	...options,
-	plugins: [noSourceMaps, ...(options.plugins ?? [])],
+	plugins: [noSourceMaps, lazyUnicodeTable, ...(options.plugins ?? [])],
 }));
 
 await rimraf('dist');
