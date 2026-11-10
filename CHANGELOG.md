@@ -516,6 +516,19 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   non-configurable replaces the formatter (its realm's stacks are no longer
   cleaned), and one that freezes Error sees the accessor (tells suite, both
   modes, compared with the page loaded natively).
+- A stylesheet is parsed with its values, at-rule preludes and selectors
+  left as text, and only a piece that could hold a URL (a url(), a string in
+  image-set() or src(), an @import, an escape) is parsed in full where it
+  stands. The full parse of every value was nearly all of a rewrite:
+  YouTube's 3 MB stylesheet, with one url() in it, took 2 s, in the service
+  worker, where it held up every other request of the page, on every load
+  (stylesheets are not kept rewritten); it takes 0.13 s. The output is byte
+  for byte the same (142 stylesheets of twelve sites compared). YouTube's
+  home page through the proxy paints first after 1.5 s instead of 5.1 s and
+  shows its content after 5.7 s instead of 9.1 s (3.6 s instead of 7.0 s on
+  a second visit). rewriter-unit checks every shape a URL comes in and,
+  unless SKIP_TIMING, that a large sheet with one url() rewrites in under
+  three quarters of the time a full parse of it takes (about 0.45 here).
 - The rewrite cache keeps a rewritten script of up to 48 MB, 512 MB in all.
   An entry could be 8 MB at most, which never kept Discord's 13 MB bundle,
   and since a rewritten script carries its text for its functions' sources

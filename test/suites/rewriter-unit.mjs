@@ -436,6 +436,93 @@ const parses = (code) => {
 	);
 }
 {
+	// a stylesheet is parsed with its values, preludes and selectors as raw
+	// text, and only a piece that could hold a URL is parsed in full: every
+	// shape a URL comes in is still routed, and the rest is left byte for byte
+	const routes = (css) => [
+		(css.match(/\/stomp\/binary\//g) || []).length,
+		(css.match(/\/stomp\/css\//g) || []).length,
+	];
+	const cases = [
+		['a{background:url(x.png)}', [1, 0]],
+		['a{background:URL( "x.png" ) !important}', [1, 0]],
+		['@import "imp.css";', [0, 1]],
+		["@import 'a.css' layer(x) supports(display:grid);", [0, 1]],
+		['@import url(imp.css) screen;', [0, 1]],
+		['a{} @import "late.css";', [0, 1]],
+		['a{background-image:image-set("a.png" 1x, url(b.png) 2x)}', [2, 0]],
+		['@font-face{src:url(a.woff2) format("woff2"),local(x)}', [1, 0]],
+		['a{--x:url(a.png);--y: url( "b.png" )}', [2, 0]],
+		['@media (min-width:1px){a{background:url(a.png)}}', [1, 0]],
+		['@supports (background:url(a.png)){a{b:c}}', [1, 0]],
+		['@container style(--x: url(a.png)){a{b:url(c.png)}}', [2, 0]],
+		['a[href="url(x)"]{background:url(y.png)}', [1, 0]],
+		['a{background:url(a.png); b{background:url(c.png)}}', [2, 0]],
+		['a{content:"url(not)";color:red}', [0, 0]],
+	];
+	const wrong = cases
+		.map(([css, want]) => [css, routes(modifyCSS(css, url)), want])
+		.filter(([, got, want]) => got.join() !== want.join());
+	const untouched = 'a{color:red}\n@media (x){b{margin:0 !important}}';
+	ok(
+		'every shape a URL takes in a stylesheet is routed, and a sheet without one is left as written',
+		wrong.length === 0 && modifyCSS(untouched, url) === untouched,
+		JSON.stringify(wrong),
+	);
+	ok(
+		'a style attribute (a declaration list) routes its url()s the same way',
+		routes(
+			modifyCSS(
+				'background:url(a.png);--x:url(b.png);color:red',
+				url,
+				'declarationList',
+			),
+		).join() === '2,0',
+	);
+	if (process.env.SKIP_TIMING !== '1') {
+		// a large sheet with a single url(): the full parse it replaces was
+		// nearly all of the rewrite (YouTube's 3 MB stylesheet took 2 s, the
+		// lazy parse 0.13 s); a ratio to css-tree's full parse of the same text,
+		// so a slow runner does not change the verdict
+		const { parse } = await import('css-tree');
+		const rules = [];
+		for (let i = 0; i < 12000; i++)
+			rules.push(
+				`ytd-rich-grid-renderer[is-two-columns] #contents>ytd-rich-item-renderer.r${i}:not([hidden]):hover,.a${i} .b>.c~d{margin:var(--m${i % 9},${i % 9}px) calc(1px + ${i % 7}%);color:var(--yt-spec-text-primary,#0f0f0f);transition:opacity .2s cubic-bezier(.4,0,.2,1),transform .3s;font:500 1.4rem/2rem "YouTube Sans",Roboto,sans-serif}`,
+			);
+		rules.splice(6000, 0, '.icon{background:url(/icon.png) no-repeat}');
+		const sheet = rules.join('\n');
+		// the best of three, alternating, so a busy machine slows both alike
+		const time = (fn) => {
+			const start = performance.now();
+			fn();
+			return performance.now() - start;
+		};
+		let full = Infinity;
+		let lazy = Infinity;
+		let out = '';
+		for (let i = 0; i < 3; i++) {
+			full = Math.min(
+				full,
+				time(() => parse(sheet, { positions: true })),
+			);
+			lazy = Math.min(
+				lazy,
+				time(() => (out = modifyCSS(sheet, url))),
+			);
+		}
+		ok(
+			'a large stylesheet with one url() rewrites in a fraction of a full parse of it',
+			lazy < full * 0.75 && routes(out).join() === '1,0',
+			JSON.stringify({
+				bytes: sheet.length,
+				full: Math.round(full),
+				lazy: Math.round(lazy),
+			}),
+		);
+	}
+}
+{
 	// testharness's fetch_tests_from_window(win) posts to the window it was
 	// given; after a blocked window.open that is null, and the rewritten call
 	// must fail the way the original does (it threw "Function.prototype.apply
