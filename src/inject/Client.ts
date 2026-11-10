@@ -69,6 +69,20 @@ export default class Client {
 	applied: boolean;
 	/** @internal called after a response reached this context (fetch, XHR): caches that depend on the jar drop */
 	readonly responseListeners = new Set<() => void>();
+	/**
+	 * @internal Globals of this realm that a module holds behind an accessor
+	 * until the page first reads them (CanvasTaint's WebGL interfaces): each
+	 * name's function makes it the plain data property it natively is. The
+	 * Reflection module calls it before any reflective question about the
+	 * name on the window, so a page never sees the accessor.
+	 */
+	readonly lazyGlobals = new Map<string, () => void>();
+	/**
+	 * @internal Globals a module deleted and defined again (lazyGlobals), by
+	 * the key they came after: the Reflection module lists the window's keys
+	 * with each back in its native place
+	 */
+	readonly globalKeyAfter = new Map<string, PropertyKey>();
 	/** @internal how often document.cookie went to the jar (cookie-cache suite) */
 	cookieReads = 0;
 	isDOM: boolean;

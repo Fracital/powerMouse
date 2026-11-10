@@ -36,6 +36,12 @@ const toStringTag = Symbol.toStringTag;
  * hands out a WebGL context, which is the only way to one: the browser
  * makes an interface the first time anything names it, and the two WebGL
  * ones cost every frame about 90 KB of heap (an ad frame that never draws).
+ * A page can name them before any context exists (and keep
+ * `WebGLRenderingContext.prototype.texImage2D` unhooked), so the two names
+ * are accessors on the window until first read: the read gets a context
+ * of the kind from the native getContext of an OffscreenCanvas, hooks its
+ * prototype, and makes the name the data property it natively is, before
+ * the page has the interface. A frame that never names them pays nothing.
  */
 export default class CanvasTaintModule extends Module<DocumentClient> {
 	apply() {
@@ -339,6 +345,8 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		// the context prototypes looked at already: each is hooked (or not) on
 		// the first context of it a getContext hands out
 		const seen = new WeakSet<object>();
+		// a lazy WebGL global the page's first context of its kind settles
+		const resolvers = new Map<string, (value: unknown) => void>();
 		const hookGetContext = (proto: object | undefined) => {
 			const native = proto && (proto as Record<string, unknown>).getContext;
 			if (typeof native !== 'function') return;
@@ -354,13 +362,108 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 							proto,
 							toStringTag,
 						)?.value;
-						if (typeof name === 'string') hookTextures(proto, name);
+						if (typeof name === 'string') {
+							hookTextures(proto, name);
+							resolvers.get(name)?.(
+								Reflect.getOwnPropertyDescriptor(proto, 'constructor')?.value,
+							);
+						}
 					}
 					return context;
 				},
 			);
 		};
 		hookGetContext(canvasProto);
+
+		// The WebGL interfaces, behind accessors until first read: whoever
+		// reads one gets it with its texture uploads hooked already
+		const offscreenGetContext = global.OffscreenCanvas?.prototype.getContext;
+		const lazyInterface = (name: string, type: string) => {
+			let pending = true;
+			const settle = (value: unknown, present: boolean) => {
+				pending = false;
+				this.client.lazyGlobals.delete(name);
+				if (present)
+					Reflect.defineProperty(global, name, {
+						value,
+						writable: true,
+						enumerable: false,
+						configurable: true,
+					});
+				else Reflect.deleteProperty(global, name);
+			};
+			const resolve = () => {
+				if (!pending) return;
+				let found: unknown;
+				try {
+					const context =
+						offscreenGetContext &&
+						(Reflect.apply(
+							offscreenGetContext,
+							new global.OffscreenCanvas(1, 1),
+							[type],
+						) as object | null);
+					if (context) {
+						const proto = Reflect.getPrototypeOf(context);
+						if (proto) {
+							if (!seen.has(proto)) {
+								seen.add(proto);
+								hookTextures(proto, name);
+							}
+							found = Reflect.getOwnPropertyDescriptor(
+								proto,
+								'constructor',
+							)?.value;
+						}
+						// a throwaway context gives its resources back
+						(
+							context as {
+								getExtension?: (
+									name: string,
+								) => { loseContext?: () => void } | null;
+							}
+						)
+							.getExtension?.('WEBGL_lose_context')
+							?.loseContext?.();
+					}
+				} catch (error) {
+					// no WebGL here: then no page has a context to upload to
+				}
+				// without WebGL the interface cannot be had (so the name goes)
+				settle(found, found !== undefined);
+			};
+			resolvers.set(name, (value) => {
+				if (pending) settle(value, true);
+			});
+			this.client.lazyGlobals.set(name, resolve);
+			// deleted first: redefining the browser's lazy property in place
+			// makes the interface (about 85 KB a frame for the two, measured
+			// with frame-cost), deleting it does not, and the context hands it
+			// out again
+			const keys = Reflect.ownKeys(global);
+			const after = keys[keys.indexOf(name) - 1];
+			if (after !== undefined) this.client.globalKeyAfter.set(name, after);
+			Reflect.deleteProperty(global, name);
+			Reflect.defineProperty(global, name, {
+				get: proxyModule.wrapFunction(
+					function WebGLInterface() {} as () => unknown,
+					() => {
+						resolve();
+						return Reflect.get(global, name);
+					},
+				),
+				set: proxyModule.wrapFunction(
+					function WebGLInterface(_value: unknown) {} as (
+						value: unknown,
+					) => void,
+					(_target, _that, args) => settle(args[0], true),
+				),
+				enumerable: false,
+				configurable: true,
+			});
+		};
+		lazyInterface('WebGLRenderingContext', 'webgl');
+		lazyInterface('WebGL2RenderingContext', 'webgl2');
 
 		const offscreen2D = global.OffscreenCanvasRenderingContext2D?.prototype;
 		if (offscreen2D) {

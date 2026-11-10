@@ -6,6 +6,23 @@
 // case by case. `?k=` keys this run's requests in the fixture's log
 // (test/sop-server.mjs); `?only=<prefix>` runs the cases under one prefix.
 (() => {
+	// WebGL's texture uploads as a page can take them before any WebGL
+	// context exists (the first thing it does); and what a reflective read of
+	// one of the interfaces shows before anything named it
+	const webglNeighbours = (() => {
+		const keys = Object.getOwnPropertyNames(window);
+		return ['WebGLRenderingContext', 'WebGL2RenderingContext'].map(
+			(name) => keys[keys.indexOf(name) - 1] ?? null,
+		);
+	})();
+	const webglDescriptor = Object.keys(
+		Object.getOwnPropertyDescriptor(window, 'WebGL2RenderingContext') ?? {},
+	);
+	const earlyUploads = {
+		texImage2D: window.WebGLRenderingContext?.prototype.texImage2D,
+		texSubImage2D: window.WebGLRenderingContext?.prototype.texSubImage2D,
+		texImage2D2: window.WebGL2RenderingContext?.prototype.texImage2D,
+	};
 	const query = new URLSearchParams(location.search);
 	const A = location.origin;
 	const B = query.get('b');
@@ -518,6 +535,72 @@
 			return failed(error);
 		}
 	});
+	add(
+		'canvas/WebGL uploads taken before any context, of a cross-origin image',
+		async () => {
+			const element = await image(r(B, { type: 'png' }).url);
+			const result = {};
+			for (const [method, type] of [
+				['texImage2D', 'webgl'],
+				['texSubImage2D', 'webgl'],
+				['texImage2D2', 'webgl2'],
+			]) {
+				const gl = canvas().getContext(type);
+				const upload = earlyUploads[method];
+				if (!gl || !upload) {
+					result[method] = 'no webgl';
+					continue;
+				}
+				gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+				try {
+					if (method === 'texSubImage2D') {
+						gl.texImage2D(
+							gl.TEXTURE_2D,
+							0,
+							gl.RGBA,
+							1,
+							1,
+							0,
+							gl.RGBA,
+							gl.UNSIGNED_BYTE,
+							null,
+						);
+						upload.call(
+							gl,
+							gl.TEXTURE_2D,
+							0,
+							0,
+							0,
+							gl.RGBA,
+							gl.UNSIGNED_BYTE,
+							element,
+						);
+					} else
+						upload.call(
+							gl,
+							gl.TEXTURE_2D,
+							0,
+							gl.RGBA,
+							gl.RGBA,
+							gl.UNSIGNED_BYTE,
+							element,
+						);
+					result[method] = 'ok';
+				} catch (error) {
+					result[method] = failed(error);
+				}
+			}
+			return result;
+		},
+	);
+	add(
+		'canvas/a WebGL interface read reflectively first',
+		() => webglDescriptor,
+	);
+	add(
+		'canvas/where the WebGL interfaces are among the window keys',
+		() => webglNeighbours,
+	);
 	add('canvas/SVG image of another site', async () => {
 		const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
 		const element = document.createElementNS(

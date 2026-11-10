@@ -115,6 +115,8 @@ export default class ReflectionModule extends Module<Client> {
 			holder[name] = proxyModule.wrapFunction(
 				holder[name],
 				(target, that, args) => {
+					if (args[0] === global && typeof args[1] === 'string')
+						this.client.lazyGlobals.get(args[1])?.();
 					const descriptor = Reflect.apply(target, that, args) as
 						PropertyDescriptor | undefined;
 					if (!descriptor || !windowLike(args[0])) return descriptor;
@@ -128,13 +130,33 @@ export default class ReflectionModule extends Module<Client> {
 		wrapDescriptorGetter(global.Object, 'getOwnPropertyDescriptor');
 		wrapDescriptorGetter(global.Reflect, 'getOwnPropertyDescriptor');
 
+		// a global a module redefined is listed where the browser lists it
+		const inNativeOrder = (keys: PropertyKey[]) => {
+			for (const [name, after] of this.client.globalKeyAfter) {
+				const at = keys.indexOf(name);
+				const before = keys.indexOf(after);
+				if (at === -1 || before === -1 || at === before + 1) continue;
+				keys.splice(at, 1);
+				keys.splice(keys.indexOf(after) + 1, 0, name);
+			}
+			return keys;
+		};
 		global.Object.getOwnPropertyDescriptors = proxyModule.wrapFunction(
 			global.Object.getOwnPropertyDescriptors,
 			(target, that, args) => {
-				const descriptors = Reflect.apply(target, that, args) as Record<
+				if (args[0] === global)
+					for (const resolve of [...this.client.lazyGlobals.values()])
+						resolve();
+				let descriptors = Reflect.apply(target, that, args) as Record<
 					PropertyKey,
 					PropertyDescriptor
 				>;
+				if (args[0] === global && this.client.globalKeyAfter.size) {
+					const ordered: Record<PropertyKey, PropertyDescriptor> = {};
+					for (const key of inNativeOrder(Reflect.ownKeys(descriptors)))
+						ordered[key as string] = descriptors[key as string];
+					descriptors = ordered;
+				}
 				if (windowLike(args[0]))
 					for (const key of Reflect.ownKeys(descriptors))
 						if (hidden.has(key)) Reflect.deleteProperty(descriptors, key);
@@ -277,6 +299,7 @@ export default class ReflectionModule extends Module<Client> {
 				(holder as Record<string, any>)[name],
 				(target, that, args) => {
 					const keys = Reflect.apply(target, that, args) as PropertyKey[];
+					if (args[0] === global) inNativeOrder(keys);
 					return ours(args[0]) ? keys.filter((key) => !hidden.has(key)) : keys;
 				},
 			);
@@ -313,6 +336,8 @@ export default class ReflectionModule extends Module<Client> {
 				objectPrototype[name] = proxyModule.wrapFunction(
 					objectPrototype[name],
 					(target, that, args) => {
+						if (that === global && typeof args[0] === 'string')
+							this.client.lazyGlobals.get(args[0])?.();
 						const accessor = Reflect.apply(target, that, args);
 						if (!accessor || !windowLike(that) || !unforgeable(args[0]))
 							return accessor;

@@ -383,6 +383,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A page that takes `WebGLRenderingContext.prototype.texImage2D` (or
+  `texSubImage2D`, or WebGL 2's) before any WebGL context exists gets the
+  taint-checked method, as natively it gets one that refuses another site's
+  image: it got the unhooked native since the hooks moved to the first
+  context. The two interfaces stay unnamed until the page names them (a
+  frame that never does pays nothing: frame-cost reads the same heap), and
+  read as the data properties they natively are. (sop-escapes suite.)
 - A site framed by a frame of another site under its own top-level page
   (B in A in B) gets storage of its own and its own Partitioned cookies, as
   Chrome keys it (the ancestor chain bit); it shared them with that page.

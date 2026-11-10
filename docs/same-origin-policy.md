@@ -169,8 +169,18 @@ Filled in commit by commit; see the CHANGELOG for each.
   tainted, and so is a pattern or ImageBitmap made from one; a tainted
   canvas refuses `toDataURL`, `toBlob`, `getImageData` and `convertToBlob`
   with Chrome's SecurityError, and WebGL refuses a tainting source as a
-  texture. Cost: a draw is a WeakSet lookup on a canvas that is tainted
-  already, else a WeakMap lookup and a native getter call; 200,000
+  texture. WebGL's uploads are hooked on the first context of each kind
+  (naming the two interfaces costs a frame about 85 KB): a page that takes
+  `WebGLRenderingContext.prototype.texImage2D` before any context exists
+  names the interface first, which is an accessor on the window until
+  then; its first read gets a context of the kind from the native
+  `getContext`, hooks its prototype and makes the name the data property
+  it natively is (where it natively is among the window's keys, and so it
+  reads for `getOwnPropertyDescriptor`), before the page holds the method
+  (sop-escapes: the early-taken `texImage2D`, `texSubImage2D` and WebGL 2's
+  `texImage2D` refuse another site's image). Cost: a draw is a WeakSet
+  lookup on a canvas that is tainted already, else a WeakMap lookup and a
+  native getter call; 200,000
   `drawImage` calls of a same-origin image took 280 to 340 ms natively and
   295 to 320 ms proxied (noise).
 - **Web Locks** (section 3, sop-escapes: 2 cases). The Partition module
