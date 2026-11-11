@@ -233,8 +233,17 @@ const LISTS = [
 	';;a:url(b);;',
 	'',
 ];
-// inputs whose answer css-tree takes from an earlier parse: declined
-const DECLINED = ['a { b: url(c) } } d { e: url(f) }', ') a { b: url(c) }'];
+// a closing bracket with nothing open: css-tree's answer was taken from the
+// sheet it parsed before (css-parse-history suite) and the scanner declined
+// these; now it is a token like any other for both
+const STRAY = [
+	'a { b: url(c) } } d { e: url(f) }',
+	') a { b: url(c) }',
+	'a{b:url(c)} ] ) } @import "d"; e{f:url(g)}',
+	'{ b: url(]c) }\0 @media }\0 @media',
+];
+// past what the scanner covers: declined, and css-tree does the sheet
+const DECLINED = [`${'@media x{'.repeat(70)}a{b:url(c)}`];
 // and some with nothing for the rewriter to route: never scanned
 SHEETS.push(
 	'a { filter: progid:DXImageTransform.Microsoft.AlphaImageLoader(src="a.png") }',
@@ -261,11 +270,19 @@ SHEETS.push(
 		answered === wanted,
 		`${answered} of ${wanted} ${JSON.stringify(unanswered)}`,
 	);
+	let stray = 0;
+	for (const sheet of STRAY)
+		if (sameStyles(sheet, 'stylesheet', 'stray')) stray++;
+	ok(
+		'a closing bracket with nothing open is answered, and rewrites the same',
+		stray === STRAY.length && tally.differ === 0,
+		`${stray} of ${STRAY.length} ${JSON.stringify(differences[0] ?? null)}`,
+	);
 	let declined = 0;
 	for (const sheet of DECLINED)
 		if (!sameStyles(sheet, 'stylesheet', 'declined')) declined++;
 	ok(
-		'a closing bracket with nothing open is declined, and rewrites the same',
+		'blocks nested past 64 are declined, and rewrite the same',
 		declined === DECLINED.length && tally.differ === 0,
 		`${declined} of ${DECLINED.length}`,
 	);

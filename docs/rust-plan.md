@@ -480,12 +480,20 @@ href>`), one pass in place of three, with JavaScript's `\s` and ASCII-only
 case folding.
 
 The scanner declines (status 5, and css-tree parses the sheet as before)
-where css-tree's answer depends on something a port cannot see or should
-not copy: a closing bracket at the top level with nothing open (css-tree
-reads a stale entry of a buffer it reuses between parses, so the answer
-depends on the sheet parsed before), a sheet of more than 0xFFFFFF UTF-16
-units (its 24-bit token offsets wrap), blocks nested more than 64 deep (the
-port recurses), and a parse that stops advancing. None of the corpus does.
+only what is past the port: a sheet of more than 0xFFFFFF UTF-16 units
+(css-tree's 24-bit token offsets wrap), blocks nested more than 64 deep
+(the port recurses), and a parse that stops advancing. None of the corpus
+does, and 24 of 400,000 fuzzed sheets do.
+
+It first declined a closing bracket with nothing open as well, because
+css-tree's own answer for one depended on the sheet it had parsed before:
+it reads the token at index `source.length` of a buffer it keeps between
+parses and never writes there. That was a bug of the JavaScript path, not a
+limit of the port (the same sheet parsed differently from load to load,
+and the fuzz found a pair of sheets whose second never stopped parsing), so
+`src/rewriteCSS.ts` now clears the buffer after every parse
+(`css-parse-history` suite) and the scanner answers such a sheet as
+css-tree does with a clean one.
 
 The corpus on disk is 99 sheets (11.9 MB: `csscorpus`, YouTube's, CNN's),
 not the 142 this plan named: all rewrite byte for byte the same with the

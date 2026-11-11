@@ -15,9 +15,9 @@
 //! table (`TokenStream.js`) and the lazy halves of its node parsers
 //! (`lib/syntax/node/{StyleSheet,Atrule,Rule,Block,Declaration,
 //! DeclarationList,Raw}.js`), quirk for quirk, with the JavaScript names
-//! kept so the two can be read side by side. Where css-tree's answer depends
-//! on something this module cannot see (see `Fail::Decline`), it declines
-//! and the JavaScript rewriter does the sheet.
+//! kept so the two can be read side by side. Where a sheet is past what
+//! this port covers (see `Fail::Decline`), it declines and the JavaScript
+//! rewriter does the sheet.
 //!
 //! Offsets are bytes of UTF-8 here and UTF-16 units there. Every token
 //! boundary falls between characters in both (a byte of 0x80 or more is a
@@ -510,12 +510,9 @@ pub struct Piece {
 pub enum Fail {
 	/// css-tree's SyntaxError: the nearest `parseWithFallback` takes over
 	Syntax,
-	/// The JavaScript rewriter does this sheet. css-tree's answer here
-	/// depends on what its token buffer held from the parse before (a
-	/// closing bracket with nothing open, after a block closed, is matched
-	/// against a stale token), or is past what this port covers (a sheet of
-	/// 16 MB, nesting deeper than MAX_DEPTH, a token that ends past the
-	/// source).
+	/// The JavaScript rewriter does this sheet: it is past what this port
+	/// covers (a sheet of 16 MB, nesting deeper than MAX_DEPTH, a token that
+	/// ends past the source, a loop that consumed nothing).
 	Decline,
 }
 
@@ -542,9 +539,6 @@ struct Parser<'a> {
 
 fn is_opener(kind: u8) -> bool {
 	matches!(kind, FUNCTION | LEFT_PAREN | LEFT_SQUARE | LEFT_CURLY)
-}
-fn is_closer(kind: u8) -> bool {
-	matches!(kind, RIGHT_PAREN | RIGHT_SQUARE | RIGHT_CURLY)
 }
 fn pair_of(kind: u8) -> u8 {
 	match kind {
@@ -595,15 +589,16 @@ impl<'a> Parser<'a> {
 		}
 		let count = ends.len();
 		let mut balance: Vec<u32> = vec![0; count + 1];
-		// NONE stands for css-tree's `source.length`: nothing is open
+		// NONE stands for css-tree's `source.length`: nothing is open. The
+		// bracket css-tree waits for then is the pair of the token at that
+		// index of its buffer, which no parse writes and src/rewriteCSS.ts
+		// keeps at zero: none, so a closing bracket with nothing open is a
+		// token like any other
 		let mut balance_start = NONE;
 		let mut close_kind = 0u8;
 		for index in 0..count {
 			let kind = kinds[index];
 			balance[index] = balance_start;
-			if balance_start == NONE && is_closer(kind) {
-				return Err(Fail::Decline);
-			}
 			if kind == close_kind {
 				let previous = balance[balance_start as usize];
 				balance[balance_start as usize] = index as u32;
@@ -1036,9 +1031,22 @@ mod tests {
 	}
 
 	#[test]
-	fn a_stray_closer_at_the_top_is_declined() {
-		assert_eq!(scan(b"a{} } b{}", false), Err(Fail::Decline));
-		assert_eq!(scan(b") a{}", false), Err(Fail::Decline));
+	fn a_stray_closer_at_the_top_is_a_token_like_any_other() {
+		// it joins the prelude of the rule after it, as in css-tree
+		assert_eq!(
+			pieces("a{b:url(c)} } d{e:url(f)}", false),
+			vec![('V', "url(c)"), ('V', "url(f)")]
+		);
+		assert_eq!(
+			pieces(") a[b=url(] { c: url(d) }", false),
+			vec![('R', ") a[b=url(] { c: url(d) }")]
+		);
+	}
+
+	#[test]
+	fn nesting_past_the_depth_this_port_recurses_to_is_declined() {
+		let deep = "@media x{".repeat(70) + "a{b:url(c)}";
+		assert_eq!(scan(deep.as_bytes(), false), Err(Fail::Decline));
 	}
 
 	#[test]

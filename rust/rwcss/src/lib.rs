@@ -223,7 +223,7 @@ mod tests {
 
 	#[test]
 	fn a_declined_sheet_and_an_unknown_flag() {
-		assert_eq!(answer(b"} a{}", 0), Err(5));
+		assert_eq!(answer("&{".repeat(70).as_bytes(), 0), Err(5));
 		assert_eq!(answer(b"", 9), Err(6));
 	}
 }
