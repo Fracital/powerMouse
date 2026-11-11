@@ -60,46 +60,92 @@ on its frames (`FRAME_ALLOW` in demo/public/pm/main.js). Chrome never shows
 a frame of another origin the notification prompt, so in isolation mode a
 site's `Notification.requestPermission()` is dismissed (`default`).
 
-## The device comes first
+## The order of a getUserMedia answer
 
 Chrome answers `getUserMedia` in this order (measured in headless Chrome
-152 and 156, top level, a frame of another site without `allow` and with
-it, for `{ audio }`, `{ video }` and both, with the permission undecided,
-granted and denied): malformed constraints (TypeError), then the devices,
-then the policy, then the permission. It looks for a device of every kind
-the request names, and settles the constraints against them, before it
-looks at anything else, so with no microphone, or no camera, the answer
-is the same whoever asks:
+152 and 156, identical on both: top level, a frame of another site without
+`allow` and with it, with the permission undecided, granted and denied,
+with a microphone and a camera, with no camera, and with neither):
 
-| The site                                      | Every kind asked for has a device      | One has none                               |
-| --------------------------------------------- | -------------------------------------- | ------------------------------------------ |
-| top level or allowed frame, undecided         | the prompt (headless: NotAllowedError) | NotFoundError, no prompt, no state changes |
-| top level or allowed frame, granted           | the stream                             | NotFoundError                              |
-| top level or allowed frame, denied            | NotAllowedError "Permission denied"    | NotFoundError                              |
-| a frame its policy refuses, whatever the rest | NotAllowedError "Permission denied"    | NotFoundError                              |
+1. Malformed constraints, and a request for neither kind: TypeError.
+2. Audio, when asked for: no microphone is "NotFoundError: Requested
+   device not found"; constraints no microphone satisfies are
+   OverconstrainedError, its `constraint` the one that failed (`deviceId`
+   before `groupId` before the rest), its message empty.
+3. Video, when asked for, the same way.
+4. The permissions policy: "NotAllowedError: Permission denied".
+5. The permission: denied is the same NotAllowedError, undecided the
+   prompt (headless Chrome denies it, and a denied request for both denies
+   both).
 
-`{ audio: true, video: true }` with one of the two devices missing is
-NotFoundError as well, and neither permission is asked for. STomp reads
-the browser's device list (`enumerateDevices`, which names every kind the
-browser has whatever the policy and the permission) before its own policy
-and the site's state, and answers "NotFoundError: Requested device not
-found" for a kind that is not there: no host prompt, no state changed.
-Before, a frame its policy refused and a site that was denied were told
-NotAllowedError on a machine without the device (a CI runner has neither).
+A request that ends at 1 to 3 prompts nobody and changes no state, and the
+answer is the same whoever asks:
 
-Not reproduced: Chrome also settles the constraints before the policy, so
-natively a frame its policy refuses, or a site that was denied, still
-reads OverconstrainedError for constraints no device satisfies
-(`{ video: { width: { min: 99999 } } }`, an unknown exact `deviceId`) and
-TypeError for malformed ones. STomp cannot ask the browser that without
-letting it prompt or open the device, and answers NotAllowedError there.
-A site that may ask gets the browser's own answer.
+| The request                                                        | Microphone and camera           | No camera                          | Neither       |
+| ------------------------------------------------------------------ | ------------------------------- | ---------------------------------- | ------------- |
+| `{ video: { mandatory: {}, width: 1 } }`, `{}`                     | TypeError                       | TypeError                          | TypeError     |
+| malformed video, unsatisfiable audio                               | TypeError                       | TypeError                          | TypeError     |
+| `{ audio: true }`                                                  | policy, then permission         | policy, then permission            | NotFoundError |
+| `{ video: true }`, `{ audio: true, video: true }`                  | policy, then permission         | NotFoundError                      | NotFoundError |
+| `{ video: { width: { min: 99999 } } }`                             | OverconstrainedError `width`    | NotFoundError                      | NotFoundError |
+| `{ audio: { deviceId: { exact: 'nope' } } }`                       | OverconstrainedError `deviceId` | OverconstrainedError               | NotFoundError |
+| the same with `video: true`                                        | OverconstrainedError `deviceId` | OverconstrainedError (audio first) | NotFoundError |
+| `{ audio: true, video: { width: { min: 99999 } } }`                | OverconstrainedError `width`    | NotFoundError                      | NotFoundError |
+| `{ audio: { groupId: { exact: 'nope' } } }`                        | OverconstrainedError `groupId`  | OverconstrainedError               | NotFoundError |
+| `deviceId` and `groupId` both unknown                              | OverconstrainedError `deviceId` | OverconstrainedError               | NotFoundError |
+| `{ video: { groupId: { exact: 'nope' }, width: { min: 99999 } } }` | OverconstrainedError `groupId`  | NotFoundError                      | NotFoundError |
+| unsatisfiable only in an `advanced` set, or as an ideal value      | policy, then permission         | by the kinds, as above             | NotFoundError |
 
-The suite compares every request on the machine's own devices and again in
-a Chrome launched with a microphone and a camera
-(`--use-fake-device-for-media-stream`), with no camera (`=device-count=0`)
-and with no microphone (`NO_AUDIO` in test/lib.mjs: no PulseAudio server
-and an empty ALSA configuration; Chrome has no switch for it).
+"Policy, then permission" is NotAllowedError for a frame its policy
+refuses and for a denied site, the prompt for an undecided one, the stream
+for a granted one.
+
+Only the browser can make checks 1 to 3, and STomp's own answers (the
+simulated policy, the site's state, the host's prompt) must come after
+them. Calling the page's `getUserMedia` to learn them could prompt the
+user or open the device. So the controller asks for it: its document (the
+proxy origin, as the page is, so the device ids mean the same) makes the
+request in a frame whose `allow` turns the camera and the microphone off
+(`mediaVerdict` in src/controller/mediaVerdict.ts). Chrome gets as far as
+its policy there and no further: NotAllowedError says checks 1 to 3
+passed, any other error is the page's answer, with Chrome's own name,
+message and `constraint`. Nothing is prompted for and no device opens.
+The inject's `getUserMedia` then goes on to the page's policy, the site's
+state and the host's prompt, and calls the browser last. A `groupId` is
+one document's, so for the controller's frame a required `groupId`
+becomes the `deviceId`s of that group's devices, and a failure of those
+is reported as `groupId`.
+
+Before, STomp answered with its policy and the site's state first: a
+frame its policy refused and a site that was denied were told
+NotAllowedError on a machine without the device (a CI runner has
+neither), and for unsatisfiable or malformed constraints; a site the host
+had to ask for showed the host's prompt for a request that could only
+fail; and a page that read `permissions.query()` at once after a refused
+request for both kinds could still read `prompt` for one of them.
+
+Limits. The verdict costs one round trip to the controller per request,
+and the controller makes them one at a time. For each request that gets as
+far as the policy, Chrome logs "Permissions policy violation: microphone
+is not allowed in this document." (or camera) as an error in the console
+of the controller's document, the host page or in isolation mode the
+controller frame, as it does for any frame its policy refuses; a host
+whose `Reporting-Endpoints` name a default group is sent the report.
+Constraints that are not plain data (a function, a symbol) get no verdict,
+and neither does a page whose controller does not answer within 6 s:
+then STomp looks for the devices itself (`enumerateDevices` names every
+kind the browser has, whatever the policy and the permission), answers
+NotFoundError for a missing kind, and leaves the constraints to the
+browser's own call, after the policy and the permission. The constraints
+are read once more than natively (a getter in them runs again).
+
+The suite makes each of these requests as a site that has not been asked,
+as one that was refused and in a frame its policy refuses, on the
+machine's own devices and again in a Chrome launched with a microphone
+and a camera (`--use-fake-device-for-media-stream`), with no camera
+(`=device-count=0`) and with no microphone (`NO_AUDIO` in test/lib.mjs: no
+PulseAudio server and an empty ALSA configuration; Chrome has no switch
+for it), and as a granted site with fake devices.
 
 ## The devices a site reads
 
@@ -138,9 +184,17 @@ Measured in Chrome 152 and 156 with fake devices
   changed: an output plugged in is an event for a site with the microphone
   permission and for a frame allowed the microphone, none for a site that
   has not asked, one with the camera only, or a frame without `allow`.
-  (Fake devices never change: measured with Chrome on a private PipeWire
-  server without hardware, in a mount namespace with `/dev/snd` and
-  `/dev/video*` hidden, null sinks loaded with `pactl`.)
+  Chrome on Linux notices the new device when a page next lists the
+  devices, and fires the event then. Fake devices never change, so this
+  is measured, and the suite checks it, in a Chrome whose only sound
+  server is a private PipeWire one without hardware
+  (`launchPrivateSound` in test/lib.mjs: a mount namespace with `/dev/snd`,
+  `/dev/video*` and the system bus hidden, a virtual microphone, and null
+  sinks loaded with `pactl` as the outputs plugged in). Where no such
+  server can be started (a CI runner has no PipeWire) that part of the
+  suite is skipped. The camera-only case is measured by hand in the same
+  Chrome (`grantPermissions(['camera'])`, no camera needed): the proxy
+  cannot grant a site a camera that is not there.
 
 To the browser every proxied site is the proxy origin, so before this was
 handled a proxied page read the proxy origin's list:

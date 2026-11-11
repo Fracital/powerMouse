@@ -778,6 +778,13 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 			// the document's own origin, not its top's: an origin's ids are
 			// the same in any top-level site
 			if (message.op === 'deviceSalt') return deviceSalt(new URL(real).origin);
+			// the controller's document asks the browser (mediaVerdict.ts); no
+			// answer in time is no verdict
+			if (message.op === 'media')
+				return Promise.race([
+					ref.rpc.call('mediaVerdict', message.constraints),
+					new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+				]);
 			if (!SIMULATED_PERMISSIONS.includes(name)) return null;
 			if (message.op === 'request')
 				return decide(

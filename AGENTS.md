@@ -356,9 +356,12 @@ suite, and they run against the real thing:
    camera: a launch that can be granted a media permission (a suite's
    `grantPermissions`, `--use-fake-ui-for-media-stream`) runs with
    `--use-fake-device-for-media-stream`, or with no device at all (`NO_AUDIO`
-   and the mount namespace above, where a private PipeWire server with
-   `pactl load-module module-null-sink` gives devices that are no hardware,
-   for `devicechange`).
+   and the mount namespace above). Devices that change (`devicechange`)
+   come from `launchPrivateSound` in test/lib.mjs: a Chrome in a mount
+   namespace whose only sound server is a private PipeWire one without
+   hardware, with a virtual microphone and outputs plugged in by `pactl`;
+   it is null, and that part of a suite skipped, where PipeWire or user
+   namespaces are missing (the CI runner).
    `backwalk` walks real Wikipedia pages and is timing sensitive. It is not in
    CI (needs Chrome and network on the runner).
    The `wpt-cookies`, `wpt-fetch-metadata` and `wpt-referrer-policy` suites

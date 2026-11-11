@@ -65,6 +65,7 @@ import { BUILD } from '../version';
 import { compileModule } from '../wasm/module';
 import { canTraverse, traverse } from './history';
 import { controllerId, forgetControllerIds, keptControllerId } from './id';
+import { mediaVerdict } from './mediaVerdict';
 import type { StaleInfo, TransportDescriptor } from './messages';
 import { DEFAULT_SANDBOX } from './remote';
 import RewriteWorkers, {
@@ -1271,6 +1272,10 @@ export class StompController extends EventTarget {
 				replaced: async () => {
 					if (this.#port === port) this.#rpc?.abort('Controller replaced');
 				},
+				mediaVerdict: async (constraints) => [
+					await mediaVerdict(constraints),
+					[],
+				],
 				permission: async (info) => {
 					const ask = this.#init.onPermissionRequest;
 					if (!ask) return [null, []];

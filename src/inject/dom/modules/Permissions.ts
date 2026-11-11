@@ -1,5 +1,6 @@
 import {
 	PERMISSION,
+	type MediaVerdict,
 	type PermissionDecision,
 	type PermissionOp,
 	type PermissionState,
@@ -50,6 +51,13 @@ interface DeviceIds {
 	incoming(constraints: unknown): Promise<unknown>;
 	/** learn the browser's ids now, so a track's are shown as the site's */
 	learn(): Promise<void>;
+	/**
+	 * Make `plain` (a copy of what `incoming` gave, as plain data) mean the
+	 * same to another document of this origin: a groupId, which is one
+	 * document's, becomes the ids of that group's devices. Returns what the
+	 * constraint that document says failed is called in this one.
+	 */
+	elsewhere(plain: unknown): (constraint: string) => string;
 }
 
 /**
@@ -352,6 +360,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		this.userMedia(
 			request,
 			allowed,
+			(constraints) => ask<MediaVerdict>({ op: 'media', constraints }),
 			this.devices(
 				() => ask<string>({ op: 'deviceSalt' }),
 				refresh,
@@ -512,7 +521,11 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			!groupIdOf ||
 			!labelOf
 		)
-			return { incoming: async (value) => value, learn: async () => {} };
+			return {
+				incoming: async (value) => value,
+				learn: async () => {},
+				elsewhere: () => (constraint) => constraint,
+			};
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const enumerate = mediaDevices.enumerateDevices;
 		const digest = subtle.digest;
@@ -573,17 +586,33 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			}
 			return shown;
 		};
+		// the browser's devices as last read: the ids of each kind, and of each
+		// group's members by kind
+		let inputs: Record<string, Set<string>> = {};
+		let groups = new Map<string, Record<string, string[]>>();
 		/** the browser's devices, their ids known both ways */
 		const learn = async (): Promise<void> => {
 			try {
+				const ofKind: Record<string, Set<string>> = {};
+				const ofGroup = new Map<string, Record<string, string[]>>();
 				for (const device of (await Reflect.apply(
 					enumerate,
 					Reflect.apply(mediaOf!, navigator, []),
 					[],
 				)) as MediaDeviceInfo[]) {
-					await show('deviceId', Reflect.apply(deviceIdOf, device, []));
-					await show('groupId', Reflect.apply(groupIdOf, device, []));
+					const kind = Reflect.apply(kindOf, device, []) as string;
+					const id = Reflect.apply(deviceIdOf, device, []) as string;
+					const group = Reflect.apply(groupIdOf, device, []) as string;
+					await show('deviceId', id);
+					await show('groupId', group);
+					if (id === '') continue;
+					(ofKind[kind] ??= new Set()).add(id);
+					let members = ofGroup.get(group);
+					if (!members) ofGroup.set(group, (members = {}));
+					(members[kind] ??= []).push(id);
 				}
+				inputs = ofKind;
+				groups = ofGroup;
 			} catch (error) {
 				// no list: no id is known, and none names a device
 			}
@@ -964,7 +993,67 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			}
 		}
 
+		// the ids a constraint requires, as the browser reads them: text
+		const exactOf = (value: unknown): string[] | null => {
+			if (value === null || typeof value !== 'object' || isArray(value))
+				return null;
+			const exact = (value as Record<string, unknown>).exact;
+			if (exact === undefined || exact === null) return null;
+			const out: string[] = [];
+			if (isArray(exact))
+				for (let i = 0; i < exact.length; i++) out[i] = `${exact[i]}`;
+			else out[0] = `${exact}`;
+			return out.length ? out : null;
+		};
+		const KINDS = [
+			['audio', 'audioinput'],
+			['video', 'videoinput'],
+		];
+		// names no device anywhere: only ever said to the other document
+		const NO_DEVICE = 'no device of that group';
+		const elsewhere = (plain: unknown) => {
+			// the kinds whose deviceId now stands for a groupId
+			const stands: string[] = [];
+			const known = (kind: string, id: string) =>
+				inputs[kind]?.has(id) || LITERAL.has(id);
+			const sets = (
+				plain !== null && typeof plain === 'object' ? plain : {}
+			) as Record<string, Record<string, unknown> | null | undefined>;
+			for (const [member, kind] of KINDS) {
+				const set = sets[member];
+				if (set === null || typeof set !== 'object') continue;
+				// an advanced set fails no request
+				if (isArray(set.advanced))
+					for (const entry of set.advanced)
+						if (entry !== null && typeof entry === 'object')
+							delete (entry as Record<string, unknown>).groupId;
+				const required = exactOf(set.groupId);
+				delete set.groupId;
+				if (!required) continue;
+				const own = exactOf(set.deviceId);
+				// a deviceId that names no device fails first, as it is
+				if (own && !own.some((id) => known(kind, id))) continue;
+				const ids: string[] = [];
+				for (const group of required)
+					for (const id of groups.get(group)?.[kind] ?? [])
+						if (!own || own.includes(id)) ids.push(id);
+				set.deviceId = { exact: ids.length ? ids : [NO_DEVICE] };
+				stands.push(member);
+			}
+			return (constraint: string) => {
+				if (constraint !== 'deviceId' || !stands.length) return constraint;
+				// the browser settles audio before video
+				for (const [member, kind] of KINDS) {
+					const required = exactOf(sets[member]?.deviceId);
+					if (required && !required.some((id) => known(kind, id)))
+						return stands.includes(member) ? 'groupId' : constraint;
+				}
+				return constraint;
+			};
+		};
+
 		return {
+			elsewhere,
 			incoming: async (constraints) => {
 				if (constraints === null || typeof constraints !== 'object')
 					return constraints;
@@ -981,11 +1070,15 @@ export default class PermissionsModule extends Module<DocumentClient> {
 
 	/**
 	 * getUserMedia asks for the camera and the microphone it names first.
-	 * Chrome looks for a device of each kind before it looks at the policy
-	 * or the permission (measured, docs/permissions.md): with no microphone
-	 * the request ends in NotFoundError for a site that may ask, one that was
-	 * denied and a frame its policy refuses alike, nobody is asked and no
-	 * state changes. So the refusals here come after the same look.
+	 * Chrome settles a request in this order (measured, docs/permissions.md):
+	 * malformed constraints (TypeError), the devices and the constraints
+	 * against them (NotFoundError with no device of a kind,
+	 * OverconstrainedError), the policy, the permission. With no microphone
+	 * the request ends in NotFoundError for a site that may ask, one that
+	 * was denied and a frame its policy refuses alike, nobody is asked and
+	 * no state changes. So the refusals here, and the host's prompt, come
+	 * after the browser's own answer to those first checks (`verdict`, the
+	 * controller's mediaVerdict).
 	 */
 	userMedia(
 		request: (
@@ -995,6 +1088,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			| { call: false; dismissed: boolean }
 		>,
 		allowed: (name: string) => boolean,
+		verdict: (constraints: unknown) => Promise<MediaVerdict | null>,
 		deviceIds: DeviceIds,
 	) {
 		const global = this.client.global;
@@ -1028,6 +1122,47 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				return false;
 			}
 		};
+		const Overconstrained = (
+			global as unknown as {
+				OverconstrainedError: new (
+					constraint: string,
+					message?: string,
+				) => Error;
+			}
+		).OverconstrainedError;
+		const isArray = global.Array.isArray;
+		// the constraints as plain data a message carries, read as the browser
+		// reads them (inherited members too); undefined when they hold
+		// anything else
+		const plainOf = (value: unknown): unknown => {
+			const copy = (from: unknown, depth: number): unknown => {
+				if (from === null || typeof from !== 'object') {
+					if (
+						typeof from === 'function' ||
+						typeof from === 'symbol' ||
+						typeof from === 'bigint'
+					)
+						throw new RangeError('not plain');
+					return from;
+				}
+				if (depth > 8) throw new RangeError('not plain');
+				if (isArray(from)) {
+					const list: unknown[] = [];
+					for (let i = 0; i < from.length; i++)
+						list[i] = copy(from[i], depth + 1);
+					return list;
+				}
+				const out: Record<string, unknown> = {};
+				for (const key in from)
+					out[key] = copy((from as Record<string, unknown>)[key], depth + 1);
+				return out;
+			};
+			try {
+				return copy(value, 0);
+			} catch (error) {
+				return undefined;
+			}
+		};
 		Reflect.defineProperty(prototype, 'getUserMedia', {
 			...Reflect.getOwnPropertyDescriptor(prototype, 'getUserMedia'),
 			value: proxyModule.wrapFunction(
@@ -1049,7 +1184,24 @@ export default class PermissionsModule extends Module<DocumentClient> {
 							dismissed ? 'Permission dismissed' : 'Permission denied',
 							'NotAllowedError',
 						);
-					if (await missing(that, names))
+					// what the browser answers before its policy and its permission
+					// (in a frame of the controller's document: `elsewhere`)
+					const plain = plainOf(constraints);
+					const here = plain === undefined ? null : deviceIds.elsewhere(plain);
+					const first = here ? await verdict(plain) : null;
+					if (first?.name === 'TypeError')
+						throw new global.TypeError(first.message);
+					if (first?.name === 'OverconstrainedError')
+						throw new Overconstrained(
+							here!(first.constraint ?? ''),
+							first.message,
+						);
+					if (
+						first?.name === 'NotFoundError' ||
+						// no verdict (a host without the check, constraints no
+						// message carries): the devices at least
+						(first?.name !== 'NotAllowedError' && (await missing(that, names)))
+					)
 						throw new global.DOMException(
 							'Requested device not found',
 							'NotFoundError',
@@ -1064,7 +1216,9 @@ export default class PermissionsModule extends Module<DocumentClient> {
 						await deviceIds.learn();
 						return stream;
 					} catch (error) {
-						void answer.settle(
+						// the site's states are what the refusal made them by the
+						// time the page hears of it, as the browser's are
+						await answer.settle(
 							(error as DOMException)?.name === 'NotAllowedError'
 								? false
 								: null,

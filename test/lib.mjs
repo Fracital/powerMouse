@@ -11,7 +11,16 @@
 //   FIXTURE  base URL of test/fixture.mjs (default http://127.0.0.1:8084/)
 //   CHROME   Chrome binary (default /usr/bin/google-chrome)
 //   SHOTS    when set, suites write screenshots to test/out/
-import { mkdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import {
+	chmodSync,
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
@@ -104,6 +113,119 @@ export async function launch(
 		],
 		...(scrollbars ? { ignoreDefaultArgs: ['--hide-scrollbars'] } : {}),
 	});
+}
+
+// Chrome in a mount namespace where no real device is reachable: every
+// camera node is /dev/null, /dev/snd is empty, the system bus (Bluetooth
+// devices) is out of sight, and the only sound server is a PipeWire one
+// started here with its session manager, which finds no hardware. Any step
+// that fails ends the launch (set -e): Chrome never starts beside real
+// devices. Each process dies with its parent, so nothing outlives the
+// launcher.
+const PRIVATE_SOUND = `#!/bin/sh
+exec unshare -Urm --kill-child sh -c '
+set -e
+for v in /dev/video*; do
+	if [ -e "$v" ]; then mount --bind /dev/null "$v"; fi
+done
+if [ -d /dev/snd ]; then mount -t tmpfs none /dev/snd; fi
+if [ -d /run/dbus ]; then mount -t tmpfs none /run/dbus; fi
+unset DBUS_SESSION_BUS_ADDRESS PIPEWIRE_REMOTE PIPEWIRE_RUNTIME_DIR PULSE_RUNTIME_PATH
+export XDG_RUNTIME_DIR="$0" PULSE_SERVER="unix:$0/pulse/native" ALSA_CONFIG_PATH=/dev/null
+setpriv --pdeathsig KILL pipewire >"$0/pipewire.log" 2>&1 &
+setpriv --pdeathsig KILL pipewire-pulse >"$0/pulse.log" 2>&1 &
+i=0
+while [ ! -S "$0/pulse/native" ]; do
+	i=$((i + 1))
+	[ "$i" -lt 100 ]
+	sleep 0.1
+done
+setpriv --pdeathsig KILL wireplumber >"$0/wireplumber.log" 2>&1 &
+setpriv --pdeathsig KILL "$@"
+' "$STOMP_SOUND_DIR" "$STOMP_SOUND_CHROME" "$@"
+`;
+
+/**
+ * Headless Chrome whose devices can change: fake devices never do, and a
+ * test must never reach the machine's real ones. Its only sound server is
+ * a private PipeWire one without hardware (see PRIVATE_SOUND), which is
+ * given one virtual microphone, and it has no camera. `plug()` adds a
+ * virtual output; Chrome on Linux notices it when a page next lists the
+ * devices. Null where that cannot be had (no pipewire, pipewire-pulse,
+ * wireplumber, pactl, unshare or setpriv, no user namespaces, or a server
+ * that has any device not made here), as on a CI runner.
+ */
+export async function launchPrivateSound(args = []) {
+	let dir = null;
+	let browser = null;
+	try {
+		for (const tool of ['pipewire', 'pipewire-pulse', 'wireplumber', 'pactl'])
+			execFileSync(tool, ['--version'], { stdio: 'ignore' });
+		execFileSync(
+			'unshare',
+			['-Urm', 'setpriv', '--pdeathsig', 'KILL', 'true'],
+			{
+				stdio: 'ignore',
+			},
+		);
+		// a short path: a socket's is at most 107 bytes
+		const where = (dir = mkdtempSync(join(tmpdir(), 'stomp-sound-')));
+		const wrapper = join(where, 'chrome');
+		writeFileSync(wrapper, PRIVATE_SOUND);
+		chmodSync(wrapper, 0o755);
+		browser = await chromium.launch({
+			executablePath: wrapper,
+			headless: true,
+			env: {
+				...process.env,
+				STOMP_SOUND_DIR: where,
+				STOMP_SOUND_CHROME: CHROME,
+			},
+			args: [
+				'--no-sandbox',
+				'--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE *.localhost, EXCLUDE 127.0.0.1',
+				...args,
+			],
+		});
+		const pactl = (...command) =>
+			execFileSync('pactl', command, {
+				env: { ...process.env, PULSE_SERVER: `unix:${where}/pulse/native` },
+				encoding: 'utf8',
+			});
+		const sink = (...properties) =>
+			pactl('load-module', 'module-null-sink', ...properties);
+		sink('media.class=Audio/Source/Virtual', 'sink_name=microphone');
+		// the session manager has looked for hardware by now: every device
+		// of the server must be one made here, or nothing is run on it
+		await sleep(1000);
+		const names = ['sources', 'sinks'].flatMap((kind) =>
+			pactl('list', 'short', kind)
+				.split('\n')
+				.filter(Boolean)
+				.map((line) => line.split('\t')[1]),
+		);
+		if (
+			!names.includes('microphone') ||
+			names.some(
+				(name) => !/^(auto_null|microphone|output\d+)(\.monitor)?$/.test(name),
+			)
+		)
+			throw new Error(`devices not made here: ${names.join(', ')}`);
+		let outputs = 0;
+		const launched = browser;
+		return {
+			browser,
+			plug: () => sink(`sink_name=output${++outputs}`),
+			close: async () => {
+				await launched.close();
+				rmSync(where, { recursive: true, force: true });
+			},
+		};
+	} catch (error) {
+		await browser?.close().catch(() => {});
+		if (dir) rmSync(dir, { recursive: true, force: true });
+		return null;
+	}
 }
 
 /**

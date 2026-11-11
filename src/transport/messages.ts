@@ -364,7 +364,22 @@ export type PermissionOp =
 	| {
 			/** the salt of the document's origin, for the device ids it reads */
 			op: 'deviceSalt';
+	  }
+	| {
+			/**
+			 * what Chrome answers getUserMedia(`constraints`) before the policy
+			 * and the permission (the controller's mediaVerdict)
+			 */
+			op: 'media';
+			constraints: unknown;
 	  };
+/** the error a getUserMedia request ends in, as its fields */
+export interface MediaVerdict {
+	name: string;
+	message: string;
+	/** an OverconstrainedError's */
+	constraint?: string;
+}
 export interface PermissionStates {
 	site: string;
 	states: Record<string, PermissionState>;
@@ -668,6 +683,11 @@ export type Controllerbound = {
 	 * asks the user (true grants, false denies, null: no answer)
 	 */
 	permission: [PermissionRequestInfo, boolean | null];
+	/**
+	 * what the browser answers getUserMedia(constraints) before its policy
+	 * and permission checks (src/controller/mediaVerdict.ts); null: none
+	 */
+	mediaVerdict: [unknown, MediaVerdict | null];
 };
 
 /** a transport's response on its way to a RemoteTransport: a streamed body travels on a port of its own (bodyPort.ts) */

@@ -845,6 +845,22 @@ sinkId })` and made in a track's settings, capabilities and constraints
   `speaker-selection` is in its `allow`; the demo's frames name it), and
   `devicechange` fires only where the site may read what changed.
   docs/permissions.md has the measurements; permissions suite.
+- `getUserMedia` answers in Chrome's order all the way: malformed
+  constraints (TypeError), then for audio and then for video a missing
+  device (NotFoundError) or constraints no device satisfies
+  (OverconstrainedError, with Chrome's `constraint`), then the permissions
+  policy, then the permission (measured on Chrome 152 and 156). The first
+  three are the browser's own answer, which the controller gets from a frame
+  of its document whose `allow` turns the camera and the microphone off:
+  Chrome stops at its policy there, so nothing is prompted for and no device
+  opens. Before, a frame its policy refused and a denied site read
+  NotAllowedError for a request Chrome ends in TypeError or
+  OverconstrainedError, a site the host had to ask for showed the host's
+  prompt for constraints that could only fail, and after a refused request
+  for both kinds `permissions.query()` could still read `prompt` for one of
+  them for a moment. permissions suite: every request as a site that has not
+  asked, a refused one, a granted one and a frame its policy refuses, with
+  both devices, no camera and no microphone.
 - Client hints follow Chrome per proxied origin. A top-level page's
   `Accept-CH` is kept for its real origin (not the proxy's, which every
   proxied site shares) and applies at once to its own subresources and to

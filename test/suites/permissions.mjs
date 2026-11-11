@@ -23,11 +23,19 @@
 //   the suite passed on one and failed on the other). The requests are
 //   compared on the machine's own devices and again in a Chrome with a
 //   microphone and a camera, with no camera, and with no microphone.
+// - Chrome settles the constraints before the policy and the permission
+//   too (TypeError, OverconstrainedError): the ORDER requests are made
+//   before the site is asked anything and after it was refused, in each of
+//   those Chromes, and by a granted site.
+// - A site reads its own devices (ids per origin, named only where it may
+//   use them), and hears devicechange only where it may read what changed
+//   (on a private sound server without hardware, where there is one).
 import { createServer } from 'node:http';
 import {
 	done,
 	HOST,
 	launch,
+	launchPrivateSound,
 	NO_AUDIO,
 	ok,
 	openDemo,
@@ -57,6 +65,45 @@ const NAMES = [
 	'payment-handler',
 ];
 
+// requests Chrome ends before it looks at the permissions policy or the
+// permission (docs/permissions.md), and two it does not: malformed
+// constraints, constraints no device satisfies (audio is settled before
+// video), a constraint only an advanced set or an ideal value names
+const ORDER = {
+	malformed: { video: { mandatory: {}, width: 1 } },
+	malformedAudio: { audio: { mandatory: {}, deviceId: 'x' } },
+	notAString: { audio: { deviceId: { exact: {} } } },
+	neither: {},
+	overVideo: { video: { width: { min: 99999 } } },
+	overAudio: { audio: { deviceId: { exact: 'nope' } } },
+	malformedOver: {
+		audio: { deviceId: { exact: 'nope' } },
+		video: { mandatory: {}, width: 1 },
+	},
+	overAudioVideo: { audio: { deviceId: { exact: 'nope' } }, video: true },
+	audioOverVideo: { audio: true, video: { width: { min: 99999 } } },
+	overBoth: {
+		audio: { deviceId: { exact: 'nope' } },
+		video: { width: { min: 99999 } },
+	},
+	overGroup: { audio: { groupId: { exact: 'nope' } } },
+	overGroupWidth: {
+		video: { groupId: { exact: 'nope' }, width: { min: 99999 } },
+	},
+	overIdGroup: {
+		audio: { deviceId: { exact: 'nope' }, groupId: { exact: 'nope' } },
+	},
+	overGroupVideo: {
+		audio: { groupId: { exact: 'nope' } },
+		video: { width: { min: 99999 } },
+	},
+	advanced: {
+		audio: { advanced: [{ groupId: { exact: 'nope' } }] },
+		video: { advanced: [{ width: { min: 99999 } }] },
+	},
+	ideal: { video: { width: 99999 } },
+};
+
 const probe = `<!doctype html><title>permissions</title><script>
 (async () => {
 	const ask = new URLSearchParams(location.search).get('ask') || '';
@@ -82,9 +129,23 @@ const probe = `<!doctype html><title>permissions</title><script>
 			);
 		});
 	const media = (constraints) => Promise.race([
-		navigator.mediaDevices.getUserMedia(constraints).then(() => 'stream', (error) => error.name + ': ' + error.message),
+		navigator.mediaDevices.getUserMedia(constraints).then(() => 'stream', (error) => error.name + ': ' + error.message + (error.constraint ? ' [' + error.constraint + ']' : '')),
 		new Promise((resolve) => setTimeout(() => resolve('pending'), 8000)),
 	]);
+	// each request, and whether it changed what the site may do
+	const order = async () => {
+		const answers = {};
+		for (const [name, constraints] of Object.entries(${JSON.stringify(ORDER)})) {
+			const state = async () => (await navigator.permissions.query({ name: 'microphone' })).state + ' ' + (await navigator.permissions.query({ name: 'camera' })).state;
+			const before = await state();
+			answers[name] = await media(constraints);
+			const after = await state();
+			if (after !== before) answers[name] += ' (' + before + ' -> ' + after + ')';
+		}
+		return answers;
+	};
+	// before the site was asked anything, and again after it was refused
+	if (ask.includes('order')) out.orderFirst = await order();
 	if (ask.includes('mic')) {
 		out.devices = [...new Set((await navigator.mediaDevices.enumerateDevices()).map((device) => device.kind))].sort().join(' ');
 		out.mic = await media({ audio: true });
@@ -93,6 +154,7 @@ const probe = `<!doctype html><title>permissions</title><script>
 	}
 	if (ask.includes('cam')) out.cam = await media({ video: true });
 	if (ask.includes('both')) out.both = await media({ audio: true, video: true });
+	if (ask.includes('order')) out.order = await order();
 	if (ask.includes('notify'))
 		out.notify = await Promise.race([
 			Notification.requestPermission(),
@@ -134,6 +196,11 @@ const ops = {
 		for (const track of window.stream ? window.stream.getTracks() : []) track.stop();
 		window.stream = null;
 	},
+	watch: async () => {
+		window.changes = 0;
+		media.addEventListener('devicechange', () => window.changes++);
+	},
+	changes: async () => window.changes,
 	sink: async (id) => {
 		const out = { selectAudioOutput: 'selectAudioOutput' in media };
 		const element = new Audio();
@@ -197,7 +264,7 @@ const CASES = [
 			`${base}/frame?allow=${encodeURIComponent('geolocation; camera; microphone')}`,
 	],
 ];
-const ASK = 'geo,mic,cam,both,notify';
+const ASK = 'geo,mic,cam,both,order,notify';
 const ASKING = [
 	['a top-level site that asks', (base) => `${base}/probe?ask=${ASK}`],
 	['a frame of another site that asks', (base) => `${base}/frame?ask=${ASK}`],
@@ -452,6 +519,16 @@ async function deviceRows({ visit, grant, after }) {
 		ownA,
 	);
 	await a('stop');
+	// Chrome's answer to the constraints comes before the permission, so a
+	// granted site gets it too
+	rows['a granted site, malformed constraints'] = await a(
+		'open',
+		ORDER.malformed,
+	);
+	rows['a granted site, constraints no camera satisfies'] = await a(
+		'open',
+		ORDER.audioOverVideo,
+	);
 	rows['its own output id as a sink'] = named(await a('sink', outA), ownA);
 	rows['default as a sink'] = named(await a('sink', 'default'), ownA);
 
@@ -467,6 +544,13 @@ async function deviceRows({ visit, grant, after }) {
 		await b('sink', outA),
 		idNames(listA, "the first site's").filter(([id]) => HEX.test(id)),
 	);
+	// an id that is not this site's own is no device's: Chrome says so
+	// before anybody is asked
+	rows["getUserMedia with the first site's microphone id, before it is asked"] =
+		named(
+			await b('open', { audio: { deviceId: { exact: micA } } }),
+			idNames(listA, "the first site's").filter(([id]) => HEX.test(id)),
+		);
 	await grant(b, B, ['microphone', 'camera']);
 	const listB = await b('list');
 	rows['the other site granted both'] = shape(listB);
@@ -516,6 +600,12 @@ async function deviceRows({ visit, grant, after }) {
 	);
 	frame = await visit(`${A}/frame?page=devices`);
 	rows['the same frame without allow'] = shape(await frame('list'));
+	rows['the frame without allow, constraints no microphone satisfies'] =
+		await frame('open', ORDER.overAudioVideo);
+	rows['the frame without allow, constraints a device satisfies'] = await frame(
+		'open',
+		ORDER.ideal,
+	);
 	rows['default as a sink in the frame without allow'] = named(
 		await frame('sink', 'default'),
 		[],
@@ -642,6 +732,107 @@ for (const [mode, base] of MODES) {
 			`the first site kept ${shared(proxied.cleared.a, proxied.listA)} of ${idsOf(proxied.listA).length}, the other ${shared(proxied.cleared.b, proxied.listB)} of ${idsOf(proxied.listB).length}`,
 	);
 	await tab.context().close();
+}
+
+// devicechange: Chrome fires it only where the site may read the devices
+// that changed. Fake devices never change and a test never reaches the
+// machine's real ones, so this part runs on a private sound server
+// without hardware (launchPrivateSound), where a virtual output can be
+// plugged in, and is left out where there is none (a CI runner). Chrome
+// on Linux notices a new device when a page lists the devices again.
+const sound = await launchPrivateSound();
+if (!sound)
+	console.log(
+		'SKIP permissions, devicechange: no private PipeWire server can be started here',
+	);
+else {
+	const CHANGES = [
+		['a site that has not asked', `${A}/devices`, false],
+		['a site granted the microphone', `${A}/devices`, true],
+		[
+			'a frame of another site without allow, its top granted',
+			`${A}/frame?page=devices`,
+			true,
+		],
+		[
+			'a frame of another site allowed the microphone, its top granted',
+			`${A}/frame?page=devices&allow=microphone`,
+			true,
+		],
+	];
+	/** what the document behind `run` hears of an output plugged in */
+	const heard = async (run) => {
+		await run('watch');
+		const outputs = async () =>
+			(await run('list')).filter(
+				(device) => device.kind === 'audiooutput' && device.label,
+			).length;
+		const before = await outputs();
+		sound.plug();
+		// heard at once where it is heard at all; 2 s say it is not
+		let after = before;
+		let changes = 0;
+		for (let i = 0; i < 8 && !(changes && after > before); i++) {
+			await sleep(250);
+			after = await outputs();
+			changes = await run('changes');
+		}
+		return `${changes} devicechange, ${after - before} more outputs named`;
+	};
+	const nativeHeard = new Map();
+	for (const [name, url, grant] of CHANGES) {
+		const context = await sound.browser.newContext();
+		if (grant)
+			for (const origin of [A, B])
+				await context.grantPermissions(['microphone'], { origin });
+		const page = await context.newPage();
+		await page.goto(stamped(url));
+		nativeHeard.set(
+			name,
+			await heard(await runIn(() => page.frames(), visits)),
+		);
+		await context.close();
+	}
+	ok(
+		'natively, devicechange: an output plugged in is an event for a site granted the microphone, none for one that has not asked',
+		nativeHeard.get(CHANGES[1][0]) === '1 devicechange, 1 more outputs named' &&
+			nativeHeard.get(CHANGES[0][0]) === '0 devicechange, 0 more outputs named',
+		describe([...nativeHeard]),
+	);
+	for (const [mode, base] of MODES)
+		for (const [name, url, grant] of CHANGES) {
+			const tab = await openDemo(sound.browser, base);
+			await tab.context().grantPermissions(['microphone'], {
+				origin: new URL(base).origin,
+			});
+			let proxied;
+			try {
+				if (grant) {
+					// the site is granted through the host's prompt, on a document
+					// of its own
+					await submitLanding(tab, stamped(`${A}/devices`));
+					const run = await runIn(proxiedFrames(tab), visits);
+					const opened = run('open', { audio: true });
+					const allow = await tab.waitForSelector('#permissionPrompt .allow', {
+						timeout: 15000,
+					});
+					await allow.click();
+					await opened;
+					await run('stop');
+					await submitOmni(tab, stamped(url));
+				} else await submitLanding(tab, stamped(url));
+				proxied = await heard(await runIn(proxiedFrames(tab), visits));
+			} catch (error) {
+				proxied = String(error);
+			}
+			ok(
+				`${mode}, devicechange: ${name}, as natively`,
+				proxied === nativeHeard.get(name),
+				`\n  proxied ${proxied}\n  native  ${nativeHeard.get(name)}`,
+			);
+			await tab.context().close();
+		}
+	await sound.close();
 }
 
 server.close();
