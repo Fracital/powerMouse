@@ -136,6 +136,7 @@ import {
 	NavigationHint,
 	takeNavigationHint,
 } from './navigationHints';
+import { ORB_SNIFF_BYTES, orbByHeaders, orbSniff, peekBody } from './orb';
 import type { RewriteCache, RewriteCacheOutcome } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
 import Router from './Router';
@@ -1770,6 +1771,34 @@ function genericForward(
 		) {
 			await response.body?.cancel().catch(() => {});
 			return refuse('blocked by Cross-Origin-Resource-Policy');
+		}
+		// a script of another origin that is HTML, XML or JSON by its type
+		// and first bytes is not handed over (opaque response blocking): the
+		// element fires `error`, as natively
+		if (
+			fromNetwork &&
+			chainCrossed &&
+			policyMode === 'no-cors' &&
+			serverRequest.destination === 'script' &&
+			!REDIRECT_STATUSES.includes(response.status)
+		) {
+			let verdict = orbByHeaders(response.headers, response.status);
+			if (verdict === 'sniff' && response.body) {
+				const { head, body } = await peekBody(response.body, ORB_SNIFF_BYTES);
+				const peeked: typeof response = new Response(body, {
+					status: response.status,
+					statusText: response.statusText,
+					headers: response.headers,
+				});
+				peeked.rawHeaders = response.rawHeaders;
+				response = peeked;
+				if (orbSniff(response.headers, response.status, head))
+					verdict = 'block';
+			}
+			if (verdict === 'block') {
+				await response.body?.cancel().catch(() => {});
+				return refuse('blocked by opaque response blocking');
+			}
 		}
 
 		// the report is made now (its time is to the headers) and sent once the

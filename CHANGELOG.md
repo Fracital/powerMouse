@@ -459,6 +459,12 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   `<anonymous>` where the page's URL stands natively, because a script
   whose text was its own rewrite was taken for one already rewritten and
   skipped when the markup's scripts were named. (error-surfaces suite.)
+- Opaque response blocking: a classic script of another origin whose
+  response is HTML, XML or JSON by its type and first bytes (Chrome's rules:
+  the never-sniffed types, `nosniff`, the JSON prefixes sites put before
+  their data) is not handed to the page, and the element fires `error` as
+  natively, where it fired `load` after failing to parse. (sop-escapes
+  suite.)
 - A video or sound behind a redirect loads: Chrome's media loader gives up
   on a load over 64 KiB whose redirect a service worker answered with
   `Content-Length: 0` (measured with a plain worker), so a redirect goes out
