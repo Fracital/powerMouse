@@ -14,16 +14,20 @@ import {
 import { provideRewriters } from './rewriters';
 import { routeBinary } from './routeURL';
 import StompURL from './StompURL';
-import { rewriteStyles, rewriteValueURLs } from './wasm/scanner';
+import {
+	rewriteStyles,
+	rewriteValueURLs,
+	rewritingStyles,
+} from './wasm/scanner';
 
 export { restoreCSSValueURLs, routeCSS } from './cssURLs';
 
 /**
  * Asks for the wasm backend (`rewriter: 'wasm'`), and is told which backend
  * did the rewrite: the module (rust/rwcss, `wasm`) or the JavaScript below
- * (`js`: this thread holds no module, the module declined the text, or it
- * was in a call already). Left as it was when there was nothing to look
- * into. The output is the same either way, byte for byte.
+ * (`js`: this thread holds no module, or the module was in a call
+ * already). Left as it was when there was nothing to look into. The output
+ * is the same either way, byte for byte.
  */
 export interface StyleRewrittenBy {
 	by?: 'wasm' | 'js';
@@ -33,8 +37,10 @@ export interface StyleRewrittenBy {
  * Route every url() in a raw CSS value (cssURLs' rewriteCSSValueURLs, the
  * expression): in the module when `told` asks for it and this thread holds
  * it, in JavaScript otherwise. The module's answer is the expression's, but
- * on a single value the expression is the faster of the two (2.7 against
- * 4.7 microseconds: the text crosses into the module and back), so the
+ * on a single value the expression is the faster of the two (2.9 against
+ * 3.7 microseconds, 2.3 of either being the routing of the URL itself: the
+ * call into the module and the text of the URL coming back out cost 0.6
+ * before anything is answered, which is all the expression takes), so the
  * callers of this build do not ask.
  */
 export function rewriteCSSValueURLs(
@@ -141,8 +147,8 @@ export function modifyCSS(
 	const lazy = LAZY_CONTEXTS.includes(context);
 	if (lazy && !MAY_ROUTE.test(script)) return script;
 	// The module does all of what follows (css-tree's tokenizer and parsers
-	// ported, the same routing asked of this thread URL by URL), and what it
-	// cannot do the same it declines.
+	// ported, the same routing asked of this thread URL by URL). It throws
+	// where css-tree's parse would never end, for the caller's own catch.
 	if (told && lazy) {
 		const output = rewriteStyles(script, url, context);
 		told.by = output === null ? 'js' : 'wasm';
@@ -302,4 +308,10 @@ export function modifyCSS(
 	return edits.result();
 }
 
-provideRewriters({ modifyCSS });
+// a stylesheet inside a stylesheet (the data: URL of an @import, which
+// routeCSS rewrites through the registry) asks for the backend the sheet
+// around it was asked for
+provideRewriters({
+	modifyCSS: (script, url, context) =>
+		modifyCSS(script, url, context, rewritingStyles() ? {} : undefined),
+});

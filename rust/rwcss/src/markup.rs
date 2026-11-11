@@ -181,14 +181,20 @@ mod tests {
 			vec![(" type=module", "a"), ("", "b")]
 		);
 		assert_eq!(
-			texts("<style media=print>a{}</style x><style>b{}</style>", "style"),
+			texts(
+				"<style media=print>a{}</style x><style>b{}</style>",
+				"style"
+			),
 			vec![(" media=print", "a{}</style x><style>b{}")]
 		);
 	}
 
 	#[test]
 	fn an_unclosed_element_ends_the_scan() {
-		assert_eq!(texts("<script>a</script><script>b", "script"), vec![("", "a")]);
+		assert_eq!(
+			texts("<script>a</script><script>b", "script"),
+			vec![("", "a")]
+		);
 		assert_eq!(texts("<script a", "script"), vec![]);
 	}
 

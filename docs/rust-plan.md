@@ -115,9 +115,9 @@ none:
 - the rewriter module: 426,993 bytes, 151,391 brotli as built with every
   rewrite family in (the budget is 600 KB, 160 KB brotli).
 - the scanner module (`scanner.wasm`, phase 3: the CSS rewriter and the
-  markup scan): 48,102 bytes, 19,454 brotli. It has no dependencies and
+  markup scan): 48,518 bytes, 19,673 brotli. It has no dependencies and
   shares no code with the rewriter, so it is a module of its own and not
-  48 KB more of the rewriter's.
+  49 KB more of the rewriter's.
 - the blocker module, 1,063 KB, 299 KB brotli (the crate's regex and idna
   tables dominate).
 
@@ -515,7 +515,7 @@ suite then measures plus its usual margin.
   | `modifyJS` (every path of phase 2)   | the rewriter module               | no module yet; the module declined the script or trapped              |
   | `singleExpression`, `parsesAsScript` | the rewriter module (parse only)  | no module yet                                                         |
   | `printExpression`                    | the fallback, until phase 5       | something threw and its message names a part of the page's expression |
-  | `modifyCSS`                          | the scanner module (phase 3)      | no module yet; the scanner declined the sheet                         |
+  | `modifyCSS`                          | the scanner module (phase 3)      | no module yet, or it trapped; a data: sheet inside a sheet            |
   | `getDomain`, `getPublicSuffix`       | the shell, then the suffix module | no module yet, for a host no shell named                              |
 
   A document's own site and its top's are needed while the client is made,
@@ -904,10 +904,24 @@ import (`e.r`, as the JS rewriter's module does): a kind (a URL the
 expression found or a string of `image-set()` or `src()`, a `url()`, an
 `@import`'s `url()`, an `@import`'s string) and the URL text, and is
 answered the routed URL, or -1 to leave the piece as written (the text is
-no URL, or an `@import` that is routed already). An answer longer than the
-64 KiB scratch (a data: URL, which `preserveValue` carries twice) goes over
-in parts, a protocol between `src/wasm/scanner.ts` and `abi.rs` that needs
-nothing of `src/wasm/module.ts`.
+no URL, or an `@import` that is routed already).
+
+The crossing. A rewrite does not go through `r`: the module keeps an input
+buffer from call to call (`i(len) -> ptr`), the thread encodes the text
+straight into it (`encodeInto`, no array and no allocation per call) and
+calls `x(len, flags) -> status`, and a routed URL is written into a scratch
+the module makes as large as the answer (`s(len) -> ptr`: a data: URL,
+which `preserveValue` carries twice, can be megabytes). Past 1 MiB either
+buffer is given back after the call. `BufferInstance.exchange`
+(`src/wasm/module.ts`) is that call, beside `call`, which the rewriter
+module and the markup scan keep; it reads what comes back with a decoder
+that keeps a byte order mark, and a surrogate with no other half crosses
+both ways as the three bytes its code point would take (WTF-8: the thread
+encodes and decodes those itself, only for a text that holds one). The
+module copies such bytes as it copies any others, and its `JSON.stringify`
+writes one as `\udXXX`, as JavaScript does. `r` answers "unknown flag" for
+a rewrite, so a glue older than the module rewrites in JavaScript, and a
+glue newer than the module (no `x` among its exports) does too.
 
 One call per URL, not a batch. Measured on a sheet of 5,000 rules with a
 URL each (0.53 MB), best of 15 runs: the rewrite takes 33.6 ms; the same
@@ -920,22 +934,45 @@ microseconds a URL, and a batch could save part of that at the price of a
 second pass in the module (collect, then splice). On the real corpus
 (1,690 URLs in 11.9 MB) the calls are under 2.5 ms of 77.
 
-The gate is identity: anything the module cannot answer with the JavaScript
-rewriter's bytes it declines (status 5), and JavaScript rewrites the text
-as before. It declines a text of more than 0xFFFFFF UTF-16 units
-(css-tree's 24-bit token offsets wrap), blocks nested more than 64 deep
-and brackets or functions nested more than 96 deep in one value (the port
-recurses), a token css-tree ends past the end of the text (an escape cut
-off at the end of a bad `url(`), a parse that stops advancing, and a URL
-whose text begins with U+FEFF (the thread reads what the module hands it
-through a decoder that drops one). The thread keeps to itself a text with
-a lone surrogate (it does not cross as UTF-8) and a rewrite inside a
-rewrite: a `data:` stylesheet imported by a stylesheet is rewritten by
-css-tree while the sheet around it is the module's, because an instance is
-not entered twice. A sheet that begins with U+FEFF is answered (the thread
-puts the mark back). css-tree's walker compares an at-rule's name as
-written, so `@IMPORT url(x)` routes as an image and `@IMPORT "x"` is left
-alone; the module does the same.
+The gate is identity, and the module answers every text itself: it
+declines no stylesheet, declaration list or value (its first form declined
+a lone surrogate, a URL that begins with U+FEFF, deep nesting, a large
+sheet and a token past the end of the text, and css-tree rewrote those).
+What is left to JavaScript is a thread with no module, an instance that
+trapped, and a rewrite inside a rewrite: a `data:` stylesheet imported by a
+stylesheet asks for the module as the sheet around it did, and is css-tree's
+until `src/wasm/thread.ts` gives a call made during a call an instance.
+css-tree's walker compares an at-rule's name as written, so `@IMPORT
+url(x)` routes as an image and `@IMPORT "x"` is left alone; the module does
+the same. Where css-tree itself has no clean answer the module has one:
+
+- Nesting. css-tree recurses, and V8's stack ends at 1,400 to 3,000 levels
+  of blocks or brackets, by the shape and by what else is on the stack.
+  Where its parser runs out the innermost `parseWithFallback` takes the
+  rule or value as raw text, whose url()s the expression routes; where its
+  walk of the finished tree runs out `modifyCSS` throws, and its callers
+  route the whole text by the expression (so an `@import "x"` of that sheet
+  is not routed at all). The port recurses too, on the stack the host gives
+  a wasm call (V8 stops it at 2,300 to 5,000 levels), so it stops at 1,024
+  (`MAX_DEPTH`, `MAX_NESTING`), always, and what is deeper is raw text: the
+  first of css-tree's two answers, with the rest of the sheet parsed. From
+  1,024 levels to where css-tree runs out the two differ in spelling only:
+  css-tree still parses and writes `url(x)`, the module writes the
+  expression's `url("x")`. The deepest of the 2,396 corpus sheets nests
+  24 brackets.
+- Size. css-tree keeps a token's offset in 24 bits: in a sheet of more than
+  16,777,215 UTF-16 units what follows that point is no longer parsed. A
+  url() there is still routed, by the expression; an `@import "x"` there
+  is left as written and loads from the origin, unproxied. The module's
+  offsets are whole and it rewrites the sheet to its end. This is the one
+  place the module's output is deliberately not css-tree's.
+- A token css-tree ends past the end of the text (an escape cut off at the
+  end of a bad `url(`): the end of the text, which is what every reader of
+  that token's end made of it.
+- A parse that stops advancing (css-tree's own loop would never end): the
+  module answers status 8 and `modifyCSS` throws, for its caller's own
+  catch (the expression in the service worker, the value left alone in a
+  frame). No text of the corpus or of 560,000 fuzzed ones gets there.
 
 It first declined a closing bracket with nothing open as well, because
 css-tree's own answer for one depended on the sheet it had parsed before:
@@ -953,25 +990,31 @@ from this machine's caches and packages (57.8 MB). All 2,396 rewrite byte
 for byte the same in the module and in JavaScript, none declined (1,104
 hold something to route and are the module's; the rest never leave the
 `MAY_ROUTE` test). The `scanner-parity` suite holds the hand-written cases
-(108 stylesheets and declaration lists and 20 values the module must answer
-itself, and the ones it must decline), every stylesheet and document under
-`test/pages`, the inject library's path, and a seeded fuzz that mutates
-them (`SCANNER_FUZZ` rounds, `SCANNER_CORPUS` for a corpus directory); it
-needs no browser. At `SCANNER_FUZZ=120000` it compares 160,000 mutated
-stylesheets and declaration lists and 120,000 mutated values with no
-difference; the module answers 176,273 of them and declines 2,451, nearly
-all for a lone surrogate the fuzz inserts (in a run of 70,000, 605 of 622
-declines), and the rest hold nothing to route.
+(108 stylesheets and declaration lists and 20 values, then lone
+surrogates, byte order marks, nesting to 20,000 levels, a sheet and a
+routed URL of megabytes, a sheet past 16.7 million units: every one the
+module's own answer), every stylesheet and document under `test/pages`, the
+inject library's path, and a seeded fuzz that mutates them (`SCANNER_FUZZ`
+rounds, `SCANNER_CORPUS` for a corpus directory); it needs no browser. At
+`SCANNER_FUZZ=240000` it compares 320,000 mutated stylesheets and
+declaration lists and 240,000 mutated values with no difference; the
+module answers 358,597 of them and declines none, and the rest hold
+nothing to route.
 
 Speed, in node, best of 9 passes over the 99 sheets: css-tree 553 ms, the
 module's first form (it found, JavaScript rewrote) 145 ms, the module
 77 ms, 154 MB a second. About 12 ms of the 77 is the thread encoding the
-text to UTF-8 and 6 ms is routing; the module's own work is about 40 ms.
+text to UTF-8 (8.5 ms of it since the text is encoded in place) and 6 ms is
+routing; the module's own work is about 40 ms.
 The wider sweep takes 0.5 s against 54 s. An element's style of 57
-characters takes 5.7 microseconds against css-tree's 8.9. A single value is the one place the module loses:
-2.7 microseconds for the expression against 4.7 through the module (the
-text crosses and comes back), and 15 ms against 37 for the 99 sheets taken
-as values, so `rewriteCSSValueURLs` takes the module only when asked and no
+characters takes 5.0 microseconds against css-tree's 9.1. A single value is
+the one place the module loses: 2.9 microseconds for the expression
+against 3.7 through the module (4.7 before the text was encoded in place),
+and 14 ms against 35 for the 99 sheets taken as values. Of either, 2.3 is
+routing the URL itself (`new URL`, the codec), which both do; the call
+into the module and the URL's text coming back out cost 0.6 before
+anything is answered, which is all the expression takes for its whole
+match. So `rewriteCSSValueURLs` takes the module only when asked and no
 caller asks. Built for speed (`opt-level = 3` for the crate) the module is
 91 KB (27 KB brotli) and its own work about 15% faster; it is built for
 size like the others.
@@ -1002,17 +1045,10 @@ bundle, each of these needs another answer than css-tree:
   that has not arrived yet (the service worker can wait for it, its route
   is asynchronous; a frame's library cannot), a document outside the
   controller's agent cluster, an instance that trapped;
-- a lone surrogate (0 of the 2,396 corpus sheets): the text would cross as
-  bytes the thread encodes itself (WTF-8), which `BufferInstance.call`
-  does not offer;
-- a URL that begins with U+FEFF, and the mark put back on a sheet: gone
-  with a decoder that keeps the mark (`ignoreBOM`) in `src/wasm/module.ts`;
 - a `data:` stylesheet inside a stylesheet: a second instance for a call
-  made during a call (`src/wasm/thread.ts`);
-- nesting past 64 or 96, more than 16.7 million units, a token past the
-  end, a parse that does not advance (none in the corpus, 3 of 70,000
-  fuzzed texts): the module's own expression pass (its flag 5) is the
-  answer a sheet css-tree throws on gets today.
+  made during a call (`src/wasm/thread.ts`).
+
+Nothing about a text itself sends it to css-tree any more (above).
 
 **Phase 4. The blocker.** The second artifact, the service worker's network
 path, the cosmetic and scriptlet paths, redirect resources, the option, the

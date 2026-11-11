@@ -8,6 +8,9 @@
 		"r:function",
 		"p:function",
 		"n:function",
-		"b:function"
+		"b:function",
+		"i:function",
+		"x:function",
+		"s:function"
 	]
 }

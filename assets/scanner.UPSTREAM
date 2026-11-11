@@ -1,5 +1,5 @@
 crate rust/rwcss
-sources 73cb2cee41f5
+sources 5af270ebea84
 toolchain stomp-rust-toolchain:eda716cbc2c6
 RUST_IMAGE=rustlang/rust@sha256:dde6da7d1b5fa1ba0ebd311488ddc916f36311a2ce0038420ceba5ce76fdcc23
 RUST_NIGHTLY=2026-11-09

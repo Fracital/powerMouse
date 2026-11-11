@@ -1,15 +1,26 @@
 //! The CSS rewriter and the markup scanner of stomp, built to wasm
-//! (docs/rust-plan.md, phase 3), behind the same byte-buffer ABI as the JS
-//! rewriter's (`rust/rwjs/src/abi.rs`, loaded by `src/wasm/module.ts`):
+//! (docs/rust-plan.md, phase 3), behind the byte-buffer ABI of the JS
+//! rewriter's module (`rust/rwjs/src/abi.rs`, loaded by
+//! `src/wasm/module.ts`) and three exports of its own:
 //!
 //! - `a(len) -> ptr`, `f(ptr, len)`: bytes for the host to write, and back.
 //! - `c(ptr, len) -> status`: a configuration; this module has none.
-//! - `r(ptr, len, flags) -> status`: answers for the text in the bytes
-//!   (owned from then on) and keeps the answer until the next call.
+//! - `r(ptr, len, flags) -> status`: a scan (flags 0 to 2) of the text in
+//!   the bytes (owned from then on); the answer is kept until the next call.
+//! - `i(len) -> ptr`, `x(len, flags) -> status`: a rewrite (flags 3 to 5) of
+//!   the text the host wrote into the buffer `i` gave, which is kept from
+//!   call to call.
 //! - `p()`, `n()`: the answer's pointer and length.
-//! - `b() -> ptr`: the scratch the host answers a routing call in.
+//! - `b() -> ptr`, `s(len) -> ptr`: the scratch the host answers a routing
+//!   call in, and the same made at least `len` bytes.
 //! - the import `e.r(kind, ptr, len) -> len`: the host's routing of a URL,
 //!   written to the scratch; -1 when it does not route (`abi.rs`).
+//!
+//! Text is UTF-8, except that a surrogate with no other half (JavaScript's
+//! strings can hold one) crosses as the three bytes its code point would
+//! take (0xED first), in both directions: the rewrite copies what it does
+//! not understand, and `JSON.stringify` (rewrite.rs) is the one place that
+//! tells such a half from a character.
 //!
 //! `flags` says what is asked:
 //!
@@ -28,9 +39,14 @@
 //!   order. What a build that rewrote each piece in JavaScript asked for,
 //!   kept for it and for telling the scan from the rewrite when they differ.
 //!
-//! Status 0 is an answer; 5 is declined (JavaScript does this input,
-//! `css::Fail::Decline`); 6 is a flag this build does not know; 7 is
-//! unchanged. A panic aborts, which the loader sees as a trap and treats as
+//! Status 0 is an answer; 5 is a scan declined; 6 is a flag this entry does
+//! not know; 7 is unchanged; 8 says the text has no parse (css-tree's own
+//! loop over it would never end), and the host throws as its caller
+//! expects of a parser that failed. No rewrite is declined. Where
+//! css-tree's stack runs out (blocks or brackets nested by the thousand)
+//! the module fails the piece as css-tree's parser does, sooner and at a
+//! depth that is always the same (`MAX_DEPTH` in css.rs, `MAX_NESTING` in
+//! full.rs). A panic aborts, which the loader sees as a trap and treats as
 //! a dead instance.
 #![allow(clippy::missing_safety_doc)]
 
@@ -51,6 +67,7 @@ pub const REWRITE_VALUE: u32 = 5;
 pub const DECLINED: i32 = 5;
 pub const UNKNOWN: i32 = 6;
 pub const UNCHANGED: i32 = 7;
+pub const STUCK: i32 = 8;
 
 /// Byte offsets into UTF-8 as UTF-16 offsets, asked in rising order: a
 /// character is one unit, or two when its first byte says it is four bytes
@@ -118,7 +135,11 @@ pub fn answer(input: &[u8], flags: u32) -> Result<Vec<u8>, i32> {
 			}
 		}
 		MARKUP => {
-			output.extend_from_slice(if markup::has_base(input) { b"B 1\n" } else { b"B 0\n" });
+			output.extend_from_slice(if markup::has_base(input) {
+				b"B 1\n"
+			} else {
+				b"B 0\n"
+			});
 			for (kind, name) in [(b'J', &b"script"[..]), (b'C', &b"style"[..])] {
 				for element in markup::elements(input, name) {
 					output.push(kind);
@@ -156,8 +177,7 @@ mod tests {
 	}
 
 	#[test]
-	fn a_declined_sheet_and_an_unknown_flag() {
-		assert_eq!(answer("&{".repeat(70).as_bytes(), 0), Err(5));
+	fn an_unknown_flag() {
 		assert_eq!(answer(b"", 9), Err(6));
 	}
 }

@@ -18,14 +18,14 @@
 //! It is a port, quirk for quirk, with the JavaScript names kept: `eof` that
 //! stays set after a step back, a comparison read without consuming its
 //! `=`, `Object` found as the parser of a feature named `constructor`.
-//! Where a piece is past what the port covers it declines the sheet
-//! (`Fail::Decline`), never guesses.
 
 use crate::css::*;
 
-/// sequences (brackets, functions, conditions) nested deeper than this are
-/// left to the JavaScript rewriter, which has a stack of its own to run out of
-const MAX_NESTING: u32 = 96;
+/// Sequences (brackets, functions, conditions) nested deeper than this fail
+/// as css-tree's fail when its stack runs out: the piece is raw text to the
+/// rewriter, whose url()s the expression routes (`deep` in rewrite.rs).
+/// As `MAX_DEPTH` in css.rs: well short of where the host's stack ends.
+const MAX_NESTING: u32 = 1024;
 
 /// the parse context `deep` asks for
 #[derive(Clone, Copy)]
@@ -80,7 +80,10 @@ pub(crate) fn lower_is(text: &[u8], reference: &[u8]) -> bool {
 	for &wanted in reference {
 		if wanted == b'k' && text[at.min(text.len())..].starts_with(&[0xE2, 0x84, 0xAA]) {
 			at += 3;
-		} else if text.get(at).is_some_and(|&byte| byte.to_ascii_lowercase() == wanted) {
+		} else if text
+			.get(at)
+			.is_some_and(|&byte| byte.to_ascii_lowercase() == wanted)
+		{
 			at += 1;
 		} else {
 			return false;
@@ -115,8 +118,7 @@ impl<'a> Parser<'a> {
 		cmp_str(self.source, self.start, self.end, reference)
 	}
 	fn lookup_type_non_sc(&self, mut idx: usize) -> u8 {
-		for offset in self.index..self.count {
-			let kind = self.kinds[offset];
+		for &kind in self.kinds.iter().take(self.count).skip(self.index) {
 			if kind != WHITESPACE && kind != COMMENT {
 				if idx == 0 {
 					return kind;
@@ -152,7 +154,11 @@ impl<'a> Parser<'a> {
 	fn lookup_offset(&self, offset: usize) -> usize {
 		let at = self.index + offset;
 		if at < self.count {
-			if at == 0 { 0 } else { self.ends[at - 1] as usize }
+			if at == 0 {
+				0
+			} else {
+				self.ends[at - 1] as usize
+			}
 		} else {
 			self.source.len()
 		}
@@ -162,7 +168,11 @@ impl<'a> Parser<'a> {
 		at < self.count
 			&& cmp_str(
 				self.source,
-				if at == 0 { 0 } else { self.ends[at - 1] as usize },
+				if at == 0 {
+					0
+				} else {
+					self.ends[at - 1] as usize
+				},
 				self.ends[at] as usize,
 				reference,
 			)
@@ -171,7 +181,8 @@ impl<'a> Parser<'a> {
 		if offset == 0 {
 			return self.is_delim(code);
 		}
-		self.lookup_type(offset) == DELIM && self.source.get(self.lookup_offset(offset)) == Some(&code)
+		self.lookup_type(offset) == DELIM
+			&& self.source.get(self.lookup_offset(offset)) == Some(&code)
 	}
 	fn skip(&mut self, count: usize) {
 		self.skip_to(self.index + count);
@@ -271,7 +282,11 @@ impl<'a> Parser<'a> {
 			_ => return Err(Fail::Syntax),
 		};
 		self.leaves.push(Leaf {
-			kind: if value.0 == start { URL_TOKEN_LEAF } else { URL_FUNCTION_LEAF },
+			kind: if value.0 == start {
+				URL_TOKEN_LEAF
+			} else {
+				URL_FUNCTION_LEAF
+			},
 			start,
 			end: self.start,
 			value,
@@ -285,7 +300,7 @@ impl<'a> Parser<'a> {
 	/// `readSequence`: how many children it read
 	fn read_sequence(&mut self, scope: Scope) -> Result<usize, Fail> {
 		if self.nesting >= MAX_NESTING {
-			return Err(Fail::Decline);
+			return Err(Fail::Syntax);
 		}
 		self.nesting += 1;
 		let read = self.sequence(scope);
@@ -333,7 +348,8 @@ impl<'a> Parser<'a> {
 			}
 			URL => self.url()?,
 			IDENT => {
-				if cmp_char(self.source, self.start, b'u') && cmp_char(self.source, self.start + 1, b'+')
+				if cmp_char(self.source, self.start, b'u')
+					&& cmp_char(self.source, self.start + 1, b'+')
 				{
 					self.unicode_range()?
 				} else {
@@ -545,19 +561,21 @@ impl<'a> Parser<'a> {
 		self.skip_sc();
 		if supports {
 			if self
-				.attempt(|parser| parser.to_parenthesis(Self::full_declaration))?
+				.attempt(|parser| parser.up_to_parenthesis(Self::full_declaration))?
 				.is_some()
 			{
 				return Ok(());
 			}
 			if self
-				.attempt(|parser| parser.to_parenthesis(|inner| inner.condition(Kind::Supports)))?
+				.attempt(|parser| {
+					parser.up_to_parenthesis(|inner| inner.condition(Kind::Supports))
+				})?
 				.is_some()
 			{
 				return Ok(());
 			}
 		} else if self
-			.attempt(|parser| parser.to_parenthesis(Self::layer))?
+			.attempt(|parser| parser.up_to_parenthesis(Self::layer))?
 			.is_some()
 		{
 			return Ok(());
@@ -566,7 +584,7 @@ impl<'a> Parser<'a> {
 		Ok(())
 	}
 	/// import.js's `try { parse } finally { the closing parenthesis is next }`
-	fn to_parenthesis(&mut self, parse: impl FnOnce(&mut Self) -> Parsed) -> Parsed {
+	fn up_to_parenthesis(&mut self, parse: impl FnOnce(&mut Self) -> Parsed) -> Parsed {
 		let parsed = parse(self);
 		if parsed == Err(Fail::Decline) {
 			return parsed;
@@ -664,7 +682,7 @@ impl<'a> Parser<'a> {
 
 	fn condition(&mut self, kind: Kind) -> Parsed {
 		if self.nesting >= MAX_NESTING {
-			return Err(Fail::Decline);
+			return Err(Fail::Syntax);
 		}
 		self.nesting += 1;
 		let parsed = self.condition_terms(kind);
@@ -1299,9 +1317,7 @@ mod tests {
 			Err(Fail::Syntax) => return None,
 			Err(Fail::Decline) => panic!("declined"),
 		}
-		let text = |range: (usize, usize)| {
-			String::from_utf8(parser.text(range).to_vec()).unwrap()
-		};
+		let text = |range: (usize, usize)| String::from_utf8(parser.text(range).to_vec()).unwrap();
 		Some(
 			parser
 				.leaves
@@ -1353,7 +1369,10 @@ mod tests {
 	#[test]
 	fn expression_and_var_keep_their_arguments_raw() {
 		assert_eq!(
-			leaves("expression(url(a)) var(--b, url(c) d) var(--e)", Context::Value),
+			leaves(
+				"expression(url(a)) var(--b, url(c) d) var(--e)",
+				Context::Value
+			),
 			Some(vec![
 				leaf(RAW_LEAF, "url(a)", "expression"),
 				leaf(RAW_LEAF, " url(c) d", "var"),
@@ -1374,7 +1393,10 @@ mod tests {
 			])
 		);
 		assert_eq!(
-			leaves("url(a.css) supports(not (display: grid))", Context::AtrulePrelude(b"IMPORT")),
+			leaves(
+				"url(a.css) supports(not (display: grid))",
+				Context::AtrulePrelude(b"IMPORT")
+			),
 			Some(vec![leaf(URL_TOKEN_LEAF, "url(a.css)", "")])
 		);
 		assert_eq!(leaves("a.css", Context::AtrulePrelude(b"import")), None);
@@ -1383,11 +1405,21 @@ mod tests {
 	#[test]
 	fn other_preludes() {
 		assert_eq!(
-			leaves("svg url(http://www.w3.org/2000/svg)", Context::AtrulePrelude(b"namespace")),
-			Some(vec![leaf(URL_TOKEN_LEAF, "url(http://www.w3.org/2000/svg)", "")])
+			leaves(
+				"svg url(http://www.w3.org/2000/svg)",
+				Context::AtrulePrelude(b"namespace")
+			),
+			Some(vec![leaf(
+				URL_TOKEN_LEAF,
+				"url(http://www.w3.org/2000/svg)",
+				""
+			)])
 		);
 		assert_eq!(
-			leaves("(background: url(a)) and selector(b > c)", Context::AtrulePrelude(b"supports")),
+			leaves(
+				"(background: url(a)) and selector(b > c)",
+				Context::AtrulePrelude(b"supports")
+			),
 			Some(vec![leaf(URL_TOKEN_LEAF, "url(a)", "")])
 		);
 		// a function no feature is named after is enclosed, its value read
@@ -1404,7 +1436,10 @@ mod tests {
 	#[test]
 	fn selectors() {
 		assert_eq!(
-			leaves("a[href*=\"url(\"]:not([b='c']), d:lang(\"e\")", Context::SelectorList),
+			leaves(
+				"a[href*=\"url(\"]:not([b='c']), d:lang(\"e\")",
+				Context::SelectorList
+			),
 			Some(vec![
 				leaf(STRING_LEAF, "\"url(\"", ""),
 				leaf(STRING_LEAF, "'c'", "not"),
@@ -1412,7 +1447,10 @@ mod tests {
 			])
 		);
 		assert_eq!(
-			leaves("a:-webkit-any(b):foo(url(c)):nth-child(2n + 1 of d)", Context::SelectorList),
+			leaves(
+				"a:-webkit-any(b):foo(url(c)):nth-child(2n + 1 of d)",
+				Context::SelectorList
+			),
 			Some(vec![leaf(RAW_LEAF, "url(c)", "foo")])
 		);
 		assert_eq!(leaves("a:is( ) url(b)", Context::SelectorList), None);
@@ -1427,9 +1465,9 @@ mod tests {
 	}
 
 	#[test]
-	fn nesting_past_what_the_port_recurses_to_is_declined() {
-		let deep = "(".repeat(200) + "url(a)";
+	fn nesting_past_what_the_port_recurses_to_fails_the_piece() {
+		let deep = "(".repeat(MAX_NESTING as usize + 8) + "url(a)";
 		let mut parser = Parser::recycled(deep.as_bytes(), Buffers::default()).unwrap();
-		assert_eq!(parser.parse_context(Context::Value), Err(Fail::Decline));
+		assert_eq!(parser.parse_context(Context::Value), Err(Fail::Syntax));
 	}
 }

@@ -59,7 +59,8 @@ impl Edits<'_> {
 			self.output.reserve(self.text.len() + self.text.len() / 8);
 			self.edited = true;
 		}
-		self.output.extend_from_slice(slice(self.text, self.at, start));
+		self.output
+			.extend_from_slice(slice(self.text, self.at, start));
 		self.output.extend_from_slice(replacement);
 		self.at = end;
 	}
@@ -87,7 +88,11 @@ fn consume_escaped(source: &[u8], mut offset: usize) -> usize {
 		}
 		let next = code(offset);
 		if is_white_space(next) {
-			offset += if next == 13 && code(offset + 1) == 10 { 2 } else { 1 };
+			offset += if next == 13 && code(offset + 1) == 10 {
+				2
+			} else {
+				1
+			};
 		}
 	}
 	offset
@@ -168,7 +173,11 @@ pub fn string_decode(str: &[u8]) -> Vec<u8> {
 pub fn url_decode(str: &[u8]) -> Vec<u8> {
 	let len = str.len() as isize;
 	let mut start: isize = 4;
-	let mut end = if str.last() == Some(&b')') { len - 2 } else { len - 1 };
+	let mut end = if str.last() == Some(&b')') {
+		len - 2
+	} else {
+		len - 1
+	};
 	while start < end && is_white_space(str[start as usize] as u32) {
 		start += 1;
 	}
@@ -207,10 +216,24 @@ pub fn url_encode(value: &[u8], encoded: &mut Vec<u8>) {
 	encoded.push(b')');
 }
 
-/// `JSON.stringify` of a string
+const HEX: &[u8; 16] = b"0123456789abcdef";
+
+/// `JSON.stringify` of a string. A surrogate with no other half is written
+/// as its `\uXXXX` escape, as JavaScript writes it.
 pub fn json_string(value: &[u8], output: &mut Vec<u8>) {
+	// a surrogate, as the host encodes one that stands alone (three bytes,
+	// 0xED first): the half it is
+	let half = |at: usize| -> Option<bool> {
+		match (value.get(at), value.get(at + 1), value.get(at + 2)) {
+			(Some(0xED), Some(&second), Some(_)) if second >= 0xA0 => Some(second < 0xB0),
+			_ => None,
+		}
+	};
 	output.push(b'"');
-	for &code in value {
+	let mut at = 0;
+	while at < value.len() {
+		let code = value[at];
+		at += 1;
 		match code {
 			b'"' => output.extend_from_slice(b"\\\""),
 			b'\\' => output.extend_from_slice(b"\\\\"),
@@ -221,9 +244,28 @@ pub fn json_string(value: &[u8], output: &mut Vec<u8>) {
 			0x09 => output.extend_from_slice(b"\\t"),
 			0..=0x1F => {
 				output.extend_from_slice(b"\\u00");
-				output.push(b"0123456789abcdef"[(code >> 4) as usize]);
-				output.push(b"0123456789abcdef"[(code & 15) as usize]);
+				output.push(HEX[(code >> 4) as usize]);
+				output.push(HEX[(code & 15) as usize]);
 			}
+			0xED => match half(at - 1) {
+				// a high half with its low half after it is a character,
+				// written as it stands (the two halves met in a splice)
+				Some(true) if half(at + 2) == Some(false) => {
+					output.extend_from_slice(&value[at - 1..at + 5]);
+					at += 5;
+				}
+				// one that stands alone is written as its escape
+				Some(_) => {
+					let unit =
+						0xD000 | ((value[at] as u32 & 0x3F) << 6) | (value[at + 1] as u32 & 0x3F);
+					output.extend_from_slice(b"\\u");
+					for shift in [12, 8, 4, 0] {
+						output.push(HEX[((unit >> shift) & 15) as usize]);
+					}
+					at += 2;
+				}
+				None => output.push(code),
+			},
 			_ => output.push(code),
 		}
 	}
@@ -321,7 +363,10 @@ fn original_of(target: &[u8]) -> Option<(Vec<u8>, (usize, usize))> {
 
 /// `preserveValue`: `url` to its `#`, then `#` and the page's token
 fn preserve_value(url: &[u8], value: &[u8], output: &mut Vec<u8>) {
-	let end = url.iter().position(|&byte| byte == b'#').unwrap_or(url.len());
+	let end = url
+		.iter()
+		.position(|&byte| byte == b'#')
+		.unwrap_or(url.len());
 	output.extend_from_slice(&url[..end]);
 	output.push(b'#');
 	output.extend_from_slice(value);
@@ -331,7 +376,9 @@ fn preserve_value(url: &[u8], value: &[u8], output: &mut Vec<u8>) {
 fn line_terminator(text: &[u8], at: usize) -> bool {
 	match text.get(at) {
 		Some(b'\n' | b'\r') => true,
-		Some(0xE2) => text.get(at + 1) == Some(&0x80) && matches!(text.get(at + 2), Some(0xA8 | 0xA9)),
+		Some(0xE2) => {
+			text.get(at + 1) == Some(&0x80) && matches!(text.get(at + 2), Some(0xA8 | 0xA9))
+		}
 		_ => false,
 	}
 }
@@ -536,7 +583,11 @@ impl Walk<'_, '_, '_> {
 				Some((token, url)) => &token[url.0..url.1],
 				None => value.as_slice(),
 			};
-			let kind = if atrule == Some(b"import") { STYLE } else { BINARY };
+			let kind = if atrule == Some(b"import") {
+				STYLE
+			} else {
+				BINARY
+			};
 			if (self.route)(kind, original, &mut self.answer)? {
 				match &routed {
 					Some((token, _)) => self.url(from, to, token),
@@ -646,7 +697,10 @@ mod tests {
 			sheet("a { --b: url(c); d: url(e) ! f }"),
 			"a { --b: url(\"/1/c#url(c)\"); d: url(/2/e#url\\(e\\)) ! f }"
 		);
-		assert_eq!(value("url( 'a b' ) url(c\n) url(d"), "url(\"/1/a b#url( 'a b' )\") url(\"/1/c#url(c\\n)\") url(d");
+		assert_eq!(
+			value("url( 'a b' ) url(c\n) url(d"),
+			"url(\"/1/a b#url( 'a b' )\") url(\"/1/c#url(c\\n)\") url(d"
+		);
 		assert_eq!(value("url('a\nb')"), "url('a\nb')");
 		assert_eq!(value("url(\"a' ) x"), "url(\"/1/\\\"a'#url(\\\"a' )\") x");
 	}
@@ -672,7 +726,10 @@ mod tests {
 		let mut encoded = Vec::new();
 		url_encode(b"a b\x01c\x01z(\0)", &mut encoded);
 		assert_eq!(encoded, "url(a\\ b\\1 c\\1z\\(\u{FFFD}\\))".as_bytes());
-		assert_eq!(decode_uri_component(b"%e2%82%ac%41"), Some("\u{20AC}A".as_bytes().to_vec()));
+		assert_eq!(
+			decode_uri_component(b"%e2%82%ac%41"),
+			Some("\u{20AC}A".as_bytes().to_vec())
+		);
 		assert_eq!(decode_uri_component(b"%c0%80"), None);
 		assert_eq!(decode_uri_component(b"%4"), None);
 	}
@@ -689,5 +746,39 @@ mod tests {
 		edits.replace(4, 6, b"b");
 		edits.replace(7, 8, b"c");
 		assert_eq!(edits.result(), Some(b"01a56c89".to_vec()));
+	}
+
+	#[test]
+	fn json_strings_as_javascript_writes_them() {
+		let json = |value: &[u8]| {
+			let mut output = Vec::new();
+			json_string(value, &mut output);
+			output
+		};
+		assert_eq!(
+			json(b"a\"b\\c\n\x01\x1f"),
+			b"\"a\\\"b\\\\c\\n\\u0001\\u001f\"".to_vec()
+		);
+		// U+D7FF and a character outside the plane are characters
+		assert_eq!(
+			json("\u{D7FF}\u{1F600}".as_bytes()),
+			"\"\u{D7FF}\u{1F600}\"".as_bytes().to_vec()
+		);
+		// a surrogate that stands alone (the host's three bytes for it) is
+		// its escape, lower case
+		assert_eq!(json(b"a\xED\xA0\xBDb"), b"\"a\\ud83db\"".to_vec());
+		assert_eq!(json(b"\xED\xB8\x80"), b"\"\\ude00\"".to_vec());
+		// low before high: each alone
+		assert_eq!(
+			json(b"\xED\xB8\x80\xED\xA0\xBD"),
+			b"\"\\ude00\\ud83d\"".to_vec()
+		);
+		// high then low is a character again
+		assert_eq!(
+			json(b"\xED\xA0\xBD\xED\xB8\x80"),
+			b"\"\xED\xA0\xBD\xED\xB8\x80\"".to_vec()
+		);
+		// cut short: not a surrogate, copied
+		assert_eq!(json(b"\xED\xA0"), b"\"\xED\xA0\"".to_vec());
 	}
 }

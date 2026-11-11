@@ -10,9 +10,10 @@
 // brackets, cut strings, escapes, comments, non-ASCII, URLs that do not
 // parse or are routed already), and with SCANNER_CORPUS=<dir>[:<dir>...]
 // every .css file (and every string of a JSON array) under those
-// directories. The module may decline an input (JavaScript then does it);
-// how often is reported, and the hand-written cases it must answer are
-// checked to be answered.
+// directories. The module answers every one of them itself (a byte order
+// mark, a surrogate with no other half, a URL of megabytes, brackets nested
+// by the thousand): css-tree is what rewrites when a thread holds no
+// module, and nothing here is left to it.
 import {
 	mkdirSync,
 	readdirSync,
@@ -127,17 +128,10 @@ const attempt = (run) => {
 
 const tally = { answered: 0, declined: 0, differ: 0 };
 const differences = [];
-/** why the module left a text to JavaScript, as far as the text shows it */
-const declinedFor = { surrogate: 0, mark: 0, other: 0 };
-const otherDeclined = [];
+/** texts the module left to JavaScript: there should be none */
+const leftToJS = [];
 function noteDeclined(text) {
-	if (/[\ud800-\udfff]/.test(text) && !text.isWellFormed())
-		declinedFor.surrogate++;
-	else if (text.includes('\ufeff')) declinedFor.mark++;
-	else {
-		declinedFor.other++;
-		if (otherDeclined.length < 3) otherDeclined.push(text.slice(0, 300));
-	}
+	if (leftToJS.length < 3) leftToJS.push(text.slice(0, 300));
 }
 /** `text` rewritten by css-tree and by the module: the same? */
 function sameStyles(text, context, label) {
@@ -154,7 +148,13 @@ function sameStyles(text, context, label) {
 	if (got === expected) return answered;
 	tally.differ++;
 	if (differences.length < 5)
-		differences.push({ label, context, text, expected, got });
+		differences.push({
+			label,
+			context,
+			text: text.slice(0, 2000),
+			expected: String(expected).slice(0, 2000),
+			got: String(got).slice(0, 2000),
+		});
 	return answered;
 }
 
@@ -402,11 +402,24 @@ const VALUES = [
 	'none',
 	'',
 ];
-// lone surrogates do not cross to the module: declined, and JavaScript
-// rewrites the text
-const UNCROSSED = [
+// a surrogate with no other half crosses to the module and back as it is
+// (UTF-8 has no bytes for one), wherever it stands: in a URL (which the URL
+// parser makes U+FFFD, both ways), in a string that is written again as
+// JSON, in text that is only copied
+const CROSSED = [
 	'a { b: url(\ud83d.png) }',
 	'a { b: url(c) } \udc00 { d: url(e) }',
+	'@import "\ud83d.css"; @import \'a\ude00\ud83d.css\';',
+	'a { b: image-set("\ude00.png" 1x, "c\ud83d" 2x); --d: url(\udfff) }',
+	'a { b: url("c") } /* \ud800 */ d\udbff { e: url(f\ud83d\ud83d\ude00) }',
+	'a { b: url(http://[\ud83d) url(c) "\ud83d',
+	'\ud83d',
+	'a { b: url(c) }\ud83d',
+];
+const CROSSED_VALUES = [
+	'url(\ud83d.png) url("a\ude00") url(b)',
+	'\ude00url(a)\ud83d',
+	'url("\ud83d\ude00") url(\ude00\ud83d)',
 ];
 // declaration lists (an element's style attribute)
 const LISTS = [
@@ -429,13 +442,44 @@ const STRAY = [
 	'a{b:url(c)} ] ) } @import "d"; e{f:url(g)}',
 	'{ b: url(]c) }\0 @media }\0 @media',
 ];
-// past what the module covers: declined, and css-tree does the sheet
-const DECLINED = [
+// what the module once left to css-tree: nesting past a few dozen levels,
+// and a URL that begins with a byte order mark (a decoder drops one unless
+// told not to)
+const ONCE_DECLINED = [
 	`${'@media x{'.repeat(70)}a{b:url(c)}`,
 	`a{b:${'('.repeat(120)}url(c)${')'.repeat(120)}}`,
-	// a URL that begins with a byte order mark: the thread's decoder would
-	// drop it
+	`${'@media x{'.repeat(700)}a{b:url(c)}${'}'.repeat(700)}`,
+	`a{b:${'f('.repeat(900)}url(c)${')'.repeat(900)}}`,
+	`@supports ${'('.repeat(600)}b:url(c)${')'.repeat(600)}{d{e:url(f)}}`,
 	'a { b: url(\ufeffc) }',
+	'\ufeff@import "\ufeffa.css"; a { b: url("\ufeff") image-set("\ufeffc") }',
+	'\ufffe a { b: url(\ufffec) }',
+];
+// Nesting past where css-tree's stack ends. Where its parser runs out, the
+// rule or value that is too deep is raw text whose url()s the expression
+// routes; where its walk of the tree runs out, modifyCSS throws, and its
+// callers route the whole text by the expression. The module stops
+// recursing at 1,024 levels, always, and what is deeper is raw text: the
+// first of the two answers. (From 1,024 levels to where css-tree runs out,
+// 1,400 to 3,000 by the shape and by what else is on the stack, css-tree
+// still parses and the two spell the routed URL differently: `url(x)` from
+// the parse, `url("x")` from the expression. These are well past both.)
+// Which of its two answers css-tree gives for a text changes from run to
+// run, so each of these holds its URLs in the deep part alone, where the
+// two answers are one.
+const TOO_DEEP = [
+	`${'@media x{'.repeat(6000)}a{b:url(c)}`,
+	`${'@media x{'.repeat(6000)}a{b:url(c)}${'}'.repeat(6000)}`,
+	`a{b:${'('.repeat(20000)}url(c)`,
+	`a{b:${'f('.repeat(20000)}url(c)${')'.repeat(20000)}}d{e:f}`,
+	`a{b:${'['.repeat(20000)}url(c)}`,
+	`@supports ${'('.repeat(20000)}b:url(c)${')'.repeat(20000)}{d{e:f}}`,
+];
+// more than the module keeps between calls (its input buffer and the
+// scratch a routed URL is answered in are given back past 1 MiB)
+const LARGE = [
+	`a { b: url(c) } /* ${'x'.repeat(1200000)} */ d { e: url(f) }`,
+	`a { b: url("data:image/png;base64,${'QUJD'.repeat(300000)}"); c: url(d) }`,
 ];
 // and some with nothing for the rewriter to route: never handed over
 SHEETS.push(
@@ -471,13 +515,17 @@ SHEETS.push(
 		valueTally.differ === 0 && values === wantedValues,
 		`${values} of ${wantedValues} ${JSON.stringify(differences[0] ?? null)}`,
 	);
-	let uncrossed = 0;
-	for (const sheet of UNCROSSED)
-		if (!sameStyles(sheet, 'stylesheet', 'uncrossed')) uncrossed++;
+	let crossed = 0;
+	for (const sheet of CROSSED)
+		if (sameStyles(sheet, 'stylesheet', 'crossed')) crossed++;
+	for (const value of CROSSED_VALUES)
+		if (sameValue(value, 'crossed value')) crossed++;
+	// a text with nothing to route (the lone half) is handed to neither
+	const wantedCrossed = CROSSED.length - 1 + CROSSED_VALUES.length;
 	ok(
-		'a lone surrogate is declined, and rewrites the same',
-		uncrossed === UNCROSSED.length && tally.differ === 0,
-		`${uncrossed} of ${UNCROSSED.length} ${JSON.stringify(differences[0] ?? null)}`,
+		'a surrogate with no other half crosses to the module and back, and rewrites the same',
+		crossed === wantedCrossed && tally.differ === 0 && valueTally.differ === 0,
+		`${crossed} of ${wantedCrossed} ${JSON.stringify(differences[0] ?? null)}`,
 	);
 	let stray = 0;
 	for (const sheet of STRAY)
@@ -487,13 +535,86 @@ SHEETS.push(
 		stray === STRAY.length && tally.differ === 0,
 		`${stray} of ${STRAY.length} ${JSON.stringify(differences[0] ?? null)}`,
 	);
-	let declined = 0;
-	for (const sheet of DECLINED)
-		if (!sameStyles(sheet, 'stylesheet', 'declined')) declined++;
+	let once = 0;
+	for (const sheet of ONCE_DECLINED)
+		if (sameStyles(sheet, 'stylesheet', 'once declined')) once++;
 	ok(
-		'what the module does not cover is declined, and rewrites the same',
-		declined === DECLINED.length && tally.differ === 0,
-		`${declined} of ${DECLINED.length}`,
+		'deep nesting and a URL that begins with a byte order mark are answered, and rewrite the same',
+		once === ONCE_DECLINED.length && tally.differ === 0,
+		`${once} of ${ONCE_DECLINED.length} ${JSON.stringify(differences[0] ?? null).slice(0, 600)}`,
+	);
+	let deep = 0;
+	const deepDifferences = [];
+	for (const sheet of TOO_DEEP) {
+		// as the callers of modifyCSS do when it throws
+		let expected;
+		let threw = false;
+		try {
+			expected = modifyCSS(sheet, url);
+		} catch (error) {
+			threw = true;
+			expected = valueInJS(sheet, url);
+		}
+		const told = {};
+		const got = attempt(() => modifyCSS(sheet, url, 'stylesheet', told));
+		if (told.by === 'wasm' && got === expected) deep++;
+		else
+			deepDifferences.push({
+				sheet: sheet.slice(0, 40),
+				by: told.by,
+				threw,
+				expected: expected.slice(-80),
+				got: got.slice(-80),
+			});
+	}
+	ok(
+		"nesting past where css-tree's stack ends is answered by the module, as css-tree or its callers answer it",
+		deep === TOO_DEEP.length,
+		`${deep} of ${TOO_DEEP.length} ${JSON.stringify(deepDifferences)}`,
+	);
+	{
+		// and the module's answer is always the first of the two: what is too
+		// deep is the expression's, the sheet around it is parsed
+		const value = `${'f('.repeat(20000)}url(c)${')'.repeat(20000)}`;
+		const around = '@import "g.css"; d { e: url(f) }';
+		const told = {};
+		const got = attempt(() =>
+			modifyCSS(`a{b:${value}}${around}`, url, 'stylesheet', told),
+		);
+		ok(
+			'the sheet around a value that is too deep is parsed all the same',
+			told.by === 'wasm' &&
+				got === `a{b:${valueInJS(value, url)}}${modifyCSS(around, url)}`,
+			`${told.by} ${got.slice(-200)}`,
+		);
+	}
+	let large = 0;
+	for (const sheet of LARGE)
+		if (sameStyles(sheet, 'stylesheet', 'large')) large++;
+	// and the small ones after them, in buffers made again
+	if (sameStyles(SHEETS[0], 'stylesheet', 'after large')) large++;
+	ok(
+		'a sheet and a routed URL larger than the module keeps are answered, and rewrite the same',
+		large === LARGE.length + 1 && tally.differ === 0,
+		`${large} of ${LARGE.length + 1} ${JSON.stringify(differences[0] ?? null).slice(0, 600)}`,
+	);
+	// css-tree keeps a token's offset in 24 bits: in a sheet past 16,777,215
+	// units what follows that point is no longer parsed (a url() there is
+	// routed by the expression, an @import's string is left as written and
+	// loads from the origin, unproxied). The module's offsets are whole, and
+	// it rewrites the sheet to its end.
+	const head = 'a { b: url(c) }';
+	const tail = 'd { e: url(f) } @import "g.css";';
+	const filler = `/*${'x'.repeat(0x1000000)}*/`;
+	const told = {};
+	const whole = attempt(() =>
+		modifyCSS(head + filler + tail, url, 'stylesheet', told),
+	);
+	ok(
+		'a sheet past 16,777,215 units is rewritten to its end by the module',
+		told.by === 'wasm' &&
+			whole === modifyCSS(head, url) + filler + modifyCSS(tail, url),
+		`${told.by} ${whole.length} ${whole.slice(0, 80)} ... ${whole.slice(-120)}`,
 	);
 }
 
@@ -622,6 +743,10 @@ const CSS_TOKENS = [
 	'\u{1F600}',
 	'﻿',
 	'\ud83d',
+	'\ude00',
+	'%ED%A0%BD',
+	'url(x y\\',
+	'((((((((',
 	'var(--a,',
 	'{}',
 	'a{b:url(c)}',
@@ -698,9 +823,9 @@ const ROUNDS = Number(process.env.SCANNER_FUZZ) || 6000;
 		JSON.stringify({ answered, declined, first: differences[0] ?? null }),
 	);
 	ok(
-		'the module rewrites most of them itself',
-		answered > declined * 4,
-		JSON.stringify({ answered, declined }),
+		'the module rewrites every one of them itself',
+		answered > ROUNDS / 2 && declined === 0,
+		JSON.stringify({ answered, declined, leftToJS }),
 	);
 }
 {
@@ -722,9 +847,9 @@ const ROUNDS = Number(process.env.SCANNER_FUZZ) || 6000;
 		JSON.stringify({ answered, declined, first: differences[0] ?? null }),
 	);
 	ok(
-		'the module routes most of them itself',
-		answered > declined * 4,
-		JSON.stringify({ answered, declined, declinedFor, otherDeclined }),
+		'the module routes every one of them itself',
+		answered > ROUNDS / 2 && declined === 0,
+		JSON.stringify({ answered, declined, leftToJS }),
 	);
 }
 {

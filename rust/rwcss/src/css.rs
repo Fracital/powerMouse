@@ -51,22 +51,14 @@ pub const LEFT_CURLY: u8 = 23;
 pub const RIGHT_CURLY: u8 = 24;
 pub const COMMENT: u8 = 25;
 
-/// css-tree packs a token's end offset into 24 bits: past this many UTF-16
-/// units its offsets wrap, and what it answers then is not worth matching
-pub const MAX_UNITS: usize = 0x00FF_FFFF;
-
-/// how many UTF-16 units `source` is: a character is one unit, or two when
-/// its first byte says it is four bytes
-pub fn units(source: &[u8]) -> usize {
-	source
-		.iter()
-		.map(|&byte| ((byte & 0xC0) != 0x80) as usize + (byte >= 0xF0) as usize)
-		.sum()
-}
-
-/// blocks nested deeper than this are left to the JavaScript rewriter, which
-/// has a stack of its own to run out of
-const MAX_DEPTH: u32 = 64;
+/// Blocks nested deeper than this fail as css-tree's fail when its stack
+/// runs out (a RangeError, at some 1,500 blocks in V8, give or take what
+/// was on the stack): the nearest `parseWithFallback` takes the rule or
+/// at-rule as raw text, whose url()s the expression routes. The port
+/// recurses on the stack the host gave the call (V8 stops it at 2,300 to
+/// 5,000 blocks, by what tier compiled it and what called it), so it stops
+/// well short of that and at a depth that is always the same.
+const MAX_DEPTH: u32 = 1024;
 
 /// `source.charCodeAt(offset)` past the end: NaN, equal to nothing
 const NAN: u32 = u32::MAX;
@@ -180,7 +172,11 @@ impl Tokenizer<'_> {
 		self.source.len()
 	}
 	fn newline_length(&self, offset: usize, code: u32) -> usize {
-		if code == 13 && self.code(offset + 1) == 10 { 2 } else { 1 }
+		if code == 13 && self.code(offset + 1) == 10 {
+			2
+		} else {
+			1
+		}
 	}
 	fn cmp_char(&self, offset: usize, reference: u32) -> bool {
 		let mut code = self.raw(offset);
@@ -443,8 +439,8 @@ impl Tokenizer<'_> {
 			0x2F => {
 				if one == 0x2A {
 					self.kind = COMMENT;
-					self.offset = find(self.source, offset + 2, b"*/")
-						.map_or(self.len(), |at| at + 2);
+					self.offset =
+						find(self.source, offset + 2, b"*/").map_or(self.len(), |at| at + 2);
 				} else {
 					self.delim();
 				}
@@ -553,9 +549,8 @@ pub struct Piece {
 pub enum Fail {
 	/// css-tree's SyntaxError: the nearest `parseWithFallback` takes over
 	Syntax,
-	/// The JavaScript rewriter does this sheet: it is past what this port
-	/// covers (a sheet of 16 MB, nesting deeper than MAX_DEPTH, a token that
-	/// ends past the source, a loop that consumed nothing).
+	/// There is no parse of this text: a loop that consumed nothing, which
+	/// in css-tree never ends.
 	Decline,
 }
 
@@ -670,13 +665,18 @@ impl<'a> Parser<'a> {
 	pub(crate) fn recycled(source: &'a [u8], buffers: Buffers) -> Result<Self, Fail> {
 		let length = source.len();
 		// U+FEFF or U+FFFE first: css-tree starts after it
-		let bom = source.starts_with(&[0xEF, 0xBB, 0xBF]) || source.starts_with(&[0xEF, 0xBF, 0xBE]);
+		let bom =
+			source.starts_with(&[0xEF, 0xBB, 0xBF]) || source.starts_with(&[0xEF, 0xBF, 0xBE]);
 		let mut tokens = Tokenizer {
 			source,
 			offset: if bom { 3 } else { 0 },
 			kind: 0,
 		};
-		let first_char_offset = if tokens.offset < length { tokens.offset } else { 0 };
+		let first_char_offset = if tokens.offset < length {
+			tokens.offset
+		} else {
+			0
+		};
 		let Buffers {
 			mut ends,
 			mut kinds,
@@ -691,10 +691,10 @@ impl<'a> Parser<'a> {
 		kinds.reserve(length / 3 + 16);
 		while tokens.offset < length {
 			tokens.token();
-			if tokens.offset > length {
-				return Err(Fail::Decline);
-			}
-			ends.push(tokens.offset as u32);
+			// css-tree ends the remnants of a bad url() one past the text
+			// when the text ends in an escape; everything it then reads by
+			// that offset (substring, the edit's end) is cut to the text
+			ends.push(tokens.offset.min(length) as u32);
 			kinds.push(tokens.kind);
 		}
 		let count = ends.len();
@@ -713,7 +713,11 @@ impl<'a> Parser<'a> {
 				let previous = balance[balance_start as usize];
 				balance[balance_start as usize] = index as u32;
 				balance_start = previous;
-				close_kind = if previous == NONE { 0 } else { pair_of(kinds[previous as usize]) };
+				close_kind = if previous == NONE {
+					0
+				} else {
+					pair_of(kinds[previous as usize])
+				};
 			} else if is_opener(kind) {
 				balance_start = index as u32;
 				close_kind = pair_of(kind);
@@ -784,7 +788,11 @@ impl<'a> Parser<'a> {
 	pub(crate) fn skip_to(&mut self, next: usize) {
 		if next < self.count {
 			self.index = next;
-			self.start = if next == 0 { 0 } else { self.ends[next - 1] as usize };
+			self.start = if next == 0 {
+				0
+			} else {
+				self.ends[next - 1] as usize
+			};
 			self.kind = self.kinds[next];
 			self.end = self.ends[next] as usize;
 		} else {
@@ -874,7 +882,11 @@ impl<'a> Parser<'a> {
 	}
 	/// `substring()`: a start past its end is swapped with it
 	fn span(&self, (start, end): (usize, usize)) -> (usize, usize) {
-		let (start, end) = if start <= end { (start, end) } else { (end, start) };
+		let (start, end) = if start <= end {
+			(start, end)
+		} else {
+			(end, start)
+		};
 		(start.min(self.source.len()), end.min(self.source.len()))
 	}
 	pub(crate) fn text(&self, range: (usize, usize)) -> &'a [u8] {
@@ -885,7 +897,9 @@ impl<'a> Parser<'a> {
 	fn marked(&self, range: (usize, usize)) -> impl Iterator<Item = &(u32, u32)> {
 		let (start, end) = self.span(range);
 		let first = self.marks.partition_point(|mark| (mark.0 as usize) < start);
-		self.marks[first..].iter().take_while(move |mark| mark.1 as usize <= end)
+		self.marks[first..]
+			.iter()
+			.take_while(move |mark| mark.1 as usize <= end)
 	}
 	/// whether the rewriter could change anything in the text at `range`
 	fn may_route(&self, range: (usize, usize)) -> bool {
@@ -932,8 +946,8 @@ impl<'a> Parser<'a> {
 			}
 		}
 	}
-	/// a loop that consumed nothing would never end: css-tree's would not
-	/// either, and a page is better served by the JavaScript rewriter's fate
+	/// a loop that consumed nothing would never end, and css-tree's would
+	/// not either: the host is told there is no parse of this text
 	pub(crate) fn advanced(&self, from: usize) -> Parsed {
 		if self.index == from && !self.eof {
 			return Err(Fail::Decline);
@@ -1030,7 +1044,7 @@ impl<'a> Parser<'a> {
 	}
 	fn block(&mut self, is_style_block: bool) -> Parsed {
 		if self.depth >= MAX_DEPTH {
-			return Err(Fail::Decline);
+			return Err(Fail::Syntax);
 		}
 		self.depth += 1;
 		let parsed = self.block_children(is_style_block);
@@ -1123,10 +1137,6 @@ impl<'a> Parser<'a> {
 /// declaration list (an element's `style`), in source order, offsets in
 /// bytes
 pub fn scan(source: &[u8], declaration_list: bool) -> Result<Vec<Piece>, Fail> {
-	// a unit is at least a byte
-	if source.len() > MAX_UNITS && units(source) > MAX_UNITS {
-		return Err(Fail::Decline);
-	}
 	let mut parser = Parser::new(source)?;
 	parser.marks = marks(source);
 	if declaration_list {
@@ -1191,9 +1201,12 @@ mod tests {
 	}
 
 	#[test]
-	fn nesting_past_the_depth_this_port_recurses_to_is_declined() {
-		let deep = "@media x{".repeat(70) + "a{b:url(c)}";
-		assert_eq!(scan(deep.as_bytes(), false), Err(Fail::Decline));
+	fn nesting_past_the_depth_this_port_recurses_to_is_raw() {
+		// the at-rule whose block would be one too deep is raw text
+		let deep = "@media x{".repeat(MAX_DEPTH as usize + 3) + "a{b:url(c)}";
+		let found = pieces(&deep, false);
+		assert_eq!(found.len(), 1);
+		assert_eq!(found[0], ('R', "@media x{@media x{@media x{a{b:url(c)}"));
 	}
 
 	#[test]

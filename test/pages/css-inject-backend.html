@@ -31,5 +31,12 @@
 		cssText(n) {
 			box.style.cssText = `background: ${sprite('cssText', n)}`;
 		},
+		// what the module once left to css-tree: at-rules nested by the
+		// thousand, a byte order mark, half a surrogate pair
+		deep(n) {
+			const style = document.createElement('style');
+			style.textContent = `${'@media all{'.repeat(1000)}#box { background: ${sprite('deep', n)} } /* \ufeff\ud83d */${'}'.repeat(1000)}`;
+			document.head.append(style);
+		},
 	};
 </script>

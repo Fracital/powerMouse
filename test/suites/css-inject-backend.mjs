@@ -96,6 +96,18 @@ async function written(backend, n) {
 			js: after && before ? after.js - before.js : null,
 		};
 	}
+	// a sheet the module once declined: no URL of it is waited for (whether
+	// Chrome applies a rule nested this deep is its own business)
+	const before = await library();
+	await page.evaluate(
+		(n) => window.__frame.element.contentWindow.__styles.deep(n),
+		n,
+	);
+	const after = await library();
+	results.deep = {
+		wasm: after && before ? after.wasm - before.wasm : null,
+		js: after && before ? after.js - before.js : null,
+	};
 	return { state, results };
 }
 
@@ -138,6 +150,11 @@ ok(
 			routed(results[way]) && results[way].wasm >= 1 && results[way].js === 0,
 			JSON.stringify(results[way]),
 		);
+	ok(
+		"wasm: a sheet nested a thousand deep, with a byte order mark and half a surrogate pair, is the module's too",
+		results.deep.wasm >= 1 && results.deep.js === 0,
+		JSON.stringify(results.deep),
+	);
 }
 
 await done(browser);

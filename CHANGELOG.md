@@ -201,7 +201,7 @@ The first release after a four-year gap. Everything below is breaking.
   `?js` for the JavaScript rewriters), and the `wasm-share` suite checks
   that every thread holds the modules.
 - With `rewriter: 'wasm'` stylesheets are rewritten in a Rust module,
-  `scanner.wasm` (`rust/rwcss`, 48 KB, 19 KB brotli; `init.assets.scanner`
+  `scanner.wasm` (`rust/rwcss`, 49 KB, 20 KB brotli; `init.assets.scanner`
   names it), which also finds a document's inline scripts, styles and
   `<base href>` for prewriting (the three expressions of `src/prewrite.ts`
   in one pass). The module is css-tree's tokenizer and parsers ported (the
@@ -210,13 +210,20 @@ The first release after a four-year gap. Everything below is breaking.
   thread what it routes to (one call per URL through the module's routing
   import: the base URL and the codec stay in JavaScript), and splices the
   result into the text. The output is the JavaScript rewriter's byte for
-  byte: 2,396 real stylesheets (69.7 MB) and 280,000 fuzzed stylesheets,
+  byte: 2,396 real stylesheets (69.7 MB) and 560,000 fuzzed stylesheets,
   declaration lists and values rewrite the same both ways. The 99 sheets
-  of the corpus (11.9 MB) take 77 ms against css-tree's 553 ms. What the
-  module cannot answer the same it declines, and css-tree rewrites the text
-  as before: more than 16.7 million UTF-16 units, blocks nested past 64, a
-  value's brackets nested past 96, a lone surrogate, a URL that begins with
-  U+FEFF, a `data:` stylesheet inside a stylesheet (none of the corpus).
+  of the corpus (11.9 MB) take 77 ms against css-tree's 553 ms. The module
+  declines no text: a lone surrogate, a byte order mark, a routed URL of
+  megabytes and nesting by the thousand are its own to answer (the text is
+  encoded straight into a buffer the module keeps, and a surrogate with no
+  other half crosses as the bytes of its code point), so css-tree only
+  rewrites on a thread with no module and for a `data:` stylesheet inside a
+  stylesheet. Two answers are the module's own. Past 1,024 nested blocks
+  or brackets the rest is raw text whose url()s the expression routes
+  (css-tree does that or throws, from 1,400 to 3,000 levels by the state
+  of the stack). A sheet of more than 16.7 million UTF-16 units is
+  rewritten to its end, where css-tree stops parsing at that point and an
+  `@import "x"` after it went out unrouted.
   `onRequest` says which rewrote a stylesheet (`rewriteBy`: `wasm` or
   `js`). The service worker's `/css/` route and the inline styles of a
   prewritten document use it, and so does the page: a proxied top's

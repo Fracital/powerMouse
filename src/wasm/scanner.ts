@@ -8,8 +8,8 @@
 // which of the two rewrote a sheet shows nowhere but in the time it took.
 // The markup scan only finds; what is done with each element is
 // src/prewrite.ts's own code. Every function answers null when this thread
-// holds no scanner or the scanner declined the input, and the caller then
-// does the work in JavaScript as it always did.
+// holds no scanner (or one in a call already, or a scan it declined), and
+// the caller then does the work in JavaScript as it always did.
 import { routeCSS } from '../cssURLs';
 import { routeBinary } from '../routeURL';
 import StompURL from '../StompURL';
@@ -26,6 +26,8 @@ const REWRITE_LIST = 4;
 const REWRITE_VALUE = 5;
 /** the text comes back as it was: there is no answer to copy out */
 const UNCHANGED = 7;
+/** the text has no parse: css-tree's loop over it would never end */
+const STUCK = 8;
 
 // rust/rwcss/src/rewrite.rs: what the module asks to have routed
 /** a url() the expression found, a string of image-set() or src(): binary, and a failure says nothing */
@@ -35,15 +37,6 @@ const ROUTE_QUIET = 1;
 const ROUTE_STYLE = 3;
 /** an @import's string: a stylesheet, unless it is routed already */
 const ROUTE_IMPORT = 4;
-/** the next part of an answer too long for one (rust/rwcss/src/abi.rs) */
-const ROUTE_MORE = 0;
-const PART = '\x01';
-const LAST = '\x02';
-/**
- * How many UTF-16 units of an answer go in one part: the module's scratch
- * is 64 KiB and a unit is at most three bytes of UTF-8
- */
-const PART_UNITS = 16 * 1024;
 
 /**
  * What answers the module's routing calls while it rewrites CSS of the
@@ -52,29 +45,18 @@ const PART_UNITS = 16 * 1024;
  * `route` in src/rewriteCSS.ts and rewriteCSSValueURLs leave it.
  */
 function styleRoute(url: StompURL): RouteImport {
-	const base = url.toString();
-	const imported = `${url.directory}css/`;
-	/** what is left of an answer that goes over in parts */
-	let rest = '';
-	const part = (): string => {
-		let end = Math.min(PART_UNITS, rest.length);
-		// a pair of surrogates stays in one part
-		if (end < rest.length && (rest.charCodeAt(end - 1) & 0xfc00) === 0xd800)
-			end--;
-		const text = rest.slice(0, end);
-		rest = rest.slice(end);
-		return (rest ? PART : LAST) + text;
-	};
+	// made when the first URL is asked for: most values hold none that
+	// routes
+	let base: string | undefined;
 	return (kind, text) => {
-		if (kind === ROUTE_MORE) return part();
-		let routed: string;
 		try {
-			if (kind === ROUTE_IMPORT && text.startsWith(imported)) return null;
+			if (kind === ROUTE_IMPORT && text.startsWith(`${url.directory}css/`))
+				return null;
+			base ??= url.toString();
 			const resolved = new StompURL(new URL(text, base), url);
-			routed =
-				kind === ROUTE_STYLE || kind === ROUTE_IMPORT
-					? routeCSS(resolved, url)
-					: routeBinary(resolved);
+			return kind === ROUTE_STYLE || kind === ROUTE_IMPORT
+				? routeCSS(resolved, url)
+				: routeBinary(resolved);
 		} catch (error) {
 			// a URL that does not parse loads nothing natively, and says
 			// nothing: left as written
@@ -82,42 +64,44 @@ function styleRoute(url: StompURL): RouteImport {
 				console.error(error);
 			return null;
 		}
-		// whole, unless it is too long for the scratch or could be taken
-		// for a part
-		if (routed.length <= PART_UNITS && routed.charCodeAt(0) > 2) return routed;
-		rest = routed;
-		return part();
 	};
 }
 
-/**
- * Whether the module can be handed `text` and give the JavaScript
- * rewriter's bytes back: the text crosses as UTF-8, which has no lone
- * surrogate (it would come back as U+FFFD)
- */
-function crosses(text: string): boolean {
-	const wellFormed = (text as { isWellFormed?: () => boolean }).isWellFormed;
-	return typeof wellFormed === 'function'
-		? wellFormed.call(text)
-		: !/[\ud800-\udfff]/.test(text);
-}
+/** the rewrites the module has in hand on this thread */
+let inHand = 0;
 
-/** `text` rewritten by the module under `flags`, or null */
+/**
+ * Whether the module is rewriting CSS on this thread now: what it is asked
+ * to route can hold CSS of its own (the data: URL of an @import), and the
+ * rewrite of that is asked of the module as the one around it was.
+ */
+export const rewritingStyles = (): boolean => inHand > 0;
+
+/**
+ * `text` rewritten by the module under `flags`, or null when it is
+ * JavaScript's to rewrite: this thread holds no module that rewrites (none,
+ * or one older than this glue), or the module is in a call already. Throws
+ * where css-tree would never have come back.
+ */
 function rewritten(text: string, url: StompURL, flags: number): string | null {
-	if (!crosses(text)) return null;
-	// the answer is read by a decoder that drops a leading byte order mark;
-	// the module answers only with one where the text began with one
-	const marked = text.charCodeAt(0) === 0xfeff;
-	return withInstance(
-		SCANNER,
-		(instance) => {
-			const result = instance.call(text, flags);
-			if ('output' in result)
-				return marked ? `\ufeff${result.output}` : result.output;
-			return result.status === UNCHANGED ? text : null;
-		},
-		styleRoute(url),
-	);
+	let result;
+	inHand++;
+	try {
+		result = withInstance(
+			SCANNER,
+			(instance) => instance.exchange(text, flags),
+			styleRoute(url),
+		);
+	} finally {
+		inHand--;
+	}
+	if (result === null) return null;
+	if ('output' in result) return result.output;
+	if (result.status === UNCHANGED) return text;
+	// thrown here, not inside the call: the instance is sound
+	if (result.status === STUCK)
+		throw new SyntaxError('Stomp: this CSS has no parse');
+	return null;
 }
 
 /**
@@ -125,8 +109,7 @@ function rewritten(text: string, url: StompURL, flags: number): string | null {
  * the document at `url` with every URL routed (`context` as modifyCSS
  * takes it), or null when JavaScript has to do it: this thread holds no
  * module, the module is in a call already (a data: stylesheet imported by
- * the sheet being rewritten), it declined the text, or the context is one
- * it does not rewrite.
+ * the sheet being rewritten), or the context is one it does not rewrite.
  */
 export function rewriteStyles(
 	text: string,
