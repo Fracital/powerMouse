@@ -735,6 +735,25 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   before its load event replaces its entry, as natively. Through the proxy
   about one such redirect in three made a new entry, so Back went to the
   redirecting page and it redirected again. (toolbar-history suite.)
+- CSS the page writes through the CSSOM in a document no service worker
+  controls (an about:blank frame or popup it builds) loads: a rule put into
+  a `<style>`'s, a `<link>`'s or an imported sheet (`insertRule`, `addRule`),
+  a rule's declarations changed in place (`rule.style`, `rule.styleMap`,
+  an `@font-face`'s source, a keyframe's), a rule put inside another, a
+  constructed sheet changed after it was adopted, and a `<style>` given its
+  text once it is connected asked the proxy origin's own server for their
+  routes and never showed. Their loads are copied like the rest, once for
+  the writes of a task. Elements, text nodes and styles of the page's own
+  document moved into such a document were not seen at all (the insertion
+  hooks told a node by its realm): their styles load too. Five writes
+  loaded from the site itself, past the proxy, in any document: the
+  declarations `addRule` takes, a rule put inside an `@media`, an
+  `@supports` or a style rule, a keyframe given to
+  `CSSKeyframesRule.appendRule`, a style attribute node set with
+  `setAttributeNodeNS` or `attributes.setNamedItem`, and a URL named as a
+  string of `image-set()` in a property write. All are routed (blank-sources
+  suite: 56 loads the page makes natively in each of four documents, each
+  through the worker and read back as written).
 - The load gate: a load the proxy copies for a document no service worker
   controls (an about:blank frame or popup the page builds) is granted by
   what the inject announced for it on a MessagePort its bundle opened to

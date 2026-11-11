@@ -554,6 +554,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 							if (!name.startsWith('s_o:') && !element.hasAttributeOG(name))
 								domHooksModule.updateAttributeHooks(element, name);
 					});
+					// a style the hooks saw elsewhere (a clone, an element of
+					// another document) names routes: in a document no service
+					// worker controls its loads are copied here
+					if (names.includes('style'))
+						domAttributesModule.copyInline?.(element);
 				}
 			}
 
@@ -627,8 +632,10 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					}
 					prewritten.add(style);
 				}
+				// a node of any realm: the page's own document made it, or the
+				// bundle did for a document its creator reaches into
 				const nodes = args.filter(
-					(arg): arg is Node => arg instanceof this.client.global.Node,
+					(arg): arg is Node => nodeTypeOf(arg) !== null,
 				);
 				const run = (index: number): any =>
 					index < nodes.length

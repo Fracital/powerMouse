@@ -1,0 +1,446 @@
+<!doctype html>
+<title>BLANK CSSOM</title>
+<script>
+	// CSSOM and attribute writes that name a load, in documents the page
+	// builds, which no service worker controls (a new frame's about:blank,
+	// one it opened, a popup): rules put into a <style>'s or a <link>'s sheet,
+	// declarations of a rule changed in place, a rule inside a grouping
+	// rule, constructed sheets changed after they are adopted, and an
+	// element's style written through its declaration, its attribute and an
+	// attribute node. Each names an image as its element's content, so the
+	// element is the image's size once it shows. Every URL is marked
+	// ?cssom=<document>-<kind>.
+	const report = {};
+	window.__blankCssom = report;
+	const at = (name, kind, file = 'blank-pixel.svg') =>
+		new URL(`${file}?cssom=${name}-${kind}`, location.href).href;
+	const load = async (name, doc, win) => {
+		const seen = (report[name] = {});
+		const elements = {};
+		const make = (kind, parent = doc.body, tag = 'div') => {
+			const element = doc.createElement(tag);
+			element.className = kind;
+			parent.append(element);
+			elements[kind] = element;
+			return element;
+		};
+		const shows = (kind) => `content: url("${at(name, kind)}");`;
+		const rule = (kind) => `.${kind} { ${shows(kind)} }`;
+		const base = doc.createElement('style');
+		base.textContent = 'div { display: inline-block; }';
+		doc.head.append(base);
+		const errors = {};
+		const attempt = (kind, write) => {
+			try {
+				write(make(kind));
+			} catch (error) {
+				errors[kind] = error.name;
+			}
+		};
+
+		// a <style>'s sheet
+		const style = doc.createElement('style');
+		style.textContent =
+			'.style-rule-set {} .style-rule-prop {} .style-rule-text {} @media all { .unused {} } @supports (display: block) { .unused {} }';
+		doc.head.append(style);
+		const rules = style.sheet.cssRules;
+		attempt('style-insert', () =>
+			style.sheet.insertRule(rule('style-insert'), rules.length),
+		);
+		attempt('style-add', () =>
+			style.sheet.addRule('.style-add', shows('style-add')),
+		);
+		attempt('style-rule-set', () =>
+			rules[0].style.setProperty(
+				'content',
+				`url("${at(name, 'style-rule-set')}")`,
+			),
+		);
+		attempt('style-rule-prop', () => {
+			rules[1].style.content = `url("${at(name, 'style-rule-prop')}")`;
+		});
+		attempt('style-rule-text', () => {
+			rules[2].style.cssText = shows('style-rule-text');
+		});
+		attempt('style-rule-map', () => {
+			const index = style.sheet.insertRule('.style-rule-map {}', 0);
+			style.sheet.cssRules[index].styleMap.set(
+				'content',
+				`url("${at(name, 'style-rule-map')}")`,
+			);
+		});
+		attempt('style-media', () => rules[4].insertRule(rule('style-media')));
+		attempt('style-supports', () =>
+			rules[5].insertRule(rule('style-supports'), 1),
+		);
+		// a rule the page put in is changed in place
+		attempt('style-inserted-set', () => {
+			const index = style.sheet.insertRule('.style-inserted-set {}', 0);
+			style.sheet.cssRules[index].style.setProperty(
+				'content',
+				`url("${at(name, 'style-inserted-set')}")`,
+			);
+		});
+		// a rule's declarations assigned whole (rule.style = text)
+		attempt('style-rule-assign', () => {
+			const index = style.sheet.insertRule(
+				'.style-rule-assign {}',
+				style.sheet.cssRules.length,
+			);
+			style.sheet.cssRules[index].style = shows('style-rule-assign');
+		});
+		// a keyframe changed in place
+		attempt('style-keyframe-set', (element) => {
+			const index = style.sheet.insertRule(
+				`@keyframes cssom-set-${name} { from, to { color: red; } }`,
+				style.sheet.cssRules.length,
+			);
+			style.sheet.cssRules[index].cssRules[0].style.setProperty(
+				'background-image',
+				`url("${at(name, 'style-keyframe-set')}")`,
+			);
+			element.style.animation = `cssom-set-${name} 1s infinite`;
+		});
+		// a rule nested in a style rule
+		attempt('style-nested', () => {
+			const index = style.sheet.insertRule(
+				'.style-nested {}',
+				style.sheet.cssRules.length,
+			);
+			style.sheet.cssRules[index].insertRule(
+				`&.style-nested { ${shows('style-nested')} }`,
+			);
+		});
+		// a keyframe put into an @keyframes rule, which the element's
+		// animation runs
+		attempt('style-keyframes', (element) => {
+			const index = style.sheet.insertRule(
+				`@keyframes cssom-${name} {}`,
+				style.sheet.cssRules.length,
+			);
+			style.sheet.cssRules[index].appendRule(
+				`from, to { background-image: url("${at(name, 'style-keyframes')}"); }`,
+			);
+			element.style.animation = `cssom-${name} 1s infinite`;
+		});
+		// an @font-face rule put in, and one whose source is set in place
+		attempt('style-font', (element) => {
+			style.sheet.insertRule(
+				`@font-face { font-family: cssom-font-${name}; src: url("${at(name, 'style-font', 'blank-font.ttf')}"); }`,
+				style.sheet.cssRules.length,
+			);
+			element.style.font = `20px cssom-font-${name}, monospace`;
+			element.textContent = 'xxx';
+		});
+		attempt('style-font-set', (element) => {
+			const index = style.sheet.insertRule(
+				`@font-face { font-family: cssom-set-${name}; }`,
+				style.sheet.cssRules.length,
+			);
+			style.sheet.cssRules[index].style.setProperty(
+				'src',
+				`url("${at(name, 'style-font-set', 'blank-font.ttf')}")`,
+			);
+			element.style.font = `20px cssom-set-${name}, monospace`;
+			element.textContent = 'xxx';
+		});
+		// an empty <style>, its sheet filled only through the CSSOM
+		const empty = doc.createElement('style');
+		doc.head.append(empty);
+		attempt('empty-import', () =>
+			empty.sheet.insertRule(
+				`@import url("${at(name, 'empty-import', 'blank.css')}");`,
+			),
+		);
+		attempt('empty-insert', () =>
+			empty.sheet.insertRule(rule('empty-insert'), empty.sheet.cssRules.length),
+		);
+		// a <style> whose text changes after rules were put in
+		const retexted = doc.createElement('style');
+		doc.head.append(retexted);
+		attempt('retexted', () => {
+			retexted.sheet.insertRule('.gone {}');
+			retexted.textContent = rule('retexted');
+		});
+		// a connected <style> given its text: as its textContent, as markup,
+		// as a text node of this document and of the page's own, and through
+		// the text node it has
+		const texted = (kind, write) =>
+			attempt(kind, () => {
+				const element = doc.createElement('style');
+				doc.head.append(element);
+				write(element);
+			});
+		texted('text-content', (element) => {
+			element.textContent = rule('text-content');
+		});
+		texted('text-markup', (element) => {
+			element.innerHTML = rule('text-markup');
+		});
+		texted('text-node', (element) => {
+			element.appendChild(doc.createTextNode(rule('text-node')));
+		});
+		texted('text-own-node', (element) => {
+			element.appendChild(document.createTextNode(rule('text-own-node')));
+		});
+		texted('text-data', (element) => {
+			element.textContent = '.gone {}';
+			element.firstChild.data = rule('text-data');
+		});
+		texted('text-append', (element) => {
+			element.textContent = '.gone {}';
+			element.firstChild.appendData(rule('text-append'));
+		});
+		// a <style> the page's own document made, moved in
+		attempt('style-moved', () => {
+			const element = document.createElement('style');
+			element.textContent = rule('style-moved');
+			doc.head.appendChild(element);
+		});
+		// a <style> in a shadow root
+		const host = make('host');
+		const shadow = host.attachShadow({ mode: 'open' });
+		const shadowBase = doc.createElement('style');
+		shadowBase.textContent = 'div { display: inline-block; }';
+		const shadowStyle = doc.createElement('style');
+		shadow.append(shadowBase, shadowStyle);
+		try {
+			make('shadow-insert', shadow);
+			shadowStyle.sheet.insertRule(rule('shadow-insert'));
+		} catch (error) {
+			errors['shadow-insert'] = error.name;
+		}
+		// a constructed sheet a shadow root adopted, changed afterwards
+		try {
+			make('shadow-adopted', shadow);
+			const sheet = new win.CSSStyleSheet();
+			shadow.adoptedStyleSheets = [sheet];
+			sheet.insertRule(rule('shadow-adopted'));
+		} catch (error) {
+			errors['shadow-adopted'] = error.name;
+		}
+
+		// a <link>'s sheet (of the page's own site), once it loaded
+		const link = doc.createElement('link');
+		link.rel = 'stylesheet';
+		link.href = at(name, 'link-sheet', 'blank.css');
+		const linked = new Promise((resolve) => {
+			link.onload = () => resolve('load');
+			link.onerror = () => resolve('error');
+			setTimeout(() => resolve('timeout'), 4000);
+		});
+		doc.head.append(link);
+		seen.link = await linked;
+		attempt('link-insert', () =>
+			link.sheet.insertRule(rule('link-insert'), link.sheet.cssRules.length),
+		);
+		attempt('link-rule-set', () => {
+			const index = link.sheet.insertRule(
+				'.link-rule-set {}',
+				link.sheet.cssRules.length,
+			);
+			link.sheet.cssRules[index].style.setProperty(
+				'content',
+				`url("${at(name, 'link-rule-set')}")`,
+			);
+		});
+
+		// a rule put into an imported sheet, once it loaded
+		for (let i = 0; i < 40; i++) {
+			try {
+				if (empty.sheet.cssRules[0].styleSheet.cssRules) break;
+			} catch (error) {
+				// not loaded yet
+			}
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		attempt('import-insert', () => {
+			const imported = empty.sheet.cssRules[0].styleSheet;
+			imported.insertRule(rule('import-insert'), imported.cssRules.length);
+		});
+
+		// constructed sheets, changed after the document adopted them
+		const made = new win.CSSStyleSheet();
+		made.replaceSync('.made-rule-set {} @media all { .unused {} }');
+		const late = new win.CSSStyleSheet();
+		const pushed = new win.CSSStyleSheet();
+		doc.adoptedStyleSheets = [made, late];
+		attempt('made-rule-set', () =>
+			made.cssRules[0].style.setProperty(
+				'content',
+				`url("${at(name, 'made-rule-set')}")`,
+			),
+		);
+		attempt('made-media', () =>
+			made.cssRules[1].insertRule(rule('made-media')),
+		);
+		attempt('made-late', () => late.replaceSync(rule('made-late')));
+		attempt('made-add', () => late.addRule('.made-add', shows('made-add')));
+		attempt('made-pushed', () => {
+			pushed.insertRule(rule('made-pushed'));
+			doc.adoptedStyleSheets.push(pushed);
+		});
+
+		// an element's own style
+		attempt('inline-set', (element) =>
+			element.style.setProperty('content', `url("${at(name, 'inline-set')}")`),
+		);
+		attempt('inline-prop', (element) => {
+			element.style.content = `url("${at(name, 'inline-prop')}")`;
+		});
+		// a custom property the content takes its image from, and a URL
+		// named as a string of image-set()
+		attempt('inline-custom', (element) => {
+			element.style.setProperty(
+				'--cssom-image',
+				`url("${at(name, 'inline-custom')}")`,
+			);
+			element.style.content = 'var(--cssom-image)';
+		});
+		attempt('inline-image-set', (element) => {
+			element.style.content = `image-set("${at(name, 'inline-image-set')}" 1x)`;
+		});
+		attempt('inline-text', (element) => {
+			element.style.cssText = shows('inline-text');
+		});
+		attempt('inline-assign', (element) => {
+			element.style = shows('inline-assign');
+		});
+		attempt('inline-attribute', (element) =>
+			element.setAttribute('style', shows('inline-attribute')),
+		);
+		attempt('inline-ns', (element) =>
+			element.setAttributeNS(null, 'style', shows('inline-ns')),
+		);
+		attempt('inline-node', (element) => {
+			const attribute = doc.createAttribute('style');
+			attribute.value = shows('inline-node');
+			element.setAttributeNode(attribute);
+		});
+		attempt('inline-node-ns', (element) => {
+			const attribute = doc.createAttributeNS(null, 'style');
+			attribute.value = shows('inline-node-ns');
+			element.setAttributeNodeNS(attribute);
+		});
+		attempt('inline-named', (element) => {
+			const attribute = doc.createAttribute('style');
+			attribute.value = shows('inline-named');
+			element.attributes.setNamedItem(attribute);
+		});
+		attempt('inline-node-value', (element) => {
+			element.setAttribute('style', 'color: red');
+			element.getAttributeNode('style').value = shows('inline-node-value');
+		});
+		attempt('inline-node-text', (element) => {
+			element.setAttribute('style', 'color: red');
+			element.attributes.style.textContent = shows('inline-node-text');
+		});
+		attempt('inline-node-later', (element) => {
+			const attribute = doc.createAttribute('style');
+			element.setAttributeNode(attribute);
+			attribute.nodeValue = shows('inline-node-later');
+		});
+		attempt('inline-markup', (element) => {
+			element.innerHTML = `<div class="inner" style='${shows('inline-markup')}'></div>`;
+			elements['inline-markup'] = element.firstChild;
+		});
+		attempt('inline-adjacent', (element) => {
+			element.insertAdjacentHTML(
+				'beforeend',
+				`<div class="inner" style='${shows('inline-adjacent')}'></div>`,
+			);
+			elements['inline-adjacent'] = element.firstChild;
+		});
+		attempt('inline-cloned', (element) => {
+			const source = doc.createElement('div');
+			source.setAttribute('style', shows('inline-cloned'));
+			elements['inline-cloned'] = element.appendChild(source.cloneNode(true));
+		});
+		// an element the page's own document made, styled there, then moved
+		attempt('inline-moved', (element) => {
+			const source = document.createElement('div');
+			source.style.content = `url("${at(name, 'inline-moved')}")`;
+			elements['inline-moved'] = element.appendChild(source);
+		});
+		attempt('inline-imported', (element) => {
+			const source = document.createElement('div');
+			source.setAttribute('style', shows('inline-imported'));
+			elements['inline-imported'] = element.appendChild(
+				doc.importNode(source, true),
+			);
+		});
+		// an SVG element's style
+		attempt('inline-svg', (element) => {
+			const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+			svg.setAttribute('width', '10');
+			svg.setAttribute('height', '10');
+			const rect = doc.createElementNS('http://www.w3.org/2000/svg', 'rect');
+			rect.setAttribute('width', '10');
+			rect.setAttribute('height', '10');
+			rect.setAttribute(
+				'style',
+				`fill: url("${at(name, 'inline-svg')}#none") red; ${shows('inline-svg')}`,
+			);
+			svg.append(rect);
+			element.append(svg);
+			elements['inline-svg'] = rect;
+		});
+
+		setTimeout(() => {
+			const sheets = { style, empty, retexted, shadowStyle, link };
+			seen.readback = {
+				errors,
+				elements: Object.fromEntries(
+					Object.entries(elements).map(([kind, element]) => [
+						kind,
+						{
+							width: element.getBoundingClientRect().width,
+							computed: win.getComputedStyle(element).content,
+							attribute: element.getAttribute('style'),
+						},
+					]),
+				),
+				rules: {
+					...Object.fromEntries(
+						Object.entries(sheets).map(([kind, element]) => [
+							kind,
+							[...element.sheet.cssRules].map((rule) => rule.cssText),
+						]),
+					),
+					made: [...made.cssRules].map((rule) => rule.cssText),
+					late: [...late.cssRules].map((rule) => rule.cssText),
+					pushed: [...pushed.cssRules].map((rule) => rule.cssText),
+				},
+				text: Object.fromEntries(
+					Object.entries(sheets).map(([kind, element]) => [
+						kind,
+						element.textContent,
+					]),
+				),
+				color: win.getComputedStyle(doc.body).color,
+			};
+		}, 2500);
+	};
+	addEventListener('load', async () => {
+		const frame = (build) => {
+			const iframe = document.createElement('iframe');
+			document.body.append(iframe);
+			return build(iframe.contentDocument, iframe.contentWindow);
+		};
+		const popup = window.open();
+		await Promise.allSettled([
+			load('own', document, window),
+			frame((doc, win) => load('initial', doc, win)),
+			frame((doc, win) => {
+				doc.open();
+				doc.close();
+				return load('opened', doc, win);
+			}),
+			popup && load('popup', popup.document, popup),
+		]);
+		setTimeout(() => {
+			popup?.close();
+			report.done = true;
+		}, 3000);
+	});
+</script>

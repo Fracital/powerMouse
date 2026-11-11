@@ -202,6 +202,18 @@ const CASES = [
 		// attributeStyleMap.set from a string and a parsed value, append
 		loads: ['string', 'parsed', 'appended'],
 	},
+	{
+		name: 'CSSOM and attribute writes',
+		page: 'blank-cssom.html',
+		key: '__blankCssom',
+		marker: 'cssom',
+		// the page's own document too: what is routed there is copied in
+		// the others
+		documents: ['own', 'initial', 'opened', 'popup'],
+		events: ['link'],
+		// every load the same page makes natively, and no other
+		loads: 'native',
+	},
 ];
 
 /**
@@ -254,6 +266,25 @@ for (const test of CASES) {
 	await page.goto(`${FIXTURE}pages/${test.page}`);
 	natives[test.page] = await reportOf(page, test.key);
 	await page.close();
+	if (test.loads === 'native') {
+		// <document>-<kind> of each marked URL the native page asked for
+		test.nativeLoads = [
+			...new Set(
+				requested
+					.map((url) => new URL(url).searchParams.get(test.marker))
+					.filter((mark) => mark),
+			),
+		];
+		ok(
+			`natively, the ${test.name} load from every document`,
+			test.documents.every(
+				(name) =>
+					test.nativeLoads.filter((mark) => mark.startsWith(`${name}-`))
+						.length > 20,
+			),
+			JSON.stringify(test.nativeLoads),
+		);
+	}
 	const never = (test.never ?? []).filter((kind) =>
 		requested.some(
 			(url) => url.includes(`${test.marker}=`) && url.includes(`-${kind}`),
@@ -317,13 +348,32 @@ for (const [mode, base] of [
 					proxied: events(proxied?.[name]),
 				}),
 			);
-			const missing = test.loads.filter(
+			const kindsOf = (marks) =>
+				marks
+					.filter((mark) => mark.startsWith(`${name}-`))
+					.map((mark) => mark.slice(name.length + 1));
+			const loads =
+				test.loads === 'native' ? kindsOf(test.nativeLoads) : test.loads;
+			const missing = loads.filter(
 				(kind) =>
 					!served.some((url) => url.includes(`${test.marker}=${name}-${kind}`)),
 			);
-			const loaded = (test.never ?? []).filter((kind) =>
-				served.some((url) => url.includes(`${test.marker}=${name}-${kind}`)),
-			);
+			const loaded =
+				test.loads === 'native'
+					? kindsOf(
+							[
+								...new Set(
+									served.map((url) =>
+										new URL(url).searchParams.get(test.marker),
+									),
+								),
+							].filter((mark) => mark),
+						).filter((kind) => !loads.includes(kind))
+					: (test.never ?? []).filter((kind) =>
+							served.some((url) =>
+								url.includes(`${test.marker}=${name}-${kind}`),
+							),
+						);
 			ok(
 				`${mode}: the ${name} document's ${test.name} go through the worker`,
 				missing.length === 0 && loaded.length === 0,

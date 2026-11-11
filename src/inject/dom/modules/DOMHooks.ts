@@ -798,7 +798,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						for (const node of [...that.childNodes]) node.remove();
 
 						that.append(
-							new Text(this.client.prepareScriptText(that, String(args[0]))),
+							new this.client.global.Text(
+								this.client.prepareScriptText(that, String(args[0])),
+							),
 						);
 					},
 				),
@@ -853,7 +855,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						that instanceof this.client.global.HTMLScriptElement
 							? this.client.prepareScriptText(that, String(args[0]))
 							: String(args[0]);
-					(that as Element).append(new Text(text));
+					(that as Element).append(new this.client.global.Text(text));
 				},
 			),
 		});
@@ -877,7 +879,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						// other node and leaves half the old text in place
 						for (const node of [...that.childNodes]) node.remove();
 
-						that.append(new Text(args[0]));
+						that.append(new this.client.global.Text(args[0]));
 					},
 				),
 			},
@@ -898,7 +900,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				set: proxyModule.wrapFunction(
 					outerTextDescriptor.set!,
 					(target, that: Element, args) => {
-						that.replaceWith(new Text(args[0]));
+						that.replaceWith(new this.client.global.Text(args[0]));
 					},
 				),
 			},
@@ -983,7 +985,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							if (element.nodeName === 'SCRIPT') {
 								// allow the bad practice of setting the script's innerHTML
 								// scripts cannot support nodes as content
-								element.append(new Text(markup));
+								element.append(new this.client.global.Text(markup));
 							} else {
 								// parsed in the element's context, as the browser does:
 								// a table section's rows, an <svg>'s SVG, a <textarea>'s
@@ -1369,6 +1371,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 		// Element.attributes: a view of the map without the markers
 		const attributeMaps = new WeakMap<NamedNodeMap, NamedNodeMap>();
+		/** the element's hooked setAttributeNode and setAttributeNodeNS, once they are wrapped below */
+		const setNamedItems: {
+			setAttributeNode?: Element['setAttributeNode'];
+			setAttributeNodeNS?: Element['setAttributeNodeNS'];
+		} = {};
 		const standIns = new WeakMap<Attr, Attr>();
 		const nativeCreateAttribute =
 			this.client.global.Document.prototype.createAttribute;
@@ -1433,6 +1440,32 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 												: (map.getNamedItem(name) ??
 													named(attributeName(owner, String(name))) ??
 													null);
+									// an attribute node set through the map is set on the
+									// element: through its hooks, so what it loads is routed
+									if (key === 'setNamedItem' || key === 'setNamedItemNS') {
+										const set =
+											setNamedItems[
+												key === 'setNamedItem'
+													? 'setAttributeNode'
+													: 'setAttributeNodeNS'
+											];
+										if (set)
+											return (...args: unknown[]) => {
+												// the browser's own errors (no argument, not an
+												// Attr, a node in use) name the map's method
+												const attr = args[0];
+												if (
+													!(attr instanceof this.client.global.Attr) ||
+													(attr.ownerElement && attr.ownerElement !== owner)
+												)
+													return Reflect.apply(
+														Reflect.get(map, key) as Function,
+														map,
+														args,
+													);
+												return Reflect.apply(set, owner, args);
+											};
+									}
 									if (key === Symbol.iterator)
 										return function* () {
 											yield* visible();
@@ -1797,22 +1830,26 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						return result;
 					}),
 			);
-		this.client.global.Element.prototype.setAttributeNode =
-			proxyModule.wrapFunction(
-				this.client.global.Element.prototype.setAttributeNode,
-				(target, that: Element, args) => {
-					const name = (args[0] as Attr)?.name;
-					const write = () => {
-						const result = Reflect.apply(target, that, args);
-						if (name)
-							usePrototype(that, CustomElement.prototype, (element) =>
-								this.updateAttributeHooks(element, name),
-							);
-						return result;
-					};
-					return name ? pageWrite(that, name, write) : write();
-				},
-			);
+		// setAttributeNode and setAttributeNodeNS are one algorithm, and an
+		// attribute map's setNamedItem and setNamedItemNS are the same one
+		// again (setNamedItems, read by the attributes view)
+		for (const method of ['setAttributeNode', 'setAttributeNodeNS'] as const)
+			this.client.global.Element.prototype[method] = setNamedItems[method] =
+				proxyModule.wrapFunction(
+					this.client.global.Element.prototype[method],
+					(target, that: Element, args) => {
+						const name = (args[0] as Attr)?.name;
+						const write = () => {
+							const result = Reflect.apply(target, that, args);
+							if (name)
+								usePrototype(that, CustomElement.prototype, (element) =>
+									this.updateAttributeHooks(element, name),
+								);
+							return result;
+						};
+						return name ? pageWrite(that, name, write) : write();
+					},
+				);
 
 		this.client.global.Element.prototype.setAttribute =
 			proxyModule.wrapFunction(

@@ -56,12 +56,22 @@ export default class CSSOMModule extends Module<DocumentClient> {
 			}
 		};
 
-		// a constructed sheet in a document no service worker controls has its
-		// loads copied once its rules change (replace: once they are in)
+		// what addRule takes for a rule's body: a declaration list
+		const rewriteDeclarations = (text: unknown) => {
+			const source = String(text);
+			try {
+				return modifyCSS(source, this.client.url, 'declarationList');
+			} catch (error) {
+				return rewriteCSSValueURLs(source, this.client.url);
+			}
+		};
+
+		// a sheet in a document no service worker controls has its loads
+		// copied once its rules change (replace: once they are in)
 		const domAttributes = this.client.getModule(DOMAttributesModule);
 		const copied = (sheet: unknown) => {
 			if (domAttributes?.uncontrolled())
-				domAttributes.copyConstructed?.(sheet as CSSStyleSheet);
+				domAttributes.copyRules?.(sheet as CSSStyleSheet);
 		};
 		// The rules of another origin's stylesheet are not the page's to read
 		// or change: every route is same-origin to the browser, so it hands
@@ -159,7 +169,13 @@ export default class CSSOMModule extends Module<DocumentClient> {
 						throw refuse(
 							`Failed to execute '${method}' on 'CSSStyleSheet': Cannot access StyleSheet to ${action}`,
 						);
-					return Reflect.apply(target, that, args);
+					// addRule(selector, declarations, index): the declarations are
+					// the page's CSS as much as insertRule's rule is
+					if (method === 'addRule' && args.length > 1)
+						args[1] = rewriteDeclarations(args[1]);
+					const result = Reflect.apply(target, that, args);
+					copied(that);
+					return result;
 				},
 			) as any;
 		}
@@ -189,6 +205,40 @@ export default class CSSOMModule extends Module<DocumentClient> {
 					return result;
 				},
 			) as any;
+		}
+
+		// A rule put inside another (an @media's, an @supports's, a style
+		// rule's nested ones, a keyframe of an @keyframes) is the page's CSS
+		// too: routed before the browser parses it, or its url()s load from
+		// the site itself, past the proxy. Its sheet's loads are copied where
+		// no service worker controls.
+		const parentSheet = sheetGetter(
+			global.CSSRule?.prototype,
+			'parentStyleSheet',
+		);
+		for (const name of Object.getOwnPropertyNames(global)) {
+			if (!/^CSS\w*Rule$/.test(name)) continue;
+			const rule = (global as unknown as Record<string, any>)[name]?.prototype;
+			if (!rule) continue;
+			for (const method of ['insertRule', 'appendRule', 'deleteRule']) {
+				const descriptor = Reflect.getOwnPropertyDescriptor(rule, method);
+				if (typeof descriptor?.value !== 'function') continue;
+				rule[method] = proxyModule.wrapFunction(
+					descriptor.value as Function,
+					(target, that, args) => {
+						if (method !== 'deleteRule' && args.length)
+							args[0] = rewrite(args[0]);
+						const result = Reflect.apply(target, that, args);
+						try {
+							const owner = parentSheet && Reflect.apply(parentSheet, that, []);
+							if (owner) copied(owner);
+						} catch (error) {
+							// not a rule: the native method threw already
+						}
+						return result;
+					},
+				);
+			}
 		}
 
 		// a face made in another realm settles that realm's promises: the page

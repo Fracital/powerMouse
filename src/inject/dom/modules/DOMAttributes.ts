@@ -94,8 +94,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 	uncontrolled: () => boolean = () => false;
 	/** @internal copy a <style>'s routed loads in a document no service worker controls (DOMContentHooks) */
 	copySheet?: (style: StyleElement, mark: (rule: CSSRule) => void) => void;
-	/** @internal copy a constructed sheet's routed loads in a document no service worker controls (CSSOM) */
-	copyConstructed?: (sheet: CSSStyleSheet) => void;
+	/** @internal copy the routed loads of a sheet whose rules the CSSOM changed, in a document no service worker controls (CSSOM) */
+	copyRules?: (sheet: CSSStyleSheet) => void;
+	/** @internal copy the routed loads of an element's style that came into a document no service worker controls (DOMContentHooks) */
+	copyInline?: (element: Element) => void;
 	/** @internal the page's view of a CSSStyleDeclaration: reads unrouted, writes routed (CSSReadback) */
 	wrapDeclaration?: (declaration: CSSStyleDeclaration) => CSSStyleDeclaration;
 	// captured before the hooks replace them, for serializeStyle
@@ -1852,17 +1854,64 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.removeAttributeOG('style');
 				});
 			};
+			// a rule's declarations (rule.style) belong to its sheet: a write
+			// there in a document no service worker controls has the sheet's
+			// loads copied
+			const parentRule = Reflect.getOwnPropertyDescriptor(
+				styleProto,
+				'parentRule',
+			)!.get!;
+			const parentSheet = Reflect.getOwnPropertyDescriptor(
+				this.client.global.CSSRule.prototype,
+				'parentStyleSheet',
+			)!.get!;
+			const ruleWritten = (rule: unknown) => {
+				try {
+					const sheet = rule && Reflect.apply(parentSheet, rule, []);
+					if (sheet) this.copyRules?.(sheet as CSSStyleSheet);
+				} catch (error) {
+					// not a rule
+				}
+			};
 			const afterWrite = (declaration: unknown) => {
 				const owner = owners.get(declaration as CSSStyleDeclaration);
-				if (!owner) return;
+				if (!owner) {
+					if (!uncontrolled()) return;
+					try {
+						ruleWritten(Reflect.apply(parentRule, declaration, []));
+					} catch (error) {
+						// not a declaration block
+					}
+					return;
+				}
 				dropMarker(owner);
 				copyInlineSoon(owner);
 			};
+			this.copyInline = (element) => copyInlineSoon(element);
 
-			const rewriteValue = (value: unknown) =>
-				typeof value === 'string' && value.includes('url(')
+			// One property's value. A url() token is found as it stands; a URL
+			// named any other way (a string of image-set() or src(), a url(
+			// spelled with an escape) takes the parser, which reads the value
+			// as a declaration's
+			const AS_DECLARATION = 'content:';
+			const rewriteValue = (value: unknown) => {
+				if (typeof value !== 'string') return value;
+				if (/image-set|src\(|\\/i.test(value))
+					try {
+						const routed = modifyCSS(
+							AS_DECLARATION + value,
+							this.client.url,
+							'declarationList',
+						);
+						if (routed.startsWith(AS_DECLARATION))
+							return routed.slice(AS_DECLARATION.length);
+					} catch (error) {
+						// not a value the parser takes: the url() tokens it has
+					}
+				return value.includes('url(')
 					? rewriteCSSValueURLs(value, this.client.url)
 					: value;
+			};
 
 			const rewriteCssText = (value: unknown) => {
 				try {
@@ -2016,6 +2065,30 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					),
 				});
 			}
+			// a style rule's styleMap: a write there changes the rule
+			const mapRules = new WeakMap<object, object>();
+			{
+				const descriptor = Reflect.getOwnPropertyDescriptor(
+					this.client.global.CSSStyleRule.prototype,
+					'styleMap',
+				);
+				if (descriptor?.get)
+					Reflect.defineProperty(
+						this.client.global.CSSStyleRule.prototype,
+						'styleMap',
+						{
+							...descriptor,
+							get: proxyModule.wrapFunction(
+								descriptor.get,
+								(target, that, args) => {
+									const map = Reflect.apply(target, that, args);
+									if (map && typeof map === 'object') mapRules.set(map, that);
+									return map;
+								},
+							),
+						},
+					);
+			}
 			if (typeof typed.StylePropertyMap === 'function')
 				for (const name of ['set', 'append', 'delete', 'clear'])
 					if (typeof typed.StylePropertyMap.prototype[name] === 'function')
@@ -2030,7 +2103,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								if (owner) {
 									dropMarker(owner);
 									copyInlineSoon(owner);
-								}
+								} else if (uncontrolled()) ruleWritten(mapRules.get(that));
 								return result;
 							},
 						);
@@ -2128,6 +2201,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			this.client.global.CSSStyleRule.prototype,
 			'style',
 		)!.get!;
+		const keyframeStyle = Reflect.getOwnPropertyDescriptor(
+			this.client.global.CSSKeyframeRule?.prototype ?? {},
+			'style',
+		)?.get;
 		const sheetText = (sheet: CSSStyleSheet | null | undefined) => {
 			try {
 				return [...(sheet?.cssRules ?? [])].map(textOf).join('\n');
@@ -2160,6 +2237,21 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						putBack(rule as unknown as CSSGroupingRule, copied, mark);
 					continue;
 				}
+				// an @keyframes rule's keyframes take the copies as a style rule
+				// does (they cannot be put back at a place)
+				if ('appendRule' in rule) {
+					for (const keyframe of (rule as CSSKeyframesRule).cssRules)
+						if (keyframeStyle && routesIn(textOf(keyframe)).length)
+							putCopies(
+								Reflect.apply(
+									keyframeStyle,
+									keyframe,
+									[],
+								) as CSSStyleDeclaration,
+								copied,
+							);
+					continue;
+				}
 				// a grouping rule (@media, @supports, @layer) is entered
 				if ('cssRules' in rule && !('styleSheet' in rule)) {
 					putBack(rule as CSSGroupingRule, copied, mark);
@@ -2177,7 +2269,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				}
 			}
 		};
-		this.copySheet = (style, mark) =>
+		/** how the CSSOM pass of each <style> marks a rule it need not redo */
+		const sheetMarks = new WeakMap<StyleElement, (rule: CSSRule) => void>();
+		this.copySheet = (style, mark) => {
+			sheetMarks.set(style, mark);
 			copyOwned(
 				style,
 				'sheet',
@@ -2186,34 +2281,45 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					if (style.sheet) putBack(style.sheet, copied, mark);
 				},
 			);
-		// A constructed sheet a document no service worker controls made
-		// (replace, replaceSync, insertRule, deleteRule): the same, the copies
-		// the sheet's own. A sheet a <link> or <style> owns, or an @import's,
-		// has its loads copied with its owner.
+		};
+		// A sheet whose rules the page changed through the CSSOM in a document
+		// no service worker controls (insertRule, addRule, replace,
+		// replaceSync, deleteRule, a rule put inside another, a rule's own
+		// declarations): the same. A <style>'s sheet is copied as its
+		// element's, so the copies go when its text changes; any other (a
+		// constructed sheet, a <link>'s, an @import's) holds its own. Once
+		// for the writes of a task: a page that builds a sheet rule by rule
+		// has it read once.
 		const ownerNode = Reflect.getOwnPropertyDescriptor(
 			this.client.global.StyleSheet.prototype,
 			'ownerNode',
 		)!.get!;
-		const ownerRule = Reflect.getOwnPropertyDescriptor(
-			this.client.global.CSSStyleSheet.prototype,
-			'ownerRule',
-		)!.get!;
-		this.copyConstructed = (sheet) => {
-			try {
-				if (
-					Reflect.apply(ownerNode, sheet, []) !== null ||
-					Reflect.apply(ownerRule, sheet, []) !== null
-				)
+		const changedSheets = new WeakSet<CSSStyleSheet>();
+		this.copyRules = (sheet) => {
+			if (!uncontrolled() || changedSheets.has(sheet)) return;
+			changedSheets.add(sheet);
+			queueMicrotask(() => {
+				changedSheets.delete(sheet);
+				let style: StyleElement | null;
+				try {
+					style = this.client.styleElement(Reflect.apply(ownerNode, sheet, []));
+				} catch (error) {
 					return;
-			} catch (error) {
-				return;
-			}
-			copyOwned(
-				sheet,
-				'rules',
-				() => sheetText(sheet),
-				(copied) => putBack(sheet, copied, () => {}),
-			);
+				}
+				if (style) {
+					// the sheet the element has now: one the page kept from before
+					// its text changed shows nothing
+					if (style.sheet === sheet)
+						this.copySheet!(style, sheetMarks.get(style) ?? (() => {}));
+					return;
+				}
+				copyOwned(
+					sheet,
+					'rules',
+					() => sheetText(sheet),
+					(copied) => putBack(sheet, copied, () => {}),
+				);
+			});
 		};
 
 		// The elements the parser made from markup the page wrote into a
