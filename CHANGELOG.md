@@ -450,6 +450,9 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   argument that named `top` or `location`, or read a member, reached the
   real one: `eval(top)` handed a page the real top-level window.
   (rewriter-unit and adversarial-eval suites.)
+- `super.postMessage(m)` in a class stays the class's own call: it was
+  rewritten to a call that names `super` as a value, which does not parse,
+  so the whole script failed. (rewriter-unit suite.)
 - A stylesheet is rewritten the same whatever was rewritten before it, and
   its rewrite always ends. css-tree keeps its token buffer between parses
   and reads one entry of it that the parse at hand never writes (the token

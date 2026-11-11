@@ -1180,4 +1180,13 @@ console.warn = warn;
 		out,
 	);
 }
+{
+	// `super` is no value to hand the access API: the output did not parse
+	const own = rewrite('class A extends B { m() { super.postMessage(1); } }');
+	ok(
+		"super.postMessage stays the class's own call",
+		/super\.postMessage\(1\)/.test(own) && parses(own),
+		own,
+	);
+}
 await done();

@@ -78,6 +78,9 @@ function postMessageCall(
 	node: any,
 ): { target: any; args: any; optional: boolean } | null {
 	const { callee } = node;
+	// (`super.postMessage(m)` stays the class's own: `super` is no value to
+	// hand the access API)
+	if (isPostMessage(callee) && callee.object.type === 'Super') return null;
 	if (isPostMessage(callee))
 		return {
 			target: callee.object,
