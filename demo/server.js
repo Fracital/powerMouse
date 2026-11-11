@@ -40,6 +40,11 @@
 //   STOMP_REWRITER      `wasm` runs the Rust rewriters where a thread holds
 //                       them (the controller's `rewriter` option); the
 //                       JavaScript rewriters otherwise
+//   STOMP_ADBLOCK       `1` turns on the built-in content blocker with its
+//                       default lists (the controller's `adblock` option,
+//                       docs/adblock.md); `?adblock` on the page does it for
+//                       one visit, `?noadblock` turns it off for one, and
+//                       the page's Block ads toggle is remembered
 //   STOMP_TEST_TRANSPORT `1` swaps epoxy for /test/mixed-transport.mjs, which
 //                       reaches the mixed-content suite's fixture hosts (test
 //                       runs only; test/run.mjs sets it for that suite)
@@ -248,6 +253,7 @@ const pageConfig = {
 			: process.env.STOMP_ECH_DNS || 'https://cloudflare-dns.com/dns-query',
 	...(process.env.STOMP_TEST_TRANSPORT === '1' && { testTransport: true }),
 	...(process.env.STOMP_REWRITER === 'wasm' && { rewriter: 'wasm' }),
+	...(process.env.STOMP_ADBLOCK === '1' && { adblock: true }),
 	// startedAt lets the dev client tell a restarted server from a dropped
 	// connection: a different value on reconnect means new server code
 	...(dev && { dev: true, startedAt: started }),

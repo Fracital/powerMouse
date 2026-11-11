@@ -33,6 +33,7 @@ Environment variables:
 | `HOLYWISP_LOG_LEVEL`   | `error`        | Log level of the built-in holyWisp (`debug` shows every stream and why it closed), printed on stdout                                                                   |
 | `STOMP_HTTP3`          | on             | Set to `0` to turn off HTTP/3 for the epoxy transport (`?http3=0` turns it off for one visit, `?http3` on); docs/http3.md has what it costs and why it is on           |
 | `STOMP_REWRITER`       | unset          | `wasm` runs the Rust rewriters where a thread holds them (the controller's `rewriter` option; `?wasm` does one visit, `?js` the JavaScript ones)                       |
+| `STOMP_ADBLOCK`        | unset          | Set to `1` to turn on the built-in content blocker (docs/adblock.md); `?adblock` and `?noadblock` do one visit, the page's Block ads toggle is remembered              |
 | `STOMP_ECH_DNS`        | Cloudflare DoH | DNS-over-HTTPS endpoint epoxy asks for HTTPS records to offer real Encrypted Client Hello (docs/fingerprint.md); `off` sends GREASE ECH only (`?noech` does one visit) |
 | `STOMP_TEST_TRANSPORT` | unset          | Set to `1` to use `/test/mixed-transport.mjs` (epoxy that reaches the mixed-content suite's fixture hosts); test runs only                                             |
 

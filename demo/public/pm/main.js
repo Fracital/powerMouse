@@ -43,6 +43,7 @@ const recentsList = $('recentsList');
 const landingStatus = $('logMsg');
 const chromeStatus = $('chromeStatus');
 const transportSelect = $('transport');
+const adblockToggle = $('adblock');
 const omni = $('omni');
 const mainForm = $('mainForm');
 
@@ -89,6 +90,19 @@ const REWRITER = new URLSearchParams(location.search).has('js')
 	: CFG.rewriter === 'wasm' || new URLSearchParams(location.search).has('wasm')
 		? 'wasm'
 		: '';
+// the built-in content blocker (docs/adblock.md), off by default. In order:
+// ?noadblock and ?adblock on this page (one load), the toggle beside the
+// transport select (remembered), STOMP_ADBLOCK=1 on the server
+const ADBLOCK = (() => {
+	const query = new URLSearchParams(location.search);
+	if (query.has('noadblock')) return false;
+	if (query.has('adblock')) return true;
+	try {
+		const saved = localStorage.getItem('stomp-demo:adblock');
+		if (saved !== null) return saved === '1';
+	} catch {}
+	return !!CFG.adblock;
+})();
 // real Encrypted Client Hello where a site's HTTPS DNS record has a config,
 // looked up over DoH by epoxy (STOMP_ECH_DNS on the server; ?noech sends
 // GREASE ECH only, as before)
@@ -349,6 +363,7 @@ async function startController(name) {
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
 			serviceWorkerEventDelay: SERVICE_WORKER_EVENT_DELAY,
 			...(REWRITER && { rewriter: REWRITER }),
+			...(ADBLOCK && { adblock: true }),
 			...controllerCallbacks,
 		});
 	} else {
@@ -367,6 +382,7 @@ async function startController(name) {
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
 			serviceWorkerEventDelay: SERVICE_WORKER_EVENT_DELAY,
 			...(REWRITER && { rewriter: REWRITER }),
+			...(ADBLOCK && { adblock: true }),
 			...controllerCallbacks,
 		});
 	}
@@ -1444,6 +1460,22 @@ addEventListener('keydown', (event) => {
 transportSelect.addEventListener('change', () =>
 	switchTransport(transportSelect.value),
 );
+
+// the blocker is an option of the controller: the choice is remembered and
+// the page starts again with it (without a ?adblock that would overrule it)
+adblockToggle.checked = ADBLOCK;
+adblockToggle.addEventListener('change', () => {
+	try {
+		localStorage.setItem(
+			'stomp-demo:adblock',
+			adblockToggle.checked ? '1' : '0',
+		);
+	} catch {}
+	const url = new URL(location.href);
+	url.searchParams.delete('adblock');
+	url.searchParams.delete('noadblock');
+	location.replace(url.href);
+});
 
 const homeTiles = [];
 for (const [label, url, color] of QUICK_LINKS) {

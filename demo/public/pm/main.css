@@ -575,6 +575,15 @@ button::-moz-focus-inner {
 	margin-left: 4px;
 }
 
+.rbottom .check {
+	margin-right: 14px;
+}
+
+.rbottom .check input {
+	accent-color: #4ca9fb;
+	vertical-align: -2px;
+}
+
 .chrome .select {
 	height: 28px;
 	box-sizing: border-box;
