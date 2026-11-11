@@ -7,7 +7,9 @@
 	// the toolbar suite's page: its name is ?p=, #link goes where the suite
 	// points it, #act runs the history call the suite names in
 	// window.tbAction (here, in the page's own script, as a site would), and
-	// ?frame=<page> puts that page in an iframe
+	// ?frame=<page> puts that page in an iframe; ?auto=<kind>&to=<url> runs
+	// that history call by itself, ?ms= after the load event (300 by
+	// default), without a user activation
 	const query = new URLSearchParams(location.search);
 	document.title = `TB ${query.get('p') ?? ''}`;
 	document.getElementById('name').textContent = query.get('p') ?? '';
@@ -17,13 +19,37 @@
 		frame.src = query.get('frame');
 		document.body.append(frame);
 	}
-	document.getElementById('act').addEventListener('click', () => {
-		const { kind, url } = window.tbAction ?? {};
+	const run = (kind, url) => {
 		if (kind === 'push') history.pushState({ url }, '', url);
 		else if (kind === 'replace') history.replaceState({ url }, '', url);
 		else if (kind === 'hash') location.hash = url;
 		else if (kind === 'assign') location.href = url;
 		else if (kind === 'location-replace') location.replace(url);
 		else if (kind === 'child-src') document.getElementById('child').src = url;
+		else if (kind === 'push2') {
+			history.pushState({ url }, '', `${url}-1`);
+			history.pushState({ url }, '', `${url}-2`);
+		} else if (kind.startsWith('later-')) {
+			// a click now, the call after the activation has expired
+			setTimeout(() => run(kind.slice(6), url), 6000);
+		}
+	};
+	document.getElementById('act').addEventListener('click', () => {
+		const { kind, url } = window.tbAction ?? {};
+		run(kind, url);
 	});
+	if (query.get('auto'))
+		addEventListener('load', () =>
+			setTimeout(
+				() => {
+					run(query.get('auto'), query.get('to'));
+					if (query.get('then'))
+						setTimeout(
+							() => run(query.get('then'), query.get('to2')),
+							Number(query.get('ms2') ?? 300),
+						);
+				},
+				Number(query.get('ms') ?? 300),
+			),
+		);
 </script>

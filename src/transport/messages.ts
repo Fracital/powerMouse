@@ -332,6 +332,15 @@ export const STORAGE_EVENT = '$stomp$storageEvent';
  */
 export const HOOK_ERROR = '$stomp$hookError';
 export const NAVIGATE = '$stomp$navigate';
+/**
+ * a proxied document telling the host it got its first user activation (a
+ * click or a key), posted like a navigate report with the document's token
+ * (its client's historyActivation.token), for Chrome's history intervention
+ * (src/controller/history.ts): the click may navigate it away before the
+ * host could read it. In same-origin mode the frame's element has a
+ * function under this name, which the document calls instead
+ */
+export const ACTIVATED = '$stomp$activated';
 
 export interface NavigateInfo {
 	/** the real URL the page shows */

@@ -33,6 +33,7 @@ import { isUrlLike, urlLike } from '../StompURL';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
 import type { HostReload, RequestRule } from '../transport/messages';
 import {
+	ACTIVATED,
 	CLIENT_HINTS,
 	CLIENT_ID,
 	ClientHintsReport,
@@ -73,7 +74,14 @@ import TransportWorker from '../transport/TransportWorker';
 import { BUILD } from '../version';
 import { compileModule } from '../wasm/module';
 import { ClientFrames } from './clientFrames';
-import { canTraverse, traverse } from './history';
+import {
+	bindHistory,
+	canTraverse,
+	clientView,
+	noteActivation,
+	noteBrowserNavigation,
+	traverse,
+} from './history';
 import { hostReload } from './hostReload';
 import { controllerId, forgetControllerIds, keptControllerId } from './id';
 import { mediaVerdict } from './mediaVerdict';
@@ -456,6 +464,13 @@ export function clientReport(data: unknown): string | null {
 	if (typeof data !== 'object' || data === null) return null;
 	const client = (data as Record<string, unknown>)[CLIENT_ID];
 	return typeof client === 'string' ? client : null;
+}
+
+/** the token of a proxied document that reported its first user activation, else null */
+export function activatedReport(data: unknown): string | null {
+	if (typeof data !== 'object' || data === null) return null;
+	const token = (data as Record<string, unknown>)[ACTIVATED];
+	return typeof token === 'string' ? token : null;
 }
 
 /** a hook error report posted by a proxied page, else null */
@@ -952,6 +967,12 @@ export class StompController extends EventTarget {
 			const found = frameOfSource(this.frames, event.source);
 			if (!found) return;
 			const { frame, nested } = found;
+			// a document of the frame got a user activation: read it now
+			const activated = activatedReport(event.data);
+			if (activated !== null) {
+				noteActivation(frame.historyWindow(), activated, nested);
+				return;
+			}
 			// a document in a frame of the page tells the real top which client
 			// it is (its requests are this frame's), when its history moved and
 			// that a hook of the host's threw in it, as the page does; nothing
@@ -2049,6 +2070,13 @@ export class Frame extends EventTarget {
 	) {
 		super();
 		if (sandbox !== null) element.setAttribute('sandbox', sandbox);
+		// a document of the frame tells of its first user activation here,
+		// at once (the message it would post can come too late)
+		Reflect.defineProperty(element, ACTIVATED, {
+			value: (token: unknown) =>
+				noteActivation(this.historyWindow(), String(token)),
+			configurable: true,
+		});
 	}
 	/** @internal */
 	report(info: NavigateInfo) {
@@ -2062,6 +2090,14 @@ export class Frame extends EventTarget {
 		for (const resolve of this.#awaitingReport) resolve();
 		this.#awaitingReport.clear();
 		this.dispatchEvent(new CustomEvent('navigate', { detail: info }));
+	}
+	/** @internal the frame's window, its history told how to read its documents */
+	historyWindow(): Window | null {
+		const win = this.element.contentWindow;
+		bindHistory(win, (target) =>
+			clientView(target, helperNames(this.controller.config).client),
+		);
+		return win;
 	}
 	/**
 	 * @internal A document in a frame of the page reported: the last report
@@ -2125,7 +2161,9 @@ export class Frame extends EventTarget {
 			this.element.clientWidth,
 			this.element.clientHeight,
 		);
-		this.element.src = await this.controller.route(url);
+		const routed = await this.controller.route(url);
+		noteBrowserNavigation(this.historyWindow());
+		this.element.src = routed;
 		await reported;
 	}
 	/**
@@ -2136,25 +2174,26 @@ export class Frame extends EventTarget {
 	 * show its own "nothing to go back to" state.
 	 */
 	async back(): Promise<boolean> {
-		const win = this.element.contentWindow;
+		const win = this.historyWindow();
 		return win ? traverse(win, 'back') : false;
 	}
 	async forward(): Promise<boolean> {
-		const win = this.element.contentWindow;
+		const win = this.historyWindow();
 		return win ? traverse(win, 'forward') : false;
 	}
 	/** whether the frame's history (nested frames included) has an entry before/after the current one; null when the browser cannot tell */
 	get canGoBack(): boolean | null {
-		return canTraverse(this.element.contentWindow, 'back');
+		return canTraverse(this.historyWindow(), 'back');
 	}
 	get canGoForward(): boolean | null {
-		return canTraverse(this.element.contentWindow, 'forward');
+		return canTraverse(this.historyWindow(), 'forward');
 	}
 	/** reload the frame; resolves when the reloaded document first reports (false when there was no document to reload) */
 	async reload(): Promise<boolean> {
 		const win = this.element.contentWindow;
 		if (!win) return false;
 		const reported = this.#nextReport();
+		noteBrowserNavigation(this.historyWindow());
 		win.location.reload();
 		await reported;
 		return true;

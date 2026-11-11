@@ -255,6 +255,17 @@ export default class DocumentClient extends Client {
 	 * next navigation on.
 	 */
 	sandboxFlags: Set<string> | null = null;
+	/**
+	 * The document's user activation, for the host's history (the Navigate
+	 * module): whether the browser had given it one when it started (carried
+	 * over from the document that navigated to it) and whether it has one of
+	 * its own
+	 */
+	historyActivation: {
+		start: boolean;
+		activated: () => boolean;
+		token: string;
+	} | null = null;
 	/** the window's native frameElement getter (the Framing module hooks it) */
 	#frameElementGet: (() => Element | null) | undefined;
 	/** the flags a popup inherited from its opener when it was created */

@@ -749,6 +749,18 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   set for a response the origin confirmed with a 304 (the demo's viewer
   tags it "304"). (http-cache suite, native against proxied in both
   modes; cache, sop-escapes and sop-partitions suites.)
+- A frame's Back and Forward pass over the entries Chrome's history
+  intervention passes over: those of a page that sent the frame on to a
+  new document by script with no user activation, its own or one carried
+  over from a document of its origin that navigated to it (a link, not a
+  typed URL, Back or Reload). Back to such a page landed on it and it
+  redirected again; Back is now off when every entry before is one of
+  those, as Chrome's is. Measured in Chrome 152 and 156: a pushState or
+  fragment without activation is kept, as is a frame in the page that
+  redirects, and a page's same-document entries go with it. Proxied
+  documents tell the host when they first get an activation, since the
+  browser carries one over between every two of them (they share the
+  proxy's origin). (toolbar-history suite.)
 - A frame's Back and Forward (`back()`, `forward()`, `canGoBack`,
   `canGoForward`, and the demo's buttons) go where a browser tab's go.
   After a link to another site Back was greyed out for good: the controller

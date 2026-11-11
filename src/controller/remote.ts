@@ -19,6 +19,7 @@ import { ClientFrames } from './clientFrames';
 import { hostReload } from './hostReload';
 import { controllerId, forgetControllerIds, keptControllerId } from './id';
 import {
+	activatedReport,
 	clientReport,
 	CookieJar,
 	cookieJar,
@@ -313,6 +314,13 @@ export class RemoteController extends EventTarget {
 			const found = frameOfSource(this.frames, event.source);
 			if (!found) return;
 			const { frame, nested } = found;
+			// a document of the frame got a user activation: the controller
+			// frame reads it now
+			const activated = activatedReport(event.data);
+			if (activated !== null) {
+				frame.historyTouched(activated, nested);
+				return;
+			}
 			// a document in a frame of the page says which client it is (its
 			// requests are this frame's), when its history moved and that a
 			// hook threw in it, nothing else (see StompController)
@@ -484,6 +492,17 @@ export class RemoteController extends EventTarget {
 		return this.#rpc.call('frameInfo', index);
 	}
 	/** @internal */
+	async frameActivated(
+		element: HTMLIFrameElement,
+		token: string,
+		nested: boolean,
+	) {
+		await this.#ready;
+		const index = this.#frameIndex(element);
+		if (index !== -1)
+			await this.#rpc.call('frameActivated', { index, token, nested });
+	}
+	/** @internal */
 	async frameCommand(
 		element: HTMLIFrameElement,
 		command: FrameCommand,
@@ -550,7 +569,10 @@ export class RemoteFrame extends EventTarget {
 			this.element.clientWidth,
 			this.element.clientHeight,
 		);
-		this.element.src = await this.controller.route(url);
+		const routed = await this.controller.route(url);
+		// the next document is the host's, not the page's (history intervention)
+		await this.controller.frameCommand(this.element, 'typed').catch(() => {});
+		this.element.src = routed;
 		this.#keepFocusAcrossCommit();
 		this.url = url;
 		await reported;
@@ -608,6 +630,16 @@ export class RemoteFrame extends EventTarget {
 				.catch(() => {});
 		this.#history = this.#history.then(run, run);
 		return this.#history;
+	}
+	/** @internal a document of the frame got a user activation */
+	historyTouched(token: string, nested: boolean) {
+		// in line with the history state requests, so it is in before the
+		// report of the document the click navigated to
+		const run = () =>
+			this.controller
+				.frameActivated(this.element, token, nested)
+				.catch(() => {});
+		this.#history = this.#history.then(run, run);
 	}
 	/**
 	 * @internal A report, out with the frame's history state once that is

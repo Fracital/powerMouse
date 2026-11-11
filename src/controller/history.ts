@@ -34,6 +34,8 @@ const COMMIT_TIMEOUT = 10000;
  * with location.replace instead
  */
 const DROPPED_TIMEOUT = 3000;
+/** how long a document's activation report may lag the next document */
+const ACTIVATION_GRACE = 400;
 /** how deep nested frames are followed */
 const MAX_DEPTH = 8;
 
@@ -87,7 +89,41 @@ interface Step {
 	to: Entry;
 	/** when it was recorded, on the clock all frames share */
 	at: number;
+	/** the frame's own navigable took it (not a frame in its page) */
+	top: boolean;
+	/** the state it reaches: Back and Forward pass over it (see `mark`) */
+	skip: boolean;
+	/** the state it reaches: which of the frame's documents it shows */
+	doc: number;
 }
+
+/**
+ * What the controller can tell of a proxied document, from its client: its
+ * real origin, whether the browser had already given it a user activation
+ * when it started (one carried over from the document that navigated to it)
+ * and whether it has one of its own
+ */
+export interface DocumentView {
+	origin: string;
+	activatedAtStart: boolean;
+	activated: boolean;
+	/** names the document in its activation report */
+	token: string;
+}
+
+/** a document the frame has shown, for Chrome's history intervention */
+interface DocumentState {
+	id: number;
+	origin: string | null;
+	/** the browser's view: activated when it started (null until its client is read) */
+	start: boolean | null;
+	/** a user activation of its own, as far as last seen */
+	own: boolean;
+	token: string | null;
+	/** a history activation carried over from the document before it */
+	carried: boolean;
+}
+let documentIds = 0;
 
 /**
  * The frames of this realm in one joint session history, and a clock their
@@ -142,6 +178,26 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 class FrameHistory {
 	constructor(public win: Window) {}
+	/** reads a document's client (set by the controller) */
+	reader: ((win: Window) => DocumentView | null) | null = null;
+	/** the next document of the frame comes from the host (a typed URL, Reload) */
+	browserNavigation = false;
+	documents = new WeakMap<Document, DocumentState>();
+	/** the frame's document at the last look */
+	document: DocumentState | null = null;
+	/** the documents that reported a user activation, by token */
+	activations = new Set<string>();
+	/** a navigation of the page's own whose activation is not read yet */
+	undecided: {
+		previous: DocumentState;
+		current: DocumentState;
+		left: number;
+		/** not decided before this time (see sync) */
+		after?: number;
+	} | null = null;
+	/** the state before the first step: skippable, its document */
+	startSkip = false;
+	startDoc = 0;
 	/** when this frame last changed the joint history */
 	touched = 0;
 	steps: Step[] = [];
@@ -162,10 +218,105 @@ class FrameHistory {
 		return this.alias.get(key) ?? key;
 	}
 
+	skipAt(state: number) {
+		return state === 0 ? this.startSkip : !!this.steps[state - 1]?.skip;
+	}
+	docAt(state: number) {
+		return state === 0 ? this.startDoc : (this.steps[state - 1]?.doc ?? 0);
+	}
+	setState(state: number, skip: boolean, doc: number) {
+		if (state === 0) {
+			this.startSkip = skip;
+			this.startDoc = doc;
+		} else if (this.steps[state - 1]) {
+			this.steps[state - 1].skip = skip;
+			this.steps[state - 1].doc = doc;
+		}
+	}
+
+	/** the frame's document now, with what is known of it */
+	readDocument(top: Window): DocumentState | null {
+		let doc: Document;
+		try {
+			doc = top.document;
+		} catch (error) {
+			return null; // another origin: its initial document, in isolation
+		}
+		let state = this.documents.get(doc);
+		let view: DocumentView | null = null;
+		try {
+			view = this.reader?.(top) ?? null;
+		} catch (error) {
+			// not a client yet
+		}
+		if (!state) {
+			// its client may not be there yet: what it says comes at a later look
+			state = {
+				id: ++documentIds,
+				origin: null,
+				start: null,
+				own: false,
+				carried: false,
+				token: null,
+			};
+			this.documents.set(doc, state);
+		}
+		if (view && state.start === null) {
+			state.origin = view.origin;
+			state.start = view.activatedAtStart;
+			state.token = view.token;
+		}
+		if (view?.activated || (state.token && this.activations.has(state.token)))
+			state.own = true;
+		return state;
+	}
+
+	/**
+	 * Chrome's history manipulation intervention (measured in 152 and 156):
+	 * a document that sends the tab to a new document by script with no
+	 * history activation (no user activation of its own, none carried over
+	 * from a same-origin document that navigated to it) leaves every entry
+	 * it showed skippable, and Back and Forward pass over those. Only the
+	 * tab's own document does it; a frame in its page and a same-document
+	 * entry (pushState, a fragment) do not.
+	 */
+	mark(left: DocumentState, from: number) {
+		for (let state = from; state >= 0; state--) {
+			if (this.docAt(state) !== left.id) break;
+			this.setState(state, true, left.id);
+		}
+	}
+
+	/**
+	 * Whether `before` had a history activation when it navigated to `after`:
+	 * the browser carries a user activation over to the next document of its
+	 * origin, which in proxy URL space is every one, so `after` started
+	 * without one only if `before` had none; with one, `before` had its own
+	 * (when the browser had given it none at its start) or one it carried
+	 */
+	activated(before: DocumentState, after: DocumentState): boolean {
+		if (before.token && this.activations.has(before.token)) before.own = true;
+		if (!after.start) return false;
+		return !before.start || before.own || before.carried;
+	}
+
 	/** read where the frame is, and record the steps it took by itself */
 	sync(top: Window) {
 		const live = walk(top);
 		if (!live.length) return;
+		// the frame's document, and whether the host or a step of ours brought
+		// it (a typed URL, Reload, Back or Forward): the browser starts a
+		// document it navigated to itself without a carried activation
+		const previous = this.document;
+		const current = this.readDocument(top);
+		const ours = this.browserNavigation || this.pending?.win === top;
+		const newDocument = !!current && current !== previous;
+		if (newDocument) {
+			this.document = current;
+			this.browserNavigation = false;
+		}
+		/** the state the frame's own navigable left for a new entry */
+		let left = -1;
 		const seen = new Map<Window, Entry>();
 		for (const node of live) {
 			const entry = { key: this.logical(node.key), url: node.url };
@@ -190,9 +341,72 @@ class FrameHistory {
 				if (before.url !== entry.url) this.renamed(entry);
 				continue;
 			}
-			this.moved(node, before, entry);
+			const index = this.index;
+			if (this.moved(node, before, entry, node.win === top) && node.win === top)
+				left = index;
 		}
 		this.known = seen;
+		if (!current) return;
+		if (newDocument) {
+			// a decision still waiting is taken now, before the next one
+			if (this.undecided) this.decide(top, true);
+			this.undecided =
+				previous && !ours
+					? // the page navigated itself: to a new entry, or in place (it
+						// replaced or reloaded itself); decided once both clients
+						// are read
+						{ previous, current, left }
+					: null;
+		}
+		this.decide(top, false);
+		// the state the frame is in shows this document
+		this.setState(this.index, this.skipAt(this.index), current.id);
+	}
+
+	/**
+	 * Whether the document a navigation of the page's own left had a history
+	 * activation, once both documents' clients are read: when it had none,
+	 * its states are passed over (`mark`), else the next document carries it
+	 * on. `now`: decide at once (a step is about to be taken)
+	 */
+	decide(top: Window, now: boolean) {
+		const undecided = this.undecided;
+		if (
+			!undecided ||
+			undecided.current.start === null ||
+			undecided.previous.start === null
+		)
+			return;
+		const activated = this.activated(undecided.previous, undecided.current);
+		// that the document had no activation of its own rests on its report
+		// not having come; the one a click that navigated it posted can be
+		// overtaken by the loading of the next document: give it a moment
+		if (!activated && undecided.previous.start && !now) {
+			const time = Date.now();
+			undecided.after ??= time + ACTIVATION_GRACE;
+			if (time < undecided.after) {
+				setTimeout(() => syncHistory(top), ACTIVATION_GRACE);
+				return;
+			}
+		}
+		this.undecided = null;
+		if (undecided.left !== -1 && !activated)
+			this.mark(undecided.previous, undecided.left);
+		undecided.current.carried =
+			activated &&
+			undecided.previous.origin !== null &&
+			undecided.previous.origin === undecided.current.origin;
+	}
+
+	make(from: Entry, to: Entry, top: boolean): Step {
+		return {
+			from,
+			to,
+			at: ++clock,
+			top,
+			skip: false,
+			doc: this.document?.id ?? 0,
+		};
 	}
 
 	/** a frame first seen with entries already: they are its steps */
@@ -200,7 +414,7 @@ class FrameHistory {
 		const entries = entriesOf(node.nav);
 		const at = entries.findIndex((entry) => entry.key === node.key);
 		for (let i = 1; i < entries.length; i++)
-			this.steps.push({ from: entries[i - 1], to: entries[i], at: ++clock });
+			this.steps.push(this.make(entries[i - 1], entries[i], true));
 		this.index = Math.max(at, 0);
 		if (entries.length > 1) this.touched = clock;
 	}
@@ -214,24 +428,28 @@ class FrameHistory {
 	}
 
 	/** a navigable went from `before` to `now` without us */
-	moved(node: Live, before: Entry, now: Entry) {
+	/** whether it was a new entry */
+	moved(node: Live, before: Entry, now: Entry, top: boolean): boolean {
 		// a traversal the page made itself (history.back(), go(-2), forward())
 		for (let i = this.index - 1; i >= 0; i--) {
 			const step = this.steps[i];
 			if (step.from.key === now.key) {
 				this.index = i;
-				return this.renamed(now);
+				this.renamed(now);
+				return false;
 			}
 			if (step.to.key === now.key) {
 				this.index = i + 1;
-				return this.renamed(now);
+				this.renamed(now);
+				return false;
 			}
 		}
 		for (let i = this.index; i < this.steps.length; i++) {
 			const step = this.steps[i];
 			if (step.to.key === now.key) {
 				this.index = i + 1;
-				return this.renamed(now);
+				this.renamed(now);
+				return false;
 			}
 		}
 		const entries = entriesOf(node.nav).map((entry) => ({
@@ -245,7 +463,7 @@ class FrameHistory {
 				if (step.from.key === before.key) step.from = now;
 				if (step.to.key === before.key) step.to = now;
 			}
-			return;
+			return false;
 		}
 		// a new entry: every native entry between the two is a step (two
 		// pushState calls before anyone looked are two steps)
@@ -255,21 +473,63 @@ class FrameHistory {
 		if (start !== -1 && end > start) {
 			entries[start] = before;
 			for (let i = start + 1; i <= end; i++)
-				this.steps.push({ from: entries[i - 1], to: entries[i], at: ++clock });
-		} else this.steps.push({ from: before, to: now, at: ++clock });
+				this.steps.push(this.make(entries[i - 1], entries[i], top));
+		} else this.steps.push(this.make(before, now, top));
 		this.index = this.steps.length;
 		this.touched = clock;
+		return true;
 	}
 
-	/** take one step back or forward; false when there is none */
+	/**
+	 * the state Back or Forward goes to: the nearest one Chrome's history
+	 * intervention does not pass over; -1 when there is none (the button is
+	 * off then, as Chrome's is)
+	 */
+	target(direction: Direction) {
+		const delta = direction === 'back' ? -1 : 1;
+		for (
+			let state = this.index + delta;
+			state >= 0 && state <= this.steps.length;
+			state += delta
+		)
+			if (!this.skipAt(state)) return state;
+		return -1;
+	}
+
+	/** go back or forward; false when there is nowhere to go */
 	async step(top: Window, direction: Direction): Promise<boolean> {
 		this.sync(top);
+		this.decide(top, true);
+		const to = this.target(direction);
+		if (to === -1) return false;
 		const back = direction === 'back';
-		const delta = back ? -1 : 1;
-		const step = this.steps[back ? this.index - 1 : this.index];
-		if (!step) return false;
-		const holder = back ? step.to : step.from;
-		const target = back ? step.from : step.to;
+		// the steps between, undone or redone: one traversal of the frame's
+		// navigable when they are all its own, else one at a time
+		const between = back
+			? this.steps.slice(to, this.index)
+			: this.steps.slice(this.index, to);
+		if (between.length > 1 && !between.every((step) => step.top)) {
+			while (this.index !== to) {
+				const index = this.index;
+				await this.take(
+					top,
+					back ? [this.steps[index - 1]] : [this.steps[index]],
+					back ? -1 : 1,
+				);
+				if (this.index === index) return true;
+			}
+			return true;
+		}
+		await this.take(top, between, to - this.index);
+		return true;
+	}
+
+	/** undo (delta < 0) or redo the consecutive `steps` of one navigable */
+	async take(top: Window, steps: Step[], delta: number) {
+		const back = delta < 0;
+		const holder = back ? steps[steps.length - 1].to : steps[0].from;
+		const target = back ? steps[0].from : steps[steps.length - 1].to;
+		const at = Math.min(...steps.map((step) => step.at));
 		const node = walk(top).find(
 			(candidate) => this.logical(candidate.key) === holder.key,
 		);
@@ -278,12 +538,11 @@ class FrameHistory {
 			// came back as a new one when its page was gone back to): the
 			// press uses the step up and nothing moves, as natively
 			this.index += delta;
-			return true;
+			return;
 		}
-		this.go(node, target, holder, delta, step.at);
+		this.go(node, target, holder, delta, at);
 		this.index += delta;
 		await this.committed(top, node);
-		return true;
 	}
 
 	/** send one navigable to an entry of its history */
@@ -382,9 +641,7 @@ class FrameHistory {
 	}
 
 	can(direction: Direction) {
-		return direction === 'back'
-			? this.index > 0
-			: this.index < this.steps.length;
+		return this.target(direction) !== -1;
 	}
 }
 
@@ -444,4 +701,66 @@ export async function traverse(
 	} catch (error) {
 		return false; // the frame is between documents or left our origin
 	}
+}
+
+/**
+ * Tell the frame's history how to read its documents' clients (their real
+ * origin and user activation), for Chrome's history intervention
+ */
+export function bindHistory(
+	win: Window | null | undefined,
+	reader: (win: Window) => DocumentView | null,
+) {
+	if (!win || !supported) return;
+	historyOf(win).reader = reader;
+}
+
+/**
+ * The frame's next document comes from the host, not the page (a typed URL,
+ * Reload): it starts with no activation carried over, and the document it
+ * replaces is not taken to have navigated by script
+ */
+export function noteBrowserNavigation(win: Window | null | undefined) {
+	if (!win || !supported) return;
+	historyOf(win).browserNavigation = true;
+}
+
+/** what a document's client (the window's `name` global) says for its frame's history */
+export function clientView(win: Window, name: string): DocumentView | null {
+	const client = (win as unknown as Record<string, unknown>)[name] as
+		| {
+				url?: { url?: URL };
+				historyActivation?: {
+					start: boolean;
+					activated: () => boolean;
+					token: string;
+				};
+		  }
+		| undefined;
+	const activation = client?.historyActivation;
+	const origin = client?.url?.url?.origin;
+	if (!activation || typeof origin !== 'string') return null;
+	return {
+		origin,
+		activatedAtStart: activation.start,
+		activated: activation.activated(),
+		token: activation.token,
+	};
+}
+
+/**
+ * A document of the frame reported its first user activation (its token);
+ * `nested`: a document of a frame in its page, whose activation is the
+ * page's too (an activation reaches every ancestor of its frame)
+ */
+export function noteActivation(
+	win: Window | null | undefined,
+	token: string,
+	nested = false,
+) {
+	if (!win || !supported) return;
+	const history = historyOf(win);
+	history.activations.add(token);
+	syncHistory(win);
+	if (nested && history.document) history.document.own = true;
 }

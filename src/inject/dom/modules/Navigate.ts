@@ -1,4 +1,5 @@
 import {
+	ACTIVATED,
 	CLIENT_ID,
 	FRAME_MOVED,
 	NAVIGATE,
@@ -88,6 +89,90 @@ export default class NavigateModule extends Module<DocumentClient> {
 			addDocumentOpenListener(global, listen);
 			return schedule;
 		};
+
+		// The document's user activation, as the host's history needs it for
+		// Chrome's history intervention: a document that navigates by script
+		// with none is passed over by Back. The browser carries an activation
+		// over to the next document of the same origin, and every proxied
+		// document is of one origin, so one the document starts with may be
+		// another site's: from then on only its own input counts (and a click
+		// while it has a transient activation, as automation's clicks are).
+		// The host is told at once, with a token that names the document, as
+		// the click may navigate it away before the host reads anything. A
+		// document in a frame of the page tells it too: an activation there
+		// is the page's as well
+		const isActive = Reflect.getOwnPropertyDescriptor(
+			global.UserActivation?.prototype ?? {},
+			'isActive',
+		)?.get;
+		const hasBeenActive = Reflect.getOwnPropertyDescriptor(
+			global.UserActivation?.prototype ?? {},
+			'hasBeenActive',
+		)?.get;
+		const userActivation = global.navigator.userActivation;
+		const sticky = () =>
+			!!hasBeenActive &&
+			!!userActivation &&
+			Reflect.apply(hasBeenActive, userActivation, []) === true;
+		const start = sticky();
+		let input = false;
+		const activated = () => (start ? input : sticky());
+		const token = `${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}`;
+		this.client.historyActivation = { start, activated, token };
+		const onInput = (event: Event) => {
+			if (
+				event.type === 'click'
+					? !isActive ||
+						!userActivation ||
+						Reflect.apply(isActive, userActivation, []) !== true
+					: !event.isTrusted
+			)
+				return;
+			// keys that activate nothing (the spec's activation-triggering
+			// keydown leaves out Escape and the modifiers)
+			if (
+				event.type === 'keydown' &&
+				/^(Escape|Shift|Control|Alt|Meta|AltGraph|CapsLock|Fn)$/.test(
+					(event as KeyboardEvent).key,
+				)
+			)
+				return;
+			if (input) return;
+			input = true;
+			// a frame of the host's own page (same-origin mode) is told at once:
+			// a message from a document that is navigating can wait behind the
+			// next document's loading for longer than the host can
+			try {
+				const element = this.client.nativeFrameElement() as unknown as Record<
+					string,
+					unknown
+				> | null;
+				const note = element?.[ACTIVATED];
+				if (typeof note === 'function') {
+					Reflect.apply(note, element, [token]);
+					return;
+				}
+			} catch (error) {
+				// the host's: it reads the message instead
+			}
+			this.client.postToHost({ [ACTIVATED]: token });
+		};
+
+		// document.open() drops window listeners (and runs before the real
+		// page is written), so they are registered again after each open
+		const listenInput = () => {
+			for (const event of [
+				'keydown',
+				'mousedown',
+				'pointerdown',
+				'pointerup',
+				'touchend',
+				'click',
+			])
+				global.addEventListener(event, onInput, true);
+		};
+		listenInput();
+		addDocumentOpenListener(global, listenInput);
 
 		// A document in a frame of the page: the host takes from it which
 		// client it is (its requests are the page's frame's) and when its

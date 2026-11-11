@@ -24,6 +24,12 @@ const page = (name, base = ONE, extra = '') =>
 	`${base}tb.html?p=${name}${extra}`;
 const framed = (name, child) =>
 	page(name, ONE, `&frame=${encodeURIComponent(child)}`);
+// a page that makes a history call by itself `ms` after loading, and another
+const auto = (kind, to, ms = 300) =>
+	`&auto=${kind}&to=${encodeURIComponent(to)}&ms=${ms}`;
+const then = (kind, to, ms = 500) =>
+	`&then=${kind}&to2=${encodeURIComponent(to)}&ms2=${ms}`;
+const later = (name, extra) => page(name, ONE, extra);
 
 // [operation, ...arguments]; `wait` and steps marked `nocheck` compare nothing
 const SEQUENCES = {
@@ -148,6 +154,60 @@ const SEQUENCES = {
 		['forward'],
 		['forward'],
 	],
+	// Chrome's history manipulation intervention (measured in 152 and 156):
+	// Back and Forward pass over the entries of a document that sent the tab
+	// on by script with no user activation, its own or carried over from a
+	// document of its origin that navigated to it
+	'a page that redirects by script after loading, typed': [
+		['open', page('A')],
+		['open', later('L', auto('assign', page('T')))],
+		['back'],
+		['forward'],
+		['back'],
+	],
+	'the same reached by a link: kept once, passed over again': [
+		['open', page('A')],
+		['link', later('L', auto('assign', page('T')))],
+		['back'],
+		['back'],
+		['forward'],
+	],
+	'the same reached by a link from another site': [
+		['open', page('A', OTHER)],
+		['link', later('L', auto('assign', page('T')))],
+		['back'],
+		['forward'],
+	],
+	'pushState after loading is kept, a redirect after it takes both': [
+		['open', page('A')],
+		['open', later('L', auto('push', '?p=L2'))],
+		['back'],
+		['back'],
+		[
+			'open',
+			later('M', `${auto('push', '?p=M2')}${then('assign', page('T'))}`),
+		],
+		['back'],
+	],
+	"a frame's redirect is kept": [
+		['open', page('A')],
+		['open', framed('F', `tb.html?p=k${auto('assign', page('k2'))}`)],
+		['back'],
+	],
+	'a redirecting first page: Back stays off': [
+		['open', later('L', auto('assign', page('T')))],
+		['back'],
+		['link', page('U')],
+		['back'],
+		['back'],
+	],
+	'Reload drops the activation a link carried': [
+		['open', page('A')],
+		['link', later('L', auto('assign', page('T'), 2500))],
+		['reload'],
+		['wait', 3500],
+		['back'],
+	],
 	'two tabs in turn': [
 		['open', page('A')],
 		['link', page('B')],
@@ -186,18 +246,36 @@ const same = (a, b) =>
 const show = (s) =>
 	`${s.url} "${s.title}" back ${s.back ? 'on' : 'off'}, forward ${s.fwd ? 'on' : 'off'}`;
 
-/** a frame's title and its frames' titles, `TB F [TB c1]` */
-async function titles(frame) {
-	if (!frame) return '';
+/**
+ * A window's title and its frames' titles, `TB F [TB c1]`, as an expression
+ * to evaluate with no user activation: Playwright's own evaluate (and
+ * title()) gives the page one, and a page with one is never passed over by
+ * Chrome's history intervention
+ */
+const TITLES = `(function titles(w) {
 	let title;
 	try {
-		title = await frame.title();
+		title = w.document.title;
 	} catch (error) {
-		title = '';
+		return '';
 	}
-	const children = frame.childFrames();
-	if (!children.length) return title;
-	return `${title} [${(await Promise.all(children.map(titles))).join(', ')}]`;
+	const children = [];
+	for (let i = 0; i < w.length; i++) children.push(titles(w[i]));
+	return children.length ? title + ' [' + children.join(', ') + ']' : title;
+})`;
+
+/** evaluate `expression` over CDP without a user activation */
+async function quietly(session, expression) {
+	try {
+		const { result } = await session.send('Runtime.evaluate', {
+			expression,
+			returnByValue: true,
+			userGesture: false,
+		});
+		return result.value ?? '';
+	} catch (error) {
+		return null; // between documents, or the session went with its target
+	}
 }
 
 /** poll `read` until it has not changed for `still` ms */
@@ -263,12 +341,17 @@ async function native(steps) {
 			});
 	};
 	const read = async () => {
-		const history = await tab.cdp.send('Page.getNavigationHistory');
+		// the session is briefly gone while the tab swaps processes for
+		// another site: read again
+		const history = await tab.cdp
+			.send('Page.getNavigationHistory')
+			.catch(() => ({ currentIndex: -1, entries: [] }));
 		return {
 			url: short(tab.view.url()),
-			title: await titles(tab.view.mainFrame()),
+			title: (await quietly(tab.cdp, `${TITLES}(window)`)) ?? '',
 			back: history.currentIndex > 0,
 			fwd: history.currentIndex < history.entries.length - 1,
+			entry: history.entries[history.currentIndex]?.id,
 		};
 	};
 	const ops = {
@@ -289,15 +372,31 @@ async function native(steps) {
 		reload: () => tab.view.reload().catch(() => {}),
 	};
 	const states = [];
+	const ran = [];
 	for (const [op, ...args] of steps) {
 		if (op === 'wait') {
 			await sleep(args[0]);
 			continue;
 		}
 		await ops[op](...args.filter((arg) => arg !== 'nocheck'));
+		ran.push(op);
+		// a step not compared (one that is still loading) is not looked at:
+		// reading the page then changed what the next press did
 		states.push(args.includes('nocheck') ? null : await settle(read));
 	}
 	await context.close();
+	// The protocol's history has no word of the entries Chrome's history
+	// intervention passes over, so whether a button is on comes from its
+	// index alone; a press that then moves nothing says the button was off
+	// (Chrome's Back is off when every entry before is passed over), and the
+	// state after it is the same
+	for (let i = 1; i < states.length; i++) {
+		const name = { back: 'back', forward: 'fwd' }[ran[i]];
+		if (name && states[i] && states[i - 1]?.entry === states[i].entry) {
+			states[i - 1][name] = false;
+			states[i][name] = false;
+		}
+	}
 	return states;
 }
 
@@ -336,6 +435,30 @@ async function demo(name, steps, expected, mode, base) {
 			() =>
 				document.readyState === 'complete' && !!document.getElementById('act'),
 		);
+	// the proxied page's titles: through the host page in same-origin mode,
+	// over the frame's own CDP session in isolation (a frame of another site
+	// runs in a process of its own)
+	const sessions = new Map();
+	const frameTitles = async () => {
+		if (mode === 'same-origin')
+			return (
+				(await quietly(
+					await viewSession(),
+					`${TITLES}(document.querySelector('.frame:not(.hidden)').contentWindow)`,
+				)) ?? ''
+			);
+		const frame = await active();
+		if (!frame) return '';
+		if (!sessions.has(frame))
+			sessions.set(frame, await context.newCDPSession(frame).catch(() => null));
+		const session = sessions.get(frame);
+		const titles = session && (await quietly(session, `${TITLES}(window)`));
+		if (titles === null) sessions.delete(frame);
+		return titles ?? '';
+	};
+	let hostSession = null;
+	const viewSession = async () =>
+		(hostSession ??= await context.newCDPSession(view));
 	const read = async () => {
 		const bar = await view.evaluate(() => ({
 			url: document.querySelector('#omni input').value,
@@ -345,7 +468,7 @@ async function demo(name, steps, expected, mode, base) {
 		}));
 		return {
 			url: short(bar.url),
-			title: await titles(await active()),
+			title: await frameTitles(),
 			back: bar.back,
 			fwd: bar.fwd,
 			host: bar.host,
@@ -431,7 +554,10 @@ async function demo(name, steps, expected, mode, base) {
 	await context.close();
 }
 
+// SEQUENCES=<words> runs the sequences whose names contain one of them
+const only = process.env.SEQUENCES?.split(',');
 for (const [name, steps] of Object.entries(SEQUENCES)) {
+	if (only && !only.some((word) => name.includes(word))) continue;
 	const expected = await native(steps);
 	console.log(
 		`natively, ${name}: ${expected.map((s) => (s ? `${s.url}${s.back ? ' <' : ''}${s.fwd ? ' >' : ''}` : '-')).join(' | ')}`,

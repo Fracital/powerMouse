@@ -10,7 +10,14 @@ import type { HookErrorInfo } from '../hooks';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
 import type { RequestInfo } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
-import { canTraverse, traverse } from './history';
+import {
+	bindHistory,
+	canTraverse,
+	clientView,
+	noteActivation,
+	noteBrowserNavigation,
+	traverse,
+} from './history';
 import { StompController, type PermissionRequest } from './index';
 import {
 	ControllerFrameInit,
@@ -101,6 +108,12 @@ if (window === window.parent || !origins.length) {
 		// the client's name on a proxied window: the controller's config's, once
 		// the controller exists (the defaults until then)
 		const clientName = () => helperNames(controller?.config).client;
+		/** a proxied frame's window, its history told how to read its documents */
+		function historyWindow(index: number) {
+			const win = proxiedWindow(index);
+			bindHistory(win, (target) => clientView(target, clientName()));
+			return win;
+		}
 		function proxiedWindow(index: number): (Window & typeof globalThis) | null {
 			if (!Number.isInteger(index) || index < 0) return null;
 			try {
@@ -236,7 +249,7 @@ if (window === window.parent || !origins.length) {
 					else await controller.setTransport(await loadTransport(descriptor));
 				},
 				frameInfo: async (index) => {
-					const win = proxiedWindow(index);
+					const win = historyWindow(index);
 					if (!win)
 						return [
 							{ url: null, title: null, canGoBack: null, canGoForward: null },
@@ -271,10 +284,19 @@ if (window === window.parent || !origins.length) {
 					if (!controller) throw new Error('Controller is not initialised');
 					return [await controller.goneClients(clients), []];
 				},
+				frameActivated: async ({ index, token, nested }) => {
+					noteActivation(historyWindow(index), String(token), nested === true);
+					return [null, []];
+				},
 				frameCommand: async ({ index, command }) => {
-					const win = proxiedWindow(index);
+					const win = historyWindow(index);
 					if (!win) return [false, []];
+					if (command === 'typed') {
+						noteBrowserNavigation(win);
+						return [true, []];
+					}
 					if (command === 'reload') {
+						noteBrowserNavigation(win);
 						win.location.reload();
 						return [true, []];
 					}

@@ -95,7 +95,8 @@ export interface FrameInfo {
 	canGoForward: boolean | null;
 }
 
-export type FrameCommand = 'back' | 'forward' | 'reload';
+/** `typed`: the frame's next document comes from the host (see noteBrowserNavigation) */
+export type FrameCommand = 'back' | 'forward' | 'reload' | 'typed';
 
 /** rpc id on the host <-> controller-frame postMessage channel */
 export const REMOTE_RPC = 'stomp-remote';
@@ -121,6 +122,7 @@ export type FrameBound = {
 	setTransport: [TransportDescriptor];
 	/** frames are addressed by their index in the host window's `frames` list */
 	frameInfo: [number, FrameInfo];
+	frameActivated: [{ index: number; token: string; nested: boolean }, null];
 	/** resolves to whether the command was carried out (false: nothing to go back/forward to) */
 	frameCommand: [{ index: number; command: FrameCommand }, boolean];
 	clearCache: [];
