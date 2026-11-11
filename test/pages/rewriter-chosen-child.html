@@ -1,0 +1,28 @@
+<!doctype html>
+<title>REWRITER CHOSEN CHILD</title>
+<body>
+	<script>
+		// a frame of another site: once the page around it settled, scripts it
+		// evaluates and inserts, and whether the document was marked by them
+		window.__ran = [];
+		setTimeout(() => {
+			try {
+				eval("window.__ran.push('eval')");
+			} catch (error) {
+				window.__ran.push(String(error));
+			}
+			try {
+				new Function("window.__ran.push('function')")();
+			} catch (error) {
+				window.__ran.push(String(error));
+			}
+			const script = document.createElement('script');
+			script.textContent = "window.__ran.push('inserted')";
+			document.body.append(script);
+			window.__report = {
+				ran: window.__ran,
+				marked: document.documentElement.getAttribute('data-rewriter'),
+			};
+		}, 3000);
+	</script>
+</body>

@@ -1,0 +1,43 @@
+<!doctype html>
+<title>REWRITER CHOSEN</title>
+<body>
+	<script>
+		// A top page that passed no hook: it hooks the browser's own
+		// MessagePort.prototype.close and, on every port that is closed, plays a
+		// message of its own making that hands over a rewriter module it
+		// compiled (test/pages/rewriter-chosen.wat, assembled with wat2wasm: it
+		// answers revision "2", says every script parses, and turns every
+		// script into a line that marks the document). Natively nothing listens.
+		// The frame under it is of another site, and reports what its scripts did.
+		const bytes = Uint8Array.from(
+			atob(
+				'AGFzbQEAAAABFwRgAX8Bf2AAAX9gAn9/AX9gA39/fwF/AwcGAAECAQEDBQMBAAEGDAJ/AUGAIAt/AUEACwciBwZtZW1vcnkCAAFhAAABYgABAWMAAgFwAAMBbgAEAXIABQp/BgYAQYCAAQsGAEGAgAILBABBAAsEACMACwQAIwELYAAgAkEgcQRAQYAgJABBASQBQQAPCyACQQhxBEBBgCAkAEEAJAFBAA8LIAJBEHEEQEGAIiQAQQIkAUEADwsgAkHAAXEEQEGAJCQAQQEkAUEADwtBgMAAJABBzwAkAUEACwttBABBgCALATIAQYAiCwIwCQBBgCQLATEAQYDAAAtPZG9jdW1lbnQuZG9jdW1lbnRFbGVtZW50LnNldEF0dHJpYnV0ZSgnZGF0YS1yZXdyaXRlcicsJ3RoZSB0b3AgcGFnZSBjaG9zZSBpdCcpOw==',
+			),
+			(c) => c.charCodeAt(0),
+		);
+		const chosen = new WebAssembly.Module(bytes);
+		window.__forged = 0;
+		const close = MessagePort.prototype.close;
+		MessagePort.prototype.close = function () {
+			try {
+				this.dispatchEvent(
+					new MessageEvent('message', {
+						data: { $stomp$pageModules: { rewriter: chosen } },
+					}),
+				);
+				window.__forged++;
+			} catch (error) {
+				// not a port
+			}
+			return close.call(this);
+		};
+		addEventListener('load', () => {
+			const frame = document.createElement('iframe');
+			frame.src = new URL(
+				'rewriter-chosen-child.html',
+				location.href.replace('127.0.0.1', 'localhost'),
+			).href;
+			document.body.append(frame);
+		});
+	</script>
+</body>

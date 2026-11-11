@@ -13,6 +13,7 @@ import {
 	TransportToHost,
 	WebSocketMessage,
 } from './messages';
+import { closePort, onPort, privateChannel } from './ports';
 import { RpcHelper } from './rpc';
 
 /**
@@ -41,24 +42,26 @@ export default class RemoteTransport implements ProxyTransport {
 		);
 
 		this.port = Promise.resolve(port).then((port) => {
-			port.addEventListener('message', (event) => this.rpc.receive(event.data));
-			port.addEventListener('messageerror', (event) =>
-				console.error('RemoteTransport port messageerror', event),
+			// listened to with the browser's own methods, trusted messages
+			// only: in a page's realm, the page may have replaced them by now
+			// (src/transport/ports.ts)
+			onPort(port, 'message', (data) => this.rpc.receive(data));
+			onPort(port, 'messageerror', () =>
+				console.error('RemoteTransport port messageerror'),
 			);
 			// the serving side is gone (its tab closed, its worker died): a
 			// request on this port would never be answered, so every pending
 			// and later one fails at once instead of waiting out the timeout
-			port.addEventListener('close', () =>
+			onPort(port, 'close', () =>
 				this.rpc.abort('Stomp: the transport port closed'),
 			);
-			port.start();
 			return port;
 		});
 	}
 	/** fail every pending and later call with `reason` and close the port (the host side replaced it) */
 	close(reason: string) {
 		this.rpc.abort(reason);
-		this.port.then((port) => port.close());
+		this.port.then((port) => closePort(port));
 	}
 	async init() {
 		await this.readyPromise;
@@ -92,8 +95,7 @@ export default class RemoteTransport implements ProxyTransport {
 		(data: WebSocketDataType) => void,
 		(code: number, reason: string) => void,
 	] {
-		const channel = new MessageChannel();
-		const port = channel.port1;
+		const [port, theirs] = privateChannel();
 
 		// frames travel on their own port and can overtake the connect
 		// response on the rpc port; hold them until onopen has run
@@ -107,8 +109,8 @@ export default class RemoteTransport implements ProxyTransport {
 		this.rpc
 			.call(
 				'connect',
-				{ url: url.href, protocols, requestHeaders, port: channel.port2 },
-				[channel.port2],
+				{ url: url.href, protocols, requestHeaders, port: theirs },
+				[theirs],
 			)
 			.then((response) => {
 				if (response.result === 'success') {
@@ -119,12 +121,13 @@ export default class RemoteTransport implements ProxyTransport {
 			})
 			.catch((error) => onerror(String(error)));
 
-		port.onmessage = ({ data }: MessageEvent<WebSocketMessage>) => {
-			if (opened) deliver(data);
-			else pending.push(data);
-		};
-		port.onmessageerror = () => onerror('Message error in transport port');
-		port.start();
+		onPort(port, 'message', (data) => {
+			if (opened) deliver(data as WebSocketMessage);
+			else pending.push(data as WebSocketMessage);
+		});
+		onPort(port, 'messageerror', () =>
+			onerror('Message error in transport port'),
+		);
 
 		return [
 			(data) =>

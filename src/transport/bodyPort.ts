@@ -18,6 +18,7 @@
 // transport, and a cancelled stream cancels the transport's body.
 
 import { postToPort } from './messages';
+import { closePort, onPort, privateChannel } from './ports';
 
 /** bytes sent that the receiving reader has not taken yet, at most */
 export const BODY_WINDOW = 4 * 1024 * 1024;
@@ -60,7 +61,9 @@ function ownsBuffer(chunk: Uint8Array): boolean {
 
 /** the sending end: reads `body` and pushes it to the port it returns */
 export function sendBody(body: ReadableStream<Uint8Array>): PortBody {
-	const { port1: port, port2 } = new MessageChannel();
+	// the browser's own channel, listened to with its own methods: in a
+	// page's realm the page may have replaced them (src/transport/ports.ts)
+	const [port, port2] = privateChannel();
 	const reader = body.getReader();
 	let credit = BODY_WINDOW;
 	let stopped = false;
@@ -71,15 +74,16 @@ export function sendBody(body: ReadableStream<Uint8Array>): PortBody {
 		resolve?.();
 	};
 
-	port.onmessage = ({ data }: MessageEvent<BodyControl>) => {
+	onPort(port, 'message', (message) => {
+		const data = message as BodyControl;
 		if (data.type === 'credit') credit += data.bytes;
 		else if (data.type === 'cancel') {
 			stopped = true;
 			reader.cancel(data.reason).catch(() => {});
-			port.close();
+			closePort(port);
 		}
 		resume();
-	};
+	});
 
 	let batch: Uint8Array[] = [];
 	let batched = 0;
@@ -152,13 +156,13 @@ export function receiveBody({
 	let granted = 0;
 	const close = () => {
 		open = false;
-		port.onmessage = null;
-		port.close();
+		closePort(port);
 	};
 	return new ReadableStream<Uint8Array>(
 		{
 			start(controller) {
-				port.onmessage = ({ data }: MessageEvent<BodyMessage>) => {
+				onPort(port, 'message', (message) => {
+					const data = message as BodyMessage;
 					if (!open) return;
 					if (data.type === 'data') {
 						received += data.data.byteLength;
@@ -170,7 +174,7 @@ export function receiveBody({
 						close();
 						controller.error(data.error);
 					}
-				};
+				});
 			},
 			// runs as the reader takes chunks: what it took is granted back in
 			// steps, and all of it once the reader has caught up

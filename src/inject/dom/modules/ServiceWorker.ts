@@ -7,6 +7,7 @@ import type {
 	WorkerType,
 } from '../../../serviceWorkerTypes';
 import { SW_API, SW_CONTROL, SW_EVENT } from '../../../transport/messages';
+import { closePort, onPort, privateChannel } from '../../../transport/ports';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import ServiceWorkerObjects from '../../serviceWorkerObjects';
@@ -184,14 +185,16 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 		): Promise<unknown> =>
 			new Promise((resolve, reject) => {
 				const client = this.client.routedClient();
-				const channel = new global.MessageChannel();
+				// the browser's own channel, and only its delivered answer
+				// (src/transport/ports.ts)
+				const [port, theirs] = privateChannel();
 				if (
 					!client ||
 					!client.postToWorker(
 						{
 							[SW_API]: { directory: client.directory, method, args },
 						},
-						[channel.port2, ...transfer],
+						[theirs, ...transfer],
 					)
 				) {
 					reject(
@@ -207,7 +210,7 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 				const giveUp = global.setTimeout(() => {
 					if (answered) return;
 					answered = true;
-					channel.port1.close();
+					closePort(port);
 					reject(
 						new global.DOMException(
 							'The document is in an invalid state.',
@@ -216,12 +219,12 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 					);
 					release();
 				}, CALL_GIVE_UP_MS);
-				channel.port1.onmessage = (event) => {
+				onPort(port, 'message', (data) => {
 					if (answered) return;
 					answered = true;
 					global.clearTimeout(giveUp);
-					channel.port1.close();
-					const reply = event.data as ApiReply;
+					closePort(port);
+					const reply = data as ApiReply;
 					if ('error' in reply) {
 						reject(objects.error(reply.error));
 						// after the page's continuation (a microtask) has run
@@ -243,7 +246,7 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 					const attempt = () => snapshots.every(complete) && finish();
 					const late = global.setTimeout(finish, STEPS_WAIT_MS);
 					if (!attempt()) answers.add(attempt);
-				};
+				});
 			});
 
 		const objects = new ServiceWorkerObjects(global, proxyModule, {
@@ -255,7 +258,7 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 			postMessage: (worker, registration, message, transfer) => {
 				// posted now, so what cannot be cloned throws here, as natively
 				const client = this.client.routedClient();
-				const channel = new global.MessageChannel();
+				const [port, theirs] = privateChannel();
 				client?.postToWorker(
 					{
 						[SW_API]: {
@@ -268,10 +271,10 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 							},
 						},
 					},
-					[channel.port2, ...transfer],
+					[theirs, ...transfer],
 					true,
 				);
-				channel.port1.onmessage = () => channel.port1.close();
+				onPort(port, 'message', () => closePort(port));
 			},
 			preload: (registration, op, value) =>
 				call('preload', { scope: registration.scope, op, value }),

@@ -782,6 +782,19 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- STomp's own channels in a page (a document's transport, the
+  controller's wasm modules, the permission verdicts, the emulated service
+  workers' calls, a WebSocket's frames, a body's chunks) are made and
+  listened to with the browser's own MessageChannel and MessagePort
+  members, taken when the bundle loads, and hear only what the browser
+  delivered. A page that replaced `MessagePort.prototype.close` could play
+  a wasm module of its own on the port the controller's modules came on,
+  and under `rewriter: 'wasm'` that module rewrote the scripts of every
+  frame under the page, another site's included; one that replaced the
+  `onmessage` setter or `addEventListener` gave itself the permission
+  verdict it chose, so a site the user had blocked read the location the
+  browser holds for the proxy origin. (rewriter-chosen and permissions
+  suites, both modes, against native.)
 - A frame fires `load` once per document, as natively. The shell writes
   the page from a timer, and when Chrome ran the shell's load task first
   the frame element fired `load` for the shell, with the inject's script

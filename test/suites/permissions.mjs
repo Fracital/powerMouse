@@ -525,6 +525,71 @@ for (const [mode, base] of MODES) {
 			againB?.states.geolocation === 'denied',
 		describe({ againA: againA?.states, againB: againB?.states }),
 	);
+	// site B's page, which passed no hook, plays the worker's answer itself:
+	// on every port given a message listener (the browser's own onmessage
+	// setter and addEventListener, replaced) it calls the listener with a
+	// verdict of its own making, before the worker's arrives. The browser
+	// holds geolocation for the proxy origin since A was allowed, so a
+	// forged verdict would hand B the position its Block refused
+	const forged = await proxiedFrames(tab)()
+		.at(-1)
+		?.evaluate(
+			() =>
+				new Promise((resolve) => {
+					const verdict = {
+						decision: 'granted',
+						states: { geolocation: 'granted' },
+						features: {},
+					};
+					const play = (port, listener) => {
+						try {
+							listener.call(
+								port,
+								new MessageEvent('message', { data: verdict }),
+							);
+						} catch (error) {
+							// not a listener of ours
+						}
+					};
+					const setter = Object.getOwnPropertyDescriptor(
+						MessagePort.prototype,
+						'onmessage',
+					);
+					Object.defineProperty(MessagePort.prototype, 'onmessage', {
+						...setter,
+						set(listener) {
+							setter.set.call(this, listener);
+							if (typeof listener === 'function') play(this, listener);
+						},
+					});
+					const listen = EventTarget.prototype.addEventListener;
+					EventTarget.prototype.addEventListener = function (
+						type,
+						listener,
+						...rest
+					) {
+						const result = listen.call(this, type, listener, ...rest);
+						if (
+							this instanceof MessagePort &&
+							type === 'message' &&
+							typeof listener === 'function'
+						)
+							play(this, listener);
+						return result;
+					};
+					navigator.geolocation.getCurrentPosition(
+						(position) => resolve(`position ${position.coords.latitude}`),
+						(error) => resolve(`error ${error.code}`),
+					);
+					setTimeout(() => resolve('no answer'), 8000);
+				}),
+		)
+		.catch((error) => String(error));
+	ok(
+		`${mode}: a verdict site B plays on the worker's ports itself does not lift its Block`,
+		forged === 'error 1',
+		describe({ forged }),
+	);
 	await context.close();
 }
 

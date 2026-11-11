@@ -6,6 +6,7 @@ import {
 	type PermissionState,
 	type PermissionStates,
 } from '../../../transport/messages';
+import { closePort, onPort, privateChannel } from '../../../transport/ports';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
@@ -102,7 +103,6 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		if (!stateDescriptor?.get) return;
 		const nativeState = stateDescriptor.get;
 		const nativePermissions = global.navigator.permissions;
-		const Channel = global.MessageChannel;
 		const addListener = global.EventTarget.prototype.addEventListener;
 		const dispatch = global.EventTarget.prototype.dispatchEvent;
 		const stopImmediate = global.Event.prototype.stopImmediatePropagation;
@@ -113,15 +113,18 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		const ask = <T>(message: PermissionOp) =>
 			new Promise<T | null>((resolve) => {
 				if (!routed) return resolve(null);
-				const channel = new Channel();
-				channel.port1.onmessage = (event) => {
-					channel.port1.close();
-					resolve(event.data as T | null);
-				};
+				// the browser's own channel, and only its delivered answer: a
+				// verdict the page played on this port itself would grant it
+				// what the host decided for another site (src/transport/ports.ts)
+				const [port, theirs] = privateChannel();
+				onPort(port, 'message', (data) => {
+					closePort(port);
+					resolve(data as T | null);
+				});
 				if (
 					!routed.postToWorker(
 						{ [PERMISSION]: { directory: routed.directory, ...message } },
-						[channel.port2],
+						[theirs],
 					)
 				)
 					resolve(null);

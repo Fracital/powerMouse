@@ -35,6 +35,13 @@ import {
 	WORKER_BASE,
 	WORKER_MODULES,
 } from '../transport/messages';
+import {
+	closePort,
+	listenOn,
+	messageOf,
+	privateChannel,
+	startPort,
+} from '../transport/ports';
 import RemoteTransport from '../transport/RemoteTransport';
 import { BUILD } from '../version';
 import { LINK_SEGMENT } from '../visited';
@@ -658,7 +665,9 @@ export default class Client {
 				'Stomp: no service worker controller available to obtain a transport',
 			);
 
-		const channel = new MessageChannel();
+		// made with the browser's own MessageChannel and getters: a page that
+		// redefined them would be handed this context's transport
+		const [mine, theirs] = privateChannel();
 
 		this.#serviceWorkerPostMessage.call(
 			controller,
@@ -668,10 +677,10 @@ export default class Client {
 					...(worker ? { worker } : {}),
 				},
 			},
-			[channel.port2],
+			[theirs],
 		);
 
-		return channel.port1;
+		return mine;
 	}
 	/** @internal how this realm's rewrites went (rewriter.ts rewriteCounts; tests) */
 	get rewriteCounts() {
@@ -688,30 +697,37 @@ export default class Client {
 	requestModules(adopt: (name: string, module: WebAssembly.Module) => void) {
 		const controller = this.#serviceWorkerContainer?.controller;
 		if (!controller || !this.#serviceWorkerPostMessage) return;
-		const channel = new MessageChannel();
-		const port = channel.port1;
+		// made, started, listened to and closed with what the page cannot
+		// replace (src/transport/ports.ts), and only a message the browser
+		// delivered from the worker's end is heard: a module the page played
+		// on this port as a MessageEvent of its own would be the rewriter of
+		// everything this top and every frame under it evaluate, whatever
+		// their site
+		const [port, theirs] = privateChannel();
 		// the workers this context starts meanwhile are sent them too
 		this.expectModules();
-		port.addEventListener('message', (event) => {
+		listenOn(port, 'message', (event) => {
+			if (!messageOf(event)) return;
 			const modules = readModules(event, PAGE_MODULES);
 			if (modules) for (const name in modules) adopt(name, modules[name]);
 			this.holdModules(modules);
-			port.close();
+			closePort(port);
 		});
-		port.addEventListener('messageerror', () => {
+		listenOn(port, 'messageerror', (event) => {
+			if (!messageOf(event)) return;
 			this.holdModules(null);
-			port.close();
+			closePort(port);
 		});
-		port.start();
+		startPort(port);
 		try {
 			this.#serviceWorkerPostMessage.call(
 				controller,
 				{ [INIT_PAGE_MODULES]: { directory: this.directory } },
-				[channel.port2],
+				[theirs],
 			);
 		} catch (error) {
 			this.holdModules(null);
-			port.close();
+			closePort(port);
 		}
 	}
 	/** the compiled wasm modules this context was handed: what a dedicated worker it starts is handed in turn */
@@ -747,9 +763,11 @@ export default class Client {
 	/** @internal a port that hears this context's modules when they arrive (WORKER_MODULES), or null when none are on their way */
 	laterModules(): MessagePort | null {
 		if (!this.#modulePorts) return null;
-		const channel = new MessageChannel();
-		this.#modulePorts.push(channel.port1);
-		return channel.port2;
+		// the browser's own channel (src/transport/ports.ts): the page's
+		// getters of its ports would hand the worker a port the page holds
+		const [kept, handed] = privateChannel();
+		this.#modulePorts.push(kept);
+		return handed;
 	}
 	/**
 	 * The client whose modules this context's workers are handed: its own,

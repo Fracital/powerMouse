@@ -2,6 +2,7 @@ import { ParsedConfig } from '../../config';
 import { workerKindPartition } from '../../partition';
 import type { EmulateInfo } from '../../serviceWorkerTypes';
 import { WORKER_PARTITION } from '../../transport/messages';
+import { replayOf } from '../../transport/ports';
 import Client, { type HandedModules } from '../Client';
 import ServiceWorkerGlobalModule from './modules/ServiceWorkerGlobal';
 
@@ -52,16 +53,18 @@ const HELD_TYPES = ['message', 'connect'];
  * and origin, in the order they came
  */
 function dispatchHeld(events: readonly MessageEvent[]) {
-	for (const event of events)
-		Reflect.apply(nativeDispatchEvent, globalThis, [
-			new NativeMessageEvent(event.type, {
-				data: event.data,
-				origin: event.origin,
-				lastEventId: event.lastEventId,
-				source: event.source,
-				ports: [...event.ports],
-			}),
-		]);
+	for (const event of events) {
+		const replay = new NativeMessageEvent(event.type, {
+			data: event.data,
+			origin: event.origin,
+			lastEventId: event.lastEventId,
+			source: event.source,
+			ports: [...event.ports],
+		});
+		// as the browser's as the event it stands for (src/transport/ports.ts)
+		replayOf(event, replay);
+		Reflect.apply(nativeDispatchEvent, globalThis, [replay]);
+	}
 }
 
 // what the module preamble held, until it is dispatched

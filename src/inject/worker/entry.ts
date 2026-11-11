@@ -4,6 +4,7 @@ import {
 	TRANSPORT_INIT,
 	WORKER_MODULES,
 } from '../../transport/messages';
+import { listenOn, messageOf, startPort } from '../../transport/ports';
 import { messageField, readModules, type HandedModules } from '../Client';
 import { handModules } from '../rewriter';
 import WorkerClient, {
@@ -13,10 +14,21 @@ import WorkerClient, {
 } from './Client';
 import createWorkerClient from './worker';
 
-const isTransportInit = (event: MessageEvent) =>
-	typeof event.data === 'object' &&
-	event.data !== null &&
-	TRANSPORT_INIT in event.data;
+/**
+ * The transport port a TRANSPORT_INIT the browser delivered carries, read
+ * with its own getters (src/transport/ports.ts): a shared worker's script
+ * may have replaced them, or dispatch a message of its own, by the time a
+ * later page connects
+ */
+const transportOf = (event: Event) => {
+	const message = messageOf(event);
+	return message &&
+		typeof message.data === 'object' &&
+		message.data !== null &&
+		TRANSPORT_INIT in message.data
+		? (message.ports[0] ?? null)
+		: null;
+};
 
 const shared =
 	typeof SharedWorkerGlobalScope !== 'undefined' &&
@@ -56,14 +68,16 @@ setWorkerTransportPort(
 		if (shared) {
 			// every connecting page offers a port; the first one is used and
 			// every offer is kept from the worker's own handlers
-			addEventListener('connect', (event) => {
-				const port = (event as MessageEvent).ports[0];
-				port.addEventListener('message', (message) => {
-					if (!isTransportInit(message)) return;
+			listenOn(globalThis, 'connect', (event) => {
+				const port = messageOf(event)?.ports[0];
+				if (!port) return;
+				listenOn(port, 'message', (message) => {
+					const transport = transportOf(message);
+					if (!transport) return;
 					message.stopImmediatePropagation();
-					resolve(message.ports[0]);
+					resolve(transport);
 				});
-				port.start();
+				startPort(port);
 			});
 			return;
 		}
@@ -128,16 +142,21 @@ if (
 )
 	setServiceWorkerPort(
 		new Promise<MessagePort>((resolve) => {
+			// only one the browser delivered (or STomp's replay of one, a
+			// module worker's held events), read with its own getters
 			const handler = (event: MessageEvent) => {
+				const message = messageOf(event);
 				if (
-					typeof event.data !== 'object' ||
-					event.data === null ||
-					!(SW_PORT in event.data)
+					!message ||
+					typeof message.data !== 'object' ||
+					message.data === null ||
+					!(SW_PORT in message.data) ||
+					!message.ports[0]
 				)
 					return;
 				event.stopImmediatePropagation();
 				removeEventListener('message', handler);
-				resolve(event.ports[0]);
+				resolve(message.ports[0]);
 			};
 			addEventListener('message', handler);
 		}),

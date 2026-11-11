@@ -596,6 +596,22 @@ Filled in commit by commit; see the CHANGELOG for each.
     would hear the nonce first and hold the channel (load-grants,
     load-grants-restart: a page that offers channels until one is taken and
     answers the nonce too gets none, and its announcements read nothing).
+  - _STomp's other channels in a page_ are kept from it the same way
+    (`src/transport/ports.ts`): a document's transport, the controller's
+    wasm modules, the permission verdicts, the emulated service workers'
+    calls, a WebSocket's frames and a body's chunks travel on channels made,
+    started, listened to and closed with the browser's own MessageChannel
+    and MessagePort members, taken when the bundle loads, and only a message
+    the browser delivered is heard (a MessageEvent the page dispatches on a
+    port it reached is not). Before, a page could replace
+    `MessagePort.prototype.close`, reach the port the controller's modules
+    were coming on, and play a module of its own on it: under
+    `rewriter: 'wasm'` that module rewrote every script of the frames under
+    the page, another site's included (rewriter-chosen suite: the frame of
+    another site ran the top page's line instead of its own scripts). The
+    same through the `onmessage` setter or `addEventListener` gave a site
+    the verdict it chose: a site the user had blocked read the location the
+    browser holds for the proxy origin (permissions suite).
   - _What a grant hands over is what Chrome would let into the renderer._
     A granted copy of another origin's no-cors load goes through opaque
     response blocking in the worker, whatever the load (it was scripts
