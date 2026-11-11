@@ -24,11 +24,7 @@ import {
 
 // Cases known to differ from Chrome, by why (docs/same-origin-policy.md). A
 // case on the list that now reads as natively fails too: take it off.
-const KNOWN_BY_REASON = {
-	'an about:srcdoc document under no-referrer is judged as an opaque origin': [
-		'fetch/from a srcdoc frame that sends no referrer, ACAO A',
-	],
-};
+const KNOWN_BY_REASON = {};
 const KNOWN = new Map(
 	Object.entries(KNOWN_BY_REASON).flatMap(([why, names]) =>
 		names.map((name) => [name, why]),

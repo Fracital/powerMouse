@@ -139,6 +139,7 @@ import type { RewritePool } from './rewritePool';
 import Router from './Router';
 import { applyHeaderRule, CompiledRule, compileRules } from './rules';
 import { serviceWorkers } from './serviceWorkers';
+import { boundClient } from './srcdocVouches';
 
 export const statusEmpty = [101, 204, 205, 304];
 
@@ -794,6 +795,22 @@ function genericForward(
 								? await knownOriginOf(found.url)
 								: null) ?? decoded)
 						: null;
+					// an about:srcdoc document a routed ancestor vouched for is of
+					// that ancestor's origin and partition (srcdocVouches); waited
+					// for only when no Referer says whose the request is (Chrome
+					// reports the client's URL as empty until it has parsed)
+					if (
+						!client &&
+						found &&
+						found.type === 'window' &&
+						(found.url === '' || found.url.startsWith('about:srcdoc'))
+					) {
+						const bound = await boundClient(id, !referrer);
+						if (bound) {
+							client = bound.client;
+							clientTopSite = bound.top;
+						}
+					}
 					unknownBlob = !client && !!found?.url.startsWith('blob:');
 					unknownClient = !client && !!found && !unknownBlob;
 					if (

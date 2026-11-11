@@ -459,6 +459,12 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   `<anonymous>` where the page's URL stands natively, because a script
   whose text was its own rewrite was taken for one already rewritten and
   skipped when the markup's scripts were named. (error-surfaces suite.)
+- An about:srcdoc document that sends no referrer is judged as the document
+  that made it, as natively: a CORS answer naming that origin is accepted
+  and its credentialed requests carry its cookies. Its nearest routed
+  ancestor vouches for it to the worker when its client starts (a sandboxed
+  one without `allow-same-origin`, or one under a frame of an opaque
+  origin, stays opaque). (sop-escapes suite.)
 - A canvas is tainted by what the image, video or bitmap it draws came
   through, and by what any document drew into it: an image of the page's
   own URL that redirects to another site (also one that comes back, one

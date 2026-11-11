@@ -29,14 +29,17 @@ import {
 	postToPort,
 	RequestInfo,
 	ServiceWorkerApiMessage,
+	SRCDOC_CLAIM,
+	SRCDOC_VOUCH,
 	SW_API,
 	SW_REVIVE,
 	SWbound,
+	type SrcdocMessage,
 } from '../transport/messages';
 import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
-import { recordBlobOrigin } from './blobOrigins';
+import { knownOriginOf, knownTopSiteOf, recordBlobOrigin } from './blobOrigins';
 import {
 	hintsDocument,
 	recordReport as recordClientHintsReport,
@@ -56,6 +59,7 @@ import { RewriteCache } from './rewriteCache';
 import { RewritePool } from './rewritePool';
 import { abortRequest } from './rewrites';
 import { ApiError, serviceWorkers, type WorkerHost } from './serviceWorkers';
+import { claim, vouch } from './srcdocVouches';
 
 interface ControllerRef {
 	/** the controller's address: its scope plus its id */
@@ -563,6 +567,63 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 			url: message.url,
 			...(partition ? { partition } : {}),
 		});
+	} else if (SRCDOC_VOUCH in data) {
+		// from a routed document of that controller: the srcdoc document
+		// under it is of its real origin and partition, read from its own
+		// route (an inline document's from what the worker recorded when it
+		// served it: its route names its referrer, and a data: document is of
+		// no origin a srcdoc document under it could be bound as)
+		const message = data[SRCDOC_VOUCH] as SrcdocMessage;
+		const source =
+			event.source instanceof Client ? event.source.url : undefined;
+		if (
+			!message ||
+			typeof message.directory !== 'string' ||
+			typeof message.token !== 'string' ||
+			!INLINE_TOKEN.test(message.token) ||
+			!source?.startsWith(`${location.origin}${message.directory}`)
+		)
+			return;
+		const ready = controllers.get(message.directory)?.ready;
+		const route = ready?.routeOf(source);
+		if (!ready || !route) return;
+		const inline = source.startsWith(
+			`${location.origin}${message.directory}inline:`,
+		);
+		event.waitUntil(
+			(async () => {
+				try {
+					const origin = inline
+						? (await knownOriginOf(source))?.origin
+						: new URL(ready.realURL(source)).origin;
+					if (!origin || origin === 'null') return;
+					vouch(message.token, {
+						origin,
+						top: inline
+							? await knownTopSiteOf(source)
+							: partitionSite(routePartition(route.resource, origin)),
+					});
+				} catch (error) {
+					// not a URL: no vouch
+				}
+			})(),
+		);
+	} else if (SRCDOC_CLAIM in data) {
+		// from the about:srcdoc client itself (Chrome reports its URL as
+		// empty until the document is parsed)
+		const message = data[SRCDOC_CLAIM] as SrcdocMessage;
+		const source = event.source instanceof Client ? event.source : null;
+		if (
+			!message ||
+			typeof message.token !== 'string' ||
+			(message.token !== '' && !INLINE_TOKEN.test(message.token)) ||
+			!source ||
+			source.type !== 'window' ||
+			source.frameType !== 'nested' ||
+			(source.url !== '' && !source.url.startsWith('about:srcdoc'))
+		)
+			return;
+		claim(message.token, source.id);
 	} else if (BLOB_MINTED in data) {
 		// from a routed document of that controller, for a blob: URL of this
 		// origin; the origin recorded is the document's own real one, never

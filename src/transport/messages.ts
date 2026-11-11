@@ -332,6 +332,26 @@ export interface PermissionRequestInfo {
 	/** the requesting document's service worker client id */
 	client?: string;
 }
+/**
+ * A routed document vouches for an about:srcdoc document under it: a token
+ * the srcdoc document made, which the worker binds to the routed document's
+ * real origin and partition (read from its own routed URL, never from the
+ * message) and the srcdoc document's client then claims (SRCDOC_CLAIM),
+ * before any of its page's script runs. A srcdoc document's URL names no
+ * origin, and under a no-referrer policy its requests carry no Referer
+ * either: without this the worker judges them as an opaque origin's.
+ */
+export const SRCDOC_VOUCH = '$stomp$srcdocVouch';
+/**
+ * an about:srcdoc client presents the token its ancestor vouched for; an
+ * empty token says none vouches for it (an opaque document)
+ */
+export const SRCDOC_CLAIM = '$stomp$srcdocClaim';
+
+export interface SrcdocMessage {
+	directory: string;
+	token: string;
+}
 
 export interface InlineDocumentMessage {
 	directory: string;

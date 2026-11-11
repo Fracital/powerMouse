@@ -20,6 +20,8 @@ import {
 	ABORT_REQUEST,
 	INIT_REMOTE_TRANSPORT,
 	INLINE_DOCUMENT,
+	SRCDOC_CLAIM,
+	SRCDOC_VOUCH,
 	TRANSPORT_INIT,
 	WORKER_BASE,
 } from '../transport/messages';
@@ -451,14 +453,7 @@ export default class Client {
 		// URL says nothing about which controller it belongs to)
 		const client = this.routedClient();
 		if (!client) return null;
-		const bytes = new Uint8Array(16);
-		this.global.crypto.getRandomValues(bytes);
-		let token = '';
-		for (const byte of bytes) token += String.fromCharCode(byte);
-		token = btoa(token)
-			.replace(/\+/g, '-')
-			.replace(/\//g, '_')
-			.replace(/=+$/, '');
+		const token = this.#token();
 		if (
 			!client.postToWorker({
 				[INLINE_DOCUMENT]: {
@@ -477,6 +472,57 @@ export default class Client {
 			`${origin}${client.directory}`,
 		).encode();
 		return `${origin}${client.directory}inline:${token}/${encoded}`;
+	}
+
+	/** 16 random bytes in base64url, for the worker's single-use tokens */
+	#token(): string {
+		const bytes = new Uint8Array(16);
+		this.global.crypto.getRandomValues(bytes);
+		let token = '';
+		for (const byte of bytes) token += String.fromCharCode(byte);
+		return btoa(token)
+			.replace(/\+/g, '-')
+			.replace(/\//g, '_')
+			.replace(/=+$/, '');
+	}
+
+	/**
+	 * An about:srcdoc document tells the worker whose it is, before any of
+	 * the page's script runs. Its URL names no origin, and under a
+	 * no-referrer policy its requests carry no Referer either, so the worker
+	 * would judge them as an opaque origin's. The nearest routed ancestor,
+	 * whose route names its real origin and partition, vouches for a token
+	 * this document makes, and this document's own client claims it
+	 * (SRCDOC_VOUCH, SRCDOC_CLAIM): each load binds itself, so a frame that
+	 * loads again is bound again. A document with no such ancestor, or an
+	 * opaque one (sandboxed without allow-same-origin), claims nothing, which
+	 * tells the worker not to wait for it.
+	 */
+	#bindSrcdoc() {
+		if (!this.isDOM) return;
+		try {
+			if (this.global.location.href !== 'about:srcdoc') return;
+		} catch (error) {
+			return;
+		}
+		let token = '';
+		try {
+			const client = this.opaqueRequests ? null : this.routedClient();
+			if (client && client !== this) {
+				const minted = this.#token();
+				if (
+					client.postToWorker({
+						[SRCDOC_VOUCH]: { directory: client.directory, token: minted },
+					})
+				)
+					token = minted;
+			}
+		} catch (error) {
+			// an ancestor that cannot vouch: claims nothing
+		}
+		this.postToWorker({
+			[SRCDOC_CLAIM]: { directory: this.directory, token },
+		});
 	}
 
 	/**
@@ -608,6 +654,7 @@ export default class Client {
 	 * hook registered before it)
 	 */
 	apply(deferPost = false) {
+		this.#bindSrcdoc();
 		this.runHook('pre');
 		for (const module of this.modules.values()) {
 			if (module.apply) {
