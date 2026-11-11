@@ -680,7 +680,17 @@ suites' known lists with the same reason.
    this way (the element fires `error`, as natively). Closing it
    needs those loads to reach the service worker, which Chrome does not do
    for those documents, or MediaSource for every copied file, which plays
-   only fragmented MP4 and WebM.
+   only what it is fed in segments (fragmented MP4 and WebM, and in Chrome
+   152 MPEG audio, AAC and MPEG-2 transport streams): a progressive MP4
+   would need a remuxer in the inject. Measured on 56 media-heavy real
+   pages (news, sports, ad-heavy publishers, video and audio sites), each
+   loaded twice in plain Chrome 152: a video or sound of another site was
+   loaded in a document no service worker controls on 3 of them, each time
+   an ad's about:blank frame, and all 6 files were progressive MP4, which a
+   MediaSource copy cannot play. The streaming players hand their element
+   a MediaSource URL of their own, which STomp does not copy. So the live
+   URL stays, and MediaSource would close this for none of the files
+   measured.
    What the gate does not cover, since it is not the gate's: a realm
    without hooks is in the proxy's one real origin, so it reads what the
    browser renders there with the browser's own methods (a canvas it draws
