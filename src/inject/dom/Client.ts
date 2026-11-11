@@ -1140,6 +1140,33 @@ export default class DocumentClient extends Client {
 		return linkRoute(this.scope, this.codec, context, target);
 	}
 	/**
+	 * The proxied window `_parent`, `_top` or `_unfencedtop` names from a
+	 * frame under the proxied top, with its client; null for any other
+	 * keyword, for the proxied top (its own parent and top) and for a
+	 * sandboxed document (the Sandbox module decides what it may navigate).
+	 * The browser's own keywords cannot be used: the host frames the proxied
+	 * top sandboxed, and a sandboxed frame navigates no ancestor (and its top
+	 * is the host). The hooks navigate the window from its own realm instead
+	 * (window.open here, a link's click and a javascript: form in the Sandbox
+	 * module), with the URL routed as a document of that window.
+	 */
+	targetWindow(
+		keyword: string | null | undefined,
+	): { window: typeof globalThis; client: DocumentClient } | null {
+		const name = (keyword ?? '').toLowerCase();
+		if (name !== '_parent' && name !== '_top' && name !== '_unfencedtop')
+			return null;
+		if (this.sandboxFlags !== null || !this.nested) return null;
+		try {
+			const window = name === '_parent' ? this.parent : this.proxiedTop;
+			const client = (window as Record<string, any>)[this.names.client] as
+				DocumentClient | undefined;
+			return client ? { window, client } : null;
+		} catch (error) {
+			return null;
+		}
+	}
+	/**
 	 * Called by the shell the service worker served with `document`, before
 	 * the page runs. When the worker saw only the proxy origin (the policy
 	 * stripped the routed URL the browser had), a nested document's

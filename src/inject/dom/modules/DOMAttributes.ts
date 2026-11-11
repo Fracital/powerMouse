@@ -1201,6 +1201,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// never allows top navigation, so the browser refuses them as it
 		// would natively, and the Sandbox module navigates the proxied top for
 		// a link the page's sandbox lets through
+		// (a frame under the proxied top is navigated the same way, and the
+		// hooks navigate the proxied parent or top it means: DocumentClient
+		// targetWindow)
 		const selfTargets = ['_top', '_parent', '_unfencedtop'];
 		const targetHook = (attribute: string) => (element: CustomElement) => {
 			element.restoreAttributesOG(attribute);
@@ -1269,29 +1272,99 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			],
 		);
 
-		domHooksModule.useAttributes(
-			(element) => {
-				element.restoreAttributesOG('href');
+		const linkHook = (attribute: string) => (element: CustomElement) => {
+			element.restoreAttributesOG(attribute);
 
-				if (
-					element.hasAttribute('href') &&
-					element.getAttribute('href') !== ''
-				) {
-					element.setAttributeOG('href', element.getAttribute('href')!);
-					element.setAttribute(
-						'href',
-						this.client.linkRoute(
-							new StompURL(
-								new URL(
-									element.getAttribute('href')!,
-									this.client.baseURL.toString(),
-								),
-								this.client.baseURL,
+			if (
+				element.hasAttribute(attribute) &&
+				element.getAttribute(attribute) !== ''
+			) {
+				element.setAttributeOG(attribute, element.getAttribute(attribute)!);
+				element.setAttribute(
+					attribute,
+					this.client.linkRoute(
+						new StompURL(
+							new URL(
+								element.getAttribute(attribute)!,
+								this.client.baseURL.toString(),
 							),
+							this.client.baseURL,
 						),
+					),
+				);
+			}
+		};
+		// an SVG link's legacy xlink:href is a link as much as its href: a
+		// javascript: URL in it ran as the page wrote it
+		domHooksModule.useAttributes(linkHook('xlink:href'), [['a', 'xlink:href']]);
+		// An SVG animation of a link's href (<set attributeName="href"
+		// to="javascript:...">, <animate values="...">) makes its values the
+		// link's while it runs: they are routed the way the attribute itself
+		// is, the link's as a link (which rewrites a javascript: URL's code),
+		// any other reference's as the file it loads. The animation's target is
+		// the element its own href names, else its parent; a value written
+		// before either is known is routed when it is a javascript: URL (no
+		// reference runs one unrewritten).
+		const ANIMATED = ['to', 'from', 'by', 'values'];
+		const animatedTarget = (element: CustomElement): Element | null => {
+			const reference =
+				element.getAttribute('href') ?? element.getAttribute('xlink:href');
+			if (reference?.startsWith('#'))
+				return (
+					(element.getRootNode() as Document | ShadowRoot).getElementById?.(
+						reference.slice(1),
+					) ?? null
+				);
+			return element.parentElement;
+		};
+		const animatedHook = (element: CustomElement) => {
+			element.restoreAttributesOG(...ANIMATED);
+			const name = element.getAttribute('attributeName');
+			if (name !== 'href' && name !== 'xlink:href') return;
+			const target = animatedTarget(element);
+			const link = target ? target.localName === 'a' : null;
+			const route = (value: string): string => {
+				const trimmed = value.trim();
+				if (trimmed === '' || trimmed.startsWith('#')) return value;
+				try {
+					const url = new StompURL(
+						new URL(trimmed, this.client.baseURL.toString()),
+						this.client.baseURL,
 					);
+					// (a link's route rewrites a javascript: URL's code)
+					if (link === true || url.url.protocol === 'javascript:')
+						return this.client.linkRoute(url);
+					return link === false ? routeBinary(url) : value;
+				} catch (error) {
+					// no URL: the browser makes nothing of it either
+					return value;
 				}
-			},
+			};
+			for (const attribute of ANIMATED) {
+				if (!element.hasAttribute(attribute)) continue;
+				const value = element.getAttribute(attribute)!;
+				// `values` is a list, split at semicolons before any is a URL
+				const routed =
+					attribute === 'values'
+						? value.split(';').map(route).join(';')
+						: route(value);
+				if (routed === value) continue;
+				element.setAttributeOG(attribute, value);
+				element.setAttribute(attribute, routed);
+			}
+		};
+		domHooksModule.useAttributes(
+			animatedHook,
+			['set', 'animate'].flatMap((tag) =>
+				[...ANIMATED, 'attributeName'].map((attribute): [string, string] => [
+					tag,
+					attribute,
+				]),
+			),
+		);
+
+		domHooksModule.useAttributes(
+			linkHook('href'),
 			[
 				['A', 'href'],
 				['a', 'href'],

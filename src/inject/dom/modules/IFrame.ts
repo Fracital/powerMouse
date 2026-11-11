@@ -32,14 +32,26 @@ export default class IFrameModule extends Module<DocumentClient> {
 		// a javascript: URL a frame navigates to runs in the frame's own
 		// window: an iframe's initial about:blank, which nothing injected when
 		// the page never read its contentWindow (`iframe.src = 'javascript:...'`
-		// on a fresh frame). Only a child of this page, so a page cannot have
-		// another document's window injected with its bundle
+		// on a fresh frame). Or in a window a link or a form of this page
+		// opened by its target (`<a target="name" href="javascript:...">`),
+		// which no call of the page's made: it is on its initial about:blank,
+		// this page is its opener (whose document it is: DocumentClient url).
+		// Only a child or such a popup of this page, so a page
+		// cannot have another document's window injected with its bundle
 		this.client.injectChild = (context) => {
-			if (Reflect.get(context, 'parent') !== (this.client.global as unknown))
-				return;
+			const self = this.client.global as unknown;
+			const popup =
+				Reflect.get(context, 'parent') === (context as unknown) &&
+				Reflect.get(context, 'opener') === self &&
+				initialBlank(context);
+			if (Reflect.get(context, 'parent') !== self && !popup) return;
 			injectContext(context);
-			const client = (context as Record<string, any>)[this.client.names.client];
-			if (!client.applied) client.apply();
+			const client = (context as Record<string, any>)[
+				this.client.names.client
+			] as DocumentClient;
+			if (client.applied) return;
+			if (popup) this.client.openedWindows.add(context);
+			client.apply();
 		};
 
 		const windowModule = this.client.getModule(ContextModule)!;

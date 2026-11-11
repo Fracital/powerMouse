@@ -175,10 +175,17 @@ export default class SandboxModule extends Module<DocumentClient> {
 		// a sandboxed document: the hooks leave its target as the page wrote
 		// it (DOMAttributes), so the browser refuses it, unless the sandbox
 		// allows top navigation; then the proxied top goes there, from its own
-		// realm (the browser would not let this frame navigate it)
+		// realm (the browser would not let this frame navigate it).
+		//
+		// And a link to the parent or the top in a frame under the proxied
+		// top, sandboxed or not: the hooks made its target the frame itself
+		// (the browser's `_parent` and `_top` are not the page's: the host
+		// frames the proxied top sandboxed, and its top is the host), so the
+		// window the page means is navigated here, from its own realm, with
+		// the URL routed as its document. A javascript: URL runs there.
 		const nativeAssign = global.location.assign;
 		const onClick = (event: MouseEvent) => {
-			if (client.sandboxFlags === null || event.defaultPrevented) return;
+			if (event.defaultPrevented) return;
 			if (
 				event.button !== 0 ||
 				event.ctrlKey ||
@@ -200,6 +207,28 @@ export default class SandboxModule extends Module<DocumentClient> {
 				global.document.querySelector('base[target]')?.getAttribute('target') ||
 				''
 			).toLowerCase();
+			if (client.sandboxFlags === null) {
+				const aimed = client.targetWindow(target);
+				if (!aimed) return;
+				const destination = resolve(link.getAttribute('href'));
+				if (!['http:', 'https:', 'javascript:'].includes(destination.protocol))
+					return;
+				event.preventDefault();
+				aimed.client.callIn(nativeAssign, aimed.window.location, [
+					// a document is one of that window's own navigations; a
+					// javascript: URL's code is rewritten to run there
+					destination.protocol === 'javascript:'
+						? routeHTML(
+								new StompURL(destination, client.url),
+								client.url,
+								client.config,
+								false,
+								aimed.client.nestedRoute,
+							)
+						: aimed.client.navigationRoute(destination),
+				]);
+				return;
+			}
 			const top = client.proxiedTop;
 			if (!(
 				target === '_top' ||
@@ -222,7 +251,116 @@ export default class SandboxModule extends Module<DocumentClient> {
 				),
 			]);
 		};
-		const install = () => global.addEventListener('click', onClick);
+		// A form aimed at the proxied parent or top, from a frame under the
+		// top: a javascript: action runs in that window. Any other is
+		// submitted by that window, from a copy of the form made in its
+		// document with the form's entry list (the browser builds it once,
+		// here, as it would have for the submission this stands in for), so
+		// the action is routed as that window's document and the response
+		// lands there.
+		// Returns whether it took the submission.
+		const nativeSubmit = global.HTMLFormElement.prototype.submit;
+		const submitAimed = (
+			form: HTMLFormElement,
+			submitter: HTMLElement | null,
+		): boolean => {
+			if (client.sandboxFlags !== null) return false;
+			const aimed = client.targetWindow(
+				submitter?.getAttribute('formtarget') ||
+					form.getAttribute('target') ||
+					global.document.querySelector('base[target]')?.getAttribute('target'),
+			);
+			if (!aimed) return false;
+			const method = (
+				submitter?.getAttribute('formmethod') ??
+				form.getAttribute('method') ??
+				''
+			).toLowerCase();
+			// (a dialog's form navigates nothing)
+			if (method === 'dialog') return false;
+			// a form with no action submits to its document
+			const destination = resolve(
+				submitter?.getAttribute('formaction') ??
+					form.getAttribute('action') ??
+					'',
+			);
+			if (destination.protocol === 'javascript:') {
+				aimed.client.callIn(nativeAssign, aimed.window.location, [
+					routeHTML(
+						new StompURL(destination, client.url),
+						client.url,
+						client.config,
+						false,
+						aimed.client.nestedRoute,
+					),
+				]);
+				return true;
+			}
+			if (!['http:', 'https:'].includes(destination.protocol)) return false;
+			const document = aimed.window.document;
+			const copy = document.createElement('form');
+			for (const [name, override] of [
+				['method', 'formmethod'],
+				['enctype', 'formenctype'],
+				['accept-charset', null],
+			] as const) {
+				const value =
+					(override && submitter?.getAttribute(override)) ??
+					form.getAttribute(name);
+				if (value !== null && value !== undefined)
+					copy.setAttribute(name, value);
+			}
+			copy.setAttribute('action', destination.href);
+			for (const [name, value] of new global.FormData(
+				form,
+				submitter ?? undefined,
+			)) {
+				const input = document.createElement('input');
+				input.name = name;
+				if (typeof value === 'string') {
+					input.type = 'hidden';
+					input.value = value;
+				} else {
+					input.type = 'file';
+					const files = new global.DataTransfer();
+					files.items.add(value);
+					input.files = files.files;
+				}
+				copy.append(input);
+			}
+			copy.hidden = true;
+			document.documentElement.append(copy);
+			try {
+				aimed.client.callIn(nativeSubmit, copy, []);
+			} finally {
+				copy.remove();
+			}
+			return true;
+		};
+		const onSubmit = (event: SubmitEvent) => {
+			if (event.defaultPrevented) return;
+			const form = event.target;
+			if (!(form instanceof global.HTMLFormElement)) return;
+			if (submitAimed(form, event.submitter)) event.preventDefault();
+		};
+		// submit() fires no event
+		global.HTMLFormElement.prototype.submit = proxyModule.wrapFunction(
+			nativeSubmit,
+			(target, that, args) => {
+				let form = false;
+				try {
+					form = that instanceof global.HTMLFormElement;
+				} catch (error) {
+					// no form: the call throws on its own
+				}
+				if (form && submitAimed(that, null)) return;
+				return Reflect.apply(target, that, args);
+			},
+		);
+		const install = () => {
+			global.addEventListener('click', onClick);
+			global.addEventListener('submit', onSubmit);
+		};
 		install();
 		addDocumentOpenListener(global, install);
 

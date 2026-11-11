@@ -108,8 +108,11 @@ export function routeHTML(
 		// the frame's initial about:blank, which nothing injected, and the
 		// rewritten code would throw on the access helper. The parent's client
 		// injects the frame first (a page or a frame it already injected has
-		// its own client, and nothing happens).
-		const inject = `self[${client}]||(()=>{try{parent[${client}].injectChild(self)}catch(e){}})()`;
+		// its own client, and nothing happens). A window with no parent is a
+		// popup a link or a form opened by its target: its opener's client
+		// injects it.
+		const creator = `(parent===self?opener:parent)[${client}]`;
+		const inject = `self[${client}]||(()=>{try{${creator}.injectChild(self)}catch(e){}})()`;
 		// A javascript: URL whose value is a string replaces the document with
 		// that markup, which nothing would inject: the frame or page would run
 		// its scripts raw. For a single-expression body the string goes through
@@ -120,7 +123,7 @@ export function routeHTML(
 			// statements: injected after their directive prologue, so a
 			// 'use strict' stays one
 			return `javascript:${modifyJS(body, url, config, 'generic', `void (${inject});`, undefined, kept)}`;
-		return `javascript:((r,c)=>typeof r==='string'&&c?c.javascriptDocument(r,document.URL):r)((${inject},(${expression})),self[${client}]||(()=>{try{return parent[${client}]}catch(e){}})())`;
+		return `javascript:((r,c)=>typeof r==='string'&&c?c.javascriptDocument(r,document.URL):r)((${inject},(${expression})),self[${client}]||(()=>{try{return ${creator}}catch(e){}})())`;
 	}
 
 	return routeURL(

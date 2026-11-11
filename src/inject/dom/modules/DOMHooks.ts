@@ -560,6 +560,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					);
 				const routable =
 					destination !== null && /^https?:$/.test(destination.protocol);
+				// the proxied parent or top, named from a frame under the top:
+				// the URL is routed as that window's document
+				const aimed = this.client.targetWindow(name);
 				// a javascript: URL runs in the opened window: rewritten, like a
 				// javascript: link (routeHTML rewrites its body)
 				if (destination !== null && destination.protocol === 'javascript:')
@@ -568,7 +571,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						this.client.url,
 						this.client.config,
 						false,
-						this.client.nestedRoute,
+						aimed ? aimed.client.nestedRoute : this.client.nestedRoute,
 					);
 				// a new tab: the host's to open, when it said so (then the page
 				// sees null, as with a popup blocker). Not for a sandboxed
@@ -593,23 +596,35 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 				if (routable)
 					args[0] =
-						// this window itself: a navigation like location.assign's
+						// this window itself: a navigation like location.assign's; the
+						// proxied parent or top: one of that window's own
 						name.toLowerCase() === '_self'
 							? this.client.navigationRoute(destination!)
-							: routeHTML(
-									new StompURL(destination!, this.client.url),
-									this.client.url,
-									this.client.config,
-									false,
-									this.client.nestedRoute,
-								);
+							: aimed
+								? aimed.client.navigationRoute(destination!)
+								: routeHTML(
+										new StompURL(destination!, this.client.url),
+										this.client.url,
+										this.client.config,
+										false,
+										this.client.nestedRoute,
+									);
+
+				// the proxied parent or top navigates from its own realm (see
+				// DocumentClient targetWindow), and a javascript: URL's code runs
+				// there; the caller gets that window
+				if (aimed)
+					return aimed.client.callIn(target, aimed.window, [
+						args[0],
+						'_self',
+						...args.slice(2),
+					]);
 
 				// a top-level page is its own top and parent: navigate the frame
+				// (a sandboxed frame's too)
 				if (
 					args[1] !== undefined &&
-					['_top', '_parent', '_unfencedtop'].includes(
-						String(args[1]).toLowerCase(),
-					)
+					['_top', '_parent', '_unfencedtop'].includes(name.toLowerCase())
 				)
 					args[1] = '_self';
 
@@ -712,7 +727,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				)!.get!,
 				(target, that, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
-					Reflect.apply(target, that, args);
+					const base = Reflect.apply(target, that, args);
+					// a document with no base URL of its own or inherited (a popup
+					// opened on a javascript: URL, a document the page made with
+					// createHTMLDocument) has none for the page either
+					if (base === 'about:blank') return base;
 					return responseURLOf(that) ?? this.client.baseURL.toString();
 				},
 			),

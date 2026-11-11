@@ -4981,6 +4981,20 @@ token '%'`. The body is decoded before rewriting and re-encoded after.
 - The handler attributes of every element interface are rewritten: an
   interface's own handlers (an SVG animation's `onbegin`, `onend` and
   `onrepeat`) ran as the page wrote them. (adversarial-scripts suite.)
+- A `javascript:` URL runs rewritten in the window it is aimed at.
+  `window.open('javascript:...')` handed the page a stand-in for its own
+  popup and the URL's code could not reach its opener: the popup starts on
+  an about:blank with no base URL, which read as a document of no origin.
+  It is the opener's, as natively (and its `baseURI` reads `about:blank`).
+  A popup a link or a form opens by its target is injected by its opener
+  before the URL's code runs. An SVG link's `xlink:href` and an animation
+  of a link's `href` (`<set to="javascript:...">`) ran raw. And `_parent`
+  and `_top` from a frame under the proxied top name the proxied parent
+  and top: `window.open`, a link and a form aimed at them navigated the
+  frame itself (the host frames the proxied top sandboxed, so the
+  browser's own keywords cannot be used); the window the page means now
+  navigates, from its own realm, with the URL routed as its document.
+  (adversarial-scripts suite.)
 
 ### Origin isolation
 

@@ -39,6 +39,52 @@
 			'parent.parent.__advChild(' +
 			JSON.stringify(nav) +
 			', top === parent.parent ? "parent" : top === window ? "self" : "OTHER-WINDOW", location.href)';
+		// for a popup this frame opens: it has no parent, its opener is this
+		// frame, and it is its own top
+		const popup =
+			'opener.parent.__advChild(' +
+			JSON.stringify(nav + ' [in popup]') +
+			', top === window ? "self" : "OTHER-WINDOW", location.href); void setTimeout(function () { close(); }, 1500)';
+		// for code that runs in the parent page itself
+		const inParent =
+			'__advChild(' +
+			JSON.stringify(nav) +
+			', top === window ? "self" : "OTHER-WINDOW", location.href)';
+		const popupWho = (w) => {
+			try {
+				if (w === null) return 'null';
+				if (w === window) return 'self';
+				if (w === parent) return 'parent';
+				return w.window === w &&
+					w.opener === window &&
+					w.top === w &&
+					w.parent === w
+					? 'popup'
+					: 'OTHER-WINDOW';
+			} catch (error) {
+				return 'OTHER-WINDOW(' + error.name + ')';
+			}
+		};
+		// what the popup's own evaluators answer: its URL, its base, its
+		// opener and its top, read by code that runs in the popup
+		const popupRealm = (w) => {
+			const read = (run) => {
+				try {
+					return run(
+						'[location.href, document.baseURI, origin, top === self ? "top" : "framed", opener === null ? "no opener" : opener.location.href, typeof parent.__advChild]',
+					);
+				} catch (error) {
+					return 'threw ' + error.name;
+				}
+			};
+			if (!w) return 'no window';
+			return {
+				eval: read((code) => w.eval(code)),
+				Function: read((code) => new w.Function('return ' + code)()),
+				setTimeout: typeof w.setTimeout,
+				sameEval: w.eval === eval ? "TELL:the opener's eval" : 'its own',
+			};
+		};
 		const frame = (fn) => {
 			const f = document.createElement('iframe');
 			fn(f);
@@ -141,12 +187,276 @@
 				history.pushState(null, '', '#adv');
 				a.click();
 			},
-			'window.open(javascript:)': (p) => {
-				const w = window.open('javascript:' + p);
-				parent.__advRecord(
-					nav + ' [returned]',
-					w === null ? 'null' : w === window ? 'self' : 'OTHER-WINDOW',
+			// a popup: the URL's code runs in the new window, whose opener is
+			// this frame, and the window comes back to the caller. It is
+			// another window by right, so it is named 'popup' when it is a
+			// top-level window this frame opened and OTHER-WINDOW otherwise
+			'window.open(javascript:)': () => {
+				const w = window.open('javascript:' + popup);
+				parent.__advRecord(nav + ' [returned]', popupWho(w));
+				parent.__advRecord(nav + ' [returned realm]', popupRealm(w));
+			},
+			'window.open(javascript:, _blank)': () => {
+				const w = window.open('javascript:' + popup, '_blank');
+				parent.__advRecord(nav + ' [returned]', popupWho(w));
+			},
+			'window.open() then location = javascript:': () => {
+				const w = window.open();
+				parent.__advRecord(nav + ' [returned]', popupWho(w));
+				w.location = 'javascript:' + popup;
+			},
+			'window.open(about:blank) then location.href = javascript:': () => {
+				const w = window.open('about:blank');
+				w.location.href = 'javascript:' + popup;
+			},
+			'window.open() then eval': () => {
+				const w = window.open();
+				w.eval(popup);
+			},
+			'document.open(javascript:, _blank, features)': () => {
+				const w = document.open('javascript:' + popup, '_blank', '');
+				parent.__advRecord(nav + ' [returned]', popupWho(w));
+			},
+			// a javascript: URL aimed at another window runs there: the parent
+			// (this frame's top), or a frame of this frame by name
+			'window.open(javascript:, _parent)': () =>
+				window.open('javascript:' + inParent, '_parent'),
+			'window.open(javascript:, _top)': () =>
+				window.open('javascript:' + inParent, '_top'),
+			'a target=_parent href=javascript: click': () => {
+				const a = document.createElement('a');
+				a.href = 'javascript:' + inParent;
+				a.target = '_parent';
+				document.body.append(a);
+				a.click();
+			},
+			'a target=_top href=javascript: click': () => {
+				const a = document.createElement('a');
+				a.href = 'javascript:' + inParent;
+				a.target = '_top';
+				document.body.append(a);
+				a.click();
+			},
+			'form target=_parent action=javascript: submit': () => {
+				const f = document.createElement('form');
+				f.action = 'javascript:' + inParent;
+				f.target = '_parent';
+				document.body.append(f);
+				f.submit();
+			},
+			'form target=_top action=javascript: requestSubmit': () => {
+				const f = document.createElement('form');
+				f.action = 'javascript:' + inParent;
+				f.target = '_top';
+				document.body.append(f);
+				f.requestSubmit();
+			},
+			'button formtarget=_parent formaction=javascript: click': () => {
+				const f = document.createElement('form');
+				const b = document.createElement('button');
+				b.setAttribute('formaction', 'javascript:' + inParent);
+				b.setAttribute('formtarget', '_parent');
+				f.append(b);
+				document.body.append(f);
+				b.click();
+			},
+			'base target=_parent, a href=javascript: click': () => {
+				const base = document.createElement('base');
+				base.target = '_parent';
+				document.head.append(base);
+				const a = document.createElement('a');
+				a.href = 'javascript:' + inParent;
+				document.body.append(a);
+				a.click();
+			},
+			// a window a link opens by its target, which no call of the page's
+			// made: the URL's code runs in it, and this frame is its opener
+			'a target=new window href=javascript: click': () => {
+				const a = document.createElement('a');
+				a.href = 'javascript:' + popup;
+				a.target = 'advlinkpopup';
+				document.body.append(a);
+				a.click();
+			},
+			'parent.location = javascript:': () => {
+				parent.location = 'javascript:' + inParent;
+			},
+			'top.location.href = javascript:': () => {
+				top.location.href = 'javascript:' + inParent;
+			},
+			'window.open(javascript:, named frame)': () =>
+				frame((f) => {
+					f.name = 'advnamed';
+					setTimeout(() => window.open('javascript:' + nested, 'advnamed'));
+				}),
+			'a target=named frame href=javascript: click': () =>
+				frame((f) => {
+					f.name = 'advnamed';
+					setTimeout(() => {
+						const a = document.createElement('a');
+						a.href = 'javascript:' + nested;
+						a.target = 'advnamed';
+						document.body.append(a);
+						a.click();
+					});
+				}),
+			'form target=named frame action=javascript: submit': () =>
+				frame((f) => {
+					f.name = 'advnamed';
+					setTimeout(() => {
+						const form = document.createElement('form');
+						form.action = 'javascript:' + nested;
+						form.target = 'advnamed';
+						document.body.append(form);
+						form.submit();
+					});
+				}),
+			'iframe contentWindow.location.href = javascript:': () => {
+				const f = document.createElement('iframe');
+				document.body.append(f);
+				f.contentWindow.location.href = 'javascript:' + nested;
+			},
+			'iframe contentWindow.location.assign(javascript:)': () => {
+				const f = document.createElement('iframe');
+				document.body.append(f);
+				f.contentWindow.location.assign('javascript:' + nested);
+			},
+			'iframe contentWindow.location.replace(javascript:)': () => {
+				const f = document.createElement('iframe');
+				document.body.append(f);
+				f.contentWindow.location.replace('javascript:' + nested);
+			},
+			'frames[0].location = javascript:': () => {
+				const f = document.createElement('iframe');
+				document.body.append(f);
+				frames[0].location = 'javascript:' + nested;
+			},
+			'iframe src=javascript: in innerHTML': () => {
+				const d = document.createElement('div');
+				document.body.append(d);
+				d.innerHTML =
+					'<iframe src="javascript:' +
+					nested.replace(/"/g, '&quot;') +
+					'"></iframe>';
+			},
+			'iframe loaded then src = javascript:': () => {
+				const f = document.createElement('iframe');
+				f.addEventListener(
+					'load',
+					() => {
+						f.src = 'javascript:' + nested;
+					},
+					{ once: true },
 				);
+				document.body.append(f);
+			},
+			// the scheme as the URL parser reads it: any case, tabs and
+			// newlines dropped from anywhere, leading spaces and controls
+			'location = JaVaScRiPt:': (p) => {
+				location = 'JaVaScRiPt:' + p;
+			},
+			'location = java\\tscript:': (p) => {
+				location = 'java\tscr\nipt:' + p;
+			},
+			'location = leading controls javascript:': (p) => {
+				location = ' \x01\x1f javascript:' + p;
+			},
+			'a href=jav&Tab;ascript: in innerHTML click': (p) => {
+				const d = document.createElement('div');
+				document.body.append(d);
+				d.innerHTML =
+					'<a href="jav&Tab;ascript:' + p.replace(/"/g, '&quot;') + '">x</a>';
+				d.firstChild.click();
+			},
+			'a href= leading space javascript: click': (p) => {
+				const a = document.createElement('a');
+				a.setAttribute('href', ' \n javascript:' + p);
+				document.body.append(a);
+				a.click();
+			},
+			'svg a href=javascript: click': (p) => {
+				const d = document.createElement('div');
+				document.body.append(d);
+				d.innerHTML =
+					'<svg><a href="javascript:' +
+					p.replace(/"/g, '&quot;') +
+					'"><text y="10">x</text></a></svg>';
+				d.querySelector('a').dispatchEvent(
+					new MouseEvent('click', { bubbles: true, cancelable: true }),
+				);
+			},
+			'svg a xlink:href=javascript: click': (p) => {
+				const d = document.createElement('div');
+				document.body.append(d);
+				d.innerHTML =
+					'<svg><a xlink:href="javascript:' +
+					p.replace(/"/g, '&quot;') +
+					'"><text y="10">x</text></a></svg>';
+				d.querySelector('a').dispatchEvent(
+					new MouseEvent('click', { bubbles: true, cancelable: true }),
+				);
+			},
+			'svg a href.baseVal = javascript: click': (p) => {
+				const d = document.createElement('div');
+				document.body.append(d);
+				d.innerHTML = '<svg><a><text y="10">x</text></a></svg>';
+				const a = d.querySelector('a');
+				a.href.baseVal = 'javascript:' + p;
+				a.dispatchEvent(
+					new MouseEvent('click', { bubbles: true, cancelable: true }),
+				);
+			},
+			'svg a set href to=javascript: click': (p) => {
+				const d = document.createElement('div');
+				document.body.append(d);
+				d.innerHTML =
+					'<svg><a href="#"><set attributeName="href" to="javascript:' +
+					p.replace(/"/g, '&quot;') +
+					'"/><text y="10">x</text></a></svg>';
+				setTimeout(
+					() =>
+						d
+							.querySelector('a')
+							.dispatchEvent(
+								new MouseEvent('click', { bubbles: true, cancelable: true }),
+							),
+					100,
+				);
+			},
+			'input type=submit formaction=javascript:': (p) => {
+				const f = document.createElement('form');
+				const b = document.createElement('input');
+				b.type = 'submit';
+				b.formAction = 'javascript:' + p;
+				f.append(b);
+				document.body.append(f);
+				b.click();
+			},
+			'form.requestSubmit(button formaction=javascript:)': (p) => {
+				const f = document.createElement('form');
+				const b = document.createElement('button');
+				b.formAction = 'javascript:' + p;
+				f.append(b);
+				document.body.append(f);
+				f.requestSubmit(b);
+			},
+			'navigation.navigate(javascript:)': (p) => {
+				navigation.navigate('javascript:' + p);
+			},
+			'location.href = javascript: via Reflect.set(location)': (p) => {
+				Reflect.set(location, 'href', 'javascript:' + p);
+			},
+			'location.assign.call(location, javascript:)': (p) => {
+				location.assign.call(location, 'javascript:' + p);
+			},
+			'document.location.assign(javascript:)': (p) => {
+				document.location.assign('javascript:' + p);
+			},
+			"window['loc' + 'ation'] = javascript:": (p) => {
+				window['loc' + 'ation'] = 'javascript:' + p;
+			},
+			'self.location = javascript:': (p) => {
+				self.location = 'javascript:' + p;
 			},
 			'window.open(javascript:, _self)': (p) =>
 				window.open('javascript:' + p, '_self'),

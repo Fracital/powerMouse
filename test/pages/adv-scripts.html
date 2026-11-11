@@ -1314,8 +1314,150 @@
 		'history.pushState then javascript:',
 		'window.open(javascript:)',
 		'window.open(javascript:, _self)',
+		'window.open(javascript:, _blank)',
+		'window.open() then location = javascript:',
+		'window.open(about:blank) then location.href = javascript:',
+		'window.open() then eval',
+		'document.open(javascript:, _blank, features)',
+		'window.open(javascript:, _parent)',
+		'window.open(javascript:, _top)',
+		'a target=_parent href=javascript: click',
+		'a target=_top href=javascript: click',
+		'form target=_parent action=javascript: submit',
+		'form target=_top action=javascript: requestSubmit',
+		'button formtarget=_parent formaction=javascript: click',
+		'base target=_parent, a href=javascript: click',
+		'a target=new window href=javascript: click',
+		'parent.location = javascript:',
+		'top.location.href = javascript:',
+		'window.open(javascript:, named frame)',
+		'a target=named frame href=javascript: click',
+		'form target=named frame action=javascript: submit',
+		'iframe contentWindow.location.href = javascript:',
+		'iframe contentWindow.location.assign(javascript:)',
+		'iframe contentWindow.location.replace(javascript:)',
+		'frames[0].location = javascript:',
+		'iframe src=javascript: in innerHTML',
+		'iframe loaded then src = javascript:',
+		'location = JaVaScRiPt:',
+		'location = java\\tscript:',
+		'location = leading controls javascript:',
+		'a href=jav&Tab;ascript: in innerHTML click',
+		'a href= leading space javascript: click',
+		'svg a href=javascript: click',
+		'svg a xlink:href=javascript: click',
+		'svg a href.baseVal = javascript: click',
+		'svg a set href to=javascript: click',
+		'input type=submit formaction=javascript:',
+		'form.requestSubmit(button formaction=javascript:)',
+		'navigation.navigate(javascript:)',
+		'location.href = javascript: via Reflect.set(location)',
+		'location.assign.call(location, javascript:)',
+		'document.location.assign(javascript:)',
+		"window['loc' + 'ation'] = javascript:",
+		'self.location = javascript:',
 		'meta refresh javascript:',
 	];
+	// The parent and the top a frame two levels down means are the proxied
+	// ones, for a javascript: URL (its code runs in the window it is aimed
+	// at) and for a document (that window navigates, the frame stays). The
+	// frames are about:blank ones this page makes; `_top` is this page, so
+	// only code is aimed at it.
+	const twoDown = async () => {
+		const outer = document.createElement('iframe');
+		document.body.append(outer);
+		await new Promise((r) => setTimeout(r, 50));
+		const inner = outer.contentDocument.createElement('iframe');
+		outer.contentDocument.body.append(inner);
+		await new Promise((r) => setTimeout(r, 50));
+		return [outer.contentWindow, inner.contentWindow, outer];
+	};
+	const AIMED = {
+		'window.open': (w, url, target) => w.open(url, target),
+		a: (w, url, target) => {
+			const a = w.document.createElement('a');
+			a.href = url;
+			a.target = target;
+			w.document.body.append(a);
+			a.click();
+		},
+		'form.submit': (w, url, target) => {
+			const f = w.document.createElement('form');
+			// a GET form's fields are its query
+			f.action = url.replace('?name=aimed', '');
+			f.target = target;
+			f.innerHTML = '<input type="hidden" name="name" value="aimed">';
+			w.document.body.append(f);
+			f.submit();
+		},
+		'form POST requestSubmit': (w, url, target) => {
+			const f = w.document.createElement('form');
+			f.action = url;
+			f.method = 'post';
+			f.target = target;
+			f.innerHTML = '<input type="hidden" name="posted" value="1">';
+			w.document.body.append(f);
+			f.requestSubmit();
+		},
+	};
+	let aimedCount = 0;
+	for (const [how, aim] of Object.entries(AIMED)) {
+		for (const target of ['_parent', '_top']) {
+			const key = '__advAimed' + aimedCount++;
+			A(
+				'two frames down: ' + how + ' javascript: at ' + target,
+				async () => {
+					const [outer, inner] = await twoDown();
+					aim(
+						inner,
+						'javascript:void (window.' +
+							key +
+							' = top === window ? "its own top" : "under this page")',
+						target,
+					);
+					await new Promise((r) => setTimeout(r, 1000));
+					const ran = (w) => (w[key] === undefined ? 'no' : w[key]);
+					const saw =
+						'page: ' +
+						ran(window) +
+						', outer: ' +
+						ran(outer) +
+						', inner: ' +
+						ran(inner);
+					return saw ===
+						(target === '_top'
+							? 'page: its own top, outer: no, inner: no'
+							: 'page: no, outer: under this page, inner: no')
+						? 'ran in ' + target
+						: 'TELL:' + saw;
+				},
+				8000,
+			);
+		}
+		A(
+			'two frames down: ' + how + ' a document at _parent',
+			async () => {
+				const [outer, inner, element] = await twoDown();
+				// the parent's new document is read once it has loaded: before
+				// that its window may hold a document no script has run in yet
+				const loaded = new Promise((r) => {
+					element.addEventListener('load', r, { once: true });
+					setTimeout(r, 6000);
+				});
+				aim(inner, 'adv-child.html?name=aimed', '_parent');
+				await loaded;
+				await new Promise((r) => setTimeout(r, 200));
+				const path = (href) => href.replace(/^.*\//, '');
+				let innerNow = 'gone';
+				if (outer.frames.length) innerNow = path(outer.frames[0].location.href);
+				const saw = path(outer.location.href) + ', inner: ' + innerNow;
+				return saw === 'adv-child.html?name=aimed, inner: gone'
+					? 'the parent navigated'
+					: 'TELL:' + saw;
+			},
+			8000,
+		);
+	}
 	const startNav = (i) => {
 		if (i >= NAV_ROUTES.length) return __advFinish(3500);
 		const name = NAV_ROUTES[i];

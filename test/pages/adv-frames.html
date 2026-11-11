@@ -127,8 +127,10 @@
 		const f = document.createElement('iframe');
 		document.body.append(f);
 		f.contentDocument.open();
+		// (the markup is read back below: the script spells its verdict in
+		// two halves, so only a script that ran with another top says it)
 		f.contentDocument.write(
-			'<a id="l" href="/ab">x</a><script>parent.__advRecord("about:blank written script", {top: top === parent ? "parent" : "OTHER-WINDOW", href: location.href, anchor: document.getElementById("l").href})<\/script>',
+			'<a id="l" href="/ab">x</a><script>parent.__advRecord("about:blank written script", {top: top === parent ? "parent" : "OTHER-" + "WINDOW", href: location.href, anchor: document.getElementById("l").href})<\/script>',
 		);
 		f.contentDocument.close();
 		const l = f.contentDocument.getElementById('l');
@@ -189,9 +191,26 @@
 			src: cross.src,
 		};
 	});
+	// a popup is another window by right: named 'popup' when it is the
+	// top-level window this page opened, with this page for its opener
+	const popupWho = (w) => {
+		try {
+			if (w === null) return 'null';
+			return w !== window &&
+				w.window === w &&
+				w.top === w &&
+				w.parent === w &&
+				w.opener === window &&
+				w.location.href === 'about:blank'
+				? 'popup'
+				: W(w);
+		} catch (error) {
+			return 'OTHER-WINDOW(' + error.name + ')';
+		}
+	};
 	P('window.open(about:blank)', () => {
 		const w = window.open('about:blank');
-		const r = W(w);
+		const r = popupWho(w);
 		if (w) w.close();
 		return r;
 	});
