@@ -1509,13 +1509,24 @@
 		'canvas/the tracks of a stream captured before its canvas was tainted',
 		async () => (await capturedThenTainted()).tracks,
 	);
+	// A video once it has a frame to give. Chrome fires loadeddata before its
+	// first frame is presented now and then (on a busy machine, natively
+	// too): read then, a canvas draws nothing, createImageBitmap says "The
+	// image source is not usable" and VideoFrame "Invalid source state". The
+	// first video frame callback comes once it is
 	const video = (src, crossOrigin) =>
 		new Promise((resolve) => {
 			const element = document.createElement('video');
 			element.muted = true;
 			element.preload = 'auto';
 			if (crossOrigin !== undefined) element.crossOrigin = crossOrigin;
-			element.onloadeddata = () => resolve(element);
+			const presented = new Promise((frame) =>
+				element.requestVideoFrameCallback(frame),
+			);
+			element.onloadeddata = async () => {
+				await Promise.race([presented, sleep(10000)]);
+				resolve(element);
+			};
 			element.onerror = () => resolve(null);
 			element.src = src;
 		});
