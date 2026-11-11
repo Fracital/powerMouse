@@ -578,7 +578,7 @@ part of the key on its own, as it must: the two backends' outputs differ.
 Per-frame cost therefore goes down, not up, once the JavaScript libraries
 leave the inject bundle: that is a goal of phase 2 with a number on it, set
 out under "The inject bundle without the JavaScript libraries" below. The
-`frame-cost` ceiling (1,160 KB of heap per frame, `injectDocument.js` at
+`frame-cost` ceiling (1,150 KB of heap per frame, `injectDocument.js` at
 most 475 KB since the JavaScript libraries left it, 850 before) is a gate
 on every phase.
 

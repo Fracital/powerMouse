@@ -19,14 +19,15 @@
 //   and say why.
 // - the JS heap one proxied frame adds (test/frame-memory.mjs, FRAMES frames
 //   of a small ad-like page, same site), against a ceiling above what this
-//   build measures: 1,110 to 1,123 KB with 20 frames on Chrome 152 and 156
+//   build measures: 1,094 to 1,100 KB with 20 frames on Chrome 152 and 156
 //   with the content blocker on in every frame, within a few KB from run to
-//   run, and the same before the library left the bundle (a frame never
-//   evaluated it, and its text cost a frame about 3 KB). The ceiling, 1,160
-//   KB, takes the escape fixes' hooks (about 24 KB a frame) and :visited's
-//   link routes (about 6 KB). A module that makes an interface every frame
-//   (the WebGL ones, +90 KB) or evaluates the rewriter library in every
-//   frame again (+230 KB) goes past it.
+//   run (1,147 to 1,153 KB before the SVG and CSS rule hooks named their
+//   interfaces and one hook took every event handler attribute). The
+//   ceiling, 1,150 KB, takes the escape fixes' hooks (about 24 KB a frame)
+//   with about 25 KB to spare. A module that makes an interface every frame
+//   (the WebGL ones, +90 KB; every SVG element interface, +33 KB) or
+//   evaluates the rewriter library in every frame again (+230 KB) goes past
+//   it.
 import { statSync } from 'node:fs';
 import { measureFrames } from '../frame-memory.mjs';
 import { done, ok } from '../lib.mjs';
@@ -34,7 +35,7 @@ import { done, ok } from '../lib.mjs';
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
 const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 475;
 const FRAMES = Number(process.env.FRAMES) || 20;
-const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1160;
+const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1150;
 
 const bundleKB = statSync(BUNDLE).size / 1024;
 ok(
