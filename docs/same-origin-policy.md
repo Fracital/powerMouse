@@ -1203,19 +1203,45 @@ suites' known lists with the same reason.
    isolated, which is the host's to send. What is not as natively under a
    host that is (the first two are on the suite's known list or measured by
    it):
-   - A frame with a Document-Isolation-Policy in a page that is not
-     isolated is isolated natively and not through the proxy, which takes
-     the header as one more way to be isolated inside an isolated group.
-     Serving the header itself was measured (Chrome 152 and 156): it
-     isolates a document under any host, without any header of the host's,
-     and its popups keep their opener; but no Permissions-Policy undoes it,
-     and a document that has it is in another agent cluster than a
-     same-origin document that has not (`contentDocument` null, a
-     SecurityError on its window). Every proxied document shares one real
-     origin and the membrane reaches the real windows, so either all of
-     them would carry it, and all be isolated, or an isolated page could
-     not be reached by the documents around it; and a host on the proxy's
-     origin could not reach its own frames.
+   - A document with a Document-Isolation-Policy is isolated natively
+     wherever it is; through the proxy it is isolated only inside an
+     isolated group (a frame of an isolated page, or a page under an
+     isolated host), and never under a host that is not isolated. Chrome
+     152 and 156 both ship the header to pages. Measured natively (a page
+     without headers and its same-origin frame that sends
+     `isolate-and-require-corp`): the frame is isolated, and the two are
+     cross-origin to each other although their origin is one:
+     `contentDocument` null, a SecurityError for `contentWindow.document`,
+     its `location.href` and `name`, and in the frame for `parent.document`
+     and `parent.location.href`, `frameElement` null; `postMessage` both
+     ways (`event.source` is the window, `origin` the page's), a
+     BroadcastChannel, localStorage and cookies are shared as for any
+     same-origin frame. Serving the page's own header was measured too (the
+     worker passing it on, Chrome 152): Chrome isolates the frame
+     (`crossOriginIsolated` true, SharedArrayBuffer), and every proxied
+     document around it can no longer reach it, nor it them. STomp's inject
+     takes a real window it cannot reach for the host's page, the boundary
+     above the proxied top: the frame read `top === self`,
+     `parent === self`, `parent.frames.length` 0 and lost its name, its
+     parent's messages and its own were dropped as the host's are
+     (`Framing`), and its storage partition, which is decided by the
+     proxied top it finds by walking up, came out as its own site's: a
+     frame of another site would have read and written that site's
+     first-party storage. So the header is not served. Matching Chrome
+     needs a membrane for a proxied window that is of the proxy's origin and
+     cannot be reached: the frame's route saying how many levels up its
+     proxied top is (a cross-origin `parent` chain can be walked, its
+     documents cannot), `top`, `parent`, `frames` and named access as
+     cross-origin stand-ins that compare equal from both sides, the
+     message envelope accepted from such a window and told apart from the
+     host's, the partition, the site facts and the rewriter library taken
+     from the route and the bundle instead of the top's realm, the joint
+     session history (src/controller/history.ts and the History module walk
+     the frames' realms) and, for a proxied top that sends the header, a
+     `Frame` whose `url`, `title`, `back` and `forward` work without its
+     window. Half of that is worse than the difference it removes (the
+     partition above), so it stays on the cross-origin-isolation suite's
+     known list until it is done whole.
    - A credentialless frame has its site's cookies and stored data, where
      Chrome gives it none, and `iframe.credentialless` reads false: the
      attribute never reaches the browser (as before; the frame would lose
