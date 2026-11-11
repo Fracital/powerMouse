@@ -505,6 +505,8 @@ export function modifyJS(
 	compact?: boolean,
 	/** where the text its functions read back as is kept (a part of a split script, a javascript: URL) */
 	source?: ScriptSource,
+	/** told which backend rewrote the script, where the wasm one was asked (the request log's `rewriteBy`) */
+	told?: RewrittenBy,
 ) {
 	// the wasm backend answers where this thread holds the module; what it
 	// declines (a script its parser refuses, a shape it leaves alone) is
@@ -519,6 +521,7 @@ export function modifyJS(
 			() => scriptLead(url, config, type, preamble),
 			source,
 		);
+		if (told) told.by = output === null ? 'js' : 'wasm';
 		if (output !== null) return output;
 	}
 	const names = helperNames(config);
@@ -1884,6 +1887,15 @@ function hoistParamPatterns(
  * (src/functionSource.ts). A whole script needs none of it: its own text is
  * kept, by its own key.
  */
+/**
+ * Which backend rewrote a script under `rewriter: 'wasm'`: the module, or
+ * the JavaScript rewriter (the module declined the script, or the thread
+ * holds none). Unset when the module was not asked.
+ */
+export interface RewrittenBy {
+	by?: 'wasm' | 'js';
+}
+
 export interface ScriptSource {
 	/** the key of the text this script's positions refer to */
 	key?: string;

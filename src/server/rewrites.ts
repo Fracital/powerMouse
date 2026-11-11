@@ -47,7 +47,7 @@ import {
 	routeHTML,
 	XML_DOCUMENT_MIMES,
 } from '../rewriteHTML';
-import { modifyJS, routeJS, ScriptType } from '../rewriteJS';
+import { modifyJS, RewrittenBy, routeJS, ScriptType } from '../rewriteJS';
 import { parseRoutedURL, routeBinary, unwrapRoute } from '../routeURL';
 import type { ControlInfo } from '../serviceWorkerTypes';
 import StompURL from '../StompURL';
@@ -2756,6 +2756,7 @@ export function registerRewrites(
 		note: Note,
 	): Promise<string> => {
 		let split = false;
+		const told: RewrittenBy = {};
 		const pooled = rewriter.pool?.live
 			? await rewriter.pool.rewrite(
 					text,
@@ -2763,11 +2764,28 @@ export function registerRewrites(
 					rewriter.config,
 					type,
 					() => (split = true),
+					told,
 				)
 			: null;
 		note.rewriteIn =
 			pooled === null ? 'service-worker' : split ? 'pool split' : 'pool';
-		return pooled ?? modifyJS(text, url, rewriter.config, type);
+		const output =
+			pooled ??
+			modifyJS(
+				text,
+				url,
+				rewriter.config,
+				type,
+				'',
+				undefined,
+				undefined,
+				told,
+			);
+		// which backend made it: the module, or the JavaScript rewriter (the
+		// module declined the script, the thread held none, or the script was
+		// split, whose parts are the JavaScript rewriter's)
+		if (rewriter.config.rewriter === 'wasm') note.rewriteBy = told.by ?? 'js';
+		return output;
 	};
 	// the config a script's rewrite depends on, for its cache key: all of it
 	// but the client's name, which a controller mints anew (a host that keeps

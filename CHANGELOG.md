@@ -256,6 +256,10 @@ The first release after a four-year gap. Everything below is breaking.
   beside newer ones (the first artifact answered every call with its input)
   would hand scripts back as the page wrote them: such a module is never
   asked, and the JavaScript rewriter answers.
+- Under `rewriter: 'wasm'` `onRequest` says which backend rewrote a script
+  made now (`rewriteBy`: `wasm`, or `js` when the module declined it, its
+  thread does not hold the module yet, or the script was split), as it says
+  for a stylesheet.
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

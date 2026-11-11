@@ -2,7 +2,7 @@
 // src/server/rewritePool.ts). Apart from transport/messages.ts, which the
 // controller and its declarations import, because this names the rewriter.
 import type { Config } from './config';
-import type { ScriptSource, ScriptType } from './rewriteJS';
+import type { RewrittenBy, ScriptSource, ScriptType } from './rewriteJS';
 import type { SplitPlan } from './splitRewrite';
 
 /** rpc id on a rewrite worker's port */
@@ -34,6 +34,11 @@ export interface RewriteRequest {
 	preamble?: string;
 }
 
+/** a script's output with the backend that made it: the answer under `rewriter: 'wasm'`, where the module was asked (the output alone otherwise) */
+export interface RewriteAnswer extends Required<RewrittenBy> {
+	output: string;
+}
+
 /** a large script to plan a split of (splitRewrite) */
 export interface PlanRequest {
 	script: string;
@@ -43,6 +48,6 @@ export interface PlanRequest {
 
 /** implemented by a rewrite worker (src/rewriteWorker.ts), called by the service worker */
 export type RewriteBound = {
-	rewrite: [RewriteRequest, string];
+	rewrite: [RewriteRequest, string | RewriteAnswer];
 	plan: [PlanRequest, SplitPlan | null];
 };

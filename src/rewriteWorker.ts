@@ -7,10 +7,11 @@
 // everything its output depends on and gets back what modifyJS makes of it,
 // the same as it would have made itself.
 import { parseConfig } from './config';
-import { modifyJS } from './rewriteJS';
+import { modifyJS, type RewrittenBy } from './rewriteJS';
 import {
 	REWRITE_READY,
 	REWRITE_RPC,
+	RewriteAnswer,
 	RewriteBound,
 	RewriteRequest,
 } from './rewriteMessages';
@@ -23,11 +24,12 @@ import { adoptModules, heldModules } from './wasm/thread';
 
 declare const self: DedicatedWorkerGlobalScope;
 
-function rewrite(request: RewriteRequest): string {
+function rewrite(request: RewriteRequest): string | RewriteAnswer {
 	addRouteScopes(request.scopes);
 	const { codec } = parseConfig(request.config, request.codecKey);
 	const url = new StompURL(new URL(request.url), codec, request.directory);
-	return modifyJS(
+	const told: RewrittenBy = {};
+	const output = modifyJS(
 		request.script,
 		url,
 		request.config,
@@ -35,7 +37,9 @@ function rewrite(request: RewriteRequest): string {
 		request.preamble ?? '',
 		request.compact,
 		request.source,
+		told,
 	);
+	return told.by ? { output, by: told.by } : output;
 }
 
 function serve(port: MessagePort) {

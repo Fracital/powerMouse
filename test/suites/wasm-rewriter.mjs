@@ -83,7 +83,12 @@ async function load(name, extra, tries = 300) {
 					const frame = window.__frame.element.contentWindow;
 					const ran = !!frame.__rc?.some(([n]) => n === name);
 					return entry && ran
-						? { where: entry.rewriteIn, ran, seen: frame[read] }
+						? {
+								where: entry.rewriteIn,
+								by: entry.rewriteBy,
+								ran,
+								seen: frame[read],
+							}
 						: null;
 				},
 				{ before, name, read },
@@ -109,6 +114,11 @@ ok('every thread holds the rewriter', await settled(1));
 		'a script is rewritten in a worker, and runs',
 		result.where === 'pool' && result.ran,
 		show(result),
+	);
+	ok(
+		'the request log says the module rewrote it',
+		result.by === 'wasm',
+		show(result.by),
 	);
 	const [body] = bodiesOf('p');
 	ok(
@@ -140,6 +150,11 @@ ok('the service worker holds the rewriter', await settled(0));
 		'with no worker the service worker rewrites it, and it runs',
 		result.where === 'service-worker' && result.ran,
 		show(result),
+	);
+	ok(
+		'and the request log says its module rewrote it',
+		result.by === 'wasm',
+		show(result.by),
 	);
 	const seen = bodiesOf('p');
 	ok(
@@ -183,6 +198,11 @@ ok('the service worker holds the rewriter', await settled(0));
 			!body.includes('/* gone */'),
 		show([declined, body?.slice(0, 300)]),
 	);
+	ok(
+		'and the request log says the JavaScript rewriter rewrote it',
+		declined.by === 'js',
+		show(declined.by),
+	);
 
 	// a script neither rewriter parses runs as it was written (and fails as
 	// it would natively), not as something half rewritten
@@ -208,6 +228,11 @@ await controller('wasm-rewriter-js', { rewriteWorkers: 0 });
 			!body.includes('/* kept */') &&
 			body.includes("$s$j.get(top, 'top')"),
 		show([result, body?.slice(0, 300)]),
+	);
+	ok(
+		'and its request log names no backend',
+		result.by === undefined,
+		show(result.by),
 	);
 }
 

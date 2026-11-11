@@ -6,7 +6,7 @@
 // with the page or a crash) or the worker took longer than the timeout. A
 // port that closed or timed out is not used again.
 import type { Config } from '../config';
-import { minified, ScriptSource, ScriptType } from '../rewriteJS';
+import { minified, RewrittenBy, ScriptSource, ScriptType } from '../rewriteJS';
 import { REWRITE_READY, REWRITE_RPC, RewriteBound } from '../rewriteMessages';
 import { routeScopeList } from '../routeURL';
 import { SPLIT_MIN, splitSources, stitch } from '../splitRewrite';
@@ -116,7 +116,7 @@ export class RewritePool {
 			member.load -= size;
 		}
 	}
-	#rewriteOne(
+	async #rewriteOne(
 		script: string,
 		url: StompURL,
 		config: Config,
@@ -124,8 +124,9 @@ export class RewritePool {
 		compact?: boolean,
 		source?: ScriptSource,
 		preamble?: string,
+		told?: RewrittenBy,
 	): Promise<string | null> {
-		return this.#call(
+		const answer = await this.#call(
 			'rewrite',
 			{
 				script,
@@ -141,6 +142,10 @@ export class RewritePool {
 			},
 			script.length,
 		);
+		// under `rewriter: 'wasm'` the worker says which backend answered
+		if (answer === null || typeof answer === 'string') return answer;
+		if (told) told.by = answer.by;
+		return answer.output;
 	}
 	/**
 	 * A document's inline script, rewritten as the document's client would
@@ -239,7 +244,8 @@ export class RewritePool {
 	}
 	/**
 	 * The script rewritten by the workers, or null when the caller must
-	 * rewrite it itself. `split` is told when it was split across them.
+	 * rewrite it itself. `split` is told when it was split across them,
+	 * `told` which backend rewrote it whole (`rewriter: 'wasm'`).
 	 */
 	async rewrite(
 		script: string,
@@ -247,12 +253,22 @@ export class RewritePool {
 		config: Config,
 		type: ScriptType,
 		split?: () => void,
+		told?: RewrittenBy,
 	): Promise<string | null> {
 		const parts = await this.#split(script, url, config, type);
 		if (parts !== null) {
 			split?.();
 			return parts;
 		}
-		return this.#rewriteOne(script, url, config, type);
+		return this.#rewriteOne(
+			script,
+			url,
+			config,
+			type,
+			undefined,
+			undefined,
+			undefined,
+			told,
+		);
 	}
 }

@@ -713,6 +713,10 @@ hand a script back as the page wrote it (`wasm-rewriter-glue` suite). So
 the revision is raised with the boundary as well as with the output: a
 module that takes a flag the last one did not is another revision.
 
+The request log says which backend rewrote a script (`rewriteBy`): the
+module, or the JavaScript rewriter when the module declined the script, its
+thread holds none, or the script was split.
+
 The option is one selector for every rewriter, not the JS rewriter's own:
 `'wasm'` means each rewriter that has a wasm backend uses it (JS in this
 phase, CSS and the markup scan when phase 3 lands), each from its own
