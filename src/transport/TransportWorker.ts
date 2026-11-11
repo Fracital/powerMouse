@@ -15,14 +15,16 @@ const BOOT_TIMEOUT_MS = 30000;
  * src/transport/worker.ts): a dedicated Worker that imports and constructs
  * the transport and serves it on every port handed over. `decorate` answers
  * the worker's handshake-header requests (the cookie jar stays with the
- * controller).
+ * controller); `tick` is called every KEEPALIVE_MS, on the worker's clock,
+ * whether or not the worker hosts a transport (a controller that hosts its
+ * own starts one for the clock alone).
  */
 export default class TransportWorker {
 	#worker: Worker;
 	#rpc: RpcHelper<WorkerToController, WorkerBound>;
 	/** rejects when the worker script could not start (a 404, a parse error) */
 	#failed: Promise<never>;
-	constructor(url: URL, decorate: DecorateHandshake) {
+	constructor(url: URL, decorate: DecorateHandshake, tick: () => void) {
 		// a classic worker (see build.js: emscripten's environment detection)
 		this.#worker = new Worker(url);
 		this.#rpc = new RpcHelper<WorkerToController, WorkerBound>(
@@ -31,6 +33,7 @@ export default class TransportWorker {
 					await decorate(new URL(url), headers),
 					[],
 				],
+				tick: async () => tick(),
 			},
 			TRANSPORT_WORKER_RPC,
 			(data, transfer) => this.#worker.postMessage(data, transfer),
@@ -50,6 +53,10 @@ export default class TransportWorker {
 		);
 		// nothing awaits a failure after boot; it is reported through init()
 		this.#failed.catch(() => {});
+	}
+	/** `failed()` once, when the worker script could not start */
+	onFailure(failed: () => void) {
+		this.#failed.catch(failed);
 	}
 	/**
 	 * Import the module and construct the transport in the worker. Rejects

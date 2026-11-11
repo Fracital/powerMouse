@@ -49,6 +49,7 @@ import {
 	FRAME_MOVED,
 	HANDSHAKE_REFUSED,
 	HOOK_ERROR,
+	KEEPALIVE_MS,
 	NAVIGATE,
 	NavigateInfo,
 	OPEN_TAB,
@@ -908,6 +909,7 @@ export class StompController extends EventTarget {
 		]).then(() => {
 			if (this.transportHost === 'worker') this.config.workerTransport = true;
 			else delete this.config.workerTransport;
+			if (!this.#worker) this.#startClock();
 		});
 
 		window.addEventListener('message', (event) => {
@@ -1215,7 +1217,11 @@ export class StompController extends EventTarget {
 		);
 		let worker: TransportWorker | undefined;
 		try {
-			worker = new TransportWorker(url, this.#handshakeHeaders);
+			worker = new TransportWorker(
+				url,
+				this.#handshakeHeaders,
+				this.#keepAlive,
+			);
 			await worker.init(resolvedModule(descriptor));
 			this.#worker = worker;
 			// the host's own view of the transport, served by the worker like
@@ -1232,6 +1238,33 @@ export class StompController extends EventTarget {
 			this.dispatchEvent(
 				new CustomEvent('transporthost', { detail: { host: 'page', error } }),
 			);
+		}
+	}
+	/**
+	 * A controller that hosts its transport in the page has no worker to
+	 * keep the time for #keepAlive: the transport worker's script is started
+	 * for its clock alone (it imports nothing until it is told to). Where
+	 * that script cannot start either (the reason some transports are in the
+	 * page), the page's own timer is what there is: good for five minutes
+	 * of a hidden tab, once a minute after.
+	 */
+	#startClock() {
+		const own = () => setInterval(this.#keepAlive, KEEPALIVE_MS);
+		try {
+			const clock = new TransportWorker(
+				new URL(
+					assetName(this.config.assets, 'transportWorker'),
+					this.directory,
+				),
+				this.#handshakeHeaders,
+				this.#keepAlive,
+			);
+			clock.onFailure(() => {
+				clock.terminate();
+				own();
+			});
+		} catch (error) {
+			own();
 		}
 	}
 	/** import a descriptor's module in this page (`host: 'page'`, or the worker fallback) */
@@ -1793,6 +1826,22 @@ export class StompController extends EventTarget {
 			// asks for the handshake itself
 		}
 	}
+	/**
+	 * Every KEEPALIVE_MS, on a worker's clock: the service worker hears from
+	 * this controller, so the browser does not stop it while a controller is
+	 * alive. It stops one nothing reached for 30 seconds, whatever the page
+	 * shows, runs or holds open (measured: a visible tab, a hidden one, a
+	 * page with a timer, a page with an open WebSocket), and the first thing
+	 * a page or its host did after sitting idle then paid for a worker start
+	 * and a handshake. A message and nothing else: no request, nothing per
+	 * frame, and no event kept open (a worker with an event in progress
+	 * keeps its successor waiting). One that finds the worker stopped anyway
+	 * (the tab was frozen, the machine slept) starts it, and it asks for the
+	 * handshake before anybody needs it.
+	 */
+	#keepAlive = () => {
+		if (this.lastHandshake) this.#wake();
+	};
 	async #call<Method extends keyof SWbound>(
 		method: Method,
 		args: SWbound[Method][0],

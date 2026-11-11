@@ -3994,6 +3994,18 @@ url`) carries its value and targets that window. An about:blank child of
   request after a stop that soon after a handshake (1119 to 1214 ms, now 121
   to 180; sw-restart). A worker of an earlier build, whose revive names
   nothing, is asked as before.
+- The service worker is not stopped under a live controller. Chrome stops a
+  service worker no event has reached for 30 s, whether its tab is visible or
+  hidden and whatever the page runs or holds open (measured natively on Chrome
+  152 and 156: stopped at 28.5 to 29.8 s with a visible tab, a hidden one, a 1
+  s timer, an open WebSocket; through the demo at 29.7 to 32 s), and the first
+  thing a page did after sitting idle paid for a worker start and a handshake.
+  A controller now sends the worker a message every 20 s (`KEEPALIVE_MS`),
+  timed by the transport worker, whose timers a hidden tab does not hold back
+  (a controller with an in-page transport starts that worker's script for the
+  clock alone), and nothing else: no request, nothing per frame, no event held
+  open. sw-keepalive (new): 45 s idle under each kind of controller, the
+  worker never stopped.
 - `history.pushState` and `replaceState` refuse a URL of another origin, or
   one that does not parse, with a SecurityError naming the page's origin and
   URL, like the browser; before this the URL was routed and accepted (every

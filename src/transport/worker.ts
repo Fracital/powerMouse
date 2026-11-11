@@ -9,6 +9,7 @@
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { constructTransport, resolveHttp3 } from './construct';
 import {
+	KEEPALIVE_MS,
 	TRANSPORT_WORKER_RPC,
 	TransportModule,
 	WorkerBound,
@@ -60,3 +61,9 @@ const rpc = new RpcHelper<WorkerBound, WorkerToController>(
 );
 
 self.addEventListener('message', (event) => rpc.receive(event.data));
+
+// the controller's clock for keeping the service worker running: a timer
+// here is not held back when the tab is hidden, the page's own is
+setInterval(() => {
+	rpc.call('tick', undefined).catch(() => {});
+}, KEEPALIVE_MS);

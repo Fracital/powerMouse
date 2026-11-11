@@ -36,6 +36,15 @@ export interface ReviveMessage {
  */
 export const SW_WAKE = '$stomp$swWake';
 /**
+ * How often a controller sends SW_WAKE with nothing to ask, so the worker
+ * is not stopped under it: the browser stops a service worker no event has
+ * reached for 30 seconds, and a message is an event. The time is kept by a
+ * worker (the transport's, or one started for the time alone): a hidden
+ * tab's own timers run once a minute after five minutes, a worker's keep
+ * theirs.
+ */
+export const KEEPALIVE_MS = 20000;
+/**
  * @internal page -> SW: re-point the client the worker checks a controller
  * against before serving a document at its address (the suites stand in
  * for a host tab in the back/forward cache with it; nothing else sends it)
@@ -880,6 +889,8 @@ export const HANDSHAKE_REFUSED = '$stomp$handshakeRefused';
 export type WorkerToController = {
 	/** the headers a WebSocket handshake goes out with (the controller adds the jar's Cookie); rejects with HANDSHAKE_REFUSED to refuse the socket */
 	decorate: [{ url: string; headers: RawHeaders }, RawHeaders];
+	/** KEEPALIVE_MS went by: the controller keeps the service worker running */
+	tick: [];
 };
 
 export type WebSocketMessage =
