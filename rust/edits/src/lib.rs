@@ -95,7 +95,9 @@ impl Edit {
 			kind: Kind::Replace { text },
 		}
 	}
-	/// `text` at `at`; of two insertions at one offset the lower `order` comes first
+	/// `text` at `at`; of two insertions at one offset the lower `order`
+	/// comes first, and a negative `order` stays outside a wrap that starts
+	/// there (a preamble ahead of a statement the rewriter wraps)
 	pub fn insert(at: u32, text: Vec<Piece>, order: i16) -> Self {
 		Self {
 			span: Span::new(at, at),
@@ -139,29 +141,41 @@ fn order(a: &Edit, b: &Edit) -> Ordering {
 				x.cmp(y)
 			}
 			// the insert against a span starting here
-			(true, false) => edge(b),
-			(false, true) => edge(a).reverse(),
+			(true, false) => edge(a, b),
+			(false, true) => edge(b, a).reverse(),
 			(false, false) => b.span.end.cmp(&a.span.end),
 		}
 	})
 }
 
 /// where an insertion at a span's start goes relative to the span's edit
-fn edge(spanned: &Edit) -> Ordering {
-	match spanned.kind {
+fn edge(insert: &Edit, spanned: &Edit) -> Ordering {
+	match (&insert.kind, &spanned.kind) {
+		// one that asked to stay outside: before the wrap
+		(Kind::Insert { order, .. }, Kind::Wrap { .. }) if *order < 0 => Ordering::Less,
 		// inside: after the wrap
-		Kind::Wrap { .. } => Ordering::Greater,
+		(_, Kind::Wrap { .. }) => Ordering::Greater,
 		// outside: before the replace
 		_ => Ordering::Less,
 	}
 }
 
 /// The output of `source` with `edits` spliced in, or why it cannot be
-pub fn apply(source: &str, mut edits: Vec<Edit>) -> Result<String, EditError> {
-	let len = source.len() as u32;
+pub fn apply(source: &str, edits: Vec<Edit>) -> Result<String, EditError> {
+	apply_range(source, Span::new(0, source.len() as u32), edits)
+}
+
+/// The output of the part `range` of `source` alone, with `edits` (all of
+/// them inside it) spliced in: a part the rewriter writes somewhere else, or
+/// twice, is rendered on its own and becomes the text of an edit
+pub fn apply_range(source: &str, range: Span, mut edits: Vec<Edit>) -> Result<String, EditError> {
+	let len = range.end;
+	if range.end < range.start || range.end as usize > source.len() {
+		return Err(EditError::OutOfBounds(range));
+	}
 	for edit in &edits {
 		let span = edit.span;
-		if span.end < span.start || span.end > len {
+		if span.end < span.start || span.end > len || span.start < range.start {
 			return Err(EditError::OutOfBounds(span));
 		}
 		for at in [span.start, span.end] {
@@ -174,8 +188,9 @@ pub fn apply(source: &str, mut edits: Vec<Edit>) -> Result<String, EditError> {
 	check_nesting(&edits)?;
 
 	// the output grows by what the edits add; a rewrite rarely doubles
-	let mut out = String::with_capacity(source.len() + source.len() / 2 + 64);
-	let mut cursor = 0u32;
+	let size = range.len() as usize;
+	let mut out = String::with_capacity(size + size / 2 + 64);
+	let mut cursor = range.start;
 	// the wraps whose `after` is still to be written, innermost last
 	let mut open: Vec<(u32, &[Piece])> = Vec::new();
 
@@ -208,7 +223,7 @@ pub fn apply(source: &str, mut edits: Vec<Edit>) -> Result<String, EditError> {
 	}
 	close_through(source, &mut out, &mut cursor, &mut open, len, true);
 	if len > cursor {
-		out.push_str(&source[cursor as usize..]);
+		out.push_str(&source[cursor as usize..len as usize]);
 	}
 	Ok(out)
 }
@@ -403,6 +418,30 @@ mod tests {
 			Err(EditError::NotCharBoundary(1))
 		));
 		assert_eq!(apply("é", vec![Edit::insert(2, t("x"), 0)]).unwrap(), "éx");
+	}
+
+	#[test]
+	fn a_negative_insert_stays_outside_a_wrap() {
+		let src = "x";
+		let edits = vec![
+			Edit::wrap(Span::new(0, 1), t("("), t(")")),
+			Edit::insert(0, t("pre;"), -1),
+		];
+		assert_eq!(apply(src, edits).unwrap(), "pre;(x)");
+	}
+
+	#[test]
+	fn a_range_is_rendered_alone() {
+		let src = "f(a, b)";
+		let edits = vec![
+			Edit::wrap(Span::new(2, 3), t("<"), t(">")),
+			Edit::replace(Span::new(5, 6), t("B")),
+		];
+		assert_eq!(apply_range(src, Span::new(2, 6), edits).unwrap(), "<a>, B");
+		assert!(matches!(
+			apply_range(src, Span::new(2, 6), vec![Edit::insert(1, t("x"), 0)]),
+			Err(EditError::OutOfBounds(_))
+		));
 	}
 
 	#[test]

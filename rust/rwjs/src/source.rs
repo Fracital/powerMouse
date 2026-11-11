@@ -28,6 +28,81 @@ pub fn function_mark(key: &str, start: u32, end: u32) -> String {
 	format!("/*{key}.{}.{}*/", base36(start), base36(end - start))
 }
 
+/// the characters a kept text cannot carry in a block comment on one line
+const CARRIED: [char; 6] = ['*', '<', '\n', '\r', '\u{2028}', '\u{2029}'];
+/// what stands for them: characters scripts do not contain
+const STAND_INS: [u8; 29] = [
+	1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
+	29, 30, 31, 127,
+];
+
+/// The statement that hands a script's text to the access API
+/// (`holderStatement`): None when the text holds every stand-in character
+pub fn holder_statement(access: &str, key: &str, text: &str) -> Option<String> {
+	let mut present = [false; 128];
+	for byte in text.bytes() {
+		if byte < 128 {
+			present[byte as usize] = true;
+		}
+	}
+	let subs: Vec<char> = STAND_INS
+		.iter()
+		.filter(|code| !present[**code as usize])
+		.take(CARRIED.len())
+		.map(|code| *code as char)
+		.collect();
+	if subs.len() < CARRIED.len() {
+		return None;
+	}
+	let mut out = String::with_capacity(text.len() + 96);
+	out.push_str("typeof ");
+	out.push_str(access);
+	out.push_str("!==\"undefined\"&&");
+	out.push_str(access);
+	out.push_str(".src(");
+	out.push_str(&quote(key));
+	out.push(',');
+	out.push_str(&quote(&subs.iter().collect::<String>()));
+	out.push_str(",function(){/*");
+	for c in text.chars() {
+		match CARRIED.iter().position(|carried| *carried == c) {
+			Some(i) => out.push(subs[i]),
+			None => out.push(c),
+		}
+	}
+	out.push_str("*/});");
+	Some(out)
+}
+
+/// `text` as a JavaScript string literal, spelled as JSON.stringify spells
+/// it (and the two line separators escaped, which a script's line cannot
+/// hold before ES2019)
+pub fn quote(text: &str) -> String {
+	let mut out = String::with_capacity(text.len() + 2);
+	out.push('"');
+	for c in text.chars() {
+		match c {
+			'"' => out.push_str("\\\""),
+			'\\' => out.push_str("\\\\"),
+			'\n' => out.push_str("\\n"),
+			'\r' => out.push_str("\\r"),
+			'\t' => out.push_str("\\t"),
+			'\u{8}' => out.push_str("\\b"),
+			'\u{c}' => out.push_str("\\f"),
+			'\u{2028}' => out.push_str("\\u2028"),
+			'\u{2029}' => out.push_str("\\u2029"),
+			c if (c as u32) < 0x20 => {
+				out.push_str("\\u00");
+				out.push(char::from_digit((c as u32) >> 4, 16).unwrap());
+				out.push(char::from_digit((c as u32) & 15, 16).unwrap());
+			}
+			c => out.push(c),
+		}
+	}
+	out.push('"');
+	out
+}
+
 fn base36(mut n: u32) -> String {
 	if n == 0 {
 		return "0".to_owned();
@@ -117,6 +192,22 @@ mod tests {
 		assert_eq!(function_mark("0ztntfpdo", 5, 70), "/*0ztntfpdo.5.1t*/");
 		assert_eq!(function_mark("k", 0, 0), "/*k.0.0*/");
 		assert_eq!(function_mark("k", 36, 1296), "/*k.10.z0*/");
+	}
+
+	// what holderStatement gives (node, 2026-11-10)
+	#[test]
+	fn holders_match_the_typescript() {
+		assert_eq!(
+			holder_statement("$s$j", "k", "a*b<c\nd").unwrap(),
+			"typeof $s$j!==\"undefined\"&&$s$j.src(\"k\",\"\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\",function(){/*a\u{1}b\u{2}c\u{3}d*/});"
+		);
+		let all: String = STAND_INS.iter().map(|code| *code as char).collect();
+		assert!(holder_statement("$s$j", "k", &all).is_none());
+	}
+
+	#[test]
+	fn quoting() {
+		assert_eq!(quote("a\"b\\c\n\u{2028}\u{1}"), "\"a\\\"b\\\\c\\n\\u2028\\u0001\"");
 	}
 
 	#[test]

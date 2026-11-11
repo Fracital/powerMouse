@@ -126,11 +126,19 @@ if (artifacts.includes('rewriter.wasm')) {
 		routed.push([kind, text]);
 		return text === 'decline' ? null : `routed:${text}`;
 	});
-	instance.configure('{"names":{"access":"$s$j"}}');
+	let refused = false;
+	try {
+		instance.configure('{"names":{"access":"$s$j"}}');
+	} catch (error) {
+		refused = true;
+	}
+	ok('a configuration that is not lines of key and value is refused', refused);
+	instance.configure('access\t$s$j\n');
+	// (nothing in these is rewritten: every byte comes back where it was)
 	const texts = [
 		'',
 		'a',
-		'const x = location.href;',
+		'/* kept */ const x = 1n;  // kept too',
 		// non-ASCII identifiers, a line separator, an astral character
 		'über; straße; const s = "\u{1F600}' + 'x'.repeat(100000) + '";',
 	];
@@ -142,6 +150,57 @@ if (artifacts.includes('rewriter.wasm')) {
 			'output' in result ? '' : `status ${result.status}`,
 		);
 	}
+	const read = instance.call('x = location.href; // why', 0);
+	ok(
+		'a read of location goes through the access API, the rest as it was',
+		'output' in read &&
+			read.output === 'x = $s$j.get(location, "location").href; // why',
+		JSON.stringify(read),
+	);
+	instance.configure('access\t$a\n');
+	const renamed = instance.call('x = top;', 0);
+	instance.configure('access\t$s$j\n');
+	ok(
+		"the helper names are the configuration's",
+		'output' in renamed && renamed.output === 'x = $a.get(top, "top");',
+		JSON.stringify(renamed),
+	);
+	// what a rewrite depends on per script (flag 8), and what it found (16)
+	instance.call('https://example.com/a.js\n\n\nPRE;', 8);
+	const led = instance.call('"use strict"; function f() {}', 0);
+	const meta = instance.call('', 16);
+	ok(
+		'the leading text follows the directive prologue, and the marks are counted',
+		'output' in led &&
+			/^"use strict";PRE; function\/\*[0-9a-z]+\.e\.f\*\/ f\(\) \{\}$/.test(
+				led.output,
+			) &&
+			'output' in meta &&
+			/^1\t[0-9a-z]+$/.test(meta.output),
+		JSON.stringify([led, meta]),
+	);
+	// (32) the revision of what the module writes, which a kept rewrite is
+	// of: the one rust/host/parity.mjs --cases recorded its outputs under
+	const revision = instance.call('', 32);
+	ok(
+		'the module answers the revision its outputs were recorded under',
+		'output' in revision &&
+			revision.output ===
+				readFileSync(`${root}rust/host/cases.revision`, 'utf8').split(' ')[0],
+		JSON.stringify(revision),
+	);
+	const unled = instance.call('location', 0);
+	ok(
+		'the leading text holds for one script',
+		'output' in unled && unled.output === '$s$j.get(location, "location")',
+		JSON.stringify(unled),
+	);
+	const broken = instance.call('const = ;', 0);
+	ok(
+		'a script that does not parse is declined',
+		'status' in broken && broken.status === 4,
+		JSON.stringify(broken),
+	);
 	const viaHost = instance.call('https://example.com/a', 1);
 	ok(
 		'the routing import answers through the scratch',
