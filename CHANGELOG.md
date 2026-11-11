@@ -5114,6 +5114,28 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- Every proxied site's documents share one renderer process, and with it
+  one event loop and one JavaScript heap: the proxy origin's. Natively a
+  frame of another site has a process of its own (site isolation): a busy
+  loop in its parent does not delay it, a `postMessage` round trip to it
+  takes about 1 to 2 ms where one in a shared process takes 0.03 to 0.2
+  ms, and its `performance.memory` is its own (measured in Chrome 152 with
+  a page on 127.0.0.1 and a frame on localhost: natively the frame's timers
+  ran late by 7 to 9 ms while its parent spun 300 ms; through the proxy, in
+  both modes, and natively with `--disable-site-isolation-trials`, by 300
+  ms, and the two heaps read the same). Cloudflare Turnstile notices: on
+  kits4beats.com, a managed challenge, headful Chrome 152 passed without
+  interaction on 6 of 6 loads (with `--disable-quic` and with a 4x CPU
+  throttle too), the same Chrome with `--disable-site-isolation-trials`
+  showed the "Verify you are human" checkbox on 5 of 5 (with
+  `--enable-precise-memory-info` as well, so not the coarse memory figures
+  of a shared process), and every proxied load showed it, in both modes.
+  People report that clicking it brings the challenge back. Chrome 152
+  gives each origin that sends `Origin-Agent-Cluster: ?1` a process of its
+  own even within one site (measured with a.localhost and b.localhost), so
+  the way out is an origin per proxied site (a subdomain of the proxy's),
+  which needs the service worker, the cookie jar and the stores, one per
+  origin today, shared between those origins.
 - The same-origin policy between proxied sites is simulated by the proxy
   (docs/same-origin-policy.md). Not yet: `crossOriginIsolated` (COOP and
   COEP cannot isolate a proxied frame).
