@@ -130,8 +130,14 @@ The first release after a four-year gap. Everything below is breaking.
   every open tab at its next reload, gets a new one), and they go with the
   host origin's site data. There is no new API and no option for it.
   (controller-ids suite.)
-- A built-in content blocker, off by default: `init.adblock` on
-  `StompController` and `RemoteController` (docs/adblock.md). The engine is
+- A built-in content blocker, on by default: `init.adblock` on
+  `StompController` and `RemoteController` (docs/adblock.md), `false` to
+  turn it off. A host has to serve `blocker.wasm` from `directory` with the
+  other files; one that does not keeps working without the blocker, with
+  one `console.info` line, and so does one whose wisp server does not reach
+  the list servers. Left out, the option never makes a page wait for the
+  lists (`true` and an object wait for the first build, five seconds at the
+  most). The engine is
   Brave's adblock-rust 0.13.5 compiled to wasm (`rust/block`, shipped as
   `dist/blocker.wasm`, 1,063 KB, 299 KB with brotli, MPL-2.0; named by
   `init.assets.blocker`), so it reads EasyList and uBlock Origin syntax.
@@ -162,9 +168,9 @@ The first release after a four-year gap. Everything below is breaking.
     the page's first script, over STomp's hooks.
   - The module travels as one more of the wasm modules
     (`ControllerInitMessage.modules.blocker`, bytes the service worker
-    compiles); the rewrite workers never get it. With the option off the
+    compiles); the rewrite workers never get it. With `adblock: false` the
     module is never fetched, the worker has no engine and the inject installs
-    nothing (the frame-cost gate is unchanged).
+    nothing.
   - WebSockets: a socket never passes the service worker, so the controller
     asks it from the hook that adds the cookie header to the handshake (one
     more message each way, beside the cookie question), with the type
@@ -177,13 +183,20 @@ The first release after a four-year gap. Everything below is breaking.
     holds for a socket opened from a dedicated, shared or emulated service
     worker. `onRequest` reports it with destination `websocket`.
   - Not yet: a blocked element is not collapsed, and cosmetic rules do not
-    reach shadow roots or `about:blank`, `srcdoc` and `blob:` documents. The
-    crate does no HTML filtering or `$replace`.
-  - The demo reads `STOMP_ADBLOCK=1` (`?adblock` for one visit,
-    `?noadblock` to turn it off for one). Suites: `adblock-engine` (node:
+    reach shadow roots or `about:blank`, `srcdoc` and `blob:` documents. In
+    a frame that keeps the client of a parent that read its `contentWindow`
+    early, only the hide selectors and scriptlets apply (docs/adblock.md).
+    The crate does no HTML filtering or `$replace`.
+  - The demo has it on: `STOMP_ADBLOCK=0` turns it off (`?noadblock` for
+    one visit, `?adblock` on for one, the Block ads toggle is remembered).
+    A test run asks nothing of the list servers: the demo page's controller
+    is given a fixture list (`STOMP_ADBLOCK` as JSON) and the run's wisp
+    refuses the list servers (`WISP_BLOCK_HOSTS`). Suites: `adblock-engine` (node:
     the engine's decisions, types, CSP, cosmetic answers, trust, storage) and
     `adblock` (browser: a blocked request never reaches the site, elements
-    are hidden, scriptlets run, and off changes nothing).
+    are hidden, scriptlets run, off changes nothing, and by default the
+    lists come through the transport, a host without the module or the
+    lists works unfiltered, and no navigation waits).
 - `init.rewriter` on `StompController` and `RemoteController` (`Config.rewriter`,
   `'js'` by default) chooses the rewriter backend (docs/rust-plan.md). With
   `'wasm'` the controller loads the Rust modules named by `init.assets` once

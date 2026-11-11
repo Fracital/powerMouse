@@ -362,7 +362,7 @@ export class RemoteController extends EventTarget {
 						: {}),
 					...(init.rules ? { rules: init.rules } : {}),
 					...(init.assets ? { assets: init.assets } : {}),
-					...(init.adblock ? { adblock: init.adblock } : {}),
+					...(init.adblock !== undefined ? { adblock: init.adblock } : {}),
 					...(init.names ? { names: init.names } : {}),
 					...(init.hooks ? { hooks: init.hooks } : {}),
 					...(init.errorPage ? { errorPage: init.errorPage } : {}),

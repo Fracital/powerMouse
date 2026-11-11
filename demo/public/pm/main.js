@@ -90,18 +90,22 @@ const REWRITER = new URLSearchParams(location.search).has('js')
 	: CFG.rewriter === 'wasm' || new URLSearchParams(location.search).has('wasm')
 		? 'wasm'
 		: '';
-// the built-in content blocker (docs/adblock.md), off by default. In order:
-// ?noadblock and ?adblock on this page (one load), the toggle beside the
-// transport select (remembered), STOMP_ADBLOCK=1 on the server
+// the built-in content blocker (docs/adblock.md), on unless something says
+// off. In order: ?noadblock and ?adblock on this page (one load), the toggle
+// beside the transport select (remembered), STOMP_ADBLOCK=0 on the server.
+// On, the controller is given nothing (the blocker is the library's default)
+// or the lists STOMP_ADBLOCK named; off, `adblock: false`
 const ADBLOCK = (() => {
 	const query = new URLSearchParams(location.search);
-	if (query.has('noadblock')) return false;
-	if (query.has('adblock')) return true;
+	let on = CFG.adblock !== false;
 	try {
 		const saved = localStorage.getItem('stomp-demo:adblock');
-		if (saved !== null) return saved === '1';
+		if (saved !== null) on = saved === '1';
 	} catch {}
-	return !!CFG.adblock;
+	if (query.has('adblock')) on = true;
+	if (query.has('noadblock')) on = false;
+	if (!on) return { adblock: false };
+	return typeof CFG.adblock === 'object' ? { adblock: CFG.adblock } : {};
 })();
 // real Encrypted Client Hello where a site's HTTPS DNS record has a config,
 // looked up over DoH by epoxy (STOMP_ECH_DNS on the server; ?noech sends
@@ -363,7 +367,7 @@ async function startController(name) {
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
 			serviceWorkerEventDelay: SERVICE_WORKER_EVENT_DELAY,
 			...(REWRITER && { rewriter: REWRITER }),
-			...(ADBLOCK && { adblock: true }),
+			...ADBLOCK,
 			...controllerCallbacks,
 		});
 	} else {
@@ -382,7 +386,7 @@ async function startController(name) {
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
 			serviceWorkerEventDelay: SERVICE_WORKER_EVENT_DELAY,
 			...(REWRITER && { rewriter: REWRITER }),
-			...(ADBLOCK && { adblock: true }),
+			...ADBLOCK,
 			...controllerCallbacks,
 		});
 	}
@@ -1463,7 +1467,7 @@ transportSelect.addEventListener('change', () =>
 
 // the blocker is an option of the controller: the choice is remembered and
 // the page starts again with it (without a ?adblock that would overrule it)
-adblockToggle.checked = ADBLOCK;
+adblockToggle.checked = ADBLOCK.adblock !== false;
 adblockToggle.addEventListener('change', () => {
 	try {
 		localStorage.setItem(

@@ -2,13 +2,14 @@
 
 STomp can block what a content blocker in the user's browser would block:
 ad and tracker requests never leave, the elements the lists name are hidden,
-and the lists' scriptlets run in the page. It is off by default and costs
-nothing until a host turns it on.
+and the lists' scriptlets run in the page. It is on by default; a host
+turns it off with `adblock: false`, and then nothing of it is fetched or
+run.
 
 ```js
 const controller = new StompController({
 	// ...
-	adblock: true,
+	// adblock: false,
 });
 ```
 
@@ -20,8 +21,8 @@ Origin. The plan and the reasons behind the design are in
 
 ## The option
 
-`adblock` on `StompController` and `RemoteController`: `false` (default),
-`true`, or an object.
+`adblock` on `StompController` and `RemoteController`: left out (on, see
+"By default"), `false`, `true`, or an object.
 
 | Field       | Meaning                                                                                                                                                                            |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -56,9 +57,31 @@ worker, and nothing else runs the blocker, so the controller never compiles
 it and the rewrite workers never get it. When the module cannot be fetched
 the controller says so on the console and runs without the blocker.
 
-The first navigation after the blocker is turned on waits for the engine,
-for five seconds at the most; past that the document loads unfiltered and
-the engine serves from the moment it is built.
+With `true` or an object, the first navigation waits for the engine, for
+five seconds at the most; past that the document loads unfiltered and the
+engine serves from the moment it is built.
+
+### By default
+
+A controller that is not given the option runs the blocker with the default
+lists, as `adblock: true` does, except that what it cannot have never gets
+in the way of a host that did not ask for it:
+
+- A host that does not serve `blocker.wasm` gets one `console.info` line from
+  the controller (`Stomp: the content blocker is off, its module did not
+load`); no list is asked for and the inject installs nothing for the
+  blocker. When the resources or every list cannot be fetched (a wisp server
+  that does not reach the list servers), the service worker says it once
+  (`Stomp: the content blocker is off: ...`) and pages load unfiltered; a
+  single default list that fails is left out without a line. The next
+  controller to shake hands tries again. With `true` or an object the module
+  and each list that fails are a `console.warn`, as before.
+- No navigation waits for the list servers, only for the engine the browser
+  stored (milliseconds). With none stored yet (a first visit, or cleared site
+  data) documents load unfiltered until the engine is built.
+
+The first handshake waits for `blocker.wasm` either way (fetched beside the
+transport's module), so serve it with the cache headers of the other files.
 
 ### A prebuilt engine
 
@@ -173,7 +196,7 @@ function (its helpers never become globals), so what a scriptlet wraps is
 STomp's hook and what it sees is the page's own URL: a scriptlet that wraps
 `fetch` gets the URL the page passed, and `location.href` is the real page.
 
-With the option off none of this exists: the config carries no `adblock`,
+With `adblock: false` none of this exists: the config carries no `adblock`,
 the module is never fetched, the worker has no engine and the inject takes
 no natives and installs no hook.
 
@@ -218,6 +241,12 @@ an unlisted socket to a local server opens in 2.6 ms with the blocker on.
   keeps its box unless a cosmetic rule hides it.
 - Cosmetic rules do not apply inside shadow roots, in `about:blank`,
   `srcdoc` and `blob:` documents, or in XML documents.
+- A frame whose parent read its `contentWindow` before its document arrived
+  keeps the parent's client (the browser keeps the about:blank Window for a
+  document of the same origin). There the lists' selectors hide and the
+  scriptlets run, but generic rules by class and id and procedural filters
+  do not: they read the document's nodes, and a node the parent's bundle
+  reads first is the parent's realm's to the page from then on.
 - On wasm the crate never discards a compiled regex (it has no clock), so
   an instance only grows. Past 160 MB of linear memory the worker replaces
   it with a fresh one that loads the stored engine.

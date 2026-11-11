@@ -23,6 +23,9 @@
 //   WISP_ALLOW_LOOPBACK let the built-in wisp reach loopback/private hosts
 //   WISP_NO_UDP         the built-in wisp refuses UDP streams (HTTP/3 then
 //                       falls back to the transport's TCP connections)
+//   WISP_BLOCK_HOSTS    hostnames the built-in wisp refuses, comma separated
+//                       (a test run names the content blocker's list servers:
+//                       no suite's controller reaches them)
 //   HOLYWISP_LOG_LEVEL  the built-in holyWisp's log level (default error;
 //                       debug shows every stream), printed on stdout
 //   HOLYWISP_BIN        a holyWisp executable to run instead of the one the
@@ -40,10 +43,13 @@
 //   STOMP_REWRITER      `wasm` runs the Rust rewriters where a thread holds
 //                       them (the controller's `rewriter` option); the
 //                       JavaScript rewriters otherwise
-//   STOMP_ADBLOCK       `1` turns on the built-in content blocker with its
-//                       default lists (the controller's `adblock` option,
-//                       docs/adblock.md); `?adblock` on the page does it for
-//                       one visit, `?noadblock` turns it off for one, and
+//   STOMP_ADBLOCK       `0` turns off the built-in content blocker, which
+//                       is on by default (the controller's `adblock` option,
+//                       docs/adblock.md); a JSON object is that option
+//                       (`{"lists":[...],"resources":"..."}`: a mirror of the
+//                       lists, or the suites' fixture list, which keeps a
+//                       test run off the list servers). `?noadblock` on the
+//                       page turns it off for one visit, `?adblock` on, and
 //                       the page's Block ads toggle is remembered
 //   STOMP_TEST_TRANSPORT `1` swaps epoxy for /test/mixed-transport.mjs, which
 //                       reaches the mixed-content suite's fixture hosts (test
@@ -114,6 +120,9 @@ if (!externalWisp) {
 		// UDP (HTTP/3) is relayed unless refused, as an edge with `allow-udp =
 		// off` does
 		allowUDP: !process.env.WISP_NO_UDP,
+		...(process.env.WISP_BLOCK_HOSTS && {
+			blacklist: { hostnames: process.env.WISP_BLOCK_HOSTS.split(',') },
+		}),
 		floodProtection: { enabled: false },
 		maxMessageSize: 262149,
 		streamQueueMax: 64 * 1024 * 1024,
@@ -253,7 +262,11 @@ const pageConfig = {
 			: process.env.STOMP_ECH_DNS || 'https://cloudflare-dns.com/dns-query',
 	...(process.env.STOMP_TEST_TRANSPORT === '1' && { testTransport: true }),
 	...(process.env.STOMP_REWRITER === 'wasm' && { rewriter: 'wasm' }),
-	...(process.env.STOMP_ADBLOCK === '1' && { adblock: true }),
+	...(process.env.STOMP_ADBLOCK === '0'
+		? { adblock: false }
+		: process.env.STOMP_ADBLOCK?.startsWith('{') && {
+				adblock: JSON.parse(process.env.STOMP_ADBLOCK),
+			}),
 	// startedAt lets the dev client tell a restarted server from a dropped
 	// connection: a different value on reconnect means new server code
 	...(dev && { dev: true, startedAt: started }),

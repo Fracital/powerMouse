@@ -67,6 +67,11 @@ const nginxCheck = async ({ module, wisp: wispUrl }) => {
 		transport: { module, options: [{ wisp: wispUrl }], http3: true },
 		directory: '/stomp/',
 		codec: 'xor',
+		// without the content blocker: one of the two wisp servers is this
+		// suite's own, which does not refuse the list servers as the run's
+		// does (test/run.mjs), and what the lists would cost in HTTP/3
+		// attempts is not what is read here
+		adblock: false,
 	});
 	await controller.wait();
 	const element = document.createElement('iframe');

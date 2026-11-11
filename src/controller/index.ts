@@ -277,13 +277,17 @@ export interface ControllerInit {
 	 */
 	errorPage?: string;
 	/**
-	 * The built-in blocker (docs/adblock.md), off by default. `true` fetches
-	 * EasyList, EasyPrivacy and uBlock Origin's lists through the transport
-	 * and blocks, hides and neutralises what they name, as a content blocker
-	 * in the user's browser would; an object names other lists, the
-	 * resources, a prebuilt engine or the refresh interval. A
-	 * blocked request is a network error to the page, nothing more. With no
-	 * list fetched the blocker stays off.
+	 * The built-in blocker (docs/adblock.md), on by default: EasyList,
+	 * EasyPrivacy and uBlock Origin's lists are fetched through the transport
+	 * and what they name is blocked, hidden and neutralised, as a content
+	 * blocker in the user's browser would; an object names other lists, the
+	 * resources, a prebuilt engine or the refresh interval, and `false`
+	 * turns it off (nothing of it is fetched then). A blocked request is a
+	 * network error to the page, nothing more. Left out, the blocker is best
+	 * effort: a host that does not serve `blocker.wasm`, or lists that cannot
+	 * be fetched, leave it off with one line on the console, and no page
+	 * waits for the lists. `true` and an object are the host asking for it:
+	 * the first navigation then waits for the engine (five seconds at most).
 	 */
 	adblock?: boolean | AdblockOptions;
 	/**
@@ -791,7 +795,7 @@ export class StompController extends EventTarget {
 				? { navigationHintWait: init.navigationHintWait }
 				: {}),
 			...(init.assets ? { assets: init.assets } : {}),
-			...(init.adblock ? { adblock: true } : {}),
+			...(init.adblock !== false ? { adblock: true } : {}),
 			// the client's name is this controller's own unless the host chose
 			// one: a page that could name it would reach the real windows it
 			// holds (see mintClientName)
@@ -1196,7 +1200,14 @@ export class StompController extends EventTarget {
 					if (name !== 'blocker') compiled[name] = await compileModule(bytes);
 					loaded[name] = bytes;
 				} catch (error) {
-					console.warn(`Stomp: the ${name} module did not load`, error);
+					// a blocker nobody asked for (it is on by default) is not a
+					// fault of the host's: said once, and not as a warning
+					if (name === 'blocker' && this.#adblock?.byDefault)
+						console.info(
+							'Stomp: the content blocker is off, its module did not load',
+							error,
+						);
+					else console.warn(`Stomp: the ${name} module did not load`, error);
 				}
 			}),
 		);

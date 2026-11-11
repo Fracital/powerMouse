@@ -128,9 +128,11 @@ if (process.env.STOMP_REWRITER !== 'wasm') {
 		await controller('wasm-share-js', { rewriteWorkers: 1 }),
 	);
 	const none = await held(() => true);
+	// the content blocker's module is no rewriter's: it is on by default, and
+	// the demo's own controller has the service worker hold it
 	ok(
-		"with rewriter 'js' no thread is handed a module",
-		none.serviceWorker.length === 0 &&
+		"with rewriter 'js' no thread is handed a rewriter's module",
+		none.serviceWorker.every((name) => name === 'blocker') &&
 			none.rewriteWorkers.every((names) => names.length === 0),
 		JSON.stringify(none),
 	);

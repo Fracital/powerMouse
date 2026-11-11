@@ -717,7 +717,9 @@ Where each part runs:
   skips verification when its own version matches, so only engines our own
   container built, pinned to the crate version, are ever loaded. Resources
   are not in the DAT: `use_resources` is called again from the resource JSON.
-- **The option.** `adblock: false` by default. `true` or an object with list
+- **The option.** On by default since 2026-11-10 (`adblock: false` turns it
+  off; left out it is best effort, docs/adblock.md "By default"). `true` or
+  an object with list
   URLs, a prebuilt engine URL, a resource URL and the trusted list set. In
   the demo it is set the way every controller option is set there (the page
   has no option UI beyond the transport select): a URL parameter

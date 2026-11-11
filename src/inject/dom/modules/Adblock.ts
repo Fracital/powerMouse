@@ -30,9 +30,10 @@ import DocumentClient, { addDocumentOpenListener } from '../Client';
  *   its first script, so what they wrap is the proxy's hooks and what they
  *   see is the page's own URLs.
  *
- * The mutation callback only queues its records and arms a timer: typing in
- * a page mutates on every key, and the work (reading classes, asking the
- * worker, running the procedural filters) is done in slices off that path.
+ * The mutation callback only queues the records' elements (weakly) and
+ * arms a timer: typing in a page mutates on every key, and the work
+ * (reading classes, asking the worker, running the procedural filters) is
+ * done in slices off that path.
  *
  * All of it uses natives taken in `apply`, which runs before every other
  * module's (the module is added first) and takes nothing unless the blocker
@@ -222,6 +223,8 @@ function takeNatives(global: typeof globalThis): Natives {
 	};
 }
 
+/** taken before the page runs */
+const NativeWeakRef = WeakRef;
 /** elements a slice of the queue reads before it yields */
 const SLICE_ELEMENTS = 2000;
 /** ms the first batch of mutations waits, and every later one */
@@ -240,6 +243,15 @@ function start(
 ) {
 	const global = client.global;
 	const document = global.document;
+	// a window another realm's bundle runs (an initial about:blank its
+	// parent read, whose Window the frame's document keeps): a node this
+	// bundle reads first, from a mutation record or a query, is wrapped in
+	// the bundle's realm, once, and the page then gets it with that realm's
+	// prototypes and natives (its <head> appended scripts unrewritten:
+	// helper-seal). There the lists' selectors still hide what they name, and
+	// the scriptlets run, but nothing reads the document's nodes: no generic
+	// rules by class and id, no procedural filters
+	const foreign = global !== globalThis;
 	const elements = (found: unknown): Element[] => {
 		const out: Element[] = [];
 		const length = Reflect.apply(natives.listLength, found, []) as number;
@@ -338,7 +350,7 @@ function start(
 		const filter = compileFilter(json);
 		if (!filter) continue;
 		if (filter.css) rules.push(filter.css);
-		else filters.push(filter);
+		else if (!foreign) filters.push(filter);
 	}
 	const sheet = new natives.Sheet();
 	Reflect.apply(natives.replaceSync, sheet, [rules.join('\n')]);
@@ -404,7 +416,7 @@ function start(
 
 	// the generic rules: the classes and ids the document uses, asked of
 	// the worker once each
-	const generic = !page.generichide;
+	const generic = !page.generichide && !foreign;
 	const seen = new Set<string>();
 	let classes: string[] = [];
 	let ids: string[] = [];
@@ -479,31 +491,27 @@ function start(
 		later(procedural, Math.max(0, proceduralAt + PROCEDURAL_MS - Date.now()));
 	};
 
-	// mutation records wait in a queue; a timer reads them in slices
-	const queue: MutationRecord[] = [];
+	// the elements of the mutation records wait in a queue a timer reads in
+	// slices, held weakly: a subtree the page writes and drops again (an
+	// innerHTML it reads back, a list it rebuilds) is the page's to free
+	// before the queue reaches it, and its classes are nobody's then. `deep`:
+	// an added element, whose subtree is read too
+	const queue: { element: WeakRef<Element>; deep: boolean }[] = [];
 	let armed = false;
 	let first = true;
 	const drain = () => {
 		armed = false;
 		let budget = SLICE_ELEMENTS;
 		while (queue.length && budget > 0) {
-			const record = queue.shift()!;
-			if (!generic) continue;
-			const target = Reflect.apply(natives.recordTarget, record, []) as Element;
-			if (Reflect.apply(natives.recordType, record, []) === 'attributes') {
-				note(target);
-				budget--;
-				continue;
-			}
-			for (const added of elements(
-				Reflect.apply(natives.recordAdded, record, []),
-			)) {
-				if (Reflect.apply(natives.nodeType, added, []) !== 1) continue;
-				note(added);
-				const inside = dom.queryAll(added, '[class],[id]');
-				for (const element of inside) note(element);
-				budget -= 1 + inside.length;
-			}
+			const { element, deep } = queue.shift()!;
+			const target = element.deref();
+			if (!target) continue;
+			note(target);
+			budget--;
+			if (!deep) continue;
+			const inside = dom.queryAll(target, '[class],[id]');
+			for (const element of inside) note(element);
+			budget -= inside.length;
 		}
 		if (queue.length) arm();
 		if (generic) ask();
@@ -516,7 +524,22 @@ function start(
 		first = false;
 	};
 	const observer = new natives.Observer((records) => {
-		for (const record of records) queue.push(record);
+		if (generic)
+			for (const record of records) {
+				if (Reflect.apply(natives.recordType, record, []) === 'attributes')
+					queue.push({
+						element: new NativeWeakRef(
+							Reflect.apply(natives.recordTarget, record, []) as Element,
+						),
+						deep: false,
+					});
+				else
+					for (const added of elements(
+						Reflect.apply(natives.recordAdded, record, []),
+					))
+						if (Reflect.apply(natives.nodeType, added, []) === 1)
+							queue.push({ element: new NativeWeakRef(added), deep: true });
+			}
 		arm();
 	});
 	const observe = () =>

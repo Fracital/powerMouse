@@ -494,8 +494,19 @@ ok(
 		defaults.lists.every((list) => list.url.startsWith('https://')) &&
 		defaults.resources.startsWith('https://') &&
 		defaults.refreshMs === 24 * 3600_000 &&
-		resolveAdblockOptions(false) === null &&
-		resolveAdblockOptions(undefined) === null,
+		!('byDefault' in defaults),
+);
+const unnamed = resolveAdblockOptions(undefined);
+ok(
+	'the option left out is the default lists too, marked as nobody having asked; only `false` is off',
+	unnamed.byDefault === true &&
+		same(
+			{ ...unnamed, byDefault: undefined },
+			{ ...defaults, byDefault: undefined },
+		) &&
+		!('byDefault' in resolveAdblockOptions({})) &&
+		resolveAdblockOptions(false) === null,
+	JSON.stringify(unnamed),
 );
 const given = resolveAdblockOptions({
 	lists: [

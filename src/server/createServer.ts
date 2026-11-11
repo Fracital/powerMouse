@@ -45,7 +45,7 @@ export interface StompServer {
 	routeOf(routed: string): { resource: string; url: string } | null;
 	/** the routed URL of a real one under a route kind (`binary`, `sw:<version>`) */
 	routeAs(kind: string, url: string): string;
-	/** the built-in blocker, when the controller turned it on (docs/adblock.md) */
+	/** the built-in blocker, unless the host turned it off (docs/adblock.md) */
 	blocker?: Blocker;
 }
 
@@ -190,7 +190,7 @@ export default async function createServer(
 	log?: (info: RequestInfo) => void,
 	/** the controller's rewrite workers, when it started any */
 	pool?: RewritePool,
-	/** the built-in blocker's lists, when the controller turned it on */
+	/** the built-in blocker's lists, unless the host turned it off */
 	adblock?: AdblockInit,
 ): Promise<StompServer> {
 	const db = await openConfigDB();
@@ -286,6 +286,7 @@ export default async function createServer(
 		rewrites,
 		pool,
 		blocker,
+		!adblock?.byDefault,
 	);
 	if (blocker) registerBlocker(router, blocker);
 	registerStorage(router, stores.storage);

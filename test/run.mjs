@@ -60,6 +60,30 @@ const SUITE_ENV = {
 	// refuses UDP: the demo's default HTTP/3 has to fall back
 	'demo-http3': { STOMP_TEST_TRANSPORT: '1', WISP_NO_UDP: '1' },
 };
+// where the content blocker's default lists and resources live
+// (src/blocker/types.ts DEFAULT_LISTS, DEFAULT_RESOURCES)
+const LIST_SERVERS = [
+	'easylist.to',
+	'ublockorigin.github.io',
+	'raw.githubusercontent.com',
+];
+// the content blocker is on by default, with lists on the list servers. A
+// test run asks nothing of those: the demo page's controller names the
+// fixture's list instead (test/pages/adblock-run.txt), so the engine runs in
+// every suite that drives the demo, and the wisp server refuses the list
+// servers, so a controller a suite builds itself, which says nothing of the
+// blocker, runs as a host does whose lists cannot be had (the proxy without
+// the blocker). A suite gets the same, for a demo server it starts itself
+// (demo-http3). STOMP_ADBLOCK=0 runs the demo without the blocker
+const blockerEnv = (fixturePort) => ({
+	STOMP_ADBLOCK:
+		process.env.STOMP_ADBLOCK ??
+		JSON.stringify({
+			lists: [`http://127.0.0.1:${fixturePort}/pages/adblock-run.txt`],
+			resources: `http://127.0.0.1:${fixturePort}/pages/adblock-run-resources.json`,
+		}),
+	WISP_BLOCK_HOSTS: LIST_SERVERS.join(','),
+});
 const suiteTimeoutMs = (name) =>
 	(Number(process.env.SUITE_TIMEOUT) || SUITE_TIMEOUT_MINUTES[name] || 10) *
 	60 *
@@ -187,6 +211,7 @@ async function startServersOnce(name) {
 		...process.env,
 		PORT: port,
 		WISP_ALLOW_LOOPBACK: '1',
+		...blockerEnv(fixturePort),
 		...SUITE_ENV[name],
 	};
 	delete env.STOMP_PROXY_ORIGIN;
@@ -222,6 +247,7 @@ function runSuite(name, { port, fixturePort }) {
 		const child = spawn(process.execPath, [`${suitesDir}${name}.mjs`], {
 			env: {
 				...process.env,
+				...blockerEnv(fixturePort),
 				PORT: port,
 				FIXTURE: `http://127.0.0.1:${fixturePort}/`,
 			},

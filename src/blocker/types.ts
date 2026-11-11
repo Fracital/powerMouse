@@ -48,6 +48,13 @@ export interface AdblockInit {
 	resources: string;
 	engine?: string;
 	refreshMs: number;
+	/**
+	 * the host did not name the option, and the blocker is on because that
+	 * is the default: what it cannot have (its module, the lists) leaves it
+	 * off with one line on the console, and no navigation waits for the
+	 * lists to be fetched
+	 */
+	byDefault?: true;
 }
 
 /**
@@ -107,12 +114,16 @@ export const DEFAULT_RESOURCES =
 
 export const DEFAULT_REFRESH_HOURS = 24;
 
-/** the options as the host gave them, resolved: every list an object, every default filled in */
+/**
+ * the options as the host gave them, resolved: every list an object, every
+ * default filled in. Only `false` is off: an option left out is the default
+ * lists, as `true` is
+ */
 export function resolveAdblockOptions(
-	given: boolean | AdblockOptions | undefined,
+	given: boolean | AdblockOptions | null | undefined,
 ): AdblockInit | null {
-	if (!given) return null;
-	const options = given === true ? {} : given;
+	if (given === false) return null;
+	const options = given === true || !given ? {} : given;
 	const lists = (options.lists ?? DEFAULT_LISTS).map((list) =>
 		typeof list === 'string' ? { url: list } : { ...list },
 	);
@@ -124,6 +135,7 @@ export function resolveAdblockOptions(
 		refreshMs:
 			(Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_REFRESH_HOURS) *
 			3600_000,
+		...(given === undefined || given === null ? { byDefault: true } : {}),
 	};
 }
 

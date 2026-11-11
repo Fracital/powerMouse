@@ -1,0 +1,11 @@
+! Title: the list every suite's blocker runs with (test/run.mjs)
+! The blocker is on by default, and its default lists are on the list
+! servers: a test run names this list instead, so the engine runs in every
+! suite and nothing is asked of a server that is not the run's. The rules
+! name nothing a suite serves. Its resources are adblock-run-resources.json
+! (none): the fixture's hit counters are one table for every suite of a
+! run, and the adblock suite counts the fetches of its own files.
+||ads.stomp-suites.invalid^
+/stomp-suites-ad/*$script,image
+##.stomp-suites-ad
+###stomp-suites-ad

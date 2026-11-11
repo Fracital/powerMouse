@@ -2,9 +2,14 @@
 // resources that are fixture files (test/pages/adblock-list.txt), fetched by
 // the service worker through the transport like any page's request.
 //
-// Off (the default): the controller's config has no `adblock`, the module is
-// never fetched, nothing asks the worker for rules, and the page loads
-// everything and hides nothing.
+// Off (`adblock: false`): the controller's config has no `adblock`, the
+// module is never fetched, nothing asks the worker for rules, and the page
+// loads everything and hides nothing.
+//
+// By default (the option left out) the blocker is on with the default lists,
+// which are asked of the transport and of nothing else; lists that cannot be
+// had and a module the host does not serve leave the proxy working without
+// it, said once on the console, and no navigation waits for the lists.
 //
 // On: a blocked request never reaches the fixture server (its hit counters
 // stay where they were) and is a network error to the page, as a content
@@ -30,12 +35,22 @@ const browser = await launch();
 const page = await browser.newPage();
 const requested = [];
 page.on('request', (request) => requested.push(request.url()));
+const consoleLines = [];
+page.on('console', (message) =>
+	consoleLines.push([message.type(), message.text()]),
+);
+// every request of the context, the service worker's among them
+const contextRequested = [];
+page.context().on('request', (request) => contextRequested.push(request.url()));
 const policies = [];
 page.on('response', (response) => {
 	const policy = response.headers()['content-security-policy'];
 	if (policy) policies.push(policy);
 });
-await page.goto(PROXY);
+// the demo's own controller runs without the blocker (the run's default is
+// the fixture list, test/run.mjs): the module's fetches counted below are
+// those of this suite's controllers
+await page.goto(`${PROXY}?noadblock`);
 await page.waitForFunction(
 	() => window.controller && window.controller.isReady,
 	null,
@@ -44,32 +59,74 @@ await page.waitForFunction(
 const hits = async () => (await fetch(`${FIXTURE}hits`)).json();
 const count = (table, file) => table[file]?.requests ?? 0;
 
-/** a controller with `adblock`, a frame on the fixture page, and what the page reports */
-const visit = (adblock, pages) =>
+/**
+ * a controller with `adblock` (left out when undefined), a frame on the
+ * fixture page, and what the page reports. `mirror`: what the transport
+ * answers the default lists' URLs with (a URL of the fixture each, `null`
+ * for one that is not there), `delay` ms late: the controller's transport
+ * is the demo's, wrapped, and `asked` is every URL off this machine that it
+ * was asked for. `assets`: the controller's `assets`. `until`: the name of
+ * a script of the page; the last page is loaded again, a second apart,
+ * until that script no longer runs (the engine was built meanwhile), and
+ * the report of the load after that one is `reports.built`
+ */
+const visit = (
+	adblock,
+	pages,
+	{ mirror = null, delay = 0, assets, until = '' } = {},
+) =>
 	page.evaluate(
-		async ({ adblock, pages }) => {
+		async ({ adblock, pages, mirror, delay, assets, until, fixture }) => {
 			const log = [];
+			const asked = [];
+			const real = window.controller.transport;
+			const transport = !mirror
+				? real
+				: new Proxy(real, {
+						get(target, key) {
+							if (key === 'request')
+								return async (remote, ...rest) => {
+									let url = new URL(remote);
+									if (!['127.0.0.1', 'localhost'].includes(url.hostname)) {
+										asked.push(url.href);
+										if (delay)
+											await new Promise((resolve) =>
+												setTimeout(resolve, delay),
+											);
+										url = new URL(
+											mirror[url.href] ?? `${fixture}pages/adblock-missing.txt`,
+										);
+									}
+									return target.request(url, ...rest);
+								};
+							const value = Reflect.get(target, key);
+							return typeof value === 'function' ? value.bind(target) : value;
+						},
+					});
 			const controller = new window.StompController({
 				serviceworker: window.controller.serviceworker,
-				transport: window.controller.transport,
+				transport,
 				directory: window.controller.directory.pathname,
 				codec: 'xor',
 				cache: false,
 				onRequest: (info) => log.push(info),
-				...(adblock ? { adblock } : {}),
+				...(adblock === undefined ? {} : { adblock }),
+				...(assets ? { assets } : {}),
 			});
 			await controller.wait();
 			const modules = await controller.wasmModules();
 			const element = document.createElement('iframe');
 			document.body.append(element);
 			const frame = controller.createFrame(element);
-			const out = { config: controller.config, modules, reports: {} };
+			const out = { config: controller.config, modules, reports: {}, ms: {} };
 			for (const [name, url] of Object.entries(pages)) {
 				const load = new Promise((resolve) =>
 					element.addEventListener('load', resolve, { once: true }),
 				);
+				const started = performance.now();
 				await frame.go(url);
 				await load;
+				out.ms[name] = Math.round(performance.now() - started);
 				const win = element.contentWindow;
 				for (let i = 0; i < 100 && !win.__adblockReport && !win.__worker; i++)
 					await new Promise((resolve) => setTimeout(resolve, 100));
@@ -84,6 +141,23 @@ const visit = (adblock, pages) =>
 					out.reports[name] = { threw: String(error?.stack ?? error) };
 				}
 			}
+			let settledLoads = 0;
+			for (let i = 0; until && i < 30; i++) {
+				await new Promise((resolve) => setTimeout(resolve, 1000));
+				const load = new Promise((resolve) =>
+					element.addEventListener('load', resolve, { once: true }),
+				);
+				await frame.go(Object.values(pages).at(-1));
+				await load;
+				const win = element.contentWindow;
+				for (let j = 0; j < 100 && !win.__adblockReport; j++)
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				out.reports.built = await win.__adblockReport();
+				// the load during which the engine was built has the rules for
+				// its requests and not those of its shell: the one after it counts
+				if (out.reports.built.ran.includes(until)) continue;
+				if (settledLoads++) break;
+			}
 			await new Promise((resolve) => setTimeout(resolve, 300));
 			out.log = log.map(({ url, status, error, kind }) => ({
 				url,
@@ -91,10 +165,11 @@ const visit = (adblock, pages) =>
 				error,
 				kind,
 			}));
+			out.asked = asked;
 			element.remove();
 			return out;
 		},
-		{ adblock, pages },
+		{ adblock, pages, mirror, delay, assets, until, fixture: FIXTURE },
 	);
 
 const site = `${FIXTURE}pages/adblock.html`;
@@ -160,7 +235,11 @@ ok(
 
 // off
 const before = await hits();
-const off = await visit(null, { page: site, sockets: socketSite('off') });
+const off = await visit(
+	false,
+	{ page: site, sockets: socketSite('off') },
+	{ mirror: {} },
+);
 const afterOff = await hits();
 const offReport = off.reports.page;
 ok(
@@ -170,8 +249,19 @@ ok(
 );
 ok(
 	'off: the module is never fetched and the worker is never asked for rules',
-	!requested.some((url) => /blocker\.wasm|\/adblock$/.test(url)),
-	requested.filter((url) => /blocker\.wasm|\/adblock$/.test(url)).join(' '),
+	![...requested, ...contextRequested].some((url) =>
+		/blocker\.wasm|\/adblock$/.test(url),
+	),
+	[...requested, ...contextRequested]
+		.filter((url) => /blocker\.wasm|\/adblock$/.test(url))
+		.join(' '),
+);
+ok(
+	'off: no list and no resources are asked for, of the transport or of anything',
+	off.asked.length === 0 &&
+		count(afterOff, 'adblock-resources.json') ===
+			count(before, 'adblock-resources.json'),
+	JSON.stringify(off.asked),
 );
 ok(
 	'off: every script runs, the image and the fetches load',
@@ -533,13 +623,170 @@ ok(
 );
 
 // off again, on the worker that just ran the blocker
-const again = await visit(null, { page: site });
+const again = await visit(false, { page: site });
 ok(
-	'off again: a controller without the option blocks and hides nothing',
+	'off again: a controller with the option off blocks and hides nothing',
 	again.reports.page.ran.length === 5 &&
 		Object.values(again.reports.page.shown).every((shown) => shown === true) &&
 		again.reports.page.spy === null,
 	JSON.stringify(again.reports.page),
+);
+
+// by default: a controller that says nothing of the blocker has it, with
+// the default lists. Their servers are not this machine's, and this browser
+// resolves no name but the loopback ones (lib.mjs launch), so the
+// controller's transport answers their URLs from the fixture and notes what
+// it was asked: a list that arrives came through the transport
+const RESOURCES =
+	'https://raw.githubusercontent.com/brave/adblock-resources/master/dist/resources.json';
+const EASYLIST = 'https://easylist.to/easylist/easylist.txt';
+const UBLOCK = 'https://ublockorigin.github.io/uAssets/filters/';
+const LISTS = [
+	EASYLIST,
+	'https://easylist.to/easylist/easyprivacy.txt',
+	...[
+		'filters.min.txt',
+		'unbreak.min.txt',
+		'badware.min.txt',
+		'privacy.min.txt',
+		'resource-abuse.txt',
+		'quick-fixes.min.txt',
+	].map((file) => UBLOCK + file),
+];
+const everything = (report) =>
+	JSON.stringify(report?.ran) ===
+		JSON.stringify(['blocked', 'allowed', 'redirect', 'third', 'domain']) &&
+	Object.values(report.shown).every((shown) => shown === true) &&
+	report.spy === null;
+const said = (type, pattern) =>
+	consoleLines.filter(([kind, text]) => kind === type && pattern.test(text));
+const unservedAssets = { blocker: 'adblock-unserved.wasm' };
+
+// a host that does not serve the module (one that took the package's new
+// version and copies the files it always copied)
+consoleLines.length = 0;
+const unserved = await visit(
+	undefined,
+	{ page: site },
+	{ mirror: {}, assets: unservedAssets },
+);
+ok(
+	'default, the module not served: the proxy works without the blocker and asks for no list',
+	!('adblock' in unserved.config) &&
+		everything(unserved.reports.page) &&
+		unserved.asked.length === 0,
+	JSON.stringify([unserved.config.adblock, unserved.reports, unserved.asked]),
+);
+ok(
+	'default, the module not served: said once on the console, and not as a warning',
+	said('info', /content blocker is off, its module did not load/).length ===
+		1 && said('warning', /blocker/).length === 0,
+	JSON.stringify(consoleLines),
+);
+consoleLines.length = 0;
+const refused = await visit(
+	true,
+	{ page: site },
+	{ mirror: {}, assets: unservedAssets },
+);
+ok(
+	'asked for, the module not served: the warning of before, and the proxy works without the blocker',
+	said('warning', /the blocker module did not load/).length === 1 &&
+		said('info', /content blocker/).length === 0 &&
+		!('adblock' in refused.config) &&
+		everything(refused.reports.page),
+	JSON.stringify([consoleLines, refused.config.adblock, refused.reports]),
+);
+
+// no list to be had (the resources come first, and without them nothing is
+// built): the page loads unfiltered, at once
+const workerLines = [];
+for (const worker of page.context().serviceWorkers())
+	worker.on('console', (message) =>
+		workerLines.push([message.type(), message.text()]),
+	);
+const listless = await visit(undefined, { page: site }, { mirror: {} });
+ok(
+	'default, no list to be had: asked of the transport, and the page loads unfiltered without a wait',
+	listless.config.adblock === true &&
+		listless.asked.includes(RESOURCES) &&
+		everything(listless.reports.page) &&
+		listless.ms.page < 4000,
+	JSON.stringify([listless.asked, listless.ms, listless.reports]),
+);
+await sleep(300);
+const listlessAgain = await visit(undefined, { page: site }, { mirror: {} });
+ok(
+	'default, no list to be had: the next controller tries again, and the worker says once that the blocker is off',
+	listlessAgain.asked.includes(RESOURCES) &&
+		workerLines.filter(
+			([kind, text]) =>
+				kind === 'info' && /content blocker is off: the resources/.test(text),
+		).length === 1 &&
+		!workerLines.some(([kind]) => kind === 'warning'),
+	JSON.stringify([listlessAgain.asked, workerLines]),
+);
+
+// the lists three seconds away each (the resources, then the lists): the
+// first navigation does not wait for them (one asked for waits five
+// seconds), and the engine serves from the moment it is built
+const mirror = {
+	[RESOURCES]: `${FIXTURE}pages/adblock-resources.json`,
+	[`${UBLOCK}filters.min.txt`]: `${FIXTURE}pages/adblock-list.txt`,
+	[EASYLIST]: `${FIXTURE}pages/adblock-untrusted.txt`,
+};
+const listServers = (url) =>
+	/^https?:\/\/(easylist\.to|ublockorigin\.github\.io|raw\.githubusercontent\.com)\//.test(
+		url,
+	);
+const beforeDefault = await hits();
+consoleLines.length = 0;
+const first = await visit(
+	undefined,
+	{ page: site },
+	{ mirror, delay: 3000, until: 'blocked' },
+);
+const built = first.reports.built;
+ok(
+	'default: the first navigation does not wait for the lists and loads unfiltered',
+	first.config.adblock === true &&
+		everything(first.reports.page) &&
+		first.ms.page < 4000,
+	JSON.stringify([first.ms, first.reports]),
+);
+const afterDefault = await hits();
+ok(
+	'default: the default lists and the resources are asked of the transport, once each',
+	JSON.stringify([...first.asked].sort()) ===
+		JSON.stringify([RESOURCES, ...LISTS].sort()) &&
+		count(afterDefault, 'adblock-list.txt') ===
+			count(beforeDefault, 'adblock-list.txt') + 1 &&
+		count(afterDefault, 'adblock-resources.json') ===
+			count(beforeDefault, 'adblock-resources.json') + 1,
+	JSON.stringify(first.asked),
+);
+ok(
+	'default: the browser itself asks no list server',
+	!requested.some(listServers) && !contextRequested.some(listServers),
+	JSON.stringify([...requested, ...contextRequested].filter(listServers)),
+);
+ok(
+	'default: once built the engine blocks, hides and runs the scriptlets, trusted for uBlock Origin lists only',
+	JSON.stringify(built?.ran) ===
+		JSON.stringify(['allowed', 'third', 'domain']) &&
+		built.typedFetch === 'TypeError: Failed to fetch' &&
+		built.shown.generic === false &&
+		built.shown.procedural === false &&
+		built.spy?.href === site &&
+		built.trusted === true &&
+		built.untrusted === null,
+	JSON.stringify(built),
+);
+ok(
+	'default: a list that is not there is left out without a warning',
+	!workerLines.some(([kind]) => kind === 'warning') &&
+		said('warning', /filter list|blocker/).length === 0,
+	JSON.stringify([workerLines, consoleLines]),
 );
 
 // isolation mode: the host page is on another origin, and the option goes
@@ -635,4 +882,54 @@ ok(
 		(await reached('open', 'isolated', 'window')),
 	JSON.stringify([remoteConfig, isolatedSockets]),
 );
+// `false` crosses to the controller frame as it is: left out there, it
+// would be the default
+const offHost = await browser.newPage();
+await offHost.goto(HOST);
+await offHost.waitForFunction(
+	() => window.controller && window.controller.isReady,
+	null,
+	{ timeout: 45000 },
+);
+const remoteOff = await offHost.evaluate(async (proxy) => {
+	const remote = new window.StompRemoteController({
+		proxyOrigin: proxy.replace(/\/$/, ''),
+		directory: '/stomp/',
+		transport: {
+			module: `${proxy}epoxy/index.mjs`,
+			options: [{ wisp: `${proxy.replace(/^http/, 'ws')}wisp/` }],
+		},
+		codec: 'xor',
+		cache: false,
+		adblock: false,
+	});
+	await remote.wait();
+	return remote.config;
+}, PROXY);
+ok(
+	'isolated: `adblock: false` reaches the proxy origin, whose config has no blocker',
+	remoteOff && !('adblock' in remoteOff),
+	JSON.stringify(remoteOff),
+);
+await offHost.close();
+
+// the demo: on unless something says off (here the run's fixture list,
+// STOMP_ADBLOCK in test/run.mjs), and its toggle shows it
+const demo = await browser.newPage();
+await demo.goto(PROXY);
+await demo.waitForFunction(
+	() => window.controller && window.controller.isReady,
+	null,
+	{ timeout: 45000 },
+);
+const demoState = await demo.evaluate(() => ({
+	adblock: window.controller.config.adblock,
+	toggle: document.getElementById('adblock').checked,
+}));
+ok(
+	'demo: the blocker is on by default, and the Block ads toggle is checked',
+	demoState.adblock === true && demoState.toggle === true,
+	JSON.stringify(demoState),
+);
+await demo.close();
 await done(browser);

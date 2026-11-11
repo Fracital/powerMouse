@@ -44,6 +44,8 @@ const MEMORY_LIMIT = 160 * 1024 * 1024;
 const FIRST_BUILD_WAIT_MS = 5_000;
 /** scriptlet rewrites kept, by their lines (a site's pages share theirs) */
 const SCRIPT_MEMO = 64;
+/** a blocker that is on by default and cannot be had says so once a thread */
+let saidOff = false;
 
 export interface Verdict {
 	block: boolean;
@@ -134,6 +136,9 @@ export class Blocker {
 	#ready = false;
 	/** the first load or build, whichever settles first; false when nothing could be loaded */
 	readonly #settled: Promise<boolean>;
+	/** the engine this browser stored was tried: it serves, or there is none and the lists are being fetched */
+	readonly #restored: Promise<void>;
+	#tried: () => void = () => {};
 	#key = '';
 	#resources = '';
 	#building: Promise<void> | null = null;
@@ -151,9 +156,21 @@ export class Blocker {
 		this.#init = init;
 		this.#fetch = fetch;
 		this.#given = module;
+		this.#restored = new Promise((resolve) => {
+			this.#tried = resolve;
+		});
 		this.#settled = this.#start();
 		this.#settled.then((ready) => {
+			this.#tried();
 			this.#failed = !ready;
+			// on by default and nothing to serve with: the proxy works
+			// without it, and says so once
+			if (!ready && init.byDefault && !saidOff) {
+				saidOff = true;
+				console.info(
+					`Stomp: the content blocker is off: ${this.lastError ?? 'no engine could be loaded'}`,
+				);
+			}
 		});
 	}
 	get ready(): boolean {
@@ -164,9 +181,15 @@ export class Blocker {
 	get failed(): boolean {
 		return this.#failed && !this.#ready && !this.#building;
 	}
-	/** the engine answers, or nothing could be loaded; bounded by `ms` for a page that must not wait on a first fetch of the lists */
-	settled(ms = FIRST_BUILD_WAIT_MS): Promise<boolean> {
+	/**
+	 * the engine answers, or nothing could be loaded; bounded by `ms` for a
+	 * page that must not wait on a first fetch of the lists. Without `build`
+	 * the wait is for the stored engine alone (milliseconds), never for the
+	 * lists' servers: a blocker that is on by default delays no page
+	 */
+	settled(build = true, ms = FIRST_BUILD_WAIT_MS): Promise<boolean> {
 		if (this.#ready) return Promise.resolve(true);
+		if (!build) return this.#restored.then(() => this.#ready);
 		return Promise.race([
 			this.#settled,
 			new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms)),
@@ -200,6 +223,7 @@ export class Blocker {
 				return true;
 			}
 		}
+		this.#tried();
 		await this.#refresh();
 		return this.#ready;
 	}
@@ -297,12 +321,18 @@ export class Blocker {
 				return;
 			}
 		} else {
+			let missed = '';
 			const lists = await Promise.all(
 				this.#init.lists.map(async (list) => {
 					try {
 						return { list, text: await this.#fetchText(list.url) };
 					} catch (error) {
-						console.warn(`Stomp: filter list not fetched: ${String(error)}`);
+						missed ||= String(error);
+						// a list the host named is the host's to hear of; one of
+						// the default lists is left out quietly (with none at all
+						// the blocker says once that it is off)
+						if (!this.#init.byDefault)
+							console.warn(`Stomp: filter list not fetched: ${String(error)}`);
 						return null;
 					}
 				}),
@@ -311,7 +341,7 @@ export class Blocker {
 				(entry): entry is { list: AdblockList; text: string } => entry !== null,
 			);
 			if (!fetched.length) {
-				this.lastError = 'no filter list could be fetched';
+				this.lastError = `no filter list could be fetched (${missed})`;
 				return;
 			}
 			let builder: BlockerInstance;

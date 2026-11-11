@@ -494,8 +494,10 @@ interface Rewriter {
 	log?: (info: RequestInfo) => void;
 	/** the host's request rules, compiled */
 	rules: CompiledRule[];
-	/** the built-in blocker, when the host turned it on (docs/adblock.md) */
+	/** the built-in blocker, unless the host turned it off (docs/adblock.md) */
 	blocker?: Blocker;
+	/** the host asked for the blocker: the first navigation waits for its lists (on by default, none does) */
+	blockerAsked?: boolean;
 }
 
 /** the page aborted the request (its signal fired) */
@@ -1281,8 +1283,11 @@ function genericForward(
 		// the cache and the transport: what the lists block reaches none of
 		// them. A request the worker makes for itself is not the page's
 		const blocker = context?.internal ? undefined : rewriter.blocker;
-		// the first navigation after a start waits for the engine, bounded
-		if (blocker && navigation && !blocker.ready) await blocker.settled();
+		// the first navigation after a start waits for the engine: the stored
+		// one, and, when the host asked for the blocker, a first fetch of the
+		// lists, bounded
+		if (blocker && navigation && !blocker.ready)
+			await blocker.settled(!!rewriter.blockerAsked);
 		const decision = blocker?.decide({
 			url: reportURL(url),
 			source:
@@ -2712,6 +2717,7 @@ export function registerRewrites(
 	rewrites?: RewriteCache,
 	pool?: RewritePool,
 	blocker?: Blocker,
+	blockerAsked = true,
 ) {
 	const rewriter: Rewriter = {
 		get config() {
@@ -2750,6 +2756,7 @@ export function registerRewrites(
 		log,
 		rules: [],
 		blocker,
+		blockerAsked,
 		codec: init.codec,
 		directory: init.directory,
 		errorPage: init.errorPage,
