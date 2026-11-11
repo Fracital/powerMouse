@@ -378,7 +378,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					script.text,
 					true,
 				) ?? modifyJS(script.text, this.client.url, this.client.config, type);
-			rewrittenScripts.set(script, rewritten);
+			// a rewrite that changed nothing leaves no mark. The mark is the
+			// rewritten text, and a script of the document's markup whose text
+			// is its own rewrite (nothing in it to rewrite, and written as the
+			// rewriter prints it) was taken for one rewritten already when the
+			// markup's scripts were named: it ran without its name, and its
+			// errors read as an unnamed script's. Rewriting it again changes
+			// nothing
+			if (rewritten !== script.text) rewrittenScripts.set(script, rewritten);
 			script.text = rewritten;
 		};
 

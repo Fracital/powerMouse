@@ -19,6 +19,10 @@
 		'<script>__inline.written = new Error("written").stack<\/script>',
 	);
 </script>
+<!-- a script the rewriter has nothing to change in, spelled as it prints
+	it: its rewrite is its own text, and it is named for the page all the same -->
+<!-- prettier-ignore -->
+<script>__inline.same = new Error('same').stack;</script>
 <script>
 	throw new Error('inline uncaught');
 </script>

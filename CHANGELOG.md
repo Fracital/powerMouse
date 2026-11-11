@@ -453,6 +453,12 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 - `super.postMessage(m)` in a class stays the class's own call: it was
   rewritten to a call that names `super` as a value, which does not parse,
   so the whole script failed. (rewriter-unit suite.)
+- An inline script of a document's markup that the rewriter changes nothing
+  in, written as the rewriter prints it (`<script>f();</script>`), is named
+  for the page like every other: its stack frames and uncaught errors read
+  `<anonymous>` where the page's URL stands natively, because a script
+  whose text was its own rewrite was taken for one already rewritten and
+  skipped when the markup's scripts were named. (error-surfaces suite.)
 - A stylesheet is rewritten the same whatever was rewritten before it, and
   its rewrite always ends. css-tree keeps its token buffer between parses
   and reads one entry of it that the parse at hand never writes (the token
