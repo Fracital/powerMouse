@@ -214,6 +214,12 @@ export class RemoteController extends EventTarget {
 			init.assets,
 			'controllerFrame',
 		)}${script ? `?script=${encodeURIComponent(script)}` : ''}`;
+		// a host page that is cross-origin isolated lets the proxy's frames be
+		// (the permission does not reach another origin's frame by itself):
+		// the controller's frame reads there that the host is, and tells the
+		// service worker
+		if (globalThis.crossOriginIsolated === true)
+			this.element.allow = `cross-origin-isolated ${this.proxyOrigin}`;
 		this.element.style.display = 'none';
 		this.element.setAttribute('aria-hidden', 'true');
 		this.element.title = 'Stomp controller';
@@ -536,6 +542,18 @@ export class RemoteFrame extends EventTarget {
 		super();
 		element.setAttribute('sandbox', sandbox);
 		element.setAttribute('referrerpolicy', 'no-referrer');
+		// in a cross-origin isolated host page the frame may be isolated too
+		// (a page whose own headers isolate it is; the service worker serves
+		// every other one without the permission): added to what the host
+		// allows the frame already
+		if (globalThis.crossOriginIsolated === true) {
+			const allow = element.getAttribute('allow')?.trim() ?? '';
+			if (!/(^|;)\s*cross-origin-isolated(\s|;|$)/.test(allow))
+				element.setAttribute(
+					'allow',
+					`${allow}${allow && !allow.endsWith(';') ? '; ' : allow ? ' ' : ''}cross-origin-isolated ${controller.proxyOrigin}`,
+				);
+		}
 	}
 	/** hosts waiting for the next report (go, reload) */
 	#awaitingReport = new Set<() => void>();

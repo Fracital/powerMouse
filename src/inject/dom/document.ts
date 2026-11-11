@@ -21,6 +21,7 @@ import DownloadModule from './modules/Download';
 import FramingModule from './modules/Framing';
 import HistoryModule from './modules/History';
 import IFrameModule from './modules/IFrame';
+import IsolationModule from './modules/Isolation';
 import LocationModule from './modules/Location';
 import MediaSessionModule from './modules/MediaSession';
 import MediaTaintModule from './modules/MediaTaint';
@@ -81,6 +82,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(CanvasTaintModule);
 	client.addModule(MediaTaintModule);
 	client.addModule(MediaSessionModule);
+	client.addModule(IsolationModule);
 	client.addModule(WebRTCModule);
 	client.addModule(AnimationFramesModule);
 	client.addModule(NavigateModule);

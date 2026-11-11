@@ -27,6 +27,7 @@ Environment variables:
 | `PORT`                 | `8080`         | HTTP port                                                                                                                                                              |
 | `STOMP_WISP_URL`       | unset          | External wisp endpoint for the transports; when set, `/wisp/` is not served and no holyWisp is started                                                                 |
 | `STOMP_PROXY_ORIGIN`   | unset          | Origin serving the proxy for isolation mode; empty means same origin                                                                                                   |
+| `STOMP_ISOLATION`      | on             | `off` leaves out the headers that make the pages cross-origin isolated (see Cross-origin isolation)                                                                    |
 | `WISP_ALLOW_LOOPBACK`  | unset          | Set to `1` to let the built-in wisp reach `127.0.0.1` / private networks (local QA)                                                                                    |
 | `WISP_NO_UDP`          | unset          | Set to `1` to make the built-in wisp refuse UDP streams (HTTP/3 fallback QA)                                                                                           |
 | `WISP_BLOCK_HOSTS`     | unset          | Hostnames the built-in wisp refuses, comma separated (a test run names the content blocker's list servers)                                                             |
@@ -289,6 +290,38 @@ What the isolated mode consists of:
   title are relayed through the controller frame, which is same-origin with
   the proxied pages; the host page never touches them directly.
 
+## Cross-origin isolation
+
+Every response of the server carries
+`Cross-Origin-Opener-Policy: same-origin`,
+`Cross-Origin-Embedder-Policy: credentialless` and
+`Cross-Origin-Resource-Policy: cross-origin`. The first two make the page
+cross-origin isolated, and STomp, which reads that at run time, then lets a
+proxied page be isolated when its own headers isolate it natively
+(SharedArrayBuffer, the precise clock); every other proxied page has what a
+page without isolation has. The embedder policy on the other files is for
+the workers the controller starts from `/stomp/` (a worker of an isolated
+page starts only when its script has one), and with the third header for the
+isolated mode, where the page embeds the controller's frame from the proxy
+origin: a frame of an isolated page loads only with an embedder policy and,
+from another origin, with that resource policy.
+
+`credentialless` rather than `require-corp`: both isolate, and under either
+the proxied frames need a policy of their own (the service worker's). Under
+`require-corp` everything the page itself loads from another origin would
+have to send a Cross-Origin-Resource-Policy, which GitHub's avatars in the
+commit list do not; under `credentialless` they load, without cookies.
+
+`STOMP_ISOLATION=off` leaves the three headers out. Nothing is isolated
+then, and everything else is the same. The suites run that way
+(test/run.mjs) except `cross-origin-isolation` and `sop-escapes`: under an
+isolated page whose proxy is on another origin, Chrome gives the proxied
+frames no window for the popups they open, and the suites open real popups
+(the demo's own page takes them as tabs with `onOpen`, so it loses nothing).
+`STOMP_ISOLATION=on npm test -- <suite>` runs a suite under the isolated
+host. docs/same-origin-policy.md, "Cross-origin isolation", has the
+measurements.
+
 ## Deploying somewhere real
 
 https://stomp.fracit.al is this directory, deployed by
@@ -314,6 +347,10 @@ For your own deployment:
   `controllerFrame.html`. Cloudflare's universal certificate covers one
   subdomain level, so prefer `name-proxy.example.com` over
   `proxy.name.example.com`.
+- For cross-origin isolation, the page and (with two hostnames) the proxy
+  origin's files must keep the three headers above through whatever is in
+  front of the server; a proxy or CDN that drops them leaves the page not
+  isolated, and the demo then runs as it did without them.
 - Serve the page over HTTPS; the script picks `wss://` for the wisp URL
   automatically from `location.protocol`.
 - Keep `dist/`, the transports and the page on the same origin. The service

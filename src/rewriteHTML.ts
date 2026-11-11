@@ -220,6 +220,8 @@ function sited(client: string, sites: SiteFacts[] | undefined): string {
  * `sites`: what the service worker's list says of the document's host and
  * its top's (src/siteFacts.ts); a shell the page realm builds hands on what
  * its bundle was told.
+ * `isolation`: what the document is by its headers, when the host's page is
+ * cross-origin isolated (src/isolation.ts isolationFacts).
  */
 export function modifyHTML(
 	script: string,
@@ -238,6 +240,7 @@ export function modifyHTML(
 	sites?: SiteFacts[],
 	/** the document is a proxied top the service worker serves: its shell loads the rewriter library */
 	top = false,
+	isolation?: string,
 ): string {
 	const { head, tail } = shell(
 		script,
@@ -252,6 +255,7 @@ export function modifyHTML(
 		adblock,
 		sites,
 		top,
+		isolation,
 	);
 	return head + tail(prewritten);
 }
@@ -275,6 +279,7 @@ export function modifyHTMLStreamed(
 	sites?: SiteFacts[],
 	/** as modifyHTML's */
 	top = false,
+	isolation?: string,
 ): { head: string; tail: (prewritten: Prewritten | null) => string } {
 	return shell(
 		script,
@@ -289,6 +294,7 @@ export function modifyHTMLStreamed(
 		adblock,
 		sites,
 		top,
+		isolation,
 	);
 }
 
@@ -306,6 +312,7 @@ function shell(
 	adblock?: AdblockPage | null,
 	sites?: SiteFacts[],
 	top = false,
+	isolation?: string,
 ): { head: string; tail: (prewritten?: Prewritten | null) => string } {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	const names = helperNames(config);
@@ -338,6 +345,11 @@ ${sited(names.client, sites)}${referred(names.client, referrer)}${
 			? `
 	${names.client}.upgradeInsecureRequests = true;`
 			: ''
+	}${
+		isolation === undefined
+			? ''
+			: `
+	${names.client}.isolation = ${JSON.stringify(isolation)};`
 	}
 	if (!${names.client}.applied) try {
 		${names.client}.apply(true);

@@ -8,6 +8,18 @@ import { codecType, Config, ParsedConfig } from '../config';
 import { rewriteLinkHeader } from '../headers';
 import { helperNames } from '../helperNames';
 import {
+	delegatedTo,
+	embedderPolicy,
+	embedderPolicyBlocks,
+	embedderRefuses,
+	isolationFacts,
+	isolationHeaders,
+	isolationResponseHeaders,
+	nestedIsolation,
+	topLevelIsolation,
+	type DocumentIsolation,
+} from '../isolation';
+import {
 	insecure,
 	metaUpgradesInsecureRequests,
 	mixedContentVerdict,
@@ -18,6 +30,8 @@ import {
 } from '../mixedContent';
 import {
 	kindPartition,
+	nestedMark,
+	parseNestedMark,
 	partitionSite,
 	siteOf,
 	workerKindPartition,
@@ -137,6 +151,7 @@ import {
 	timingAllowed,
 	unsafeHeaderNames,
 } from './cors';
+import { embedderPolicyOf, rememberEmbedderPolicy } from './embedderPolicies';
 import { DOCUMENT_DESTINATIONS, hostErrorPage } from './errorPage';
 import {
 	AdditionalFilter,
@@ -431,6 +446,35 @@ function takeRedirect(
 	return Date.now() - entry.at > REDIRECT_HOP_TTL ? undefined : entry;
 }
 
+/**
+ * A frame's first navigation this worker answered with a document that
+ * comes back at once (forward, "a frame's first navigation"): what the
+ * navigation was, by the routed URL it comes back to. The request that comes
+ * back is the browser's own, from that document: its referrer and policy
+ * are that document's, and the navigation's are put back from here.
+ */
+const returns = new Map<
+	string,
+	{ referrer: string; policy: ReferrerPolicy; url: string; at: number }
+>();
+
+function rememberReturn(
+	to: string,
+	navigation: { referrer: string; policy: ReferrerPolicy; url: string },
+) {
+	const now = Date.now();
+	for (const [key, entry] of returns)
+		if (now - entry.at > REDIRECT_HOP_TTL) returns.delete(key);
+	returns.set(to, { ...navigation, at: now });
+}
+
+function takeReturn(url: string) {
+	const entry = returns.get(url);
+	if (!entry) return undefined;
+	returns.delete(url);
+	return Date.now() - entry.at > REDIRECT_HOP_TTL ? undefined : entry;
+}
+
 const BODY_ILLEGAL = ['GET', 'HEAD'];
 
 /**
@@ -511,6 +555,8 @@ type BodyTransform = (
 interface Note {
 	/** the emulated registration that controls the document (docs/service-workers.md) */
 	serviceWorker?: ControlInfo;
+	/** the document's isolation, when the host's page is isolated (src/isolation.ts isolationFacts) */
+	isolation?: string;
 	rewriteCache?: RewriteCacheOutcome;
 	rewriteIn?: 'pool' | 'pool split' | 'service-worker';
 	/**
@@ -559,6 +605,8 @@ interface Rewriter {
 	 * each stops loading past the caches)
 	 */
 	hostReload?: { mode: HostReload; until: number; loads: Map<string, number> };
+	/** the host's page is cross-origin isolated (config.isolated) */
+	isolated: boolean;
 }
 
 /** how long after a reloaded host's word a top-level navigation is one it restores */
@@ -908,7 +956,75 @@ function genericForward(
 		const topLevel =
 			destination === 'document' ||
 			(destination === 'iframe' && nestedRoute === null);
-		const policy = serverRequest.referrerPolicy || DEFAULT_REFERRER_POLICY;
+		// a navigation that comes back from the document this worker answered
+		// its first request with (below) is that first one again
+		const returned = navigation ? takeReturn(serverRequest.url) : undefined;
+		const policy =
+			returned?.policy ??
+			(serverRequest.referrerPolicy || DEFAULT_REFERRER_POLICY);
+		const requestReferrer = returned
+			? returned.referrer
+			: serverRequest.referrer;
+
+		// A frame's first navigation in a cross-origin isolated document, to a
+		// document that will not be isolated there (the embedder's permission
+		// does not reach its origin). Natively the frame's initial about:blank
+		// is of the embedder's origin and the new document of another, which
+		// gets a window of its own. Here both are of the proxy's origin, and
+		// Chrome keeps the initial document's window for a navigation that
+		// began as the frame was inserted, and with it the embedder's 5
+		// microsecond clock, whatever the new document's policy says
+		// (measured). So the first request is answered with a document that
+		// replaces itself with the same URL, marked as no first navigation:
+		// the frame leaves its initial state, the real document gets a new
+		// window, and the frame fires no load event and gains no history
+		// entry for it (measured). Nothing has gone to the site yet.
+		if (
+			rewriter.isolated &&
+			navigation &&
+			!topLevel &&
+			!returned &&
+			serverRequest.method === 'GET'
+		) {
+			const kind = oURL.pathname.slice(rewriter.directory.length).split('/')[0];
+			const mark = nestedMarkOfKind(kind);
+			const parsed = mark === null ? null : parseNestedMark(mark);
+			if (
+				parsed &&
+				parsed.embedder.group &&
+				!parsed.embedder.later &&
+				(parsed.embedder.delegates !== 'none' ||
+					parsed.embedder.origins.length > 0) &&
+				!delegatedTo(parsed.embedder, url.url.origin)
+			) {
+				const back = new URL(oURL);
+				back.pathname = `${rewriter.directory}${kind.slice(
+					0,
+					kind.indexOf(':nested:') + ':nested:'.length,
+				)}${encodeURIComponent(
+					nestedMark(parsed.top, parsed.crossAncestor, {
+						...parsed.embedder,
+						later: true,
+					}),
+				)}${oURL.pathname.slice(rewriter.directory.length + kind.length)}`;
+				rememberReturn(back.href, {
+					referrer: serverRequest.referrer,
+					policy,
+					url: serverRequest.url,
+				});
+				const headers = new Headers({
+					'content-type': 'text/html; charset=utf-8',
+					'cache-control': 'no-store',
+				});
+				isolationResponseHeaders(headers, { isolated: false, topLevel: false });
+				return new Response(
+					`<!doctype html><script>location.replace(${JSON.stringify(
+						back.href,
+					).replace(/</g, '\\u003c')} + location.hash)</script>`,
+					{ headers },
+				);
+			}
+		}
 
 		const routedPrefix = `${oURL.origin}${rewriter.directory}`;
 		const decode = (routed: string): URL | null => {
@@ -921,8 +1037,8 @@ function genericForward(
 			}
 		};
 		const referrer =
-			serverRequest.referrer && serverRequest.referrer !== 'about:client'
-				? serverRequest.referrer
+			requestReferrer && requestReferrer !== 'about:client'
+				? requestReferrer
 				: null;
 
 		// the request's client, by its real URL. Never for a navigation: its
@@ -1096,8 +1212,8 @@ function genericForward(
 		const hopClient = navigation ? '' : (context?.clientId ?? '');
 		const previousHop = takeRedirect(
 			hopClient,
-			serverRequest.referrer,
-			serverRequest.url,
+			requestReferrer,
+			returned?.url ?? serverRequest.url,
 		);
 		const carried = previousHop?.referer;
 		const referer =
@@ -1281,8 +1397,22 @@ function genericForward(
 		// the initiator's real origin is the target's (every proxied request
 		// looks same-origin to the browser, so this is decided here; an
 		// unknown initiator is given the benefit), `include` always
+		// The embedder policy of the document or worker that makes the request
+		// (src/isolation.ts), when the host's page is isolated: the browser
+		// has the proxy's for every document there, so the page's own is
+		// applied here. A `credentialless` one sends its no-cors requests to
+		// another origin without credentials, and keeps none from the answer.
+		const ownerPolicy =
+			rewriter.isolated && !navigation
+				? embedderPolicyOf(context?.clientId, clientRoute, referrer)
+				: null;
+		const credentialless =
+			ownerPolicy?.policy === 'credentialless' &&
+			initiator !== null &&
+			!sameOrigin &&
+			(load?.mode ?? (internal ? 'no-cors' : serverRequest.mode)) === 'no-cors';
 		const credentials =
-			serverRequest.credentials === 'omit'
+			serverRequest.credentials === 'omit' || credentialless
 				? false
 				: serverRequest.credentials === 'same-origin'
 					? (initiator === null && !unknownBlob && !opaque) || sameOrigin
@@ -2405,6 +2535,49 @@ function genericForward(
 			await response.body?.cancel().catch(() => {});
 			return refuse('blocked by Cross-Origin-Resource-Policy');
 		}
+		// the page's own embedder policy: under require-corp a no-cors
+		// response of another origin, a redirect included, needs a resource
+		// policy that lets the page have it, and a dedicated worker's script
+		// (not a redirect on the way to it) a policy of its own (a shared
+		// worker starts without one: measured)
+		if (
+			fromNetwork &&
+			ownerPolicy &&
+			((crossOrigin &&
+				policyMode === 'no-cors' &&
+				embedderPolicyBlocks(
+					ownerPolicy.policy,
+					response.headers,
+					policyOrigin !== 'null' &&
+						initiator !== null &&
+						siteBetween(initiator, url.url) !== 'cross-site',
+				)) ||
+				(serverRequest.destination === 'worker' &&
+					!REDIRECT_STATUSES.includes(response.status) &&
+					embedderPolicy(
+						response.headers.get('cross-origin-embedder-policy'),
+					) === 'unsafe-none'))
+		) {
+			await response.body?.cancel().catch(() => {});
+			return refuse('blocked by Cross-Origin-Embedder-Policy');
+		}
+		// a worker's own policy is its script's, for the loads it makes
+		if (
+			rewriter.isolated &&
+			fromNetwork &&
+			(serverRequest.destination === 'worker' ||
+				serverRequest.destination === 'sharedworker') &&
+			!REDIRECT_STATUSES.includes(response.status)
+		) {
+			const policy = embedderPolicy(
+				response.headers.get('cross-origin-embedder-policy'),
+			);
+			rememberEmbedderPolicy(
+				serverRequest.url,
+				undefined,
+				policy === 'unsafe-none' ? null : { policy },
+			);
+		}
 		// a script of another origin that is HTML, XML or JSON by its type
 		// and first bytes is not handed over (opaque response blocking): the
 		// element fires `error`, as natively. And so for every load the
@@ -2450,11 +2623,83 @@ function genericForward(
 			}
 		}
 
+		// Cross-origin isolation (src/isolation.ts), when the host's page is
+		// isolated: every document needs an embedder policy to load there at
+		// all, and is isolated natively only by its own headers (a top-level
+		// one) and by what the document that embeds it lets it be (a nested
+		// one, whose route says so). One whose embedder has an embedder policy
+		// and that sent none, or that another origin's embedder may not have,
+		// does not load, as natively.
+		let isolation: (DocumentIsolation & { topLevel: boolean }) | null = null;
+		// a redirect on the way to a frame needs no embedder policy, but one
+		// of another origin than the embedder's still needs the resource
+		// policy (measured)
+		const navigationRedirect =
+			REDIRECT_STATUSES.includes(response.status) &&
+			response.headers.has('location');
+		if (rewriter.isolated && navigation) {
+			const real = isolationHeaders(response.headers);
+			const origin = url.url.origin;
+			if (topLevel) {
+				if (!navigationRedirect)
+					isolation = {
+						...topLevelIsolation(real, origin),
+						topLevel: destination === 'document',
+					};
+			} else {
+				const mark = nestedMarkOf(oURL.pathname, rewriter.directory);
+				const embedder = (mark !== null ? parseNestedMark(mark) : null)
+					?.embedder ?? {
+					origin: '',
+					coep: false,
+					group: false,
+					delegates: 'none' as const,
+					origins: [],
+					credentialless: false,
+					later: false,
+				};
+				let sameSite = false;
+				try {
+					sameSite =
+						siteBetween(new URL(embedder.origin), url.url) !== 'cross-site';
+				} catch (error) {
+					// an embedder without an origin: another site
+				}
+				if (
+					embedderRefuses(
+						response.headers,
+						origin,
+						embedder,
+						sameSite,
+						navigationRedirect,
+					)
+				) {
+					await response.body?.cancel().catch(() => {});
+					return refuse('blocked by Cross-Origin-Embedder-Policy');
+				}
+				if (!navigationRedirect)
+					isolation = {
+						...nestedIsolation(real, origin, embedder),
+						topLevel: false,
+					};
+			}
+		}
+
 		// the report is made now (its time is to the headers) and sent once the
 		// body's transform has said how it went
 		// the registration that controls the document this navigation makes:
 		// its shell says so before the page's first script
 		const note: Note = control ? { serviceWorker: control } : {};
+		// what the document's shell tells its client of its isolation, and
+		// its own embedder policy for the loads it makes
+		if (isolation) {
+			note.isolation = isolationFacts(isolation);
+			rememberEmbedderPolicy(
+				serverRequest.url,
+				context?.clientId,
+				isolation.coep === 'unsafe-none' ? null : { policy: isolation.coep },
+			);
+		}
 		let report: RequestInfo | null = null;
 		if (rewriter.log) {
 			const length = Number(response.headers.get('content-length'));
@@ -2506,6 +2751,19 @@ function genericForward(
 			(target, base) => transformRoute(target, base, resource),
 			additionalResponseFilter,
 		);
+		if (isolation) isolationResponseHeaders(responseHeaders, isolation);
+		// the browser asks the same of this redirect when the host's page is
+		// of another origin than the proxy's
+		else if (rewriter.isolated && navigation && navigationRedirect)
+			responseHeaders.set('cross-origin-resource-policy', 'cross-origin');
+		// a worker's script needs an embedder policy to start under a
+		// document that has one (every proxied document, in an isolated host)
+		else if (
+			rewriter.isolated &&
+			(serverRequest.destination === 'worker' ||
+				serverRequest.destination === 'sharedworker')
+		)
+			responseHeaders.set('cross-origin-embedder-policy', 'credentialless');
 		// the type an emulated service worker's answer has is the worker's to
 		// say (serviceWorkers.dispatch); a site never says it
 		if (fromNetwork) responseHeaders.delete(RESPONSE_TYPE_HEADER);
@@ -3258,6 +3516,9 @@ export function registerRewrites(
 				codec: codecType(this.codec),
 				frameAncestors: init.frameAncestors,
 				...(init.openTab ? { openTab: true } : {}),
+				// the host's page is cross-origin isolated: a document says whom
+				// it embeds (src/isolation.ts)
+				...(init.isolated ? { isolated: true } : {}),
 				// the pages' synchronous requests complete (a written script in
 				// a document no worker controls is copied at once)
 				...(init.workerTransport ? { workerTransport: true } : {}),
@@ -3288,6 +3549,7 @@ export function registerRewrites(
 		rules: [],
 		blocker,
 		blockerAsked,
+		isolated: !!init.isolated,
 		codec: init.codec,
 		directory: init.directory,
 		errorPage: init.errorPage,
@@ -3799,6 +4061,7 @@ export function registerRewrites(
 						adblock,
 						shellSites(url, request.routed, rewriter.directory),
 						top,
+						note.isolation,
 					);
 				// The page does not wait for the rewrite workers: the shell's
 				// first part (the inject bundle's script and the markup) goes out
@@ -3819,6 +4082,7 @@ export function registerRewrites(
 					adblock,
 					shellSites(url, request.routed, rewriter.directory),
 					top,
+					note.isolation,
 				);
 				const first = UTF8.encode(head);
 				return new ReadableStream<Uint8Array>({

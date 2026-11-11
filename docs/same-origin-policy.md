@@ -97,7 +97,7 @@ would not give it).
 | Opaque response blocking: a classic script of another origin that is HTML, XML or JSON                                                                                                                                                           | `error`                                                                    | `load` (a parse failure)                            | the worker blocks it by type and first bytes                                                                 |
 | Muted errors of a cross-origin classic script                                                                                                                                                                                                    | "Script error.", no location                                               | as natively (Unroute's muted check)                 |                                                                                                              |
 | `Timing-Allow-Origin` on resource timing                                                                                                                                                                                                         | without it: no timing details, sizes 0, `responseStatus` 0                 | every detail of another site's resources            | inject restricts entries (see Fix status)                                                                    |
-| `crossOriginIsolated`; COOP and COEP                                                                                                                                                                                                             | false without COOP+COEP                                                    | false; COOP, COEP stripped                          | structural (see Left)                                                                                        |
+| `crossOriginIsolated`; COOP and COEP                                                                                                                                                                                                             | isolated with COOP `same-origin` and a COEP                                | never isolated; COOP, COEP stripped                 | as natively when the host's page is isolated (Cross-origin isolation)                                        |
 
 ### 3. Storage and messaging partitions
 
@@ -905,6 +905,224 @@ KB to 445, budget 460). A frame pays about 8 KB of heap for the module
 redefining their getters); they are made only in a document the worker
 redirected, which its navigation entry says from the start.
 
+## Cross-origin isolation
+
+### Measured natively
+
+Chrome 152.0.7977.64 and CI's 156.0.8078.79, a local fixture that sends real
+headers (`/coi/doc`, `/coi/r` of test/coi-server.mjs); the two versions agree
+on every row. "Isolated" is all of: `crossOriginIsolated` true, a
+`SharedArrayBuffer` global, a SharedArrayBuffer that clones and posts
+(`structuredClone`, `postMessage` to a window, a MessagePort, a
+BroadcastChannel, a worker, which then shares its memory),
+`performance.measureUserAgentSpecificMemory`, and a 5 microsecond clock
+(`performance.now`, `Event.timeStamp`, marks, the timing entries). "Not" is
+`crossOriginIsolated` false, no such global (a shared `WebAssembly.Memory`
+still hands out the constructor, in either kind of page), DataCloneError
+"SharedArrayBuffer transfer requires self.crossOriginIsolated." from each of
+those, no `measureUserAgentSpecificMemory`, and a 100 microsecond clock.
+History state and IndexedDB refuse a SharedArrayBuffer in either.
+
+| What                                                                                                                                                   | Chrome                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A top-level page**                                                                                                                                   |                                                                                                                                                                                                                                                                                                             |
+| No headers; COOP `same-origin` alone; COEP alone                                                                                                       | not                                                                                                                                                                                                                                                                                                         |
+| COOP `same-origin` and COEP `require-corp` or `credentialless`                                                                                         | isolated                                                                                                                                                                                                                                                                                                    |
+| COEP with COOP `same-origin-allow-popups`, `noopener-allow-popups`, `unsafe-none`; COOP `same-origin` with COEP `unsafe-none`                          | not                                                                                                                                                                                                                                                                                                         |
+| Either header in its Report-Only form                                                                                                                  | not                                                                                                                                                                                                                                                                                                         |
+| Either value in another case (`SAME-ORIGIN`), quoted, or as a list (`require-corp, require-corp`)                                                      | not                                                                                                                                                                                                                                                                                                         |
+| Either value with parameters (`; report-to="x"`, `;foo=bar`)                                                                                           | isolated                                                                                                                                                                                                                                                                                                    |
+| Both headers and `Permissions-Policy: cross-origin-isolated=()`                                                                                        | not; `(self)` isolated                                                                                                                                                                                                                                                                                      |
+| `Document-Isolation-Policy: isolate-and-require-corp` or `isolate-and-credentialless`, nothing else                                                    | isolated                                                                                                                                                                                                                                                                                                    |
+| **A frame**                                                                                                                                            |                                                                                                                                                                                                                                                                                                             |
+| Any frame of a page that is not isolated, whatever it sends (but a Document-Isolation-Policy)                                                          | not                                                                                                                                                                                                                                                                                                         |
+| A frame without COEP in a document with COEP (isolated or not)                                                                                         | does not load: the element gets `load`, `contentDocument` is null, `contentWindow.location.href` throws SecurityError                                                                                                                                                                                       |
+| A frame of another origin with COEP but without CORP `cross-origin` (or `same-site` from its site) on its document, in a document with COEP            | does not load, the same way                                                                                                                                                                                                                                                                                 |
+| A redirect on the way to a frame, in a document with COEP                                                                                              | needs no COEP; one of another origin than the document that holds the frame needs the CORP, or the frame does not load. `allow="cross-origin-isolated"` delegates to the origin the element's `src` names, so a frame that a redirect of the page's origin sent to another origin loads and is not isolated |
+| Same origin, COEP, in an isolated page                                                                                                                 | isolated                                                                                                                                                                                                                                                                                                    |
+| Another origin, COEP and CORP, in an isolated page                                                                                                     | not; isolated with `allow="cross-origin-isolated"` on the element                                                                                                                                                                                                                                           |
+| Same origin, COEP, `allow="cross-origin-isolated 'none'"`                                                                                              | not                                                                                                                                                                                                                                                                                                         |
+| Same origin, COEP and its own `Permissions-Policy: cross-origin-isolated=()`                                                                           | not, but the clock is 5 microseconds when the frame was navigated as it was inserted (`src` set before it is appended, or markup): that load keeps the Window of the initial about:blank, which the isolated parent made. 100 otherwise                                                                     |
+| The same reused Window, when the parent touched it before the load                                                                                     | keeps what the page set on it and its SharedArrayBuffer global, in a document that is not isolated                                                                                                                                                                                                          |
+| about:blank and `srcdoc` frames                                                                                                                        | as their parent                                                                                                                                                                                                                                                                                             |
+| `<iframe credentialless>`, no headers at all                                                                                                           | loads; isolated when the permission reaches it (same origin, or `allow`), without cookies or stored data                                                                                                                                                                                                    |
+| A frame with a Document-Isolation-Policy                                                                                                               | isolated wherever it is, and whatever the permission says (`Permissions-Policy: cross-origin-isolated=()` in it does not undo it); in a document with COEP it still needs COEP (and CORP) to load; a same-origin parent cannot reach its document                                                           |
+| `document.featurePolicy.allowsFeature('cross-origin-isolated')`, `getAllowlistForFeature`, `allowedFeatures`                                           | the permission, not the isolation: true with the document's origin in a page without any header; the feature is third in `allowedFeatures()`, the order of `features()`                                                                                                                                     |
+| **Workers**                                                                                                                                            |                                                                                                                                                                                                                                                                                                             |
+| A dedicated worker of an isolated document, script with COEP; a `blob:` worker; a worker of such a worker                                              | isolated (a `Permissions-Policy` on the script changes nothing)                                                                                                                                                                                                                                             |
+| A dedicated worker whose script has no COEP, owner with COEP                                                                                           | an `error` event, no worker                                                                                                                                                                                                                                                                                 |
+| A redirect on the way to a dedicated worker's script                                                                                                   | needs no COEP; the script it leads to does                                                                                                                                                                                                                                                                  |
+| A dedicated worker of a document that is not isolated                                                                                                  | not                                                                                                                                                                                                                                                                                                         |
+| A shared worker, with or without COEP, of any document                                                                                                 | loads; not isolated                                                                                                                                                                                                                                                                                         |
+| **COEP's own effects**                                                                                                                                 |                                                                                                                                                                                                                                                                                                             |
+| `require-corp`: a no-cors load (image, script, stylesheet, no-cors fetch) of another origin without CORP `cross-origin` (or `same-site` from its site) | fails                                                                                                                                                                                                                                                                                                       |
+| `require-corp`: a redirect of another origin on the way to a no-cors load                                                                              | needs the CORP as well, whatever origin it leads to; a redirect of the page's origin needs none                                                                                                                                                                                                             |
+| `credentialless`: the same load                                                                                                                        | loads, sent without cookies; a CORS load carries what its credentials mode says                                                                                                                                                                                                                             |
+| CORP `same-site` between two ports of `localhost`; of `127.0.0.1`                                                                                      | loads; fails (an IP address is same-site only with its own origin)                                                                                                                                                                                                                                          |
+| **Popups**                                                                                                                                             |                                                                                                                                                                                                                                                                                                             |
+| Opened by an isolated page or its same-origin frame: a document of its origin with COOP `same-origin` and COEP; about:blank                            | the opener keeps the window                                                                                                                                                                                                                                                                                 |
+| The same opener, a document without those headers                                                                                                      | the window reads closed, the popup's `opener` is null                                                                                                                                                                                                                                                       |
+| Opened by a frame of another origin than a top-level page with COOP `same-origin`, any document, about:blank included                                  | `window.open` returns null; the popup opens without an opener                                                                                                                                                                                                                                               |
+| The same frame under COOP `same-origin-allow-popups` and COEP                                                                                          | the opener keeps the window; the page is not isolated                                                                                                                                                                                                                                                       |
+
+### Through the proxy
+
+Every proxied document is a frame (or a popup) of the host's page, and
+Chrome decides isolation by the top-level page: a frame can be isolated only
+when the host's own page is. So the host opts in, with the two headers that
+isolate any page (COOP `same-origin` and a COEP) on its own page, and
+nothing else: there is no library option. The controller reads
+`crossOriginIsolated` of its own context when it starts and tells the
+service worker and every document (`config.isolated`, internal).
+
+**The host is not isolated.** Nothing is done: no proxied page is isolated,
+whatever it sends, and each reads what a page without the headers reads
+natively (the suite's last part runs a demo server without the headers).
+
+**The host is isolated.** The service worker serves every proxied document
+so that it loads there and is isolated exactly when Chrome would isolate it
+natively (`src/isolation.ts`, `src/server/rewrites.ts`):
+
+- Every document and worker script gets COEP `credentialless` and CORP
+  `cross-origin` (a frame of an isolated page loads only with the first
+  and, from another origin than the host's, the second), and a top-level
+  one (a popup) COOP `same-origin`, so that it stays in the host's browsing
+  context group. In
+  the isolated mode the controller's frames carry
+  `allow="cross-origin-isolated <proxy origin>"`, and a redirect the worker
+  answers a navigation with carries the CORP too (Chrome asks it of every
+  redirect on the way to a frame of another origin's page: without it no
+  page that redirects would load). The page's own COOP, COEP
+  and Document-Isolation-Policy never reach the browser, as before.
+- The worker decides from the response's real headers what the document is
+  natively. A page (the document in the host's frame, or a popup) is
+  isolated when it sent COOP `same-origin` and a COEP and its
+  Permissions-Policy does not deny `cross-origin-isolated` to itself, or
+  when it sent a Document-Isolation-Policy. A nested frame is judged against
+  its embedder, whose facts ride on the frame's route (the nested mark of
+  `src/partition.ts`: whether the embedder is in an isolated group, has an
+  embedder policy, whom the element's `allow` delegates the permission to,
+  whether the element is `credentialless`): isolated when the group is, the
+  permission reaches it and it sent a COEP (or is credentialless), or by its
+  own Document-Isolation-Policy.
+- A document that is not isolated natively is served with
+  `Permissions-Policy: cross-origin-isolated=()`. Under it Chrome itself
+  gives the document everything a page without isolation has
+  (`crossOriginIsolated` false, no SharedArrayBuffer global, the
+  DataCloneErrors, no `measureUserAgentSpecificMemory`, the 100 microsecond
+  clock, workers that are not isolated), so no clock is clamped and no clone
+  intercepted by a hook. That is why this was chosen over hiding the
+  isolation in the inject, which would have had to reach every clock and
+  every clone in every realm.
+- Two things that header leaves, both from the Window a frame keeps from
+  its initial about:blank when it is navigated as it is inserted (measured
+  above: the clock stays 5 microseconds and a touched context keeps its
+  SharedArrayBuffer). The inject deletes the SharedArrayBuffer global of a
+  document that is not isolated (`Isolation.ts`). And the first navigation
+  of a frame the permission does not reach, in an isolated group, is
+  answered with a document that replaces itself with the same URL
+  (`location.replace`, the fragment kept; measured: one `load` event, the
+  same history length), so the page's document gets a Window of its own and
+  the 100 microsecond clock; the request that comes back carries the
+  referrer and policy of the first. For the same reason `Frame.go` of an
+  isolated host waits until its element is in the document before it sets
+  `src`. A frame the permission does reach keeps the reused Window, as
+  natively (so does the 5 microsecond clock of a same-origin frame whose
+  own Permissions-Policy denies it).
+- A frame Chrome would not load is not loaded: the worker answers a network
+  error for a document without COEP (or, from another origin, without CORP)
+  whose embedder has one, and for a redirect of another origin without CORP
+  on the way to it, and the element then reads as natively
+  (`contentDocument` null, `contentWindow.location.href` a SecurityError of
+  the page's origin). A dedicated worker's script without COEP under an
+  owner with COEP is refused the same way. Shared workers load and are
+  never isolated, which is Chrome's own rule for the real worker.
+- COEP's own effects are the worker's, by each document's and worker's real
+  policy (`src/server/embedderPolicies.ts`), since to the browser every load
+  is the proxy's own: under `require-corp` a no-cors response of another
+  origin, a redirect included, without a CORP that lets it be had is a
+  network error; under
+  `credentialless` such a request goes out without cookies. Only under an
+  isolated host: under any other a page's COEP does nothing, as before.
+- `document.featurePolicy` answers for `cross-origin-isolated` with the
+  page's permission and origin (`allowsFeature`, `getAllowlistForFeature`,
+  `allowedFeatures` in the native order); the real policy would show the
+  denial the worker added.
+
+`cross-origin-isolation` (test/pages/coi.js, test/coi-server.mjs) loads one
+battery in documents with each set of headers of the table (12 kinds of
+page, one of them reached through redirects), natively and through the
+proxy in both modes, and compares every case: the page itself (20 cases),
+its workers (12), its frames (31: same origin and another, with and without
+COEP and CORP, through redirects, `allow` and its denial, credentialless,
+about:blank, `srcdoc`, a Document-Isolation-Policy, frames navigated before
+and after insertion and again) and what its embedder policy does to its
+loads (18), and it calls `Frame.go` before the frame's element is in the
+document (it is then put into a shadow tree). 1232 checks in all, two cases
+on its known list (the Document-Isolation-Policy frame, below). sop-escapes'
+case of a page that sends both headers is off its known list; both suites
+run a demo server whose pages send the headers.
+
+What a page sees, by its own headers:
+
+| The page                                                                                                   | Chrome     | STomp, isolated host                         | STomp, host not isolated |
+| ---------------------------------------------------------------------------------------------------------- | ---------- | -------------------------------------------- | ------------------------ |
+| COOP `same-origin` and COEP (either value, parameters or not)                                              | isolated   | isolated                                     | not                      |
+| The same and `Permissions-Policy: cross-origin-isolated=()`                                                | not        | not                                          | not                      |
+| No headers, one of the two, another COOP value, a Report-Only form, a malformed value                      | not        | not                                          | not                      |
+| A Document-Isolation-Policy                                                                                | isolated   | isolated                                     | not                      |
+| Its dedicated workers (script with COEP, `blob:`, nested)                                                  | as it is   | as it is                                     | not                      |
+| Its dedicated worker whose script has no COEP, when it has one                                             | `error`    | `error`                                      | runs, not isolated       |
+| Its shared workers                                                                                         | not        | not                                          | not                      |
+| Its frame without COEP (or, from another origin, CORP), when it has COEP                                   | no load    | no load                                      | loads, not isolated      |
+| Its same-origin frame with COEP; another origin's with COEP, CORP and `allow`; about:blank, `srcdoc`       | as it is   | as it is                                     | not                      |
+| Its frame the permission does not reach (another origin without `allow`, `allow` `'none'`, its own header) | not        | not                                          | not                      |
+| Its credentialless frame                                                                                   | as above   | as above (with the site's cookies, see Left) | not                      |
+| A frame with a Document-Isolation-Policy in a page that is not isolated                                    | isolated   | not                                          | not                      |
+| `require-corp`: its no-cors load of another origin without CORP                                            | fails      | fails                                        | loads                    |
+| `credentialless`: the same load                                                                            | no cookies | no cookies                                   | with cookies             |
+
+### What a host does
+
+Its own page (the one that holds the controller) sends
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: credentialless
+```
+
+(`require-corp` isolates as well; under it everything the host's own page
+loads from another origin must send a CORP). The files of `dist/` and the
+transport send the same embedder policy: the controller starts its
+transport and rewrite workers from there, and a dedicated worker of an
+isolated page starts only when its script has one (the table above;
+measured with a host that sends the two headers on its page alone: both
+scripts are refused, the proxy runs without the workers, and a page that
+isolates itself is isolated). When the proxy is on another origin
+(`RemoteController`), those files also send
+`Cross-Origin-Resource-Policy: cross-origin`, or the controller's frame does
+not load in the isolated page and nothing runs (measured the same way). The demo server sends all three on every
+response; `STOMP_ISOLATION=off` leaves them out. A host that sends nothing
+is as before.
+
+What isolation costs a host, measured:
+
+- **Popups, when the proxy is on another origin.** Chrome gives a frame of
+  another origin than its top-level page no window for what it opens once
+  that page sends COOP `same-origin`: `window.open` returns null and the
+  popup opens without an opener (the table's last rows). A host that takes
+  popups itself (`onOpen`, as the demo's page does) loses nothing, since
+  `window.open` returns null there already; a host that leaves them to the
+  browser loses the opener and the returned window, for every page. With the
+  proxy on the host's own origin popups work as before. This is why the
+  suites, which open real popups from the isolated mode's frames, run a demo
+  server without the headers (test/run.mjs) except these two, and why
+  sop-escapes lists its popup case in the isolated mode.
+- The host's own page is isolated too, with what that means for it: its
+  no-cors loads of other origins go without cookies (credentialless) or
+  need a CORP (require-corp), and a window it opens on another origin, or on
+  a page without the headers, has no opener.
+
 ## Left
 
 Ranked by what a page could learn or do. Measured ones are listed in the
@@ -959,20 +1177,43 @@ suites' known lists with the same reason.
    frame's `src` its page sets, and the navigations of a page that listens
    to the Navigation API. Each reads unvisited where Chrome shows it
    visited; none reads visited where Chrome would not.
-3. `crossOriginIsolated`: a page that sends COOP and COEP natively gets an
-   isolated agent cluster (SharedArrayBuffer, precise timers); through the
-   proxy the frame lives in the host's browsing context group, so it cannot
-   (sop-escapes keeps the case on its known list). Measured in plain Chrome
-   with a worker-served frame: the frame is isolated only when the host's
-   own page sends COOP `same-origin` and COEP, and then a frame that sends
-   no COEP does not load at all; a host on another origin than the proxy
-   (the isolated mode) also needs `allow="cross-origin-isolated"` on the
-   frame and CORP `cross-origin` on its document. So it needs the host to
-   opt in with its own headers, the worker to add COEP to every proxied
-   document, and the inject to hide the isolation (`crossOriginIsolated`,
-   the SharedArrayBuffer global, a clone that carries one, timer
-   precision) from every page that did not send both headers itself. The
-   first is a deployment decision, not the library's.
+3. Cross-origin isolation (the section above) needs the host's page to be
+   isolated, which is the host's to send. What is not as natively under a
+   host that is (the first two are on the suite's known list or measured by
+   it):
+   - A frame with a Document-Isolation-Policy in a page that is not
+     isolated is isolated natively and not through the proxy, which takes
+     the header as one more way to be isolated inside an isolated group.
+     Serving the header itself was measured (Chrome 152 and 156): it
+     isolates a document under any host, without any header of the host's,
+     and its popups keep their opener; but no Permissions-Policy undoes it,
+     and a document that has it is in another agent cluster than a
+     same-origin document that has not (`contentDocument` null, a
+     SecurityError on its window). Every proxied document shares one real
+     origin and the membrane reaches the real windows, so either all of
+     them would carry it, and all be isolated, or an isolated page could
+     not be reached by the documents around it; and a host on the proxy's
+     origin could not reach its own frames.
+   - A credentialless frame has its site's cookies and stored data, where
+     Chrome gives it none, and `iframe.credentialless` reads false: the
+     attribute never reaches the browser (as before; the frame would lose
+     the service worker's client otherwise).
+   - No COOP or COEP report is sent (`report-to`, the Report-Only forms):
+     nothing of the Reporting API is simulated.
+   - COOP's own effect is not simulated, as before: a popup without the
+     headers that an isolated page opens keeps its opener, where Chrome
+     severs it.
+   - A `blob:` worker's loads are not judged by the embedder policy it
+     inherits; an origin named in an iframe's `allow` is not the proxy's
+     real one, for this feature as for every other (the feature reaches a
+     frame by `*`, `'src'` and `'self'` only); the document that replaces
+     itself on a frame's first navigation is what a page's own service
+     worker sees as the referrer of the navigation that follows.
+   - Under a host that is not isolated a page's COEP does nothing, as
+     before: no frame or load is refused by it, and
+     `document.featurePolicy` answers for `cross-origin-isolated` as the
+     browser does for the proxied frame, not as for the page natively (the
+     suite does not compare it there).
 4. Smaller differences that are kept, none a read of another site's data:
    - The tracks of a stream captured from a canvas end when the canvas is
      tainted (a player of the stream shows nothing), where Chrome keeps

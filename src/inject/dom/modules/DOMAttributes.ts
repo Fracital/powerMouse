@@ -1474,7 +1474,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								this.client.url,
 								this.client.config,
 								false,
-								this.client.childRoute,
+								// with the host's page cross-origin isolated, the
+								// route says whom the frame's `allow` lets be, and
+								// whether the frame is a credentialless one (the
+								// attribute itself is kept from the browser, below)
+								this.client.hostIsolated
+									? this.client.childRouteFor(
+											element.getAttribute('allow'),
+											resource.url.origin,
+											element.hasAttributeOG('credentialless') ||
+												element.hasAttribute('credentialless'),
+										)
+									: this.client.childRoute,
 							),
 					);
 				}
@@ -1482,6 +1493,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[
 				['IFRAME', 'src'],
 				['FRAME', 'src'],
+				// what the route says of the frame (an isolated host only)
+				...(this.client.hostIsolated
+					? ([
+							['IFRAME', 'allow'],
+							['IFRAME', 'credentialless'],
+						] as [string, string][])
+					: []),
 				[
 					this.client.global.HTMLFrameElement,
 					'src',

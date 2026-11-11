@@ -864,6 +864,10 @@ export class StompController extends EventTarget {
 			scope: this.directory.pathname,
 			...(init.frameAncestors ? { frameAncestors: init.frameAncestors } : {}),
 			...(init.onOpen || init.openTab ? { openTab: true } : {}),
+			// the host's page sent COOP same-origin and an embedder policy (in
+			// origin-isolation mode this is the controller's frame, which the
+			// host's page lets be isolated): proxied frames can be isolated here
+			...(globalThis.crossOriginIsolated === true ? { isolated: true } : {}),
 			...(init.cache === false ? { cache: false } : {}),
 			...(init.onRequest || init.requestLog ? { requestLog: true } : {}),
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
@@ -2063,6 +2067,25 @@ export class StompController extends EventTarget {
 }
 
 /**
+ * Resolves once `element` is in the document. An insertion into a shadow
+ * tree is not the document's own mutation, so a timer looks as well.
+ */
+function connected(element: Element): Promise<void> {
+	if (element.isConnected) return Promise.resolve();
+	return new Promise((resolve) => {
+		const check = () => {
+			if (!element.isConnected) return;
+			observer.disconnect();
+			clearInterval(timer);
+			resolve();
+		};
+		const observer = new MutationObserver(check);
+		observer.observe(document, { childList: true, subtree: true });
+		const timer = setInterval(check, 50);
+	});
+}
+
+/**
  * A proxied frame. Dispatches `navigate` (CustomEvent, `detail` is a
  * NavigateInfo) whenever the page reports a new URL, title or history state.
  */
@@ -2168,6 +2191,11 @@ export class Frame extends EventTarget {
 			this.element.clientHeight,
 		);
 		const routed = await this.controller.route(url);
+		// In a cross-origin isolated page a frame navigated as it is inserted
+		// keeps its initial document's window, and with it that document's
+		// 5 microsecond clock, whatever the new document is (measured): the
+		// frame is navigated once it is in the document
+		if (globalThis.crossOriginIsolated === true) await connected(this.element);
 		noteBrowserNavigation(this.historyWindow());
 		this.element.src = routed;
 		await reported;

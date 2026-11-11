@@ -2,14 +2,21 @@ import type { AdblockPage } from '../../blocker/types';
 import { ParsedConfig } from '../../config';
 import { rewriteCSSValueURLs } from '../../cssURLs';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
-import { nestedMark, partitionOf, siteOf } from '../../partition';
+import { allowDelegates } from '../../isolation';
+import {
+	nestedMark,
+	parseNestedMark,
+	partitionOf,
+	siteOf,
+	type NestedEmbedder,
+} from '../../partition';
 import {
 	PrewrittenTable,
 	scriptPreamble,
 	type Prewritten,
 } from '../../prewrite';
 import { refererFor, type ReferrerInfo } from '../../referrerPolicy';
-import { modifyHTML, routeHTML } from '../../rewriteHTML';
+import { modifyHTML, nestedMarkOf, routeHTML } from '../../rewriteHTML';
 import type { RewriterLib } from '../../rewriterLib';
 import { parseRoutedURL, ROUTE_PROTOCOLS, unwrapRoute } from '../../routeURL';
 import { rewriteImportMap } from '../../scriptRoutes';
@@ -781,7 +788,105 @@ export default class DocumentClient extends Client {
 	 * the top's site (src/partition.ts nestedMark)
 	 */
 	get childRoute(): string {
-		return nestedMark(this.topOrigin, this.partition !== '');
+		return this.childRouteFor(null, null, false);
+	}
+	/**
+	 * childRoute for a frame element: with the host's page cross-origin
+	 * isolated the marker also says what this document is and whom the
+	 * frame's `allow` lets have the permission (src/isolation.ts), so the
+	 * service worker can decide whether the frame's document loads here and
+	 * whether it is isolated. `src`: the origin the frame is navigated to.
+	 */
+	childRouteFor(
+		allow: string | null,
+		src: string | null,
+		credentialless: boolean,
+	): string {
+		return nestedMark(
+			this.topOrigin,
+			this.partition !== '',
+			this.#embedder(allow, src, credentialless),
+		);
+	}
+	/**
+	 * What this document is by its headers when the host's page is
+	 * cross-origin isolated: its shell's word, or its parent's for a document
+	 * no response made (about:blank, about:srcdoc, a blob: document), which
+	 * inherits it
+	 */
+	get isolationFacts(): string {
+		if (this.isolation !== null) return this.isolation;
+		if (this.nested)
+			try {
+				return (
+					(this.parent as Record<string, any>)[
+						this.names.client
+					] as DocumentClient
+				).isolationFacts;
+			} catch (error) {
+				// the parent went away
+			}
+		return '';
+	}
+	/**
+	 * In a host page that is cross-origin isolated, a document that is not:
+	 * it has no SharedArrayBuffer global. Chrome keeps the window of a
+	 * frame's initial about:blank for a first navigation within one origin
+	 * (every proxied document is of the proxy's), and with it the globals
+	 * that document had under an isolated embedder (measured: natively such
+	 * a frame is of another origin and gets a window of its own). Called
+	 * when the client is applied and when a shell says what its document is.
+	 */
+	override hideSharedArrayBuffer() {
+		if (!this.hostIsolated) return;
+		try {
+			if (
+				Reflect.get(this.global, 'crossOriginIsolated') === false &&
+				Reflect.has(this.global, 'SharedArrayBuffer')
+			)
+				Reflect.deleteProperty(this.global, 'SharedArrayBuffer');
+		} catch (error) {
+			// a window that is going away
+		}
+	}
+	/** this document as the embedder of a frame (null when the host's page is not isolated) */
+	#embedder(
+		allow: string | null,
+		src: string | null,
+		credentialless: boolean,
+	): NestedEmbedder | null {
+		if (!this.hostIsolated) return null;
+		const facts = this.isolationFacts;
+		return {
+			origin: this.url.url.origin,
+			coep: facts.includes('c'),
+			group: facts.includes('g'),
+			// only a document that has the permission can pass it on
+			...(facts.includes('p')
+				? allowDelegates(allow, src)
+				: { delegates: 'none' as const }),
+			credentialless,
+		};
+	}
+	/**
+	 * The embedder a navigation of this frame's own keeps: the one its
+	 * route names, or its parent as it is for a document without a route
+	 */
+	#ownEmbedder(): NestedEmbedder | null {
+		if (!this.hostIsolated) return null;
+		const mark = nestedMarkOf(this.baseURI.pathname, this.directory);
+		const parsed = mark === null ? null : parseNestedMark(mark);
+		if (parsed) return { ...parsed.embedder, later: true };
+		try {
+			const embedder = (
+				(this.parent as Record<string, any>)[
+					this.names.client
+				] as DocumentClient
+			).#embedder(null, null, false);
+			return embedder && { ...embedder, later: true };
+		} catch (error) {
+			return null;
+		}
 	}
 	/** the origin of the outermost proxied document above this one (its own when it is the top) */
 	get topOrigin(): string {
@@ -850,7 +955,7 @@ export default class DocumentClient extends Client {
 	/** what a navigation from this context routes as: the top origin when nested, else a top-level document */
 	get nestedRoute(): string | false {
 		return this.nested
-			? nestedMark(this.topOrigin, this.#crossAncestor())
+			? nestedMark(this.topOrigin, this.#crossAncestor(), this.#ownEmbedder())
 			: false;
 	}
 	#visited?: { document: Document; context: string | null };

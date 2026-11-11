@@ -54,6 +54,9 @@ const SUITE_TIMEOUT_MINUTES = {
 	// three browsers with a profile each, every visit and 17 contexts in
 	// each: about three minutes alone
 	visited: 20,
+	// a dozen kinds of page, each loaded natively and in both modes, one
+	// battery of frames and workers after another
+	'cross-origin-isolation': 30,
 };
 // what a suite's demo server needs beyond the defaults
 const SUITE_ENV = {
@@ -68,6 +71,10 @@ const SUITE_ENV = {
 	samesite: { STOMP_TEST_TRANSPORT: '1' },
 	'sop-partitions': { STOMP_TEST_TRANSPORT: '1' },
 	'site-facts': { STOMP_TEST_TRANSPORT: '1' },
+	// the host's pages cross-origin isolated (the demo server's default)
+	'cross-origin-isolation': { STOMP_ISOLATION: 'on' },
+	// for its page that sends COOP and COEP
+	'sop-escapes': { STOMP_ISOLATION: 'on' },
 };
 // where the content blocker's default lists and resources live
 // (src/blocker/types.ts DEFAULT_LISTS, DEFAULT_RESOURCES)
@@ -93,6 +100,15 @@ const blockerEnv = (fixturePort) => ({
 		}),
 	WISP_BLOCK_HOSTS: LIST_SERVERS.join(','),
 });
+// The demo server's pages are cross-origin isolated unless it is told not to
+// be, and the suites run it without: once the host's page sends COOP
+// same-origin, Chrome hands a frame of another origin no window for the
+// popups it opens (`window.open` returns null; docs/same-origin-policy.md,
+// "Cross-origin isolation"), and the suites open real popups from the
+// isolated mode's frames. cross-origin-isolation and sop-escapes run the
+// isolated host; STOMP_ISOLATION=on in the environment runs any suite under
+// one.
+const ISOLATION_DEFAULT = 'off';
 const suiteTimeoutMs = (name) =>
 	(Number(process.env.SUITE_TIMEOUT) || SUITE_TIMEOUT_MINUTES[name] || 10) *
 	60 *
@@ -221,6 +237,7 @@ async function startServersOnce(name) {
 		PORT: port,
 		WISP_ALLOW_LOOPBACK: '1',
 		...blockerEnv(fixturePort),
+		STOMP_ISOLATION: process.env.STOMP_ISOLATION || ISOLATION_DEFAULT,
 		...SUITE_ENV[name],
 	};
 	delete env.STOMP_PROXY_ORIGIN;

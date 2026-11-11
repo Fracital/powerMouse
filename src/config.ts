@@ -79,6 +79,14 @@ export interface Config {
 	serviceWorkerTimeout?: number;
 	/** @internal ms every emulated service worker event waits before it reaches the pages (tests: the events trail the answers to the pages' calls) */
 	serviceWorkerEventDelay?: number;
+	/**
+	 * @internal the context that shows the proxied frames (the host's page, or
+	 * the controller's frame in it) is cross-origin isolated: the service
+	 * worker then serves every document so it loads there, and isolated only
+	 * when its own headers isolate it natively (src/isolation.ts). Never an
+	 * option: the controller reads `crossOriginIsolated`.
+	 */
+	isolated?: boolean;
 	/** @internal build id of the service worker that serves the page (src/version.ts) */
 	build?: string;
 	/** @internal ms a routed request may take before the service worker answers 504 (tests; default by destination) */

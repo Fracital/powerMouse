@@ -213,6 +213,15 @@ export default class IFrameModule extends Module<DocumentClient> {
 			addDocumentOpenListener(global, observe);
 		}
 
+		const reachable = (context: typeof globalThis): boolean => {
+			try {
+				Reflect.get(context, 'document');
+				return true;
+			} catch (error) {
+				return false;
+			}
+		};
+
 		// the three elements that embed a document the page can reach: iframe,
 		// the frameset's frame, and object with an HTML or SVG document (embed
 		// exposes none of this)
@@ -239,6 +248,13 @@ export default class IFrameModule extends Module<DocumentClient> {
 			const getContentWindow = (element: Element) => {
 				const context = getContentWindowDescriptor.get!.call(element) as
 					typeof globalThis | null;
+
+				// a navigation the browser did not show (a document its
+				// embedder's policy refused, a network error) leaves the
+				// browser's own error document: of another origin to everyone,
+				// as natively, and nothing of this page's to inject
+				if (context && !reachable(context))
+					return windowModule.restrictOpaque(context);
 
 				if (
 					context &&

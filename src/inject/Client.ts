@@ -131,6 +131,8 @@ export default class Client {
 	assets?: Assets;
 	/** the built-in blocker is on (config.adblock): a document's inject applies the cosmetic rules it is handed */
 	blocking: boolean;
+	/** the host's page is cross-origin isolated (config.isolated; src/isolation.ts) */
+	hostIsolated: boolean;
 	applied: boolean;
 	/** @internal called after a response reached this context (fetch, XHR): caches that depend on the jar drop */
 	readonly responseListeners = new Set<() => void>();
@@ -154,6 +156,21 @@ export default class Client {
 	isWorker: boolean;
 	/** the document's policy upgrades insecure requests (its shell says so; src/mixedContent.ts) */
 	upgradeInsecureRequests = false;
+	/**
+	 * What the document is by its own headers, when the host's page is
+	 * cross-origin isolated (its shell says so; src/isolation.ts
+	 * isolationFacts): null for a document no response made
+	 */
+	get isolation(): string | null {
+		return this.#isolation;
+	}
+	set isolation(facts: string | null) {
+		this.#isolation = facts;
+		this.hideSharedArrayBuffer();
+	}
+	#isolation: string | null = null;
+	/** see the document client's */
+	hideSharedArrayBuffer() {}
 	#bare?: BareCompatibleClient;
 	/** set by the Context module: maps the real `top` to the proxied world's top */
 	resolveTop?: (value: unknown) => unknown;
@@ -331,6 +348,7 @@ export default class Client {
 		// bundle does not carry (rewriter.ts): beside the bundle itself
 		rewriterLibraryAt(() => rewriterLibJS(this.url, this.config));
 		this.blocking = !!init.adblock;
+		this.hostIsolated = !!init.isolated;
 		// a stale cached bundle next to a new service worker: say so once,
 		// the page still gets its best effort
 		if (init.build && init.build !== BUILD)
@@ -367,6 +385,7 @@ export default class Client {
 			...(this.wasmRewriter ? { rewriter: 'wasm' } : {}),
 			...(this.assets ? { assets: this.assets } : {}),
 			...(this.blocking ? { adblock: true } : {}),
+			...(this.hostIsolated ? { isolated: true } : {}),
 			...(this.#customNames ? { names: this.names } : {}),
 			...(this.hooks ? { hooks: this.hooks } : {}),
 		};

@@ -23,14 +23,17 @@ import {
 } from '../lib.mjs';
 
 // Cases known to differ from Chrome, by why (docs/same-origin-policy.md). A
-// case on the list that now reads as natively fails too: take it off.
+// case on the list that now reads as natively fails too: take it off. A name
+// that starts with a mode (`isolated: `) is known in that mode only.
 const KNOWN_BY_REASON = {
 	"a video or sound copied for a document no service worker controls keeps a blob: URL the page's process can fetch while the element shows it: its loads go on (a seek, a replay), and Chrome resolves a blob: URL again for each (docs/same-origin-policy.md)":
 		[
 			'gate/the URL a video of another site has in a written about:blank frame, fetched',
 		],
-	"a page that sends COOP and COEP is not cross-origin isolated: its frame is in the host's browsing context group":
-		['coi/a page that sends COOP and COEP'],
+	// the suite's host is cross-origin isolated (test/run.mjs), which the
+	// coi/ case needs
+	"a frame of another origin than its top-level page gets no window for the popups it opens once that page sends COOP same-origin (Chrome opens them without an opener), which the isolated mode's host does to be cross-origin isolated":
+		['isolated: canvas/a popup tainted its canvas, the opener draws it'],
 	'the tracks of a stream captured from a canvas end when the canvas is tainted (their player shows nothing), where Chrome keeps them live and sends them no more frames (their player keeps the last one)':
 		['canvas/the tracks of a stream captured before its canvas was tainted'],
 };
@@ -400,9 +403,10 @@ function compare(mode, native, proxied) {
 		const want = normal(native[name]);
 		const got = normal(proxied?.[name]);
 		const detail = `\n      native  ${want}\n      proxied ${got}`;
-		if (KNOWN.has(name))
+		const known = KNOWN.get(`${mode}: ${name}`) ?? KNOWN.get(name);
+		if (known)
 			ok(
-				`${mode}: ${name} differs as known (${KNOWN.get(name)})`,
+				`${mode}: ${name} differs as known (${known})`,
 				want !== got,
 				`now as natively: take it off the list${detail}`,
 			);

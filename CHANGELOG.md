@@ -408,6 +408,16 @@ The first release after a four-year gap. Everything below is breaking.
   Not changed, and listed in `site-facts`: Chrome holds a window by origin
   where the membrane compares sites, and `Origin-Agent-Cluster: ?0` is not
   honoured (docs/same-origin-policy.md).
+- The demo server's pages are cross-origin isolated: every response carries
+  `Cross-Origin-Opener-Policy: same-origin`,
+  `Cross-Origin-Embedder-Policy: credentialless` and
+  `Cross-Origin-Resource-Policy: cross-origin`, so a proxied page that
+  isolates itself natively is isolated in the demo. `STOMP_ISOLATION=off`
+  leaves the headers out. The page's own loads of other origins (the commit
+  list's avatars) go without cookies under that policy. The test runner
+  starts its demo servers without the headers except for the two suites
+  that need them (`STOMP_ISOLATION=on npm test -- <suite>` runs any suite
+  under an isolated host).
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,
@@ -926,6 +936,29 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   `<anonymous>` where the page's URL stands natively, because a script
   whose text was its own rewrite was taken for one already rewritten and
   skipped when the markup's scripts were named. (error-surfaces suite.)
+- Cross-origin isolation: a proxied page that sends COOP `same-origin` and
+  a Cross-Origin-Embedder-Policy (or a Document-Isolation-Policy) is
+  cross-origin isolated as natively (`crossOriginIsolated`, the
+  SharedArrayBuffer global, a SharedArrayBuffer shared with its workers,
+  the 5 microsecond clock) when the host's own page is, which the host
+  decides by sending those two headers on its page (and an embedder policy
+  on the files of `dist/`, README.md "Cross-origin isolation"); there is no
+  option. Every other page, its frames the permission does not reach and
+  its shared workers have what a page without isolation has, and a COEP's
+  own effects are the page's: a frame or dedicated worker without the
+  policy does not load, `require-corp` refuses a no-cors load of another
+  origin without a Cross-Origin-Resource-Policy, `credentialless` sends it
+  without cookies. A host that sends nothing is as before: no page is
+  isolated. An isolated host whose proxy is on another origin has no real
+  popups (Chrome hands a frame of another origin no window once the
+  top-level page sends COOP `same-origin`), so it should take them with
+  `onOpen`. docs/same-origin-policy.md, "Cross-origin isolation", has the
+  measurements and what is left. (cross-origin-isolation and sop-escapes
+  suites.)
+- A frame whose navigation the proxy refused reads as one that failed to
+  load natively: `contentDocument` is null and `contentWindow.location.href`
+  throws the page's SecurityError, where the hook threw one naming the
+  proxy's origin.
 - Opaque response blocking: a classic script of another origin whose
   response is HTML, XML or JSON by its type and first bytes (Chrome's rules:
   the never-sniffed types, `nosniff`, the JSON prefixes sites put before

@@ -14,18 +14,25 @@ const cspHeaders: string[] = [
 const corsHeaders: string[] = [
 	'Cross-Origin-Resource-Policy',
 	'Cross-Origin-Opener-Policy',
+	'Cross-Origin-Opener-Policy-Report-Only',
 ];
 
 // headers that would bind the page to the proxy origin or reach past the
 // frame: HSTS pins the proxy host, Clear-Site-Data wipes every proxied
 // origin's state at once, COEP blocks the page's own subresources once CORP
-// is gone, the reporting headers would post proxy URLs to the site, and
-// Set-Cookie was consumed by the cookie jar (the browser must not store it
-// for the proxy origin too)
+// is gone (the worker applies the page's policy itself, and serves its own
+// where the host's page is isolated: src/isolation.ts), a
+// Document-Isolation-Policy would move the frame into an agent cluster of
+// its own, away from the documents of its origin, the reporting headers
+// would post proxy URLs to the site, and Set-Cookie was consumed by the
+// cookie jar (the browser must not store it for the proxy origin too)
 const bindingHeaders: string[] = [
 	'Strict-Transport-Security',
 	'Clear-Site-Data',
 	'Cross-Origin-Embedder-Policy',
+	'Cross-Origin-Embedder-Policy-Report-Only',
+	'Document-Isolation-Policy',
+	'Document-Isolation-Policy-Report-Only',
 	'Report-To',
 	'NEL',
 	'Reporting-Endpoints',

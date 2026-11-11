@@ -192,6 +192,36 @@ there: `wait()` rejects with an error named `StorageBlockedError` that says
 so, and the host decides what to do (the demo falls back to the same-origin
 controller when the isolation was its own local default).
 
+## Cross-origin isolation
+
+A page that sends `Cross-Origin-Opener-Policy: same-origin` and a
+`Cross-Origin-Embedder-Policy` is cross-origin isolated natively
+(`crossOriginIsolated`, SharedArrayBuffer, the precise clock). A proxied
+page is a frame of yours, so it can be only when your own page is. To let
+proxied pages be isolated, serve the page that holds the controller with
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: credentialless
+```
+
+and the files of `dist/` and the transport with the same embedder policy:
+the controller starts its transport and rewrite workers from there, and a
+worker of an isolated page starts only when its script has one (without it
+the proxy still runs, without those workers). With a `RemoteController`
+those files also need `Cross-Origin-Resource-Policy: cross-origin`, or the
+controller's frame does not load in your page and nothing runs. There is no
+option: STomp reads `crossOriginIsolated` of your page at run time. It then isolates
+exactly the proxied pages whose own headers isolate them natively, and
+gives every other page what a page without isolation has. Without the
+headers nothing changes and no proxied page is isolated.
+
+What it costs: your page is isolated too (its no-cors loads of other
+origins go without cookies), and with a `RemoteController` Chrome hands the
+proxied frames no window for the popups they open (`window.open` returns
+null, the popup has no opener), so take popups with `onOpen`.
+docs/same-origin-policy.md, "Cross-origin isolation", has the measurements.
+
 ## Embedding
 
 Install the package from npm. Nightly builds of master are published as

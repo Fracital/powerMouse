@@ -61,6 +61,10 @@
 //                       checkout's own git log)
 //   GITHUB_TOKEN        optional; raises GitHub's limit for the commit list's
 //                       avatars from 60 to 5000 requests an hour
+//   STOMP_ISOLATION     `off` serves the pages without the headers that make
+//                       them cross-origin isolated (COOP same-origin and an
+//                       embedder policy, below): no proxied page is isolated
+//                       then, whatever it sends
 //   STOMP_DEV           development mode (`npm run dev` sets it): /__dev is a
 //                       WebSocket that announces rebuilt bundles and edited
 //                       files to the page, which reloads what changed; see
@@ -148,6 +152,31 @@ Set STOMP_WISP_URL to use an external wisp server instead.`);
 const started = Date.now();
 
 const app = express();
+
+// Cross-origin isolation. A proxied page that sends COOP same-origin and an
+// embedder policy is cross-origin isolated natively (SharedArrayBuffer, the
+// precise clock); its frame here can be only when this page is, which is
+// what these two headers on the host's page do. STomp reads that at run time
+// and serves every proxied document so that it loads in such a page, isolated
+// only when its own headers isolate it natively (docs/same-origin-policy.md).
+// The embedder policy is `credentialless`: under either value a frame's
+// document needs a policy of its own (the service worker's), and under this
+// one what the page loads from another origin (the commit list's avatars)
+// loads whether or not it sends a Cross-Origin-Resource-Policy, without
+// cookies. The proxy origin's own files say the same and let another origin
+// have them: in origin-isolation mode the host's page embeds the
+// controller's frame and the proxied frames from there, and a frame of an
+// isolated page loads only with an embedder policy and, from another origin,
+// with that resource policy.
+if (process.env.STOMP_ISOLATION !== 'off')
+	app.use((req, res, next) => {
+		res.set({
+			'Cross-Origin-Opener-Policy': 'same-origin',
+			'Cross-Origin-Embedder-Policy': 'credentialless',
+			'Cross-Origin-Resource-Policy': 'cross-origin',
+		});
+		next();
+	});
 
 // TLD autocomplete for the address bar, as Powermouse did it: the public
 // suffix list is fetched once at startup, and /suggestions ranks suffixes by

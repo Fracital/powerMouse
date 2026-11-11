@@ -1,4 +1,5 @@
 import { Config, ConfigCodec } from '../config';
+import { isolationResponseHeaders } from '../isolation';
 import { kindPartition, partitionSite } from '../partition';
 import { nestedMarkOfKind, nestedTopOf } from '../rewriteHTML';
 import { addRouteScope } from '../routeURL';
@@ -1151,6 +1152,62 @@ function bounded(
 	return Promise.race([response.finally(() => clearTimeout(timer)), timeout]);
 }
 
+/** a navigation's destinations: a document of the proxy's in a frame or a window */
+const NAVIGATION_DESTINATIONS = new Set([
+	'document',
+	'iframe',
+	'frame',
+	'embed',
+	'object',
+]);
+
+/**
+ * In a host whose page is cross-origin isolated (config.isolated) a frame's
+ * document without an embedder policy does not load at all. The documents
+ * the rewriter serves carry theirs (src/isolation.ts); this covers every
+ * other one this worker makes (an error page, an inline document, an
+ * emulated service worker's script), which are never isolated themselves.
+ */
+async function isolatedHost(
+	request: Request,
+	answer: Promise<Response>,
+): Promise<Response> {
+	const response = await answer;
+	const navigation =
+		request.mode === 'navigate' &&
+		NAVIGATION_DESTINATIONS.has(request.destination);
+	const worker =
+		request.destination === 'worker' || request.destination === 'sharedworker';
+	// a redirect on the way to a frame needs no embedder policy, only the
+	// resource policy that lets a host's page of another origin have it
+	// (measured: without it the frame does not load)
+	const redirect = response.status >= 300 && response.status < 400;
+	if (
+		(!navigation && !worker) ||
+		// the network's own answer (a file of the host's server), a network
+		// error, or one that has its policy already
+		response.url !== '' ||
+		response.type !== 'default' ||
+		(redirect
+			? !navigation || response.headers.has('cross-origin-resource-policy')
+			: response.headers.has('cross-origin-embedder-policy'))
+	)
+		return response;
+	const headers = new Headers(response.headers);
+	if (redirect) headers.set('cross-origin-resource-policy', 'cross-origin');
+	else if (navigation)
+		isolationResponseHeaders(headers, {
+			isolated: false,
+			topLevel: request.destination === 'document',
+		});
+	else headers.set('cross-origin-embedder-policy', 'credentialless');
+	return new Response(redirect ? null : response.body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers,
+	});
+}
+
 /**
  * The request through its controller. A document for a controller whose tab
  * is not active right now (in the back/forward cache, or gone without its
@@ -1224,10 +1281,18 @@ function answerFor(
 		// the server is still opening its databases: decide once it's up
 		if (ref.ready && !ref.ready.router.willRoute(event.request.url))
 			return null;
-		return bounded(event.request, serve(event, ref), ref);
+		const answer = bounded(event.request, serve(event, ref), ref);
+		return ref.config.isolated ? isolatedHost(event.request, answer) : answer;
 	}
 	const orphan = orphanOf(pathname);
-	return orphan ? answerOrphan(event.request, orphan) : null;
+	if (!orphan) return null;
+	// an address without a controller is answered for a host's page all the
+	// same (a redirect to the controller that takes it over, the error
+	// page): isolated when a controller that is left says its host is
+	const answer = answerOrphan(event.request, orphan);
+	for (const other of controllers.values())
+		if (other.config.isolated) return isolatedHost(event.request, answer);
+	return answer;
 }
 
 /**
