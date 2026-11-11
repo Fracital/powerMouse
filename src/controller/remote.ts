@@ -15,6 +15,7 @@ import type {
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
+import { ClientFrames } from './clientFrames';
 import { hostReload } from './hostReload';
 import { controllerId, forgetControllerIds, keptControllerId } from './id';
 import {
@@ -163,14 +164,17 @@ export class RemoteController extends EventTarget {
 	stale: StaleInfo | null = null;
 	frames: RemoteFrame[] = [];
 	isReady = false;
-	/** service worker client ids the pages reported, by frame */
-	#clientFrames = new Map<string, RemoteFrame>();
-	/** clients a request report waited for in vain (see StompController) */
-	#silentClients = new Set<string>();
-	/** a page said which client it is: its requests are `frame`'s */
-	#attribute(client: string, frame: RemoteFrame) {
-		this.#clientFrames.set(client, frame);
-		this.#silentClients.delete(client);
+	/** the service worker clients the pages reported, by frame, and those nobody spoke for */
+	#clients = new ClientFrames<RemoteFrame>(
+		() => this.frames,
+		async (clients) => {
+			await this.#ready;
+			return this.#rpc.call('goneClients', clients);
+		},
+	);
+	/** @internal see StompController */
+	get clientCounts(): { clients: number; silent: number } {
+		return this.#clients.sizes;
 	}
 	readonly element: HTMLIFrameElement;
 	#rpc: RpcHelper<HostBound, FrameBound>;
@@ -229,15 +233,12 @@ export class RemoteController extends EventTarget {
 				},
 				request: async (info) => {
 					// a worker's request is its creator's frame's (info.owner)
-					const known = () =>
-						(info.client && this.#clientFrames.get(info.client)) ||
-						(info.owner && this.#clientFrames.get(info.owner)) ||
-						null;
+					const known = () => this.#clients.frame(info.client, info.owner);
 					let frame = known();
 					// the document and its head's subresources are reported before the
 					// page has said which frame it is in: give that a moment, once
 					// for a client that never says (see StompController)
-					if (!frame && info.client && !this.#silentClients.has(info.client)) {
+					if (!frame && info.client && !this.#clients.silent(info.client)) {
 						const deadline =
 							Date.now() +
 							(['document', 'iframe', 'frame', 'embed', 'object'].includes(
@@ -249,10 +250,10 @@ export class RemoteController extends EventTarget {
 							await new Promise((resolve) => setTimeout(resolve, 50));
 							frame = known();
 						}
-						if (!frame) this.#silentClients.add(info.client);
+						if (!frame) this.#clients.silence(info.client);
 					}
 					if (frame && info.client && info.owner)
-						this.#attribute(info.client, frame);
+						this.#clients.attribute(info.client, frame);
 					const event: RemoteRequestEvent = { ...info, frame };
 					init.onRequest?.(event);
 					this.dispatchEvent(new CustomEvent('request', { detail: event }));
@@ -264,8 +265,7 @@ export class RemoteController extends EventTarget {
 						const answer = await ask({
 							origin: info.origin,
 							permission: info.permission,
-							frame:
-								(info.client && this.#clientFrames.get(info.client)) || null,
+							frame: this.#clients.frame(info.client),
 						});
 						return [typeof answer === 'boolean' ? answer : null, []];
 					} catch (error) {
@@ -315,14 +315,14 @@ export class RemoteController extends EventTarget {
 				);
 			};
 			if (nested) {
-				if (navigate?.client) this.#attribute(navigate.client, frame);
+				if (navigate?.client) this.#clients.attribute(navigate.client, frame);
 				// a frame in the page that navigated is a step of the frame's
 				// history (a tab's Back steps it first): the buttons follow
 				if (navigate) frame.historyChanged(announce);
 				return;
 			}
 			if (navigate) {
-				if (navigate.client) this.#attribute(navigate.client, frame);
+				if (navigate.client) this.#clients.attribute(navigate.client, frame);
 				frame.report(navigate);
 				// where the frame's history can go is the controller frame's to
 				// say (nested frames included), not the page's own navigable

@@ -65,6 +65,7 @@ import serveTransport from '../transport/serveTransport';
 import TransportWorker from '../transport/TransportWorker';
 import { BUILD } from '../version';
 import { compileModule } from '../wasm/module';
+import { ClientFrames } from './clientFrames';
 import { canTraverse, traverse } from './history';
 import { hostReload } from './hostReload';
 import { controllerId, forgetControllerIds, keptControllerId } from './id';
@@ -658,21 +659,14 @@ export class StompController extends EventTarget {
 	/** every hook error so far (a hook that threw, a hook URL that failed), newest last; also `hookerror` events */
 	readonly hookErrors: HookErrorInfo[] = [];
 	#init: ControllerInit;
-	/** service worker client ids the pages reported, by frame */
-	#clientFrames = new Map<string, Frame>();
-	/**
-	 * clients a request report waited for in vain: nobody says which frame a
-	 * page's emulated service worker is in (it is its site's; a document
-	 * tells the host its own client id, and the service worker names the
-	 * document that made a worker), so its later reports go out as they
-	 * come. One that tells after all (a page slower than the wait) is a
-	 * frame's from then on.
-	 */
-	#silentClients = new Set<string>();
-	/** a page said which client it is: its requests are `frame`'s */
-	#attribute(client: string, frame: Frame) {
-		this.#clientFrames.set(client, frame);
-		this.#silentClients.delete(client);
+	/** the service worker clients the pages reported, by frame, and those nobody spoke for */
+	#clients = new ClientFrames<Frame>(
+		() => this.frames,
+		(clients) => this.goneClients(clients),
+	);
+	/** @internal how many clients are kept with a frame, and how many without (tests) */
+	get clientCounts(): { clients: number; silent: number } {
+		return this.#clients.sizes;
 	}
 	#onRequest?: (info: RequestEvent) => void;
 	#sandbox: string | null;
@@ -895,7 +889,7 @@ export class StompController extends EventTarget {
 			// page does: its requests are this frame's, and that is all it
 			// says here (where the frame is, is its page's to say)
 			if (nested) {
-				if (navigate?.client) this.#attribute(navigate.client, frame);
+				if (navigate?.client) this.#clients.attribute(navigate.client, frame);
 				// a frame in the page that navigated is a step of the frame's
 				// history (a tab's Back steps it first): the buttons follow
 				const moved = navigate && frame.historyChanged();
@@ -908,7 +902,7 @@ export class StompController extends EventTarget {
 				return;
 			}
 			if (navigate) {
-				if (navigate.client) this.#attribute(navigate.client, frame);
+				if (navigate.client) this.#clients.attribute(navigate.client, frame);
 				frame.report(navigate);
 				init.onNavigate?.(navigate, frame);
 				this.dispatchEvent(
@@ -1357,8 +1351,7 @@ export class StompController extends EventTarget {
 						const answer = await ask({
 							origin: info.origin,
 							permission: info.permission,
-							frame:
-								(info.client && this.#clientFrames.get(info.client)) || null,
+							frame: this.#clients.frame(info.client),
 							...(info.client ? { client: info.client } : {}),
 						});
 						return [typeof answer === 'boolean' ? answer : null, []];
@@ -1463,21 +1456,18 @@ export class StompController extends EventTarget {
 				},
 				request: async (info) => {
 					// a worker's request is its creator's frame's (info.owner)
-					const known = () =>
-						(info.client && this.#clientFrames.get(info.client)) ||
-						(info.owner && this.#clientFrames.get(info.owner)) ||
-						null;
+					const known = () => this.#clients.frame(info.client, info.owner);
 					let frame = known();
 					// a document's own request, and the subresources its head fetches,
 					// are reported before the page has told us which frame it is in:
 					// give that report a moment to arrive. Not without frames: the
 					// controller frame relays every report to a host that owns them.
-					// And once for a client that never tells (see #silentClients)
+					// And once for a client that never tells (see ClientFrames)
 					if (
 						!frame &&
 						info.client &&
 						this.frames.length &&
-						!this.#silentClients.has(info.client)
+						!this.#clients.silent(info.client)
 					) {
 						const deadline =
 							Date.now() +
@@ -1488,12 +1478,12 @@ export class StompController extends EventTarget {
 							await sleep(50);
 							frame = known();
 						}
-						if (!frame) this.#silentClients.add(info.client);
+						if (!frame) this.#clients.silence(info.client);
 					}
 					// kept under the worker's own id too: the service worker
 					// forgets who made a worker when it restarts
 					if (frame && info.client && info.owner)
-						this.#attribute(info.client, frame);
+						this.#clients.attribute(info.client, frame);
 					const event: RequestEvent = { ...info, frame };
 					this.#onRequest?.(event);
 					this.dispatchEvent(new CustomEvent('request', { detail: event }));
@@ -1695,6 +1685,11 @@ export class StompController extends EventTarget {
 	async cookieCommand(command: CookieCommand): Promise<CookieResult> {
 		await this.#ready;
 		return this.#rpc!.call('cookies', command);
+	}
+	/** @internal which of these service worker clients no longer exist (ClientFrames; the controller frame asks for its host) */
+	async goneClients(clients: string[]): Promise<string[]> {
+		await this.#ready;
+		return this.#rpc!.call('goneClients', clients);
 	}
 	/**
 	 * The cookie jar, for the host application only (pages never reach this

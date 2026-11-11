@@ -3916,6 +3916,22 @@ url`) carries its value and targets that window. An about:blank child of
   1063 KB of heap on Chrome 152 and 1060 KB on 156 before and after, the
   document bundle 284 bytes larger (frame-cost; request-frames gains the
   rows).
+- What a controller keeps for that (which frame each service worker
+  client's requests belong to, and which clients nobody spoke for) no
+  longer grows with every navigation: every document and every worker is
+  a new client, and nothing was ever taken out, so a tab navigated 200
+  times left 801 entries, each holding its frame. An entry now goes when
+  its frame went away (the host took it out of `frames`, or its element
+  out of the document), when its client is gone (every sixteen new
+  clients the controller asks the service worker which of those it keeps
+  still exist; `RemoteController` asks through the controller frame), and
+  past 1024 in any case, the oldest first. Both controllers share the one
+  class (`src/controller/clientFrames.ts`). After 200 navigations of four
+  clients each a controller keeps 5 clients, never more than 17 on the
+  way; 85 for twenty frames become 9 once the frames are gone; a client
+  that is still there (a page's service worker) is not waited for again
+  (request-clients suite, which reads the counts from the controllers'
+  internal `clientCounts`).
 - `history.pushState` and `replaceState` refuse a URL of another origin, or
   one that does not parse, with a SecurityError naming the page's origin and
   URL, like the browser; before this the URL was routed and accepted (every

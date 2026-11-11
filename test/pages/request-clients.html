@@ -1,0 +1,22 @@
+<!doctype html>
+<title>REQUEST CLIENTS</title>
+<body></body>
+<script>
+	// One visit of the request-clients suite, which makes four service
+	// worker clients that each make a request: this document, a nested one
+	// (request-frames-child.html), one on about:srcdoc and a worker. `n`
+	// names the visit: the fetches are /echo-headers?from=<what>-<n>
+	const n = new URLSearchParams(location.search).get('n');
+	const add = (set) => {
+		const frame = document.createElement('iframe');
+		set(frame);
+		document.body.append(frame);
+	};
+	add((frame) => (frame.src = `/pages/request-frames-child.html?name=${n}`));
+	add(
+		(frame) =>
+			(frame.srcdoc = `<script>fetch('/echo-headers?from=srcdoc-${n}');<\/script>`),
+	);
+	new Worker('/pages/request-frames-worker.js').postMessage(`worker-${n}`);
+	fetch(`/echo-headers?from=top-${n}`);
+</script>

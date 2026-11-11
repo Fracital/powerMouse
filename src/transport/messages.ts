@@ -651,6 +651,11 @@ export type SWbound = {
 	 * the service worker (docs/adblock.md). False while no engine answers.
 	 */
 	socket: [{ url: string; source: string }, boolean];
+	/**
+	 * which of these clients no longer exist: the controller forgets the
+	 * frame it kept for each (the request log's attribution)
+	 */
+	goneClients: [string[], string[]];
 };
 
 /** a cookie as the jar stores it, for export and import by the host */

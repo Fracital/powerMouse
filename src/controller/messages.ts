@@ -127,6 +127,8 @@ export type FrameBound = {
 	cookies: [CookieCommand, CookieResult];
 	/** replace the request rules */
 	rules: [RequestRule[]];
+	/** which of these service worker clients no longer exist (the host's ClientFrames) */
+	goneClients: [string[], string[]];
 };
 
 /** the two builds in a mismatch, as the host sees them on `controller.stale` */

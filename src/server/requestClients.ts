@@ -14,7 +14,8 @@ import { CLIENT_ID } from '../transport/messages';
  * id on its first request and tells the host like any other document.
  * Nothing costs a frame a request: a client is looked up once, when it
  * first makes a request the host hears of. What is known here goes with the
- * worker; the controller keeps what it learned.
+ * worker; the controller keeps what it learned, and says when it asks which
+ * of its clients are gone (goneClients), which are then dropped here as well.
  */
 
 /** how many clients, and blob: URLs of workers yet to make a request, are kept (the oldest go first) */
@@ -75,6 +76,25 @@ async function identify(id: string) {
 		// the client went away: nobody to name
 	}
 	remember(owners, id, owner);
+}
+
+/**
+ * Which of the clients `asked` about no longer exist (a controller keeps a
+ * frame for each client its pages reported, and asks now and then). They
+ * are forgotten here too
+ */
+export async function goneClients(asked: string[]): Promise<string[]> {
+	const live = new Set<string>();
+	// every kind, and those this worker does not control (a host's own
+	// worker for a page's emulated service worker)
+	for (const client of await clients.matchAll({
+		includeUncontrolled: true,
+		type: 'all',
+	}))
+		live.add(client.id);
+	const gone = asked.filter((id) => typeof id === 'string' && !live.has(id));
+	for (const id of gone) owners.delete(id);
+	return gone;
 }
 
 /**

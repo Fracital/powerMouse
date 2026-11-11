@@ -72,6 +72,7 @@ import {
 	SIMULATED_PERMISSIONS,
 } from './permissions';
 import {
+	goneClients,
 	noteBlobWorker,
 	noteRequestClients,
 	requestOwner,
@@ -246,6 +247,10 @@ function registerController(
 			hostReload: async (mode) => {
 				(await server).hostReloaded(mode);
 			},
+			goneClients: async (asked) => [
+				Array.isArray(asked) ? await goneClients(asked) : [],
+				[],
+			],
 			cookies: async (command) => {
 				const { cookies } = await server;
 				switch (command.op) {
