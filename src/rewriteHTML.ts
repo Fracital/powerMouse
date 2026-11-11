@@ -9,12 +9,14 @@ import {
 	createDataURI,
 	injectDocumentJS,
 	parseDataURI,
+	rewriterLibJS,
 	routeURL,
 } from './routeURL';
 import type { ControlInfo } from './serviceWorkerTypes';
 import type { SiteFacts } from './siteFacts';
 import StompURL from './StompURL';
 import { SHELL_MARKUP, SW_CONTROL, WORKER_BASE } from './transport/messages';
+import { LIBRARY_FACTORY } from './version';
 
 /**
  * The route of a document. `form`: a GET form's action, whose query the
@@ -234,6 +236,8 @@ export function modifyHTML(
 	/** the blocker's cosmetic rules and scriptlets for the document (docs/adblock.md) */
 	adblock?: AdblockPage | null,
 	sites?: SiteFacts[],
+	/** the document is a proxied top the service worker serves: its shell loads the rewriter library */
+	top = false,
 ): string {
 	const { head, tail } = shell(
 		script,
@@ -247,6 +251,7 @@ export function modifyHTML(
 		false,
 		adblock,
 		sites,
+		top,
 	);
 	return head + tail(prewritten);
 }
@@ -268,6 +273,8 @@ export function modifyHTMLStreamed(
 	upgradeInsecure = false,
 	adblock?: AdblockPage | null,
 	sites?: SiteFacts[],
+	/** as modifyHTML's */
+	top = false,
 ): { head: string; tail: (prewritten: Prewritten | null) => string } {
 	return shell(
 		script,
@@ -281,6 +288,7 @@ export function modifyHTMLStreamed(
 		true,
 		adblock,
 		sites,
+		top,
 	);
 }
 
@@ -297,6 +305,7 @@ function shell(
 	streamed: boolean,
 	adblock?: AdblockPage | null,
 	sites?: SiteFacts[],
+	top = false,
 ): { head: string; tail: (prewritten?: Prewritten | null) => string } {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	const names = helperNames(config);
@@ -361,11 +370,32 @@ ${blocked}
 	const kept = streamed
 		? `<script${attribute}>globalThis[${markupKey}] = ${markup()};</script>`
 		: '';
+	const library = top ? libraryScripts(url, config, attribute) : '';
 	return {
-		head: `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${baseScript}<script${attribute} src="${injectDocumentJS(url, config)}"></script>${kept}`,
+		head: `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${baseScript}${library}<script${attribute} src="${injectDocumentJS(url, config)}"></script>${kept}`,
 		tail: (prewritten) =>
 			`<script${attribute}>${inject(prewritten)}</script></body></html>`,
 	};
+}
+
+/**
+ * The scripts that load the rewriter library in a proxied top's shell,
+ * before the inject bundle (the parser fetches the two together, from the
+ * HTTP cache: the controller fetched the file when it started). The library
+ * is in no bundle. With `rewriter: 'js'` a top needs it for its first
+ * script; with `'wasm'` it is what answers a rewrite the page asks for
+ * before its module has arrived, which a page's first task often does.
+ * Either costs the top what it paid when the bundle carried the library,
+ * and a page that had to fetch the file when a rewrite asked would wait for
+ * a synchronous request, which the browser reports to the page as
+ * deprecated. The file assigns its factory to a name, made here so that it
+ * is never enumerable; the bundle takes it and deletes the name as it loads
+ * (src/inject/rewriter.ts). A frame shares its top's library and gets none
+ * of this. `attribute`: what the shell's own scripts carry (a nonce, the
+ * XHTML namespace).
+ */
+function libraryScripts(url: StompURL, config: Config, attribute: string) {
+	return `<script${attribute}>Reflect.defineProperty(globalThis, ${JSON.stringify(LIBRARY_FACTORY)}, { writable: true, configurable: true });</script><script${attribute} src="${rewriterLibJS(url, config)}"></script>`;
 }
 
 /** the mimes an XML document is served under and parsed with */
@@ -386,6 +416,8 @@ export function modifyXML(
 	mime: string,
 	referrer?: ReferrerInfo,
 	sites?: SiteFacts[],
+	/** as modifyHTML's */
+	top = false,
 ): string {
 	// the root start tag, after the prolog, comments and doctype
 	const tags =
@@ -415,7 +447,7 @@ ${sited(names.client, sites)}${referred(names.client, referrer)}
 	${names.client}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});
 }`;
 	const xhtml = 'http://www.w3.org/1999/xhtml';
-	return `<?xml version="1.0" encoding="UTF-8"?>${root}<script xmlns="${xhtml}" src="${injectDocumentJS(url, config)}"></script><script xmlns="${xhtml}">${cdata(inject)}</script></${name}>`;
+	return `<?xml version="1.0" encoding="UTF-8"?>${root}${top ? libraryScripts(url, config, ` xmlns="${xhtml}"`) : ''}<script xmlns="${xhtml}" src="${injectDocumentJS(url, config)}"></script><script xmlns="${xhtml}">${cdata(inject)}</script></${name}>`;
 }
 
 /**

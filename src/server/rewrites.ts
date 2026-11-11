@@ -3524,6 +3524,12 @@ export function registerRewrites(
 				// <meta charset>), then serve the rewritten document as UTF-8
 				const bytes = new Uint8Array(await response.arrayBuffer());
 				responseHeaders.set('content-type', utf8ContentType(contentType));
+				// a proxied top (not a document a page routed as nested): its
+				// shell loads the rewriter library
+				const top =
+					request.navigation &&
+					nestedTopOf(new URL(request.routed).pathname, rewriter.directory) ===
+						null;
 				// an XML document (a standalone SVG, an XHTML page) keeps its mime
 				// and gets an XML shell: the HTML one is not well-formed XML
 				if (XML_DOCUMENT_MIMES.includes(mime))
@@ -3534,6 +3540,7 @@ export function registerRewrites(
 						mime,
 						referrer,
 						shellSites(url, request.routed, rewriter.directory),
+						top,
 					);
 				// A Refresh header schedules its navigation on the document the
 				// browser creates for this response, which the shell re-opens to
@@ -3604,6 +3611,7 @@ export function registerRewrites(
 						upgradeInsecure,
 						adblock,
 						shellSites(url, request.routed, rewriter.directory),
+						top,
 					);
 				// The page does not wait for the rewrite workers: the shell's
 				// first part (the inject bundle's script and the markup) goes out
@@ -3623,6 +3631,7 @@ export function registerRewrites(
 					upgradeInsecure,
 					adblock,
 					shellSites(url, request.routed, rewriter.directory),
+					top,
 				);
 				const first = UTF8.encode(head);
 				return new ReadableStream<Uint8Array>({

@@ -182,6 +182,7 @@ function registerAssets(router: Router, scope: string, assets?: Assets) {
 		'injectDocument',
 		'injectWorker',
 		'transportWorker',
+		'rewriterLib',
 	] as const) {
 		const name = assetName(assets, key);
 		router.routes.set(new RegExp(exact(name)), () =>

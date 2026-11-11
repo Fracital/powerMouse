@@ -43,6 +43,17 @@ interface Source {
 	embed?: boolean;
 }
 
+/**
+ * How the questions this thread asked its module went, counted: `answered`
+ * by the module, `declined` by a module the thread holds (a shape it
+ * leaves alone, a script its parser refuses, a call inside a call, a
+ * trap), `early` a rewrite asked for before the thread held a module. The
+ * last two are the JavaScript rewriter's, which a page loads only then
+ * (src/rewriterLight.ts adds how often; test/suites/rewriter-fallback.mjs
+ * reads them).
+ */
+export const counts = { answered: 0, declined: 0, early: 0 };
+
 /** whether this thread can rewrite scripts in wasm at all */
 export const hasRewriter = () => hasModule(REWRITER);
 
@@ -91,11 +102,14 @@ function sameRevision(instance: BufferInstance): boolean {
  */
 export function parsesInWasm(code: string, single: boolean): boolean | null {
 	if (!hasModule(REWRITER)) return null;
-	return withInstance(REWRITER, (instance) => {
+	const parses = withInstance(REWRITER, (instance) => {
 		if (!sameRevision(instance)) return null;
 		const answered = instance.call(code, single ? FLAG_SINGLE : FLAG_PARSES);
 		return 'output' in answered ? answered.output === '1' : null;
 	});
+	if (parses === null) counts.declined++;
+	else counts.answered++;
+	return parses;
 }
 
 /**
@@ -236,18 +250,25 @@ export function rewriteInWasm(
 	lead: () => string,
 	source?: Source,
 ): string | null {
-	if (!hasModule(REWRITER)) return null;
+	if (!hasModule(REWRITER)) {
+		counts.early++;
+		return null;
+	}
 	// a lone surrogate has no UTF-8: the encoder would hand the module
 	// U+FFFD in its place, and what came back would not be the page's
 	// text. A script from the network never holds one; a string a page
 	// evaluates can
-	if (!script.isWellFormed()) return null;
-	return withInstance(
-		REWRITER,
-		(instance) =>
-			sameRevision(instance)
-				? rewriteWith(instance, script, url, config, type, lead(), source)
-				: null,
-		rewriterRoute(url, config, type),
-	);
+	const output = script.isWellFormed()
+		? withInstance(
+				REWRITER,
+				(instance) =>
+					sameRevision(instance)
+						? rewriteWith(instance, script, url, config, type, lead(), source)
+						: null,
+				rewriterRoute(url, config, type),
+			)
+		: null;
+	if (output === null) counts.declined++;
+	else counts.answered++;
+	return output;
 }

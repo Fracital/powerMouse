@@ -354,8 +354,8 @@ bundle and its DOM globals are captured while it is still attached
 (`src/libGlobals.ts`). Two consequences:
 
 - the module's bytes are never inlined into the library text. The text is
-  embedded in `injectDocument.js` and counts against its 850 KB budget, and
-  600 KB of base64 would blow it. The module is handed in.
+  embedded in `injectDocument.js` and counts against its budget, and 600 KB
+  of base64 would blow it. The module is handed in.
 - `WebAssembly` joins the globals the library captures from the realm, and
   the client hands the realm a compiled `WebAssembly.Module`, not bytes:
   instantiation is synchronous and cheap (`new WebAssembly.Instance`), while
@@ -390,7 +390,8 @@ Per-frame cost therefore goes down, not up, once the JavaScript libraries
 leave the inject bundle: that is a goal of phase 2 with a number on it, set
 out under "The inject bundle without the JavaScript libraries" below. The
 `frame-cost` ceiling (1,120 KB of heap per frame, `injectDocument.js` at
-most 850 KB) is a gate on every phase until then.
+most 630 KB since the JavaScript rewriter left it, 850 before) is a gate on
+every phase until then.
 
 ### Instance memory
 
@@ -467,10 +468,11 @@ the suite counts, 1,024 to the KB): the stub build's size, which the real
 removal should beat, since `rewriteJS.ts`, `callPrinter.ts`, `acornUtil.ts`
 and `builders.ts` (35 KB of the 46,669) leave with their parsers and the
 wasm glue that replaces them is under 4 KB. The `frame-cost` suite's bundle
-budget (`INJECT_BUDGET_KB`, 850 today) is lowered to 430 in the same change
-that removes the libraries, so the size cannot come back unnoticed; its heap
-ceiling (1,120 KB per frame) is lowered in that change too, to what the
-suite then measures plus its usual margin.
+budget (`INJECT_BUDGET_KB`, 850 before the split, 630 with meriyah and
+escodegen out) is lowered to 430 in the same change that removes the last
+of the libraries, so the size cannot come back unnoticed. Its heap ceiling
+(1,120 KB per frame) moves only by what is measured, and nothing was: a
+frame never evaluated the library ("As built" below).
 
 **What the wasm side costs in exchange.**
 
@@ -503,12 +505,19 @@ suite then measures plus its usual margin.
   the module's rewrite.
 - _The inject's rewrites are synchronous, and the module arrives by
   message._ So there are moments and realms with no module, and a JavaScript
-  fallback has to exist for them. It leaves the bundle all the same: the
-  library as it is today becomes an asset of its own (`rewriterLib.js`, a
-  key in `Assets`), which the small library that stays in the bundle
-  fetches with a synchronous request from the asset directory and evaluates
-  in its own realm, with the globals it captured, the first time one of
-  these happens:
+  fallback has to exist for them. It is in no bundle (built, phase 2 step
+  4): the library as it was is an asset of its own (`rewriterLib.js`, the
+  key `rewriterLib` in `Assets`), one file for documents and workers, asked
+  for as `rewriterLib.js?<hash of its bytes>` so that a deploy never pairs
+  one build's library with another's bundle and a host may let browsers
+  keep the file for good. What the bundles carry is the light library
+  (`src/rewriterLight.ts`): the same calls with no parser and no printer
+  behind them. A call that needs the rewriter library it does not hold
+  stops and says so; the realm that asked hands it the file's text, and the
+  library evaluates it in its own realm with the globals it captured (its
+  realm is detached, and a detached realm cannot make a request: `send`
+  throws, Chrome 152 and 156). That happens the first time one of these
+  does:
 
   | Inject path                          | Served by                         | The fallback loads when                                               |
   | ------------------------------------ | --------------------------------- | --------------------------------------------------------------------- |
@@ -518,17 +527,68 @@ suite then measures plus its usual margin.
   | `modifyCSS`                          | the scanner module (phase 3)      | no module yet, or it trapped; a data: sheet inside a sheet            |
   | `getDomain`, `getPublicSuffix`       | the shell, then the suffix module | no module yet, for a host no shell named                              |
 
+  The last two rows are not cut over yet: css-tree and tldts are still in
+  the document bundle's light library (`src/rewriterLightDocument.ts`
+  hands them to it as parts), because without their modules in the page
+  every top would load the file for its first style or cookie. A part that
+  is taken out of that file is the fallback's from then on, with no other
+  change: that is the whole cut. A rewrite in the middle of another (a
+  `data:` script that a script the module is rewriting imports, a `data:`
+  stylesheet in a stylesheet) is the fallback's too: without it the outer
+  call is marked as needing it and made again once it is there.
+
+  Where the text comes from. The service worker writes the file's script
+  into every proxied top's shell, before the bundle: the parser fetches
+  the two together, and the bundle takes the factory the file assigned and
+  deletes the name (made non-enumerable by the shell, gone before any page
+  script). With `rewriter: 'js'` the top's library realm is made from that
+  factory and is the rewriter library itself, as it was when the bundle
+  carried it. With `'wasm'` the realm holds the light library, and the top
+  hands it the factory's text when a call needs it. A frame gets no such
+  script: it shares its top's library and asks its top to load it. The
+  first design had the realm that asked fetch the file with a synchronous
+  request instead, and two measurements ended it. With `'js'` it cost
+  every top 4 to 5 ms before its first script; with the shell's script a
+  top is 3 to 5 ms faster than before the split (`measure-first-rewrite`,
+  from navigation start to the first page-side rewrite answered, 3 x 120
+  warm navigations on Chrome 152 and 156: the fastest 31 to 34 ms against
+  34 to 38 ms, the lower quartile 33 to 41 ms against 39 to 48 ms). And
+  on a document's main thread the browser reports a synchronous request
+  as deprecated, to the page's own ReportingObserver, naming the inject
+  bundle: `error-surfaces` caught it.
+
+  How often the fallback is needed with `'wasm'`, on nine fixture pages
+  (`rewriter-fallback` prints the counts): five never need it, four need
+  it once, and in every one of the four the first cause is a rewrite the
+  page asked for before its module had arrived (a function made from a
+  string, `document.write` or a worker in the page's first task). The
+  module declined 2 of 124 calls on the error messages page and none
+  elsewhere. A top that got its module before its first script would
+  seldom evaluate the fallback at all.
+
+  The controller fetches the file when it starts, under both backends, so
+  it is in the HTTP cache before the first proxied page exists, and a host
+  that does not serve it fails there (`wait()` rejects, naming the asset's
+  key) instead of in some page later.
+
   A document's own site and its top's are needed while the client is made,
   before any message can have arrived: the service worker, which keeps
   tldts (its bundle is one per scope, not per frame), writes them into the
   shell (built: "The shell carries the site" below). A realm the module
-  cannot reach at all (a sandboxed document with
-  an opaque origin, a tab in another agent cluster) loads the fallback on
-  its first rewrite, which is what it costs today. A page's dedicated
-  worker is in its document's agent cluster and is handed the module with
-  its transport port; a shared worker is not, and imports the worker
-  flavour of the fallback with `importScripts`. A rewrite that can be made
-  by neither (the fallback did not load) is refused, as a failed rewrite is
+  cannot reach at all keeps a light library of its own and loads the
+  fallback on its first rewrite. A document
+  sandboxed with an opaque origin is handed the text by its top, as a
+  string; where its script policy refuses eval (a sandbox without
+  allow-scripts) the text is run as a script with the policy's nonce
+  instead. A page's dedicated worker is in its document's agent cluster
+  and is handed the module with its transport port; a shared worker and
+  the page's service worker are not. A worker fetches the file with a
+  synchronous request (3 to 7 ms from the HTTP cache for the 471 KB), which
+  no report follows there. So does a frame under a top of another build
+  (during a deploy), the one document that still makes that request: its
+  page is not shown the deprecation report (`applyReports` in
+  `src/inject/modules/Unroute.ts`). A rewrite that can be made by neither
+  backend (the fallback did not load) is refused, as a failed rewrite is
   today: the script does not run unrewritten.
 
 - _The public suffix list._ A table of its own, not a crate's: the `psl`
@@ -626,7 +686,25 @@ suite then measures plus its usual margin.
 
 What is left of the library in the bundle after the removal: the codecs and
 URL routing (the 18,632 bytes of crypto-js and STomp's own routing code),
-the wasm glue, and the fallback's loader.
+the wasm glue, and the fallback's loader. The file carries the codecs and
+the routing code as well: with `'js'` it is the whole of a top's library,
+so it has to stand alone, and a realm that loads it beside a light library
+evaluates those 30 KB twice.
+
+**As built (step 4, on the series up to the CSS rewriter in the scanner
+module).** css-tree and tldts still in the light library:
+
+| File                     | Before  | After   | Brotli before | Brotli after |
+| ------------------------ | ------- | ------- | ------------- | ------------ |
+| `dist/injectDocument.js` | 860,006 | 633,099 | 224,309       | 173,356      |
+| `dist/injectWorker.js`   | 440,982 | 213,903 | 110,609       | 59,461       |
+| `dist/rewriterLib.js`    |         | 471,109 |               | 122,541      |
+
+The heap one proxied frame adds does not move (1,089 to 1,096 KB with 20
+frames before and after, both backends, Chrome 156): a frame
+never evaluated the library, and its text in the bundle cost a frame about
+3 KB. What a frame saves is the 227 KB it no longer fetches, scans and
+keeps a copy of.
 
 ## 7. Staying compatible with a host's build pipeline
 
@@ -844,21 +922,21 @@ Its definition of done, in the order the work goes:
    the pinned list), with the parity suite against tldts, and the service
    worker writing a document's own site and its top's into the shell
    (built: the service worker and a top's library ask the module, the
-   shell carries the site; tldts is still in both bundles and leaves with
-   step 4);
-4. the JavaScript library becomes the asset `rewriterLib.js` (and its
-   worker flavour), loaded on first need as section 6 sets out, and
-   meriyah, escodegen, css-tree and tldts leave `dist/injectDocument.js`:
+   shell carries the site);
+4. the JavaScript library becomes the asset `rewriterLib.js`, loaded on
+   first need as section 6 sets out (built: meriyah, escodegen and the
+   rewriters on them are in no bundle, `dist/injectDocument.js` is 633,099
+   bytes and the `frame-cost` budget 630 KB), and css-tree and tldts leave
+   `dist/injectDocument.js` with their modules (steps 3 and phase 3):
    **at most 415,585 bytes** against 814,491 on master, with the
-   `frame-cost` bundle budget lowered from 850 to 430 KB and its heap
-   ceiling lowered to the new measurement in the same change;
+   `frame-cost` bundle budget lowered to 430 KB in that change;
 5. the suites of section 10 under both backends, and `frame-cost`,
    `wasm-share` and the new suffix suite in the gate.
 
 Step 4 needs the CSS scanner of phase 3 in the page (it adopts every module
 the controller sends, so the scanner arrives with the rewriter) and a host
-that serves one more asset; both `'js'` and `'wasm'` keep working, the
-first by loading the fallback on its first rewrite.
+that serves one more asset; both `'js'` and `'wasm'` keep working, with
+the file loaded by a top's shell.
 
 **Phase 3. CSS and the markup scan, where they pay.** `rewriteCSS.ts`
 already emits an edit list and parses lazily, so the Rust version is a
@@ -1200,20 +1278,20 @@ Phase 1, measured (2026-11-10, Node 24, load about 20; medians of three):
 
 ## 12. Risks
 
-| Risk                                                                                             | Handling                                                                                                    |
-| ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| oxc and meriyah disagree on what parses (webcompat, global return, V8 intrinsics, HTML comments) | the parse parity sweep over the corpora; a disagreement falls back per script                               |
-| the optional chain rewrites are the hardest to express as edits                                  | their own differential corpus, the coverage macro, and a per-script fallback until proved                   |
-| nested or overlapping edits                                                                      | the nest-aware engine, property tests, and a failed rewrite falls back rather than emitting garbage         |
-| wasm instance memory never shrinks                                                               | allocator reset, instance replacement past a threshold, idle drop in the service worker                     |
-| a per-frame wasm instance would blow the frame-cost ceiling                                      | the instance lives only in the shared library realm; `wasm-share` asserts it                                |
-| the fallback library is fetched synchronously where a rewrite cannot wait                        | it loads at most once per top, only on the paths section 6 lists, and a rewrite that has neither is refused |
-| the suffix table goes stale against tldts                                                        | the pin is raised with the nightly, and a suite compares the two over a host corpus                         |
-| the artifact carries a token or a name section that a host's canary scan would reject            | the build fails on it, so it cannot ship                                                                    |
-| no Rust toolchain on this machine (no rustup, cargo, wasm-opt or wasm-bindgen)                   | everything is built in the container, as epoxy is                                                           |
-| blocker list fetches fail, or a list licence is awkward to redistribute                          | lists are fetched at runtime, nothing is vendored, and a failed fetch leaves the blocker off                |
-| the blocker adds a tell                                                                          | a blocked request is a plain network error; the `tells` suite gains cases                                   |
-| other agents land in `src/inject` and `src/server` continuously                                  | rebase onto `origin/master` before every phase and before every gate run                                    |
+| Risk                                                                                             | Handling                                                                                            |
+| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| oxc and meriyah disagree on what parses (webcompat, global return, V8 intrinsics, HTML comments) | the parse parity sweep over the corpora; a disagreement falls back per script                       |
+| the optional chain rewrites are the hardest to express as edits                                  | their own differential corpus, the coverage macro, and a per-script fallback until proved           |
+| nested or overlapping edits                                                                      | the nest-aware engine, property tests, and a failed rewrite falls back rather than emitting garbage |
+| wasm instance memory never shrinks                                                               | allocator reset, instance replacement past a threshold, idle drop in the service worker             |
+| a per-frame wasm instance would blow the frame-cost ceiling                                      | the instance lives only in the shared library realm; `wasm-share` asserts it                        |
+| the fallback library is fetched synchronously where a rewrite cannot wait                        | only a worker or a frame under a top of another build fetches it; a top's shell loads it, section 6 |
+| the suffix table goes stale against tldts                                                        | the pin is raised with the nightly, and a suite compares the two over a host corpus                 |
+| the artifact carries a token or a name section that a host's canary scan would reject            | the build fails on it, so it cannot ship                                                            |
+| no Rust toolchain on this machine (no rustup, cargo, wasm-opt or wasm-bindgen)                   | everything is built in the container, as epoxy is                                                   |
+| blocker list fetches fail, or a list licence is awkward to redistribute                          | lists are fetched at runtime, nothing is vendored, and a failed fetch leaves the blocker off        |
+| the blocker adds a tell                                                                          | a blocked request is a plain network error; the `tells` suite gains cases                           |
+| other agents land in `src/inject` and `src/server` continuously                                  | rebase onto `origin/master` before every phase and before every gate run                            |
 
 ## 13. Toolchain, as found today
 

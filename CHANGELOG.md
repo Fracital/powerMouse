@@ -281,6 +281,32 @@ The first release after a four-year gap. Everything below is breaking.
   origin, a page's worker). docs/rust-plan.md has the measured plan for
   taking the JavaScript parsers out of the inject bundle after it (814 KB
   to at most 416 KB).
+- The JavaScript rewriter is no longer in the inject bundles. meriyah,
+  escodegen and STomp's rewriters on them (with css-tree and tldts, until
+  their wasm modules answer in the page) are one file of their own,
+  `dist/rewriterLib.js`, named by the new `init.assets.rewriterLib`:
+  **a host has to serve one more file**, beside the other bundles, and a
+  host that vendors a list of files has to add it to the list. The
+  controller fetches it when it starts and `wait()` rejects, naming the
+  key, when the host does not serve it. `dist/injectDocument.js` goes from
+  860,006 to 633,099 bytes (224,309 to 173,356 brotli) and
+  `dist/injectWorker.js` from 440,982 to 213,903; `rewriterLib.js` is
+  471,109 (122,541 brotli). Every proxied frame fetched, scanned and kept
+  the larger bundle; only a top ever ran the library in it. Now the
+  service worker writes the file's script into a proxied top's shell,
+  before the bundle: with `rewriter: 'js'` the top's library is made from
+  it, with `'wasm'` the top keeps it for the first rewrite its module has
+  not arrived for or declines, and a frame shares its top's as before. A
+  top's first page-side rewrite is answered 3 to 5 ms sooner than when the
+  bundle carried the library (`measure-first-rewrite`). A worker, and a
+  frame under a top of another build, load the file with one synchronous
+  request the first time they rewrite. The file is asked for as
+  `rewriterLib.js?<hash of its bytes>`, so a host may answer that URL
+  `immutable` (the demo does, when the hash is the file's own). The heap
+  one proxied frame adds does not change (a frame never evaluated the
+  library); `frame-cost`'s bundle budget goes from 850 to 630 KB. New
+  suite `rewriter-fallback`; `client.rewriteCounts` says how a page's
+  rewrites went (the module, declined, before it arrived, the library).
 - The wasm rewriter's glue asks a module only when it answers the revision
   the glue was written against (`wasm-rewriter-glue` suite). The module is
   fetched apart from the bundles, and an older `rewriter.wasm` served

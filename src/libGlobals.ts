@@ -59,6 +59,33 @@ export const navigator: typeof globalThis.navigator = take('navigator');
 export const postMessage: typeof globalThis.postMessage = take('postMessage');
 
 /**
+ * Every global taken above, by name: what a library evaluated later in this
+ * realm is made with (the light library hands them to the rewriter library
+ * it loads, src/rewriterLight.ts). By then the realm may be detached, and
+ * what it would look up itself is gone.
+ */
+export const realmGlobals: Record<string, unknown> = {
+	URL,
+	atob,
+	btoa,
+	TextEncoder,
+	TextDecoder,
+	Reflect,
+	WebAssembly,
+	Function,
+	fetch,
+	Request,
+	Response,
+	XMLHttpRequest,
+	XMLHttpRequestEventTarget,
+	EventSource,
+	WebSocket,
+	DOMParser,
+	navigator,
+	postMessage,
+};
+
+/**
  * What the library logs, kept for the realm that asked (it replays the
  * messages after the call): the library never calls out, so no code of the
  * caller's, which a page can reach, runs while the library's is on the stack.

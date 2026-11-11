@@ -59,7 +59,7 @@ is watched, and `/config.js` carries `dev: true` plus the server's
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | a stylesheet under `/pm/`                 | swaps the `<link>` in place, no navigation                                                                                                                                            |
 | any other file in `demo/public`           | reloads the page                                                                                                                                                                      |
-| `injectDocument.js`, `injectWorker.js`    | reloads every proxied frame                                                                                                                                                           |
+| `inject*.js`, `rewriterLib.js`            | reloads every proxied frame                                                                                                                                                           |
 | `serviceWorker.js`                        | same origin: `registration.update()`, waits for the new worker to activate, points the controller at it and reloads the frames (identical bytes: nothing). Isolated: reloads the page |
 | `Controller.js`, `controllerFrame.*`, ... | reloads the page                                                                                                                                                                      |
 | the server restarted (new `startedAt`)    | reloads the page once it reconnects                                                                                                                                                   |
@@ -322,6 +322,12 @@ For your own deployment:
 - The page, its scripts and `/stomp/` are served with `Cache-Control:
 no-cache` so browsers revalidate and CDNs do not pin a stale service worker
   or shell to a new build; the transports and fonts may be cached for a day.
+  One file under `/stomp/` is kept for good: the rewriter library, which
+  STomp asks for as `rewriterLib.js?<hash of its bytes>` and a worker loads
+  with a synchronous request, where a revalidation is a round trip a script
+  waits for. `demo/server.js` answers that URL with `immutable` only when
+  the hash is the file's own (a page of the build before a deploy asks by
+  the old hash, and gets `no-cache`).
   The demo also registers with `updateViaCache: 'none'`. Behind Cloudflare,
   check the zone's Browser Cache TTL: it overrides origin headers unless a
   cache rule for the host says "respect origin" (stomp.fracit.al and

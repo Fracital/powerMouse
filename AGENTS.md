@@ -90,8 +90,16 @@ on every save (use a `git worktree`).
   through `src/inject/rewriter.ts` (light code reaches modifyJS/modifyCSS
   through `src/rewriters.ts`). A proxied top evaluates the library in a
   removed about:blank frame and its frames share that copy
-  (`src/inject/dom/rewriterRealm.ts`). A removed frame's realm still runs
-  code, but its DOM globals answer `undefined` (structuredClone silently
+  (`src/inject/dom/rewriterRealm.ts`). The parsers and the printer are in
+  no bundle: they are `dist/rewriterLib.js` (`src/rewriterLib.ts`), which a
+  top's shell loads before the bundle, and what the bundles carry is the
+  light library (`src/rewriterLight.ts`), which is handed that file's text
+  when a call needs it. Never import meriyah, escodegen or `rewriteJS.ts`
+  from anything an inject bundle reaches: `frame-cost` fails on the size.
+  Never fetch the file with a synchronous request from a document that has
+  a top to take it from: the browser reports that request to the page. A
+  removed frame's realm still runs code, but its DOM globals answer
+  `undefined` (structuredClone silently
   returned undefined there and broke every shorthand property): anything
   the library reads from the window must be taken in `src/libGlobals.ts`.
   Only strings, numbers and booleans cross; the library never calls out.

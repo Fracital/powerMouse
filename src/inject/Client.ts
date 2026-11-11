@@ -14,7 +14,12 @@ import type {
 	HookPhase,
 	ResolvedHooks,
 } from '../hooks';
-import { addRouteScope, parseRoutedURL, ROUTE_PROTOCOLS } from '../routeURL';
+import {
+	addRouteScope,
+	parseRoutedURL,
+	rewriterLibJS,
+	ROUTE_PROTOCOLS,
+} from '../routeURL';
 import StompURL from '../StompURL';
 import {
 	ABORT_REQUEST,
@@ -30,6 +35,7 @@ import {
 import RemoteTransport from '../transport/RemoteTransport';
 import { BUILD } from '../version';
 import Module from './Module';
+import { rewriteCounts, rewriterLibraryAt } from './rewriter';
 
 export interface ModuleCtor {
 	new (client: any): Module<any>;
@@ -267,6 +273,9 @@ export default class Client {
 		this.serviceWorkers = init.serviceWorkers !== false;
 		this.wasmRewriter = init.rewriter === 'wasm';
 		this.assets = init.assets;
+		// where a rewrite of this realm finds the rewriter library the
+		// bundle does not carry (rewriter.ts): beside the bundle itself
+		rewriterLibraryAt(() => rewriterLibJS(this.url, this.config));
 		this.blocking = !!init.adblock;
 		// a stale cached bundle next to a new service worker: say so once,
 		// the page still gets its best effort
@@ -584,6 +593,10 @@ export default class Client {
 		);
 
 		return channel.port1;
+	}
+	/** @internal how this realm's rewrites went (rewriter.ts rewriteCounts; tests) */
+	get rewriteCounts() {
+		return rewriteCounts();
 	}
 	/**
 	 * Ask the controller (through the service worker) for the wasm modules

@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { watch } from 'node:fs';
 import { copyFile, mkdir, readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -45,6 +46,9 @@ const common = {
 		// when this is not a git checkout
 		'process.env.STOMP_BUILD': JSON.stringify(buildId()),
 		'process.env.NODE_ENV': JSON.stringify(dev ? 'development' : 'production'),
+		// what the rewriter library asset is asked for by: known once that
+		// file is built (see `bundles` below)
+		'process.env.STOMP_LIBRARY': '""',
 	},
 };
 
@@ -115,14 +119,16 @@ const lazyUnicodeTable = {
 };
 
 /**
- * The rewriter library (src/rewriterLib.ts: meriyah, escodegen, css-tree,
- * tldts and the rewriters on them) for the inject bundles, which import it
- * as `stomp:rewriter-lib`: bundled on its own and handed over as a function
- * that evaluates it, so a frame evaluates none of it until it rewrites
- * something, and a top can evaluate the same text in a realm of its own for
- * the frames under it (src/inject/rewriter.ts). Its globals come from
- * src/libGlobals.ts, which also names every global the inject bundles
- * inject: the text names nothing of the bundle it is carried in.
+ * The light rewriter library (src/rewriterLight.ts: the wasm rewriter's
+ * glue and, until their modules answer in the page, css-tree and tldts)
+ * for the inject bundles, which import it as `stomp:rewriter-lib`: bundled
+ * on its own and handed over as a function that evaluates it, so a frame
+ * evaluates none of it until it rewrites something, and a top can evaluate
+ * the same text in a realm of its own for the frames under it
+ * (src/inject/rewriter.ts). Its globals come from src/libGlobals.ts, which
+ * also names every global the inject bundles inject: the text names nothing
+ * of the bundle it is carried in. The parsers and the printer are not in
+ * it: they are the rewriter library below, a file of its own.
  *
  * @type {import('esbuild').Plugin}
  */
@@ -140,13 +146,16 @@ const rewriterLib = {
 			async () => {
 				const result = await build({
 					...common,
+					define: pluginBuild.initialOptions.define,
 					entryPoints: [
-						worker ? 'src/rewriterLibWorker.ts' : 'src/rewriterLibDocument.ts',
+						worker
+							? 'src/rewriterLightWorker.ts'
+							: 'src/rewriterLightDocument.ts',
 					],
 					format: 'iife',
 					globalName: '__stompLib',
 					inject: [resolve('src/libGlobals.ts')],
-					plugins: [noSourceMaps, lazyUnicodeTable],
+					plugins: [noSourceMaps],
 					sourcemap: false,
 					write: false,
 					metafile: true,
@@ -163,6 +172,34 @@ const rewriterLib = {
 			},
 		);
 	},
+};
+
+/**
+ * The rewriter library (src/rewriterLib.ts: meriyah, escodegen, css-tree,
+ * tldts and the rewriters on them), the asset `rewriterLib`: no bundle
+ * carries it. The file is one statement that assigns the library's factory
+ * to a name (src/version.ts LIBRARY_FACTORY), and is read two ways. With
+ * `rewriter: 'js'` a proxied top's shell loads it as a script before the
+ * inject bundle, which takes the factory and removes the name
+ * (src/rewriteHTML.ts, src/inject/rewriter.ts). Anywhere else a copy of
+ * the light library is handed its text the first time a call needs it
+ * (src/inject/rewriter.ts loads it, synchronously) and evaluates it in its
+ * own realm as the body of a function that has the name as a parameter,
+ * which writes no global. A statement survives a host's minifier, which
+ * drops a function expression nobody uses. One file for documents and
+ * workers; a worker never calls the parts it has no use for.
+ *
+ * @type {import('esbuild').BuildOptions}
+ */
+const rewriterLibrary = {
+	...common,
+	entryPoints: { rewriterLib: 'src/rewriterLibDocument.ts' },
+	format: 'iife',
+	globalName: '__stompLib',
+	inject: [resolve('src/libGlobals.ts')],
+	banner: { js: '__stompRewriterLib=function(__stompRealm){' },
+	footer: { js: 'return __stompLib.api;};' },
+	plugins: [noSourceMaps, lazyUnicodeTable],
 };
 
 /**
@@ -220,11 +257,26 @@ const builds = [
 		entryPoints: { SearchBuilder: 'src/bootstrapper/entry.ts' },
 		format: 'iife',
 	},
-].map((options) => ({
-	...common,
-	...options,
-	plugins: [noSourceMaps, lazyUnicodeTable, ...(options.plugins ?? [])],
-}));
+];
+
+/**
+ * Every bundle but the rewriter library, which is built first: the inject
+ * bundles and the controllers ask for that file by the hash of its bytes
+ * (`STOMP_LIBRARY`, src/version.ts LIBRARY), so the URL of another
+ * build's file is another URL and a host can let browsers keep it for
+ * good. The watch build has no bytes to hash before it starts: its files
+ * are asked for by the time it started, and the dev server caches nothing.
+ */
+const bundles = (library) =>
+	builds.map((options) => ({
+		...common,
+		...options,
+		define: {
+			...common.define,
+			'process.env.STOMP_LIBRARY': JSON.stringify(library),
+		},
+		plugins: [noSourceMaps, lazyUnicodeTable, ...(options.plugins ?? [])],
+	}));
 
 await rimraf('dist');
 await mkdir('dist', { recursive: true });
@@ -290,12 +342,13 @@ const reporter = {
 
 if (dev) {
 	const contexts = await Promise.all(
-		builds.map((options) =>
-			context({
-				...options,
-				metafile: true,
-				plugins: [...(options.plugins ?? []), reporter],
-			}),
+		[rewriterLibrary, ...bundles(`dev${Date.now().toString(36)}`)].map(
+			(options) =>
+				context({
+					...options,
+					metafile: true,
+					plugins: [...(options.plugins ?? []), reporter],
+				}),
 		),
 	);
 	await Promise.all(contexts.map((ctx) => ctx.watch()));
@@ -307,5 +360,10 @@ if (dev) {
 	watch(ASSETS, async () => notify(await copyAssets()));
 	console.log('Watching for changes...');
 } else {
-	await Promise.all(builds.map((options) => build(options)));
+	await build(rewriterLibrary);
+	const library = createHash('sha256')
+		.update(await readFile('dist/rewriterLib.js'))
+		.digest('hex')
+		.slice(0, 16);
+	await Promise.all(bundles(library).map((options) => build(options)));
 }

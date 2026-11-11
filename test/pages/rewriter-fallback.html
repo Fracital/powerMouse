@@ -1,0 +1,76 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>rewriter fallback</title>
+	</head>
+	<body>
+		<script>
+			// What a page asks its rewriter for after it loaded (the suite
+			// rewriter-fallback): a function made from a string, an error
+			// message that names the page's expression, and the same function
+			// made in a dedicated worker, a shared worker, a service worker
+			// and a frame sandboxed without allow-same-origin. Each answers
+			// its location as the page sees it, which only rewritten code
+			// does. Under /pages/deep/rwf/ (the service worker's scope).
+			const answered = (port) =>
+				new Promise((resolve) => {
+					port.onmessage = (event) => resolve(event.data);
+					setTimeout(() => resolve({ error: 'no answer' }), 15000);
+				});
+			window.__fallback = {
+				made: () => new Function('return location.href')(),
+				message() {
+					const o = {};
+					const k = 'missing';
+					try {
+						o[k]();
+					} catch (error) {
+						return error.message;
+					}
+					return '';
+				},
+				dedicated() {
+					const worker = new Worker('rewriter-fallback-worker.js');
+					const answer = answered(worker);
+					worker.postMessage('ask');
+					return answer;
+				},
+				shared() {
+					const worker = new SharedWorker('rewriter-fallback-worker.js');
+					worker.port.start();
+					return answered(worker.port);
+				},
+				async service() {
+					const container = navigator.serviceWorker;
+					const registration = await container.register(
+						'rewriter-fallback-worker.js',
+					);
+					await container.ready;
+					const { port1, port2 } = new MessageChannel();
+					const answer = answered(port1);
+					(
+						registration.active ||
+						registration.waiting ||
+						registration.installing
+					).postMessage('ask', [port2]);
+					return answer;
+				},
+				sandboxed(sandbox, name, wait = 15000) {
+					const frame = document.createElement('iframe');
+					frame.setAttribute('sandbox', sandbox);
+					frame.name = name;
+					frame.src = 'rewriter-fallback-child.html';
+					const answer = new Promise((resolve) => {
+						addEventListener('message', (event) => {
+							if (event.source === frame.contentWindow) resolve(event.data);
+						});
+						setTimeout(() => resolve({ error: 'no answer' }), wait);
+					});
+					document.body.append(frame);
+					return answer;
+				},
+			};
+		</script>
+	</body>
+</html>

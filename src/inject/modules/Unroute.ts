@@ -254,6 +254,9 @@ const MUTED: ErrorReport = {
 	colno: 0,
 	error: null,
 };
+/** the deprecation report's id for a synchronous request on a document's main thread */
+const SYNCHRONOUS_REQUEST_REPORT =
+	'XMLHttpRequestSynchronousInNonWorkerOutsideBeforeUnload';
 // the members of a report and its body that hold a URL
 const REPORT_URL_KEYS = [
 	'url',
@@ -742,7 +745,32 @@ export default class UnrouteModule extends Module<Client> {
 			Observer.prototype,
 			'takeRecords',
 		)?.value;
+		// A report about the inject's own code is not the page's. There is
+		// one: a document with no top to take the rewriter library from (a
+		// frame under a top of another build) fetches it with a synchronous
+		// request (src/inject/rewriter.ts), which the browser reports as
+		// deprecated, naming the inject bundle. No request of the page's
+		// raises that report here: its synchronous requests go through the
+		// bridge (dom/modules/Sync.ts).
+		const own = (report: unknown) => {
+			try {
+				const { type, body } = report as {
+					type?: unknown;
+					body?: { id?: unknown; sourceFile?: unknown } | null;
+				};
+				return (
+					type === 'deprecation' &&
+					body?.id === SYNCHRONOUS_REQUEST_REPORT &&
+					typeof body.sourceFile === 'string' &&
+					unrouteURL(this.client, body.sourceFile) === null
+				);
+			} catch (error) {
+				return false;
+			}
+		};
 		const seen = (reports: unknown) => {
+			if (Array.isArray(reports) && reports.some(own))
+				reports = reports.filter((report) => !own(report));
 			if (Array.isArray(reports))
 				for (const report of reports) {
 					if (typeof report !== 'object' || report === null) continue;
@@ -769,7 +797,9 @@ export default class UnrouteModule extends Module<Client> {
 				if (typeof args[0] === 'function') {
 					const callback = args[0];
 					args[0] = function (this: unknown, ...called: unknown[]) {
-						seen(called[0]);
+						called[0] = seen(called[0]);
+						// (nothing left: there was no report of the page's)
+						if (Array.isArray(called[0]) && !called[0].length) return;
 						return Reflect.apply(callback, this, called);
 					};
 				}

@@ -1,8 +1,10 @@
-// The rewriter library of the document inject (src/rewriterLib.ts): scripts,
-// stylesheets and the public suffix list. The list is asked through
-// src/suffix.ts, as in the service worker: of the suffix module once this
-// copy holds it (a proxied top's library is handed the controller's
-// modules, `adopt`), of tldts until then and wherever no module arrives.
+// The rewriter library (src/rewriterLib.ts) as the asset `rewriterLib`
+// (build.js): scripts, stylesheets and the public suffix list, for
+// documents and workers alike. No bundle carries it. The list is asked
+// through src/suffix.ts, as in the service worker: of the suffix module
+// once this copy holds it (a proxied top's library is handed the
+// controller's modules, `adopt`), of tldts until then and wherever no
+// module arrives.
 import { modifyCSS, type StyleRewrittenBy } from './rewriteCSS';
 import { library } from './rewriterLib';
 import { getDomain, getPublicSuffix } from './suffix';

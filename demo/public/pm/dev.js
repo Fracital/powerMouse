@@ -12,7 +12,8 @@
 //                               controller with the new worker, reload the
 //                               proxied frames (isolated mode: reload the
 //                               page, the worker lives in the controller frame)
-//   dist/inject*.js             reload every proxied frame
+//   dist/inject*.js,            reload every proxied frame
+//   dist/rewriterLib.js
 //   dist/transportWorker.js     reload the page (the running worker keeps
 //                               the old code)
 //   any other bundle            reload the page
@@ -223,7 +224,9 @@ async function apply(changed) {
 	const page = list.filter((name) => PAGE_BUNDLES.has(name));
 	if (page.length) return reload(`${page.join(', ')} rebuilt`);
 	const worker = changed.has('serviceWorker.js');
-	const inject = list.filter((name) => name.startsWith('inject'));
+	const inject = list.filter(
+		(name) => name.startsWith('inject') || name === 'rewriterLib.js',
+	);
 	if (worker) {
 		// the worker is registered by the controller frame on the proxy origin,
 		// which this page cannot reach: reloading re-registers it there

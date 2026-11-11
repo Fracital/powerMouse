@@ -28,6 +28,7 @@ import {
 	type HookErrorInfo,
 	type InitHooks,
 } from '../hooks';
+import { libraryFile } from '../routeURL';
 import { isUrlLike, urlLike } from '../StompURL';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
 import type { HostReload, RequestRule } from '../transport/messages';
@@ -681,6 +682,7 @@ export class StompController extends EventTarget {
 	/** how the host page was loaded, until the worker has been told (hostReload.ts) */
 	#hostReload: Promise<HostReload | undefined> | null = null;
 	#readyResolve!: () => void;
+	#readyReject!: (error: Error) => void;
 	private lastHandshake = 0;
 	/** a build mismatch is being healed: the next ready answer must agree */
 	#healing = false;
@@ -860,11 +862,20 @@ export class StompController extends EventTarget {
 					this.id = id;
 					this.config.directory = `${this.directory.pathname}${id}/`;
 				});
+		// the rewriter library is in no bundle: a proxied top's shell loads
+		// it beside the inject bundle, and a realm with no such top (a
+		// worker) loads it with a synchronous request the first time one of
+		// its rewrites needs it. So the file is fetched here, and is in the
+		// HTTP cache before the first proxied page exists. A host that does
+		// not serve it is told here, not by a page that cannot rewrite:
+		// nothing is handed to the service worker and `wait()` rejects
+		const libraryReady = this.#fetchLibrary();
 		this.#hostReady = Promise.all([
 			hooksReady,
 			transportReady,
 			idReady,
 			adblockReady,
+			libraryReady,
 		]).then(() => {
 			if (this.transportHost === 'worker') this.config.workerTransport = true;
 			else delete this.config.workerTransport;
@@ -903,8 +914,16 @@ export class StompController extends EventTarget {
 			if (hookError) this.#reportHookError(hookError, frame);
 		});
 
-		this.#ready = new Promise((resolve) => {
+		this.#ready = new Promise((resolve, reject) => {
 			this.#readyResolve = resolve;
+			this.#readyReject = reject;
+		});
+		// a controller that cannot start says so once, whether or not the
+		// host waits for it
+		this.#ready.catch(() => {});
+		this.#hostReady.catch((error) => {
+			console.error(error);
+			this.#readyReject(error instanceof Error ? error : new Error(`${error}`));
 		});
 		this.#hostReload =
 			init.hostReload === undefined
@@ -1186,7 +1205,38 @@ export class StompController extends EventTarget {
 	}
 	/** (re)register with the service worker once the transport is hosted */
 	#handshake() {
-		this.#hostReady.then(() => this.#handshakeNow());
+		this.#hostReady.then(
+			() => this.#handshakeNow(),
+			() => {
+				// the controller could not start (the constructor said why)
+			},
+		);
+	}
+	/**
+	 * Fetch the rewriter library asset (`init.assets.rewriterLib`) by the
+	 * URL a page loads it with (src/routeURL.ts), which leaves it in the
+	 * HTTP cache, where a page's shell and a worker's synchronous request
+	 * find it. Throws, with the asset's key, when the host does not serve
+	 * it.
+	 */
+	async #fetchLibrary(): Promise<void> {
+		const url = new URL(libraryFile(this.config.assets), this.directory);
+		const missing = (why: string) =>
+			new Error(
+				`Stomp: the host does not serve the asset 'rewriterLib' (${why} for ${url.href}). The inject bundles load the rewriter library from that file; serve dist/${DEFAULT_ASSETS.rewriterLib} beside the other bundles, or name it in init.assets.rewriterLib.`,
+			);
+		let response: Response;
+		try {
+			response = await fetch(url);
+		} catch (error) {
+			throw missing(`${error}`);
+		}
+		if (!response.ok) throw missing(`HTTP ${response.status}`);
+		// a host that answers every path with its own page
+		const type = response.headers.get('content-type') ?? '';
+		if (/^text\/html\b/i.test(type)) throw missing(`a ${type} answer`);
+		// the cache keeps a response that was read to its end
+		await response.arrayBuffer();
 	}
 	/**
 	 * The wasm artifacts, loaded once and compiled once, here. The rewrite

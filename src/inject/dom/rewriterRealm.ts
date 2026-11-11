@@ -1,5 +1,6 @@
 import rewriterLib from 'stomp:rewriter-lib';
 import type { RewriterLib } from '../../rewriterLib';
+import { LIBRARY_FACTORY } from '../../version';
 
 // taken when the bundle loads, before any hook or page code runs: the realm
 // is made through the browser's own methods, so no hook of ours (the IFrame
@@ -16,6 +17,11 @@ const contentWindowGet = Reflect.getOwnPropertyDescriptor(
 	'contentWindow',
 )!.get!;
 const toSource = Function.prototype.toString;
+const setAttribute = Element.prototype.setAttribute;
+const textContentSet = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'textContent',
+)!.set!;
 
 /**
  * The rewriter library (src/rewriterLib.ts) in a realm of its own, for a
@@ -34,7 +40,11 @@ const toSource = Function.prototype.toString;
  * (src/libGlobals.ts). What the realm holds is the library and the last
  * call's context, nothing of any one site's (rewriterLib.ts).
  */
-export function createRewriterRealm(document: Document): RewriterLib | null {
+export function createRewriterRealm(
+	document: Document,
+	/** what makes the library: the bundle's light one, or the rewriter library itself when the shell loaded it (src/inject/rewriter.ts givenLibrary) */
+	factory: (realm?: Record<string, unknown>) => RewriterLib = rewriterLib,
+): RewriterLib | null {
 	let root: Element | null = null;
 	let frame: HTMLIFrameElement | null = null;
 	try {
@@ -48,7 +58,7 @@ export function createRewriterRealm(document: Document): RewriterLib | null {
 			(typeof globalThis & { eval: (code: string) => unknown }) | null;
 		if (!realm) return null;
 		// the library's own text, which names nothing of this bundle's
-		const make = realm.eval(`(${Reflect.apply(toSource, rewriterLib, [])})`);
+		const make = realm.eval(`(${Reflect.apply(toSource, factory, [])})`);
 		if (typeof make !== 'function') return null;
 		const lib = make() as RewriterLib;
 		return typeof lib === 'object' && lib !== null ? lib : null;
@@ -58,6 +68,57 @@ export function createRewriterRealm(document: Document): RewriterLib | null {
 		if (root && frame)
 			try {
 				Reflect.apply(removeChild, root, [frame]);
+			} catch (error) {
+				// not in the document after all
+			}
+	}
+}
+
+/**
+ * The rewriter library's factory from the asset's `text`, run in this
+ * realm's `document` as a script with its script policy's `nonce`: for a
+ * document whose policy refuses eval (a sandbox without allow-scripts,
+ * sandbox.ts), where the library cannot make it from the text itself
+ * (src/rewriterLight.ts). The shell's own scripts run the same way. The
+ * text assigns the factory to a name (src/version.ts LIBRARY_FACTORY),
+ * which is made here, not enumerable, and is gone again with the script's
+ * element before this returns: an inline script runs as it is inserted,
+ * and it is inserted with the browser's own methods, which no hook of ours
+ * and no observer sees first. Null when the script did not run.
+ */
+export function libraryFactoryFromScript(
+	document: Document,
+	text: string,
+	nonce: string,
+): ((realm?: Record<string, unknown>) => RewriterLib) | null {
+	let root: Element | null = null;
+	let script: Element | null = null;
+	try {
+		root = Reflect.apply(documentElementGet, document, []) as Element | null;
+		if (!root) return null;
+		script = Reflect.apply(createElement, document, ['script']) as Element;
+		Reflect.apply(setAttribute, script, ['nonce', nonce]);
+		Reflect.apply(textContentSet, script, [text]);
+		Reflect.defineProperty(globalThis, LIBRARY_FACTORY, {
+			value: undefined,
+			writable: true,
+			configurable: true,
+		});
+		Reflect.apply(appendChild, root, [script]);
+		const made: unknown = Reflect.getOwnPropertyDescriptor(
+			globalThis,
+			LIBRARY_FACTORY,
+		)?.value;
+		return typeof made === 'function'
+			? (made as (realm?: Record<string, unknown>) => RewriterLib)
+			: null;
+	} catch (error) {
+		return null;
+	} finally {
+		Reflect.deleteProperty(globalThis, LIBRARY_FACTORY);
+		if (root && script)
+			try {
+				Reflect.apply(removeChild, root, [script]);
 			} catch (error) {
 				// not in the document after all
 			}

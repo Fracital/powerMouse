@@ -19,6 +19,9 @@ import { BUILD } from '../../version';
 import Client from '../Client';
 import {
 	getPublicSuffix,
+	givenLibrary,
+	libraryText,
+	loadRewriterLibrary,
 	modifyCSS,
 	modifyJS,
 	shareRewriter,
@@ -36,11 +39,12 @@ import DOMAttributesModule, {
 } from './modules/DOMAttributes';
 import { MARKER } from './modules/MutationObserver';
 import SyncModule from './modules/Sync';
-import { createRewriterRealm } from './rewriterRealm';
+import { createRewriterRealm, libraryFactoryFromScript } from './rewriterRealm';
 import {
 	documentNonce,
 	guardDocument,
 	pageSandbox,
+	runningNonce,
 	sandboxTokens,
 	serializeScripted,
 	stripScripts,
@@ -254,6 +258,8 @@ export default class DocumentClient extends Client {
 	#frameElementGet: (() => Element | null) | undefined;
 	/** the flags a popup inherited from its opener when it was created */
 	#inheritedFlags: Set<string> | null = null;
+	/** the nonce the shell script that made this client carried, in its document (guardScripts) */
+	#shellNonce: { document: Document; nonce: string } | null = null;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		this.#setTimeout = this.global.setTimeout;
@@ -297,16 +303,40 @@ export default class DocumentClient extends Client {
 		this.#inheritedFlags = this.#openerFlags();
 		this.sandboxFlags = this.#sandbox();
 		this.isDOM = true;
+		// read while the shell's own script makes this client, never later: a
+		// script running then could be the page's
+		const shellNonce = runningNonce(this.global.document);
+		if (shellNonce !== null)
+			this.#shellNonce = { document: this.global.document, nonce: shellNonce };
 		this.guardScripts();
 		// The rewriter library this bundle's rewrites use (rewriter.ts). The
 		// bundle's first client is its realm's document; a top makes the realm
 		// it shares now, before any of our hooks or of the page's code exists
 		if (
-			shareRewriter(() => this.#rewriterLibrary()) &&
+			shareRewriter(() => this.#rewriterLibrary(), {
+				load: (library) => this.#topClient().loadSharedRewriter(library),
+				text: () => {
+					const top = this.#topClient();
+					return top === this ? null : top.rewriterLibraryText(BUILD);
+				},
+				factory: (text) => {
+					const nonce = documentNonce(this.global.document);
+					return nonce === null
+						? null
+						: libraryFactoryFromScript(this.global.document, text, nonce);
+				},
+			}) &&
 			!this.sandboxedOpaque &&
 			this.#topClient() === this
 		)
-			this.#rewriter = createRewriterRealm(this.global.document);
+			// with `rewriter: 'js'` the realm holds the rewriter library
+			// itself, made from the file this top's shell loaded; with
+			// `'wasm'` the light library, which is handed that file's text
+			// when a call needs it
+			this.#rewriter = createRewriterRealm(
+				this.global.document,
+				this.wasmRewriter ? undefined : (givenLibrary() ?? undefined),
+			);
 		// with `rewriter: 'wasm'` the library a top shares rewrites in the
 		// module the controller compiled, once it has arrived: the realm
 		// only instantiates it, and until then (and whenever the module
@@ -329,6 +359,29 @@ export default class DocumentClient extends Client {
 	 */
 	get sharedRewriter(): RewriterLib | null {
 		return this.#rewriter ?? null;
+	}
+	/**
+	 * The rewriter library (the asset the bundles do not carry) loaded into
+	 * the library this top shares, by this top's realm, which holds the
+	 * file's text (its shell loaded it); where it does not, its request for
+	 * it is this document's, not a frame's, whose own answer to the `allow`
+	 * attribute the page gave it (`sync-xhr 'none'`, as on ad frames).
+	 * False when `library` is not this top's. @internal
+	 */
+	loadSharedRewriter(library: RewriterLib): boolean {
+		if (!this.#rewriter || library !== this.#rewriter) return false;
+		loadRewriterLibrary(library);
+		return true;
+	}
+	/**
+	 * The rewriter library's text as this top's shell loaded it, for a
+	 * document under it that keeps a library of its own (one sandboxed
+	 * without allow-same-origin): a string, and nothing of this realm's
+	 * with it. Null without the text, or for a bundle of another `build`.
+	 * @internal
+	 */
+	rewriterLibraryText(build: string): string | null {
+		return build === BUILD ? libraryText() : null;
 	}
 	/** a top's library (null: it could not make one), undefined for a frame under a top */
 	#rewriter: RewriterLib | null | undefined;
@@ -559,10 +612,17 @@ export default class DocumentClient extends Client {
 	 * document gets a Content-Security-Policy that lets only scripts carrying
 	 * the inject's nonce run (sandbox.ts). It is in place before any of the
 	 * page's markup reaches the document, and every document this one makes
-	 * of its own (about:blank, srcdoc, blob:, data:) inherits it.
+	 * of its own (about:blank, srcdoc, blob:, data:) inherits it. A document
+	 * that inherited one already (its shell's scripts carry that policy's
+	 * nonce) gets a policy with the same nonce.
 	 */
 	guardScripts() {
-		if (!this.allows('allow-scripts')) guardDocument(this.global.document);
+		if (this.allows('allow-scripts')) return;
+		const document = this.global.document;
+		guardDocument(
+			document,
+			this.#shellNonce?.document === document ? this.#shellNonce.nonce : null,
+		);
 	}
 	/** this document's requests go from an opaque origin (the request modules mark them) */
 	override get opaqueRequests(): boolean {

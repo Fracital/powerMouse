@@ -1,0 +1,27 @@
+<!doctype html>
+<title>rewriter fallback child</title>
+<body onload="window.loaded = new Function('return 1')()">
+	<p style="background: url(blank-pixel.svg)" onclick="this.title = 'clicked'">
+		a frame of rewriter-fallback.html
+	</p>
+	<script>
+		// what the browser reports to this document as deprecated (reportIds)
+		window.__reports = [];
+		try {
+			window.__observer = new ReportingObserver(
+				(reports) =>
+					window.__reports.push(...reports.map((report) => report.body.id)),
+				{ types: ['deprecation'], buffered: true },
+			);
+			window.__observer.observe();
+		} catch (error) {
+			window.__reports.push(String(error));
+		}
+		window.reportIds = () => [
+			...window.__reports,
+			...window.__observer.takeRecords().map((report) => report.body.id),
+		];
+		// its location as a function it makes from a string reads it
+		parent.postMessage({ href: new Function('return location.href')() }, '*');
+	</script>
+</body>

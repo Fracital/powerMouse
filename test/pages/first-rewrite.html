@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>first rewrite</title>
+	</head>
+	<body>
+		<script>
+			// the first thing the page evaluates in the page: a function made
+			// from a string is rewritten there, by the rewriter the inject has
+			(function () {
+				var made = new Function('return location.href');
+				window.__first = { at: performance.now(), href: made() };
+			})();
+		</script>
+	</body>
+</html>

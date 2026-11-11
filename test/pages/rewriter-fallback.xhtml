@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+	<head>
+		<title>rewriter fallback, XHTML</title>
+	</head>
+	<body>
+		<script>
+			// an XML document as a proxied top (the suite rewriter-fallback):
+			// its location as a function it makes from a string reads it, and
+			// what the browser reports to it as deprecated
+			window.__reports = [];
+			window.__observer = new ReportingObserver(
+				(reports) =>
+					window.__reports.push(...reports.map((report) => report.body.id)),
+				{ types: ['deprecation'], buffered: true },
+			);
+			window.__observer.observe();
+			window.reportIds = () => [
+				...window.__reports,
+				...window.__observer.takeRecords().map((report) => report.body.id),
+			];
+			window.__xml = { href: new Function('return location.href')() };
+		</script>
+	</body>
+</html>

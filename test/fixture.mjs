@@ -154,6 +154,7 @@ const NEUTRAL = {
 	'frame.js': 'controllerFrame.js',
 	'tw.js': 'transportWorker.js',
 	'rw.js': 'rewriteWorker.js',
+	'lib.js': 'rewriterLib.js',
 };
 // the transport modules under neutral names too (assets and transport-worker
 // suites): /neutral/transport.mjs is epoxy, /neutral/libcurl.mjs is libcurl

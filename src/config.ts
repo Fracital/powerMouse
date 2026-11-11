@@ -198,6 +198,16 @@ export interface Assets {
 	blocker?: string;
 	/** the public suffix lookup's wasm module (docs/rust-plan.md, phase 2) */
 	suffix?: string;
+	/**
+	 * The rewriter library (meriyah, escodegen, css-tree, tldts and the
+	 * rewriters on them): no inject bundle carries it. A proxied top's shell
+	 * loads this file, and a worker fetches it the first time it rewrites.
+	 * A controller fetches it when it starts and fails when the host does
+	 * not serve it; it is asked for as `<name>?<hash of its bytes>`, so it
+	 * can be cached for as long as the host likes (docs/rust-plan.md,
+	 * section 6)
+	 */
+	rewriterLib?: string;
 }
 
 export const DEFAULT_ASSETS: Required<Assets> = {
@@ -212,6 +222,7 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 	scanner: 'scanner.wasm',
 	blocker: 'blocker.wasm',
 	suffix: 'suffix.wasm',
+	rewriterLib: 'rewriterLib.js',
 };
 
 /**

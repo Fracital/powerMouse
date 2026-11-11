@@ -77,6 +77,40 @@ export function documentNonce(document: Document): string | null {
 	return nonces.get(document) ?? null;
 }
 
+const nativeCurrentScript = Reflect.getOwnPropertyDescriptor(
+	Document.prototype,
+	'currentScript',
+)!.get!;
+const nativeNonce = Reflect.getOwnPropertyDescriptor(
+	HTMLElement.prototype,
+	'nonce',
+)!.get!;
+const NONCE = /^[\w+/=-]+$/;
+
+/**
+ * The nonce the script running in `document` carries, or null: read while
+ * a shell's own script makes the document's client, it is the nonce of
+ * the policy the document inherited from the one that built the shell (an
+ * about:srcdoc, about:blank, blob: or data: document of a document without
+ * allow-scripts), which a shell's scripts are the only ones to carry
+ * (src/rewriteHTML.ts).
+ */
+export function runningNonce(document: Document): string | null {
+	try {
+		const script = Reflect.apply(
+			nativeCurrentScript,
+			document,
+			[],
+		) as Element | null;
+		if (!script) return null;
+		const nonce: unknown = Reflect.apply(nativeNonce, script, []);
+		return typeof nonce === 'string' && NONCE.test(nonce) ? nonce : null;
+	} catch (error) {
+		// an SVG script, or a document of another kind
+		return null;
+	}
+}
+
 /**
  * Put the script policy on `document` (once): a `<meta http-equiv>` in its
  * head (its documentElement when it has no head), which applies from the
@@ -85,8 +119,18 @@ export function documentNonce(document: Document): string | null {
  * inherited by the about:blank, srcdoc, blob: and data: documents it
  * creates. Returns the policy's nonce, or null when the document has no
  * element to hold it yet.
+ *
+ * `inherited`: the nonce of a policy the document already runs under, the
+ * one it inherited from the document that built its shell (runningNonce).
+ * Its own policy then takes the same nonce: a script has to satisfy every
+ * policy of a document, so a script the inject inserts later (the rewriter
+ * library run with the nonce, src/inject/dom/rewriterRealm.ts) carrying a
+ * nonce of its own would be refused by the inherited one.
  */
-export function guardDocument(document: Document): string | null {
+export function guardDocument(
+	document: Document,
+	inherited?: string | null,
+): string | null {
 	const known = nonces.get(document);
 	if (known !== undefined) return known;
 	const parent = (Reflect.apply(nativeHead, document, []) ??
@@ -94,9 +138,10 @@ export function guardDocument(document: Document): string | null {
 	if (!parent) return null;
 	const bytes = new Uint8Array(16);
 	crypto.getRandomValues(bytes);
-	const nonce = [...bytes]
-		.map((byte) => byte.toString(16).padStart(2, '0'))
-		.join('');
+	const nonce =
+		inherited && NONCE.test(inherited)
+			? inherited
+			: [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 	const meta = Reflect.apply(nativeCreateElement, document, [
 		'meta',
 	]) as Element;

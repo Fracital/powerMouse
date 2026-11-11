@@ -1,6 +1,7 @@
 import GenericCodec from './Codecs';
-import { assetName, type Config } from './config';
+import { assetName, type Assets, type Config } from './config';
 import StompURL from './StompURL';
+import { LIBRARY } from './version';
 
 export const ROUTE_PROTOCOLS = ['http:', 'https:'];
 
@@ -178,6 +179,20 @@ export function injectDocumentJS(url: StompURL, config?: Config) {
 
 export function injectWorkerJS(url: StompURL, config?: Config) {
 	return `${assetBase(url, config)}${assetName(config?.assets, 'injectWorker')}`;
+}
+
+/**
+ * The rewriter library asset (a top's shell loads it, src/rewriteHTML.ts;
+ * a worker fetches it, src/inject/rewriter.ts), by the URL the controller
+ * fetched it with when it started: the same cache entry
+ */
+export function rewriterLibJS(url: StompURL, config?: Config) {
+	return `${assetBase(url, config)}${libraryFile(config?.assets)}`;
+}
+
+/** the rewriter library's file as it is asked for: its name and its build's hash */
+export function libraryFile(assets?: Assets) {
+	return `${assetName(assets, 'rewriterLib')}?${encodeURIComponent(LIBRARY)}`;
 }
 
 export function geckoXHR(url: StompURL) {

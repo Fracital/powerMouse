@@ -64,12 +64,13 @@
 //                       files to the page, which reloads what changed; see
 //                       demo/public/pm/dev.js
 import { execFile } from 'node:child_process';
-import { readFileSync, watch } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, statSync, watch } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { hostname, tmpdir } from 'node:os';
-import { dirname, join, sep } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import express from 'express';
@@ -461,7 +462,45 @@ const cached = { maxAge: '1d', immutable: false };
 app.use(
 	express.static(fileURLToPath(new URL('./public/', import.meta.url)), fresh),
 );
-app.use('/stomp/', express.static(stompPath, fresh));
+// One STomp file is not revalidated: the rewriter library, which no inject
+// bundle carries. A proxied page whose rewrite needs it and has no copy (a
+// worker, a sandboxed frame, any page of `rewriter: 'wasm'` whose module
+// declined a script) loads it with a synchronous request, and a
+// revalidation there is a round trip the page's script waits for. STomp
+// asks for the file as `rewriterLib.js?<hash of its bytes>`, so one URL is
+// one file and browsers and CDNs may keep it for good. Only when the hash
+// is this file's: a page of the build before a deploy asks by the old
+// hash and must not be told to keep the new file under it. The watch build
+// has no hash (its files change under one name): nothing is kept.
+let libraryHash = { mtimeMs: -1, hash: '' };
+function libraryHashOf(path) {
+	try {
+		const { mtimeMs } = statSync(path);
+		if (mtimeMs !== libraryHash.mtimeMs)
+			libraryHash = {
+				mtimeMs,
+				hash: createHash('sha256')
+					.update(readFileSync(path))
+					.digest('hex')
+					.slice(0, 16),
+			};
+		return libraryHash.hash;
+	} catch (error) {
+		return '';
+	}
+}
+const stompFiles = {
+	setHeaders: (res, path) =>
+		res.set(
+			'Cache-Control',
+			!dev &&
+				basename(path) === 'rewriterLib.js' &&
+				res.req.originalUrl.endsWith(`?${libraryHashOf(path)}`)
+				? 'public, max-age=31536000, immutable'
+				: 'no-cache',
+		),
+};
+app.use('/stomp/', express.static(stompPath, stompFiles));
 app.use(
 	'/examples/',
 	express.static(
