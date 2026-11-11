@@ -20,6 +20,14 @@ case "$version" in
 	;;
 esac
 
+# what the artifact is built from, for its provenance (inputs.sh);
+# ONLY_SOURCES=1 stops there, with nothing built
+mkdir -p /work/out
+if [[ ${ONLY_SOURCES:-0} == 1 ]]; then
+	bash /work/inputs.sh "$crate" > "/work/out/$name.inputs"
+	exit 0
+fi
+
 # LOCK=1 lets cargo resolve a changed dependency and write the lockfile,
 # which build.sh copies back to be committed with the change
 locked=--locked
@@ -57,4 +65,6 @@ wasm-opt -Oz --strip-debug --strip-producers --strip-target-features \
 	--enable-sign-ext --enable-mutable-globals \
 	-o "/work/out/$name.wasm" "/work/out/$name.unopt.wasm"
 rm "/work/out/$name.unopt.wasm"
+# after the build, so the lockfile is the one it resolved (LOCK=1)
+bash /work/inputs.sh "$crate" > "/work/out/$name.inputs"
 ls -la /work/out

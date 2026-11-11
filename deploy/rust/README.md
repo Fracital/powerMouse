@@ -14,7 +14,17 @@ deploy/rust/build.sh <crate> <name>    # e.g. build.sh rwjs rewriter
 
 gives `assets/<name>.wasm`, `assets/<name>.wasm.sha256` and
 `assets/<name>.UPSTREAM` (the crate, a hash of its sources, the toolchain
-image and every pin). The first run builds the toolchain image (a few
+image and every pin). The `sources` hash is of what that crate's build
+takes in and nothing else (`inputs.sh`, run in the container): the crate's
+own files, those of the workspace crates it depends on by path (`rwjs`
+builds `rust/edits` in), the dependency set cargo resolves for it
+(`cargo tree -p <crate> --locked`, with features), the release profile,
+`pins.env` and the build scripts. So an artifact's line changes when its
+bytes could, and adding a crate to the workspace or touching another
+crate's sources or dependencies leaves it alone.
+`ONLY_SOURCES=1 deploy/rust/build.sh <crate> <name>` builds nothing and
+prints the line the tree as it stands would get, to hold against the one
+committed. The first run builds the toolchain image (a few
 minutes); later runs reuse it until `pins.env` or the `Dockerfile` changes.
 Where docker's bridge network cannot reach the Rust mirrors, set `ENGINE` to
 a wrapper that adds `--network host` to `docker build`, as for
