@@ -1162,6 +1162,14 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   `onOpen`. docs/same-origin-policy.md, "Cross-origin isolation", has the
   measurements and what is left. (cross-origin-isolation and sop-escapes
   suites.)
+- `Frame.go` of a cross-origin isolated host waits for its element to be in
+  the document (a shadow tree included) at most 10 seconds, then sets `src`
+  as asked; the wait holds the element only through a WeakRef, so a frame
+  dropped before it is inserted is collected and its wait ends with it. The
+  wait for the new document's report starts when `src` is set, under any
+  host: a frame inserted while `go` was routing the URL no longer takes the
+  load of its about:blank for the new document's. (cross-origin-isolation
+  suite.)
 - A frame whose navigation the proxy refused reads as one that failed to
   load natively: `contentDocument` is null and `contentWindow.location.href`
   throws the page's SecurityError, where the hook threw one naming the

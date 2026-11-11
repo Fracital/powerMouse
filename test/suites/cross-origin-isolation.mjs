@@ -285,6 +285,73 @@ if (!only) {
 	await page.context().close();
 }
 
+// The wait of Frame.go for its element ends: at the limit (10 s) for a
+// frame that is never put in the document, which is then navigated as asked,
+// and as soon as a frame dropped before it was inserted is collected. Its
+// timer is the controller's own setTimeout of 100 ms, counted here.
+if (!only || 'the wait of Frame.go'.includes(only)) {
+	const page = await openDemo(browser, PROXY);
+	const cdp = await page.context().newCDPSession(page);
+	await page.evaluate(() => {
+		const native = window.setTimeout;
+		window.__watchTimers = 0;
+		window.setTimeout = function (callback, delay, ...rest) {
+			if (
+				delay === 100 &&
+				/\/stomp\/[^\s]*controller/i.test(new Error().stack ?? '')
+			)
+				window.__watchTimers++;
+			return native.call(this, callback, delay, ...rest);
+		};
+	});
+	const counted = async (ms) => {
+		await page.evaluate(() => (window.__watchTimers = 0));
+		await sleep(ms);
+		return page.evaluate(() => window.__watchTimers);
+	};
+	const idle = await counted(1000);
+	const url = pageURL({ headers: [], parts: 'self' });
+	const kept = await page.evaluate((url) => {
+		const element = document.createElement('iframe');
+		window.__kept = element;
+		window.controller.createFrame(element).go(url);
+		return element.getAttribute('src');
+	}, url);
+	const watching = await counted(1000);
+	await sleep(9500);
+	const after = await page.evaluate(() => window.__kept.getAttribute('src'));
+	const left = await counted(1000);
+	ok(
+		'a frame never put in the document: Frame.go watches for it, then stops at the limit and navigates it as asked',
+		idle === 0 && kept === null && watching > 0 && !!after && left === 0,
+		JSON.stringify({ idle, kept, watching, navigated: !!after, left }),
+	);
+	await page.evaluate(() => window.__kept.remove());
+
+	await page.evaluate((url) => {
+		const element = document.createElement('iframe');
+		const frame = window.controller.createFrame(element);
+		frame.go(url);
+		// the host lets the frame go: nothing of its holds it
+		window.controller.frames.splice(window.controller.frames.indexOf(frame), 1);
+		window.__dropped = new WeakRef(element);
+	}, url);
+	const before = await counted(500);
+	await cdp.send('HeapProfiler.collectGarbage');
+	await sleep(300);
+	await cdp.send('HeapProfiler.collectGarbage');
+	const collected = await page.evaluate(
+		() => window.__dropped.deref() === undefined,
+	);
+	const remaining = await counted(1000);
+	ok(
+		'a frame dropped before it is put in the document is collected, and the wait of its Frame.go ends with it',
+		before > 0 && collected && remaining === 0,
+		JSON.stringify({ before, collected, remaining }),
+	);
+	await page.context().close();
+}
+
 // The host that does not send the headers: a second demo server without
 // them. Nothing is isolated there, so every page reads what a page without
 // the headers reads natively, whatever it sent.

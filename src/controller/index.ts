@@ -2066,23 +2066,56 @@ export class StompController extends EventTarget {
 	}
 }
 
+/** how often `connected` looks for an insertion no mutation of the document's shows */
+const CONNECTED_POLL_MS = 100;
+/** how long `connected` waits for the element at most */
+const CONNECTED_LIMIT_MS = 10_000;
+/** what each element `connected` waits for resolves: kept as long as the element is */
+const awaitingConnection = new WeakMap<Element, () => void>();
+
 /**
- * Resolves once `element` is in the document. An insertion into a shadow
- * tree is not the document's own mutation, so a timer looks as well.
+ * Resolves once `element` is in the document, or once it has not been put
+ * there for CONNECTED_LIMIT_MS. A mutation of the document's says so at once;
+ * an insertion into a shadow tree is no mutation of the document's own, so a
+ * timer looks as well. Neither holds the element (watchConnection): what
+ * resolves the promise is kept by the element itself, so a frame dropped
+ * before it is inserted takes its waiting with it.
  */
 function connected(element: Element): Promise<void> {
 	if (element.isConnected) return Promise.resolve();
-	return new Promise((resolve) => {
-		const check = () => {
-			if (!element.isConnected) return;
-			observer.disconnect();
-			clearInterval(timer);
-			resolve();
-		};
-		const observer = new MutationObserver(check);
-		observer.observe(document, { childList: true, subtree: true });
-		const timer = setInterval(check, 50);
-	});
+	const waiting = new Promise<void>((resolve) =>
+		awaitingConnection.set(element, resolve),
+	);
+	watchConnection(new WeakRef(element));
+	return waiting;
+}
+
+/**
+ * The observer and the timer of `connected`, made apart from it so that
+ * nothing they close over reaches the element but the WeakRef: they stop once
+ * it is in the document, past the limit, or collected
+ */
+function watchConnection(target: WeakRef<Element>) {
+	const until = performance.now() + CONNECTED_LIMIT_MS;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const stop = () => {
+		observer.disconnect();
+		clearTimeout(timer);
+	};
+	const check = (polled: boolean) => {
+		const element = target.deref();
+		if (!element) return stop();
+		if (element.isConnected || performance.now() >= until) {
+			stop();
+			const resolve = awaitingConnection.get(element);
+			awaitingConnection.delete(element);
+			return resolve?.();
+		}
+		if (polled) timer = setTimeout(() => check(true), CONNECTED_POLL_MS);
+	};
+	const observer = new MutationObserver(() => check(false));
+	observer.observe(document, { childList: true, subtree: true });
+	timer = setTimeout(() => check(true), CONNECTED_POLL_MS);
 }
 
 /**
@@ -2185,7 +2218,6 @@ export class Frame extends EventTarget {
 	 * Listen for the frame's `load` before calling when you need that event.
 	 */
 	async go(url: string): Promise<void> {
-		const reported = this.#nextReport();
 		this.controller.reportViewport(
 			this.element.clientWidth,
 			this.element.clientHeight,
@@ -2194,8 +2226,13 @@ export class Frame extends EventTarget {
 		// In a cross-origin isolated page a frame navigated as it is inserted
 		// keeps its initial document's window, and with it that document's
 		// 5 microsecond clock, whatever the new document is (measured): the
-		// frame is navigated once it is in the document
+		// frame is navigated once it is in the document (or, one that is not
+		// put there within CONNECTED_LIMIT_MS, as it was asked to be)
 		if (globalThis.crossOriginIsolated === true) await connected(this.element);
+		// waited for from here: until the frame is navigated nothing of the
+		// wait holds it, and the load of the about:blank its insertion made
+		// is not taken for the new document's
+		const reported = this.#nextReport();
 		noteBrowserNavigation(this.historyWindow());
 		this.element.src = routed;
 		await reported;

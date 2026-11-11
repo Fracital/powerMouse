@@ -1042,7 +1042,11 @@ natively (`src/isolation.ts`, `src/server/rewrites.ts`):
   the 100 microsecond clock; the request that comes back carries the
   referrer and policy of the first. For the same reason `Frame.go` of an
   isolated host waits until its element is in the document before it sets
-  `src`. A frame the permission does reach keeps the reused Window, as
+  `src`: a mutation of the document says so, and a 100 ms timer looks for
+  an insertion into a shadow tree. The wait holds the element only through
+  a WeakRef and ends when the element is collected, or after 10 seconds,
+  when `src` is set as asked (the frame then keeps the reused Window). A
+  frame the permission does reach keeps the reused Window, as
   natively (so does the 5 microsecond clock of a same-origin frame whose
   own Permissions-Policy denies it).
 - A frame Chrome would not load is not loaded: the worker answers a network
@@ -1074,7 +1078,9 @@ COEP and CORP, through redirects, `allow` and its denial, credentialless,
 about:blank, `srcdoc`, a Document-Isolation-Policy, frames navigated before
 and after insertion and again) and what its embedder policy does to its
 loads (18), and it calls `Frame.go` before the frame's element is in the
-document (it is then put into a shadow tree). 1232 checks in all, two cases
+document (it is then put into a shadow tree; it is never put there, and the
+wait ends at its limit; it is dropped, and the wait ends when it is
+collected). 1234 checks in all, two cases
 on its known list (the Document-Isolation-Policy frame, below). sop-escapes'
 case of a page that sends both headers is off its known list; both suites
 run a demo server whose pages send the headers.
