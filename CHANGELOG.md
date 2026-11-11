@@ -4949,6 +4949,10 @@ token '%'`. The body is decoded before rewriting and re-encoded after.
 - The demo prints its deployment facts (mode and origins, transport and wisp
   endpoint, version, controller state, boot errors) as styled console badges
   instead of showing the isolation mode on the landing page.
+- `textContent = null` leaves an element empty (it left the text "null"),
+  an empty `textContent` or `innerText` leaves no text node, and
+  `innerText` puts a `<br>` at each line break, as natively.
+  (adversarial-scripts suite.)
 
 ### Origin isolation
 

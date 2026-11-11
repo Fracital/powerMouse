@@ -910,11 +910,15 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 					for (const node of [...that.childNodes]) node.remove();
 
+					// null is the empty string, which leaves no text node, as
+					// natively (it left a text node reading "null")
+					const written = args[0] === null ? '' : String(args[0]);
+					if (written === '') return;
 					// a script's text set while it is connected runs at once
 					const text =
 						that instanceof this.client.global.HTMLScriptElement
-							? this.client.prepareScriptText(that, String(args[0]))
-							: String(args[0]);
+							? this.client.prepareScriptText(that, written)
+							: written;
 					(that as Element).append(new this.client.global.Text(text));
 				},
 			),
@@ -939,7 +943,18 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						// other node and leaves half the old text in place
 						for (const node of [...that.childNodes]) node.remove();
 
-						that.append(new this.client.global.Text(args[0]));
+						// as the browser builds it: null is the empty string, which
+						// leaves nothing, and each line break is a <br> between
+						// the text of the lines
+						const text = args[0] === null ? '' : String(args[0]);
+						if (text === '') return;
+						const nodes: Node[] = [];
+						for (const [index, line] of text.split(/\r\n|\r|\n/).entries()) {
+							if (index)
+								nodes.push(this.client.global.document.createElement('br'));
+							if (line !== '') nodes.push(new this.client.global.Text(line));
+						}
+						that.append(...nodes);
 					},
 				),
 			},

@@ -26,6 +26,8 @@
 	// payload saw the spoofed top and the page's URL; 'did-not-run' means the
 	// browser itself never executed it.
 	const R = __advRecord;
+	const P = __advProbe;
+	const A = __advAsync;
 	const C = __advPayload;
 	const CC = __advChildPayload;
 	const route = (name, fn) => {
@@ -440,6 +442,30 @@
 		const svg = document.createElementNS(SVG, 'svg');
 		document.body.append(svg);
 		svg.innerHTML = '<script>' + p + '<\/script>';
+	});
+	// What the text setters leave in an element: nothing for null and for
+	// the empty string, and innerText's line breaks as <br> elements
+	P('textContent and innerText leave what the browser leaves', () => {
+		const left = (set) => {
+			const div = document.createElement('div');
+			div.append('old');
+			set(div);
+			return div.childNodes.length + ':' + div.innerHTML;
+		};
+		const script = document.createElement('script');
+		script.textContent = null;
+		const saw = [
+			left((d) => (d.textContent = null)),
+			left((d) => (d.textContent = '')),
+			left((d) => (d.textContent = 'a')),
+			left((d) => (d.innerText = null)),
+			left((d) => (d.innerText = '')),
+			left((d) => (d.innerText = 'a\nb\r\n\rc')),
+			script.childNodes.length + ':' + script.textContent,
+		].join(' | ');
+		return saw === '0: | 0: | 1:a | 0: | 0: | 6:a<br>b<br><br>c | 0:'
+			? 'as natively'
+			: 'TELL:' + saw;
 	});
 	route('math annotation-xml script', (p) => {
 		const d = document.createElement('div');

@@ -321,7 +321,11 @@ export default class ReadbackModule extends Module<DocumentClient> {
 						// unchanged (detached, or the running script restoring its
 						// source): recorded as written, for a rewrite on insertion
 						sources.set(that, {
-							written: String(args[0]),
+							// (textContent's null is the empty string)
+							written:
+								key === 'textContent' && args[0] === null
+									? ''
+									: String(args[0]),
 							rewritten: nativeText(that),
 						});
 					}
