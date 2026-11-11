@@ -637,7 +637,18 @@ Filled in commit by commit; see the CHANGELOG for each.
     wrote or appended is gone, `contentDocument` is another object), so no
     served document can stand in for a synchronous about:blank. The copies
     stay for about:blank documents, srcdoc documents under them, and object
-    and embed documents.
+    and embed documents. A srcdoc document under an about:blank frame or
+    popup could be served from the worker instead, as blob: and data:
+    documents are (`inline:`), which would give it a worker of its own:
+    measured and not built. Fifty images of another site in such a frame
+    load in 116 ms (Chrome 156) and 189 ms (152) through the proxy, against
+    103 and 140 ms in a srcdoc frame the worker controls and 47 and 91 ms
+    natively (medians of 9), so it would save a tenth to a quarter of that
+    document's load, but only for that one kind: an about:blank frame's own
+    loads (98 and 177 ms) and an object's or embed's stay copies, with the
+    same path through the bundle above, and the srcdoc document's readbacks
+    (`about:srcdoc`, its base URL, its parent's policy container) would
+    need a stand-in of their own.
   - Cost: frame-cost 1070 KB of heap a frame (1064 before, ceiling 1120),
     the bundle 816 KB (809, ceiling 850); an about:blank frame with fifty
     images of another site loads in 48 ms (median of 9; 47 to 62 before,
