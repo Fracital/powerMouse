@@ -185,7 +185,15 @@ for (const [name, selector] of [
 	);
 	const pages = page.context().pages().length;
 	await page.click(selector);
-	await sleep(500);
+	// the address bar ends on the link's URL; the frame may report the page it
+	// is leaving first, so wait for the end, not a fixed time
+	await page
+		.waitForFunction(
+			(url) => document.querySelector('#omni input.omnibox').value === url,
+			href,
+			{ timeout: 15000 },
+		)
+		.catch(() => {});
 	const shown = await page.evaluate(() => ({
 		omni: document.querySelector('#omni input.omnibox').value,
 		browser: !document.getElementById('browser').classList.contains('hidden'),
