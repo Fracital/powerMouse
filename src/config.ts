@@ -222,6 +222,7 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 export const WASM_ASSETS = [
 	'rewriter',
 	'scanner',
+	'suffix',
 ] as const satisfies (keyof Assets)[];
 
 /** a served file's name: the host's, else the default */

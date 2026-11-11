@@ -1224,6 +1224,11 @@ export class StompController extends EventTarget {
 			rewriteWorkers: this.#rewriteWorkers?.held() ?? [],
 		};
 	}
+	/** @internal the public suffix list the service worker answers sites from (its suffix module's), null while tldts answers (tests) */
+	async suffixList(): Promise<{ commit: string; date: string } | null> {
+		await this.wait();
+		return this.#rpc!.call('suffixList', undefined);
+	}
 	/** (re)register with the service worker over a fresh MessageChannel */
 	#handshakeNow() {
 		if (this.#port) {

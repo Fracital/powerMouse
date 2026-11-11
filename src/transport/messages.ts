@@ -540,6 +540,12 @@ export type SWbound = {
 	clearCache: [];
 	/** the wasm modules the service worker's thread holds, by Assets key (src/wasm/thread.ts) */
 	modules: [undefined, string[]];
+	/**
+	 * the public suffix list the service worker's sites are answered from:
+	 * the commit and date its suffix module names (src/wasm/suffix.ts), null
+	 * while tldts answers
+	 */
+	suffixList: [undefined, { commit: string; date: string } | null];
 	/** the host reading, importing or wiping the cookie jar */
 	cookies: [CookieCommand, CookieResult];
 	/**

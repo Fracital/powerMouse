@@ -83,7 +83,8 @@ export type CookieSource = 'http' | 'script';
  * The public suffix of a host (tldts `getPublicSuffix` with the private list,
  * so github.io counts), or null for an IP. Passed in rather than imported:
  * the inject bundles share this module for `BrowserCookieArray`, and a
- * static tldts import would carry its 100 KB list into every worker.
+ * static import of src/suffix.ts would carry tldts and its 100 KB list into
+ * every worker.
  */
 export type PublicSuffix = (host: string) => string | null;
 
@@ -827,7 +828,7 @@ function migrateLegacy(
  */
 export async function openCookies(): Promise<Cookies> {
 	// loaded here, not at the top: see PublicSuffix
-	const { getPublicSuffix } = await import('tldts');
+	const { getPublicSuffix } = await import('../suffix');
 	const db = await openDB('stompCookies', 2, {
 		upgrade: async (db, oldVersion, _newVersion, tx) => {
 			// nothing but the stores' own requests may be awaited in here (an
@@ -857,9 +858,7 @@ export async function openCookies(): Promise<Cookies> {
 	// restarted whenever the browser idles it, which is not the end of the
 	// user's session
 
-	const cookies = new Cookies(db, (host) =>
-		getPublicSuffix(host, { allowPrivateDomains: true }),
-	);
+	const cookies = new Cookies(db, (host) => getPublicSuffix(host, true));
 	cookies.onChange = (domain) => {
 		broadcastChange(domain);
 		for (const listener of jarListeners) listener(domain);

@@ -1,9 +1,9 @@
-import { getDomain, getPublicSuffix } from 'tldts';
 import { Config, ConfigCodec } from '../config';
 import { kindPartition, partitionSite } from '../partition';
 import { nestedTopOf } from '../rewriteHTML';
 import { addRouteScope } from '../routeURL';
 import { SW_ROUTE, type ApiReply } from '../serviceWorkerTypes';
+import { getDomain, getPublicSuffix } from '../suffix';
 import {
 	ABORT_REQUEST,
 	BLOB_MINTED,
@@ -43,6 +43,7 @@ import {
 import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
+import { suffixListPin } from '../wasm/suffix';
 import { adoptModules, heldModules } from '../wasm/thread';
 import { knownOriginOf, knownTopSiteOf, recordBlobOrigin } from './blobOrigins';
 import {
@@ -195,6 +196,10 @@ function registerController(
 				await (await server).clearCache();
 			},
 			modules: async () => [await heldModules(), []],
+			suffixList: async () => {
+				await heldModules();
+				return [suffixListPin(), []];
+			},
 			socket: async ({ url, source }) => {
 				// a WebSocket never passes this worker: the controller asks from
 				// its handshake hook and refuses the socket on a yes
@@ -426,9 +431,7 @@ function serviceWorkerSender(
 function routePartition(kind: string, origin: string): string {
 	if (kind.startsWith('sw:'))
 		return serviceWorkers.versionPartition(kind.slice(3));
-	return kindPartition(kind, origin, (host) =>
-		getPublicSuffix(host, { allowPrivateDomains: true }),
-	);
+	return kindPartition(kind, origin, (host) => getPublicSuffix(host, true));
 }
 
 /** the first segment under the scope, and the rest of the path */

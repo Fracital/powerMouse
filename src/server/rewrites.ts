@@ -2,7 +2,6 @@ import {
 	BareCompatibleClient,
 	type ProxyTransport,
 } from '@mercuryworkshop/proxy-transports';
-import { getDomain, getPublicSuffix } from 'tldts';
 import { acceptLanguage } from '../acceptLanguage';
 import GenericCodec from '../Codecs';
 import { codecType, Config, ParsedConfig } from '../config';
@@ -51,6 +50,7 @@ import { modifyJS, RewrittenBy, routeJS, ScriptType } from '../rewriteJS';
 import { parseRoutedURL, routeBinary, unwrapRoute } from '../routeURL';
 import type { ControlInfo } from '../serviceWorkerTypes';
 import StompURL from '../StompURL';
+import { getDomain, getPublicSuffix } from '../suffix';
 import type {
 	RequestErrorKind,
 	RequestInfo,
@@ -174,9 +174,8 @@ type Site = 'none' | 'same-origin' | 'same-site' | 'cross-site';
 function siteBetween(from: URL, to: URL): Site {
 	if (from.origin === to.origin) return 'same-origin';
 	if (from.protocol !== to.protocol) return 'cross-site';
-	const domain = getDomain(from.hostname, { allowPrivateDomains: true });
-	return (domain !== null &&
-		domain === getDomain(to.hostname, { allowPrivateDomains: true })) ||
+	const domain = getDomain(from.hostname, true);
+	return (domain !== null && domain === getDomain(to.hostname, true)) ||
 		from.hostname === to.hostname
 		? 'same-site'
 		: 'cross-site';
@@ -496,9 +495,8 @@ interface Rewriter {
 /** the page aborted the request (its signal fired) */
 const ABORTED = Symbol('aborted');
 
-/** tldts getPublicSuffix with the private list, as the jar and the partitions take it */
-const publicSuffix = (host: string) =>
-	getPublicSuffix(host, { allowPrivateDomains: true });
+/** the public suffix with the private list, as the jar and the partitions take it */
+const publicSuffix = (host: string) => getPublicSuffix(host, true);
 
 /**
  * The top-level site a routed URL's kind names: a nested document's (its

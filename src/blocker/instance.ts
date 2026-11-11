@@ -1,10 +1,11 @@
 // An instance of the blocker's wasm module (rust/block, assets/blocker.wasm)
 // in the service worker: the buffer ABI of src/wasm/module.ts, with bytes in
 // and out as well as strings (a serialized engine is not text), and the one
-// import answered here: the public suffix list, from the tldts the worker
-// already carries for its cookie jar and its partitions, so the crate's own
-// copy stays out of the artifact.
-import { getDomain } from 'tldts';
+// import answered here: the public suffix list, from what the worker already
+// asks for its cookie jar and its partitions (src/suffix.ts: the suffix
+// module when the worker holds it, tldts otherwise), so the crate's own copy
+// stays out of the artifact.
+import { getDomain } from '../suffix';
 import type { BufferExports } from '../wasm/module';
 
 /** the operations `r` takes in the low byte of its flags (rust/block/src/lib.rs) */
@@ -32,7 +33,7 @@ const decoder = new TextDecoder();
 
 /** the registrable domain (eTLD+1) of a hostname, as the lists' `$domain=` and third-party rules need it */
 export function registrableDomain(host: string): string | null {
-	return getDomain(host, { allowPrivateDomains: true });
+	return getDomain(host, true);
 }
 
 export class BlockerInstance {

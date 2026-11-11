@@ -9,7 +9,10 @@
 // holds no instance. A page loads and runs as before either way: a module
 // only ever answers what the JavaScript rewriter would have. A stylesheet's
 // request says the scanner module found its pieces (`rewriteBy`), and its
-// url() is routed as before.
+// url() is routed as before. The service worker names the public suffix
+// list its sites are answered from once it holds the suffix module
+// (rust/suffix/src/pins.env), and none while tldts answers.
+import { readFileSync } from 'node:fs';
 import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
@@ -65,8 +68,8 @@ async function held(settled) {
 	return last;
 }
 
-/** every module of the build: the JS rewriter and the CSS and markup scanner */
-const MODULES = ['rewriter', 'scanner'];
+/** every module of the build: the JS rewriter, the CSS and markup scanner and the public suffix list */
+const MODULES = ['rewriter', 'scanner', 'suffix'];
 const holdsAll = (names) => MODULES.every((name) => names.includes(name));
 
 /** load the fixture page with a stylesheet of one url(): how the sheet was scanned and whether its image was fetched */
@@ -131,6 +134,8 @@ if (process.env.STOMP_REWRITER !== 'wasm') {
 			none.rewriteWorkers.every((names) => names.length === 0),
 		JSON.stringify(none),
 	);
+	const list = await page.evaluate(() => window.__controller.suffixList());
+	ok('and tldts answers the service worker its sites', list === null, list);
 }
 
 ok(
@@ -153,6 +158,17 @@ ok(
 		'every rewrite worker holds the compiled modules',
 		all.rewriteWorkers.length === 2 && all.rewriteWorkers.every(holdsAll),
 		JSON.stringify(all),
+	);
+	const pins = readFileSync(
+		new URL('../../rust/suffix/src/pins.env', import.meta.url),
+		'utf8',
+	);
+	const pinned = (key) => new RegExp(`^${key}=(.*)$`, 'm').exec(pins)?.[1];
+	const list = await page.evaluate(() => window.__controller.suffixList());
+	ok(
+		"the service worker's sites are answered from the suffix module's list",
+		list?.commit === pinned('PSL_COMMIT') && list?.date === pinned('PSL_DATE'),
+		JSON.stringify(list),
 	);
 	const result = await load('w');
 	ok(
