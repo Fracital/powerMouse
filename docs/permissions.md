@@ -67,7 +67,13 @@ Chrome answers `getUserMedia` in this order (measured in headless Chrome
 `allow` and with it, with the permission undecided, granted and denied,
 with a microphone and a camera, with no camera, and with neither):
 
-1. Malformed constraints, and a request for neither kind: TypeError.
+1. Malformed constraints, and a request for neither kind: TypeError. A
+   kind is asked for by `true` and any other truthy value, by any object
+   and by `null` (a member that is null is an empty set of constraints:
+   `{ audio: null }` opens the microphone); `false`, `0`, `''`, `NaN` and
+   `undefined` ask for nothing. The constraints themselves may be any
+   object, a function and `document.all` too, and each member is read
+   once.
 2. Audio, when asked for: no microphone is "NotFoundError: Requested
    device not found"; constraints no microphone satisfies are
    OverconstrainedError, its `constraint` the one that failed (`deviceId`
@@ -124,20 +130,82 @@ had to ask for showed the host's prompt for a request that could only
 fail; and a page that read `permissions.query()` at once after a refused
 request for both kinds could still read `prompt` for one of them.
 
-Limits. The verdict costs one round trip to the controller per request,
-and the controller makes them one at a time. For each request that gets as
-far as the policy, Chrome logs "Permissions policy violation: microphone
-is not allowed in this document." (or camera) as an error in the console
-of the controller's document, the host page or in isolation mode the
-controller frame, as it does for any frame its policy refuses; a host
-whose `Reporting-Endpoints` name a default group is sent the report.
+Not every request needs the verdict, and three kinds get none:
+
+- A request the browser's own call answers. A site that holds the
+  permission, and one that neither STomp nor the browser has decided about
+  (the browser's own prompt asks), go straight to the browser's
+  `getUserMedia`, which makes checks 1 to 3 itself, in its order.
+- A document the browser's own policy refuses every kind it asks for: the
+  host's `Permissions-Policy` header, or the `allow` of a frame above the
+  proxied page (`document.featurePolicy`, which no proxied page can
+  widen). Such a page reads `denied` and is refused, as a page under that
+  policy is natively, and the browser's call says so itself: it can
+  neither prompt nor open a device there, its answer comes in Chrome's
+  order, and its console line is the page's own, as natively. (Only when
+  every kind is refused. With one of two refused Chrome's real permission
+  path answers NotAllowedError too, but under
+  `--use-fake-ui-for-media-stream` it opens the other kind, so that
+  request takes the checks below.)
+- Kinds with no constraints on them (`true`, `null`, any value that is no
+  object). No such set is malformed and none can fail a device, so only a
+  missing device ends the request before the policy, and
+  `enumerateDevices` names every kind the browser has.
+
+The controller's frame under a host's own headers. The frame is the
+host's document's (the controller frame's in isolation mode), so the
+host's headers are its headers. Measured in Chrome 152 and 156, an
+`about:blank` frame whose `allow` turns both devices off, made by a
+document served with each of these, is made and answers the three kinds
+of request (TypeError, OverconstrainedError, NotAllowedError) in under
+10 ms, with no `securitypolicyviolation` event:
+`Content-Security-Policy: frame-src 'none'`, `child-src 'none'`,
+`default-src 'none'` (Chrome applies none of them to an `about:blank`
+frame), `sandbox allow-scripts allow-same-origin`,
+`Permissions-Policy: camera=(), microphone=()`,
+`Cross-Origin-Embedder-Policy: require-corp` and `credentialless`, with
+and without `Cross-Origin-Opener-Policy: same-origin`, `X-Frame-Options:
+DENY`, `frame-ancestors 'none'` and `require-trusted-types-for 'script'`.
+Under `sandbox` without `allow-same-origin` the document has no origin
+and reading its own frame throws: there is no verdict, at once (and no
+service worker either, so no proxy). No header makes a page wait on the
+controller's 4 s or the inject's 6 s. The suite asks `mediaVerdict` in a
+document under each header, and runs the top-level and frame cases
+through a demo behind a server that adds a Content-Security-Policy, a
+sandbox and a Permissions-Policy to every document (`demoBehind` in
+test/lib.mjs). Under an embedder policy no proxied page loads at all
+today (the worker's documents do not send the header Chrome then
+requires of a frame), so there only the frame itself is covered.
+
+Limits. The verdict costs one round trip to the controller per request
+that needs one, and the controller makes them one at a time. Chrome logs
+"Permissions policy violation: microphone is not allowed in this
+document." (or camera) as an error in the console of a document whose
+policy refuses a request, for every request that is not a TypeError (one
+that ends in OverconstrainedError too), so each verdict leaves that line
+in the console of the controller's document, the host page or in
+isolation mode the controller frame; a host whose `Reporting-Endpoints`
+name a default group is sent the report. There is no way to the same
+answer without the line: Chrome writes it when the request is made, in
+any frame its policy refuses (a sandboxed one, one removed at once, which
+then never answers), and a frame its policy does not refuse would prompt
+or open the device. So the line is left only for a request with
+constraints on a kind, from a site that was refused, a frame the page's
+policy refuses, or a site the host is asked about. Natively the line is
+in the refused page's own console; through the proxy a frame the page's
+policy refuses (and the browser's does not) has none.
 Constraints that are not plain data (a function, a symbol) get no verdict,
 and neither does a page whose controller does not answer within 6 s:
 then STomp looks for the devices itself (`enumerateDevices` names every
 kind the browser has, whatever the policy and the permission), answers
 NotFoundError for a missing kind, and leaves the constraints to the
-browser's own call, after the policy and the permission. The constraints
-are read once more than natively (a getter in them runs again).
+browser's own call, after the policy and the permission. `audio` and
+`video` are read once, as natively; what is inside them is read once
+more (a getter there runs again), and only its enumerable members go to
+the controller. A request for both kinds whose policy refuses the
+microphone only, from a site granted both, is "NotAllowedError:
+Permission dismissed" in Chrome (a refused camera is "Permission
+denied"); STomp says "Permission denied" for either.
 
 The suite makes each of these requests as a site that has not been asked,
 as one that was refused and in a frame its policy refuses, on the

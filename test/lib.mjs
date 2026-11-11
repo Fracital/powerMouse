@@ -19,6 +19,8 @@ import {
 	rmSync,
 	writeFileSync,
 } from 'node:fs';
+import { createServer, request } from 'node:http';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -226,6 +228,69 @@ export async function launchPrivateSound(args = []) {
 		if (dir) rmSync(dir, { recursive: true, force: true });
 		return null;
 	}
+}
+
+/**
+ * The demo behind a server that adds headers to every document it serves:
+ * a host with policy headers of its own (a Content-Security-Policy, a
+ * Permissions-Policy), which the demo's server has no switch for.
+ * `headers(port)` makes them for the front's port, so a policy can name its
+ * own origins. The demo picks its mode and its origins from the page's
+ * address, so both work through the front: resolves to `proxy` (the
+ * same-origin controller), `host` (the isolated host page) and `close()`.
+ */
+export async function demoBehind(headers) {
+	const demo = Number(PORT);
+	let added = {};
+	const front = createServer((req, res) => {
+		const upstream = request(
+			{
+				host: '127.0.0.1',
+				port: demo,
+				path: req.url,
+				method: req.method,
+				headers: req.headers,
+			},
+			(answer) => {
+				const document = /text\/html/.test(
+					answer.headers['content-type'] ?? '',
+				);
+				res.writeHead(answer.statusCode, {
+					...answer.headers,
+					...(document ? added : {}),
+				});
+				answer.pipe(res);
+			},
+		);
+		upstream.on('error', () => res.destroy());
+		req.pipe(upstream);
+	});
+	// the wisp socket, as it came
+	front.on('upgrade', (req, socket, head) => {
+		const upstream = connect(demo, '127.0.0.1', () => {
+			let text = `${req.method} ${req.url} HTTP/1.1\r\n`;
+			for (let i = 0; i < req.rawHeaders.length; i += 2)
+				text += `${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}\r\n`;
+			upstream.write(`${text}\r\n`);
+			upstream.write(head);
+			socket.pipe(upstream);
+			upstream.pipe(socket);
+		});
+		upstream.on('error', () => socket.destroy());
+		socket.on('error', () => upstream.destroy());
+	});
+	// every interface: localhost may resolve to ::1
+	await new Promise((resolve) => front.listen(0, resolve));
+	const { port } = front.address();
+	added = headers(port);
+	return {
+		proxy: `http://127.0.0.1:${port}/`,
+		host: `http://localhost:${port}/`,
+		close: () => {
+			front.closeAllConnections();
+			front.close();
+		},
+	};
 }
 
 /**

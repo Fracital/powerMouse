@@ -45,11 +45,26 @@ async function verdictOf(constraints: unknown): Promise<MediaVerdict | null> {
 	frame.hidden = true;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
-		document.documentElement.appendChild(frame);
-		const media = frame.contentWindow?.navigator.mediaDevices;
-		if (!media) return null;
+		// A host's own headers never leave the page waiting on VERDICT_MS:
+		// Chrome makes this frame and answers in it at once under a
+		// Content-Security-Policy (frame-src, child-src and default-src
+		// apply to no about:blank frame), a sandbox that keeps the origin,
+		// a Permissions-Policy that turns the devices off and an embedder
+		// policy (measured, docs/permissions.md). A frame that cannot be
+		// asked (a document sandboxed out of its origin is another origin
+		// than its own frame) throws when it is read: no verdict, and no
+		// wait
+		let request: Promise<MediaStream>;
+		try {
+			document.documentElement.appendChild(frame);
+			const media = frame.contentWindow?.navigator.mediaDevices;
+			if (!media) return null;
+			request = media.getUserMedia(constraints as MediaStreamConstraints);
+		} catch (error) {
+			return null;
+		}
 		const stream = await Promise.race([
-			media.getUserMedia(constraints as MediaStreamConstraints),
+			request,
 			new Promise<null>((resolve) => {
 				timer = setTimeout(() => resolve(null), VERDICT_MS);
 			}),

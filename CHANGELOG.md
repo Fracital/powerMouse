@@ -861,6 +861,25 @@ sinkId })` and made in a track's settings, capabilities and constraints
   them for a moment. permissions suite: every request as a site that has not
   asked, a refused one, a granted one and a frame its policy refuses, with
   both devices, no camera and no microphone.
+- `getUserMedia` reads the kinds a request asks for as Chrome does: a
+  member that is `null` or any object asks for its kind (`{ audio: null }`
+  opens the microphone natively), constraints may be a function or
+  `document.all`, and `audio` and `video` are read once. Before, such a
+  request reached the browser's call unasked, and a site that was refused
+  got the device the browser lets the proxy origin use. The controller's
+  verdict is asked only where it is needed: a site that holds the
+  permission, or that nobody has decided about, goes straight to the
+  browser's call; a page whose host's `Permissions-Policy` or a frame above
+  refuses every kind it asks for is refused by the browser itself, with its
+  console line in the page's own console, as natively; and a kind with no
+  constraints on it needs only the device list. The verdict frame answers at
+  once under a host's own Content-Security-Policy (`frame-src`, `child-src`,
+  `default-src`, `sandbox`), Permissions-Policy and embedder policy
+  (measured on Chrome 152 and 156), and a host sandboxed out of its origin
+  gets no verdict instead of a wait. permissions suite: those kinds as a
+  refused and a granted site, the verdict in a document under each header,
+  and the demo behind a server that adds a Content-Security-Policy, a
+  sandbox or a Permissions-Policy to every document.
 - Client hints follow Chrome per proxied origin. A top-level page's
   `Accept-CH` is kept for its real origin (not the proxy's, which every
   proxied site shares) and applies at once to its own subresources and to

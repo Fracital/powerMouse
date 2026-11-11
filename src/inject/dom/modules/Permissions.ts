@@ -44,6 +44,16 @@ const FEATURE: Record<string, string> = {
 	'speaker-selection': 'speaker-selection',
 };
 
+/**
+ * What the browser converts as an object where it expects a dictionary: a
+ * function too, and document.all, which says it is undefined
+ */
+const isObject = (value: unknown): value is object =>
+	value !== null &&
+	(typeof value === 'object' ||
+		typeof value === 'function' ||
+		(typeof value === 'undefined' && value !== undefined));
+
 type IdKey = 'deviceId' | 'groupId';
 /** the device ids a page names, as the browser knows them (devices()) */
 interface DeviceIds {
@@ -175,6 +185,35 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				return false;
 			}
 		};
+		// the browser's own policy for this document: the host's
+		// Permissions-Policy header and the allow of the frames above decide
+		// it, and what it refuses no proxied page can have, whatever its own
+		// policy says. A page under such a policy natively reads `denied` and
+		// is refused as a frame without allow is, so that is what this is
+		const policyOf = Reflect.getOwnPropertyDescriptor(
+			global.Document.prototype,
+			'featurePolicy',
+		)?.get;
+		const browserPolicy = new Map<string, boolean>();
+		const browserAllows = (feature: string): boolean => {
+			let allows = browserPolicy.get(feature);
+			if (allows === undefined) {
+				allows = true;
+				try {
+					const policy = Reflect.apply(policyOf!, global.document, []) as {
+						features(): string[];
+						allowsFeature(feature: string): boolean;
+					};
+					// a feature this browser does not know is not its to refuse
+					if (policy.features().includes(feature))
+						allows = policy.allowsFeature(feature);
+				} catch (error) {
+					// no featurePolicy (not Chrome): the browser's call says
+				}
+				browserPolicy.set(feature, allows);
+			}
+			return allows;
+		};
 		const allowed = (name: string): boolean => {
 			// Chrome asks for notifications from a top-level site only, or a
 			// frame of its own origin
@@ -182,6 +221,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				return client.url.url.origin === site;
 			const feature = FEATURE[name];
 			if (!feature) return true;
+			if (!browserAllows(feature)) return false;
 			if (features && feature in features) return features[feature];
 			return sameOriginAsParent();
 		};
@@ -333,10 +373,6 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		// 156 has a policy feature for it (speaker-selection, default
 		// allowlist self) that an allow attribute gives a frame; before, no
 		// frame of another origin could, whatever its allow (measured on 152)
-		const policyOf = Reflect.getOwnPropertyDescriptor(
-			global.Document.prototype,
-			'featurePolicy',
-		)?.get;
 		let speakerPolicy: boolean | null = null;
 		const speakers = (): boolean => {
 			if (speakerPolicy === null)
@@ -357,9 +393,26 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		};
 
 		this.geolocation(request, allowed);
+		// whether a request for `names` reaches the browser's own call without
+		// this module refusing it or the host being asked: the site holds the
+		// permission, or neither it nor the browser has decided and the
+		// browser's own prompt asks
+		const direct = async (names: string[]) => {
+			await refresh();
+			for (const name of names) {
+				if (!allowed(name)) return false;
+				const state = siteState(name);
+				if (state === 'granted') continue;
+				if (state !== 'prompt' || (await realState(name)) !== 'prompt')
+					return false;
+			}
+			return true;
+		};
 		this.userMedia(
 			request,
 			allowed,
+			(name) => !browserAllows(FEATURE[name]),
+			direct,
 			(constraints) => ask<MediaVerdict>({ op: 'media', constraints }),
 			this.devices(
 				() => ask<string>({ op: 'deviceSalt' }),
@@ -1055,8 +1108,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		return {
 			elsewhere,
 			incoming: async (constraints) => {
-				if (constraints === null || typeof constraints !== 'object')
-					return constraints;
+				if (!isObject(constraints)) return constraints;
 				const { audio, video } = constraints as Record<string, unknown>;
 				if (names(audio) || names(video)) await learn();
 				return over(constraints, {
@@ -1088,6 +1140,8 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			| { call: false; dismissed: boolean }
 		>,
 		allowed: (name: string) => boolean,
+		browserRefuses: (name: string) => boolean,
+		direct: (names: string[]) => Promise<boolean>,
 		verdict: (constraints: unknown) => Promise<MediaVerdict | null>,
 		deviceIds: DeviceIds,
 	) {
@@ -1172,13 +1226,25 @@ export default class PermissionsModule extends Module<DocumentClient> {
 					const constraints = (await deviceIds.incoming(args[0])) as
 						MediaStreamConstraints | undefined;
 					if (args.length) args[0] = constraints;
+					// the kinds asked for, as the browser reads the members: null
+					// and any object are a set of constraints (measured: `audio:
+					// null` opens the microphone), anything else a boolean
+					const asks = (member: unknown) =>
+						member === null || isObject(member) || !!member;
 					const names: string[] = [];
-					if (constraints && typeof constraints === 'object') {
-						if (constraints.video) names.push('camera');
-						if (constraints.audio) names.push('microphone');
+					if (isObject(constraints)) {
+						if (asks(constraints.video)) names.push('camera');
+						if (asks(constraints.audio)) names.push('microphone');
 					}
 					// the browser rejects a request for nothing with its own TypeError
 					if (!names.length) return Reflect.apply(target, that, args);
+					// kinds the browser's own policy refuses this document (the
+					// host's Permissions-Policy, the allow of a frame above):
+					// its call can neither prompt nor open a device, and answers
+					// as it does natively under that policy, in its order and
+					// with its line in this document's console
+					if (names.every(browserRefuses))
+						return Reflect.apply(target, that, args);
 					const refused = (dismissed = false) =>
 						new global.DOMException(
 							dismissed ? 'Permission dismissed' : 'Permission denied',
@@ -1186,29 +1252,53 @@ export default class PermissionsModule extends Module<DocumentClient> {
 						);
 					// what the browser answers before its policy and its permission
 					// (in a frame of the controller's document: `elsewhere`)
-					const plain = plainOf(constraints);
-					const here = plain === undefined ? null : deviceIds.elsewhere(plain);
-					const first = here ? await verdict(plain) : null;
-					if (first?.name === 'TypeError')
-						throw new global.TypeError(first.message);
-					if (first?.name === 'OverconstrainedError')
-						throw new Overconstrained(
-							here!(first.constraint ?? ''),
-							first.message,
-						);
-					if (
-						first?.name === 'NotFoundError' ||
-						// no verdict (a host without the check, constraints no
-						// message carries): the devices at least
-						(first?.name !== 'NotAllowedError' && (await missing(that, names)))
-					)
-						throw new global.DOMException(
-							'Requested device not found',
-							'NotFoundError',
-						);
-					if (!names.every(allowed)) throw refused();
+					const checks = async () => {
+						const plain = plainOf(constraints);
+						// kinds with no constraints on them (true, null): no set
+						// of them is malformed and none can fail a device, so only
+						// a missing device ends the request before the policy.
+						// The controller is not asked, and its console gets no
+						// line
+						const bare =
+							plain !== undefined &&
+							!isObject((plain as MediaStreamConstraints).audio) &&
+							!isObject((plain as MediaStreamConstraints).video);
+						const here =
+							plain === undefined || bare ? null : deviceIds.elsewhere(plain);
+						const first = here ? await verdict(plain) : null;
+						if (first?.name === 'TypeError')
+							throw new global.TypeError(first.message);
+						if (first?.name === 'OverconstrainedError')
+							throw new Overconstrained(
+								here!(first.constraint ?? ''),
+								first.message,
+							);
+						if (
+							first?.name === 'NotFoundError' ||
+							// no verdict (none needed, a host without the check,
+							// constraints no message carries): the devices at least
+							(first?.name !== 'NotAllowedError' &&
+								(await missing(that, names)))
+						)
+							throw new global.DOMException(
+								'Requested device not found',
+								'NotFoundError',
+							);
+					};
+					// a request that goes straight to the browser's call gets the
+					// browser's order from it; one this module answers, or the
+					// host is asked about, gets those checks first
+					const straight = await direct(names);
+					if (!straight) {
+						await checks();
+						if (!names.every(allowed)) throw refused();
+					}
 					const answer = await request(names);
-					if (!answer.call) throw refused(answer.dismissed);
+					if (!answer.call) {
+						// refused after all (the site was answered meanwhile)
+						if (straight) await checks();
+						throw refused(answer.dismissed);
+					}
 					try {
 						const stream = await Reflect.apply(target, that, args);
 						void answer.settle(true);
