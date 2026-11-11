@@ -170,7 +170,10 @@ for (const [mode, base] of [
 		went[0] === 'resolved' && went[1] < 10000 && landed === 'HIST 2',
 		JSON.stringify([...went, landed]),
 	);
-	// and in the window in which a revive is checked before it is believed
+	// and right after that restart's handshake. The revive names the run of
+	// the worker it is from, so the controller knows this one is from
+	// another than the worker it just shook hands with; it used to ask the
+	// stopped one over its port first, and waited a second for the silence
 	await stop();
 	const back = await go(`${FIXTURE}pages/hist-1.html`);
 	const returned = await titled('HIST 1');
@@ -179,6 +182,12 @@ for (const [mode, base] of [
 		back[0] === 'resolved' && back[1] < 10000 && returned === 'HIST 1',
 		JSON.stringify([...back, returned]),
 	);
+	if (process.env.SKIP_TIMING !== '1')
+		ok(
+			`${mode}: with no second spent asking the stopped worker whether it knows the controller`,
+			back[1] < 1000,
+			JSON.stringify(back),
+		);
 	await sleep(2500);
 	await stop();
 	const routed = await timed(() => {

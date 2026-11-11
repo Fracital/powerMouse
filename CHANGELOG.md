@@ -3983,6 +3983,17 @@ url`) carries its value and targets that window. An about:blank child of
     the WebSocket's first message in 114 to 118 ms. The synchronous calls
     (cookies, storage, a synchronous XHR) still freeze the page until
     their limit after a stop.
+- A controller tells a restarted service worker's revive from the worker it
+  has just shaken hands with at once. The revive names the run of the worker
+  it is from, and the worker that takes a handshake says which run it is
+  (`hello`), so a revive of another run means a handshake and one of the same
+  run means nothing. Before, within two seconds of a handshake the controller
+  asked the worker over its port, and a worker stopped again in that time says
+  nothing: a host's navigation right after a second stop waited a second for
+  the silence (1201 to 1326 ms, now 160 to 434 ms), and so did a page's first
+  request after a stop that soon after a handshake (1119 to 1214 ms, now 121
+  to 180; sw-restart). A worker of an earlier build, whose revive names
+  nothing, is asked as before.
 - `history.pushState` and `replaceState` refuse a URL of another origin, or
   one that does not parse, with a SecurityError naming the page's origin and
   URL, like the browser; before this the URL was routed and accepted (every

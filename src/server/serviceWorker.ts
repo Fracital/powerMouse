@@ -34,6 +34,7 @@ import {
 	PermissionMessage,
 	postToPort,
 	RequestInfo,
+	ReviveMessage,
 	ServiceWorkerApiMessage,
 	SRCDOC_CLAIM,
 	SRCDOC_VOUCH,
@@ -292,6 +293,10 @@ function registerController(
 
 	port.addEventListener('message', (event) => rpc.receive(event.data));
 	port.start();
+	// which run of the worker has this controller: its revive, on its way or
+	// still to come, is not for it (a controller of an earlier build has no
+	// such method and checks over the port instead)
+	rpc.call('hello', { instance: INSTANCE }).catch(() => {});
 
 	const ref: ControllerRef = {
 		directory,
@@ -1145,6 +1150,8 @@ async function serve(event: FetchEvent, ref: ControllerRef): Promise<Response> {
 
 /** when this worker (re)started: its first moments are the revive window */
 const STARTED_AT = Date.now();
+/** this run of the worker, to its controllers (ReviveMessage) */
+const INSTANCE = `${STARTED_AT.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 /**
  * How long after the worker starts a routed request whose controller has not
  * registered yet waits for it. A restarted worker knows no controller until
@@ -1244,5 +1251,7 @@ setTimeout(async () => {
 	for (const client of await self.clients.matchAll({
 		includeUncontrolled: true,
 	}))
-		client.postMessage({ [SW_REVIVE]: {} });
+		client.postMessage({
+			[SW_REVIVE]: { instance: INSTANCE } satisfies ReviveMessage,
+		});
 }, 100);

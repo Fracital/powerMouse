@@ -19,8 +19,16 @@ import type { Http3DescriptorOptions } from './construct';
 export const CONTROLLER_INIT = '$stomp$controllerInit';
 /** proxied page -> SW, with [port]: ask the controller at `directory` (the page's address) to serve a transport on this port */
 export const INIT_REMOTE_TRANSPORT = '$stomp$initRemoteTransport';
-/** SW -> every client: SW (re)started, controllers must re-send CONTROLLER_INIT */
+/**
+ * SW -> every client: SW (re)started, controllers must re-send
+ * CONTROLLER_INIT. It names the worker (ReviveMessage), so a controller
+ * that worker has already registered knows the revive is not for it
+ */
 export const SW_REVIVE = '$stomp$swRevive';
+export interface ReviveMessage {
+	/** this run of the worker: new every time the browser starts it */
+	instance?: string;
+}
 /**
  * controller -> SW, with every call it makes over its port: nothing to do.
  * A worker the browser stopped hears nothing on a port; this message starts
@@ -766,6 +774,12 @@ export interface RouteContext {
 
 /** implemented by the controller, called by the SW */
 export type Controllerbound = {
+	/**
+	 * the worker took the handshake: sent at once, before the server it
+	 * creates for the controller is up (`ready`), with the worker's name for
+	 * this run of it (ReviveMessage.instance)
+	 */
+	hello: [{ instance: string }];
 	ready: [{ build: string }];
 	/** another controller registered with this one's id; the worker closes the port right after */
 	replaced: [];

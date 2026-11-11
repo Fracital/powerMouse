@@ -55,6 +55,7 @@ import {
 	PAGE_MODULES,
 	postToPort,
 	RequestInfo,
+	ReviveMessage,
 	SW_PORT,
 	SW_REVIVE,
 	SW_WAKE,
@@ -707,6 +708,11 @@ export class StompController extends EventTarget {
 	#readyReject!: (error: Error) => void;
 	#readySettled = false;
 	private lastHandshake = 0;
+	/** a handshake is on its way and the worker has not said it took it (hello) */
+	#awaiting = false;
+	/** the run of the worker that took our handshake (ReviveMessage.instance) */
+	#instance: string | undefined;
+	#takenWaiters = new Set<() => void>();
 	/** a build mismatch is being healed: the next ready answer must agree */
 	#healing = false;
 	#rules: RequestRule[];
@@ -988,14 +994,30 @@ export class StompController extends EventTarget {
 				return;
 			const source = event.source;
 			if (!(source instanceof ServiceWorker) || !this.#ours(source)) return;
-			// soon after a handshake the revive is usually from the worker that
-			// handshake started, which knows us already. Usually: a worker that
-			// stopped right after it (Chrome stops idle ones; a crash) took the
-			// registration with it, and its successor's revive is the only one
-			// there will be. So ask over the port instead of assuming: an
-			// answer means it knows us, silence or a dead port means shake
-			// hands again
-			if (
+			// The revive names the run of the worker it is from, and so did
+			// the worker that took our handshake (hello): the same one knows us
+			// already (its revive goes out to everyone a moment after it
+			// starts, our handshake may be what started it), any other is a
+			// worker that knows nobody. A handshake still on its way is given
+			// a moment to be taken first. Nothing is asked over the port: a
+			// stopped worker's port says nothing, and waiting out its silence
+			// was a second on top of the first thing a host did after two
+			// stops in a row
+			const revive = event.data[SW_REVIVE] as ReviveMessage | null;
+			const instance =
+				typeof revive?.instance === 'string' ? revive.instance : null;
+			if (instance !== null) {
+				if (this.#awaiting) await this.#taken(REVIVE_PING_MS);
+				if (this.#instance === instance) return;
+			} else if (
+				// a worker of a build that does not name itself: soon after a
+				// handshake its revive is usually from the worker that handshake
+				// started, which knows us already. Usually: a worker that stopped
+				// right after it (Chrome stops idle ones; a crash) took the
+				// registration with it, and its successor's revive is the only one
+				// there will be. So ask over the port instead of assuming: an
+				// answer means it knows us, silence or a dead port means shake
+				// hands again
 				Date.now() - this.lastHandshake <= REVIVE_GUARD_MS &&
 				(await this.#knownToWorker())
 			)
@@ -1243,6 +1265,23 @@ export class StompController extends EventTarget {
 			clearTimeout(timer);
 		}
 	}
+	/** resolves when the worker has taken the handshake on its way (hello), or after `ms` */
+	#taken(ms: number): Promise<void> {
+		return new Promise((resolve) => {
+			const done = () => {
+				this.#takenWaiters.delete(done);
+				clearTimeout(timer);
+				resolve();
+			};
+			const timer = setTimeout(done, ms);
+			this.#takenWaiters.add(done);
+		});
+	}
+	/** the handshake on its way was taken, or will not be (its port closed) */
+	#settleTaken() {
+		this.#awaiting = false;
+		for (const done of [...this.#takenWaiters]) done();
+	}
 	/** (re)register with the service worker once the transport is hosted */
 	#handshake() {
 		this.#hostReady.then(
@@ -1364,6 +1403,8 @@ export class StompController extends EventTarget {
 
 		this.#expectHandshake();
 		this.lastHandshake = Date.now();
+		this.#awaiting = true;
+		this.#instance = undefined;
 		// a new handshake is a new (or restarted) service worker: it holds no
 		// port to the emulated workers this controller hosts, and starts them
 		// again when it needs them
@@ -1383,11 +1424,17 @@ export class StompController extends EventTarget {
 		port.addEventListener('close', () => {
 			if (this.#port !== port) return;
 			this.#rpc?.abort('Service worker port closed');
+			this.#settleTaken();
 			if (!superseded) this.#expectHandshake();
 		});
 
 		this.#rpc = new RpcHelper<Controllerbound, SWbound>(
 			{
+				hello: async (info) => {
+					if (this.#port !== port) return;
+					this.#instance = info?.instance;
+					this.#settleTaken();
+				},
 				replaced: async () => {
 					if (this.#port !== port) return;
 					superseded = true;
@@ -1413,6 +1460,8 @@ export class StompController extends EventTarget {
 					}
 				},
 				ready: async (info) => {
+					// a worker of a build that says no hello
+					if (this.#port === port && this.#awaiting) this.#settleTaken();
 					const build = info?.build;
 					// the worker we already settled on as stale answers again
 					// (it restarted): nothing new to heal
