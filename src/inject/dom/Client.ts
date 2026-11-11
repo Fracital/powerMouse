@@ -1420,6 +1420,14 @@ export default class DocumentClient extends Client {
 	}
 	/** the inline scripts and styles of the document loadHTML wrote, rewritten by the worker */
 	#prewritten: PrewrittenTable | null = null;
+	/**
+	 * loadHTML was called and has not written the page yet: this document
+	 * is still the shell. It writes from a timer, and when Chrome runs the
+	 * shell's load task before it, the frame element fires `load` for the
+	 * shell and again for the page, where natively it fires once (the
+	 * embedder's IFrame module keeps the first from its page)
+	 */
+	shellPending = false;
 	/** large style texts and their routed text, the oldest out first */
 	readonly #styleMemo = new Map<string, string>();
 	#styleMemoChars = 0;
@@ -1582,6 +1590,7 @@ export default class DocumentClient extends Client {
 
 		// jump out of the DOM "write stream" so we can start loading our own HTML
 		const load = () => {
+			this.shellPending = false;
 			Reflect.apply(this.open, this.global.document, []);
 			runDocumentOpenListeners(this.global);
 			// the host's post hook, on the document the page's markup lands in
@@ -1611,6 +1620,7 @@ export default class DocumentClient extends Client {
 		// page the parent's URL (reCAPTCHA's anchor took its page for its
 		// parent and never answered it). So the callback is this window's own,
 		// through a wrapper and a setTimeout taken before any page script ran.
+		this.shellPending = true;
 		Reflect.apply(this.#setTimeout, this.global, [this.ownCallback(load)]);
 	}
 }

@@ -782,6 +782,15 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A frame fires `load` once per document, as natively. The shell writes
+  the page from a timer, and when Chrome ran the shell's load task first
+  the frame element fired `load` for the shell, with the inject's script
+  as its document, and again for the page: a page that read its frame at
+  the first one read STomp's shell (seen in the http-cache suite's
+  reloaded frames on CI). The embedding document's inject now keeps a
+  frame's load event from the page while the frame's document is still
+  the shell. The http-cache suite counts each frame's load events, natively
+  and through both modes.
 - The worker's HTTP cache keeps what Chrome's keeps and asks the origin
   when Chrome's does (docs/http-cache.md has the table, measured in 152
   and 156). It kept only a response with explicit freshness to a request

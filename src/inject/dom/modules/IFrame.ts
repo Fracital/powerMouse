@@ -230,6 +230,47 @@ export default class IFrameModule extends Module<DocumentClient> {
 			this.client.global.HTMLFrameElement,
 			this.client.global.HTMLObjectElement,
 		].filter((ctor) => typeof ctor === 'function');
+
+		// A frame's load event for the shell its document still is: the
+		// shell writes the page from a timer (DocumentClient.loadHTML), and
+		// when Chrome runs the shell's load task first the element fires
+		// `load` twice, for the shell and for the page, where natively it
+		// fires once, for the page. The first is kept from the page, before
+		// any listener of its own: a capture listener of the document's (a
+		// load event's path ends there, never at the window), added before
+		// the page's first script and again after each open, which erases
+		// the document's listeners
+		const nativeContentWindows = embedders.map(
+			(ctor) =>
+				[
+					ctor,
+					Reflect.getOwnPropertyDescriptor(ctor.prototype, 'contentWindow')
+						?.get,
+				] as const,
+		);
+		const stopImmediate = global.Event.prototype.stopImmediatePropagation;
+		const shellLoads = () =>
+			global.document.addEventListener(
+				'load',
+				(event) => {
+					const target = event.target;
+					for (const [ctor, get] of nativeContentWindows) {
+						if (!get || !(target instanceof ctor)) continue;
+						try {
+							const child = get.call(target) as Record<string, any> | null;
+							if (child?.[this.client.names.client]?.shellPending === true)
+								Reflect.apply(stopImmediate, event, []);
+						} catch (error) {
+							// another origin's document: not a shell of ours
+						}
+						return;
+					}
+				},
+				true,
+			);
+		shellLoads();
+		addDocumentOpenListener(global, shellLoads);
+
 		for (const ctor of embedders) {
 			const getContentWindowDescriptor = Reflect.getOwnPropertyDescriptor(
 				ctor.prototype,

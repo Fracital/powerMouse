@@ -8,7 +8,7 @@
 	// for the log after each); `probe`,
 	// `cookie` and `init` say what a visit sends. A `frame` shape is a
 	// document: a frame loads it, a second frame loads it, and the first
-	// reloads. Each shape has a path of
+	// reloads; the report ends with how many load events each frame fired. Each shape has a path of
 	// its own, so a cookie set for it goes with no other shape's requests.
 	// The report, per shape: what the origin was asked at each visit and
 	// what the page got.
@@ -360,6 +360,11 @@
 			document.createElement('iframe'),
 			document.createElement('iframe'),
 		];
+		// how many times each frame fired load: once per document, natively
+		const loads = [0, 0];
+		frames.forEach((frame, index) =>
+			frame.addEventListener('load', () => loads[index]++),
+		);
 		let seen = 0;
 		for (let visit = 0; visit < (shape.visits ?? 3); visit++) {
 			if (shape.cookie)
@@ -404,6 +409,11 @@
 			seen = all.length;
 			const wait = Array.isArray(shape.wait) ? shape.wait[visit] : shape.wait;
 			if (wait && visit < (shape.visits ?? 3) - 1) await sleep(wait);
+		}
+		if (shape.frame) {
+			// (a load that comes late is counted too)
+			await sleep(500);
+			got.push(`loads ${loads.join('+')}`);
 		}
 		__hc.cases[name] = { asked, got };
 	}
