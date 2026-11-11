@@ -163,13 +163,21 @@ broken; 560 are declined (34 texts its parser refuses, one shape).
 any more fails the run. The other direction, over real scripts
 (`early.mjs --corpus`): of the 28 corpus scripts, the 341 of the suites'
 pages and 2,346 files of `node_modules` (66 MB) nothing V8 takes is
-answered as an error. The JavaScript rewriter on the same table: 156 of
-the refused scripts run rewritten (12 texts), 1,290 of the taken go out
-unrewritten (296 texts its parser refuses, most of them a reserved word
-of strict code as a name in a generator, which meriyah reads as strict)
-and 1,158 come out broken (140 texts, nearly all an escaped `eval` it
-prints plain); the wasm backend inherits the first kind for what its own
-parser refuses. Cost, as first landed (a walk of its own after the parse, and the
+answered as an error. The JavaScript rewriter on the same table: 174 of
+the refused scripts run rewritten (23 texts: the 12 it always took, two
+module forms the harness used to stop short of, and escaped `eval`s V8
+13.6 parses in full in parentheses, which the printer drops), none of the
+taken goes out unrewritten (1,202 scripts of 220 texts its parser refuses,
+most of them a reserved word of strict code as a name in a generator,
+which meriyah reads as strict, are refused for STomp instead, below) and
+29 come out broken (three texts); the wasm backend inherits the first kind
+for what its own parser refuses. A script the JavaScript rewriter cannot
+rewrite went out as it came, and ran unrewritten wherever the browser took
+it. Now the browser's own engine is asked, compiling and never calling it
+as a function's body (a strict async function's for a module without
+`import` or `export`): one it refuses goes as it came, one it may take goes
+with an end no browser compiles (`this.#STomp_could_not_rewrite_this_script`),
+refused before any of it runs. Over 2,492 real scripts none is. Cost, as first landed (a walk of its own after the parse, and the
 parser parsing every pattern): 15,631 bytes of artifact (5,243 brotli) and
 12% of rewrite time on the corpus (2,341 to 2,613 ms for the module alone,
 medians of five, interleaved, load 18), +7.3% of the module's

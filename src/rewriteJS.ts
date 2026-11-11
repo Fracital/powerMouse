@@ -1261,7 +1261,10 @@ export function modifyJS(
 							(ctx.node.name === 'location' || ctx.node.name === 'eval') &&
 							assignmentTarget(ctx)
 						) {
-							const { name } = ctx.node;
+							const { name, range } = ctx.node;
+							// (as the page wrote it: respell)
+							const written = () =>
+								Object.assign(b.identifier(name), { range });
 							unshorthand(ctx);
 							ctx.replaceWith(
 								b.memberExpression(
@@ -1271,12 +1274,12 @@ export function modifyJS(
 											b.identifier('ref1'),
 										),
 										[
-											b.identifier(name),
+											written(),
 											b.arrowFunctionExpression(
 												[b.identifier(cValue)],
 												b.assignmentExpression(
 													'=',
-													b.identifier(name),
+													written(),
 													b.identifier(cValue),
 												),
 											),
@@ -1861,6 +1864,10 @@ export function modifyJS(
 				shift = shifts[i + 1]!;
 			return position + shift;
 		};
+		// (before the marks, which print a function's name with its own; only
+		// a script that escapes an ASCII letter, a digit, `$` or `_` can
+		// have a name it matters for, a keyword's or `eval`'s)
+		if (ASCII_ESCAPE.test(script)) respell(tree, script);
 		let marks = 0;
 		try {
 			marks = markFunctions(
@@ -1892,9 +1899,128 @@ export function modifyJS(
 			trailer
 		);
 	} catch (error) {
-		// a script the rewriter cannot handle runs as it was
-		return unrewritten(script, url, config, String(error));
+		// (a part of a split script comes back as it went, which the caller
+		// tells and rewrites the whole instead)
+		if (compact !== undefined)
+			return unrewritten(script, url, config, String(error));
+		return cannotRewrite(script, url, config, type, String(error));
 	}
+}
+
+/**
+ * Whether the browser this runs in refuses `script` (of `type`) as it
+ * compiles it, asked of its own engine without running anything: as a
+ * function's body (a classic script's: the body takes what a script does,
+ * a leading `#!` line aside, and `return` and `new.target` besides), or as
+ * a strict async function's (a module's, when it names neither `import`
+ * nor `export`, which no function body takes). False when it may take it:
+ * the engine cannot be asked (a policy that forbids compiling strings), or
+ * the script writes `eval` or `arguments` with an escape, where the answer
+ * may not be the script's (V8 13.7 and before take the name in strict code
+ * they compile lazily, and a function's body is compiled otherwise than a
+ * script).
+ */
+function refusedHere(script: string, type: ScriptType): boolean {
+	if (escapesEval(script)) return false;
+	const body = script.replace(/^#![^\n\r\u2028\u2029]*/, '');
+	const module = type === 'genericModule' || type === 'workerModule';
+	if (module && /\b(?:import|export)\b/.test(body)) return false;
+	try {
+		new Function(
+			module ? `'use strict'; return async function () {\n${body}\n};` : body,
+		);
+		return false;
+	} catch (error) {
+		return (error as Error)?.name === 'SyntaxError';
+	}
+}
+
+/** an escape of an ASCII letter, digit, `$` or `_` */
+const ASCII_ESCAPE =
+	/\\u(?:00|\{0*)(?:2[4]|3[0-9]|[46][1-9a-fA-F]|[57][0-9aA]|5[fF])\}?/;
+
+/** a name with an escape in its text, decoded */
+const decoded = (written: string) =>
+	written.replace(
+		/\\u(?:\{([0-9a-fA-F]+)\}|([0-9a-fA-F]{4}))/g,
+		(_, braced, plain) => {
+			// (one past the last code point is no name's)
+			const point = parseInt(braced ?? plain, 16);
+			return point > 0x10ffff ? '\\' : String.fromCodePoint(point);
+		},
+	);
+
+/** whether `script` writes `eval` or `arguments` with an escape (as a name or anywhere) */
+function escapesEval(script: string): boolean {
+	if (!script.includes('\\u')) return false;
+	for (const [word] of script.matchAll(
+		/(?:[\w$]|\\u(?:\{[0-9a-fA-F]+\}|[0-9a-fA-F]{4}))+/g,
+	))
+		if (word.includes('\\') && /^(?:eval|arguments)$/.test(decoded(word)))
+			return true;
+	return false;
+}
+
+/**
+ * The end written after a script this rewriter cannot rewrite and the
+ * browser may run: a private name no class declares, an early error in
+ * every kind of script, after all of the page's code. The browser
+ * refuses the whole before any of it runs, with the page's own error
+ * where the page's code has one, and STomp's name in the message where it
+ * has none.
+ */
+export const UNREWRITTEN_END =
+	'\n;this.#STomp_could_not_rewrite_this_script;\n';
+
+/**
+ * What a script this rewriter cannot rewrite (its parser refuses it, or
+ * the rewrite failed) is answered with. One the browser refuses goes as it
+ * came, and the page reads the browser's own SyntaxError. One it would run
+ * must not run unrewritten, where its code would reach the real globals:
+ * it goes with an end no browser compiles (UNREWRITTEN_END).
+ */
+function cannotRewrite(
+	script: string,
+	url: StompURL,
+	config: Config,
+	type: ScriptType,
+	why: string,
+): string {
+	const output = unrewritten(script, url, config, why);
+	if (output !== script || refusedHere(script, type)) return output;
+	return script + UNREWRITTEN_END;
+}
+
+/**
+ * Each name of the page's the tree prints as the page wrote it, where it
+ * was written with an escape (`\u0065val`, `l\u0065t`): printed plain
+ * it is another token, a keyword or a name strict code refuses, and the
+ * printed script a SyntaxError where the page's ran (`for (l\u0065t of
+ * a);`, and V8 13.7 and before take an escaped `eval` in strict code they
+ * compile lazily).
+ */
+function respell(tree: any, script: string) {
+	// (a tree: a node the rewrite placed twice is respelled once)
+	const walk = (node: any) => {
+		if (node === null || typeof node !== 'object') return;
+		if (Array.isArray(node)) {
+			for (const item of node) walk(item);
+			return;
+		}
+		if (node.type === 'Identifier' && Array.isArray(node.range)) {
+			const written = script.slice(node.range[0], node.range[1]);
+			if (
+				written !== node.name &&
+				written.includes('\\') &&
+				decoded(written) === node.name
+			)
+				node.name = written;
+			return;
+		}
+		for (const key in node)
+			if (key !== 'range' && key !== 'loc') walk(node[key]);
+	};
+	walk(tree);
 }
 
 /**

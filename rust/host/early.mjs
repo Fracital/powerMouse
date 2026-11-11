@@ -134,7 +134,7 @@ mkdirSync(out, { recursive: true });
 const entry = `${out}early-entry.mjs`;
 writeFileSync(
 	entry,
-	`export { modifyJS, singleExpression } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
+	`export { modifyJS, singleExpression, UNREWRITTEN_END } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 export { compileModule, BufferInstance } from ${JSON.stringify(`${root}src/wasm/module.ts`)};
@@ -149,8 +149,14 @@ await esbuild.build({
 	outfile: `${out}early.mjs`,
 	logLevel: 'silent',
 });
-const { modifyJS, StompURL, parseConfig, compileModule, BufferInstance } =
-	await import(`${out}early.mjs?${Date.now()}`);
+const {
+	modifyJS,
+	UNREWRITTEN_END,
+	StompURL,
+	parseConfig,
+	compileModule,
+	BufferInstance,
+} = await import(`${out}early.mjs?${Date.now()}`);
 const { parse } = await import(`${root}node_modules/meriyah/dist/meriyah.mjs`);
 
 const config = { directory: '/stomp/', codec: 'xor' };
@@ -166,7 +172,11 @@ const compiled = await compileModule(
 // a static import routes to anything: only what compiles is asked here
 const route = (kind, text) => `/routed/${kind}/${text.length}`;
 let instance = new BufferInstance(compiled, route);
-console.warn = () => {};
+/** the JavaScript rewriter gave the last script up (it says so) */
+let gaveUp = false;
+console.warn = (message) => {
+	if (/could not rewrite/.test(message)) gaveUp = true;
+};
 
 /** what the module makes of a script: `{ output }` or `{ status }` */
 function wasm({ code, module }) {
@@ -339,19 +349,17 @@ const named = (script, ...kinds) => {
 
 /** what the JavaScript rewriter makes of a script, null when it gives up */
 function javascript({ code, module }) {
-	try {
-		parse(code, { module, next: true, globalReturn: true, webcompat: true });
-	} catch (error) {
-		return null;
-	}
+	gaveUp = false;
 	const output = modifyJS(
 		code,
 		url,
 		config,
 		module ? 'genericModule' : 'generic',
 	);
-	// (a script it parsed and then could not rewrite comes back as it was)
-	return output === code ? null : output;
+	// (one it gave up comes back as it was, or with an end no browser
+	// compiles where this V8 may take it: UNREWRITTEN_END; one it rewrote
+	// may be printed as it was written)
+	return gaveUp && output === code ? null : output;
 }
 
 // V8 on every source, then on every rewrite. Where node's V8 is known to
@@ -406,6 +414,9 @@ const OUTCOMES = [
 	'rewritten',
 	'RAW',
 	'BROKE',
+	// the JavaScript rewriter gave it up and wrote an end no browser
+	// compiles: the page's script is refused, and does not run unrewritten
+	'refused for STomp',
 	// the module only: handed to the JavaScript rewriter
 	'declined',
 ];
@@ -473,6 +484,8 @@ scripts.forEach((script, index) => {
 						: 'still refused, other message';
 				detail = `${verdict} / ${after}`;
 			} else if (after === null) outcome = 'rewritten';
+			else if (backend === 'js' && output.endsWith(UNREWRITTEN_END))
+				outcome = 'refused for STomp';
 			else {
 				outcome = 'BROKE';
 				detail = `${after}\n      ${output}`;

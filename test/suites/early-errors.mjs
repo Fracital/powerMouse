@@ -71,28 +71,30 @@ const NEVER_RUN = new Set([
 	'for (() => a in b;;);',
 ]);
 // The JavaScript rewriter alone: scripts V8 takes that it prints into ones
-// V8 refuses (parentheses its printer drops around a loop head's target, a
-// name written with an escape that it prints plain; what it dropped around
-// a class heritage and the string statements it printed as directives are
+// V8 refuses (parentheses its printer drops around a loop head's target;
+// what it dropped around a class heritage, the string statements it printed
+// as directives and the names written with an escape it printed plain are
 // kept now)
 const JS_BREAKS = [
 	'for ((let) of a);',
 	'for ((let.a) of b);',
 	'for ((async) of a);',
-	'for (l\\u0065t of a);',
 ];
-// ... and scripts V8 refuses that it prints into ones V8 refuses with
-// another message: V8 refuses `\\u0065val` as a target and an escaped
-// keyword as a shorthand property for being written so, and the plain names
-// it prints as names strict code does not take
+// ... and scripts V8 refuses that it rewrites into ones V8 refuses with
+// another message: its parser takes `\\u0065val` as a target in strict
+// code, which V8 refuses as no target at all
 const JS_MESSAGES = [
 	'[\\u0065val] = a',
 	'[...\\u0065val] = a',
 	'({ a: \\u0065val } = a)',
-	'({ impl\\u0065ments })',
-	'({ st\\u0061tic })',
-	'({ l\\u0065t })',
 ];
+// A script the JavaScript rewriter cannot rewrite and the browser would
+// run goes with an end no browser compiles (src/rewriteJS.ts
+// UNREWRITTEN_END): refused, with the name in this message, where natively
+// it compiles. Under both backends (what the module's parser refuses is the
+// JavaScript rewriter's); counted, not named
+const STOMP_REFUSES =
+	/Private field '#STomp_could_not_rewrite_this_script' must be declared/;
 const KNOWN = new Map(JS_RUNS.map((text) => [text, 'runs']));
 if (!WASM) {
 	for (const text of JS_BREAKS) KNOWN.set(text, 'breaks');
@@ -264,10 +266,15 @@ for (const [mode, base] of [
 		const differ = [];
 		let known = 0;
 		let moved = 0;
+		let refusedForStomp = 0;
 		list.forEach(([entry, want], index) => {
 			const have = proxied[carrier][index][1];
 			if (said(want) === said(have)) {
 				if (position(want) !== position(have)) moved++;
+				return;
+			}
+			if (said(want) === 'compiles' && STOMP_REFUSES.test(said(have))) {
+				refusedForStomp++;
 				return;
 			}
 			if (KNOWN.has(entry.text)) {
@@ -286,6 +293,10 @@ for (const [mode, base] of [
 				? `${differ.length} differ: ${differ.slice(0, 12).join(' | ')}`
 				: '',
 		);
+		if (refusedForStomp)
+			console.log(
+				`${mode}: ${carrier}: ${refusedForStomp} of ${list.length} the browser compiles refused for STomp, which could not rewrite them`,
+			);
 		if (moved)
 			console.log(
 				`${mode}: ${carrier}: measured ${moved} of ${list.length} with the native message at another line or column (rewritten code)`,

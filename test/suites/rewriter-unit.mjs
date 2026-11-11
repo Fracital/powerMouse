@@ -807,6 +807,45 @@ const parses = (code) => {
 		) && parses(strict),
 		strict,
 	);
+	// one the browser would run must not run unrewritten: the JavaScript
+	// rewriter's parser refuses a reserved word of strict code as a name in a
+	// generator, which V8 takes in sloppy code
+	const js = { rewriter: 'js' };
+	const taken = 'function* g() { implements = 1 }\ntop.location = "/x";';
+	const refused = rewrite(taken, 'generic', js);
+	ok(
+		'one the browser would run goes with an end no browser compiles',
+		parses(taken) &&
+			refused.startsWith(taken) &&
+			refused.includes('#STomp_could_not_rewrite_this_script') &&
+			!parses(refused),
+		refused,
+	);
+	const module = rewrite('a() = 1;\ntop.x = 1;', 'genericModule', js);
+	ok(
+		'so does a module (V8 takes a call assigned to, a ReferenceError when it runs)',
+		module.includes('#STomp_could_not_rewrite_this_script'),
+		module,
+	);
+	ok(
+		'a part of a split script it cannot rewrite comes back as it went',
+		modifyJS(taken, url, { ...config, ...js }, 'generic', '', true) === taken,
+	);
+	// a name written with an escape is printed as written
+	const lets = rewrite('for (l\\u0065t of a);', 'generic', js);
+	ok(
+		'a name written with an escape is printed as the page wrote it',
+		lets.includes('l\\u0065t') && parses(lets),
+		lets,
+	);
+	const evals = rewrite('class A { m() { \\u0065val = top } }', 'generic', js);
+	ok(
+		'and an escaped eval assigned to, which V8 13.7 takes in a method',
+		!/(^|[^\\\w])eval\s*=[^=]/.test(evals) &&
+			evals.includes('\\u0065val') &&
+			parses(evals),
+		evals,
+	);
 }
 console.warn = warn;
 
