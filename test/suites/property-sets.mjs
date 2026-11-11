@@ -19,6 +19,28 @@ import {
 } from '../lib.mjs';
 
 const host = new URL(FIXTURE).host;
+const CONNECTED = ['script-src', 'link-href', 'img-src', 'iframe-src'];
+// the holder's own loads of the ?read page, before it is read back
+const OWN = ['read-link', 'read-img', 'read-srcset', 'read-shadow'];
+
+/** poll `probe` (every 100 ms, for 30 s) until it answers something truthy */
+async function until(probe) {
+	for (let i = 0; i < 300; i++) {
+		const value = await probe();
+		if (value) return value;
+		await sleep(100);
+	}
+	return null;
+}
+
+/** the frame of `page` in which `probe` holds, once there is one */
+const frameWhere = (page, probe) =>
+	until(async () => {
+		for (const frame of page.frames())
+			if (await frame?.evaluate(probe).catch(() => false)) return frame;
+		return null;
+	});
+
 const browser = await launch();
 for (const [mode, base] of [
 	['same-origin', PROXY],
@@ -33,7 +55,20 @@ for (const [mode, base] of [
 		);
 	});
 	await submitLanding(page, `${FIXTURE}pages/property-sets.html`);
-	await sleep(4000);
+	// the page says when its sets are two seconds old. The controller holds a
+	// frame's document request for up to three seconds (until a frame of its
+	// own claims it, which a page's inner frame never does), so that report
+	// is waited for: a fixed sleep from here lost to a slow load
+	await frameWhere(page, () => window.__propertySets?.done === true);
+	const connected = (served) =>
+		CONNECTED.every((kind) =>
+			served.some((url) => url.includes(`prop=${kind}-connected`)),
+		);
+	await until(async () =>
+		connected(await page.evaluate(() => window.__served)),
+	);
+	// and a load past the proxy that started late is in the recorder's list
+	await sleep(1000);
 	const raw = recorder
 		.raw()
 		.filter((entry) => new URL(entry.url).host === host)
@@ -46,9 +81,7 @@ for (const [mode, base] of [
 	const served = await page.evaluate(() => window.__served);
 	ok(
 		`${mode}: the connected loads go through the worker`,
-		['script-src', 'link-href', 'img-src', 'iframe-src'].every((kind) =>
-			served.some((url) => url.includes(`prop=${kind}-connected`)),
-		),
+		connected(served),
 		JSON.stringify(served.filter((url) => url.includes('prop=')).length),
 	);
 	await page.close();
@@ -69,42 +102,40 @@ for (const [mode, base] of [
 		);
 	});
 	await submitLanding(page, `${FIXTURE}pages/property-sets.html?read`);
-	let frame = null;
-	for (let i = 0; i < 40 && !frame; i++) {
-		await sleep(100);
-		for (const f of page.frames())
-			if (
-				await f
-					.evaluate(
-						() =>
-							window.__readStarted === undefined &&
-							!!document.querySelector('template'),
-					)
-					.catch(() => false)
-			)
-				frame = f;
-	}
+	// through the worker: each marked load once, the page's own
+	const marked = async () => {
+		const counts = {};
+		for (const url of await page.evaluate(() => window.__served)) {
+			const mark = /prop=(read-[\w-]+)/.exec(url)?.[1];
+			if (mark) counts[mark] = (counts[mark] ?? 0) + 1;
+		}
+		return counts;
+	};
+	// the page reads when it is asked (__readBack), and it is asked once its
+	// own loads were served and the recorder listens: no timer of the page's
+	// has to be met
+	const frame = await frameWhere(
+		page,
+		() => typeof window.__readBack === 'function',
+	);
+	await until(async () => {
+		const counts = await marked();
+		return OWN.every((mark) => counts[mark] >= 1);
+	});
 	const recorder = await recordRequests(page.context());
-	let read = null;
-	for (let i = 0; i < 40 && !read; i++) {
-		await sleep(100);
-		read = await frame?.evaluate(() => window.__read ?? null).catch(() => null);
-	}
+	const read =
+		(await frame?.evaluate(() => window.__readBack()).catch(() => null)) ??
+		null;
 	await sleep(1000);
 	const during = recorder.log
 		.filter((entry) => /prop=read-/.test(entry.url))
 		.map((entry) => [entry.kind, entry.url.replace(/^.*prop=/, '')]);
-	// through the worker: each marked load once, the page's own
-	const served = await page.evaluate(() => window.__served);
-	const counts = {};
-	for (const url of served) {
-		const mark = /prop=(read-[\w-]+)/.exec(url)?.[1];
-		if (mark) counts[mark] = (counts[mark] ?? 0) + 1;
-	}
+	const counts = await marked();
 	ok(
 		`${mode}: reading the markup back makes no request at all`,
 		read !== null &&
 			during.length === 0 &&
+			OWN.every((mark) => counts[mark] === 1) &&
 			Object.values(counts).every((count) => count <= 1),
 		JSON.stringify({ read, during, counts }),
 	);

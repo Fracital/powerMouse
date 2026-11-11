@@ -36,8 +36,9 @@
 			}
 		const image = new Image();
 		image.src = at('blank-pixel.svg', 'image-object');
-		// ?read: the markup is read back every way a page can, after its own
-		// loads are in; the reads must load nothing at all
+		// ?read: the markup is read back every way a page can, when the suite
+		// asks (__readBack: it has seen the page's own loads by then); the
+		// reads must load nothing at all
 		if (location.search.includes('read'))
 			setTimeout(() => {
 				const holder = document.createElement('div');
@@ -50,20 +51,16 @@
 					`<img src="${at('blank-pixel.svg', 'read-shadow')}">`;
 				holder.append(host);
 				document.body.append(holder);
-				// the page's own loads first, then a quiet moment to read in
-				setTimeout(() => {
-					window.__readStarted = true;
-					window.__read = [
-						document.body.innerHTML.length,
-						holder.outerHTML.length,
-						typeof holder.getHTML === 'function'
-							? holder.getHTML({ serializableShadowRoots: true }).length
-							: 0,
-						new XMLSerializer().serializeToString(holder).length,
-						template.innerHTML.length,
-						host.shadowRoot.innerHTML.length,
-					];
-				}, 1500);
+				window.__readBack = () => [
+					document.body.innerHTML.length,
+					holder.outerHTML.length,
+					typeof holder.getHTML === 'function'
+						? holder.getHTML({ serializableShadowRoots: true }).length
+						: 0,
+					new XMLSerializer().serializeToString(holder).length,
+					template.innerHTML.length,
+					host.shadowRoot.innerHTML.length,
+				];
 			}, 300);
 		setTimeout(() => (window.__propertySets = { done: true }), 2000);
 	});
