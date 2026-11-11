@@ -88,6 +88,37 @@ export function isHTMLTemplate(node: unknown): node is HTMLTemplateElement {
 }
 
 /**
+ * Script elements known to be "already started", which the browser tells
+ * nobody: the ones a markup string made, the ones seen running. Text that
+ * lands in one never runs, so the hooks leave it as the page wrote it.
+ */
+export const startedScripts = new WeakSet<object>();
+
+/**
+ * Whether `node` is a script element, an HTML one or an SVG one: the two
+ * the browser runs. Read by the browser's own getters, like isHTMLTemplate
+ * (an element of another namespace named `script` is no script, and an SVG
+ * one's nodeName is lowercase).
+ */
+export function isScriptElement(node: unknown): node is Element {
+	try {
+		if (
+			Reflect.apply(nativeNodeType, node, []) !== 1 ||
+			Reflect.apply(nativeLocalName, node, []) !== 'script'
+		)
+			return false;
+		const namespace = Reflect.apply(nativeNamespace, node, []);
+		return (
+			namespace === 'http://www.w3.org/1999/xhtml' ||
+			namespace === 'http://www.w3.org/2000/svg'
+		);
+	} catch (error) {
+		// not a node
+		return false;
+	}
+}
+
+/**
  * The document a template's content lives in: inert, with no window and so
  * no custom element registry. What the parser puts in a template is made
  * there, so a defined custom element in it is not constructed until the
@@ -293,19 +324,18 @@ export default function cloneRawNode(
 					// a script from a markup string must not run (the parser marked
 					// it "already started", as a browser's innerHTML does); a fresh
 					// element would lose that, so the parsed one is adopted and only
-					// its attributes go through the hooks
-					// (an SVG script is re-created like any other element: the script
-					// hooks expect HTMLScriptElement)
-					if (
-						!runScripts &&
-						d[0].nodeName === 'SCRIPT' &&
-						(d[0] as Element).namespaceURI === 'http://www.w3.org/1999/xhtml'
-					) {
+					// its attributes go through the hooks. An SVG script as much as
+					// an HTML one: re-created, it ran the moment the markup landed,
+					// which no browser does, and ran as the page wrote it
+					if (!runScripts && isScriptElement(d[0])) {
 						const script = document.adoptNode(d[0]) as Element;
+						startedScripts.add(script);
 						// attributes first, on an empty element (the type hook reads the
 						// text), then the source back, like a fresh clone would
 						const children = [...script.childNodes];
 						for (const child of children) script.removeChild(child);
+						// by qualified name: an SVG script's xlink:href keeps the
+						// namespace the parser gave it
 						for (const attribute of script.getAttributeNames())
 							script.setAttribute(attribute, script.getAttribute(attribute)!);
 						for (const child of children) script.appendChild(child);

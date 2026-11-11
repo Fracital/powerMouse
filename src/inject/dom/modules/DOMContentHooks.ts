@@ -11,7 +11,12 @@ import DocumentClient, {
 	getGlobalParsingState,
 	type StyleElement,
 } from '../Client';
-import cloneRawNode, { inertClones, parseHTMLFragmentIn } from '../cloneNode';
+import cloneRawNode, {
+	inertClones,
+	isScriptElement,
+	parseHTMLFragmentIn,
+	startedScripts,
+} from '../cloneNode';
 import DOMAttributesModule, {
 	scriptType,
 	shouldRewriteScript,
@@ -22,6 +27,7 @@ import DOMHooksModule, {
 	nativeGetter,
 	nativeNode,
 } from './DOMHooks';
+import { hiddenMove, hiddenMutation } from './MutationObserver';
 
 export const nativeHTMLElement: HTMLElement = Object.create(nativeElement);
 export const nativeHTMLStyleElement: HTMLStyleElement =
@@ -58,6 +64,33 @@ const parentNodeGet = Reflect.getOwnPropertyDescriptor(
 )!.get!;
 const nodeNameGet = nativeGetter(nativeNode, 'nodeName');
 const namespaceGet = nativeGetter(nativeElement, 'namespaceURI');
+const childNodesGet = nativeGetter(nativeNode, 'childNodes');
+const nextSiblingGet = nativeGetter(nativeNode, 'nextSibling');
+const nativeInsertBefore = Node.prototype.insertBefore;
+const nativeDataDescriptor = Reflect.getOwnPropertyDescriptor(
+	CharacterData.prototype,
+	'data',
+)!;
+const nativeGetAttribute = Element.prototype.getAttribute;
+const nativeSetAttribute = Element.prototype.setAttribute;
+const nativeRemoveAttribute = Element.prototype.removeAttribute;
+const nativeHasAttribute = Element.prototype.hasAttribute;
+const nativeHasAttributeNS = Element.prototype.hasAttributeNS;
+/** the Text children of `node` (CDATA sections too), in order: a script's source is their text */
+function textChildren(node: Node): CharacterData[] {
+	const texts: CharacterData[] = [];
+	for (const child of [
+		...(Reflect.apply(childNodesGet, node, []) as NodeListOf<ChildNode>),
+	]) {
+		const type = nodeTypeOf(child);
+		if (type === 3 || type === 4) texts.push(child as CharacterData);
+	}
+	return texts;
+}
+const dataOf = (text: CharacterData): string =>
+	Reflect.apply(nativeDataDescriptor.get!, text, []);
+const setData = (text: CharacterData, data: string): void =>
+	Reflect.apply(nativeDataDescriptor.set!, text, [data]);
 /** a node of any realm (`instanceof` knows only one), else null */
 function nodeTypeOf(value: unknown): number | null {
 	// a string or null is no node: answered without the getter's TypeError
@@ -511,6 +544,192 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						]) as NodeListOf<Element>),
 					];
 
+		// A connected script that has not run yet runs the moment a child
+		// lands in it: the browser prepares it again at every child insertion,
+		// and runs whatever text it holds then. The insertion hooks above see
+		// a script as it connects, where it is rewritten; a script that
+		// connected empty (or with a type that named no script, or whose text
+		// went into a child it already had) holds text nothing rewrote, and
+		// ran it as the page wrote it, with the browser's `top` and the
+		// routed URL. So whatever puts a child into such a script is run
+		// through here, and the text the script will run is rewritten before
+		// the browser reads it.
+		const currentScriptGet = nativeGetter(
+			this.client.global.Document.prototype,
+			'currentScript',
+		);
+		/** what the browser should run for `text` in `script`; null when its type names nothing the hooks rewrite */
+		const runnable = (script: Element, text: string): string | null =>
+			usePrototype(script, nativeElement, (element) => {
+				if (
+					(element.getAttribute('type') || '').trim().toLowerCase() ===
+					'importmap'
+				)
+					return rewriteImportMap(
+						text,
+						this.client.baseURL,
+						this.client.config,
+					);
+				if (!shouldRewriteScript(element)) return null;
+				const type = scriptType(element);
+				return (
+					this.client.prewrittenScript(type === 'genericModule', text, true) ??
+					modifyJS(text, this.client.baseURL, this.client.config, type)
+				);
+			});
+		/**
+		 * The script `node` is when a child landing in it can run it: connected,
+		 * of a type the browser runs, with no source of its own to load (which
+		 * the browser runs instead of its text), and not one known to have
+		 * started (the running script, a script of a markup string: what lands
+		 * in it never runs)
+		 */
+		const fillable = (node: unknown): Element | null => {
+			if (!isScriptElement(node)) return null;
+			if (startedScripts.has(node)) return null;
+			if (!Reflect.apply(nativeIsConnected, node, [])) return null;
+			if (
+				node ===
+				Reflect.apply(currentScriptGet, this.client.global.document, [])
+			) {
+				startedScripts.add(node);
+				return null;
+			}
+			if (
+				Reflect.apply(nativeHasAttribute, node, ['src']) ||
+				(Reflect.apply(namespaceGet, node, []) !==
+					'http://www.w3.org/1999/xhtml' &&
+					(Reflect.apply(nativeHasAttribute, node, ['href']) ||
+						Reflect.apply(nativeHasAttributeNS, node, [
+							'http://www.w3.org/1999/xlink',
+							'href',
+						])))
+			)
+				return null;
+			return usePrototype(node, nativeElement, (element) =>
+				shouldRewriteScript(element) ||
+				(element.getAttribute('type') || '').trim().toLowerCase() ===
+					'importmap'
+					? node
+					: null,
+			);
+		};
+		/** `script` holds `output` from here, in the first of `texts`, for what the page wrote in them: the insertion hook leaves it, the page reads its own text */
+		const filled = (
+			script: Element,
+			texts: CharacterData[],
+			output: string,
+		) => {
+			const pieces = texts.map((text): [CharacterData, string] => [
+				text,
+				dataOf(text),
+			]);
+			// (a text node may be watched where it stands: no record of this)
+			hiddenMutation(() => {
+				setData(texts[0], output);
+				for (const text of texts.slice(1)) setData(text, '');
+			});
+			rewrittenScripts.set(script as HTMLScriptElement, output);
+			this.client.scriptSource?.(
+				script,
+				pieces.map(([, piece]) => piece).join(''),
+				output,
+				pieces,
+			);
+		};
+		/**
+		 * Keep `script` from running while children land in it, for a script
+		 * that already holds text the hooks did not write: where the new
+		 * children stand among the old decides the text, and only the browser's
+		 * own insertion says where that is. Its type names no script for the
+		 * time, and the function this returns puts the type back, rewrites the
+		 * text the script holds by then into its first text node and puts that
+		 * node back where it is: the insertion the browser prepares the script
+		 * at. None of it is the page's doing, so no observer of the page's
+		 * hears of it. A script that had run already does not run again, as
+		 * natively.
+		 */
+		const holdScript = (script: Element): (() => void) => {
+			const type = Reflect.apply(nativeGetAttribute, script, ['type']) as
+				string | null;
+			hiddenMutation(() =>
+				Reflect.apply(nativeSetAttribute, script, ['type', 'text/plain']),
+			);
+			return () => {
+				const first = hiddenMutation(() => {
+					if (type === null)
+						Reflect.apply(nativeRemoveAttribute, script, ['type']);
+					else Reflect.apply(nativeSetAttribute, script, ['type', type]);
+					const texts = textChildren(script);
+					const written = texts.map(dataOf).join('');
+					if (written === '') return null;
+					const output =
+						rewrittenScripts.get(script as HTMLScriptElement) === written
+							? written
+							: runnable(script, written);
+					if (output === null) return null;
+					if (output !== written) filled(script, texts, output);
+					return texts[0];
+				});
+				// the script runs here, if it has not: what it does is the page's
+				if (first)
+					hiddenMove(script, first, () =>
+						Reflect.apply(nativeInsertBefore, script, [
+							first,
+							Reflect.apply(nextSiblingGet, first, []),
+						]),
+					);
+			};
+		};
+		/**
+		 * Children are about to land in `script` (see fillable): the first
+		 * `count` of `args`, strings among them when `strings`. An empty
+		 * script runs what lands, wherever it lands, so that text is
+		 * rewritten where it stands, in its first node (a string becomes the
+		 * Text node the browser would make of it); a script that holds text
+		 * is held (holdScript) unless that text is what the hooks wrote, which
+		 * ran when they wrote it. Returns what to call once the children are in.
+		 */
+		const fillScript = (
+			script: Element,
+			args: unknown[],
+			count: number,
+			strings: boolean,
+		): (() => void) | undefined => {
+			const existing = textChildren(script).map(dataOf).join('');
+			if (existing !== '')
+				return rewrittenScripts.get(script as HTMLScriptElement) === existing
+					? undefined
+					: holdScript(script);
+			const texts: CharacterData[] = [];
+			for (let i = 0; i < count; i++) {
+				const type = nodeTypeOf(args[i]);
+				if (type === 3 || type === 4) texts.push(args[i] as CharacterData);
+				else if (type === 11) texts.push(...textChildren(args[i] as Node));
+				else if (type === null && strings) {
+					args[i] = Reflect.apply(
+						nativeCreateTextNode,
+						this.client.global.document,
+						[String(args[i])],
+					);
+					texts.push(args[i] as CharacterData);
+				}
+			}
+			const written = texts.map(dataOf).join('');
+			// nothing to run, or the text a hooked setter prepared already
+			if (
+				written === '' ||
+				rewrittenScripts.get(script as HTMLScriptElement) === written
+			)
+				return;
+			const output = runnable(script, written);
+			if (output === null) return;
+			// text the rewriter leaves as it is stays in the nodes it came in
+			if (output === written)
+				rewrittenScripts.set(script as HTMLScriptElement, output);
+			else filled(script, texts, output);
+		};
+
 		const insert = <T>(
 			insert: Node,
 			that: Node | null,
@@ -567,7 +786,8 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			const name = htmlName(insert);
 			// an HTML or an SVG <style>, inserted itself
 			const insertedStyle = this.client.styleElement(insert);
-			if (name === 'SCRIPT') {
+			// a script itself, an HTML or an SVG one (whose name is lowercase)
+			if (isScriptElement(insert)) {
 				rewriteAnyScript(insert, willConnect);
 			} else if (insertedStyle) {
 				// before it connects and the browser parses it
@@ -612,43 +832,62 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// replaceWith), into the receiver's parent; `strings`: the method
 		// takes strings as Text (the ParentNode and ChildNode methods), where
 		// the Node methods insert their first argument only
+		// `call` puts the first `count` of `args` under `parent`, beside or
+		// into `receiver` (the parent itself, or the child they land next to)
+		const landing = <T>(
+			receiver: Node | null,
+			parent: Node | null,
+			args: unknown[],
+			count: number,
+			strings: boolean,
+			call: () => T,
+		): T => {
+			const style = this.client.styleElement(parent);
+			if (style) {
+				for (let i = 0; i < count; i++) {
+					if (nodeTypeOf(args[i]) !== null) routeInsertedText(args[i] as Node);
+					else if (strings)
+						args[i] = Reflect.apply(
+							nativeCreateTextNode,
+							this.client.global.document,
+							[this.client.prepareStyleText(String(args[i]))],
+						);
+				}
+				prewritten.add(style);
+			}
+			const script = fillable(parent);
+			const release = script
+				? fillScript(script, args, count, strings)
+				: undefined;
+			// a node of any realm: the page's own document made it, or the
+			// bundle did for a document its creator reaches into
+			const nodes = args.filter((arg): arg is Node => nodeTypeOf(arg) !== null);
+			const run = (index: number): T =>
+				index < nodes.length
+					? insert(nodes[index], receiver, () => run(index + 1))
+					: call();
+			try {
+				return run(0);
+			} finally {
+				// the insertion threw before the pass that takes it
+				if (style) prewritten.delete(style);
+				release?.();
+			}
+		};
 		const willInsertNode = (
 			x: (inserted: Node, ...args: any[]) => any,
 			{ childNode = false, strings = false } = {},
 		) =>
-			proxyModule.wrapFunction(x, (target, that, args) => {
-				const style = this.client.styleElement(
+			proxyModule.wrapFunction(x, (target, that, args) =>
+				landing(
+					that,
 					childNode ? parentOf(that) : that,
-				);
-				if (style) {
-					const inserted = strings ? args.length : Math.min(args.length, 1);
-					for (let i = 0; i < inserted; i++) {
-						if (nodeTypeOf(args[i]) !== null) routeInsertedText(args[i]);
-						else if (strings)
-							args[i] = Reflect.apply(
-								nativeCreateTextNode,
-								this.client.global.document,
-								[this.client.prepareStyleText(String(args[i]))],
-							);
-					}
-					prewritten.add(style);
-				}
-				// a node of any realm: the page's own document made it, or the
-				// bundle did for a document its creator reaches into
-				const nodes = args.filter(
-					(arg): arg is Node => nodeTypeOf(arg) !== null,
-				);
-				const run = (index: number): any =>
-					index < nodes.length
-						? insert(nodes[index], that, () => run(index + 1))
-						: Reflect.apply(target, that, args);
-				try {
-					return run(0);
-				} finally {
-					// the insertion threw before the pass that takes it
-					if (style) prewritten.delete(style);
-				}
-			});
+					args,
+					strings ? args.length : Math.min(args.length, 1),
+					strings,
+					() => Reflect.apply(target, that, args),
+				),
+			);
 
 		this.client.global.Node.prototype.appendChild = willInsertNode(
 			this.client.global.Node.prototype.appendChild,
@@ -834,6 +1073,36 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					insertAdjacent(that, position, fragment);
 				},
 			);
+
+		const global = this.client.global;
+		const wrapMethod = (
+			prototype: object | undefined,
+			name: string,
+			handler: (target: Function, that: any, args: any[]) => unknown,
+		) => {
+			const native = prototype && (prototype as Record<string, unknown>)[name];
+			if (typeof native !== 'function') return;
+			(prototype as Record<string, unknown>)[name] = proxyModule.wrapFunction(
+				native as (...args: any[]) => unknown,
+				handler,
+			);
+		};
+		// a Text split in two puts the second half in as a new child: a script
+		// that holds text it has not run runs it then
+		wrapMethod(global.Text.prototype, 'splitText', (target, that, args) => {
+			const script = fillable(parentOf(that));
+			const release =
+				script &&
+				rewrittenScripts.get(script as HTMLScriptElement) !==
+					textChildren(script).map(dataOf).join('')
+					? holdScript(script)
+					: undefined;
+			try {
+				return Reflect.apply(target, that, args);
+			} finally {
+				release?.();
+			}
+		});
 
 		// does not insert element
 		this.client.global.Node.prototype.removeChild = proxyModule.wrapFunction(

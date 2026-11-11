@@ -57,6 +57,8 @@ const recordGetter = (key: keyof MutationRecord) =>
 const nativeRecord = {
 	type: recordGetter('type'),
 	target: recordGetter('target'),
+	addedNodes: recordGetter('addedNodes'),
+	removedNodes: recordGetter('removedNodes'),
 	attributeName: recordGetter('attributeName'),
 	oldValue: recordGetter('oldValue'),
 };
@@ -102,6 +104,19 @@ interface ObserverState {
 const states = new WeakMap<MutationObserver, ObserverState>();
 /** observers with a registration that sees attributes */
 const live = new Set<WeakRef<MutationObserver>>();
+/**
+ * Observers with a registration of any kind (hiddenMutation). A collected
+ * observer's entry goes when the set is next walked, or when it has doubled
+ * (observers that are made, used and dropped without a disconnect).
+ */
+const observing = new Set<WeakRef<MutationObserver>>();
+let observingSweep = 64;
+function observes(ref: WeakRef<MutationObserver>) {
+	observing.add(ref);
+	if (observing.size < observingSweep) return;
+	for (const entry of observing) if (!entry.deref()) observing.delete(entry);
+	observingSweep = Math.max(64, observing.size * 2);
+}
 /** records already shaped for the page (an inner write's result) */
 const settled = new WeakSet<object>();
 
@@ -324,17 +339,46 @@ function deliver(observer: MutationObserver) {
 	Reflect.apply(state.callback, observer, [records, observer]);
 }
 
+/** the hooks' own move being run (hiddenMove): `node` out of `target` and back in */
+let moved: { target: Node; node: Node } | null = null;
+/** `records` without the ones of the hooks' own move being run */
+function visible(records: MutationRecord[]): MutationRecord[] {
+	const move = moved;
+	if (!move || !records.length) return records;
+	return records.filter((record) => {
+		if (
+			recordType(record) !== 'childList' ||
+			recordTarget(record) !== move.target
+		)
+			return true;
+		const added = Reflect.apply(
+			nativeRecord.addedNodes,
+			record,
+			[],
+		) as NodeList;
+		const removed = Reflect.apply(
+			nativeRecord.removedNodes,
+			record,
+			[],
+		) as NodeList;
+		return !(
+			added.length + removed.length === 1 &&
+			(added[0] ?? removed[0]) === move.node
+		);
+	});
+}
+
 /** take every observer's pending records into the write being run */
-function drain() {
+function drain(observers = live) {
 	const write = writes[writes.length - 1];
-	for (const ref of live) {
+	for (const ref of observers) {
 		const observer = ref.deref();
 		if (!observer) {
-			live.delete(ref);
+			observers.delete(ref);
 			continue;
 		}
 		const state = states.get(observer)!;
-		const records = Reflect.apply(state.take, observer, []);
+		const records = visible(Reflect.apply(state.take, observer, []));
 		if (!records.length) continue;
 		if (write) {
 			if (!write.records.has(observer)) write.records.set(observer, []);
@@ -441,6 +485,49 @@ export function hookWrite<T>(
 	);
 }
 
+/**
+ * Run mutations that are the hooks' own and stand for no page write (a
+ * script's text rewritten where it stands and put back in its place, so the
+ * browser prepares the script): no observer hears of them, whatever it
+ * observes. What each observer had pending is the page's and goes to its
+ * queue first, in order.
+ */
+export function hiddenMutation<T>(callback: () => T): T {
+	// (inside another, the outer one drops the records of both)
+	if (!observing.size || hiding) return callback();
+	drain(observing);
+	hiding = true;
+	try {
+		return callback();
+	} finally {
+		hiding = false;
+		for (const ref of observing) {
+			const observer = ref.deref();
+			if (observer) Reflect.apply(states.get(observer)!.take, observer, []);
+		}
+	}
+}
+let hiding = false;
+
+/**
+ * Run the hooks' own move of `node` out of `target` and back in, which may
+ * run page code (a script's text node put back where it is runs the
+ * script): the two records of the move reach no observer, and whatever else
+ * is recorded meanwhile is the page's.
+ */
+export function hiddenMove<T>(target: Node, node: Node, callback: () => T): T {
+	if (!observing.size) return callback();
+	drain(observing);
+	const outer = moved;
+	moved = { target, node };
+	try {
+		return callback();
+	} finally {
+		drain(observing);
+		moved = outer;
+	}
+}
+
 const PROPERTY_ATTRIBUTES: Record<string, string> = {
 	httpEquiv: 'http-equiv',
 	htmlFor: 'for',
@@ -484,7 +571,7 @@ export default class MutationObserverModule extends Module<DocumentClient> {
 						) {
 							const state = states.get(self);
 							if (!state) return;
-							for (const record of shapeLoose(state, records))
+							for (const record of shapeLoose(state, visible(records)))
 								state.queue.push(record);
 							deliver(self);
 						},
@@ -559,6 +646,7 @@ export default class MutationObserverModule extends Module<DocumentClient> {
 					];
 				}
 				const result = Reflect.apply(target, that, [args[0], copy]);
+				observes(state.ref);
 				if (attributes) {
 					const oldValue = !!copy.attributeOldValue;
 					state.registrations.set(args[0], {
@@ -582,6 +670,7 @@ export default class MutationObserverModule extends Module<DocumentClient> {
 					state.registrations = new WeakMap();
 					state.anyOldValue = false;
 					live.delete(state.ref);
+					observing.delete(state.ref);
 					for (const write of writes) write.records.delete(that);
 				}
 				return result;
@@ -596,7 +685,8 @@ export default class MutationObserverModule extends Module<DocumentClient> {
 				if (!state) return records;
 				const taken = state.queue;
 				state.queue = [];
-				for (const record of shapeLoose(state, records)) taken.push(record);
+				for (const record of shapeLoose(state, visible(records)))
+					taken.push(record);
 				return taken;
 			},
 		);

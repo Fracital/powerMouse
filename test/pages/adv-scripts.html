@@ -11,6 +11,11 @@
 		'<script>' + __advPayload('document.writeln script') + '<\/script>',
 	);
 	document.write(
+		'<svg><script>' +
+			__advPayload('document.write svg script') +
+			'<\/script></svg>',
+	);
+	document.write(
 		'<img src="x:" onerror=\'' +
 			__advPayload('document.write img onerror') +
 			"'>",
@@ -443,6 +448,170 @@
 		document.body.append(svg);
 		svg.innerHTML = '<script>' + p + '<\/script>';
 	});
+	// Markup with a script in it never runs the script, an SVG one no more
+	// than an HTML one (the fragment parser marks both as started), through
+	// any markup setter, in an SVG or an HTML context, and not when the page
+	// moves or clones the element afterwards either
+	const svgIn = (fn) => {
+		const svg = document.createElementNS(SVG, 'svg');
+		document.body.append(svg);
+		fn(svg);
+	};
+	const svgScript = (p) => '<script>' + p + '<\/script>';
+	route('div innerHTML svg script', (p) => {
+		const d = document.createElement('div');
+		document.body.append(d);
+		d.innerHTML = '<svg>' + svgScript(p) + '</svg>';
+	});
+	route('detached div innerHTML svg script appended', (p) => {
+		const d = document.createElement('div');
+		d.innerHTML = '<svg>' + svgScript(p) + '</svg>';
+		document.body.append(d);
+	});
+	route('svg outerHTML script', (p) =>
+		svgIn((svg) => {
+			const g = document.createElementNS(SVG, 'g');
+			svg.append(g);
+			g.outerHTML = svgScript(p);
+		}),
+	);
+	route('svg insertAdjacentHTML script', (p) =>
+		svgIn((svg) => svg.insertAdjacentHTML('beforeend', svgScript(p))),
+	);
+	route('svg setHTMLUnsafe script', (p) =>
+		svgIn((svg) => svg.setHTMLUnsafe(svgScript(p))),
+	);
+	route('shadowRoot.innerHTML svg script', (p) => {
+		const host = document.createElement('div');
+		document.body.append(host);
+		host.attachShadow({ mode: 'open' }).innerHTML =
+			'<svg>' + svgScript(p) + '</svg>';
+	});
+	route('svg innerHTML script moved', (p) =>
+		svgIn((svg) => {
+			svg.innerHTML = '<g>' + svgScript(p) + '</g>';
+			document.body.append(svg.querySelector('script'));
+		}),
+	);
+	route('svg innerHTML script cloned', (p) =>
+		svgIn((svg) => {
+			svg.innerHTML = '<g>' + svgScript(p) + '</g>';
+			svg.append(svg.querySelector('script').cloneNode(true));
+		}),
+	);
+	route('svg innerHTML script href data:', (p) =>
+		svgIn((svg) => {
+			svg.innerHTML =
+				'<script href="data:text/javascript,' +
+				encodeURIComponent(p) +
+				'"><\/script>';
+		}),
+	);
+	route('svg innerHTML script xlink:href data:', (p) =>
+		svgIn((svg) => {
+			svg.innerHTML =
+				'<script xlink:href="data:text/javascript,' +
+				encodeURIComponent(p) +
+				'"><\/script>';
+		}),
+	);
+	route('template innerHTML svg script cloned', (p) => {
+		const t = document.createElement('template');
+		t.innerHTML = '<svg>' + svgScript(p) + '</svg>';
+		document.body.append(t.content.cloneNode(true));
+	});
+	// a fragment a range makes is the exception: its scripts run when the
+	// page inserts them
+	route('svg createContextualFragment script', (p) =>
+		svgIn((svg) => {
+			const range = document.createRange();
+			range.selectNodeContents(svg);
+			svg.append(range.createContextualFragment(svgScript(p)));
+		}),
+	);
+	route('DOMParser svg script adopted', (p) => {
+		const parsed = new DOMParser().parseFromString(
+			'<svg xmlns="http://www.w3.org/2000/svg">' + svgScript(p) + '</svg>',
+			'image/svg+xml',
+		);
+		document.body.append(parsed.documentElement);
+	});
+	route('DOMParser html svg script adopted', (p) => {
+		const parsed = new DOMParser().parseFromString(
+			'<svg>' + svgScript(p) + '</svg>',
+			'text/html',
+		);
+		document.body.append(parsed.querySelector('svg'));
+	});
+	route('DOMParser svg script imported', (p) => {
+		const parsed = new DOMParser().parseFromString(
+			'<svg xmlns="http://www.w3.org/2000/svg">' + svgScript(p) + '</svg>',
+			'image/svg+xml',
+		);
+		document.body.append(document.importNode(parsed.documentElement, true));
+	});
+	// handlers in SVG markup
+	route('div innerHTML svg onload', (p) => {
+		const d = document.createElement('div');
+		document.body.append(d);
+		d.innerHTML = "<svg onload='" + p + "'></svg>";
+	});
+	route('svg innerHTML image onerror', (p) =>
+		svgIn((svg) => {
+			svg.innerHTML = "<image href='x:' onerror='" + p + "'/>";
+		}),
+	);
+	// A connected script that has not run (it was empty) runs the moment a
+	// child lands in it, however the child gets there: an SVG one first,
+	// then the same routes on an HTML one
+	const connected = (ns, fn) => {
+		const s = ns
+			? document.createElementNS(SVG, 'script')
+			: document.createElement('script');
+		if (ns) {
+			const svg = document.createElementNS(SVG, 'svg');
+			svg.append(s);
+			document.body.append(svg);
+		} else document.body.append(s);
+		fn(s);
+	};
+	const FILLS = {
+		textContent: (s, p) => (s.textContent = p),
+		innerHTML: (s, p) => (s.innerHTML = p),
+		'append(string)': (s, p) => s.append(p),
+		'appendChild(textNode)': (s, p) =>
+			s.appendChild(document.createTextNode(p)),
+		'prepend(string)': (s, p) => s.prepend(p),
+		'replaceChildren(string)': (s, p) => s.replaceChildren(p),
+		'insertBefore(textNode)': (s, p) =>
+			s.insertBefore(document.createTextNode(p), null),
+		insertAdjacentText: (s, p) => s.insertAdjacentText('beforeend', p),
+		insertAdjacentHTML: (s, p) => s.insertAdjacentHTML('beforeend', p),
+		setHTMLUnsafe: (s, p) => s.setHTMLUnsafe(p),
+		'append(fragment)': (s, p) => {
+			const f = document.createDocumentFragment();
+			f.append(p);
+			s.append(f);
+		},
+		'comment.replaceWith(string)': (s, p) => {
+			// a comment is no script text: the script has not run yet
+			const c = document.createComment('');
+			s.append(c);
+			c.replaceWith(p);
+		},
+		'comment.after(string)': (s, p) => {
+			const c = document.createComment('');
+			s.append(c);
+			c.after(p);
+		},
+	};
+	for (const [fill, fn] of Object.entries(FILLS)) {
+		route('svg script connected ' + fill, (p) =>
+			connected(true, (s) => fn(s, p)),
+		);
+		route('script connected ' + fill, (p) => connected(false, (s) => fn(s, p)));
+	}
+	route('script connected text', (p) => connected(false, (s) => (s.text = p)));
 	// What the text setters leave in an element: nothing for null and for
 	// the empty string, and innerText's line breaks as <br> elements
 	P('textContent and innerText leave what the browser leaves', () => {
@@ -467,14 +636,184 @@
 			? 'as natively'
 			: 'TELL:' + saw;
 	});
-	route('math annotation-xml script', (p) => {
-		const d = document.createElement('div');
-		d.innerHTML =
-			'<math><annotation-xml encoding="text/html"><img src="x:" onerror=\'' +
-			p +
-			"'></annotation-xml></math>";
-		document.body.append(d);
-	});
+	// What the page sees of a script it filled: the text it gave, in the
+	// nodes it gave it in, and the records of its own insertions only. The
+	// first is filled while empty, the second holds text when the child that
+	// runs it lands.
+	const SAW = (s, seen) =>
+		JSON.stringify({
+			text: s.textContent,
+			pieces: [...s.childNodes].map((n) => n.data),
+			markup: s.innerHTML,
+			records: seen
+				.takeRecords()
+				.map(
+					(r) =>
+						r.type + '+' + r.addedNodes.length + '-' + r.removedNodes.length,
+				),
+		});
+	const watch = (s) => {
+		const seen = new MutationObserver(() => {});
+		seen.observe(s, {
+			childList: true,
+			characterData: true,
+			attributes: true,
+			subtree: true,
+		});
+		return seen;
+	};
+	const told = (saw, expected) =>
+		saw === JSON.stringify(expected) ? 'as written' : 'TELL:' + saw;
+	for (const ns of [false, true]) {
+		const kind = ns ? 'svg script' : 'script';
+		P(kind + ' filled reads back as written', () => {
+			let saw;
+			connected(ns, (s) => {
+				const seen = watch(s);
+				s.append('window.__advFilled = ', '(window.__advFilled || 0) + !!top;');
+				saw = SAW(s, seen);
+			});
+			return told(saw, {
+				text: 'window.__advFilled = (window.__advFilled || 0) + !!top;',
+				pieces: ['window.__advFilled = ', '(window.__advFilled || 0) + !!top;'],
+				markup: 'window.__advFilled = (window.__advFilled || 0) + !!top;',
+				records: ['childList+2-0'],
+			});
+		});
+		P(kind + ' held reads back as written', () => {
+			let saw;
+			connected(ns, (s) => {
+				const t = document.createTextNode('');
+				s.append(t);
+				t.data = 'window.__advHeld = (window.__advHeld || 0) + !!top;';
+				const seen = watch(s);
+				t.splitText(7);
+				s.append(document.createComment('c'));
+				saw = SAW(s, seen);
+			});
+			return told(saw, {
+				text: 'window.__advHeld = (window.__advHeld || 0) + !!top;',
+				pieces: [
+					'window.',
+					'__advHeld = (window.__advHeld || 0) + !!top;',
+					'c',
+				],
+				markup: 'window.__advHeld = (window.__advHeld || 0) + !!top;<!--c-->',
+				records: ['characterData+0-0', 'childList+1-0', 'childList+1-0'],
+			});
+		});
+	}
+	P('filled and held scripts ran once each', () =>
+		window.__advFilled === 2 && window.__advHeld === 2
+			? 'ran'
+			: 'TELL:' + window.__advFilled + ',' + window.__advHeld,
+	);
+	// A script that holds text it has not run (its type named no script
+	// when it connected, or the text went into a child that was there) runs
+	// it at the next child that lands, even one that brings no text
+	const held = (ns, hold, trigger) =>
+		connected(ns, (s) => {
+			hold(s);
+			trigger(s);
+		});
+	for (const ns of [false, true]) {
+		const kind = ns ? 'svg script' : 'script';
+		route(kind + ' typed late then comment appended', (p) => {
+			const s = ns
+				? document.createElementNS(SVG, 'script')
+				: document.createElement('script');
+			s.setAttribute('type', 'text/plain');
+			s.textContent = p;
+			(ns
+				? document.body.appendChild(document.createElementNS(SVG, 'svg'))
+				: document.body
+			).append(s);
+			s.removeAttribute('type');
+			s.append(document.createComment(''));
+		});
+		route(kind + ' textNode.data then comment appended', (p) =>
+			held(
+				ns,
+				(s) => {
+					const t = document.createTextNode('');
+					s.append(t);
+					t.data = p;
+				},
+				(s) => s.append(document.createComment('')),
+			),
+		);
+		route(kind + ' textNode.data then splitText', (p) =>
+			held(
+				ns,
+				(s) => {
+					const t = document.createTextNode('');
+					s.append(t);
+					t.data = p;
+				},
+				(s) => s.firstChild.splitText(4),
+			),
+		);
+		route(kind + ' textNode.appendData then empty text appended', (p) =>
+			held(
+				ns,
+				(s) => {
+					const t = document.createTextNode('');
+					s.append(t);
+					t.appendData(p);
+				},
+				(s) => s.append(''),
+			),
+		);
+		route(kind + ' split across two appends', (p) =>
+			connected(ns, (s) => {
+				const t = document.createTextNode('');
+				s.append(t);
+				t.data = p.slice(0, 9);
+				s.append(p.slice(9));
+			}),
+		);
+		route(kind + ' append(a, b) split mid-token', (p) =>
+			connected(ns, (s) => s.append(p.slice(0, 5), p.slice(5))),
+		);
+		route(kind + ' moveBefore(textNode)', (p) =>
+			connected(ns, (s) => {
+				const t = document.createTextNode(p);
+				document.body.append(t);
+				s.moveBefore(t, null);
+			}),
+		);
+		route(kind + ' moveBefore(script) from a template', (p) => {
+			const s = ns
+				? document.createElementNS(SVG, 'script')
+				: document.createElement('script');
+			s.textContent = p;
+			const t = document.createElement('template');
+			t.content.append(s);
+			try {
+				document.body.moveBefore(s, null);
+			} catch (error) {
+				// the browser refuses a move out of a template's document
+				document.body.append(document.adoptNode(s));
+			}
+		});
+	}
+	route('svg script appended to a connected svg', (p) =>
+		svgIn((svg) => {
+			const s = document.createElementNS(SVG, 'script');
+			s.textContent = p;
+			svg.append(s);
+		}),
+	);
+	route('svg script inserted with insertAdjacentElement', (p) =>
+		svgIn((svg) => {
+			const s = document.createElementNS(SVG, 'script');
+			s.textContent = p;
+			svg.insertAdjacentElement('beforeend', s);
+		}),
+	);
+	route('script connected innerText', (p) =>
+		connected(false, (s) => (s.innerText = p)),
+	);
 	// srcdoc frames through every attribute API
 	const frame = (fn) => {
 		const f = document.createElement('iframe');

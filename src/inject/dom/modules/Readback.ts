@@ -108,6 +108,16 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const global = this.client.global;
 		const sources = new WeakMap<HTMLScriptElement, ScriptSource>();
+		// a script the hooks filled where no wrapper here sees the text go in
+		// (a child landing in a connected script, DOMContentHooks)
+		// The rewritten text stands in the first text node and the others are
+		// empty, so each reads back as the piece the page gave it for as long
+		// as the script holds that text.
+		const pieces = new WeakMap<object, string>();
+		this.client.scriptSource = (script, written, rewritten, texts) => {
+			sources.set(script as HTMLScriptElement, { written, rewritten });
+			for (const [text, piece] of texts) pieces.set(text, piece);
+		};
 
 		const HTML = 'http://www.w3.org/1999/xhtml';
 		const SVG = 'http://www.w3.org/2000/svg';
@@ -279,6 +289,9 @@ export default class ReadbackModule extends Module<DocumentClient> {
 					const script = scriptOf(that);
 					if (!script || typeof value !== 'string') return value;
 					const source = written(script);
+					// one of several text nodes the script's text was given in
+					const piece = script === that ? undefined : pieces.get(that);
+					if (piece !== undefined && source !== undefined) return piece;
 					// the text node holds the whole rewritten script
 					return source !== undefined &&
 						value === sources.get(script)!.rewritten

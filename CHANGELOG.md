@@ -4953,6 +4953,18 @@ token '%'`. The body is decoded before rewriting and re-encoded after.
   an empty `textContent` or `innerText` leaves no text node, and
   `innerText` puts a `<br>` at each line break, as natively.
   (adversarial-scripts suite.)
+- A script that runs when a child lands in it is rewritten first. An SVG
+  `<script>` in markup the page set (`innerHTML`, `outerHTML`,
+  `insertAdjacentHTML`) ran the moment the markup landed, which no browser
+  does, and ran as the page wrote it, with the real `top` and the routed
+  URL; so did the text put into a connected script that had not run yet
+  (an HTML or an SVG one) through `HTMLScriptElement`'s own `textContent`
+  and `innerText`, `innerHTML`, `setHTMLUnsafe`, `append` and its
+  siblings, a text node, a fragment, or held in the script and run by the
+  next child (`splitText`, a comment). A script of a markup string keeps
+  "already started", and the text a connected script will run is
+  rewritten where it stands, read back as the page wrote it, with no
+  record of the hooks' own for an observer. (adversarial-scripts suite.)
 
 ### Origin isolation
 

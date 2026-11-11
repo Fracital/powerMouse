@@ -22,6 +22,7 @@ import DocumentClient, {
 import cloneRawNode, {
 	inertDocumentOf,
 	isHTMLTemplate,
+	isScriptElement,
 	parseHTMLFragmentIn,
 	releaseMarkup,
 	templateContentDocument,
@@ -891,6 +892,49 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			'textContent',
 		)!;
 
+		// Chrome gives HTMLScriptElement its own `textContent` and `innerText`
+		// (the Trusted Types ones), which shadow the hooked accessors of Node
+		// and HTMLElement: a connected script's text set through either ran
+		// as the page wrote it. Both replace the script's children with the
+		// text, as `text` does (an `innerText` with line breaks puts <br>
+		// elements between its lines, which are no part of a script's text).
+		for (const name of ['textContent', 'innerText'] as const) {
+			const own = Reflect.getOwnPropertyDescriptor(
+				this.client.global.HTMLScriptElement.prototype,
+				name,
+			);
+			if (!own?.set) continue;
+			Reflect.defineProperty(
+				this.client.global.HTMLScriptElement.prototype,
+				name,
+				{
+					...own,
+					set: proxyModule.wrapFunction(
+						own.set,
+						(target, that: HTMLScriptElement, args) => {
+							if (!isScriptElement(that))
+								return Reflect.apply(target, that, args);
+							// null is the empty string, which leaves no child
+							const text = args[0] === null ? '' : String(args[0]);
+							usePrototype(that, nativeElement, (element) => {
+								for (const node of [...element.childNodes]) node.remove();
+							});
+							if (text === '') return;
+							const lines =
+								name === 'innerText' ? text.split(/\r\n|\r|\n/) : [text];
+							const nodes: (string | Node)[] = [];
+							for (const [index, line] of lines.entries()) {
+								if (index)
+									nodes.push(this.client.global.document.createElement('br'));
+								if (line !== '') nodes.push(line);
+							}
+							Reflect.apply(hookedAppend, that, nodes);
+						},
+					),
+				},
+			);
+		}
+
 		Reflect.defineProperty(this.client.global.Node.prototype, 'textContent', {
 			enumerable: true,
 			configurable: true,
@@ -1057,10 +1101,23 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						else {
 							for (const node of [...element.childNodes]) node.remove();
 
-							if (element.nodeName === 'SCRIPT') {
-								// allow the bad practice of setting the script's innerHTML
-								// scripts cannot support nodes as content
-								element.append(new this.client.global.Text(markup));
+							if (isScriptElement(that)) {
+								// a script's markup is its text (an HTML script's as it
+								// is written, an SVG script's parsed), and a connected
+								// script that has not run runs it: it goes in through
+								// the insertion hook, which rewrites what will run
+								const nodes =
+									element.nodeName === 'SCRIPT'
+										? markup
+										: cloneRawNode(
+												parseHTMLFragmentIn(
+													markup,
+													that,
+													this.client.global.document,
+												),
+												this.client.global.document,
+											);
+								if (nodes !== '') Reflect.apply(hookedAppend, that, [nodes]);
 							} else {
 								// parsed in the element's context, as the browser does:
 								// a table section's rows, an <svg>'s SVG, a <textarea>'s
@@ -1223,6 +1280,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						// goes in, which the native call would not (no declarative
 						// shadow root is made in a style)
 						if (kind === 'svg')
+							return Reflect.apply(hookedInnerHTMLSet, that, [args[0]]);
+						// and a script's markup is its text, which a connected
+						// script runs: rewritten as it goes in, by the same setter
+						if (args.length && isScriptElement(that))
 							return Reflect.apply(hookedInnerHTMLSet, that, [args[0]]);
 						if (args.length)
 							args[0] = rewriteMarkup(

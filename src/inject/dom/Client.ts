@@ -41,6 +41,7 @@ import cloneRawNode, {
 	nativeAttributes,
 	parseHTML,
 	releaseMarkup,
+	startedScripts,
 } from './cloneNode';
 import { initLoads, loadSource, type LoadSource } from './loadGrants';
 import DOMAttributesModule, {
@@ -1575,6 +1576,17 @@ export default class DocumentClient extends Client {
 	/** @internal the rewritten text each script element carries (DOMContentHooks, DOMHooks) */
 	readonly rewrittenScripts = new WeakMap<HTMLScriptElement, string>();
 	/**
+	 * @internal set by the Readback module: `script` holds `rewritten` for the
+	 * text `written` the page gave it, which is what the page reads back; in
+	 * `pieces`, the text nodes that held it and what each was given
+	 */
+	scriptSource?: (
+		script: Element,
+		written: string,
+		rewritten: string,
+		pieces: [CharacterData, string][],
+	) => void;
+	/**
 	 * @internal The text a script should get when the page sets it (`text`,
 	 * `textContent`). A connected script runs the moment its text lands,
 	 * before any hook, so the text is rewritten here and recorded so the
@@ -1590,6 +1602,7 @@ export default class DocumentClient extends Client {
 		// is injected now, since the parser runs it inside the write that
 		// made the frame, before any observer hears of the frame
 		if (script === this.global.document.currentScript) {
+			startedScripts.add(script);
 			this.sweepFrames?.();
 			return text;
 		}
