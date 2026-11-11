@@ -39,6 +39,52 @@ class Edits {
 	}
 }
 
+/** css-tree's parser as its parse contexts see it (`this`): the token buffer it keeps from one parse to the next */
+interface Tokens {
+	offsetAndType?: Uint32Array;
+	tokenCount: number;
+}
+type ParseContext = (this: Tokens, options: ParseOptions) => CssNode;
+/** css-tree's parse contexts by name: the parser looks the one to run up here on every parse */
+const contexts = (
+	parse as unknown as { config?: { context?: Record<string, ParseContext> } }
+).config?.context;
+const CLEARED = 'cleared';
+// css-tree reads one token of its buffer that the parse at hand never
+// writes: when the outermost block of a sheet closes, the bracket it waits
+// for next is the pair of the token at index `source.length`
+// (TokenStream.setSource), which is whatever a longer sheet parsed earlier
+// left there. With an opening bracket there, a closing bracket with nothing
+// open (`a{} } b{}`) matched it and the balance table went round in a
+// circle: the same sheet parsed differently after another sheet, and for
+// some the recovery never ended, making nodes until the heap was gone (a
+// sheet of 32 characters, in the service worker and in the page). So a
+// parse runs in a context that runs the one asked for and then clears the
+// tokens it wrote: every parse reads a buffer of zeros, as the first does.
+if (contexts)
+	contexts[CLEARED] = function (options) {
+		try {
+			return contexts[(options as { inner: string }).inner]!.call(
+				this,
+				options,
+			);
+		} finally {
+			this.offsetAndType?.fill(0, 0, this.tokenCount + 1);
+		}
+	};
+/** css-tree's parse, the same whatever it parsed before */
+const parseCleared = (
+	text: string,
+	options: ParseOptions & { context: string },
+): CssNode =>
+	contexts && options.context in contexts
+		? parse(text, {
+				...options,
+				context: CLEARED,
+				inner: options.context,
+			} as ParseOptions)
+		: parse(text, options);
+
 /** what css-tree's walker tells a visitor about where a node is */
 interface WalkContext {
 	function?: { name: string } | null;
@@ -153,12 +199,12 @@ export function modifyCSS(
 		const start = node.loc!.start.offset;
 		let piece: CssNode;
 		try {
-			piece = parse(script.slice(start, node.loc!.end.offset), {
+			piece = parseCleared(script.slice(start, node.loc!.end.offset), {
 				positions: true,
 				context: kind,
 				offset: start,
 				...(atrule === undefined ? {} : { atrule }),
-			} as ParseOptions);
+			} as ParseOptions & { context: string });
 		} catch (error) {
 			route.call({}, node, atrule);
 			return;
@@ -168,7 +214,7 @@ export function modifyCSS(
 		});
 	};
 
-	const tree = parse(
+	const tree = parseCleared(
 		script,
 		lazy
 			? {

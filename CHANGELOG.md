@@ -403,6 +403,18 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A stylesheet is rewritten the same whatever was rewritten before it, and
+  its rewrite always ends. css-tree keeps its token buffer between parses
+  and reads one entry of it that the parse at hand never writes (the token
+  at index `source.length`, when a sheet's outermost block closes): with an
+  opening bracket left there by a longer sheet, a closing bracket with
+  nothing open (`a{} } b{}`) was matched against it, the same sheet parsed
+  differently from one load to the next, and for some sheets the parser's
+  recovery went round forever, making nodes until the heap was gone (a
+  sheet of 32 characters after an ordinary one, in the service worker and
+  in the page). The buffer is cleared after every parse (css-parse-history
+  suite; found by a fuzz of mutated sheets, 400,000 of which now run
+  clean).
 - A proxied site's documents no longer get a resource another site loaded
   from the renderer's memory cache: natively each site has a renderer of its
   own, through the proxy every site shares one, so an image, script,
