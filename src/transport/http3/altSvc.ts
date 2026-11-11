@@ -103,6 +103,8 @@ interface Broken {
 	until: number;
 	/** consecutive failures, for the backoff */
 	count: number;
+	/** the wisp relay refused the UDP stream; QUIC itself was never tried */
+	refused: boolean;
 }
 
 /** per-origin alternative services and the broken ones, keyed by `URL.origin` */
@@ -174,13 +176,24 @@ export class AltSvcCache {
 		this.#entries.set(origin, entry);
 	}
 
-	/** QUIC to `origin` failed: leave it alone for a while, longer each time */
-	markBroken(origin: string): number {
+	/**
+	 * QUIC to `origin` failed: leave it alone for a while, longer each time.
+	 * `refused` when the wisp relay closed the UDP stream before anything
+	 * came back on it, which says what that relay does, not what the origin
+	 * does (forgetRefused).
+	 */
+	markBroken(origin: string, refused = false): number {
 		const previous = this.#broken.get(origin);
 		const count = (previous?.count ?? 0) + 1;
 		const delay = Math.min(BROKEN_BASE_MS * 2 ** (count - 1), BROKEN_MAX_MS);
-		this.#broken.set(origin, { until: this.#now() + delay, count });
+		this.#broken.set(origin, { until: this.#now() + delay, count, refused });
 		return delay;
+	}
+
+	/** a new wisp connection may reach another relay: what the old one refused is tried again */
+	forgetRefused(): void {
+		for (const [origin, broken] of this.#broken)
+			if (broken.refused) this.#broken.delete(origin);
 	}
 
 	/** QUIC to `origin` worked: the backoff starts over */
@@ -193,11 +206,13 @@ export class AltSvcCache {
 		origin: string;
 		entry: AltService;
 		brokenUntil: number | null;
+		refused: boolean;
 	}[] {
 		return [...this.#entries].map(([origin, entry]) => ({
 			origin,
 			entry,
 			brokenUntil: this.#broken.get(origin)?.until ?? null,
+			refused: this.#broken.get(origin)?.refused ?? false,
 		}));
 	}
 }

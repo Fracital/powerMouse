@@ -47,7 +47,7 @@ The first release after a four-year gap. Everything below is breaking.
   `deploy/epoxy/h3/` into epoxy-transport's `dist/h3/`, loaded only when an
   origin offers h3). Requests never wait on a handshake that has not worked;
   a failed one marks the origin broken (5 minutes, doubling), a wisp server
-  that refuses UDP turns QUIC off for a while, and the request goes over the
+  without UDP turns QUIC off for a while, and the request goes over the
   transport as before. Chrome's QUIC transport parameters, 256 KiB header
   sections, Chrome's pseudo-header order, no 0-RTT. `Http3Transport` is
   exported for hosts that construct transports themselves. Needs a wisp
@@ -68,6 +68,25 @@ The first release after a four-year gap. Everything below is breaking.
   QUIC connection whose wisp stream ends is closed at once, so its requests
   go over the base transport instead of waiting 30 s for the idle timeout
   (wisp-reconnect and http3-fallback suites).
+- A UDP stream the wisp server refuses turns HTTP/3 off for its origin, not
+  for the session. One refused stream (a relay that will not send UDP to
+  one name, a blocked host, a name that does not resolve) was read as "this
+  relay has no UDP" and cost every origin its HTTP/3 for 5 minutes. The
+  relay is now taken to have no UDP only on evidence about the relay: it
+  says so (a wisp v2 server without the UDP extension), or it refused
+  streams to 8 distinct hosts, with close reason `0x48` or `0x42` or none
+  reported, while no datagram had come back over the wisp connection. A
+  datagram back on any stream withdraws that, and a new wisp connection
+  starts from nothing, the origins the old relay refused included. A
+  refused origin falls back as before (its requests go over the base
+  transport at once, its stream is not asked for again with each request).
+  `Http3Transport.info()` gains `udpCarried`, `udpRefused` and
+  `altSvc[].refused`. deploy/epoxy's patch 0058 gives a UDP stream
+  `closeReason()`, which the transport reads where it exists; it is not in
+  the pinned epoxy-transport build yet, and without it every refusal
+  counts as one with no reason reported. docs/http3.md has the rule (5) and
+  what each wisp server sends (http3-fallback and demo-http3 suites, with
+  `test/wisp-gate.mjs`, a relay that refuses UDP per name).
 
 ### Demo and API
 

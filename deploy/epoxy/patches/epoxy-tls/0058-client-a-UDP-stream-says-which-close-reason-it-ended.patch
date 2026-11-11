@@ -1,0 +1,126 @@
+From 43b657172ae372e10245294fd46a0da40f084043 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 10 Nov 2026 20:34:20 -0500
+Subject: [PATCH] client: a UDP stream says which close reason it ended with
+
+A Wisp server answers a stream it will not open with a CLOSE packet and
+a reason, and to the caller of connect_udp that looked like any other
+end: the read side finished and the reason, which the multiplexor keeps,
+went nowhere. STomp opens one UDP stream per HTTP/3 origin and has to
+tell a refusal of that destination (a blocked or unreachable host, a
+name the server will not relay UDP to: 0x03, 0x42, 0x48 and the like)
+from a server that relays no UDP at all; without the reason it could
+only count refusals.
+
+The stream object gets closeReason() next to read, write and send: the
+close reason as a number once the read side has ended, undefined before.
+0x01 is also what a stream closed from this side, or with its
+connection, reports. Nothing else about the stream changes.
+---
+ client/src/io_stream.rs | 47 ++++++++++++++++++++++++++++++++++++-----
+ client/src/lib.rs       |  2 ++
+ 2 files changed, 44 insertions(+), 5 deletions(-)
+
+diff --git a/client/src/io_stream.rs b/client/src/io_stream.rs
+index 693e268..f61861d 100644
+--- a/client/src/io_stream.rs
++++ b/client/src/io_stream.rs
+@@ -1,18 +1,20 @@
+ use std::{
+-	cell::RefCell,
++	cell::{Cell, RefCell},
+ 	future::poll_fn,
+ 	pin::Pin,
+ 	rc::Rc,
+-	task::{Context, Poll},
++	task::{ready, Context, Poll},
+ };
+ 
+ use bytes::Bytes;
+-use futures_util::{AsyncReadExt, AsyncWriteExt, Sink, SinkExt, Stream, TryStreamExt};
++use futures_util::{
++	AsyncReadExt, AsyncWriteExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt,
++};
+ use js_sys::{Object, Promise, Uint8Array};
+ use wasm_bindgen::prelude::*;
+ use wasm_bindgen_futures::future_to_promise;
+ use wasm_streams::{ReadableStream, WritableStream};
+-use wisp_mux::stream::MuxStreamWrite;
++use wisp_mux::stream::{MuxStreamRead, MuxStreamWrite};
+ 
+ use crate::{
+ 	stream_provider::{ProviderAsyncRW, ProviderUnencryptedStream, ProviderWispTransportWrite},
+@@ -106,21 +108,56 @@ async fn send_datagram(write: SharedDatagramWrite, datagram: JsValue) -> Result<
+ 	Ok(JsValue::UNDEFINED)
+ }
+ 
++/// A UDP stream's read side. When it ends it notes the reason the stream
++/// closed with, for `closeReason()`.
++struct DatagramRead {
++	read: MuxStreamRead<ProviderWispTransportWrite>,
++	reason: Rc<Cell<Option<u8>>>,
++}
++
++impl Stream for DatagramRead {
++	type Item = Result<Bytes, EpoxyError>;
++
++	fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
++		let item = ready!(self.read.poll_next_unpin(cx));
++		if item.is_none() {
++			self.reason
++				.set(self.read.get_close_reason().map(u8::from));
++		}
++		Poll::Ready(item.map(|x| x.map(Bytes::from).map_err(EpoxyError::Wisp)))
++	}
++}
++
+ // A UDP stream gets `send(datagram)` next to its streams: like sendto(2) on a
+ // native socket, a datagram over the size one Wisp packet carries fails that
+ // call alone (EMSGSIZE) and the socket keeps working. A WritableStream cannot
+ // do that, since a rejected write errors the whole stream; its write rejects
+ // with the same error.
++//
++// It also gets `closeReason()`: the Wisp close reason the stream ended with,
++// once its read side has ended (undefined before). The read side of a stream
++// the server closed ends like any other, and a caller that opened the stream
++// for one destination has to tell a refusal of that destination (0x03, 0x42,
++// 0x48 and the like) from a server that relays no UDP at all. 0x01 is also
++// what a stream closed from this side, or with its connection, reports.
+ pub fn iostream_from_stream(stream: ProviderUnencryptedStream) -> EpoxyIoStream {
+ 	let (rx, tx) = stream.into_split();
+ 	let tx: SharedDatagramWrite = Rc::new(RefCell::new(tx));
++	let reason = Rc::new(Cell::new(None));
+ 	let out = create_iostream_object(
+-		Box::pin(rx.map_ok(Bytes::from).map_err(EpoxyError::Wisp)),
++		Box::pin(DatagramRead {
++			read: rx,
++			reason: reason.clone(),
++		}),
+ 		Box::pin(DatagramSink(tx.clone())),
+ 	);
+ 	let send = Closure::<dyn Fn(JsValue) -> Promise>::new(move |datagram: JsValue| {
+ 		future_to_promise(send_datagram(tx.clone(), datagram))
+ 	});
+ 	object_set(&out, "send", send.into_js_value());
++	let close_reason = Closure::<dyn Fn() -> JsValue>::new(move || {
++		reason.get().map_or(JsValue::UNDEFINED, JsValue::from)
++	});
++	object_set(&out, "closeReason", close_reason.into_js_value());
+ 	JsValue::from(out).into()
+ }
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index 216d2ef..67762e9 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -59,6 +59,8 @@ type EpoxyIoStream = {
+ 	write: WritableStream<Uint8Array>,
+ 	/** UDP streams only: sends one datagram; one over a Wisp packet's 64 KiB fails this call alone (EMSGSIZE) */
+ 	send?: (datagram: Uint8Array) => Promise<void>,
++	/** UDP streams only: the Wisp close reason the stream ended with, once `read` has ended (0x01 also for a stream closed from this side or with its connection) */
++	closeReason?: () => number | undefined,
+ };
+ type EpoxyWispTransportResult = { read: ReadableStream<ArrayBuffer>, write: WritableStream<Uint8Array> };
+ type EpoxyWispTransport = string | (() => Promise<EpoxyWispTransportResult> | EpoxyWispTransportResult);
+-- 
+2.54.0
+

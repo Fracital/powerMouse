@@ -21,8 +21,9 @@ new StompController({
 
 The demo has it on by default: `STOMP_HTTP3=0` on the server turns it off,
 `?http3=0` on the page turns it off for one visit and `?http3` on for one
-(demo/README.md). The demo-http3 suite checks the default, the switches and
-that a page loads on time where QUIC cannot be had.
+(demo/README.md). The demo-http3 suite checks the default, the switches,
+that a page loads on time where QUIC cannot be had, and that a wisp server
+refusing UDP to one name leaves HTTP/3 on for the rest of the session.
 
 ## Pieces
 
@@ -54,16 +55,45 @@ that a page loads on time where QUIC cannot be had.
    back within `timeout`, 10 s) marks the origin broken: 5 minutes, doubling
    on each consecutive failure up to 2 days, reset when QUIC works again.
    This is Chrome's `BrokenAlternativeServices`.
-5. A wisp server that refuses UDP (wisp v2 without the UDP extension, or the
-   stream closed at once) turns QUIC off for every origin for 5 minutes, like
-   Chrome's "QUIC is blocked on this network".
+5. A UDP stream the wisp server ends before any datagram has come back on
+   it was refused (wisp has no answer to CONNECT: a server that will not
+   relay a stream closes it, at once or when its first datagram arrives),
+   and so was one that could not be opened. A refusal is about that
+   destination: it marks the one origin broken as in 4, its requests go
+   over the base transport at once, its stream is not asked for again until
+   the mark runs out, and every other origin keeps its HTTP/3. The relay
+   itself is taken to have no UDP, which turns QUIC off for every origin
+   for 5 minutes, only on evidence about the relay:
+   - the server says so: a wisp v2 server that did not announce the UDP
+     extension (epoxy fails the open with `ExtensionsNotSupported`, and no
+     origin is marked broken for it); or
+   - 8 distinct hosts were refused while no datagram had come back on any
+     UDP stream of this wisp connection. A refusal counts when its close
+     reason is one a server also gives with UDP off altogether (`0x48`,
+     `0x42`) or the transport does not report the reason (the table under
+     Wisp servers); one with any other reason (`0x03`, the edges' name
+     gate) never counts.
+
+   A datagram coming back on any stream shows that the relay carries UDP:
+   the count is dropped and not kept again on this wisp connection, and a
+   verdict reached by counting is withdrawn at once (a stream opened before
+   the verdict may still carry). The count also starts over when the 5
+   minutes begin. A new wisp connection (the base transport built again
+   after the old one was lost, or a UDP stream that could not be opened
+   because the connection was gone) starts from nothing, since another
+   edge may answer it: no verdict, no count, and the origins the old relay
+   refused are tried again. Origins whose QUIC failed for their own reasons
+   (rule 4) stay broken.
+
 6. An h3 request that fails before its response head is retried over the
    base transport when it is GET, HEAD or OPTIONS, or when its stream never
    opened (so it never reached the server); otherwise the error is the
    request's. Request bodies are buffered (or a stream teed) for that retry.
 
-`info()` on an `Http3Transport` lists the alt-svc entries, the connections
-with their RTT and datagram counts, and how the last 64 requests went.
+`info()` on an `Http3Transport` lists the alt-svc entries (with which are
+broken, and which of those by a refusal), the connections with their RTT and
+datagram counts, how the last 64 requests went, and what is known of the
+relay: `udpBlockedUntil`, `udpCarried` and the hosts in `udpRefused`.
 
 ## What matches Chrome
 
@@ -160,8 +190,9 @@ relay UDP streams.
 | holyWisp, the public `wss://holywisp.fracit.al/` relay and the keyed Fracital path on the edges | on since abulxt 853761c7: `holywisp_allow_udp: true` and `holywisp_proxy_udp_direct: true` render `allow-udp = on` and `proxy-udp = direct` (the edge egress proxy only speaks TCP) |
 | holyWisp on amph (abulxt's own relay)                                                           | on, `proxy-udp = direct` (mullvad-pool is TCP only)                                                                                                                                 |
 
-With UDP off the option costs nothing: the first UDP stream is refused at
-once and QUIC stays off for 5 minutes at a time. The edges turned it on
+With UDP off the option costs nothing: an origin's UDP stream is refused at
+once and the origin stays on the base transport, and after eight hosts QUIC
+is off for 5 minutes at a time (rule 5). The edges turned it on
 (abulxt 853761c7) with, in `deploy/ansible/inventory/group_vars/edge.yml`:
 
 ```yaml
@@ -194,6 +225,56 @@ YouTube watch page is fetched from the one address and its later requests
 come from the other. A server that sends
 both from one address (the demo's built-in `/wisp/` on an ordinary machine)
 does not split a session this way.
+
+### What a refused UDP stream looks like
+
+Wisp has no answer to CONNECT, so a server that will not relay a UDP stream
+sends CLOSE with a reason, and the client cannot tell from one stream
+whether the server refuses this destination or every one. What the servers
+send, read from their source (holyWisp 0.5.2 `src/server/conn.c` and
+`stream.c`; wisp-js 0.5.3 `src/server/connection.mjs`, `filter.mjs` and
+`net.mjs`) and, where a cell does not say "read", measured 2026-11-10 with
+epoxy against both servers run locally:
+
+| Case                                                                                                                             | holyWisp 0.5.2                                                                                                                                                                                            | wisp-js 0.5.3                                                                                                 | About               |
+| -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------- |
+| UDP off on the whole relay                                                                                                       | `allow-udp = off`: a wisp v2 INFO without the UDP extension (epoxy then fails the open itself); `0x48` on CONNECT for a wisp v1 client (epoxy's default)                                                  | `allow_udp_streams: false`: the same, except `0x03` for a name that does not resolve (the lookup comes first) | the relay           |
+| UDP off behind a proxy                                                                                                           | `proxy-udp = refuse` with a `proxy`: `0x48` on CONNECT; the v2 INFO still announces UDP                                                                                                                   | no such setting                                                                                               | the relay           |
+| A destination the server blocks: a host or port on its lists, a literal IP where none are allowed, a private or loopback address | `0x48` (read: also a destination its reputation store refuses)                                                                                                                                            | `0x48`                                                                                                        | the destination     |
+| A name the edges' gate closes to UDP (abulxt, not deployed yet)                                                                  | read, and measured by the edge work: the stream opens, and the first datagram sent on it is answered with `0x03` (the edge's `send()` fails with `EPERM`, an errno holyWisp has no reason of its own for) | not applicable                                                                                                | the destination     |
+| A name that does not resolve                                                                                                     | `0x42`                                                                                                                                                                                                    | `0x03`                                                                                                        | the destination     |
+| A port that answers a datagram with ICMP unreachable                                                                             | `0x42`                                                                                                                                                                                                    | `0x02`                                                                                                        | the destination     |
+| An address with no route                                                                                                         | `0x42` (read)                                                                                                                                                                                             | `0x03` (read)                                                                                                 | the destination     |
+| A CONNECT the server cannot use (port 0)                                                                                         | `0x41`                                                                                                                                                                                                    | `0x41` (read)                                                                                                 | the request         |
+| The server's limits: streams per connection, connects per source or destination, a full queue                                    | `0x49` (read)                                                                                                                                                                                             | `0x49`                                                                                                        | the client          |
+| A stream that opens and whose datagrams go nowhere                                                                               | no CLOSE, nothing comes back                                                                                                                                                                              | no CLOSE, nothing comes back                                                                                  | the origin (rule 4) |
+
+Read only: epoxy-server answers `0x48` with `allow_udp = false`, and
+wisp-server-python answers `0x42` with `--block-udp`, which is also its
+answer to any stream it could not open. So `0x48` and `0x42` are what a
+relay without UDP says, and both are also said about one destination;
+`0x03` is never said about the relay. A refusal arrives one wisp round trip
+after the CONNECT or the first datagram (2 to 11 ms through a local
+server).
+
+Epoxy ends the stream's read side the same way whatever the reason was. A
+build with `deploy/epoxy` patch `0058` adds `closeReason()` to the stream
+`connect_udp` returns, and `Http3Transport` reads it when the stream ends;
+a build without it reports no reason and every refusal counts.
+
+Eight hosts, because a refusal is nearly free (two small wisp packets, in
+the background, and no request waits on it) and a wrong verdict costs every
+origin its HTTP/3 for 5 minutes. Measured 2026-11-10, ten sites loaded once
+in Chrome without a proxy, counting the hosts whose responses offered h3:
+1 to 50 a page (YouTube 10, CNN 15, Discord 8, Twitch 5, Reddit and TikTok
+4, Google and Amazon 3, GitHub 1, the New York Times 50), the first few
+often one party's (CNN's first four its own, all of YouTube's Google's).
+Eight are reached within one page on four of the ten, so a relay without
+UDP is found out within a few pages, and a site whose own few names are
+refused does not make the count before another party's stream carries.
+With a transport that reports no close reason, a wisp connection whose
+first eight hosts are all refused for themselves is still taken for a relay
+without UDP, for 5 minutes.
 
 A datagram crosses wisp whole, as one DATA packet. Epoxy refuses one over
 64 KiB (above the 65507 bytes an IPv4 datagram carries) with `EMSGSIZE`
@@ -268,8 +349,18 @@ EpoxyTransport `dist` branch with everything else.
 - `http3-fallback` (no network): a stand-in base transport and refused,
   closed and black-hole datagram channels. Alt-Svc parsing (http origins,
   other hosts, drafts, `ma`, `clear`), no wait during a handshake, broken
-  marking, the UDP-refused switch, a forced origin's bounded wait, and a
-  module that does not load.
+  marking, a forced origin's bounded wait, and a module that does not load.
+  Rule 5 with a stand-in for stomp-h3 whose handshake is a datagram out and
+  one back: one origin refused beside one that works, a relay that refuses
+  every stream (by reason), refusals that never count, the verdict
+  withdrawn, a new wisp connection. Then the same through a real epoxy
+  client and the demo's wisp server behind `test/wisp-gate.mjs`, a relay
+  that refuses UDP to one name as the edges' gate does, or to all, and can
+  drop its connections.
+- `demo-http3` (no network): the demo's default and switches, a wisp server
+  without UDP, and one behind the gate: the refused origin's page and
+  requests arrive over TCP on time, its stream is asked for once, and the
+  next origin's stream is still asked for.
 - `http3` (network): quic.nginx.org reports h3 through the proxy with a wisp
   that relays UDP and reports not h3, as fast, through one that refuses it;
   raw requests over h3 to quic.nginx.org, cloudflare-quic.com, www.google.com

@@ -7,7 +7,10 @@
 // on QUIC that has not worked yet: until the handshake is done it goes over
 // the base transport, so a wisp server or network that drops UDP costs
 // nothing the user sees, and the failure marks the origin broken for a
-// while (AltSvcCache). docs/http3.md has the design and its limits.
+// while (AltSvcCache). A UDP stream the wisp server refuses is a failure of
+// that one origin; HTTP/3 goes off for every origin only on evidence about
+// the relay itself (Relay, below). docs/http3.md has the design and its
+// limits.
 import type {
 	ProxyTransport,
 	RawHeaders,
@@ -21,6 +24,12 @@ import { base64url, httpsQuery, parseHttpsAnswer } from './dnsHttps';
 export interface DatagramChannel {
 	read: ReadableStream<Uint8Array>;
 	write: WritableStream<Uint8Array>;
+	/**
+	 * The wisp close reason the stream ended with, once `read` has ended
+	 * (epoxy builds with deploy/epoxy's patch 0058; older ones have no such
+	 * method and the reason is not known)
+	 */
+	closeReason?: () => number | undefined;
 }
 export type UdpOpener = (
 	host: string,
@@ -76,13 +85,20 @@ interface H3Module {
 export interface Http3Info {
 	enabled: boolean;
 	moduleError: string | null;
+	/** HTTP/3 is off for every origin until then: the wisp relay is taken to have no UDP */
 	udpBlockedUntil: number | null;
+	/** a datagram came back over this wisp connection, so its relay has UDP */
+	udpCarried: boolean;
+	/** hosts the relay refused a UDP stream to while nothing had been carried */
+	udpRefused: string[];
 	altSvc: {
 		origin: string;
 		port: number;
 		expires: number;
 		source: string;
 		brokenUntil: number | null;
+		/** broken because the wisp relay refused the UDP stream */
+		refused: boolean;
 	}[];
 	connections: {
 		origin: string;
@@ -95,8 +111,30 @@ export interface Http3Info {
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_WAIT_MS = 300;
-/** a wisp server that refuses UDP refuses it for every origin: try again after this */
+/** how long HTTP/3 stays off for every origin once the relay is taken to have no UDP */
 const UDP_BLOCKED_MS = 5 * 60 * 1000;
+/**
+ * How many distinct hosts the relay must refuse a UDP stream to, with no
+ * datagram having come back over the wisp connection, before the relay
+ * itself is taken to have no UDP. A refusal costs two small wisp packets in
+ * the background and no request waits on it, where a wrong verdict costs
+ * every origin its HTTP/3, so the number errs high: more than the hosts of
+ * one party a page usually opens with, and still reached within a page or
+ * three behind a relay that has no UDP (docs/http3.md).
+ */
+const RELAY_REFUSALS = 8;
+/**
+ * The close reasons a wisp server also gives when it relays no UDP at all:
+ * 0x48 (blocked: holyWisp with `allow-udp = off` or `proxy-udp = refuse`,
+ * wisp-js and epoxy-server with UDP off) and 0x42 (unreachable:
+ * wisp-server-python's --block-udp). Every other reason is about the
+ * destination (0x03, 0x41, 0x43, 0x44, 0x47), the client's rate (0x49) or
+ * this side (0x01, 0x02) and says nothing about the relay.
+ */
+const RELAY_REASONS = new Set([0x42, 0x48]);
+/** epoxy's error for a UDP stream on a wisp v2 connection whose server did not announce the UDP extension */
+const NO_UDP_EXTENSION =
+	/ExtensionsNotSupported|Protocol extensions .* not supported/;
 const DNS_NEGATIVE_MS = 5 * 60 * 1000;
 const RECENT = 64;
 /** methods a failed h3 attempt may be retried on the base transport with (RFC 9110 9.2.2, minus those with bodies that matter) */
@@ -131,6 +169,20 @@ const STATUS_TEXT: Record<number, string> = {
 	503: 'Service Unavailable',
 	504: 'Gateway Timeout',
 };
+
+/** what the UDP streams of one wisp connection have shown of its relay */
+interface Relay {
+	/** the base transport's client the streams are opened on; another one is another wisp connection */
+	client: unknown;
+	/** a datagram came back on some stream: the relay carries UDP */
+	carried: boolean;
+	/** hosts refused while nothing had been carried */
+	refused: Set<string>;
+	/** HTTP/3 is off for every origin until then */
+	offUntil: number;
+}
+
+const hex = (reason: number) => `0x${reason.toString(16).padStart(2, '0')}`;
 
 const sleep = (ms: number) =>
 	new Promise<null>((resolve) => setTimeout(() => resolve(null), ms));
@@ -180,7 +232,12 @@ export default class Http3Transport implements ProxyTransport {
 	#pending = new Map<string, Promise<H3Connection | null>>();
 	/** origins a QUIC handshake succeeded for in this session */
 	#confirmed = new Set<string>();
-	#udpBlockedUntil = 0;
+	#relay: Relay = {
+		client: undefined,
+		carried: false,
+		refused: new Set(),
+		offUntil: 0,
+	};
 	#dnsAsked = new Map<string, number>();
 	#recent: Http3Info['recent'] = [];
 
@@ -247,14 +304,19 @@ export default class Http3Transport implements ProxyTransport {
 			enabled: !!this.#udp() && !this.#moduleError,
 			moduleError: this.#moduleError,
 			udpBlockedUntil:
-				this.#udpBlockedUntil > Date.now() ? this.#udpBlockedUntil : null,
-			altSvc: this.#cache.entries().map(({ origin, entry, brokenUntil }) => ({
-				origin,
-				port: entry.port,
-				expires: entry.expires,
-				source: entry.source,
-				brokenUntil,
-			})),
+				this.#relay.offUntil > Date.now() ? this.#relay.offUntil : null,
+			udpCarried: this.#relay.carried,
+			udpRefused: [...this.#relay.refused],
+			altSvc: this.#cache
+				.entries()
+				.map(({ origin, entry, brokenUntil, refused }) => ({
+					origin,
+					port: entry.port,
+					expires: entry.expires,
+					source: entry.source,
+					brokenUntil,
+					refused,
+				})),
 			connections: [...this.#connections].map(([origin, conn]) => ({
 				origin,
 				alive: conn.alive,
@@ -279,6 +341,9 @@ export default class Http3Transport implements ProxyTransport {
 	): Promise<TransferrableResponse> {
 		const origin = remote.origin;
 		const usable = remote.protocol === 'https:' && !!this.#udp();
+		// an origin the last wisp connection's relay refused is not broken
+		// on a new one
+		if (usable) this.#currentRelay();
 		const alt = usable ? this.#cache.lookup(origin) : null;
 		let retryBody = body;
 		let via: Http3Info['recent'][number]['via'] = 'base';
@@ -327,7 +392,11 @@ export default class Http3Transport implements ProxyTransport {
 			signal,
 		);
 		this.#note(remote, via);
-		if (usable) this.#learn(remote, response.headers);
+		if (usable) {
+			// the base transport may have answered over a new wisp connection
+			this.#currentRelay();
+			this.#learn(remote, response.headers);
+		}
 		return response;
 	}
 
@@ -367,6 +436,77 @@ export default class Http3Transport implements ProxyTransport {
 			);
 	}
 
+	/**
+	 * What is known of the relay behind the wisp connection in use. The
+	 * base transport builds a new client when its wisp connection is lost
+	 * (RevivingTransport), and another edge may answer the new one, so
+	 * nothing learned over the old connection is kept.
+	 */
+	#currentRelay(): Relay {
+		const client = (this.base as { client?: unknown }).client;
+		if (client !== this.#relay.client) this.#newRelay();
+		return this.#relay;
+	}
+
+	/** a new wisp connection: no verdict, no refusals counted, and what the old relay refused is tried again */
+	#newRelay(): void {
+		this.#relay = {
+			client: (this.base as { client?: unknown }).client,
+			carried: false,
+			refused: new Set(),
+			offUntil: 0,
+		};
+		this.#cache.forgetRefused();
+	}
+
+	/** a datagram came back on a stream of `relay`: it carries UDP, whatever was refused */
+	#carried(relay: Relay): void {
+		if (relay !== this.#relay || relay.carried) return;
+		relay.carried = true;
+		relay.refused.clear();
+		if (relay.offUntil > Date.now())
+			console.warn('Stomp: HTTP/3 is on again, the wisp server does relay UDP');
+		relay.offUntil = 0;
+	}
+
+	/**
+	 * The relay closed the UDP stream to `alt.host` before anything came
+	 * back on it (`reason`: the wisp close reason, when the transport
+	 * reports it), or the stream could not be opened. That is a failure of
+	 * this origin. It counts against the relay only while no datagram has
+	 * come back over the wisp connection and the reason is one a server
+	 * without UDP gives too (or is not known).
+	 */
+	#refused(
+		relay: Relay,
+		origin: string,
+		alt: AltService,
+		reason: number | undefined,
+		detail: string,
+	): void {
+		const delay = this.#cache.markBroken(origin, true);
+		console.warn(
+			`Stomp: the wisp server refused UDP to ${alt.host}:${alt.port} (${detail}); HTTP/3 off for ${origin} for ${Math.round(delay / 1000)} s`,
+		);
+		if (relay !== this.#relay || relay.carried) return;
+		if (reason !== undefined && !RELAY_REASONS.has(reason)) return;
+		relay.refused.add(alt.host.toLowerCase());
+		if (relay.refused.size < RELAY_REFUSALS) return;
+		this.#relayOff(
+			relay,
+			`UDP streams to ${relay.refused.size} hosts refused and none carried`,
+		);
+	}
+
+	/** the relay is taken to have no UDP: no origin is tried for a while, then the evidence is gathered again */
+	#relayOff(relay: Relay, why: string): void {
+		relay.offUntil = Date.now() + UDP_BLOCKED_MS;
+		relay.refused.clear();
+		console.warn(
+			`Stomp: HTTP/3 is off for ${UDP_BLOCKED_MS / 1000} s, the wisp server relays no UDP (${why})`,
+		);
+	}
+
 	#loadModule(): Promise<H3Module> {
 		this.#module ??= (async () => {
 			if (!this.#moduleUrl)
@@ -398,7 +538,8 @@ export default class Http3Transport implements ProxyTransport {
 		const live = this.#connections.get(origin);
 		if (live?.alive) return live;
 		if (live) this.#connections.delete(origin);
-		if (this.#udpBlockedUntil > Date.now() || this.#moduleError) return null;
+		if (this.#currentRelay().offUntil > Date.now() || this.#moduleError)
+			return null;
 
 		let pending = this.#pending.get(origin);
 		if (!pending) {
@@ -429,16 +570,27 @@ export default class Http3Transport implements ProxyTransport {
 		} catch {
 			return null;
 		}
+		// the relay this stream is opened on; a verdict about another wisp
+		// connection's relay is not this stream's to give
+		const relay = this.#currentRelay();
 		let channel: DatagramChannel;
 		try {
 			channel = await udp(alt.host, alt.port);
 		} catch (error) {
+			const message = String((error as Error)?.message ?? error);
 			// the wisp connection itself is gone: the base transport opens a
-			// new one, and UDP is as available as it was
-			if (wispGone(error)) return null;
-			// the wisp server has no UDP (wisp v2 without the UDP extension)
-			this.#udpBlockedUntil = Date.now() + UDP_BLOCKED_MS;
-			console.warn('Stomp: HTTP/3 is off for now, no UDP over wisp:', error);
+			// new one, and what its relay does is not known yet
+			if (wispGone(error)) {
+				if (relay === this.#relay) this.#newRelay();
+				return null;
+			}
+			// the server said so itself: a wisp v2 server that did not
+			// announce the UDP extension relays UDP to nobody
+			if (NO_UDP_EXTENSION.test(message)) {
+				if (relay === this.#relay) this.#relayOff(relay, message);
+				return null;
+			}
+			this.#refused(relay, origin, alt, undefined, message);
 			return null;
 		}
 		// A channel that ends under a live connection (its wisp stream closed,
@@ -454,8 +606,28 @@ export default class Http3Transport implements ProxyTransport {
 			conn.close();
 			this.#lost(origin, conn);
 		};
-		const watch = new TransformStream<Uint8Array, Uint8Array>({ flush: end });
-		channel.read.pipeTo(watch.writable).catch(end);
+		// the first datagram back shows the relay carries UDP
+		let received = false;
+		// stomp-h3 closes its writer when it gives up on the connection, and
+		// the stream then ends because this side closed it. A stream that
+		// ends before that was ended from the other side: `cut`.
+		let released = false;
+		let cut = false;
+		const readEnded = () => {
+			if (!released) cut = true;
+			end();
+		};
+		const watch = new TransformStream<Uint8Array, Uint8Array>({
+			transform: (chunk, controller) => {
+				if (!received) {
+					received = true;
+					this.#carried(relay);
+				}
+				controller.enqueue(chunk);
+			},
+			flush: readEnded,
+		});
+		channel.read.pipeTo(watch.writable).catch(readEnded);
 		// A datagram that cannot go out means the same. stomp-h3 closes its
 		// writer when the connection goes without waiting on it, and closing
 		// an errored stream rejects with no one to catch it, so a failed write
@@ -463,8 +635,14 @@ export default class Http3Transport implements ProxyTransport {
 		const out = channel.write.getWriter();
 		const write = new WritableStream<Uint8Array>({
 			write: (chunk) => out.write(chunk).catch(end),
-			close: () => out.close().catch(() => {}),
-			abort: (reason) => out.abort(reason).catch(() => {}),
+			close: () => {
+				released = true;
+				return out.close().catch(() => {});
+			},
+			abort: (reason) => {
+				released = true;
+				return out.abort(reason).catch(() => {});
+			},
 		});
 		try {
 			conn = await module.connect(alt.host, watch.readable, write, {
@@ -481,10 +659,26 @@ export default class Http3Transport implements ProxyTransport {
 			return conn;
 		} catch (error) {
 			const message = String((error as Error)?.message || error);
-			// a channel the wisp server closed at once refused UDP (wisp v1
-			// cannot say so up front): every origin would fail the same way
-			if (/datagram channel closed/.test(message))
-				this.#udpBlockedUntil = Date.now() + UDP_BLOCKED_MS;
+			// A stream the wisp server closed before a datagram came back
+			// on it was refused: wisp has no answer to CONNECT, so a server
+			// that will not relay a stream closes it, at once or when the
+			// first datagram for it arrives. The refusal is of this
+			// destination (a name the relay will not send UDP to, a blocked
+			// or unreachable host); whether it is also evidence about the
+			// relay is #refused's to say.
+			if (cut && !received) {
+				const reason = channel.closeReason?.();
+				this.#refused(
+					relay,
+					origin,
+					alt,
+					reason,
+					reason === undefined
+						? 'the stream was closed before anything came back'
+						: `close reason ${hex(reason)}`,
+				);
+				return null;
+			}
 			const delay = this.#cache.markBroken(origin);
 			console.warn(
 				`Stomp: QUIC to ${origin} failed (${message}); HTTP/3 off for it for ${Math.round(delay / 1000)} s`,
