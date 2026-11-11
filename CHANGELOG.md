@@ -546,6 +546,10 @@ The first release after a four-year gap. Everything below is breaking.
   page), so a neighbour's bar and close button showed through it, and a
   later tab's page faded over it (switcher-geometry suite, desktop and phone
   widths).
+- Every link of the demo's own pages opens in the proxy, never in the real
+  browser: Fork us on GitHub, the repository and each of the latest
+  commits. A click opens it in the current tab; Ctrl, Cmd, Shift or the
+  middle button opens it in a new one. (demo suite.)
 - The demo keeps bookmarks. A star at the right end of the address bar,
   in the Tango style of its other icons (Butter when the page is
   bookmarked, hollow Aluminium when not), bookmarks the active tab's page,

@@ -173,6 +173,9 @@ holyWisp is started.
    back to the landing page. Below the address bar it shows the repository's
    latest commits, from `/api/commits` (the server's ten-minute copy of
    GitHub's answer; `STOMP_REPO` names another repository).
+   Its links, like Fork us on GitHub, open in the proxy, never in the real
+   browser: a click in the current tab, Ctrl, Cmd, Shift or the middle
+   button in a new one.
 8. **Navigation bar** at the bottom of the screen, styled after the early
    Android bar: Back steps through the active tab's own history (the frame
    reports whether it can step, from the browser's Navigation API, so mashing

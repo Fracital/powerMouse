@@ -1237,6 +1237,33 @@ function focusFrame(tab) {
 	tab.element.focus({ preventScroll: true });
 }
 
+// every link of the demo's own pages (Fork us on GitHub, the repository, the
+// commits) opens in the proxy, never in the real browser: a click in the
+// current tab, Ctrl, Cmd, Shift or the middle button in a new one
+function proxyLink(event) {
+	if (
+		event.defaultPrevented ||
+		(event.type === 'auxclick' && event.button !== 1)
+	)
+		return;
+	const link = event.target.closest?.('a[href]');
+	if (!link) return;
+	let url;
+	try {
+		url = new URL(link.href, location.href);
+	} catch {
+		return;
+	}
+	if (!/^https?:$/.test(url.protocol) || url.origin === location.origin) return;
+	event.preventDefault();
+	navigate(url.href, {
+		newTab:
+			event.button === 1 || event.ctrlKey || event.metaKey || event.shiftKey,
+	});
+}
+document.addEventListener('click', proxyLink);
+document.addEventListener('auxclick', proxyLink);
+
 async function navigate(input, { newTab = false } = {}) {
 	const url = normalizeUrl(SEARCH.query(input.trim()));
 	if (!controller) {
@@ -1633,9 +1660,7 @@ async function showCommits() {
 		repoLink.href = data.url;
 		for (const commit of data.commits) {
 			const link = element('a', 'commit');
-			link.href = commit.url;
-			link.target = '_blank';
-			link.rel = 'noopener';
+			link.href = commit.url; // opens in the proxy (proxyLink)
 			if (commit.avatar) {
 				const avatar = element('img', 'commitAvatar');
 				avatar.src = `${commit.avatar}&s=48`;

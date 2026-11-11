@@ -169,6 +169,36 @@ await waitActive(page, () => document.title === 'Example Domain').then(
 	(error) => ok('reload restores proxied page', false, error.message),
 );
 
+// the demo's own links (Fork us on GitHub, the repository, a commit) open
+// in the proxy, never in the real browser
+for (const [name, selector] of [
+	['Fork us on GitHub', '.git'],
+	['the repository link', '#commitsRepo'],
+	['a commit', '.commit'],
+]) {
+	if (!(await page.$(selector))) continue; // no commits offline
+	await page.click('#home');
+	await sleep(300);
+	const href = await page.$eval(
+		selector,
+		(node) => (node.closest('a') || node).href,
+	);
+	const pages = page.context().pages().length;
+	await page.click(selector);
+	await sleep(500);
+	const shown = await page.evaluate(() => ({
+		omni: document.querySelector('#omni input.omnibox').value,
+		browser: !document.getElementById('browser').classList.contains('hidden'),
+	}));
+	ok(
+		`${name} opens in the proxy, not the real browser`,
+		shown.browser &&
+			shown.omni === href &&
+			page.context().pages().length === pages,
+		JSON.stringify({ href, ...shown }),
+	);
+}
+
 await page.setViewportSize({ width: 390, height: 800 });
 await page.click('#home');
 await sleep(300);
