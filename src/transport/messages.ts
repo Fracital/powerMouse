@@ -746,8 +746,8 @@ export interface CookieRecord {
 }
 
 export type CookieCommand =
-	/** `initiator`: the origin asking (a WebSocket handshake), so SameSite applies; absent means the host, which gets everything */
-	| { op: 'get'; url: string; initiator?: string }
+	/** `initiator`: the origin asking (a WebSocket handshake), so SameSite applies; absent means the host, which gets everything. `partitionKey`: the asking context is in that top-level site's partition (SOCKET_PARTITION) */
+	| { op: 'get'; url: string; initiator?: string; partitionKey?: string }
 	| { op: 'set'; url: string; setCookie: string | string[] }
 	| { op: 'list'; origin?: string }
 	| { op: 'clear'; origin?: string };
@@ -921,6 +921,15 @@ export type WorkerBound = {
  * hook that stalls, leave the handshake as the page sent it.
  */
 export const HANDSHAKE_REFUSED = '$stomp$handshakeRefused';
+
+/**
+ * The header the inject adds to a WebSocket handshake of a context in a
+ * partition, naming its top-level site (src/partition.ts partitionSite):
+ * the controller's decorate hook reads it for the jar (that context's
+ * Partitioned cookies, and no SameSite=Lax or Strict ones, as natively),
+ * and serveTransport removes it, so it never goes out
+ */
+export const SOCKET_PARTITION = '$stomp$partition';
 
 /** implemented by the controller, called by the transport worker */
 export type WorkerToController = {

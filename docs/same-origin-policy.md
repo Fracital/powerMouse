@@ -203,10 +203,57 @@ Filled in commit by commit; see the CHANGELOG for each.
   parses the value as a host first (`0.0.1` is `0.0.0.1`, `127.0.0.1.` is
   `127.0.0.1`, `a b` shows as `a%20b`), refuses an empty value, an IP host
   other than its own, a value that is not a suffix and a public suffix
-  (`'localhost' is a top-level domain.`) with Chrome's messages, and then
+  (`'localhost' is a top-level domain.`; one of the list's private section
+  too, `github.io` to a page of its customer) with Chrome's messages, and then
   does nothing: a document is in an origin-keyed agent cluster by default
   (`window.originAgentCluster`), where Chrome's setter has no effect. It
   used to accept a parent domain and read it back.
+- **Where a site ends** (samesite, sop-partitions and site-facts, with
+  the names of `test/private-sites.mjs`: `stomp-a`,
+  `www.stomp-a` and `stomp-b` under `github.io`, `blogspot.com`,
+  `s3.eu-west-1.amazonaws.com` and `cloudfront.net`, and under `co.uk` as
+  the control). Chrome 152 and 156 end a site at the public suffix list's
+  private section for everything it decides by site, exactly as at `co.uk`:
+  Sec-Fetch-Site (`same-site` to the name under a, `cross-site` to b), the
+  SameSite cookies of a fetch, a frame's document request and a WebSocket
+  handshake (b gets the `SameSite=None` one alone), a frame's storage
+  partition and the HTTP cache's key (the name under a shares a's, b has
+  its own), and `document.domain` (the suffix "is a top-level domain").
+  The service worker's fetches, the jar and the partitions asked with the
+  private section already. Three places asked the ICANN section alone and
+  took the two customers for one site: the SameSite decision for a
+  WebSocket handshake's cookies (b got a's Strict and Lax cookies), the
+  site the window membrane compares windows by (a page of a read b's frame,
+  and b's frame its parent) and `document.domain` (which took `github.io`).
+  All three ask with the private section now. More rows differed for
+  every suffix, `co.uk` included, and read as natively now. A context in a
+  partition (b's frame under a's page; measured too for a frame of a under
+  a frame of b under a's page) has `SameSite=None` cookies alone: its
+  `document.cookie` reads no `Lax` or `Strict` cookie and one its script
+  writes is not kept (before, the write showed up in that site's own
+  top-level page); its Cookie Store API and its service worker's read none
+  either, and a write of one and any deletion (a deletion is a `Strict`
+  write) reject with Chrome's TypeError ("Cookie was malformed and could
+  not be stored, due to problem(s) while parsing."), where they used to be
+  stored; and its own WebSocket's handshake carries none, with its
+  Partitioned cookies (the inject names the partition to the controller
+  in a header of its own, `$stomp$partition`, which never goes out; the
+  handshake used to be judged by its Origin alone); so do its fetches,
+  which went by their initiator and the nested top in their Referer, so
+  that a frame of a under b's frame, a partitioned worker or a Referer
+  the policy cut down got a's `Lax` and `Strict` cookies. And a response
+  to a request whose site for cookies is another site, or that another
+  site started, a top-level navigation aside, sets `SameSite=None`
+  cookies alone: a's fetch of b, b's frame's document, the fetch of a
+  frame of a under b's frame, and a frame of b that navigates itself to
+  a (each used to set all four). Still different, for every suffix, and
+  listed in site-facts: Chrome holds a window by its document's origin, so
+  a page and a frame of its site on another host read nothing of each
+  other, where the membrane compares sites and lets them; and a response's
+  `Origin-Agent-Cluster: ?0` is not read, so `originAgentCluster` stays
+  true and `document.domain` never takes effect (with the header and the
+  same `document.domain` on both sides Chrome lets the two read each
+  other, which the membrane allows anyway).
 - **Resource timing** (section 2, sop-escapes: 3 cases, and 3 new ones
   that read as natively). Only the worker sees a response's
   Timing-Allow-Origin: when it names the page (or `*`) on a load of another

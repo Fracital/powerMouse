@@ -2,7 +2,9 @@ import type {
 	BareCompatibleWebSocket,
 	RawHeaders,
 } from '@mercuryworkshop/proxy-transports';
+import { partitionSite } from '../../partition';
 import { urlLike } from '../../StompURL';
+import { SOCKET_PARTITION } from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
 import { failsToParse, withStack } from '../nativeErrors';
@@ -90,6 +92,11 @@ export default class WebSocketModule extends Module<Client> {
 					['Origin', origin],
 					['User-Agent', navigator.userAgent],
 				];
+				// a context in a partition: the controller reads it for the jar
+				// (its Partitioned cookies, and SameSite as another site's)
+				const partitionKey = partitionSite(client.partition);
+				if (partitionKey !== null)
+					requestHeaders.push([SOCKET_PARTITION, partitionKey]);
 
 				// client.bare is created lazily; a failure there (no transport)
 				// surfaces as an error event like a refused connection would.

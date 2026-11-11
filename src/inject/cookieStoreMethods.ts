@@ -37,6 +37,11 @@ export interface CookieStoreContext {
 	store(write: CookieStoreWrite): Promise<void>;
 	/** a refusal of the whole API (an opaque origin's), or null */
 	refused(method: CookieStoreMethod): Error | null;
+	/**
+	 * Whether this realm reads as another site's: a document or a worker in
+	 * a partition, under a top-level page or a frame of another site
+	 */
+	crossSite(): boolean;
 	/** before a call reads or writes (a document starts its change record) */
 	look(): Promise<void>;
 }
@@ -276,6 +281,11 @@ export function cookieStoreMethods(
 		if (refused) throw refused;
 		const cookie = make();
 		await context.look();
+		// Chrome stores no SameSite=Lax or Strict cookie for a realm that
+		// reads as another site's, and a deletion is a Strict write there:
+		// both are refused as malformed (measured in Chrome 152 and 156)
+		if (cookie.sameSite !== 'none' && context.crossSite())
+			throw fail(method, MALFORMED);
 		await context.store(cookie);
 	};
 

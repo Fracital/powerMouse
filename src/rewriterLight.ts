@@ -48,12 +48,9 @@ export interface LightParts {
 	) => string | undefined;
 	/** a stylesheet this entry left to the rewriter library was rewritten there */
 	styledByLibrary?: () => void;
+	/** both with the list's private section, where Chrome ends a site */
 	getDomain?: (host: string) => string | null | undefined;
-	/** with the private list unless `icann` (the ICANN section alone) */
-	getPublicSuffix?: (
-		host: string,
-		icann?: boolean,
-	) => string | null | undefined;
+	getPublicSuffix?: (host: string) => string | null | undefined;
 	/** the public suffix list this copy's suffix module holds (its commit and date), '' while it holds none */
 	suffixList?: () => string;
 }
@@ -323,12 +320,12 @@ export function library(parts: LightParts): RewriterLib {
 					: inLibrary((lib) => lib.domain(host), null);
 			}, null);
 		},
-		publicSuffix(host: string, icann: boolean): string | null {
+		publicSuffix(host: string): string | null {
 			return run(() => {
-				const answered = parts.getPublicSuffix?.(host, icann === true);
+				const answered = parts.getPublicSuffix?.(host);
 				return answered !== undefined
 					? answered
-					: inLibrary((lib) => lib.publicSuffix(host, icann === true), null);
+					: inLibrary((lib) => lib.publicSuffix(host), null);
 			}, null);
 		},
 		suffixList(): string {

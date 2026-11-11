@@ -383,6 +383,31 @@ The first release after a four-year gap. Everything below is breaking.
   for it in a document that shares none), which is what kept tldts in the
   inject bundle. `frameElement` compares the two documents' site keys, as
   the window membrane does (`site-facts` suite).
+- A site ends at the public suffix list's private section everywhere, as
+  in Chrome: two customers of `github.io` are two sites. Three places asked
+  the ICANN section alone and took them for one: the site the window
+  membrane compares windows by (a page of one read the other's frame, and
+  the frame its parent), the SameSite decision for a WebSocket handshake's
+  cookies (the other site got Strict and Lax cookies) and
+  `document.domain`, which took `github.io`. The shell carries two answers
+  for a name instead of three, and the rewriter library's `domain` and
+  `publicSuffix` answer with the private section alone. A context in a
+  partition (a frame under another site's page, or under a frame of
+  another site) has only its `SameSite=None` cookies, as in Chrome: its
+  `document.cookie`, its Cookie Store API and its service worker's read
+  no `Lax` or `Strict` cookie and keep none they write (the Cookie Store
+  API rejects such a write, and any deletion, with Chrome's TypeError),
+  and its requests and WebSocket handshakes carry none (the handshakes
+  now carry its Partitioned cookies too). A response to a request whose
+  site for cookies is another site, or that another site started, other
+  than a top-level navigation, sets `SameSite=None` cookies alone.
+  Measured against Chrome 152 and 156 with names under `github.io`,
+  `blogspot.com`, `s3.eu-west-1.amazonaws.com` and `cloudfront.net`, and
+  under `co.uk` as the control (`test/private-sites.mjs`; rows in
+  `samesite`, `sop-partitions` and `site-facts`).
+  Not changed, and listed in `site-facts`: Chrome holds a window by origin
+  where the membrane compares sites, and `Origin-Agent-Cluster: ?0` is not
+  honoured (docs/same-origin-policy.md).
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

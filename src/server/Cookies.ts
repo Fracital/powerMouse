@@ -93,6 +93,13 @@ export interface ParseOptions {
 	now?: number;
 	/** the context's partition key (CookieRequestContext.partitionKey) */
 	partitionKey?: string;
+	/**
+	 * The response is to a request whose site for cookies is another site
+	 * and that is not a top-level navigation (a subresource or a frame's
+	 * document under another site's page): Chrome keeps no SameSite=Lax or
+	 * Strict cookie it sets
+	 */
+	crossSite?: boolean;
 }
 
 /** what the jar needs to know about a request to apply SameSite */
@@ -267,7 +274,12 @@ export function parseCookie(
 	header: string,
 	url: URL,
 	publicSuffix: PublicSuffix,
-	{ source = 'http', now = Date.now(), partitionKey }: ParseOptions = {},
+	{
+		source = 'http',
+		now = Date.now(),
+		partitionKey,
+		crossSite = false,
+	}: ParseOptions = {},
 ): JarCookie | null {
 	// Chrome's HTTP parser ends a header at a bare CR or LF and reads a NUL
 	// as a space (a transport hands the raw value over); anywhere else in the
@@ -354,6 +366,14 @@ export function parseCookie(
 		? 'lax'
 		: (sameSiteAttribute as SameSite);
 	if (sameSite === 'none' && !secure) return null;
+	// a document in a partition is under another site's page or frame, and
+	// Chrome keeps no SameSite=Lax or Strict cookie its script writes there,
+	// nor one a response sets in a cross-site context
+	if (
+		sameSite !== 'none' &&
+		(crossSite || (source === 'script' && partitionKey !== undefined))
+	)
+		return null;
 	// Chrome refuses a Partitioned cookie that is not Secure
 	const partitioned = !!parsed.partitioned;
 	if (partitioned && !secure) return null;
@@ -443,6 +463,8 @@ export function storeCookie(
 		hostOnly = false;
 	}
 	if (/^__host-/i.test(name) && (!hostOnly || path !== '/')) return null;
+	// in a partition, as for a script's Set-Cookie string (parseCookie)
+	if (partitionKey !== undefined && sameSite !== 'none') return null;
 	const partitioned = !!write.partitioned;
 	const key = partitioned ? partitionKey : undefined;
 	return {
@@ -694,13 +716,16 @@ export default class Cookies {
 	/**
 	 * Apply Set-Cookie values from a response (or a script, when `source` says
 	 * so) for `url`, the way RFC 6265bis 5.6 stores them; a Partitioned one in
-	 * `partitionKey`'s partition (CookieRequestContext.partitionKey).
+	 * `partitionKey`'s partition (CookieRequestContext.partitionKey), and a
+	 * response in a cross-site context sets no SameSite=Lax or Strict one
+	 * (ParseOptions.crossSite).
 	 */
 	async set(
 		cookies: string | string[],
 		url: URL | string,
 		source: CookieSource = 'http',
 		partitionKey?: string,
+		crossSite = false,
 	): Promise<void> {
 		partitionKey = partitionKeyOf(partitionKey);
 		url = new URL(url);
@@ -715,6 +740,7 @@ export default class Cookies {
 				source,
 				now,
 				partitionKey,
+				crossSite,
 			});
 			if (!cookie) continue;
 

@@ -890,8 +890,10 @@ frame never evaluated the library ("As built" below).
 - _The shell carries the site._ The service worker writes into each
   document's shell what the list says of the document's host and of its
   top's (`src/siteFacts.ts`): for the host and every name above it, the
-  registrable domain and the public suffix with and without the private
-  section, as spans of the host (about 70 bytes for a host of four labels).
+  registrable domain and the public suffix, both with the list's private
+  section, which is where Chrome ends a site (two customers of `github.io`
+  are two sites; measured, `docs/same-origin-policy.md`), as spans of the
+  host (67 bytes for `www.example.co.uk`).
   Every name, and each asked on its own, because a name's suffix does not
   follow from the suffix of the name below it (`city.kobe.jp` is
   registrable under `kobe.jp`, whose own suffix is `jp`). The inject keeps

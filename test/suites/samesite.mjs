@@ -3,7 +3,11 @@
 // another site, then fetches 127.0.0.1 with credentials (None only; a default
 // fetch gets nothing) and embeds it as a nested frame (None only: a browser
 // judges it by the top-level page), while 127.0.0.1's own request carries all
-// three.
+// three. Then Sec-Fetch-Site and the SameSite cookies between names under a
+// private suffix of the public suffix list (test/private-sites.mjs), and
+// what a context in a partition reads, writes and sends (its
+// document.cookie, Cookie Store API, service worker, WebSocket, fetches,
+// and what a response sets).
 import {
 	done,
 	FIXTURE,
@@ -14,6 +18,7 @@ import {
 	sleep,
 	submitLanding,
 } from '../lib.mjs';
+import { privateSiteRows } from '../private-sites.mjs';
 
 const browser = await launch();
 const page = await openDemo(browser, PROXY);
@@ -94,4 +99,8 @@ ok(
 		!has(framed, 'strict'),
 	JSON.stringify(framed),
 );
-await done(browser);
+await browser.close();
+
+await privateSiteRows(['fetch-metadata', 'cookies']);
+
+await done();

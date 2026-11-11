@@ -17,7 +17,6 @@ import { getDomain, getPublicSuffix } from '../../rewriter';
 import DocumentClient from '../Client';
 import SyncModule, { BEACON_QUOTA, WRITE_BUDGET } from './Sync';
 
-// with private domains (the rewriter library asks for them)
 const publicSuffix = (host: string) => getPublicSuffix(host);
 
 const expired = (cookie: JarCookie, now: number) =>
@@ -125,10 +124,21 @@ export class CookiesModule extends Module<DocumentClient> {
 	get #partitionKey(): string | undefined {
 		return partitionSite(this.client.partition) ?? undefined;
 	}
-	/** what the jar is told of this document's partition with every call */
+	/**
+	 * What the jar is told of this document with every call: its partition,
+	 * and that it reads as another site's (a document in a partition is
+	 * under a top-level page or a frame of another site, where Chrome shows
+	 * script no SameSite=Lax or Strict cookie)
+	 */
 	get #context(): CookieRequestContext | undefined {
 		const partitionKey = this.#partitionKey;
-		return partitionKey === undefined ? undefined : { partitionKey };
+		return partitionKey === undefined
+			? undefined
+			: { partitionKey, site: 'cross-site' };
+	}
+	/** whether this document reads the jar as another site's (#context) */
+	get crossSite(): boolean {
+		return this.#partitionKey !== undefined;
 	}
 	/** the key other documents of this site bump when they write a cookie */
 	get #versionKey() {

@@ -16,6 +16,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { done, FIXTURE, launch, ok, OUT, PROXY, sleep } from '../lib.mjs';
+import { privateSiteRows } from '../private-sites.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const tldts = await import('tldts');
@@ -92,12 +93,11 @@ if (esbuild) {
 			apart.push(host);
 			continue;
 		}
-		for (const [name, [domain, suffix, icann]] of read) {
+		for (const [name, [domain, suffix]] of read) {
 			names++;
 			if (
-				domain !== tldts.getDomain(name) ||
-				suffix !== tldts.getPublicSuffix(name, { allowPrivateDomains: true }) ||
-				icann !== tldts.getPublicSuffix(name)
+				domain !== tldts.getDomain(name, { allowPrivateDomains: true }) ||
+				suffix !== tldts.getPublicSuffix(name, { allowPrivateDomains: true })
 			)
 				apart.push(name);
 		}
@@ -111,19 +111,27 @@ if (esbuild) {
 		'a name under an exception rule is not worked out from the name below it',
 		JSON.stringify(readSiteFacts(siteFacts('x.city.kobe.jp', lookups))) ===
 			JSON.stringify([
-				['x.city.kobe.jp', ['city.kobe.jp', 'kobe.jp', 'kobe.jp']],
-				['city.kobe.jp', ['city.kobe.jp', 'kobe.jp', 'kobe.jp']],
-				['kobe.jp', ['kobe.jp', 'jp', 'jp']],
-				['jp', [null, 'jp', 'jp']],
-			]),
+				['x.city.kobe.jp', ['city.kobe.jp', 'kobe.jp']],
+				['city.kobe.jp', ['city.kobe.jp', 'kobe.jp']],
+				['kobe.jp', ['kobe.jp', 'jp']],
+				['jp', [null, 'jp']],
+			]) &&
+			// the private section counts: a customer of github.io is a site
+			JSON.stringify(readSiteFacts(siteFacts('w.a.github.io', lookups))) ===
+				JSON.stringify([
+					['w.a.github.io', ['a.github.io', 'github.io']],
+					['a.github.io', ['a.github.io', 'github.io']],
+					['github.io', [null, 'github.io']],
+					['io', [null, 'io']],
+				]),
 		JSON.stringify(readSiteFacts(siteFacts('x.city.kobe.jp', lookups))),
 	);
 	ok(
 		'anything that is not facts is refused',
-		readSiteFacts(['a.b', 0, 3, 2, 3, 2, 3]) === null &&
-			readSiteFacts(['a.b', 0, 3, 2, 3, 2, 3, 0, 0, 2, 3, 2, 3]) === null &&
-			readSiteFacts(['a.b', 0, 3, 2, 3, 2, 3, 0, 3, 2, 3, 2, 3]) === null &&
-			readSiteFacts(['a.b', 0, 3, 2, 3, 2, 9, -1, -1, 2, 3, 2, 3]) === null &&
+		readSiteFacts(['a.b', 0, 3, 2, 3]) === null &&
+			readSiteFacts(['a.b', 0, 3, 2, 3, 0, 0, 2, 3]) === null &&
+			readSiteFacts(['a.b', 0, 3, 2, 3, 0, 3, 2, 3]) === null &&
+			readSiteFacts(['a.b', 0, 3, 2, 9, -1, -1, 2, 3]) === null &&
 			readSiteFacts('a.b') === null &&
 			readSiteFacts([]) === null &&
 			siteFacts('', lookups) === null,
@@ -373,5 +381,26 @@ ok(
 	writes.unnamed.reads === 'SecurityError' && writes.unnamed.asked > 0,
 	JSON.stringify(writes.unnamed),
 );
+await browser.close();
 
-await done(browser);
+// Where a site ends, against Chrome, with names under a private suffix of
+// the list (test/private-sites.mjs): what a page and a frame read of each
+// other's windows, what document.domain takes, Origin-Agent-Cluster.
+await privateSiteRows('windows', {
+	// Chrome holds a window by its document's origin, the membrane by its
+	// site: the name under a reads a's page and a's page reads it
+	'the membrane compares windows by site, Chrome by origin': [
+		"what a's page reads of a frame of sub",
+		'what a frame of sub reads of its parent',
+	],
+	// the response header is not read: every document says it is in an
+	// origin-keyed agent cluster, and document.domain never takes effect
+	// (the windows row reads as natively all the same: the name under a is
+	// of a's site, and b is not)
+	'Origin-Agent-Cluster: ?0 is not honoured': [
+		'with Origin-Agent-Cluster: ?0, originAgentCluster',
+		'with Origin-Agent-Cluster: ?0, document.domain',
+	],
+});
+
+await done();

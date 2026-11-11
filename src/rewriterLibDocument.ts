@@ -23,8 +23,8 @@ export const api = {
 			if (told.by) styles[told.by]++;
 			return output;
 		},
-		getDomain: (host) => getDomain(host),
-		getPublicSuffix: (host, icann) => getPublicSuffix(host, !icann),
+		getDomain: (host) => getDomain(host, true),
+		getPublicSuffix: (host) => getPublicSuffix(host, true),
 		suffixList: () => {
 			const pin = suffixListPin();
 			return pin ? `${pin.commit} ${pin.date}` : '';

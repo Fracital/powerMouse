@@ -36,8 +36,9 @@ export const api = {
 			if (left) styles.js++;
 			left = false;
 		},
-		getDomain: (host) => domainOf(host, false),
-		getPublicSuffix: (host, icann) => publicSuffixOf(host, !icann),
+		// with the list's private section, where Chrome ends a site
+		getDomain: (host) => domainOf(host, true),
+		getPublicSuffix: (host) => publicSuffixOf(host, true),
 		suffixList: () => {
 			const pin = suffixListPin();
 			return pin ? `${pin.commit} ${pin.date}` : '';

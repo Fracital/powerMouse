@@ -195,7 +195,10 @@ type Site = 'none' | 'same-origin' | 'same-site' | 'cross-site';
  * domain with the private registries (two github.io pages are cross-site);
  * an IP or localhost has no registrable domain, so the host is the site.
  */
-function siteBetween(from: URL, to: URL): Site {
+export function siteBetween(
+	from: URL,
+	to: URL,
+): 'same-origin' | 'same-site' | 'cross-site' {
 	if (from.origin === to.origin) return 'same-origin';
 	if (from.protocol !== to.protocol) return 'cross-site';
 	const domain = getDomain(from.hostname, true);
@@ -1174,7 +1177,7 @@ function genericForward(
 			(referrer
 				? nestedTopOf(new URL(referrer).pathname, rewriter.directory)
 				: null);
-		const cookieSite = nestedTop
+		const nestedSite = nestedTop
 			? widestSite(site, siteBetween(new URL(nestedTop), url.url))
 			: site;
 		// the partition of the request's Partitioned cookies (CHIPS): its
@@ -1213,6 +1216,18 @@ function genericForward(
 			(topSite !== null && topSite !== siteOf(url.url, publicSuffix)
 				? topSite
 				: undefined);
+		// A request with a partition key is one whose site for cookies is
+		// another site: a context in a partition (whatever it asks for, since
+		// its ancestors are not all of its top's site; A in B in A too, and a
+		// partitioned worker, whose route names no nested top), or one asking
+		// for another site than its top's. Chrome sends such a request its
+		// SameSite=None cookies alone, as it does one another site started,
+		// and keeps none but SameSite=None ones from the response of either
+		// (measured: a frame of the top's site that another site's frame
+		// navigated keeps only those); a top-level navigation sets any cookie.
+		const cookieSite = partitionKey !== undefined ? 'cross-site' : nestedSite;
+		const crossSiteSet =
+			cookieSite === 'cross-site' && !(navigation && topLevel);
 
 		// the chain's earlier hops count for the site (Sec-Fetch-Site only:
 		// the browser's site for cookies does not follow redirects)
@@ -1640,7 +1655,14 @@ function genericForward(
 			const rest: [string, string][] = [];
 			for (const [header, field] of preloaded.rawHeaders ?? [])
 				if (header.toLowerCase() !== 'set-cookie') rest.push([header, field]);
-				else if (credentials) await rewriter.cookies.set(field, url.url);
+				else if (credentials)
+					await rewriter.cookies.set(
+						field,
+						url.url,
+						'http',
+						partitionKey,
+						crossSiteSet,
+					);
 			preloaded.rawHeaders = rest;
 			return preloaded;
 		};
@@ -2640,7 +2662,13 @@ function genericForward(
 			if (header.toLowerCase() === 'set-cookie') {
 				// a response to a request without credentials sets nothing
 				if (credentials)
-					await rewriter.cookies.set(value, url.url, 'http', partitionKey);
+					await rewriter.cookies.set(
+						value,
+						url.url,
+						'http',
+						partitionKey,
+						crossSiteSet,
+					);
 			}
 		}
 

@@ -11,7 +11,10 @@
 // site too, so it shares none of them with the top-level page of its own
 // site (unpartitioned cookies aside: Chrome sends third-party cookies by
 // default). Each report is compared with the same sequence loaded natively,
-// in both modes.
+// in both modes. Then where a partition's site ends, with names under a
+// private suffix of the public suffix list (test/private-sites.mjs): the
+// storage a frame shares with its own name's top-level page, and the HTTP
+// cache's key.
 import {
 	done,
 	FIXTURE,
@@ -23,6 +26,7 @@ import {
 	sleep,
 	submitLanding,
 } from '../lib.mjs';
+import { privateSiteRows } from '../private-sites.mjs';
 
 const A = new URL(FIXTURE).origin;
 const B = new URL(FIXTURE.replace('127.0.0.1', 'localhost')).origin;
@@ -187,4 +191,6 @@ function check(mode, name, want, got) {
 	else ok(`${mode}: ${name} as natively`, a === b, detail);
 }
 
-await done(browser);
+await browser.close();
+await privateSiteRows('partitions');
+await done();

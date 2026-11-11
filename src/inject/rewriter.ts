@@ -459,9 +459,9 @@ export function printExpression(source: string, part: string): string | null {
 }
 
 /**
- * tldts getDomain: the registrable domain of `host`, or null. What the
- * shell said of the host answers (src/inject/sites.ts); the library's list
- * is asked about any other.
+ * tldts getDomain with the private domains: the registrable domain of
+ * `host`, or null. What the shell said of the host answers
+ * (src/inject/sites.ts); the library's list is asked about any other.
  */
 export function getDomain(host: string): string | null {
 	const known = knownSite(host, 0);
@@ -472,15 +472,13 @@ export function getDomain(host: string): string | null {
 }
 
 /**
- * tldts getPublicSuffix: the public suffix of `host`, or null; with the
- * private domains unless `icann` (the ICANN section alone)
+ * tldts getPublicSuffix with the private domains: the public suffix of
+ * `host`, or null
  */
-export function getPublicSuffix(host: string, icann = false): string | null {
-	const known = knownSite(host, icann ? 2 : 1);
+export function getPublicSuffix(host: string): string | null {
+	const known = knownSite(host, 1);
 	if (known !== undefined) return known;
-	const [lib, result] = ask<unknown>((lib) =>
-		lib.publicSuffix(text(host), icann),
-	);
+	const [lib, result] = ask<unknown>((lib) => lib.publicSuffix(text(host)));
 	settle(lib, false);
 	return nullableString(result);
 }

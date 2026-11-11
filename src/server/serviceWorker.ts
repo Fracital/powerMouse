@@ -3,7 +3,7 @@ import { kindPartition, partitionSite } from '../partition';
 import { nestedTopOf } from '../rewriteHTML';
 import { addRouteScope } from '../routeURL';
 import { SW_ROUTE, type ApiReply } from '../serviceWorkerTypes';
-import { getDomain, getPublicSuffix } from '../suffix';
+import { getPublicSuffix } from '../suffix';
 import {
 	ABORT_REQUEST,
 	BLOB_MINTED,
@@ -82,7 +82,7 @@ import {
 } from './requestClients';
 import { RewriteCache } from './rewriteCache';
 import { RewritePool } from './rewritePool';
-import { abortRequest } from './rewrites';
+import { abortRequest, siteBetween } from './rewrites';
 import { ApiError, serviceWorkers, type WorkerHost } from './serviceWorkers';
 import { claim, vouch } from './srcdocVouches';
 
@@ -113,7 +113,11 @@ interface ControllerRef {
 	host?: WorkerHost;
 }
 
-/** the fetch-metadata site of a request from `initiator` to `url` */
+/**
+ * The fetch-metadata site of a request from `initiator` to `url`, which a
+ * page's WebSocket handshake takes its SameSite cookies by: decided as for
+ * a fetch (siteBetween)
+ */
 function siteOf(
 	initiator: string,
 	url: string,
@@ -125,14 +129,7 @@ function siteOf(
 		for (const u of [from, to])
 			if (u.protocol === 'ws:') u.protocol = 'http:';
 			else if (u.protocol === 'wss:') u.protocol = 'https:';
-		if (from.origin === to.origin) return 'same-origin';
-		if (from.protocol !== to.protocol) return 'cross-site';
-		const domain = getDomain(from.hostname);
-		// an IP or localhost has no registrable domain: the host itself is the site
-		return (domain !== null && domain === getDomain(to.hostname)) ||
-			from.hostname === to.hostname
-			? 'same-site'
-			: 'cross-site';
+		return siteBetween(from, to);
 	} catch (error) {
 		return 'cross-site';
 	}
@@ -273,9 +270,16 @@ function registerController(
 							(
 								await cookies.get(
 									command.url,
-									command.initiator
-										? { site: siteOf(command.initiator, command.url) }
-										: {},
+									// a context in a partition is another site's to the jar,
+									// as its document.cookie is
+									command.partitionKey !== undefined
+										? {
+												site: 'cross-site',
+												partitionKey: command.partitionKey,
+											}
+										: command.initiator
+											? { site: siteOf(command.initiator, command.url) }
+											: {},
 								)
 							).toString(),
 							[],
@@ -366,8 +370,16 @@ function workerHost(ref: ControllerRef, ready: StompServer): WorkerHost {
 				{ clientId, bypassCache, internal: true },
 			),
 		routeDocument: (url) => ready.route(url),
+		// a worker in a partition reads the jar as another site's
 		jarCookies: async (url, partitionKey) =>
-			forScript(await ready.cookies.get(url, { partitionKey })),
+			forScript(
+				await ready.cookies.get(
+					url,
+					partitionKey === undefined
+						? {}
+						: { partitionKey, site: 'cross-site' },
+				),
+			),
 		fetchResource: (url, init, clientId) =>
 			ready.router.route(
 				new Request(ready.routeAs('binary', url), {

@@ -101,7 +101,7 @@ export interface WorkerHost {
 	): Promise<Response>;
 	/** a document's routed URL at this address (WindowClient.navigate) */
 	routeDocument(url: string): string;
-	/** the jar's cookies script at `url` may see (no HttpOnly ones), in a partition (CookieRequestContext.partitionKey) */
+	/** the jar's cookies script at `url` may see (no HttpOnly ones), in a partition (CookieRequestContext.partitionKey), where it reads as another site's */
 	jarCookies(url: string, partitionKey?: string): Promise<JarCookie[]>;
 	/** a resource fetched through the proxy for a page's background fetch: the raw response */
 	fetchResource(

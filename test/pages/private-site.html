@@ -1,0 +1,306 @@
+<!doctype html>
+<title>PRIVATE SITE</title>
+<body>
+	<script>
+		// One page for every part of the private suffix rows
+		// (test/private-sites.mjs serves it at /ps/page on each name). `a`,
+		// `sub` and `b` are the three origins of a group: a site, a name under
+		// it, another site under the same suffix. By `role`:
+		//   seed     top-level on each: keeps a mark in localStorage and loads
+		//            a's cacheable resource (the response sets the cookies)
+		//   top      top-level on a: a fetch, a WebSocket, a fetch whose
+		//            response sets cookies and a frame to each of the three,
+		//            and what it can read of each frame's window
+		//   frame    what a framed page sees: its parent, its frame element,
+		//            the mark its own name's top-level page kept, its cookies
+		//            (with those its document's response and the top's fetch
+		//            set) and which of two it writes are kept, what the Cookie
+		//            Store API reads and writes, its own and its service
+		//            worker's, what its WebSocket's handshake carries, and (the
+		//            name under the site) what document.domain and a cookie's
+		//            Domain take
+		//   nested   a frame of a in b's frame: what its fetch (whose response
+		//            sets cookies) and its WebSocket carry, its cookies
+		//   nav, landed
+		//            a frame of b that navigates itself to a, and what the
+		//            page it lands on reads of the cookies its response set
+		//   after    top-level on b, last: the cookies it has now (which of
+		//            its frame's writes were kept)
+		//   legacy-top, legacy-frame
+		//            the same pair with Origin-Agent-Cluster: ?0, both setting
+		//            document.domain (and the top's cookies, a's own now)
+		// The report is window.__ps; a frame posts its own to its parent.
+		const query = new URLSearchParams(location.search);
+		const role = query.get('role');
+		const tag = query.get('t');
+		const suffix = query.get('suffix');
+		const sites = {
+			a: query.get('a'),
+			sub: query.get('sub'),
+			b: query.get('b'),
+		};
+		const page = (site, role, name, more = '') =>
+			`${site}/ps/page?role=${role}&name=${name}&t=${tag}&suffix=${suffix}` +
+			`&k=${tag}-${name}-${role}` +
+			Object.entries(sites)
+				.map(([key, value]) => `&${key}=${encodeURIComponent(value)}`)
+				.join('') +
+			more;
+		const attempt = (read) => {
+			try {
+				return read();
+			} catch (error) {
+				return error.name;
+			}
+		};
+		const domain = (value) => {
+			try {
+				document.domain = value;
+				return `set, now ${document.domain}`;
+			} catch (error) {
+				return error.message;
+			}
+		};
+		const cookieNames = () =>
+			document.cookie
+				.split('; ')
+				.filter(Boolean)
+				.map((pair) => pair.split('=')[0])
+				.sort();
+		const settled = () => new Promise((resolve) => setTimeout(resolve, 300));
+		/** the four cookies each name's top-level page was given */
+		const given = (list) =>
+			list.filter((name) => /^ps_(strict|lax|none|default)$/.test(name)).sort();
+		const outcome = (call) =>
+			call().then(
+				() => 'ok',
+				(error) => `${error.name}: ${error.message}`,
+			);
+		/** what a handshake to this origin carried (the server's word) */
+		const socketCookies = (k) =>
+			new Promise((resolve) => {
+				const socket = new WebSocket(
+					`${location.origin.replace(/^https/, 'wss')}/ps/ws?k=${k}`,
+				);
+				socket.onmessage = (event) =>
+					resolve(given(JSON.parse(event.data).cookies));
+				socket.onerror = () => resolve('error');
+			});
+		/** what this origin's service worker's Cookie Store API does */
+		const workerStore = async () => {
+			try {
+				const registration = await navigator.serviceWorker.register(
+					'/ps/sw.js',
+					{ scope: '/ps/sw-scope/' },
+				);
+				const worker =
+					registration.installing ||
+					registration.waiting ||
+					registration.active;
+				const answer = new Promise((resolve) =>
+					navigator.serviceWorker.addEventListener(
+						'message',
+						(event) => resolve(event.data),
+						{ once: true },
+					),
+				);
+				worker.postMessage('store');
+				const report = await answer;
+				await registration.unregister();
+				return report;
+			} catch (error) {
+				return error.name;
+			}
+		};
+		const cached = () =>
+			fetch(`${sites.a}/ps/cached?k=${tag}-cached`, { credentials: 'omit' })
+				.then((response) => response.text())
+				.catch((error) => error.name);
+		/** a frame of `site` in `role`, and the report it posts */
+		/** `reporter`: the role and name of the page that reports, when the frame navigates on */
+		const framed = (site, role, name, more, reporter = { role, name }) => {
+			const frame = document.createElement('iframe');
+			const reported = new Promise((resolve) => {
+				addEventListener('message', function heard(event) {
+					const report = event.data?.psFrame;
+					if (report?.name !== reporter.name || report.role !== reporter.role)
+						return;
+					removeEventListener('message', heard);
+					resolve(report);
+				});
+			});
+			frame.src = page(site, role, name, more);
+			document.body.append(frame);
+			return [frame, reported];
+		};
+		const reads = (frame) => ({
+			document: attempt(() => typeof frame.contentWindow.document),
+			href: attempt(() => typeof frame.contentWindow.location.href),
+			contentDocument: frame.contentDocument === null ? 'null' : 'document',
+		});
+
+		const roles = {
+			async seed() {
+				localStorage.setItem('ps-top', location.hostname);
+				return { cached: await cached() };
+			},
+			async after() {
+				return { cookies: cookieNames() };
+			},
+			async top() {
+				const out = { oac: window.originAgentCluster, to: {} };
+				for (const [name, site] of Object.entries(sites)) {
+					const row = (out.to[name] = {});
+					const k = `${tag}-${name}`;
+					row.fetch = await fetch(`${site}/ps/echo?k=${k}-fetch`, {
+						credentials: 'include',
+					})
+						.then((response) => response.json())
+						.then(({ site, cookies }) => ({ site, cookies }))
+						.catch((error) => error.name);
+					row.socket = await new Promise((resolve) => {
+						const socket = new WebSocket(
+							`${site.replace(/^https/, 'wss')}/ps/ws?k=${k}-ws`,
+						);
+						socket.onmessage = (event) => {
+							const { site, cookies, origin } = JSON.parse(event.data);
+							resolve({ site, cookies, origin: origin === location.origin });
+						};
+						socket.onerror = () => resolve('error');
+					});
+					// a response that sets cookies, which the frame then reads
+					await fetch(`${site}/ps/echo?k=${k}-set&set=1`, {
+						credentials: 'include',
+					}).catch(() => {});
+					const [frame, reported] = framed(site, 'frame', name);
+					row.frame = await reported;
+					row.reads = reads(frame);
+				}
+				// a frame of b that navigates itself to a: of a's site under a's
+				// page, its document's request started by another site
+				out.landed = await framed(sites.b, 'nav', 'b', '', {
+					role: 'landed',
+					name: 'a',
+				})[1];
+				out.cached = await cached();
+				return out;
+			},
+			async frame() {
+				const report = {
+					frameElement: attempt(() =>
+						frameElement === null ? 'null' : 'element',
+					),
+					parent: attempt(() => typeof parent.document),
+					parentHref: attempt(() => typeof parent.location.href),
+					mark: attempt(() => localStorage.getItem('ps-top')),
+					oac: window.originAgentCluster,
+					cookies: cookieNames(),
+				};
+				document.cookie = 'ps_w_lax=1; Path=/; Secure';
+				document.cookie = 'ps_w_none=1; Path=/; Secure; SameSite=None';
+				await settled();
+				report.written = cookieNames().filter((name) =>
+					name.startsWith('ps_w_'),
+				);
+				report.store = {
+					reads: await cookieStore.getAll().then(
+						(list) => given(list.map((cookie) => cookie.name)),
+						(error) => error.name,
+					),
+					writes: [
+						await outcome(() => cookieStore.set('ps_cs_default', '1')),
+						await outcome(() =>
+							cookieStore.set({
+								name: 'ps_cs_none',
+								value: '1',
+								sameSite: 'none',
+							}),
+						),
+						await outcome(() => cookieStore.delete('ps_cs_none')),
+					],
+				};
+				report.socket = await socketCookies(
+					`${tag}-${query.get('name')}-frame-ws`,
+				);
+				report.worker = await workerStore();
+				// a frame of a under b's frame (A in B in A): of a's site, under
+				// a page of a, and still in a partition
+				if (query.get('name') === 'b')
+					report.nested = await framed(sites.a, 'nested', 'a')[1];
+				if (query.get('name') === 'sub') {
+					const above = new URL(sites.a).hostname;
+					document.cookie = `ps_suffix=1; Domain=${suffix}; Path=/; Secure`;
+					document.cookie = `ps_above=1; Domain=${above}; Path=/; Secure`;
+					await settled();
+					report.domainCookies = cookieNames().filter((name) =>
+						/^ps_(suffix|above)$/.test(name),
+					);
+					report.domain = {
+						suffix: domain(suffix),
+						tld: domain(suffix.split('.').pop()),
+						above: domain(above),
+					};
+				}
+				return report;
+			},
+			async nav() {
+				location.href = page(sites.a, 'landed', 'a');
+				return new Promise(() => {});
+			},
+			async landed() {
+				return { cookies: cookieNames().filter((name) => /^ps_z_/.test(name)) };
+			},
+			async nested() {
+				const fetched = await fetch(
+					`${sites.a}/ps/echo?k=${tag}-nested-fetch&set=n`,
+					{ credentials: 'include' },
+				)
+					.then((response) => response.json())
+					.then(({ cookies }) => given(cookies))
+					.catch((error) => error.name);
+				return {
+					fetch: fetched,
+					cookies: given(cookieNames()),
+					socket: await socketCookies(`${tag}-a-nested-ws`),
+				};
+			},
+			async 'legacy-top'() {
+				const out = {
+					cookies: cookieNames(),
+					oac: window.originAgentCluster,
+					domain: domain(location.hostname),
+					to: {},
+				};
+				for (const name of ['sub', 'b']) {
+					const [frame, reported] = framed(
+						sites[name],
+						'legacy-frame',
+						name,
+						'&oac=0',
+					);
+					out.to[name] = { frame: await reported, reads: reads(frame) };
+				}
+				return out;
+			},
+			async 'legacy-frame'() {
+				const own = query.get('name') === 'sub';
+				return {
+					oac: window.originAgentCluster,
+					domain: domain(own ? new URL(sites.a).hostname : suffix),
+					parent: attempt(() => typeof parent.document),
+					frameElement: attempt(() =>
+						frameElement === null ? 'null' : 'element',
+					),
+				};
+			},
+		};
+		roles[role]()
+			.catch((error) => ({ error: String(error) }))
+			.then((report) => {
+				report.role = role;
+				report.name = query.get('name');
+				window.__ps = { done: true, tag, ...report };
+				if (parent !== window) parent.postMessage({ psFrame: report }, '*');
+			});
+	</script>
+</body>

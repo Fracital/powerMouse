@@ -55,13 +55,13 @@ export function learnSites(facts: unknown): boolean {
 
 /**
  * What this bundle knows of `host`'s site without the list: answer 0 the
- * registrable domain (ICANN section), 1 the public suffix with the private
- * section, 2 the public suffix in the ICANN section alone; undefined when
- * it was not told. The empty host has none of them (tldts answers null).
+ * registrable domain, 1 the public suffix, both with the list's private
+ * section; undefined when it was not told. The empty host has neither
+ * (tldts answers null).
  */
 export function knownSite(
 	host: unknown,
-	answer: 0 | 1 | 2,
+	answer: 0 | 1,
 ): string | null | undefined {
 	if (typeof host !== 'string') return undefined;
 	if (host === '') {

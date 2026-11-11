@@ -61,9 +61,9 @@ function parsesAsScript(source: string): boolean {
 /** what the library has beyond scripts (a worker's has none of it) */
 export interface LibraryParts {
 	modifyCSS?: (text: string, url: StompURL, context?: string) => string;
+	/** both with the list's private section, where Chrome ends a site */
 	getDomain?: (host: string) => string | null;
-	/** with the private list unless `icann` (the ICANN section alone) */
-	getPublicSuffix?: (host: string, icann?: boolean) => string | null;
+	getPublicSuffix?: (host: string) => string | null;
 	/** the public suffix list this copy's suffix module holds (its commit and date), '' while tldts answers */
 	suffixList?: () => string;
 }
@@ -130,14 +130,9 @@ export function library(parts: LibraryParts) {
 		domain(host: string): string | null {
 			return run(() => (parts.getDomain ?? missing('getDomain'))(host), null);
 		},
-		/** with the private list, or the ICANN section alone when `icann` */
-		publicSuffix(host: string, icann: boolean): string | null {
+		publicSuffix(host: string): string | null {
 			return run(
-				() =>
-					(parts.getPublicSuffix ?? missing('getPublicSuffix'))(
-						host,
-						icann === true,
-					),
+				() => (parts.getPublicSuffix ?? missing('getPublicSuffix'))(host),
 				null,
 			);
 		},

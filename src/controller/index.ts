@@ -58,6 +58,7 @@ import {
 	postToPort,
 	RequestInfo,
 	ReviveMessage,
+	SOCKET_PARTITION,
 	STANDBY_DECLINED,
 	SW_KICK,
 	SW_PORT,
@@ -1874,7 +1875,11 @@ export class StompController extends EventTarget {
 		// request that no cache may answer. The transport's own client says
 		// which encodings it takes (as on its HTTP requests), and offers no
 		// permessage-deflate it could not speak
-		const headers: RawHeaders = [...given];
+		// a context in a partition says so (SOCKET_PARTITION), for the jar
+		const marked = given.find(
+			([name]) => name.toLowerCase() === SOCKET_PARTITION,
+		);
+		const headers: RawHeaders = given.filter((header) => header !== marked);
 		const has = (name: string) =>
 			headers.some(([header]) => header.toLowerCase() === name);
 		const languages = acceptLanguage(navigator.languages);
@@ -1902,6 +1907,7 @@ export class StompController extends EventTarget {
 				op: 'get',
 				url: url.href,
 				...(origin ? { initiator: origin[1] } : {}),
+				...(marked ? { partitionKey: marked[1] } : {}),
 			})
 			.catch(() => null);
 		if (await blocked) throw new Error(HANDSHAKE_REFUSED);

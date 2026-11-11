@@ -747,10 +747,13 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 			`${new URL(String(global.location.href)).origin}${this.client.directory}cookies/${route}`;
 		const sender = `sw-${info.version.id}-${Math.random().toString(36).slice(2)}`;
 		// the registration's partition: its Partitioned cookies are that
-		// top-level site's
+		// top-level site's, and a worker in one reads the jar as another
+		// site's (no SameSite=Lax or Strict cookie), as a document there does
 		const partitionContext = () => {
 			const partitionKey = partitionSite(this.client.partition);
-			return partitionKey === null ? null : { partitionKey };
+			return partitionKey === null
+				? null
+				: { partitionKey, site: 'cross-site' as const };
 		};
 		let sequence = 0;
 		const inflight = new Set<number>();
@@ -800,6 +803,7 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 				}
 			},
 			refused: () => null,
+			crossSite: () => partitionContext() !== null,
 			look: async () => {},
 		});
 		const isCookieStore = (that: unknown) => that === cookieStore;

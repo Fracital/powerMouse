@@ -25,8 +25,8 @@ import { WebSocketServer } from 'ws';
 
 const pagesDir = fileURLToPath(new URL('./pages/', import.meta.url));
 
-/** a self-signed certificate for mixed.test, from the openssl CLI */
-function certificate() {
+/** a self-signed certificate for `name` (mixed.test), from the openssl CLI */
+export function certificate(name = 'mixed.test') {
 	const dir = mkdtempSync(join(tmpdir(), 'stomp-mixed-'));
 	try {
 		execFileSync(
@@ -44,9 +44,9 @@ function certificate() {
 				'-days',
 				'2',
 				'-subj',
-				'/CN=mixed.test',
+				`/CN=${name}`,
 				'-addext',
-				'subjectAltName=DNS:mixed.test',
+				`subjectAltName=DNS:${name}`,
 			],
 			{ stdio: 'ignore' },
 		);
@@ -99,6 +99,23 @@ const FILES = {
 		'<!doctype html><title>insecure frame</title><p>insecure frame</p>',
 	],
 };
+
+/**
+ * One listener for two servers: a connection that opens with a TLS record
+ * goes to `secure`, anything else to its plain twin
+ */
+export function tlsOrPlain(secure, plain) {
+	return createNet((socket) => {
+		socket.on('error', () => {});
+		// peeked without flowing: the server it goes to reads it again
+		socket.once('readable', () => {
+			const chunk = socket.read();
+			if (!chunk) return socket.destroy();
+			socket.unshift(chunk);
+			(chunk[0] === 0x16 ? secure : plain).emit('connection', socket);
+		});
+	});
+}
 
 /**
  * Start both sites on free ports. `log` lists every request as
@@ -189,18 +206,8 @@ export async function startMixedServers() {
 	}
 	// a TLS hello at the plain server (an upgraded load there) is no request
 	plain.on('clientError', (error, socket) => socket.destroy());
-	// mixed.test: a connection that opens with a TLS record goes to the TLS
-	// server, anything else to its plain twin
-	const both = createNet((socket) => {
-		socket.on('error', () => {});
-		// peeked without flowing: the server it goes to reads it again
-		socket.once('readable', () => {
-			const chunk = socket.read();
-			if (!chunk) return socket.destroy();
-			socket.unshift(chunk);
-			(chunk[0] === 0x16 ? secure : secureInPlain).emit('connection', socket);
-		});
-	});
+	// mixed.test: TLS and plain http on one port
+	const both = tlsOrPlain(secure, secureInPlain);
 	const listen = (server) =>
 		new Promise((resolve) =>
 			server.listen(0, '127.0.0.1', () => resolve(server.address().port)),

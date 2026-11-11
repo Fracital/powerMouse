@@ -14,18 +14,18 @@
 
 /**
  * One host's answers, as the shell carries them: the host, then for the
- * host and each name above it three spans of the host (start and end; -1
- * and -1 for null): `getDomain` in the ICANN section, `getPublicSuffix`
- * with the private section, `getPublicSuffix` in the ICANN section alone
+ * host and each name above it two spans of the host (start and end; -1
+ * and -1 for null): `getDomain` and `getPublicSuffix`, both with the
+ * list's private section, which is where Chrome ends a site (two
+ * customers of github.io are two sites)
  */
 export type SiteFacts = [host: string, ...spans: number[]];
 
-/** the three answers for a name, in the order the spans are written */
-export type SiteAnswers = [
-	domain: string | null,
-	publicSuffix: string | null,
-	icannSuffix: string | null,
-];
+/** the two answers for a name, in the order the spans are written */
+export type SiteAnswers = [domain: string | null, publicSuffix: string | null];
+
+/** numbers per name: a start and an end for each answer */
+const SPANS = 4;
 
 /** what answers a host's site: src/suffix.ts in the service worker */
 export interface SiteLookups {
@@ -63,9 +63,8 @@ export function siteFacts(
 	for (const start of nameStarts(host)) {
 		const name = host.slice(start);
 		const answers: SiteAnswers = [
-			lookups.getDomain(name),
+			lookups.getDomain(name, true),
 			lookups.getPublicSuffix(name, true),
-			lookups.getPublicSuffix(name),
 		];
 		for (const answer of answers) {
 			if (answer === null) {
@@ -92,12 +91,12 @@ export function readSiteFacts(
 		return null;
 	const host: string = facts[0];
 	const starts = nameStarts(host);
-	if (facts.length !== 1 + starts.length * 6) return null;
+	if (facts.length !== 1 + starts.length * SPANS) return null;
 	const read: [string, SiteAnswers][] = [];
 	let at = 1;
 	for (const start of starts) {
 		const answers: (string | null)[] = [];
-		for (let answer = 0; answer < 3; answer++) {
+		for (let answer = 0; answer < SPANS / 2; answer++) {
 			const from: unknown = facts[at++];
 			const to: unknown = facts[at++];
 			if (from === -1 && to === -1) {

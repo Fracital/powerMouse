@@ -36,7 +36,7 @@ Environment variables:
 | `STOMP_REWRITER`       | unset          | `wasm` runs the Rust rewriters where a thread holds them (the controller's `rewriter` option; `?wasm` does one visit, `?js` the JavaScript ones)                       |
 | `STOMP_ADBLOCK`        | on             | Set to `0` to turn off the content blocker (docs/adblock.md), a JSON object is its `adblock` option; `?noadblock` and `?adblock` do one visit, the toggle is kept      |
 | `STOMP_ECH_DNS`        | Cloudflare DoH | DNS-over-HTTPS endpoint epoxy asks for HTTPS records to offer real Encrypted Client Hello (docs/fingerprint.md); `off` sends GREASE ECH only (`?noech` does one visit) |
-| `STOMP_TEST_TRANSPORT` | unset          | Set to `1` to use `/test/mixed-transport.mjs` (epoxy that reaches the mixed-content suite's fixture hosts); test runs only                                             |
+| `STOMP_TEST_TRANSPORT` | unset          | Set to `1` to use `/test/mixed-transport.mjs` (epoxy that reaches the suites' fixture hosts: mixed-content's, and the names under a private suffix); test runs only    |
 
 They can also live in a `.env` file next to `package.json` (not committed);
 the server reads it at startup. The page gets what it needs from `/config.js`.

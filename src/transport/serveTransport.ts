@@ -7,6 +7,7 @@ import {
 	HANDSHAKE_REFUSED,
 	HostToTransport,
 	postToPort,
+	SOCKET_PARTITION,
 	transferablesOf,
 	TRANSPORT_RPC,
 	TransportToHost,
@@ -126,18 +127,22 @@ export default function serveTransport(
 			},
 			connect: async ({ url, protocols, requestHeaders, port: socket }) => {
 				const transport = await readyTransport();
-				requestHeaders = requestHeaders.filter(
+				const given = requestHeaders.filter(
 					([name]) => name.toLowerCase() !== 'cookie',
 				);
+				// the inject's word for the hook, never the server's
+				const outgoing = (headers: RawHeaders) =>
+					headers.filter(([name]) => name.toLowerCase() !== SOCKET_PARTITION);
+				requestHeaders = outgoing(given);
 				if (decorate)
 					try {
 						const decorated = await Promise.race([
-							decorate(new URL(url), requestHeaders),
+							decorate(new URL(url), given),
 							new Promise<null>((resolve) =>
 								setTimeout(() => resolve(null), DECORATE_TIMEOUT_MS),
 							),
 						]);
-						if (decorated) requestHeaders = decorated;
+						if (decorated) requestHeaders = outgoing(decorated);
 					} catch (error) {
 						// an explicit refusal: the page's socket gets the failure a
 						// connection the browser refused to make gets (error, then

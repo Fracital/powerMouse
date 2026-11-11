@@ -754,10 +754,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						!host.endsWith(`.${parsed}`)
 					)
 						throw refuse(`'${shown}' is not a suffix of '${host}'.`);
-					// the ICANN section, as tldts answered by default here before
-					// (through the rewriter library: a copy of tldts in the bundle
-					// cost every frame its tables)
-					if (getPublicSuffix(parsed, true) === parsed)
+					// with the list's private section, as Chrome refuses it:
+					// 'github.io' is a top-level domain to a page of its customer
+					if (getPublicSuffix(parsed) === parsed)
 						throw refuse(`'${shown}' is a top-level domain.`);
 				},
 			),

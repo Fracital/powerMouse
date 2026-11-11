@@ -59,6 +59,10 @@ const SUITE_ENV = {
 	// the fixture's https origin through the test transport, and a wisp that
 	// refuses UDP: the demo's default HTTP/3 has to fall back
 	'demo-http3': { STOMP_TEST_TRANSPORT: '1', WISP_NO_UDP: '1' },
+	// and the sites under a private suffix of test/private-sites.mjs
+	samesite: { STOMP_TEST_TRANSPORT: '1' },
+	'sop-partitions': { STOMP_TEST_TRANSPORT: '1' },
+	'site-facts': { STOMP_TEST_TRANSPORT: '1' },
 };
 // where the content blocker's default lists and resources live
 // (src/blocker/types.ts DEFAULT_LISTS, DEFAULT_RESOURCES)

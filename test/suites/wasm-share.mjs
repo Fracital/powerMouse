@@ -211,8 +211,7 @@ ok(
 					list: library.suffixList(),
 					answers: [
 						library.domain('a.b.github.io'),
-						library.publicSuffix('a.b.github.io', false),
-						library.publicSuffix('a.b.github.io', true),
+						library.publicSuffix('a.b.github.io'),
 						library.domain('www.example.co.uk'),
 						library.domain('127.0.0.1'),
 					],
@@ -240,7 +239,7 @@ ok(
 		sites.holds &&
 			sites.list === `${pinned('PSL_COMMIT')} ${pinned('PSL_DATE')}` &&
 			JSON.stringify(sites.answers) ===
-				JSON.stringify(['github.io', 'github.io', 'io', 'example.co.uk', null]),
+				JSON.stringify(['b.github.io', 'github.io', 'example.co.uk', null]),
 		JSON.stringify(sites),
 	);
 	const top = await inPage('top');

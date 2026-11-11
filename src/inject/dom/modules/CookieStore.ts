@@ -77,6 +77,7 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 			jar: () => cookies.jarCookies(),
 			store: (write) => cookies.store(write),
 			refused: (method) => opaque(method),
+			crossSite: () => cookies.crossSite,
 			look: () => watch(),
 		});
 		const { methods, item, deletedItem } = shared;
