@@ -204,6 +204,51 @@ export default class AccessModule extends Module<Client> {
 				},
 			};
 		};
+		/**
+		 * `target.postMessage(...args)` with the method the page's read gave:
+		 * see `post`
+		 */
+		const posted = (
+			method: any,
+			target: any,
+			args: any[],
+			optional?: boolean,
+			partial?: string,
+		): any => {
+			if (optional && nullish(method)) return undefined;
+			if (typeof method !== 'function')
+				return errors.call(method, target, args, partial);
+			if (this.client.postToWindow) {
+				let receiver: Client | undefined;
+				try {
+					if (
+						typeof target === 'object' &&
+						target !== null &&
+						target.window === target
+					)
+						receiver = target[this.client.names.client];
+				} catch (error) {
+					// a cross-origin window: called as written
+				}
+				// only while the receiver's postMessage is still the hook: a
+				// page that assigned its own function gets that function
+				if (
+					receiver?.nativePostMessage &&
+					method === receiver.hookedPostMessage
+				)
+					return this.client.postToWindow(target, args);
+			}
+			if (this.client.postToRestricted?.(target, args)) return undefined;
+			return Reflect.apply(method, target, args);
+		};
+		// the scope of a `with` whose head needs none: no name is found in it
+		// (no prototype), and a page that gets hold of it converts it like any
+		// object (by a symbol, which no name finds)
+		const NO_SCOPE = Object.freeze(
+			Object.create(null, {
+				[Symbol.toPrimitive]: { value: () => '[object Object]' },
+			}),
+		) as object;
 		const api = {
 			get2: (
 				target: any,
@@ -230,6 +275,14 @@ export default class AccessModule extends Module<Client> {
 				// come here too, so knowing the name (a same-site frame's shell
 				// shows it while it loads) gives a page nothing
 				if (key === this.client.names.client) return undefined;
+				// another window's postMessage, read and not called: the page
+				// gets a function of this realm for it, so a call of it later
+				// (bound, detached, handed to `call`) posts from this realm,
+				// which the browser names as the source
+				if (key === 'postMessage' && container !== undefined) {
+					const own = this.client.postMessageOf?.(container);
+					if (own) return own;
+				}
 				try {
 					if (key === 'top' && this.client.resolveTop)
 						return this.client.resolveTop(object);
@@ -578,7 +631,7 @@ export default class AccessModule extends Module<Client> {
 				errors.coerce(value, partial),
 			/**
 			 * `x.postMessage(...)` (the rewriter routes every such call here, and
-			 * the .call / .apply / Reflect.apply forms): a STomp window gets the
+			 * a call by a computed key that names it): a STomp window gets the
 			 * message through its own native postMessage called from this realm,
 			 * so this context is the incumbent the browser reports as the
 			 * source, with an envelope carrying this context's real origin;
@@ -595,32 +648,7 @@ export default class AccessModule extends Module<Client> {
 					if (optional) return undefined;
 					throw errors.read(target, 'postMessage');
 				}
-				const method = target.postMessage;
-				if (optional && nullish(method)) return undefined;
-				if (typeof method !== 'function')
-					return errors.post(method, target, args, partial);
-				if (this.client.postToWindow) {
-					let receiver: Client | undefined;
-					try {
-						if (
-							typeof target === 'object' &&
-							target !== null &&
-							target.window === target
-						)
-							receiver = target[this.client.names.client];
-					} catch (error) {
-						// a cross-origin window: called as written
-					}
-					// only while the receiver's postMessage is still the hook: a
-					// page that assigned its own function gets that function
-					if (
-						receiver?.nativePostMessage &&
-						method === receiver.hookedPostMessage
-					)
-						return this.client.postToWindow(target, args);
-				}
-				if (this.client.postToRestricted?.(target, args)) return undefined;
-				return Reflect.apply(method, target, args);
+				return posted(target.postMessage, target, args, optional, partial);
 			},
 			call2: (
 				target: any,
@@ -639,6 +667,10 @@ export default class AccessModule extends Module<Client> {
 				}
 
 				key = keyOf(key);
+				// `w['post' + 'Message'](m)` posts like `w.postMessage(m)`
+				if (key === 'postMessage')
+					return api.post(target, args, !!(links & 2), partial);
+
 				const method = api.get(target[key], key);
 
 				if (typeof method === 'function')
@@ -672,8 +704,13 @@ export default class AccessModule extends Module<Client> {
 				}
 				return (key: any) => {
 					key = keyOf(key);
-					const method = api.get(target[key], key);
+					// (`w?.['post' + 'Message'](f())` posts like `w.postMessage`)
+					const post = key === 'postMessage';
+					const method = post ? target[key] : api.get(target[key], key);
 					if (optionalCall && nullish(method)) return undefined;
+					if (post)
+						return (...args: any[]) =>
+							posted(method, target, args, optionalCall, partial);
 					return (...args: any[]) =>
 						typeof method === 'function'
 							? Reflect.apply(method, target, args)
@@ -687,6 +724,15 @@ export default class AccessModule extends Module<Client> {
 				nullish(target) || nullish(target.postMessage)
 					? undefined
 					: (...args: any[]) => api.post(target, args, true, partial),
+			// `with (o) body` whose body says `postMessage` is printed
+			// `{ const w = scope(o); with (w[0]) with (w[1]) body }`: the head
+			// as written, and inside it a scope that answers that one name
+			// when the head is a window of another realm (see get), nothing
+			// otherwise
+			scope: (object: unknown): [unknown, object] => [
+				object,
+				this.client.postScope?.(object) ?? NO_SCOPE,
+			],
 			evalScope: (code: unknown) => {
 				// `eval(x)` with anything but a string returns x: handed back as it
 				// is, the direct eval then returns it
@@ -751,7 +797,12 @@ export default class AccessModule extends Module<Client> {
 				let position = 0;
 				return new Proxy(object as object, {
 					get: (target, key) => {
-						const value = api.get(Reflect.get(target, key), key);
+						const value = api.get(
+							Reflect.get(target, key),
+							key,
+							// (`{ postMessage } = parent`: a read of the window's)
+							key === 'postMessage' ? target : undefined,
+						);
 						const nested = ordered
 							? ordered[position++]
 							: spec && typeof key === 'string'

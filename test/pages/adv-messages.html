@@ -103,7 +103,7 @@
 			const resolve = waiting.get(d.__advTag);
 			if (resolve) {
 				waiting.delete(d.__advTag);
-				resolve(describe(e));
+				resolve(describe(e), e);
 			}
 		}
 	});
@@ -228,25 +228,150 @@
 				postMessage({ __advTag: 'onmessage' }, '*');
 			}),
 	);
-	A(
+	// A message a child frame posts to this page: its source is the child's
+	// window (another window by right, so it is named 'child' when it is the
+	// frame's own contentWindow and OTHER-WINDOW when it is any other), and
+	// its origin this page's, whatever form the child's call takes. The
+	// forms differ in who the browser takes for the caller.
+	const fromChild = (name, code, expect = 'child') =>
+		A(
+			name,
+			() =>
+				new Promise((resolve) => {
+					const f = document.createElement('iframe');
+					f.srcdoc =
+						'<script>var M = {__advTag: ' +
+						JSON.stringify(name) +
+						'}; ' +
+						code +
+						'<\/script>';
+					waiting.set(name, (r, e) => {
+						const who = (x) =>
+							x === f.contentWindow ? 'child' : x === window ? 'self' : W(x);
+						let native;
+						try {
+							native = who(nativeSource.call(e));
+						} catch (error) {
+							native = 'threw ' + error.name;
+						}
+						// the browser names the frame whose code posted as the
+						// source, however the code got hold of postMessage
+						const source = who(e.source);
+						resolve({
+							...r,
+							source: source === expect ? source : 'TELL:' + source,
+							nativeSource: native,
+						});
+					});
+					document.body.append(f);
+					// every child starts at once, with the page's other probes:
+					// twenty proxied frames take seconds to come up on a busy
+					// machine, so the deadline is far past that
+					setTimeout(
+						() =>
+							resolve(
+								expect === 'none' ? 'did-not-arrive' : 'TELL:did not arrive',
+							),
+						15000,
+					);
+				}),
+			16000,
+		);
+	fromChild(
 		'message event via a child frame to parent',
+		'parent.postMessage(M, "*")',
+	);
+	fromChild('child top.postMessage', 'top.postMessage(M, "*")');
+	fromChild(
+		'child window.parent.postMessage',
+		'window.parent.postMessage(M, "*")',
+	);
+	fromChild('child parent.postMessage no target', 'parent.postMessage(M)');
+	fromChild(
+		'child parent.postMessage options',
+		'parent.postMessage(M, {targetOrigin: "*"})',
+	);
+	fromChild(
+		'child postMessage.call(parent)',
+		'postMessage.call(parent, M, "*")',
+	);
+	fromChild(
+		'child parent.postMessage.call(parent)',
+		'parent.postMessage.call(parent, M, "*")',
+	);
+	fromChild(
+		'child parent.postMessage.apply(parent)',
+		'parent.postMessage.apply(parent, [M, "*"])',
+	);
+	fromChild(
+		'child Reflect.apply(parent.postMessage, parent)',
+		'Reflect.apply(parent.postMessage, parent, [M, "*"])',
+	);
+	fromChild(
+		'child parent.postMessage.bind(parent)',
+		'parent.postMessage.bind(parent)(M, "*")',
+	);
+	fromChild(
+		'child detached parent.postMessage',
+		'var pm = parent.postMessage; pm(M, "*")',
+	);
+	fromChild(
+		'child strict detached parent.postMessage',
+		'(function () { "use strict"; var pm = parent.postMessage; pm(M, "*"); })()',
+	);
+	fromChild(
+		"child parent['post' + 'Message']",
+		'parent["post" + "Message"](M, "*")',
+	);
+	fromChild(
+		'child destructured parent.postMessage',
+		'var {postMessage: pm2} = parent; pm2.call(parent, M, "*")',
+	);
+	fromChild(
+		'child setTimeout(parent.postMessage)',
+		// the timer calls it on the child's window: the child gets it
+		'setTimeout(parent.postMessage, 0, M, "*")',
+		'none',
+	);
+	fromChild(
+		'child [M].forEach(parent.postMessage, parent)',
+		'[M].forEach(function (m) { this.postMessage(m, "*"); }, parent)',
+	);
+	fromChild(
+		'child Function.prototype.call.call(parent.postMessage, parent)',
+		'Function.prototype.call.call(parent.postMessage, parent, M, "*")',
+	);
+	fromChild(
+		'child parent.postMessage from a promise job',
+		'Promise.resolve().then(function () { parent.postMessage(M, "*"); })',
+	);
+	fromChild(
+		'child parent.postMessage through with',
+		'with (parent) { postMessage(M, "*"); }',
+	);
+	// the other way: what a child sees of a message this page posts to it,
+	// and of the reply path through event.source
+	A(
+		'message event from parent to a child frame',
 		() =>
 			new Promise((resolve) => {
 				const f = document.createElement('iframe');
 				f.srcdoc =
-					'<script>parent.postMessage({__advTag: "from-child"}, "*")<\/script>';
-				waiting.set('from-child', (r) =>
+					'<script>addEventListener("message", function (e) { if (!e.data || e.data.__advDown !== 1) return; var g = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "source").get; var w = function (x) { return x === parent ? "parent" : x === window ? "self" : x && x.window === x ? "OTHER-WINDOW" : String(x); }; e.source.postMessage({__advTag: "down-reply", source: w(e.source), nativeSource: w(g.call(e)), origin: e.origin, top: w(e.source.top)}, "*"); });<\/script>';
+				waiting.set('down-reply', (r, e) =>
 					resolve({
-						...r,
-						isChild:
-							r.source === 'OTHER-WINDOW'
-								? 'child window (expected other)'
-								: r.source,
+						child: e.data,
+						replySource: e.source === f.contentWindow ? 'child' : r.source,
+						replyOrigin: e.origin,
 					}),
+				);
+				f.addEventListener('load', () =>
+					f.contentWindow.postMessage({ __advDown: 1 }, '*'),
 				);
 				document.body.append(f);
 				setTimeout(() => resolve('did-not-arrive'), 3000);
 			}),
+		4000,
 	);
 	// the shape of the postMessage property
 	P('o.postMessage identity', () => {
@@ -319,7 +444,12 @@
 				MessagePort.prototype.postMessage.call(mc.port1, 'viaproto');
 			}),
 	);
+	// A method taken off its object and called bare has no receiver. In
+	// strict code `this` is undefined and reading it throws; in sloppy code
+	// (this page's) `this` is the window, so nothing throws and the method
+	// reads the window's properties
 	P('detached postMessage loses receiver', () => {
+		'use strict';
 		const o = {
 			tag: 'T',
 			postMessage(x) {
@@ -334,6 +464,73 @@
 			return error.name;
 		}
 	});
+	P('detached postMessage has the window for receiver (sloppy)', () => {
+		const o = {
+			tag: 'T',
+			postMessage(x) {
+				return (this === window ? 'window' : W(this)) + ':' + this.tag + x;
+			},
+		};
+		const detached = o.postMessage;
+		try {
+			return detached('1');
+		} catch (error) {
+			return 'TELL:threw ' + error.name;
+		}
+	});
+	P('o.postMessage keeps its receiver', () => {
+		'use strict';
+		const o = {
+			tag: 'T',
+			postMessage(x) {
+				return this.tag + x;
+			},
+		};
+		const said = (run) => {
+			try {
+				return run();
+			} catch (error) {
+				return error.name;
+			}
+		};
+		const saw = [
+			() => o.postMessage('1'),
+			() => o.postMessage.call({ tag: 'U' }, '2'),
+			() => o.postMessage.apply({ tag: 'V' }, ['3']),
+			() => Reflect.apply(o.postMessage, { tag: 'W' }, ['4']),
+			() => o.postMessage.bind({ tag: 'X' })('5'),
+			() => o?.postMessage('6'),
+			() => o['post' + 'Message']('7'),
+		]
+			.map(said)
+			.join(' ');
+		return saw === 'T1 U2 V3 W4 X5 T6 T7' ? saw : 'TELL:' + saw;
+	});
+	P('window.postMessage without a window', () => {
+		'use strict';
+		const out = [];
+		for (const receiver of [{}, 1, 'x', document, null, undefined]) {
+			try {
+				postMessage.call(receiver, { __advTag: 'no-window' }, '*');
+				out.push('posted');
+			} catch (error) {
+				out.push(error.name + ': ' + error.message);
+			}
+		}
+		const saw = out.join(', ');
+		return saw ===
+			'TypeError: Illegal invocation, TypeError: Illegal invocation, TypeError: Illegal invocation, TypeError: Illegal invocation, posted, posted'
+			? saw
+			: 'TELL:' + saw;
+	});
+	post('strict detached postMessage', (m) => {
+		'use strict';
+		const pm = window.postMessage;
+		pm(m, '*');
+	});
+	post('postMessage.bind(window)', (m) => postMessage.bind(window)(m, '*'));
+	post('postMessage.bind(top)', (m) => top.postMessage.bind(top)(m, '*'));
+	post('setTimeout(postMessage)', (m) => setTimeout(postMessage, 0, m, '*'));
 	P('Window.prototype.postMessage', () => {
 		const d =
 			Object.getOwnPropertyDescriptor(Window.prototype, 'postMessage') ||

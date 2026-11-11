@@ -201,6 +201,17 @@ export default class Client {
 	/** @internal set by the Context module: post `args` to a STomp window from this realm, so this context is the incumbent (source and origin are its own) */
 	postToWindow?: (target: object, args: unknown[]) => unknown;
 	/**
+	 * @internal set by the Context module: the function a read of
+	 * `target.postMessage` hands this realm's code, for a STomp window of
+	 * another realm whose postMessage is still the hook (undefined for
+	 * anything else: the read stands as written). It is a function of this
+	 * realm, so a message posted through it, however it is called later
+	 * (detached, bound, handed to a timer), names this context as its
+	 * source, as the browser names the realm of the code that calls
+	 * postMessage. The access helpers hand it out.
+	 */
+	postMessageOf?: (target: unknown) => unknown;
+	/**
 	 * @internal set by the DOM content hooks: `assign` writes the node
 	 * `value` into `target` by an index (`select[0] = option`,
 	 * `select.options[0] = option`), which the indexed setter of a select
@@ -213,6 +224,13 @@ export default class Client {
 		value: object,
 		assign: () => unknown,
 	) => unknown;
+	/**
+	 * @internal set by the Context module: for a `with (target)` whose body
+	 * names postMessage, the scope that answers the name with
+	 * `postMessageOf(target)` (undefined when that is: the head alone
+	 * stands)
+	 */
+	postScope?: (target: unknown) => object | undefined;
 	readonly #callIn: CallIn;
 	readonly #ownCallback: (callback: () => void) => () => void;
 	/**

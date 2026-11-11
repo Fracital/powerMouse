@@ -1155,18 +1155,114 @@ export default class ContextModule extends Module<DocumentClient> {
 				options,
 			]);
 		};
-		this.client.global.postMessage = proxyModule.wrapFunction(
-			this.client.global.postMessage,
-			(target, that, args) => {
+		// The window's postMessage acts on its receiver, as the browser's
+		// does: the window it was read from when it is called with none (a
+		// detached call), any other window it is called on
+		// (`postMessage.call(parent, m)`, a timer of another window calling
+		// it), and anything that is no window is the browser's Illegal
+		// invocation. It posted to its own window whatever it was called on.
+		// The message goes from this realm, which the browser names as the
+		// source.
+		const nativePost = this.client.global.postMessage;
+		// (the scope a `with` over another window reads the name through
+		// stands for that window: see postScope)
+		const scopes = new WeakMap<object, object>();
+		const poster = (home: Context) =>
+			proxyModule.wrapFunction(nativePost, (target, that, args) => {
+				const receiver: unknown =
+					that === undefined || that === null || that === scopes.get(home)
+						? home
+						: that;
+				if (receiver === this.client.global) {
+					catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
+					this.#cloneCheck(args);
+					return Reflect.apply(
+						target,
+						this.client.global,
+						this.postMessage(<any>args, this.client.global as Context),
+					);
+				}
+				let stomp: Client | undefined;
+				let window = false;
+				try {
+					window =
+						typeof receiver === 'object' &&
+						(this.restrictedContexts.has(receiver as Context) ||
+							(receiver as Context).window === receiver);
+					if (window)
+						stomp = (receiver as Record<string, any>)[this.client.names.client];
+				} catch (error) {
+					// a window of another origin: the browser's own call
+				}
+				if (!window)
+					throw new this.client.global.TypeError('Illegal invocation');
 				catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
-				this.#cloneCheck(args);
-				return Reflect.apply(
-					target,
-					this.client.global,
-					this.postMessage(<any>args, this.client.global as Context),
-				);
-			},
-		);
+				if (stomp?.nativePostMessage)
+					return this.client.postToWindow!(receiver as object, args);
+				if (this.client.postToRestricted!(receiver, args)) return undefined;
+				return Reflect.apply(target, receiver, args);
+			});
+		this.client.global.postMessage = poster(this.client.global as Context);
 		this.client.hookedPostMessage = this.client.global.postMessage;
+		const posters = new WeakMap<object, unknown>();
+		this.client.postMessageOf = (target) => {
+			if (target === this.client.global) return undefined;
+			try {
+				if (
+					typeof target !== 'object' ||
+					target === null ||
+					(target as Context).window !== target
+				)
+					return undefined;
+				const receiver = (target as Record<string, any>)[
+					this.client.names.client
+				] as Client | undefined;
+				if (
+					!receiver?.nativePostMessage ||
+					(target as Context).postMessage !== receiver.hookedPostMessage
+				)
+					return undefined;
+			} catch (error) {
+				// a window of another origin
+				return undefined;
+			}
+			let made = posters.get(target);
+			if (!made) {
+				made = poster(target as Context);
+				posters.set(target, made);
+			}
+			return made;
+		};
+		// `with (parent) { postMessage(m) }`: the name is found on the window
+		// with no member read to route. The rewriter puts this scope inside
+		// the head's. It has the one name, for as long as the window's
+		// postMessage is the hook, and a write or a delete of the name is the
+		// window's. It has the access API's name too: the helpers the body's
+		// code calls are this realm's, where the head's window would answer
+		// with its own.
+		this.client.postScope = (target) => {
+			if (!this.client.postMessageOf!(target)) return undefined;
+			let scope = scopes.get(target as object);
+			if (!scope) {
+				const access = this.client.names.access;
+				scope = new Proxy(Object.create(null) as object, {
+					has: (_, key) =>
+						key === access ||
+						(key === 'postMessage' && !!this.client.postMessageOf!(target)),
+					get: (_, key) =>
+						key === access
+							? (this.client.global as Record<string, any>)[access]
+							: key === 'postMessage'
+								? this.client.postMessageOf!(target)
+								: undefined,
+					set: (_, key, value) =>
+						key === access || Reflect.set(target as object, key, value),
+					deleteProperty: (_, key) =>
+						key === access || Reflect.deleteProperty(target as object, key),
+				});
+				scopes.set(target as object, scope);
+			}
+			return scope;
+		};
 	}
 }

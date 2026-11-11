@@ -50,12 +50,7 @@ export { scriptLead };
  * to the chain's start. A nested ChainExpression is a parenthesised chain,
  * which ends the short-circuit (`(a?.b).location` throws on null).
  */
-/**
- * A call that posts a message: `x.postMessage(...)`, `x.postMessage.call(w,
- * ...)`, `x.postMessage.apply(w, args)` and `Reflect.apply(x.postMessage, w,
- * args)`. The receiver, the arguments (an array expression or the array
- * given) and whether the chain is optional; null for any other call.
- */
+/** `x.postMessage`, `x['postMessage']` */
 const isPostMessage = (member: any) =>
 	member?.type === 'MemberExpression' &&
 	(member.computed
@@ -66,82 +61,30 @@ const isPostMessage = (member: any) =>
 
 /** whether postMessageCall finds a call that posts, without building its parts */
 function postsMessage(node: any): boolean {
-	const { callee } = node;
-	return (
-		callee?.type === 'MemberExpression' &&
-		(isPostMessage(callee) ||
-			isPostMessage(callee.object) ||
-			isPostMessage(node.arguments[0])) &&
-		postMessageCall(node) !== null
-	);
+	return isPostMessage(node.callee) && node.callee.object.type !== 'Super';
 }
 
+/**
+ * A call that posts a message, `x.postMessage(...)`: the receiver, the
+ * arguments and whether the chain is optional; null for any other call.
+ * Every other way to a postMessage is a read of it (`x.postMessage.call(w,
+ * m)`, `.bind(x)`, `var pm = x.postMessage`): see postRead.
+ */
 function postMessageCall(
 	node: any,
 ): { target: any; args: any; optional: boolean } | null {
 	const { callee } = node;
 	// (`super.postMessage(m)` stays the class's own: `super` is no value to
-	// hand the access API. So do `super.postMessage.call(this, m)` and
-	// `Reflect.apply(super.postMessage, this, [m])`: the target's own
-	// postMessage, which the access API would call, may be the one the
-	// class overrides)
-	const ofSuper = (member: any) => member.object.type === 'Super';
-	if (isPostMessage(callee) && ofSuper(callee)) return null;
-	// `f().postMessage.call(w, m)`: the method is the target's own, read by
-	// the access API, but the expression it was written as is still the
-	// page's to evaluate, first, as it was (`f` is called, a member of null
-	// throws)
-	const after = (method: any, target: any) =>
-		method.object.type === 'Identifier' ||
-		method.object.type === 'ThisExpression'
-			? target
-			: b.sequenceExpression([method, target]);
+	// hand the access API, and the postMessage the access API would call may
+	// be the one the class overrides. A read of it is left alone too: see
+	// routesMember)
+	if (isPostMessage(callee) && callee.object.type === 'Super') return null;
 	if (isPostMessage(callee))
 		return {
 			target: callee.object,
 			args: argumentsArray(node.arguments),
 			optional:
 				!!node.optional || !!callee.optional || inOptionalChain(callee.object),
-		};
-	if (
-		callee?.type === 'MemberExpression' &&
-		!callee.computed &&
-		callee.property.type === 'Identifier' &&
-		(callee.property.name === 'call' || callee.property.name === 'apply') &&
-		isPostMessage(callee.object) &&
-		!ofSuper(callee.object) &&
-		// (`.apply(w, args, more)`: what follows the arguments is evaluated
-		// and ignored, so the call is left as written)
-		(callee.property.name === 'call' || node.arguments.length <= 2) &&
-		!node.arguments.some((argument: any) => argument.type === 'SpreadElement')
-	) {
-		const [target = b.identifier('undefined'), ...rest] = node.arguments;
-		return {
-			target: after(callee.object, target),
-			args:
-				callee.property.name === 'call'
-					? argumentsArray(rest)
-					: (rest[0] ?? b.arrayExpression([])),
-			optional: false,
-		};
-	}
-	if (
-		callee?.type === 'MemberExpression' &&
-		!callee.computed &&
-		callee.object.type === 'Identifier' &&
-		callee.object.name === 'Reflect' &&
-		callee.property.type === 'Identifier' &&
-		callee.property.name === 'apply' &&
-		node.arguments.length >= 2 &&
-		node.arguments.length <= 3 &&
-		isPostMessage(node.arguments[0]) &&
-		!ofSuper(node.arguments[0]) &&
-		!node.arguments.some((argument: any) => argument.type === 'SpreadElement')
-	)
-		return {
-			target: after(node.arguments[0], node.arguments[1]),
-			args: node.arguments[2] ?? b.arrayExpression([]),
-			optional: false,
 		};
 	return null;
 }
@@ -278,9 +221,30 @@ function indexWrite(ctx: AcornContext): boolean {
 }
 
 /**
+ * `x.postMessage` read, not called: `x.postMessage.bind(x)`, `var pm =
+ * x.postMessage`, `f(x.postMessage)`. Another window's postMessage is a
+ * function of that window's realm, and the browser names the realm of the
+ * code that calls it as the message's source; the hook that stands for it
+ * cannot tell who called, so the read hands the page a function of its own
+ * realm (access API `get`). A call is `post`; a construction, a tag and a
+ * write stay as they are.
+ */
+function postRead(ctx: AcornContext): boolean {
+	if (!isPostMessage(ctx.node)) return false;
+	const parent = ctx.parent?.node;
+	return !(
+		((parent?.type === 'CallExpression' || parent?.type === 'NewExpression') &&
+			ctx.parentKey === 'callee') ||
+		(parent?.type === 'TaggedTemplateExpression' && ctx.parentKey === 'tag') ||
+		parent?.type === 'UpdateExpression' ||
+		(parent?.type === 'AssignmentExpression' && ctx.parentKey === 'left')
+	);
+}
+
+/**
  * Whether the rewriter routes a member read through the access API: a
- * computed key that is no literal, an unforgeable's name, an index (read
- * anywhere but as a callee: `callee`)
+ * computed key that is no literal, an unforgeable's name, an index or
+ * `postMessage` (the two read anywhere but as a callee: `callee`)
  */
 function routesMember(
 	node: any,
@@ -289,6 +253,7 @@ function routesMember(
 ): boolean {
 	if (node.object.type === 'Super') return false;
 	const { property } = node;
+	if (!callee && isPostMessage(node)) return true;
 	if (node.computed)
 		return (
 			property.type !== 'Literal' ||
@@ -1037,6 +1002,40 @@ export function modifyJS(
 							);
 					}
 					break;
+				case 'WithStatement':
+					// `with (parent) { postMessage(m) }`: the name resolves on the
+					// window in the head, and the call posts to it from this realm.
+					// No member is written that a read could be routed through, so
+					// a scope goes inside the head's that answers that one name
+					// (access API `scope`: nothing when the head is no window of
+					// another realm). Only for a body that says the name. The two
+					// come from one call made before the head is entered, where
+					// the helper's name is still this realm's.
+					if (refersTo(ctx.node.body, 'postMessage')) {
+						const scopes = b.identifier(`${names.access}w`);
+						const part = (index: number) =>
+							b.memberExpression(scopes, b.literal(index), true);
+						ctx.replaceWith(
+							b.blockStatement([
+								b.variableDeclaration('const', [
+									b.variableDeclarator(
+										scopes,
+										access('scope', [result(ctx.node.object)]),
+									),
+								]),
+								{
+									type: 'WithStatement',
+									object: part(0),
+									body: {
+										type: 'WithStatement',
+										object: part(1),
+										body: result(ctx.node.body),
+									},
+								},
+							]),
+						);
+					}
+					break;
 				case 'CallExpression':
 					{
 						const { callee } = ctx.node;
@@ -1679,6 +1678,7 @@ export function modifyJS(
 								if (
 									!routed.includes(ctx.node.property.value) &&
 									!indexRead(ctx) &&
+									!postRead(ctx) &&
 									!indexWrite(ctx)
 								) {
 									break typeLoop;
@@ -1687,7 +1687,10 @@ export function modifyJS(
 						} else
 							switch (ctx.node.property.type) {
 								case 'Identifier':
-									if (!routed.includes(ctx.node.property.name)) {
+									if (
+										!routed.includes(ctx.node.property.name) &&
+										!postRead(ctx)
+									) {
 										break typeLoop;
 									}
 
@@ -2159,7 +2162,9 @@ function patternSpec(
 		if (nested) {
 			spec[name] = nested;
 			any = true;
-		} else if (routed.includes(name)) {
+		} else if (routed.includes(name) || name === 'postMessage') {
+			// (`{ postMessage } = parent` reads another window's postMessage:
+			// see postRead)
 			spec[name] = true;
 			any = true;
 		}
@@ -2275,6 +2280,28 @@ function mentions(node: any, names: string[]): boolean {
 	if (node.type === 'Identifier' && names.includes(node.name)) return true;
 	if (someChild(node, (child) => mentions(child, names))) return true;
 	return false;
+}
+
+/**
+ * Whether code under `node` may read or call the bare name: an identifier
+ * anywhere but where it only names a property (`o.name`, `{ name: 1 }`, a
+ * class member's key)
+ */
+function refersTo(node: any, name: string): boolean {
+	if (node.type === 'Identifier') return node.name === name;
+	return someChild(
+		node,
+		(child) =>
+			!(
+				!node.computed &&
+				((node.type === 'MemberExpression' && child === node.property) ||
+					((node.type === 'Property' ||
+						node.type === 'MethodDefinition' ||
+						node.type === 'PropertyDefinition') &&
+						child === node.key &&
+						child !== node.value))
+			) && refersTo(child, name),
+	);
 }
 
 /** a tree of its own with the same nodes (the walk's marks, which are symbols, stay behind) */

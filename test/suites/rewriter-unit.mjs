@@ -326,9 +326,12 @@ const parses = (code) => {
 	);
 }
 {
-	// every way of posting a message goes through the caller's access API
+	// every way of posting a message goes through the caller's access API: a
+	// call is `post`, and any other way to another window's postMessage is a
+	// read of it (`.call`, `.apply`, `Reflect.apply`, a detached copy), which
+	// the access API answers with a function of the caller's realm
 	const out = shape(
-		"w.postMessage(m, '*'); w?.postMessage(m); w.postMessage.call(w2, m, o); w.postMessage.apply(w2, list); Reflect.apply(w.postMessage, w2, list); port.postMessage(m); x.postmessage(m)",
+		"w.postMessage(m, '*'); w?.postMessage(m); w.postMessage.call(w2, m, o); w.postMessage.apply(w2, list); Reflect.apply(w.postMessage, w2, list); const pm = w.postMessage; port.postMessage(m); x.postmessage(m)",
 	);
 	ok(
 		'postMessage calls in every shape go through the access API',
@@ -336,9 +339,14 @@ const parses = (code) => {
 			out,
 		) &&
 			/\$s\$j\.post\(w,\s*\[\s*m\s*\],\s*true,\s*'/.test(out) &&
-			/\$s\$j\.post\(w2,\s*\[\s*m,\s*o\s*\],\s*false,\s*'/.test(out) &&
-			(out.match(/\$s\$j\.post\(w2,\s*list,\s*false,\s*'/g) || []).length ===
-				2 &&
+			/\$s\$j\.call3\(w,\s*'postMessage',\s*'call',\s*\[\s*w2,\s*m,\s*o\s*\],\s*'/.test(
+				out,
+			) &&
+			/\$s\$j\.call3\(w,\s*'postMessage',\s*'apply',\s*\[\s*w2,\s*list\s*\],\s*'/.test(
+				out,
+			) &&
+			/Reflect\.apply\(\$s\$j\.get2\(w,\s*'postMessage',\s*'/.test(out) &&
+			/pm\s*=\s*\$s\$j\.get2\(w,\s*'postMessage',\s*'/.test(out) &&
 			/\$s\$j\.post\(port,\s*\[\s*m\s*\],\s*false,\s*'/.test(out) &&
 			/x\.postmessage\(m\)/.test(out) &&
 			parses(out),
@@ -1540,7 +1548,8 @@ console.warn = warn;
 			own.includes(
 				"Reflect.apply(super.postMessage, this, [$s$j.get(top, 'top')])",
 			) &&
-			own.includes('$s$j.post(v, [1], false,') &&
+			// (another window's is read through the access API, and called)
+			own.includes("$s$j.call3(w, 'postMessage', 'call', [") &&
 			parses(own),
 		own,
 	);
@@ -1850,21 +1859,28 @@ console.warn = warn;
 	);
 }
 {
-	// the `.call`, `.apply` and `Reflect.apply` forms of a post take the
-	// method from the target, but the expression the page read it from is
-	// still evaluated, first; arguments an apply ignores are not dropped
+	// the `.call`, `.apply` and `Reflect.apply` forms of a post read the
+	// method through the access API, from the expression the page read it
+	// from, evaluated once and first; arguments an apply ignores are not
+	// dropped
 	const posts = shape(
 		'f().postMessage.call(w, top);\nx.postMessage.apply(w, [1], g());\nReflect.apply(a.b.postMessage, w, [1]);\nReflect.apply(x.postMessage, w, [1], g());\nx.postMessage.call(w, 1);',
 	);
 	ok(
 		'the method expression of postMessage.call, .apply and Reflect.apply is evaluated',
-		posts.includes(
-			"$s$j.post((f().postMessage, w), [$s$j.get(top, 'top')], false, 'f().postMessage.call(0, 0)');",
+		/\$s\$j\.call3\(f\(\), 'postMessage', 'call', \[\s*w,\s*\$s\$j\.get\(top, 'top'\)\s*\]/.test(
+			posts,
 		) &&
-			posts.includes('x.postMessage.apply(w, [1], g());') &&
-			posts.includes('$s$j.post((a.b.postMessage, w), [1], false,') &&
-			posts.includes('Reflect.apply(x.postMessage, w, [1], g());') &&
-			posts.includes("$s$j.post(w, [1], false, 'x.postMessage.call(0, 0)');") &&
+			posts.includes(
+				"$s$j.method($s$j.get2(x, 'postMessage', '(x.postMessage)'), false, false, 'x.postMessage.apply(0, 0, 0)')?.('apply')?.(w, [1], g());",
+			) &&
+			posts.includes(
+				"Reflect.apply($s$j.get2(a.b, 'postMessage', '(a.b.postMessage)'), w, [1]);",
+			) &&
+			posts.includes(
+				"Reflect.apply($s$j.get2(x, 'postMessage', '(x.postMessage)'), w, [1], g());",
+			) &&
+			/\$s\$j\.call3\(x, 'postMessage', 'call', \[\s*w,\s*1\s*\]/.test(posts) &&
 			parses(posts),
 		posts,
 	);

@@ -226,28 +226,6 @@ export default class ErrorMessages {
 			throw this.error(messageOf(applied));
 		throw this.error(this.#template(CALL, VALUE, callee) ?? messageOf(applied));
 	}
-	/**
-	 * A rewritten `x.postMessage(...)` (`.call`, `.apply`, `Reflect.apply`
-	 * forms too) whose postMessage is no function: what the page's call does
-	 * with it, or throws
-	 */
-	post(method: unknown, that: unknown, args: unknown[], partial: unknown) {
-		const callee = this.print(partial, 'callee');
-		const via = /\.(call|apply)$/.exec(callee ?? '')?.[1];
-		if (callee === null || callee === 'Reflect.apply' || !via)
-			return this.call(method, that, args, partial);
-		if (method === null || method === undefined) throw this.read(method, via);
-		const fn = (method as any)[via];
-		if (typeof fn === 'function')
-			return Reflect.apply(
-				fn,
-				method,
-				via === 'call' ? [that, ...args] : [that, args],
-			);
-		throw this.error(
-			this.#template(CALL, VALUE, callee) ?? `${callee} is not a function`,
-		);
-	}
 	/** `new` of `partial` constructs `target`, which may be no constructor */
 	construct(target: unknown, args: unknown[], partial: unknown): unknown {
 		try {

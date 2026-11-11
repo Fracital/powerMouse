@@ -10,8 +10,8 @@
 //! The JavaScript rewriter decides from a node and its parent; here the
 //! parent decides for its operands (a call looks at its callee, an
 //! assignment at its target), which is the same table read the other way.
-//! What it drops from the output (a post's receiver) is walked for the
-//! function marks alone, counted and not written.
+//! What it leaves unvisited (`result()` not given) is walked for the
+//! function marks alone, as its tree keeps those nodes as they were.
 
 use edits::{Edit, Piece, Span as EditSpan, apply_range};
 use oxc::ast::AstKind;
@@ -25,9 +25,9 @@ use crate::pattern;
 use oxc::allocator::Allocator;
 use crate::rewrite::{Decline, Options, ROUTE_IMPORT, Route, js_whitespace};
 use crate::shape::{
-	Mem, Post, Shapes, bindings_named, bound_names, in_optional_chain, index_write, inner_span,
-	is_literal, is_pattern_call, iterates, post_message, pure, pure_arguments, spec_text, unparen,
-	Spec,
+	Mem, Shapes, Spec, bindings_named, bound_names, in_optional_chain, index_write, inner_span,
+	is_literal, is_pattern_call, iterates, post_message, pure, pure_arguments, refers_to,
+	spec_text, unparen,
 };
 use crate::source::{Utf16Offsets, function_mark, quote, source_key};
 
@@ -88,11 +88,9 @@ pub struct Walker<'a, 'c, 'h> {
 	/// is visited next is an expression by its type's name (it puts a
 	/// partial in parentheses then), innermost last
 	parents: Vec<bool>,
-	/// false inside what the JavaScript rewriter drops (`drop_expression`):
-	/// nothing there is rewritten
+	/// false inside what the JavaScript rewriter does not visit: only the
+	/// function marks are written there
 	rewriting: bool,
-	/// inside what the JavaScript rewriter drops: marks are counted, not written
-	dropped: bool,
 	/// functions, arrows and static blocks around: a `var` in one is local
 	functions: u32,
 	cx: Cx,
@@ -154,7 +152,6 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			edits: Vec::new(),
 			parents: vec![false],
 			rewriting: true,
-			dropped: false,
 			functions: 0,
 			cx: Cx::default(),
 			chain_out: false,
@@ -360,15 +357,6 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		self.chain_out = false;
 	}
 
-	/// what it drops from the output: nothing written, its marks counted
-	fn drop_expression(&mut self, e: &Expression<'a>) {
-		let rewriting = std::mem::replace(&mut self.rewriting, false);
-		let dropped = std::mem::replace(&mut self.dropped, true);
-		self.visit_expression(e);
-		self.rewriting = rewriting;
-		self.dropped = dropped;
-	}
-
 	/// the part `span` as the walk rewrites it, as text
 	fn render(&mut self, span: Span, walk: impl FnOnce(&mut Self)) -> String {
 		let outer = std::mem::take(&mut self.edits);
@@ -500,9 +488,6 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			return;
 		};
 		self.marks += 1;
-		if self.dropped {
-			return;
-		}
 		let start = self.shifted(self.offsets.convert(span.start));
 		let end = self.shifted(self.offsets.convert(span.end));
 		let mark = function_mark(self.key(), start, end.max(start));
@@ -832,8 +817,8 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			self.chain_out = false;
 			return;
 		}
-		if let Some(post) = post_message(c) {
-			return self.post(c, post);
+		if let Some(m) = post_message(c) {
+			return self.post(c, m);
 		}
 		let callee = unparen(&c.callee);
 		if matches!(callee, Expression::Identifier(id) if id.name == "eval") && !c.arguments.is_empty() {
@@ -950,82 +935,23 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	}
 
 	/// a message posted to a window goes out from the caller's realm
-	fn post(&mut self, c: &CallExpression<'a>, post: Post<'_, 'a>) {
+	fn post(&mut self, c: &CallExpression<'a>, m: Mem<'_, 'a>) {
 		let partial = self.call_text(&c.callee, &c.arguments, c.optional, false);
 		let args = &c.arguments;
-		let mut seq = self.seq(c.span, "post");
-		match post {
-			Post::Direct(m) => {
-				let optional = c.optional || m.optional() || in_optional_chain(m.object());
-				if optional && !pure_arguments(args) {
-					// w?.postMessage(f()): nothing is posted, nor f called,
-					// when w is nullish
-					seq = self.seq(c.span, "poster");
-					self.seq_operand(&mut seq, m.object());
-					seq.pending.push_str(&format!(", {partial}"));
-					self.seq_arguments(&mut seq, args, ")?.(", None);
-					return self.seq_end(seq);
-				}
-				self.seq_operand(&mut seq, m.object());
-				self.seq_arguments(&mut seq, args, ", [", Some("], "));
-				seq.pending.push_str(&format!("{optional}, {partial})"));
-			}
-			Post::Call | Post::Apply | Post::Reflect => {
-				// the method is the target's own, read by the access API, but
-				// the expression it was written as is still the page's to
-				// evaluate, first (`f().postMessage.call(w, m)` calls f, a
-				// member of null throws): `post((f().postMessage, w), ...)`
-				let method = match post {
-					Post::Reflect => args[0].to_expression(),
-					_ => match unparen(&c.callee) {
-						Expression::StaticMemberExpression(named) => &named.object,
-						_ => return self.decline(Decline::Shape),
-					},
-				};
-				let kept = Mem::of(unparen(method)).is_some_and(|m| {
-					!matches!(
-						unparen(m.object()),
-						Expression::Identifier(_) | Expression::ThisExpression(_)
-					)
-				});
-				let (target, rest) = match post {
-					Post::Reflect => (args.get(1), args.get(2..).unwrap_or(&[])),
-					_ => (args.first(), args.get(1..).unwrap_or(&[])),
-				};
-				if kept {
-					seq.pending.push('(');
-					self.seq_operand(&mut seq, method);
-					seq.pending.push_str(", ");
-				} else {
-					// the receiver the method was read from is not in the output
-					self.drop_expression(&c.callee);
-					if matches!(post, Post::Reflect) {
-						self.drop_expression(method);
-					}
-				}
-				match target {
-					Some(target) => self.seq_operand(&mut seq, target.to_expression()),
-					None => seq.pending.push_str("undefined"),
-				}
-				if kept {
-					seq.pending.push(')');
-				}
-				if matches!(post, Post::Call) {
-					self.seq_arguments(&mut seq, rest, ", [", Some("], "));
-				} else {
-					// (an `.apply` takes at most its arguments: `post_message`)
-					match rest.first() {
-						Some(array) => {
-							seq.pending.push_str(", ");
-							self.seq_operand(&mut seq, array.to_expression());
-							seq.pending.push_str(", ");
-						}
-						None => seq.pending.push_str(", [], "),
-					}
-				}
-				seq.pending.push_str(&format!("false, {partial})"));
-			}
+		let optional = c.optional || m.optional() || in_optional_chain(m.object());
+		if optional && !pure_arguments(args) {
+			// w?.postMessage(f()): nothing is posted, nor f called, when w
+			// is nullish
+			let mut seq = self.seq(c.span, "poster");
+			self.seq_operand(&mut seq, m.object());
+			seq.pending.push_str(&format!(", {partial}"));
+			self.seq_arguments(&mut seq, args, ")?.(", None);
+			return self.seq_end(seq);
 		}
+		let mut seq = self.seq(c.span, "post");
+		self.seq_operand(&mut seq, m.object());
+		self.seq_arguments(&mut seq, args, ", [", Some("], "));
+		seq.pending.push_str(&format!("{optional}, {partial})"));
 		self.seq_end(seq);
 	}
 
@@ -2233,6 +2159,38 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		}
 	}
 
+	fn visit_with_statement(&mut self, it: &WithStatement<'a>) {
+		// `with (parent) { postMessage(m) }`: the name resolves on the
+		// window in the head, and the call posts to it from this realm. No
+		// member is written that a read could be routed through, so a scope
+		// goes inside the head's that answers that one name (access API
+		// `scope`: nothing when the head is no window of another realm).
+		// Only for a body that says the name. The two come from one call
+		// made before the head is entered, where the helper's name is still
+		// this realm's.
+		self.early.with(it);
+		if !self.rewriting || !refers_to(&it.body, "postMessage") {
+			return walk::walk_with_statement(self, it);
+		}
+		let access = self.access();
+		let scopes = format!("{access}w");
+		let object = it.object.span();
+		self.wrap(it.span, String::new(), "}".into());
+		self.replace(it.span.start, object.start, format!("{{const {scopes} = {access}.scope("));
+		if matches!(it.object, Expression::SequenceExpression(_)) {
+			// `with (a, b)`: one argument of the helper, not two
+			self.wrap(object, "(".into(), ")".into());
+		}
+		self.operand(&it.object);
+		self.replace(
+			object.end,
+			it.body.span().start,
+			format!("); with ({scopes}[0]) with ({scopes}[1]) "),
+		);
+		self.cx = Cx::default();
+		self.under(false, |walker| walker.visit_statement(&it.body));
+	}
+
 	fn visit_debugger_statement(&mut self, it: &DebuggerStatement) {
 		// a proxied site's anti-debugging trap, not the user's breakpoint
 		if self.rewriting {
@@ -2363,11 +2321,6 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		self.early.loop_enter(&it.body);
 		walk::walk_do_while_statement(self, it);
 		self.early.loop_leave();
-	}
-
-	fn visit_with_statement(&mut self, it: &WithStatement<'a>) {
-		self.early.with(it);
-		walk::walk_with_statement(self, it);
 	}
 
 	fn visit_switch_statement(&mut self, it: &SwitchStatement<'a>) {

@@ -4995,6 +4995,18 @@ token '%'`. The body is decoded before rewriting and re-encoded after.
   browser's own keywords cannot be used); the window the page means now
   navigates, from its own realm, with the URL routed as its document.
   (adversarial-scripts suite.)
+- `window.postMessage` acts on its receiver, and a message names the
+  window whose code posted it as its `event.source`, as natively.
+  `postMessage.call(parent, m)` posted to the calling window, a timer of
+  another window calling it posted to the wrong one, a receiver that is no
+  window posted where the browser throws `Illegal invocation`, and another
+  window's `postMessage` read first and called later
+  (`parent.postMessage.bind(parent)`, a detached, destructured or computed
+  read, `with (parent)`) named that window as the source. The read hands
+  the page a function of its own realm for the window's, which posts from
+  that realm however it is called. And `o.postMessage.call(x, m)` on an
+  object of the page's called `x.postMessage` instead (it threw for any `x`
+  with no such method). (adversarial-messages suite.)
 
 ### Origin isolation
 

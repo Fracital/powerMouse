@@ -502,6 +502,46 @@ pub(crate) mod tests {
 	}
 
 	#[test]
+	fn post_message_reads() {
+		// a call is `post`; every other way to the function is a read of it
+		assert_eq!(
+			plain("w.postMessage.call(v, m)"),
+			"$s$j.call3(w, \"postMessage\", \"call\", [v, m], \"w.postMessage.call(0, 0)\")"
+		);
+		assert!(plain("x = w.postMessage").starts_with("x = $s$j.get2(w, \"postMessage\", "));
+		assert!(plain("f(w['postMessage'])").starts_with("f($s$j.get2(w, 'postMessage', "));
+		for kept in [
+			"w.postMessage = f",
+			"w.postMessage++",
+			"new w.postMessage()",
+			"delete w.postMessage",
+			"w.postMessage`t`",
+			"class A extends B { m() { return super.postMessage } }",
+			"class A extends B { m() { super.postMessage.call(this, m) } }",
+		] {
+			assert_eq!(plain(kept), kept);
+		}
+		assert_eq!(
+			plain("var { postMessage: pm } = parent"),
+			"var { postMessage: pm } = $s$j.pattern(parent, {\"postMessage\":true}, \"{ postMessage: pm } = parent\")"
+		);
+	}
+
+	#[test]
+	fn with_scopes() {
+		assert_eq!(
+			plain("with (o) postMessage(m)"),
+			"{const $s$jw = $s$j.scope(o); with ($s$jw[0]) with ($s$jw[1]) postMessage(m)}"
+		);
+		assert_eq!(
+			plain("with (a, b) { postMessage }"),
+			"{const $s$jw = $s$j.scope((a, b)); with ($s$jw[0]) with ($s$jw[1]) { postMessage }}"
+		);
+		assert_eq!(plain("with (o) o.postMessage = 1"), "with (o) o.postMessage = 1");
+		assert_eq!(plain("with (o) ({ postMessage: 1 })"), "with (o) ({ postMessage: 1 })");
+	}
+
+	#[test]
 	fn index_writes() {
 		assert_eq!(
 			plain("s[0] = o"),
@@ -596,12 +636,16 @@ pub(crate) mod tests {
 			plain("o[k].m(f()).v = 1"),
 			"($s$j.method($s$j.get2(o, k, \"(o[k])\"), false, false, \"o[k].m(0)\")?.(\"m\")?.(f())).v = 1"
 		);
-		// the method a post was read from is evaluated
+		// a post's method read for `.call` or `.apply` is a read of it, made
+		// where the page wrote it
 		assert_eq!(
 			plain("f().postMessage.call(w, m)"),
-			"$s$j.post((f().postMessage, w), [m], false, \"f().postMessage.call(0, 0)\")"
+			"$s$j.call3(f(), \"postMessage\", \"call\", [w, m], \"f().postMessage.call(0, 0)\")"
 		);
-		assert_eq!(plain("x.postMessage.apply(w, [1], g())"), "x.postMessage.apply(w, [1], g())");
+		assert_eq!(
+			plain("x.postMessage.apply(w, [1], g())"),
+			"$s$j.method($s$j.get2(x, \"postMessage\", \"(x.postMessage)\"), false, false, \"x.postMessage.apply(0, 0, 0)\")?.(\"apply\")?.(w, [1], g())"
+		);
 		// super's members
 		assert_eq!(plain("o = { m() { super.top } }"), "o = { m() { $s$j.get(super.top, \"top\") } }");
 		assert_eq!(

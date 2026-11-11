@@ -7,6 +7,7 @@
 
 use oxc::syntax::number::ToJsString;
 use oxc::ast::ast::*;
+use oxc::ast_visit::Visit;
 use oxc::span::{GetSpan, Span};
 
 use crate::config::Config;
@@ -207,50 +208,42 @@ pub fn in_optional_chain(mut e: &Expression) -> bool {
 	}
 }
 
-/// How a call posts a message (`postMessageCall`)
-pub enum Post<'b, 'a> {
-	/// `x.postMessage(...)`
-	Direct(Mem<'b, 'a>),
-	/// `x.postMessage.call(w, ...)`
-	Call,
-	/// `x.postMessage.apply(w, args)`
-	Apply,
-	/// `Reflect.apply(x.postMessage, w, args)`
-	Reflect,
+/// `x.postMessage`, `x["postMessage"]` (not on `super`)
+fn is_post_message(m: Mem) -> bool {
+	!m.on_super() && m.literal_key() == Some("postMessage")
 }
 
-fn is_post_message(e: &Expression) -> bool {
-	Mem::of(e).is_some_and(|m| !m.on_super() && m.literal_key() == Some("postMessage"))
+/// A call that posts a message, `x.postMessage(...)` (`postMessageCall`):
+/// its callee. Every other way to a postMessage is a read of it
+/// (`x.postMessage.call(w, m)`, `.bind(x)`), which `routes_member` routes.
+pub fn post_message<'b, 'a>(call: &'b CallExpression<'a>) -> Option<Mem<'b, 'a>> {
+	Mem::of(unparen(&call.callee)).filter(|m| is_post_message(*m))
 }
 
-pub fn post_message<'b, 'a>(call: &'b CallExpression<'a>) -> Option<Post<'b, 'a>> {
-	let callee = Mem::of(unparen(&call.callee))?;
-	if is_post_message(unparen(&call.callee)) {
-		return Some(Post::Direct(callee));
+/// Whether code under a statement may read or call the bare name
+/// (`refersTo`): an identifier of any kind but one that only names a
+/// property (`o.name`, `{ name: 1 }`, a method's or a field's key)
+pub fn refers_to(statement: &Statement, name: &str) -> bool {
+	let mut finder = RefersTo { name, found: false };
+	finder.visit_statement(statement);
+	finder.found
+}
+
+struct RefersTo<'n> {
+	name: &'n str,
+	found: bool,
+}
+
+impl<'a> Visit<'a> for RefersTo<'_> {
+	fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
+		self.found |= it.name == self.name;
 	}
-	let Mem::Static(named) = callee else {
-		return None;
-	};
-	let spread = call.arguments.iter().any(|a| matches!(a, Argument::SpreadElement(_)));
-	let name = named.property.name.as_str();
-	// (`.apply(w, args, more)`: what follows the arguments is evaluated and
-	// ignored, so the call is left as written)
-	if (name == "call" || (name == "apply" && call.arguments.len() <= 2))
-		&& is_post_message(unparen(&named.object))
-		&& !spread
-	{
-		return Some(if name == "call" { Post::Call } else { Post::Apply });
+	fn visit_binding_identifier(&mut self, it: &BindingIdentifier<'a>) {
+		self.found |= it.name == self.name;
 	}
-	if name == "apply"
-		&& matches!(unparen(&named.object), Expression::Identifier(id) if id.name == "Reflect")
-		&& call.arguments.len() >= 2
-		&& call.arguments.len() <= 3
-		&& !spread
-		&& is_post_message(unparen(call.arguments[0].to_expression()))
-	{
-		return Some(Post::Reflect);
+	fn visit_label_identifier(&mut self, it: &LabelIdentifier<'a>) {
+		self.found |= it.name == self.name;
 	}
-	None
 }
 
 /// A key of a pattern the access API resolves, and what is under it
@@ -350,12 +343,25 @@ impl Shapes<'_> {
 		self.config.routes(name)
 	}
 
+	/// a key an object pattern reads through the access API: an
+	/// unforgeable's name, or `postMessage` (`{ postMessage } = parent`
+	/// reads another window's, see `routes_member`)
+	fn pattern_key(&self, name: &str) -> bool {
+		self.routed(name) || name == "postMessage"
+	}
+
 	/// Whether a member read goes through the access API: a computed key
-	/// that is no literal, an unforgeable's name, an index (read anywhere
-	/// but as a callee: `callee`)
+	/// that is no literal, an unforgeable's name, an index or `postMessage`
+	/// (the two read anywhere but as a callee: `callee`). Another window's
+	/// postMessage read (`x.postMessage.bind(x)`, `var pm = x.postMessage`)
+	/// is a function of that window's realm, which would name the realm of
+	/// whoever calls it as the source: the read hands the page its own.
 	pub fn routes_member(&self, m: Mem, callee: bool) -> bool {
 		if m.on_super() {
 			return false;
+		}
+		if !callee && is_post_message(m) {
+			return true;
 		}
 		match m {
 			Mem::Static(m) => self.routed(m.property.name.as_str()),
@@ -606,7 +612,7 @@ impl Fields {
 			}
 			None => {
 				self.positions.push(Item::Zero);
-				if shapes.routed(&name) {
+				if shapes.pattern_key(&name) {
 					set_spec(&mut self.entries, name, Spec::True);
 					self.any = true;
 				}
