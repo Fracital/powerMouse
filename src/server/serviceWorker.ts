@@ -604,9 +604,50 @@ async function orphanError(
 	);
 }
 
+/** the address (`directory`) a page's message names, if it names one */
+function addressNamed(data: Record<string, unknown>): string | null {
+	for (const value of Object.values(data)) {
+		const directory =
+			typeof value === 'object' && value !== null
+				? (value as { directory?: unknown }).directory
+				: undefined;
+		if (typeof directory === 'string') return directory;
+	}
+	return null;
+}
+
 self.addEventListener('message', (event: ExtendableMessageEvent) => {
 	const { data } = event;
 	if (typeof data !== 'object' || data === null) return;
+	// In the revive window a page's message for an address whose controller
+	// has not registered yet waits for it, as a request does: a worker the
+	// browser stopped and a page's message started again knows no controller,
+	// and what it dropped then never came (the transport port of the first
+	// WebSocket a page opens after sitting idle, an inline document, a
+	// blob: URL). A controller's own messages are for now
+	const address =
+		CONTROLLER_INIT in data ||
+		CONTROLLER_CLOSE in data ||
+		CONTROLLER_CLIENT in data
+			? null
+			: addressNamed(data as Record<string, unknown>);
+	if (
+		address !== null &&
+		!controllers.has(address) &&
+		Date.now() - STARTED_AT < REVIVE_HOLD_MS
+	) {
+		event.waitUntil(
+			registered(() => controllers.has(address)).then(() =>
+				handleMessage(event),
+			),
+		);
+		return;
+	}
+	handleMessage(event);
+});
+
+function handleMessage(event: ExtendableMessageEvent) {
+	const data = event.data as Record<string, any>;
 
 	const sender = event.source instanceof Client ? event.source.id : undefined;
 
@@ -989,7 +1030,7 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 		const [port] = event.ports;
 		if (port) controllers.get(directory)?.rpc.call('pageModules', port, [port]);
 	}
-});
+}
 
 /**
  * How long a routed request may take before the worker answers 504 instead.
@@ -1149,8 +1190,14 @@ async function heldForRevive(
 	event: FetchEvent,
 	pathname: string,
 ): Promise<Response> {
+	await registered(() => !!controllerFor(pathname));
+	return answerFor(event, pathname) ?? fetch(event.request);
+}
+
+/** resolves once `there()` holds (looked at with every registration), or when the revive window ends */
+async function registered(there: () => boolean): Promise<void> {
 	const deadline = STARTED_AT + REVIVE_HOLD_MS;
-	while (!controllerFor(pathname) && Date.now() < deadline)
+	while (!there() && Date.now() < deadline)
 		await new Promise<void>((resolve) => {
 			const wake = () => {
 				registrationWaiters.delete(wake);
@@ -1160,7 +1207,6 @@ async function heldForRevive(
 			const timer = setTimeout(wake, deadline - Date.now());
 			registrationWaiters.add(wake);
 		});
-	return answerFor(event, pathname) ?? fetch(event.request);
 }
 
 self.addEventListener('fetch', (event: FetchEvent) => {

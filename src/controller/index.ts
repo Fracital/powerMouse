@@ -57,6 +57,7 @@ import {
 	RequestInfo,
 	SW_PORT,
 	SW_REVIVE,
+	SW_WAKE,
 	SWbound,
 	TRANSPORT_INIT,
 	WORKER_MODULES,
@@ -698,11 +699,13 @@ export class StompController extends EventTarget {
 	/** the pages' emulated service workers this controller hosts, by the worker's id for them */
 	#serviceWorkers = new Map<string, Worker>();
 	#stopServing?: () => void;
+	/** settles when the service worker answered the handshake under way; a new one for every handshake after the first */
 	#ready: Promise<void>;
 	/** how the host page was loaded, until the worker has been told (hostReload.ts) */
 	#hostReload: Promise<HostReload | undefined> | null = null;
 	#readyResolve!: () => void;
 	#readyReject!: (error: Error) => void;
+	#readySettled = false;
 	private lastHandshake = 0;
 	/** a build mismatch is being healed: the next ready answer must agree */
 	#healing = false;
@@ -1106,6 +1109,7 @@ export class StompController extends EventTarget {
 			this.stale = { controller: BUILD, worker: build };
 			this.config = { ...this.config, build };
 			this.isReady = true;
+			this.#readySettled = true;
 			this.#readyResolve();
 			this.dispatchEvent(new CustomEvent('stale', { detail: this.stale }));
 		};
@@ -1339,6 +1343,17 @@ export class StompController extends EventTarget {
 		await this.wait();
 		return this.#rpc!.call('suffixList', undefined);
 	}
+	/** what waits for the worker from here on waits for the next handshake's answer */
+	#expectHandshake() {
+		this.isReady = false;
+		if (!this.#readySettled) return;
+		this.#readySettled = false;
+		this.#ready = new Promise((resolve, reject) => {
+			this.#readyResolve = resolve;
+			this.#readyReject = reject;
+		});
+		this.#ready.catch(() => {});
+	}
 	/** (re)register with the service worker over a fresh MessageChannel */
 	#handshakeNow() {
 		if (this.#port) {
@@ -1347,7 +1362,7 @@ export class StompController extends EventTarget {
 			this.#port.close();
 		}
 
-		this.isReady = false;
+		this.#expectHandshake();
 		this.lastHandshake = Date.now();
 		// a new handshake is a new (or restarted) service worker: it holds no
 		// port to the emulated workers this controller hosts, and starts them
@@ -1361,14 +1376,22 @@ export class StompController extends EventTarget {
 		// the worker dropped this controller (another took its id) or went
 		// away: a call on the dead port would wait forever, so every pending
 		// and later one fails at once
+		// (a worker that went away comes back knowing no controller and asks
+		// for a handshake: calls wait for that one, see #call; a controller
+		// another took the id of has nothing to wait for)
+		let superseded = false;
 		port.addEventListener('close', () => {
-			if (this.#port === port) this.#rpc?.abort('Service worker port closed');
+			if (this.#port !== port) return;
+			this.#rpc?.abort('Service worker port closed');
+			if (!superseded) this.#expectHandshake();
 		});
 
 		this.#rpc = new RpcHelper<Controllerbound, SWbound>(
 			{
 				replaced: async () => {
-					if (this.#port === port) this.#rpc?.abort('Controller replaced');
+					if (this.#port !== port) return;
+					superseded = true;
+					this.#rpc?.abort('Controller replaced');
 				},
 				mediaVerdict: async (constraints) => [
 					await mediaVerdict(constraints),
@@ -1419,6 +1442,7 @@ export class StompController extends EventTarget {
 						);
 					}
 					this.isReady = true;
+					this.#readySettled = true;
 					this.#readyResolve();
 				},
 				startServiceWorker: async ({ id, url, type }) => {
@@ -1665,6 +1689,8 @@ export class StompController extends EventTarget {
 	};
 	/** resolves once the service worker has created a server for this controller */
 	async wait(): Promise<void> {
+		// a worker the browser stopped answers once something starts it
+		if (this.lastHandshake && !this.isReady) this.#wake();
 		await this.#ready;
 	}
 	/** a hook that threw in a realm, or a hook URL that failed: callback and `hookerror` event */
@@ -1700,26 +1726,61 @@ export class StompController extends EventTarget {
 			this.transport = transport;
 		}
 	}
+	/**
+	 * A call to the service worker that a restart of it does not lose. The
+	 * browser stops a worker nothing has reached for half a minute, and one
+	 * that starts again knows no controller: it asks for a handshake, which
+	 * is a new channel, and a call still waiting on the old one fails
+	 * ("Service worker replaced"). It is made again on the channel that took
+	 * its place, so a host's navigation after a page sat idle is carried
+	 * through. A stopped worker hears nothing on a port, so a message goes
+	 * with every call (SW_WAKE): that starts it.
+	 */
+	#wake() {
+		try {
+			this.serviceworker.postMessage({ [SW_WAKE]: true });
+		} catch (error) {
+			// a worker that is gone for good: the registration's next one
+			// asks for the handshake itself
+		}
+	}
+	async #call<Method extends keyof SWbound>(
+		method: Method,
+		args: SWbound[Method][0],
+	): Promise<SWbound[Method][1]> {
+		for (let attempt = 0; ; attempt++) {
+			this.#wake();
+			await this.#ready;
+			const rpc = this.#rpc!;
+			try {
+				return await rpc.call(method, args);
+			} catch (error) {
+				// the channel is still the one the call went out on: the worker
+				// itself refused
+				if (attempt >= 3 || (rpc === this.#rpc && this.isReady)) throw error;
+			}
+		}
+	}
 	/** replace the request rules the service worker applies (see ControllerInit.rules) */
 	async setRules(rules: RequestRule[]): Promise<void> {
 		this.#rules = rules;
 		await this.#ready;
-		await this.#rpc!.call('rules', rules);
+		await this.#call('rules', rules);
 	}
 	/** drop every entry of the service worker's HTTP cache */
 	async clearCache(): Promise<void> {
 		await this.#ready;
-		await this.#rpc!.call('clearCache', undefined);
+		await this.#call('clearCache', undefined);
 	}
 	/** @internal */
 	async cookieCommand(command: CookieCommand): Promise<CookieResult> {
 		await this.#ready;
-		return this.#rpc!.call('cookies', command);
+		return this.#call('cookies', command);
 	}
 	/** @internal which of these service worker clients no longer exist (ClientFrames; the controller frame asks for its host) */
 	async goneClients(clients: string[]): Promise<string[]> {
 		await this.#ready;
-		return this.#rpc!.call('goneClients', clients);
+		return this.#call('goneClients', clients);
 	}
 	/**
 	 * The cookie jar, for the host application only (pages never reach this
@@ -1737,7 +1798,7 @@ export class StompController extends EventTarget {
 	/** the proxied URL a frame should navigate to in order to load `url` */
 	async route(url: string): Promise<string> {
 		await this.#ready;
-		return new URL(await this.#rpc!.call('route', url), this.directory).href;
+		return new URL(await this.#call('route', url), this.directory).href;
 	}
 	/**
 	 * The real URL a routed one stands for (the inverse of `route()`, with
@@ -1747,7 +1808,7 @@ export class StompController extends EventTarget {
 	 */
 	async unroute(url: string): Promise<string | null> {
 		await this.#ready;
-		return this.#rpc!.call('unroute', new URL(url, this.directory).href);
+		return this.#call('unroute', new URL(url, this.directory).href);
 	}
 	createFrame(element: HTMLIFrameElement = document.createElement('iframe')) {
 		const frame = new Frame(this, element, this.#sandbox);

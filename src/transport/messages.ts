@@ -22,6 +22,12 @@ export const INIT_REMOTE_TRANSPORT = '$stomp$initRemoteTransport';
 /** SW -> every client: SW (re)started, controllers must re-send CONTROLLER_INIT */
 export const SW_REVIVE = '$stomp$swRevive';
 /**
+ * controller -> SW, with every call it makes over its port: nothing to do.
+ * A worker the browser stopped hears nothing on a port; this message starts
+ * it, and it then asks for the handshake the call is made again after
+ */
+export const SW_WAKE = '$stomp$swWake';
+/**
  * @internal page -> SW: re-point the client the worker checks a controller
  * against before serving a document at its address (the suites stand in
  * for a host tab in the back/forward cache with it; nothing else sends it)

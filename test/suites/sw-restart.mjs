@@ -7,7 +7,10 @@
 // through to the host's server. Within two seconds of a handshake the
 // revive was taken for the one from the worker that handshake started, so
 // the controller never shook hands again and every routed request fell
-// through to the host until a later restart. Stopped over CDP, both modes.
+// through to the host until a later restart. The host's own first act
+// after a restart is carried through as well (a navigation, a call to a
+// worker nothing else starts), and so is a page's first WebSocket. Stopped
+// over CDP, both modes.
 import {
 	done,
 	FIXTURE,
@@ -122,6 +125,103 @@ for (const [mode, base] of [
 		`${mode}: a reload right after a restart lands on the page`,
 		title === 'HIST 1',
 		JSON.stringify(title),
+	);
+	// The host's own calls. A page that sat idle for half a minute has no
+	// worker (Chrome stops one nothing reached for 30 s), so the first thing
+	// its user does is the first thing after a stop: a navigation from the
+	// address bar is the controller's call to the worker (route), which was
+	// still waiting on the old channel when the restarted worker's
+	// handshake replaced it, and was rejected ("Service worker replaced").
+	// It is carried over to the new channel; and a call alone, with nothing
+	// else to start the worker, starts it
+	const titled = async (wanted) => {
+		let found = null;
+		for (let i = 0; i < 40 && found !== wanted; i++) {
+			await sleep(250);
+			found = await frameOf(page)
+				?.evaluate(() => document.title)
+				.catch(() => null);
+		}
+		return found;
+	};
+	const timed = (call, argument) =>
+		Promise.race([
+			page.evaluate(call, argument),
+			sleep(30000).then(() => ['no answer in 30 s', 30000]),
+		]);
+	const go = (url) =>
+		timed((url) => {
+			const started = performance.now();
+			const took = () => Math.round(performance.now() - started);
+			return window.controller.frames
+				.at(-1)
+				.go(url)
+				.then(
+					() => ['resolved', took()],
+					(error) => [`rejected: ${error.message}`, took()],
+				);
+		}, url);
+	await sleep(2500);
+	await stop();
+	const went = await go(`${FIXTURE}pages/hist-2.html`);
+	const landed = await titled('HIST 2');
+	ok(
+		`${mode}: the host's navigation right after a restart is carried through`,
+		went[0] === 'resolved' && went[1] < 10000 && landed === 'HIST 2',
+		JSON.stringify([...went, landed]),
+	);
+	// and in the window in which a revive is checked before it is believed
+	await stop();
+	const back = await go(`${FIXTURE}pages/hist-1.html`);
+	const returned = await titled('HIST 1');
+	ok(
+		`${mode}: and so is one right after that restart's handshake`,
+		back[0] === 'resolved' && back[1] < 10000 && returned === 'HIST 1',
+		JSON.stringify([...back, returned]),
+	);
+	await sleep(2500);
+	await stop();
+	const routed = await timed(() => {
+		const started = performance.now();
+		const took = () => Math.round(performance.now() - started);
+		return window.controller.route('https://example.com/').then(
+			(url) => [/\/stomp\/[\w-]+\/html\//.test(url), took()],
+			(error) => [`rejected: ${error.message}`, took()],
+		);
+	});
+	ok(
+		`${mode}: a call to a stopped worker starts it and is answered`,
+		routed[0] === true && routed[1] < 10000,
+		JSON.stringify(routed),
+	);
+	// The page's own channel: its first WebSocket asks the worker for a
+	// port to the transport, and the worker that message started knew no
+	// controller to pass it to and dropped it; the socket never opened and
+	// never failed. The message waits for the controller like a request
+	await sleep(2500);
+	await stop();
+	const socket = await Promise.race([
+		frameOf(page)
+			.evaluate(
+				(url) =>
+					new Promise((resolve) => {
+						const started = performance.now();
+						const took = () => Math.round(performance.now() - started);
+						const socket = new WebSocket(url);
+						socket.onmessage = () => resolve(['message', took()]);
+						socket.onerror = () => resolve(['error', took()]);
+						socket.onclose = (event) =>
+							resolve([`closed ${event.code}`, took()]);
+					}),
+				`${FIXTURE.replace(/^http/, 'ws')}ws-echo`,
+			)
+			.catch((error) => [String(error), 0]),
+		sleep(20000).then(() => ['nothing in 20 s', 20000]),
+	]);
+	ok(
+		`${mode}: the first WebSocket a page opens right after a restart opens and hears its server`,
+		socket[0] === 'message' && socket[1] < 10000,
+		JSON.stringify(socket),
 	);
 	await cdp.detach();
 	await page.close();

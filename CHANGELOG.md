@@ -3957,6 +3957,32 @@ url`) carries its value and targets that window. An about:blank child of
   Error of the child's realm, which the page's bundle did not take for
   one (`instanceof`), so the message read `Error: boom` and the stack was
   left out. A hook that throws in a worker still tells nobody.
+- The first thing a host or a page does after the service worker was
+  stopped is carried through. Chrome stops a worker nothing has reached
+  for 30 s, so for a page that sat idle that is the user's next click or
+  address-bar navigation; a fetch already was (the worker holds it for its
+  controller), these were not:
+  - a host's navigation (`frame.go`, any call of the controller to the
+    worker: `route`, `unroute`, `setRules`, `clearCache`, `cookies`) was
+    rejected with "Service worker replaced" about 110 ms in: the call was
+    waiting on the old channel when the restarted worker's handshake took
+    its place. A call is made again on the channel that replaced it, waits
+    for a handshake that is under way, and takes a message with it that
+    starts a stopped worker (a port does not), so a call with nothing else
+    to start the worker no longer waits for good. `wait()` resolves for
+    the handshake under way, not for the first one.
+  - the first WebSocket a page opened never opened and never failed: the
+    page asks the worker for its port to the transport, and the worker
+    that message started knew no controller yet and dropped it. A page's
+    message for an address whose controller has not registered waits for
+    it in the revive window, as a request does (an inline document's and
+    a blob: URL's too).
+  - sw-restart has the rows, on both controllers: a navigation is through
+    219 to 260 ms after the stop (about 1.2 s inside the two seconds in
+    which a revive is checked first), a bare `route()` in 113 to 119 ms,
+    the WebSocket's first message in 114 to 118 ms. The synchronous calls
+    (cookies, storage, a synchronous XHR) still freeze the page until
+    their limit after a stop.
 - `history.pushState` and `replaceState` refuse a URL of another origin, or
   one that does not parse, with a SecurityError naming the page's origin and
   URL, like the browser; before this the URL was routed and accepted (every
