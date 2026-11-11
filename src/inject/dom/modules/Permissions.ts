@@ -412,7 +412,14 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		});
 	}
 
-	/** getUserMedia asks for the camera and the microphone it names first */
+	/**
+	 * getUserMedia asks for the camera and the microphone it names first.
+	 * Chrome looks for a device of each kind before it looks at the policy
+	 * or the permission (measured, docs/permissions.md): with no microphone
+	 * the request ends in NotFoundError for a site that may ask, one that was
+	 * denied and a frame its policy refuses alike, nobody is asked and no
+	 * state changes. So the refusals here come after the same look.
+	 */
 	userMedia(
 		request: (
 			names: string[],
@@ -426,6 +433,33 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		const prototype = global.MediaDevices?.prototype;
 		if (!prototype?.getUserMedia) return;
 		const proxyModule = this.client.getModule(ProxyModule)!;
+		const enumerate = prototype.enumerateDevices;
+		const kindOf = Reflect.getOwnPropertyDescriptor(
+			global.MediaDeviceInfo?.prototype ?? {},
+			'kind',
+		)?.get;
+		const KIND: Record<string, string> = {
+			camera: 'videoinput',
+			microphone: 'audioinput',
+		};
+		// whether the browser has no device for one of `names`: its list
+		// names every kind it has, whatever the policy and the permission
+		const missing = async (that: unknown, names: string[]) => {
+			if (!enumerate || !kindOf) return false;
+			try {
+				const kinds = new Set<string>();
+				for (const device of (await Reflect.apply(
+					enumerate,
+					that,
+					[],
+				)) as MediaDeviceInfo[])
+					kinds.add(Reflect.apply(kindOf, device, []) as string);
+				return names.some((name) => !kinds.has(KIND[name]));
+			} catch (error) {
+				// no list: the browser's own call says what is wrong
+				return false;
+			}
+		};
 		Reflect.defineProperty(prototype, 'getUserMedia', {
 			...Reflect.getOwnPropertyDescriptor(prototype, 'getUserMedia'),
 			value: proxyModule.wrapFunction(
@@ -443,6 +477,11 @@ export default class PermissionsModule extends Module<DocumentClient> {
 						new global.DOMException(
 							dismissed ? 'Permission dismissed' : 'Permission denied',
 							'NotAllowedError',
+						);
+					if (await missing(that, names))
+						throw new global.DOMException(
+							'Requested device not found',
+							'NotFoundError',
 						);
 					if (!names.every(allowed)) throw refused();
 					const answer = await request(names);

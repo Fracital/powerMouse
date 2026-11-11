@@ -1,7 +1,7 @@
 # Permissions through the proxy
 
-**Measured 2026-11-10 against Chrome 152, both demo modes** (permissions
-suite).
+**Measured 2026-11-10 against Chrome 152 and 156, both demo modes**
+(permissions suite).
 
 ## The trade-off
 
@@ -50,7 +50,7 @@ the camera, the microphone, the clipboard and the other powerful features
 only when its `allow` names them, and never notifications, as natively;
 there `query()` reads `denied`, `getCurrentPosition` fails with "Geolocation
 has been disabled in this document by permissions policy." and
-`getUserMedia` with NotAllowedError.
+`getUserMedia` with NotAllowedError (when the device exists, see below).
 
 The host's own frame decides what the proxy origin may ask the browser for
 at all. In same-origin mode the proxied frame is same-origin with the host
@@ -59,6 +59,47 @@ origin, which gets nothing without an `allow` attribute: the demo sets one
 on its frames (`FRAME_ALLOW` in demo/public/pm/main.js). Chrome never shows
 a frame of another origin the notification prompt, so in isolation mode a
 site's `Notification.requestPermission()` is dismissed (`default`).
+
+## The device comes first
+
+Chrome answers `getUserMedia` in this order (measured in headless Chrome
+152 and 156, top level, a frame of another site without `allow` and with
+it, for `{ audio }`, `{ video }` and both, with the permission undecided,
+granted and denied): malformed constraints (TypeError), then the devices,
+then the policy, then the permission. It looks for a device of every kind
+the request names, and settles the constraints against them, before it
+looks at anything else, so with no microphone, or no camera, the answer
+is the same whoever asks:
+
+| The site                                      | Every kind asked for has a device      | One has none                               |
+| --------------------------------------------- | -------------------------------------- | ------------------------------------------ |
+| top level or allowed frame, undecided         | the prompt (headless: NotAllowedError) | NotFoundError, no prompt, no state changes |
+| top level or allowed frame, granted           | the stream                             | NotFoundError                              |
+| top level or allowed frame, denied            | NotAllowedError "Permission denied"    | NotFoundError                              |
+| a frame its policy refuses, whatever the rest | NotAllowedError "Permission denied"    | NotFoundError                              |
+
+`{ audio: true, video: true }` with one of the two devices missing is
+NotFoundError as well, and neither permission is asked for. STomp reads
+the browser's device list (`enumerateDevices`, which names every kind the
+browser has whatever the policy and the permission) before its own policy
+and the site's state, and answers "NotFoundError: Requested device not
+found" for a kind that is not there: no host prompt, no state changed.
+Before, a frame its policy refused and a site that was denied were told
+NotAllowedError on a machine without the device (a CI runner has neither).
+
+Not reproduced: Chrome also settles the constraints before the policy, so
+natively a frame its policy refuses, or a site that was denied, still
+reads OverconstrainedError for constraints no device satisfies
+(`{ video: { width: { min: 99999 } } }`, an unknown exact `deviceId`) and
+TypeError for malformed ones. STomp cannot ask the browser that without
+letting it prompt or open the device, and answers NotAllowedError there.
+A site that may ask gets the browser's own answer.
+
+The suite compares every request on the machine's own devices and again in
+a Chrome launched with a microphone and a camera
+(`--use-fake-device-for-media-stream`), with no camera (`=device-count=0`)
+and with no microphone (`NO_AUDIO` in test/lib.mjs: no PulseAudio server
+and an empty ALSA configuration; Chrome has no switch for it).
 
 ## What it covers
 

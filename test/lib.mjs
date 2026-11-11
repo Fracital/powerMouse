@@ -56,6 +56,18 @@ export async function waitForServer(url, tries = 60) {
 }
 
 /**
+ * The environment of a Chrome on Linux that finds no audio device, input or
+ * output, as on a CI runner: no PulseAudio server to reach, and an ALSA
+ * configuration that names no device. (Chrome has a switch for fake devices,
+ * `--use-fake-device-for-media-stream`, with `=device-count=0` for no camera,
+ * and none for no microphone.)
+ */
+export const NO_AUDIO = {
+	PULSE_SERVER: 'unix:/nonexistent/pulse',
+	ALSA_CONFIG_PATH: '/dev/null',
+};
+
+/**
  * Headless Chrome. Every hostname except the loopback ones fails to resolve,
  * so a request that bypasses the proxy fails loudly instead of silently
  * reaching the real site. `*.localhost` stays resolvable too: the WPT suites
@@ -65,11 +77,17 @@ export async function waitForServer(url, tries = 60) {
  * `args`: more Chrome flags (e.g. an autoplay policy for media suites).
  * `scrollbars`: draw scrollbars as a user's Chrome does; Playwright hides them
  * in headless mode (`--hide-scrollbars`), and a bug that needs one never shows.
+ * `env`: environment variables for Chrome on top of this process's (see
+ * NO_AUDIO).
  */
-export async function launch(args = [], { scrollbars = false } = {}) {
+export async function launch(
+	args = [],
+	{ scrollbars = false, env = null } = {},
+) {
 	return chromium.launch({
 		executablePath: CHROME,
 		headless: true,
+		...(env ? { env: { ...process.env, ...env } } : {}),
 		args: [
 			'--no-sandbox',
 			'--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE *.localhost, EXCLUDE 127.0.0.1',

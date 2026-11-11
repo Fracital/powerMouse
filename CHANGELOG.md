@@ -509,6 +509,17 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   every proxied page at once (browserleaks' geolocation page). The demo's
   frames carry an `allow` list and it shows its own prompt.
   docs/permissions.md has the trade-off; permissions suite.
+- `getUserMedia` looks for the device first, as Chrome does: with no
+  microphone or no camera a request ends in "NotFoundError: Requested device
+  not found" for a site that may ask, a site that was denied and a frame its
+  permissions policy refuses alike, and nobody is asked (measured on Chrome
+  152 and 156: the devices come before the policy and the permission).
+  Before, a frame of another site without `allow` and a denied site read
+  NotAllowedError on a machine without the device, and a site whose answer
+  the host had to ask for showed the host's prompt for a device that was not
+  there. The permissions suite asks for the microphone, the camera and both
+  on the machine's devices and in a Chrome with both, with no camera and
+  with no microphone (the CI runner has neither, which is how it showed).
 - Client hints follow Chrome per proxied origin. A top-level page's
   `Accept-CH` is kept for its real origin (not the proxy's, which every
   proxied site shares) and applies at once to its own subresources and to

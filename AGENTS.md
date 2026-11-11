@@ -329,6 +329,18 @@ suite, and they run against the real thing:
    `--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost` so any request
    that bypasses the proxy fails loudly. Suites sharing one server starve
    each other on its wisp and fail spuriously; never point two at one server.
+   `CHROME=<binary> npm test -- <suite>` runs a suite under another Chrome
+   (CI's runner has a newer one than most workstations). The runner also
+   has no microphone, camera or sound card, and Chrome answers differently
+   without a device (`getUserMedia` ends in NotFoundError before the policy
+   or the permission is looked at). With `PULSE_SERVER=unix:/nonexistent/pulse`
+   and `ALSA_CONFIG_PATH=/dev/null` in its environment the Chrome of any
+   suite has no audio device (`NO_AUDIO` in test/lib.mjs, for `launch`'s `env`),
+   and `--use-fake-device-for-media-stream` (`=device-count=0` for no
+   camera) gives one the devices on a machine that has none; hiding a real
+   camera takes a mount namespace (`unshare -Urm` with `/dev/null` bound
+   over each `/dev/video*`). A suite whose answer depends on a device runs
+   under each set itself, as `permissions` does.
    `backwalk` walks real Wikipedia pages and is timing sensitive. It is not in
    CI (needs Chrome and network on the runner).
    The `wpt-cookies`, `wpt-fetch-metadata` and `wpt-referrer-policy` suites

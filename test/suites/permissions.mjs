@@ -16,11 +16,19 @@
 //   request asks the user through the host (the demo's prompt: Allow), site
 //   B is not granted by that and is asked again (Block), and each keeps its
 //   answer across a reload.
+// - Chrome looks for the device before the policy and the permission: with
+//   no microphone or no camera getUserMedia ends in NotFoundError even for
+//   a frame its policy refuses, and through the proxy that frame was told
+//   NotAllowedError (a CI runner has neither device, a workstation both, so
+//   the suite passed on one and failed on the other). The requests are
+//   compared on the machine's own devices and again in a Chrome with a
+//   microphone and a camera, with no camera, and with no microphone.
 import { createServer } from 'node:http';
 import {
 	done,
 	HOST,
 	launch,
+	NO_AUDIO,
 	ok,
 	openDemo,
 	PROXY,
@@ -73,11 +81,18 @@ const probe = `<!doctype html><title>permissions</title><script>
 				(error) => { clearTimeout(timer); resolve('error ' + error.code + ' ' + error.message + ' ' + (error instanceof GeolocationPositionError)); },
 			);
 		});
-	if (ask.includes('mic'))
-		out.mic = await Promise.race([
-			navigator.mediaDevices.getUserMedia({ audio: true }).then(() => 'stream', (error) => error.name + ': ' + error.message),
-			new Promise((resolve) => setTimeout(() => resolve('pending'), 8000)),
-		]);
+	const media = (constraints) => Promise.race([
+		navigator.mediaDevices.getUserMedia(constraints).then(() => 'stream', (error) => error.name + ': ' + error.message),
+		new Promise((resolve) => setTimeout(() => resolve('pending'), 8000)),
+	]);
+	if (ask.includes('mic')) {
+		out.devices = [...new Set((await navigator.mediaDevices.enumerateDevices()).map((device) => device.kind))].sort().join(' ');
+		out.mic = await media({ audio: true });
+		out.afterMic = {};
+		await query(out.afterMic);
+	}
+	if (ask.includes('cam')) out.cam = await media({ video: true });
+	if (ask.includes('both')) out.both = await media({ audio: true, video: true });
 	if (ask.includes('notify'))
 		out.notify = await Promise.race([
 			Notification.requestPermission(),
@@ -128,61 +143,108 @@ const CASES = [
 		(base) =>
 			`${base}/frame?allow=${encodeURIComponent('geolocation; camera; microphone')}`,
 	],
-	['a top-level site that asks', (base) => `${base}/probe?ask=geo,mic,notify`],
+];
+const ASK = 'geo,mic,cam,both,notify';
+const ASKING = [
+	['a top-level site that asks', (base) => `${base}/probe?ask=${ASK}`],
+	['a frame of another site that asks', (base) => `${base}/frame?ask=${ASK}`],
 	[
-		'a frame of another site that asks',
-		(base) => `${base}/frame?ask=geo,mic,notify`,
+		'a frame of another site allowed geolocation, camera, microphone that asks',
+		(base) =>
+			`${base}/frame?ask=${ASK}&allow=${encodeURIComponent('geolocation; camera; microphone')}`,
 	],
 ];
 
-const browser = await launch();
-const native = new Map();
-for (const [name, url] of CASES) {
-	const page = await browser.newPage();
-	await page.goto(url(A));
-	native.set(name, await result(() => page.frames()));
-	await page.context().close();
-}
+// the devices Chrome finds: this machine's own, then each set a launch can
+// make on any machine. `has` is what its device list must then name
+const DEVICES = [
+	{ label: '', cases: [...CASES, ...ASKING] },
+	{
+		label: 'a microphone and a camera',
+		args: ['--use-fake-device-for-media-stream'],
+		has: { audioinput: true, videoinput: true },
+	},
+	{
+		label: 'a microphone and no camera',
+		args: ['--use-fake-device-for-media-stream=device-count=0'],
+		has: { audioinput: true, videoinput: false },
+	},
+	{
+		label: 'no microphone',
+		env: NO_AUDIO,
+		has: { audioinput: false },
+	},
+];
+
 const proxiedFrames = (tab) => () =>
 	tab.frames().filter((frame) => /\/stomp\/[\w-]+\/html/.test(frame.url()));
-
 const describe = (value) => JSON.stringify(value);
-for (const [mode, base] of [
+const MODES = [
 	['same-origin', PROXY],
 	['isolated', HOST],
-]) {
-	for (const [name, url] of CASES) {
-		const tab = await openDemo(browser, base);
-		await submitLanding(tab, url(A));
-		const proxied = await result(proxiedFrames(tab));
-		let expected = native.get(name);
-		// in isolation mode the proxied top is a frame of another origin than
-		// the host, and Chrome never shows a frame of another origin the
-		// notification prompt (allow cannot change it): the request is
-		// dismissed, the site stays undecided
-		if (
-			mode === 'isolated' &&
-			expected?.notify === 'denied' &&
-			expected.states.notifications === 'prompt'
-		)
-			expected = {
-				...expected,
-				after: {
-					...expected.after,
-					notifications: 'prompt',
-					push: 'prompt',
-				},
-				notify: 'default',
-				notificationAfter: 'default',
-			};
-		ok(
-			`${mode}: ${name} reads and asks as natively`,
-			describe(proxied) === describe(expected),
-			`\n  proxied ${describe(proxied)}\n  native  ${describe(expected)}`,
-		);
-		await tab.context().close();
-	}
+];
 
+let browser = null;
+for (const { label, args = [], env = null, has, cases = ASKING } of DEVICES) {
+	await browser?.close();
+	browser = await launch(args, { env });
+	const where = label ? `, ${label}` : '';
+	const native = new Map();
+	for (const [name, url] of cases) {
+		const page = await browser.newPage();
+		await page.goto(url(A));
+		native.set(name, await result(() => page.frames()));
+		await page.context().close();
+	}
+	if (has) {
+		const kinds =
+			native.get(ASKING[0][0])?.devices?.split(' ').filter(Boolean) ?? null;
+		ok(
+			`natively${where}: Chrome finds those devices`,
+			kinds !== null &&
+				Object.entries(has).every(
+					([kind, present]) => kinds.includes(kind) === present,
+				),
+			describe(kinds),
+		);
+	}
+	for (const [mode, base] of MODES)
+		for (const [name, url] of cases) {
+			const tab = await openDemo(browser, base);
+			await submitLanding(tab, url(A));
+			const proxied = await result(proxiedFrames(tab));
+			let expected = native.get(name);
+			// in isolation mode the proxied top is a frame of another origin than
+			// the host, and Chrome never shows a frame of another origin the
+			// notification prompt (allow cannot change it): the request is
+			// dismissed, the site stays undecided
+			if (
+				mode === 'isolated' &&
+				expected?.notify === 'denied' &&
+				expected.states.notifications === 'prompt'
+			)
+				expected = {
+					...expected,
+					after: {
+						...expected.after,
+						notifications: 'prompt',
+						push: 'prompt',
+					},
+					notify: 'default',
+					notificationAfter: 'default',
+				};
+			ok(
+				`${mode}${where}: ${name} reads and asks as natively`,
+				describe(proxied) === describe(expected),
+				`\n  proxied ${describe(proxied)}\n  native  ${describe(expected)}`,
+			);
+			await tab.context().close();
+		}
+}
+
+await browser.close();
+browser = await launch();
+for (const [mode, base] of MODES) {
 	// one site's permission is never another's
 	const tab = await openDemo(browser, base);
 	const context = tab.context();
