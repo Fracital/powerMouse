@@ -4,7 +4,10 @@
 // taken once by the request that carries its token: a token nobody
 // announced, one taken before, one of another client or for another URL,
 // an expired one and anything that is no token are the page's own
-// requests. One channel per client; what the worker keeps is bounded.
+// requests. One channel per client: the first it opens when the worker
+// served its document, else the one that answers the worker's challenge
+// (a worker that restarted cannot tell whose the first is). What the worker
+// keeps is bounded.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { done, ok, OUT, sleep } from '../lib.mjs';
@@ -38,22 +41,32 @@ if (esbuild) {
 	globalThis.self = globalThis;
 	globalThis.clients = {
 		get: async (id) => ({
-			postMessage: (message) => posted.push([id, Object.keys(message)[0]]),
+			postMessage: (message) =>
+				posted.push([id, Object.keys(message)[0], Object.values(message)[0]]),
 		}),
 		matchAll: async () => [{ id: 'A' }, { id: 'B' }],
 	};
 	const grants = await import(`${bundle}?${Date.now()}`);
-	const { openLoadChannel, takeLoadGrant, loadGrantStats } = grants;
+	const { openLoadChannel, servedLoadClient, takeLoadGrant, loadGrantStats } =
+		grants;
+	// the clients whose documents this worker served
+	for (const client of ['A', 'B']) servedLoadClient(client);
 
 	let serial = 0;
 	const token = () => String(++serial).padStart(22, 'A');
 	const URL_A = 'http://proxy.test/stomp/x/binary/one';
 	const tick = () => sleep(15);
-	const open = (client) => {
+	const open = (client, answer) => {
 		const channel = new MessageChannel();
-		const taken = openLoadChannel(client, channel.port2);
+		const taken = openLoadChannel(client, channel.port2, answer);
 		return { taken, port: channel.port1 };
 	};
+	/** the nonces the worker sent `client` since `from` */
+	const nonces = (client, from = 0) =>
+		posted
+			.slice(from)
+			.filter(([id, kind]) => id === client && kind === '$stomp$swRevive')
+			.map(([, , revive]) => revive.load);
 	const announce = async (port, grant) => {
 		port.postMessage(grant);
 		await tick();
@@ -194,24 +207,92 @@ if (esbuild) {
 		const started = Date.now();
 		const late = await takeLoadGrant(token(), 'C', URL_A);
 		ok(
-			'a client without a channel is asked to open one, once',
+			'a client without a channel is challenged to open one, once',
 			asked.length === 1 &&
 				asked[0][0] === 'C' &&
 				asked[0][1] === '$stomp$swRevive' &&
+				/^[A-Za-z0-9_-]{22}$/.test(asked[0][2].load) &&
 				second === null &&
 				late === null &&
 				Date.now() - started < 200 &&
 				posted.length === before + 1,
 			JSON.stringify({ asked, second, late, ms: Date.now() - started }),
 		);
+		const from = posted.length;
 		const t = token();
 		const waiting = takeLoadGrant(t, 'D', URL_A);
 		await tick();
-		const d = open('D');
+		const [nonce] = nonces('D', from);
+		const d = open('D', nonce);
 		await announce(d.port, { token: t, url: URL_A, load: 'image no-cors' });
 		ok(
-			'and the request that asked is granted what the reopened channel tells again',
+			'and the request that asked is granted what the channel opened with the nonce tells again',
 			d.taken === true && (await waiting) === 'image no-cors',
+		);
+	}
+	{
+		// a client this worker did not serve (the worker restarted under
+		// it): whose its first channel is cannot be known
+		const from = posted.length;
+		const offered = open('F');
+		await tick();
+		const sent = nonces('F', from);
+		const t = token();
+		await announce(offered.port, {
+			token: t,
+			url: URL_A,
+			load: 'image no-cors',
+		});
+		ok(
+			'the first channel of a client the worker did not serve is not taken: the client is challenged',
+			offered.taken === false &&
+				sent.length === 1 &&
+				(await takeLoadGrant(t, 'F', URL_A)) === null,
+			JSON.stringify({ taken: offered.taken, sent }),
+		);
+		const again = open('F');
+		const guessed = open('F', 'A'.repeat(22));
+		const other = open('F', nonces('D')[0]);
+		await tick();
+		ok(
+			'another offer, a guess and the nonce of another client are refused, and no second nonce is sent',
+			again.taken === false &&
+				guessed.taken === false &&
+				other.taken === false &&
+				nonces('F', from).length === 1,
+			JSON.stringify(nonces('F', from)),
+		);
+		const answered = open('F', sent[0]);
+		const u = token();
+		await announce(answered.port, {
+			token: u,
+			url: URL_A,
+			load: 'image no-cors',
+		});
+		const late = open('F', sent[0]);
+		ok(
+			'the channel that comes with the nonce is taken, and the nonce opens no second one',
+			answered.taken === true &&
+				(await takeLoadGrant(u, 'F', URL_A)) === 'image no-cors' &&
+				late.taken === false,
+		);
+		// a challenge nobody answers gives way to a new one
+		const start = posted.length;
+		open('G');
+		await tick();
+		const now = Date.now;
+		Date.now = () => now() + 5001;
+		open('G');
+		await tick();
+		Date.now = now;
+		const [first, second] = nonces('G', start);
+		ok(
+			'a challenge nobody answered is replaced after a while, and the old nonce opens nothing',
+			nonces('G', start).length === 2 &&
+				first !== second &&
+				open('G', first).taken === false &&
+				open('G', second).taken === true,
+			JSON.stringify(nonces('G', start)),
 		);
 	}
 	{
@@ -256,7 +337,12 @@ if (esbuild) {
 				load: 'image no-cors',
 			});
 		}
-		for (let i = 0; i < 40; i++) open(`E${i}`);
+		for (let i = 0; i < 40; i++) {
+			servedLoadClient(`E${i}`);
+			open(`E${i}`);
+		}
+		for (let i = 0; i < 600; i++) open(`H${i}`);
+		for (let i = 0; i < 5000; i++) servedLoadClient(`S${i}`);
 		await sleep(400);
 		const all = loadGrantStats();
 		ok(
@@ -265,7 +351,9 @@ if (esbuild) {
 				all.grants <= grants.GRANTS_KEPT &&
 				all.grants <= 2 * grants.GRANTS_PER_CLIENT &&
 				all.spent <= 1024 &&
-				all.waiting === 0,
+				all.waiting === 0 &&
+				all.challenges <= grants.CHANNELS_KEPT &&
+				all.served <= 4096,
 			JSON.stringify({ one, all }),
 		);
 	}

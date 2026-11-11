@@ -516,11 +516,34 @@ Filled in commit by commit; see the CHANGELOG for each.
     port, the natives it is used with and the tokens are in the module's
     scope. A bundle in a document the worker did not serve (a srcdoc
     document's, an object's or embed's document's) goes through the
-    nearest bundle above it that has a channel. A worker that restarted
-    asks the client of the first token it sees to open its channel again,
-    and the inject tells its last five seconds of announcements again. Kept
-    in the worker: 2048 grants at most (512 for one client), 30 s each, 512
-    channels, 1024 spent tokens.
+    nearest bundle above it that has a channel. Kept in the worker: 2048
+    grants at most (512 for one client), 30 s each, 512 channels, 1024
+    spent tokens, 4096 clients it served, one challenge for each client.
+  - _A worker that restarted_ (Chrome stops an idle one within about 30 s)
+    keeps no channel and served none of the documents it finds, so it
+    cannot know whose the first channel a client offers is. It takes a
+    client's first channel at once only when it answered the navigation
+    that made the client's document (`resultingClientId`). Any other client
+    is challenged: the worker sends that client alone a nonce (22 random
+    characters, in `SW_REVIVE`) and takes the first channel that comes back
+    with it, one challenge standing at a time (5 s); a channel offered
+    without it, a guess, another client's nonce and a second answer are
+    refused. The inject's listener for the nonce is the container's first,
+    added before the page ran, so its answer is posted first, and the
+    messages of one client reach the worker in order. The inject opens
+    the channel again with the ports' getters it took when its bundle
+    loaded: before, a page that redefined `MessageChannel.prototype.port2`
+    was handed the channel the inject opened again for a restarted worker,
+    and read another site's text through it. Then the inject tells its last
+    five seconds of announcements again. What is not achievable: a worker
+    that restarted can verify nothing it kept, since a secret it handed
+    the inject would have to survive in IndexedDB or the Cache, which every
+    realm of the proxy origin reads, and the grants it issued before are
+    gone with it. The inject's one advantage is that it runs first in its
+    document; a realm that ran script in the client before its bundle did
+    would hear the nonce first and hold the channel (load-grants,
+    load-grants-restart: a page that offers channels until one is taken and
+    answers the nonce too gets none, and its announcements read nothing).
   - _What a grant hands over is what Chrome would let into the renderer._
     A granted copy of another origin's no-cors load goes through opaque
     response blocking in the worker, whatever the load (it was scripts
@@ -603,10 +626,11 @@ suites' known lists with the same reason.
    an image into, a sheet's rules), in a document the worker controls as
    much as in a copied one, and it can ask the worker for a transport
    (`INIT_REMOTE_TRANSPORT`), which is how a document's WebSocket works. A
-   worker that restarted takes the first channel a client opens: the
-   inject's, unless a realm without hooks posts as that client first. The
-   defence against such a realm is that there is none (the escape suites);
-   the gate is what holds when a hook is passed.
+   worker that restarted takes a client's channel with the nonce it
+   challenged the client with, which the inject hears first: a realm that
+   ran in that client before the inject's bundle would hear it before it.
+   The defence against such a realm is that there is none (the escape
+   suites); the gate is what holds when a hook is passed.
 2. `:visited`: Chrome never lets script read it, and since Chrome 136
    keeps it per link URL, top-level site and frame origin; through the
    proxy every link is a proxy URL under one top-level site and one frame

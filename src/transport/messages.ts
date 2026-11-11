@@ -67,6 +67,8 @@ export const LOAD_CHANNEL = '$stomp$loadChannel';
 export interface LoadChannelMessage {
 	/** the sender's controller address */
 	directory: string;
+	/** the nonce the worker challenged this client with (SW_REVIVE's `load`), when it did */
+	answer?: string;
 }
 /**
  * On that channel: one load the client is about to request. `load` is

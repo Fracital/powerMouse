@@ -735,6 +735,17 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   before its load event replaces its entry, as natively. Through the proxy
   about one such redirect in three made a new entry, so Back went to the
   redirecting page and it redirected again. (toolbar-history suite.)
+- The load gate after a service worker restart: the worker takes a
+  client's channel at once only when it served the client's document, and
+  otherwise only the one that answers a nonce it sends that client, which
+  the inject hears before any listener of the page's. It took the first
+  channel a client offered, and the inject opened its channel again with
+  the page's own getters of a channel's ports: a page that redefined
+  `MessageChannel.prototype.port2` was handed the channel and read
+  another site's text through it, and the inject's copies stopped loading.
+  A channel the page offers, a guess and a second answer are refused, and
+  a revive the page dispatches itself is not heard. (load-grants and
+  load-grants-restart suites.)
 - CSS the page writes through the CSSOM in a document no service worker
   controls (an about:blank frame or popup it builds) loads: a rule put into
   a `<style>`'s, a `<link>`'s or an imported sheet (`insertRule`, `addRule`),

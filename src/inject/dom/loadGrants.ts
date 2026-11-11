@@ -24,7 +24,13 @@ import type Client from '../Client';
  *
  * Everything is taken when the bundle loads (the page has run nothing yet):
  * the service worker container before the Navigator module hides it, the
- * natives before the page can replace them.
+ * natives before the page can replace them, a channel's ports' getters
+ * among them (a channel opened again is made long after the page ran).
+ *
+ * A worker that restarted takes a channel only with the nonce it sent this
+ * client (SW_REVIVE's `load`). The bundle listens for it from the start, in
+ * the capturing phase, so it hears the nonce before any listener the page
+ * could add and its answer is the first the worker gets.
  */
 export interface LoadSource {
 	/** the client whose `nativeFetch` and sync bridge make the granted request */
@@ -49,6 +55,15 @@ const taken = (() => {
 			portPost: globalThis.MessagePort.prototype.postMessage as Post,
 			portStart: globalThis.MessagePort.prototype.start,
 			Channel: globalThis.MessageChannel,
+			port1Of: Reflect.getOwnPropertyDescriptor(
+				globalThis.MessageChannel.prototype,
+				'port1',
+			)!.get!,
+			port2Of: Reflect.getOwnPropertyDescriptor(
+				globalThis.MessageChannel.prototype,
+				'port2',
+			)!.get!,
+			own: Reflect.getOwnPropertyDescriptor,
 			listen: globalThis.EventTarget.prototype.addEventListener,
 			dataOf: Reflect.getOwnPropertyDescriptor(
 				globalThis.MessageEvent.prototype,
@@ -87,9 +102,10 @@ function mint(): string {
  * Open a channel to the worker that controls this realm. The first is used
  * at once (announcements follow it in order); one opened again, for a
  * worker that restarted, only once the worker says it took it: a worker
- * that did not restart takes no second one.
+ * that did not restart takes no second one, and one that did takes the one
+ * that carries its nonce (`answer`).
  */
-function open(directory: string): boolean {
+function open(directory: string, answer?: string): boolean {
 	if (!taken) return false;
 	try {
 		const controller = Reflect.apply(
@@ -99,7 +115,8 @@ function open(directory: string): boolean {
 		) as ServiceWorker | null;
 		if (!controller) return false;
 		const channel = new taken.Channel();
-		const mine = channel.port1;
+		const mine = Reflect.apply(taken.port1Of, channel, []) as MessagePort;
+		const theirs = Reflect.apply(taken.port2Of, channel, []) as MessagePort;
 		if (port === null) port = mine;
 		Reflect.apply(taken.listen, mine, [
 			'message',
@@ -114,8 +131,11 @@ function open(directory: string): boolean {
 		]);
 		Reflect.apply(taken.portStart, mine, []);
 		Reflect.apply(taken.workerPost, controller, [
-			{ [LOAD_CHANNEL]: { directory } },
-			[channel.port2],
+			{
+				[LOAD_CHANNEL]:
+					answer === undefined ? { directory } : { directory, answer },
+			},
+			[theirs],
 		]);
 		return true;
 	} catch (error) {
@@ -160,10 +180,20 @@ export function initLoads(client: Client) {
 		Reflect.apply(taken.listen, taken.container, [
 			'message',
 			(event: MessageEvent) => {
+				// the worker's, not one the page dispatched (isTrusted is the
+				// event's own, and cannot be redefined)
+				if (!event.isTrusted) return;
 				const data = Reflect.apply(taken.dataOf, event, []) as unknown;
-				if (typeof data === 'object' && data !== null && SW_REVIVE in data)
-					open(client.directory);
+				if (typeof data !== 'object' || data === null) return;
+				// own values only: the message is the worker's, its prototypes
+				// are the page's
+				const revive = taken.own(data, SW_REVIVE)?.value as unknown;
+				if (typeof revive !== 'object' || revive === null) return;
+				const nonce = taken.own(revive, 'load')?.value as unknown;
+				open(client.directory, typeof nonce === 'string' ? nonce : undefined);
 			},
+			// before any listener the page adds, whatever phase it asks for
+			true,
 		]);
 	} catch (error) {
 		// nothing to hear: the channel stays as it is

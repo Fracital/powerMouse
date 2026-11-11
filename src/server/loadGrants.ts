@@ -15,9 +15,17 @@
  * The worker takes one channel per client for as long as it lives; what it
  * keeps is bounded (CHANNELS_KEPT, GRANTS_KEPT, GRANTS_PER_CLIENT).
  *
- * A worker that restarted has no channels. A token from a client without
- * one makes the worker ask that client, once, to open its channel again
- * (SW_REVIVE); the inject then tells its last few announcements again.
+ * The first channel a client opens is its inject's when this worker served
+ * the client's document: the bundle opens it before any of the page's
+ * script runs. A worker that restarted has no channels and served none of
+ * the documents it finds, and a channel any realm of such a client offers
+ * first is not known to be the inject's. So that client is challenged: the
+ * worker sends it a nonce (SW_REVIVE, `load`), and takes the channel that
+ * comes back with it. Every listener of the client hears the nonce, in the
+ * order they were added, and the inject added its own before the page ran:
+ * its answer is posted first, and messages of one client arrive in order.
+ * A token from a client without a channel challenges it the same way; the
+ * inject then tells its last few announcements again.
  */
 import { SW_REVIVE } from '../transport/messages';
 
@@ -50,8 +58,14 @@ const grants = new Map<string, Grant>();
 const perClient = new Map<string, number>();
 const spent = new Set<string>();
 const waiting = new Map<string, (grant: Grant | null) => void>();
-/** clients asked to open their channel again, oldest first out */
-const asked = new Map<string, number>();
+/** the clients whose documents this worker served, oldest first out */
+const served = new Set<string>();
+/** how many served clients are remembered */
+const SERVED_KEPT = 4096;
+/** clients challenged to open their channel again: the nonce, and when; oldest first out */
+const challenges = new Map<string, { nonce: string; at: number }>();
+/** how long a challenge stands before another may be sent */
+const CHALLENGE_MS = 5_000;
 
 /** a URL as two requests for it compare: absolute, without its fragment */
 function comparable(url: string): string | null {
@@ -126,14 +140,43 @@ function announce(client: string, data: unknown) {
 }
 
 /**
- * A client's load channel: the first it opens, for as long as this worker
- * lives (its inject opens it before any of its page's script runs). Whether
- * it was taken.
+ * This worker is answering the navigation that makes `client`'s document:
+ * the first channel that client opens is its inject's.
  */
-export function openLoadChannel(client: string, port: MessagePort): boolean {
+export function servedLoadClient(client: string | undefined) {
+	if (!client) return;
+	served.add(client);
+	if (served.size > SERVED_KEPT) served.delete(served.values().next().value!);
+}
+
+/**
+ * A client's load channel, for as long as this worker lives: the first it
+ * opens when this worker served its document (its inject opens it before
+ * any of its page's script runs), else the first that comes with the nonce
+ * the worker challenged the client with (`answer`); an offer without it
+ * is what starts the challenge. Whether it was taken.
+ */
+export function openLoadChannel(
+	client: string,
+	port: MessagePort,
+	answer?: unknown,
+): boolean {
 	if (channels.has(client)) {
 		port.close();
 		return false;
+	}
+	if (!served.has(client)) {
+		const challenge = challenges.get(client);
+		if (
+			challenge === undefined ||
+			typeof answer !== 'string' ||
+			answer !== challenge.nonce
+		) {
+			port.close();
+			ask(client);
+			return false;
+		}
+		challenges.delete(client);
 	}
 	channels.set(client, port);
 	port.addEventListener('message', (event) => announce(client, event.data));
@@ -160,19 +203,38 @@ async function sweepChannels() {
 		}
 }
 
+/** a nonce: 22 random characters of base64url */
+function nonce(): string {
+	const alphabet =
+		'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+	let text = '';
+	for (const byte of crypto.getRandomValues(new Uint8Array(22)))
+		text += alphabet[byte & 63];
+	return text;
+}
+
 /**
- * Ask a client that has no channel to open one (this worker restarted
- * under it): once for each client. Whether its channel may still come:
- * it was asked now, or within the time a request waits.
+ * Challenge a client that has no channel to open one (this worker
+ * restarted under it): one challenge stands at a time, so no offer or
+ * request of the page's can replace the nonce the inject is answering.
+ * Whether its channel may still come: it was challenged now, or within the
+ * time a request waits.
  */
 function ask(client: string): boolean {
-	const before = asked.get(client);
-	if (before !== undefined) return Date.now() - before < GRANT_WAIT_MS;
-	asked.set(client, Date.now());
-	if (asked.size > CHANNELS_KEPT) asked.delete(asked.keys().next().value!);
+	const now = Date.now();
+	const before = challenges.get(client);
+	if (before !== undefined && now - before.at < CHALLENGE_MS)
+		return now - before.at < GRANT_WAIT_MS;
+	const challenge = { nonce: nonce(), at: now };
+	challenges.delete(client);
+	challenges.set(client, challenge);
+	if (challenges.size > CHANNELS_KEPT)
+		challenges.delete(challenges.keys().next().value!);
 	(self as unknown as ServiceWorkerGlobalScope).clients
 		.get(client)
-		.then((found) => found?.postMessage({ [SW_REVIVE]: {} }))
+		.then((found) =>
+			found?.postMessage({ [SW_REVIVE]: { load: challenge.nonce } }),
+		)
 		.catch(() => {});
 	return true;
 }
@@ -180,7 +242,7 @@ function ask(client: string): boolean {
 /**
  * The load a request's LOAD_HEADER was granted as, once: null for a value
  * that is no token, a token nothing announced (waited for briefly when its
- * client has a channel or was just asked for one, since the announcement
+ * client has a channel or was just challenged for one, since the announcement
  * and the request travel apart), one taken before, one of another client or for another URL, or
  * an expired one.
  */
@@ -221,5 +283,7 @@ export function loadGrantStats() {
 		grants: grants.size,
 		spent: spent.size,
 		waiting: waiting.size,
+		served: served.size,
+		challenges: challenges.size,
 	};
 }
