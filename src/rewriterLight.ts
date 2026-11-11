@@ -1,11 +1,13 @@
 // The rewriter library as the inject bundles carry it (build.js,
 // `stomp:rewriter-lib`): the calls of src/rewriterLib.ts with no parser
 // and no printer behind them. A script is rewritten by the wasm module
-// where this copy holds it (src/wasm/rewriter.ts); everything else is the
-// rewriter library's, which is a file of its own (the asset `rewriterLib`:
+// where this copy holds it (src/wasm/rewriter.ts), and so are a stylesheet
+// and a host's site where its entry asks their modules
+// (src/rewriterLightDocument.ts); everything else is the rewriter
+// library's, which is a file of its own (the asset `rewriterLib`:
 // meriyah, escodegen, css-tree, tldts and the rewriters on them) that no
 // frame fetches, scans or holds until a call needs it: a rewrite with
-// `rewriter: 'js'`, a rewrite before the module arrived or one it
+// `rewriter: 'js'`, a rewrite before the modules arrived or one they
 // declined, an error message that names a part of the page's expression.
 //
 // This copy never fetches anything: it is called from other realms, speaks
@@ -44,13 +46,15 @@ export interface LightParts {
 		url: StompURL,
 		context?: string,
 	) => string | undefined;
+	/** a stylesheet this entry left to the rewriter library was rewritten there */
+	styledByLibrary?: () => void;
 	getDomain?: (host: string) => string | null | undefined;
 	/** with the private list unless `icann` (the ICANN section alone) */
 	getPublicSuffix?: (
 		host: string,
 		icann?: boolean,
 	) => string | null | undefined;
-	/** the public suffix list this copy's suffix module holds (its commit and date), '' while tldts answers */
+	/** the public suffix list this copy's suffix module holds (its commit and date), '' while it holds none */
 	suffixList?: () => string;
 }
 
@@ -178,7 +182,11 @@ export function library(parts: LightParts): RewriterLib {
 		},
 		modifyCSS: (text, url, context = 'stylesheet') =>
 			parts.modifyCSS?.(text, url, context) ??
-			within((lib) => lib.css(entered, text, context)),
+			within((lib) => {
+				const output = lib.css(entered, text, context);
+				if (output !== null) parts.styledByLibrary?.();
+				return output;
+			}),
 		singleExpression: (code) =>
 			parsesInWasm(code, true) ?? within((lib) => lib.singleExpression(code)),
 	});
@@ -279,7 +287,11 @@ export function library(parts: LightParts): RewriterLib {
 				entered = contextJSON;
 				return (
 					parts.modifyCSS?.(text, enter(contextJSON).url, kind) ??
-					inLibrary((lib) => lib.css(contextJSON, text, kind), null)
+					inLibrary((lib) => {
+						const output = lib.css(contextJSON, text, kind);
+						if (output !== null) parts.styledByLibrary?.();
+						return output;
+					}, null)
 				);
 			}, null);
 		},

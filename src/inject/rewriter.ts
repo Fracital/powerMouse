@@ -1,17 +1,18 @@
 // The rewriters as the inject uses them: modifyJS, modifyCSS and the public
 // suffix lookups, with the signatures of the originals, backed by the
 // rewriter library. What a bundle carries of it is the light library
-// (src/rewriterLight.ts): the wasm rewriter's glue and, for now, css-tree
-// and tldts. A frame evaluates none of that either: it uses its top's copy,
+// (src/rewriterLight.ts): the glue of the wasm modules (scripts,
+// stylesheets, the public suffix list), with no parser, printer or list of
+// its own. A frame evaluates none of that either: it uses its top's copy,
 // which lives in a realm no page code runs in
 // (src/inject/dom/rewriterRealm.ts), and evaluates a copy of its own only
 // when it has no such top (a sandboxed document without allow-same-origin,
 // a worker), the first time it rewrites something.
 //
-// The JavaScript rewriter itself (meriyah, escodegen and the rewriters on
-// them, src/rewriterLib.ts) is in no bundle: it is the asset `rewriterLib`.
-// A proxied top's shell loads that file before this bundle
-// (src/rewriteHTML.ts), which takes the factory it assigned. With
+// The JavaScript rewriter itself (meriyah, escodegen, css-tree, tldts and
+// the rewriters on them, src/rewriterLib.ts) is in no bundle: it is the
+// asset `rewriterLib`. A proxied top's shell loads that file before this
+// bundle (src/rewriteHTML.ts), which takes the factory it assigned. With
 // `rewriter: 'js'` the top's library is made from it; with `'wasm'` the top
 // keeps it, and hands its text to the light library the first time a call
 // needs it (a rewrite the module has not arrived for or declines, an error

@@ -119,16 +119,16 @@ const lazyUnicodeTable = {
 };
 
 /**
- * The light rewriter library (src/rewriterLight.ts: the wasm rewriter's
- * glue and, until their modules answer in the page, css-tree and tldts)
- * for the inject bundles, which import it as `stomp:rewriter-lib`: bundled
- * on its own and handed over as a function that evaluates it, so a frame
- * evaluates none of it until it rewrites something, and a top can evaluate
- * the same text in a realm of its own for the frames under it
- * (src/inject/rewriter.ts). Its globals come from src/libGlobals.ts, which
- * also names every global the inject bundles inject: the text names nothing
- * of the bundle it is carried in. The parsers and the printer are not in
- * it: they are the rewriter library below, a file of its own.
+ * The light rewriter library (src/rewriterLight.ts: the glue of the wasm
+ * modules and nothing they stand in for) for the inject bundles, which
+ * import it as `stomp:rewriter-lib`: bundled on its own and handed over as
+ * a function that evaluates it, so a frame evaluates none of it until it
+ * rewrites something, and a top can evaluate the same text in a realm of
+ * its own for the frames under it (src/inject/rewriter.ts). Its globals
+ * come from src/libGlobals.ts, which also names every global the inject
+ * bundles inject: the text names nothing of the bundle it is carried in.
+ * The parsers, the printer and the public suffix list are not in it: they
+ * are the rewriter library below, a file of its own.
  *
  * @type {import('esbuild').Plugin}
  */

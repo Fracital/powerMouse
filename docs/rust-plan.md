@@ -390,8 +390,8 @@ Per-frame cost therefore goes down, not up, once the JavaScript libraries
 leave the inject bundle: that is a goal of phase 2 with a number on it, set
 out under "The inject bundle without the JavaScript libraries" below. The
 `frame-cost` ceiling (1,120 KB of heap per frame, `injectDocument.js` at
-most 630 KB since the JavaScript rewriter left it, 850 before) is a gate on
-every phase until then.
+most 430 KB since the JavaScript libraries left it, 850 before) is a gate
+on every phase.
 
 ### Instance memory
 
@@ -470,7 +470,12 @@ and `builders.ts` (35 KB of the 46,669) leave with their parsers and the
 wasm glue that replaces them is under 4 KB. The `frame-cost` suite's bundle
 budget (`INJECT_BUDGET_KB`, 850 before the split, 630 with meriyah and
 escodegen out) is lowered to 430 in the same change that removes the last
-of the libraries, so the size cannot come back unnoticed. Its heap ceiling
+of the libraries, so the size cannot come back unnoticed. Reached, by the
+budget and not by the byte count: the bundle is 428,139 bytes (418 KB).
+The 415,585 was taken on master, and by the time of the removal the bundle
+with the libraries in it had grown to 860,006 (the wasm glue, the shell's
+site facts, the blocker's page side); the stub build's saving of 398,906
+would have left 461,100, and the removal saves 431,867. Its heap ceiling
 (1,120 KB per frame) moves only by what is measured, and nothing was: a
 frame never evaluated the library ("As built" below).
 
@@ -527,12 +532,19 @@ frame never evaluated the library ("As built" below).
   | `modifyCSS`                          | the scanner module (phase 3)      | no module yet, or it trapped; a data: sheet inside a sheet            |
   | `getDomain`, `getPublicSuffix`       | the shell, then the suffix module | no module yet, for a host no shell named                              |
 
-  The last two rows are not cut over yet: css-tree and tldts are still in
-  the document bundle's light library (`src/rewriterLightDocument.ts`
-  hands them to it as parts), because without their modules in the page
-  every top would load the file for its first style or cookie. A part that
-  is taken out of that file is the fallback's from then on, with no other
-  change: that is the whole cut. A rewrite in the middle of another (a
+  Every row is cut over. The last two were cut second, once their modules
+  answered in the page (step 3 and phase 3): the document bundle's light
+  library carried css-tree and tldts until then
+  (`src/rewriterLightDocument.ts` handed them to it as parts), because
+  without the modules every top would have loaded the file for its first
+  style or cookie. That entry now asks the scanner and suffix modules and
+  nothing else; a part an entry does not answer is the fallback's, with no
+  other change, and that was the whole cut. What it costs is with `'wasm'`
+  alone, in the time before a top's modules arrive: a stylesheet a script
+  writes then, or a host no shell named, loads the fallback into the top's
+  library, as a script rewritten then already did (from the text the
+  shell loaded, without a request). With `'js'` a top's library is the
+  file itself, as before. A rewrite in the middle of another (a
   `data:` script that a script the module is rewriting imports, a `data:`
   stylesheet in a stylesheet) is the fallback's too: without it the outer
   call is marked as needing it and made again once it is there.
@@ -558,13 +570,14 @@ frame never evaluated the library ("As built" below).
   bundle: `error-surfaces` caught it.
 
   How often the fallback is needed with `'wasm'`, on nine fixture pages
-  (`rewriter-fallback` prints the counts): five never need it, four need
-  it once, and in every one of the four the first cause is a rewrite the
-  page asked for before its module had arrived (a function made from a
-  string, `document.write` or a worker in the page's first task). The
-  module declined 2 of 124 calls on the error messages page and none
-  elsewhere. A top that got its module before its first script would
-  seldom evaluate the fallback at all.
+  (`rewriter-fallback` prints the counts): three never need it, six need
+  it once (four did while css-tree and tldts were in the light library),
+  and in every one of the six the first cause is a rewrite the page asked
+  for before its modules had arrived (a function made from a string,
+  `document.write`, a worker or a style written in the page's first
+  task). The module declined 2 of 124 calls on the error messages page and
+  none elsewhere. A top that got its modules before its first script
+  would seldom evaluate the fallback at all.
 
   The controller fetches the file when it starts, under both backends, so
   it is in the HTTP cache before the first proxied page exists, and a host
@@ -692,18 +705,20 @@ so it has to stand alone, and a realm that loads it beside a light library
 evaluates those 30 KB twice.
 
 **As built (step 4, on the series up to the CSS rewriter in the scanner
-module).** css-tree and tldts still in the light library:
+module).** In two changes: meriyah, escodegen and the rewriters on them
+first (css-tree and tldts still in the light library), then css-tree and
+tldts. Bytes, with brotli in brackets:
 
-| File                     | Before  | After   | Brotli before | Brotli after |
-| ------------------------ | ------- | ------- | ------------- | ------------ |
-| `dist/injectDocument.js` | 860,006 | 633,099 | 224,309       | 173,356      |
-| `dist/injectWorker.js`   | 440,982 | 213,903 | 110,609       | 59,461       |
-| `dist/rewriterLib.js`    |         | 471,109 |               | 122,541      |
+| File                     | Before            | Parsers out       | css-tree and tldts out |
+| ------------------------ | ----------------- | ----------------- | ---------------------- |
+| `dist/injectDocument.js` | 860,006 (224,309) | 633,099 (173,356) | 428,139 (114,967)      |
+| `dist/injectWorker.js`   | 440,982 (110,609) | 213,903 (59,461)  | 214,001 (59,429)       |
+| `dist/rewriterLib.js`    |                   | 471,109 (122,541) | 471,109 (122,541)      |
 
 The heap one proxied frame adds does not move (1,089 to 1,096 KB with 20
 frames before and after, both backends, Chrome 156): a frame
 never evaluated the library, and its text in the bundle cost a frame about
-3 KB. What a frame saves is the 227 KB it no longer fetches, scans and
+3 KB. What a frame saves is the 432 KB it no longer fetches, scans and
 keeps a copy of.
 
 ## 7. Staying compatible with a host's build pipeline
@@ -924,12 +939,12 @@ Its definition of done, in the order the work goes:
    (built: the service worker and a top's library ask the module, the
    shell carries the site);
 4. the JavaScript library becomes the asset `rewriterLib.js`, loaded on
-   first need as section 6 sets out (built: meriyah, escodegen and the
-   rewriters on them are in no bundle, `dist/injectDocument.js` is 633,099
-   bytes and the `frame-cost` budget 630 KB), and css-tree and tldts leave
-   `dist/injectDocument.js` with their modules (steps 3 and phase 3):
-   **at most 415,585 bytes** against 814,491 on master, with the
-   `frame-cost` bundle budget lowered to 430 KB in that change;
+   first need as section 6 sets out, and meriyah, escodegen, css-tree and
+   tldts leave `dist/injectDocument.js`: **at most 415,585 bytes** against
+   814,491 on master, with the `frame-cost` bundle budget lowered to 430 KB
+   in that change (built, in two changes: 428,139 bytes against the
+   860,006 the bundle had grown to, under the 430 KB budget; "The target"
+   in section 6 says why the byte count of master is not the measure);
 5. the suites of section 10 under both backends, and `frame-cost`,
    `wasm-share` and the new suffix suite in the gate.
 
@@ -1128,14 +1143,17 @@ frame's single values (a CSSOM property set, a presentation attribute)
 stay on the expression in the frame.
 
 What still needs css-tree, which is 69 KB of the minified service worker
-(627,999 bytes) and 71 KB of `injectDocument.js` (840,295; `source-map-js`
-is in neither since phase 2 put `src/noSourceMaps.ts` in its place):
-nothing calls `modifyCSS` with a context other than the two the module
-rewrites, so what is left is the fallback. Only `src/rewriteCSS.ts` imports
-css-tree, and only `src/server/rewrites.ts` and `src/rewriterLibDocument.ts`
-import that; its head (the `MAY_ROUTE` test, the module's call) needs no
-parser. For css-tree to leave a bundle, each of these needs another answer
-than css-tree:
+(627,999 bytes) and was 71 KB of `injectDocument.js` (840,295;
+`source-map-js` is in neither since phase 2 put `src/noSourceMaps.ts` in
+its place): nothing calls `modifyCSS` with a context other than the two
+the module rewrites, so what is left is the fallback. Only
+`src/rewriteCSS.ts` imports css-tree, and only `src/server/rewrites.ts`
+and `src/rewriterLibDocument.ts` (the fallback asset) import that; its
+head (the `MAY_ROUTE` test, the module's call) needs no parser, and is
+all the inject bundle keeps of it (`src/rewriterLightDocument.ts`: phase 2
+step 4 took css-tree out of that bundle, with the fallback asset as the
+other answer below). For css-tree to leave the service worker, each of
+these needs another answer than css-tree:
 
 - a thread that holds no module: `rewriter: 'js'` (the default), a module
   that has not arrived yet (the service worker waits for one that is being
@@ -1156,8 +1174,8 @@ demo toggle, docs and suites.
 have been green across a few nightlies, and the JavaScript library is then
 only the fallback asset of phase 2: no bundle carries meriyah, escodegen,
 css-tree or tldts, and the budgets phase 2 lowered stay where it put them
-(`injectDocument.js` at most 430 KB in `frame-cost`, measured at 415,585
-bytes or less). Optional: `callPrinter.ts` in Rust, which would stop an
+(`injectDocument.js` at most 430 KB in `frame-cost`, 428,139 bytes as
+built). Optional: `callPrinter.ts` in Rust, which would stop an
 error message from being the one thing that loads the fallback. Probably
 not worth it for the printer alone: it only runs on error paths.
 

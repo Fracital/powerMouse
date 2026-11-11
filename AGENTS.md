@@ -94,8 +94,10 @@ on every save (use a `git worktree`).
   no bundle: they are `dist/rewriterLib.js` (`src/rewriterLib.ts`), which a
   top's shell loads before the bundle, and what the bundles carry is the
   light library (`src/rewriterLight.ts`), which is handed that file's text
-  when a call needs it. Never import meriyah, escodegen or `rewriteJS.ts`
-  from anything an inject bundle reaches: `frame-cost` fails on the size.
+  when a call needs it. Never import meriyah, escodegen, css-tree, tldts,
+  `rewriteJS.ts`, `rewriteCSS.ts` or `suffix.ts` from anything an inject
+  bundle reaches (the light library asks the wasm modules through
+  `src/wasm/`): `frame-cost` fails on the size.
   Never fetch the file with a synchronous request from a document that has
   a top to take it from: the browser reports that request to the page. A
   removed frame's realm still runs code, but its DOM globals answer

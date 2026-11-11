@@ -4,15 +4,15 @@
 // ad-heavy pages keep hundreds of frames in one renderer, so a module that
 // adds a little to each frame adds it hundreds of times. Two checks:
 //
-// - the size of dist/injectDocument.js, against a budget: 618 KB as built,
+// - the size of dist/injectDocument.js, against a budget: 418 KB as built,
 //   with the rewriter library a file of its own (dist/rewriterLib.js: the
-//   bundle was 840 KB with meriyah, escodegen and the rewriters on them in
-//   it). A dependency the inject imports directly instead of through the
-//   rewriter library (tldts did, +133 KB, every frame evaluating its tables
-//   again), or a parser that comes back into the light library, goes past
-//   it. Deterministic. Raise the budget in the same change as code that has
-//   to grow the bundle, and say why; lower it when css-tree and tldts leave
-//   the light library (docs/rust-plan.md: 430 KB then).
+//   bundle was 840 KB with meriyah, escodegen, css-tree, tldts and the
+//   rewriters on them in it). A dependency the inject imports directly
+//   instead of through the rewriter library (tldts did, +133 KB, every
+//   frame evaluating its tables again), or a parser or the suffix list
+//   coming back into the light library (css-tree and tldts were 205 KB of
+//   it), goes past it. Deterministic. Raise the budget in the same change
+//   as code that has to grow the bundle, and say why.
 // - the JS heap one proxied frame adds (test/frame-memory.mjs, FRAMES frames
 //   of a small ad-like page, same site), against a ceiling well above what
 //   this build measures: 1,089 to 1,096 KB with 20 frames on Chrome 152 and
@@ -26,7 +26,7 @@ import { measureFrames } from '../frame-memory.mjs';
 import { done, ok } from '../lib.mjs';
 
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
-const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 630;
+const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 430;
 const FRAMES = Number(process.env.FRAMES) || 20;
 const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1120;
 
