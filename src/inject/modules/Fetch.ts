@@ -7,6 +7,7 @@ import {
 import StompURL, { urlLike } from '../../StompURL';
 import {
 	ABORT_HEADER,
+	OPAQUE_COPY_HEADER,
 	OPAQUE_HEADER,
 	OPAQUE_MARKER,
 	PROXY_METRICS,
@@ -141,6 +142,23 @@ export function adoptTypeMark(response: Response): boolean {
 		url || undefined,
 	);
 	return true;
+}
+
+/**
+ * Whether the worker answered a copy the inject asked for (a granted
+ * request) as one the page may not read: another origin's no-cors load
+ * (OPAQUE_COPY_HEADER)
+ */
+export function opaqueCopy(response: Response): boolean {
+	try {
+		const headers = Reflect.apply(nativeResponseHeaders, response, []);
+		return (
+			Reflect.apply(nativeHeadersGet, headers, [OPAQUE_COPY_HEADER]) ===
+			'opaque'
+		);
+	} catch (error) {
+		return false;
+	}
 }
 
 /**

@@ -1,9 +1,10 @@
 import { routeBinary } from '../../../routeURL';
 import StompURL from '../../../StompURL';
-import { LOAD_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { scopePrefix } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { loadFetch } from '../loadGrants';
 
 /** the name a Content-Disposition header gives, if any */
 function dispositionName(header: string | null): string | null {
@@ -124,11 +125,16 @@ export default class DownloadModule extends Module<DocumentClient> {
 		addDocumentOpenListener(global, install);
 	}
 	async save(url: URL, named: string) {
-		const response = await this.client.routedFetch(
-			routeBinary(new StompURL(url, this.client.url)),
-			// the browser's own download, not a page's read: no CORS (a value
+		const response = await loadFetch(
+			this.client,
+			new URL(
+				routeBinary(new StompURL(url, this.client.url)),
+				scopePrefix(this.client),
+			).href,
+			// the browser's own download, not a page's read: no CORS (a load
 			// the worker takes no metadata from)
-			{ credentials: 'include', headers: { [LOAD_HEADER]: 'download' } },
+			'download',
+			{ credentials: 'include' },
 		);
 		const last = decodeURIComponent(
 			url.pathname.slice(url.pathname.lastIndexOf('/') + 1),

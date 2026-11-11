@@ -25,6 +25,10 @@ import {
 // Cases known to differ from Chrome, by why (docs/same-origin-policy.md). A
 // case on the list that now reads as natively fails too: take it off.
 const KNOWN_BY_REASON = {
+	"a video or sound copied for a document no service worker controls keeps a blob: URL the page's process can fetch while the element shows it: its loads go on (a seek, a replay), and Chrome resolves a blob: URL again for each (docs/same-origin-policy.md)":
+		[
+			'gate/the URL a video of another site has in a written about:blank frame, fetched',
+		],
 	"a page that sends COOP and COEP is not cross-origin isolated: its frame is in the host's browsing context group":
 		['coi/a page that sends COOP and COEP'],
 	'the tracks of a stream captured from a canvas end when the canvas is tainted (their player shows nothing), where Chrome keeps them live and sends them no more frames (their player keeps the last one)':
@@ -62,7 +66,18 @@ const normal = (value) =>
 // (media plays without a gesture, so Web Audio has an element's sound to hear)
 const browser = await launch(['--autoplay-policy=no-user-gesture-required']);
 
+// what a realm the inject's hooks do not run in would hold: the browser's
+// own functions, taken before anything else runs in each document (the
+// gate/ cases)
+const NATIVES = `window.__sopNative = {
+	fetch: window.fetch,
+	text: Response.prototype.text,
+	getAttribute: Element.prototype.getAttribute,
+	MutationObserver: window.MutationObserver,
+};`;
+
 const nativePage = await browser.newPage();
+await nativePage.context().addInitScript(NATIVES);
 await nativePage.goto(pageURL('native'));
 const native = await report(nativePage);
 await nativePage.context().close();
@@ -90,6 +105,21 @@ for (const [mode, base] of [
 	['isolated', HOST],
 ]) {
 	const page = await openDemo(browser, base);
+	await page.context().addInitScript(NATIVES);
+	// the header each copy went out with (a grant's token, src/server/
+	// loadGrants.ts), as only the network sees it: the battery replays them
+	const seen = [];
+	let asked = 0;
+	page.context().on('request', (request) => {
+		const token = request.headers()['x-stomp-load'];
+		// (the battery's own forgeries carry the header too)
+		if (token && /^[\w-]{22}$/.test(token))
+			seen.push({ url: request.url(), token });
+	});
+	await page.context().exposeBinding('__sopSeen', () => {
+		asked++;
+		return seen;
+	});
 	await page.evaluate((url) => {
 		const form = document.getElementById('mainForm');
 		form.url.value = url;
@@ -98,6 +128,12 @@ for (const [mode, base] of [
 	const proxied = await report(page);
 	ok(`${mode}: the battery ran every case`, proxied !== null, normal(proxied));
 	compare(mode, native, proxied);
+	if (!only || 'gate/'.startsWith(only) || only.startsWith('gate/'))
+		ok(
+			`${mode}: the copies went out with single-use tokens, which the battery replayed`,
+			asked > 0 && seen.length > 0,
+			JSON.stringify({ asked, seen: seen.length }),
+		);
 	await page.context().close();
 }
 

@@ -26,6 +26,8 @@ import {
 	InitRemoteTransportMessage,
 	INLINE_DOCUMENT,
 	InlineDocumentMessage,
+	LOAD_CHANNEL,
+	LoadChannelMessage,
 	NAVIGATION_HINT,
 	NavigationHintMessage,
 	PERMISSION,
@@ -54,6 +56,7 @@ import { forScript, onJarChange } from './Cookies';
 import createServer, { addressCodec, StompServer } from './createServer';
 import { hostErrorPage } from './errorPage';
 import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
+import { openLoadChannel } from './loadGrants';
 import { recordNavigationHint } from './navigationHints';
 import {
 	decide,
@@ -618,6 +621,26 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 			url: message.url,
 			...(partition ? { partition } : {}),
 		});
+	} else if (LOAD_CHANNEL in data) {
+		// a window's load channel (loadGrants.ts): from a document this
+		// worker served under that controller, whose inject ran before
+		// anything of the page's, and the first one that client opens
+		const message = data[LOAD_CHANNEL] as LoadChannelMessage;
+		const source = event.source instanceof Client ? event.source : null;
+		const [port] = event.ports;
+		if (
+			!port ||
+			!message ||
+			typeof message.directory !== 'string' ||
+			!controllers.has(message.directory) ||
+			!source ||
+			source.type !== 'window' ||
+			!source.url.startsWith(`${location.origin}${message.directory}`)
+		) {
+			port?.close();
+			return;
+		}
+		openLoadChannel(source.id, port);
 	} else if (SRCDOC_VOUCH in data) {
 		// from a routed document of that controller: the srcdoc document
 		// under it is of its real origin and partition, read from its own

@@ -71,6 +71,7 @@ import {
 	KEPT_MARKER,
 	LOAD_HEADER,
 	MEMORY_MARKER,
+	OPAQUE_COPY_HEADER,
 	OPAQUE_HEADER,
 	OPAQUE_MARKER,
 	PREFLIGHT_HEADER,
@@ -151,13 +152,20 @@ import {
 	upgradesInsecure,
 } from './insecureRequests';
 import { noteKeptLoad } from './keptLoads';
+import { takeLoadGrant } from './loadGrants';
 import { recordCrossedMedia } from './mediaLoads';
 import {
 	awaitNavigationHint,
 	NavigationHint,
 	takeNavigationHint,
 } from './navigationHints';
-import { ORB_SNIFF_BYTES, orbByHeaders, orbSniff, peekBody } from './orb';
+import {
+	ORB_SNIFF_BYTES,
+	orbByHeaders,
+	orbMedia,
+	orbSniff,
+	peekBody,
+} from './orb';
 import type { RewriteCache, RewriteCacheOutcome } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
 import Router from './Router';
@@ -277,6 +285,12 @@ interface RedirectHop {
 	 * spec's response tainting)
 	 */
 	crossed?: boolean;
+	/**
+	 * the chain is a load the inject copies for a page, under a grant its
+	 * first hop took (loadGrants.ts): the browser repeats the token on every
+	 * hop, and a hop that carries the same one is the same load
+	 */
+	grant?: { token: string; load: string };
 	/** the routed URL the chain began at */
 	first?: string;
 }
@@ -305,10 +319,8 @@ const LOAD_MODES = ['no-cors', 'cors'];
 const LOAD_NAVIGATIONS = ['embed', 'object'];
 
 /**
- * What a LOAD_HEADER says the request stands for, or null. A page could set
- * the header on a fetch of its own: it can only make that fetch look like
- * one of its own subresource loads, which its site (decided from its
- * verified client, as ever) does not change
+ * The load a grant named (the value the inject announced for a request
+ * that carries its token in LOAD_HEADER, loadGrants.ts), or null
  */
 function loadOf(
 	value: string | null,
@@ -379,10 +391,19 @@ function rememberRedirect(
 	}
 }
 
+/** the previous hop of this request's redirect chain, left where it is */
+function peekRedirect(
+	client: string,
+	referrer: string,
+	url: string,
+): RedirectHop | undefined {
+	const entry = redirectHops.get(redirectKey(client, referrer, url));
+	return entry && Date.now() - entry.at <= REDIRECT_HOP_TTL ? entry : undefined;
+}
+
 /** whether this request is a later hop of a redirect chain the worker answered */
 function redirectPending(client: string, referrer: string, url: string) {
-	const entry = redirectHops.get(redirectKey(client, referrer, url));
-	return !!entry && Date.now() - entry.at <= REDIRECT_HOP_TTL;
+	return !!peekRedirect(client, referrer, url);
 }
 
 /** what the previous hop of this request's redirect chain decided, if it was one */
@@ -768,15 +789,38 @@ function genericForward(
 		);
 		// ours, never the origin's (nor a cache key's)
 		requestHeaders.delete(ABORT_HEADER);
-		// a load the inject fetched for the page says what it stands for; the
-		// page's own requests never carry the header (the inject drops it)
-		// (and a request the worker makes itself: an emulated service worker's
-		// script or the scripts it imports, no-cors loads natively)
-		const internal =
-			serverRequest.headers.has(LOAD_HEADER) ||
-			(!!context?.internal && !context.cors);
-		const load = loadOf(serverRequest.headers.get(LOAD_HEADER));
+		// a load the inject fetched for the page says so by the token of a
+		// grant its client announced for this very request (loadGrants.ts),
+		// or it is a later hop of a chain whose first hop did (the browser
+		// repeats the header). Anything else in the header changes nothing:
+		// the request is the page's own, judged by its real mode
+		// (a request the worker makes itself is internal too: an emulated
+		// service worker's script or the scripts it imports, no-cors loads
+		// natively)
+		const loadToken = serverRequest.headers.get(LOAD_HEADER);
 		requestHeaders.delete(LOAD_HEADER);
+		const earlierGrant =
+			loadToken === null || serverRequest.mode === 'navigate'
+				? undefined
+				: peekRedirect(
+						context?.clientId ?? '',
+						serverRequest.referrer,
+						serverRequest.url,
+					)?.grant;
+		const granted =
+			serverRequest.mode === 'navigate'
+				? null
+				: earlierGrant
+					? earlierGrant.token === loadToken
+						? earlierGrant.load
+						: null
+					: await takeLoadGrant(
+							loadToken,
+							context?.clientId,
+							serverRequest.url,
+						);
+		let internal = granted !== null || (!!context?.internal && !context.cors);
+		const load = loadOf(granted);
 		// a page's own request from an opaque origin (a document the page
 		// sandboxed without allow-same-origin): never a navigation
 		const opaque =
@@ -1086,6 +1130,11 @@ function genericForward(
 			!unknownBlob &&
 			initiator !== null &&
 			initiator.origin === url.url.origin;
+		// a download the inject saves for a page starts at the page's own
+		// origin (the `download` attribute counts for nothing else): a grant
+		// that names one for another origin's URL is not one
+		if (granted === 'download' && !previousHop && !sameOrigin)
+			internal = !!context?.internal && !context.cors;
 
 		// the browser sends Origin on cross-origin CORS requests and on every
 		// request with a body; Chrome also on a module script's, same-origin
@@ -1262,8 +1311,9 @@ function genericForward(
 
 		// The same-origin policy between the real origins (cors.ts). The mode
 		// is the request's own; an inject's copy of a page's load is that load
-		// (LOAD_HEADER), and any other copy (a download, a load whose kind the
-		// worker takes no metadata from) the browser's own no-cors load of it.
+		// (its grant names it), and any other copy (a download, a load whose
+		// kind the worker takes no metadata from) the browser's own no-cors
+		// load of it.
 		// The origin compared is the initiator's: "null" for an opaque one, a
 		// blob: worker or client this worker cannot place, and after a
 		// redirect from another origin to a third
@@ -1280,6 +1330,14 @@ function genericForward(
 			policyOrigin !== null &&
 			(policyOrigin === 'null' || policyOrigin !== url.url.origin);
 		const corsChecked = crossOrigin && policyMode === 'cors';
+		// a subresource the inject copies for a page under a grant: its bytes
+		// go to the page's process as a blob (not a download, which the page
+		// never holds, nor an object's or embed's document, a navigation)
+		const copiedLoad =
+			granted !== null &&
+			internal &&
+			granted !== 'download' &&
+			load?.mode !== 'navigate';
 		// the site of the frame or worker that makes the request (a
 		// navigation's is its destination's), null for an opaque or unknown
 		// one: with the top-level site, the network partition (the HTTP and
@@ -1436,10 +1494,10 @@ function genericForward(
 		// match blocks, answers, redirects or edits headers. Before the cache
 		// (a blocked or redirected request never touches it) and logged as such
 		// the rules see the request's real destination. A load the inject
-		// copied for a page (LOAD_HEADER) counts as the load it names too, but
-		// only for a rule that blocks it: a page can name any load on a fetch
-		// of its own, so a rule that edits headers, redirects or answers takes
-		// the real destination only
+		// copied for a page (a granted LOAD_HEADER) counts as the load it
+		// names too, for a rule that blocks it; a rule that edits headers,
+		// redirects or answers takes the real destination only, as it did
+		// when the header was the page's to write
 		const realDestination = serverRequest.destination || 'empty';
 		const rule = rewriter.rules.find(
 			(candidate) =>
@@ -2307,16 +2365,28 @@ function genericForward(
 		}
 		// a script of another origin that is HTML, XML or JSON by its type
 		// and first bytes is not handed over (opaque response blocking): the
-		// element fires `error`, as natively
+		// element fires `error`, as natively. And so for every load the
+		// inject copies for a page, whatever it is for: natively such a
+		// response never enters the page's process, and a copy's bytes do
 		if (
 			fromNetwork &&
 			chainCrossed &&
 			policyMode === 'no-cors' &&
-			serverRequest.destination === 'script' &&
+			(serverRequest.destination === 'script' || copiedLoad) &&
 			!REDIRECT_STATUSES.includes(response.status)
 		) {
 			let verdict = orbByHeaders(response.headers, response.status);
-			if (verdict === 'sniff' && response.body) {
+			// a video's or sound's copy keeps a URL the page's process can
+			// fetch for as long as it plays (docs/same-origin-policy.md): only
+			// what is media by its first bytes is handed over as one
+			const mediaCopy =
+				copiedLoad &&
+				(load?.destination === 'video' || load?.destination === 'audio');
+			if (mediaCopy && verdict !== 'block' && !response.body) verdict = 'block';
+			if (
+				(verdict === 'sniff' || (mediaCopy && verdict !== 'block')) &&
+				response.body
+			) {
 				const { head, body } = await peekBody(response.body, ORB_SNIFF_BYTES);
 				const peeked: typeof response = new Response(body, {
 					status: response.status,
@@ -2325,7 +2395,11 @@ function genericForward(
 				});
 				peeked.rawHeaders = response.rawHeaders;
 				response = peeked;
-				if (orbSniff(response.headers, response.status, head))
+				if (
+					(verdict === 'sniff' &&
+						orbSniff(response.headers, response.status, head)) ||
+					(mediaCopy && !orbMedia(head))
+				)
 					verdict = 'block';
 			}
 			if (verdict === 'block') {
@@ -2477,6 +2551,18 @@ function genericForward(
 		// unless its Timing-Allow-Origin names the page: the inject reads this
 		// mark (and takes it out of the headers a fetch or XHR shows)
 		if (timingShown) responseHeaders.append('server-timing', TAO_MARKER);
+		// a copy of a load the page may not read says so to the inject that
+		// asked for it, which keeps the copy out of the page's reach (only a
+		// granted request's answer carries the header)
+		responseHeaders.delete(OPAQUE_COPY_HEADER);
+		if (
+			copiedLoad &&
+			!redirect &&
+			(fromNetwork
+				? chainCrossed && policyMode === 'no-cors'
+				: !!responseHeaders.get(RESPONSE_TYPE_HEADER)?.startsWith('opaque'))
+		)
+			responseHeaders.set(OPAQUE_COPY_HEADER, 'opaque');
 		// an answer from the worker's own caches reads as the browser's cache
 		// hit in resource timing (CACHED_MARKER)
 		if (cached && !redirect)
@@ -2518,6 +2604,9 @@ function genericForward(
 						? { tainted: true }
 						: {}),
 					...(chainCrossed ? { crossed: true } : {}),
+					...(granted !== null && loadToken !== null
+						? { grant: { token: loadToken, load: granted } }
+						: {}),
 					first: previousHop?.first ?? serverRequest.url,
 				},
 			);
@@ -2858,6 +2947,7 @@ function recentOutputKey(
 		request.method !== 'GET' ||
 		request.mode === 'navigate' ||
 		!context?.clientId ||
+		request.headers.has(LOAD_HEADER) ||
 		(request.cache !== undefined && request.cache !== 'default')
 	)
 		return null;
@@ -2869,9 +2959,9 @@ function recentOutputKey(
 		request.credentials,
 		// what the same-origin policy decides by, past the client's origin
 		// (the client id) and the mode and credentials above: whether it is
-		// one of the inject's copies, of an opaque origin, and the page's
-		// headers that would need a preflight
-		request.headers.get(LOAD_HEADER) ?? '',
+		// of an opaque origin, and the page's headers that would need a
+		// preflight (a request that names a load grant is never answered
+		// from here: its grant is taken once)
 		request.headers.has(OPAQUE_HEADER) ? 'opaque' : '',
 		unsafeHeaderNames(request.headers, notPagesHeader).join(','),
 	].join('\u0000');

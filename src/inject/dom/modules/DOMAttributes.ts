@@ -17,17 +17,19 @@ import {
 import { routeJS, ScriptType } from '../../../scriptRoutes';
 import { parseAcceptCH } from '../../../server/hintNames';
 import StompURL from '../../../StompURL';
-import { LOAD_HEADER } from '../../../transport/messages';
+import { LOAD_HEADER, OPAQUE_COPY_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
-import { opaqueMarked } from '../../modules/Fetch';
+import { opaqueCopy, opaqueMarked } from '../../modules/Fetch';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { scopePrefix, unrouteCSS, unrouteURL } from '../../modules/Unroute';
 import { modifyCSS, modifyJS } from '../../rewriter';
 import { blobLoads, opaqueCopies } from '../blobLoads';
 import DocumentClient, { type StyleElement } from '../Client';
+import { loadFetch, loadSource } from '../loadGrants';
 import { responseURLOf } from '../responseDocuments';
 import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
+import { sealedURL } from '../sealedCopies';
 import DOMHooksModule, {
 	CustomElement,
 	nativeElement,
@@ -158,10 +160,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// element gets a blob: URL of the copy, written underneath the hooks:
 		// the attribute, the property and the markup read back as the page
 		// wrote them, currentSrc as the URL the copy came from.
+		// (an about:srcdoc document has its parent's worker, so one under such
+		// a document has none either)
 		const uncontrolled = () =>
 			!this.client.controlled &&
 			(this.client.opened ||
 				this.client.global.location.href === 'about:blank' ||
+				this.client.global.location.href === 'about:srcdoc' ||
 				this.client.global.location.protocol === 'blob:');
 		this.uncontrolled = uncontrolled;
 		// the proxy origin from the base URL: an about:blank document's own
@@ -180,8 +185,131 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// taken now: a page that replaces them later sees none of the copies
 		const createObjectURL = this.client.global.URL.createObjectURL;
 		const revokeObjectURL = this.client.global.URL.revokeObjectURL;
-		/** one value's copies: the routed value, what was set, the blobs made */
-		type Copy = { routed: string; url?: string; made: string[] };
+		/**
+		 * One value's copies: the routed value, what was set, the blobs made.
+		 * `kept` are the images that hold a sealed copy's cache entry
+		 * (sealedCopies.ts), `sound` whether every one of them loaded, `live`
+		 * the copies of another origin's scripts and stylesheets, whose URLs
+		 * are revoked as soon as their loads have them (endLive)
+		 */
+		type Copy = {
+			routed: string;
+			url?: string;
+			made: string[];
+			kept?: object[];
+			sound?: boolean;
+			live?: string[];
+			retried?: boolean;
+		};
+		const createElement = this.client.global.Document.prototype.createElement;
+		const isConnected = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Node.prototype,
+			'isConnected',
+		)!.get!;
+		/** an image the inject keeps, loading `url` in this document; whether it loaded */
+		const keep = (url: string, state: Copy): Promise<boolean> =>
+			new Promise((resolve) => {
+				try {
+					const keeper = Reflect.apply(
+						createElement,
+						this.client.global.document,
+						['img'],
+					) as HTMLImageElement;
+					for (const type of ['load', 'error'])
+						nativeElement.addEventListener.call(
+							keeper,
+							type,
+							() => resolve(type === 'load'),
+							{ once: true },
+						);
+					nativeElement.setAttribute.call(keeper, 'src', url);
+					(state.kept ??= []).push(keeper);
+				} catch (error) {
+					resolve(false);
+				}
+			});
+		/**
+		 * The URL of a copy the page may not read (another origin's no-cors
+		 * load), which is to be shown as an image: one nothing can fetch,
+		 * answered from the memory cache an image the inject keeps holds
+		 * (sealedCopies.ts). Bytes that are no image name nothing at all, as
+		 * the load fails natively. Without a worker to make it in, the URL is
+		 * this realm's: revoked at once when the bytes are no image.
+		 */
+		const sealed = async (
+			body: Blob,
+			state: Copy,
+			fragments: string[],
+		): Promise<string> => {
+			let primed = false;
+			// the memory cache keeps a blob: URL's fragment in its key: one
+			// kept image for each form the value names the copy by
+			const dead = await sealedURL(body, async (url) => {
+				primed = (
+					await Promise.all(
+						(fragments.length ? fragments : ['']).map((fragment) =>
+							keep(url + fragment, state),
+						),
+					)
+				).every((loaded) => loaded);
+				return true;
+			});
+			if (dead !== null) {
+				if (state.sound !== false) state.sound = primed;
+				return dead;
+			}
+			const url = proxyBlobURL(
+				Reflect.apply(createObjectURL, this.client.global.URL, [
+					body,
+				]) as string,
+			);
+			if (!(await keep(url, state)))
+				Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
+			return url;
+		};
+		/**
+		 * The copies of another origin's scripts and stylesheets a value shows
+		 * (`state.live`) are let go as soon as their loads have them: a load
+		 * resolves its blob: URL when it starts, so the URL of `placed`, set
+		 * on an element in the document, is revoked at once (measured in
+		 * plain Chrome 152 and 156 for classic, async, deferred and module
+		 * scripts and for stylesheets, forty at a time); the rest (an element
+		 * not in the document yet, the imports of a stylesheet) when `owner`
+		 * has loaded or failed, or after half a minute.
+		 */
+		const endLive = (owner: object, state: Copy, placed?: string) => {
+			let live = state.live;
+			if (!live?.length) return;
+			state.live = undefined;
+			const revoke = (urls: string[]) => {
+				for (const url of urls)
+					Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
+			};
+			if (
+				placed !== undefined &&
+				live.includes(placed) &&
+				Reflect.apply(isConnected, owner, [])
+			) {
+				revoke([placed]);
+				live = live.filter((url) => url !== placed);
+				if (!live.length) return;
+			}
+			let ended = false;
+			const end = () => {
+				if (ended) return;
+				ended = true;
+				revoke(live);
+			};
+			try {
+				for (const type of ['load', 'error'])
+					nativeElement.addEventListener.call(owner as Element, type, end, {
+						once: true,
+					});
+			} catch (error) {
+				// no element (a constructed sheet): the timer alone
+			}
+			setTimeout(end, 30_000);
+		};
 		const copies = new WeakMap<object, Map<string, Copy>>();
 		// a route inside a url(): the worker's rewritten CSS writes them whole,
 		// then the marker that keeps the page's token
@@ -191,6 +319,34 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				'\\$&',
 			);
 			return new RegExp(`(url\\(\\s*["']?)(${escaped}[^"'\\s)#]*)`, 'g');
+		};
+		/**
+		 * What the url() that starts at `index` of `text` names, as the
+		 * browser's tokenizer reads it: quoted or not, its escapes undone
+		 * (CSS Syntax, consume a url token and consume an escaped code point).
+		 * Null when it does not end.
+		 */
+		const cssURLAt = (text: string, index: number): string | null => {
+			let at = index + 4;
+			while (/\s/.test(text[at] ?? '')) at++;
+			const quote = text[at] === '"' || text[at] === "'" ? text[at++] : '';
+			let named = '';
+			for (; at < text.length; at++) {
+				const char = text[at];
+				if (quote ? char === quote : char === ')' || /\s/.test(char))
+					return named;
+				if (char !== '\\') {
+					named += char;
+					continue;
+				}
+				const hex = /^[0-9a-f]{1,6}/i.exec(text.slice(at + 1, at + 7))?.[0];
+				if (hex) {
+					named += String.fromCodePoint(parseInt(hex, 16) || 0xfffd);
+					at += hex.length;
+					if (/\s/.test(text[at + 1] ?? '')) at++;
+				} else if (at + 1 < text.length) named += text[++at];
+			}
+			return null;
 		};
 		const routesIn = (text: string) => [
 			...new Set([...text.matchAll(routePattern())].map((match) => match[2])),
@@ -211,11 +367,20 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		/** copies of every route in `text`, by route (a failed one is left out) */
 		const copiesOf = async (text: string, state: Copy, depth: number) => {
 			const copied = new Map<string, string>();
-			// each route as the load where it first appears
+			// each route as the load where it first appears, and what follows
+			// it in each url() that names it (the marker that keeps the page's
+			// token): the copy's URL is named with the same
 			const kinds = new Map<string, string>();
-			for (const match of text.matchAll(routePattern()))
-				if (!kinds.has(match[2]))
-					kinds.set(match[2], cssLoadKind(text, match.index ?? 0, match[2]));
+			const fragments = new Map<string, Set<string>>();
+			for (const match of text.matchAll(routePattern())) {
+				const target = match[2];
+				if (!kinds.has(target))
+					kinds.set(target, cssLoadKind(text, match.index ?? 0, target));
+				const named = cssURLAt(text, match.index ?? 0);
+				if (!fragments.has(target)) fragments.set(target, new Set());
+				if (named?.startsWith(target))
+					fragments.get(target)!.add(named.slice(target.length));
+			}
 			await Promise.allSettled(
 				routesIn(text).map(async (target) =>
 					copied.set(
@@ -226,6 +391,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							state,
 							depth,
 							kinds.get(target) ?? null,
+							[...(fragments.get(target) ?? [])],
 						),
 					),
 				),
@@ -274,7 +440,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const settle = () => {
 				const shown = blobsIn(read());
 				const previous = perOwner.get(key);
-				if (previous)
+				if (previous) {
 					for (const url of previous.made.splice(0))
 						if (shown.has(url)) state.made.push(url);
 						else {
@@ -282,7 +448,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							opaqueCopies.delete(url);
 							Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
 						}
+					// the images that hold the copies still shown stay with them
+					if (previous.kept?.length && state.made.length)
+						(state.kept ??= []).push(...previous.kept);
+					previous.kept = undefined;
+				}
 				perOwner.set(key, state);
+				endLive(owner, state);
 			};
 			const text = read();
 			if (!routesIn(text).length) {
@@ -417,18 +589,21 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			state: Copy,
 			depth = 4,
 			load: string | null = null,
+			fragments: string[] | null = null,
 		): Promise<string> => {
 			// an SVG reference's fragment names the element in the copy
 			const hash = routed.indexOf('#');
 			const fragment = hash === -1 ? '' : routed.slice(hash);
-			const response = await this.client.routedFetch(
-				hash === -1 ? routed : routed.slice(0, hash),
-				{
-					credentials: 'include',
-					// the copy stands for the element's load, never a page's read
-					// (a load the worker takes no metadata from is `copy`)
-					headers: { [LOAD_HEADER]: load ?? 'copy' },
-				},
+			const response = await loadFetch(
+				this.client,
+				new URL(
+					hash === -1 ? routed : routed.slice(0, hash),
+					scopePrefix(this.client),
+				).href,
+				// the copy stands for the element's load, never a page's read
+				// (a load the worker takes no metadata from is `copy`)
+				load ?? 'copy',
+				{ credentials: 'include' },
 			);
 			if (!response.ok && response.status !== 0)
 				throw new Error(String(response.status));
@@ -438,11 +613,27 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						type,
 					})
 				: await response.blob();
-			const url = proxyBlobURL(
-				Reflect.apply(createObjectURL, this.client.global.URL, [
+			// a copy the page may not read is kept out of its reach: an image's
+			// URL is sealed, a script's or stylesheet's revoked once its load
+			// has it (a video's or sound's must stay: its loads go on)
+			const opaque = opaqueCopy(response);
+			const kind = load === null ? null : load.split(' ')[0];
+			let url: string;
+			if (opaque && (kind === 'image' || kind === null))
+				url = await sealed(
 					body,
-				]) as string,
-			);
+					state,
+					fragments ?? (fragment ? [fragment] : []),
+				);
+			else {
+				url = proxyBlobURL(
+					Reflect.apply(createObjectURL, this.client.global.URL, [
+						body,
+					]) as string,
+				);
+				if (opaque && (kind === 'script' || kind === 'style'))
+					(state.live ??= []).push(url);
+			}
 			state.made.push(url);
 			blobLoads.set(url, page);
 			if (opaqueMarked(response)) opaqueCopies.add(url);
@@ -462,18 +653,21 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			load: string | null = null,
 		): string | null => {
 			if (!this.client.workerTransport) return null;
-			const controlled =
-				this.client.controlledClient() as DocumentClient | null;
-			// asked of the controlled client itself: it may be of another bundle
-			const sync = controlled?.syncBridge;
-			if (!sync) return null;
+			// the bridge of the client the grant is announced through (it may
+			// be of another bundle): its beacon is the request the worker sees
+			const from = loadSource();
+			const sync = (from?.client as DocumentClient | undefined)?.syncBridge;
+			if (!from || !sync) return null;
 			try {
+				const target = new URL(routed, scopePrefix(this.client)).href;
+				const token = from.announce(target, load ?? 'copy');
+				if (token === null) return null;
 				const response = sync.fetch(
-					new URL(routed, scopePrefix(this.client)).href,
+					target,
 					{
 						credentials: 'include',
 						// a Headers: the bridge passes on no other kind
-						headers: new Headers({ [LOAD_HEADER]: load ?? 'copy' }),
+						headers: new Headers({ [LOAD_HEADER]: token }),
 					},
 					false,
 					5000,
@@ -488,6 +682,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				);
 				state.made.push(url);
 				blobLoads.set(url, page);
+				if (response.headers.get(OPAQUE_COPY_HEADER) === 'opaque')
+					(state.live ??= []).push(url);
 				return url;
 			} catch (error) {
 				// a stuck or refused bridge: the copy is made the usual way
@@ -502,6 +698,39 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				opaqueCopies.delete(url);
 				Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
 			}
+			state.kept = undefined;
+			state.live = undefined;
+		};
+		const stopImmediate =
+			this.client.global.Event.prototype.stopImmediatePropagation;
+		const nativeQuery = this.client.global.Document.prototype.querySelector;
+		/**
+		 * A script the page wrote got its copy during the write (syncCopyOf),
+		 * in the markup: the element the parser makes from it loads the URL.
+		 * A copy the page may not read is revoked once that element is in the
+		 * document (its load has the URL by then), looked for after the write
+		 * and a few times more (a parser held up by an earlier script).
+		 */
+		const endWritten = (state: Copy, url: string) => {
+			if (!state.live?.includes(url)) return;
+			state.live = state.live.filter((live) => live !== url);
+			const revoke = () =>
+				Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
+			const waits = [0, 50, 250, 1000, 5000, 24_000];
+			const look = () => {
+				let found: Element | null = null;
+				try {
+					found = Reflect.apply(nativeQuery, this.client.global.document, [
+						`script[src="${url}"],script[href="${url}"]`,
+					]) as Element | null;
+				} catch (error) {
+					// a document that is gone
+				}
+				const wait = waits.shift();
+				if (found || wait === undefined) revoke();
+				else setTimeout(look, wait);
+			};
+			setTimeout(look, 0);
 		};
 		// async=false scripts run in the order they were added (the browser's
 		// list of scripts that execute in order follows when each gets its
@@ -534,6 +763,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			routed: string,
 			urls: { routed: string; page: string }[] | null = null,
 			compose: (copies: string[]) => string = (copies) => copies[0],
+			retried = false,
 		) => {
 			const targets = urls ?? [
 				{
@@ -562,6 +792,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			if (!perAttribute) copies.set(element, new Map());
 			const states = copies.get(element)!;
 			const state: Copy = { routed, made: [] };
+			if (retried) state.retried = true;
 			states.set(attribute, state);
 			// markup the page writes: the element here is the clone the markup
 			// is rewritten on; the parser makes the real one, which gets its copy
@@ -588,6 +819,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				if (url) {
 					state.url = url;
 					element.setAttribute(attribute, url);
+					endWritten(state, url);
 					release(current);
 					return;
 				}
@@ -601,10 +833,34 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					return;
 				}
 				state.url = value;
+				const ownLive = !!state.live?.includes(value);
 				usePrototype(element, CustomElement.prototype, (element) =>
 					element.setAttribute(attribute, value),
 				);
+				endLive(element, state, value);
 				release(current);
+				// a sealed image whose cache entry went, a stylesheet put back
+				// into the document after its URL was revoked: the load fails
+				// where the native one would not, and is copied again, once
+				if (
+					!state.retried &&
+					(state.sound === true ||
+						(ownLive && loadKind(element, attribute)?.startsWith('style ')))
+				)
+					nativeElement.addEventListener.call(
+						element,
+						'error',
+						(event) => {
+							if (states.get(attribute) !== state) return;
+							Reflect.apply(stopImmediate, event, []);
+							states.delete(attribute);
+							release(state);
+							usePrototype(element, CustomElement.prototype, (element) =>
+								placeLoad(element, attribute, routed, urls, compose, true),
+							);
+						},
+						{ once: true, capture: true },
+					);
 			};
 			let settle = apply;
 			if (
@@ -2197,16 +2453,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.setAttribute(attribute, value),
 				);
 			};
-			this.client
-				// the copy goes out as the load it stands for (LOAD_HEADER)
-				.routedFetch(routeXHR(resource), {
-					headers: {
-						[LOAD_HEADER]:
-							// Chrome loads an object's or embed's resource as a nested
-							// context: mode navigate, destination its element
-							attribute === 'data' ? 'object navigate' : 'embed navigate',
-					},
-				})
+			// the copy goes out as the load it stands for (loadGrants.ts)
+			loadFetch(
+				this.client,
+				new URL(routeXHR(resource), scopePrefix(this.client)).href,
+				// Chrome loads an object's or embed's resource as a nested
+				// context: mode navigate, destination its element
+				attribute === 'data' ? 'object navigate' : 'embed navigate',
+			)
 				.then(async (response) => {
 					if (!response.ok && response.status !== 0)
 						throw new Error(String(response.status));

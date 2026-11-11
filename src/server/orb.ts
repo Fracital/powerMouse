@@ -115,19 +115,26 @@ export function orbByHeaders(
 const starts = (bytes: Uint8Array, ...signature: number[]) =>
 	signature.every((byte, index) => byte < 0 || bytes[index] === byte);
 /** an image, a sound or a video, by its first bytes */
-function media(bytes: Uint8Array): boolean {
+export function orbMedia(bytes: Uint8Array): boolean {
 	return (
 		starts(bytes, 0x89, 0x50, 0x4e, 0x47) || // PNG
 		starts(bytes, 0xff, 0xd8, 0xff) || // JPEG
 		starts(bytes, 0x47, 0x49, 0x46, 0x38) || // GIF
 		starts(bytes, 0x42, 0x4d) || // BMP
 		starts(bytes, 0x00, 0x00, 0x01, 0x00) || // ICO
+		starts(bytes, 0x00, 0x00, 0x02, 0x00) || // CUR
 		starts(bytes, 0x52, 0x49, 0x46, 0x46) || // RIFF: WebP, WAV, AVI
 		starts(bytes, 0x4f, 0x67, 0x67, 0x53) || // Ogg
 		starts(bytes, 0x1a, 0x45, 0xdf, 0xa3) || // WebM, Matroska
 		starts(bytes, 0x49, 0x44, 0x33) || // MP3 with ID3
 		starts(bytes, 0x66, 0x4c, 0x61, 0x43) || // FLAC
-		starts(bytes, -1, -1, -1, -1, 0x66, 0x74, 0x79, 0x70) // MP4
+		starts(bytes, -1, -1, -1, -1, 0x66, 0x74, 0x79, 0x70) || // MP4, AVIF
+		// an MPEG audio frame (MP3 without ID3, AAC in ADTS): eleven sync
+		// bits and a layer; 0xFF 0xFE is UTF-16's byte order mark, not sound
+		(bytes[0] === 0xff &&
+			(bytes[1] & 0xe0) === 0xe0 &&
+			bytes[1] !== 0xfe &&
+			bytes[1] !== 0xff)
 	);
 }
 
@@ -176,7 +183,7 @@ export function orbSniff(
 	status: number,
 	head: Uint8Array,
 ): boolean {
-	if (media(head)) return false;
+	if (orbMedia(head)) return false;
 	if (status < 200 || status > 299) return true;
 	const type = essence(headers);
 	if (type === '') return false;

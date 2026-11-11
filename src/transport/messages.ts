@@ -51,11 +51,44 @@ export const ABORT_HEADER = 'x-stomp-abort';
 /**
  * On a request the inject makes for a page's load (the copy of an element's
  * or a stylesheet's subresource in a document no service worker controls):
- * `<destination> <mode>`, the Sec-Fetch-Dest and Sec-Fetch-Mode of the load
- * it stands for. The worker takes subresource values only, never a
- * navigation's, and strips it
+ * the token of a grant the inject announced for exactly this request on its
+ * client's load channel (LOAD_CHANNEL). The worker takes the grant once,
+ * judges the request as the load the grant names and strips the header; a
+ * value that names no grant of the requesting client for this URL changes
+ * nothing, and the request is the page's own
  */
 export const LOAD_HEADER = 'x-stomp-load';
+/**
+ * proxied page -> SW, with [port]: the channel on which this client's inject
+ * announces the loads it is about to copy (src/server/loadGrants.ts), opened
+ * before any of the page's script runs; the worker takes one per client
+ */
+export const LOAD_CHANNEL = '$stomp$loadChannel';
+export interface LoadChannelMessage {
+	/** the sender's controller address */
+	directory: string;
+}
+/**
+ * On that channel: one load the client is about to request. `load` is
+ * `<destination> <mode>`, the Sec-Fetch-Dest and Sec-Fetch-Mode of the load
+ * the request stands for (subresource values only, never a navigation's
+ * but an object's or embed's), or `copy` (a load the worker takes no
+ * metadata from) or `download`
+ */
+export interface LoadGrantMessage {
+	/** 22 random characters of base64url: the LOAD_HEADER of the request */
+	token: string;
+	/** the routed URL the request will ask for */
+	url: string;
+	load: string;
+}
+/**
+ * On the answer to a granted load whose response the page may not read (a
+ * no-cors load of another origin, or one that came through another origin):
+ * the inject keeps its copy where no realm of the page can fetch it. Only
+ * a granted request's answer carries it, and no page reads that answer
+ */
+export const OPAQUE_COPY_HEADER = 'x-stomp-copy';
 /**
  * A Server-Timing metric the worker adds to a response of another origin
  * whose Timing-Allow-Origin lets the page see its timing: every route is

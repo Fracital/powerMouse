@@ -146,10 +146,11 @@ Filled in commit by commit; see the CHANGELOG for each.
   gets nothing of it. A redirect from one other origin to a third sends
   `Origin: null`. The inject's fetch records each response's type (`cors`,
   `opaque`) and an opaque one reads as the browser's (status 0, no headers,
-  no body, no URL). The inject's own copies of a page's loads say which load
-  they stand for (`x-stomp-load`) and are judged as that load; the page's
-  own requests never carry the proxy's headers (fetch, Request and
-  XMLHttpRequest drop them). A synchronous XMLHttpRequest the policy
+  no body, no URL). The inject's own copies of a page's loads are judged as
+  the load they stand for, by a grant the inject announced for each (the
+  load gate, below); the page's own requests never carry the proxy's
+  headers (fetch, Request and XMLHttpRequest drop them), and one that did
+  would be judged as the request it is. A synchronous XMLHttpRequest the policy
   refuses throws NetworkError, as natively. Cost: nothing on a same-origin
   request; a preflight is the round trip Chrome makes too.
   A client whose URL names no origin is judged by the one the worker
@@ -341,8 +342,9 @@ Filled in commit by commit; see the CHANGELOG for each.
 - **Output reuse** (`recentOutputs`, master's speed series): the worker
   gives a document the output it just gave it for the same request only
   when everything the policy decides by is the same: the client (its
-  origin), mode, credentials, the inject's copy marker, the opaque-origin
-  marker and the page's headers that need a preflight; never for a hop of
+  origin), mode, credentials, the opaque-origin marker and the page's
+  headers that need a preflight (a request that carries the load header is
+  never answered from it: a grant is for one request); never for a hop of
   a redirect chain, whose origin may be "null" by then. A refused request
   is never kept. (sop-escapes: a script of another site plain then
   `crossorigin` without CORS, and the other way.)
@@ -491,38 +493,120 @@ Filled in commit by commit; see the CHANGELOG for each.
   three; anything else by the JSON sniffer and the prefixes sites put
   before JSON). A blocked script is a network error to the page. Other
   no-cors loads of such a response fail or are opaque either way.
+- **The load gate** (sop-escapes `gate/`: 13 cases per mode read another
+  site's bytes, 1 is left; load-grants, load-grants-restart and
+  document-kinds suites). Chrome gives an about:blank document no service
+  worker, whatever is done to it (measured in plain Chrome 152 and 156,
+  table below), so the inject fetches such a document's loads from a
+  document a worker does control and hands the element a `blob:` URL: a
+  copy. The worker used to judge a request as the load it named in
+  `x-stomp-load`, which any realm could write, and the copy's URL was one
+  any realm could fetch. Three things changed.
+  - _The request is a capability._ The inject's bundle opens a MessagePort
+    to the worker when it loads, before any of the page's script
+    (`src/inject/dom/loadGrants.ts`); the worker takes it only from a
+    client it served a document to, and only the first from each
+    (`src/server/loadGrants.ts`). For each copy the inject announces
+    `{token, url, load}` on the port and sends the token (22 random
+    characters) in `x-stomp-load`. The worker grants it once: to the client
+    that announced it, for that URL, within 30 s; a redirect's later hops
+    inherit it only with the same token. Anything else in the header (the
+    old `image no-cors`, a made-up token, a token used before, one sent
+    twice at once) is the page's own request, judged by its real mode. The
+    port, the natives it is used with and the tokens are in the module's
+    scope. A bundle in a document the worker did not serve (a srcdoc
+    document's, an object's or embed's document's) goes through the
+    nearest bundle above it that has a channel. A worker that restarted
+    asks the client of the first token it sees to open its channel again,
+    and the inject tells its last five seconds of announcements again. Kept
+    in the worker: 2048 grants at most (512 for one client), 30 s each, 512
+    channels, 1024 spent tokens.
+  - _What a grant hands over is what Chrome would let into the renderer._
+    A granted copy of another origin's no-cors load goes through opaque
+    response blocking in the worker, whatever the load (it was scripts
+    only): HTML, XML and JSON never reach the page's process. A download's
+    grant is for the page's own origin.
+  - _The copy's URL names nothing._ The worker says which copies the page
+    may not read (`x-stomp-copy: opaque`, on a granted answer only). An
+    image's (an `<img>`, a srcset, a poster, an SVG image, a CSS `url()`)
+    gets a URL made in a worker of the inject's that is then terminated: a
+    `blob:` URL dies with the context that made it, while Blink's memory
+    cache goes on answering elements and styles that name it, held by an
+    image the inject keeps, one for each fragment the value names the URL
+    with (the cache keeps a `blob:` URL's fragment in its key, and a
+    style's url() carries the page's token after `#`)
+    (`src/inject/dom/sealedCopies.ts`; measured:
+    `URL.revokeObjectURL` will not do, it purges the cache, and the
+    worker's end is not synchronous, so a second URL of the same worker is
+    fetched until it fails). Bytes that are no image name nothing at all,
+    and the element fires `error` as natively. A script's or stylesheet's
+    URL is revoked in the task that sets it on an element in the document
+    (a load resolves its `blob:` URL when it starts; measured for classic,
+    async, deferred and module scripts and for stylesheets, forty at a
+    time), otherwise when the element has loaded; a stylesheet's imports
+    when it has loaded. A stylesheet put back into the document afterwards,
+    or an image whose cache entry went, fails once and is copied again.
+  - The documents (plain Chrome 152 and 156, the same in both; through the
+    proxy, document-kinds suite). No service worker: an about:blank frame
+    (fresh, `src="about:blank"`, after `document.open` and `write` by its
+    parent or itself, navigated back to it, sandboxed with
+    allow-same-origin), `window.open('')` and `'about:blank'` popups and
+    the frames in them; `clients.claim()` does not claim them and
+    `clients.matchAll({ includeUncontrolled: true })` does not list them.
+    A srcdoc frame has its parent's worker, so one under an about:blank
+    frame or popup has none (its loads were not copied before, and
+    failed). blob: and data: documents have none natively; the proxy
+    serves them from the worker already (`inline:`), as it does
+    `javascript:` documents. An `<object>`'s or `<embed>`'s document has
+    none, and its navigation never reaches a worker. A frame navigated to
+    a URL the worker serves is controlled and keeps its Window, but the
+    about:blank Document the page holds is replaced at commit (what it
+    wrote or appended is gone, `contentDocument` is another object), so no
+    served document can stand in for a synchronous about:blank. The copies
+    stay for about:blank documents, srcdoc documents under them, and object
+    and embed documents.
+  - Cost: frame-cost 1070 KB of heap a frame (1064 before, ceiling 1120),
+    the bundle 816 KB (809, ceiling 850); an about:blank frame with fifty
+    images of another site loads in 48 ms (median of 9; 47 to 62 before,
+    44 to 55 natively: no difference outside the runs' noise), one worker
+    for the fifty.
 
 ## Left
 
 Ranked by what a page could learn or do. Measured ones are listed in the
 suites' known lists with the same reason.
 
-1. **The gate between page and worker is in the page, and cannot move out
-   of it while the copies exist.** The worker exempts the inject's copies
-   from CORS by their `x-stomp-load` marker (judged as the load they stand
-   for: a no-cors image is read whole). The hooks drop the marker from the
-   page's own requests and hand the browser the page's headers as a record
-   read with the browser's own members, so a replaced iterator, getter or
-   `Object.prototype.headers` adds nothing (sop-escapes measured both ways
-   in before that). A realm no hook runs in could still send it. A secret
-   only the inject holds was considered: the worker would hand it, over a
-   MessagePort, once, to each client it served the shell to, before any of
-   the page's script runs, and trust only a marker that carries it. It
-   would stop a forged marker, but not what the marker grants. The copies
-   exist because Chrome gives a document no service worker controls (an
-   about:blank frame or popup the page builds) no worker at all, so the
-   inject fetches each of its loads through a controlled ancestor and hands
-   the element a `blob:` URL of the bytes. Those bytes are in the page's
-   realm by construction: a realm that can forge the marker can just as well
-   put another site's image into such a frame and read the `blob:` URL the
-   copy left in the element's attribute. Taking the bytes out of the page
-   needs those loads to reach the service worker themselves, which Chrome
-   does not do for those documents (measured in plain Chrome 152,
-   docs/scramjet-parity.md section 7),
-   or no such documents, which pages build constantly. So the marker stays
-   a page-side gate, hardened as above. (Also measured: a DevTools or
-   extension isolated world's fetch does not reach the service worker at
-   all; the proxy server answers it, 404.)
+1. **A video or sound copied for a document no service worker controls
+   keeps a `blob:` URL the page's process can fetch.** The rest of the gate
+   between page and worker is closed (the load gate, above). A media
+   element's loads go on after the first: a seek into what it has not
+   buffered, a replay. Chrome resolves the `blob:` URL again for each, and
+   has no other way to hand an element a Blob (measured in plain Chrome 152
+   and 156: `video.srcObject = blob` throws "TypeError: Failed to set the
+   'srcObject' property on 'HTMLMediaElement': The provided value is not of
+   type '(MediaSourceHandle or MediaStream)'"; revoking the URL as soon as
+   it is set gives error code 4; revoking it after `loadedmetadata` leaves
+   a 4 MB video stalled on a seek to 95% and a 300 MB one on any seek, with
+   no error event). So the URL stays alive while the element shows it, and
+   a realm without the inject's hooks that reads the attribute can fetch
+   the bytes (sop-escapes: `gate/the URL a video of another site has ...`,
+   on the known list). The bytes are a media file's: the worker hands a
+   video's or sound's copy over only when its first bytes are a media
+   container's, so a document, data or text of another site is not read
+   this way (the element fires `error`, as natively). Closing it
+   needs those loads to reach the service worker, which Chrome does not do
+   for those documents, or MediaSource for every copied file, which plays
+   only fragmented MP4 and WebM.
+   What the gate does not cover, since it is not the gate's: a realm
+   without hooks is in the proxy's one real origin, so it reads what the
+   browser renders there with the browser's own methods (a canvas it draws
+   an image into, a sheet's rules), in a document the worker controls as
+   much as in a copied one, and it can ask the worker for a transport
+   (`INIT_REMOTE_TRANSPORT`), which is how a document's WebSocket works. A
+   worker that restarted takes the first channel a client opens: the
+   inject's, unless a realm without hooks posts as that client first. The
+   defence against such a realm is that there is none (the escape suites);
+   the gate is what holds when a hook is passed.
 2. `:visited`: Chrome never lets script read it, and since Chrome 136
    keeps it per link URL, top-level site and frame origin; through the
    proxy every link is a proxy URL under one top-level site and one frame

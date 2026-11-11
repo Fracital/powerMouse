@@ -2268,6 +2268,398 @@
 		}),
 	}));
 
+	// --- the gate between page and worker ---------------------------------
+	// A document no service worker controls (an about:blank frame the page
+	// builds) gets its loads as copies the inject fetches. What a realm the
+	// inject's hooks do not run in could do with that, each compared with
+	// plain Chrome: the suite takes the browser's own fetch, getAttribute
+	// and MutationObserver before anything else runs in the page
+	// (window.__sopNative), which is what such a realm would hold.
+	const N = window.__sopNative ?? {
+		fetch: window.fetch,
+		text: Response.prototype.text,
+		getAttribute: Element.prototype.getAttribute,
+		MutationObserver: window.MutationObserver,
+	};
+	/** what the browser's own fetch reads of `url` */
+	const nativeRead = async (url, init) => {
+		try {
+			const response = await N.fetch.call(window, url, init);
+			const body = await N.text.call(response);
+			return `read ${body.length}: ${body.slice(0, 12)}`;
+		} catch (error) {
+			return failed(error);
+		}
+	};
+	/** the URL the browser would load for `url` as an image of this page */
+	const loadedURL = (url) => {
+		const element = new Image();
+		element.src = url;
+		return N.getAttribute.call(element, 'src');
+	};
+	const writtenFrame = () => {
+		const frame = document.createElement('iframe');
+		document.body.append(frame);
+		const written = frame.contentDocument;
+		written.open();
+		written.write('<body>');
+		written.close();
+		return { frame, written };
+	};
+	const settled = (element, events = ['load', 'error']) =>
+		new Promise((resolve) => {
+			for (const type of events)
+				element.addEventListener(type, () => resolve(type), { once: true });
+		});
+	/** the attribute as the browser holds it, once it names what loaded */
+	const heldURL = async (element, attribute) => {
+		for (let i = 0; i < 40; i++) {
+			const value = N.getAttribute.call(element, attribute);
+			if (value) return value;
+			await sleep(50);
+		}
+		return null;
+	};
+	add(
+		'gate/the marker a copy used to carry, from a realm without hooks',
+		async () => {
+			const url = loadedURL(r(B, {}).url);
+			const marker = { 'x-stomp-load': 'image no-cors' };
+			return [
+				await nativeRead(url, { headers: marker }),
+				await nativeRead(url, { headers: marker, credentials: 'include' }),
+				await nativeRead(url, { headers: marker, mode: 'no-cors' }),
+				await nativeRead(url, { headers: { 'x-stomp-load': 'download' } }),
+			];
+		},
+	);
+	add(
+		'gate/a token of its own making, from a realm without hooks',
+		async () => {
+			const url = loadedURL(r(B, {}).url);
+			const token = Array.from(
+				crypto.getRandomValues(new Uint8Array(22)),
+				(byte) =>
+					'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'.charAt(
+						byte & 63,
+					),
+			).join('');
+			return [
+				await nativeRead(url, { headers: { 'x-stomp-load': token } }),
+				await nativeRead(url, { headers: { 'x-stomp-load': token } }),
+			];
+		},
+	);
+	add('gate/the header a copy went out with, sent again', async () => {
+		const { frame, written } = writtenFrame();
+		const element = written.createElement('img');
+		written.body.append(element);
+		const loaded = settled(element);
+		element.src = r(B, { type: 'png' }).url;
+		const event = await loaded;
+		// through the proxy, the suite hands over every request header the
+		// copies went out with so far (a realm in the page cannot see them);
+		// natively there is none, and the same read is made with any value
+		const seen = ((await window.__sopSeen?.()) ?? []).slice(-6);
+		const targets = seen.length
+			? seen
+			: [{ url: N.getAttribute.call(element, 'src'), token: 'x' }];
+		const outcomes = new Set();
+		for (const { url, token } of targets)
+			for (const outcome of await Promise.all([
+				nativeRead(url, { headers: { 'x-stomp-load': token } }),
+				nativeRead(url, { headers: { 'x-stomp-load': token } }),
+			]))
+				outcomes.add(outcome);
+		frame.remove();
+		return { event, outcomes: [...outcomes].sort() };
+	});
+	const heldCase = (name, make) =>
+		add(name, async () => {
+			const { frame, written } = writtenFrame();
+			// read by an observer of the browser's own, the moment the
+			// attribute is set, and again once the load is over
+			let early;
+			const { element, attribute, loaded, shown } = make(written, frame);
+			const observer = new N.MutationObserver(() => {
+				const value = N.getAttribute.call(element, attribute);
+				if (value && !early) early = nativeRead(value);
+			});
+			observer.observe(written, {
+				attributes: true,
+				subtree: true,
+				childList: true,
+			});
+			const event = await loaded();
+			const held = await heldURL(element, attribute);
+			const late = held ? await nativeRead(held) : 'no URL';
+			observer.disconnect();
+			const result = {
+				event,
+				shown: await shown(),
+				early: (await early) ?? 'never set',
+				late,
+			};
+			frame.remove();
+			return result;
+		});
+	heldCase(
+		'gate/the URL an image of another site has in a written about:blank frame, fetched',
+		(written) => {
+			const element = written.createElement('img');
+			written.body.append(element);
+			return {
+				element,
+				attribute: 'src',
+				loaded: () => {
+					const loaded = settled(element);
+					element.src = r(B, { type: 'png' }).url;
+					return loaded;
+				},
+				shown: () => element.naturalWidth,
+			};
+		},
+	);
+	heldCase(
+		"gate/the URL another site's text has as an image in a written about:blank frame, fetched",
+		(written) => {
+			const element = written.createElement('img');
+			written.body.append(element);
+			return {
+				element,
+				attribute: 'src',
+				loaded: () => {
+					const loaded = settled(element);
+					element.src = r(B, {}).url;
+					return loaded;
+				},
+				shown: () => element.naturalWidth,
+			};
+		},
+	);
+	heldCase(
+		'gate/the URL a script of another site has in a written about:blank frame, fetched',
+		(written, frame) => {
+			const element = written.createElement('script');
+			return {
+				element,
+				attribute: 'src',
+				loaded: () => {
+					const loaded = settled(element);
+					element.src = r(B, { type: 'js', js: 'window.fromB = 7' }).url;
+					written.body.append(element);
+					return loaded;
+				},
+				shown: () => frame.contentWindow.fromB ?? null,
+			};
+		},
+	);
+	heldCase(
+		'gate/the URL a script of another site has when it is set on a script already in the frame, fetched',
+		(written, frame) => {
+			const element = written.createElement('script');
+			written.body.append(element);
+			return {
+				element,
+				attribute: 'src',
+				loaded: () => {
+					const loaded = settled(element);
+					element.src = r(B, { type: 'js', js: 'window.fromB = 8' }).url;
+					return loaded;
+				},
+				shown: () => frame.contentWindow.fromB ?? null,
+			};
+		},
+	);
+	heldCase(
+		'gate/the URL a stylesheet of another site has in a written about:blank frame, fetched',
+		(written, frame) => {
+			const element = written.createElement('link');
+			element.rel = 'stylesheet';
+			return {
+				element,
+				attribute: 'href',
+				loaded: () => {
+					const loaded = settled(element);
+					element.href = r(B, {
+						type: 'css',
+						css: 'body{margin-left:37px}',
+					}).url;
+					written.head.append(element);
+					return loaded;
+				},
+				shown: () =>
+					frame.contentWindow.getComputedStyle(written.body).marginLeft,
+			};
+		},
+	);
+	heldCase(
+		'gate/the URL a video of another site has in a written about:blank frame, fetched',
+		(written) => {
+			const element = written.createElement('video');
+			element.muted = true;
+			written.body.append(element);
+			return {
+				element,
+				attribute: 'src',
+				loaded: () => {
+					const loaded = settled(element, ['loadeddata', 'error']);
+					element.src = r(B, { type: 'webm' }).url;
+					return loaded;
+				},
+				shown: () => element.videoWidth > 0,
+			};
+		},
+	);
+	heldCase(
+		"gate/the URL another site's text has as a video in a written about:blank frame, fetched",
+		(written) => {
+			const element = written.createElement('video');
+			element.muted = true;
+			written.body.append(element);
+			return {
+				element,
+				attribute: 'src',
+				loaded: () => {
+					const loaded = settled(element, ['loadeddata', 'error']);
+					element.src = r(B, {}).url;
+					return loaded;
+				},
+				shown: () => element.videoWidth > 0,
+			};
+		},
+	);
+	add(
+		'gate/the URL a script the page writes into an about:blank frame has, fetched',
+		async () => {
+			const frame = document.createElement('iframe');
+			document.body.append(frame);
+			const written = frame.contentDocument;
+			written.open();
+			written.write(
+				`<body><script src="${r(B, { type: 'js', js: 'window.fromB = 9' }).url}"></scr` +
+					'ipt>',
+			);
+			written.close();
+			for (let i = 0; i < 60 && frame.contentWindow.fromB === undefined; i++)
+				await sleep(50);
+			await sleep(100);
+			const element = written.querySelector('script');
+			const held = element && (await heldURL(element, 'src'));
+			const result = {
+				ran: frame.contentWindow.fromB ?? null,
+				late: held ? await nativeRead(held) : 'no URL',
+			};
+			frame.remove();
+			return result;
+		},
+	);
+	add(
+		'gate/the URL an image of another site has in a style of a written about:blank frame, fetched',
+		async () => {
+			const { frame, written } = writtenFrame();
+			const box = written.createElement('div');
+			box.style.cssText = `display:inline-block;content:url(${r(B, { type: 'png' }).url})`;
+			written.body.append(box);
+			// through the proxy the style holds the copy's URL once it is in
+			let held = null;
+			for (let i = 0; i < 40; i++) {
+				held = /url\(["']?([^"')]+)/.exec(
+					N.getAttribute.call(box, 'style') ?? '',
+				)?.[1];
+				if (
+					held &&
+					(held.startsWith('blob:') || held.startsWith(B)) &&
+					box.offsetWidth
+				)
+					break;
+				await sleep(50);
+			}
+			const result = {
+				shown: box.offsetWidth,
+				late: held ? await nativeRead(held) : 'no URL',
+			};
+			frame.remove();
+			return result;
+		},
+	);
+
+	heldCase(
+		'gate/the URL an SVG image of another site named with a fragment has in a written about:blank frame, fetched',
+		(written) => {
+			const element = written.createElement('img');
+			written.body.append(element);
+			return {
+				element,
+				attribute: 'src',
+				loaded: () => {
+					const loaded = settled(element);
+					element.src = `${
+						r(B, {
+							type: 'raw',
+							ct: 'image/svg+xml',
+							body: '<svg xmlns="http://www.w3.org/2000/svg" width="7" height="3"><rect id="part" width="7" height="3"/></svg>',
+						}).url
+					}#part`;
+					return loaded;
+				},
+				shown: () => element.naturalWidth,
+			};
+		},
+	);
+	// the same image named from the frame's other styles: each shows
+	add(
+		'gate/an image of another site named by the styles of a written about:blank frame shows',
+		async () => {
+			const { frame, written } = writtenFrame();
+			const png = () => r(B, { type: 'png' }).url;
+			const box = (id) => {
+				const element = written.createElement('div');
+				element.id = id;
+				written.body.append(element);
+				return element;
+			};
+			const rule = (id, url, quote = '') =>
+				`#${id}{display:inline-block;content:url(${quote}${url}${quote})}`;
+			const style = written.createElement('style');
+			style.textContent =
+				rule('plain', png()) +
+				rule('double', png(), '"') +
+				rule('single', png(), "'");
+			written.head.append(style);
+			const link = written.createElement('link');
+			link.rel = 'stylesheet';
+			link.href = r(A, { type: 'css', css: rule('sheet', png()) }).url;
+			written.head.append(link);
+			const other = written.createElement('link');
+			other.rel = 'stylesheet';
+			other.href = r(B, { type: 'css', css: rule('theirs', png(), '"') }).url;
+			written.head.append(other);
+			const ids = [
+				'plain',
+				'double',
+				'single',
+				'sheet',
+				'theirs',
+				'om',
+				'twice',
+			];
+			const boxes = ids.map(box);
+			boxes[5].style.display = 'inline-block';
+			boxes[5].style.content = `url("${png()}")`;
+			const same = png();
+			boxes[6].style.cssText = `display:inline-block;content:url(${same});background-image:url("${same}")`;
+			// (a box whose sheet is not in yet is a block as wide as the frame)
+			for (let i = 0; i < 60 && !boxes.every((b) => b.offsetWidth === 1); i++)
+				await sleep(50);
+			const shown = Object.fromEntries(
+				boxes.map((element) => [element.id, element.offsetWidth]),
+			);
+			frame.remove();
+			return shown;
+		},
+	);
+
 	(async () => {
 		for (const [name, run] of cases) {
 			if (only ? !name.startsWith(only) : name.startsWith('bench/')) continue;

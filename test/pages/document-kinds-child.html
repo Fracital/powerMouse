@@ -1,0 +1,15 @@
+<!doctype html>
+<title>document kinds child</title>
+<body>
+	<script>
+		const name =
+			location.search === '?o'
+				? 'object'
+				: location.search === '?e'
+					? 'embed'
+					: 'real-in-blank';
+		document.write(
+			`<img id="k-${name}" src="blank-pixel.svg?kind=${name}" onload="this.dataset.e='load'" onerror="this.dataset.e='error'">`,
+		);
+	</script>
+</body>

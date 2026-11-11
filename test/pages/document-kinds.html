@@ -1,0 +1,171 @@
+<!doctype html>
+<title>document kinds</title>
+<body>
+	<script>
+		// every kind of document a page makes itself, each with one image
+		const report = (window.__kinds = { cases: {}, done: false });
+		const img = (name) =>
+			`<img id="k-${name}" src="${new URL('blank-pixel.svg?kind=' + name, location.href).href}" onload="this.dataset.e='load'" onerror="this.dataset.e='error'">`;
+		const frame = (attrs = {}, parent = document.body) => {
+			const f = parent.ownerDocument.createElement('iframe');
+			for (const k in attrs) f.setAttribute(k, attrs[k]);
+			parent.append(f);
+			return f;
+		};
+		const loaded = (f) =>
+			new Promise((r) => f.addEventListener('load', r, { once: true }));
+		const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+		const put = (doc, name) =>
+			doc.body.insertAdjacentHTML('beforeend', img(name));
+		const cases = {
+			async blank() {
+				put(frame().contentDocument, 'blank');
+			},
+			async 'blank-written'() {
+				const d = frame().contentDocument;
+				d.open();
+				d.write('<body>' + img('blank-written'));
+				d.close();
+			},
+			async srcdoc() {
+				frame({ srcdoc: img('srcdoc') });
+			},
+			async 'srcdoc-in-blank'() {
+				const f = frame();
+				frame({ srcdoc: img('srcdoc-in-blank') }, f.contentDocument.body);
+			},
+			async 'blank-in-srcdoc'() {
+				const f = frame({ srcdoc: '<p>s</p>' });
+				await loaded(f);
+				put(
+					frame({}, f.contentDocument.body).contentDocument,
+					'blank-in-srcdoc',
+				);
+			},
+			async 'blank-in-blank'() {
+				const f = frame();
+				put(
+					frame({}, f.contentDocument.body).contentDocument,
+					'blank-in-blank',
+				);
+			},
+			async blob() {
+				frame({
+					src: URL.createObjectURL(
+						new Blob([img('blob')], { type: 'text/html' }),
+					),
+				});
+			},
+			async 'blob-in-blank'() {
+				const f = frame();
+				frame(
+					{
+						src: URL.createObjectURL(
+							new Blob([img('blob-in-blank')], { type: 'text/html' }),
+						),
+					},
+					f.contentDocument.body,
+				);
+			},
+			async data() {
+				frame({ src: 'data:text/html,' + encodeURIComponent(img('data')) });
+			},
+			async javascript() {
+				frame({ src: 'javascript:' + JSON.stringify(img('javascript')) });
+			},
+			async 'javascript-in-blank'() {
+				const f = frame();
+				frame(
+					{ src: 'javascript:' + JSON.stringify(img('javascript-in-blank')) },
+					f.contentDocument.body,
+				);
+			},
+			async 'real-in-blank'() {
+				const f = frame();
+				frame(
+					{ src: new URL('document-kinds-child.html', location.href).href },
+					f.contentDocument.body,
+				);
+			},
+			async popup() {
+				const w = window.open('');
+				put(w.document, 'popup');
+				window.__popups = [w];
+			},
+			async 'popup-written'() {
+				const w = window.open('about:blank');
+				w.document.write('<body>' + img('popup-written'));
+				w.document.close();
+				window.__popups.push(w);
+			},
+			async 'blank-in-popup'() {
+				const w = window.open('');
+				put(frame({}, w.document.body).contentDocument, 'blank-in-popup');
+				window.__popups.push(w);
+			},
+			async 'srcdoc-in-popup'() {
+				const w = window.open('');
+				frame({ srcdoc: img('srcdoc-in-popup') }, w.document.body);
+				window.__popups.push(w);
+			},
+			async 'sandbox-same-origin-blank'() {
+				put(
+					frame({ sandbox: 'allow-same-origin' }).contentDocument,
+					'sandbox-same-origin-blank',
+				);
+			},
+			async 'sandbox-scripts-same-origin-blank'() {
+				put(
+					frame({ sandbox: 'allow-scripts allow-same-origin' }).contentDocument,
+					'sandbox-scripts-same-origin-blank',
+				);
+			},
+			async 'sandbox-scripts-srcdoc'() {
+				frame({
+					sandbox: 'allow-scripts',
+					srcdoc: img('sandbox-scripts-srcdoc'),
+				});
+			},
+			async 'sandbox-none-srcdoc'() {
+				frame({ sandbox: '', srcdoc: img('sandbox-none-srcdoc') });
+			},
+			async 'sandbox-scripts-same-origin-srcdoc'() {
+				frame({
+					sandbox: 'allow-scripts allow-same-origin',
+					srcdoc: img('sandbox-scripts-same-origin-srcdoc'),
+				});
+			},
+			async 'sandbox-scripts-blob'() {
+				frame({
+					sandbox: 'allow-scripts',
+					src: URL.createObjectURL(
+						new Blob([img('sandbox-scripts-blob')], { type: 'text/html' }),
+					),
+				});
+			},
+			async object() {
+				const o = document.createElement('object');
+				o.type = 'text/html';
+				o.data = new URL('document-kinds-child.html?o', location.href).href;
+				document.body.append(o);
+			},
+			async embed() {
+				const o = document.createElement('embed');
+				o.type = 'text/html';
+				o.src = new URL('document-kinds-child.html?e', location.href).href;
+				document.body.append(o);
+			},
+		};
+		addEventListener('load', async () => {
+			for (const name in cases)
+				try {
+					await cases[name]();
+					report.cases[name] = 'made';
+				} catch (e) {
+					report.cases[name] = 'threw: ' + e.message;
+				}
+			await sleep(4000);
+			report.done = true;
+		});
+	</script>
+</body>

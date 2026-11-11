@@ -735,6 +735,27 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   before its load event replaces its entry, as natively. Through the proxy
   about one such redirect in three made a new entry, so Back went to the
   redirecting page and it redirected again. (toolbar-history suite.)
+- The load gate: a load the proxy copies for a document no service worker
+  controls (an about:blank frame or popup the page builds) is granted by
+  what the inject announced for it on a MessagePort its bundle opened to
+  the worker before the page ran, under a single-use token, where the
+  worker trusted a header that named the load. The old header value, a
+  made-up token, a token sent again and one sent twice at once are the
+  page's own requests, refused by CORS as natively. The copy of another
+  site's image is given a `blob:` URL that nothing can fetch (made in a
+  worker that is then terminated; the renderer's memory cache still shows
+  it), a script's or stylesheet's is revoked as its load starts, and what
+  a granted copy hands over goes through opaque response blocking first
+  (a video's or sound's only when it is media by its first bytes). Read by
+  the browser's own `fetch`, thirteen ways gave another site's bytes; one
+  is left and listed, a playing video's or
+  sound's URL, with the measurement that shows why
+  (docs/same-origin-policy.md). A srcdoc frame under an about:blank frame
+  or popup, which has no service worker either, has its loads copied: they
+  failed. No measurable cost: an about:blank frame with fifty images of
+  another site loads in 48 ms as before, 6 KB of heap a frame. (sop-escapes
+  `gate/` cases, load-grants, load-grants-restart and document-kinds
+  suites.)
 - Resource timing tells every way the worker answered a load apart, as
   Chrome does (measured in 152 and 156): the body and 300 bytes from the
   network; 0 and `deliveryType` "cache" from a cache, with the protocol

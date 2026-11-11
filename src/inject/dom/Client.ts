@@ -33,6 +33,7 @@ import cloneRawNode, {
 	parseHTML,
 	releaseMarkup,
 } from './cloneNode';
+import { initLoads, loadSource, type LoadSource } from './loadGrants';
 import DOMAttributesModule, {
 	scriptKind,
 	shouldRewriteScript,
@@ -262,6 +263,8 @@ export default class DocumentClient extends Client {
 	#shellNonce: { document: Document; nonce: string } | null = null;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
+		// the bundle's own realm's client: its load channel opens now
+		if (global === globalThis) initLoads(this);
 		this.#setTimeout = this.global.setTimeout;
 		this.write = this.global.document.write;
 		this.open = this.global.document.open;
@@ -648,6 +651,10 @@ export default class DocumentClient extends Client {
 	}
 	get parent(): typeof globalThis {
 		return this.parentDescriptor.get!.call(this.global);
+	}
+	/** @internal what this client's bundle fetches its copies through (loadGrants.ts) */
+	loadSource(): LoadSource | null {
+		return loadSource();
 	}
 	/**
 	 * A child frame of a proxied page: its navigations are routed as nested
