@@ -172,8 +172,7 @@ holyWisp is started.
    there or clicking a quick link opens a new tab. Closing the last tab goes
    back to the landing page. Below the address bar it shows the repository's
    latest commits, from `/api/commits` (the server's ten-minute copy of
-   GitHub's answer; `STOMP_REPO` names another repository), and the header
-   links to Fracital and vibeOS.
+   GitHub's answer; `STOMP_REPO` names another repository).
 8. **Navigation bar** at the bottom of the screen, styled after the early
    Android bar: Back steps through the active tab's own history (the frame
    reports whether it can step, from the browser's Navigation API, so mashing
@@ -214,6 +213,23 @@ holyWisp is started.
     shortcut close the panel; Home or a short Recents press take it down on
     their way. The page load itself is reported before the page has a client
     id (`frame` is null), so it is not attributed to a tab.
+
+12. **Bookmarks.** The star in the address bar (and on each tab card)
+    toggles the tab's page in a list kept in `localStorage`
+    (`stomp-demo:bookmarks`): the real URL the address bar shows (a routed
+    one goes through `controller.unroute`), the title and the page's icon
+    (`NavigateInfo.icon`, else the site's `/favicon.ico`). The host page
+    never loads that icon itself, which would leave the proxy: a host hook
+    in every proxied top document (`ICON_HOOK`, `hooks.init.post`) posts
+    the host a `MessagePort`, and the host asks the page's own fetch
+    through it, then draws the answer into a 64 px PNG `data:` URL (the
+    Tango globe when there is none to be had). The star tab on the
+    home page's card, or Saved pages after Reload in the address bar,
+    opens a sidebar listing the bookmarks; a click opens one in the current
+    tab, the middle button or Ctrl in a new one. The
+    first visit bookmarks Fracital, vibeOS, Estro and Krunk, once
+    (`stomp-demo:bookmarks-seeded`), so one the user removes stays removed,
+    with curated icons and tile colours bundled in `pm/icons/`.
 
 Errors from any step land in the status line (`Error: ...`) rather than the
 console only.

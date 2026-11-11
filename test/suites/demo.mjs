@@ -28,12 +28,6 @@ ok(
 	await page.textContent('#uptime'),
 );
 ok('quick links rendered', (await page.$$('.btn-fancy')).length === 4);
-ok(
-	'home links to Fracital and vibeOS',
-	JSON.stringify(
-		await page.$$eval('.sites a', (links) => links.map((a) => a.href)),
-	) === JSON.stringify(['https://fracit.al/', 'https://vibeos.fracit.al/']),
-);
 // the commits panel
 await page
 	.waitForFunction(

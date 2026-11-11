@@ -66,6 +66,7 @@ const cardBars = () =>
 			'#toolBack',
 			'#toolForward',
 			'#toolReload',
+			'#toolSaved',
 			'#omni input',
 			'#chromeStatus',
 		].map((sel) => {
@@ -176,18 +177,20 @@ await sleep(400);
 
 const bars = await cardBars();
 ok(
-	"each card's bar copy has Back, Forward and Reload with its tab's states",
+	"each card's bar copy has Back, Forward, Reload and Saved pages with its tab's states",
 	JSON.stringify(bars.cards.map((c) => c.tools)) ===
 		JSON.stringify([
 			[
 				['toolBack', false, true],
 				['toolForward', true, true],
 				['toolReload', false, true],
+				['toolSaved', false, true],
 			],
 			[
 				['toolBack', true, true],
 				['toolForward', false, true],
 				['toolReload', false, true],
+				['toolSaved', false, true],
 			],
 		]),
 	JSON.stringify(bars.cards.map((c) => c.tools)),
@@ -293,7 +296,7 @@ const opened = await page.evaluate(() => {
 		],
 		live: [
 			document.querySelector('#omni input').value,
-			...['toolBack', 'toolForward', 'toolReload'].map(
+			...['toolBack', 'toolForward', 'toolReload', 'toolSaved'].map(
 				(id) => document.getElementById(id).disabled,
 			),
 		],
@@ -302,7 +305,8 @@ const opened = await page.evaluate(() => {
 ok(
 	'an opening card shows the live bar it lands on',
 	JSON.stringify(opened.copy) === JSON.stringify(opened.live) &&
-		JSON.stringify(opened.live) === JSON.stringify([TWO, false, true, false]),
+		JSON.stringify(opened.live) ===
+			JSON.stringify([TWO, false, true, false, false]),
 	JSON.stringify(opened),
 );
 await sleep(600);

@@ -546,6 +546,39 @@ The first release after a four-year gap. Everything below is breaking.
   page), so a neighbour's bar and close button showed through it, and a
   later tab's page faded over it (switcher-geometry suite, desktop and phone
   widths).
+- The demo keeps bookmarks. A star at the right end of the address bar,
+  in the Tango style of its other icons (Butter when the page is
+  bookmarked, hollow Aluminium when not), bookmarks the active tab's page,
+  and every card in the tab manager has the same star for its tab. A star
+  tab hanging off the home page card's left edge, in a band of its own
+  between the status line and the commits, slides in a sidebar listing
+  them: the icon on a rounded tile, the title and the real URL, a click
+  opening one in the current tab and the middle button or Ctrl in a new
+  one, a remove button, an empty state; Escape closes it and the keyboard
+  stays in it while it is open. The list lives in `localStorage`
+  (`stomp-demo:bookmarks`) with the real URL (never a route), the title and
+  the icon, one entry per URL, so it outlives a reload and every star and
+  the sidebar follow it, in other windows of the demo too. The first visit
+  starts the list with Fracital, vibeOS, Estro and Krunk, once (a marker
+  beside it), so one the user removes stays removed; their icons and tile
+  colours are curated and bundled (`demo/public/pm/icons/`: Fracital's own
+  files for three, the Tango computer for vibeOS, which declares none;
+  Estro's and Krunker's, whole tiles themselves, cover theirs), and a
+  YouTube bookmark always shows YouTube's white logo on its red. The
+  pills beside the title that linked to Fracital and vibeOS are gone. A
+  page bookmarked by the user keeps the icon it declared, else its site's
+  `/favicon.ico`, as a 64 px PNG `data:` URL, so the sidebar never asks the
+  network to draw it; it is fetched by the page itself through a port a
+  host hook hands over (`ICON_HOOK`), never by the host page, whose request
+  would leave the proxy, and a page with no icon to be had shows the Tango
+  globe. A Saved pages button after Reload in the address bar, a Tango
+  page with a ribbon, opens the same sidebar over the page, where a click
+  opens a bookmark in the current tab. The service worker's status chip
+  now sits inside the address box, quiet and grey, just left of the star;
+  the box's text stops short of both, and the tab cards' copies of the bar
+  follow. On a short phone the home page's quick-link tiles take one row,
+  and none below 587 px, to leave the tab its room (demo-bookmarks suite,
+  both modes).
 - A card in the demo's tab manager shows the whole tab as the browser view
   does: its bar has Back, Forward and Reload, greyed out as they would be for
   that tab, beside the tab's own URL and the status, above the page. The bar

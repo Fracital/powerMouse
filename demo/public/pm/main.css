@@ -721,7 +721,45 @@ body {
 	width: 100%;
 	box-sizing: border-box;
 	height: 36px;
-	padding: 0 0.75rem;
+	/* the status chip and the star sit at the right end */
+	padding: 0 calc(var(--omni-end, 100px) + 12px) 0 0.75rem;
+}
+/* over the address box's right end: the service worker's status, then the
+   star, both centred in it (the live box and every card's copy) */
+.omniEnd {
+	position: absolute;
+	top: 0;
+	right: 4px;
+	bottom: 0;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+/* one box for the live chip and every card's copy, so switching between the
+   browser and the tab manager never moves it */
+.omniEnd .select {
+	box-sizing: border-box;
+	flex: 0 1 auto;
+	max-width: min(200px, 30vw);
+	height: 24px;
+	padding: 0 6px;
+	font-size: 12px;
+	line-height: 22px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	pointer-events: none;
+	/* grey and quiet: it reports, it does not call for attention */
+	color: #fff;
+	background: #8a8a8a;
+	border: none;
+}
+
+/* an error still shows in the error colour */
+.omniEnd .select.error {
+	color: #f67;
+	border-color: #a33;
 }
 
 .chrome .omnibox:focus {
@@ -1008,32 +1046,33 @@ body.recents .frames .frame.gone,
 	cursor: inherit;
 }
 
-/* the box of the live bar's form: it grows into the room the buttons and
-   the status chip leave, never below 120px */
-.cardChrome .url {
+/* the box of the live bar's form: it grows into the room the buttons
+   leave, never below 120px */
+.cardChrome .urlBox {
+	position: relative;
 	flex: 1 1 auto;
-	float: none;
-	width: auto;
 	min-width: 120px;
+}
+
+.cardChrome .url {
+	float: none;
+	width: 100%;
 	height: 36px;
 	box-sizing: border-box;
-	padding: 0 0.75rem;
+	padding: 0 calc(var(--omni-end, 100px) + 12px) 0 0.75rem;
 	line-height: 36px;
 	white-space: nowrap;
+}
+
+.cardChrome .urlText {
+	display: block;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
 
-/* the status chip, same box as .chrome .select on the live bar, which never
-   shrinks below its text: the address box gives way, not the chip */
+/* the status chip, same box as the live bar's */
 .cardLabel .status {
-	flex: 0 0 auto;
-	max-width: 50%;
-	height: 28px;
 	box-sizing: border-box;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
 }
 
 /* just below the bar copy, over the page's top-right corner: the bar stays an
@@ -1545,34 +1584,12 @@ input:focus-visible {
 	}
 }
 
-/* ---- home page: the maker's sites and the latest commits ---------------- */
+/* ---- home page: the latest commits ---------------------------------------- */
 
 .head > h1 {
 	display: inline-block;
 	vertical-align: middle;
 }
-.sites {
-	display: inline-flex;
-	gap: 8px;
-	vertical-align: middle;
-	margin-left: 8px;
-}
-.sites a {
-	color: #fff;
-	text-decoration: none;
-	border: 1px solid #b6b6b6;
-	border-radius: 10px;
-	padding: 3px 12px;
-	font-size: 13px;
-	font-weight: 600;
-	line-height: 20px;
-	white-space: nowrap;
-}
-.sites a:hover {
-	background: #fff;
-	color: #000;
-}
-.sites a:focus-visible,
 .commit:focus-visible,
 .commitsHead a:focus-visible {
 	outline: 2px solid #4ca9fb;
@@ -1586,7 +1603,7 @@ input:focus-visible {
 	position: absolute;
 	left: 25px;
 	right: 25px;
-	top: 132px;
+	top: 188px; /* below the bookmarks tab */
 	bottom: 137px;
 	display: flex;
 	flex-direction: column;
@@ -1725,16 +1742,12 @@ input:focus-visible {
 		display: block;
 		margin: 6px 0 2px;
 	}
-	.sites {
-		display: flex;
-		margin: 0 0 8px;
-	}
 	.listing {
-		/* the title bar is taller with the links below the title */
-		height: calc(100vh - 220px);
+		/* the title bar is shorter with the title on a line of its own */
+		height: calc(100vh - 197px);
 	}
 	.commits {
-		top: 209px;
+		top: 256px;
 		bottom: 232px; /* the tiles wrap to two rows, the footer to three lines */
 	}
 	.commitSha {
@@ -1762,7 +1775,6 @@ input:focus-visible {
 	}
 }
 @media (prefers-reduced-motion: reduce) {
-	.sites a,
 	.commit {
 		transition: none;
 	}
@@ -1788,4 +1800,383 @@ input:focus-visible {
 .permissionPrompt div {
 	display: flex;
 	gap: 8px;
+}
+
+/* ---- bookmarks ------------------------------------------------------------ */
+/* The star: Tango's Butter when the page is bookmarked, hollow Aluminium when
+   not, at the right end of the address box (the live one and every card's) */
+.starbtn {
+	position: relative;
+	flex: none;
+	width: 30px;
+	height: 30px;
+	padding: 0;
+	border: 1px solid transparent;
+	border-radius: 0.25rem;
+	background: url('/pm/icons/star-off.svg') center / 20px 20px no-repeat;
+	cursor: pointer;
+	transition-property: background-color, border-color;
+}
+
+.starbtn[aria-pressed='true'] {
+	background-image: url('/pm/icons/star-on.svg');
+}
+
+.starbtn:hover:not(:disabled) {
+	background-color: rgba(0, 0, 0, 0.06);
+	border-color: rgba(0, 0, 0, 0.15);
+}
+
+.starbtn:active:not(:disabled) {
+	background-color: rgba(0, 0, 0, 0.12);
+}
+
+.starbtn:disabled {
+	cursor: default;
+	opacity: 0.35;
+}
+
+.starbtn:focus-visible,
+.bookmarksTab:focus-visible,
+.bookmarks button:focus-visible {
+	outline: 2px solid #4ca9fb;
+	outline-offset: 1px;
+}
+
+/* the card's bar is a picture the card takes presses for, but its star */
+.cardChrome .starbtn {
+	pointer-events: auto;
+}
+
+/* a card's star is as small as the card: its press area is not */
+.cardChrome .starbtn::after {
+	content: '';
+	position: absolute;
+	inset: calc(-8px / var(--k, 1));
+}
+
+/* the home page's tab, hanging off the card's left edge: flush against the
+   inside of its border, square on that side, in its own band between the
+   status line and the commits */
+.bookmarksTab {
+	position: absolute;
+	z-index: 1; /* under .urlFill (2): the suggestions drop over it */
+	top: 132px;
+	left: 0;
+	width: 60px;
+	height: 44px;
+	display: grid;
+	place-items: center;
+	padding: 0;
+	/* one solid line in the card's own border colour */
+	border: 1px solid #b6b6b6;
+	border-left: 0;
+	border-radius: 0 10px 10px 0;
+	background: #8f5902; /* Tango Chocolate */
+	cursor: pointer;
+}
+
+.bookmarksTab:hover {
+	background-color: #a8690a;
+}
+
+.bookmarksTab:active {
+	background-color: #6b4301;
+}
+
+.bookmarksTab img {
+	display: block;
+	pointer-events: none;
+}
+
+/* the sidebar slides in from the left over the home page, above the
+   navigation bar, in the home page's own style: a black card with the
+   header's texture on top */
+.bookmarksScrim {
+	position: fixed;
+	inset: 0 0 48px 0;
+	z-index: 16;
+	background: rgba(0, 0, 0, 0.55);
+	opacity: 0;
+	visibility: hidden;
+	transition:
+		opacity 0.25s ease,
+		visibility 0s linear 0.25s;
+}
+
+.bookmarksScrim.open {
+	opacity: 1;
+	visibility: visible;
+	transition: opacity 0.25s ease;
+}
+
+.bookmarks {
+	position: fixed;
+	top: 0;
+	left: 0;
+	bottom: 48px;
+	z-index: 17;
+	width: min(380px, calc(100% - 40px));
+	display: flex;
+	flex-direction: column;
+	box-sizing: border-box;
+	background: #000;
+	border: 1px solid #b6b6b6;
+	border-left: 0;
+	border-radius: 0 5px 5px 0;
+	box-shadow: 10px 0 40px rgba(0, 0, 0, 0.6);
+	color: #fff;
+	font-family: 'Montserrat', sans-serif;
+	transform: translateX(-100%);
+	visibility: hidden;
+	transition:
+		transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1),
+		visibility 0s linear 0.25s;
+}
+
+.bookmarks.open {
+	transform: translateX(0);
+	visibility: visible;
+	transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.bookmarks * {
+	transition-property: background-color, color, border-color;
+}
+
+.bookmarksTop {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 10px 10px 16px;
+	background: #000 url('/pm/header-background.png');
+	border-bottom: 1px solid #b6b6b6;
+	border-radius: 0 5px 0 0;
+}
+
+.bookmarksTitle {
+	flex: 1 1 auto;
+	font-size: 18px;
+}
+
+.bookmarksCount {
+	flex: 0 0 auto;
+	border: 1px solid #b6b6b6;
+	border-radius: 10px;
+	padding: 0 10px;
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 22px;
+	font-variant-numeric: tabular-nums;
+}
+
+.bookmarksClose,
+.bookmarkRemove {
+	flex: 0 0 auto;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: transparent;
+	color: #fff;
+	font-size: 22px;
+	line-height: 32px;
+	cursor: pointer;
+}
+
+.bookmarksClose:hover {
+	background: rgba(255, 255, 255, 0.12);
+}
+
+.bookmarksList {
+	flex: 1 1 auto;
+	min-height: 0;
+	margin: 0;
+	padding: 6px;
+	list-style: none;
+	overflow-y: auto;
+}
+
+.bookmarksList:empty {
+	display: none;
+}
+
+/* one row per bookmark, like a commit's: icon, title, the URL below */
+.bookmark {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	border-radius: 5px;
+}
+
+.bookmark:hover {
+	background: #161616;
+}
+
+.bookmarkOpen {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 7px 4px 7px 8px;
+	border: 0;
+	border-radius: 5px;
+	background: none;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+/* the icon on a rounded tile, in the site's colour (Fracital's link cards) */
+.bookmarkTile {
+	flex: none;
+	display: grid;
+	place-items: center;
+	width: 34px;
+	height: 34px;
+	border-radius: 9px;
+	background: var(--tile, #fff);
+	box-shadow:
+		inset 0 1px 0 rgba(255, 255, 255, 0.25),
+		0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.bookmarkIcon {
+	display: block;
+	width: 22px;
+	height: 22px;
+	object-fit: contain;
+}
+
+/* an icon that is a whole tile covers it, clipped to the tile's corners */
+.bookmarkIcon.full {
+	width: 100%;
+	height: 100%;
+	border-radius: inherit;
+	object-fit: cover;
+}
+
+.bookmarkText {
+	flex: 1;
+	min-width: 0;
+}
+
+.bookmarkTitle,
+.bookmarkUrl {
+	display: block;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.bookmarkTitle {
+	font-size: 15px;
+	line-height: 22px;
+}
+
+.bookmarkUrl {
+	color: #4ca9fb;
+	font-size: 12px;
+	line-height: 16px;
+}
+
+.bookmarkRemove {
+	margin-right: 8px;
+	color: #9a9a9a;
+}
+
+.bookmarkRemove:hover {
+	background: rgba(204, 0, 0, 0.25);
+	color: #f67;
+}
+
+.bookmarksEmpty {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	padding: 24px;
+	text-align: center;
+	color: #9a9a9a;
+}
+
+.bookmarksEmpty img {
+	opacity: 0.35;
+	margin-bottom: 6px;
+}
+
+.bookmarksEmpty p {
+	margin: 0;
+	font-size: 15px;
+	color: #fff;
+}
+
+.bookmarksEmpty .bookmarksHint {
+	font-size: 13px;
+	color: #9a9a9a;
+}
+
+@media only screen and (max-width: 767px) {
+	.bookmarksTab {
+		top: 206px;
+		width: 52px;
+		height: 40px;
+	}
+	.bookmarksTab img {
+		width: 28px;
+		height: 28px;
+	}
+}
+
+/* a landscape phone: the tab is slimmer, to stay clear of the footer */
+@media only screen and (min-width: 768px) and (max-height: 440px) {
+	.bookmarksTab {
+		top: 126px;
+		width: 52px;
+		height: 34px;
+	}
+	.bookmarksTab img {
+		width: 24px;
+		height: 24px;
+	}
+}
+
+/* a short phone: the tiles in one row, so they stay clear of the tab, and
+   none at all where even that row has no room (as below 520px everywhere) */
+@media only screen and (max-width: 767px) and (max-height: 664px) {
+	#button-container {
+		flex-wrap: nowrap;
+	}
+	.btn-fancy {
+		flex: 1 1 0;
+		min-width: 0;
+		margin: 5px 3px;
+		line-height: 44px;
+		font-size: 14px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+}
+@media only screen and (max-width: 767px) and (max-height: 586px) {
+	#button-container {
+		display: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.bookmarks,
+	.bookmarks.open,
+	.bookmarks *,
+	.bookmarksScrim,
+	.bookmarksScrim.open,
+	.bookmarksTab,
+	.starbtn {
+		transition: none;
+	}
 }

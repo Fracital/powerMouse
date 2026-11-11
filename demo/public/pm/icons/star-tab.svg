@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+	<!-- the home page's bookmarks tab: a white star outlined in Tango's darkest Aluminium -->
+	<defs>
+		<linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+			<stop offset="0" stop-color="#fff" />
+			<stop offset="1" stop-color="#eeeeec" />
+		</linearGradient>
+	</defs>
+	<path d="M12 1.8 14.7 8.58 21.99 9.06 16.38 13.72 18.17 20.8 12 16.9 5.83 20.8 7.62 13.72 2.01 9.06 9.3 8.58Z" fill="url(#body)" stroke="#2e3436" stroke-width="1.1" stroke-linejoin="round" />
+</svg>

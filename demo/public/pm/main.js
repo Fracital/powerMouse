@@ -182,6 +182,15 @@ function setStatus(text, error = false) {
 	}
 }
 
+// the address box's text stops short of the status chip and the star over
+// its right end, whatever the status says; the cards' copies take the same
+// room (--omni-end), so a card's bar stays a picture of the live one
+new ResizeObserver(() => {
+	const width = $('omniEnd').offsetWidth;
+	if (width)
+		document.documentElement.style.setProperty('--omni-end', `${width}px`);
+}).observe($('omniEnd'));
+
 function preferredTransport() {
 	try {
 		const saved = localStorage.getItem('stomp-demo:transport');
@@ -316,8 +325,38 @@ function isFrameOf(element, source) {
 	return false;
 }
 
+// A bookmark keeps the page's icon as a small picture. The host page cannot
+// load it itself (that request would leave the proxy), so every proxied top
+// document hands the host a port, and the host asks through it: the page's
+// own fetch (taken before the page's first script) gets the icon through the
+// proxy, under the CORS rules the page lives by, and hands back the bytes
+const ICON_MESSAGE = '$stompDemo$icon';
+const ICON_HOOK = `
+if (stomp.kind === 'document' && stomp.isTop) {
+	const win = stomp.window;
+	const fetch = win.fetch;
+	const blob = win.Response.prototype.blob;
+	const apply = win.Reflect.apply;
+	const channel = new win.MessageChannel();
+	channel.port1.onmessage = async (event) => {
+		const { id, url } = event.data || {};
+		let body = null;
+		try {
+			const response = await apply(fetch, win, [url]);
+			if (response.ok) body = await apply(blob, response, []);
+		} catch {}
+		channel.port1.postMessage({ id, body });
+	};
+	win.top.postMessage({ ${JSON.stringify(ICON_MESSAGE)}: true }, '*', [channel.port2]);
+}`;
+addEventListener('message', (event) => {
+	if (!event.data?.[ICON_MESSAGE] || !event.ports[0]) return;
+	const tab = tabs.find((t) => t.element.contentWindow === event.source);
+	if (tab) tab.iconPort = event.ports[0];
+});
+
 const controllerCallbacks = {
-	hooks: { init: { post: { source: KEY_HOOK } } },
+	hooks: { init: { post: { source: KEY_HOOK + ICON_HOOK } } },
 	// a site asks for a permission another site was given (the browser's own
 	// prompt asked for the first)
 	onPermissionRequest: askPermission,
@@ -333,9 +372,11 @@ const controllerCallbacks = {
 		const tab = tabs.find((t) => t.frame === frame);
 		if (!tab) return;
 		tab.url = info.url;
+		tab.icon = info.icon;
 		recordUrl(tab);
 		if (tab === activeTab) syncOmnibox();
 		syncCardBar(tab); // its card in the switcher, if there is one
+		completeBookmark(tab);
 	},
 };
 
@@ -468,6 +509,8 @@ function createTab() {
 		index: -1,
 		traversal: null, // 'back' / 'forward' while a step we issued is in flight
 		pending: Promise.resolve(false), // queue of back/forward presses
+		icon: null, // the icon the page declared (NavigateInfo.icon)
+		iconPort: null, // its document's port for fetching that icon (ICON_HOOK)
 	};
 	element.addEventListener('load', async () => {
 		// a RemoteFrame's url is polled: refresh before recording, or a redirect
@@ -743,7 +786,7 @@ function layoutRecents(animated = false) {
 // one label element per tab, kept across renders so it can transition in
 // step with its frame (rebuilding labels made them jump into place)
 const labelFor = new Map();
-const TOOL_IDS = ['toolBack', 'toolForward', 'toolReload'];
+const TOOL_IDS = ['toolBack', 'toolForward', 'toolReload', 'toolSaved'];
 
 /** the card's bar copy shows what the live bar would for this tab */
 function syncCardBar(tab) {
@@ -754,7 +797,8 @@ function syncCardBar(tab) {
 	const tools = label.querySelectorAll('.toolbtn');
 	tools[0].classList.toggle('disabled', !canStep(tab, 'back'));
 	tools[1].classList.toggle('disabled', !canStep(tab, 'forward'));
-	label.querySelector('.url').textContent = tab.url || '';
+	label.querySelector('.urlText').textContent = tab.url || '';
+	syncStar(label.querySelector('.starbtn'), tab);
 }
 
 /** the expanding card's bar copy shows exactly what the live bar does */
@@ -763,7 +807,11 @@ function mirrorLiveBar(label) {
 	TOOL_IDS.forEach((id, i) =>
 		tools[i].classList.toggle('disabled', $(id).disabled),
 	);
-	label.querySelector('.url').textContent = omni.url.value;
+	label.querySelector('.urlText').textContent = omni.url.value;
+	const star = label.querySelector('.starbtn');
+	const live = $('toolStar');
+	star.disabled = live.disabled;
+	star.setAttribute('aria-pressed', live.getAttribute('aria-pressed'));
 }
 
 function createLabel(tab) {
@@ -777,24 +825,46 @@ function createLabel(tab) {
 	// exactly like the real one it will land on: Back, Forward and Reload
 	// greyed out as they would be for this tab, the address box with the
 	// tab's URL, the chip the same service worker status as the live bar.
-	// Only a picture: a press anywhere on it opens the tab.
+	// A picture but for the star, which bookmarks the tab's page as the live
+	// bar's does: a press anywhere else on it opens the tab.
 	const chrome = document.createElement('div');
 	chrome.className = 'cardChrome';
-	chrome.setAttribute('aria-hidden', 'true');
 	for (const id of TOOL_IDS) {
 		const tool = document.createElement('span');
 		tool.className = 'toolbtn';
 		tool.dataset.tool = id;
+		tool.setAttribute('aria-hidden', 'true');
 		tool.append($(id).querySelector('img').cloneNode());
 		chrome.append(tool);
 	}
+	// the address box and, over its right end, the status chip and the star,
+	// as the live bar's form holds them
+	const box = document.createElement('div');
+	box.className = 'urlBox';
 	const url = document.createElement('div');
 	url.className = 'form-text omnibox url';
+	const urlText = document.createElement('span');
+	urlText.className = 'urlText';
+	urlText.setAttribute('aria-hidden', 'true');
+	url.append(urlText);
+	const end = document.createElement('div');
+	end.className = 'omniEnd';
+	const star = document.createElement('button');
+	star.type = 'button';
+	star.className = 'starbtn';
+	star.setAttribute('aria-label', "Bookmark this tab's page");
+	star.addEventListener('click', (event) => {
+		event.stopPropagation(); // not a press on the card
+		toggleBookmark(tab);
+	});
 	const status = document.createElement('span');
 	status.className = 'select status';
+	status.setAttribute('aria-hidden', 'true');
 	status.textContent = chromeStatus.textContent;
 	status.classList.toggle('error', chromeStatus.classList.contains('error'));
-	chrome.append(url, status);
+	end.append(status, star);
+	box.append(url, end);
+	chrome.append(box);
 
 	const close = document.createElement('button');
 	close.className = 'close';
@@ -1080,7 +1150,7 @@ let recentsSwiped = false;
 
 	recentsLabels.addEventListener('pointerdown', (event) => {
 		if (event.button !== 0 || !tabs.length || flyingOut) return;
-		if (event.target.closest('.close')) return; // a button, not a gesture
+		if (event.target.closest('.close, .starbtn')) return; // a button, not a gesture
 		pointer = event.pointerId;
 		startX = event.clientX;
 		startY = event.clientY;
@@ -1228,6 +1298,7 @@ function syncToolbar() {
 	$('toolBack').disabled = !canStep(tab, 'back');
 	$('toolForward').disabled = !canStep(tab, 'forward');
 	$('toolReload').disabled = !tab;
+	syncStar($('toolStar'), tab);
 }
 
 // pages report navigation through onNavigate; this is only a safety net
@@ -1884,6 +1955,409 @@ addEventListener(
 	},
 	true,
 );
+
+// ---- bookmarks --------------------------------------------------------------
+// Kept in localStorage beside the demo's other choices, one list for every
+// window of the demo (the storage event brings another window's changes):
+// the real URL (what the address bar shows, never a route), the title and
+// the icon as a small PNG data URL, newest first, one per URL. The stars in
+// the address bar and on the cards and the sidebar all draw from it.
+
+const BOOKMARKS_KEY = 'stomp-demo:bookmarks';
+// The defaults' icons and tile colours are curated, as Fracital's quick
+// links are: Fracital's, Estro's and Krunker's are copies of Fracital's
+// public/icon.svg, estro.svg and krunker.png (Apache-2.0, the same owner),
+// vibeOS (which declares none) has the Tango computer from vibeOS's own
+// icon set, and globe.png, the Tango web browser from the same set, stands
+// in for a page whose icon could not be had
+const DEFAULT_BOOKMARKS = [
+	{
+		title: 'Fracital',
+		url: 'https://fracit.al/',
+		icon: '/pm/icons/fracital.svg',
+		color: '#fb74fe',
+	},
+	{
+		title: 'vibeOS',
+		url: 'https://vibeos.fracit.al/',
+		icon: '/pm/icons/vibeos.png',
+		color: '#3465a4',
+	},
+	{
+		title: 'Estro',
+		url: 'https://estro.help/',
+		icon: '/pm/icons/estro.svg',
+		color: '#9a5ae7',
+	},
+	{
+		title: 'Krunk',
+		url: 'https://krunk.io/',
+		icon: '/pm/icons/krunker.png',
+		color: '#ffd95c',
+	},
+];
+const GLOBE_ICON = '/pm/icons/globe.png';
+// a site whose own icon reads poorly on a tile has a curated one, by host,
+// whatever icon its bookmark kept: YouTube's white logo on its red, as
+// Fracital's link cards draw it
+const SITE_ICONS = new Map([
+	['youtube.com', { icon: '/pm/icons/youtube.svg', color: '#ff0000' }],
+]);
+// icons drawn as a whole tile (their own rounded square, art to the edges)
+// fill the tile instead of sitting in its middle
+const FULL_TILE_ICONS = new Set([
+	'/pm/icons/estro.svg',
+	'/pm/icons/krunker.png',
+]);
+const bookmarksPanel = $('bookmarks');
+const bookmarksList = $('bookmarksList');
+const bookmarksTab = $('bookmarksTab');
+
+function loadBookmarks() {
+	let list = [];
+	try {
+		list = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '[]');
+	} catch {}
+	if (!Array.isArray(list)) return [];
+	const seen = new Set();
+	const kept = [];
+	for (const entry of list) {
+		if (typeof entry?.url !== 'string' || seen.has(entry.url)) continue;
+		seen.add(entry.url);
+		// a default seeded before it had its curated icon gets it now
+		const curated = DEFAULT_BOOKMARKS.find((other) => other.url === entry.url);
+		const icon =
+			typeof entry.icon === 'string' &&
+			(entry.icon.startsWith('data:image/') ||
+				/^\/pm\/icons\/[\w.-]+$/.test(entry.icon))
+				? entry.icon
+				: curated?.icon || null;
+		const color =
+			typeof entry.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(entry.color)
+				? entry.color
+				: curated?.color || null;
+		kept.push({
+			url: entry.url,
+			title: typeof entry.title === 'string' ? entry.title : '',
+			icon,
+			...(color && { color }),
+		});
+	}
+	return kept;
+}
+
+let bookmarks = loadBookmarks();
+
+function saveBookmarks() {
+	try {
+		localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+	} catch {}
+	renderBookmarks();
+}
+
+addEventListener('storage', (event) => {
+	if (event.key !== BOOKMARKS_KEY && event.key !== null) return;
+	bookmarks = loadBookmarks();
+	renderBookmarks();
+});
+
+/** the URL the address bar shows for a tab, when it is a page to bookmark */
+function pageUrl(tab) {
+	const url = tab ? normalizeUrl(tab.frame.url || tab.url || '') : '';
+	return /^https?:\/\//i.test(url) ? url : null;
+}
+
+/** a routed URL (one the frame's location could show) as the real one */
+async function realUrl(url) {
+	const scopes = [location.origin, PROXY_ORIGIN]
+		.filter(Boolean)
+		.map((origin) => `${origin}${DIRECTORY}`);
+	if (!scopes.some((scope) => url.startsWith(scope))) return url;
+	return (await controller.unroute(url).catch(() => null)) || null;
+}
+
+const bookmarkOf = (url) =>
+	url ? bookmarks.find((entry) => entry.url === url) || null : null;
+
+function syncStar(button, tab) {
+	if (!button) return;
+	const url = pageUrl(tab);
+	const on = !!bookmarkOf(url);
+	button.disabled = !url;
+	button.setAttribute('aria-pressed', String(on));
+	button.title = on ? 'Remove this bookmark' : 'Bookmark this page';
+}
+
+function syncStars() {
+	syncStar($('toolStar'), activeTab);
+	for (const [tab, label] of labelFor) {
+		// the opening card shows the live bar's state, which is this tab's
+		if (!label.classList.contains('expanding'))
+			syncStar(label.querySelector('.starbtn'), tab);
+		else mirrorLiveBar(label);
+	}
+}
+
+async function toggleBookmark(tab) {
+	const shown = pageUrl(tab);
+	const url = shown && (await realUrl(shown));
+	if (!url) return;
+	const at = bookmarks.findIndex((entry) => entry.url === url);
+	if (at !== -1) {
+		bookmarks.splice(at, 1);
+		saveBookmarks();
+		return;
+	}
+	const title = tabTitle(tab);
+	bookmarks.unshift({ url, title: title === shown ? '' : title, icon: null });
+	saveBookmarks();
+	completeBookmark(tab);
+}
+
+// the icon is fetched once per URL and visit; a bookmark made before the page
+// reported its icon, or while its document was still loading, gets it later
+const iconsAsked = new Set();
+async function completeBookmark(tab) {
+	const url = pageUrl(tab);
+	const entry = bookmarkOf(url);
+	if (!entry || entry.icon || iconsAsked.has(url) || !tab.iconPort) return;
+	iconsAsked.add(url);
+	// no declared icon: the site's /favicon.ico, as a browser tries
+	const icon = await fetchIcon(
+		tab,
+		tab.icon || new URL('/favicon.ico', url).href,
+	);
+	if (!icon) return;
+	// the list may have changed meanwhile, here or in another window
+	bookmarks = loadBookmarks();
+	const kept = bookmarkOf(url);
+	if (!kept || kept.icon) return renderBookmarks();
+	kept.icon = icon;
+	saveBookmarks();
+}
+
+let iconRequest = 0;
+/** the icon at `url` through the tab's page, as a 64 px PNG data URL, else null */
+async function fetchIcon(tab, url) {
+	const port = tab.iconPort;
+	const id = ++iconRequest;
+	const body = await new Promise((resolve) => {
+		const timer = setTimeout(() => resolve(null), 10000);
+		port.addEventListener('message', function answer(event) {
+			if (event.data?.id !== id) return;
+			port.removeEventListener('message', answer);
+			clearTimeout(timer);
+			resolve(event.data.body);
+		});
+		port.start();
+		port.postMessage({ id, url });
+	});
+	if (!(body instanceof Blob) || !body.size || body.size > 1024 * 1024)
+		return null;
+	// the browser sniffs a raster image whatever its type, never an SVG one
+	let picture = body;
+	if (
+		body.type !== 'image/svg+xml' &&
+		/<svg[\s>]/i.test(await body.slice(0, 1024).text())
+	)
+		picture = new Blob([body], { type: 'image/svg+xml' });
+	const source = URL.createObjectURL(picture);
+	try {
+		const image = new Image();
+		image.src = source;
+		await image.decode();
+		const size = 64;
+		const canvas = document.createElement('canvas');
+		canvas.width = canvas.height = size;
+		const width = image.naturalWidth || size;
+		const height = image.naturalHeight || size;
+		const scale = Math.min(size / width, size / height);
+		const context = canvas.getContext('2d');
+		context.drawImage(
+			image,
+			(size - width * scale) / 2,
+			(size - height * scale) / 2,
+			width * scale,
+			height * scale,
+		);
+		// nothing drawn (an SVG sprite sheet): no icon, the globe stands in
+		const { data } = context.getImageData(0, 0, size, size);
+		if (!data.some((value, i) => i % 4 === 3 && value)) return null;
+		return canvas.toDataURL('image/png');
+	} catch {
+		return null; // not an image the browser can draw
+	} finally {
+		URL.revokeObjectURL(source);
+	}
+}
+
+const bookmarksOpen = () => bookmarksPanel.classList.contains('open');
+
+function bookmarkRow(entry) {
+	const row = element('li', 'bookmark');
+	const open = element('button', 'bookmarkOpen');
+	open.type = 'button';
+	open.title = entry.url;
+	let host = '';
+	try {
+		host = new URL(entry.url).hostname.replace(/^www\./, '');
+	} catch {}
+	// the icon on a rounded tile, in the site's colour where it has one (as
+	// Fracital's link cards), else white, which most icons are drawn for
+	const site = SITE_ICONS.get(host.replace(/^m\./, ''));
+	const src = site?.icon || entry.icon;
+	const color = site?.color || entry.color;
+	const tile = element('span', 'bookmarkTile');
+	if (color) tile.style.setProperty('--tile', color);
+	const icon = element('img', 'bookmarkIcon');
+	icon.alt = '';
+	icon.width = 22;
+	icon.height = 22;
+	icon.src = src || GLOBE_ICON;
+	if (!src) icon.classList.add('globe');
+	if (FULL_TILE_ICONS.has(src)) icon.classList.add('full');
+	tile.append(icon);
+	open.append(tile);
+	const text = element('span', 'bookmarkText');
+	text.append(
+		element('span', 'bookmarkTitle', entry.title || host || entry.url),
+		element('span', 'bookmarkUrl', entry.url),
+	);
+	open.append(text);
+	// a click opens it in the current tab; Ctrl, Cmd or the middle button in
+	// a new one, as a browser's links do
+	const go = (newTab) => {
+		closeBookmarks(false);
+		navigate(entry.url, { newTab });
+	};
+	open.addEventListener('click', (event) =>
+		go(event.ctrlKey || event.metaKey || event.shiftKey),
+	);
+	open.addEventListener('mousedown', (event) => {
+		if (event.button === 1) event.preventDefault(); // no autoscroll
+	});
+	open.addEventListener('auxclick', (event) => {
+		if (event.button === 1) go(true);
+	});
+	const remove = element('button', 'bookmarkRemove', '×');
+	remove.type = 'button';
+	remove.title = 'Remove';
+	remove.setAttribute(
+		'aria-label',
+		`Remove bookmark ${entry.title || host || entry.url}`,
+	);
+	remove.addEventListener('click', () => {
+		const rows = [...bookmarksList.children];
+		const next = rows[rows.indexOf(row) + 1] || rows[rows.indexOf(row) - 1];
+		bookmarks = bookmarks.filter((other) => other.url !== entry.url);
+		saveBookmarks();
+		// keep the keyboard in the list: on the next row, else the close button
+		const url = next?.querySelector('.bookmarkOpen')?.title;
+		const target = [...bookmarksList.querySelectorAll('.bookmarkOpen')].find(
+			(button) => button.title === url,
+		);
+		(target || $('bookmarksClose')).focus();
+	});
+	row.append(open, remove);
+	return row;
+}
+
+function renderBookmarks() {
+	syncStars();
+	$('bookmarksCount').textContent = String(bookmarks.length);
+	$('bookmarksEmpty').classList.toggle('hidden', bookmarks.length > 0);
+	// the rows are built while the sidebar is up only
+	if (!bookmarksOpen()) return;
+	const focused = bookmarksList.contains(document.activeElement)
+		? document.activeElement
+				.closest('.bookmark')
+				?.querySelector('.bookmarkOpen')?.title
+		: null;
+	bookmarksList.replaceChildren(...bookmarks.map(bookmarkRow));
+	if (focused)
+		[...bookmarksList.querySelectorAll('.bookmarkOpen')]
+			.find((button) => button.title === focused)
+			?.focus();
+}
+
+// the button that opened the sidebar: the home page's tab or the bar's
+// Saved pages, which gets the focus back
+let bookmarksOpener = bookmarksTab;
+
+function openBookmarks(opener = bookmarksTab) {
+	if (bookmarksOpen()) return;
+	bookmarksOpener = opener;
+	bookmarksPanel.classList.add('open');
+	bookmarksPanel.setAttribute('aria-hidden', 'false');
+	$('bookmarksScrim').classList.add('open');
+	opener.setAttribute('aria-expanded', 'true');
+	// the keyboard stays in the sidebar
+	landing.inert = true;
+	browser.inert = true;
+	renderBookmarks();
+	(bookmarksList.querySelector('.bookmarkOpen') || $('bookmarksClose')).focus();
+}
+
+function closeBookmarks(restoreFocus = true) {
+	if (!bookmarksOpen()) return;
+	bookmarksPanel.classList.remove('open');
+	bookmarksPanel.setAttribute('aria-hidden', 'true');
+	$('bookmarksScrim').classList.remove('open');
+	bookmarksOpener.setAttribute('aria-expanded', 'false');
+	landing.inert = false;
+	browser.inert = false;
+	if (restoreFocus) bookmarksOpener.focus();
+	// the rows go once the sidebar has slid away
+	setTimeout(() => {
+		if (!bookmarksOpen()) bookmarksList.textContent = '';
+	}, 300);
+}
+
+bookmarksTab.addEventListener('click', () => openBookmarks(bookmarksTab));
+$('toolSaved').addEventListener('click', () => openBookmarks($('toolSaved')));
+$('bookmarksClose').addEventListener('click', () => closeBookmarks());
+$('bookmarksScrim').addEventListener('click', () => closeBookmarks());
+$('toolStar').addEventListener('click', () => toggleBookmark(activeTab));
+// Escape closes the sidebar before anything else sees the key, and the
+// navigation bar takes it down on the way to what it does (Back only closes)
+addEventListener(
+	'keydown',
+	(event) => {
+		if (event.key !== 'Escape' || !bookmarksOpen()) return;
+		closeBookmarks();
+		event.stopImmediatePropagation();
+	},
+	true,
+);
+document.addEventListener(
+	'click',
+	(event) => {
+		const button = event.target.closest('.navbar .navbtn');
+		if (!button || !bookmarksOpen()) return;
+		closeBookmarks(false);
+		if (button.id === 'back') event.stopImmediatePropagation();
+	},
+	true,
+);
+// The maker's sites and two friends' are bookmarked once, on the first visit
+// (after the user's own, for a list from before they were): a marker beside
+// the list remembers it, so one the user removes stays removed.
+const SEEDED_KEY = 'stomp-demo:bookmarks-seeded';
+{
+	let seeded = false;
+	try {
+		seeded = localStorage.getItem(SEEDED_KEY) === '1';
+	} catch {}
+	if (!seeded) {
+		for (const entry of DEFAULT_BOOKMARKS)
+			if (!bookmarkOf(entry.url)) bookmarks.push({ ...entry });
+		try {
+			localStorage.setItem(SEEDED_KEY, '1');
+		} catch {}
+		saveBookmarks();
+	}
+}
+renderBookmarks();
 
 const booted = boot();
 booted

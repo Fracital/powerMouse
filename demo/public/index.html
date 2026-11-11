@@ -25,10 +25,6 @@
 		<div class="wrapper" id="landing">
 			<div class="head">
 				<h1><a class="noStyle ns" href="/">powerMouse</a></h1>
-				<nav class="sites" aria-label="Fracital sites">
-					<a href="https://fracit.al/">Fracital</a>
-					<a href="https://vibeos.fracit.al/">vibeOS</a>
-				</nav>
 				<a draggable="false" href="https://github.com/Fracital/powerMouse"
 					><div class="ns git">Fork us on GitHub</div></a
 				>
@@ -50,6 +46,25 @@
 					</form>
 					<div id="button-container"></div>
 					<p id="logMsg">Starting…</p>
+					<!-- sticks out of the card's left edge, between the status line
+					     and the commits: opens the bookmarks sidebar -->
+					<button
+						id="bookmarksTab"
+						class="bookmarksTab"
+						type="button"
+						title="Bookmarks"
+						aria-label="Bookmarks"
+						aria-expanded="false"
+						aria-controls="bookmarks"
+					>
+						<img
+							src="/pm/icons/star-tab.svg"
+							width="32"
+							height="32"
+							alt=""
+							draggable="false"
+						/>
+					</button>
 					<section class="commits" aria-labelledby="commitsTitle">
 						<div class="commitsHead">
 							<span id="commitsTitle">Latest commits</span>
@@ -125,6 +140,23 @@
 						draggable="false"
 					/>
 				</button>
+				<!-- the bookmarks sidebar, over the page -->
+				<button
+					id="toolSaved"
+					class="toolbtn"
+					title="Saved pages"
+					aria-label="Saved pages"
+					aria-expanded="false"
+					aria-controls="bookmarks"
+				>
+					<img
+						src="/pm/icons/bookmarks.svg"
+						width="24"
+						height="24"
+						alt=""
+						draggable="false"
+					/>
+				</button>
 				<form id="omni" autocomplete="off">
 					<input
 						name="url"
@@ -132,8 +164,22 @@
 						type="text"
 						placeholder="Search or enter a web address"
 					/>
+					<!-- at the right end of the address box: the service worker's
+					     status, then whether the active tab's page is bookmarked
+					     (Tango star) -->
+					<div class="omniEnd" id="omniEnd">
+						<span id="chromeStatus" class="select">…</span>
+						<button
+							id="toolStar"
+							class="starbtn"
+							type="button"
+							title="Bookmark this page"
+							aria-label="Bookmark this page"
+							aria-pressed="false"
+							disabled
+						></button>
+					</div>
 				</form>
-				<span id="chromeStatus" class="select">…</span>
 			</div>
 			<div id="frames" class="frames"></div>
 		</div>
@@ -174,6 +220,52 @@
 			<div class="requestsList" id="requestsList"></div>
 			<div class="requestsEmpty" id="requestsEmpty">No requests yet</div>
 		</section>
+
+		<!-- bookmarks: the home page's star tab slides this in from the left -->
+		<div id="bookmarksScrim" class="bookmarksScrim"></div>
+		<aside
+			id="bookmarks"
+			class="bookmarks"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="bookmarksTitle"
+			aria-hidden="true"
+		>
+			<div class="bookmarksTop">
+				<img
+					src="/pm/icons/star-tab.svg"
+					width="20"
+					height="20"
+					alt=""
+					draggable="false"
+				/>
+				<span class="bookmarksTitle" id="bookmarksTitle">Bookmarks</span>
+				<span class="bookmarksCount" id="bookmarksCount">0</span>
+				<button
+					class="bookmarksClose"
+					id="bookmarksClose"
+					type="button"
+					title="Close"
+					aria-label="Close bookmarks"
+				>
+					×
+				</button>
+			</div>
+			<ul class="bookmarksList" id="bookmarksList"></ul>
+			<div class="bookmarksEmpty" id="bookmarksEmpty">
+				<img
+					src="/pm/icons/star-tab.svg"
+					width="48"
+					height="48"
+					alt=""
+					draggable="false"
+				/>
+				<p>No bookmarks yet</p>
+				<p class="bookmarksHint">
+					Star a page in the address bar to keep it here.
+				</p>
+			</div>
+		</aside>
 
 		<!-- early-Android (Holo) style navigation bar -->
 		<nav class="navbar" aria-label="Navigation">
