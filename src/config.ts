@@ -192,7 +192,7 @@ export interface Assets {
 	rewriteWorker?: string;
 	/** the JS rewriter's wasm module (docs/rust-plan.md) */
 	rewriter?: string;
-	/** the CSS and markup scanners' wasm module (docs/rust-plan.md, phase 3) */
+	/** the CSS rewriter's and markup scanner's wasm module (docs/rust-plan.md, phase 3) */
 	scanner?: string;
 	/** the built-in blocker's wasm module (docs/adblock.md) */
 	blocker?: string;

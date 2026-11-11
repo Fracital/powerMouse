@@ -31,7 +31,7 @@ fn is_word(byte: u8) -> bool {
 /// the length of the `\s` character at `at`, or 0: JavaScript's WhiteSpace
 /// and LineTerminator (tab, LF, VT, FF, CR, space, U+00A0, U+1680,
 /// U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, U+3000, U+FEFF)
-fn space_at(source: &[u8], at: usize) -> usize {
+pub(crate) fn space_at(source: &[u8], at: usize) -> usize {
 	match source.get(at) {
 		Some(0x09..=0x0D | 0x20) => 1,
 		Some(0xC2) if source.get(at + 1) == Some(&0xA0) => 2,
@@ -47,7 +47,7 @@ fn space_at(source: &[u8], at: usize) -> usize {
 	}
 }
 
-fn skip_spaces(source: &[u8], mut at: usize) -> usize {
+pub(crate) fn skip_spaces(source: &[u8], mut at: usize) -> usize {
 	loop {
 		let length = space_at(source, at);
 		if length == 0 {

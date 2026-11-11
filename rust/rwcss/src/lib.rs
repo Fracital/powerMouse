@@ -1,45 +1,56 @@
-//! The scanners' wasm boundary (docs/rust-plan.md, phase 3): the stylesheet
-//! scan (`css`) and the markup scan (`markup`), behind the same byte-buffer
-//! ABI as the JS rewriter's (`rust/rwjs/src/lib.rs`, loaded by
-//! `src/wasm/module.ts`), with no import: a scan answers where things
-//! stand and the JavaScript side does the routing, so nothing calls back.
+//! The CSS rewriter and the markup scanner of stomp, built to wasm
+//! (docs/rust-plan.md, phase 3), behind the same byte-buffer ABI as the JS
+//! rewriter's (`rust/rwjs/src/abi.rs`, loaded by `src/wasm/module.ts`):
 //!
 //! - `a(len) -> ptr`, `f(ptr, len)`: bytes for the host to write, and back.
-//! - `c(ptr, len) -> status`: a configuration; the scans have none.
-//! - `r(ptr, len, flags) -> status`: scans the text in the bytes (owned from
-//!   then on) and keeps the answer until the next call. `flags` says which
-//!   scan: 0 a stylesheet, 1 a declaration list, 2 markup.
-//! - `p()`, `n()`: the answer's pointer and length. `b()`: no scratch.
+//! - `c(ptr, len) -> status`: a configuration; this module has none.
+//! - `r(ptr, len, flags) -> status`: answers for the text in the bytes
+//!   (owned from then on) and keeps the answer until the next call.
+//! - `p()`, `n()`: the answer's pointer and length.
+//! - `b() -> ptr`: the scratch the host answers a routing call in.
+//! - the import `e.r(kind, ptr, len) -> len`: the host's routing of a URL,
+//!   written to the scratch; -1 when it does not route (`abi.rs`).
 //!
-//! The answer is lines of ASCII, offsets in UTF-16 units (what the host
-//! slices its string by):
+//! `flags` says what is asked:
 //!
-//! - a stylesheet or declaration list: `V start end` (a declaration's
-//!   value), `P start end nameStart nameEnd` (an at-rule's prelude and its
-//!   name), `S start end` (a rule's prelude), `R start end` (raw text), in
-//!   source order;
-//! - markup: `B 0` or `B 1` (whether it sets a base URL), then `J` (script)
-//!   and `C` (style) lines of `attributesStart attributesEnd textStart
-//!   textEnd`, each kind in source order.
+//! - 3 a stylesheet, 4 a declaration list, 5 a single value: the answer is
+//!   the text rewritten (`rewrite`), every URL routed by the host, byte for
+//!   byte what `modifyCSS` and `rewriteCSSValueURLs` give. Status 7 says
+//!   the text comes back as it was, and there is no answer to copy.
+//! - 2 markup: `B 0` or `B 1` (whether it sets a base URL), then `J`
+//!   (script) and `C` (style) lines of `attributesStart attributesEnd
+//!   textStart textEnd`, each kind in source order, offsets in UTF-16 units
+//!   (what the host slices its string by).
+//! - 0 a stylesheet, 1 a declaration list, scanned only: the raw pieces the
+//!   rewrite looks into, as lines `V start end` (a declaration's value),
+//!   `P start end nameStart nameEnd` (an at-rule's prelude and its name),
+//!   `S start end` (a rule's prelude), `R start end` (raw text), in source
+//!   order. What a build that rewrote each piece in JavaScript asked for,
+//!   kept for it and for telling the scan from the rewrite when they differ.
 //!
-//! Status 0 is an answer; 5 is declined (the JavaScript scan does this
-//! input, `css::Fail::Decline`); 6 is a flag this build does not know. A
-//! panic aborts, which the loader sees as a trap and treats as a dead
-//! instance.
+//! Status 0 is an answer; 5 is declined (JavaScript does this input,
+//! `css::Fail::Decline`); 6 is a flag this build does not know; 7 is
+//! unchanged. A panic aborts, which the loader sees as a trap and treats as
+//! a dead instance.
 #![allow(clippy::missing_safety_doc)]
 
+#[cfg(target_arch = "wasm32")]
+mod abi;
 pub mod css;
+pub mod full;
 pub mod markup;
+pub mod rewrite;
 
-use std::alloc::{Layout, alloc, dealloc};
-use std::cell::UnsafeCell;
+pub const STYLE_SHEET: u32 = 0;
+pub const DECLARATION_LIST: u32 = 1;
+pub const MARKUP: u32 = 2;
+pub const REWRITE_SHEET: u32 = 3;
+pub const REWRITE_LIST: u32 = 4;
+pub const REWRITE_VALUE: u32 = 5;
 
-const STYLE_SHEET: u32 = 0;
-const DECLARATION_LIST: u32 = 1;
-const MARKUP: u32 = 2;
-
-const DECLINED: i32 = 5;
-const UNKNOWN: i32 = 6;
+pub const DECLINED: i32 = 5;
+pub const UNKNOWN: i32 = 6;
+pub const UNCHANGED: i32 = 7;
 
 /// Byte offsets into UTF-8 as UTF-16 offsets, asked in rising order: a
 /// character is one unit, or two when its first byte says it is four bytes
@@ -89,9 +100,6 @@ pub fn answer(input: &[u8], flags: u32) -> Result<Vec<u8>, i32> {
 	};
 	match flags {
 		STYLE_SHEET | DECLARATION_LIST => {
-			if units.at(input.len()) > css::MAX_UNITS {
-				return Err(DECLINED);
-			}
 			let pieces = css::scan(input, flags == DECLARATION_LIST).map_err(|_| DECLINED)?;
 			for piece in pieces {
 				output.push(piece.kind);
@@ -125,80 +133,6 @@ pub fn answer(input: &[u8], flags: u32) -> Result<Vec<u8>, i32> {
 		_ => return Err(UNKNOWN),
 	}
 	Ok(output)
-}
-
-struct Slot(UnsafeCell<Vec<u8>>);
-// wasm32-unknown-unknown has one thread: the host calls one export at a time
-unsafe impl Sync for Slot {}
-
-static OUTPUT: Slot = Slot(UnsafeCell::new(Vec::new()));
-
-fn output() -> &'static mut Vec<u8> {
-	// SAFETY: single threaded, and no reference outlives the export call
-	unsafe { &mut *OUTPUT.0.get() }
-}
-
-/// `len` bytes the host writes; owned by `f`, `c` or `r`
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn a(len: usize) -> *mut u8 {
-	if len == 0 {
-		return std::ptr::null_mut();
-	}
-	let layout = Layout::from_size_align(len, 1).unwrap();
-	unsafe { alloc(layout) }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn f(ptr: *mut u8, len: usize) {
-	if len == 0 || ptr.is_null() {
-		return;
-	}
-	let layout = Layout::from_size_align(len, 1).unwrap();
-	unsafe { dealloc(ptr, layout) }
-}
-
-/// the bytes `a` gave, as a Vec that frees them
-unsafe fn take(ptr: *mut u8, len: usize) -> Vec<u8> {
-	if len == 0 || ptr.is_null() {
-		return Vec::new();
-	}
-	unsafe { Vec::from_raw_parts(ptr, len, len) }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn c(ptr: *mut u8, len: usize) -> i32 {
-	drop(unsafe { take(ptr, len) });
-	0
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn r(ptr: *mut u8, len: usize, flags: u32) -> i32 {
-	let input = unsafe { take(ptr, len) };
-	match answer(&input, flags) {
-		Ok(answer) => {
-			*output() = answer;
-			0
-		}
-		Err(status) => {
-			*output() = Vec::new();
-			status
-		}
-	}
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn p() -> *const u8 {
-	output().as_ptr()
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn n() -> usize {
-	output().len()
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn b() -> *mut u8 {
-	std::ptr::null_mut()
 }
 
 #[cfg(test)]

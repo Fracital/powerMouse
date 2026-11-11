@@ -2,7 +2,7 @@
 name = "rwcss"
 version = "0.1.0"
 edition = "2024"
-description = "the CSS and markup scanners of stomp, built to wasm (docs/rust-plan.md, phase 3)"
+description = "the CSS rewriter and the markup scanner of stomp, built to wasm (docs/rust-plan.md, phase 3)"
 license = "GPL-3.0-only"
 publish = false
 

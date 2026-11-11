@@ -8,9 +8,9 @@
 // cluster) for the rewriter library it shares with its frames, so a frame
 // holds no instance. A page loads and runs as before either way: a module
 // only ever answers what the JavaScript rewriter would have. A stylesheet's
-// request says the scanner module found its pieces (`rewriteBy`), and its
-// url() is routed as before. The service worker names the public suffix
-// list its sites are answered from once it holds the suffix module
+// request says the scanner module rewrote it (`rewriteBy`), and its url() is
+// routed as before. The service worker names the public suffix list its
+// sites are answered from once it holds the suffix module
 // (rust/suffix/src/pins.env), and none while tldts answers.
 import { readFileSync } from 'node:fs';
 import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
@@ -178,7 +178,7 @@ ok(
 	);
 	const styled = await loadStyled();
 	ok(
-		"a stylesheet's pieces are found by the scanner module",
+		'a stylesheet is rewritten by the scanner module',
 		styled.sheet === 200 && styled.by === 'wasm',
 		JSON.stringify(styled),
 	);

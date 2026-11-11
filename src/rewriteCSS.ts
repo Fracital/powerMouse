@@ -8,15 +8,47 @@ import { LAZY_CONTEXTS, MAY_ROUTE } from './cssURL';
 import {
 	originalOf,
 	preserveValue,
-	rewriteCSSValueURLs,
+	rewriteCSSValueURLs as rewriteValueURLsInJS,
 	routeCSS,
 } from './cssURLs';
 import { provideRewriters } from './rewriters';
 import { routeBinary } from './routeURL';
 import StompURL from './StompURL';
-import type { StylePiece } from './wasm/scanner';
+import { rewriteStyles, rewriteValueURLs } from './wasm/scanner';
 
-export { restoreCSSValueURLs, rewriteCSSValueURLs, routeCSS } from './cssURLs';
+export { restoreCSSValueURLs, routeCSS } from './cssURLs';
+
+/**
+ * Asks for the wasm backend (`rewriter: 'wasm'`), and is told which backend
+ * did the rewrite: the module (rust/rwcss, `wasm`) or the JavaScript below
+ * (`js`: this thread holds no module, the module declined the text, or it
+ * was in a call already). Left as it was when there was nothing to look
+ * into. The output is the same either way, byte for byte.
+ */
+export interface StyleRewrittenBy {
+	by?: 'wasm' | 'js';
+}
+
+/**
+ * Route every url() in a raw CSS value (cssURLs' rewriteCSSValueURLs, the
+ * expression): in the module when `told` asks for it and this thread holds
+ * it, in JavaScript otherwise. The module's answer is the expression's, but
+ * on a single value the expression is the faster of the two (2.7 against
+ * 4.7 microseconds: the text crosses into the module and back), so the
+ * callers of this build do not ask.
+ */
+export function rewriteCSSValueURLs(
+	value: string,
+	url: StompURL,
+	told?: StyleRewrittenBy,
+): string {
+	if (told && value.includes('url(')) {
+		const output = rewriteValueURLs(value, url);
+		told.by = output === null ? 'js' : 'wasm';
+		if (output !== null) return output;
+	}
+	return rewriteValueURLsInJS(value, url);
+}
 
 /**
  * The replacements a walk makes in a stylesheet, in source order, applied
@@ -94,22 +126,12 @@ interface WalkContext {
 	declaration?: { property: string; value: CssNode } | null;
 }
 
-/**
- * The raw pieces of a lazily parsed stylesheet that the rewrite looks into,
- * found without css-tree (src/wasm/scanner.ts), or null to have css-tree
- * find them
- */
-export type StyleScanner = (
-	script: string,
-	context: string,
-) => StylePiece[] | null;
-
 export function modifyCSS(
 	script: string,
 	url: StompURL,
 	context = 'stylesheet',
-	/** `rewriter: 'wasm'`: the scanner the thread holds; the output is the same with it and without */
-	scan?: StyleScanner,
+	/** `rewriter: 'wasm'`: the module rewrites the text when this thread holds it; the output is the same with it and without */
+	told?: StyleRewrittenBy,
 ) {
 	// A stylesheet is parsed with its values, at-rule preludes and selectors
 	// left as raw text, and only a piece that could hold a URL is parsed in
@@ -118,6 +140,14 @@ export function modifyCSS(
 	// rewrite in the service worker on every load). The output is the same.
 	const lazy = LAZY_CONTEXTS.includes(context);
 	if (lazy && !MAY_ROUTE.test(script)) return script;
+	// The module does all of what follows (css-tree's tokenizer and parsers
+	// ported, the same routing asked of this thread URL by URL), and what it
+	// cannot do the same it declines.
+	if (told && lazy) {
+		const output = rewriteStyles(script, url, context);
+		told.by = output === null ? 'js' : 'wasm';
+		if (output !== null) return output;
+	}
 	const edits = new Edits(script);
 
 	const route = function (
@@ -131,7 +161,7 @@ export function modifyCSS(
 		// anything it could not shape (a block under a malformed at-rule
 		// prelude) comes as raw text too: its url()s are routed by the regex
 		if (node.type === 'Raw' && node.value.includes('url(')) {
-			const generated = rewriteCSSValueURLs(node.value, url);
+			const generated = rewriteValueURLsInJS(node.value, url);
 
 			if (generated !== node.value) {
 				edits.replace(node.loc!.start.offset, node.loc!.end.offset, generated);
@@ -226,27 +256,6 @@ export function modifyCSS(
 			route.call(this as WalkContext, inner, atrule);
 		});
 	};
-
-	// The lazy parse and the walk below only find the raw pieces to look
-	// into, and on a large sheet that is nearly all the time that is left.
-	// The scanner finds the same pieces (it is css-tree's tokenizer and lazy
-	// parser, ported), and each is then handled by the code the walk calls.
-	const pieces = lazy && scan ? scan(script, context) : null;
-	if (pieces) {
-		for (const piece of pieces) {
-			const [kind, start, end] = piece;
-			const node = {
-				type: 'Raw',
-				value: script.slice(start, end),
-				loc: { start: { offset: start }, end: { offset: end } },
-			} as unknown as CssNode;
-			if (kind === 'R') route.call({}, node);
-			else if (kind === 'V') deep(node, 'value');
-			else if (kind === 'S') deep(node, 'selectorList');
-			else deep(node, 'atrulePrelude', script.slice(piece[3], piece[4]));
-		}
-		return edits.result();
-	}
 
 	const tree = parseCleared(
 		script,

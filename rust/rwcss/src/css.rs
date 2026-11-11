@@ -55,6 +55,15 @@ pub const COMMENT: u8 = 25;
 /// units its offsets wrap, and what it answers then is not worth matching
 pub const MAX_UNITS: usize = 0x00FF_FFFF;
 
+/// how many UTF-16 units `source` is: a character is one unit, or two when
+/// its first byte says it is four bytes
+pub fn units(source: &[u8]) -> usize {
+	source
+		.iter()
+		.map(|&byte| ((byte & 0xC0) != 0x80) as usize + (byte >= 0xF0) as usize)
+		.sum()
+}
+
 /// blocks nested deeper than this are left to the JavaScript rewriter, which
 /// has a stack of its own to run out of
 const MAX_DEPTH: u32 = 64;
@@ -62,36 +71,36 @@ const MAX_DEPTH: u32 = 64;
 /// `source.charCodeAt(offset)` past the end: NaN, equal to nothing
 const NAN: u32 = u32::MAX;
 
-fn is_digit(code: u32) -> bool {
-	(0x30..=0x39).contains(&code)
+pub(crate) const fn is_digit(code: u32) -> bool {
+	code >= 0x30 && code <= 0x39
 }
-fn is_hex_digit(code: u32) -> bool {
-	is_digit(code) || (0x41..=0x46).contains(&code) || (0x61..=0x66).contains(&code)
+pub(crate) const fn is_hex_digit(code: u32) -> bool {
+	is_digit(code) || (code >= 0x41 && code <= 0x46) || (code >= 0x61 && code <= 0x66)
 }
-fn is_uppercase(code: u32) -> bool {
-	(0x41..=0x5A).contains(&code)
+const fn is_uppercase(code: u32) -> bool {
+	code >= 0x41 && code <= 0x5A
 }
-fn is_letter(code: u32) -> bool {
-	is_uppercase(code) || (0x61..=0x7A).contains(&code)
+const fn is_letter(code: u32) -> bool {
+	is_uppercase(code) || (code >= 0x61 && code <= 0x7A)
 }
 /// a byte of a multi-byte character stands for its UTF-16 units, all of
 /// which are 0x80 or more
-fn is_name_start(code: u32) -> bool {
+const fn is_name_start(code: u32) -> bool {
 	code != NAN && (is_letter(code) || code >= 0x80 || code == 0x5F)
 }
-fn is_name(code: u32) -> bool {
+const fn is_name(code: u32) -> bool {
 	is_name_start(code) || is_digit(code) || code == 0x2D
 }
 fn is_non_printable(code: u32) -> bool {
 	code <= 0x08 || code == 0x0B || (0x0E..=0x1F).contains(&code) || code == 0x7F
 }
-fn is_newline(code: u32) -> bool {
+pub(crate) const fn is_newline(code: u32) -> bool {
 	code == 0x0A || code == 0x0D || code == 0x0C
 }
-fn is_white_space(code: u32) -> bool {
+pub(crate) const fn is_white_space(code: u32) -> bool {
 	is_newline(code) || code == 0x20 || code == 0x09
 }
-fn is_valid_escape(first: u32, second: u32) -> bool {
+pub(crate) fn is_valid_escape(first: u32, second: u32) -> bool {
 	first == 0x5C && !is_newline(second) && second != 0
 }
 fn is_identifier_start(first: u32, second: u32, third: u32) -> bool {
@@ -117,6 +126,38 @@ fn is_number_start(first: u32, second: u32, third: u32) -> bool {
 		return is_digit(second);
 	}
 	is_digit(first)
+}
+
+/// what a byte is to the tokenizer's loops, looked up instead of compared
+const SPACE: u8 = 1;
+const DIGIT: u8 = 2;
+const NAME_START: u8 = 4;
+const NAME: u8 = 8;
+static CLASS: [u8; 256] = {
+	let mut class = [0u8; 256];
+	let mut byte = 0;
+	while byte < 256 {
+		let code = byte as u32;
+		let mut bits = 0;
+		if is_white_space(code) {
+			bits |= SPACE;
+		}
+		if is_digit(code) {
+			bits |= DIGIT;
+		}
+		if is_name_start(code) {
+			bits |= NAME_START;
+		}
+		if is_name(code) {
+			bits |= NAME;
+		}
+		class[byte] = bits;
+		byte += 1;
+	}
+	class
+};
+fn class(byte: u8) -> u8 {
+	CLASS[byte as usize]
 }
 
 /// the tokens of a source, as css-tree's `tokenize` reports them
@@ -158,13 +199,13 @@ impl Tokenizer<'_> {
 			.all(|(&byte, &wanted)| byte.to_ascii_lowercase() == wanted)
 	}
 	fn white_space_end(&self, mut offset: usize) -> usize {
-		while offset < self.len() && is_white_space(self.source[offset] as u32) {
+		while offset < self.len() && class(self.source[offset]) & SPACE != 0 {
 			offset += 1;
 		}
 		offset
 	}
 	fn decimal_end(&self, mut offset: usize) -> usize {
-		while offset < self.len() && is_digit(self.source[offset] as u32) {
+		while offset < self.len() && class(self.source[offset]) & DIGIT != 0 {
 			offset += 1;
 		}
 		offset
@@ -185,11 +226,12 @@ impl Tokenizer<'_> {
 	}
 	fn consume_name(&self, mut offset: usize) -> usize {
 		while offset < self.len() {
-			let code = self.source[offset] as u32;
-			if is_name(code) {
+			let byte = self.source[offset];
+			if class(byte) & NAME != 0 {
 				offset += 1;
 				continue;
 			}
+			let code = byte as u32;
 			if is_valid_escape(code, self.code(offset + 1)) {
 				offset = self.consume_escaped(offset);
 				continue;
@@ -349,17 +391,16 @@ impl Tokenizer<'_> {
 		let code = self.source[offset] as u32;
 		// charCodeCategory, in its order: whitespace, digit, name start,
 		// non-printable, then the character itself
-		if is_white_space(code) {
-			self.kind = WHITESPACE;
-			self.offset = self.white_space_end(offset + 1);
-			return;
-		}
-		if is_digit(code) {
-			self.consume_numeric_token();
-			return;
-		}
-		if is_name_start(code) {
-			self.consume_ident_like_token();
+		let bits = class(self.source[offset]);
+		if bits & (SPACE | DIGIT | NAME_START) != 0 {
+			if bits & SPACE != 0 {
+				self.kind = WHITESPACE;
+				self.offset = self.white_space_end(offset + 1);
+			} else if bits & DIGIT != 0 {
+				self.consume_numeric_token();
+			} else {
+				self.consume_ident_like_token();
+			}
 			return;
 		}
 		let (one, two, three) = (
@@ -450,7 +491,7 @@ impl Tokenizer<'_> {
 }
 
 /// the first `needle` in `source` at or after `from`
-fn find(source: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+pub(crate) fn find(source: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 	if from > source.len() {
 		return None;
 	}
@@ -460,32 +501,34 @@ fn find(source: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 		.map(|at| at + from)
 }
 
-/// whether `text` holds `needle` (lower case ASCII), ASCII case ignored
-fn holds(text: &[u8], needle: &[u8]) -> bool {
-	let first = needle[0];
-	let mut at = 0;
-	while at + needle.len() <= text.len() {
-		if text[at].to_ascii_lowercase() == first
-			&& text[at + 1..at + needle.len()]
-				.iter()
-				.zip(&needle[1..])
-				.all(|(&byte, &wanted)| byte.to_ascii_lowercase() == wanted)
-		{
-			return true;
-		}
-		at += 1;
-	}
-	false
-}
-
 /// What a piece must hold for the rewriter to change anything in it: a
 /// `url(` (a Url node, or a raw fallback the URL regex rewrites), or an
-/// `image-set(` or `src(` (whose strings are URLs). The JavaScript side
-/// looks into more (its MAY_ROUTE also takes `import` and a backslash), but
-/// none of those can lead to an edit without one of these: css-tree compares
-/// the raw text of a name, so an escaped `url` is not a url() to it.
-fn may_route(text: &[u8]) -> bool {
-	holds(text, b"url(") || holds(text, b"image-set") || holds(text, b"src(")
+/// `image-set` or `src(` (whose strings are URLs), ASCII case ignored. The
+/// JavaScript side looks into more (its MAY_ROUTE also takes `import` and a
+/// backslash), but none of those can lead to an edit without one of these:
+/// css-tree compares the raw text of a name, so an escaped `url` is not a
+/// url() to it. This is where each of them stands in `source`, start and
+/// end, found in one pass: in source order, and no two overlap (none of the
+/// three has a `(` before its last byte), so the ends are in order as well.
+fn marks(source: &[u8]) -> Vec<(u32, u32)> {
+	let mut found = Vec::new();
+	for (at, &byte) in source.iter().enumerate() {
+		if byte == b'(' {
+			if at >= 3 {
+				let name = &source[at - 3..at];
+				if name.eq_ignore_ascii_case(b"url") || name.eq_ignore_ascii_case(b"src") {
+					found.push(((at - 3) as u32, (at + 1) as u32));
+				}
+			}
+		} else if byte == b'-'
+			&& at >= 5
+			&& at + 4 <= source.len()
+			&& source[at - 5..at + 4].eq_ignore_ascii_case(b"image-set")
+		{
+			found.push(((at - 5) as u32, (at + 4) as u32));
+		}
+	}
+	found
 }
 
 /// the kinds of piece, as the answer spells them
@@ -516,25 +559,69 @@ pub enum Fail {
 	Decline,
 }
 
-type Parsed = Result<(), Fail>;
+pub(crate) type Parsed = Result<(), Fail>;
 
 const NONE: u32 = u32::MAX;
 
-/// css-tree's TokenStream, and the lazy parser on top of it
-struct Parser<'a> {
-	source: &'a [u8],
+/// no function encloses a leaf (`Leaf::function`)
+pub(crate) const NO_FUNCTION: (usize, usize) = (usize::MAX, usize::MAX);
+
+/// The leaves of a piece parsed in full that the rewriter routes, as css-tree's
+/// walk visits them (source order)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Leaf {
+	/// `RAW_LEAF`, `STRING_LEAF`, `URL_TOKEN_LEAF` or `URL_FUNCTION_LEAF`
+	pub kind: u8,
+	/// the node's `loc`, in bytes of the piece
+	pub start: usize,
+	pub end: usize,
+	/// the token its value is decoded from (a string, a url token)
+	pub value: (usize, usize),
+	/// the name of the nearest Function or pseudo-class around it, or
+	/// `NO_FUNCTION`: the walk's `this.function`
+	pub function: (usize, usize),
+}
+
+/// text no full parse shaped: its url()s are routed by the regex
+pub const RAW_LEAF: u8 = 0;
+pub const STRING_LEAF: u8 = 1;
+/// `url(a.png)`, one token
+pub const URL_TOKEN_LEAF: u8 = 2;
+/// `url("a.png")`: a function token, a string and a parenthesis
+pub const URL_FUNCTION_LEAF: u8 = 3;
+
+/// the token vectors of a parse, handed to the next (a sheet has thousands of
+/// pieces, each tokenized on its own as css-tree does)
+#[derive(Default)]
+pub(crate) struct Buffers {
 	ends: Vec<u32>,
 	kinds: Vec<u8>,
 	balance: Vec<u32>,
-	count: usize,
+	leaves: Vec<Leaf>,
+}
+
+/// css-tree's TokenStream, and the lazy parser on top of it
+pub(crate) struct Parser<'a> {
+	pub(crate) source: &'a [u8],
+	pub(crate) ends: Vec<u32>,
+	pub(crate) kinds: Vec<u8>,
+	balance: Vec<u32>,
+	pub(crate) count: usize,
 	first_char_offset: usize,
-	eof: bool,
-	index: usize,
-	kind: u8,
-	start: usize,
-	end: usize,
+	pub(crate) eof: bool,
+	pub(crate) index: usize,
+	pub(crate) kind: u8,
+	pub(crate) start: usize,
+	pub(crate) end: usize,
 	depth: u32,
 	pieces: Vec<Piece>,
+	/// the full parse (full.rs): what it found, the function it is in, and
+	/// how deep its sequences are nested
+	pub(crate) leaves: Vec<Leaf>,
+	pub(crate) function: (usize, usize),
+	pub(crate) nesting: u32,
+	/// the lazy parse: `marks` of the source
+	marks: Vec<(u32, u32)>,
 }
 
 fn is_opener(kind: u8) -> bool {
@@ -549,7 +636,7 @@ fn pair_of(kind: u8) -> u8 {
 	}
 }
 
-fn until_balance_end(_code: u8) -> u8 {
+pub(crate) fn until_balance_end(_code: u8) -> u8 {
 	0
 }
 fn until_left_curly(code: u8) -> u8 {
@@ -558,7 +645,7 @@ fn until_left_curly(code: u8) -> u8 {
 fn until_left_curly_or_semicolon(code: u8) -> u8 {
 	(code == b'{' || code == b';') as u8
 }
-fn until_exclamation_or_semicolon(code: u8) -> u8 {
+pub(crate) fn until_exclamation_or_semicolon(code: u8) -> u8 {
 	(code == b'!' || code == b';') as u8
 }
 fn until_semicolon_included(code: u8) -> u8 {
@@ -568,6 +655,19 @@ fn until_semicolon_included(code: u8) -> u8 {
 impl<'a> Parser<'a> {
 	/// `setSource`: the tokens and the balance table
 	fn new(source: &'a [u8]) -> Result<Self, Fail> {
+		Self::recycled(source, Buffers::default())
+	}
+	/// the vectors of this parse, for the next one
+	pub(crate) fn buffers(self) -> Buffers {
+		Buffers {
+			ends: self.ends,
+			kinds: self.kinds,
+			balance: self.balance,
+			leaves: self.leaves,
+		}
+	}
+	/// `new`, in the vectors an earlier parse gave back
+	pub(crate) fn recycled(source: &'a [u8], buffers: Buffers) -> Result<Self, Fail> {
 		let length = source.len();
 		// U+FEFF or U+FFFE first: css-tree starts after it
 		let bom = source.starts_with(&[0xEF, 0xBB, 0xBF]) || source.starts_with(&[0xEF, 0xBF, 0xBE]);
@@ -577,8 +677,18 @@ impl<'a> Parser<'a> {
 			kind: 0,
 		};
 		let first_char_offset = if tokens.offset < length { tokens.offset } else { 0 };
-		let mut ends: Vec<u32> = Vec::with_capacity(length / 3 + 16);
-		let mut kinds: Vec<u8> = Vec::with_capacity(length / 3 + 16);
+		let Buffers {
+			mut ends,
+			mut kinds,
+			mut balance,
+			mut leaves,
+		} = buffers;
+		ends.clear();
+		kinds.clear();
+		balance.clear();
+		leaves.clear();
+		ends.reserve(length / 3 + 16);
+		kinds.reserve(length / 3 + 16);
 		while tokens.offset < length {
 			tokens.token();
 			if tokens.offset > length {
@@ -588,7 +698,7 @@ impl<'a> Parser<'a> {
 			kinds.push(tokens.kind);
 		}
 		let count = ends.len();
-		let mut balance: Vec<u32> = vec![0; count + 1];
+		balance.resize(count + 1, 0);
 		// NONE stands for css-tree's `source.length`: nothing is open. The
 		// bracket css-tree waits for then is the pair of the token at that
 		// index of its buffer, which no parse writes and src/rewriteCSS.ts
@@ -637,6 +747,10 @@ impl<'a> Parser<'a> {
 			end: first_char_offset,
 			depth: 0,
 			pieces: Vec::new(),
+			leaves,
+			function: NO_FUNCTION,
+			nesting: 0,
+			marks: Vec::new(),
 		};
 		// reset() and the first next()
 		if count > 0 {
@@ -649,7 +763,7 @@ impl<'a> Parser<'a> {
 		}
 		Ok(parser)
 	}
-	fn next(&mut self) {
+	pub(crate) fn next(&mut self) {
 		let next = self.index + 1;
 		if next < self.count {
 			self.index = next;
@@ -667,7 +781,7 @@ impl<'a> Parser<'a> {
 	/// `skip` to the token `next`. `eof` is not cleared on the way back, and
 	/// a skip to the first token starts it at 0, not after a BOM: both as
 	/// css-tree has them.
-	fn skip_to(&mut self, next: usize) {
+	pub(crate) fn skip_to(&mut self, next: usize) {
 		if next < self.count {
 			self.index = next;
 			self.start = if next == 0 { 0 } else { self.ends[next - 1] as usize };
@@ -678,29 +792,34 @@ impl<'a> Parser<'a> {
 			self.next();
 		}
 	}
-	fn lookup_type(&self, offset: usize) -> u8 {
+	pub(crate) fn lookup_type(&self, offset: usize) -> u8 {
 		let at = self.index + offset;
 		if at < self.count { self.kinds[at] } else { EOF }
 	}
-	fn is_delim(&self, code: u8) -> bool {
+	pub(crate) fn is_delim(&self, code: u8) -> bool {
 		self.kind == DELIM && self.source.get(self.start) == Some(&code)
 	}
-	fn skip_sc(&mut self) {
+	pub(crate) fn skip_sc(&mut self) {
 		while self.kind == WHITESPACE || self.kind == COMMENT {
 			self.next();
 		}
 	}
-	fn eat(&mut self, kind: u8) -> Parsed {
+	pub(crate) fn eat(&mut self, kind: u8) -> Parsed {
 		if self.kind != kind {
+			// css-tree steps past a lone `#` before it reports the missing
+			// name, and the step can reach the end, which is not undone
+			if kind == HASH && self.is_delim(b'#') {
+				self.next();
+			}
 			return Err(Fail::Syntax);
 		}
 		self.next();
 		Ok(())
 	}
-	fn is_balance_edge(&self, token: usize) -> bool {
+	pub(crate) fn is_balance_edge(&self, token: usize) -> bool {
 		(self.balance[self.index] as usize) < token
 	}
-	fn skip_until_balanced(&mut self, start_token: usize, stop: fn(u8) -> u8) {
+	fn skip_until_balanced(&mut self, start_token: usize, stop: impl Fn(u8) -> u8) {
 		let mut cursor = start_token;
 		while cursor < self.count {
 			let balance_end = self.balance[cursor] as usize;
@@ -729,7 +848,11 @@ impl<'a> Parser<'a> {
 		self.skip_to(cursor);
 	}
 	/// `Raw`: where the raw text stands
-	fn raw(&mut self, stop: fn(u8) -> u8, exclude_white_space: bool) -> (usize, usize) {
+	pub(crate) fn raw(
+		&mut self,
+		stop: impl Fn(u8) -> u8,
+		exclude_white_space: bool,
+	) -> (usize, usize) {
 		let start = self.start;
 		self.skip_until_balanced(self.index, stop);
 		let end = if exclude_white_space && self.start > start {
@@ -749,10 +872,24 @@ impl<'a> Parser<'a> {
 		}
 		self.start
 	}
-	fn text(&self, (start, end): (usize, usize)) -> &'a [u8] {
-		// substring() swaps a start past its end
+	/// `substring()`: a start past its end is swapped with it
+	fn span(&self, (start, end): (usize, usize)) -> (usize, usize) {
 		let (start, end) = if start <= end { (start, end) } else { (end, start) };
-		&self.source[start.min(self.source.len())..end.min(self.source.len())]
+		(start.min(self.source.len()), end.min(self.source.len()))
+	}
+	pub(crate) fn text(&self, range: (usize, usize)) -> &'a [u8] {
+		let (start, end) = self.span(range);
+		&self.source[start..end]
+	}
+	/// the marks that stand whole in `range`
+	fn marked(&self, range: (usize, usize)) -> impl Iterator<Item = &(u32, u32)> {
+		let (start, end) = self.span(range);
+		let first = self.marks.partition_point(|mark| (mark.0 as usize) < start);
+		self.marks[first..].iter().take_while(move |mark| mark.1 as usize <= end)
+	}
+	/// whether the rewriter could change anything in the text at `range`
+	fn may_route(&self, range: (usize, usize)) -> bool {
+		self.marked(range).next().is_some()
 	}
 	fn piece(&mut self, kind: u8, range: (usize, usize), name: (usize, usize)) {
 		self.pieces.push(Piece {
@@ -764,16 +901,21 @@ impl<'a> Parser<'a> {
 	}
 	/// text no parse shaped: the walk routes its url()s by the regex
 	fn raw_piece(&mut self, range: (usize, usize)) {
-		if find(self.text(range), 0, b"url(").is_some() {
+		// `includes('url(')`: in lower case only
+		let source = self.source;
+		if self
+			.marked(range)
+			.any(|mark| &source[mark.0 as usize..mark.1 as usize] == b"url(")
+		{
 			self.piece(RAW, range, (0, 0));
 		}
 	}
 	/// `parseWithFallback`: what the failed consumer found is forgotten
 	fn with_fallback(
 		&mut self,
-		consumer: fn(&mut Self, bool) -> Parsed,
+		consumer: impl FnOnce(&mut Self, bool) -> Parsed,
 		argument: bool,
-		stop: fn(u8) -> u8,
+		stop: impl Fn(u8) -> u8,
 		exclude_white_space: bool,
 	) -> Parsed {
 		let start_index = self.index;
@@ -792,7 +934,7 @@ impl<'a> Parser<'a> {
 	}
 	/// a loop that consumed nothing would never end: css-tree's would not
 	/// either, and a page is better served by the JavaScript rewriter's fate
-	fn advanced(&self, from: usize) -> Parsed {
+	pub(crate) fn advanced(&self, from: usize) -> Parsed {
 		if self.index == from && !self.eof {
 			return Err(Fail::Decline);
 		}
@@ -854,7 +996,7 @@ impl<'a> Parser<'a> {
 		self.skip_sc();
 		if !self.eof && self.kind != LEFT_CURLY && self.kind != SEMICOLON {
 			let prelude = self.raw(until_left_curly_or_semicolon, true);
-			if self.text(name) == b"import" || may_route(self.text(prelude)) {
+			if self.text(name) == b"import" || self.may_route(prelude) {
 				self.piece(PRELUDE, prelude, name);
 			}
 			self.skip_sc();
@@ -881,7 +1023,7 @@ impl<'a> Parser<'a> {
 	}
 	fn rule(&mut self, _: bool) -> Parsed {
 		let prelude = self.raw(until_left_curly, true);
-		if may_route(self.text(prelude)) {
+		if self.may_route(prelude) {
 			self.piece(SELECTOR, prelude, (0, 0));
 		}
 		self.block(true)
@@ -961,7 +1103,7 @@ impl<'a> Parser<'a> {
 		let value = self.raw(until_exclamation_or_semicolon, !custom);
 		if custom {
 			self.raw_piece(value);
-		} else if may_route(self.text(value)) {
+		} else if self.may_route(value) {
 			self.piece(VALUE, value, (0, 0));
 		}
 		if self.is_delim(b'!') {
@@ -981,7 +1123,12 @@ impl<'a> Parser<'a> {
 /// declaration list (an element's `style`), in source order, offsets in
 /// bytes
 pub fn scan(source: &[u8], declaration_list: bool) -> Result<Vec<Piece>, Fail> {
+	// a unit is at least a byte
+	if source.len() > MAX_UNITS && units(source) > MAX_UNITS {
+		return Err(Fail::Decline);
+	}
 	let mut parser = Parser::new(source)?;
+	parser.marks = marks(source);
 	if declaration_list {
 		parser.declaration_list()?;
 	} else {

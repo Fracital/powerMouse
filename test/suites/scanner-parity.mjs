@@ -1,16 +1,18 @@
 // The scanner module (rust/rwcss, dist/scanner.wasm) against the JavaScript
-// it stands in for, in node: with `rewriter: 'wasm'` the service worker has
-// the scanner find the pieces of a stylesheet that modifyCSS looks into
-// (css-tree's lazy parse and walk otherwise) and a document's inline
+// it stands in for, in node: with `rewriter: 'wasm'` the module rewrites a
+// stylesheet, a declaration list (an element's style) and a single value
+// (css-tree's parse and walk, and the URL expression, otherwise), asking
+// the thread only what each URL routes to, and finds a document's inline
 // scripts and styles (three regular expressions otherwise). The contract is
 // identical output, so every input here is rewritten both ways and the two
 // are compared byte for byte: hand-written edge cases, every stylesheet and
 // page of test/pages, a seeded fuzz of mutations of them (unbalanced
-// brackets, cut strings, escapes, comments, non-ASCII), and with
-// SCANNER_CORPUS=<dir>[:<dir>...] every .css file (and every string of a
-// JSON array) under those directories. The scanner may decline an input
-// (the JavaScript scan then does it); how often is reported, and the
-// hand-written cases it must answer are checked to be answered.
+// brackets, cut strings, escapes, comments, non-ASCII, URLs that do not
+// parse or are routed already), and with SCANNER_CORPUS=<dir>[:<dir>...]
+// every .css file (and every string of a JSON array) under those
+// directories. The module may decline an input (JavaScript then does it);
+// how often is reported, and the hand-written cases it must answer are
+// checked to be answered.
 import {
 	mkdirSync,
 	readdirSync,
@@ -34,12 +36,13 @@ mkdirSync(OUT, { recursive: true });
 const entry = `${OUT}scanner-parity-entry.mjs`;
 writeFileSync(
 	entry,
-	`export { modifyCSS } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
+	`export { modifyCSS, rewriteCSSValueURLs } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
+export { rewriteCSSValueURLs as valueInJS } from ${JSON.stringify(`${root}src/cssURLs.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 export { hasBase, inlineSources } from ${JSON.stringify(`${root}src/prewrite.ts`)};
 export { adoptModules } from ${JSON.stringify(`${root}src/wasm/thread.ts`)};
-export { scanMarkup, scanStyles } from ${JSON.stringify(`${root}src/wasm/scanner.ts`)};
+export { rewriteStyles, scanMarkup } from ${JSON.stringify(`${root}src/wasm/scanner.ts`)};
 `,
 );
 const bundle = `${OUT}scanner-parity.mjs`;
@@ -55,13 +58,15 @@ await esbuild.build({
 });
 const {
 	modifyCSS,
+	rewriteCSSValueURLs,
+	valueInJS,
 	StompURL,
 	parseConfig,
 	hasBase,
 	inlineSources,
 	adoptModules,
 	scanMarkup,
-	scanStyles,
+	rewriteStyles,
 } = await import(`${bundle}?${Date.now()}`);
 
 const { codec } = parseConfig({ directory: '/stomp/', codec: 'xor' }, 'k');
@@ -71,11 +76,18 @@ const quiet = { error: console.error, warn: console.warn };
 console.error = () => {};
 console.warn = () => {};
 
-ok(
-	'without the module every scan is declined',
-	scanStyles('a{b:url(c)}', 'stylesheet') === null &&
-		scanMarkup('<style>a{}</style>') === null,
-);
+{
+	const told = {};
+	ok(
+		'without the module every rewrite and scan is declined, and JavaScript rewrites',
+		rewriteStyles('a{b:url(c)}', url, 'stylesheet') === null &&
+			scanMarkup('<style>a{}</style>') === null &&
+			modifyCSS('a{b:url(c)}', url, 'stylesheet', told) ===
+				modifyCSS('a{b:url(c)}', url) &&
+			told.by === 'js',
+		JSON.stringify(told),
+	);
+}
 const bytes = readFileSync(`${root}dist/scanner.wasm`);
 await adoptModules({
 	scanner: bytes.buffer.slice(
@@ -95,25 +107,53 @@ const attempt = (run) => {
 
 const tally = { answered: 0, declined: 0, differ: 0 };
 const differences = [];
-/** `text` rewritten by css-tree's scan and by the scanner's: the same? */
+/** why the module left a text to JavaScript, as far as the text shows it */
+const declinedFor = { surrogate: 0, mark: 0, other: 0 };
+const otherDeclined = [];
+function noteDeclined(text) {
+	if (/[\ud800-\udfff]/.test(text) && !text.isWellFormed())
+		declinedFor.surrogate++;
+	else if (text.includes('\ufeff')) declinedFor.mark++;
+	else {
+		declinedFor.other++;
+		if (otherDeclined.length < 3) otherDeclined.push(text.slice(0, 300));
+	}
+}
+/** `text` rewritten by css-tree and by the module: the same? */
 function sameStyles(text, context, label) {
 	const expected = attempt(() => modifyCSS(text, url, context));
-	let answered = false;
-	const got = attempt(() =>
-		modifyCSS(text, url, context, (script, kind) => {
-			const pieces = scanStyles(script, kind);
-			answered = pieces !== null;
-			return pieces;
-		}),
-	);
-	// a sheet with nothing to route never reaches a scan
+	const told = {};
+	const got = attempt(() => modifyCSS(text, url, context, told));
+	const answered = told.by === 'wasm';
+	// a sheet with nothing to route never reaches the module
 	if (answered) tally.answered++;
-	else if (expected !== text || /url\(|image-set|src\(|import|\\/i.test(text))
+	else if (told.by === 'js') {
 		tally.declined++;
+		noteDeclined(text);
+	}
 	if (got === expected) return answered;
 	tally.differ++;
 	if (differences.length < 5)
 		differences.push({ label, context, text, expected, got });
+	return answered;
+}
+
+const valueTally = { answered: 0, declined: 0, differ: 0 };
+/** the url()s of the single value `text` routed by the expression and by the module: the same? */
+function sameValue(text, label) {
+	const expected = attempt(() => valueInJS(text, url));
+	const told = {};
+	const got = attempt(() => rewriteCSSValueURLs(text, url, told));
+	const answered = told.by === 'wasm';
+	if (answered) valueTally.answered++;
+	else if (told.by === 'js') {
+		valueTally.declined++;
+		noteDeclined(text);
+	}
+	if (got === expected) return answered;
+	valueTally.differ++;
+	if (differences.length < 5)
+		differences.push({ label, context: 'value', text, expected, got });
 	return answered;
 }
 
@@ -157,7 +197,7 @@ function sameMarkup(markup, label) {
 		markupDifferences.push({ label, markup, expected, got });
 }
 
-// stylesheets the scanner must answer, each a shape of its own
+// stylesheets the module must rewrite itself, each a shape of its own
 const SHEETS = [
 	'a { background: url(a.png) }',
 	'@import "a.css";\n@import url(b.css) screen;\n@IMPORT url(c.css);',
@@ -220,6 +260,77 @@ const SHEETS = [
 	'a { b: url(c) }'.repeat(200),
 	`a { ${'b: url(c); '.repeat(300)} }`,
 	`${'@media x {'.repeat(20)} a { b: url(c) } ${'}'.repeat(20)}`,
+	// what the full parsers of a value, a prelude and a selector meet
+	'@import url("a.css") layer(base) supports(not (display: grid)) screen and (min-width: 1px);',
+	'@import url(a.css) layer supports(selector(a > b)) (width >= 600px), print;',
+	'@import "/stomp/css/routed-already"; @import url(/stomp/css/routed-already);',
+	'@import "http://[" screen; @import url(http://[); a { b: url(http://[) }',
+	'@import \'a\\62 c.css\'; @import "a\\\nb.css"; @import url("a\\"b.css");',
+	'@supports (background: url(a)) and (not (src: url("b"))) { c { d: url(e) } }',
+	'@supports selector(:has(a)) or font-tech(color-COLRv1) { b { c: url(d) } }',
+	'@media (min-resolution: 2dppx) and (400px <= width <= 700px), not all and (aspect-ratio: 16/9) { a { b: url(c) } }',
+	'@media screen and (constructor: 1), (toString) { a { b: url(c) } }',
+	'@container card (inline-size > 30em) and style(--responsive: true) { a { b: url(c) } }',
+	'@scope (.a:has(> img[src="url(x)"])) to (:scope > .b) { c { d: url(e) } }',
+	'@layer a.b, c { d { e: url(f) } } @layer url(x) { g { h: url(i) } }',
+	'@page wide:first:left { a: url(b) } @nest & > c { d: url(e) }',
+	'@font-face { src: url(a.woff2) format(woff2) tech(variations), src("b.woff"), SRC(\'c.woff\'), local(url(d)) }',
+	'a { b: image-set("a\\62.png" 1x, \'c d.png\' 2x, url("e.png") type("image/png")) }',
+	'a { b: -WEBKIT-IMAGE-SET("a.png" 1x) cross-fade(url(c), "d") }',
+	'a { b: url("a b.png") url(\'c"d.png\') url(e\\ f.png) url( g.png ) url("h\\\ni.png") }',
+	'a { b: url(  ) url("") url(\'\') url( "" ) }',
+	'a { b: url(%E0%A4%A) url(a%20b) url("%7Bc%7D") url(%zz) }',
+	'a { b: url(/stomp/routed) url(//other.example/x) url(?q=1) url(../up.png) url(blob:https://example.com/id) url(javascript:void(0)) url(about:blank) }',
+	'a { b: URL("c") Url(d) uRl( e ) }',
+	'a { b: url(c) url(c) url(c); d: url(c) }',
+	'a { b: url(var(--x)) url("c" d) url(e f) url(g\th) }',
+	'a { b: url(c\u2028d) url("e\u2029f") url(g\u212ah) }',
+	'a { b: -x-y(url(c), "d", [e], {f}) U+1F600-1F64F u+4?? url(g) }',
+	'a { --x: { b: url(c) }; --y: [ url(d) ]; --z: url(e) !important; --w:url(f)}',
+	'a:is(b, c > d):not(.e)::before, f:nth-child(2n + 1 of .g), h::part(i):hover, j:lang("k", l), m:dir(rtl), n:nth-last-of-type(-n+3), o:host(p), q::slotted(r), s|t, *|u, |v, w:has(+ x ~ y) { z: url(0) }',
+	'a[b="c" i], a[b~=c s], a[b|=\'c\'], a[b^=c], a[b$=c], [d|e], [*|f="url(g)"] { h: url(i) }',
+	':nth-child(odd), :nth-child(even), :nth-child(+3n-2), :nth-child(-n- 1), :nth-child(n+ 2), :nth-child(3n -1), :nth-child(N), :nth-child(-N+1) { a: url(b) }',
+	'a:-moz-any(b)::-webkit-scrollbar:horizontal, :matches(c), :where(d), ::highlight(e), :state(f), :unknown(url(g)), ::unknown("h") { i: url(j) }',
+	'50% { a: url(b) } from, to { c: url(d) } 12.5%, a|b { e: url(f) }',
+	'a { b: url(c) }\n@media (width: calc(1px + url(d))) and (e: "f") and (g: h(i)) { j { k: url(l) } }',
+	'@import url(a.css) (b: url(c)) "d" e(f "g" url(h));',
+	'@import url(a.css)\n;@import\t"b.css"\f;@import/**/"c.css"/**/;',
+	'@font-face { src: url(a) } @font-face { src: "b" } @x { src: src("c") } d { src: image-set("e") }',
+	'a { b: src ("c") image-set ("d") url ("e") }',
+	`a { b: url(data:image/svg+xml;base64,${'QUJD'.repeat(20000)}) }`,
+	`a { b: url("data:image/png;base64,${'QUJD'.repeat(40000)}") no-repeat; c: url(d) }`,
+	'@import url("data:text/css,a%7Bb:url(c)%7D"); @import "data:text/css;base64,YXtiOnVybChjKX0=";',
+];
+// single values (a presentation attribute, a CSSOM property set)
+const VALUES = [
+	'url(a.png)',
+	'url("a.png") no-repeat, url(\'b.png\')',
+	'url( a ) url(  "b"  ) url(\t\'c\'\n)',
+	'url(a) url(',
+	'url("a) url(b")',
+	'url(\'a") url("b\')',
+	'url("a"b) url(c"d") url("e\'f")',
+	'url("") url(\'\') url() url( )',
+	'url(a\nb) url(c\rd) url(e\u2028f) url(g\u2029h)',
+	'url(a\\)b) url(c\\ d)',
+	'image-set(url(a) 1x, "b" 2x) src("c")',
+	'var(--x, url(a)) URL(b) Url(c)',
+	'url(http://[) url(//x/y) url(#z) url(data:,a) url(/stomp/routed)',
+	'url(%E0%A4%A) url(a%20b) url(%zz)',
+	'url(url(a))',
+	'xurl(a) -url(b) curl(c)',
+	'url(\u00a0a\u00a0) url(\ufeffb\ufeff) url(\u3000c\u1680)',
+	'url(é.png) url(\u{1F600}.png) url(\u212a)',
+	'\ufeffurl(a)',
+	`url(data:image/png;base64,${'QUJD'.repeat(30000)}) url(a)`,
+	'none',
+	'',
+];
+// lone surrogates do not cross to the module: declined, and JavaScript
+// rewrites the text
+const UNCROSSED = [
+	'a { b: url(\ud83d.png) }',
+	'a { b: url(c) } \udc00 { d: url(e) }',
 ];
 // declaration lists (an element's style attribute)
 const LISTS = [
@@ -242,9 +353,15 @@ const STRAY = [
 	'a{b:url(c)} ] ) } @import "d"; e{f:url(g)}',
 	'{ b: url(]c) }\0 @media }\0 @media',
 ];
-// past what the scanner covers: declined, and css-tree does the sheet
-const DECLINED = [`${'@media x{'.repeat(70)}a{b:url(c)}`];
-// and some with nothing for the rewriter to route: never scanned
+// past what the module covers: declined, and css-tree does the sheet
+const DECLINED = [
+	`${'@media x{'.repeat(70)}a{b:url(c)}`,
+	`a{b:${'('.repeat(120)}url(c)${')'.repeat(120)}}`,
+	// a URL that begins with a byte order mark: the thread's decoder would
+	// drop it
+	'a { b: url(\ufeffc) }',
+];
+// and some with nothing for the rewriter to route: never handed over
 SHEETS.push(
 	'a { filter: progid:DXImageTransform.Microsoft.AlphaImageLoader(src="a.png") }',
 	'a { b: c } d',
@@ -266,9 +383,25 @@ SHEETS.push(
 	);
 	const wanted = SHEETS.length - 2 + LISTS.filter((list) => list).length;
 	ok(
-		'the scanner answers every one of them',
+		'the module rewrites every one of them itself',
 		answered === wanted,
-		`${answered} of ${wanted} ${JSON.stringify(unanswered)}`,
+		`${answered} of ${wanted} ${JSON.stringify(unanswered.map((text) => text.slice(0, 200)))}`,
+	);
+	let values = 0;
+	const wantedValues = VALUES.filter((value) => value.includes('url(')).length;
+	for (const value of VALUES) if (sameValue(value, 'value')) values++;
+	ok(
+		'the hand-written values route the same both ways, each by the module',
+		valueTally.differ === 0 && values === wantedValues,
+		`${values} of ${wantedValues} ${JSON.stringify(differences[0] ?? null)}`,
+	);
+	let uncrossed = 0;
+	for (const sheet of UNCROSSED)
+		if (!sameStyles(sheet, 'stylesheet', 'uncrossed')) uncrossed++;
+	ok(
+		'a lone surrogate is declined, and rewrites the same',
+		uncrossed === UNCROSSED.length && tally.differ === 0,
+		`${uncrossed} of ${UNCROSSED.length} ${JSON.stringify(differences[0] ?? null)}`,
 	);
 	let stray = 0;
 	for (const sheet of STRAY)
@@ -282,7 +415,7 @@ SHEETS.push(
 	for (const sheet of DECLINED)
 		if (!sameStyles(sheet, 'stylesheet', 'declined')) declined++;
 	ok(
-		'blocks nested past 64 are declined, and rewrite the same',
+		'what the module does not cover is declined, and rewrites the same',
 		declined === DECLINED.length && tally.differ === 0,
 		`${declined} of ${DECLINED.length}`,
 	);
@@ -416,6 +549,29 @@ const CSS_TOKENS = [
 	'var(--a,',
 	'{}',
 	'a{b:url(c)}',
+	'#url(',
+	'%22',
+	'%E0',
+	'data:',
+	'/stomp/css/',
+	'/stomp/',
+	'http://[',
+	'https://other.example/',
+	'layer(',
+	'supports(',
+	'selector(',
+	':not(',
+	':nth-child(',
+	'2n+1',
+	' of ',
+	'[a=',
+	' and ',
+	'<=',
+	'\u2028',
+	'\u212a',
+	'\u00a0',
+	'\\',
+	'\\"',
 ];
 const MARKUP_TOKENS = [
 	...'<>/="\' \n\t',
@@ -442,10 +598,9 @@ const ROUNDS = Number(process.env.SCANNER_FUZZ) || 6000;
 {
 	const before = { ...tally };
 	const random = generator(0x5ca11e7);
-	const seeds = [
-		...SHEETS,
-		...pageSheets.filter((sheet) => sheet.length < 4000),
-	];
+	const seeds = [...SHEETS, ...pageSheets].filter(
+		(sheet) => sheet.length < 4000,
+	);
 	for (let i = 0; i < ROUNDS; i++) {
 		const seed = seeds[Math.floor(random() * seeds.length)];
 		sameStyles(mutate(seed, random, CSS_TOKENS), 'stylesheet', `fuzz ${i}`);
@@ -467,9 +622,33 @@ const ROUNDS = Number(process.env.SCANNER_FUZZ) || 6000;
 		JSON.stringify({ answered, declined, first: differences[0] ?? null }),
 	);
 	ok(
-		'the scanner answers most of them',
-		answered > declined,
+		'the module rewrites most of them itself',
+		answered > declined * 4,
 		JSON.stringify({ answered, declined }),
+	);
+}
+{
+	const before = { ...valueTally };
+	const random = generator(0x7a1e5);
+	const seeds = [
+		...VALUES.filter((value) => value.length < 4000),
+		...LISTS.filter((list) => list),
+	];
+	for (let i = 0; i < ROUNDS; i++) {
+		const seed = seeds[Math.floor(random() * seeds.length)];
+		sameValue(mutate(seed, random, CSS_TOKENS), `fuzz value ${i}`);
+	}
+	const answered = valueTally.answered - before.answered;
+	const declined = valueTally.declined - before.declined;
+	ok(
+		`${ROUNDS} mutated values route the same both ways`,
+		valueTally.differ === before.differ,
+		JSON.stringify({ answered, declined, first: differences[0] ?? null }),
+	);
+	ok(
+		'the module routes most of them itself',
+		answered > declined * 4,
+		JSON.stringify({ answered, declined, declinedFor, otherDeclined }),
 	);
 }
 {
@@ -519,17 +698,15 @@ if (process.env.SCANNER_CORPUS) {
 	const declinedSheets = [];
 	for (const [path, text] of sheets) {
 		bytesIn += text.length;
-		if (
-			!sameStyles(text, 'stylesheet', path) &&
-			/url\(|image-set|src\(|import|\\/i.test(text)
-		)
-			declinedSheets.push(path);
+		const declinedBefore = tally.declined;
+		sameStyles(text, 'stylesheet', path);
+		if (tally.declined > declinedBefore) declinedSheets.push(path);
 		// each way again, timed (the first pass warmed both)
 		let start = performance.now();
 		attempt(() => modifyCSS(text, url, 'stylesheet'));
 		timed.js += performance.now() - start;
 		start = performance.now();
-		attempt(() => modifyCSS(text, url, 'stylesheet', scanStyles));
+		attempt(() => modifyCSS(text, url, 'stylesheet', {}));
 		timed.wasm += performance.now() - start;
 	}
 	ok(

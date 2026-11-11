@@ -34,7 +34,12 @@ import {
 	refererFor,
 	type ReferrerInfo,
 } from '../referrerPolicy';
-import { modifyCSS, rewriteCSSValueURLs, routeCSS } from '../rewriteCSS';
+import {
+	modifyCSS,
+	rewriteCSSValueURLs,
+	routeCSS,
+	type StyleRewrittenBy,
+} from '../rewriteCSS';
 import {
 	modifyHTML,
 	modifyHTMLStreamed,
@@ -75,7 +80,7 @@ import {
 	XHR_MARKER,
 } from '../transport/messages';
 import { BUILD } from '../version';
-import { scanMarkup, scanStyles } from '../wasm/scanner';
+import { scanMarkup } from '../wasm/scanner';
 import {
 	knownOriginOf,
 	knownTopSiteOf,
@@ -2926,12 +2931,7 @@ export function registerRewrites(
 							return [
 								start,
 								end,
-								modifyCSS(
-									source,
-									url,
-									'stylesheet',
-									wasm ? scanStyles : undefined,
-								),
+								modifyCSS(source, url, 'stylesheet', wasm ? {} : undefined),
 							];
 						} catch (error) {
 							return [start, end, rewriteCSSValueURLs(source, url)];
@@ -3058,14 +3058,13 @@ export function registerRewrites(
 				const text = await response.text();
 				try {
 					if (rewriter.config.rewriter !== 'wasm') return modifyCSS(text, url);
-					// the scanner finds what css-tree's lazy parse finds, and the
-					// request log says whether it did or the parse had to (a sheet
-					// with nothing to route is looked into by neither)
-					return modifyCSS(text, url, 'stylesheet', (script, context) => {
-						const pieces = scanStyles(script, context);
-						note.rewriteBy = pieces ? 'wasm' : 'js';
-						return pieces;
-					});
+					// the module rewrites the sheet, and the request log says
+					// whether it did or css-tree had to (a sheet with nothing to
+					// route is looked into by neither)
+					const told: StyleRewrittenBy = {};
+					const output = modifyCSS(text, url, 'stylesheet', told);
+					if (told.by) note.rewriteBy = told.by;
+					return output;
 				} catch (error) {
 					// a stylesheet the parser rejects still reaches the page, its
 					// url()s routed by the regex (as the CSSOM path does)
