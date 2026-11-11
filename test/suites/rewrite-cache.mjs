@@ -27,8 +27,6 @@ import {
 
 const browser = await launch();
 const page = await openDemo(browser, PROXY);
-// the run's rewriter backend (STOMP_REWRITER), for every controller made here
-await page.evaluate((rewriter) => (window.__rewriter = rewriter), REWRITER);
 
 // every routed script response's body, in order
 const bodies = [];
@@ -58,8 +56,15 @@ const bodiesOf = (name) =>
 		(body) => body?.match(/push\(\[\s*['"](\w+)['"]/)?.[1] === name,
 	);
 
-/** a controller of its own, logging to window.__log */
-const controller = (options = {}) =>
+/**
+ * a controller of its own, logging to window.__log, with the run's rewriter
+ * backend (STOMP_REWRITER) handed in each time: the host page is loaded again
+ * below, which forgets whatever the page was told before, and a controller
+ * made after that without it would be the default backend's (another config,
+ * so every script a miss)
+ */
+const controller = (options = {}) => construct({ ...REWRITER, ...options });
+const construct = (options) =>
 	page.evaluate(async (options) => {
 		const old = window.controller;
 		window.__log = [];
@@ -72,7 +77,6 @@ const controller = (options = {}) =>
 			codec: 'xor',
 			cache: true,
 			onRequest: (info) => window.__log.push(info),
-			...window.__rewriter,
 			...options,
 		});
 		await controller.wait();
