@@ -1167,4 +1167,17 @@ console.warn = warn;
 		JSON.stringify({ wrong, packedSizes }),
 	);
 }
+{
+	// a direct eval's arguments stand twice in its rewrite (for the real
+	// eval, and for a function the page named eval): rewritten both times.
+	// They were left as written, so `eval(top.x)` read the real top
+	const out = rewrite('eval(o[k], top)');
+	ok(
+		"a direct eval's arguments are rewritten in both of its branches",
+		(out.match(/\$s\$j\.get2\(o, k, /g) || []).length === 2 &&
+			(out.match(/\$s\$j\.get\(top, 'top'\)/g) || []).length === 2 &&
+			parses(out),
+		out,
+	);
+}
 await done();

@@ -39,6 +39,15 @@
 		return e(C('destructured eval'));
 	});
 	P('eval?.()', () => eval?.(C('eval?.()')));
+	// what a direct eval is handed is page code like any other: its
+	// arguments are evaluated before eval sees them
+	P('eval(top) argument', () => (eval(top) === top ? 'same' : 'OTHER-WINDOW'));
+	P('shadowed eval(top) argument', () => {
+		function passes(eval) {
+			return eval(top);
+		}
+		return passes((value) => value) === top ? 'same' : 'OTHER-WINDOW';
+	});
 	P('top.eval', () => top.eval(C('top.eval')));
 	P('parent.eval', () => parent.eval(C('parent.eval')));
 	P('document.defaultView.eval', () =>

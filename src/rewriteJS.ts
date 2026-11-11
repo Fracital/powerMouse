@@ -899,9 +899,17 @@ export function modifyJS(
 											ctx.node.arguments.map((arg: unknown) => result(arg)),
 										),
 									]),
+									// the arguments stand a second time, as copies: a node
+									// the walk meets twice is rewritten once at most, and
+									// one its own replacement reuses (`top`) not at all,
+									// which left `eval(top.x)` reading the real top here
 									b.callExpression(
 										b.identifier('eval'),
-										ctx.node.arguments.map((arg: unknown) => result(arg)),
+										ctx.node.arguments.map((arg: unknown) => {
+											const copy = copyNode(arg);
+											prepareTree(copy, names.access, routed, functions);
+											return result(copy);
+										}),
 									),
 								),
 							);
@@ -1733,6 +1741,15 @@ function mentions(node: any, names: string[]): boolean {
 	if (node.type === 'Identifier' && names.includes(node.name)) return true;
 	if (someChild(node, (child) => mentions(child, names))) return true;
 	return false;
+}
+
+/** a tree of its own with the same nodes (the walk's marks, which are symbols, stay behind) */
+function copyNode(node: any): any {
+	if (Array.isArray(node)) return node.map(copyNode);
+	if (!node || typeof node !== 'object' || node instanceof RegExp) return node;
+	const copy: any = {};
+	for (const key in node) copy[key] = copyNode(node[key]);
+	return copy;
 }
 
 /**

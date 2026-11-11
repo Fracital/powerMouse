@@ -444,6 +444,12 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A direct `eval`'s arguments are rewritten. They were left as written in
+  both branches of its replacement (`eval(top.x)` became
+  `$s$j.isEval(eval) ? eval($s$j.evalScope(top.x)) : eval(top.x)`), so an
+  argument that named `top` or `location`, or read a member, reached the
+  real one: `eval(top)` handed a page the real top-level window.
+  (rewriter-unit and adversarial-eval suites.)
 - A stylesheet is rewritten the same whatever was rewritten before it, and
   its rewrite always ends. css-tree keeps its token buffer between parses
   and reads one entry of it that the parse at hand never writes (the token
