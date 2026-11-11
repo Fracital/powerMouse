@@ -37,7 +37,7 @@
 	// listener, onerror and unhandledrejection saw, what a call threw, and
 	// what the workers reported. The suite compares each case with the page
 	// loaded natively. `window.__surfaces.done` when all have run.
-	const R = (window.__surfaces = { cases: {}, done: false });
+	const R = (window.__surfaces = { cases: {}, tries: {}, done: false });
 	const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 	const cross = location.href
 		.replace('//127.0.0.1:', '//localhost:')
@@ -122,6 +122,23 @@
 				resolve(seen);
 			}, wait);
 		});
+	// Chrome drops the error event of a shared worker whose script is
+	// missing now and then, and it never comes, though the script's 404 was
+	// answered (one to two in a hundred natively on a busy machine, top-level
+	// and in a frame alike). Such a case makes another worker, of another URL
+	// (`make` is told which try it is), while the last had no error event in
+	// its time, RETRIES more at most; the tries it took go in `R.tries`, which
+	// the suite prints
+	const RETRIES = 5;
+	const retried = async (make, wait) => {
+		for (let tries = 1; ; tries++) {
+			const seen = await workerCase(() => make(tries), wait);
+			if (seen.threw || seen.events.length || tries > RETRIES) {
+				if (tries > 1) R.tries[current] = tries;
+				return seen;
+			}
+		}
+	};
 
 	(async () => {
 		await sleep(200);
@@ -235,8 +252,11 @@
 			workerCase(() => new Worker('/neutral/error-surfaces-missing.js'), 1500),
 		);
 		await run('sharedWorkerMissing', () =>
-			workerCase(
-				() => new SharedWorker('/neutral/error-surfaces-missing.js'),
+			retried(
+				(tries) =>
+					new SharedWorker(
+						`/neutral/error-surfaces-missing.js${tries > 1 ? `?try=${tries}` : ''}`,
+					),
 				1500,
 			),
 		);

@@ -86,6 +86,12 @@ const distinct = (report) => {
 		];
 	return report;
 };
+// the cases that made their shared worker again (Chrome dropped its error
+// event), with the tries each took
+const tries = (report) =>
+	Object.entries(report.tries ?? {})
+		.map(([name, count]) => `${name} ${count}`)
+		.join(', ') || 'none';
 
 const nativePage = await browser.newPage();
 const nativeErrors = [];
@@ -100,6 +106,7 @@ ok(
 	Object.keys(native.cases).length === 35,
 	Object.keys(native.cases).join(','),
 );
+console.log(`natively: cases tried again: ${tries(native)}`);
 ok(
 	'natively: the CSP violation fires',
 	Array.isArray(native.cases.cspViolation?.value) &&
@@ -124,6 +131,7 @@ for (const [mode, base] of [
 	const page = await openDemo(browser, base);
 	await submitLanding(page, PAGE);
 	const proxied = distinct(await measure(() => frameOf(page)));
+	console.log(`${mode}: cases tried again: ${tries(proxied)}`);
 	await sleep(500);
 	const consoleErrors = page.errorStacks;
 	if (DUMP)
