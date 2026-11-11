@@ -96,9 +96,10 @@ jobs:
   browser:
     name: browser suites
     runs-on: ubuntu-latest
-    # a clean run takes 22 to 24 minutes; a suite that failed runs once more
-    # alone after the others and needs room for it
-    timeout-minutes: 40
+    # a clean run takes about 40 minutes (cross-origin-isolation alone takes
+    # about 15, visited about 3); a suite that failed runs once more alone
+    # after the others and needs room for it
+    timeout-minutes: 70
     steps:
       - name: Still master's head?
         id: head
