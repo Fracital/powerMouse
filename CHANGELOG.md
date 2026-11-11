@@ -3932,6 +3932,19 @@ url`) carries its value and targets that window. An about:blank child of
   that is still there (a page's service worker) is not waited for again
   (request-clients suite, which reads the counts from the controllers'
   internal `clientCounts`).
+- A document in a frame of a proxied page tells the host which service worker
+  client it is and when its history moved, nothing else. It ran the whole of
+  what a page reports where it is with (a MutationObserver over its document,
+  the icon looked up and the report built on every change, a message to the
+  host whenever it differed), and the host took from it only the client id and
+  that a report came, on which it reads the frame's Back and Forward again. It
+  keeps `pushState` and `replaceState` wrapped and its four window listeners,
+  and after any of them posts a history message once per turn. Twenty ad-like
+  frames posted 40 navigate reports as they loaded (7140 bytes) and now post
+  40 history messages and 20 client ids (2880 bytes); five of them changing
+  their title and their document 5000 times each posted 25035 more reports
+  (4.9 MB) and now post none (Chrome 152). The heap a frame costs is unchanged
+  (1132 KB over 20 frames). A top-level document reports as before.
 - `history.pushState` and `replaceState` refuse a URL of another origin, or
   one that does not parse, with a SecurityError naming the page's origin and
   URL, like the browser; before this the URL was routed and accepted (every

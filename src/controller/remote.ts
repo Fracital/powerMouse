@@ -19,8 +19,10 @@ import { ClientFrames } from './clientFrames';
 import { hostReload } from './hostReload';
 import { controllerId, forgetControllerIds, keptControllerId } from './id';
 import {
+	clientReport,
 	CookieJar,
 	cookieJar,
+	frameMovedReport,
 	frameOfSource,
 	hookErrorReport,
 	navigateReport,
@@ -304,9 +306,8 @@ export class RemoteController extends EventTarget {
 			const found = frameOfSource(this.frames, event.source);
 			if (!found) return;
 			const { frame, nested } = found;
-			const navigate = navigateReport(event.data);
-			// a document in a frame of the page reports here as the page does:
-			// its requests are this frame's, and that is all it says (see
+			// a document in a frame of the page says which client it is (its
+			// requests are this frame's) and when its history moved (see
 			// StompController)
 			const announce = (info: NavigateInfo) => {
 				init.onNavigate?.(info, frame);
@@ -315,12 +316,16 @@ export class RemoteController extends EventTarget {
 				);
 			};
 			if (nested) {
-				if (navigate?.client) this.#clients.attribute(navigate.client, frame);
+				const client = clientReport(event.data);
+				const moved = frameMovedReport(event.data);
+				const id = client ?? moved?.client;
+				if (id) this.#clients.attribute(id, frame);
 				// a frame in the page that navigated is a step of the frame's
 				// history (a tab's Back steps it first): the buttons follow
-				if (navigate) frame.historyChanged(announce);
+				if (moved) frame.historyChanged(announce);
 				return;
 			}
+			const navigate = navigateReport(event.data);
 			if (navigate) {
 				if (navigate.client) this.#clients.attribute(navigate.client, frame);
 				frame.report(navigate);

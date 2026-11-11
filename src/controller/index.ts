@@ -34,6 +34,7 @@ import { constructTransport, resolveHttp3 } from '../transport/construct';
 import type { HostReload, RequestRule } from '../transport/messages';
 import {
 	CLIENT_HINTS,
+	CLIENT_ID,
 	ClientHintsReport,
 	CONTROLLER_CLOSE,
 	CONTROLLER_INIT,
@@ -45,6 +46,7 @@ import {
 	CookieCommand,
 	CookieRecord,
 	CookieResult,
+	FRAME_MOVED,
 	HANDSHAKE_REFUSED,
 	HOOK_ERROR,
 	NAVIGATE,
@@ -428,6 +430,22 @@ export function navigateReport(data: unknown): NavigateInfo | null {
 		icon: typeof icon === 'string' ? icon : null,
 		...(typeof client === 'string' ? { client } : {}),
 	};
+}
+
+/** the service worker client id a document in a frame of a proxied page posted, else null */
+/** a FRAME_MOVED report of a document in a frame of a proxied page (with its client id, when it has one), else null */
+export function frameMovedReport(
+	data: unknown,
+): { client: string | null } | null {
+	if (typeof data !== 'object' || data === null || !(FRAME_MOVED in data))
+		return null;
+	const client = (data as Record<string, unknown>)[FRAME_MOVED];
+	return { client: typeof client === 'string' ? client : null };
+}
+export function clientReport(data: unknown): string | null {
+	if (typeof data !== 'object' || data === null) return null;
+	const client = (data as Record<string, unknown>)[CLIENT_ID];
+	return typeof client === 'string' ? client : null;
 }
 
 /** a hook error report posted by a proxied page, else null */
@@ -884,23 +902,26 @@ export class StompController extends EventTarget {
 			const found = frameOfSource(this.frames, event.source);
 			if (!found) return;
 			const { frame, nested } = found;
-			const navigate = navigateReport(event.data);
-			// a document in a frame of the page reports to the real top as the
-			// page does: its requests are this frame's, and that is all it
-			// says here (where the frame is, is its page's to say)
+			// a document in a frame of the page tells the real top which client
+			// it is: its requests are this frame's, and that is all it says
+			// (where the frame is, is its page's to say)
 			if (nested) {
-				if (navigate?.client) this.#clients.attribute(navigate.client, frame);
+				const client = clientReport(event.data);
+				const moved = frameMovedReport(event.data);
+				const id = client ?? moved?.client;
+				if (id) this.#clients.attribute(id, frame);
 				// a frame in the page that navigated is a step of the frame's
 				// history (a tab's Back steps it first): the buttons follow
-				const moved = navigate && frame.historyChanged();
-				if (moved) {
-					init.onNavigate?.(moved, frame);
+				const changed = moved && frame.historyChanged();
+				if (changed) {
+					init.onNavigate?.(changed, frame);
 					this.dispatchEvent(
-						new CustomEvent('navigate', { detail: { info: moved, frame } }),
+						new CustomEvent('navigate', { detail: { info: changed, frame } }),
 					);
 				}
 				return;
 			}
+			const navigate = navigateReport(event.data);
 			if (navigate) {
 				if (navigate.client) this.#clients.attribute(navigate.client, frame);
 				frame.report(navigate);

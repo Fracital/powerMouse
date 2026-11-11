@@ -229,11 +229,23 @@ export const KEPT_LOAD = '$stomp$keptLoad';
 /** [when (ms since the epoch), how] */
 export type KeptLoad = [at: number, delivery: Delivery];
 /**
- * SW -> a document on about:srcdoc that made a request the host's log
- * reports: its service worker client id, which it has no URL of its own to
- * ask for (`whoami`); it tells the host like any other document
+ * A document's service worker client id. SW -> a document on about:srcdoc
+ * that made a request the host's log reports: it has no URL of its own to
+ * ask for it (`whoami`), and tells the host like any other document. And a
+ * document in a frame of a proxied page -> the real top window, with
+ * FRAME_MOVED all it tells the host (the page itself says it with its
+ * navigate reports)
  */
 export const CLIENT_ID = '$stomp$clientId';
+/**
+ * A document in a frame of a proxied page -> the real top window: its
+ * history moved (it loaded, pushState or replaceState, popstate,
+ * hashchange), with its client id once it has one, else null. A step of a
+ * frame in the page is a step of the frame's history, which a tab's Back
+ * takes first: the host reads the frame's buttons again
+ * (src/controller/history.ts)
+ */
+export const FRAME_MOVED = '$stomp$frameMoved';
 /** SW -> every window: the cookie jar changed for `domain` (every host when empty); pages drop their document.cookie cache */
 export const COOKIES_CHANGED = '$stomp$cookiesChanged';
 export interface CookiesChange {

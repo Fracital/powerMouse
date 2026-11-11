@@ -6,9 +6,11 @@
 // document's are, not after the wait a report gets for a page that has yet
 // to say where it is. A client nobody can speak for (the page's service
 // worker, which is its site's and no frame's) has no frame, and holds its
-// reports back for that wait once, not every time. Both controllers: same
-// origin (StompController) and isolated (RemoteController, the report
-// relayed by the controller frame).
+// reports back for that wait once, not every time. A nested document tells
+// the host which client it is and nothing more: what a page reports (where
+// it is, its title, its icon) the host takes from the page only, so a frame
+// watches none of it. Both controllers: same origin (StompController) and
+// isolated (RemoteController, the report relayed by the controller frame).
 import {
 	done,
 	FIXTURE,
@@ -44,6 +46,20 @@ for (const [mode, base] of [
 ]) {
 	const page = await openDemo(browser, base);
 	await page.evaluate(() => {
+		// what the documents in frames of the page post to the host: their
+		// windows are not the host's frames' own
+		window.__nested = { navigate: 0, client: 0 };
+		window.addEventListener('message', (event) => {
+			if (typeof event.data !== 'object' || event.data === null) return;
+			if (
+				window.controller.frames.some(
+					(frame) => frame.element.contentWindow === event.source,
+				)
+			)
+				return;
+			if ('$stomp$navigate' in event.data) window.__nested.navigate++;
+			if ('$stomp$clientId' in event.data) window.__nested.client++;
+		});
 		window.__reports = [];
 		window.controller.addEventListener('request', (event) => {
 			const { url, destination, frame } = event.detail;
@@ -182,6 +198,17 @@ for (const [mode, base] of [
 			`${after} ms after the answer, ${JSON.stringify(request)}`,
 		);
 	}
+	// the nested documents (same, cross, deep and the one on about:srcdoc)
+	// each said which client they are and nothing about where they are
+	// (only that their history moved), although each changed its title,
+	// its URL and its icon when pinged; the one on about:blank is no client
+	// and says nothing of it
+	const nested = await page.evaluate(() => window.__nested);
+	ok(
+		`${mode}: a nested document tells the host which client it is, once, and nothing about where it is`,
+		nested.client === 4 && nested.navigate === 0,
+		`${nested.client} client ids and ${nested.navigate} navigate reports from 4 nested documents`,
+	);
 	errors.push(...page.errors);
 	await page.close();
 }

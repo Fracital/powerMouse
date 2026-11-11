@@ -5,7 +5,8 @@
 	// a nested document of request-frames.html: tells the top when it loaded
 	// and when the fetch a ping asked for was answered; `inner` names a frame
 	// of the other origin it holds itself, `worker` gives it a worker, which
-	// fetches on the same ping (as nested-worker)
+	// fetches on the same ping (as nested-worker). The ping also changes
+	// what a page would tell its host about: the title, the URL, the icon
 	const params = new URLSearchParams(location.search);
 	const name = params.get('name');
 	const tell = (what, who = name) =>
@@ -30,6 +31,12 @@
 		for (let i = 0; i < frames.length; i++)
 			frames[i].postMessage('request-frames-ping', '*');
 		worker?.postMessage('nested-worker');
+		document.title = `${name} pinged`;
+		history.pushState(null, '', `#${name}`);
+		const icon = document.createElement('link');
+		icon.rel = 'icon';
+		icon.href = 'data:,';
+		document.head.append(icon);
 		await fetch(`/echo-headers?from=${name}`);
 		tell('answered');
 	});
