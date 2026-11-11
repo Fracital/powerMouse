@@ -45,6 +45,8 @@ export interface StompServer {
 	routeOf(routed: string): { resource: string; url: string } | null;
 	/** the routed URL of a real one under a route kind (`binary`, `sw:<version>`) */
 	routeAs(kind: string, url: string): string;
+	/** the built-in blocker, when the controller turned it on (docs/adblock.md) */
+	blocker?: Blocker;
 }
 
 /**
@@ -294,6 +296,7 @@ export default async function createServer(
 	return {
 		router,
 		route,
+		blocker,
 		cookies,
 		clearCache: async () => {
 			await cache?.clear();

@@ -165,10 +165,20 @@ The first release after a four-year gap. Everything below is breaking.
     compiles); the rewrite workers never get it. With the option off the
     module is never fetched, the worker has no engine and the inject installs
     nothing (the frame-cost gate is unchanged).
-  - Not yet: WebSocket connections are not blocked (they do not pass
-    through the service worker), a blocked element is not collapsed, and
-    cosmetic rules do not reach shadow roots or `about:blank`, `srcdoc` and
-    `blob:` documents. The crate does no HTML filtering or `$replace`.
+  - WebSockets: a socket never passes the service worker, so the controller
+    asks it from the hook that adds the cookie header to the handshake (one
+    more message each way, beside the cookie question), with the type
+    `websocket`, the socket's real URL and the origin that opens it. A
+    listed socket is refused before the transport hears of it (the hook
+    rejects with `HANDSHAKE_REFUSED`; any other failure of the hook, and a
+    hook that stalls, let the socket through as before) and the page sees
+    what it sees natively of a socket a content blocker refused: `error`,
+    then `close` with 1006 in the same task, both reading `CLOSED`. The same
+    holds for a socket opened from a dedicated, shared or emulated service
+    worker. `onRequest` reports it with destination `websocket`.
+  - Not yet: a blocked element is not collapsed, and cosmetic rules do not
+    reach shadow roots or `about:blank`, `srcdoc` and `blob:` documents. The
+    crate does no HTML filtering or `$replace`.
   - The demo reads `STOMP_ADBLOCK=1` (`?adblock` for one visit,
     `?noadblock` to turn it off for one). Suites: `adblock-engine` (node:
     the engine's decisions, types, CSP, cosmetic answers, trust, storage) and
@@ -630,6 +640,11 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   for an answer from the worker's caches), a `deliveryType` and a
   `nextHopProtocol` (the scheme's usual one: no transport reports what the
   origin spoke). (sop-escapes suite.)
+- A proxied WebSocket that cannot connect fires `close` right after `error`,
+  in the same task, as natively: Chrome fires both before a task queued from
+  the error listener runs. The close came from a timer, so such a task ran
+  between the two (the `adblock` suite compares the sequence with the
+  browser's own).
 - A stylesheet is rewritten the same whatever was rewritten before it, and
   its rewrite always ends. css-tree keeps its token buffer between parses
   and reads one entry of it that the parse at hand never writes (the token

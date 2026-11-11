@@ -13,6 +13,14 @@
 /pages/adblock-param.json$removeparam=utm_source
 /pages/adblock-csp.html$csp=worker-src 'none'
 /pages/adblock-csp.html$csp=script-src 'self'
+! WebSockets (adblock-ws.html): the fixture's /ws-echo, by the socket's key
+/ws-echo?k=adblock-ws-blocked$websocket
+/ws-echo?k=adblock-ws-plain
+/ws-echo?k=adblock-ws-third$websocket,third-party
+/ws-echo?k=adblock-ws-domain$websocket,domain=localhost
+/ws-echo?k=adblock-ws-excepted
+@@/ws-echo?k=adblock-ws-excepted$websocket
+/ws-echo?k=adblock-ws-image$image
 ! Cosmetic rules
 ##.adblock-generic
 ##.adblock-late

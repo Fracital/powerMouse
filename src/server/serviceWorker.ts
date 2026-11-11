@@ -193,6 +193,24 @@ function registerController(
 				await (await server).clearCache();
 			},
 			modules: async () => [await heldModules(), []],
+			socket: async ({ url, source }) => {
+				// a WebSocket never passes this worker: the controller asks from
+				// its handshake hook and refuses the socket on a yes
+				const blocked = !!(await server).blocker?.socket(url, source);
+				if (blocked && config.requestLog)
+					report({
+						url,
+						method: 'GET',
+						destination: 'websocket',
+						status: 0,
+						ms: 0,
+						cached: false,
+						bytes: null,
+						error: 'blocked by the content blocker',
+						kind: 'blocked',
+					});
+				return [blocked, []];
+			},
 			cookies: async (command) => {
 				const { cookies } = await server;
 				switch (command.op) {

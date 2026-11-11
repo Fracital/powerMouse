@@ -163,6 +163,44 @@ ok(
 			{ block: true },
 		),
 );
+// WebSockets: the controller asks for them with the Origin of the handshake
+const WS = SITE.replace('http', 'ws');
+const WS_OTHER = OTHER.replace('http', 'ws');
+const socket = (kind, source = SITE, host = WS) =>
+	blocker.socket(`${host}/ws-echo?k=adblock-ws-${kind}.t.window`, source);
+ok(
+	'a $websocket rule and a plain rule block a socket, an image rule does not',
+	socket('blocked') === true &&
+		socket('plain') === true &&
+		socket('image') === false &&
+		socket('open') === false,
+	JSON.stringify(
+		['blocked', 'plain', 'image', 'open'].map((kind) => socket(kind)),
+	),
+);
+ok(
+	"a socket's party and $domain come from the origin that opens it",
+	socket('third') === false &&
+		socket('third', SITE, WS_OTHER) === true &&
+		socket('third', '', WS) === true &&
+		socket('domain') === false &&
+		socket('domain', OTHER) === true,
+	JSON.stringify([
+		socket('third'),
+		socket('third', SITE, WS_OTHER),
+		socket('third', '', WS),
+		socket('domain'),
+		socket('domain', OTHER),
+	]),
+);
+ok(
+	'an exception rule lets a listed socket through',
+	socket('excepted') === false,
+);
+ok(
+	'a $websocket rule leaves the same URL alone as a fetch',
+	decide('/ws-echo?k=adblock-ws-blocked.t.window', '') === null,
+);
 ok(
 	'a subdocument rule blocks a nested navigation',
 	same(decide('/pages/adblock-frame.html', 'iframe', { navigation: true }), {
@@ -373,6 +411,8 @@ ok(
 	'with no list fetched the blocker stays off',
 	(await none.settled()) === false &&
 		none.ready === false &&
+		none.socket(`${WS}/ws-echo?k=adblock-ws-blocked.t.window`, SITE) ===
+			false &&
 		none.decide({
 			url: `${SITE}/pages/adblock-blocked.js`,
 			source: page,

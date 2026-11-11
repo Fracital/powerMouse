@@ -497,6 +497,16 @@ export class Blocker {
 		return null;
 	}
 	/**
+	 * Whether the lists block a WebSocket to `url` (ws: or wss:) opened under
+	 * `source`. A `$redirect` or `$removeparam` rule that matches a socket
+	 * has nothing to answer with or to rewrite: a redirect rule blocks, as in
+	 * uBlock Origin, and the other is not applied. False while no engine
+	 * answers, as for any request that is not a navigation.
+	 */
+	socket(url: string, source: string): boolean {
+		return !!this.check(url, source, 'websocket', 'GET')?.block;
+	}
+	/**
 	 * The `$csp=` policies of the lists for a document at `url` (a nested
 	 * one's `top` is the page it is framed under), reduced to what the proxy
 	 * can enforce (src/blocker/csp.ts), or null

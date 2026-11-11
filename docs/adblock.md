@@ -109,6 +109,40 @@ same-origin with its page; none of that is used.
 - The host's request log (`onRequest`) reports a blocked request with status
   0, kind `blocked` and the error `blocked by the content blocker`.
 
+**WebSockets.** A socket never passes the service worker: the page's inject
+(a document's or a worker's) opens it on the transport, whose host (the
+controller, or its transport worker) lets the controller add the cookie
+jar's header to the handshake first. That hook is where a socket is judged.
+The controller asks the service worker (one more message each way on the
+port they already share, sent beside the question for the cookies, so a
+socket waits for nothing new), the worker asks the same engine with the
+type `websocket`, the socket's real `ws:` or `wss:` URL and the origin its
+handshake carries, which is the real origin of the document or worker that
+opened it and all the engine reads of a source (its host, for `$domain` and
+`$third-party`). On a yes the hook refuses the handshake
+(`HANDSHAKE_REFUSED`, `src/transport/serveTransport.ts`) and the transport
+never hears of the socket: no stream is opened on the wisp connection.
+
+- The page sees what it sees natively of a socket a content blocker refused,
+  which is what it sees of any socket that could not connect (Chrome for
+  Testing 156 with a `declarativeNetRequest` rule): `readyState` goes from
+  `CONNECTING` to `CLOSED`, `error` fires, and `close` follows in the same
+  task with code 1006, no reason and `wasClean` false. The `adblock` suite
+  compares the two sequences in the browser it runs in.
+- Sockets opened from a dedicated worker, a shared worker and an emulated
+  service worker take the same path and get the same answer.
+- Only an explicit refusal fails a socket. With no answer (the service
+  worker is restarting, the question took more than the hook's two seconds)
+  the socket connects, as every request passes while no engine answers; a
+  socket is not a navigation, so it does not wait for an engine that is
+  still being built.
+- `onRequest` reports a blocked socket like a blocked request (status 0,
+  kind `blocked`, destination `websocket`), without a frame: the handshake
+  hook does not know which page a socket belongs to. Sockets that connect
+  are not reported, as before.
+- A `$redirect` rule that matches a socket blocks it, as in uBlock Origin;
+  `$removeparam` is not applied to sockets.
+
 **Cosmetic rules.** While it builds a document's shell the worker asks the
 engine for the document's URL and hands the answer to the inject before
 the page's markup:
@@ -168,15 +202,16 @@ stored (an engine of 8.5 MB) 1.0 to 1.3 s after the controller was made. A
 document then carries 559 generic hide selectors in its shell, and the
 requests of a page to an ad server and an analytics script were blocked.
 
+A refused WebSocket reaches its `error` event 0.5 ms after `new WebSocket()`
+(median of 25, 1.2 ms at the most; the transport hosted in the page), where
+an unlisted socket to a local server opens in 2.6 ms with the blocker on.
+
 ## Limits
 
 - The crate does not do HTML filtering (`##^`) or response body `$replace`,
   and drops a whole rule that carries an option it does not know (`popup`,
   `header`, `denyallow`, `replace`).
-- WebSocket connections do not pass through the service worker (the page's
-  inject opens them on the transport, and the controller only adds headers
-  to the handshake), so `$websocket` rules and plain rules do not block them
-  yet.
+- WebTransport and WebRTC connections are not judged by the lists.
 - A blocker that was built stays in the service worker until the worker
   stops, also when the last controller that asked for it is gone.
 - An element whose request was blocked is not collapsed: a blocked image

@@ -367,7 +367,8 @@ carries, so the public suffix list is not in the artifact twice.
 
 As built (phase 4): `docs/adblock.md` is the reference for what follows, and
 says where the result differs from this plan (the option is `adblock`, the
-suites are `adblock-engine` and `adblock`, WebSockets are not blocked yet).
+suites are `adblock-engine` and `adblock`, and WebSockets are judged from the
+controller's handshake hook, since they never pass the service worker).
 
 Where each part runs:
 

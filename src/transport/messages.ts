@@ -527,6 +527,13 @@ export type SWbound = {
 	modules: [undefined, string[]];
 	/** the host reading, importing or wiping the cookie jar */
 	cookies: [CookieCommand, CookieResult];
+	/**
+	 * whether the built-in blocker's lists block a WebSocket to `url` opened
+	 * under `source` (the Origin its handshake carries, '' when it has none):
+	 * the controller asks from its handshake hook, since a socket never passes
+	 * the service worker (docs/adblock.md). False while no engine answers.
+	 */
+	socket: [{ url: string; source: string }, boolean];
 };
 
 /** a cookie as the jar stores it, for export and import by the host */
@@ -692,9 +699,18 @@ export type WorkerBound = {
 	serve: [MessagePort];
 };
 
+/**
+ * The message of the error a WebSocket handshake hook rejects with to refuse
+ * the socket (serveTransport's `decorate`, and WorkerToController.decorate,
+ * whose rejection crosses the rpc by its message): the connection fails
+ * before anything is opened on the transport. Any other rejection, and a
+ * hook that stalls, leave the handshake as the page sent it.
+ */
+export const HANDSHAKE_REFUSED = '$stomp$handshakeRefused';
+
 /** implemented by the controller, called by the transport worker */
 export type WorkerToController = {
-	/** the headers a WebSocket handshake goes out with (the controller adds the jar's Cookie) */
+	/** the headers a WebSocket handshake goes out with (the controller adds the jar's Cookie); rejects with HANDSHAKE_REFUSED to refuse the socket */
 	decorate: [{ url: string; headers: RawHeaders }, RawHeaders];
 };
 

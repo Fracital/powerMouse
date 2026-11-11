@@ -44,6 +44,7 @@ import {
 	CookieCommand,
 	CookieRecord,
 	CookieResult,
+	HANDSHAKE_REFUSED,
 	HOOK_ERROR,
 	NAVIGATE,
 	NavigateInfo,
@@ -1454,6 +1455,8 @@ export class StompController extends EventTarget {
 	 * the page's origin (its Origin header). The header is added here, in
 	 * the controller's realm, so the page never holds it; without a worker
 	 * to ask (not ready, an error) the handshake goes out without one.
+	 * Rejects with HANDSHAKE_REFUSED when the built-in blocker's lists block
+	 * the socket: the transport's host fails it without connecting.
 	 */
 	#handshakeHeaders = async (
 		url: URL,
@@ -1473,18 +1476,31 @@ export class StompController extends EventTarget {
 		if (!has('cache-control')) headers.push(['Cache-Control', 'no-cache']);
 		if (!this.isReady || !this.#rpc) return headers;
 		const origin = headers.find(([name]) => name.toLowerCase() === 'origin');
-		try {
-			const cookie = await this.#rpc.call('cookies', {
+		// the built-in blocker (docs/adblock.md): a socket never passes the
+		// service worker, where the engine is, so the worker is asked here,
+		// beside the question for the cookies (one more message each way,
+		// no wait of its own). A yes refuses the socket; no answer does not
+		const blocked = this.#adblock
+			? this.#rpc
+					.call('socket', {
+						url: url.href,
+						source: origin && origin[1] !== 'null' ? origin[1] : '',
+					})
+					.catch(() => false)
+			: false;
+		// no jar answer: a handshake without cookies
+		const cookie = this.#rpc
+			.call('cookies', {
 				op: 'get',
 				url: url.href,
 				...(origin ? { initiator: origin[1] } : {}),
-			});
-			if (typeof cookie === 'string' && cookie)
-				return [...headers, ['Cookie', cookie]];
-		} catch (error) {
-			// no jar answer: a handshake without cookies
-		}
-		return headers;
+			})
+			.catch(() => null);
+		if (await blocked) throw new Error(HANDSHAKE_REFUSED);
+		const jar = await cookie;
+		return typeof jar === 'string' && jar
+			? [...headers, ['Cookie', jar]]
+			: headers;
 	};
 	/** resolves once the service worker has created a server for this controller */
 	async wait(): Promise<void> {

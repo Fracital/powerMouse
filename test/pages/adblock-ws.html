@@ -1,0 +1,74 @@
+<!doctype html>
+<title>adblock sockets</title>
+<script src="/pages/adblock-ws.js"></script>
+<script>
+	// `?tag=<phase>` keeps one phase's sockets apart from another's in the
+	// fixture's record of the handshakes that reached it (`?k=<key>`)
+	const tag = new URLSearchParams(location.search).get('tag') || 'none';
+	const here = location.host;
+	const other = here.includes('127.0.0.1')
+		? here.replace('127.0.0.1', 'localhost')
+		: here.replace('localhost', '127.0.0.1');
+	const socketURL = (kind, context, host = here) =>
+		`ws://${host}/ws-echo?k=adblock-ws-${kind}.${tag}.${context}`;
+	const within = (promise, ms, what) =>
+		Promise.race([
+			promise,
+			new Promise((resolve) =>
+				setTimeout(() => resolve({ failed: `${what}: no answer` }), ms),
+			),
+		]).catch((error) => ({ failed: `${what}: ${error}` }));
+	const pair = (context) => [
+		socketURL('blocked', context),
+		socketURL('open', context),
+	];
+	const named = (answer) =>
+		Array.isArray(answer) ? { blocked: answer[0], open: answer[1] } : answer;
+	const dedicated = () =>
+		new Promise((resolve, reject) => {
+			const worker = new Worker('/pages/adblock-ws.js');
+			worker.onmessage = (event) => resolve(event.data);
+			worker.onerror = () => reject(new Error('the worker failed'));
+			worker.postMessage(pair('worker'));
+		});
+	const shared = () =>
+		new Promise((resolve, reject) => {
+			const worker = new SharedWorker('/pages/adblock-ws.js', `ws-${tag}`);
+			worker.onerror = () => reject(new Error('the shared worker failed'));
+			worker.port.onmessage = (event) => resolve(event.data);
+			worker.port.postMessage(pair('shared'));
+		});
+	const serviceWorker = async () => {
+		await navigator.serviceWorker.register('/pages/adblock-ws.js');
+		const registration = await navigator.serviceWorker.ready;
+		const channel = new MessageChannel();
+		const answered = new Promise((resolve) => {
+			channel.port1.onmessage = (event) => resolve(event.data);
+		});
+		registration.active.postMessage(pair('sw'), [channel.port2]);
+		const answer = await answered;
+		await registration.unregister();
+		return answer;
+	};
+	window.__adblockReport = async () => {
+		const out = { tag, window: {} };
+		const sockets = {
+			blocked: socketURL('blocked', 'window'),
+			plain: socketURL('plain', 'window'),
+			third: socketURL('third', 'window', other),
+			firstParty: socketURL('third', 'first'),
+			domain: socketURL('domain', 'window'),
+			excepted: socketURL('excepted', 'window'),
+			image: socketURL('image', 'window'),
+			open: socketURL('open', 'window'),
+		};
+		for (const [kind, url] of Object.entries(sockets))
+			out.window[kind] = await self.__socketSequence(url);
+		out.worker = named(await within(dedicated(), 15000, 'worker'));
+		out.shared = named(await within(shared(), 15000, 'shared worker'));
+		out.serviceWorker = named(
+			await within(serviceWorker(), 20000, 'service worker'),
+		);
+		return out;
+	};
+</script>

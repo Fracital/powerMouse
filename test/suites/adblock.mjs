@@ -17,6 +17,13 @@
 // scriptlets run, the scriptlets over the proxy's hooks with the page's own
 // URLs. Same-origin mode, controllers of our own (each replaces the last
 // in the worker).
+//
+// WebSockets never pass the service worker: the controller asks it from the
+// handshake hook and refuses a listed socket, which then fails as a socket
+// the browser could not connect does (measured in the suite, natively) and
+// never reaches the fixture's /ws-echo, from a window, a dedicated worker,
+// a shared worker and a service worker alike.
+import { createServer } from 'node:net';
 import { done, FIXTURE, HOST, launch, ok, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
@@ -92,10 +99,68 @@ const visit = (adblock, pages) =>
 
 const site = `${FIXTURE}pages/adblock.html`;
 const otherSite = site.replace('127.0.0.1', 'localhost');
+const socketSite = (tag) => `${FIXTURE}pages/adblock-ws.html?tag=${tag}`;
+/** whether the handshake of the socket `kind` a phase's `context` opened reached the fixture */
+const reached = async (kind, tag, context) =>
+	(await (
+		await fetch(
+			`${FIXTURE}echo-headers/recorded?k=adblock-ws-${kind}.${tag}.${context}`,
+		)
+	).json()) !== null;
+/** a socket's sequence without what names the one socket */
+const shape = (sequence) =>
+	JSON.stringify(
+		(sequence ?? []).map((step) =>
+			step[0] === 'message' ? ['message', typeof step[1]] : step,
+		),
+	);
+const opened = (sequence) =>
+	Array.isArray(sequence) && sequence.some((step) => step[0] === 'open');
+
+// the browser's own sequences, from the fixture page loaded without the
+// proxy: a socket to a port nothing listens on (what a page sees of a socket
+// a content blocker refused is the same: error, then close with 1006, both
+// CLOSED and in one task; Chrome for Testing 156 with a declarativeNetRequest
+// rule, 2026-11-10) and one that connects
+const deadPort = await new Promise((resolve, reject) => {
+	const probe = createServer();
+	probe.on('error', reject);
+	probe.listen(0, '127.0.0.1', () => {
+		const { port } = probe.address();
+		probe.close(() => resolve(port));
+	});
+});
+const nativePage = await browser.newPage();
+await nativePage.goto(socketSite('native'));
+const nativeRefused = shape(
+	await nativePage.evaluate(
+		(url) => window.__socketSequence(url),
+		`ws://127.0.0.1:${deadPort}/ws-echo`,
+	),
+);
+const nativeOpen = shape(
+	await nativePage.evaluate(
+		(url) => window.__socketSequence(url),
+		`${FIXTURE.replace('http', 'ws')}ws-echo?k=adblock-ws-open.native.window`,
+	),
+);
+await nativePage.close();
+ok(
+	'natively a refused socket is an error and a close with 1006 in one task, both CLOSED',
+	nativeRefused ===
+		JSON.stringify([
+			['constructed', 0],
+			['microtask', 0],
+			['error', 3, '[object Event]', false, false],
+			['close', 3, 1006, '', false, '', '', 0],
+			['task queued in error'],
+		]),
+	nativeRefused,
+);
 
 // off
 const before = await hits();
-const off = await visit(null, { page: site });
+const off = await visit(null, { page: site, sockets: socketSite('off') });
 const afterOff = await hits();
 const offReport = off.reports.page;
 ok(
@@ -140,6 +205,24 @@ ok(
 	JSON.stringify(offReport),
 );
 
+const offSockets = off.reports.sockets;
+ok(
+	'off: every socket connects, from the window and from each kind of worker',
+	Object.values(offSockets.window).every(opened) &&
+		[offSockets.worker, offSockets.shared, offSockets.serviceWorker].every(
+			(context) => opened(context.blocked) && opened(context.open),
+		) &&
+		(await reached('blocked', 'off', 'window')) &&
+		(await reached('blocked', 'off', 'worker')) &&
+		shape(offSockets.window.blocked) === nativeOpen,
+	JSON.stringify([offSockets, nativeOpen]),
+);
+ok(
+	'off: the worker is not asked about sockets and reports none',
+	!off.log.some((entry) => entry.url.startsWith('ws')),
+	JSON.stringify(off.log.filter((entry) => entry.url.startsWith('ws'))),
+);
+
 // on
 const on = await visit(
 	{
@@ -153,6 +236,8 @@ const on = await visit(
 		page: site,
 		other: otherSite,
 		csp: `${FIXTURE}pages/adblock-csp.html`,
+		sockets: socketSite('on'),
+		socketsOther: socketSite('other').replace('127.0.0.1', 'localhost'),
 	},
 );
 const afterOn = await hits();
@@ -375,6 +460,78 @@ ok(
 	JSON.stringify([policies, on.reports.csp]),
 );
 
+// WebSockets
+const sockets = on.reports.sockets;
+const socketsOther = on.reports.socketsOther;
+console.log('INFO sockets:', JSON.stringify(sockets));
+ok(
+	'a listed socket fails as a socket the browser could not connect does',
+	shape(sockets.window.blocked) === nativeRefused &&
+		shape(sockets.window.plain) === nativeRefused &&
+		shape(sockets.window.third) === nativeRefused,
+	JSON.stringify([sockets.window, nativeRefused]),
+);
+ok(
+	'and never reaches the site',
+	!(await reached('blocked', 'on', 'window')) &&
+		!(await reached('plain', 'on', 'window')) &&
+		!(await reached('third', 'on', 'window')),
+);
+ok(
+	'an unlisted socket connects and echoes, as natively',
+	shape(sockets.window.open) === nativeOpen &&
+		sockets.window.open.some(
+			(step) =>
+				step[0] === 'message' && /adblock-ws-open\.on\.window/.test(step[1]),
+		) &&
+		(await reached('open', 'on', 'window')),
+	JSON.stringify([sockets.window.open, nativeOpen]),
+);
+ok(
+	'an exception rule lets a listed socket through, and a rule for another type does not block it',
+	opened(sockets.window.excepted) &&
+		opened(sockets.window.image) &&
+		(await reached('excepted', 'on', 'window')) &&
+		(await reached('image', 'on', 'window')),
+	JSON.stringify([sockets.window.excepted, sockets.window.image]),
+);
+ok(
+	"a socket's party and $domain come from the page that opens it",
+	opened(sockets.window.firstParty) &&
+		opened(sockets.window.domain) &&
+		shape(socketsOther.window.domain) === nativeRefused &&
+		shape(socketsOther.window.third) === nativeRefused &&
+		opened(socketsOther.window.firstParty),
+	JSON.stringify([sockets.window, socketsOther.window]),
+);
+for (const [context, name, key] of [
+	['worker', 'a dedicated worker', 'worker'],
+	['shared', 'a shared worker', 'shared'],
+	['serviceWorker', 'a service worker', 'sw'],
+])
+	ok(
+		`${name}'s listed socket is refused the same way, and its unlisted one connects`,
+		shape(sockets[context].blocked) === nativeRefused &&
+			shape(sockets[context].open) === nativeOpen &&
+			!(await reached('blocked', 'on', key)) &&
+			(await reached('open', 'on', key)),
+		JSON.stringify(sockets[context]),
+	);
+const socketLog = on.log.filter((entry) => entry.url.startsWith('ws'));
+ok(
+	'the host is told of a blocked socket, and of no other',
+	socketLog.length > 0 &&
+		socketLog.every(
+			(entry) =>
+				entry.status === 0 &&
+				entry.kind === 'blocked' &&
+				/blocker/.test(entry.error) &&
+				/adblock-ws-(blocked|plain|third|domain)\./.test(entry.url),
+		) &&
+		socketLog.some((entry) => entry.url.includes('adblock-ws-blocked.on.sw')),
+	JSON.stringify(socketLog),
+);
+
 // off again, on the worker that just ran the blocker
 const again = await visit(null, { page: site });
 ok(
@@ -413,7 +570,8 @@ const remoteConfig = await host.evaluate(
 		await remote.wait();
 		const element = document.createElement('iframe');
 		document.body.append(element);
-		await remote.createFrame(element).go(site);
+		window.__remoteFrame = remote.createFrame(element);
+		await window.__remoteFrame.go(site);
 		return remote.config;
 	},
 	{ proxy: PROXY, fixture: FIXTURE, site },
@@ -441,5 +599,40 @@ ok(
 		isolated.shown.procedural === false &&
 		isolated.spy?.href === site,
 	JSON.stringify([remoteConfig, isolated]),
+);
+// its transport is hosted in the controller frame's worker: the refusal
+// crosses from the controller to that worker
+await host.evaluate(
+	(url) => window.__remoteFrame.go(url),
+	socketSite('isolated'),
+);
+let isolatedSockets = null;
+for (let i = 0; i < 80 && !isolatedSockets; i++) {
+	for (const frame of host.frames())
+		try {
+			if (
+				await frame.evaluate(
+					() =>
+						document.title === 'adblock sockets' &&
+						typeof window.__adblockReport === 'function',
+				)
+			)
+				isolatedSockets = await frame.evaluate(() => window.__adblockReport());
+		} catch (error) {
+			// a frame that is navigating, or not ours
+		}
+	if (!isolatedSockets) await sleep(250);
+}
+ok(
+	'isolated: a listed socket is refused through the transport worker, from the window and a worker',
+	remoteConfig?.workerTransport === true &&
+		shape(isolatedSockets?.window.blocked) === nativeRefused &&
+		shape(isolatedSockets.window.open) === nativeOpen &&
+		shape(isolatedSockets.worker.blocked) === nativeRefused &&
+		opened(isolatedSockets.worker.open) &&
+		!(await reached('blocked', 'isolated', 'window')) &&
+		!(await reached('blocked', 'isolated', 'worker')) &&
+		(await reached('open', 'isolated', 'window')),
+	JSON.stringify([remoteConfig, isolatedSockets]),
 );
 await done(browser);

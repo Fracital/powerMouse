@@ -4,6 +4,7 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import { sendBody } from './bodyPort';
 import {
+	HANDSHAKE_REFUSED,
 	HostToTransport,
 	postToPort,
 	transferablesOf,
@@ -13,7 +14,11 @@ import {
 } from './messages';
 import { RpcHelper } from './rpc';
 
-/** the headers a WebSocket handshake goes out with, given the page's */
+/**
+ * The headers a WebSocket handshake goes out with, given the page's. A hook
+ * that rejects with an Error whose message is HANDSHAKE_REFUSED refuses the
+ * socket: it fails like a connection the browser itself would not make.
+ */
 export type DecorateHandshake = (
 	url: URL,
 	headers: RawHeaders,
@@ -82,7 +87,9 @@ function initOnce(transport: ProxyTransport): Promise<void> {
  * may add headers to a WebSocket handshake (the controller adds the cookie
  * jar's Cookie, HttpOnly included, which the page must never hold); a
  * Cookie the page sent itself is dropped first, and a hook that fails or
- * stalls leaves the handshake as it was.
+ * stalls leaves the handshake as it was. A hook that refuses the socket
+ * (HANDSHAKE_REFUSED: the built-in blocker's lists block it) fails the
+ * connection here, before the transport hears of it.
  * Returns a function that closes the port.
  */
 export default function serveTransport(
@@ -132,7 +139,14 @@ export default function serveTransport(
 						]);
 						if (decorated) requestHeaders = decorated;
 					} catch (error) {
-						// the handshake goes out without the extra headers
+						// an explicit refusal: the page's socket gets the failure a
+						// connection the browser refused to make gets (error, then
+						// close with 1006), and nothing is opened on the transport
+						if (error instanceof Error && error.message === HANDSHAKE_REFUSED) {
+							socket.close();
+							return [{ result: 'failure', error: 'refused' }, []];
+						}
+						// anything else: the handshake goes out without the extra headers
 					}
 
 				let resolve!: (result: TransportToHost['connect'][1]) => void;
