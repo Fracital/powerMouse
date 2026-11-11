@@ -459,6 +459,24 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   `<anonymous>` where the page's URL stands natively, because a script
   whose text was its own rewrite was taken for one already rewritten and
   skipped when the markup's scripts were named. (error-surfaces suite.)
+- A video or sound behind a redirect loads: Chrome's media loader gives up
+  on a load over 64 KiB whose redirect a service worker answered with
+  `Content-Length: 0` (measured with a plain worker), so a redirect goes out
+  without its Content-Length, which no page can read. (sop-escapes suite.)
+- What leaves a canvas or a media element as a stream or as sound follows
+  the same-origin policy: `captureStream()` of a tainted canvas or of an
+  element playing another origin's data is the browser's SecurityError, a
+  stream captured earlier ends when its source turns (its clones too), and
+  Web Audio hears silence from a MediaElementAudioSourceNode of such an
+  element, through `connect` however it was obtained, as the element
+  changes source. A video or sound the page's own URL redirects to another
+  site is that site's while it is still loading too: the worker records the
+  chain and the inject asks it over the synchronous bridge the first time
+  an element with data is judged (its resource timing entry, which carries
+  the mark for an image, is not there until the last byte). Cost: about
+  15 KB of heap a frame for the hooked stream and audio interfaces (the
+  frame-cost suite measures 1065 KB a frame, 1050 before). (sop-escapes
+  suite.)
 - The rules of a stylesheet of another origin cannot be read or changed:
   `cssRules`, `rules`, `insertRule`, `deleteRule`, `addRule` and
   `removeRule` throw the browser's SecurityError for a sheet of another

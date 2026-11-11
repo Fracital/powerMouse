@@ -22,6 +22,7 @@ import HistoryModule from './modules/History';
 import IFrameModule from './modules/IFrame';
 import LocationModule from './modules/Location';
 import MediaSessionModule from './modules/MediaSession';
+import MediaTaintModule from './modules/MediaTaint';
 import MutationObserverModule from './modules/MutationObserver';
 import NavigateModule from './modules/Navigate';
 import NavigationHintModule from './modules/NavigationHint';
@@ -73,6 +74,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(OpenModule);
 	client.addModule(DownloadModule);
 	client.addModule(CanvasTaintModule);
+	client.addModule(MediaTaintModule);
 	client.addModule(MediaSessionModule);
 	client.addModule(WebRTCModule);
 	client.addModule(AnimationFramesModule);

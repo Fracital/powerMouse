@@ -130,6 +130,7 @@ import {
 	rememberUpgradeInsecure,
 	upgradesInsecure,
 } from './insecureRequests';
+import { recordCrossedMedia } from './mediaLoads';
 import {
 	awaitNavigationHint,
 	NavigationHint,
@@ -235,6 +236,8 @@ interface RedirectHop {
 	 * spec's response tainting)
 	 */
 	crossed?: boolean;
+	/** the routed URL the chain began at */
+	first?: string;
 }
 
 /** the destinations and modes a LOAD_HEADER may name: a page's subresource loads, never a navigation */
@@ -1897,6 +1900,15 @@ function genericForward(
 			!redirect
 		)
 			responseHeaders.append('server-timing', OPAQUE_MARKER);
+		// (a video or sound says so before its load is over, which is when the
+		// mark can be read: the inject asks, mediaLoads.ts)
+		if (
+			!redirect &&
+			(serverRequest.destination === 'video' ||
+				serverRequest.destination === 'audio') &&
+			responseHeaders.get('server-timing')?.includes(OPAQUE_MARKER)
+		)
+			await recordCrossedMedia(previousHop?.first ?? serverRequest.url);
 		// the page's resource timing of another origin's load is restricted
 		// unless its Timing-Allow-Origin names the page: the inject reads this
 		// mark (and takes it out of the headers a fetch or XHR shows)
@@ -1908,6 +1920,12 @@ function genericForward(
 		// an XMLHttpRequest's entry names its initiator (XHR_MARKER)
 		if (requestTypeOf(serverRequest) === 'XMLHttpRequest endpoint' && !redirect)
 			responseHeaders.append('server-timing', XHR_MARKER);
+
+		// A redirect goes out without its Content-Length, which no page can
+		// read: Chrome's media loader gives up on a video or sound over 64 KiB
+		// whose redirect a service worker answered with `Content-Length: 0`
+		// (measured with a plain worker, without the proxy)
+		if (redirect) responseHeaders.delete('content-length');
 
 		// the browser follows the redirect in proxy URL space, where every hop
 		// is same-origin and the referrer never narrows: remember what this hop
@@ -1930,6 +1948,7 @@ function genericForward(
 						? { tainted: true }
 						: {}),
 					...(chainCrossed ? { crossed: true } : {}),
+					first: previousHop?.first ?? serverRequest.url,
 				},
 			);
 

@@ -5,6 +5,10 @@ import { unrouteURL } from '../../modules/Unroute';
 import { blobLoads, opaqueCopies } from '../blobLoads';
 import type DocumentClient from '../Client';
 import type { CanvasTaints } from '../Client';
+import SyncModule from './Sync';
+
+// taken when the bundle loads, before page code can replace it
+const nativeListen = EventTarget.prototype.addEventListener;
 
 type Kind = 'image' | 'svgImage' | 'video' | 'canvas' | 'other';
 
@@ -37,6 +41,24 @@ const toStringTag = Symbol.toStringTag;
  * the page has the interface. A frame that never names them pays nothing.
  */
 export default class CanvasTaintModule extends Module<DocumentClient> {
+	/** whether drawing `source` taints a canvas: it holds another origin's data the page may not read */
+	taints: (source: unknown) => boolean = () => false;
+	/**
+	 * Run `callback` when `element` fires an event of one of `types`, whatever
+	 * the page's own listeners do: one that stops the event before the
+	 * inject's listener runs it first.
+	 */
+	watch(element: object, types: string[], callback: () => void) {
+		const watched = this.client.canvasTaints.watched;
+		let byType = watched.get(element);
+		if (!byType) watched.set(element, (byType = new Map()));
+		for (const type of types) {
+			const callbacks = byType.get(type);
+			if (callbacks) callbacks.push(callback);
+			else byType.set(type, [callback]);
+			Reflect.apply(nativeListen, element, [type, callback, true]);
+		}
+	}
 	apply() {
 		const global = this.client.global;
 		if (typeof global.CanvasRenderingContext2D !== 'function') return;
@@ -52,6 +74,13 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 			sources: taintedSources,
 			bitmaps: taintedBitmaps,
 		} = shared;
+		/** a canvas now holds another origin's data: what was captured from it ends */
+		const taintCanvas = (canvas: object) => {
+			taintedCanvases.add(canvas);
+			const tracks = shared.sourceTracks.get(canvas);
+			if (tracks && shared.stopTrack)
+				for (const track of tracks) shared.stopTrack(track);
+		};
 		const taintBitmap = (bitmap: object) => {
 			taintedSources.add(bitmap);
 			if (!taintedBitmaps.has(bitmap)) {
@@ -157,10 +186,39 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 			object,
 			{ url: string; cross: boolean; real: string; taints: boolean }
 		>();
+		// A video or sound of the page's own URL: its load is over (and its
+		// mark readable) when its last byte has come, so the worker is asked
+		// whether it came through another origin (server/mediaLoads.ts), once
+		// a load, when the element first has anything to draw, hear or capture
+		const mediaReady = getter(global.HTMLMediaElement?.prototype, 'readyState');
+		const asked = new WeakMap<object, { url: string; crossed: boolean }>();
+		const mediaCrossed = (element: object, url: string): boolean => {
+			if (!mediaReady || (Reflect.apply(mediaReady, element, []) as number) < 1)
+				return false;
+			const known = asked.get(element);
+			if (known && known.url === url) return known.crossed;
+			// no answer: another origin's
+			let crossed = true;
+			try {
+				crossed =
+					this.client
+						.getModule(SyncModule)!
+						.jsonAPI(`${this.client.directory}media/crossed`, url) !== false;
+			} catch (error) {
+				// a document with no bridge
+			}
+			if (!known)
+				this.watch(element, ['emptied', 'loadstart'], () =>
+					asked.delete(element),
+				);
+			asked.set(element, { url, crossed });
+			return crossed;
+		};
 		const elementTaints = (
 			element: object,
 			url: string,
 			cors: ((this: unknown) => unknown) | undefined,
+			media = false,
 		): boolean => {
 			let last = judged.get(element);
 			if (!last || last.url !== url) {
@@ -180,6 +238,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 			// marked it, which is not known until it has loaded (an element
 			// drawn while it loads draws nothing, and is asked again)
 			if (opaqueLoad(last.real)) last.taints = true;
+			else if (media) return mediaCrossed(element, last.real);
 			return last.taints;
 		};
 		/** whether drawing `source` taints the canvas it is drawn into */
@@ -199,6 +258,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 						source,
 						String(Reflect.apply(mediaSrc!, source, [])),
 						mediaCrossOrigin,
+						true,
 					);
 				case 'svgImage': {
 					const href = Reflect.apply(svgHref!, source, []) as object;
@@ -213,6 +273,30 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 			}
 		};
 
+		this.taints = taints;
+		// the inject's listeners run even for an event a page listener stops
+		const stopImmediate = global.Event.prototype.stopImmediatePropagation;
+		const eventTarget = getter(global.Event.prototype, 'target');
+		const eventType = getter(global.Event.prototype, 'type');
+		global.Event.prototype.stopImmediatePropagation = proxyModule.wrapFunction(
+			stopImmediate,
+			(target, that, args) => {
+				let callbacks: (() => void)[] | undefined;
+				try {
+					const element = Reflect.apply(eventTarget!, that, []) as object;
+					callbacks =
+						element === null
+							? undefined
+							: shared.watched
+									.get(element)
+									?.get(String(Reflect.apply(eventType!, that, [])));
+				} catch (error) {
+					// not an event: the native call throws
+				}
+				if (callbacks) for (const callback of callbacks) callback();
+				return Reflect.apply(target, that, args);
+			},
+		);
 		const securityError = (message: string) =>
 			new global.DOMException(message, 'SecurityError');
 
@@ -237,7 +321,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 						const result = Reflect.apply(target, that, args);
 						taintedContexts.add(that);
 						if (canvasOf)
-							taintedCanvases.add(Reflect.apply(canvasOf, that, []) as object);
+							taintCanvas(Reflect.apply(canvasOf, that, []) as object);
 						return result;
 					}
 					return Reflect.apply(target, that, args);
@@ -273,9 +357,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 							) {
 								taintedContexts.add(that as object);
 								if (canvasOf)
-									taintedCanvases.add(
-										Reflect.apply(canvasOf, that, []) as object,
-									);
+									taintCanvas(Reflect.apply(canvasOf, that, []) as object);
 							}
 							return result;
 						},
@@ -583,9 +665,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 						taintedSources.has(args[0] as object) &&
 						rendererCanvas
 					)
-						taintedCanvases.add(
-							Reflect.apply(rendererCanvas, that, []) as object,
-						);
+						taintCanvas(Reflect.apply(rendererCanvas, that, []) as object);
 					return result;
 				},
 			);

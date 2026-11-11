@@ -14,6 +14,7 @@ import type { RequestInfo, RequestRule } from '../transport/messages';
 import { HttpCache, memoryCache } from './cache';
 import Cookies, { openCookies, registerCookies } from './Cookies';
 import { hostErrorPage } from './errorPage';
+import { registerMediaLoads } from './mediaLoads';
 import { RewriteCache } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
 import { registerRewrites } from './rewrites';
@@ -232,6 +233,7 @@ export default async function createServer(
 		pool,
 	);
 	registerStorage(router, stores.storage);
+	registerMediaLoads(router);
 	registerXhr(router);
 
 	return {

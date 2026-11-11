@@ -165,6 +165,22 @@ export interface CanvasTaints {
 	/** the ImageBitmaps of those, and how many were ever made */
 	bitmaps: WeakSet<object>;
 	bitmapCount: number;
+	/**
+	 * the tracks that carry what a canvas or media element shows (its
+	 * captured streams' and their clones), by that source, and each one's
+	 * source
+	 */
+	sourceTracks: WeakMap<object, Set<object>>;
+	trackSources: WeakMap<object, object>;
+	/** ends a track (a realm's native `stop`), once anything was captured */
+	stopTrack?: (track: object) => void;
+	/**
+	 * what the inject does when an element fires an event, by element and
+	 * type: run before a page's stopImmediatePropagation can keep it out
+	 */
+	watched: WeakMap<object, Map<string, (() => void)[]>>;
+	/** the gain node between a media element's source node and what the page connected it to */
+	gates: WeakMap<object, object>;
 }
 
 const newCanvasTaints = (): CanvasTaints => ({
@@ -173,6 +189,10 @@ const newCanvasTaints = (): CanvasTaints => ({
 	sources: new WeakSet(),
 	bitmaps: new WeakSet(),
 	bitmapCount: 0,
+	sourceTracks: new WeakMap(),
+	trackSources: new WeakMap(),
+	watched: new WeakMap(),
+	gates: new WeakMap(),
 });
 // a window's parent and opener as the browser has them, taken when the
 // bundle runs: a window's own accessors answer for any window
