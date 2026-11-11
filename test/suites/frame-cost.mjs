@@ -11,24 +11,28 @@
 //   instead of through the rewriter library (tldts did, +133 KB, every
 //   frame evaluating its tables again), or a parser or the suffix list
 //   coming back into the light library (css-tree and tldts were 205 KB of
-//   it), goes past it. Deterministic. Raise the budget in the same change
-//   as code that has to grow the bundle, and say why.
+//   it), goes past it. Deterministic. The budget, 460 KB, leaves room for
+//   the hooks that sealed link routes, sealed URLs and the escape fixes
+//   add (about 30 KB together). Raise it in the same change as code that
+//   has to grow the bundle, and say why.
 // - the JS heap one proxied frame adds (test/frame-memory.mjs, FRAMES frames
-//   of a small ad-like page, same site), against a ceiling well above what
-//   this build measures: 1,089 to 1,096 KB with 20 frames on Chrome 152 and
-//   156, within a few KB from run to run, and the same before the library
-//   left the bundle (a frame never evaluated it, and its text cost a frame
-//   about 3 KB). A module that makes an interface every frame (the WebGL
-//   ones, +90 KB) or evaluates the rewriter library in every frame again
-//   (+230 KB) goes past it.
+//   of a small ad-like page, same site), against a ceiling above what this
+//   build measures: 1,110 to 1,123 KB with 20 frames on Chrome 152 and 156
+//   with the content blocker on in every frame, within a few KB from run to
+//   run, and the same before the library left the bundle (a frame never
+//   evaluated it, and its text cost a frame about 3 KB). The ceiling, 1,160
+//   KB, takes the escape fixes' hooks (about 24 KB a frame) and :visited's
+//   link routes (about 6 KB). A module that makes an interface every frame
+//   (the WebGL ones, +90 KB) or evaluates the rewriter library in every
+//   frame again (+230 KB) goes past it.
 import { statSync } from 'node:fs';
 import { measureFrames } from '../frame-memory.mjs';
 import { done, ok } from '../lib.mjs';
 
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
-const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 430;
+const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 460;
 const FRAMES = Number(process.env.FRAMES) || 20;
-const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1120;
+const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1160;
 
 const bundleKB = statSync(BUNDLE).size / 1024;
 ok(

@@ -389,8 +389,8 @@ part of the key on its own, as it must: the two backends' outputs differ.
 Per-frame cost therefore goes down, not up, once the JavaScript libraries
 leave the inject bundle: that is a goal of phase 2 with a number on it, set
 out under "The inject bundle without the JavaScript libraries" below. The
-`frame-cost` ceiling (1,120 KB of heap per frame, `injectDocument.js` at
-most 430 KB since the JavaScript libraries left it, 850 before) is a gate
+`frame-cost` ceiling (1,160 KB of heap per frame, `injectDocument.js` at
+most 460 KB since the JavaScript libraries left it, 850 before) is a gate
 on every phase.
 
 ### Instance memory
@@ -1280,7 +1280,7 @@ Reported every phase:
 | Docs Closure bundles          | plain rewrite time of 3 to 7 MB  |
 | Rewrite only, per corpus file | the harness number               |
 | Artifact size, raw and brotli | budget 600 KB / 160 KB           |
-| Per-frame heap and RSS        | ceiling 1,120 KB                 |
+| Per-frame heap and RSS        | ceiling 1,160 KB                 |
 
 Phase 1, measured (2026-11-10, Node 24, load about 20; medians of three):
 
