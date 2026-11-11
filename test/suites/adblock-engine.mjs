@@ -26,7 +26,7 @@ const entry = `${OUT}adblock-engine-entry.mjs`;
 writeFileSync(
 	entry,
 	`export { Blocker } from ${JSON.stringify(`${root}src/server/blocker.ts`)};\n` +
-		`export { carriedCsp } from ${JSON.stringify(`${root}src/blocker/csp.ts`)};\n` +
+		`export { carriedCsp, withWorkerSource } from ${JSON.stringify(`${root}src/blocker/csp.ts`)};\n` +
 		`export { requestTypeOf, resolveAdblockOptions } from ${JSON.stringify(`${root}src/blocker/types.ts`)};\n` +
 		`export { BlockerInstance, OP } from ${JSON.stringify(`${root}src/blocker/instance.ts`)};\n` +
 		`export { compileModule } from ${JSON.stringify(`${root}src/wasm/module.ts`)};\n`,
@@ -44,6 +44,7 @@ await esbuild.build({
 const {
 	Blocker,
 	carriedCsp,
+	withWorkerSource,
 	requestTypeOf,
 	resolveAdblockOptions,
 	BlockerInstance,
@@ -301,6 +302,25 @@ ok(
 		csp("script-src 'unsafe-inline' 'unsafe-eval' 'self' 'nonce-abc'") ===
 			null &&
 		csp("default-src 'none'") === null,
+);
+const SEALER = 'http://proxy.test/stomp/id/sealer';
+ok(
+	"the proxy's own worker is among every carried policy's worker sources, and nothing else is let in",
+	withWorkerSource("worker-src 'none'", SEALER) === `worker-src ${SEALER}` &&
+		withWorkerSource("child-src 'none'", SEALER) ===
+			`child-src 'none'; worker-src ${SEALER}` &&
+		withWorkerSource(
+			"script-src 'unsafe-inline' 'unsafe-eval' 'self'; img-src 'none'",
+			SEALER,
+		) ===
+			`script-src 'unsafe-inline' 'unsafe-eval' 'self'; img-src 'none'; worker-src 'unsafe-inline' 'unsafe-eval' 'self' ${SEALER}` &&
+		withWorkerSource("worker-src blob:; child-src 'none'", SEALER) ===
+			`child-src 'none'; worker-src blob: ${SEALER}` &&
+		withWorkerSource("img-src 'none', worker-src 'none'", SEALER) ===
+			`img-src 'none', worker-src ${SEALER}` &&
+		blocker.documentCsp(`${SITE}/pages/adblock-csp.html`, null, SEALER) ===
+			`worker-src ${SEALER}`,
+	String(blocker.documentCsp(`${SITE}/pages/adblock-csp.html`, null, SEALER)),
 );
 ok(
 	'sandbox, frame-ancestors and reporting are never carried',

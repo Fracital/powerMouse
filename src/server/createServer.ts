@@ -19,6 +19,7 @@ import type {
 	RequestInfo,
 	RequestRule,
 } from '../transport/messages';
+import { SEALER_ROUTE, SEALER_SOURCE } from '../transport/messages';
 import { heldModules, moduleOf } from '../wasm/thread';
 import { Blocker, registerBlocker } from './blocker';
 import { HttpCache, memoryCache } from './cache';
@@ -280,6 +281,15 @@ export default async function createServer(
 		json(200, context?.clientId ?? null),
 	);
 	registerAssets(router, init.scope, init.assets);
+	// the sealed copies' worker, for a document whose policy refuses one
+	// from a blob: URL (messages.ts)
+	router.routes.set(
+		new RegExp(`^/${SEALER_ROUTE}$`),
+		() =>
+			new Response(SEALER_SOURCE, {
+				headers: { 'content-type': 'text/javascript' },
+			}),
+	);
 	const blocker = adblock
 		? sharedBlocker(init.scope, adblock, new BareCompatibleClient(transport))
 		: undefined;

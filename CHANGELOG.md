@@ -735,6 +735,18 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   before its load event replaces its entry, as natively. Through the proxy
   about one such redirect in three made a new entry, so Back went to the
   redirecting page and it redirected again. (toolbar-history suite.)
+- The load gate under a list's `$csp=`: a policy the blocker carries that
+  refuses a worker from a `blob:` URL (`worker-src 'none'`,
+  `child-src 'none'`, a `script-src` without `blob:`) refused the worker
+  the inject makes a sealed copy's URL in, and an image of another site
+  in an about:blank frame of such a page got a live `blob:` URL any realm
+  of the proxy origin could read. The carried policy names the service
+  worker's route of that worker's script among its worker sources (its
+  full URL, so nothing else is let in), and a worker refused before it
+  answered is made again from the route. A page's own policy, a sandbox
+  and the proxy's script policy for a frame without allow-scripts refused
+  nothing of the inject's (measured, plain Chrome 152 and 156 and through
+  the proxy). (sop-escapes `csp/` cases.)
 - The load gate after a service worker restart: the worker takes a
   client's channel at once only when it served the client's document, and
   otherwise only the one that answers a nonce it sends that client, which

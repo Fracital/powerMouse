@@ -1,0 +1,114 @@
+<!doctype html>
+<title>gate csp</title>
+<body>
+	<script>
+		// The load gate under the policies a document can have (sop-escapes
+		// `csp/` cases): each child frame is a document under one policy that
+		// copies another site's image in an about:blank frame it writes
+		// (gate-csp.js), and this page adds the documents it makes itself.
+		// Every document's result is in its own window.__gateCsp.
+		const query = new URLSearchParams(location.search);
+		const B = query.get('b');
+		const out = (window.__gateCsp = { cases: {}, done: false });
+		const N = window.__sopNative ?? {
+			fetch: window.fetch,
+			text: Response.prototype.text,
+			getAttribute: Element.prototype.getAttribute,
+		};
+		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const child = (file, name, sandbox) => {
+			const frame = document.createElement('iframe');
+			if (sandbox !== undefined) frame.setAttribute('sandbox', sandbox);
+			frame.src = `${file}?b=${encodeURIComponent(B)}&name=${encodeURIComponent(name)}`;
+			document.body.append(frame);
+		};
+		child(
+			'gate-csp-worker-none.html',
+			"csp/a page whose header is worker-src 'none'",
+		);
+		child(
+			'gate-csp-script-self.html',
+			"csp/a page whose header is script-src 'self' 'unsafe-inline'",
+		);
+		child(
+			'gate-csp-meta-worker.html',
+			"csp/a page whose meta is worker-src 'none'",
+		);
+		child(
+			'gate-csp-meta-script.html',
+			"csp/a page whose meta is script-src 'self' 'unsafe-inline'",
+		);
+		child(
+			'gate-csp-plain.html',
+			'csp/a page in a frame sandboxed with allow-scripts allow-same-origin',
+			'allow-scripts allow-same-origin',
+		);
+		const image = (name) =>
+			new URL(`/sop/r?type=png&k=gate-csp-${name}`, B).href;
+		/** what loaded in `element` and what the browser's own fetch reads of the URL it holds */
+		const held = async (element) => {
+			const event =
+				element.complete && element.naturalWidth
+					? 'load'
+					: await new Promise((resolve) => {
+							for (const type of ['load', 'error'])
+								element.addEventListener(type, () => resolve(type), {
+									once: true,
+								});
+							setTimeout(() => resolve('none in 10 s'), 10000);
+						});
+			let url = null;
+			for (let i = 0; i < 40 && !url; i++) {
+				url = N.getAttribute.call(element, 'src');
+				if (!url) await sleep(50);
+			}
+			let read = 'no URL';
+			if (url)
+				try {
+					read = `read ${(await N.text.call(await N.fetch.call(window, url))).length}`;
+				} catch (error) {
+					read = `${error.name}: ${error.message}`;
+				}
+			return { event, width: element.naturalWidth, read };
+		};
+		const found = async (frame) => {
+			for (let i = 0; i < 100; i++) {
+				const element = frame.contentDocument?.getElementById('o');
+				if (element) return element;
+				await sleep(50);
+			}
+			return null;
+		};
+		const own = {
+			// a frame without allow-scripts: the proxy guards its document
+			// with a script policy of its own (src/inject/dom/sandbox.ts)
+			async 'csp/an about:blank frame sandboxed with allow-same-origin, written by its parent'() {
+				const frame = document.createElement('iframe');
+				frame.setAttribute('sandbox', 'allow-same-origin');
+				document.body.append(frame);
+				const written = frame.contentDocument;
+				written.open();
+				written.write(`<body><img id="o" src="${image('guarded')}">`);
+				written.close();
+				return held(written.getElementById('o'));
+			},
+			async 'csp/an object document'() {
+				const object = document.createElement('object');
+				object.type = 'text/html';
+				object.data = `gate-csp-object.html?img=${encodeURIComponent(image('object'))}`;
+				document.body.append(object);
+				const element = await found(object);
+				return element ? held(element) : 'no image';
+			},
+		};
+		addEventListener('load', async () => {
+			for (const [name, run] of Object.entries(own))
+				try {
+					out.cases[name] = await run();
+				} catch (error) {
+					out.cases[name] = { threw: `${error.name}: ${error.message}` };
+				}
+			out.done = true;
+		});
+	</script>
+</body>

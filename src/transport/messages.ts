@@ -92,6 +92,16 @@ export interface LoadGrantMessage {
  */
 export const OPAQUE_COPY_HEADER = 'x-stomp-copy';
 /**
+ * The worker that makes a sealed copy's URL (src/inject/dom/sealedCopies.ts):
+ * its script, made a blob: URL by the inject, and the route under the
+ * controller's address where the service worker answers the same script
+ * for a document whose policy refuses a blob: worker (the blocker's
+ * `$csp=`, which names that route among its worker sources)
+ */
+export const SEALER_SOURCE =
+	'onmessage=function(e){postMessage([e.data[0],URL.createObjectURL(e.data[1])])}';
+export const SEALER_ROUTE = 'sealer';
+/**
  * A Server-Timing metric the worker adds to a response of another origin
  * whose Timing-Allow-Origin lets the page see its timing: every route is
  * same-origin to the browser, so only the worker knows. The inject's

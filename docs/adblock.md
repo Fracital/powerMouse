@@ -128,7 +128,11 @@ same-origin with its page; none of that is used.
   so only directives whose sources are keywords, schemes or `*` are carried,
   never `sandbox`, and a script policy only when it still allows inline
   scripts and `eval` (`src/blocker/csp.ts`). `worker-src 'none'` holds;
-  `script-src 'self'` is dropped.
+  `script-src 'self'` is dropped. Every carried policy lets one worker
+  run whatever it says of workers: the proxy's own for sealed copies, from
+  the service worker's route `<directory>sealer`, named by its full URL
+  among the policy's worker sources (docs/same-origin-policy.md, the load
+  gate).
 - The host's request log (`onRequest`) reports a blocked request with status
   0, kind `blocked` and the error `blocked by the content blocker`.
 

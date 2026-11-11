@@ -541,8 +541,10 @@ ok(
 	JSON.stringify(other),
 );
 ok(
-	"a list's $csp reaches the document, without the policy that would stop the shell",
-	policies.some((policy) => policy.includes("worker-src 'none'")) &&
+	"a list's $csp reaches the document, without the policy that would stop the shell, its worker-src naming only the proxy's own worker",
+	policies.some((policy) =>
+		/worker-src http:\/\/[^ ,;]+\/stomp\/[\w-]+\/sealer$/.test(policy),
+	) &&
 		!policies.some((policy) => policy.includes('script-src')) &&
 		on.reports.csp.ran === 'yes' &&
 		!!on.reports.csp.worker &&

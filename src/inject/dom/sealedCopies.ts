@@ -19,8 +19,17 @@
  * tells when its URLs are gone: the worker's end is not synchronous, and a
  * fetch that fails drops the cache entry of the URL it names.
  *
+ * A document whose policy refuses a worker from a blob: URL (a list's
+ * `$csp=worker-src 'none'`, or a script-src without blob:, through the
+ * blocker) has the worker made from a route of the service worker's
+ * instead, which the carried policy names among its worker sources
+ * (src/blocker/csp.ts): the first worker's error before it answered says
+ * so, and the copies it was to make are made again by the other.
+ *
  * Everything is taken when the bundle loads, before the page runs.
  */
+import { SEALER_SOURCE } from '../../transport/messages';
+
 type Post = (message: unknown) => void;
 
 const taken = (() => {
@@ -62,11 +71,19 @@ interface Batch {
 	/** settles once the worker's URLs name nothing */
 	dead: Promise<void>;
 	die: () => void;
+	/** whether the worker was started from the route */
+	routed: boolean;
+	/** whether it has answered: an error before means it never ran */
+	answered: boolean;
+	/** the document's policy refused it */
+	refused: boolean;
 }
 
 let batch: Batch | null = null;
 /** the worker's script, made when the first copy is sealed */
 let source: string | null = null;
+/** this realm's policy refused a worker from a blob: URL: workers come from the route */
+let blobRefused = false;
 
 function fail(from: Batch) {
 	for (const settle of from.waiting.values()) settle(null);
@@ -89,18 +106,15 @@ function mint(from: Batch, blob: Blob): Promise<string | null> {
 	});
 }
 
-function open(): Batch | null {
+function open(route: string | null): Batch | null {
 	if (!taken) return null;
 	try {
-		source ??= Reflect.apply(taken.createObjectURL, taken.URL, [
-			new taken.Blob(
-				[
-					'onmessage=function(e){postMessage([e.data[0],URL.createObjectURL(e.data[1])])}',
-				],
-				{ type: 'text/javascript' },
-			),
-		]) as string;
-		const worker = new taken.Worker(source);
+		const routed = blobRefused && route !== null;
+		if (!routed)
+			source ??= Reflect.apply(taken.createObjectURL, taken.URL, [
+				new taken.Blob([SEALER_SOURCE], { type: 'text/javascript' }),
+			]) as string;
+		const worker = new taken.Worker(routed ? route : source!);
 		let die!: () => void;
 		const made: Batch = {
 			worker,
@@ -112,17 +126,28 @@ function open(): Batch | null {
 			sentinel: Promise.resolve(null),
 			dead: new Promise<void>((resolve) => (die = resolve)),
 			die,
+			routed,
+			answered: false,
+			refused: false,
 		};
 		Reflect.apply(taken.listen, worker, [
 			'message',
 			(event: MessageEvent) => {
+				made.answered = true;
 				const data = Reflect.apply(taken.dataOf, event, []) as [number, string];
 				const settle = made.waiting.get(data[0]);
 				made.waiting.delete(data[0]);
 				settle?.(data[1]);
 			},
 		]);
-		Reflect.apply(taken.listen, worker, ['error', () => fail(made)]);
+		Reflect.apply(taken.listen, worker, [
+			'error',
+			() => {
+				// a worker that never ran: the policy refused its script
+				if (!made.answered && !made.routed) made.refused = blobRefused = true;
+				fail(made);
+			},
+		]);
 		made.sentinel = mint(made, new taken.Blob(['']));
 		return made;
 	} catch (error) {
@@ -157,25 +182,36 @@ async function close(ended: Batch) {
  * A blob: URL of `blob` that nothing can fetch by the time it is handed
  * over. `prime` is given the URL while it is alive: it loads it where it
  * is to be shown and says whether that worked. Null when it did not, or
- * when no worker can be had: the caller makes an ordinary URL.
+ * when no worker can be had: the caller makes an ordinary URL. `route` is
+ * the service worker's route of the worker's script, for a document whose
+ * policy refuses a blob: one.
  */
 export async function sealedURL(
 	blob: Blob,
 	prime: (url: string) => Promise<boolean>,
+	route: string | null = null,
 ): Promise<string | null> {
-	if (
-		!batch ||
-		batch.closed ||
-		(taken !== null && taken.now() - batch.opened > BATCH_MS)
-	)
-		batch = open();
-	const mine = batch;
-	if (!mine) return null;
-	mine.pending++;
-	const url = await mint(mine, blob)
-		.then(async (made) => (made !== null && (await prime(made)) ? made : null))
-		.catch(() => null);
-	if (--mine.pending === 0 && !mine.closed) close(mine).catch(() => mine.die());
-	await mine.dead;
-	return url;
+	for (;;) {
+		if (
+			!batch ||
+			batch.closed ||
+			(taken !== null && taken.now() - batch.opened > BATCH_MS)
+		)
+			batch = open(route);
+		const mine = batch;
+		if (!mine) return null;
+		mine.pending++;
+		let made: string | null = null;
+		const url = await mint(mine, blob)
+			.then(async (minted) => {
+				made = minted;
+				return minted !== null && (await prime(minted)) ? minted : null;
+			})
+			.catch(() => null);
+		if (--mine.pending === 0 && !mine.closed)
+			close(mine).catch(() => mine.die());
+		await mine.dead;
+		// refused: once more, from the route (a routed worker is not refused again)
+		if (made !== null || !mine.refused || route === null) return url;
+	}
 }

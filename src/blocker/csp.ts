@@ -90,3 +90,47 @@ export function carriedCsp(directives: string): string | null {
 	}
 	return kept.length ? kept.join(', ') : null;
 }
+
+/** the directives a worker's script is judged by, in the order the browser looks for one */
+const WORKER_FALLBACK = [
+	'worker-src',
+	'child-src',
+	'script-src',
+	'default-src',
+];
+
+/**
+ * `policies` (carried, comma-joined) with `source` among the sources each
+ * policy judges a worker by: the route of the proxy's own worker for sealed
+ * copies (src/inject/dom/sealedCopies.ts), which the inject starts from that
+ * URL when the document refuses one from a blob: URL. A policy that names
+ * no worker directive allows it already; one whose worker sources come from
+ * child-src, script-src or default-src gets a worker-src of those sources
+ * and the route, so the page's own workers are judged as before. The route
+ * is a full URL with its path, which matches that one script only.
+ */
+export function withWorkerSource(policies: string, source: string): string {
+	return policies
+		.split(',')
+		.map((policy) => {
+			const directives = policy
+				.split(';')
+				.map((directive) => directive.trim().split(/\s+/))
+				.filter((parts) => parts[0]);
+			const named = WORKER_FALLBACK.map((name) =>
+				directives.find((parts) => parts[0].toLowerCase() === name),
+			).find((parts) => parts !== undefined);
+			if (!named) return policy.trim();
+			const sources = [
+				...named.slice(1).filter((value) => value.toLowerCase() !== "'none'"),
+				source,
+			];
+			const rest = directives.filter(
+				(parts) => parts[0].toLowerCase() !== 'worker-src',
+			);
+			return [...rest, ['worker-src', ...sources]]
+				.map((parts) => parts.join(' '))
+				.join('; ');
+		})
+		.join(', ');
+}

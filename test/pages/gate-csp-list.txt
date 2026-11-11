@@ -1,0 +1,4 @@
+! the load gate under a list's policy (sop-escapes csp/ cases)
+/pages/gate-csp-list-worker.html$csp=worker-src 'none'
+/pages/gate-csp-list-script.html$csp=script-src 'self' 'unsafe-inline' 'unsafe-eval'
+/pages/gate-csp-list-child.html$csp=child-src 'none'

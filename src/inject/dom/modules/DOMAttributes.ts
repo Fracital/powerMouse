@@ -17,7 +17,11 @@ import {
 import { routeJS, ScriptType } from '../../../scriptRoutes';
 import { parseAcceptCH } from '../../../server/hintNames';
 import StompURL from '../../../StompURL';
-import { LOAD_HEADER, OPAQUE_COPY_HEADER } from '../../../transport/messages';
+import {
+	LOAD_HEADER,
+	OPAQUE_COPY_HEADER,
+	SEALER_ROUTE,
+} from '../../../transport/messages';
 import Module from '../../Module';
 import { opaqueCopy, opaqueMarked } from '../../modules/Fetch';
 import MixedContentModule from '../../modules/MixedContent';
@@ -246,16 +250,20 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			let primed = false;
 			// the memory cache keeps a blob: URL's fragment in its key: one
 			// kept image for each form the value names the copy by
-			const dead = await sealedURL(body, async (url) => {
-				primed = (
-					await Promise.all(
-						(fragments.length ? fragments : ['']).map((fragment) =>
-							keep(url + fragment, state),
-						),
-					)
-				).every((loaded) => loaded);
-				return true;
-			});
+			const dead = await sealedURL(
+				body,
+				async (url) => {
+					primed = (
+						await Promise.all(
+							(fragments.length ? fragments : ['']).map((fragment) =>
+								keep(url + fragment, state),
+							),
+						)
+					).every((loaded) => loaded);
+					return true;
+				},
+				`${new URL(scopePrefix(this.client)).origin}${this.client.directory}${SEALER_ROUTE}`,
+			);
 			if (dead !== null) {
 				if (state.sound !== false) state.sound = primed;
 				return dead;

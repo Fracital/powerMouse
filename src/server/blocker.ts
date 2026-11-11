@@ -14,7 +14,7 @@
 // The crate never discards a compiled regex on wasm (it has no clock), so a
 // long-lived worker's instance only grows: past a ceiling it is replaced by
 // a fresh one loading the same serialized engine.
-import { carriedCsp } from '../blocker/csp';
+import { carriedCsp, withWorkerSource } from '../blocker/csp';
 import {
 	BlockerInstance,
 	FLAG_HOSTS,
@@ -541,13 +541,19 @@ export class Blocker {
 	 * one's `top` is the page it is framed under), reduced to what the proxy
 	 * can enforce (src/blocker/csp.ts), or null
 	 */
-	documentCsp(url: string, top: string | null): string | null {
+	documentCsp(
+		url: string,
+		top: string | null,
+		/** the URL of the sealed copies' worker, which every carried policy lets run */
+		sealer?: string,
+	): string | null {
 		const directives = this.csp(
 			url,
 			top ?? url,
 			top === null ? 'document' : 'subdocument',
 		);
-		return directives ? carriedCsp(directives) : null;
+		const carried = directives ? carriedCsp(directives) : null;
+		return carried && sealer ? withWorkerSource(carried, sealer) : carried;
 	}
 	/** the resources JSON the engine holds (tests) */
 	get resourcesText(): string {

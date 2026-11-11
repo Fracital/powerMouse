@@ -77,6 +77,7 @@ import {
 	PREFLIGHT_HEADER,
 	RESPONSE_TYPE_HEADER,
 	REVALIDATED_MARKER,
+	SEALER_ROUTE,
 	TAO_MARKER,
 	TIMING_ONLY_MARKER,
 	XHR_MARKER,
@@ -3673,6 +3674,7 @@ export function registerRewrites(
 					? rewriter.blocker.documentCsp(
 							url.url.href,
 							nestedTopOf(new URL(request.routed).pathname, rewriter.directory),
+							`${new URL(request.routed).origin}${rewriter.directory}${SEALER_ROUTE}`,
 						)
 					: null;
 				if (listCsp) responseHeaders.append('content-security-policy', listCsp);

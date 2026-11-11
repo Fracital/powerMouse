@@ -494,8 +494,8 @@ Filled in commit by commit; see the CHANGELOG for each.
   before JSON). A blocked script is a network error to the page. Other
   no-cors loads of such a response fail or are opaque either way.
 - **The load gate** (sop-escapes `gate/`: 13 cases per mode read another
-  site's bytes, 1 is left; load-grants, load-grants-restart and
-  document-kinds suites). Chrome gives an about:blank document no service
+  site's bytes, 1 is left; sop-escapes `csp/`: 3 of 10 per mode did, under a list's policy;
+  load-grants, load-grants-restart and document-kinds suites). Chrome gives an about:blank document no service
   worker, whatever is done to it (measured in plain Chrome 152 and 156,
   table below), so the inject fetches such a document's loads from a
   document a worker does control and hands the element a `blob:` URL: a
@@ -569,6 +569,56 @@ Filled in commit by commit; see the CHANGELOG for each.
     time), otherwise when the element has loaded; a stylesheet's imports
     when it has loaded. A stylesheet put back into the document afterwards,
     or an image whose cache entry went, fails once and is copied again.
+  - _Under a document's policy._ The worker's script is a `blob:` URL, and
+    Chrome judges a worker by the policy of the realm that constructs it
+    (an about:blank frame runs its creator's bundle, so its creator's).
+    Measured in plain Chrome 152 and 156, the same in both: a policy of
+    `worker-src 'none'`, of `script-src 'self' 'unsafe-inline'` (no
+    `blob:`), of `child-src 'none'` or the proxy's own
+    `script-src 'nonce-...'` refuses a worker from a `blob:` URL, in an
+    about:blank child as well, and a `SharedWorker` too; a
+    `worker-src <URL with its path>` allows that one script and refuses
+    `blob:`. A page's own header or meta policy never
+    reaches the browser through the proxy (it would refuse the shell), so
+    it refuses nothing of the inject's; the policies that do are a list's
+    `$csp=` (the blocker carries `worker-src 'none'`, `child-src 'none'`
+    and a `script-src` that keeps inline scripts and `eval`) and the
+    script policy of a document without allow-scripts. Under a list's,
+    the copy's URL was the fallback, a live `blob:` URL of another site's
+    image (sop-escapes `csp/`, before: `read 69` in both modes). The
+    service worker cannot make a `blob:` URL for a client, and nothing
+    else measured could make one that dies while the image stays: a
+    removed frame's realm returns `""` from `URL.createObjectURL` and
+    throws `InvalidAccessError` from `new Worker`; a frame of the
+    document's own, removed in a microtask after the kept image is given
+    the URL, makes one (the image loads, the URL fails to fetch, under
+    every policy above), but inserting a frame fires its `load` event at
+    once to the page's capturing listeners, which reach the new realm and
+    can replace its `URL.createObjectURL` before the inject calls it. So
+    the blocker names the service worker's route of the worker's script
+    (`<directory>sealer`) among the worker sources of every policy it
+    carries (`src/blocker/csp.ts`: added to `worker-src`, or a
+    `worker-src` of the `child-src`, `script-src` or `default-src`
+    sources it falls back to), and a worker the policy refused before it
+    answered is made again from that route. The page's own workers are
+    judged as before (still refused under `worker-src 'none'`). The
+    script policy of a frame without allow-scripts refuses nothing of the
+    inject's: its about:blank's copies are made by its parent's bundle.
+
+    | Document (sop-escapes `csp/`)                                                                            | Natively | Through the proxy, before | Through the proxy |
+    | -------------------------------------------------------------------------------------------------------- | -------- | ------------------------- | ----------------- |
+    | header or meta `worker-src 'none'`                                                                       | refused  | refused                   | refused           |
+    | header or meta `script-src 'self' 'unsafe-inline'`                                                       | refused  | refused                   | refused           |
+    | frame sandboxed with allow-scripts allow-same-origin                                                     | refused  | refused                   | refused           |
+    | about:blank sandboxed with allow-same-origin, written by parent                                          | refused  | refused                   | refused           |
+    | an `<object>`'s document                                                                                 | refused  | refused                   | refused           |
+    | a list's `$csp=worker-src 'none'`, `child-src 'none'`, `script-src 'self' 'unsafe-inline' 'unsafe-eval'` | refused  | **read**                  | refused           |
+
+    (What the browser's own fetch makes of the URL an about:blank frame's
+    image of another site holds; both modes. A frame sandboxed with
+    allow-scripts alone has no about:blank its page can write into,
+    natively or through the proxy.)
+
   - The documents (plain Chrome 152 and 156, the same in both; through the
     proxy, document-kinds suite). No service worker: an about:blank frame
     (fresh, `src="about:blank"`, after `document.open` and `write` by its

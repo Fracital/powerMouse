@@ -234,6 +234,164 @@ if (!only || only.startsWith('coi/')) {
 	}
 }
 
+// The fourth part: the gate under the policies a document can have
+// (test/pages/gate-csp.html). An image of another site copied for an
+// about:blank frame gets a URL a worker of the inject's made, and the
+// worker's script is a blob: URL, which a policy can refuse: the page's
+// own header or meta (the proxy strips them, so the browser never applies
+// them), a sandbox, the policy the proxy puts on a frame without
+// allow-scripts, and a list's `$csp=` (the blocker's, which the browser
+// does apply: then the worker comes from the service worker's route the
+// carried policy names). In each, the URL the element holds names nothing
+// by the time it is set, as the other site's URL natively does.
+if (!only || only.startsWith('csp/')) {
+	const cspURL = (file, name = '') =>
+		`${FIXTURE}pages/${file}?b=${encodeURIComponent(other)}${name ? `&name=${encodeURIComponent(name)}` : ''}`;
+	// each document's cases, once every one of them is in
+	const cspReport = async (page, count) => {
+		let cases = {};
+		for (let i = 0; i < 160; i++) {
+			await sleep(250);
+			cases = {};
+			let pending = false;
+			for (const frame of page.frames()) {
+				const value = await Promise.race([
+					frame?.evaluate(() => window.__gateCsp).catch(() => null),
+					sleep(3000).then(() => null),
+				]);
+				if (value && !value.done) pending = true;
+				if (value?.done) Object.assign(cases, value.cases);
+			}
+			if (!pending && Object.keys(cases).length >= count) break;
+		}
+		return cases;
+	};
+	const OWN = 7;
+	const cspNativePage = await browser.newPage();
+	await cspNativePage.context().addInitScript(NATIVES);
+	await cspNativePage.goto(cspURL('gate-csp.html'));
+	const cspNative = await cspReport(cspNativePage, OWN);
+	await cspNativePage.context().close();
+	// a list's policy is the blocker's: natively the same page has none,
+	// and what its image's URL reads is the other site's refusal again
+	const LISTED = {
+		"csp/a page a list gives $csp=worker-src 'none'":
+			'gate-csp-list-worker.html',
+		"csp/a page a list gives $csp=script-src 'self' 'unsafe-inline' 'unsafe-eval'":
+			'gate-csp-list-script.html',
+		"csp/a page a list gives $csp=child-src 'none'": 'gate-csp-list-child.html',
+	};
+	for (const [name, file] of Object.entries(LISTED)) {
+		const page = await browser.newPage();
+		await page.context().addInitScript(NATIVES);
+		await page.goto(cspURL(file, name));
+		Object.assign(cspNative, await cspReport(page, 1));
+		await page.context().close();
+	}
+	ok(
+		'natively, every document of the csp/ cases loaded its image and its URL is refused',
+		Object.keys(cspNative).length === OWN + Object.keys(LISTED).length &&
+			Object.values(cspNative).every(
+				(value) =>
+					value?.event === 'load' &&
+					value.width === 1 &&
+					value.read === 'TypeError: Failed to fetch',
+			),
+		normal(cspNative),
+	);
+	const cspShape = (cases) =>
+		Object.fromEntries(
+			Object.entries(cases ?? {}).map(([name, value]) => [
+				name,
+				value && { event: value.event, width: value.width, read: value.read },
+			]),
+		);
+	for (const [mode, base] of [
+		['same-origin', PROXY],
+		['isolated', HOST],
+	]) {
+		const page = await openDemo(browser, base);
+		await page.context().addInitScript(NATIVES);
+		await page.evaluate((url) => {
+			const form = document.getElementById('mainForm');
+			form.url.value = url;
+			form.requestSubmit();
+		}, cspURL('gate-csp.html'));
+		const proxied = await cspReport(page, OWN);
+		// the lists: a controller of the suite's own with the blocker on,
+		// in the demo page (same-origin) or the isolated host
+		// (the lists' policies: a document's own never reaches the browser,
+		// and the proxy's frame-ancestors names no worker)
+		const policies = [];
+		page.context().on('response', (response) => {
+			const policy = response.headers()['content-security-policy'];
+			if (policy && /(worker|child|script)-src/.test(policy))
+				policies.push(policy);
+		});
+		for (const [name, file] of Object.entries(LISTED)) {
+			await page.evaluate(
+				async ({ mode, proxy, fixture, url }) => {
+					// the fixture's resources: the default ones are another
+					// site's, which a run without the network cannot reach
+					const adblock = {
+						resources: `${fixture}pages/adblock-resources.json`,
+						lists: [
+							{ url: `${fixture}pages/gate-csp-list.txt`, trusted: true },
+						],
+					};
+					window.__cspController ??=
+						mode === 'isolated'
+							? new window.StompRemoteController({
+									proxyOrigin: proxy.replace(/\/$/, ''),
+									directory: '/stomp/',
+									transport: {
+										module: `${proxy}epoxy/index.mjs`,
+										options: [{ wisp: `${proxy.replace(/^http/, 'ws')}wisp/` }],
+									},
+									codec: 'xor',
+									cache: false,
+									adblock,
+								})
+							: new window.StompController({
+									serviceworker: window.controller.serviceworker,
+									transport: window.controller.transport,
+									directory: window.controller.directory.pathname,
+									codec: 'xor',
+									cache: false,
+									adblock,
+								});
+					await window.__cspController.wait();
+					document.getElementById('__cspFrame')?.remove();
+					const element = document.createElement('iframe');
+					element.id = '__cspFrame';
+					document.body.append(element);
+					await window.__cspController.createFrame(element).go(url);
+				},
+				{ mode, proxy: PROXY, fixture: FIXTURE, url: cspURL(file, name) },
+			);
+			for (let i = 0; i < 80 && !proxied[name]; i++) {
+				const found = await cspReport(page, 1);
+				if (found[name]) proxied[name] = found[name];
+			}
+		}
+		ok(
+			`${mode}: a list's policy reaches the documents, and names the proxy's route among its worker sources`,
+			policies.length >= Object.keys(LISTED).length &&
+				policies.every((policy) =>
+					/worker-src [^,;]*http:\/\/[^ ,;]+\/stomp\/[\w-]+\/sealer(?=$|[;,])/.test(
+						policy,
+					),
+				) &&
+				policies.some((policy) =>
+					/worker-src http:\/\/\S+\/sealer$/.test(policy),
+				),
+			JSON.stringify(policies),
+		);
+		compare(mode, cspShape(cspNative), cspShape(proxied));
+		await page.context().close();
+	}
+}
+
 await done(browser);
 
 /** each case natively against the proxy, a known difference against its list */
