@@ -145,12 +145,13 @@ export default class WebSocketModule extends Module<Client> {
 				};
 				this.#closeNow = dispatchClose;
 
-				// a connection that fails (refused, a TLS handshake that ends)
-				// gets an error and then a close with 1006 natively; the transport
-				// reports the error only
+				// a connection that fails (refused, a TLS handshake that ends, one
+				// a content blocker refuses) gets an error and then a close with
+				// 1006 natively, one after the other in the same task and both
+				// reading CLOSED; the transport reports the error only
 				this.#socket.addEventListener('error', () => {
 					this.dispatchEvent(new Event('error'));
-					setTimeout(() => dispatchClose(1006, ''), 0);
+					dispatchClose(1006, '');
 				});
 
 				this.#socket.addEventListener('close', (event) => {
