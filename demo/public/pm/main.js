@@ -1893,9 +1893,9 @@ function requestRow(info) {
 
 function renderRequestCounts(log) {
 	const total = log ? log.total : 0;
-	requestsCount.textContent = `${total} request${total === 1 ? '' : 's'}   ${
+	requestsCount.textContent = `${total} request${total === 1 ? '' : 's'} ${
 		log ? log.cached : 0
-	} cached   ${log ? log.failed : 0} failed`;
+	} cached ${log ? log.failed : 0} failed`;
 	requestsEmpty.classList.toggle('hidden', !!log && log.entries.length > 0);
 }
 

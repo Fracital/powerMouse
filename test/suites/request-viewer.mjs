@@ -155,7 +155,7 @@ ok(
 const counts = await page.textContent('#requestsCount');
 ok(
 	'header counts requests, cached and failed',
-	/^\d+ requests · \d+ cached · \d+ failed$/.test(counts) &&
+	/^\d+ requests \d+ cached \d+ failed$/.test(counts) &&
 		parseInt(counts) >= 9 &&
 		/ [1-9]\d* cached/.test(counts),
 	counts,
@@ -262,8 +262,7 @@ ok(
 );
 ok(
 	'counts reset',
-	(await page.textContent('#requestsCount')) ===
-		'0 requests · 0 cached · 0 failed',
+	(await page.textContent('#requestsCount')) === '0 requests 0 cached 0 failed',
 	await page.textContent('#requestsCount'),
 );
 await fetchInFrame(1);
