@@ -22,7 +22,7 @@ import {
 	type ScriptType,
 } from './scriptRoutes';
 import StompURL from './StompURL';
-import { rewriteInWasm } from './wasm/rewriter';
+import { parsesInWasm, rewriteInWasm, unrewritten } from './wasm/rewriter';
 
 export {
 	ACCESS_KEY,
@@ -1631,15 +1631,8 @@ export function modifyJS(
 			trailer
 		);
 	} catch (error) {
-		// a script the rewriter cannot handle runs as it was: the browser may
-		// still parse it (and rejects it the same way when it cannot), while a
-		// `throw` here would silently kill every script with that shape
-		const message = `Stomp could not rewrite ${url}: ${String(error)}`;
-		console.warn(message);
-		// unless the host asked for a loud failure (allowInvalidJs: false)
-		if (config.allowInvalidJs === false)
-			return `throw new SyntaxError(${JSON.stringify(message)});`;
-		return script;
+		// a script the rewriter cannot handle runs as it was
+		return unrewritten(script, url, config, String(error));
 	}
 }
 
@@ -2091,6 +2084,9 @@ function markFunctions(
 
 /** whether `code` parses as a script of one expression statement (a javascript: URL's body) */
 export function singleExpression(code: string): boolean {
+	// the module's parser where this thread holds it
+	const answered = parsesInWasm(code, true);
+	if (answered !== null) return answered;
 	try {
 		const program = parse(code, { next: true });
 		return (

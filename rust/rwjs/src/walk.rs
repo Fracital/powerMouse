@@ -91,6 +91,8 @@ pub struct Walker<'a, 'c, 'h> {
 	/// a statement list: a replacement that opens a parenthesis there must
 	/// not join the statement before it
 	statement_start: Option<u32>,
+	/// the statement start a helper call was written at (`head`)
+	headed: std::cell::Cell<Option<u32>>,
 	marks: u32,
 	key: Option<String>,
 	declined: Option<Decline>,
@@ -132,6 +134,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			loop_assignments: String::new(),
 			method_value: None,
 			statement_start: None,
+			headed: std::cell::Cell::new(None),
 			marks: 0,
 			key: options.params.key.clone(),
 			declined: None,
@@ -168,13 +171,18 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	/// before it would run into the name (`return"a"[i]`)
 	fn head(&self, at: u32, name: &str) -> String {
 		let glued = at > 0 && ident_byte(self.src.as_bytes()[at as usize - 1]);
+		if self.statement_start == Some(at) {
+			// the statement now starts with this name: nothing inside it
+			// opens the statement any more (open_paren)
+			self.headed.set(Some(at));
+		}
 		format!("{}{}.{name}(", if glued { " " } else { "" }, self.access())
 	}
 
 	/// an opening parenthesis ahead of a replacement at `at`: behind a `;`
 	/// where the statement before could take it as a call's
 	fn open_paren(&self, at: u32) -> &'static str {
-		if self.statement_start != Some(at) {
+		if self.statement_start != Some(at) || self.headed.get() == Some(at) {
 			return "(";
 		}
 		let before = self.src[..at as usize].trim_end_matches(js_whitespace);
@@ -1123,7 +1131,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			// `function f({ top }) { 'use strict' }` is a SyntaxError the
 			// plain parameter would hide
 			if body.directives.iter().any(|directive| directive.directive == "use strict") {
-				return self.decline(Decline::Shape);
+				return self.decline(Decline::Invalid);
 			}
 			match body.directives.last() {
 				Some(directive) => {
@@ -1364,7 +1372,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 					}
 				});
 			}
-			Expression::V8IntrinsicExpression(_) => self.decline(Decline::Shape),
+			Expression::V8IntrinsicExpression(_) => self.decline(Decline::Invalid),
 			_ => walk::walk_expression(self, e),
 		}
 	}

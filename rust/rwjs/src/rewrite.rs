@@ -83,7 +83,7 @@ pub struct Output {
 /// `FLAG_REVISION`: raised whenever the output for any script changes, so a
 /// cache of rewrites keyed on it never serves an older module's text.
 /// rust/host/parity.mjs --cases holds it to the outputs (cases.revision).
-pub const REVISION: &str = "1";
+pub const REVISION: &str = "2";
 
 /// Why the rewriter hands a script back to the JavaScript one
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +92,10 @@ pub enum Decline {
 	Parse,
 	/// a shape this rewriter does not rewrite yet
 	Shape,
+	/// a script no browser runs (a V8 intrinsic, `"use strict"` under a
+	/// parameter pattern): the caller hands it back as it was, as the
+	/// JavaScript rewriter does with what it cannot parse
+	Invalid,
 	/// the host could not route a URL of it
 	Route,
 	/// the edits did not nest: a bug in the walk
@@ -105,6 +109,64 @@ pub type Route<'h> = dyn FnMut(u32, &str) -> Option<String> + 'h;
 
 pub const ROUTE_IMPORT: u32 = 1;
 pub const ROUTE_SOURCE_MAP: u32 = 2;
+
+const LINE_ENDS: [char; 4] = ['\n', '\r', '\u{2028}', '\u{2029}'];
+
+/// where the first line that is no HTML close comment (`--> text`, behind
+/// white space and comments that end on the line) starts
+fn after_close_comments(source: &str) -> usize {
+	let mut at = 0;
+	loop {
+		let rest = &source[at..];
+		let end = rest.find(LINE_ENDS);
+		let mut line = &rest[..end.unwrap_or(rest.len())];
+		loop {
+			line = line.trim_start();
+			match line.strip_prefix("/*").and_then(|comment| comment.split_once("*/")) {
+				Some((_, behind)) => line = behind,
+				None => break,
+			}
+		}
+		if !line.starts_with("-->") {
+			return at;
+		}
+		match end {
+			Some(end) => at += end + rest[end..].chars().next().map_or(1, char::len_utf8),
+			None => return source.len(),
+		}
+	}
+}
+
+/// Whether `source` parses as a classic script (`single`: one of a single
+/// expression statement, with no `return` at its top level), for the
+/// callers that ask the parser alone (src/rewriteJS.ts singleExpression,
+/// src/rewriterLib.ts parsesAsScript)
+pub fn parses(source: &str, single: bool) -> bool {
+	let allocator = Allocator::default();
+	let source_type = SourceType::unambiguous()
+		.with_javascript(true)
+		.with_module(false)
+		.with_script(true)
+		.with_standard(true);
+	let parsed = Parser::new(&allocator, source, source_type)
+		.with_options(ParseOptions {
+			allow_return_outside_function: !single,
+			..ParseOptions::default()
+		})
+		.parse();
+	if parsed.fatal_error || parsed.diagnostics.has_errors() {
+		return false;
+	}
+	if !single {
+		return true;
+	}
+	let program = parsed.program;
+	match (program.directives.len(), program.body.as_slice()) {
+		(1, []) => true,
+		(0, [statement]) => matches!(statement, oxc::ast::ast::Statement::ExpressionStatement(_)),
+		_ => false,
+	}
+}
 
 /// `source` rewritten, or why not (the caller falls back to the JavaScript
 /// rewriter, which decides what to do with it)
@@ -184,9 +246,16 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 				));
 			}
 			None => {
-				let at = program.hashbang.as_ref().map_or(0, |hashbang| hashbang.span.end);
+				let mut at = program.hashbang.as_ref().map_or(0, |hashbang| hashbang.span.end);
 				if at > 0 {
 					pre.insert(0, '\n');
+				} else if !options.module {
+					// `--> text` is a comment only where its line starts: the
+					// text goes behind such lines, not ahead of the first
+					at = after_close_comments(source) as u32;
+					if at > 0 && !source[..at as usize].ends_with(LINE_ENDS) {
+						pre.insert(0, '\n');
+					}
 				}
 				edits.push(Edit::insert(at, vec![Piece::Text(pre)], -1));
 			}
@@ -270,7 +339,14 @@ mod tests {
 	fn what_does_not_parse_is_declined() {
 		assert_eq!(run("const = ;", false), Err(Decline::Parse));
 		assert_eq!(run("import a from './a.js';", false), Err(Decline::Parse));
-		assert_eq!(run("%DebugPrint(1)", false), Err(Decline::Shape));
+		assert_eq!(run("%DebugPrint(1)", false), Err(Decline::Invalid));
+		assert_eq!(
+			run("function f({ top: t }) { 'use strict'; }", false),
+			Err(Decline::Invalid)
+		);
+		assert!(parses("a.b()", true) && parses("'use strict'", true));
+		assert!(!parses("a; b", true) && !parses("return 1", true) && !parses("if (a) b", true));
+		assert!(parses("return 1", false) && !parses("const = ;", false));
 	}
 
 	#[test]
@@ -373,6 +449,15 @@ mod tests {
 			plain("w.postMessage(m, '*')"),
 			"$s$j.post(w, [m, '*'], false, \"w.postMessage(0, 0)\")"
 		);
+		// the `;` that keeps a statement's opening parenthesis from being the
+		// call of the one before stands ahead of the whole statement
+		assert_eq!(plain("x\neval(c)"), "x\n;($s$j.isEval(eval) ? eval($s$j.evalScope(c)) : eval(c))");
+		assert!(plain("x\neval(c)[b]").starts_with("x\n$s$j.get2(($s$j.isEval(eval) ?"));
+		assert!(plain("x\neval(c).top").starts_with("x\n$s$j.get2(($s$j.isEval(eval) ?"));
+		assert!(plain("x\neval(c).top = 1").starts_with("x\n$s$j.set2(($s$j.isEval(eval) ?"));
+		assert!(plain("x\neval(c).postMessage(m)").starts_with("x\n$s$j.post(($s$j.isEval(eval) ?"));
+		assert!(plain("x\neval(c)(top)").starts_with("x\n;($s$j.isEval(eval) ?"));
+		assert!(plain("x\neval(c), top").starts_with("x\n;($s$j.isEval(eval) ?"));
 		assert_eq!(
 			plain("x = eval(c)"),
 			"x = ($s$j.isEval(eval) ? eval($s$j.evalScope(c)) : eval(c))"
@@ -412,6 +497,12 @@ mod tests {
 		let out = |source: &str, route: &mut Route| rewrite(source, &options, route).unwrap().text;
 		assert_eq!(out("'use strict'\nlocation", &mut route), "'use strict';PRE;\n$s$j.get(location, \"location\")");
 		assert_eq!(out("location", &mut route), "PRE;$s$j.get(location, \"location\")");
+		assert_eq!(
+			out("--> a\n /* b */ --> c\nlocation", &mut route),
+			"--> a\n /* b */ --> c\nPRE;$s$j.get(location, \"location\")"
+		);
+		assert_eq!(out("--> a", &mut route), "--> a\nPRE;");
+		assert_eq!(out("a-->b", &mut route), "PRE;a-->b");
 	}
 
 	#[test]

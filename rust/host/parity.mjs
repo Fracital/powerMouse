@@ -141,6 +141,7 @@ const STATUS = {
 	4: 'did not parse',
 	5: 'a shape left to the JavaScript rewriter',
 	6: 'the edits did not nest',
+	7: 'no browser runs it',
 };
 
 function wasm(text, url, type) {
@@ -277,6 +278,7 @@ const tally = {
 	known: 0,
 	declined: 0,
 	gaveUp: 0,
+	invalid: 0,
 	trapped: 0,
 };
 const reasons = new Map();
@@ -305,7 +307,14 @@ for (const input of inputs) {
 	);
 	bytes += text.length;
 	const js = modifyJS(text, url, config, type);
-	const out = wasm(text, url, type);
+	let out = wasm(text, url, type);
+	// a script the module calls one no browser runs (status 7) comes back
+	// as it was, which is what the JavaScript rewriter makes of it too
+	const invalid = out === text && !parses(text, isModule);
+	if (invalid) {
+		tally.invalid++;
+		out = null;
+	}
 	if (input.family)
 		written.update(`${typeof out === 'string' ? out : 'declined'}\0`);
 	const label = `${name}${isModule ? ' (module)' : ''}`;
@@ -395,6 +404,9 @@ console.log(
 );
 for (const [why, count] of reasons) console.log(`    ${why}: ${count}`);
 console.log(`  neither rewrites (does not parse): ${tally.gaveUp}`);
+console.log(
+	`    of which the module answers itself (no browser runs it): ${tally.invalid}`,
+);
 let stale = false;
 if (args.includes('--cases') && !family) {
 	const answered = instance.call('', 32);

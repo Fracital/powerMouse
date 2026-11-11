@@ -195,6 +195,38 @@ if (artifacts.includes('rewriter.wasm')) {
 		'output' in unled && unled.output === '$s$j.get(location, "location")',
 		JSON.stringify(unled),
 	);
+	// (64, 128) the parser alone: a classic script, and one of a single
+	// expression statement (a javascript: URL's body)
+	const asked = [
+		['return 1', 64],
+		['const = ;', 64],
+		['a.b()', 128],
+		['"use strict"', 128],
+		['a; b', 128],
+		['return 1', 128],
+	].map(([text, flag]) => {
+		const answered = instance.call(text, flag);
+		return 'output' in answered ? answered.output : `status ${answered.status}`;
+	});
+	ok(
+		'the module answers what parses as a script, and as one expression',
+		asked.join() === '1,0,1,1,0,0',
+		asked.join(),
+	);
+	// (7) a script no browser runs is told apart from one this parser
+	// refuses: the host hands it back without asking the JavaScript rewriter
+	const invalid = [
+		'function f({ top: t }) { "use strict"; }',
+		'%DebugPrint(top)',
+	].map((text) => {
+		const answered = instance.call(text, 0);
+		return 'status' in answered ? answered.status : 'output';
+	});
+	ok(
+		'a script no browser runs is answered as such',
+		invalid.join() === '7,7',
+		invalid.join(),
+	);
 	const broken = instance.call('const = ;', 0);
 	ok(
 		'a script that does not parse is declined',

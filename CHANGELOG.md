@@ -220,7 +220,7 @@ The first release after a four-year gap. Everything below is breaking.
   hand-written cases, the fixture pages and a seeded fuzz. The page's own
   CSS paths (CSSOM, style attributes) still use css-tree.
 - With `rewriter: 'wasm'` scripts are rewritten by the Rust rewriter
-  (`rust/rwjs`, oxc; `assets/rewriter.wasm`, 423 KB, 150 KB brotli) in the
+  (`rust/rwjs`, oxc; `assets/rewriter.wasm`, 427 KB, 151 KB brotli) in the
   rewrite workers and the service worker. It makes the same rewrites as the
   JavaScript rewriter as edits to the script's own text, so everything it
   does not touch comes out byte for byte: comments, spacing, literals, line
@@ -228,9 +228,15 @@ The first release after a four-year gap. Everything below is breaking.
   2.0 s where the JavaScript rewriter takes 13.6 s, and Discord's 12 MB
   bundle whole in 0.43 s, so a script is no longer split across workers
   under `'wasm'`. A script the module declines (one its parser refuses, a
-  few rare shapes) is rewritten by the JavaScript rewriter, as is
-  everything while a thread holds no module. The two backends are compared
-  without a browser by `rust/host/parity.mjs` (669 cases by rewrite family
+  BigInt key in a pattern beside an unforgeable) is rewritten by the
+  JavaScript rewriter, as is everything while a thread holds no module:
+  none of the corpus's scripts and none of the suites' pages' is declined.
+  A script no browser runs (a V8 intrinsic, `"use strict"` under a
+  parameter pattern) goes out as it came without the JavaScript rewriter
+  being asked, and where a thread holds the module its parser also answers
+  whether a `javascript:` URL's body is one expression and whether a
+  blob's text is a script. The two backends are compared
+  without a browser by `rust/host/parity.mjs` (680 cases by rewrite family
   and the corpora: no difference but one known case where the JavaScript
   rewriter is wrong), and `rewriter-unit` and the browser suites run under
   both (`STOMP_REWRITER=wasm`). `'js'` stays the default.

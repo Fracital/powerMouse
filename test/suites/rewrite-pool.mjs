@@ -189,9 +189,9 @@ await controller({ rewriteWorkers: 1, rewriteTimeout: 150 });
 	const small = await load('name=e');
 	// (the wasm rewriter takes three copies of three.js well inside the
 	// timeout: in its run the script opens with a shape it leaves to the
-	// JavaScript rewriter, a pattern key that is no integer beside `top`)
+	// JavaScript rewriter, a pattern key that is a BigInt beside `top`)
 	const slow = await load(
-		`name=e&three=3${REWRITER.rewriter ? `&extra=${encodeURIComponent('var { 1.5: half, top: mine } = { top: 0 };')}` : ''}`,
+		`name=e&three=3${REWRITER.rewriter ? `&extra=${encodeURIComponent('var { 1n: one, top: mine } = { top: 0 };')}` : ''}`,
 	);
 	const after = await load('name=e&after');
 	ok(

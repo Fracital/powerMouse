@@ -108,7 +108,7 @@ build time.
 Three artifacts, built separately so a deployment that wants none pays for
 none:
 
-- the rewriter module: 423,434 bytes, 149,742 brotli as built with every
+- the rewriter module: 426,993 bytes, 151,391 brotli as built with every
   rewrite family in (the budget is 600 KB, 160 KB brotli).
 - the scanner module (`scanner.wasm`, phase 3): 25 KB, 11 KB brotli. It has
   no dependencies and shares no code with the rewriter, so it is a module of
@@ -285,6 +285,8 @@ The flags of `r`, and what each call takes and answers:
 | 8    | `url`, `key`, `shifts`, `lead` | nothing: they hold for the next rewrite   |
 | 16   | nothing                        | `marks<TAB>key` of the last rewrite       |
 | 32   | nothing                        | the revision of what the module writes    |
+| 64   | a classic script               | `1` when it parses, `0` when not          |
+| 128  | a classic script               | `1` when it is one expression statement   |
 
 `lead` is what runs before the script's own code (the worker bootstrap, a
 module's `import.meta` lines, the caller's preamble), built by `scriptLead`
@@ -293,7 +295,13 @@ directive prologue. A status other than 0 is a decline, and the caller runs
 the JavaScript rewriter on that script: 1 the configuration or the params
 are malformed, 2 a URL did not route, 3 the input is not UTF-8, 4 oxc did
 not parse it, 5 a shape left to the JavaScript rewriter (`shape.rs`), 6 the
-edits did not nest. The revision (`REVISION` in `rewrite.rs`) is raised
+edits did not nest. Status 7 is no decline: the script is one no browser
+runs (below), and the host answers it as the JavaScript rewriter answers
+what it cannot parse (`unrewritten` in `src/wasm/rewriter.ts`: the script as
+it was, or a `throw` under `allowInvalidJs: false`) without running that
+rewriter. Flags 64 and 128 ask the parser alone, for `parsesAsScript` and
+`singleExpression`, whose answer is the module's wherever the thread holds
+it. The revision (`REVISION` in `rewrite.rs`) is raised
 whenever the output for any script changes, so a cache of rewrites keyed on
 the backend and the revision never serves an older module's text;
 `rust/host/parity.mjs --cases` holds it to the outputs
@@ -461,7 +469,7 @@ suite then measures plus its usual margin.
 
 **What the wasm side costs in exchange.**
 
-- Bytes, once per controller: `rewriter.wasm` is 423,434 bytes (149,742
+- Bytes, once per controller: `rewriter.wasm` is 426,993 bytes (151,391
   brotli), fetched by the controller, cached by HTTP like any asset, and
   compiled once (21 ms, off the main thread). The service worker is handed
   the bytes (a 423 KB buffer per handshake) and compiles them once more.
@@ -668,12 +676,28 @@ JavaScript rewriter by `rust/host/parity.mjs` (section 10; the numbers are
 in section 11). `modifyJS` itself tries the module first when the config
 says `'wasm'`, so the service worker, the rewrite workers and the page take
 the same path and the same fallback. What the module declines, and so
-leaves to the JavaScript rewriter: a script oxc does not parse (a top-level
-`new.target`, which meriyah lets through), a V8 intrinsic (`%DebugPrint(1)`:
-oxc parses what meriyah refuses), a destructuring key that is a number
-literal with a fraction (`{ 1.5: z }`), and a parameter pattern to hoist in
-a function whose body says `"use strict"` (an early error meriyah reports
-and oxc does not). One divergence is known and kept, because the module is
+leaves to the JavaScript rewriter: a script oxc does not parse (among the
+cases only a top-level `new.target`, which meriyah lets through and which
+is a function body's to use, so it cannot be handed back unrewritten), and
+a destructuring key that is a BigInt beside an unforgeable (`{ 1n: z, top
+}`). Two shapes it used to decline are scripts no browser runs, which it now
+says (status 7) so that nothing else is asked: a V8 intrinsic
+(`%DebugPrint(1)`: oxc is told to parse it so that it can be told apart) and
+a parameter pattern in a function whose body says `"use strict"` (an early
+error meriyah reports and oxc does not). A destructuring key that is a
+number with a fraction or an exponent (`{ 1.5: z }`, `{ 1e21: z }`) is
+spelled as JavaScript spells the number (`ToJsString` of oxc) and rewritten.
+Measured declines after that: 0 of the 28 corpus scripts (46 MB), 0 of the
+322 scripts of the suites' pages (`test/pages`, inline and files), 1 of the
+680 cases. A script neither parser takes still goes through both (oxc's
+refusal alone does not prove a browser refuses it): that, not a shape, is
+what a fallback in the page will mostly be asked for. Two bugs of the module's own, found by the integrator's
+fuzz, are fixed with these: the `;` that keeps a statement's opening
+parenthesis from being the call of the statement before was written inside
+an outer rewrite (`x\neval(a)[b]` came out as `$s$j.get2(;(...`, which
+does not parse), and the text ahead of a script was written before a first
+line that is an HTML close comment (`--> text`), which is a comment only
+where its line starts. One divergence is known and kept, because the module is
 right: `for (var location of top.a) ;` at the top level, where the
 JavaScript rewriter replaces the loop twice and leaves `top.a` as written.
 The parity runs found two bugs in the JavaScript rewriter, fixed with this
@@ -714,7 +738,8 @@ Its definition of done, in the order the work goes:
 
 1. the module answers `singleExpression` and `parsesAsScript` (a parse and
    the shape check, two flags), and the remaining declines of phase 1 are
-   closed or shown to be scripts no browser runs;
+   closed or shown to be scripts no browser runs (built: flags 64 and 128,
+   status 7, "The ABI" above; what is still declined is listed above);
 2. a page's dedicated workers are handed the module with their transport
    port, and the page's instance gets a memory threshold of its own;
 3. the suffix module (`suffix.wasm`, its table built in `deploy/rust` from
@@ -910,8 +935,8 @@ Phase 1, measured (2026-11-10, Node 24, load about 20; medians of three):
 | Discord's 12 MB `web.js`, whole, one thread      | 3.1 s      | 0.43 s                                                                   |
 | parity, the corpus                               |            | 28 of 28 the same                                                        |
 | parity, 1,309 files of `node_modules` over 2 KB  |            | 1,309 the same                                                           |
-| parity, the 669 cases                            |            | 663 the same, 0 differ, 1 known divergence, 2 declined, 3 neither parses |
-| artifact                                         |            | 423,434 bytes, 149,742 brotli                                            |
+| parity, the 680 cases                            |            | 675 the same, 0 differ, 1 known divergence, 1 declined, 3 neither parses |
+| artifact                                         |            | 426,993 bytes, 151,391 brotli                                            |
 | `dist/injectDocument.js`, master and this branch | 814,491    | 816,570                                                                  |
 
 ## 12. Risks

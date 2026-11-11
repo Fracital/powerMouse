@@ -50,6 +50,11 @@ const FLAG_META: u32 = 16;
 /// answer the revision of what this module writes (`rewrite::REVISION`)
 const FLAG_REVISION: u32 = 32;
 
+/// answer whether the input parses as a classic script: `1` or `0`
+const FLAG_PARSES: u32 = 64;
+/// answer whether the input is a script of one expression statement
+const FLAG_SINGLE: u32 = 128;
+
 /// statuses besides 0: the configuration or the params did not parse
 const STATUS_CONFIG: i32 = 1;
 /// the host could not route a URL
@@ -63,6 +68,8 @@ const STATUS_SHAPE: i32 = 5;
 /// the edits did not nest: a bug in the walk, and the output would not be
 /// the page's program
 const STATUS_EDITS: i32 = 6;
+/// a script no browser runs: the caller hands it back as it was
+const STATUS_INVALID: i32 = 7;
 
 mod host {
 	#[link(wasm_import_module = "e")]
@@ -179,6 +186,11 @@ pub unsafe extern "C" fn r(ptr: *mut u8, len: usize, flags: u32) -> i32 {
 			None => STATUS_ROUTE,
 		};
 	}
+	if flags & (FLAG_PARSES | FLAG_SINGLE) != 0 {
+		let answer = rewrite::parses(source, flags & FLAG_SINGLE != 0);
+		state().output = vec![if answer { b'1' } else { b'0' }];
+		return 0;
+	}
 	if flags & FLAG_PARAMS != 0 {
 		return match Params::parse(source) {
 			Ok(params) => {
@@ -209,6 +221,7 @@ pub unsafe extern "C" fn r(ptr: *mut u8, len: usize, flags: u32) -> i32 {
 		}
 		Err(Decline::Parse) => STATUS_PARSE,
 		Err(Decline::Shape) => STATUS_SHAPE,
+		Err(Decline::Invalid) => STATUS_INVALID,
 		Err(Decline::Route) => STATUS_ROUTE,
 		Err(Decline::Edits) => STATUS_EDITS,
 	}

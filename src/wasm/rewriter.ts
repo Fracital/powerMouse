@@ -29,6 +29,9 @@ const FLAG_HOLDER = 4;
 const FLAG_PARAMS = 8;
 const FLAG_META = 16;
 const FLAG_REVISION = 32;
+const FLAG_PARSES = 64;
+const FLAG_SINGLE = 128;
+const STATUS_INVALID = 7;
 const ROUTE_IMPORT = 1;
 const ROUTE_SOURCE_MAP = 2;
 
@@ -55,6 +58,38 @@ export function rewriterRevision(): string | null {
 	});
 }
 
+/**
+ * Whether `code` parses as a classic script (`single`: as one of a single
+ * expression statement), asked of this thread's module, or null when it
+ * holds none: the caller asks the JavaScript parser
+ */
+export function parsesInWasm(code: string, single: boolean): boolean | null {
+	if (!hasModule(REWRITER)) return null;
+	return withInstance(REWRITER, (instance) => {
+		const answered = instance.call(code, single ? FLAG_SINGLE : FLAG_PARSES);
+		return 'output' in answered ? answered.output === '1' : null;
+	});
+}
+
+/**
+ * What a script that cannot be rewritten is answered with: itself. The
+ * browser may still parse it (and rejects it the same way when it cannot),
+ * while a `throw` in its place would silently kill every script with that
+ * shape, unless the host asked for a loud failure (allowInvalidJs: false).
+ */
+export function unrewritten(
+	script: string,
+	url: StompURL,
+	config: Config,
+	why: string,
+): string {
+	const message = `Stomp could not rewrite ${url}: ${why}`;
+	console.warn(message);
+	if (config.allowInvalidJs === false)
+		return `throw new SyntaxError(${JSON.stringify(message)});`;
+	return script;
+}
+
 /** the configuration the module takes (rust/rwjs/src/config.rs) */
 export function rewriterConfig(config: Config): string {
 	const names = helperNames(config);
@@ -62,7 +97,8 @@ export function rewriterConfig(config: Config): string {
 }
 
 /**
- * `script` rewritten by `instance`, or null when it declined. `lead` is
+ * `script` rewritten by `instance` (as it was when no browser runs it), or
+ * null when it declined. `lead` is
  * what runs before the script's own code (the worker bootstrap, a module's
  * `import.meta.url`, the caller's preamble), which the module places after
  * the directive prologue.
@@ -100,7 +136,17 @@ export function rewriteWith(
 	);
 	if (!('output' in given)) return null;
 	const result = instance.call(script, flags);
-	if (!('output' in result)) return null;
+	if (!('output' in result))
+		// a script no browser runs is answered as the JavaScript rewriter
+		// answers what it cannot parse, without asking it
+		return result.status === STATUS_INVALID
+			? unrewritten(
+					script,
+					url,
+					config,
+					'SyntaxError: no browser runs this script',
+				)
+			: null;
 	if (here && source?.text === undefined) {
 		const meta = instance.call('', FLAG_META);
 		if (!('output' in meta)) return null;

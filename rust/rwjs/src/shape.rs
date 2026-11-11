@@ -5,6 +5,7 @@
 //! what a node is looks through parentheses first; only the optional chain
 //! does not, because a parenthesis ends a chain.
 
+use oxc::syntax::number::ToJsString;
 use oxc::ast::ast::*;
 use oxc::span::{GetSpan, Span};
 
@@ -361,11 +362,12 @@ impl Shapes<'_> {
 			PropertyKey::StaticIdentifier(id) => id.name.as_str().to_owned(),
 			PropertyKey::StringLiteral(s) => s.value.as_str().ok_or(Unsupported)?.to_owned(),
 			PropertyKey::NumericLiteral(n) => {
-				// the key as JavaScript spells the number: whole ones only
-				if n.value.fract() != 0.0 || n.value.abs() >= 9_007_199_254_740_992.0 {
-					return Err(Unsupported);
+				// the key as JavaScript spells the number
+				if n.value.fract() == 0.0 && n.value.abs() < 9_007_199_254_740_992.0 {
+					format!("{}", n.value as i64)
+				} else {
+					n.value.to_js_string()
 				}
-				format!("{}", n.value as i64)
 			}
 			PropertyKey::BigIntLiteral(_) => return Err(Unsupported),
 			_ => String::new(),

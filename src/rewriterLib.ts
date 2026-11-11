@@ -24,6 +24,7 @@ import { setBlobOrigins, setRouteScopes } from './routeURL';
 import type { ScriptType } from './scriptRoutes';
 import StompURL from './StompURL';
 import { BUILD } from './version';
+import { parsesInWasm } from './wasm/rewriter';
 import { adoptModule, hasModule } from './wasm/thread';
 
 /**
@@ -77,6 +78,9 @@ function run<T>(work: () => T, failed: T): T {
 }
 
 function parsesAsScript(source: string): boolean {
+	// the module's parser where this copy holds it
+	const answered = parsesInWasm(source, false);
+	if (answered !== null) return answered;
 	try {
 		parse(source, { next: true, globalReturn: true, webcompat: true });
 		return true;

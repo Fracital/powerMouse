@@ -154,11 +154,25 @@ ok('the service worker holds the rewriter', await settled(0));
 	);
 
 	// a shape the module leaves to the JavaScript rewriter (a pattern key
-	// that is no integer, beside an unforgeable): that script is printed,
+	// that is a BigInt, beside an unforgeable): that script is printed,
 	// not spliced, and runs the same
 	const declined = await load(
 		'd',
-		'/* gone */ const { 1.5: half, top: mine } = { 1.5: "h", top: "t" }; window.__seen = [half, mine];',
+		'/* gone */ const { 1n: half, top: mine } = { 1: "h", top: "t" }; window.__seen = [half, mine];',
+	);
+	// a key that is no integer is the module's, spelled as JavaScript
+	// spells the number
+	const keyed = await load(
+		'k',
+		'/* kept */ const { 1.5: half, 1e21: big, top: mine } = { 1.5: "h", 1e21: "b", top: "t" }; window.__seen = [half, big, mine];',
+	);
+	const [keyedBody] = bodiesOf('k');
+	ok(
+		'a pattern key that is no integer is rewritten by the module, and runs',
+		keyed.ran &&
+			keyed.seen?.join() === 'h,b,t' &&
+			keyedBody?.includes('/* kept */'),
+		show([keyed, keyedBody?.slice(0, 300)]),
 	);
 	const [body] = bodiesOf('d');
 	ok(
