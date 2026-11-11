@@ -80,7 +80,7 @@ import {
 	XHR_MARKER,
 } from '../transport/messages';
 import { BUILD } from '../version';
-import { scanMarkup } from '../wasm/scanner';
+import { scanMarkup, scannerSettled } from '../wasm/scanner';
 import {
 	knownOriginOf,
 	knownTopSiteOf,
@@ -2924,6 +2924,8 @@ export function registerRewrites(
 		return {
 			dispatched: Promise.all(dispatches).then(() => {}),
 			finish: async () => {
+				// the module, when it is still being compiled
+				if (wasm && styles.length) await scannerSettled();
 				// as the client's prepareStyleText makes them
 				const styleOutputs = styles.map(
 					([source, start, end]): Prewritten['styles'][number] => {
@@ -3058,9 +3060,11 @@ export function registerRewrites(
 				const text = await response.text();
 				try {
 					if (rewriter.config.rewriter !== 'wasm') return modifyCSS(text, url);
-					// the module rewrites the sheet, and the request log says
+					// the module rewrites the sheet (waited for when this worker
+					// has only just been handed it), and the request log says
 					// whether it did or css-tree had to (a sheet with nothing to
 					// route is looked into by neither)
+					await scannerSettled();
 					const told: StyleRewrittenBy = {};
 					const output = modifyCSS(text, url, 'stylesheet', told);
 					if (told.by) note.rewriteBy = told.by;

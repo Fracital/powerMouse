@@ -226,7 +226,9 @@ The first release after a four-year gap. Everything below is breaking.
   `@import "x"` after it went out unrouted.
   `onRequest` says which rewrote a stylesheet (`rewriteBy`: `wasm` or
   `js`). The service worker's `/css/` route and the inline styles of a
-  prewritten document use it, and so does the page: a proxied top's
+  prewritten document use it (a worker that was restarted waits the few
+  milliseconds its compile takes, so its first stylesheet is the module's
+  too), and so does the page: a proxied top's
   rewriter library holds the module beside the script rewriter's and
   rewrites the style elements, style attributes and CSSOM text a page's
   script writes with it (`css-inject-backend` suite), css-tree until it

@@ -1021,7 +1021,19 @@ size like the others.
 
 Callers. The service worker's `/css/` route (the request log says
 `rewriteBy: 'wasm'` or `'js'`) and a prewritten document's markup and
-inline styles, under `rewriter: 'wasm'`. In the page, the rewriter library
+inline styles, under `rewriter: 'wasm'`. Both are asynchronous, and wait
+for a scanner that is still being compiled (`scannerSettled`): a worker
+that Chrome stopped starts again holding nothing, is handed the modules'
+bytes with its controller's handshake and has them compiled 2 to 6 ms
+later. Measured over CDP restarts on Chrome 152 and 156, the first
+stylesheet's body was in hand 5 to 10 ms after that when the stylesheet
+itself woke the worker, 35 to 60 ms when a navigation did, and over 200 ms
+after for a controller just created, so the wait was 0 ms in 18 of 18; it
+is there for the sheet that does win the race (with the compile slowed to
+300 ms that sheet is the module's with the wait and css-tree's without,
+`wasm-share` suite). The route does not wait for bytes still on the
+network (a controller that has not finished loading its modules). In the
+page, the rewriter library
 (`src/rewriterLibDocument.ts`) asks for the module on every stylesheet and
 style attribute a frame has it rewrite: a proxied top is handed every
 module its controller compiled (phase 2's delivery, `adopt` by name), so
@@ -1035,18 +1047,24 @@ library's own count (`styleRewrites`), since the text is the same. A
 frame's single values (a CSSOM property set, a presentation attribute)
 stay on the expression in the frame.
 
-What still needs css-tree, which is 80 KB of the minified service worker
-and 81 KB of `injectDocument.js` (with `source-map-js`, which only it
-pulls in): nothing calls `modifyCSS` with a context other than the two the
-module rewrites, so what is left is the fallback. For css-tree to leave a
-bundle, each of these needs another answer than css-tree:
+What still needs css-tree, which is 69 KB of the minified service worker
+(627,999 bytes) and 71 KB of `injectDocument.js` (840,295; `source-map-js`
+is in neither since phase 2 put `src/noSourceMaps.ts` in its place):
+nothing calls `modifyCSS` with a context other than the two the module
+rewrites, so what is left is the fallback. Only `src/rewriteCSS.ts` imports
+css-tree, and only `src/server/rewrites.ts` and `src/rewriterLibDocument.ts`
+import that; its head (the `MAY_ROUTE` test, the module's call) needs no
+parser. For css-tree to leave a bundle, each of these needs another answer
+than css-tree:
 
 - a thread that holds no module: `rewriter: 'js'` (the default), a module
-  that has not arrived yet (the service worker can wait for it, its route
-  is asynchronous; a frame's library cannot), a document outside the
+  that has not arrived yet (the service worker waits for one that is being
+  compiled; a frame's library cannot wait at all), a document outside the
   controller's agent cluster, an instance that trapped;
 - a `data:` stylesheet inside a stylesheet: a second instance for a call
-  made during a call (`src/wasm/thread.ts`).
+  made during a call (`src/wasm/thread.ts`). `routeCSS` rewrites it inside
+  the synchronous rewriters, so whatever answers has to be in hand before
+  the rewrite around it starts.
 
 Nothing about a text itself sends it to css-tree any more (above).
 

@@ -14,7 +14,7 @@ import { routeCSS } from '../cssURLs';
 import { routeBinary } from '../routeURL';
 import StompURL from '../StompURL';
 import type { RouteImport } from './module';
-import { withInstance } from './thread';
+import { hasModule, heldModules, withInstance } from './thread';
 
 /** the scanner's Assets key (src/config.ts) */
 export const SCANNER = 'scanner';
@@ -65,6 +65,20 @@ function styleRoute(url: StompURL): RouteImport {
 			return null;
 		}
 	};
+}
+
+/**
+ * For a caller that can wait (the service worker's stylesheet route):
+ * settles at once when this thread holds the scanner, and otherwise when
+ * the compiles in flight are done. A worker that was just started is handed
+ * the modules' bytes with its controller's handshake and has them compiled
+ * 2 to 6 ms later, which is before the first stylesheet's body is in hand
+ * (5 ms at the nearest, measured), so this is seldom a wait at all; without
+ * it a sheet that did win that race was css-tree's. It never waits for
+ * bytes that have not arrived (a controller still loading its modules).
+ */
+export function scannerSettled(): Promise<unknown> | void {
+	if (!hasModule(SCANNER)) return heldModules();
 }
 
 /** the rewrites the module has in hand on this thread */

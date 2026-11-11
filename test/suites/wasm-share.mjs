@@ -308,6 +308,50 @@ ok(
 		result.ran && result.where === 'service-worker',
 		JSON.stringify(result),
 	);
+
+	// A worker that was stopped starts again knowing nothing: the request
+	// that woke it waits for its controller's handshake, which carries the
+	// modules' bytes, and a stylesheet waits for their compile. The first
+	// stylesheet of the new worker (here the request that wakes it) is the
+	// module's, not css-tree's.
+	await loadStyled();
+	const cdp = await page.context().newCDPSession(page);
+	await cdp.send('ServiceWorker.enable');
+	let stopped = false;
+	cdp.on('ServiceWorker.workerVersionUpdated', ({ versions }) => {
+		if (versions.some((version) => version.runningStatus === 'stopped'))
+			stopped = true;
+	});
+	await cdp.send('ServiceWorker.stopAllWorkers');
+	for (let i = 0; i < 40 && !stopped; i++) await sleep(100);
+	const from = await page.evaluate(() => window.__log.length);
+	await page.evaluate(() => {
+		const inner = window.__frame.element.contentDocument;
+		const link = inner.createElement('link');
+		link.rel = 'stylesheet';
+		link.href = '/pages/reqlog.css?after-restart';
+		inner.head.append(link);
+	});
+	let first;
+	for (let i = 0; i < 300 && !first; i++) {
+		first = await page.evaluate(
+			(from) =>
+				window.__log
+					.slice(from)
+					.find((e) => e.url.includes('/reqlog.css?after-restart') && e.status),
+			from,
+		);
+		if (!first) await sleep(50);
+	}
+	ok(
+		'the first stylesheet of a service worker that was restarted is rewritten by the scanner module',
+		stopped && first?.status === 200 && first.rewriteBy === 'wasm',
+		JSON.stringify({
+			stopped,
+			status: first?.status,
+			by: first?.rewriteBy,
+		}),
+	);
 }
 
 await done(browser);
