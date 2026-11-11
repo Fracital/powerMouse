@@ -10,53 +10,56 @@ import ProxyModule, {
 import { routedPrefix } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import { nativeFunction } from '../../nativeUtil';
-import { getDomain } from '../../rewriter';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
-import { siteKeyOf } from '../site';
-
-export function sameHost(first: string, second: string): boolean {
-	// tldts returns null for IPs / localhost; fall back to exact host match
-	// (and the second host is then not asked about: the first is the
-	// document's own, which its shell answered)
-	const a = getDomain(first);
-	if (a === null) return first === second;
-	const b = getDomain(second);
-	return b !== null ? a === b : first === second;
-}
 
 function removeBlob(protocol: string): string {
 	return protocol.startsWith('blob:') ? protocol.slice(5) : protocol;
 }
 
+/**
+ * Whether two URLs are of one origin: scheme, host and port (a blob: URL
+ * by the origin it names). Not one site: a name under a site is another
+ * origin to it, as to Chrome
+ */
 export function sameOrigin(first: string, second: string): boolean {
 	const firstURL = new URL(first);
 	const secondURL = new URL(second);
 	return (
 		removeBlob(firstURL.protocol) === removeBlob(secondURL.protocol) &&
 		firstURL.port === secondURL.port &&
-		// one host is one site, whatever the list says of it; two are asked
-		// about by name, without the port they share (the list's answer for
-		// a host is its answer for the host and a port), so that what the
-		// shell said of a name answers (src/inject/sites.ts)
-		(firstURL.hostname === secondURL.hostname ||
-			sameHost(firstURL.hostname, secondURL.hostname))
+		firstURL.hostname === secondURL.hostname
 	);
 }
 
 /**
- * Whether two documents are of one site as the window membrane has it:
- * by their site keys, each worked out in its own realm from what its shell
- * said, and by their URLs when either has none (an opaque URL)
+ * Whether two documents reach each other's windows, as Chrome decides it:
+ * same origin-domain. Two documents neither of which set document.domain
+ * are by their origins (scheme, host and port; a site is not enough: a name
+ * under a site is another origin to it); two that both set it, to the same
+ * value and of one scheme, are, whatever their hosts and ports; one that set
+ * it and one that did not are not, even of one origin. document.domain is
+ * set only in an agent cluster keyed by site (Origin-Agent-Cluster: ?0;
+ * DOMHooks), so it never joins two sites. Each document's origin is its own
+ * URL's (DocumentClient.url), never its base URL's; an opaque one (a
+ * sandbox without allow-same-origin, a data: document) reaches nothing.
  */
-export function sameSiteClients(
+export function reachableClients(
 	first: DocumentClient,
 	second: DocumentClient,
 ): boolean {
-	const mine = first.siteKey;
-	const theirs = second.siteKey;
-	return mine !== null && theirs !== null
-		? mine === theirs
-		: sameOrigin(first.url.toString(), second.url.toString());
+	if (first === second) return true;
+	const mine = first.originKey;
+	const theirs = second.originKey;
+	if (mine === null || theirs === null) return false;
+	const myDomain = first.documentDomain;
+	const theirDomain = second.documentDomain;
+	if (myDomain !== null || theirDomain !== null)
+		return (
+			myDomain !== null &&
+			myDomain === theirDomain &&
+			mine.slice(0, mine.indexOf(':')) === theirs.slice(0, theirs.indexOf(':'))
+		);
+	return mine === theirs;
 }
 
 // taken before the page runs: a page may replace the global
@@ -677,6 +680,26 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		if (this.held.has(context)) return context;
 
+		const other = (context as any)[this.client.names.client] as DocumentClient;
+		// a window this realm holds a stand-in of: its own again once the two
+		// documents reach each other (both set document.domain); a stand-in
+		// the page kept from before stays one
+		if (this.restricted.has(context)) {
+			let reach = false;
+			try {
+				reach =
+					context !== this.client.global &&
+					!this.client.sandboxedOpaque &&
+					!other.sandboxedOpaque &&
+					reachableClients(this.client, other);
+			} catch (error) {
+				// a window being torn down
+			}
+			if (!reach) return this.restricted.get(context)!;
+			this.held.add(context);
+			return context;
+		}
+
 		// an opaque origin (a document the page sandboxed without
 		// allow-same-origin) is another origin to every other document, and
 		// every other document is to it
@@ -694,13 +717,12 @@ export default class ContextModule extends Module<DocumentClient> {
 			// a window being torn down
 		}
 
-		// the documents' site keys, kept per document: this runs on every read
+		// the documents' origins, kept per document: this runs on every read
 		// of another window, and decoding both routed URLs for each read
 		// (about 20 us) let the ad frames of a crazygames game page, about 200
 		// walking the frame tree, keep the renderer's main thread busy for
-		// good. An opaque URL (a data: document) has no key: its URLs decide.
-		const other = (context as any)[this.client.names.client] as DocumentClient;
-		if (!opaque && sameSiteClients(this.client, other)) {
+		// good. An opaque URL (a data: document) has none, and reaches nothing.
+		if (!opaque && reachableClients(this.client, other)) {
 			this.held.add(context);
 			return context;
 		}
@@ -717,9 +739,14 @@ export default class ContextModule extends Module<DocumentClient> {
 			)?.standIns;
 			// (never a sandboxed document's: its stand-ins hold its sandbox's
 			// limits, which another document of the site does not share)
+			// (by what this document reaches others as: its origin, or the
+			// domain it set)
+			const domain = this.client.documentDomain;
 			const key =
 				this.client.sandboxFlags === null
-					? siteKeyOf(this.client.url.toString())
+					? domain !== null
+						? `${this.client.url.url.protocol}domain:${domain}`
+						: this.client.originKey
 					: null;
 			let restricted = key === null ? undefined : standIns?.get(key)?.deref();
 			if (!restricted) {

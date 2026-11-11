@@ -711,13 +711,20 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			),
 		});
 
-		// document.domain: the page's host. The setter checks the value as
-		// Chrome does (parsed as a host, then the host itself or a parent
-		// domain of a name that is not a public suffix, else the browser's
-		// SecurityError) and then does nothing: a document is in an
-		// origin-keyed agent cluster by default, where the setter has no
-		// effect (window.originAgentCluster). The native setter never runs: it
-		// would act on the proxy origin, and refuses in a sandboxed frame
+		// document.domain: the page's host, or the domain it set. The setter
+		// checks the value as Chrome does (parsed as a host, then the host
+		// itself or a parent domain of a name that is not a public suffix,
+		// else the browser's SecurityError), and it takes effect only in an
+		// agent cluster keyed by site (Origin-Agent-Cluster: ?0, decided by
+		// the origin's first document in the tab; DocumentClient.siteKeyed).
+		// In one keyed by origin, the default, it does nothing, as natively
+		// (window.originAgentCluster). Set, even to the host itself, it is
+		// what the window membrane compares this document by
+		// (Context reachableClients). The native setter never runs: it would
+		// act on the proxy origin, and refuses in a sandboxed frame.
+		// The keying is decided now, before the page runs: an origin's first
+		// document decides it for the later ones
+		void this.client.siteKeyed;
 		const domainDescriptor = Reflect.getOwnPropertyDescriptor(
 			this.client.global.Document.prototype,
 			'domain',
@@ -732,14 +739,16 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that: Document, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
-					return this.client.url.url.hostname;
+					return this.client.documentDomain ?? this.client.url.url.hostname;
 				},
 			),
 			set: proxyModule.wrapFunction(
 				domainDescriptor.set!,
 				(target, that: Document, args) => {
 					const value = String(args[0]);
-					const host = this.client.url.url.hostname;
+					// the effective domain: the host, or what an earlier write set
+					const host =
+						this.client.documentDomain ?? this.client.url.url.hostname;
 					const refuse = (reason: string) =>
 						new this.client.global.DOMException(
 							`Failed to set the 'domain' property on 'Document': ${reason}`,
@@ -753,21 +762,44 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						// not a host
 					}
 					const shown = parsed ?? encodeURI(value);
-					if (parsed === host) return;
-					if (
-						parsed === null ||
-						isIP(host) ||
-						isIP(parsed) ||
-						!host.endsWith(`.${parsed}`)
-					)
-						throw refuse(`'${shown}' is not a suffix of '${host}'.`);
-					// with the list's private section, as Chrome refuses it:
-					// 'github.io' is a top-level domain to a page of its customer
-					if (getPublicSuffix(parsed) === parsed)
-						throw refuse(`'${shown}' is a top-level domain.`);
+					if (parsed !== host) {
+						if (
+							parsed === null ||
+							isIP(host) ||
+							isIP(parsed) ||
+							!host.endsWith(`.${parsed}`)
+						)
+							throw refuse(`'${shown}' is not a suffix of '${host}'.`);
+						// with the list's private section, as Chrome refuses it:
+						// 'github.io' is a top-level domain to a page of its customer
+						if (getPublicSuffix(parsed) === parsed)
+							throw refuse(`'${shown}' is a top-level domain.`);
+					}
+					if (this.client.siteKeyed) this.client.setDocumentDomain(parsed!);
 				},
 			),
 		});
+
+		// window.originAgentCluster: whether this document's agent cluster is
+		// keyed by origin (DocumentClient.siteKeyed), not the proxy origin's
+		for (const owner of [
+			this.client.global,
+			this.client.global.Window.prototype,
+		] as object[]) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(
+				owner,
+				'originAgentCluster',
+			);
+			if (!descriptor?.get) continue;
+			Reflect.defineProperty(owner, 'originAgentCluster', {
+				...descriptor,
+				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
+					Reflect.apply(target, that, args);
+					return !this.client.siteKeyed;
+				}),
+			});
+			break;
+		}
 
 		/**
 		 * Make sure hooks are triggered instead of unhooked elements being generated.

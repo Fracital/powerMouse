@@ -16,6 +16,7 @@
 //                        the page a frame of b navigates to (`role=landed`)
 //                        four more each, `oac=0|1` sends
 //                        Origin-Agent-Cluster: ?0 or ?1
+//   /ps/ac?id=&oac=      test/pages/agent-cluster.html (agent-cluster suite)
 //   /ps/echo?k=          what the request carried, as JSON (CORS, with
 //                        credentials); `set=1` sets four more, `set=n`
 //                        another four
@@ -45,6 +46,10 @@ import { certificate, tlsOrPlain } from './mixed-servers.mjs';
 
 const PAGE = fileURLToPath(
 	new URL('./pages/private-site.html', import.meta.url),
+);
+/** what the agent-cluster suite drives (/ps/ac) */
+const AGENT_PAGE = fileURLToPath(
+	new URL('./pages/agent-cluster.html', import.meta.url),
 );
 
 /**
@@ -156,6 +161,14 @@ export async function startPrivateSites() {
 			if (query.has('oac'))
 				res.setHeader('origin-agent-cluster', `?${query.get('oac')}`);
 			res.end(readFileSync(PAGE));
+			return;
+		}
+		if (url.pathname === '/ps/ac') {
+			res.setHeader('content-type', 'text/html; charset=utf-8');
+			res.setHeader('cache-control', 'no-store');
+			if (query.has('oac'))
+				res.setHeader('origin-agent-cluster', `?${query.get('oac')}`);
+			res.end(readFileSync(AGENT_PAGE));
 			return;
 		}
 		if (url.pathname === '/ps/echo') {

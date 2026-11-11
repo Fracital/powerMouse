@@ -1,0 +1,115 @@
+<!doctype html>
+<title>AGENT CLUSTER</title>
+<body>
+	<script>
+		// What a document of one origin can reach of a window of another origin
+		// of its site, and what document.domain and Origin-Agent-Cluster change
+		// (the agent-cluster suite drives it; served by test/private-sites.mjs
+		// at /ps/ac, `oac=0|1` sends Origin-Agent-Cluster: ?0 or ?1). Every
+		// call answers a short string, a SecurityError as its name.
+		const attempt = (read) => {
+			try {
+				return read();
+			} catch (error) {
+				return error.name;
+			}
+		};
+		const query = new URLSearchParams(location.search);
+		const heard = [];
+		addEventListener('message', (event) => {
+			if (event.data?.ac !== 'hello') return;
+			const index = Array.from(
+				{ length: frames.length },
+				(_, i) => frames[i],
+			).indexOf(event.source);
+			heard.push({
+				// the source is the window the page holds as that frame or as its
+				// parent, the same object
+				is:
+					index !== -1
+						? `frame ${index}`
+						: event.source === parent && parent !== window
+							? 'parent'
+							: event.source === window.__popup
+								? 'popup'
+								: 'other',
+				document: attempt(() => typeof event.source.document),
+			});
+		});
+		window.__ac = {
+			id: query.get('id'),
+			oac: () => String(window.originAgentCluster),
+			domain: () => attempt(() => document.domain),
+			setDomain: (value) =>
+				attempt(() => {
+					document.domain = value;
+					return `set, now ${document.domain}`;
+				}),
+			frame: (url) =>
+				new Promise((resolve) => {
+					const element = document.createElement('iframe');
+					element.src = url;
+					element.onload = () =>
+						resolve(document.querySelectorAll('iframe').length - 1);
+					document.body.append(element);
+				}),
+			// what this page reaches of a window it holds
+			reach: (target) => ({
+				document: attempt(() => typeof target.document),
+				title: attempt(() => target.document.title),
+				global: attempt(() => typeof target.__ac),
+				href: attempt(() => typeof target.location.href),
+				name: attempt(() => typeof target.name),
+			}),
+			peek: (index) => ({
+				...window.__ac.reach(frames[index]),
+				contentDocument: attempt(() => {
+					const element = document.querySelectorAll('iframe')[index];
+					return element.contentDocument === null ? 'null' : 'document';
+				}),
+			}),
+			peekParent: () => ({
+				...window.__ac.reach(parent),
+				frameElement: attempt(() =>
+					frameElement === null ? 'null' : 'element',
+				),
+			}),
+			peekOpener: () => window.__ac.reach(opener),
+			// a frame of the same parent, reached through the parent's frames
+			peekSibling: (index) => window.__ac.reach(parent.frames[index]),
+			open: (url) =>
+				new Promise((resolve) => {
+					window.__popup = open(url);
+					setTimeout(() => resolve(window.__popup ? 'opened' : 'null'), 1500);
+				}),
+			peekPopup: () => window.__ac.reach(window.__popup),
+			// a hello to the parent, the opener or a frame, and what was heard
+			hello: (to) => {
+				const target =
+					{ parent, opener, popup: window.__popup }[to] ?? frames[to];
+				target.postMessage({ ac: 'hello', id: window.__ac.id }, '*');
+				return 'sent';
+			},
+			heard: () => heard,
+			// a frame's window kept, then the frame sent elsewhere
+			keep: (index) => {
+				window.__kept = frames[index];
+				return typeof window.__kept;
+			},
+			reachKept: () => window.__kept && window.__ac.reach(window.__kept),
+			navigate: (index, url) =>
+				new Promise((resolve) => {
+					const element = document.querySelectorAll('iframe')[index];
+					element.onload = () => resolve('loaded');
+					element.src = url;
+				}),
+			// a <base href> of another site, which no window's origin follows
+			setBase: (href) => {
+				const base = document.createElement('base');
+				base.href = href;
+				document.head.prepend(base);
+				return document.baseURI.replace(/:\d+\//, '/');
+			},
+		};
+	</script>
+</body>

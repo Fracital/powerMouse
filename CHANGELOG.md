@@ -786,6 +786,24 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- Windows of one site are another origin to each other unless both set
+  `document.domain`, as in Chrome, and `Origin-Agent-Cluster: ?0` is
+  honoured. The window membrane compared windows by site: a page and a
+  frame of its site on another host read each other's documents, globals
+  and locations, where Chrome gives each a SecurityError and no
+  `frameElement`. It now decides by same origin-domain on every read of
+  another window: two documents of one origin, or two that set the same
+  `document.domain` (and one that set it is another origin to one that did
+  not, even of one origin). The `document.domain` setter takes effect only
+  in an agent cluster keyed by site, which a document asks for with
+  `Origin-Agent-Cluster: ?0` and which an origin's first document in the tab
+  decides for every later one; Chrome's default, keyed by origin, ignores
+  the write. `window.originAgentCluster` reads which, the service worker
+  hands each document's shell what its response asked for, and the header
+  no longer reaches the browser, where it keyed the proxy origin's own
+  agent cluster. (agent-cluster suite: fourteen scenarios measured in
+  Chrome 152 and 156, natively against both modes; site-facts lists no
+  difference any more.)
 - A document's origin is its own URL's, never its base URL's. The inject
   took a document's identity from the URL it resolves the page's URLs
   against, which follows `<base href>`: a page of one site that named a

@@ -23,7 +23,10 @@ const corsHeaders: string[] = [
 // is gone (the worker applies the page's policy itself, and serves its own
 // where the host's page is isolated: src/isolation.ts), a
 // Document-Isolation-Policy would move the frame into an agent cluster of
-// its own, away from the documents of its origin, the reporting headers
+// its own, away from the documents of its origin, an Origin-Agent-Cluster
+// would key the proxy origin's own agent cluster for every proxied document
+// (the inject keys each document's as its header asks: DocumentClient
+// siteKeyed), the reporting headers
 // would post proxy URLs to the site, and Set-Cookie was consumed by the
 // cookie jar (the browser must not store it for the proxy origin too)
 const bindingHeaders: string[] = [
@@ -33,6 +36,7 @@ const bindingHeaders: string[] = [
 	'Cross-Origin-Embedder-Policy-Report-Only',
 	'Document-Isolation-Policy',
 	'Document-Isolation-Policy-Report-Only',
+	'Origin-Agent-Cluster',
 	'Report-To',
 	'NEL',
 	'Reporting-Endpoints',

@@ -71,6 +71,7 @@ const SUITE_ENV = {
 	samesite: { STOMP_TEST_TRANSPORT: '1' },
 	'sop-partitions': { STOMP_TEST_TRANSPORT: '1' },
 	'site-facts': { STOMP_TEST_TRANSPORT: '1' },
+	'agent-cluster': { STOMP_TEST_TRANSPORT: '1' },
 	// the host's pages cross-origin isolated (the demo server's default)
 	'cross-origin-isolation': { STOMP_ISOLATION: 'on' },
 	// for its page that sends COOP and COEP

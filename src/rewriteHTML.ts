@@ -241,6 +241,8 @@ export function modifyHTML(
 	/** the document is a proxied top the service worker serves: its shell loads the rewriter library */
 	top = false,
 	isolation?: string,
+	/** what the document's Origin-Agent-Cluster asked for (DocumentClient.agentCluster) */
+	agentCluster?: 'site' | 'origin',
 ): string {
 	const { head, tail } = shell(
 		script,
@@ -256,6 +258,7 @@ export function modifyHTML(
 		sites,
 		top,
 		isolation,
+		agentCluster,
 	);
 	return head + tail(prewritten);
 }
@@ -280,6 +283,8 @@ export function modifyHTMLStreamed(
 	/** as modifyHTML's */
 	top = false,
 	isolation?: string,
+	/** what the document's Origin-Agent-Cluster asked for (DocumentClient.agentCluster) */
+	agentCluster?: 'site' | 'origin',
 ): { head: string; tail: (prewritten: Prewritten | null) => string } {
 	return shell(
 		script,
@@ -295,6 +300,7 @@ export function modifyHTMLStreamed(
 		sites,
 		top,
 		isolation,
+		agentCluster,
 	);
 }
 
@@ -313,6 +319,8 @@ function shell(
 	sites?: SiteFacts[],
 	top = false,
 	isolation?: string,
+	/** what the document's Origin-Agent-Cluster asked for (DocumentClient.agentCluster) */
+	agentCluster?: 'site' | 'origin',
 ): { head: string; tail: (prewritten?: Prewritten | null) => string } {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	const names = helperNames(config);
@@ -350,6 +358,11 @@ ${sited(names.client, sites)}${referred(names.client, referrer)}${
 			? ''
 			: `
 	${names.client}.isolation = ${JSON.stringify(isolation)};`
+	}${
+		agentCluster === undefined
+			? ''
+			: `
+	${names.client}.agentCluster = ${JSON.stringify(agentCluster)};`
 	}
 	if (!${names.client}.applied) try {
 		${names.client}.apply(true);

@@ -195,9 +195,9 @@ A proxied site's emulated worker sees only its own site's requests:
   could reach.
 
 The window membrane is unaffected: no window crosses into the worker
-(`WindowClient` is a description, not a window), and the membrane's per-site
-comparison stays the page module's concern. Registrations are keyed by
-origin, which is stricter than the membrane's site key.
+(`WindowClient` is a description, not a window), and the membrane's
+comparison by origin stays the page module's concern. Registrations are
+keyed by origin as well.
 
 ## API surface and choices
 

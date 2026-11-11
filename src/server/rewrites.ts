@@ -557,6 +557,8 @@ interface Note {
 	serviceWorker?: ControlInfo;
 	/** the document's isolation, when the host's page is isolated (src/isolation.ts isolationFacts) */
 	isolation?: string;
+	/** what the document's Origin-Agent-Cluster asked for: ?0 a cluster keyed by site, ?1 one keyed by origin */
+	agentCluster?: 'site' | 'origin';
 	rewriteCache?: RewriteCacheOutcome;
 	rewriteIn?: 'pool' | 'pool split' | 'service-worker';
 	/**
@@ -2700,6 +2702,11 @@ function genericForward(
 				isolation.coep === 'unsafe-none' ? null : { policy: isolation.coep },
 			);
 		}
+		// what its Origin-Agent-Cluster asks for, a structured boolean (the
+		// header itself never reaches the browser: filterHeaders.ts)
+		const agentCluster = response.headers.get('origin-agent-cluster')?.trim();
+		if (agentCluster === '?0') note.agentCluster = 'site';
+		else if (agentCluster === '?1') note.agentCluster = 'origin';
 		let report: RequestInfo | null = null;
 		if (rewriter.log) {
 			const length = Number(response.headers.get('content-length'));
@@ -4062,6 +4069,7 @@ export function registerRewrites(
 						shellSites(url, request.routed, rewriter.directory),
 						top,
 						note.isolation,
+						note.agentCluster,
 					);
 				// The page does not wait for the rewrite workers: the shell's
 				// first part (the inject bundle's script and the markup) goes out
@@ -4083,6 +4091,7 @@ export function registerRewrites(
 					shellSites(url, request.routed, rewriter.directory),
 					top,
 					note.isolation,
+					note.agentCluster,
 				);
 				const first = UTF8.encode(head);
 				return new ReadableStream<Uint8Array>({

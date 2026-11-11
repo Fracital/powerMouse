@@ -209,20 +209,50 @@ Filled in commit by commit; see the CHANGELOG for each.
   `127.0.0.1`, `a b` shows as `a%20b`), refuses an empty value, an IP host
   other than its own, a value that is not a suffix and a public suffix
   (`'localhost' is a top-level domain.`; one of the list's private section
-  too, `github.io` to a page of its customer) with Chrome's messages, and then
-  does nothing: a document is in an origin-keyed agent cluster by default
-  (`window.originAgentCluster`), where Chrome's setter has no effect. It
-  used to accept a parent domain and read it back.
+  too, `github.io` to a page of its customer) with Chrome's messages,
+  against the domain the document has now (its host, or what it set). It
+  takes effect only in an agent cluster keyed by site, as in Chrome (below);
+  in one keyed by origin, the default, it does nothing.
+- **Windows of one site, `document.domain` and Origin-Agent-Cluster**
+  (agent-cluster suite: fourteen scenarios, Chrome 152 and 156 alike, natively
+  against both modes; site-facts). Chrome holds a window by its document's
+  origin: a page and a frame of its site on another host (`www.` under the
+  site, the site under `www.`) read nothing of each other (SecurityError,
+  no `frameElement`, a message's `source` no more than a stand-in). Two
+  documents reach each other only when they are same origin-domain: both
+  set `document.domain`, to one value and of one scheme (ports aside), or
+  neither did and their origins are one. One side setting it is not
+  enough, and it makes even two documents of one origin another origin to
+  each other (setting it to the host itself counts as setting it). The
+  setter takes effect only in an agent cluster keyed by site, which a
+  document asks for with `Origin-Agent-Cluster: ?0`; Chrome keys by origin
+  by default (`window.originAgentCluster` is true), always for a
+  cross-origin isolated document, and an origin's keying in a tab is
+  decided by its first document there (a later `?0` of that origin is
+  keyed by origin all the same, a later document without the header after
+  a `?0` one by site). The membrane compared windows by site (a page and a
+  frame of its site on another host read each other whole) and read no
+  Origin-Agent-Cluster (`originAgentCluster` was always true and the setter
+  never took effect). It now decides by same origin-domain on every read of
+  another window, a stand-in it handed out turning into the window once
+  both documents set the same domain (the stand-in the page kept from
+  before stays one); the service worker hands each document's shell what
+  its response asked for (and never passes the header itself to the
+  browser, which would key the proxy origin's own agent cluster), and the
+  inject keys each origin by its first document in the tab, the tab's top
+  keeping the record. Measured natively alone: a popup of the site behaves
+  as a frame (the demo opens a popup as a tab of its own).
 - **A document's identity is its own URL, never its base URL.** The inject
   resolved a URL the page writes and decided whose a document was from one
   URL, which followed the document's `<base href>`: a page of one site that
   named another site's page as its base was that site to its stores and to
   the membrane. It read the other site's `localStorage`, IndexedDB and
   cookies, its frames' documents were its own to read, and theirs it
-  (base-identity suite, natively against both modes). A document's `url` is
-  now its own (a routed document's route, what the shell of a document the
-  page made named, an about:blank or srcdoc document's maker's), and what a
-  URL it writes resolves against is its `baseURL`.
+  (base-identity suite, natively against both modes; agent-cluster frames it
+  too). A document's `url` is now its own (a routed document's route, what
+  the shell of a document the page made named, an about:blank or srcdoc
+  document's maker's), and what a URL it writes resolves against is its
+  `baseURL`.
 - **Where a site ends** (samesite, sop-partitions and site-facts, with
   the names of `test/private-sites.mjs`: `stomp-a`,
   `www.stomp-a` and `stomp-b` under `github.io`, `blogspot.com`,
@@ -261,14 +291,8 @@ Filled in commit by commit; see the CHANGELOG for each.
   site started, a top-level navigation aside, sets `SameSite=None`
   cookies alone: a's fetch of b, b's frame's document, the fetch of a
   frame of a under b's frame, and a frame of b that navigates itself to
-  a (each used to set all four). Still different, for every suffix, and
-  listed in site-facts: Chrome holds a window by its document's origin, so
-  a page and a frame of its site on another host read nothing of each
-  other, where the membrane compares sites and lets them; and a response's
-  `Origin-Agent-Cluster: ?0` is not read, so `originAgentCluster` stays
-  true and `document.domain` never takes effect (with the header and the
-  same `document.domain` on both sides Chrome lets the two read each
-  other, which the membrane allows anyway).
+  a (each used to set all four). The windows of one site, document.domain
+  and Origin-Agent-Cluster read as natively too (above).
 - **Resource timing** (section 2, sop-escapes: 3 cases, and 3 new ones
   that read as natively). Only the worker sees a response's
   Timing-Allow-Origin: when it names the page (or `*`) on a load of another

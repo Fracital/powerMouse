@@ -631,9 +631,124 @@ export default class DocumentClient extends Client {
 		const kept = this.#siteKey;
 		if (kept && kept.document === document && kept.opaque === opaque)
 			return kept.key;
-		const key = opaque ? null : siteKeyOf(this.url.toString());
+		const origin = this.originKey;
+		const key = origin === null ? null : siteKeyOf(origin);
 		this.#siteKey = { document, opaque, key };
 		return key;
+	}
+	#originKey?: { document: Document; opaque: boolean; key: string | null };
+	/**
+	 * This document's origin (scheme, host and port) as the window membrane
+	 * compares documents by (Context reachableClients): its own URL's
+	 * (`url`), never its base URL's; null for an opaque origin (a sandbox
+	 * without allow-same-origin, a data: document). Kept per document.
+	 */
+	get originKey(): string | null {
+		const document = this.global.document;
+		const opaque = this.sandboxedOpaque;
+		const kept = this.#originKey;
+		if (kept && kept.document === document && kept.opaque === opaque)
+			return kept.key;
+		let key: string | null = null;
+		if (!opaque)
+			try {
+				const { origin } = this.url.url;
+				key = origin === 'null' ? null : origin;
+			} catch (error) {
+				// no URL
+			}
+		this.#originKey = { document, opaque, key };
+		return key;
+	}
+	/** the domain this document set with document.domain, where that took effect (DOMHooks) */
+	#documentDomain: { document: Document; value: string } | null = null;
+	/**
+	 * The domain this document set with document.domain, or null when it set
+	 * none or the write had no effect (an agent cluster keyed by origin, the
+	 * default): what the window membrane compares it by then
+	 */
+	get documentDomain(): string | null {
+		const kept = this.#documentDomain;
+		return kept && kept.document === this.global.document ? kept.value : null;
+	}
+	/** @internal document.domain took effect (DOMHooks) */
+	setDocumentDomain(value: string) {
+		this.#documentDomain = { document: this.global.document, value };
+	}
+	/**
+	 * What this document's response asked for in Origin-Agent-Cluster: 'site'
+	 * for ?0, 'origin' for ?1, null for neither (its shell says so before the
+	 * page runs)
+	 */
+	agentCluster: 'site' | 'origin' | null = null;
+	/**
+	 * @internal the agent cluster keying of each origin in this browsing
+	 * context group, kept by its top (true: keyed by site): an origin's first
+	 * document there decides it for every later one, as in Chrome
+	 */
+	agentClusters?: Map<string, boolean>;
+	#siteKeyed?: { document: Document; keyed: boolean };
+	/**
+	 * Whether this document's agent cluster is keyed by site, where
+	 * document.domain takes effect and window.originAgentCluster is false:
+	 * only when the first document of its origin in the tab asked for it
+	 * with Origin-Agent-Cluster: ?0 (Chrome keys by origin by default, and
+	 * always for a cross-origin isolated document). Decided when the
+	 * document is made (apply), before its page runs.
+	 */
+	get siteKeyed(): boolean {
+		const document = this.global.document;
+		const kept = this.#siteKeyed;
+		if (kept && kept.document === document) return kept.keyed;
+		let keyed = false;
+		const origin = this.originKey;
+		let isolated = false;
+		try {
+			isolated = Reflect.get(this.global, 'crossOriginIsolated') === true;
+		} catch (error) {
+			// not readable: not isolated
+		}
+		if (origin !== null && !isolated) {
+			const group = this.#agentGroup();
+			const known = group.get(origin);
+			keyed = known ?? this.agentCluster === 'site';
+			if (known === undefined) group.set(origin, keyed);
+		}
+		this.#siteKeyed = { document, keyed };
+		return keyed;
+	}
+	/** the keying map of this document's browsing context group: its top's, or its opener's top's */
+	#agentGroup(): Map<string, boolean> {
+		const topOf = (client: DocumentClient): DocumentClient => {
+			try {
+				const top = (client.proxiedTop as Record<string, unknown>)[
+					this.names.client
+				] as DocumentClient | undefined;
+				if (top?.isDOM) return top;
+			} catch (error) {
+				// a top of another real origin
+			}
+			return client;
+		};
+		let group = topOf(this);
+		for (let depth = 0; depth < 8; depth++) {
+			let opener: DocumentClient | undefined;
+			try {
+				const window = Reflect.get(group.global, 'opener') as Record<
+					string,
+					unknown
+				> | null;
+				opener =
+					window && window !== (group.global as unknown)
+						? (window[this.names.client] as DocumentClient | undefined)
+						: undefined;
+			} catch (error) {
+				// an opener of another real origin
+			}
+			if (!opener?.isDOM || opener === group) break;
+			group = topOf(opener);
+		}
+		return (group.agentClusters ??= new Map());
 	}
 	/** the nonce the inject's own scripts carry in a document without allow-scripts, else null */
 	get scriptNonce(): string | null {

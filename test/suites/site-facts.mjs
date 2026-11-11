@@ -10,9 +10,9 @@
 // - in Chrome: a page, a frame of its site on another host, a frame of
 //   another site, an srcdoc frame and a frame nested two deep answer their
 //   site key, their partition, a cookie's Domain, a `document.domain` write
-//   and `frameElement` without asking the list once, with the answers they
-//   had; a frame on its way to a host no shell named is still asked about,
-//   and answered.
+//   and `frameElement` without asking the list once; a frame on its way to
+//   another host is held as another origin's, which asks no list (the window
+//   membrane decides by origin, as Chrome: agent-cluster suite).
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { done, FIXTURE, launch, ok, OUT, PROXY, sleep } from '../lib.mjs';
@@ -257,10 +257,10 @@ ok(
 );
 const sameState = await state(same);
 ok(
-	"a frame of the page's site on another host is of its site, and keyed with it",
+	"a frame of the page's site on another host is of its site, and keyed with it, but another origin: no frameElement, as in Chrome",
 	sameState.siteKey === topState.siteKey &&
 		sameState.partition === '' &&
-		sameState.framed === 'element' &&
+		sameState.framed === 'null' &&
 		sameState.asked === 0,
 	JSON.stringify(sameState),
 );
@@ -330,10 +330,8 @@ const writes = await same.evaluate(
 			await set('sf_foreign=1; Domain=elsewhere.test; Path=/')
 		).includes('sf_foreign=1');
 		out.asked = client.siteAnswers.asked - before;
-		// a frame on its way to another host: whether that host is of this
-		// site decides how its window is held before its document arrives.
-		// A name the shell gave is answered from it; any other host is the
-		// list's to answer
+		// a frame on its way to another host: its window is held before its
+		// document arrives, as another origin's
 		const pending = (src) => {
 			const frame = document.createElement('iframe');
 			frame.src = src;
@@ -371,14 +369,17 @@ ok(
 	writes.foreign === false,
 );
 ok('none of which asked the list', writes.asked === 0, String(writes.asked));
+// a frame on its way to another origin is its stand-in from the start
+// (Context pending): its next document is not this one's, whatever their
+// sites, and no list is asked to decide it
 ok(
-	"a frame on its way to a host the shell named is this site's, and the list is not asked",
-	writes.named.reads === 'document' && writes.named.asked === 0,
+	"a frame on its way to another host of this site is held as another origin's, and the list is not asked",
+	writes.named.reads === 'SecurityError' && writes.named.asked === 0,
 	JSON.stringify(writes.named),
 );
 ok(
-	'a frame on its way to any other host is asked about, and answered: another site',
-	writes.unnamed.reads === 'SecurityError' && writes.unnamed.asked > 0,
+	'a frame on its way to a host of another site is held the same way, and the list is not asked',
+	writes.unnamed.reads === 'SecurityError' && writes.unnamed.asked === 0,
 	JSON.stringify(writes.unnamed),
 );
 await browser.close();
@@ -386,21 +387,6 @@ await browser.close();
 // Where a site ends, against Chrome, with names under a private suffix of
 // the list (test/private-sites.mjs): what a page and a frame read of each
 // other's windows, what document.domain takes, Origin-Agent-Cluster.
-await privateSiteRows('windows', {
-	// Chrome holds a window by its document's origin, the membrane by its
-	// site: the name under a reads a's page and a's page reads it
-	'the membrane compares windows by site, Chrome by origin': [
-		"what a's page reads of a frame of sub",
-		'what a frame of sub reads of its parent',
-	],
-	// the response header is not read: every document says it is in an
-	// origin-keyed agent cluster, and document.domain never takes effect
-	// (the windows row reads as natively all the same: the name under a is
-	// of a's site, and b is not)
-	'Origin-Agent-Cluster: ?0 is not honoured': [
-		'with Origin-Agent-Cluster: ?0, originAgentCluster',
-		'with Origin-Agent-Cluster: ?0, document.domain',
-	],
-});
+await privateSiteRows('windows');
 
 await done();
