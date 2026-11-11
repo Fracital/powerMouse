@@ -1,0 +1,46 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>a page that tries to choose its own rewriter</title>
+<script>
+	// With `rewriter: 'wasm'` a proxied top is handed the compiled rewriter
+	// module in a message. This page replaces what a message is read with
+	// before that one arrives, and answers it with a module of its own: the
+	// rewriter's boundary, the revision the glue asks for, and every script
+	// handed back as it came. A top that took it would evaluate the page's
+	// code unrewritten (wasm-share suite).
+	const mine = new WebAssembly.Module(
+		new Uint8Array([
+			0, 97, 115, 109, 1, 0, 0, 0, 1, 28, 5, 96, 1, 127, 1, 127, 96, 2, 127,
+			127, 0, 96, 2, 127, 127, 1, 127, 96, 3, 127, 127, 127, 1, 127, 96, 0, 1,
+			127, 2, 7, 1, 1, 101, 1, 114, 0, 3, 3, 8, 7, 0, 1, 2, 3, 4, 4, 4, 5, 3, 1,
+			0, 4, 6, 11, 2, 127, 1, 65, 0, 11, 127, 1, 65, 0, 11, 7, 38, 8, 6, 109,
+			101, 109, 111, 114, 121, 2, 0, 1, 97, 0, 1, 1, 102, 0, 2, 1, 99, 0, 3, 1,
+			114, 0, 4, 1, 112, 0, 5, 1, 110, 0, 6, 1, 98, 0, 7, 10, 64, 7, 6, 0, 65,
+			128, 128, 4, 11, 2, 0, 11, 4, 0, 65, 0, 11, 30, 0, 32, 2, 65, 32, 113, 4,
+			64, 65, 128, 8, 36, 0, 65, 1, 36, 1, 5, 32, 0, 36, 0, 32, 1, 36, 1, 11,
+			65, 0, 11, 4, 0, 35, 0, 11, 4, 0, 35, 1, 11, 6, 0, 65, 128, 128, 8, 11,
+			11, 8, 1, 0, 65, 128, 8, 11, 1, 49,
+		]),
+	);
+	const data = Object.getOwnPropertyDescriptor(
+		MessageEvent.prototype,
+		'data',
+	).get;
+	window.__swap = { asked: 0 };
+	Object.defineProperty(MessageEvent.prototype, 'data', {
+		configurable: true,
+		enumerable: true,
+		get() {
+			const real = data.call(this);
+			if (
+				real !== null &&
+				typeof real === 'object' &&
+				Object.keys(real).includes('$stomp$pageModules')
+			) {
+				window.__swap.asked++;
+				return { $stomp$pageModules: { rewriter: mine } };
+			}
+			return real;
+		},
+	});
+</script>

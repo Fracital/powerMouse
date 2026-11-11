@@ -479,6 +479,21 @@ export interface InitRemoteTransportMessage {
 	directory: string;
 }
 
+/**
+ * page -> SW, with [port]: the controller of `directory` answers on the
+ * port with the wasm modules it compiled (PAGE_MODULES). A proxied top asks
+ * once, for the rewriter library it shares with its frames
+ * (src/inject/rewriter.ts): the page and the controller are one agent
+ * cluster, so the compiled module itself reaches it, which a library realm
+ * can only instantiate.
+ */
+export const INIT_PAGE_MODULES = '$stomp$initPageModules';
+export interface InitPageModulesMessage {
+	directory: string;
+}
+/** controller -> page, on that port: the compiled modules by Assets key */
+export const PAGE_MODULES = '$stomp$pageModules';
+
 // RPC descriptions. Each is [args, return] or [args].
 
 /** rpc id shared by the controller<->SW port */
@@ -623,6 +638,8 @@ export type Controllerbound = {
 	/** another controller registered with this one's id; the worker closes the port right after */
 	replaced: [];
 	initRemoteTransport: [MessagePort];
+	/** a proxied top asks for the compiled wasm modules, answered on the port (PAGE_MODULES) */
+	pageModules: [MessagePort];
 	/** a proxied request completed; only sent when the host asked (config.requestLog) */
 	request: [RequestInfo];
 	/**

@@ -3,10 +3,13 @@
 // get the compiled modules; the service worker gets their bytes with the
 // handshake, because a message holding a WebAssembly.Module never reaches a
 // service worker (it is an agent cluster of its own) and a handshake that
-// carried one left the controller waiting for the worker forever. A page
-// loads and runs as before either way: a module only ever answers what the
-// JavaScript rewriter would have. A stylesheet's request says the scanner
-// module found its pieces (`rewriteBy`), and its url() is routed as before.
+// carried one left the controller waiting for the worker forever. A proxied
+// top asks its controller for the compiled module (they are one agent
+// cluster) for the rewriter library it shares with its frames, so a frame
+// holds no instance. A page loads and runs as before either way: a module
+// only ever answers what the JavaScript rewriter would have. A stylesheet's
+// request says the scanner module found its pieces (`rewriteBy`), and its
+// url() is routed as before.
 import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
@@ -167,6 +170,83 @@ ok(
 		'and its url() is routed as before',
 		styled.image === 200 && styled.destination === 'image',
 		JSON.stringify(styled),
+	);
+
+	// the page: a proxied top asks its controller for the compiled module
+	// and the rewriter library it shares with its frames instantiates it.
+	// What the page evaluates is then the module's rewrite, which keeps the
+	// page's own comments (the JavaScript rewriter prints none)
+	const inPage = (work) =>
+		page.evaluate((work) => {
+			const top = window.__frame.element.contentWindow;
+			const client = top[window.__controller.config.names.client];
+			// what really runs, read with this realm's own toString
+			const written = (realm) =>
+				Function.prototype.toString.call(
+					new realm.Function('/* kept */ return location.href;'),
+				);
+			if (work === 'holds') return client.sharedRewriter.holds('rewriter');
+			if (work === 'top') return written(top);
+			const frame = top.document.createElement('iframe');
+			top.document.body.append(frame);
+			const child = frame.contentWindow;
+			const childClient = child[window.__controller.config.names.client];
+			return {
+				own: childClient.sharedRewriter === null,
+				text: written(child),
+			};
+		}, work);
+	let holds = false;
+	for (let i = 0; i < 100 && !holds; i++) {
+		holds = await inPage('holds').catch(() => false);
+		if (!holds) await sleep(100);
+	}
+	ok("the top's rewriter library holds the compiled module", holds);
+	const top = await inPage('top');
+	ok(
+		'what the page evaluates is rewritten by the module',
+		top.includes('/* kept */') && top.includes('.get(location'),
+		top,
+	);
+	const child = await inPage('frame');
+	ok(
+		"a frame under it makes no library of its own and uses the top's instance",
+		child.own &&
+			child.text.includes('/* kept */') &&
+			child.text.includes('.get(location'),
+		JSON.stringify(child),
+	);
+
+	// a page that replaces what a message is read with before the module
+	// arrives, to answer it with a module of its own (one that hands every
+	// script back as it came): the inject reads that message with getters
+	// it took before any page script, so the top holds the controller's
+	await page.evaluate(
+		(url) => window.__frame.go(url),
+		`${FIXTURE}pages/wasm-page-module.html`,
+	);
+	let swapped = null;
+	for (let i = 0; i < 100 && !swapped; i++) {
+		swapped = await page
+			.evaluate(() => {
+				const top = window.__frame.element.contentWindow;
+				const client = top[window.__controller.config.names.client];
+				if (!top.__swap || !client?.sharedRewriter?.holds('rewriter'))
+					return null;
+				return {
+					asked: top.__swap.asked,
+					text: Function.prototype.toString.call(
+						new top.Function('/* kept */ return location.href;'),
+					),
+				};
+			})
+			.catch(() => null);
+		if (!swapped) await sleep(100);
+	}
+	ok(
+		"a page cannot hand its top a module of its own: the message is not read with the page's getter, and what it evaluates is still rewritten",
+		swapped?.asked === 0 && swapped.text.includes('.get(location'),
+		JSON.stringify(swapped),
 	);
 }
 

@@ -49,6 +49,7 @@ import {
 	NAVIGATE,
 	NavigateInfo,
 	OPEN_TAB,
+	PAGE_MODULES,
 	postToPort,
 	RequestInfo,
 	SW_PORT,
@@ -636,6 +637,8 @@ export class StompController extends EventTarget {
 	#rewriteTimeout: number;
 	/** the bytes of the wasm modules loaded for `rewriter: 'wasm'`, once they are; every handshake carries them */
 	#modules: Record<string, ArrayBuffer> | null = null;
+	/** the same modules compiled, for the threads and pages of this agent cluster (none without `rewriter: 'wasm'`) */
+	#compiled: Promise<Record<string, WebAssembly.Module>> | null = null;
 	/** settles once the transport exists where it is hosted; the handshake waits for it */
 	#hostReady: Promise<void>;
 	/** every hook error so far (a hook that threw, a hook URL that failed), newest last; also `hookerror` events */
@@ -806,7 +809,8 @@ export class StompController extends EventTarget {
 				new URL(assetName(this.config.assets, 'rewriteWorker'), this.directory),
 				rewriteWorkers,
 			);
-		if (init.rewriter === 'wasm') void this.#compileModules(WASM_ASSETS);
+		if (init.rewriter === 'wasm')
+			this.#compiled = this.#compileModules(WASM_ASSETS);
 
 		// a described transport is started where it is hosted before the first
 		// handshake; a failure there never leaves the controller dead
@@ -1207,6 +1211,7 @@ export class StompController extends EventTarget {
 			};
 			this.serviceworker.postMessage({ [CONTROLLER_MODULES]: message });
 		}
+		return compiled;
 	}
 	/** @internal the wasm modules each thread holds, by Assets key (tests: `rewriter: 'wasm'` reached every thread) */
 	async wasmModules(): Promise<{
@@ -1320,6 +1325,18 @@ export class StompController extends EventTarget {
 				stopServiceWorker: async ({ id }) => {
 					this.#serviceWorkers.get(id)?.terminate();
 					this.#serviceWorkers.delete(id);
+				},
+				pageModules: async (port) => {
+					// a proxied top's rewriter library (src/inject/rewriter.ts)
+					// instantiates the modules this controller compiled. A page
+					// outside this agent cluster (a tab opened with noopener)
+					// hears a messageerror and keeps the JavaScript rewriter
+					const compiled = (await this.#compiled) ?? {};
+					try {
+						port.postMessage({ [PAGE_MODULES]: compiled });
+					} catch (error) {
+						// the page is gone
+					}
 				},
 				initRemoteTransport: async (port) => {
 					// a page's own transport port (its WebSockets): served from the

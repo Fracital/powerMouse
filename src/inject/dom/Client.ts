@@ -306,6 +306,20 @@ export default class DocumentClient extends Client {
 			this.#topClient() === this
 		)
 			this.#rewriter = createRewriterRealm(this.global.document);
+		// with `rewriter: 'wasm'` the library a top shares rewrites in the
+		// module the controller compiled, once it has arrived: the realm
+		// only instantiates it, and until then (and whenever the module
+		// declines a script) its JavaScript rewriter answers. One instance
+		// per top; a frame under it holds none
+		const library = this.#rewriter;
+		if (library && this.wasmRewriter)
+			this.requestModules((name, module) => {
+				try {
+					library.adopt(name, module);
+				} catch (error) {
+					// the library is gone with its document
+				}
+			});
 	}
 	/**
 	 * The rewriter library a top shares with the frames under it, in a realm

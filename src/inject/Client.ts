@@ -18,8 +18,10 @@ import { addRouteScope, parseRoutedURL, ROUTE_PROTOCOLS } from '../routeURL';
 import StompURL from '../StompURL';
 import {
 	ABORT_REQUEST,
+	INIT_PAGE_MODULES,
 	INIT_REMOTE_TRANSPORT,
 	INLINE_DOCUMENT,
+	PAGE_MODULES,
 	SRCDOC_CLAIM,
 	SRCDOC_VOUCH,
 	TRANSPORT_INIT,
@@ -43,6 +45,16 @@ type CallIn = (method: Function, that: unknown, args: unknown[]) => unknown;
 
 /** the largest markup an inline document takes (the worker refuses more) */
 const INLINE_DOCUMENT_MAX = 4 * 1024 * 1024;
+
+/**
+ * `MessageEvent.prototype.data` as the browser made it, taken when the
+ * bundle runs, before any script of the page: what a message that carries
+ * a wasm module is read with (requestModules)
+ */
+const messageData = Reflect.getOwnPropertyDescriptor(
+	MessageEvent.prototype,
+	'data',
+)?.get;
 
 export default class Client {
 	modules: Map<ModuleCtor, Module<any>>;
@@ -572,6 +584,54 @@ export default class Client {
 		);
 
 		return channel.port1;
+	}
+	/**
+	 * Ask the controller (through the service worker) for the wasm modules
+	 * it compiled (`rewriter: 'wasm'`), each handed to `adopt` when the
+	 * answer arrives. A compiled module is posted only within an agent
+	 * cluster: a document outside the controller's (a tab opened with
+	 * noopener) hears a messageerror instead and keeps the JavaScript
+	 * rewriter, as every document does until the answer is in.
+	 */
+	requestModules(adopt: (name: string, module: WebAssembly.Module) => void) {
+		const controller = this.#serviceWorkerContainer?.controller;
+		if (!controller || !this.#serviceWorkerPostMessage) return;
+		const channel = new MessageChannel();
+		const port = channel.port1;
+		port.addEventListener('message', (event) => {
+			// read with nothing the page can have replaced by now
+			// (`MessageEvent.prototype.data`, `Object.keys`, an array's
+			// iterator): a module of the page's own choosing would be the
+			// rewriter of everything this top and its frames evaluate
+			const own = (from: unknown, key: string): unknown =>
+				typeof from === 'object' && from !== null
+					? Reflect.getOwnPropertyDescriptor(from, key)?.value
+					: undefined;
+			const modules = own(
+				messageData ? Reflect.apply(messageData, event, []) : undefined,
+				PAGE_MODULES,
+			);
+			if (typeof modules === 'object' && modules !== null) {
+				const names = Reflect.ownKeys(modules);
+				for (let i = 0; i < names.length; i++) {
+					const name = names[i];
+					if (typeof name === 'string')
+						adopt(name, own(modules, name) as WebAssembly.Module);
+				}
+			}
+			port.close();
+		});
+		port.addEventListener('messageerror', () => port.close());
+		port.start();
+		try {
+			this.#serviceWorkerPostMessage.call(
+				controller,
+				{ [INIT_PAGE_MODULES]: { directory: this.directory } },
+				[channel.port2],
+			);
+		} catch (error) {
+			port.close();
+		}
 	}
 	/**
 	 * Messages the service worker posts to this document (storage changes),

@@ -41,6 +41,9 @@ function cloneData<T>(value: T): T {
 }
 export const structuredClone = cloneData as typeof globalThis.structuredClone;
 export const Reflect: typeof globalThis.Reflect = take('Reflect');
+// (the wasm rewriter's instance is made in this realm from a module it is
+// handed, src/rewriterLib.ts adopt)
+export const WebAssembly: typeof globalThis.WebAssembly = take('WebAssembly');
 export const Function: typeof globalThis.Function = take('Function');
 export const fetch: typeof globalThis.fetch = take('fetch');
 export const Request: typeof globalThis.Request = take('Request');

@@ -20,7 +20,9 @@ import {
 	ControllerCloseMessage,
 	ControllerInitMessage,
 	ControllerModulesMessage,
+	INIT_PAGE_MODULES,
 	INIT_REMOTE_TRANSPORT,
+	InitPageModulesMessage,
 	InitRemoteTransportMessage,
 	INLINE_DOCUMENT,
 	InlineDocumentMessage,
@@ -901,6 +903,13 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 
 		const [port] = event.ports;
 		ref.rpc.call('initRemoteTransport', port, [port]);
+	} else if (INIT_PAGE_MODULES in data) {
+		// a proxied top's library realm (src/inject/rewriter.ts): its
+		// controller answers on the port, this worker only passes it on (a
+		// compiled module does not cross into or out of a service worker)
+		const { directory } = data[INIT_PAGE_MODULES] as InitPageModulesMessage;
+		const [port] = event.ports;
+		if (port) controllers.get(directory)?.rpc.call('pageModules', port, [port]);
 	}
 });
 

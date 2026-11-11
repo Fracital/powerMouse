@@ -24,6 +24,7 @@ import { setBlobOrigins, setRouteScopes } from './routeURL';
 import type { ScriptType } from './scriptRoutes';
 import StompURL from './StompURL';
 import { BUILD } from './version';
+import { adoptModule, hasModule } from './wasm/thread';
 
 /**
  * What a rewrite depends on, as the caller sends it (JSON): the document's
@@ -164,6 +165,23 @@ export function library(parts: LibraryParts) {
 					),
 				null,
 			);
+		},
+		/**
+		 * A wasm module the controller compiled (`rewriter: 'wasm'`), by its
+		 * Assets key, for this copy's rewrites (src/wasm/thread.ts). The one
+		 * object that crosses, and only inward: the library reads nothing of
+		 * it, it instantiates it, which a module answers from its own slots
+		 * whatever realm it was made in. Whether the copy holds it now.
+		 */
+		adopt(name: string, module: unknown): boolean {
+			return run(() => {
+				adoptModule(`${name}`, module as WebAssembly.Module);
+				return hasModule(`${name}`);
+			}, false);
+		},
+		/** whether this copy holds the wasm module `name` */
+		holds(name: string): boolean {
+			return run(() => hasModule(`${name}`), false);
 		},
 		/** the message of what the last call threw, '' when it did not */
 		error(): string {

@@ -95,6 +95,14 @@ on every save (use a `git worktree`).
   returned undefined there and broke every shorthand property): anything
   the library reads from the window must be taken in `src/libGlobals.ts`.
   Only strings, numbers and booleans cross; the library never calls out.
+  The one exception is a compiled `WebAssembly.Module` the controller hands
+  a proxied top (`rewriter: 'wasm'`, `adopt` in `src/rewriterLib.ts`): the
+  library reads no property of it and only passes it to its own realm's
+  `WebAssembly.Instance`, which answers from the module's internal slots
+  whatever realm made it. The page's side of that hand-off
+  (`requestModules` in `src/inject/Client.ts`) reads the message with
+  getters taken before any page script ran: a module the page could swap in
+  would be the rewriter of everything its top and frames evaluate.
 - **Classic-script globals use `Reflect.defineProperty`, not `globalName`.**
   The inject bundles delete `createClient` after use; a top-level `var` from
   esbuild's `globalName` can't be deleted. See `src/*/entry.ts`.

@@ -234,6 +234,16 @@ The first release after a four-year gap. Everything below is breaking.
   and the corpora: no difference but one known case where the JavaScript
   rewriter is wrong), and `rewriter-unit` and the browser suites run under
   both (`STOMP_REWRITER=wasm`). `'js'` stays the default.
+- With `rewriter: 'wasm'` the page rewrites with the module too (`eval`,
+  `new Function`, string timers, written and inserted scripts, every path
+  of the inject). A proxied top asks its controller for the compiled
+  module, through the service worker, and the rewriter library it shares
+  with its frames instantiates it: one instance per top, none per frame,
+  and the JavaScript rewriter until it has arrived and wherever it cannot
+  (a tab in another agent cluster, a sandboxed document with an opaque
+  origin, a page's worker). docs/rust-plan.md has the measured plan for
+  taking the JavaScript parsers out of the inject bundle after it (814 KB
+  to at most 416 KB).
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,
