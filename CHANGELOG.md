@@ -717,6 +717,24 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   set for a response the origin confirmed with a 304 (the demo's viewer
   tags it "304"). (http-cache suite, native against proxied in both
   modes; cache, sop-escapes and sop-partitions suites.)
+- A frame's Back and Forward (`back()`, `forward()`, `canGoBack`,
+  `canGoForward`, and the demo's buttons) go where a browser tab's go.
+  After a link to another site Back was greyed out for good: the controller
+  read the page's own Navigation API, which shows a document only its own
+  origin's entries. A frame in the page that navigated was skipped where
+  Chrome's Back steps it first. And every tab of the demo is a frame of one
+  page, so they share one session history: once another tab had moved,
+  Back or Forward did nothing (the browser refuses a sandboxed frame a
+  traversal that changes a sibling) or had nowhere to go (a new entry in
+  any tab drops the forward entries of all of them). Each frame now keeps
+  its own history, its nested frames' steps included, read with the host's
+  own Navigation API; a step is the browser's traversal where that touches
+  nothing outside the frame, and a `location.replace` to the step's URL
+  where it would. (toolbar-history suite.)
+- A page that sends itself elsewhere with `location.href` or `assign()`
+  before its load event replaces its entry, as natively. Through the proxy
+  about one such redirect in three made a new entry, so Back went to the
+  redirecting page and it redirected again. (toolbar-history suite.)
 - Resource timing tells every way the worker answered a load apart, as
   Chrome does (measured in 152 and 156): the body and 300 bytes from the
   network; 0 and `deliveryType` "cache" from a cache, with the protocol

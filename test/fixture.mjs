@@ -254,6 +254,19 @@ export function startFixture(port = 8084) {
 				`(window.__rc ??= []).push([${JSON.stringify(query.get('name'))}, ${version}, location.href.length > 0, typeof window.top]);\n`,
 			);
 		}
+		// a page whose answer takes `ms` (at most ten seconds): a navigation
+		// that is still loading (toolbar suite)
+		if (path === '/slow-page') {
+			const query = new URL(req.url, 'http://x').searchParams;
+			setTimeout(
+				() => {
+					res.setHeader('content-type', 'text/html; charset=utf-8');
+					res.end(`<!doctype html><title>SLOW</title><h1>slow</h1>`);
+				},
+				Math.min(Number(query.get('ms')) || 0, 10000),
+			);
+			return;
+		}
 		// a response that takes five seconds (abort measurement)
 		if (path === '/slow') {
 			setTimeout(() => res.end('slow'), 5000);

@@ -54,6 +54,18 @@ export default class LocationModule extends Module<DocumentClient> {
 				this.client.nestedRoute,
 			);
 
+		// Chrome replaces the current entry when a page's script navigates it
+		// before its load event (a redirect while loading, measured right
+		// after the link click that brought the page too). A proxied document
+		// is written in after its own response, and the browser took such a
+		// navigation for a new entry about one time in three: Back then went
+		// to the redirecting page, which redirected again. So it is replaced
+		// here, as natively
+		const go = (url: string, method: 'assign' | 'replace') => {
+			const loading = this.client.global.document.readyState !== 'complete';
+			return Reflect.apply(real[loading ? 'replace' : method], real, [url]);
+		};
+
 		const members = new Map<string | symbol, PropertyDescriptor>();
 
 		// both URL.prototype and location share these descriptors
@@ -98,7 +110,7 @@ export default class LocationModule extends Module<DocumentClient> {
 							Reflect.apply(urlDescriptor.set!, temp, args);
 
 							this.client.getModule(NavigationHintModule)?.hint(temp.href);
-							real.href = navigateTo(temp);
+							go(navigateTo(temp), 'assign');
 						})
 					: undefined,
 			});
@@ -162,7 +174,7 @@ export default class LocationModule extends Module<DocumentClient> {
 			([url]: any[]) => {
 				const destination = new URL(url, this.client.url.toString());
 				this.client.getModule(NavigationHintModule)?.hint(destination.href);
-				return Reflect.apply(real[method], real, [navigateTo(destination)]);
+				return go(navigateTo(destination), method);
 			};
 		const methods: Record<string, (args: any[]) => unknown> = {
 			assign: navigation('assign'),

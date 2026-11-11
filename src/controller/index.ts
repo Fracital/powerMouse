@@ -893,6 +893,15 @@ export class StompController extends EventTarget {
 			// says here (where the frame is, is its page's to say)
 			if (nested) {
 				if (navigate?.client) this.#attribute(navigate.client, frame);
+				// a frame in the page that navigated is a step of the frame's
+				// history (a tab's Back steps it first): the buttons follow
+				const moved = navigate && frame.historyChanged();
+				if (moved) {
+					init.onNavigate?.(moved, frame);
+					this.dispatchEvent(
+						new CustomEvent('navigate', { detail: { info: moved, frame } }),
+					);
+				}
 				return;
 			}
 			if (navigate) {
@@ -1713,10 +1722,32 @@ export class Frame extends EventTarget {
 	}
 	/** @internal */
 	report(info: NavigateInfo) {
+		// where the frame's history can go is the frame's, nested frames
+		// included, not what the page's own navigable says
+		const canGoBack = this.canGoBack;
+		const canGoForward = this.canGoForward;
+		if (canGoBack !== null) info.canGoBack = canGoBack;
+		if (canGoForward !== null) info.canGoForward = canGoForward;
 		this.lastNavigate = info;
 		for (const resolve of this.#awaitingReport) resolve();
 		this.#awaitingReport.clear();
 		this.dispatchEvent(new CustomEvent('navigate', { detail: info }));
+	}
+	/**
+	 * @internal A document in a frame of the page reported: the last report
+	 * again, with the history state it changed, or null when it did not
+	 */
+	historyChanged(): NavigateInfo | null {
+		const last = this.lastNavigate;
+		if (!last) return null;
+		if (
+			this.canGoBack === last.canGoBack &&
+			this.canGoForward === last.canGoForward
+		)
+			return null;
+		const info = { ...last };
+		this.report(info);
+		return info;
 	}
 	/** hosts waiting for the next report (go, reload) */
 	#awaitingReport = new Set<() => void>();
@@ -1768,10 +1799,11 @@ export class Frame extends EventTarget {
 		await reported;
 	}
 	/**
-	 * Step the frame's own history (proxied pages are same-origin, so it is
-	 * reachable). Resolves false when there is no entry in that direction, so
-	 * a host can show its own "nothing to go back to" state instead of
-	 * letting history.back() walk the page that embeds the frame.
+	 * Step the frame's history as a tab's Back and Forward do: its own
+	 * entries and those of the frames in it, never the page that embeds the
+	 * frame or another frame of that page (src/controller/history.ts).
+	 * Resolves false when there is no entry in that direction, so a host can
+	 * show its own "nothing to go back to" state.
 	 */
 	async back(): Promise<boolean> {
 		const win = this.element.contentWindow;
@@ -1781,7 +1813,7 @@ export class Frame extends EventTarget {
 		const win = this.element.contentWindow;
 		return win ? traverse(win, 'forward') : false;
 	}
-	/** whether the frame's own history has an entry before/after the current one; null when the browser cannot tell */
+	/** whether the frame's history (nested frames included) has an entry before/after the current one; null when the browser cannot tell */
 	get canGoBack(): boolean | null {
 		return canTraverse(this.element.contentWindow, 'back');
 	}

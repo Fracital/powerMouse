@@ -1,0 +1,29 @@
+<!doctype html>
+<title>TB</title>
+<h1 id="name">tb</h1>
+<a id="link" href="tb.html?p=unset">link</a>
+<button id="act">act</button>
+<script>
+	// the toolbar suite's page: its name is ?p=, #link goes where the suite
+	// points it, #act runs the history call the suite names in
+	// window.tbAction (here, in the page's own script, as a site would), and
+	// ?frame=<page> puts that page in an iframe
+	const query = new URLSearchParams(location.search);
+	document.title = `TB ${query.get('p') ?? ''}`;
+	document.getElementById('name').textContent = query.get('p') ?? '';
+	if (query.get('frame')) {
+		const frame = document.createElement('iframe');
+		frame.id = 'child';
+		frame.src = query.get('frame');
+		document.body.append(frame);
+	}
+	document.getElementById('act').addEventListener('click', () => {
+		const { kind, url } = window.tbAction ?? {};
+		if (kind === 'push') history.pushState({ url }, '', url);
+		else if (kind === 'replace') history.replaceState({ url }, '', url);
+		else if (kind === 'hash') location.hash = url;
+		else if (kind === 'assign') location.href = url;
+		else if (kind === 'location-replace') location.replace(url);
+		else if (kind === 'child-src') document.getElementById('child').src = url;
+	});
+</script>

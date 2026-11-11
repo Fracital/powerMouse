@@ -302,17 +302,25 @@ export class RemoteController extends EventTarget {
 			// a document in a frame of the page reports here as the page does:
 			// its requests are this frame's, and that is all it says (see
 			// StompController)
+			const announce = (info: NavigateInfo) => {
+				init.onNavigate?.(info, frame);
+				this.dispatchEvent(
+					new CustomEvent('navigate', { detail: { info, frame } }),
+				);
+			};
 			if (nested) {
 				if (navigate?.client) this.#attribute(navigate.client, frame);
+				// a frame in the page that navigated is a step of the frame's
+				// history (a tab's Back steps it first): the buttons follow
+				if (navigate) frame.historyChanged(announce);
 				return;
 			}
 			if (navigate) {
 				if (navigate.client) this.#attribute(navigate.client, frame);
 				frame.report(navigate);
-				init.onNavigate?.(navigate, frame);
-				this.dispatchEvent(
-					new CustomEvent('navigate', { detail: { info: navigate, frame } }),
-				);
+				// where the frame's history can go is the controller frame's to
+				// say (nested frames included), not the page's own navigable
+				frame.reported(navigate, announce);
 				return;
 			}
 			const url = openRequest(event.data);
@@ -482,7 +490,7 @@ export class RemoteFrame extends EventTarget {
 	url: string | null = null;
 	/** last known document title */
 	title: string | null = null;
-	/** last known: whether the frame's own history has an entry before/after the current one; null when unknown */
+	/** last known: whether the frame's history (nested frames included) has an entry before/after the current one; null when unknown */
 	canGoBack: boolean | null = null;
 	canGoForward: boolean | null = null;
 	#refreshing: Promise<void> | null = null;
@@ -568,16 +576,63 @@ export class RemoteFrame extends EventTarget {
 	report(info: NavigateInfo) {
 		this.url = info.url;
 		this.title = info.title;
-		this.canGoBack = info.canGoBack;
-		this.canGoForward = info.canGoForward;
-		for (const resolve of this.#awaitingReport) resolve();
-		this.#awaitingReport.clear();
-		this.dispatchEvent(new CustomEvent('navigate', { detail: info }));
+	}
+	/** the last report, with the frame's history state */
+	#last: NavigateInfo | null = null;
+	/** history state requests, answered in order */
+	#history: Promise<void> = Promise.resolve();
+	/** the frame's history state from the controller frame */
+	#syncHistory(): Promise<void> {
+		const run = () =>
+			this.controller
+				.frameInfo(this.element)
+				.then((info) => {
+					if (info.canGoBack !== null) this.canGoBack = info.canGoBack;
+					if (info.canGoForward !== null) this.canGoForward = info.canGoForward;
+				})
+				.catch(() => {});
+		this.#history = this.#history.then(run, run);
+		return this.#history;
 	}
 	/**
-	 * Step the frame's own history, relayed through the controller frame.
-	 * Resolves false when there is no entry in that direction (the frame's
-	 * history is never allowed to walk the host page).
+	 * @internal A report, out with the frame's history state once that is
+	 * known: the frame's event, then the controller's (`announce`)
+	 */
+	async reported(
+		info: NavigateInfo,
+		announce: (info: NavigateInfo) => void,
+	): Promise<void> {
+		await this.#syncHistory();
+		if (this.canGoBack !== null) info.canGoBack = this.canGoBack;
+		if (this.canGoForward !== null) info.canGoForward = this.canGoForward;
+		this.canGoBack = info.canGoBack;
+		this.canGoForward = info.canGoForward;
+		this.#last = info;
+		this.dispatchEvent(new CustomEvent('navigate', { detail: info }));
+		announce(info);
+		// go() and reload() resolve once the report is out, as on Frame
+		for (const resolve of this.#awaitingReport) resolve();
+		this.#awaitingReport.clear();
+	}
+	/**
+	 * @internal A document in a frame of the page reported: the last report
+	 * goes out again when the frame's history state changed
+	 */
+	async historyChanged(announce: (info: NavigateInfo) => void): Promise<void> {
+		await this.#syncHistory();
+		const last = this.#last;
+		if (
+			!last ||
+			(this.canGoBack === last.canGoBack &&
+				this.canGoForward === last.canGoForward)
+		)
+			return;
+		await this.reported({ ...last }, announce);
+	}
+	/**
+	 * Step the frame's history as a tab's Back and Forward do (see
+	 * Frame.back), relayed through the controller frame. Resolves false when
+	 * there is no entry in that direction.
 	 */
 	back(): Promise<boolean> {
 		return this.controller.frameCommand(this.element, 'back');
