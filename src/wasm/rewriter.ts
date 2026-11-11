@@ -224,9 +224,9 @@ export function rewriterRoute(
 
 /**
  * `script` rewritten by this thread's instance of the module, or null: the
- * thread holds none, it holds another revision's, it is in a call already
- * (a data: import inside the script being rewritten), it trapped, or it
- * declined the script
+ * thread holds none, it holds another revision's, the script is not
+ * well-formed UTF-16, the instance is in a call already (a data: import
+ * inside the script being rewritten), it trapped, or it declined the script
  */
 export function rewriteInWasm(
 	script: string,
@@ -237,6 +237,11 @@ export function rewriteInWasm(
 	source?: Source,
 ): string | null {
 	if (!hasModule(REWRITER)) return null;
+	// a lone surrogate has no UTF-8: the encoder would hand the module
+	// U+FFFD in its place, and what came back would not be the page's
+	// text. A script from the network never holds one; a string a page
+	// evaluates can
+	if (!script.isWellFormed()) return null;
 	return withInstance(
 		REWRITER,
 		(instance) =>

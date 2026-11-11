@@ -260,6 +260,11 @@ The first release after a four-year gap. Everything below is breaking.
   made now (`rewriteBy`: `wasm`, or `js` when the module declined it, its
   thread does not hold the module yet, or the script was split), as it says
   for a stylesheet.
+- Under `rewriter: 'wasm'` a script that holds a lone surrogate (a string a
+  page evaluates can; a script from the network cannot) is rewritten by the
+  JavaScript rewriter: it has no UTF-8, and the module would have been
+  handed U+FFFD in its place and written that into the page's text
+  (`wasm-rewriter-glue` suite).
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

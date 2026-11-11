@@ -206,4 +206,19 @@ thread.adoptModule('rewriter', await WebAssembly.compile(bytes));
 	);
 }
 
+// a string a page evaluates may hold a lone surrogate, which has no UTF-8:
+// the module would be handed U+FFFD in its place and write that back
+{
+	const script = '/* kept */ x = "\ud83d".charCodeAt(0) + top.length;';
+	const output = thread.modifyJS(script, urlOf(thread), config, 'generic');
+	ok(
+		"a script with a lone surrogate is the JavaScript rewriter's, and the surrogate is not replaced",
+		!script.isWellFormed() &&
+			output === plain.modifyJS(script, urlOf(plain), config, 'generic') &&
+			!output.includes('\ufffd') &&
+			output.includes('.get(top'),
+		show(output),
+	);
+}
+
 await done();
