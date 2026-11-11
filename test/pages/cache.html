@@ -16,6 +16,16 @@
 		await twice('nostore.json');
 		await twice('revalidate.json');
 		await twice('auth.json', { headers: { authorization: 'Bearer x' } });
+		await (
+			await fetch('/pages/auth-other.json', {
+				headers: { authorization: 'Bearer x' },
+			})
+		).json();
+		await (
+			await fetch('/pages/auth-other.json', {
+				headers: { authorization: 'Bearer y' },
+			})
+		).json();
 		__cache.hits = await (await fetch('/hits')).json();
 	})()
 		.catch((e) => {

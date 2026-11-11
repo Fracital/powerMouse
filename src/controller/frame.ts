@@ -154,6 +154,8 @@ if (window === window.parent || !origins.length) {
 						codec: init.codec,
 						frameAncestors: [hostOrigin],
 						openTab: !!init.openTab,
+						// (the host page's, which it found out: nothing to ask here)
+						hostReload: init.hostReload ?? null,
 						...(init.cache === false ? { cache: false } : {}),
 						...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 						...(init.membrane === false ? { membrane: false } : {}),

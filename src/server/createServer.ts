@@ -14,7 +14,11 @@ import {
 } from '../config';
 import { parseRoutedURL } from '../routeURL';
 import StompURL from '../StompURL';
-import type { RequestInfo, RequestRule } from '../transport/messages';
+import type {
+	HostReload,
+	RequestInfo,
+	RequestRule,
+} from '../transport/messages';
 import { heldModules, moduleOf } from '../wasm/thread';
 import { Blocker, registerBlocker } from './blocker';
 import { HttpCache, memoryCache } from './cache';
@@ -35,6 +39,8 @@ export interface StompServer {
 	route(url: string): string;
 	/** drop every entry of the HTTP cache and the rewrite cache (a no-op when they are off) */
 	clearCache(): Promise<void>;
+	/** the host page was reloaded: what it restores takes that cache mode (rewrites.ts) */
+	hostReloaded(mode: HostReload): void;
 	/** the cookie jar, for the host's cookies API */
 	cookies: Cookies;
 	/** replace the host's request rules */
@@ -276,7 +282,7 @@ export default async function createServer(
 	const blocker = adblock
 		? sharedBlocker(init.scope, adblock, new BareCompatibleClient(transport))
 		: undefined;
-	const { route, setRules } = registerRewrites(
+	const { route, setRules, hostReloaded } = registerRewrites(
 		router,
 		init,
 		cookies,
@@ -304,6 +310,7 @@ export default async function createServer(
 			await rewrites?.clear();
 		},
 		setRules,
+		hostReloaded,
 		realURL,
 		routeOf: (routed) => {
 			try {

@@ -39,9 +39,9 @@ export interface Config {
 	 */
 	workerTransport?: boolean;
 	/**
-	 * HTTP cache in the service worker, on unless `false`: GET/HEAD responses
-	 * with explicit freshness are served from a Cache API store and
-	 * revalidated with ETag / Last-Modified when stale.
+	 * HTTP cache in the service worker, on unless `false`: GET responses are
+	 * kept in a Cache API store and served or revalidated with ETag /
+	 * Last-Modified as Chrome's HTTP cache does (docs/http-cache.md).
 	 */
 	cache?: boolean;
 	/** @internal the host wants a RequestInfo per request (ControllerInit.onRequest) */

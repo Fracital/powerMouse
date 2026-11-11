@@ -205,6 +205,23 @@ on every save (use a `git worktree`).
   holds the Response (until it is collected or the worker stops): a probe
   that restarts Chrome right after a load must stop the worker first
   (`ServiceWorker.stopAllWorkers`) or it measures nothing consumed.
+- **The HTTP cache keeps and asks as Chrome's does, by measurement.**
+  docs/http-cache.md is the table (what each shape of caching headers and
+  each request cache mode makes of the next fetch) and the http-cache
+  suite compares it natively against proxied; a rule in
+  `src/server/cache.ts` changes with a row there, not from the RFC. One
+  difference is kept on purpose and listed in both: an entry made with
+  credentials is confirmed before a request with other credentials gets it
+  (do not drop this: one store serves every cookie jar). A 206 is kept as
+  a part and completed by range as Chrome completes its sparse entries,
+  quirks included (`completePart` in `src/server/rewrites.ts`). The
+  rewrite cache's `mayKeep` is a rule of its own and stays stricter. The
+  Cache API refuses a response with `Vary: *` (it is kept under another
+  header name), and a 304's Set-Cookie has to be carried to the response
+  by hand (`rawHeaders`). A reload of the host's tab reaches the proxied
+  page only because the controller tells the worker how the host was
+  loaded (`src/controller/hostReload.ts`, asked when the module loads: a
+  hard reload can be told only before the host's load event).
 - **Same-origin `StompController` is for development only.** It is not a
   security boundary: a proxied page is same-origin with the host. Real
   deployments use `RemoteController` with a separate proxy origin

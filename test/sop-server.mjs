@@ -119,6 +119,7 @@ export function sop(req, res) {
 		acrm: h['access-control-request-method'] ?? null,
 		acrh: h['access-control-request-headers'] ?? null,
 		custom: h['x-custom'] ?? null,
+		ifNoneMatch: !!h['if-none-match'],
 	});
 	res.setHeader('cache-control', query.get('cc') ?? 'no-store');
 	const set = (name, value) => {

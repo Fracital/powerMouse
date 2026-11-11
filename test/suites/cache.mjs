@@ -1,8 +1,10 @@
 // The service worker's HTTP cache, on by default and off with `?nocache` in
 // the demo: a fresh entry (max-age) serves the second fetch without an
 // upstream request, no-store never caches, a stale entry with an ETag
-// revalidates and a 304 refreshes it, a request with Authorization bypasses,
-// clearCache() forces a refetch, and with the opt-out nothing is cached.
+// revalidates and a 304 refreshes it, a request with Authorization is given
+// what the same Authorization got, clearCache() forces a refetch, and with
+// the opt-out nothing is cached. What is kept and what is asked, shape by
+// shape against Chrome, is the http-cache suite's.
 import {
 	done,
 	FIXTURE,
@@ -66,9 +68,14 @@ async function run(base) {
 		JSON.stringify(hits['revalidate.json']),
 	);
 	ok(
-		'a request with Authorization bypasses the cache',
-		hits['auth.json']?.requests === 2,
+		'a request with Authorization is given what the same Authorization got',
+		hits['auth.json']?.requests === 1,
 		JSON.stringify(hits['auth.json']),
+	);
+	ok(
+		'and another Authorization is not: the origin is asked',
+		hits['auth-other.json']?.requests === 2,
+		JSON.stringify(hits['auth-other.json']),
 	);
 	await page.evaluate(() => window.controller.clearCache());
 	// after clearCache the fresh file must be fetched again

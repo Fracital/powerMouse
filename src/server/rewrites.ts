@@ -58,6 +58,7 @@ import { siteFacts, type SiteFacts } from '../siteFacts';
 import StompURL from '../StompURL';
 import { getDomain, getPublicSuffix } from '../suffix';
 import type {
+	HostReload,
 	RequestErrorKind,
 	RequestInfo,
 	RequestRule,
@@ -88,13 +89,21 @@ import {
 } from './blobOrigins';
 import type { Blocker } from './blocker';
 import {
+	askedRange,
+	byteRange,
+	clearsCache,
+	contentRange,
 	HttpCache,
 	isCacheable,
+	isPartCacheable,
 	mayKeep,
 	MEMORY_DESTINATIONS,
 	MemoryCache,
 	memoryCache,
+	parseCacheControl,
 	partitionedKey,
+	sameVersion,
+	type CacheHit,
 } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
 import {
@@ -223,6 +232,18 @@ const clientTopSites = new Map<string, string>();
  * as the network's 304 rather than the HTTP cache's (messages.ts Delivery)
  */
 const rendererHas = new Set<string>();
+/**
+ * the conditional request headers: a request that carries one of its page's
+ * own is not the HTTP cache's to answer (the browser's own, for what its
+ * memory cache holds, are dropped before)
+ */
+const OWN_CONDITIONALS = [
+	'if-none-match',
+	'if-modified-since',
+	'if-match',
+	'if-unmodified-since',
+	'if-range',
+];
 const RENDERER_HAS = 8192;
 const CLIENT_URLS_KEPT = 256;
 
@@ -498,7 +519,22 @@ interface Rewriter {
 	blocker?: Blocker;
 	/** the host asked for the blocker: the first navigation waits for its lists (on by default, none does) */
 	blockerAsked?: boolean;
+	/**
+	 * the host page was reloaded (src/controller/hostReload.ts): the cache
+	 * mode the pages it restores take, until when a navigation counts as
+	 * one, and the documents a hard reload made (by client id, with when
+	 * each stops loading past the caches)
+	 */
+	hostReload?: { mode: HostReload; until: number; loads: Map<string, number> };
 }
+
+/** how long after a reloaded host's word a top-level navigation is one it restores */
+const RESTORE_WINDOW_MS = 10_000;
+/**
+ * how long what a hard-reloaded document loads goes past the caches
+ * (natively until its load event, which the worker does not hear of)
+ */
+const HARD_LOAD_MS = 30_000;
 
 /** the page aborted the request (its signal fired) */
 const ABORTED = Symbol('aborted');
@@ -1647,14 +1683,16 @@ function genericForward(
 			}
 		}
 
-		// the HTTP cache, unless the host turned it off: a fresh entry answers
-		// without the transport; a stale one with validators is revalidated
-		// and a 304 refreshes it; what comes back cacheable is stored (its
-		// body split in two, one copy for the store). Stale entries are used
-		// only as far as the origin allowed: within stale-while-revalidate
-		// they answer at once and one revalidation runs behind the page; within
-		// stale-if-error they answer for a 5xx or a failed request. Never any
-		// freshness the origin did not state.
+		// the HTTP cache, unless the host turned it off, keeping and asking as
+		// Chrome's does (docs/http-cache.md): a fresh entry answers without
+		// the transport; one that is stale, `no-cache`, or made for another
+		// request (its Vary, its credentials) is confirmed by the origin with
+		// the validators it gave, and a 304 refreshes it; what comes back
+		// cacheable is stored (its body split in two, one copy for the
+		// store). Stale entries are used only as far as the origin allowed:
+		// within stale-while-revalidate they answer at once and one
+		// revalidation runs behind the page. A 206 is kept as a part of the
+		// resource, and completed by range (completePart).
 		// Kept per network partition (cache.ts partitionedKey): the top-level
 		// site and the site of the frame or worker that asks (a navigation's
 		// is its destination's); a request whose client has no site of its
@@ -1678,24 +1716,74 @@ function genericForward(
 			requestHeaders.delete('if-none-match');
 			requestHeaders.delete('if-modified-since');
 		}
+		// The request's cache mode, as Chrome's HTTP cache takes it
+		// (docs/http-cache.md). What the page wrote in the request's headers
+		// changes the default: with a conditional header of its own the
+		// request is the page's business (the cache neither answers nor keeps
+		// the answer, and the origin is asked with max-age=0), its own
+		// `Cache-Control: no-cache` or `Pragma: no-cache` is a reload, its
+		// `max-age=0` a revalidation.
+		// (Chrome hands the worker a request with a conditional header as
+		// `no-cache` already)
+		let cacheMode: RequestCache = serverRequest.cache;
+		if (OWN_CONDITIONALS.some((name) => requestHeaders.has(name))) {
+			if (cacheMode === 'default' || cacheMode === 'no-cache') {
+				cacheMode = 'no-store';
+				shape.cache = 'no-cache';
+			}
+		} else if (cacheMode === 'default') {
+			const asked = parseCacheControl(requestHeaders.get('cache-control'));
+			if (
+				asked.has('no-cache') ||
+				/(^|,)\s*no-cache\s*(,|$)/i.test(requestHeaders.get('pragma') || '')
+			)
+				cacheMode = 'reload';
+			else if (asked.get('max-age') === '0') cacheMode = 'no-cache';
+		}
+		// A host page that was reloaded shows its page again with a new
+		// navigation, which takes the reload's mode: `no-cache` for the
+		// document after a reload, `reload` for the document and what it
+		// loads after a hard one, as natively.
+		const restored = rewriter.hostReload;
+		if (restored && cacheMode === 'default') {
+			const now = Date.now();
+			if (navigation && topLevel && now < restored.until) {
+				cacheMode = shape.cache = restored.mode;
+				if (restored.mode === 'reload' && context?.clientId)
+					restored.loads.set(context.clientId, now + HARD_LOAD_MS);
+			} else if (
+				!navigation &&
+				context?.clientId &&
+				(restored.loads.get(context.clientId) ?? 0) > now
+			)
+				cacheMode = shape.cache = 'reload';
+		}
+		// `force-cache` and `only-if-cached` take an entry however stale; a
+		// navigation that asks for the latter (history, to a form's result)
+		// goes on to the network for what is not kept, since a POST's answer
+		// never is
+		const takesStale =
+			cacheMode === 'force-cache' || cacheMode === 'only-if-cached';
 		const memoryKey =
 			memoryDestination &&
 			frameSite !== null &&
 			serverRequest.method === 'GET' &&
 			!context?.bypassCache &&
-			!['no-store', 'reload', 'no-cache'].includes(serverRequest.cache)
+			!['no-store', 'reload', 'no-cache'].includes(cacheMode)
 				? MemoryCache.key(frameSite, credentials, url.toString())
 				: null;
 		const remembered =
 			memoryKey !== null && !fromWorker && !preloaded
 				? memoryCache.match(memoryKey, requestHeaders)
 				: null;
-		const hit =
+		let hit =
 			!remembered &&
 			!fromWorker &&
 			!preloaded &&
 			cache &&
 			!context?.bypassCache &&
+			cacheMode !== 'no-store' &&
+			cacheMode !== 'reload' &&
 			(serverRequest.method === 'GET' || serverRequest.method === 'HEAD')
 				? await cache.match(cacheKey!, requestHeaders)
 				: null;
@@ -1706,8 +1794,15 @@ function genericForward(
 		// natively the renderer's memory cache answers, or revalidates what it
 		// has, rather than the HTTP cache (messages.ts Delivery)
 		let memory = false;
+		// (an entry the origin has to confirm for this request, or a request
+		// that asks for the confirmation, is not served stale on any terms)
 		const within = (window: number | null) =>
-			!!hit && !hit.mustRevalidate && window !== null && hit.staleFor <= window;
+			!!hit &&
+			!hit.mustRevalidate &&
+			!hit.revalidate &&
+			cacheMode !== 'no-cache' &&
+			window !== null &&
+			hit.staleFor <= window;
 		const withValidators = (headers: Headers) => {
 			const conditional = new Headers(headers);
 			if (hit?.etag) conditional.set('if-none-match', hit.etag);
@@ -1715,14 +1810,169 @@ function genericForward(
 				conditional.set('if-modified-since', hit.lastModified);
 			return conditional;
 		};
+		// Clear-Site-Data: "cache" from the origin itself (a secure one, as
+		// natively): what the caches keep of that origin goes, in every
+		// partition, and the answer that says so is not kept either. The
+		// header's other types are not acted on, and it never reaches the
+		// browser (filterHeaders).
+		const clears = (responseHeaders: Headers) =>
+			clearsCache(responseHeaders.get('clear-site-data')) &&
+			potentiallyTrustworthy(url.url);
 		const storable = (status: number, responseHeaders: Headers) =>
 			!!cache &&
+			cacheMode !== 'no-store' &&
+			!clears(responseHeaders) &&
 			isCacheable({
 				method: serverRequest.method,
 				requestHeaders,
 				status,
 				responseHeaders,
 			});
+		// what the origin answered on the way to completing a part, that
+		// answers the request as it is (a 200: the resource changed, or the
+		// origin sends it whole): the forward goes on with it
+		let answered: Awaited<ReturnType<typeof fetchUpstream>> | null = null;
+		// the part was dropped on the way: what the origin answers now is
+		// not kept (completePart)
+		let restarted = false;
+		// The part of the resource an entry holds (cache.ts Part), as
+		// Chrome's cache completes a sparse entry: the bytes the request asks
+		// for that it holds come from it, confirmed with the origin by a
+		// conditional request for those bytes unless it holds them all and
+		// is fresh, and the bytes it lacks are asked for by range. What does
+		// not fit together that way (another version, an answer that is not
+		// the bytes asked for) is fetched as the page asked, no condition.
+		const completePart = async (kept: CacheHit) => {
+			const part = kept.part!;
+			const asked = askedRange(requestHeaders.get('range'), part.size);
+			if (asked === undefined || kept.mismatch) return null;
+			const { from, to } = asked ?? { from: 0, to: part.size - 1 };
+			// (the request and the part share no byte)
+			if (from > part.to || to < part.from) return null;
+			const holds = from >= part.from && to <= part.to;
+			if (cacheMode === 'only-if-cached' && !holds) return null;
+			const confirm =
+				!takesStale &&
+				(!holds || !kept.fresh || kept.revalidate || cacheMode === 'no-cache');
+			if (confirm && !kept.etag && !kept.lastModified) return null;
+			const keptBytes = new Uint8Array(await kept.response.arrayBuffer());
+			const cookies: [string, string][] = [];
+			const headers = new Headers(kept.response.headers);
+			let asks = 0;
+			let fetched = false;
+			const ask = async (first: number, last: number, conditional: boolean) => {
+				// (the bytes it lacks are asked for as of its version)
+				const sent = conditional
+					? withValidators(requestHeaders)
+					: new Headers(requestHeaders);
+				sent.set('range', `bytes=${first}-${last}`);
+				if (!conditional)
+					sent.set('if-range', (kept.etag ?? kept.lastModified)!);
+				asks++;
+				const upstream = await fetchUpstream(sent);
+				for (const raw of upstream.rawHeaders ?? [])
+					if (raw[0].toLowerCase() === 'set-cookie') cookies.push(raw);
+				return upstream;
+			};
+			// the bytes it lacks, by range: a 206 of exactly them, of this version
+			const lacking = async (first: number, last: number) => {
+				const upstream = await ask(first, last, false);
+				const got = contentRange(upstream.headers.get('content-range'));
+				if (
+					upstream.status === 206 &&
+					got?.from === first &&
+					got.to === last &&
+					got.size === part.size &&
+					sameVersion(kept.response.headers, upstream.headers)
+				) {
+					fetched = true;
+					return new Uint8Array(await upstream.arrayBuffer());
+				}
+				if (upstream.status === 200) answered = upstream;
+				else await upstream.body?.cancel().catch(() => {});
+				return null;
+			};
+			// Bytes it lacks before the ones it holds: Chrome asks for them, then
+			// drops the part and asks for what the page asked as the page asked
+			// it, and keeps neither answer (measured in 152 and 156: the next
+			// request is fetched again)
+			if (from < part.from) {
+				if (!kept.etag && !kept.lastModified) return null;
+				const upstream = await ask(from, part.from - 1, false);
+				await upstream.body?.cancel().catch(() => {});
+				restarted = true;
+				await cache!.drop(cacheKey!);
+				answered = await fetchUpstream(new Headers(requestHeaders));
+				return null;
+			}
+			const before = new Uint8Array();
+			if (confirm) {
+				const upstream = await ask(
+					Math.max(from, part.from),
+					Math.min(to, part.to),
+					true,
+				);
+				if (upstream.status !== 304) {
+					if (upstream.status === 200) answered = upstream;
+					else await upstream.body?.cancel().catch(() => {});
+					return null;
+				}
+				headers.delete('age');
+				for (const [name, value] of upstream.headers)
+					if (
+						!['content-length', 'content-type', 'transfer-encoding'].includes(
+							name,
+						)
+					)
+						headers.set(name, value);
+			}
+			const after =
+				to > part.to ? await lacking(part.to + 1, to) : new Uint8Array();
+			if (!after) return null;
+			// the bytes from the first it now has to the last
+			const first = Math.min(from, part.from);
+			const bytes = new Uint8Array(
+				before.byteLength + keptBytes.byteLength + after.byteLength,
+			);
+			bytes.set(before);
+			bytes.set(keptBytes, before.byteLength);
+			bytes.set(after, before.byteLength + keptBytes.byteLength);
+			if (asks) {
+				headers.delete('age');
+				if (!clears(headers))
+					await cache!.putPart(
+						cacheKey!,
+						requestHeaders,
+						new Response(null, { headers }),
+						bytes,
+						{ from: first, to: first + bytes.byteLength - 1, size: part.size },
+					);
+			}
+			const slice = bytes.slice(from - first, to - first + 1);
+			headers.set('content-length', String(slice.byteLength));
+			if (asked)
+				headers.set('content-range', `bytes ${from}-${to}/${part.size}`);
+			else headers.delete('content-range');
+			const completed: typeof response = new Response(slice, {
+				status: asked ? 206 : 200,
+				statusText: asked ? 'Partial Content' : 'OK',
+				headers,
+			});
+			completed.rawHeaders = cookies;
+			return { response: completed, asks, fetched };
+		};
+		let fromPart: Awaited<ReturnType<typeof completePart>> = null;
+		if (hit?.part) {
+			if (serverRequest.method === 'GET' && !fromWorker && !remembered)
+				fromPart = await completePart(hit).catch((error) => {
+					if (error === ABORTED) throw error;
+					return null;
+				});
+			if (!fromPart) {
+				await hit.response.body?.cancel().catch(() => {});
+				hit = null;
+			}
+		}
 
 		if (fromWorker) {
 			response = fromWorker;
@@ -1730,27 +1980,51 @@ function genericForward(
 			response = remembered;
 			cached = true;
 			memory = true;
-		} else if (hit && hit.fresh && !hit.mustRevalidate) {
+		} else if (fromPart) {
+			response = fromPart.response;
+			cached = fromPart.asks === 0;
+			revalidated = fromPart.asks > 0 && !fromPart.fetched;
+		} else if (
+			hit &&
+			(takesStale
+				? !hit.mismatch
+				: hit.fresh && !hit.revalidate && cacheMode !== 'no-cache')
+		) {
+			// (must-revalidate is about a stale entry: a fresh one is used)
 			response = hit.response;
 			cached = true;
+		} else if (cacheMode === 'only-if-cached' && !navigation) {
+			await hit?.response.body?.cancel().catch(() => {});
+			return Response.error();
 		} else if (hit && within(hit.staleWhileRevalidate)) {
 			response = hit.response;
 			cached = true;
 			// one revalidation per URL, however many stale hits arrive together
 			cache!.revalidateOnce(cacheKey!, async () => {
 				const upstream = await fetchUpstream(withValidators(requestHeaders));
+				// (no page reads this answer: its cookies are set here)
+				if (credentials)
+					for (const [header, value] of upstream.rawHeaders ?? [])
+						if (header.toLowerCase() === 'set-cookie')
+							await rewriter.cookies.set(value, url.url, 'http', partitionKey);
 				if (upstream.status === 304)
-					await cache!.refresh(cacheKey!, hit, upstream.headers);
+					await cache!.refresh(
+						cacheKey!,
+						hit,
+						upstream.headers,
+						requestHeaders,
+					);
 				else if (upstream.body && storable(upstream.status, upstream.headers))
 					await cache!.put(cacheKey!, requestHeaders, upstream, upstream.body);
 				else await upstream.body?.cancel();
 			});
 		} else {
-			let upstream: Awaited<ReturnType<typeof rewriter.bare.fetch>> | null =
-				null;
+			let upstream: Awaited<ReturnType<typeof rewriter.bare.fetch>>;
 			try {
 				upstream =
-					preloaded ?? (await fetchUpstream(withValidators(requestHeaders)));
+					preloaded ??
+					answered ??
+					(await fetchUpstream(withValidators(requestHeaders)));
 				// a Basic challenge is answered once with the request's own
 				// credentials, else the realm's kept ones; what succeeds is kept
 				const realm =
@@ -1795,40 +2069,81 @@ function genericForward(
 					reportAborted();
 					return Response.error();
 				}
-				if (!within(hit?.staleIfError ?? null)) {
-					// a document is reported by the wrapper, once it knows whether
-					// the host's page answers (then no client id is to be waited for)
-					if (!DOCUMENT_DESTINATIONS.has(serverRequest.destination)) {
-						rewriter.log?.({
-							url: reportURL(url),
-							method: serverRequest.method,
-							destination: serverRequest.destination || 'fetch',
-							status: 0,
-							ms: Date.now() - started,
-							cached: false,
-							kind: 'transport',
-							bytes: null,
-							error: String(error),
-							client: context?.clientId,
-						});
-						(error as { stompReported?: boolean }).stompReported = true;
-					}
-					throw error;
+				// (a stale entry does not answer for it, stale-if-error or not:
+				// Chrome shows the error)
+				await hit?.response.body?.cancel().catch(() => {});
+				// a document is reported by the wrapper, once it knows whether
+				// the host's page answers (then no client id is to be waited for)
+				if (!DOCUMENT_DESTINATIONS.has(serverRequest.destination)) {
+					rewriter.log?.({
+						url: reportURL(url),
+						method: serverRequest.method,
+						destination: serverRequest.destination || 'fetch',
+						status: 0,
+						ms: Date.now() - started,
+						cached: false,
+						kind: 'transport',
+						bytes: null,
+						error: String(error),
+						client: context?.clientId,
+					});
+					(error as { stompReported?: boolean }).stompReported = true;
 				}
+				throw error;
 			}
-			if (
-				upstream === null ||
-				(upstream.status >= 500 && within(hit?.staleIfError ?? null))
-			) {
-				// the origin failed (or could not be reached) and allowed a stale
-				// answer for that: the entry, marked by its Age
-				await upstream?.body?.cancel();
-				response = hit!.response;
-				cached = true;
-			} else if (hit && upstream.status === 304) {
-				response = await cache!.refresh(cacheKey!, hit, upstream.headers);
+			if (hit && upstream.status !== 304)
+				await hit.response.body?.cancel().catch(() => {});
+			if (hit && upstream.status === 304) {
+				response = await cache!.refresh(
+					cacheKey!,
+					hit,
+					upstream.headers,
+					requestHeaders,
+				);
+				// (the cookies a 304 sets are set, as any answer's)
+				response.rawHeaders = upstream.rawHeaders?.filter(
+					([header]) => header.toLowerCase() === 'set-cookie',
+				);
 				revalidated = true;
 				memory = memoryKey !== null && rendererHas.has(memoryKey);
+			} else if (restarted) {
+				response = upstream;
+			} else if (
+				upstream.body &&
+				cache &&
+				cacheMode !== 'no-store' &&
+				!clears(upstream.headers) &&
+				isPartCacheable({
+					method: serverRequest.method,
+					requestHeaders,
+					status: upstream.status,
+					responseHeaders: upstream.headers,
+				})
+			) {
+				// a part of the resource: kept as one (cache.ts putPart)
+				const [forStore, forPage] = upstream.body.tee();
+				const part = contentRange(upstream.headers.get('content-range'))!;
+				const kept = upstream;
+				new Response(forStore)
+					.arrayBuffer()
+					.then((bytes) =>
+						bytes.byteLength === part.to - part.from + 1
+							? cache.putPart(
+									cacheKey!,
+									requestHeaders,
+									kept,
+									new Uint8Array(bytes),
+									part,
+								)
+							: undefined,
+					)
+					.catch(() => {});
+				response = new Response(forPage, {
+					status: upstream.status,
+					statusText: upstream.statusText,
+					headers: upstream.headers,
+				});
+				response.rawHeaders = upstream.rawHeaders;
 			} else if (upstream.body && storable(upstream.status, upstream.headers)) {
 				const [forStore, forPage] = upstream.body.tee();
 				cache!.put(cacheKey!, requestHeaders, upstream, forStore);
@@ -1843,8 +2158,36 @@ function genericForward(
 			}
 		}
 
+		// What a cache answers from an entry, as Chrome's does: a HEAD with
+		// no body, and a request for a range of a kept 200's bytes with a 206
+		// of them
+		if (!fromWorker && (cached || revalidated)) {
+			const { rawHeaders } = response;
+			const part =
+				serverRequest.method === 'HEAD'
+					? null
+					: await byteRange(response, requestHeaders.get('range'));
+			if (part) response = part;
+			else if (serverRequest.method === 'HEAD' && response.body) {
+				await response.body.cancel().catch(() => {});
+				response = new Response(null, {
+					status: response.status,
+					statusText: response.statusText,
+					headers: response.headers,
+				});
+			}
+			response.rawHeaders = rawHeaders;
+		}
+		const cleared =
+			!fromWorker && !cached && !revalidated && clears(response.headers);
+		if (cleared) {
+			await rewriter.cache?.clearOrigin(url.url.origin);
+			memoryCache.clearOrigin(url.url.origin);
+			for (const key of rendererHas)
+				if (MemoryCache.origin(key) === url.url.origin) rendererHas.delete(key);
+		}
 		// what this site's renderer has from here on, fresh or not
-		if (memoryKey !== null && response.status === 200) {
+		if (memoryKey !== null && response.status === 200 && !cleared) {
 			rendererHas.delete(memoryKey);
 			rendererHas.add(memoryKey);
 			if (rendererHas.size > RENDERER_HAS)
@@ -1855,6 +2198,7 @@ function genericForward(
 			memoryKey !== null &&
 			!remembered &&
 			!fromWorker &&
+			!cleared &&
 			response.body &&
 			MemoryCache.keeps(response.status, response.headers)
 		) {
@@ -2005,6 +2349,7 @@ function genericForward(
 				status: response.status,
 				ms: Date.now() - started,
 				cached,
+				...(revalidated ? { revalidated: true } : {}),
 				bytes: Number.isFinite(length) ? length : null,
 				client: context?.clientId,
 				...(rule ? { rule: rule.index } : {}),
@@ -3442,6 +3787,13 @@ export function registerRewrites(
 		setRules(rules: RequestRule[]) {
 			rewriter.rules = compileRules(rules);
 			forgetRecentOutputs();
+		},
+		hostReloaded(mode: HostReload) {
+			rewriter.hostReload = {
+				mode,
+				until: Date.now() + RESTORE_WINDOW_MS,
+				loads: new Map(),
+			};
 		},
 	};
 }

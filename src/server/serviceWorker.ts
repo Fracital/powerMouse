@@ -220,6 +220,9 @@ function registerController(
 					});
 				return [blocked, []];
 			},
+			hostReload: async (mode) => {
+				(await server).hostReloaded(mode);
+			},
 			cookies: async (command) => {
 				const { cookies } = await server;
 				switch (command.op) {

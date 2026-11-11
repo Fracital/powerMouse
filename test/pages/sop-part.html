@@ -134,7 +134,16 @@
 				'max-age=3600',
 			)}`;
 			if (kind === 'fetch') await (await fetch(url)).arrayBuffer();
-			else if (kind === 'preflight') {
+			else if (kind === 'validated') {
+				// a no-cache resource with a validator: how many of its loads
+				// so far were conditional (an entry of this partition confirmed;
+				// another partition's validator never goes with the request)
+				const kept = `${site}/sop/r?k=${k}&acao=*&cc=no-cache&etag=p1`;
+				await (await fetch(kept)).arrayBuffer();
+				return (await (await fetch(`${site}/sop/log?k=${k}`)).json()).filter(
+					(entry) => entry.ifNoneMatch,
+				).length;
+			} else if (kind === 'preflight') {
 				// a preflight site A lets be kept for ten minutes: how many
 				// reached it (the preflight cache is per network partition too)
 				const asked = `${site}/sop/r?k=${k}&acao=*&pacah=x-custom&pmaxage=600`;
@@ -225,6 +234,7 @@
 			out.cacheLoads = {
 				image: await cachedLoad('image'),
 				fetch: await cachedLoad('fetch'),
+				validated: await cachedLoad('validated'),
 				preflight: await cachedLoad('preflight'),
 			};
 			await new Promise((resolve) => setTimeout(resolve, 1000));

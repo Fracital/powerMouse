@@ -548,9 +548,17 @@ export interface RequestRule {
 	action: 'block' | RequestRuleAction;
 }
 
+/**
+ * How a host page that shows a proxied page again was itself loaded, as the
+ * cache mode the navigations that restore it take: `no-cache` after a
+ * reload, `reload` after a hard one (src/controller/hostReload.ts)
+ */
+export type HostReload = 'no-cache' | 'reload';
 export type SWbound = {
 	/** replace the request rules */
 	rules: [RequestRule[]];
+	/** the host page was reloaded: the pages it restores are (HostReload) */
+	hostReload: [HostReload];
 	/** resolve a URL against the controller's config into a routed (proxied) URL */
 	route: [string, string];
 	/** the real URL a routed one stands for (the controller's codec); null for anything that is not a route */
@@ -618,6 +626,8 @@ export interface RequestInfo {
 	ms: number;
 	/** answered from the HTTP cache without a request */
 	cached: boolean;
+	/** answered from the HTTP cache once the origin had confirmed its entry (a 304 to a conditional request) */
+	revalidated?: boolean;
 	/** a script's rewritten output: from the rewrite cache, made now and kept, or made now and not kept (the response may not be kept) */
 	rewriteCache?: 'hit' | 'miss' | 'skip';
 	/** where a script made now was rewritten: one of the controller's rewrite workers, several of them (a large bundle split across them), or the service worker itself */

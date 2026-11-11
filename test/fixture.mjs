@@ -131,6 +131,8 @@ const PAGES = {
 // how often each /pages/ file was requested, and how many of those were
 // answered 304 (cache suite); /hits returns the counters
 const hits = new Map();
+// what the http-cache suite's requests asked, by run then by name
+const httpCacheLog = new Map();
 // the body version of each /rewrite-js script, by name
 const scriptVersions = new Map();
 // how many /rewrite-js responses said which they were (`st`)
@@ -291,6 +293,135 @@ export function startFixture(port = 8084) {
 					provider_urls: [`http://${req.headers.host}/pages/fedcm-config.json`],
 				}),
 			);
+		}
+		// /http-cache[/<any>]?k=<run>&n=<name>: a counting body under the
+		// caching headers the query names, and a log of what each request
+		// asked (http-cache suite). `cc`, `vary`, `pragma`: the headers as
+		// given; `etag`: an ETag; `lm=<s>`: a Last-Modified that long ago;
+		// `expires=<s>`: an Expires that far ahead (`0`: as written); `status`; `sc`: a
+		// Set-Cookie; `csd`: a Clear-Site-Data; `age`: an Age; `chunked`: no
+		// Content-Length;
+		// `fail`: 500 after the first answer; `html`: a document, `img`: with
+		// an image in it; `ranges`: a Range of bytes gets a 206 of them. A
+		// matching validator gets a 304; a method other than GET is logged
+		// before the headers. /http-cache/log?k=
+		// is the log, /http-cache/clear?what= answers with that Clear-Site-Data
+		if (path === '/http-cache/log') {
+			const run = new URL(req.url, 'http://x').searchParams.get('k');
+			res.setHeader('content-type', 'application/json');
+			res.setHeader('cache-control', 'no-store');
+			return res.end(JSON.stringify(httpCacheLog.get(run) ?? {}));
+		}
+		if (path === '/http-cache/clear') {
+			res.setHeader('cache-control', 'no-store');
+			res.setHeader(
+				'clear-site-data',
+				new URL(req.url, 'http://x').searchParams.get('what') ?? '',
+			);
+			return res.end('cleared');
+		}
+		if (path === '/http-cache/target') {
+			res.setHeader('cache-control', 'no-store');
+			return res.end('target');
+		}
+		if (path === '/http-cache' || path.startsWith('/http-cache/')) {
+			const query = new URL(req.url, 'http://x').searchParams;
+			const run = query.get('k');
+			const name = query.get('n');
+			const log = httpCacheLog.get(run) ?? {};
+			httpCacheLog.set(run, log);
+			const entry = (log[name] ??= { asked: [], bodies: 0, modified: null });
+			if (query.has('lm'))
+				entry.modified ??= new Date(
+					Date.now() - Number(query.get('lm')) * 1000,
+				).toUTCString();
+			const asked = req.method === 'GET' ? [] : [req.method];
+			for (const header of [
+				'if-none-match',
+				'if-modified-since',
+				'cache-control',
+				'pragma',
+				'range',
+				'if-range',
+			])
+				if (req.headers[header] !== undefined)
+					asked.push(
+						header.startsWith('if-')
+							? header
+							: `${header}: ${req.headers[header]}`,
+					);
+			res.setHeader(
+				'content-type',
+				query.has('html') ? 'text/html' : 'text/plain',
+			);
+			for (const header of ['cc', 'vary', 'pragma'])
+				if (query.has(header))
+					res.setHeader(
+						header === 'cc' ? 'cache-control' : header,
+						query.get(header),
+					);
+			if (query.has('etag')) res.setHeader('etag', '"e1"');
+			if (entry.modified) res.setHeader('last-modified', entry.modified);
+			if (query.has('expires'))
+				res.setHeader(
+					'expires',
+					query.get('expires') === '0'
+						? '0'
+						: new Date(
+								Date.now() + Number(query.get('expires')) * 1000,
+							).toUTCString(),
+				);
+			// (`sc=seen`: one the page can read, that says which answer set it)
+			if (query.has('sc'))
+				res.setHeader(
+					'set-cookie',
+					query.get('sc') === 'seen'
+						? `hcseen=${entry.asked.length + 1}; path=/`
+						: `hc-sc=${Date.now()}; path=/never`,
+				);
+			if (query.has('csd')) res.setHeader('clear-site-data', query.get('csd'));
+			if (query.has('age')) res.setHeader('age', query.get('age'));
+			if (
+				(query.has('etag') && req.headers['if-none-match'] === '"e1"') ||
+				(entry.modified && req.headers['if-modified-since'] === entry.modified)
+			) {
+				entry.asked.push(['304', ...asked].join(' '));
+				res.statusCode = 304;
+				return res.end();
+			}
+			const status =
+				query.has('fail') && entry.bodies > 0
+					? 500
+					: Number(query.get('status')) || 200;
+			// (`ranges`: the first bytes a Range names, as a 206)
+			const range =
+				query.has('ranges') && status === 200
+					? /^bytes=(\d+)-(\d+)$/.exec(req.headers.range ?? '')
+					: null;
+			entry.asked.push([String(range ? 206 : status), ...asked].join(' '));
+			res.statusCode = status;
+			if (status >= 300 && status < 400 && status !== 300)
+				res.setHeader('location', '/http-cache/target');
+			// (`img`: a document with an image that is fresh for an hour)
+			const body = `#${++entry.bodies}${
+				query.has('img')
+					? `<img src="/http-cache/img?k=${encodeURIComponent(run)}&n=${encodeURIComponent(name)}-img&cc=max-age%3D3600">`
+					: ''
+			}`;
+			if (query.has('ranges')) res.setHeader('accept-ranges', 'bytes');
+			if (range) {
+				const [from, to] = [Number(range[1]), Number(range[2])];
+				const part = body.slice(from, to + 1);
+				res.statusCode = 206;
+				res.setHeader(
+					'content-range',
+					`bytes ${from}-${from + part.length - 1}/${body.length}`,
+				);
+				res.setHeader('content-length', part.length);
+				return res.end(part);
+			}
+			if (!query.has('chunked')) res.setHeader('content-length', body.length);
+			return res.end(body);
 		}
 		if (path === '/hits') {
 			res.setHeader('content-type', 'application/json');

@@ -559,11 +559,10 @@ suites' known lists with the same reason.
      judges each load.
    - `nextHopProtocol` is the scheme's usual protocol (`h2` for https,
      `http/1.1` for http): no transport reports what the origin spoke.
-   - A `no-cache` response with a validator transfers its body again
-     (`transferSize` the body and 300 bytes) where Chrome revalidates it
-     with a 304 (300 bytes): the worker's HTTP cache does not keep a
-     `no-cache` response, so it has nothing to revalidate (sop-escapes
-     known list). One with `max-age=0` is kept and revalidated.
+   - What the worker's HTTP cache keeps and asks the origin differs from
+     Chrome's in one listed way (docs/http-cache.md), so those loads read
+     as a network load where Chrome's entry says cache: an entry made with
+     other credentials than the request's is confirmed or fetched again.
    - A kept script's entry in a worker (`importScripts`, a worker's own
      script) reads as the HTTP cache's however it was delivered: a worker
      hears no note and has no synchronous bridge.

@@ -138,6 +138,12 @@ for (const [mode, base] of [
 		);
 		check(
 			mode,
+			`${key}: http cache, a no-cache entry's validator`,
+			want.cacheLoads?.validated,
+			got.cacheLoads?.validated,
+		);
+		check(
+			mode,
 			`${key}: image cache`,
 			want.cacheLoads?.image,
 			got.cacheLoads?.image,

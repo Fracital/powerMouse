@@ -1,7 +1,7 @@
-// The HTTP cache honours what the origin asked for and nothing more: a stale
+// The HTTP cache honours what the origin asked for, as Chrome's does: a stale
 // entry is served within its stale-while-revalidate window and revalidated
-// behind the page, answers for a 5xx within its stale-if-error window, and is
-// not used past either window. No heuristic freshness.
+// behind the page, is not used past that window, and does not answer for a
+// 5xx, stale-if-error or not (Chrome shows the error).
 import {
 	done,
 	FIXTURE,
@@ -50,10 +50,8 @@ ok(
 	JSON.stringify([result.short2, hits['stale/swr-short']]),
 );
 ok(
-	'a stale entry within stale-if-error answers for a 5xx',
-	result.sie2?.status === 200 &&
-		result.sie2?.body?.n === 1 &&
-		hits['stale/sie']?.requests === 2,
+	'a stale entry within stale-if-error does not answer for a 5xx: the page gets the 500',
+	result.sie2?.status === 500 && hits['stale/sie']?.requests === 2,
 	JSON.stringify([result.sie2, hits['stale/sie']]),
 );
 await done(browser);

@@ -526,12 +526,10 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   send, import Set-Cookie values, export cookies as records and wipe an
   origin or everything; host-only by construction.
 - An HTTP cache in the service worker, on by default (`cache: false` turns
-  it off, `?nocache` in the demo): GET/HEAD responses with explicit freshness (max-age, s-maxage,
-  Expires) are served from a Cache API store, revalidated with ETag /
-  Last-Modified when stale, never stored for requests with Authorization or
-  cookies (unless `public`), no-store / private / no-cache or Vary: *, and
-  capped at 5 MB per entry and 50 MB in all; `controller.clearCache()` drops
-  it.
+  it off, `?nocache` in the demo): GET responses are kept in a Cache API
+  store and served or revalidated with ETag / Last-Modified as Chrome's HTTP
+  cache does (docs/http-cache.md), never `no-store`, capped at 5 MB per
+  entry and 50 MB in all; `controller.clearCache()` drops it.
 - Frames dispatch a `navigate` event (and controllers take `onNavigate`)
   whenever the proxied page loads, changes its URL through pushState /
   hashchange or changes its title, with whether its own history can step;
@@ -654,6 +652,41 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- The worker's HTTP cache keeps what Chrome's keeps and asks the origin
+  when Chrome's does (docs/http-cache.md has the table, measured in 152
+  and 156). It kept only a response with explicit freshness to a request
+  without credentials, so the origin of a `no-cache` page or script with
+  an ETag was sent no conditional request and sent the body again each
+  time, a response with only a Last-Modified was fetched every time, and
+  a fresh `must-revalidate`, `private` or cookie-bearing one was too. Now
+  a `no-cache` or stale response with a validator is kept and confirmed
+  with a 304; freshness is Chrome's (max-age, Expires, a tenth of the age
+  by Last-Modified, the Age it arrived with; s-maxage is not a browser's
+  and a `no-cache` Pragma is heeded); `Vary: *` and a Vary mismatch
+  revalidate with the entry's validator; the request's cache mode is
+  honoured (`no-store`, `reload`, `no-cache`, `force-cache`,
+  `only-if-cached`, a page's own conditional or Cache-Control header, a
+  reloaded document); `Clear-Site-Data: "cache"` drops the origin's
+  entries; a cookie a 304 sets is set (it was dropped); a HEAD the cache
+  answers has no body (it carried the GET's), and a range of a kept 200 is
+  a 206 of those bytes (the whole entry was given); a response with
+  neither a validator nor time to live is kept for `force-cache`; a 206 is
+  kept as a part of the resource, and a later request is given the bytes
+  it holds once the origin confirms them, with the rest asked for by range
+  (`If-Range`), as Chrome completes a sparse entry; a stale entry no longer
+  answers for a 5xx or a failed request within `stale-if-error`: the page
+  gets the error, as in Chrome. An entry made for
+  a request with credentials is confirmed with the origin before a
+  request with other credentials is given it, where Chrome hands it over.
+  A reload of the host's tab reaches the page the host shows again: the
+  controller tells the worker how the host page was loaded
+  (`src/controller/hostReload.ts`), and the navigations that follow within
+  ten seconds revalidate the document after a reload and fetch it and what
+  it loads past the caches after a hard reload (Ctrl+Shift+R), where the
+  worker's caches answered either. A request log entry has `revalidated`
+  set for a response the origin confirmed with a 304 (the demo's viewer
+  tags it "304"). (http-cache suite, native against proxied in both
+  modes; cache, sop-escapes and sop-partitions suites.)
 - Resource timing tells every way the worker answered a load apart, as
   Chrome does (measured in 152 and 156): the body and 300 bytes from the
   network; 0 and `deliveryType` "cache" from a cache, with the protocol
@@ -3873,8 +3906,7 @@ url`) carries its value and targets that window. An about:blank child of
   request the transport could not complete. Past either window, and under
   `must-revalidate`, nothing changes. A cache-served response carries an
   `Age` header (the standard marker; `Warning` is deprecated) and the request
-  log says `cached: true`. Still no heuristic freshness: an entry without
-  explicit freshness is never stored.
+  log says `cached: true`.
 - A document the page builds itself and shows from a `blob:` URL (a
   `text/html` Blob or File in a frame or a window) is injected and rewritten
   like a fetched one: its string contents are wrapped in the shell at
@@ -4364,9 +4396,8 @@ Fixed while testing real sites and a feature fixture:
   (not readable by the page) still show routes.
 - Aborting a fetch does not cancel the request on the transport (epoxy
   ignores the signal); the response is discarded.
-- The HTTP cache uses no heuristic freshness (`Last-Modified` alone stores
-  nothing); stale entries are served only within the origin's
-  `stale-while-revalidate` and `stale-if-error` windows.
+- The HTTP cache differs from Chrome's in one listed way
+  (docs/http-cache.md): other credentials than an entry's revalidate it.
 - `getSVGDocument()` is not spoofed.
 - WebAuthn with the real site's `rpId` (a passkey sign-in) is not a
   suffix of the proxy origin, so Chrome tries a related-origin fetch of

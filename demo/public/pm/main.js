@@ -1719,7 +1719,7 @@ function requestRow(info) {
 	cell('dest', info.destination || 'fetch');
 	cell('ms', `${Math.round(info.ms)} ms`);
 	cell('size', formatBytes(info.bytes));
-	cell('tag', info.cached ? 'cached' : '');
+	cell('tag', info.cached ? 'cached' : info.revalidated ? '304' : '');
 	return row;
 }
 

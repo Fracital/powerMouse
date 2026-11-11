@@ -1,0 +1,431 @@
+<!doctype html>
+<title>HTTP CACHE</title>
+<script>
+	// What the HTTP cache keeps and what it asks the origin, shape by shape
+	// (http-cache suite; the fixture's /http-cache answers under the headers
+	// the query names and logs what each request asked). A shape is fetched
+	// three times (`visits` says otherwise), `wait` ms apart (`settle` ms
+	// for the log after each); `probe`,
+	// `cookie` and `init` say what a visit sends. A `frame` shape is a
+	// document: a frame loads it, a second frame loads it, and the first
+	// reloads. Each shape has a path of
+	// its own, so a cookie set for it goes with no other shape's requests.
+	// The report, per shape: what the origin was asked at each visit and
+	// what the page got.
+	window.__hc = { cases: {} };
+	const key = new URLSearchParams(location.search).get('k');
+	const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+	const another = (visit) => `v${visit}`;
+	const third = (init) => (visit) => (visit === 2 ? init : {});
+	const SHAPES = {
+		'max-age=3600': { q: { cc: 'max-age=3600' } },
+		'max-age=3600, immutable': { q: { cc: 'max-age=3600, immutable' } },
+		'max-age=3600, must-revalidate': {
+			q: { cc: 'max-age=3600, must-revalidate' },
+		},
+		'no-cache with an ETag': { q: { cc: 'no-cache', etag: 1 } },
+		'no-cache with a Last-Modified': { q: { cc: 'no-cache', lm: 864000 } },
+		'no-cache without a validator': { q: { cc: 'no-cache' } },
+		'no-cache, max-age=3600 with an ETag': {
+			q: { cc: 'no-cache, max-age=3600', etag: 1 },
+		},
+		'no-cache="set-cookie", max-age=3600': {
+			q: { cc: 'max-age=3600, no-cache="set-cookie"' },
+		},
+		'Pragma: no-cache with an ETag': { q: { pragma: 'no-cache', etag: 1 } },
+		'Pragma: no-cache beside max-age=3600': {
+			q: { pragma: 'no-cache', cc: 'max-age=3600' },
+		},
+		'no-store with an ETag': { q: { cc: 'no-store', etag: 1 } },
+		'no-store, max-age=3600': { q: { cc: 'no-store, max-age=3600' } },
+		'private, max-age=3600': { q: { cc: 'private, max-age=3600' } },
+		'private with an ETag': { q: { cc: 'private', etag: 1 } },
+		'public alone': { q: { cc: 'public' } },
+		'max-age=0 with an ETag': { q: { cc: 'max-age=0', etag: 1 } },
+		'max-age=0 without a validator': { q: { cc: 'max-age=0' } },
+		'must-revalidate alone with an ETag': {
+			q: { cc: 'must-revalidate', etag: 1 },
+		},
+		'max-age=1, must-revalidate with an ETag, stale': {
+			q: { cc: 'max-age=1, must-revalidate', etag: 1 },
+			wait: 2000,
+		},
+		'max-age=1 with an ETag, stale': {
+			q: { cc: 'max-age=1', etag: 1 },
+			wait: 2000,
+		},
+		'max-age=1 without a validator, stale': {
+			q: { cc: 'max-age=1' },
+			wait: 2000,
+		},
+		'max-age=1, stale-while-revalidate=60 with an ETag, stale': {
+			q: { cc: 'max-age=1, stale-while-revalidate=60', etag: 1 },
+			wait: 2000,
+			settle: 2000,
+		},
+		// (what a cache on the way kept for fifty seconds has ten left)
+		'max-age=60 with an ETag and an Age of 50, the third fetch twelve seconds on':
+			{
+				q: { cc: 'max-age=60', etag: 1, age: 50 },
+				wait: [0, 12000],
+			},
+		's-maxage=3600 alone': { q: { cc: 's-maxage=3600' } },
+		's-maxage=0, max-age=3600': { q: { cc: 's-maxage=0, max-age=3600' } },
+		'Expires in an hour': { q: { expires: 3600 } },
+		'Expires an hour ago with an ETag': { q: { expires: -3600, etag: 1 } },
+		'Expires: 0 with an ETag': { q: { expires: 0, etag: 1 } },
+		'max-age=3600 beside an Expires an hour ago': {
+			q: { cc: 'max-age=3600', expires: -3600 },
+		},
+		'an ETag and nothing else': { q: { etag: 1 } },
+		'a Last-Modified ten days ago and nothing else': { q: { lm: 864000 } },
+		'a Last-Modified ten days ago and an ETag': {
+			q: { lm: 864000, etag: 1 },
+		},
+		// a tenth of two hundred seconds is fresh for the second fetch and
+		// stale for the third
+		'a Last-Modified two hundred seconds ago, the third fetch twenty-four seconds on':
+			{
+				q: { lm: 200 },
+				wait: [0, 24000],
+			},
+		'no caching header at all': { q: {} },
+		'max-age=3600, Vary: *': { q: { cc: 'max-age=3600', vary: '*' } },
+		'max-age=3600 with an ETag, Vary: *': {
+			q: { cc: 'max-age=3600', vary: '*', etag: 1 },
+		},
+		'max-age=3600, Vary: accept-encoding': {
+			q: { cc: 'max-age=3600', vary: 'accept-encoding' },
+		},
+		'max-age=3600, Vary on a header sent the same': {
+			q: { cc: 'max-age=3600', vary: 'x-probe' },
+			probe: () => 'same',
+		},
+		'max-age=3600, Vary on a header sent with another value each time': {
+			q: { cc: 'max-age=3600', vary: 'x-probe' },
+			probe: another,
+		},
+		'max-age=3600 with an ETag, Vary on a header sent with another value each time':
+			{
+				q: { cc: 'max-age=3600', vary: 'x-probe', etag: 1 },
+				probe: another,
+			},
+		'max-age=3600, the request with a cookie': {
+			q: { cc: 'max-age=3600' },
+			cookie: () => 'same',
+		},
+		'max-age=3600, Vary: Cookie, another cookie each time': {
+			q: { cc: 'max-age=3600', vary: 'cookie' },
+			cookie: another,
+		},
+		'public, max-age=3600, another cookie each time': {
+			q: { cc: 'public, max-age=3600' },
+			cookie: another,
+		},
+		'max-age=3600, another cookie each time': {
+			q: { cc: 'max-age=3600' },
+			cookie: another,
+		},
+		'max-age=3600 with an ETag, another cookie each time': {
+			q: { cc: 'max-age=3600', etag: 1 },
+			cookie: another,
+		},
+		'private, max-age=3600, another cookie each time': {
+			q: { cc: 'private, max-age=3600' },
+			cookie: another,
+		},
+		'max-age=3600, the request with Authorization': {
+			q: { cc: 'max-age=3600' },
+			init: () => ({ headers: { authorization: 'Basic dTpw' } }),
+		},
+		'max-age=3600, a Set-Cookie on the response': {
+			q: { cc: 'max-age=3600', sc: 1 },
+		},
+		'max-age=3600, no Content-Length': {
+			q: { cc: 'max-age=3600', chunked: 1 },
+		},
+		'203 with a Last-Modified ten days ago': {
+			q: { status: 203, lm: 864000 },
+		},
+		'204 with max-age=3600': { q: { status: 204, cc: 'max-age=3600' } },
+		'300 and nothing else': { q: { status: 300 } },
+		'301 and nothing else': { q: { status: 301 } },
+		'302 and nothing else': { q: { status: 302 } },
+		'302 with max-age=3600': { q: { status: 302, cc: 'max-age=3600' } },
+		'303 with max-age=3600': { q: { status: 303, cc: 'max-age=3600' } },
+		'307 with max-age=3600': { q: { status: 307, cc: 'max-age=3600' } },
+		'308 and nothing else': { q: { status: 308 } },
+		'401 with max-age=3600': { q: { status: 401, cc: 'max-age=3600' } },
+		'403 with max-age=3600': { q: { status: 403, cc: 'max-age=3600' } },
+		'404 with max-age=3600': { q: { status: 404, cc: 'max-age=3600' } },
+		'404 and nothing else': { q: { status: 404 } },
+		'404 with a Last-Modified ten days ago': {
+			q: { status: 404, lm: 864000 },
+		},
+		'404 with max-age=1 and an ETag, stale': {
+			q: { status: 404, cc: 'max-age=1', etag: 1 },
+			wait: 2000,
+		},
+		'410 and nothing else': { q: { status: 410 } },
+		'500 with max-age=3600': { q: { status: 500, cc: 'max-age=3600' } },
+		'503 with max-age=3600': { q: { status: 503, cc: 'max-age=3600' } },
+		// the request's own cache mode, on the third of four fetches
+		'max-age=3600, the third fetch with cache: no-store': {
+			q: { cc: 'max-age=3600' },
+			init: third({ cache: 'no-store' }),
+			visits: 4,
+		},
+		'max-age=3600, the third fetch with cache: reload': {
+			q: { cc: 'max-age=3600' },
+			init: third({ cache: 'reload' }),
+			visits: 4,
+		},
+		'max-age=3600, the third fetch with cache: no-cache': {
+			q: { cc: 'max-age=3600' },
+			init: third({ cache: 'no-cache' }),
+			visits: 4,
+		},
+		'max-age=3600 with an ETag, the third fetch with cache: no-cache': {
+			q: { cc: 'max-age=3600', etag: 1 },
+			init: third({ cache: 'no-cache' }),
+			visits: 4,
+		},
+		'max-age=1 with an ETag, stale, the third fetch with cache: force-cache': {
+			q: { cc: 'max-age=1', etag: 1 },
+			init: third({ cache: 'force-cache' }),
+			wait: 2000,
+			visits: 4,
+		},
+		'no-cache with an ETag, the third fetch with cache: force-cache': {
+			q: { cc: 'no-cache', etag: 1 },
+			init: third({ cache: 'force-cache' }),
+			visits: 4,
+		},
+		'no-cache without a validator, the third fetch with cache: force-cache': {
+			q: { cc: 'no-cache' },
+			init: third({ cache: 'force-cache' }),
+			visits: 4,
+		},
+		'no caching header at all, the third fetch with cache: force-cache': {
+			q: {},
+			init: third({ cache: 'force-cache' }),
+			visits: 4,
+		},
+		'max-age=3600, Vary on a header sent with another value each time, the third fetch with cache: force-cache':
+			{
+				q: { cc: 'max-age=3600', vary: 'x-probe' },
+				probe: another,
+				init: third({ cache: 'force-cache' }),
+				visits: 4,
+			},
+		'no-store, the third fetch with cache: force-cache': {
+			q: { cc: 'no-store' },
+			init: third({ cache: 'force-cache' }),
+			visits: 4,
+		},
+		'max-age=3600, the third fetch with cache: only-if-cached': {
+			q: { cc: 'max-age=3600' },
+			init: third({ cache: 'only-if-cached', mode: 'same-origin' }),
+			visits: 4,
+		},
+		'no-store, the third fetch with cache: only-if-cached': {
+			q: { cc: 'no-store' },
+			init: third({ cache: 'only-if-cached', mode: 'same-origin' }),
+			visits: 4,
+		},
+		"max-age=3600 with an ETag, the third fetch with the page's own If-None-Match":
+			{
+				q: { cc: 'max-age=3600', etag: 1 },
+				init: third({ headers: { 'if-none-match': '"e1"' } }),
+				visits: 4,
+			},
+		"max-age=3600 with an ETag, the third fetch with the page's own If-None-Match for another":
+			{
+				q: { cc: 'max-age=3600', etag: 1 },
+				init: third({ headers: { 'if-none-match': '"other"' } }),
+				visits: 4,
+			},
+		"max-age=3600, the third fetch with the page's own Cache-Control: no-cache":
+			{
+				q: { cc: 'max-age=3600' },
+				init: third({ headers: { 'cache-control': 'no-cache' } }),
+				visits: 4,
+			},
+		// a HEAD, and a Range of bytes, beside a GET's entry
+		'max-age=3600, the third fetch a HEAD': {
+			q: { cc: 'max-age=3600' },
+			init: third({ method: 'HEAD' }),
+			visits: 4,
+		},
+		'max-age=3600, the first fetch a HEAD': {
+			q: { cc: 'max-age=3600' },
+			init: (visit) => (visit === 0 ? { method: 'HEAD' } : {}),
+			visits: 4,
+		},
+		'max-age=3600, a Range of its bytes on the third fetch': {
+			q: { cc: 'max-age=3600', ranges: 1 },
+			init: third({ headers: { range: 'bytes=0-0' } }),
+			visits: 4,
+		},
+		'max-age=3600 with an ETag, a Range of its bytes on the first fetch': {
+			q: { cc: 'max-age=3600', etag: 1, ranges: 1 },
+			init: (visit) => (visit === 0 ? { headers: { range: 'bytes=0-0' } } : {}),
+			visits: 4,
+		},
+		'max-age=3600 with an ETag, a Range of its bytes on every fetch': {
+			q: { cc: 'max-age=3600', etag: 1, ranges: 1 },
+			init: () => ({ headers: { range: 'bytes=0-0' } }),
+		},
+		'max-age=1 with an ETag, a Range of its bytes on every fetch, stale': {
+			q: { cc: 'max-age=1', etag: 1, ranges: 1 },
+			init: () => ({ headers: { range: 'bytes=0-0' } }),
+			wait: 2000,
+		},
+		'max-age=3600 with an ETag, a Range of its last byte on the first fetch': {
+			q: { cc: 'max-age=3600', etag: 1, ranges: 1 },
+			init: (visit) => (visit === 0 ? { headers: { range: 'bytes=1-1' } } : {}),
+			visits: 4,
+		},
+		'max-age=3600 and no validator, a Range of its bytes on the first fetch': {
+			q: { cc: 'max-age=3600', ranges: 1 },
+			init: (visit) => (visit === 0 ? { headers: { range: 'bytes=0-0' } } : {}),
+			visits: 4,
+		},
+		'max-age=1, stale-if-error=60, stale, and the origin answers 500': {
+			q: { cc: 'max-age=1, stale-if-error=60', fail: 1 },
+			wait: 2000,
+		},
+		'a document with max-age=3600, loaded, loaded again and reloaded': {
+			q: { cc: 'max-age=3600', html: 1 },
+			frame: true,
+		},
+		'a document with max-age=3600 and an ETag, loaded, loaded again and reloaded':
+			{
+				q: { cc: 'max-age=3600', etag: 1, html: 1 },
+				frame: true,
+			},
+		'a document with no-cache and an ETag, loaded, loaded again and reloaded': {
+			q: { cc: 'no-cache', etag: 1, html: 1 },
+			frame: true,
+		},
+		'a document with a Last-Modified ten days ago and nothing else, loaded, loaded again and reloaded':
+			{
+				q: { lm: 864000, html: 1 },
+				frame: true,
+			},
+		'a document with no caching header at all, loaded, loaded again and reloaded':
+			{
+				q: { html: 1 },
+				frame: true,
+			},
+		// on their own, after the others: a cookie every request of the page
+		// carries from then on, and what clears the whole origin's entries.
+		// A cookie set by a 304 is set (the page reads which answer's it has)
+		'no-cache with an ETag, a Set-Cookie on every answer': {
+			q: { cc: 'no-cache', etag: 1, sc: 'seen' },
+			alone: true,
+			sees: true,
+		},
+		'max-age=1, stale-while-revalidate=60 with an ETag, a Set-Cookie on every answer':
+			{
+				q: { cc: 'max-age=1, stale-while-revalidate=60', etag: 1, sc: 'seen' },
+				wait: 2000,
+				settle: 2000,
+				alone: true,
+				sees: true,
+			},
+		'max-age=3600, the origin sends Clear-Site-Data: "cache" before the third fetch':
+			{ q: { cc: 'max-age=3600' }, clear: '"cache"' },
+		'max-age=3600, the origin sends Clear-Site-Data: "cookies" before the third fetch':
+			{ q: { cc: 'max-age=3600' }, clear: '"cookies"' },
+		'max-age=3600, the origin sends Clear-Site-Data: "*" before the third fetch':
+			{ q: { cc: 'max-age=3600' }, clear: '"*"' },
+		'max-age=3600 on a response that sends Clear-Site-Data: "cache" itself': {
+			q: { cc: 'max-age=3600', csd: '"cache"' },
+			clear: 'none',
+		},
+	};
+	const names = Object.keys(SHAPES);
+	const log = async (index) =>
+		(await (await fetch(`/http-cache/log?k=${key}`)).json())[index]?.asked ??
+		[];
+	async function run(name) {
+		const index = names.indexOf(name);
+		const shape = SHAPES[name];
+		const path = `/http-cache/${index}`;
+		const url = `${path}?${new URLSearchParams({ k: key, n: index, ...shape.q })}`;
+		const asked = [];
+		const got = [];
+		const frames = [
+			document.createElement('iframe'),
+			document.createElement('iframe'),
+		];
+		let seen = 0;
+		for (let visit = 0; visit < (shape.visits ?? 3); visit++) {
+			if (shape.cookie)
+				document.cookie = `hc=${shape.cookie(visit)}; path=${path}`;
+			if (shape.clear && shape.clear !== 'none' && visit === 2)
+				await (
+					await fetch(
+						`/http-cache/clear?what=${encodeURIComponent(shape.clear)}`,
+					)
+				).text();
+			const init = shape.init?.(visit) ?? {};
+			if (shape.probe)
+				init.headers = { ...init.headers, 'x-probe': shape.probe(visit) };
+			try {
+				if (shape.frame) {
+					const loaded = new Promise((resolve) =>
+						frames[visit % 2].addEventListener('load', resolve, {
+							once: true,
+						}),
+					);
+					if (visit === 2) frames[0].contentWindow.location.reload();
+					else {
+						frames[visit % 2].src = url;
+						document.documentElement.append(frames[visit % 2]);
+					}
+					await loaded;
+					got.push(frames[visit % 2].contentDocument.body.textContent);
+				} else {
+					const response = await fetch(url, init);
+					got.push(`${response.status} ${await response.text()}`);
+				}
+			} catch (error) {
+				got.push(String(error));
+			}
+			// (a revalidation behind the page has reached the origin by then;
+			// `settle` waits longer, for one that runs behind the page)
+			await sleep(shape.settle ?? 300);
+			if (shape.sees)
+				got.push(/hcseen=\d+/.exec(document.cookie)?.[0] ?? 'no cookie');
+			const all = await log(index);
+			asked.push(all.slice(seen).join(' / ') || 'not asked');
+			seen = all.length;
+			const wait = Array.isArray(shape.wait) ? shape.wait[visit] : shape.wait;
+			if (wait && visit < (shape.visits ?? 3) - 1) await sleep(wait);
+		}
+		__hc.cases[name] = { asked, got };
+	}
+	(async () => {
+		const only = new URLSearchParams(location.search).get('only');
+		const mine = names.filter((name) => !only || name.includes(only));
+		await Promise.all(
+			mine
+				.filter((name) => !SHAPES[name].clear && !SHAPES[name].alone)
+				.map((name) => run(name)),
+		);
+		for (const name of mine.filter(
+			(name) => SHAPES[name].clear || SHAPES[name].alone,
+		)) {
+			await run(name);
+			document.cookie = 'hcseen=; path=/; max-age=0';
+		}
+	})()
+		.catch((error) => {
+			__hc.error = String(error);
+		})
+		.finally(() => {
+			__hc.done = true;
+		});
+</script>

@@ -15,6 +15,7 @@ import type {
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
+import { hostReload } from './hostReload';
 import { controllerId, forgetControllerIds, keptControllerId } from './id';
 import {
 	CookieJar,
@@ -333,9 +334,12 @@ export class RemoteController extends EventTarget {
 
 		(document.body || document.documentElement).append(this.element);
 
-		this.#ready = Promise.all([frameReadyPromise, idReady])
-			.then(() =>
+		// how this page was loaded, for the page it shows again (hostReload.ts)
+		const reloaded = hostReload();
+		this.#ready = Promise.all([reloaded, frameReadyPromise, idReady])
+			.then(([mode]) =>
 				this.#rpc.call('init', {
+					...(mode ? { hostReload: mode } : {}),
 					codec: init.codec,
 					directory: this.directory,
 					id: this.id,

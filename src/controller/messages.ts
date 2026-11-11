@@ -6,6 +6,7 @@ import type { Http3DescriptorOptions } from '../transport/construct';
 import type {
 	CookieCommand,
 	CookieResult,
+	HostReload,
 	PermissionRequestInfo,
 	RequestInfo,
 	RequestRule,
@@ -50,6 +51,8 @@ export interface ControllerFrameInit {
 	openTab?: boolean;
 	/** HTTP cache in the service worker, off when false (RemoteControllerInit.cache) */
 	cache?: boolean;
+	/** the host page was reloaded, and how (hostReload.ts) */
+	hostReload?: HostReload;
 	/** the host wants a RequestInfo per request (RemoteControllerInit.onRequest) */
 	requestLog?: boolean;
 	/** the host asks the user about a site's permission (RemoteControllerInit.onPermissionRequest) */

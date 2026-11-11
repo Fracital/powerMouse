@@ -30,7 +30,7 @@ import {
 } from '../hooks';
 import { isUrlLike, urlLike } from '../StompURL';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
-import type { RequestRule } from '../transport/messages';
+import type { HostReload, RequestRule } from '../transport/messages';
 import {
 	CLIENT_HINTS,
 	ClientHintsReport,
@@ -64,6 +64,7 @@ import TransportWorker from '../transport/TransportWorker';
 import { BUILD } from '../version';
 import { compileModule } from '../wasm/module';
 import { canTraverse, traverse } from './history';
+import { hostReload } from './hostReload';
 import { controllerId, forgetControllerIds, keptControllerId } from './id';
 import { mediaVerdict } from './mediaVerdict';
 import type { StaleInfo, TransportDescriptor } from './messages';
@@ -154,13 +155,18 @@ export interface ControllerInit {
 	openTab?: boolean;
 	/**
 	 * Called once per proxied request with what the service worker saw: real
-	 * URL, method, destination, status, time, whether the cache answered, the
-	 * size, an error, and the Frame it belongs to when known. Nothing is
+	 * URL, method, destination, status, time, whether the cache answered (or
+	 * had the origin confirm its entry), the size, an error, and the Frame it belongs to when known. Nothing is
 	 * built or sent when unset.
 	 */
 	onRequest?: (info: RequestEvent) => void;
 	/** @internal the service worker sends request reports; set by the controller frame */
 	requestLog?: boolean;
+	/**
+	 * @internal how the host page was loaded (hostReload.ts), found out by
+	 * the host side of a controller frame; null: it was not reloaded
+	 */
+	hostReload?: HostReload | null;
 	/**
 	 * Called when a proxied site asks for a permission (geolocation, camera,
 	 * microphone, notifications, ...) that the browser already gave the proxy
@@ -672,6 +678,8 @@ export class StompController extends EventTarget {
 	#serviceWorkers = new Map<string, Worker>();
 	#stopServing?: () => void;
 	#ready: Promise<void>;
+	/** how the host page was loaded, until the worker has been told (hostReload.ts) */
+	#hostReload: Promise<HostReload | undefined> | null = null;
 	#readyResolve!: () => void;
 	private lastHandshake = 0;
 	/** a build mismatch is being healed: the next ready answer must agree */
@@ -898,6 +906,10 @@ export class StompController extends EventTarget {
 		this.#ready = new Promise((resolve) => {
 			this.#readyResolve = resolve;
 		});
+		this.#hostReload =
+			init.hostReload === undefined
+				? hostReload()
+				: Promise.resolve(init.hostReload ?? undefined);
 
 		// Our worker (re)started and asks its controllers to shake hands again.
 		// A revive before the first handshake is nothing to act on (that
@@ -1309,6 +1321,12 @@ export class StompController extends EventTarget {
 					if (build !== undefined) this.config = { ...this.config, build };
 					// the rules travel with every handshake (a new worker starts empty)
 					if (this.#rules.length) await this.#rpc!.call('rules', this.#rules);
+					// how the host was loaded is said once: it is about the pages
+					// the host shows again right after
+					const reloaded = this.#hostReload;
+					this.#hostReload = null;
+					const mode = await reloaded;
+					if (mode) await this.#rpc!.call('hostReload', mode);
 					if (this.stale && build === BUILD) {
 						this.stale = null;
 						this.dispatchEvent(
