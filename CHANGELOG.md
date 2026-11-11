@@ -823,6 +823,28 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   there. The permissions suite asks for the microphone, the camera and both
   on the machine's devices and in a Chrome with both, with no camera and
   with no microphone (the CI runner has neither, which is how it showed).
+- A proxied site reads its own devices, as natively. Every proxied site is
+  the proxy origin to the browser, so once any site was granted the
+  microphone or the camera every other proxied page read the whole device
+  list with its labels and the same `deviceId`s (an identifier across
+  sites), one site's id opened the device for another, and `devicechange`
+  reached sites that had never asked. Now `enumerateDevices()` shows a site
+  what Chrome shows an origin: one nameless entry per kind until the site
+  itself may use the microphone (audio inputs and outputs) or the camera,
+  in a frame under its `allow`; `deviceId`s made for the page's own origin
+  (stable for it, the same in a frame of another site, shared with no
+  other origin, forgotten when the host clears the origin's cookies) and
+  `groupId`s made for the document. The ids are turned back in
+  `getUserMedia`, `applyConstraints`, `setSinkId` and `new AudioContext({
+sinkId })` and made in a track's settings, capabilities and constraints
+  and in `sinkId`; another site's id, or the browser's own, names no device
+  (OverconstrainedError, NotFoundError). `setSinkId` follows Chrome where a
+  site has no microphone permission (SecurityError for an element, no
+  device for an AudioContext) and in a frame of another origin
+  ("Permissions-Policy disallows speaker selection.", unless Chrome 156's
+  `speaker-selection` is in its `allow`; the demo's frames name it), and
+  `devicechange` fires only where the site may read what changed.
+  docs/permissions.md has the measurements; permissions suite.
 - Client hints follow Chrome per proxied origin. A top-level page's
   `Accept-CH` is kept for its real origin (not the proxy's, which every
   proxied site shares) and applies at once to its own subresources and to

@@ -163,3 +163,68 @@ export async function settle(
 	pending.delete(id);
 	if (state !== 'prompt') await setState(site, name, state);
 }
+
+/**
+ * The device ids a proxied origin reads are the browser's, hashed with the
+ * origin's salt (the Permissions inject module): the same for the origin
+ * in every document and under any top-level site, as Chrome's are, never
+ * another origin's. The salt goes when the cookies of the origin's host
+ * are cleared (cookies.clear), as Chrome's does with a site's cookies; an
+ * opaque origin has a new one every time.
+ */
+let saltStore: Promise<IDBPDatabase | null> | null = null;
+const salts = new Map<string, Promise<string>>();
+
+function openSalts(): Promise<IDBPDatabase | null> {
+	saltStore ??= openDB('stompDeviceIds', 1, {
+		upgrade: (db) => {
+			db.createObjectStore('salts');
+		},
+	}).catch(() => null);
+	return saltStore;
+}
+
+export function deviceSalt(origin: string): Promise<string> {
+	if (origin === 'null') return Promise.resolve(token() + token());
+	let salt = salts.get(origin);
+	if (!salt) {
+		salt = (async () => {
+			const db = await openSalts();
+			try {
+				const kept: unknown = await db?.get('salts', origin);
+				if (typeof kept === 'string') return kept;
+			} catch (error) {
+				// no store: this worker's salt only
+			}
+			const made = token() + token();
+			try {
+				await db?.put('salts', made, origin);
+			} catch (error) {
+				// kept for this worker's life only
+			}
+			return made;
+		})();
+		salts.set(origin, salt);
+	}
+	return salt;
+}
+
+/** forget the ids of every origin of `host` (of every origin without one): their next documents read new ones */
+export async function forgetDeviceIds(host?: string) {
+	const hosted = (origin: string) => {
+		try {
+			return host === undefined || new URL(origin).hostname === host;
+		} catch (error) {
+			return false;
+		}
+	};
+	for (const origin of [...salts.keys()])
+		if (hosted(origin)) salts.delete(origin);
+	const db = await openSalts();
+	try {
+		for (const origin of ((await db?.getAllKeys('salts')) ?? []) as string[])
+			if (hosted(origin)) await db?.delete('salts', origin);
+	} catch (error) {
+		// nothing was kept
+	}
+}

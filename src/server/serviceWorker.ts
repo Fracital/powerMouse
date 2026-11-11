@@ -57,7 +57,9 @@ import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
 import { recordNavigationHint } from './navigationHints';
 import {
 	decide,
+	deviceSalt,
 	documentStates,
+	forgetDeviceIds,
 	settle,
 	SIMULATED_PERMISSIONS,
 } from './permissions';
@@ -238,9 +240,18 @@ function registerController(
 						return [undefined, []];
 					case 'list':
 						return [await cookies.list(command.origin), []];
-					case 'clear':
+					case 'clear': {
 						await cookies.clear(command.origin);
+						// the device ids of the host's origins go with its cookies
+						let host: string | undefined;
+						try {
+							if (command.origin) host = new URL(command.origin).hostname;
+						} catch (error) {
+							// not a URL: the jar refused it above
+						}
+						await forgetDeviceIds(host);
 						return [undefined, []];
+					}
 				}
 			},
 		},
@@ -764,6 +775,9 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 		const work = (async () => {
 			if (message.op === 'states')
 				return documentStates(site, hintsDocument(source.id, source.url));
+			// the document's own origin, not its top's: an origin's ids are
+			// the same in any top-level site
+			if (message.op === 'deviceSalt') return deviceSalt(new URL(real).origin);
 			if (!SIMULATED_PERMISSIONS.includes(name)) return null;
 			if (message.op === 'request')
 				return decide(

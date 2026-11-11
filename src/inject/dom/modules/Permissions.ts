@@ -40,7 +40,17 @@ const FEATURE: Record<string, string> = {
 	'captured-surface-control': 'captured-surface-control',
 	'local-network-access': 'local-network-access',
 	'screen-wake-lock': 'screen-wake-lock',
+	'speaker-selection': 'speaker-selection',
 };
+
+type IdKey = 'deviceId' | 'groupId';
+/** the device ids a page names, as the browser knows them (devices()) */
+interface DeviceIds {
+	/** getUserMedia's constraints with the site's ids turned into the browser's */
+	incoming(constraints: unknown): Promise<unknown>;
+	/** learn the browser's ids now, so a track's are shown as the site's */
+	learn(): Promise<void>;
+}
 
 /**
  * Permissions per proxied site (docs/permissions.md). Every proxied site
@@ -300,8 +310,56 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			};
 		};
 
+		// the site's states as the worker has them now: another document of
+		// the site may have been answered since this one loaded
+		const refresh = async () => {
+			const answer = await ask<PermissionStates>({ op: 'states' });
+			if (!answer) return;
+			for (const [name, state] of Object.entries(answer.states))
+				remember(name, state);
+			features = answer.features;
+		};
+		const mayRead = (name: string) =>
+			allowed(name) && siteState(name) === 'granted';
+		// whether the document may choose an AudioContext's output. Chrome
+		// 156 has a policy feature for it (speaker-selection, default
+		// allowlist self) that an allow attribute gives a frame; before, no
+		// frame of another origin could, whatever its allow (measured on 152)
+		const policyOf = Reflect.getOwnPropertyDescriptor(
+			global.Document.prototype,
+			'featurePolicy',
+		)?.get;
+		let speakerPolicy: boolean | null = null;
+		const speakers = (): boolean => {
+			if (speakerPolicy === null)
+				try {
+					speakerPolicy = (
+						Reflect.apply(policyOf!, global.document, []) as {
+							features(): string[];
+						}
+					)
+						.features()
+						.includes('speaker-selection');
+				} catch (error) {
+					speakerPolicy = false;
+				}
+			return speakerPolicy
+				? allowed('speaker-selection')
+				: sameOriginAsParent();
+		};
+
 		this.geolocation(request, allowed);
-		this.userMedia(request, allowed);
+		this.userMedia(
+			request,
+			allowed,
+			this.devices(
+				() => ask<string>({ op: 'deviceSalt' }),
+				refresh,
+				mayRead,
+				speakers,
+				mirror === null,
+			),
+		);
 		this.notifications(request, allowed, siteState);
 	}
 
@@ -413,6 +471,515 @@ export default class PermissionsModule extends Module<DocumentClient> {
 	}
 
 	/**
+	 * The devices a site reads (docs/permissions.md). Chrome gives every
+	 * origin its own deviceIds (the same in any top-level site, kept until
+	 * the origin's cookies are cleared), every document its own groupIds, and
+	 * shows ids and labels only where the site may use the microphone (audio
+	 * inputs and outputs) or the camera: one nameless entry per kind
+	 * otherwise. To the browser every proxied site is the proxy origin, so a
+	 * page would read the ids every other site reads (an identifier across
+	 * sites), with their labels, as soon as any site was granted, and one
+	 * site's id opened the device for another. A page reads ids made from the
+	 * browser's with its origin's salt (the worker keeps it) instead, and
+	 * names devices by them: they are turned back on the way in
+	 * (getUserMedia, applyConstraints, setSinkId, AudioContext) and made on
+	 * the way out (enumerateDevices, a track's settings, capabilities and
+	 * constraints, sinkId). An id of another site, or the browser's own,
+	 * names no device.
+	 */
+	devices(
+		salt: () => Promise<string | null>,
+		refresh: () => Promise<void>,
+		mayRead: (name: string) => boolean,
+		speakers: () => boolean,
+		opaque: boolean,
+	): DeviceIds {
+		const global = this.client.global;
+		const mediaDevices = global.MediaDevices?.prototype;
+		const info = global.MediaDeviceInfo?.prototype;
+		const subtle = global.crypto?.subtle;
+		const read = (name: string) =>
+			info && Reflect.getOwnPropertyDescriptor(info, name)?.get;
+		const kindOf = read('kind');
+		const deviceIdOf = read('deviceId');
+		const groupIdOf = read('groupId');
+		const labelOf = read('label');
+		if (
+			!mediaDevices?.enumerateDevices ||
+			!subtle ||
+			!kindOf ||
+			!deviceIdOf ||
+			!groupIdOf ||
+			!labelOf
+		)
+			return { incoming: async (value) => value, learn: async () => {} };
+		const proxyModule = this.client.getModule(ProxyModule)!;
+		const enumerate = mediaDevices.enumerateDevices;
+		const digest = subtle.digest;
+		const isArray = global.Array.isArray;
+		// the document's own MediaDevices, read when a list is first needed
+		const navigator = global.navigator;
+		const mediaOf = Reflect.getOwnPropertyDescriptor(
+			global.Navigator.prototype,
+			'mediaDevices',
+		)?.get;
+		const hex = (bytes: Uint8Array) => {
+			let out = '';
+			for (let i = 0; i < bytes.length; i++)
+				out += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+			return out;
+		};
+		const random = () =>
+			hex(global.crypto.getRandomValues(new global.Uint8Array(32)));
+		// an origin's salt is the worker's, kept with the origin's data; an
+		// opaque origin and a document have one of their own
+		let originSalt: Promise<string> | null = null;
+		let groupSalt: string | null = null;
+		const saltOf = (key: IdKey) =>
+			key === 'groupId'
+				? (groupSalt ??= random())
+				: (originSalt ??= opaque
+						? Promise.resolve(random())
+						: salt().then(
+								(value) => (typeof value === 'string' ? value : random()),
+								random,
+							));
+		// the browser's ids and the site's, both ways; these name the same
+		// device everywhere and are never made into another
+		const LITERAL = new Set(['', 'default', 'communications']);
+		const HEX = /^[0-9a-f]{64}$/;
+		const shownOf = { deviceId: new Map(), groupId: new Map() } as Record<
+			IdKey,
+			Map<string, string>
+		>;
+		const realOf = { deviceId: new Map(), groupId: new Map() } as Record<
+			IdKey,
+			Map<string, string>
+		>;
+		const show = async (key: IdKey, real: string): Promise<string> => {
+			if (LITERAL.has(real)) return real;
+			let shown = shownOf[key].get(real);
+			if (shown === undefined) {
+				shown = hex(
+					new global.Uint8Array(
+						await Reflect.apply(digest, subtle, [
+							'SHA-256',
+							new global.TextEncoder().encode(`${await saltOf(key)} ${real}`),
+						]),
+					),
+				);
+				shownOf[key].set(real, shown);
+				realOf[key].set(shown, real);
+			}
+			return shown;
+		};
+		/** the browser's devices, their ids known both ways */
+		const learn = async (): Promise<void> => {
+			try {
+				for (const device of (await Reflect.apply(
+					enumerate,
+					Reflect.apply(mediaOf!, navigator, []),
+					[],
+				)) as MediaDeviceInfo[]) {
+					await show('deviceId', Reflect.apply(deviceIdOf, device, []));
+					await show('groupId', Reflect.apply(groupIdOf, device, []));
+				}
+			} catch (error) {
+				// no list: no id is known, and none names a device
+			}
+		};
+		// what the page named that is no id of its site, by what the browser
+		// was told: read back (a track's constraints, a sinkId) as the page
+		// wrote it
+		const written = new Map<string, string>();
+		// an id the browser gave that was never shown is not shown as it is
+		const toShown = (key: IdKey, real: unknown): unknown =>
+			typeof real !== 'string' || LITERAL.has(real)
+				? real
+				: (shownOf[key].get(real) ??
+					written.get(real) ??
+					(HEX.test(real) ? '' : real));
+		// an id that is not this site's stays what it is, and names nothing:
+		// the browser's own id, which a page was never shown, must not either
+		const toReal = (key: IdKey, shown: unknown): unknown => {
+			if (typeof shown !== 'string' || LITERAL.has(shown)) return shown;
+			const real = realOf[key].get(shown);
+			if (real !== undefined) return real;
+			const told = shownOf[key].has(shown) ? `${shown.slice(1)}0` : shown;
+			written.set(told, shown);
+			return told;
+		};
+
+		// a constraint's ids, one way or the other: a string, a list, or
+		// { exact, ideal } of either. A changed object is a new one over the
+		// page's (its other members are read from the page's as they were)
+		const over = (value: object, changes: Record<string, unknown>) => {
+			const out = Object.create(value) as Record<string, unknown>;
+			for (const name in changes)
+				Reflect.defineProperty(out, name, {
+					value: changes[name],
+					writable: true,
+					enumerable: true,
+					configurable: true,
+				});
+			return out;
+		};
+		type Turn = (key: IdKey, id: unknown) => unknown;
+		const constrained = (key: IdKey, value: unknown, turn: Turn): unknown => {
+			if (isArray(value)) {
+				const out: unknown[] = [];
+				for (let i = 0; i < value.length; i++) out[i] = turn(key, value[i]);
+				return out;
+			}
+			if (value === null || typeof value !== 'object') return turn(key, value);
+			const changes: Record<string, unknown> = {};
+			for (const name of ['exact', 'ideal'])
+				if (name in value)
+					changes[name] = constrained(
+						key,
+						(value as Record<string, unknown>)[name],
+						turn,
+					);
+			return over(value, changes);
+		};
+		const names = (set: unknown): boolean =>
+			set !== null &&
+			typeof set === 'object' &&
+			('deviceId' in set ||
+				'groupId' in set ||
+				'advanced' in set ||
+				'mandatory' in set ||
+				'optional' in set);
+		/** a track's constraints (or one of its `advanced` sets) with its ids turned */
+		const track = (set: unknown, turn: Turn): unknown => {
+			if (!names(set)) return set;
+			const from = set as Record<string, unknown>;
+			const changes: Record<string, unknown> = {};
+			for (const key of ['deviceId', 'groupId'] as IdKey[])
+				if (key in from) changes[key] = constrained(key, from[key], turn);
+			// Chrome's older spelling: mandatory: { sourceId }, optional: [{ sourceId }]
+			const source = (entry: unknown) =>
+				entry !== null && typeof entry === 'object' && 'sourceId' in entry
+					? over(entry, {
+							sourceId: turn(
+								'deviceId',
+								(entry as Record<string, unknown>).sourceId,
+							),
+						})
+					: entry;
+			if ('mandatory' in from) changes.mandatory = source(from.mandatory);
+			for (const list of ['advanced', 'optional'])
+				if (list in from) {
+					const entries = from[list];
+					if (isArray(entries)) {
+						const out: unknown[] = [];
+						for (let i = 0; i < entries.length; i++)
+							out[i] =
+								list === 'advanced'
+									? track(entries[i], turn)
+									: source(entries[i]);
+						changes[list] = out;
+					} else changes[list] = entries;
+				}
+			return over(from, changes);
+		};
+		/** the same, written into the browser's own answer */
+		const shownIn = (value: Record<string, unknown> | undefined) => {
+			if (value === null || typeof value !== 'object') return value;
+			for (const key of ['deviceId', 'groupId'] as IdKey[])
+				if (key in value) {
+					const ids = value[key];
+					if (isArray(ids))
+						for (let i = 0; i < ids.length; i++) ids[i] = toShown(key, ids[i]);
+					else if (ids !== null && typeof ids === 'object') {
+						for (const name of ['exact', 'ideal'])
+							if (name in ids)
+								(ids as Record<string, unknown>)[name] = isArray(
+									(ids as Record<string, unknown>)[name],
+								)
+									? ((ids as Record<string, unknown>)[name] as unknown[]).map(
+											(id) => toShown(key, id),
+										)
+									: toShown(key, (ids as Record<string, unknown>)[name]);
+					} else value[key] = toShown(key, ids);
+				}
+			if (isArray(value.advanced))
+				for (const set of value.advanced as Record<string, unknown>[])
+					shownIn(set);
+			return value;
+		};
+
+		const hook = (
+			target: object | undefined,
+			name: string,
+			wrap: (native: Function, that: any, args: any[]) => unknown,
+			part: 'value' | 'get' = 'value',
+		) => {
+			const descriptor =
+				target && Reflect.getOwnPropertyDescriptor(target, name);
+			if (typeof descriptor?.[part] !== 'function') return;
+			Reflect.defineProperty(target!, name, {
+				...descriptor,
+				[part]: proxyModule.wrapFunction(descriptor[part], wrap),
+			});
+		};
+
+		// what a page reads of each device the list gave it
+		const listed = new WeakMap<
+			object,
+			{ deviceId: string; groupId: string; label: string; named: boolean }
+		>();
+		/** the devices of the browser's `list` a page is shown, each with what it reads of it */
+		const shownList = async (list: object[]) => {
+			const audio = mayRead('microphone');
+			const video = mayRead('camera');
+			const out: object[] = [];
+			const nameless = new Set<string>();
+			for (const device of list) {
+				const kind = Reflect.apply(kindOf, device, []) as string;
+				if (kind === 'videoinput' ? video : audio)
+					listed.set(device, {
+						deviceId: await show(
+							'deviceId',
+							Reflect.apply(deviceIdOf, device, []),
+						),
+						groupId: await show(
+							'groupId',
+							Reflect.apply(groupIdOf, device, []),
+						),
+						label: Reflect.apply(labelOf, device, []),
+						named: true,
+					});
+				else {
+					// one entry of the kind, saying only that there is one
+					if (nameless.has(kind)) continue;
+					nameless.add(kind);
+					listed.set(device, {
+						deviceId: '',
+						groupId: '',
+						label: '',
+						named: false,
+					});
+				}
+				out.push(device);
+			}
+			return out;
+		};
+		hook(mediaDevices, 'enumerateDevices', async (native, that, args) => {
+			const list = (await Reflect.apply(native, that, args)) as object[];
+			await refresh();
+			return shownList(list);
+		});
+
+		// devicechange: Chrome fires it only where the site may read the
+		// devices that changed (measured: an output plugged in is an event
+		// for a site that may use the microphone and for a frame allowed it,
+		// none for a site that has not asked or a frame its policy refuses).
+		// The browser fires it for the proxy origin, which may read them all.
+		// A site that may read every device gets the browser's event; one
+		// that may read some gets an event when the devices it reads differ
+		// from before; one that may read none gets none
+		const addListener = global.EventTarget.prototype.addEventListener;
+		const dispatch = global.EventTarget.prototype.dispatchEvent;
+		const stopImmediate = global.Event.prototype.stopImmediatePropagation;
+		const EventType = global.Event;
+		const ours = new WeakSet<Event>();
+		const watch = (media: object) => {
+			const reads = async () => {
+				try {
+					let out = '';
+					for (const device of await shownList(
+						(await Reflect.apply(enumerate, media, [])) as object[],
+					)) {
+						const shown = listed.get(device)!;
+						if (shown.named)
+							out += `${Reflect.apply(kindOf, device, [])} ${shown.deviceId}\n`;
+					}
+					return out;
+				} catch (error) {
+					return '';
+				}
+			};
+			let last = reads();
+			Reflect.apply(addListener, media, [
+				'devicechange',
+				(event: Event) => {
+					if (ours.has(event)) return;
+					const before = last;
+					last = reads();
+					if (mayRead('microphone') && mayRead('camera')) return;
+					Reflect.apply(stopImmediate, event, []);
+					void Promise.all([before, last]).then(([one, other]) => {
+						if (one === other) return;
+						const change = new EventType('devicechange');
+						ours.add(change);
+						Reflect.apply(dispatch, media, [change]);
+					});
+				},
+			]);
+		};
+		// the page's MediaDevices is watched from the moment it first has it,
+		// before any listener of its own
+		let watched = false;
+		hook(
+			global.Navigator.prototype,
+			'mediaDevices',
+			(native, that) => {
+				const media = Reflect.apply(native, that, []) as object | undefined;
+				if (media && !watched) {
+					watched = true;
+					watch(media);
+				}
+				return media;
+			},
+			'get',
+		);
+		for (const name of ['deviceId', 'groupId', 'label'] as const)
+			hook(
+				info,
+				name,
+				(native, that) => {
+					const shown = listed.get(that);
+					return shown ? shown[name] : Reflect.apply(native, that, []);
+				},
+				'get',
+			);
+		hook(info, 'toJSON', (native, that, args) => {
+			const json = Reflect.apply(native, that, args) as Record<string, string>;
+			const shown = listed.get(that);
+			if (shown)
+				for (const name of ['deviceId', 'groupId', 'label'] as const)
+					json[name] = shown[name];
+			return json;
+		});
+		hook(
+			global.InputDeviceInfo?.prototype,
+			'getCapabilities',
+			(native, that, args) => {
+				const capabilities = Reflect.apply(native, that, args) as Record<
+					string,
+					unknown
+				>;
+				const shown = listed.get(that);
+				if (!shown) return capabilities;
+				if (!shown.named) return {};
+				for (const key of ['deviceId', 'groupId'] as IdKey[])
+					if (key in capabilities) capabilities[key] = shown[key];
+				return capabilities;
+			},
+		);
+
+		const trackPrototype = global.MediaStreamTrack?.prototype;
+		for (const name of ['getSettings', 'getCapabilities', 'getConstraints'])
+			hook(trackPrototype, name, (native, that, args) =>
+				shownIn(Reflect.apply(native, that, args)),
+			);
+		hook(trackPrototype, 'applyConstraints', async (native, that, args) => {
+			if (names(args[0])) {
+				await learn();
+				args[0] = track(args[0], toReal);
+			}
+			return Reflect.apply(native, that, args);
+		});
+
+		// an output is named by its id too. Chrome lets a site choose one only
+		// where it may use the microphone: an element's setSinkId is refused
+		// (SecurityError) for any id but the default's, and an AudioContext
+		// finds no device but '' (measured, with the messages)
+		const sink =
+			(context: boolean) =>
+			async (native: Function, that: unknown, args: unknown[]) => {
+				const id: unknown = args[0];
+				// the policy comes first, whatever is asked for
+				if (context && args.length && !speakers())
+					throw new global.DOMException(
+						'Permissions-Policy disallows speaker selection.',
+						'NotAllowedError',
+					);
+				if (
+					typeof id === 'string' &&
+					(context ? id !== '' : !LITERAL.has(id))
+				) {
+					const missing = () =>
+						new global.DOMException(
+							context
+								? `AudioContext.setSinkId(): failed: the device ${id} is not found.`
+								: 'Requested device not found',
+							'NotFoundError',
+						);
+					await refresh();
+					if (!mayRead('microphone'))
+						throw context
+							? missing()
+							: new global.DOMException(
+									'No permission to use requested device',
+									'SecurityError',
+								);
+					if (!LITERAL.has(id)) {
+						// an id that is not this site's names no device, whatever
+						// the browser would say of it
+						await learn();
+						const real = realOf.deviceId.get(id);
+						if (real === undefined) throw missing();
+						args[0] = real;
+					}
+				}
+				return Reflect.apply(native, that, args);
+			};
+		const sinkId = (native: Function, that: unknown) =>
+			toShown('deviceId', Reflect.apply(native, that, []));
+		const element = global.HTMLMediaElement?.prototype;
+		hook(element, 'setSinkId', sink(false));
+		hook(element, 'sinkId', sinkId, 'get');
+		const NativeContext = global.AudioContext as
+			typeof AudioContext | undefined;
+		hook(NativeContext?.prototype, 'setSinkId', sink(true));
+		hook(NativeContext?.prototype, 'sinkId', sinkId, 'get');
+		if (NativeContext && 'sinkId' in NativeContext.prototype) {
+			const Wrapped = proxyModule.wrapFunction(
+				NativeContext,
+				(target, that, args, newTarget) => {
+					// called without new: the browser's own TypeError
+					if (!newTarget) return Reflect.apply(target, that, args);
+					const options = args[0] as { sinkId?: unknown } | undefined;
+					if (
+						options !== null &&
+						typeof options === 'object' &&
+						typeof options.sinkId === 'string'
+					)
+						args[0] = over(options, {
+							sinkId: toReal('deviceId', options.sinkId),
+						});
+					return Reflect.construct(target, args, newTarget);
+				},
+				true,
+			);
+			for (const name of ['AudioContext', 'webkitAudioContext']) {
+				const descriptor = Reflect.getOwnPropertyDescriptor(global, name);
+				if (descriptor?.value === NativeContext)
+					Reflect.defineProperty(global, name, {
+						...descriptor,
+						value: Wrapped,
+					});
+			}
+		}
+
+		return {
+			incoming: async (constraints) => {
+				if (constraints === null || typeof constraints !== 'object')
+					return constraints;
+				const { audio, video } = constraints as Record<string, unknown>;
+				if (names(audio) || names(video)) await learn();
+				return over(constraints, {
+					audio: track(audio, toReal),
+					video: track(video, toReal),
+				});
+			},
+			learn,
+		};
+	}
+
+	/**
 	 * getUserMedia asks for the camera and the microphone it names first.
 	 * Chrome looks for a device of each kind before it looks at the policy
 	 * or the permission (measured, docs/permissions.md): with no microphone
@@ -428,6 +995,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			| { call: false; dismissed: boolean }
 		>,
 		allowed: (name: string) => boolean,
+		deviceIds: DeviceIds,
 	) {
 		const global = this.client.global;
 		const prototype = global.MediaDevices?.prototype;
@@ -465,7 +1033,10 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			value: proxyModule.wrapFunction(
 				prototype.getUserMedia,
 				async (target, that, args) => {
-					const constraints = args[0] as MediaStreamConstraints | undefined;
+					// the ids the page names are its site's: the browser's own go in
+					const constraints = (await deviceIds.incoming(args[0])) as
+						MediaStreamConstraints | undefined;
+					if (args.length) args[0] = constraints;
 					const names: string[] = [];
 					if (constraints && typeof constraints === 'object') {
 						if (constraints.video) names.push('camera');
@@ -489,6 +1060,8 @@ export default class PermissionsModule extends Module<DocumentClient> {
 					try {
 						const stream = await Reflect.apply(target, that, args);
 						void answer.settle(true);
+						// what its tracks say of their device is read at once
+						await deviceIds.learn();
 						return stream;
 					} catch (error) {
 						void answer.settle(

@@ -106,18 +106,71 @@ const probe = `<!doctype html><title>permissions</title><script>
 })();
 </script>`;
 
+// what a page reads of the devices: window.run(op, argument)
+const devices = `<!doctype html><title>devices</title><script>
+const media = navigator.mediaDevices;
+const failure = (error) => error.name + ': ' + error.message + (error.constraint ? ' [' + error.constraint + ']' : '');
+const ids = (value) => ({ deviceId: value.deviceId, groupId: value.groupId });
+const late = (promise) => Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve('pending'), 6000))]);
+const ops = {
+	list: async () => (await media.enumerateDevices()).map((device) => ({
+		kind: device.kind,
+		deviceId: device.deviceId,
+		groupId: device.groupId,
+		label: device.label,
+		type: device.constructor.name,
+		json: JSON.stringify(device.toJSON()) === JSON.stringify({ deviceId: device.deviceId, kind: device.kind, label: device.label, groupId: device.groupId }),
+		capabilities: device.getCapabilities ? { ...ids(device.getCapabilities()), others: Object.keys(device.getCapabilities()).length } : null,
+	})),
+	open: (constraints) => late(media.getUserMedia(constraints).then((stream) => {
+		window.stream = stream;
+		return stream.getTracks().map((track) => ({ kind: track.kind, label: track.label, settings: ids(track.getSettings()), capabilities: ids(track.getCapabilities()), constraints: track.getConstraints() }));
+	}, failure)),
+	apply: (constraints) => {
+		const [track] = window.stream.getTracks();
+		return late(track.applyConstraints(constraints).then(() => ({ settings: ids(track.getSettings()), constraints: track.getConstraints() }), failure));
+	},
+	stop: async () => {
+		for (const track of window.stream ? window.stream.getTracks() : []) track.stop();
+		window.stream = null;
+	},
+	sink: async (id) => {
+		const out = { selectAudioOutput: 'selectAudioOutput' in media };
+		const element = new Audio();
+		out.element = await element.setSinkId(id).then(() => 'sinkId ' + element.sinkId, failure);
+		const context = new AudioContext();
+		out.context = await context.setSinkId(id).then(() => 'sinkId ' + context.sinkId, failure);
+		await context.close();
+		try {
+			const made = new AudioContext({ sinkId: id });
+			out.constructed = 'sinkId ' + made.sinkId;
+			await made.close();
+		} catch (error) {
+			out.constructed = failure(error);
+		}
+		return out;
+	},
+};
+window.run = (op, argument) => ops[op](argument);
+window.ready = new URLSearchParams(location.search).get('v');
+</script>`;
+
 const server = createServer((req, res) => {
 	const url = new URL(req.url, 'http://x/');
 	res.setHeader('content-type', 'text/html; charset=utf-8');
 	if (url.pathname === '/frame') {
 		const allow = url.searchParams.get('allow');
 		const ask = url.searchParams.get('ask') ?? '';
+		const inner =
+			url.searchParams.get('page') === 'devices'
+				? `devices?v=${url.searchParams.get('v')}`
+				: `probe?ask=${ask}`;
 		res.end(
-			`<!doctype html><iframe${allow ? ` allow="${allow}"` : ''} src="${B}/probe?ask=${ask}"></iframe>`,
+			`<!doctype html><iframe${allow ? ` allow="${allow}"` : ''} src="${B}/${inner}"></iframe>`,
 		);
 		return;
 	}
-	res.end(probe);
+	res.end(url.pathname === '/devices' ? devices : probe);
 });
 // every interface: localhost may resolve to ::1 for the demo's wisp
 await new Promise((resolve) => server.listen(0, resolve));
@@ -317,6 +370,278 @@ for (const [mode, base] of MODES) {
 		describe({ againA: againA?.states, againB: againB?.states }),
 	);
 	await context.close();
+}
+
+// The devices a site reads (enumerateDevices, a track's settings, a sink):
+// Chrome gives every origin its own deviceIds, shows ids and labels only
+// where the site has the permission, and takes an id only from the origin
+// it was given to. Every proxied site is the proxy origin to the browser.
+const HEX = /^[0-9a-f]{64}$/;
+const form = (id) =>
+	id === '' ? 'none' : id === 'default' ? 'default' : HEX.test(id) ? 'id' : id;
+const shape = (list) =>
+	list.map(
+		(device) =>
+			`${device.kind} ${form(device.deviceId)} "${device.label}" group ${form(device.groupId)} ${device.type}` +
+			(device.json ? '' : ' toJSON differs') +
+			(device.capabilities
+				? device.capabilities.others === 0
+					? ' capabilities {}'
+					: device.capabilities.deviceId === device.deviceId &&
+						  device.capabilities.groupId === device.groupId
+						? ' capabilities with its ids'
+						: ' capabilities with other ids'
+				: ''),
+	);
+const idsOf = (list, key = 'deviceId') =>
+	list.map((device) => device[key]).filter((id) => HEX.test(id));
+const shared = (one, other, key = 'deviceId') =>
+	idsOf(one, key).filter((id) => idsOf(other, key).includes(id)).length;
+const pick = (list, kind) =>
+	list.find((device) => device.kind === kind && HEX.test(device.deviceId));
+/** `value` as text, every id in `names` written as its name */
+const named = (value, names) => {
+	let text = JSON.stringify(value);
+	for (const [id, name] of names) text = text.replaceAll(id, `<${name}>`);
+	return text;
+};
+
+/**
+ * What two sites read, as a table of rows. `visit(url)` loads a new
+ * document and resolves to its `run`; `grant(run, origin, names)` gives
+ * the site those permissions (all it has from then on).
+ */
+const SPEAKERS =
+	'its own output id as a sink in a frame allowed the microphone and speaker-selection';
+async function deviceRows({ visit, grant, after }) {
+	const rows = {};
+	let a = await visit(`${A}/devices`);
+	rows['a site that has not asked'] = shape(await a('list'));
+	await grant(a, A, ['microphone']);
+	rows['a site granted the microphone only'] = shape(await a('list'));
+	await grant(a, A, ['microphone', 'camera']);
+	const listA = await a('list');
+	rows['a site granted both'] = shape(listA);
+	// every id either site read, by what it is
+	const idNames = (list, whose) =>
+		list.flatMap((device, i) => [
+			[device.deviceId, `${whose} ${device.kind} ${i}`],
+			[device.groupId, `${whose} ${device.kind} ${i} group`],
+		]);
+	const ownA = idNames(listA, 'its').filter(([id]) => HEX.test(id));
+	const micA = pick(listA, 'audioinput')?.deviceId;
+	const groupA = pick(listA, 'audioinput')?.groupId;
+	const camA = pick(listA, 'videoinput')?.deviceId;
+	const outA = pick(listA, 'audiooutput')?.deviceId;
+	rows['getUserMedia with its own microphone id'] = named(
+		await a('open', { audio: { deviceId: { exact: micA } } }),
+		ownA,
+	);
+	rows['applyConstraints with its own id'] = named(
+		await a('apply', { deviceId: { exact: micA } }),
+		ownA,
+	);
+	await a('stop');
+	rows['getUserMedia with its own camera id'] = named(
+		await a('open', { video: { deviceId: { exact: camA } } }),
+		ownA,
+	);
+	await a('stop');
+	rows['getUserMedia with its own groupId'] = named(
+		await a('open', { audio: { groupId: { exact: groupA } } }),
+		ownA,
+	);
+	await a('stop');
+	rows['its own output id as a sink'] = named(await a('sink', outA), ownA);
+	rows['default as a sink'] = named(await a('sink', 'default'), ownA);
+
+	const b = await visit(`${B}/devices`);
+	rows['another site that has not asked, the first granted'] = shape(
+		await b('list'),
+	);
+	rows['default as a sink for a site that has not asked'] = named(
+		await b('sink', 'default'),
+		ownA,
+	);
+	rows["the first site's output id as a sink for it"] = named(
+		await b('sink', outA),
+		idNames(listA, "the first site's").filter(([id]) => HEX.test(id)),
+	);
+	await grant(b, B, ['microphone', 'camera']);
+	const listB = await b('list');
+	rows['the other site granted both'] = shape(listB);
+	rows['ids the two sites share'] =
+		`${shared(listA, listB)} deviceIds, ${shared(listA, listB, 'groupId')} groupIds`;
+	const both = [
+		...idNames(listA, "the first site's"),
+		...idNames(listB, 'its'),
+	].filter(([id]) => HEX.test(id));
+	rows["getUserMedia with the first site's microphone id, exact"] = named(
+		await b('open', { audio: { deviceId: { exact: micA } } }),
+		both,
+	);
+	await b('stop');
+	rows["getUserMedia with the first site's microphone id, ideal"] = named(
+		await b('open', { audio: { deviceId: micA } }),
+		both,
+	);
+	rows["applyConstraints with the first site's id"] = named(
+		await b('apply', { deviceId: { exact: micA } }),
+		both,
+	);
+	await b('stop');
+	rows["getUserMedia with the first site's groupId"] = named(
+		await b('open', { audio: { groupId: { exact: groupA } } }),
+		both,
+	);
+	await b('stop');
+	rows["the first site's output id as a sink"] = named(
+		await b('sink', outA),
+		both,
+	);
+
+	a = await visit(`${A}/devices`);
+	const again = await a('list');
+	rows['a new document of the first site keeps'] =
+		`${shared(listA, again)} of ${idsOf(listA).length} deviceIds, ${shared(listA, again, 'groupId')} groupIds`;
+	const allowed = encodeURIComponent('camera; microphone');
+	let frame = await visit(`${A}/frame?page=devices&allow=${allowed}`);
+	const inFrame = await frame('list');
+	rows['the other site in a frame of the first, allowed both'] = shape(inFrame);
+	rows["that frame's deviceIds"] =
+		`${shared(inFrame, listB)} of the other site's, ${shared(inFrame, listA)} of the first's`;
+	rows["that frame's own output id as a sink"] = named(
+		await frame('sink', pick(inFrame, 'audiooutput')?.deviceId),
+		idNames(inFrame, 'its').filter(([id]) => HEX.test(id)),
+	);
+	frame = await visit(`${A}/frame?page=devices`);
+	rows['the same frame without allow'] = shape(await frame('list'));
+	rows['default as a sink in the frame without allow'] = named(
+		await frame('sink', 'default'),
+		[],
+	);
+	frame = await visit(`${A}/frame?page=devices&allow=microphone`);
+	rows['the same frame allowed the microphone'] = shape(await frame('list'));
+	// Chrome 156 lets an allow attribute give a frame its AudioContext's
+	// output; before, no frame of another origin had it
+	frame = await visit(
+		`${A}/frame?page=devices&allow=${encodeURIComponent('microphone; speaker-selection')}`,
+	);
+	const speaking = await frame('list');
+	rows[SPEAKERS] = named(
+		await frame('sink', pick(speaking, 'audiooutput')?.deviceId),
+		idNames(speaking, 'its').filter(([id]) => HEX.test(id)),
+	);
+	return { rows, listA, listB, cleared: after ? await after(visit) : null };
+}
+
+await browser.close();
+browser = await launch(['--use-fake-device-for-media-stream']);
+let visits = 0;
+const stamped = (url) => `${url}${url.includes('?') ? '&' : '?'}v=${++visits}`;
+const runIn = async (frames, stamp) => {
+	for (let i = 0; i < 120; i++) {
+		for (const frame of frames())
+			if (
+				await frame
+					.evaluate((v) => window.ready === String(v), stamp)
+					.catch(() => false)
+			)
+				return (op, argument) =>
+					frame.evaluate(([o, a]) => window.run(o, a), [op, argument]);
+		await sleep(250);
+	}
+	throw new Error(`no document for visit ${stamp}`);
+};
+const listOf = async (run) => run('list');
+const nativeContext = await browser.newContext();
+const nativePage = await nativeContext.newPage();
+const nativeDevices = await deviceRows({
+	visit: async (url) => {
+		await nativePage.goto(stamped(url));
+		return runIn(() => nativePage.frames(), visits);
+	},
+	grant: (run, origin, names) =>
+		nativeContext.grantPermissions(names, { origin }),
+});
+await nativeContext.close();
+for (const [mode, base] of MODES) {
+	const tab = await openDemo(browser, base);
+	// the browser lets the proxy origin use both: each site is asked for by
+	// the host (the demo's prompt)
+	await tab.context().grantPermissions(['microphone', 'camera'], {
+		origin: new URL(base).origin,
+	});
+	const granted = new Map();
+	let landed = false;
+	const proxied = await deviceRows({
+		visit: async (url) => {
+			await (landed ? submitOmni : submitLanding)(tab, stamped(url));
+			landed = true;
+			return runIn(proxiedFrames(tab), visits);
+		},
+		grant: async (run, origin, names) => {
+			for (const name of names) {
+				if (granted.get(origin)?.includes(name)) continue;
+				granted.set(origin, [...(granted.get(origin) ?? []), name]);
+				const opened = run(
+					'open',
+					name === 'camera' ? { video: true } : { audio: true },
+				);
+				const allow = await tab
+					.waitForSelector('#permissionPrompt .allow', { timeout: 15000 })
+					.catch(() => null);
+				await allow?.click();
+				await opened;
+				await run('stop');
+			}
+		},
+		// the host wipes the first site's cookies (controller.cookies.clear):
+		// its ids go with them, as Chrome's do with a site's cookies (measured
+		// in a profile on disk; a context like this one never resets them)
+		after: async (visit) => {
+			await tab.evaluate(
+				(origin) => window.controller.cookies.clear(origin),
+				A,
+			);
+			return {
+				a: await listOf(await visit(`${A}/devices`)),
+				b: await listOf(await visit(`${B}/devices`)),
+			};
+		},
+	}).catch((error) => ({ rows: { failed: String(error) } }));
+	for (const [row, native] of Object.entries(nativeDevices.rows)) {
+		let expected = native;
+		// in isolation mode the proxied top is a frame of another origin than
+		// the host, and before Chrome 156 no frame of another origin chooses
+		// an AudioContext's output (allow cannot change it): where Chrome
+		// would have taken the id, it refuses
+		const sink =
+			mode === 'isolated' &&
+			!/"context":"sinkId /.test(nativeDevices.rows[SPEAKERS]) &&
+			/"context":"sinkId /.test(native);
+		if (sink)
+			expected = JSON.stringify({
+				...JSON.parse(native),
+				context:
+					'NotAllowedError: Permissions-Policy disallows speaker selection.',
+			});
+		ok(
+			`${mode}, devices: ${row}, as natively`,
+			describe(proxied.rows[row]) === describe(expected),
+			`\n  proxied ${describe(proxied.rows[row])}\n  native  ${describe(expected)}`,
+		);
+	}
+	ok(
+		`${mode}, devices: a site's ids are forgotten with its cookies, and only its own`,
+		proxied.cleared &&
+			idsOf(proxied.cleared.a).length === idsOf(proxied.listA).length &&
+			shared(proxied.cleared.a, proxied.listA) === 0 &&
+			shared(proxied.cleared.b, proxied.listB) === idsOf(proxied.listB).length,
+		proxied.cleared &&
+			`the first site kept ${shared(proxied.cleared.a, proxied.listA)} of ${idsOf(proxied.listA).length}, the other ${shared(proxied.cleared.b, proxied.listB)} of ${idsOf(proxied.listB).length}`,
+	);
+	await tab.context().close();
 }
 
 server.close();

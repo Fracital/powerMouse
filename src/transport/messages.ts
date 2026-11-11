@@ -360,6 +360,10 @@ export type PermissionOp =
 			name: string;
 			token: string;
 			state: PermissionState;
+	  }
+	| {
+			/** the salt of the document's origin, for the device ids it reads */
+			op: 'deviceSalt';
 	  };
 export interface PermissionStates {
 	site: string;

@@ -271,6 +271,8 @@ export const POLICY_FEATURES = [
 	'captured-surface-control',
 	'local-network-access',
 	'screen-wake-lock',
+	// an AudioContext's output (setSinkId), a feature since Chrome 156
+	'speaker-selection',
 ];
 
 /** a document's powerful features, as Chrome's permissions policy decides them */

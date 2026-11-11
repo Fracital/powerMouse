@@ -352,6 +352,13 @@ suite, and they run against the real thing:
    camera takes a mount namespace (`unshare -Urm` with `/dev/null` bound
    over each `/dev/video*`). A suite whose answer depends on a device runs
    under each set itself, as `permissions` does.
+   Never let a test or a probe open the machine's real microphone or
+   camera: a launch that can be granted a media permission (a suite's
+   `grantPermissions`, `--use-fake-ui-for-media-stream`) runs with
+   `--use-fake-device-for-media-stream`, or with no device at all (`NO_AUDIO`
+   and the mount namespace above, where a private PipeWire server with
+   `pactl load-module module-null-sink` gives devices that are no hardware,
+   for `devicechange`).
    `backwalk` walks real Wikipedia pages and is timing sensitive. It is not in
    CI (needs Chrome and network on the runner).
    The `wpt-cookies`, `wpt-fetch-metadata` and `wpt-referrer-policy` suites

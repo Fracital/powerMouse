@@ -215,6 +215,7 @@ const FRAME_ALLOW = [
 	'window-management',
 	'captured-surface-control',
 	'local-network-access',
+	'speaker-selection',
 ].join('; ');
 
 const PERMISSION_WORDS = {

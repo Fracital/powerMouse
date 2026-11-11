@@ -101,6 +101,87 @@ a Chrome launched with a microphone and a camera
 and with no microphone (`NO_AUDIO` in test/lib.mjs: no PulseAudio server
 and an empty ALSA configuration; Chrome has no switch for it).
 
+## The devices a site reads
+
+Measured in Chrome 152 and 156 with fake devices
+(`--use-fake-device-for-media-stream`), natively:
+
+- `enumerateDevices()` lists one entry per kind with an empty `deviceId`,
+  `groupId` and `label` (and `getCapabilities()` of `{}`) until the site may
+  use the device: the microphone permission shows the audio inputs and the
+  audio outputs, the camera permission the video inputs, each without any
+  `getUserMedia` call. A frame of another site reads them with its top's
+  permission and its own `allow`, kind by kind.
+- A `deviceId` is the origin's own: no two origins share one, a new
+  document of the origin reads the same ones, and so does the origin in a
+  frame of another site (the ids are the frame's origin's, not the top's).
+  `default` is literal. A `groupId` is the document's: every document
+  reads new ones. Another profile reads other ids, and in a profile on
+  disk `Clear-Site-Data: "cookies"` resets the origin's (`"storage"` and
+  `"cache"` do not; a private context never resets them).
+- An id is taken only from its origin: `getUserMedia` and
+  `applyConstraints` with another origin's `deviceId` or `groupId` as
+  `exact` end in OverconstrainedError (as `ideal` it is ignored), an
+  element's `setSinkId` in NotFoundError, an AudioContext's in
+  "NotFoundError: AudioContext.setSinkId(): failed: the device ... is not
+  found." A track's `getSettings()` and `getCapabilities()` name its device
+  by the origin's ids, `getConstraints()` reads back what was written.
+- Without the microphone permission an element's `setSinkId` of any id but
+  `default` and `''` is "SecurityError: No permission to use requested
+  device", and an AudioContext finds no device but `''` (`default`
+  included). An AudioContext's output is a policy matter too: in a frame of
+  another origin `setSinkId` is "NotAllowedError: Permissions-Policy
+  disallows speaker selection." for any argument, on 152 whatever the
+  frame's `allow`, on 156 unless it names `speaker-selection`.
+  `selectAudioOutput` is not exposed.
+- `devicechange` fires only where the site may read the devices that
+  changed: an output plugged in is an event for a site with the microphone
+  permission and for a frame allowed the microphone, none for a site that
+  has not asked, one with the camera only, or a frame without `allow`.
+  (Fake devices never change: measured with Chrome on a private PipeWire
+  server without hardware, in a mount namespace with `/dev/snd` and
+  `/dev/video*` hidden, null sinks loaded with `pactl`.)
+
+To the browser every proxied site is the proxy origin, so before this was
+handled a proxied page read the proxy origin's list:
+
+| A proxied page                                                         | Before                                       | Now, as natively                              |
+| ---------------------------------------------------------------------- | -------------------------------------------- | --------------------------------------------- |
+| a site that has not asked, once any site was granted                   | every device, with labels and ids            | one nameless entry per kind                   |
+| a site granted the microphone only                                     | the cameras too                              | audio inputs and outputs; one nameless camera |
+| the deviceIds two sites read                                           | the same 5 of 5 (an identifier across sites) | none in common                                |
+| `getUserMedia` with another site's id, `exact`                         | opens that device                            | OverconstrainedError                          |
+| `setSinkId` with another site's output id                              | plays there                                  | NotFoundError                                 |
+| `setSinkId` of a site that has not asked                               | any output                                   | SecurityError, or no device for a context     |
+| a frame of another site without `allow`, its top granted               | every device                                 | one nameless entry per kind                   |
+| the same frame allowed the microphone                                  | the cameras too                              | audio only                                    |
+| that frame's deviceIds                                                 | its top's                                    | its own origin's, as at top level             |
+| `devicechange` for a site that has not asked, or a frame without allow | fired                                        | not fired                                     |
+
+What STomp does: a page reads ids made from the browser's with a salt of
+its own origin (SHA-256, the same shape as Chrome's; the worker keeps the
+salt in IndexedDB, an opaque origin gets a new one per document) and
+groupIds made with a salt of the document. Ids are made on the way out
+(`enumerateDevices`, `MediaDeviceInfo` and `InputDeviceInfo`, a track's
+settings, capabilities and constraints, `sinkId`) and turned back on the
+way in (`getUserMedia`, `applyConstraints`, `setSinkId`, `new
+AudioContext({ sinkId })`); an id that is not the site's, the browser's
+own included, names no device. What is listed follows the site's own
+permission and the document's policy, kind by kind. An origin's salt goes
+when the host wipes its cookies (`controller.cookies.clear(origin)`), the
+nearest thing to Chrome's reset: `Clear-Site-Data` never reaches the
+browser.
+
+Limits. In isolation mode the proxied top is a frame of another origin
+than the host: before Chrome 156 its AudioContext cannot choose an output
+at all, and from 156 only when the host's frame allows `speaker-selection`
+(the demo's does). A site that may read only one of the microphone and the
+camera gets a `devicechange` the inject dispatches (`isTrusted` false)
+when the devices it reads changed; a site that may read both gets the
+browser's. An id a page kept from a visit, used in `new AudioContext({
+sinkId })` before the document asked for anything else, is not known yet
+and names no device (`setSinkId` and `getUserMedia` look it up).
+
 ## What it covers
 
 | Permission                                                                                                                                                | Shown per site | Request gated                                        |
