@@ -22,6 +22,7 @@ import { parseRoutedURL, ROUTE_PROTOCOLS, unwrapRoute } from '../../routeURL';
 import { rewriteImportMap } from '../../scriptRoutes';
 import StompURL from '../../StompURL';
 import { HOOK_ERROR, OPEN_TAB, WORKER_BASE } from '../../transport/messages';
+import { queryOf } from '../../urlShape';
 import { BUILD } from '../../version';
 import { contextText, linkRoute, opaqueContext } from '../../visited';
 import Client from '../Client';
@@ -1131,7 +1132,7 @@ export default class DocumentClient extends Client {
 			if (
 				target.origin === own.origin &&
 				target.pathname === own.pathname &&
-				target.search === own.search
+				queryOf(target) === queryOf(own)
 			)
 				return plain();
 		}

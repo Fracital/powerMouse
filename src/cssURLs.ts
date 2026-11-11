@@ -2,17 +2,18 @@
 // stylesheet and the url() routing a regex can do. The inject's core uses
 // these on every style it touches; modifyCSS (rewriteCSS.ts, with css-tree)
 // is reached through src/rewriters.ts.
-import { serializeCSSURL } from './cssURL';
+import { cssURLValue, serializeCSSURL } from './cssURL';
 import { rewriter } from './rewriters';
 import { createDataURI, parseDataURI, routeBinary, routeURL } from './routeURL';
 import StompURL from './StompURL';
+import { dataBody } from './urlShape';
 
 export function routeCSS(resource: StompURL, url: StompURL) {
 	if (resource.url.protocol === 'data:') {
 		const { mime, data, attributes } = parseDataURI(
 			// the data is everything after `data:` but the fragment: a `?` in it
 			// is data too, which the URL parser filed under `search`
-			resource.url.pathname + resource.url.search,
+			dataBody(resource.url),
 		);
 		return createDataURI({
 			mime,
@@ -105,17 +106,24 @@ const QUOTED_URL =
 
 /**
  * inverse of rewriteCSSValueURLs for values the page reads back: the CSSOM's
- * serialization of the url() the page wrote
+ * serialization of the url() the page wrote. A computed value's url() is
+ * the absolute URL instead, which `resolve` gives for a routed one (its
+ * route stands for it, the token after `#url(` keeps its fragment).
  */
-export function restoreCSSValueURLs(value: string): string {
+export function restoreCSSValueURLs(
+	value: string,
+	resolve?: (routed: string) => string | null,
+): string {
 	return value.replace(
 		QUOTED_URL,
 		(match, double?: string, single?: string, bare?: string) => {
 			try {
 				const quoted = double ?? single;
-				return restoreValue(
-					quoted === undefined ? bare! : quoted.replace(/\\(.)/gs, '$1'),
-				);
+				const text =
+					quoted === undefined ? bare! : quoted.replace(/\\(.)/gs, '$1');
+				const real = resolve?.(text);
+				if (real) return cssURLValue(real);
+				return restoreValue(text);
 			} catch (error) {
 				return match;
 			}

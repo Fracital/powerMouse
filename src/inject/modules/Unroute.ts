@@ -1,4 +1,5 @@
 import { serializeCSSURL } from '../../cssURL';
+import { originalOf } from '../../cssURLs';
 import {
 	linkRouteURL,
 	pageBlobURL,
@@ -6,6 +7,7 @@ import {
 	ROUTE_PROTOCOLS,
 } from '../../routeURL';
 import { WORKER_ERROR } from '../../transport/messages';
+import { beforeFragment, fragmentOf } from '../../urlShape';
 import { LINK_SEGMENT } from '../../visited';
 import Client from '../Client';
 import { blobLoads } from '../dom/blobLoads';
@@ -79,7 +81,31 @@ export function unrouteURL(client: Client, url: string): string | null {
 		prefix = `${scope}${other[1]}/`;
 	}
 	try {
-		return parseRoutedURL(url, client.codec, prefix).url.toString();
+		const real = parseRoutedURL(url, client.codec, prefix).url.toString();
+		// a url() the CSS rewriter routed keeps the page's token after
+		// `#url(` (src/cssURLs.ts): the URL's own fragment is the token's
+		const token = originalOf(url);
+		return token ? beforeFragment(real) + fragmentOf(token.url) : real;
+	} catch (error) {
+		return null;
+	}
+}
+
+/**
+ * The URL a computed style's url() shows for the target the browser has
+ * (a route, or a copy, with the page's token after `#url(`): absolute, as
+ * natively. A route stands for its real URL; a copy (a document no worker
+ * controls) and anything else is the page's token resolved against the
+ * document. Null when there is nothing to resolve.
+ */
+export function computedURL(client: Client, text: string): string | null {
+	const marker = text.indexOf('#url(');
+	const target = marker === -1 ? text : text.slice(0, marker);
+	if (target.startsWith(scopePrefix(client))) return unrouteURL(client, text);
+	const original = originalOf(text);
+	if (!original) return null;
+	try {
+		return new URL(original.url, client.url.toString()).href;
 	} catch (error) {
 		return null;
 	}

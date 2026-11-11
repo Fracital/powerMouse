@@ -27,6 +27,11 @@ function serializeCSSString(value: string): string {
 	return `${result}"`;
 }
 
+/** a URL as the CSSOM serializes a computed url() value: `url("...")` */
+export function cssURLValue(url: string): string {
+	return `url(${serializeCSSString(url)})`;
+}
+
 /**
  * A url() token the page wrote (`url(a.png)`, `url('a.png')`, ...) the way
  * the browser serializes the value it parsed from it: `url("a.png")`,

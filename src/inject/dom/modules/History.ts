@@ -134,6 +134,38 @@ export default class HistoryModule extends Module<DocumentClient> {
 		const accessor = (proto: object, name: string) =>
 			Reflect.getOwnPropertyDescriptor(proto, name)!.get!;
 		type Entry = { readonly key: string };
+		// navigation.navigate(url): the page's URL, resolved against its own
+		// address, is routed as a navigation of the document is
+		// (location.assign, or with `history: 'replace'` location.replace).
+		// Unhooked, the URL resolved against the proxy's address and the frame
+		// left the proxy for the proxy origin's own path.
+		if (typeof navigationProto.navigate === 'function')
+			navigationProto.navigate = proxyModule.wrapFunction(
+				method('navigate'),
+				(target, that, args) => {
+					if (that !== navigation || !args.length)
+						return Reflect.apply(target, that, args);
+					let destination: URL;
+					try {
+						destination = new URL(String(args[0]), this.client.url.toString());
+					} catch (error) {
+						// the browser's own SyntaxError
+						return Reflect.apply(target, that, args);
+					}
+					const options = args[1] as { history?: unknown } | undefined;
+					const routed =
+						options?.history === 'replace'
+							? routeHTML(
+									new StompURL(destination, this.client.url),
+									this.client.url,
+									this.client.config,
+									false,
+									this.client.nestedRoute,
+								)
+							: this.client.navigationRoute(destination);
+					return Reflect.apply(target, that, [routed, ...args.slice(1)]);
+				},
+			);
 		const nativeEntries = method('entries');
 		const nativeTraverseTo = method('traverseTo');
 		const nativeCurrent = accessor(navigationProto, 'currentEntry');

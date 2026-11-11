@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { readCases, STRICT } from '../rust/host/early-lib.mjs';
 import { coi } from './coi-server.mjs';
+import { shapes } from './shapes-server.mjs';
 import { sop } from './sop-server.mjs';
 import { visited } from './visited-server.mjs';
 import { wpt } from './wpt-server.mjs';
@@ -17,8 +18,9 @@ import { wpt } from './wpt-server.mjs';
 // web-platform-tests paths (/resources/, /common/, /cookies/, /fetch/,
 // /referrer-policy/ and /_wpt/) are served by test/wpt-server.mjs,
 // /sop/ (the same-origin policy suites) by test/sop-server.mjs, /visited/
-// (the visited suite) by test/visited-server.mjs and /coi/ (the
-// cross-origin isolation suite) by test/coi-server.mjs.
+// (the visited suite) by test/visited-server.mjs, /coi/ (the
+// cross-origin isolation suite) by test/coi-server.mjs and /shape/ (the
+// url-shapes suite) by test/shapes-server.mjs.
 const pagesDir = fileURLToPath(new URL('./pages/', import.meta.url));
 /** the early-error cases' texts by their line, read at the first request */
 let earlyCases;
@@ -183,6 +185,7 @@ export function startFixture(port = 8084) {
 		if (sop(req, res)) return;
 		if (visited(req, res)) return;
 		if (coi(req, res)) return;
+		if (shapes(req, res)) return;
 		if (await wpt(req, res, port)) return;
 		served.push(path);
 		if (path === '/requests') {

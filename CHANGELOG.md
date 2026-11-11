@@ -830,6 +830,31 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   about:blank or srcdoc document's maker's), and its base URL is only what
   the URLs it writes resolve against. (base-identity suite, natively
   against both modes.)
+- An address that ends in an empty query (`/p?`), an empty fragment (`/p#`)
+  or both keeps them through the proxy, as natively: a frame's
+  `location.href`, `document.URL`, `baseURI`, its navigation entry and
+  `navigation.currentEntry.url`, a link's `href`, `Request.url`,
+  `Response.url` after a redirect, a worker's `location`, a module's
+  `import.meta.url`, `history.pushState`, `document.referrer`, the Referer
+  sent and the request target the site gets (`/p?`, not `/p`). A route was
+  made from the URL's `search` and `hash`, which read an empty query or
+  fragment as none; it is made from the URL's text now (src/urlShape.ts),
+  whatever the codec, and Chrome's `search` setter, which turns `?` into no
+  query at all (measured, 152 and 156), is no longer used to put a query
+  back. Through the same cause a `history.pushState` from `/p?` to `/p#`
+  was taken for a fragment navigation of the document's own URL and became
+  a load, and a GET form without fields went to `action` instead of
+  `action?`. (url-shapes suite; url-shapes-unit holds every codec to giving
+  these URLs back from a route and a link route as the very string they
+  were.)
+- `navigation.navigate(url)` is routed like `location.assign` (with
+  `history: 'replace'`, like `location.replace`): it went out unrouted,
+  resolved against the proxy's address, and the frame left the proxy for a
+  path of the proxy's origin. (url-shapes suite.)
+- A computed style's `url()` reads as the absolute URL, as natively (it read
+  the token the page wrote, `url("/a.png")`), and the resource timing entry
+  of a load a stylesheet made is named by its URL, with its own fragment:
+  the rewriter's `#url(...)` marker showed in it. (url-shapes suite.)
 - An `<object>`'s HTML document loads wherever the page's markup puts it,
   and resolves its URLs by its own `<base href>`. An object in the markup
   of a document a worker controls (the proxied top, a frame, a srcdoc

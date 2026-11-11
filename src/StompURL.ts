@@ -1,4 +1,5 @@
 import GenericCodec from './Codecs';
+import { fragmentOf, queryOf } from './urlShape';
 
 export declare type urlLike = URL | string;
 
@@ -41,10 +42,12 @@ export default class StompURL {
 		this.directory = directory;
 	}
 	encode() {
-		// hash isn't encoded
+		// the fragment isn't encoded; an empty query or fragment is kept
+		// (src/urlShape.ts)
 		return (
-			this.codec.encode(this.url.origin + this.url.pathname + this.url.search) +
-			this.url.hash
+			this.codec.encode(
+				this.url.origin + this.url.pathname + queryOf(this.url),
+			) + fragmentOf(this.url)
 		);
 	}
 	toString() {

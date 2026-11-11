@@ -43,6 +43,7 @@ import {
 	startPort,
 } from '../transport/ports';
 import RemoteTransport from '../transport/RemoteTransport';
+import { fragmentOf } from '../urlShape';
 import { BUILD } from '../version';
 import { LINK_SEGMENT } from '../visited';
 import Module from './Module';
@@ -259,7 +260,8 @@ export default class Client {
 		const named = (this.global as Record<string, unknown>)[WORKER_BASE];
 		if (typeof named === 'string' && this.isDOM) {
 			const url = new URL(named);
-			const hash = this.global.location.hash;
+			// an empty fragment too, which `location.hash` reads as ''
+			const hash = fragmentOf(this.global.location.href);
 			if (hash) url.hash = hash;
 			return new StompURL(
 				url,

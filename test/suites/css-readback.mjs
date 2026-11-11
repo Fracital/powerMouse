@@ -72,8 +72,9 @@ ok(
 	JSON.stringify(css.inline),
 );
 ok(
-	'the computed value is still the page url (the image loads through the proxy)',
-	plain(css.computed) === 'url(/pages/sprite.svg)',
+	// natively a computed url() is absolute (url-shapes measures it)
+	'the computed value is the page url, absolute as natively (the image loads through the proxy)',
+	plain(css.computed) === `url(${FIXTURE}pages/sprite.svg)`,
 	JSON.stringify(css.computed),
 );
 

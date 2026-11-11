@@ -9,6 +9,7 @@ import { workerKind } from './partition';
 import { rewriter } from './rewriters';
 import { createDataURI, parseDataURI, routeBinary, routeURL } from './routeURL';
 import StompURL from './StompURL';
+import { dataBody } from './urlShape';
 
 // the default helper names; the rewriter and the inject read a config's own
 // (src/helperNames.ts), these are for code that has none to hand (tests)
@@ -82,7 +83,7 @@ export function routeJS(
 		const { mime, data, attributes } = parseDataURI(
 			// the data is everything after `data:` but the fragment: a `?` in it
 			// is data too, which the URL parser filed under `search`
-			resource.url.pathname + resource.url.search,
+			dataBody(resource.url),
 		);
 		return createDataURI({
 			mime,

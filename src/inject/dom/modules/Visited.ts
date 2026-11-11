@@ -1,5 +1,6 @@
 import { routeHTML } from '../../../rewriteHTML';
 import StompURL from '../../../StompURL';
+import { queryOf } from '../../../urlShape';
 import { isLinkRoute } from '../../../visited';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
@@ -128,7 +129,8 @@ export default class VisitedModule extends Module<DocumentClient> {
 			return (
 				target.origin === at.origin &&
 				target.pathname === at.pathname &&
-				target.search === at.search &&
+				// an empty query is a query (src/urlShape.ts)
+				queryOf(target) === queryOf(at) &&
 				(target.href.includes('#') || target.href === at.href)
 			);
 		};

@@ -1,6 +1,7 @@
 import GenericCodec from './Codecs';
 import { assetName, type Assets, type Config } from './config';
 import StompURL from './StompURL';
+import { withQuery } from './urlShape';
 import { LIBRARY } from './version';
 import { decodeLinkRoute, LINK_SEGMENT } from './visited';
 
@@ -266,8 +267,9 @@ export function parseRoutedURL(
 	const encoded =
 		query === -1 ? path.slice(split + 1) : path.slice(split + 1, query);
 	const decoded = codec.decode(encoded);
-	const url = new URL(decoded);
-	if (query !== -1) url.search = path.slice(query);
+	let url = new URL(decoded);
+	// as written: a query of `?` alone is an empty one (src/urlShape.ts)
+	if (query !== -1) url = withQuery(url, path.slice(query));
 
 	url.hash = hashIndex === -1 ? '' : routed.slice(hashIndex);
 

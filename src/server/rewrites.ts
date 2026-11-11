@@ -102,6 +102,7 @@ import {
 	TIMING_ONLY_MARKER,
 	XHR_MARKER,
 } from '../transport/messages';
+import { fragmentOf, queryOf, withQuery } from '../urlShape';
 import { BUILD } from '../version';
 import { contextText, isLinkRoute, LINK_SEGMENT, linkRoute } from '../visited';
 import { scanMarkup, scannerSettled } from '../wasm/scanner';
@@ -4165,12 +4166,13 @@ export function registerRewrites(
 	router.routes.set(/^\/html:form(:nested:[^/]*)?\//, async (serverRequest) => {
 		const oURL = new URL(serverRequest.url);
 		const { url } = parseRoutedURL(
-			`${oURL.origin}${oURL.pathname}${oURL.hash}`, // exclude query
+			`${oURL.origin}${oURL.pathname}${fragmentOf(oURL)}`, // exclude query
 			rewriter.codec,
 			`${oURL.origin}${rewriter.directory}`,
 		);
 
-		url.url.search = oURL.search;
+		// a form without fields submits to `action?`, an empty query
+		url.url = withQuery(url.url, queryOf(oURL));
 
 		// a form an https page (or one under an https top) submits to http:
 		// warned about, blocked in a nested frame, stopped at Chrome's

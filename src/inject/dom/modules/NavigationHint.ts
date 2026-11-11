@@ -1,4 +1,5 @@
 import { NAVIGATION_HINT } from '../../../transport/messages';
+import { withQuery } from '../../../urlShape';
 import Module from '../../Module';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 
@@ -115,14 +116,18 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 			).toLowerCase();
 			if (method === 'dialog') return;
 			try {
-				const url = new URL(action);
+				let url = new URL(action);
+				// a form without fields submits to `action?` (src/urlShape.ts)
 				if (method === 'get')
-					url.search = new URLSearchParams(
-						new global.FormData(
-							form,
-							submitter ?? undefined,
-						) as unknown as Record<string, string>,
-					).toString();
+					url = withQuery(
+						url,
+						`?${new URLSearchParams(
+							new global.FormData(
+								form,
+								submitter ?? undefined,
+							) as unknown as Record<string, string>,
+						).toString()}`,
+					);
 				if (/^https?:$/.test(url.protocol)) send(url.href);
 			} catch (error) {
 				// an action that is no URL submits nowhere

@@ -20,6 +20,7 @@
 // keeps the link route that a later link of that context will match.
 import type GenericCodec from './Codecs';
 import { siteOf, type PublicSuffix } from './partition';
+import { fragmentOf, queryOf } from './urlShape';
 
 /** the segment under the scope that link routes live in: no controller id can be it */
 export const LINK_SEGMENT = '~';
@@ -83,8 +84,8 @@ export function linkRoute(
 	url: URL,
 ): string {
 	return `${scope}${LINK_SEGMENT}/${codec.encodeStable(
-		`${context} ${url.origin}${url.pathname}${url.search}`,
-	)}${url.hash}`;
+		`${context} ${url.origin}${url.pathname}${queryOf(url)}`,
+	)}${fragmentOf(url)}`;
 }
 
 /** whether `routed` (a path, or a whole URL) is a link route under `scope` */

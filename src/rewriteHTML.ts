@@ -16,6 +16,7 @@ import type { ControlInfo } from './serviceWorkerTypes';
 import type { SiteFacts } from './siteFacts';
 import StompURL from './StompURL';
 import { SHELL_MARKUP, SW_CONTROL, WORKER_BASE } from './transport/messages';
+import { dataBody } from './urlShape';
 import { LIBRARY_FACTORY } from './version';
 
 /**
@@ -70,7 +71,7 @@ export function routeHTML(
 		const { mime, data, attributes } = parseDataURI(
 			// the data is everything after `data:` but the fragment: a `?` in it
 			// is data too, which the URL parser filed under `search`
-			resource.url.pathname + resource.url.search,
+			dataBody(resource.url),
 		);
 		return createDataURI({
 			mime,

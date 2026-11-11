@@ -22,11 +22,17 @@ import {
 	OPAQUE_COPY_HEADER,
 	SEALER_ROUTE,
 } from '../../../transport/messages';
+import { dataBody } from '../../../urlShape';
 import Module from '../../Module';
 import { opaqueCopy, opaqueMarked } from '../../modules/Fetch';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
-import { scopePrefix, unrouteCSS, unrouteURL } from '../../modules/Unroute';
+import {
+	computedURL,
+	scopePrefix,
+	unrouteCSS,
+	unrouteURL,
+} from '../../modules/Unroute';
 import { modifyCSS, modifyJS } from '../../rewriter';
 import { blobLoads, opaqueCopies } from '../blobLoads';
 import DocumentClient, { type StyleElement } from '../Client';
@@ -926,9 +932,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// cross-origin frame is in same-origin mode.
 		const opaqueDocument = (resource: StompURL): string | null => {
 			if (resource.url.protocol !== 'data:') return null;
-			const { mime, data } = parseDataURI(
-				resource.url.pathname + resource.url.search,
-			);
+			const { mime, data } = parseDataURI(dataBody(resource.url));
 			if (
 				!/^\s*(text\/html|application\/xhtml\+xml)\s*$/i.test(
 					mime || 'text/plain',
@@ -1966,6 +1970,15 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				CSSStyleDeclaration,
 				CSSStyleDeclaration
 			>();
+			// a computed style's url() is absolute, natively: the real URL its
+			// route stands for
+			const computedDeclarations = new WeakSet<CSSStyleDeclaration>();
+			const restore = (target: CSSStyleDeclaration, value: string) =>
+				computedDeclarations.has(target)
+					? restoreCSSValueURLs(value, (routed) =>
+							computedURL(this.client, routed),
+						)
+					: restoreCSSValueURLs(value);
 
 			const wrapDeclaration = (declaration: CSSStyleDeclaration) => {
 				if (!declaration || typeof declaration !== 'object') return declaration;
@@ -1982,12 +1995,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								return (...args: unknown[]) => {
 									const result = Reflect.apply(value, target, args);
 									return typeof result === 'string' && result.includes('url(')
-										? restoreCSSValueURLs(result)
+										? restore(target, result)
 										: result;
 								};
 							if (typeof value === 'function') return value.bind(target);
 							return typeof value === 'string' && value.includes('url(')
-								? restoreCSSValueURLs(value)
+								? restore(target, value)
 								: value;
 						},
 						set: (target, key, value) => {
@@ -2050,8 +2063,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// computed styles read back the page's URLs too
 			this.client.global.getComputedStyle = proxyModule.wrapFunction(
 				this.client.global.getComputedStyle,
-				(target, that, args) =>
-					wrapDeclaration(Reflect.apply(target, that, args)),
+				(target, that, args) => {
+					const declaration = Reflect.apply(target, that, args);
+					if (declaration && typeof declaration === 'object')
+						computedDeclarations.add(declaration);
+					return wrapDeclaration(declaration);
+				},
 			);
 
 			// the Typed OM: values stringify with the page's URLs; what the page
