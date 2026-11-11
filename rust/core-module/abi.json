@@ -1,0 +1,22 @@
+{
+	"imports": ["e.j", "e.s"],
+	"exports": [
+		"memory:memory",
+		"a:function",
+		"jc:function",
+		"jr:function",
+		"jp:function",
+		"jn:function",
+		"jb:function",
+		"sr:function",
+		"sp:function",
+		"sn:function",
+		"si:function",
+		"sx:function",
+		"ss:function",
+		"da:function",
+		"dr:function",
+		"dp:function",
+		"dn:function"
+	]
+}

@@ -1,0 +1,15 @@
+[package]
+name = "core-module"
+version = "0.1.0"
+edition = "2024"
+description = "the one wasm module of stomp's own crates: the JS rewriter, the CSS rewriter and markup scanner and the public suffix lookup behind one export table (docs/rust-plan.md)"
+license = "GPL-3.0-only"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rwjs = { path = "../rwjs" }
+rwcss = { path = "../rwcss" }
+suffix = { path = "../suffix" }

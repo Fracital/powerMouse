@@ -6,7 +6,4 @@ description = "the CSS rewriter and the markup scanner of stomp, built to wasm (
 license = "GPL-3.0-only"
 publish = false
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-
 [dependencies]

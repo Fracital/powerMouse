@@ -1,18 +1,18 @@
-//! The public suffix lookup's wasm boundary (docs/rust-plan.md, phase 2):
-//! what tldts's `getDomain` and `getPublicSuffix` answer for a string, from
-//! a table of the public suffix list (`build.rs`, `table`) and tldts's own
-//! steps before the lookup (`host`), behind the byte-buffer ABI of the
-//! other modules (`rust/rwjs/src/abi.rs`, loaded by `src/wasm/module.ts`),
+//! The public suffix lookup, built to wasm as a member of the one module
+//! (docs/rust-plan.md, phase 2): what tldts's `getDomain` and
+//! `getPublicSuffix` answer for a string, from a table of the public suffix
+//! list (`build.rs`, `table`) and tldts's own steps before the lookup
+//! (`host`), behind the byte-buffer ABI under the letter `d`
+//! (`rust/core-module/src/suffixes.rs`, loaded by `src/wasm/module.ts`),
 //! with no import.
 //!
-//! - `a(len) -> ptr`: bytes for the host to write, for the call that
-//!   follows; `f(ptr, len)` gives them back (nothing to do).
-//! - `c(ptr, len) -> status`: a configuration; the lookup has none.
-//! - `r(ptr, len, flags) -> status`: answers for the text in the bytes and
+//! - `da(len) -> ptr`: bytes for the host to write, for the call that
+//!   follows.
+//! - `dr(ptr, len, flags) -> status`: answers for the text in the bytes and
 //!   keeps the answer until the next call.
-//! - `p()`, `n()`: the answer's pointer and length. `b()`: no scratch.
+//! - `dp()`, `dn()`: the answer's pointer and length.
 //!
-//! The flags of `r`:
+//! The flags of `dr`:
 //!
 //! - 1: the public suffix (`getPublicSuffix`); without it the registrable
 //!   domain (`getDomain`);
@@ -40,10 +40,10 @@
 //!
 //! Status 0 is an answer; 3 is input that is not UTF-8; 6 is a flag this
 //! build does not know. A panic is a trap, which the loader takes for a
-//! dead instance. The artifact is `no_std` and allocates nothing, so it
-//! carries no allocator and none of the standard library's panic machinery.
+//! dead instance. The lookup is `no_std` on wasm32 and allocates nothing:
+//! the module keeps its input and the input's UTF-16 units in buffers of
+//! its own from call to call.
 #![cfg_attr(target_arch = "wasm32", no_std)]
-#![allow(clippy::missing_safety_doc)]
 
 pub mod host;
 pub mod table;
@@ -57,9 +57,9 @@ pub const PIN: u32 = 16;
 const NOT_UTF8: i32 = 3;
 const UNKNOWN: i32 = 6;
 
-/// An answer: two numbers and a digit, or the pin. Nothing in the artifact
-/// allocates: the input and its UTF-16 units stand where `a` put them, the
-/// table's index in a static, the answer here.
+/// An answer: two numbers and a digit, or the pin. Nothing in the lookup
+/// allocates: the input and its UTF-16 units are the caller's, the table's
+/// index in a static, the answer here.
 pub struct Output {
 	bytes: [u8; 64],
 	len: usize,
@@ -227,103 +227,6 @@ pub fn answer(input: &[u8], flags: u32) -> Result<Vec<u8>, i32> {
 	match answer_into(&mut output, &mut input.to_vec(), &mut units, flags) {
 		0 => Ok(output.as_bytes().to_vec()),
 		status => Err(status),
-	}
-}
-
-/// The exports. Memory is the module's own to lay out: the host's bytes go
-/// at the heap's base, the same place for every call (nothing of a call
-/// outlives it but the answer), and their UTF-16 units right after them.
-#[cfg(target_arch = "wasm32")]
-mod abi {
-	use super::{Output, answer_into};
-	use core::arch::wasm32::{memory_grow, memory_size, unreachable};
-	use core::cell::UnsafeCell;
-
-	unsafe extern "C" {
-		static __heap_base: u8;
-	}
-
-	const PAGE: usize = 65536;
-
-	struct Slot(UnsafeCell<Output>);
-	// wasm32-unknown-unknown has one thread: the host calls one export at a time
-	unsafe impl Sync for Slot {}
-
-	static OUTPUT: Slot = Slot(UnsafeCell::new(Output::EMPTY));
-
-	fn output() -> &'static mut Output {
-		// SAFETY: single threaded, and no reference outlives the export call
-		unsafe { &mut *OUTPUT.0.get() }
-	}
-
-	/// memory reaches `len` bytes at `at` and two more for each as UTF-16
-	/// units, or the call traps: an instance that cannot hold its input is
-	/// one the loader replaces
-	fn room(at: usize, len: usize) {
-		let reached = len
-			.checked_mul(3)
-			.and_then(|bytes| bytes.checked_add(at + 2))
-			.is_some_and(|end| {
-				let have = memory_size(0) * PAGE;
-				end <= have || memory_grow(0, (end - have).div_ceil(PAGE)) != usize::MAX
-			});
-		if !reached {
-			unreachable();
-		}
-	}
-
-	/// `len` bytes the host writes, for the `c` or `r` that follows
-	#[unsafe(no_mangle)]
-	pub unsafe extern "C" fn a(len: usize) -> *mut u8 {
-		let base = (&raw const __heap_base as usize + 7) & !7;
-		room(base, len);
-		base as *mut u8
-	}
-
-	#[unsafe(no_mangle)]
-	pub unsafe extern "C" fn f(_ptr: *mut u8, _len: usize) {}
-
-	#[unsafe(no_mangle)]
-	pub unsafe extern "C" fn c(_ptr: *mut u8, _len: usize) -> i32 {
-		0
-	}
-
-	#[unsafe(no_mangle)]
-	pub unsafe extern "C" fn r(ptr: *mut u8, len: usize, flags: u32) -> i32 {
-		if len == 0 {
-			return answer_into(output(), &mut [], &mut [], flags);
-		}
-		room(ptr as usize, len);
-		// SAFETY: `room` made the memory; the host wrote `len` bytes at
-		// `ptr` and reads nothing of it again
-		let (input, units) = unsafe {
-			(
-				core::slice::from_raw_parts_mut(ptr, len),
-				core::slice::from_raw_parts_mut(((ptr as usize + len + 1) & !1) as *mut u16, len),
-			)
-		};
-		answer_into(output(), input, units, flags)
-	}
-
-	#[unsafe(no_mangle)]
-	pub unsafe extern "C" fn p() -> *const u8 {
-		output().as_bytes().as_ptr()
-	}
-
-	#[unsafe(no_mangle)]
-	pub unsafe extern "C" fn n() -> usize {
-		output().as_bytes().len()
-	}
-
-	#[unsafe(no_mangle)]
-	pub unsafe extern "C" fn b() -> *mut u8 {
-		core::ptr::null_mut()
-	}
-
-	/// a panic is a trap, which the loader takes for a dead instance
-	#[panic_handler]
-	fn panic(_: &core::panic::PanicInfo) -> ! {
-		unreachable()
 	}
 }
 

@@ -6,9 +6,6 @@ description = "the JS rewriter of stomp, built to wasm (docs/rust-plan.md)"
 license = "GPL-3.0-only"
 publish = false
 
-[lib]
-crate-type = ["cdylib"]
-
 [dependencies]
 edits = { path = "../edits" }
 # the parser and the AST walk alone: no semantic pass, no codegen, no

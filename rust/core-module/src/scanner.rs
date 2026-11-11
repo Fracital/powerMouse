@@ -1,19 +1,29 @@
-//! The wasm boundary (`lib.rs` says what crosses it; the host side is
-//! `src/wasm/module.ts` and `src/wasm/scanner.ts`).
+//! The CSS rewriter's and markup scanner's exports (`rwcss`, whose `lib.rs`
+//! says what crosses; the host side is `src/wasm/scanner.ts` through
+//! `src/wasm/module.ts`), under the letter `s` (`lib.rs` here):
+//!
+//! - `a(len) -> ptr` (shared), then `sr(ptr, len, flags) -> status`: a scan
+//!   (flags 0 to 2) of the text in the bytes, owned from then on.
+//! - `si(len) -> ptr`, `sx(len, flags) -> status`: a rewrite (flags 3 to 5)
+//!   of the text the host wrote into the buffer `si` gave.
+//! - `sp()`, `sn()`: the answer's pointer and length.
+//! - `ss(len) -> ptr`: the scratch the host answers an `e.s` routing call
+//!   in, made at least `len` bytes.
 //!
 //! A rewrite's text is written by the host straight into a buffer the
-//! module keeps from call to call (`i`), and the host's answer to a routing
-//! call into a scratch the module sizes to it (`s`): a routed URL can be
+//! module keeps from call to call (`si`), and the host's answer to a routing
+//! call into a scratch the module sizes to it (`ss`): a routed URL can be
 //! long (a data: URL of a font, kept twice over). Neither is allocated per
 //! call, which is most of what a rewrite of a few dozen bytes costs.
 
-use std::alloc::{Layout, alloc, dealloc};
 use std::cell::UnsafeCell;
 
-use crate::css::Fail;
-use crate::{
+use rwcss::css::Fail;
+use rwcss::{
 	REWRITE_LIST, REWRITE_SHEET, REWRITE_VALUE, STUCK, UNCHANGED, UNKNOWN, answer, rewrite,
 };
+
+use crate::take;
 
 const SCRATCH: usize = 64 * 1024;
 /// a kept buffer that grew past this is given back after the call
@@ -22,9 +32,9 @@ const KEPT: usize = 1024 * 1024;
 mod host {
 	#[link(wasm_import_module = "e")]
 	unsafe extern "C" {
-		/// `route(kind, ptr, len) -> len`: the host writes into `s(len)`
-		/// (or into `b()`, when what it writes fits the first 64 KiB)
-		pub fn r(kind: u32, ptr: *const u8, len: usize) -> i32;
+		/// `route(kind, ptr, len) -> len`: the host writes into `ss(len)`
+		#[link_name = "s"]
+		pub fn route(kind: u32, ptr: *const u8, len: usize) -> i32;
 	}
 }
 
@@ -53,7 +63,7 @@ fn state() -> &'static mut State {
 /// `rewrite::Route`, asked of the host
 fn route(kind: u32, text: &[u8], routed: &mut Vec<u8>) -> Result<bool, Fail> {
 	routed.clear();
-	let length = unsafe { host::r(kind, text.as_ptr(), text.len()) };
+	let length = unsafe { host::route(kind, text.as_ptr(), text.len()) };
 	if length < 0 {
 		return Ok(false);
 	}
@@ -69,43 +79,10 @@ fn route(kind: u32, text: &[u8], routed: &mut Vec<u8>) -> Result<bool, Fail> {
 	Ok(true)
 }
 
-/// `len` bytes the host writes; owned by `f`, `c` or `r`
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn a(len: usize) -> *mut u8 {
-	if len == 0 {
-		return std::ptr::null_mut();
-	}
-	let layout = Layout::from_size_align(len, 1).unwrap();
-	unsafe { alloc(layout) }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn f(ptr: *mut u8, len: usize) {
-	if len == 0 || ptr.is_null() {
-		return;
-	}
-	let layout = Layout::from_size_align(len, 1).unwrap();
-	unsafe { dealloc(ptr, layout) }
-}
-
-/// the bytes `a` gave, as a Vec that frees them
-unsafe fn take(ptr: *mut u8, len: usize) -> Vec<u8> {
-	if len == 0 || ptr.is_null() {
-		return Vec::new();
-	}
-	unsafe { Vec::from_raw_parts(ptr, len, len) }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn c(ptr: *mut u8, len: usize) -> i32 {
-	drop(unsafe { take(ptr, len) });
-	0
-}
-
-/// the scan of markup (`lib.rs`); a rewrite is asked through `x`, and a
-/// host that asks for one here is told the flag is unknown
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn r(ptr: *mut u8, len: usize, flags: u32) -> i32 {
+/// the scan of markup (`rwcss`'s `lib.rs`); a rewrite is asked through
+/// `sx`, and a host that asks for one here is told the flag is unknown
+#[unsafe(export_name = "sr")]
+pub unsafe extern "C" fn call(ptr: *mut u8, len: usize, flags: u32) -> i32 {
 	let input = unsafe { take(ptr, len) };
 	state().output = Vec::new();
 	if flags >= REWRITE_SHEET {
@@ -122,8 +99,8 @@ pub unsafe extern "C" fn r(ptr: *mut u8, len: usize, flags: u32) -> i32 {
 
 /// the buffer a rewrite's text is written to, at least `len` bytes; what
 /// it held is kept when it grows
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn i(len: usize) -> *mut u8 {
+#[unsafe(export_name = "si")]
+pub unsafe extern "C" fn input(len: usize) -> *mut u8 {
 	let input = &mut state().input;
 	if input.len() < len {
 		input.resize(len, 0);
@@ -132,8 +109,8 @@ pub unsafe extern "C" fn i(len: usize) -> *mut u8 {
 }
 
 /// the scratch the host answers a routing call in, at least `len` bytes
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn s(len: usize) -> *mut u8 {
+#[unsafe(export_name = "ss")]
+pub unsafe extern "C" fn scratch(len: usize) -> *mut u8 {
 	let scratch = &mut state().scratch;
 	if scratch.len() < len {
 		scratch.resize(len, 0);
@@ -141,9 +118,9 @@ pub unsafe extern "C" fn s(len: usize) -> *mut u8 {
 	scratch.as_mut_ptr()
 }
 
-/// the rewrite (`flags` 3, 4 or 5) of the first `len` bytes of `i`'s buffer
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn x(len: usize, flags: u32) -> i32 {
+/// the rewrite (`flags` 3, 4 or 5) of the first `len` bytes of `si`'s buffer
+#[unsafe(export_name = "sx")]
+pub unsafe extern "C" fn rewrite_input(len: usize, flags: u32) -> i32 {
 	// out of the state while the rewrite runs: a routing call reaches the
 	// state again for its scratch
 	let input = std::mem::take(&mut state().input);
@@ -172,17 +149,12 @@ pub unsafe extern "C" fn x(len: usize, flags: u32) -> i32 {
 	}
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn p() -> *const u8 {
+#[unsafe(export_name = "sp")]
+pub unsafe extern "C" fn output() -> *const u8 {
 	state().output.as_ptr()
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn n() -> usize {
+#[unsafe(export_name = "sn")]
+pub unsafe extern "C" fn length() -> usize {
 	state().output.len()
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn b() -> *mut u8 {
-	state().scratch.as_mut_ptr()
 }

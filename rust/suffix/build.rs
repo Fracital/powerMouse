@@ -151,11 +151,6 @@ fn main() {
 	.unwrap();
 	// what the module answers when asked which list it holds
 	println!("cargo:rustc-env=PSL_PIN={} {}", pin("PSL_COMMIT"), pin("PSL_DATE"));
-	// the lookup recurses nowhere: one page of stack, not the megabyte the
-	// linker reserves by default, which would be most of an instance
-	if env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("wasm32") {
-		println!("cargo:rustc-cdylib-link-arg=-zstack-size=65536");
-	}
 }
 
 /// the rule `body` (labels, dots between) ends at a node of the trie under `root`

@@ -100,10 +100,11 @@ if [[ -f "$out/$name.js" ]]; then cp "$out/$name.js" "$root/assets/$name.js"; fi
 	echo "sources $sources"
 	echo "toolchain $tag"
 	grep -v '^#' "$here/pins.env" | grep .
-	# what the crate itself pins (the suffix crate's list)
-	if [[ -f "$root/rust/$crate/src/pins.env" ]]; then
-		grep -v '^#' "$root/rust/$crate/src/pins.env" | grep .
-	fi
+	# what the crate and the workspace crates it builds in pin (the suffix
+	# crate's list), as inputs.sh listed their files
+	for pins in $(sed -n 's|^[0-9a-f]* \(rust/.*/src/pins\.env\)$|\1|p' "$out/$name.inputs"); do
+		grep -v '^#' "$root/$pins" | grep .
+	done
 	echo "built $(date -u +%Y-%m-%d)"
 } > "$root/assets/$name.UPSTREAM"
 echo
