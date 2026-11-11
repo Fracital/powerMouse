@@ -76,9 +76,12 @@ const SERVICE_WORKER_TIMEOUT =
 // later than the answers to their calls (the suites' race check)
 const SERVICE_WORKER_EVENT_DELAY =
 	Number(new URLSearchParams(location.search).get('swdelay')) || undefined;
-// HTTP/3 over wisp UDP for origins that offer it (docs/http3.md), off by
-// default; STOMP_HTTP3=1 on the server or ?http3 on this page turns it on
-const HTTP3 = !!CFG.http3 || new URLSearchParams(location.search).has('http3');
+// HTTP/3 over wisp UDP for origins that offer it (docs/http3.md), on by
+// default as in Chrome; STOMP_HTTP3=0 on the server turns it off, and
+// ?http3=0 (off) or ?http3 (on) on this page decides for one visit
+const HTTP3 = new URLSearchParams(location.search).has('http3')
+	? new URLSearchParams(location.search).get('http3') !== '0'
+	: CFG.http3 !== false;
 // real Encrypted Client Hello where a site's HTTPS DNS record has a config,
 // looked up over DoH by epoxy (STOMP_ECH_DNS on the server; ?noech sends
 // GREASE ECH only, as before)
@@ -105,7 +108,13 @@ const transports = {
 			? `${proxyBase()}/test/mixed-transport.mjs`
 			: `${proxyBase()}/epoxy/index.mjs`,
 		options: [{ wisp: wispURL(), ...(ECH_DNS && { ech_dns: ECH_DNS }) }],
-		...(HTTP3 && { http3: true }),
+		// stomp-h3 is looked for next to the transport module, and the test
+		// transport is not next to epoxy's
+		...(HTTP3 && {
+			http3: CFG.testTransport
+				? { module: `${proxyBase()}/epoxy/h3/stomp_h3.js` }
+				: true,
+		}),
 	}),
 	libcurl: () => ({
 		module: `${proxyBase()}/libcurl/index.mjs`,

@@ -27,8 +27,11 @@
 //                       debug shows every stream), printed on stdout
 //   HOLYWISP_BIN        a holyWisp executable to run instead of the one the
 //                       `holywisp` package ships for this platform
-//   STOMP_HTTP3         `1` turns on HTTP/3 (the epoxy descriptor's `http3`)
-//                       for every visit; `?http3` on the page does it for one
+//   STOMP_HTTP3         `0` turns off HTTP/3 (the epoxy descriptor's `http3`,
+//                       on by default: Chrome speaks it to the sites that
+//                       offer it, and some judge a session by it,
+//                       docs/http3.md); `?http3=0` on the page turns it off
+//                       for one visit, `?http3` on for one
 //   STOMP_ECH_DNS       the DNS-over-HTTPS endpoint epoxy asks for HTTPS
 //                       records, to offer real Encrypted Client Hello where a
 //                       site publishes a config, as Chrome does (default
@@ -233,7 +236,9 @@ app.get('/suggestions', (req, res) => {
 const pageConfig = {
 	...(externalWisp && { wisp: externalWisp }),
 	...(process.env.STOMP_PROXY_ORIGIN !== undefined && { proxyOrigin }),
-	...(process.env.STOMP_HTTP3 === '1' && { http3: true }),
+	// on unless turned off; a wisp server without UDP costs it nothing (the
+	// transport stays on HTTP/2, docs/http3.md)
+	http3: process.env.STOMP_HTTP3 !== '0',
 	echDns:
 		process.env.STOMP_ECH_DNS === 'off'
 			? null

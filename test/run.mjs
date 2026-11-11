@@ -56,6 +56,9 @@ const SUITE_TIMEOUT_MINUTES = {
 const SUITE_ENV = {
 	// epoxy plus the fixture hosts of test/mixed-servers.mjs
 	'mixed-content': { STOMP_TEST_TRANSPORT: '1' },
+	// the fixture's https origin through the test transport, and a wisp that
+	// refuses UDP: the demo's default HTTP/3 has to fall back
+	'demo-http3': { STOMP_TEST_TRANSPORT: '1', WISP_NO_UDP: '1' },
 };
 const suiteTimeoutMs = (name) =>
 	(Number(process.env.SUITE_TIMEOUT) || SUITE_TIMEOUT_MINUTES[name] || 10) *
@@ -188,6 +191,8 @@ async function startServersOnce(name) {
 	};
 	delete env.STOMP_PROXY_ORIGIN;
 	delete env.STOMP_WISP_URL;
+	// the demo's default (HTTP/3 on) unless the suite itself pins it
+	if (!SUITE_ENV[name]?.STOMP_HTTP3) delete env.STOMP_HTTP3;
 	const server = spawn(process.execPath, [`${root}demo/server.js`], {
 		env,
 		stdio: ['ignore', 'ignore', 'inherit'],

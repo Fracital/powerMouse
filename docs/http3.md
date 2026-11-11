@@ -5,7 +5,8 @@ some sites behave differently over it (quic.nginx.org tells you which one you
 got). With `http3` on, a proxied page gets the same: requests to an origin
 that offers h3 travel as QUIC datagrams over a wisp UDP stream, the way the
 user's own Chrome would send them, and everything else keeps going over the
-transport's TCP connections. It is off by default.
+transport's TCP connections. It is off unless the host's descriptor asks
+for it; the demo asks for it by default.
 
 ```js
 new StompController({
@@ -18,8 +19,10 @@ new StompController({
 });
 ```
 
-The demo turns it on with `STOMP_HTTP3=1` on the server or `?http3` on the
-page (demo/README.md).
+The demo has it on by default: `STOMP_HTTP3=0` on the server turns it off,
+`?http3=0` on the page turns it off for one visit and `?http3` on for one
+(demo/README.md). The demo-http3 suite checks the default, the switches and
+that a page loads on time where QUIC cannot be had.
 
 ## Pieces
 
@@ -251,7 +254,7 @@ What follows from it:
 
 So a host whose users see YouTube stop turns `http3` on, and one that
 already has looks at where its wisp server's TCP and UDP streams leave
-from.
+from. The demo has had it on by default since.
 
 ## Building and testing
 

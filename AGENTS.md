@@ -246,7 +246,9 @@ on every save (use a `git worktree`).
   branch any more; hosts pin an exact nightly version.
 - libcurl-transport 2.0.6: WebSockets fine, HTTP stops answering after ~70
   requests (default pool) or ~160 (`connections: [500, 400, 200]`).
-- HTTP/3 is opt-in (`TransportDescriptor.http3`, `src/transport/http3/`):
+- HTTP/3 is opt-in for hosts (`TransportDescriptor.http3`,
+  `src/transport/http3/`) and on by default in the demo (`STOMP_HTTP3=0` or
+  `?http3=0` turns it off), so every suite's demo server has it on:
   QUIC over epoxy's wisp UDP streams through stomp-h3 (`deploy/epoxy/h3/`,
   our own crate built into epoxy-transport's `dist/h3/`, not an upstream
   patch). The wisp server must relay UDP; the holyWisp edges do since

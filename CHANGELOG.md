@@ -71,6 +71,21 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- The demo has HTTP/3 on by default (`npm run demo`, `npm run dev` and every
+  test run's demo server): its epoxy descriptor carries `http3`, so a
+  proxied page reaches a site that offers h3 over QUIC, as the user's own
+  Chrome does. Some sites judge a session by it: YouTube refused most watch
+  sessions that reached it over TCP from one measured machine, Chrome's own
+  included, and almost none over QUIC (Known limitations, docs/http3.md).
+  `STOMP_HTTP3=0` on the server turns it off, `?http3=0` on the page for one
+  visit, and `?http3` turns it on for one visit where the server has it off;
+  `STOMP_HTTP3=1` still means on. The cost is bulk downloads: about half
+  the speed of HTTP/2 through the same wisp server (20 MB from
+  dl.google.com at 5 to 8 MB/s against 7 to 18), small requests the same.
+  Where QUIC cannot be had (a wisp server that refuses UDP, an origin whose
+  QUIC does not answer) the page and its requests go over HTTP/2 without
+  waiting for it (demo-http3 suite). The library's default is unchanged:
+  `TransportDescriptor.http3` is off unless a host sets it.
 - A controller whose host gives no `id` keeps one from visit to visit, where
   it got a new random one with every page. Every routed URL starts with the
   id, so a script's routed URL is now the same on the next visit: the rewrite
@@ -396,9 +411,9 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   or a `.env` file and hands the page its settings through `/config.js`; with
   an external wisp URL the built-in `/wisp/` is not served. See
   `demo/README.md`, "Deploying somewhere real".
-- The demo server reads `STOMP_HTTP3=1` (HTTP/3 for the epoxy transport,
-  `?http3` on the page for one visit) and `WISP_NO_UDP=1` (the built-in wisp
-  refuses UDP streams, to see the fallback).
+- The demo server reads `STOMP_HTTP3=0` (HTTP/3 for the epoxy transport
+  off; it is on by default, see Demo and API) and `WISP_NO_UDP=1` (the
+  built-in wisp refuses UDP streams, to see the fallback).
 - The demo server's built-in `/wisp/` is holyWisp (the `holywisp` package)
   instead of `@mercuryworkshop/wisp-js`, so `npm run demo`, `npm run dev`
   and every test run relay through the same server as stomp.fracit.al's

@@ -31,7 +31,7 @@ Environment variables:
 | `WISP_NO_UDP`          | unset          | Set to `1` to make the built-in wisp refuse UDP streams (HTTP/3 fallback QA)                                                                                           |
 | `HOLYWISP_BIN`         | unset          | Path of a `holywisp` executable to run instead of the one the `holywisp` package ships for this platform                                                               |
 | `HOLYWISP_LOG_LEVEL`   | `error`        | Log level of the built-in holyWisp (`debug` shows every stream and why it closed), printed on stdout                                                                   |
-| `STOMP_HTTP3`          | unset          | Set to `1` to turn on HTTP/3 for the epoxy transport (`?http3` does one visit)                                                                                         |
+| `STOMP_HTTP3`          | on             | Set to `0` to turn off HTTP/3 for the epoxy transport (`?http3=0` turns it off for one visit, `?http3` on); docs/http3.md has what it costs and why it is on           |
 | `STOMP_ECH_DNS`        | Cloudflare DoH | DNS-over-HTTPS endpoint epoxy asks for HTTPS records to offer real Encrypted Client Hello (docs/fingerprint.md); `off` sends GREASE ECH only (`?noech` does one visit) |
 | `STOMP_TEST_TRANSPORT` | unset          | Set to `1` to use `/test/mixed-transport.mjs` (epoxy that reaches the mixed-content suite's fixture hosts); test runs only                                             |
 
@@ -112,7 +112,9 @@ holyWisp is started.
    `ServiceWorker` object to talk to.
 2. **Load a transport.** The choice is remembered in `localStorage`
    (`stomp-demo:transport`). Transports are plain ES modules served from
-   `/epoxy/` and `/libcurl/`, imported on demand.
+   `/epoxy/` and `/libcurl/`, imported on demand. The epoxy descriptor has
+   `http3` on (docs/http3.md) unless `STOMP_HTTP3=0` or `?http3=0` says
+   otherwise.
 3. **Create the controller**:
    ```js
    controller = new StompController({
