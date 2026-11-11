@@ -1086,6 +1086,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 - `navigation.activation.from` is null for a document that was reached
   from another origin's, as natively: it was the entry of the page that
   linked to it, with its whole URL. (visited suite.)
+- A proxied frame no longer makes every SVG element interface: the hook
+  that lets an SVG reference's `href.baseVal` read back the page's URL read
+  all seventy `SVG...Element` globals to find the ten whose prototype has an
+  `href`, and reading a global makes its interface. It names the ten now
+  (src/inject/dom/svgReferences.ts), and style-readback checks the list
+  against the browser it runs. 33 KB of heap a frame (frame-cost: 1,099 to
+  1,101 KB a frame, 1,132 to 1,135 before, Chrome 152).
 - A document's navigation timing counts the site's own redirects: a GET
   form's document showed one redirect (the worker's, from the form's
   route) where Chrome shows none. (visited suite.)

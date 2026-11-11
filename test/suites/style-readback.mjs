@@ -3,7 +3,11 @@
 // cssText, the Typed OM's values), an SVG reference's href.baseVal is the
 // written value and setting it routes, document.domain accepts the page's
 // own host and refuses another like a browser, and a script created from a
-// markup string reads back the source the page wrote. Same-origin mode.
+// markup string reads back the source the page wrote. Same-origin mode. The
+// SVG interfaces the inject hooks `href` on are named in
+// src/inject/dom/svgReferences.ts (reading every SVG global made them all in
+// each frame): the list is checked against this browser's.
+import { readFileSync } from 'node:fs';
 import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
@@ -59,6 +63,28 @@ const realUse = await page.evaluate(() =>
 		window.__el.contentDocument.getElementById('use'),
 		'href',
 	),
+);
+const listed = [
+	...readFileSync(
+		new URL('../../src/inject/dom/svgReferences.ts', import.meta.url),
+		'utf8',
+	).matchAll(/'(SVG\w+Element)'/g),
+]
+	.map((match) => match[1])
+	.sort();
+const native = await page.evaluate(() =>
+	Object.getOwnPropertyNames(window)
+		.filter(
+			(name) =>
+				/^SVG\w+Element$/.test(name) &&
+				Object.getOwnPropertyDescriptor(window[name].prototype, 'href')?.get,
+		)
+		.sort(),
+);
+ok(
+	'the inject hooks href on every SVG interface that has one, and only those',
+	JSON.stringify(listed) === JSON.stringify(native),
+	`listed ${listed.join(' ')}; this browser ${native.join(' ')}`,
 );
 ok(
 	'href.baseVal is the written value and setting it routes',

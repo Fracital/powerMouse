@@ -40,6 +40,7 @@ import { loadFetch, loadSource } from '../loadGrants';
 import { responseURLOf } from '../responseDocuments';
 import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
 import { sealedURL } from '../sealedCopies';
+import { SVG_HREF_INTERFACES } from '../svgReferences';
 import DOMHooksModule, {
 	CustomElement,
 	nativeElement,
@@ -1099,8 +1100,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const proxyModule = this.client.getModule(ProxyModule)!;
 			const global = this.client.global as unknown as Record<string, any>;
 			const owners = new WeakMap<object, Element>();
-			for (const name of Object.getOwnPropertyNames(global)) {
-				if (!/^SVG\w+Element$/.test(name)) continue;
+			for (const name of SVG_HREF_INTERFACES) {
 				const prototype = global[name]?.prototype;
 				const descriptor =
 					prototype && Reflect.getOwnPropertyDescriptor(prototype, 'href');
