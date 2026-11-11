@@ -52,7 +52,12 @@ import {
 	XML_DOCUMENT_MIMES,
 } from '../rewriteHTML';
 import { modifyJS, RewrittenBy, routeJS, ScriptType } from '../rewriteJS';
-import { parseRoutedURL, routeBinary, unwrapRoute } from '../routeURL';
+import {
+	linkRouteURL,
+	parseRoutedURL,
+	routeBinary,
+	unwrapRoute,
+} from '../routeURL';
 import type { ControlInfo } from '../serviceWorkerTypes';
 import { siteFacts, type SiteFacts } from '../siteFacts';
 import StompURL from '../StompURL';
@@ -68,6 +73,7 @@ import {
 	ABORT_HEADER,
 	CACHED_MARKER,
 	CREDENTIALS_HEADER,
+	HOPS_MARKER,
 	KEPT_MARKER,
 	LOAD_HEADER,
 	MEMORY_MARKER,
@@ -83,6 +89,7 @@ import {
 	XHR_MARKER,
 } from '../transport/messages';
 import { BUILD } from '../version';
+import { contextText, isLinkRoute, LINK_SEGMENT, linkRoute } from '../visited';
 import { scanMarkup, scannerSettled } from '../wasm/scanner';
 import {
 	knownOriginOf,
@@ -173,6 +180,7 @@ import Router from './Router';
 import { applyHeaderRule, CompiledRule, compileRules } from './rules';
 import { serviceWorkers } from './serviceWorkers';
 import { boundClient } from './srcdocVouches';
+import { rememberVisitedHop, takeVisitedHop } from './visitedHops';
 
 export const statusEmpty = [101, 204, 205, 304];
 
@@ -867,13 +875,24 @@ function genericForward(
 			const value = requestHeaders.get(name);
 			if (value === null) continue;
 			try {
+				// (Ping-To is the link's href: a link route, src/visited.ts)
+				const scope = `${oURL.origin}${rewriter.config.scope}`;
+				const link = isLinkRoute(value, scope)
+					? linkRouteURL(
+							value.slice(scope.length + LINK_SEGMENT.length + 1),
+							rewriter.codec,
+						)
+					: null;
 				requestHeaders.set(
 					name,
-					parseRoutedURL(
-						value,
-						rewriter.codec,
-						`${oURL.origin}${rewriter.directory}`,
-					).url.toString(),
+					(
+						link ??
+						parseRoutedURL(
+							value,
+							rewriter.codec,
+							`${oURL.origin}${rewriter.directory}`,
+						).url
+					).toString(),
 				);
 			} catch (error) {
 				requestHeaders.delete(name);
@@ -2634,6 +2653,54 @@ function genericForward(
 				},
 			);
 
+		// a navigation that began at a link route (src/visited.ts) goes on
+		// through the link route of the URL the site redirected to, in the
+		// same context: Chrome records every URL of a redirect chain under the
+		// navigation's own key. The hop above is kept by the document's
+		// address, which that link route redirects to in turn
+		const visitedHop = navigation ? takeVisitedHop(serverRequest.url) : null;
+		// the redirects that were link routes are the worker's, not the
+		// site's: the page's navigation timing takes them off (HOPS_MARKER)
+		if (visitedHop && !redirect)
+			responseHeaders.append(
+				'server-timing',
+				// (every redirect, when the site's own crossed origins: none
+				// is shown then)
+				`${HOPS_MARKER};dur=${visitedHop.crossed ? 99 : visitedHop.hops}`,
+			);
+		if (redirect && navigation) {
+			const hop = visitedHop;
+			try {
+				const next =
+					hop &&
+					parseRoutedURL(
+						new URL(responseHeaders.get('location')!, serverRequest.url).href,
+						rewriter.codec,
+						routedPrefix,
+					);
+				if (hop && next && /^html(:nested:[^/]*)?$/.test(next.resource)) {
+					const link = linkRoute(
+						`${oURL.origin}${rewriter.config.scope}`,
+						rewriter.codec,
+						contextText(hop.context, publicSuffix),
+						next.url.url,
+					);
+					rememberVisitedHop(link, {
+						context: hop.context,
+						directory: rewriter.directory,
+						nested: nestedMarkOfKind(next.resource) ?? false,
+						hops: hop.hops,
+						...((hop.crossed || next.url.url.origin !== url.url.origin) && {
+							crossed: true,
+						}),
+					});
+					responseHeaders.set('location', link);
+				}
+			} catch (error) {
+				// a Location that is no route: as it is
+			}
+		}
+
 		// preloads announced by the server fetch through the proxy too
 		if (responseHeaders.has('link'))
 			responseHeaders.set(
@@ -3889,18 +3956,58 @@ export function registerRewrites(
 			}
 		}
 
-		return new Response(undefined, {
-			headers: {
-				location: routeHTML(
-					url,
-					url,
-					rewriter.config,
-					false,
-					nestedMarkOf(oURL.pathname, rewriter.directory) ?? false,
-				),
-			},
-			status: 307,
-		});
+		const target = routeHTML(
+			url,
+			url,
+			rewriter.config,
+			false,
+			nestedMarkOf(oURL.pathname, rewriter.directory) ?? false,
+		);
+		// A GET form's navigation is a visit like a link's: it goes on
+		// through the link route (src/visited.ts) of the URL the browser
+		// built, in the context of the document that holds the form, which
+		// the referrer names. The redirect here is the worker's own, like the
+		// link route's (HOPS_MARKER)
+		let location = target;
+		if (serverRequest.method === 'GET')
+			try {
+				const from = new URL(serverRequest.referrer);
+				if (
+					from.origin === oURL.origin &&
+					from.pathname.startsWith(rewriter.directory) &&
+					/^html(:nested:[^/]*)?$/.test(
+						from.pathname.slice(rewriter.directory.length).split('/')[0],
+					)
+				) {
+					const source = parseRoutedURL(
+						from.href,
+						rewriter.codec,
+						`${oURL.origin}${rewriter.directory}`,
+					).url.url;
+					const context = {
+						frame: source.origin,
+						top: siteOf(
+							nestedTopOf(from.pathname, rewriter.directory) ?? source.origin,
+							publicSuffix,
+						),
+					};
+					location = linkRoute(
+						`${oURL.origin}${rewriter.config.scope}`,
+						rewriter.codec,
+						contextText(context, publicSuffix),
+						url.url,
+					);
+					rememberVisitedHop(location, {
+						context,
+						directory: rewriter.directory,
+						nested: nestedMarkOf(oURL.pathname, rewriter.directory) ?? false,
+						hops: 1,
+					});
+				}
+			} catch (error) {
+				// no referrer, or not a document of this controller: as before
+			}
+		return new Response(undefined, { headers: { location }, status: 307 });
 	});
 
 	registerServiceWorkerScripts(router, rewriter);

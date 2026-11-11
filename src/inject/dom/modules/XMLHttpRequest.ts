@@ -29,6 +29,8 @@ import BlobDocumentsModule from './BlobDocuments';
 import SyncModule from './Sync';
 
 export default class XMLHttpRequestModule extends Module<DocumentClient> {
+	/** the realm's listener count (src/inject/uploadListeners.ts), which the Visited module keeps for `navigation` too */
+	listeners?: ReturnType<typeof trackUploadListeners>;
 	apply() {
 		const instances = new WeakSet();
 		const real = Symbol();
@@ -60,6 +62,8 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 		const uploads = trackUploadListeners(that.client.global, proxyModule, () =>
 			that.client.getModule(UnrouteModule)?.noteReportSite(),
 		);
+
+		this.listeners = uploads;
 
 		const decoder = new TextDecoder('utf-8');
 

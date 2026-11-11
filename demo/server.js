@@ -53,9 +53,9 @@
 //                       the page's Block ads toggle is remembered
 //   STOMP_TEST_TRANSPORT `1` swaps epoxy for /test/mixed-transport.mjs, which
 //                       reaches the suites' fixture hosts (mixed-content's,
-//                       and test/private-sites.mjs's names under a private
-//                       suffix; test runs only: test/run.mjs sets it for the
-//                       suites that need it)
+//                       visited's, and test/private-sites.mjs's names under
+//                       a private suffix; test runs only: test/run.mjs sets
+//                       it for the suites that need it)
 //   STOMP_REPO          the GitHub repository whose commits the home page
 //                       lists (default Fracital/powerMouse, read from this
 //                       checkout's own git log)

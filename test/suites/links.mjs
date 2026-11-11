@@ -34,10 +34,10 @@ const real = await page.evaluate(() => {
 		Element.prototype.getAttribute.call(doc.getElementById(id), 'href');
 	return { area: get('area'), a: get('a') };
 });
+// (a link's route names its context, not a controller: src/visited.ts)
 ok(
 	'area[href] is routed like a[href]',
-	/\/stomp\/[\w-]+\/html\//.test(real.area) &&
-		/\/stomp\/[\w-]+\/html\//.test(real.a),
+	/\/stomp\/~\/[^/?#]+#/.test(real.area) && /\/stomp\/~\/[^/?#]+#/.test(real.a),
 	JSON.stringify(real),
 );
 const seen = await newest().evaluate(() => {
@@ -183,7 +183,7 @@ ok(
 		updated.viaAttribute[1] === `${fixture.origin}/pages/hist-2.html?set=1` &&
 		updated.viaProperty[0] === '/pages/hist-2.html?prop=1' &&
 		updated.viaProperty[1] === `${fixture.origin}/pages/hist-2.html?prop=1` &&
-		/\/stomp\/[\w-]+\/html\//.test(realAfter) &&
+		/\/stomp\/~\/[^/?#]+$/.test(realAfter) &&
 		realAfter !== realBefore,
 	JSON.stringify({ ...updated, realAfter: realAfter.slice(0, 50) }),
 );

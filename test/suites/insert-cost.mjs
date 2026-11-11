@@ -85,7 +85,8 @@ for (const [mode, base] of [
 	ok(
 		`${mode}: a link no hook saw is routed when it is inserted, and reads back as written`,
 		best?.href === '/pages/insert-cost-target.html' &&
-			(mode !== 'same-origin' || /\/stomp\/[\w-]+\/html\//.test(real ?? '')),
+			// (a link's route names its context, not a controller: src/visited.ts)
+			(mode !== 'same-origin' || /\/stomp\/~\/[^/?#]+$/.test(real ?? '')),
 		detail,
 	);
 	if (process.env.SKIP_TIMING !== '1')

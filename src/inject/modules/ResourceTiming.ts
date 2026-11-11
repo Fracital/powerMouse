@@ -1,6 +1,7 @@
 import {
 	CACHED_MARKER,
 	Delivery,
+	HOPS_MARKER,
 	KEPT_LOAD,
 	KEPT_MARKER,
 	KeptLoad,
@@ -410,10 +411,109 @@ export default class ResourceTimingModule extends Module<Client> {
 						: 'revalidated'
 					: 'network';
 		};
+
+		// A navigation that went through link routes (src/visited.ts) was
+		// redirected by the worker, once for each: the document's navigation
+		// timing counts the site's redirects only, and shows none when the
+		// site made none. The worker says how many were its own (HOPS_MARKER)
+		const navigationProto = global.PerformanceNavigationTiming?.prototype as
+			object | undefined;
+		const redirectCount =
+			navigationProto &&
+			Reflect.getOwnPropertyDescriptor(navigationProto, 'redirectCount');
+		const metricDuration = Reflect.getOwnPropertyDescriptor(
+			global.PerformanceServerTiming?.prototype ?? {},
+			'duration',
+		)?.get;
+		/** the redirects of a navigation entry that were the site's own; null for any other entry, or one the worker made none of */
+		const siteRedirects = (entry: object): number | null => {
+			if (!redirectCount?.get || !nativeServerTiming || !metricName)
+				return null;
+			try {
+				const counted = Reflect.apply(redirectCount.get, entry, []) as number;
+				for (const metric of Reflect.apply(
+					nativeServerTiming,
+					entry,
+					[],
+				) as object[])
+					if (Reflect.apply(metricName, metric, []) === HOPS_MARKER)
+						return Math.max(
+							0,
+							counted -
+								(metricDuration
+									? Number(Reflect.apply(metricDuration, metric, []))
+									: 0),
+						);
+			} catch (error) {
+				// not a navigation entry
+			}
+			return null;
+		};
+		if (navigationProto && redirectCount?.get)
+			Reflect.defineProperty(navigationProto, 'redirectCount', {
+				...redirectCount,
+				get: proxyModule.wrapFunction(
+					redirectCount.get,
+					(target, that, args) => {
+						const counted = Reflect.apply(target, that, args);
+						return siteRedirects(that as object) ?? counted;
+					},
+				),
+			});
+		// the same of the document's own navigation, for the older interfaces
+		const getEntriesByType = global.Performance?.prototype.getEntriesByType;
+		const ownRedirects = (): number | null => {
+			try {
+				const [entry] = Reflect.apply(getEntriesByType, global.performance, [
+					'navigation',
+				]) as object[];
+				return entry ? siteRedirects(entry) : null;
+			} catch (error) {
+				return null;
+			}
+		};
+		const legacy = (
+			proto: object | undefined,
+			name: string,
+			value: (native: unknown, redirects: number) => unknown,
+		) => {
+			const descriptor = proto && Reflect.getOwnPropertyDescriptor(proto, name);
+			if (!proto || !descriptor?.get) return;
+			Reflect.defineProperty(proto, name, {
+				...descriptor,
+				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
+					const native = Reflect.apply(target, that, args);
+					const redirects = ownRedirects();
+					return redirects === null ? native : value(native, redirects);
+				}),
+			});
+		};
+		// (only in a document the worker redirected, which its entry says
+		// from the start: naming the two interfaces and redefining their
+		// getters costs a frame about 8 KB, and most frames are not a link's)
+		if (ownRedirects() !== null) {
+			legacy(
+				global.PerformanceNavigation?.prototype,
+				'redirectCount',
+				(native, redirects) => redirects,
+			);
+			for (const name of ['redirectStart', 'redirectEnd'])
+				legacy(
+					global.PerformanceTiming?.prototype,
+					name,
+					(native, redirects) => (redirects === 0 ? 0 : native),
+				);
+		}
+
 		for (const name of RESTRICTED_TIMES)
 			hook(name, (entry, native) => {
 				const result = native();
 				if (judge(entry).restricted) return 0;
+				if (
+					(name === 'redirectStart' || name === 'redirectEnd') &&
+					siteRedirects(entry) === 0
+				)
+					return 0;
 				if (name !== 'transferSize' || result !== 0 || !bodySize) return result;
 				const how = delivery(entry);
 				return how === 'cache' || how === 'memory'
@@ -508,6 +608,12 @@ export default class ResourceTimingModule extends Module<Client> {
 							'contentType',
 						])
 							if (name in json) json[name] = Reflect.get(proto, name, that);
+						if (navigationProto && 'redirectCount' in json)
+							json.redirectCount = Reflect.get(
+								navigationProto,
+								'redirectCount',
+								that,
+							);
 						if (Array.isArray(json.serverTiming))
 							json.serverTiming = (
 								Reflect.get(proto, 'serverTiming', that) as unknown as {

@@ -91,7 +91,8 @@ ok(
 );
 ok(
 	'an SVG link navigates through the proxy and an SVG script is routed as a script',
-	route(real.sa, 'html/') && route(real.ss, 'js:generic/'),
+	// (a link's route names its context, not a controller: src/visited.ts)
+	/\/stomp\/~\/[^/?#]+$/.test(real.sa) && route(real.ss, 'js:generic/'),
 	JSON.stringify({ sa: real.sa, ss: real.ss }),
 );
 await done(browser);

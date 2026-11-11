@@ -46,7 +46,12 @@ that reached it, so a page can tell a request that was refused before it left
   on), and Chrome 152 sends third-party cookies that are not `Partitioned`
   (measured: the frame reads and sends B's top-level cookie).
 
-Both suites keep a list of the cases known to differ, each with its reason;
+- `visited` (test/visited-server.mjs): every way of visiting a URL, made in
+  Chrome itself and through the proxy in both modes, each with a profile
+  that keeps history; then every URL is shown as a link in 17 contexts and
+  the pixels of the two are compared ("Visited links" below).
+
+The suites keep a list of the cases known to differ, each with its reason;
 a listed case that reads as natively fails the suite, so the list shrinks
 with every fix.
 
@@ -116,7 +121,7 @@ would not give it).
 | `postMessage` targetOrigin, `event.origin`                           | per origin                                                                                     | as natively                                                        |                                           |
 | `document.referrer`, Referrer-Policy                                 | per policy                                                                                     | as natively (referrer and wpt-referrer-policy suites)              |                                           |
 | `navigation.entries()` across origins                                | only the contiguous same-origin entries                                                        | **leak**: B sees A's entry, its full URL included, and `canGoBack` | entries filtered to the document's origin |
-| `:visited`                                                           | partitioned by top-level site and frame origin; never readable by script                       | every proxied link is a proxy URL in one partition                 | see Left                                  |
+| `:visited`                                                           | partitioned by top-level site and frame origin; never readable by script                       | every proxied link is a proxy URL in one partition                 | link routes (Visited links)               |
 
 ### 5. Workers
 
@@ -702,6 +707,204 @@ Filled in commit by commit; see the CHANGELOG for each.
     44 to 55 natively: no difference outside the runs' noise), one worker
     for the fifty.
 
+## Visited links
+
+**Measured 2026-11-11 against Chrome 152 and Chrome 156 (the tables are
+identical), both demo modes, with a profile that keeps history (visited
+suite).**
+
+### What Chrome does
+
+Script never reads `:visited` (every getter answers as for an unvisited
+link), so the suite's links are coloured squares and it reads their pixels
+from a screenshot taken over the DevTools protocol (`test/visited-lib.mjs`).
+The sites: A and A2 (one site, two origins), B, C, and for self-links S and
+W (`v<port>.test` and `www.v<port>.test` on port 80).
+
+- The key is the link's URL with its fragment, the top-level site and the
+  frame's origin (`visited_links` in the History database: `link_url`,
+  `top_level_url`, `frame_url`). A link clicked on A reads visited at A's
+  top level, in a frame of A under A, and in a frame of A under A2 (same
+  site); not on A2 itself (another origin), not on B, not in a frame of B
+  under A. `U#f` visited says nothing of `U` or `U#g`.
+- A visit is recorded under the site and origin of the document that
+  started the navigation: a link (HTML, SVG, one a script made or clicked),
+  `location.href`, `location.assign`, `location = url`, `window.open`, a
+  GET form, `pushState`, `replaceState`, `location.replace`, a fragment
+  navigation, a meta refresh. Every URL of a redirect chain is recorded
+  with the same key. A typed URL (and what it redirects to) records
+  nothing.
+- In a frame only a navigation that makes a history entry is recorded
+  (`HistoryTabHelper::DidFinishNavigation` returns early unless
+  `HasSubframeNavigationEntryCommitted()`): a link, `location.href` after
+  load, `pushState`. A frame's first document, `location.replace` and
+  `replaceState` in a frame are not.
+- Self-links (`VisitedLink::MaybeCreateSelfLink`): a visit whose frame
+  origin is the origin of the top-level site's own URL (the registrable
+  domain on the scheme's default port) is recorded a second time for the
+  visited URL's own site and origin. So a link clicked on `http://v.test`
+  reads visited on the visited page's own site too; one clicked on
+  `http://www.v.test`, or on any origin with a port of its own, does not.
+  The fixtures' usual origins have ports, which is why the suite adds S and
+  W. Every hop of a redirect gets its own.
+- A document of an opaque origin shows no link visited and records none.
+
+### What the proxy does
+
+Through the proxy every link was a URL of the proxy's origin in a frame of
+the proxy's origin under the host's page: one partition for every proxied
+site. The browser's own history is still what answers, so the partition is
+put where the browser looks, in the link's URL (`src/visited.ts`):
+
+```
+before  /stomp/<id>/html/<codec(url)>#fragment
+after   /stomp/~/<codec(context + ' ' + url)>#fragment
+```
+
+`context` is the frame origin of the document that holds the link, with
+`^<top-level site>` after it when that site is not the origin's own:
+`https://www.example.com`, or `https://ads.example^https://news.example`.
+A link route names no controller and no kind of route, so the same link
+reads the same in every tab, at the top and in a frame, and after a restart
+(the codec's key is the scope's, kept in the worker's database; the aes
+codec, whose routes are salted at random, writes a link route with a salt
+taken from its text), exactly when Chrome's key is the same.
+
+No document is ever at a link route. The service worker answers one with a
+307 to the document's address, which is the address it had before
+(`<id>/html/<codec(url)>`): what a page, the worker (the partition and site
+it reads from a client's address), the rewrite cache and the controller's
+records see is unchanged. Chrome records every URL of a redirect chain
+under the navigation's key, so the link route is in its history, under the
+one key every proxied frame has, and a later link with the same route reads
+visited. The pieces:
+
+- **Which controller and which kind of frame** the link route leads to: the
+  navigation's referrer, which is the address of the document that holds
+  the link; what that document told the worker (`NAVIGATION_HINT`, which now
+  carries its frame's kind) when the referrer is withheld, or when the
+  document is one a page wrote itself (about:srcdoc, about:blank, blob:),
+  whose referrer is its parent's address; else the newest live controller,
+  at the top level (a link route a host or the user opened by hand).
+- **Self-links**: when the context's frame origin is its top-level site's
+  own origin, the worker redirects first to the link route of the visited
+  URL's own context, then to the document. Decided by the measurement
+  above, not by a list of sites.
+- **A site's own redirect** of a navigation that began at a link route goes
+  on through the link route of the next URL in the same context (the
+  worker rewrites the `Location`), so each hop is recorded as natively.
+- **Script navigations that make an entry** (`location.href`,
+  `location.assign`, `location = url`, `window.open(url, '_self')` after
+  the load event) go to the link route. A GET form goes to its form route
+  as before, which the worker now redirects through the link route of the
+  URL the browser built, in the context its referrer names.
+- **`pushState`** makes its entry at the link route (recorded) and puts the
+  document's address there in the same call (a replacement, which a frame's
+  history does not record). **A fragment navigation** that makes an entry (a
+  link to `#part`, `location.hash`) is stopped in its `navigate` event and
+  made again as three steps: `pushState` to the link route, `replaceState`
+  back to the address the document had, `location.replace` to the fragment
+  (the browser's own fragment navigation: scroll, `:target`, one
+  `hashchange` with the right URLs, one `popstate`, `history.state` null,
+  one entry more, all as natively; compared as JSON in the suite).
+- **Redirect counts**: the worker's own redirects are not the site's. It
+  counts them along the chain and marks the document (`stomp-hops`, a
+  Server-Timing metric the page never sees); the inject takes them off
+  `PerformanceNavigationTiming.redirectCount`, `redirectStart` and
+  `redirectEnd`, `toJSON`, and the older `performance.navigation` and
+  `performance.timing`. A chain whose own redirect crossed origins shows
+  none, as natively.
+- **Opaque documents** (a sandboxed frame) get a context of their own each
+  (`null:<random>`), which no other document's link names.
+- **Invisible to pages and sites**: `a.href`, `getAttribute`, `outerHTML`,
+  `document.links`, `document.URL`, `document.referrer`, the Navigation
+  API's entries and `activation`, navigation timing and error text read as
+  natively (the suite compares them as JSON with Chrome's own), and no
+  request that reaches a site names a link route (the suite reads the
+  fixture's log).
+
+### What a host sees
+
+Nothing new, and no new option. `controller.route(url)` is the document's
+address, as before: a navigation the host starts is the user's own (typed),
+which Chrome does not record either. `controller.unroute()` reads a link
+route back as it reads an address, so a host that takes a link's URL off a
+frame gets the real one; a frame the host sends to a link route arrives at
+the page (the worker picks the newest live controller of the scope). The
+navigate events, `frame.url` and the request log carry real URLs as before.
+Visited state is the browser's: it lasts as long as the profile's history
+and is cleared with it.
+
+### Decisions
+
+- **The fragment stays outside the encoded part.** Chrome's key includes
+  it, and a fragment navigation has to stay one for the browser.
+- **The top-level site is in the context only when it differs** from the
+  frame origin's own site, so the common link (a top-level page's) is as
+  short as before plus the origin.
+- **Nothing is kept by the worker** but a few seconds of state between the
+  hops of one navigation (`src/server/visitedHops.ts`). The history is the
+  browser's own database; STomp stores no visit.
+- **A page that listens to the Navigation API** would hear the two steps of
+  an entry, so its `pushState` and fragment navigations are made at the
+  document's address as before. One that listens for `navigate` may
+  intercept a link's navigation, which commits the URL the navigation
+  names: its links are given the document's address while a click is
+  handled (and the link route again after), and `intercept()` on a
+  navigation that names a link route does nothing (the document loads).
+  Such a page's router works as before; its visits are not recorded.
+- **Cross-window navigations and a frame's `src`** keep the document's
+  address: the link route cannot say which kind of frame the target is
+  (the referrer is the initiator's, not the target's).
+
+### What is not recorded
+
+Every proxied document is a frame of the host's page, and nothing makes
+Chrome record a frame's navigation that makes no history entry. Probed in
+plain Chrome 152: `replaceState`, `location.replace` and
+`navigation.navigate(url, { history: 'replace' })` in a frame, alone, right
+after a `pushState`, and inside a cancelled navigation's `navigate`
+handler, never show a link visited; and a history entry cannot be made and
+taken back (a traversal is asynchronous and leaves a forward entry). So
+these, which Chrome records at the top level, read unvisited through the
+proxy (the suite's KNOWN list, each checked to read unvisited everywhere):
+
+| Visit                                          | Why                                                   |
+| ---------------------------------------------- | ----------------------------------------------------- |
+| `location.replace`, `history.replaceState`     | replace the frame's entry                             |
+| `location.href` while the page is parsed       | a navigation before the load event replaces the entry |
+| a meta refresh                                 | a client redirect replaces the entry                  |
+| `window.open` in a new window, `target=_blank` | the host opens a tab: a new frame's first document    |
+| a frame's `src` set by its page                | navigated at the document's address (Decisions)       |
+| a link on a page that listens for `navigate`   | followed at the document's address (Decisions)        |
+| `pushState` on a page that listens to the API  | made at the document's address (Decisions)            |
+
+All of them under-report. Nothing reads visited through the proxy that
+Chrome would show unvisited in the same place: the suite compares 35 kinds
+of visit in 17 contexts, cell by cell.
+
+The second row is a replacement through the proxy whatever the page does:
+a script navigation before the load event replaces the frame's entry, as
+Chrome replaces a top-level document's (the Location module, which made
+it so for Back and Forward), and a frame's replacement is not recorded.
+
+### Cost
+
+A link's route is one codec pass, as before, over a longer text (the
+context). A page of 5000 links, response to DOMContentLoaded, alternated
+runs of the builds before and after (on the build before the wasm
+rewriters), medians of 9: 174 and 175 ms before,
+183 and 182 ms after (about 2 microseconds a link, inside the spread of
+single runs). A link's navigation, start to DOMContentLoaded, with its one
+extra redirect inside the worker: 51 and 48 ms before, 49 and 45 ms after
+(no measurable difference). `dist/injectDocument.js` grows by 7.7 KB (438
+KB to 445, budget 460). A frame pays about 8 KB of heap for the module
+(frame-cost, alternated, three runs each on Chrome 152 and 156: 1137 to
+1141 KB a frame, 1128 to 1134 before, ceiling 1160). It was 18 KB with the hooks of `performance.navigation` and
+`performance.timing` made in every frame (naming the two interfaces and
+redefining their getters); they are made only in a document the worker
+redirected, which its navigation entry says from the start.
+
 ## Left
 
 Ranked by what a page could learn or do. Measured ones are listed in the
@@ -749,18 +952,13 @@ suites' known lists with the same reason.
    ran in that client before the inject's bundle would hear it before it.
    The defence against such a realm is that there is none (the escape
    suites); the gate is what holds when a hook is passed.
-2. `:visited`: Chrome never lets script read it, and since Chrome 136
-   keeps it per link URL, top-level site and frame origin; through the
-   proxy every link is a proxy URL under one top-level site and one frame
-   origin, so its timing side channels span every proxied site. Not
-   simulated. It would take a link's routed URL to differ by the proxied
-   top-level site and frame origin of the document that holds it (a marker
-   the worker ignores), so that the browser's own history is keyed as
-   natively, and a second form of each visited URL for links to the
-   document's own site, which Chrome shows as visited however the user got
-   there. That changes the shape of every routed link (and what the host
-   stores of them), which is the host's and the lead's decision, and it can
-   only be checked with a profile that keeps history, which no suite uses.
+2. `:visited` for the visits a frame's history does not record (Visited
+   links, "What is not recorded"): a replacement of the document's entry
+   (`location.replace`, `replaceState`, a navigation before the load
+   event, a meta refresh), the first document of a tab the host opens, a
+   frame's `src` its page sets, and the navigations of a page that listens
+   to the Navigation API. Each reads unvisited where Chrome shows it
+   visited; none reads visited where Chrome would not.
 3. `crossOriginIsolated`: a page that sends COOP and COEP natively gets an
    isolated agent cluster (SharedArrayBuffer, precise timers); through the
    proxy the frame lives in the host's browsing context group, so it cannot

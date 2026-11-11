@@ -69,6 +69,8 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 					url,
 					activated,
 					...(allow !== undefined ? { allow } : {}),
+					nested: this.client.nestedRoute,
+					own: routed === this.client,
 				},
 			});
 		});

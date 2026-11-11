@@ -23,7 +23,8 @@ const entry = `${OUT}unroute-unit-entry.mjs`;
 writeFileSync(
 	entry,
 	`export { unrouteText } from ${JSON.stringify(`${root}src/inject/modules/Unroute.ts`)};
-export { XORCodec } from ${JSON.stringify(`${root}src/Codecs.ts`)};
+export { default as GenericCodec, XORCodec, AESCodec, Base64Codec } from ${JSON.stringify(`${root}src/Codecs.ts`)};
+export { linkRoute, parseLinkRoute, opaqueContext } from ${JSON.stringify(`${root}src/visited.ts`)};
 `,
 );
 const bundle = `${OUT}unroute-unit.mjs`;
@@ -36,7 +37,16 @@ await esbuild.build({
 	outfile: bundle,
 	logLevel: 'silent',
 });
-const { unrouteText, XORCodec } = await import(`${bundle}?${Date.now()}`);
+const {
+	unrouteText,
+	GenericCodec,
+	XORCodec,
+	AESCodec,
+	Base64Codec,
+	linkRoute,
+	parseLinkRoute,
+	opaqueContext,
+} = await import(`${bundle}?${Date.now()}`);
 
 // xor 9, every character: '0' encodes to ':' and '9' to '1', so a URL
 // ending in 3009 ends its route in `::1`
@@ -96,5 +106,73 @@ ok(
 	unrouteText(client, `Object.thrower (${routed}:6:40)`, true) ===
 		`Object.thrower (${page}:6:40)`,
 	unrouteText(client, `Object.thrower (${routed}:6:40)`, true),
+);
+
+// A link's route (src/visited.ts): the browser's history is asked for it
+// by its exact text, so every codec writes it the same way each time (the
+// aes codec's salt is random for any other route), and it reads back as
+// the URL it stands for, with its fragment
+const suffix = (host) => host.split('.').pop();
+const target = new URL('https://example.com/a/b?c=d&e=%20f#part');
+for (const [name, linkCodec] of [
+	['plain', new GenericCodec('')],
+	['xor', new XORCodec('91')],
+	['aes', new AESCodec('a key')],
+	['base64', new Base64Codec('')],
+])
+	for (const context of [
+		'https://www.example.com',
+		'https://frame.example^https://top.example',
+		opaqueContext('k3y9'),
+	]) {
+		const route = linkRoute(`${origin}/stomp/`, linkCodec, context, target);
+		const parsed = parseLinkRoute(route, linkCodec, `${origin}/stomp/`, suffix);
+		ok(
+			`${name}: a link route of ${context} is the same text each time, and reads back`,
+			route === linkRoute(`${origin}/stomp/`, linkCodec, context, target) &&
+				/^http:\/\/127\.0\.0\.1:8090\/stomp\/~\/[^/?#]+#part$/.test(route) &&
+				parsed?.url.href === target.href &&
+				(context.includes('^')
+					? parsed.context.frame === 'https://frame.example' &&
+						parsed.context.top === 'https://top.example'
+					: context.startsWith('null:')
+						? parsed.context.frame === 'null' && parsed.context.top === context
+						: parsed.context.frame === context &&
+							parsed.context.top === 'https://example.com'),
+			`${route} ${JSON.stringify(parsed)}`,
+		);
+	}
+const link = linkRoute(
+	`${origin}/stomp/`,
+	codec,
+	'https://example.com',
+	target,
+);
+ok(
+	"a link route in a message reads as the page's URL",
+	unrouteText(client, `Cannot load ${link} now`) ===
+		`Cannot load ${target.href} now`,
+	unrouteText(client, `Cannot load ${link} now`),
+);
+ok(
+	'what is no link route is none',
+	parseLinkRoute(
+		`${origin}/stomp/abc/html/x`,
+		codec,
+		`${origin}/stomp/`,
+		suffix,
+	) === null &&
+		parseLinkRoute(
+			`${origin}/stomp/~/a/b`,
+			codec,
+			`${origin}/stomp/`,
+			suffix,
+		) === null &&
+		parseLinkRoute(
+			`${origin}/stomp/~/${codec.encode('nonsense')}`,
+			codec,
+			`${origin}/stomp/`,
+			suffix,
+		) === null,
 );
 await done();

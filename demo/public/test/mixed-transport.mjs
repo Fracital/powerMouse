@@ -16,6 +16,9 @@
 //   stomp-b under github.io, blogspot.com, s3.eu-west-1.amazonaws.com,
 //   cloudfront.net and co.uk, and any name under stomp-a; https and wss go
 //   in plain http and ws for the same reason.
+// - the visited suite's: v<port>.test and www.v<port>.test, sites on their
+//   scheme's default port (Chrome's self-links need one), go to the fixture
+//   on 127.0.0.1:<port>.
 import EpoxyTransport from '../epoxy/index.mjs';
 
 const MIXED_HOST = /^(?:[\w-]+\.)*mixed\.test$/;
@@ -23,10 +26,17 @@ const PLAIN_MIXED_HOST = /^(?:[\w-]+\.h3\.)?mixed\.test$/;
 const PRIVATE_SITE_HOST =
 	/^(?:(?:[\w-]+\.)*stomp-a|stomp-b)\.(?:github\.io|blogspot\.com|s3\.eu-west-1\.amazonaws\.com|cloudfront\.net|co\.uk)$/;
 const PLAIN = { 'https:': 'http:', 'wss:': 'ws:' };
+const PORT_HOST = /^(?:www\.)?v(\d+)\.test$/;
 
 function fixtureURL(url) {
 	const target = new URL(url);
 	const { hostname } = target;
+	const port = PORT_HOST.exec(hostname)?.[1];
+	if (port && target.port === '') {
+		target.hostname = '127.0.0.1';
+		target.port = port;
+		return target;
+	}
 	if (PRIVATE_SITE_HOST.test(hostname) || PLAIN_MIXED_HOST.test(hostname))
 		target.protocol = PLAIN[target.protocol] ?? target.protocol;
 	else if (!MIXED_HOST.test(hostname)) return target;

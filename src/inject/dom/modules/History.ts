@@ -5,6 +5,7 @@ import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import DocumentClient from '../Client';
+import VisitedModule from './Visited';
 
 /**
  * The Navigation API, scoped to this frame's own entries. TypeScript's DOM
@@ -39,12 +40,18 @@ export default class HistoryModule extends Module<DocumentClient> {
 	 * the Navigation API
 	 */
 	canStep: (step: -1 | 1) => boolean | null = () => null;
+	/** the browser's own pushState and replaceState, from before any module wrapped them */
+	native?: Pick<History, 'pushState' | 'replaceState'>;
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const global = this.client.global;
 		const prototype = global.History.prototype;
 		// taken before any page code runs
 		const navigation = (global as { navigation?: NavigationLike }).navigation;
+		this.native = {
+			pushState: prototype.pushState,
+			replaceState: prototype.replaceState,
+		};
 
 		const updateState = (name: 'pushState' | 'replaceState') =>
 			function (
@@ -78,6 +85,15 @@ export default class HistoryModule extends Module<DocumentClient> {
 						false,
 						this.client.nestedRoute,
 					);
+					// a new entry is a visit the browser's history records: made
+					// at the link route first (the Visited module)
+					if (
+						name === 'pushState' &&
+						this.client
+							.getModule(VisitedModule)
+							?.pushState(target, that, args, url)
+					)
+						return undefined;
 				}
 
 				return Reflect.apply(target, that, args);
@@ -215,6 +231,24 @@ export default class HistoryModule extends Module<DocumentClient> {
 				end++;
 			return entries.slice(start, end + 1);
 		};
+		// the entry the document was navigated from is shown only when it is
+		// of the document's own origin, as natively (every route is
+		// same-origin to the browser, so another site's document read the
+		// whole URL of the page that linked to it)
+		const activationProto = (
+			global as { NavigationActivation?: { prototype: object } }
+		).NavigationActivation?.prototype;
+		const from =
+			activationProto &&
+			Reflect.getOwnPropertyDescriptor(activationProto, 'from');
+		if (activationProto && from?.get)
+			Reflect.defineProperty(activationProto, 'from', {
+				...from,
+				get: proxyModule.wrapFunction(from.get, (target, that, args) => {
+					const entry = Reflect.apply(target, that, args) as Entry | null;
+					return entry && originOf(entry) !== own() ? null : entry;
+				}),
+			});
 		navigationProto.entries = proxyModule.wrapFunction(
 			nativeEntries,
 			(target, that, args) => {

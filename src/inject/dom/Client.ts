@@ -2,20 +2,21 @@ import type { AdblockPage } from '../../blocker/types';
 import { ParsedConfig } from '../../config';
 import { rewriteCSSValueURLs } from '../../cssURLs';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
-import { nestedMark, partitionOf } from '../../partition';
+import { nestedMark, partitionOf, siteOf } from '../../partition';
 import {
 	PrewrittenTable,
 	scriptPreamble,
 	type Prewritten,
 } from '../../prewrite';
 import { refererFor, type ReferrerInfo } from '../../referrerPolicy';
-import { modifyHTML } from '../../rewriteHTML';
+import { modifyHTML, routeHTML } from '../../rewriteHTML';
 import type { RewriterLib } from '../../rewriterLib';
-import { parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
+import { parseRoutedURL, ROUTE_PROTOCOLS, unwrapRoute } from '../../routeURL';
 import { rewriteImportMap } from '../../scriptRoutes';
 import StompURL from '../../StompURL';
 import { HOOK_ERROR, OPEN_TAB, WORKER_BASE } from '../../transport/messages';
 import { BUILD } from '../../version';
+import { contextText, linkRoute, opaqueContext } from '../../visited';
 import Client from '../Client';
 import {
 	getPublicSuffix,
@@ -851,6 +852,66 @@ export default class DocumentClient extends Client {
 		return this.nested
 			? nestedMark(this.topOrigin, this.#crossAncestor())
 			: false;
+	}
+	#visited?: { document: Document; context: string | null };
+	/**
+	 * What the browser keys this document's links' visited state by, as the
+	 * link route spells it (src/visited.ts): the document's origin, and its
+	 * top-level document's site when that is another. A document of an
+	 * opaque origin, whose links Chrome never shows visited, has a context
+	 * of its own.
+	 */
+	get visitedContext(): string | null {
+		const document = this.global.document;
+		const kept = this.#visited;
+		if (kept && kept.document === document) return kept.context;
+		let context: string | null = null;
+		try {
+			context =
+				this.origin === 'null'
+					? opaqueContext(Math.random().toString(36).slice(2, 12))
+					: contextText(
+							{
+								frame: this.url.url.origin,
+								top: siteOf(this.topOrigin, getPublicSuffix),
+							},
+							getPublicSuffix,
+						);
+		} catch (error) {
+			// no origin to key by: its links are routed as before
+		}
+		this.#visited = { document, context };
+		return context;
+	}
+	/**
+	 * Whether this document can follow a link route to its own URL without
+	 * loading again (the Visited module does it from the navigate event): a
+	 * document without that event keeps its own URLs at its address
+	 */
+	followsOwnLinks = false;
+	/**
+	 * What a link of this document to `resource` is routed as: the link
+	 * route (src/visited.ts), which the browser shows visited exactly when
+	 * its history has it under this document's own partition.
+	 */
+	linkRoute(resource: StompURL, base: StompURL = this.url): string {
+		const context = this.visitedContext;
+		const plain = () =>
+			routeHTML(resource, base, this.config, false, this.nestedRoute);
+		if (context === null || !ROUTE_PROTOCOLS.includes(resource.url.protocol))
+			return plain();
+		// a URL that is a route already is the real URL it stands for
+		const target = unwrapRoute(resource.url, resource.codec) ?? resource.url;
+		if (!this.followsOwnLinks) {
+			const own = this.location.url;
+			if (
+				target.origin === own.origin &&
+				target.pathname === own.pathname &&
+				target.search === own.search
+			)
+				return plain();
+		}
+		return linkRoute(this.scope, this.codec, context, target);
 	}
 	/**
 	 * Called by the shell the service worker served with `document`, before

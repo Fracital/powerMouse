@@ -260,17 +260,22 @@ export default class AccessModule extends Module<Client> {
 					// a cross-origin window: no location of ours
 				}
 				if (isLocation) {
+					const destination = new URL(
+						<urlLike>value,
+						this.client.url.toString(),
+					);
 					set(
-						routeHTML(
-							new StompURL(
-								new URL(<urlLike>value, this.client.url.toString()),
-								this.client.url,
-							),
-							this.client.url,
-							this.client.config,
-							false,
-							this.client.nestedRoute,
-						),
+						// this document's own location: a navigation the browser's
+						// history records (another window's is that window's)
+						target === this.client.global.location
+							? this.client.navigationRoute(destination)
+							: routeHTML(
+									new StompURL(destination, this.client.url),
+									this.client.url,
+									this.client.config,
+									false,
+									this.client.nestedRoute,
+								),
 					);
 				} else {
 					set(value);

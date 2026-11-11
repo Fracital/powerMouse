@@ -112,5 +112,11 @@ export function trackUploadListeners(
 		listening(upload: object): boolean {
 			return !!listeners.get(upload)?.size;
 		},
+		/** whether the tracked `target` has a listener for `type` now */
+		listeningFor(target: object, type: string): boolean {
+			for (const key of listeners.get(target) ?? [])
+				if (key.startsWith(`${type}|`)) return true;
+			return false;
+		},
 	};
 }

@@ -1235,7 +1235,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.setAttributeOG('href', element.getAttribute('href')!);
 					element.setAttribute(
 						'href',
-						routeHTML(
+						this.client.linkRoute(
 							new StompURL(
 								new URL(
 									element.getAttribute('href')!,
@@ -1243,10 +1243,6 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								),
 								this.client.url,
 							),
-							this.client.url,
-							this.client.config,
-							false,
-							this.client.nestedRoute,
 						),
 					);
 				}

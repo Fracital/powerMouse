@@ -136,8 +136,9 @@ for (const [mode, base] of [
 			`${mode}: a form action set to the raw proxy URL submits to the real URL (it reads back as written)`,
 			action === raw &&
 				realAction === target &&
-				// the form route's own redirect, which puts the query in the route
-				state.redirects === 1 &&
+				// the form route's own redirect, which puts the query in the
+				// route, is the worker's: the page counts none, as natively
+				state.redirects === 0 &&
 				state.title === 'DOUBLE' &&
 				state.href === `${target}?via=form`,
 			JSON.stringify({ action, realAction, state }),

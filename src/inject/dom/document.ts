@@ -37,6 +37,7 @@ import StorageModule from './modules/Storage';
 import SyncModule from './modules/Sync';
 import TokenListsModule from './modules/TokenLists';
 import ViewTransitionModule from './modules/ViewTransition';
+import VisitedModule from './modules/Visited';
 import WebRTCModule from './modules/WebRTC';
 import XMLHttpRequestModule from './modules/XMLHttpRequest';
 
@@ -85,6 +86,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(NavigateModule);
 	client.addModule(NavigationHintModule);
 	client.addModule(ClientHintsModule);
+	client.addModule(VisitedModule);
 	client.addModule(ReadbackModule);
 	client.addModule(CSSReadbackModule);
 	// last: the Navigate module's own observer keeps the native constructor

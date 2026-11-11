@@ -14,12 +14,19 @@ import {
 } from '../config';
 import { parseRoutedURL } from '../routeURL';
 import StompURL from '../StompURL';
+import { getPublicSuffix } from '../suffix';
 import type {
 	HostReload,
 	RequestInfo,
 	RequestRule,
 } from '../transport/messages';
 import { SEALER_ROUTE, SEALER_SOURCE } from '../transport/messages';
+import {
+	contextText,
+	linkRoute,
+	parseLinkRoute,
+	type VisitedContext,
+} from '../visited';
 import { heldModules, moduleOf } from '../wasm/thread';
 import { Blocker, registerBlocker } from './blocker';
 import { HttpCache, memoryCache } from './cache';
@@ -54,7 +61,14 @@ export interface StompServer {
 	routeAs(kind: string, url: string): string;
 	/** the built-in blocker, unless the host turned it off (docs/adblock.md) */
 	blocker?: Blocker;
+	/** the context and real URL of a link route (src/visited.ts), or null */
+	linkOf(routed: string): { context: VisitedContext; url: URL } | null;
+	/** the link route of `url` for a link in a document of `context` */
+	linkRoute(context: VisitedContext, url: URL): string;
 }
+
+/** the public suffix of a host, private registries counted, as Chrome's sites have it */
+export const publicSuffix = (host: string) => getPublicSuffix(host, true);
 
 /**
  * What the controllers of one scope share: a controller is a tab, not a
@@ -252,7 +266,13 @@ export default async function createServer(
 	const stores = await sharedStores(init.scope);
 
 	const router = new Router(init.directory);
+	const scopePrefix = `${location.origin}${init.scope}`;
+	const linkOf = (routed: string) =>
+		parseLinkRoute(routed, init.codec, scopePrefix, publicSuffix);
 	const realURL = (routed: string): string => {
+		// a link's route stands for its URL as a document's does
+		const link = linkOf(routed);
+		if (link) return link.url.href;
 		try {
 			return parseRoutedURL(
 				routed,
@@ -339,5 +359,13 @@ export default async function createServer(
 			const prefix = `${location.origin}${init.directory}`;
 			return `${prefix}${kind}/${new StompURL(url, init.codec, prefix).encode()}`;
 		},
+		linkOf,
+		linkRoute: (context, url) =>
+			linkRoute(
+				scopePrefix,
+				init.codec,
+				contextText(context, publicSuffix),
+				url,
+			),
 	};
 }

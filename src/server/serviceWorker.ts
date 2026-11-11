@@ -1,6 +1,6 @@
 import { Config, ConfigCodec } from '../config';
 import { kindPartition, partitionSite } from '../partition';
-import { nestedTopOf } from '../rewriteHTML';
+import { nestedMarkOfKind, nestedTopOf } from '../rewriteHTML';
 import { addRouteScope } from '../routeURL';
 import { SW_ROUTE, type ApiReply } from '../serviceWorkerTypes';
 import { getPublicSuffix } from '../suffix';
@@ -48,6 +48,12 @@ import {
 import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
+import {
+	isLinkRoute,
+	makesSelfLink,
+	sameContext,
+	selfContext,
+} from '../visited';
 import { suffixListPin } from '../wasm/suffix';
 import {
 	adoptModules,
@@ -61,11 +67,19 @@ import {
 	recordReport as recordClientHintsReport,
 } from './clientHints';
 import { forScript, onJarChange } from './Cookies';
-import createServer, { addressCodec, StompServer } from './createServer';
+import createServer, {
+	addressCodec,
+	publicSuffix,
+	StompServer,
+} from './createServer';
 import { hostErrorPage } from './errorPage';
 import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
 import { openLoadChannel, servedLoadClient } from './loadGrants';
-import { recordNavigationHint } from './navigationHints';
+import {
+	awaitNavigationHintPeek,
+	peekNavigationHint,
+	recordNavigationHint,
+} from './navigationHints';
 import {
 	decide,
 	deviceSalt,
@@ -85,6 +99,7 @@ import { RewritePool } from './rewritePool';
 import { abortRequest, siteBetween } from './rewrites';
 import { ApiError, serviceWorkers, type WorkerHost } from './serviceWorkers';
 import { claim, vouch } from './srcdocVouches';
+import { rememberVisitedHop, takeVisitedHop } from './visitedHops';
 
 interface ControllerRef {
 	/** the controller's address: its scope plus its id */
@@ -859,6 +874,9 @@ function handleMessage(event: ExtendableMessageEvent) {
 				...(typeof message.allow === 'string' && message.allow.length <= 4096
 					? { allow: message.allow }
 					: {}),
+				directory: message.directory,
+				nested: typeof message.nested === 'string' ? message.nested : false,
+				own: message.own !== false,
 			});
 		} catch (error) {
 			// not a URL: nothing to record
@@ -1241,8 +1259,146 @@ async function registered(there: () => boolean): Promise<void> {
 		});
 }
 
+/** the scope `pathname` is a link route of (src/visited.ts), if it is one */
+function linkScopeOf(pathname: string): string | null {
+	const scopes = new Set([new URL(self.registration.scope).pathname]);
+	for (const ref of controllers.values()) scopes.add(ref.config.scope);
+	for (const scope of scopes) if (isLinkRoute(pathname, scope)) return scope;
+	return null;
+}
+
+/** how long a link route waits for the hint of the document that navigates */
+const LINK_HINT_WAIT_MS = 100;
+
+/**
+ * A link route (src/visited.ts): the URL a link of a proxied document has
+ * for the browser, which names the link's partition and no controller. It
+ * is answered with a redirect to the document's address, so the browser's
+ * history records the link route under the navigation's own key, and a
+ * later link of the same partition, in any tab, reads visited as natively.
+ *
+ * Which controller, and whether its frame is a nested one: the navigation's
+ * referrer when it is a routed document (the link's own, as the link's
+ * route used to say) and what the document that navigates told the worker
+ * (NAVIGATION_HINT: all there is without a referrer, and the frame's kind
+ * for a document a page wrote itself), else the newest live controller, at
+ * the top level.
+ *
+ * Chrome counts a visit from a top-level site's own origin for the visited
+ * URL's own site as well (self-links, makesSelfLink): such a navigation
+ * goes through the link route of that site's context first.
+ */
+async function answerLink(event: FetchEvent, scope: string): Promise<Response> {
+	const { request } = event;
+	const deadline = STARTED_AT + REVIVE_HOLD_MS;
+	while (!scopeControllers(scope).length && Date.now() < deadline)
+		await new Promise<void>((resolve) => {
+			const wake = () => {
+				registrationWaiters.delete(wake);
+				clearTimeout(timer);
+				resolve();
+			};
+			const timer = setTimeout(wake, deadline - Date.now());
+			registrationWaiters.add(wake);
+		});
+	const live = scopeControllers(scope);
+	if (!live.length) return fetch(request);
+	const state = takeVisitedHop(request.url);
+	const stated = state?.directory
+		? controllers.get(state.directory)
+		: undefined;
+	// the document that started the navigation, when the browser names it
+	let referrer: { ref: ControllerRef; kind: string } | undefined;
+	try {
+		const from = new URL(request.referrer);
+		const ref =
+			from.origin === location.origin ? controllerFor(from.pathname) : null;
+		if (ref?.ready && ref.config.scope === scope)
+			referrer = {
+				ref,
+				kind: from.pathname.slice(ref.directory.length).split('/')[0],
+			};
+	} catch (error) {
+		// no referrer
+	}
+	let parsed: ReturnType<StompServer['linkOf']> = null;
+	for (const ref of [stated, referrer?.ref, ...live]) {
+		parsed = ref?.ready?.linkOf(request.url) ?? null;
+		if (parsed) break;
+	}
+	if (!parsed)
+		return new Response(
+			'<!doctype html><title>404</title><p>Stomp: not a link of a live controller</p>',
+			{ status: 404, headers: { 'content-type': 'text/html; charset=utf-8' } },
+		);
+	// (a document tells of every navigation it starts, so the hint is
+	// there, or on its way: only a navigation no document started, a host's
+	// or the user's own, waits the whole time)
+	const hint = state
+		? peekNavigationHint(parsed.url.href)
+		: await awaitNavigationHintPeek(
+				parsed.url.href,
+				live[0].config.navigationHintWait ?? LINK_HINT_WAIT_MS,
+			);
+	const hinted = hint ? controllers.get(hint.directory) : undefined;
+	let ref =
+		stated ??
+		referrer?.ref ??
+		(hinted?.config.scope === scope ? hinted : undefined);
+	if (!ref?.ready?.linkOf(request.url) || !(await alive(ref)))
+		ref = await newestAlive(
+			live.filter((candidate) => candidate.ready!.linkOf(request.url)),
+		);
+	if (!ref)
+		return orphanError(request, live[0].config, scope, live[0].config.codec);
+	// the frame's kind of route: the referrer's own when the document that
+	// navigates is the one at that address, else what the document said (one
+	// a page wrote itself, whose referrer is its creator's address)
+	const nested =
+		state?.nested ??
+		(hinted === ref && !hint!.own
+			? hint!.nested
+			: referrer?.ref === ref && referrer.kind.startsWith('html')
+				? (nestedMarkOfKind(referrer.kind) ?? false)
+				: hinted === ref
+					? hint!.nested
+					: false);
+	const ready = ref.ready!;
+	const context = state?.context ?? parsed.context;
+	const self = selfContext(parsed.url, publicSuffix);
+	const redirect = (to: string) =>
+		new Response(null, { status: 307, headers: { location: to } });
+	const hops = (state?.hops ?? 0) + 1;
+	if (makesSelfLink(context) && !sameContext(parsed.context, self)) {
+		const next = ready.linkRoute(self, parsed.url);
+		rememberVisitedHop(next, {
+			context,
+			directory: ref.directory,
+			nested,
+			hops,
+			...(state?.crossed && { crossed: true }),
+		});
+		return redirect(next);
+	}
+	const target = ready.routeAs(
+		`html${nested ? `:nested:${encodeURIComponent(nested)}` : ''}`,
+		parsed.url.href,
+	);
+	rememberVisitedHop(target, {
+		context,
+		hops,
+		...(state?.crossed && { crossed: true }),
+	});
+	return redirect(target);
+}
+
 self.addEventListener('fetch', (event: FetchEvent) => {
 	const { pathname } = new URL(event.request.url);
+	const linkScope = linkScopeOf(pathname);
+	if (linkScope) {
+		event.respondWith(answerLink(event, linkScope));
+		return;
+	}
 	// in the revive window an address whose controller has not answered yet
 	// waits for it, before another controller could take it over as an orphan
 	if (

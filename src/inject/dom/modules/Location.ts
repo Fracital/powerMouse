@@ -60,10 +60,17 @@ export default class LocationModule extends Module<DocumentClient> {
 		// is written in after its own response, and the browser took such a
 		// navigation for a new entry about one time in three: Back then went
 		// to the redirecting page, which redirected again. So it is replaced
-		// here, as natively
-		const go = (url: string, method: 'assign' | 'replace') => {
+		// here, as natively. An entry the navigation does make goes through the
+		// link route (src/visited.ts), which the browser's history records; a
+		// replacement makes none and goes to the document's address
+		const go = (destination: URL, method: 'assign' | 'replace') => {
 			const loading = this.client.global.document.readyState !== 'complete';
-			return Reflect.apply(real[loading ? 'replace' : method], real, [url]);
+			const how = loading ? 'replace' : method;
+			return Reflect.apply(real[how], real, [
+				how === 'assign'
+					? this.client.navigationRoute(destination)
+					: navigateTo(destination),
+			]);
 		};
 
 		const members = new Map<string | symbol, PropertyDescriptor>();
@@ -110,7 +117,7 @@ export default class LocationModule extends Module<DocumentClient> {
 							Reflect.apply(urlDescriptor.set!, temp, args);
 
 							this.client.getModule(NavigationHintModule)?.hint(temp.href);
-							go(navigateTo(temp), 'assign');
+							go(temp, 'assign');
 						})
 					: undefined,
 			});
@@ -174,7 +181,7 @@ export default class LocationModule extends Module<DocumentClient> {
 			([url]: any[]) => {
 				const destination = new URL(url, this.client.url.toString());
 				this.client.getModule(NavigationHintModule)?.hint(destination.href);
-				return go(navigateTo(destination), method);
+				return go(destination, method);
 			};
 		const methods: Record<string, (args: any[]) => unknown> = {
 			assign: navigation('assign'),

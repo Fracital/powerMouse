@@ -4,6 +4,7 @@
 import AES from 'crypto-js/aes';
 import Base64 from 'crypto-js/enc-base64';
 import Utf8 from 'crypto-js/enc-utf8';
+import MD5 from 'crypto-js/md5';
 
 const encodeChar = '$';
 const validChars =
@@ -58,6 +59,14 @@ export default class GenericCodec {
 	}
 	encode(input: string): string {
 		return encodeCodecURI(input);
+	}
+	/**
+	 * `input` encoded to the same text every time: a link route's
+	 * (src/visited.ts), which the browser's history is asked for by its
+	 * exact URL. Every codec decodes it with `decode`.
+	 */
+	encodeStable(input: string): string {
+		return this.encode(input);
 	}
 	decode(input: string): string {
 		input = decodeCodecURI(input);
@@ -118,6 +127,14 @@ export class AESCodec extends GenericCodec {
 		const result = AES.encrypt(input, this.key).toString();
 		return encodeCodecURI(result);
 	}
+	// (the salt, random for `encode`, is the input's own: equal inputs
+	// read equal, which is all a link route shows and what it is for)
+	encodeStable(input: string): string {
+		const salt = MD5(`${this.key}\n${input}`);
+		salt.sigBytes = 8;
+		salt.clamp();
+		return encodeCodecURI(AES.encrypt(input, this.key, { salt }).toString());
+	}
 	decode(input: string): string {
 		input = decodeCodecURI(input);
 		return AES.decrypt(input, this.key).toString(Utf8);
@@ -134,6 +151,9 @@ export class Base64Codec {
 	}
 	encode(input: string): string {
 		return encodeCodecURI(Base64.stringify(Utf8.parse(input)));
+	}
+	encodeStable(input: string): string {
+		return this.encode(input);
 	}
 	decode(input: string): string {
 		input = decodeCodecURI(input);

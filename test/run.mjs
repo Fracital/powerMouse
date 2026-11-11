@@ -51,11 +51,16 @@ const SUITE_TIMEOUT_MINUTES = {
 	'wpt-referrer-policy': 25,
 	// waits for every frame's report, up to minutes on a busy runner
 	'sandbox-restrictions': 20,
+	// three browsers with a profile each, every visit and 17 contexts in
+	// each: about three minutes alone
+	visited: 20,
 };
 // what a suite's demo server needs beyond the defaults
 const SUITE_ENV = {
 	// epoxy plus the fixture hosts of test/mixed-servers.mjs
 	'mixed-content': { STOMP_TEST_TRANSPORT: '1' },
+	// and the default-port sites of the visited suite
+	visited: { STOMP_TEST_TRANSPORT: '1' },
 	// the fixture's https origin through the test transport, and a wisp that
 	// refuses UDP: the demo's default HTTP/3 has to fall back
 	'demo-http3': { STOMP_TEST_TRANSPORT: '1', WISP_NO_UDP: '1' },

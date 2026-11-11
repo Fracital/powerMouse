@@ -10,6 +10,12 @@ export interface NavigationHint {
 	activated: boolean;
 	/** a frame's: its element's allow attribute */
 	allow?: string;
+	/** the address of the controller the document that sent it is routed under */
+	directory: string;
+	/** the nested route marker of that document's frame, false at the top level */
+	nested: string | false;
+	/** whether that document is the routed one itself: its address is then the navigation's referrer */
+	own: boolean;
 }
 
 const hints = new Map<string, NavigationHint & { at: number }>();
@@ -23,6 +29,34 @@ export function recordNavigationHint(url: string, hint: NavigationHint) {
 	hints.set(key, { ...hint, at: Date.now() });
 	if (hints.size > KEPT) hints.delete(hints.keys().next().value!);
 	for (const wake of waiters.get(key) ?? []) wake();
+}
+
+/** the hint for a navigation to `url`, left for the navigation that takes it */
+export function peekNavigationHint(url: string): NavigationHint | null {
+	const hint = hints.get(keyOf(url));
+	return hint && Date.now() - hint.at <= TTL_MS ? hint : null;
+}
+
+/** peekNavigationHint, waiting up to `ms` for the hint to arrive */
+export async function awaitNavigationHintPeek(
+	url: string,
+	ms: number,
+): Promise<NavigationHint | null> {
+	const hint = peekNavigationHint(url);
+	if (hint) return hint;
+	const key = keyOf(url);
+	await new Promise<void>((resolve) => {
+		const wake = () => {
+			clearTimeout(timer);
+			waiters.get(key)?.delete(wake);
+			if (!waiters.get(key)?.size) waiters.delete(key);
+			resolve();
+		};
+		const timer = setTimeout(wake, ms);
+		if (!waiters.has(key)) waiters.set(key, new Set());
+		waiters.get(key)!.add(wake);
+	});
+	return peekNavigationHint(url);
 }
 
 /** the hint for a navigation to `url`, taken (it serves one navigation), when one arrived */

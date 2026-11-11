@@ -1,6 +1,12 @@
 import { serializeCSSURL } from '../../cssURL';
-import { pageBlobURL, parseRoutedURL, ROUTE_PROTOCOLS } from '../../routeURL';
+import {
+	linkRouteURL,
+	pageBlobURL,
+	parseRoutedURL,
+	ROUTE_PROTOCOLS,
+} from '../../routeURL';
 import { WORKER_ERROR } from '../../transport/messages';
+import { LINK_SEGMENT } from '../../visited';
 import Client from '../Client';
 import { blobLoads } from '../dom/blobLoads';
 import type DocumentClient from '../dom/Client';
@@ -55,6 +61,14 @@ export function unrouteURL(client: Client, url: string): string | null {
 	if (!url.startsWith(prefix)) {
 		const scope = scopePrefix(client);
 		if (!url.startsWith(scope)) return url;
+		// a link's route (src/visited.ts) stands for its URL
+		if (url.startsWith(`${scope}${LINK_SEGMENT}/`))
+			return (
+				linkRouteURL(
+					url.slice(scope.length + LINK_SEGMENT.length + 1),
+					client.codec,
+				)?.href ?? null
+			);
 		// another controller's address (a sibling tab's, or the one an
 		// orphaned URL was redirected to): a route all the same, read with
 		// this page's codec, which is the one a host uses in practice
@@ -100,10 +114,17 @@ export function unrouteText(
 	const proxyBlob = `blob:${realmOrigin(client)}/`;
 	if (text.includes(proxyBlob))
 		text = text.split(proxyBlob).join(`blob:${client.url.url.origin}/`);
-	const prefix = routedPrefix(client);
-	if (!text.includes(prefix)) return text;
+	// this controller's routes, and a link's (src/visited.ts), which names
+	// no controller
+	const prefixes = [
+		routedPrefix(client),
+		`${scopePrefix(client)}${LINK_SEGMENT}/`,
+	].filter((prefix) => text.includes(prefix));
+	if (!prefixes.length) return text;
 	const pattern = new RegExp(
-		`${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\s()'"<>,]*`,
+		`(?:${prefixes
+			.map((prefix) => prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+			.join('|')})[^\\s()'"<>,]*`,
 		'g',
 	);
 	return text.replace(pattern, (match, offset: number, whole: string) => {

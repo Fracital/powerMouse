@@ -217,6 +217,13 @@ export const MEMORY_MARKER = 'stomp-memory';
  * src/server/keptLoads.ts)
  */
 export const KEPT_MARKER = 'stomp-kept';
+/**
+ * A Server-Timing metric the worker adds to a document whose navigation
+ * went through link routes (src/visited.ts): its duration is how many of
+ * the navigation's redirects were the worker's own. The inject takes them
+ * off the document's navigation timing (`redirectCount`)
+ */
+export const HOPS_MARKER = 'stomp-hops';
 /** every Server-Timing metric of the worker's own, which the page never sees */
 export const PROXY_METRICS: readonly string[] = [
 	TAO_MARKER,
@@ -227,6 +234,7 @@ export const PROXY_METRICS: readonly string[] = [
 	REVALIDATED_MARKER,
 	MEMORY_MARKER,
 	KEPT_MARKER,
+	HOPS_MARKER,
 ];
 /**
  * On the answer of a page's emulated service worker: `<type> <url>`, the
@@ -440,6 +448,15 @@ export interface NavigationHintMessage {
 	activated: boolean;
 	/** an iframe's navigation: the element's allow attribute (its container policy) */
 	allow?: string;
+	/** the nested route marker of the navigating document's frame (false at the top level): where a link route's document belongs */
+	nested?: string | false;
+	/**
+	 * Whether the document that navigates is the routed one that sends
+	 * this: not for a document a page wrote itself (about:srcdoc,
+	 * about:blank, blob:), whose navigation's referrer is the address of
+	 * another document, in another frame
+	 */
+	own?: boolean;
 }
 /**
  * What a proxied document (or the controller) sees that its requests'

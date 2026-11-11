@@ -14,8 +14,10 @@ import type {
 	HookPhase,
 	ResolvedHooks,
 } from '../hooks';
+import { routeHTML } from '../rewriteHTML';
 import {
 	addRouteScope,
+	linkRouteURL,
 	parseRoutedURL,
 	rewriterLibJS,
 	ROUTE_PROTOCOLS,
@@ -35,6 +37,7 @@ import {
 } from '../transport/messages';
 import RemoteTransport from '../transport/RemoteTransport';
 import { BUILD } from '../version';
+import { LINK_SEGMENT } from '../visited';
 import Module from './Module';
 import { rewriteCounts, rewriterLibraryAt } from './rewriter';
 
@@ -240,6 +243,19 @@ export default class Client {
 		// opener injected (about:blank) runs the opener's bundle
 		const location = this.global.location;
 		if (ROUTE_PROTOCOLS.includes(location.protocol)) {
+			// a link's route (src/visited.ts) is this document's address only
+			// while its history entry is being made (the History module): the
+			// page reads the URL it stands for
+			const link = `${location.origin}${this.scope}${LINK_SEGMENT}/`;
+			if (location.href.startsWith(link)) {
+				const url = linkRouteURL(location.href.slice(link.length), this.codec);
+				if (url)
+					return new StompURL(
+						url,
+						this.codec,
+						`${location.origin}${this.directory}`,
+					);
+			}
 			return parseRoutedURL(
 				location.toString(),
 				this.codec,
@@ -736,6 +752,21 @@ export default class Client {
 	get nestedRoute(): string | false {
 		return false;
 	}
+	/**
+	 * What a navigation of this context's own document to `destination` that
+	 * makes a history entry goes to (`location.href`, `location.assign`,
+	 * `location = url`): the document's address, or, where a document's
+	 * Visited module says so, the link route the browser's history records
+	 * (src/visited.ts)
+	 */
+	navigationRoute: (destination: URL) => string = (destination) =>
+		routeHTML(
+			new StompURL(destination, this.url),
+			this.url,
+			this.config,
+			false,
+			this.nestedRoute,
+		);
 	/**
 	 * This context's storage partition (src/partition.ts): '' for a
 	 * first-party context, `^<top-level site>` for one under a top-level

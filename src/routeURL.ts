@@ -2,6 +2,7 @@ import GenericCodec from './Codecs';
 import { assetName, type Assets, type Config } from './config';
 import StompURL from './StompURL';
 import { LIBRARY } from './version';
+import { decodeLinkRoute, LINK_SEGMENT } from './visited';
 
 export const ROUTE_PROTOCOLS = ['http:', 'https:'];
 
@@ -80,6 +81,14 @@ export function unwrapRoute(url: URL, codec: GenericCodec): URL | null {
 			if (href.startsWith(candidate)) scope = candidate;
 		if (!scope) break;
 		const rest = href.slice(scope.length);
+		// a link's route (src/visited.ts): the context, a space, the URL
+		if (rest.startsWith(`${LINK_SEGMENT}/`)) {
+			const link = linkRouteURL(rest.slice(LINK_SEGMENT.length + 1), codec);
+			if (!link) break;
+			real = link;
+			href = link.href;
+			continue;
+		}
 		// `<id>/<kind>/<encoded>`, or `<kind>/<encoded>` where the scope is the
 		// controller's directory (a config from before addresses)
 		const id = /^([\w-]+)\//.exec(rest)?.[1];
@@ -103,6 +112,14 @@ export function unwrapRoute(url: URL, codec: GenericCodec): URL | null {
 	}
 	return real;
 }
+
+/**
+ * The real URL of a link route's part after `<scope>~/` (src/visited.ts,
+ * which parses the context as well), with its fragment; null when it does
+ * not decode to one
+ */
+export const linkRouteURL = (rest: string, codec: GenericCodec): URL | null =>
+	decodeLinkRoute(rest, codec)?.url ?? null;
 
 export function routeURL(resourceType: string, url: StompURL) {
 	if (!ROUTE_PROTOCOLS.includes(url.url.protocol)) {

@@ -566,13 +566,17 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					return null;
 
 				if (routable)
-					args[0] = routeHTML(
-						new StompURL(destination!, this.client.url),
-						this.client.url,
-						this.client.config,
-						false,
-						this.client.nestedRoute,
-					);
+					args[0] =
+						// this window itself: a navigation like location.assign's
+						name.toLowerCase() === '_self'
+							? this.client.navigationRoute(destination!)
+							: routeHTML(
+									new StompURL(destination!, this.client.url),
+									this.client.url,
+									this.client.config,
+									false,
+									this.client.nestedRoute,
+								);
 
 				// a top-level page is its own top and parent: navigate the frame
 				if (

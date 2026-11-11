@@ -867,6 +867,39 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   another site loads in 48 ms as before, 6 KB of heap a frame. (sop-escapes
   `gate/` cases, load-grants, load-grants-restart and document-kinds
   suites.)
+- `:visited` is partitioned as Chrome partitions it (since Chrome 136: by
+  the link's URL, the top-level site and the frame's origin), where every
+  proxied link was one partition's: a link visited on one site read
+  visited on every other, which is what the partition is there to stop.
+  A link's routed URL is now a link route,
+  `<scope>~/<codec(context + ' ' + url)>#fragment`, where the context is
+  the origin of the document that holds the link and, when it is another
+  site's frame, its top-level site; it names no controller, so a link reads
+  the same in every tab and after a restart. The service worker answers a
+  link route with a redirect to the document's address, which is unchanged
+  (as is everything a page, the rewrite cache or a host reads), and the
+  browser's own history, which records every URL of a redirect chain, keeps
+  the link route. Link clicks, `location.href` and `assign`, GET forms,
+  `pushState`, fragment navigations, redirect chains and Chrome's
+  self-links (a visit from a site's own origin counts for the visited
+  URL's site too) read as natively in every context the suite looks at;
+  the redirects that are the worker's own are taken off the page's
+  navigation timing. `controller.route()` is as before and
+  `controller.unroute()` reads a link route back as well. Not recorded,
+  and so unvisited where Chrome shows them visited: what replaces a
+  frame's history entry (`location.replace`, `replaceState`, a navigation
+  before the load event, a meta refresh), a tab the host opens, a frame's
+  `src` its page sets, and the navigations of a page that listens to the
+  Navigation API. Cost: a page of 5000 links takes 182 ms from response to
+  DOMContentLoaded where it took 175 (medians of alternated runs), and a
+  frame about 8 KB more heap (frame-cost: 1139 KB a frame, 1130 before).
+  (visited suite, docs/same-origin-policy.md "Visited links".)
+- `navigation.activation.from` is null for a document that was reached
+  from another origin's, as natively: it was the entry of the page that
+  linked to it, with its whole URL. (visited suite.)
+- A document's navigation timing counts the site's own redirects: a GET
+  form's document showed one redirect (the worker's, from the form's
+  route) where Chrome shows none. (visited suite.)
 - Resource timing tells every way the worker answered a load apart, as
   Chrome does (measured in 152 and 156): the body and 300 bytes from the
   network; 0 and `deliveryType` "cache" from a cache, with the protocol
@@ -4600,6 +4633,11 @@ Fixed while testing real sites and a feature fixture:
 - The same-origin policy between proxied sites is simulated by the proxy
   (docs/same-origin-policy.md). Not yet: `crossOriginIsolated` (COOP and
   COEP cannot isolate a proxied frame).
+- A visit that makes no history entry in a frame is not recorded for
+  `:visited` (docs/same-origin-policy.md, "What is not recorded"):
+  `location.replace`, `replaceState`, a meta refresh, a tab the host
+  opens, and the navigations of a page that listens to the Navigation API
+  events. Their links read unvisited.
 - The Cookie Store API's change events are dispatched by the inject, so
   their `isTrusted` is false where natively it is true (native-shapes
   suite, recorded), as for the storage events of other documents' writes.
