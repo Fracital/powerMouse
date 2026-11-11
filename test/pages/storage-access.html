@@ -2,7 +2,8 @@
 <title>STORAGE ACCESS</title>
 <script>
 	// a frame of another site (`?child=<url>`): it asks the Storage Access API
-	// and reports to window.__storageAccess. With `?frame` this page is that
+	// and reports to window.__storageAccess (the page's own `storage-access`
+	// permission state to window.__storageAccessTop). With `?frame` this page is that
 	// child: it answers document.hasStorageAccess(), and
 	// requestStorageAccess() at once (no activation) and again from its
 	// button, which the test clicks (activation)
@@ -16,6 +17,9 @@
 		const report = {};
 		const send = () => parent.postMessage({ storageAccess: report }, '*');
 		(async () => {
+			report.state = (
+				await navigator.permissions.query({ name: 'storage-access' })
+			).state;
 			report.has = await settle(document.hasStorageAccess());
 			report.request = await settle(document.requestStorageAccess());
 			send();
@@ -33,6 +37,10 @@
 		});
 	} else {
 		window.__storageAccess = null;
+		// a top-level document has storage access: the permission reads granted
+		navigator.permissions
+			.query({ name: 'storage-access' })
+			.then((status) => (window.__storageAccessTop = status.state));
 		addEventListener('message', (event) => {
 			if (event.data?.storageAccess)
 				window.__storageAccess = event.data.storageAccess;

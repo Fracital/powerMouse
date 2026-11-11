@@ -299,6 +299,16 @@ export default class PermissionsModule extends Module<DocumentClient> {
 					const status = await Reflect.apply(target, that, args);
 					const asked = String((args[0] as { name?: string })?.name);
 					if (!allowed(asked)) track(status, asked, 'denied');
+					// a top-level document has storage access: Chrome answers
+					// granted there, unless its permissions policy turns the
+					// feature off (denied, the browser's own answer here too);
+					// the browser sees the proxied page as a frame, which asks
+					else if (
+						asked === 'storage-access' &&
+						!client.nested &&
+						Reflect.apply(nativeState, status, []) === 'prompt'
+					)
+						track(status, asked, 'granted');
 					else if (SIMULATED.has(simulatedName(asked))) {
 						await states;
 						track(status, asked, siteState(asked));

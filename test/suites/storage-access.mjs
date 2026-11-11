@@ -3,7 +3,9 @@
 // user activation. Every proxied frame is the proxy origin's to the browser,
 // and the host's frame sandbox had no allow-storage-access-by-user-activation,
 // so requestStorageAccess was refused for the sandbox ("The document is
-// sandboxed"). Both modes, against the page loaded natively.
+// sandboxed"). The `storage-access` permission reads granted in the
+// page itself, which is top-level (the browser saw a frame and said prompt),
+// and prompt in its frame. Both modes, against the page loaded natively.
 import {
 	done,
 	FIXTURE,
@@ -40,7 +42,10 @@ async function measure(page, getFrame) {
 			?.evaluate(() => window.__storageAccess)
 			.catch(() => null);
 	}
-	return report;
+	const top = await getFrame()
+		?.evaluate(() => window.__storageAccessTop)
+		.catch(() => null);
+	return report && { ...report, top };
 }
 
 const nativePage = await browser.newPage();
@@ -67,7 +72,14 @@ for (const [mode, base] of [
 	const page = await openDemo(browser, base);
 	await submitLanding(page, PAGE);
 	const proxied = await measure(page, () => frameOf(page));
-	for (const key of ['has', 'request', 'requestActivated', 'hasAfter'])
+	for (const key of [
+		'top',
+		'state',
+		'has',
+		'request',
+		'requestActivated',
+		'hasAfter',
+	])
 		ok(
 			`${mode}: ${key} as natively`,
 			proxied?.[key] === native?.[key],

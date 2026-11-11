@@ -896,6 +896,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- `navigator.permissions.query({ name: 'storage-access' })` reads granted
+  in a proxied top-level page, as natively: a top-level document has
+  storage access, and Chrome answers granted there (denied when its
+  permissions policy turns the feature off), but the browser sees every
+  proxied page as a frame and answered prompt (found comparing Cloudflare's
+  challenge page on kits4beats.com natively and proxied). Frames still read
+  prompt, as natively. (storage-access suite, natively against both modes.)
 - A document's permissions policy is the browser's own, as natively. The
   browser sees every proxied frame as same-origin with its parent and never
   saw a page's `Permissions-Policy`, so a frame of another site had every
