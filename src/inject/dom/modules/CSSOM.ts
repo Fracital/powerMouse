@@ -6,6 +6,7 @@ import { unrouteURL } from '../../modules/Unroute';
 import { modifyCSS } from '../../rewriter';
 import { blobLoads, opaqueCopies } from '../blobLoads';
 import DocumentClient from '../Client';
+import { RULE_METHOD_INTERFACES } from '../cssRules';
 import DOMAttributesModule from './DOMAttributes';
 
 // the FontFace of the realm the bundle was evaluated in, before any hook: the
@@ -216,8 +217,7 @@ export default class CSSOMModule extends Module<DocumentClient> {
 			global.CSSRule?.prototype,
 			'parentStyleSheet',
 		);
-		for (const name of Object.getOwnPropertyNames(global)) {
-			if (!/^CSS\w*Rule$/.test(name)) continue;
+		for (const name of RULE_METHOD_INTERFACES) {
 			const rule = (global as unknown as Record<string, any>)[name]?.prototype;
 			if (!rule) continue;
 			for (const method of ['insertRule', 'appendRule', 'deleteRule']) {

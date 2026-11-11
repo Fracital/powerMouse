@@ -2,6 +2,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { unrouteCSS, unrouteURL } from '../../modules/Unroute';
 import DocumentClient from '../Client';
+import { RULE_STYLE_INTERFACES } from '../cssRules';
 import DOMAttributesModule from './DOMAttributes';
 import DOMHooksModule from './DOMHooks';
 
@@ -54,8 +55,7 @@ export default class CSSReadbackModule extends Module<DocumentClient> {
 		const wrapDeclaration =
 			this.client.getModule(DOMAttributesModule)!.wrapDeclaration;
 		if (wrapDeclaration)
-			for (const name of Object.getOwnPropertyNames(global)) {
-				if (!/^CSS\w+Rule$/.test(name)) continue;
+			for (const name of RULE_STYLE_INTERFACES) {
 				const prototype = global[name]?.prototype;
 				const descriptor =
 					prototype && Reflect.getOwnPropertyDescriptor(prototype, 'style');

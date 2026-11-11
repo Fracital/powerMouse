@@ -1097,6 +1097,11 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   `onerror`, ...), where each of the 140 names Chrome has had a hook of its
   own in every frame: 12 to 15 KB of heap a frame (frame-cost: 1,087 to
   1,090 KB a frame, 1,099 to 1,104 before, Chrome 152).
+- The CSSOM and readback hooks of CSS rules name the rule interfaces they
+  hook (src/inject/dom/cssRules.ts) instead of reading all 25 `CSS...Rule`
+  globals, which made each of them in every frame; style-readback checks
+  the lists against the browser. 6 to 11 KB of heap a frame (frame-cost:
+  1,086 to 1,092 KB a frame, 1,097 to 1,100 before).
 - A document's navigation timing counts the site's own redirects: a GET
   form's document showed one redirect (the worker's, from the form's
   route) where Chrome shows none. (visited suite.)

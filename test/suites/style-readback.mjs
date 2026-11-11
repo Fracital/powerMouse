@@ -4,9 +4,10 @@
 // written value and setting it routes, document.domain accepts the page's
 // own host and refuses another like a browser, and a script created from a
 // markup string reads back the source the page wrote. Same-origin mode. The
-// SVG interfaces the inject hooks `href` on are named in
-// src/inject/dom/svgReferences.ts (reading every SVG global made them all in
-// each frame): the list is checked against this browser's.
+// SVG and CSS rule interfaces the inject hooks are named
+// (src/inject/dom/svgReferences.ts, cssRules.ts: reading every such global
+// made them all in each frame): the lists are checked against this
+// browser's.
 import { readFileSync } from 'node:fs';
 import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
 
@@ -64,28 +65,54 @@ const realUse = await page.evaluate(() =>
 		'href',
 	),
 );
-const listed = [
-	...readFileSync(
-		new URL('../../src/inject/dom/svgReferences.ts', import.meta.url),
-		'utf8',
-	).matchAll(/'(SVG\w+Element)'/g),
-]
-	.map((match) => match[1])
-	.sort();
-const native = await page.evaluate(() =>
-	Object.getOwnPropertyNames(window)
-		.filter(
-			(name) =>
-				/^SVG\w+Element$/.test(name) &&
-				Object.getOwnPropertyDescriptor(window[name].prototype, 'href')?.get,
+// the interfaces the inject names (src/inject/dom/svgReferences.ts,
+// cssRules.ts) against the ones of this browser that have the member
+const listed = (file, name) =>
+	[
+		...readFileSync(
+			new URL(`../../src/inject/dom/${file}`, import.meta.url),
+			'utf8',
 		)
-		.sort(),
-);
-ok(
-	'the inject hooks href on every SVG interface that has one, and only those',
-	JSON.stringify(listed) === JSON.stringify(native),
-	`listed ${listed.join(' ')}; this browser ${native.join(' ')}`,
-);
+			.split(`${name} = [`)[1]
+			.split(']')[0]
+			.matchAll(/'(\w+)'/g),
+	]
+		.map((match) => match[1])
+		.sort()
+		.join(' ');
+const native = await page.evaluate(() => {
+	const having = (pattern, has) =>
+		Object.getOwnPropertyNames(window)
+			.filter((name) => pattern.test(name) && has(window[name].prototype))
+			.sort()
+			.join(' ');
+	const own = (prototype, key) =>
+		Object.getOwnPropertyDescriptor(prototype, key);
+	return {
+		href: having(/^SVG\w+Element$/, (p) => own(p, 'href')?.get),
+		methods: having(/^CSS\w*Rule$/, (p) =>
+			['insertRule', 'appendRule', 'deleteRule'].some(
+				(key) => typeof own(p, key)?.value === 'function',
+			),
+		),
+		style: having(/^CSS\w+Rule$/, (p) => own(p, 'style')?.get),
+	};
+});
+for (const [what, file, name, found] of [
+	[
+		'href on the SVG interfaces',
+		'svgReferences.ts',
+		'SVG_HREF_INTERFACES',
+		native.href,
+	],
+	['the rule methods', 'cssRules.ts', 'RULE_METHOD_INTERFACES', native.methods],
+	["a rule's style", 'cssRules.ts', 'RULE_STYLE_INTERFACES', native.style],
+])
+	ok(
+		`the inject hooks ${what} on every interface that has them, and only those`,
+		listed(file, name) === found,
+		`listed ${listed(file, name)}; this browser ${found}`,
+	);
 ok(
 	'href.baseVal is the written value and setting it routes',
 	rb.baseVal === 'sprite.svg#icon' &&
