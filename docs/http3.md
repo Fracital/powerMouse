@@ -179,6 +179,19 @@ only filters inbound). Nothing in STomp's deployment changes: terp's
 `STOMP_WISP_URL` stays the relay, and the page enables `http3` in its
 transport descriptor.
 
+A wisp server may send its TCP and UDP streams from different addresses,
+and then a session with `http3` on reaches a site from both. The edges do:
+TCP streams go through edge-router.py and arrive from one IPv6 address,
+UDP streams leave from the edge itself and arrive from an IPv4 one
+(measured 2026-11-10 through `wss://holywisp.fracit.al/`, six connections
+alike: a STUN binding request on a UDP stream and an HTTP request to
+redirector.googlevideo.com/report_mapping on a TCP stream name the address
+each arrives from). The first requests to an origin go over TCP, so a
+YouTube watch page is fetched from the one address and its later requests
+come from the other. A server that sends
+both from one address (the demo's built-in `/wisp/` on an ordinary machine)
+does not split a session this way.
+
 A datagram crosses wisp whole, as one DATA packet. Epoxy refuses one over
 64 KiB (above the 65507 bytes an IPv4 datagram carries) with `EMSGSIZE`
 before it reaches the server, whose message bound would otherwise close
@@ -186,6 +199,59 @@ the whole connection. Through `send(datagram)` on the stream `connect_udp`
 returns, that fails the one call and the stream stays usable; a rejected
 `write` errors the WritableStream, as any rejected write does. QUIC's
 1250-byte packets are far below it.
+
+## YouTube's attestation
+
+YouTube decides whether a watch session's video keeps streaming (the SABR
+`STREAM_PROTECTION_STATUS`: 2 pending, 1 accepted, 3 attestation required,
+after which the video stops when its buffer runs out, at about 45 seconds)
+by the network path of the session's requests, and HTTP/3 is part of that
+path. Measured 2026-11-10, headful Chrome 152 on a private display, a fresh
+profile for every load, four public videos, arms alternated in one batch,
+refused loads of those with a verdict:
+
+| Arm (from a machine behind a WireGuard tunnel unless it says edges) | Refused  |
+| ------------------------------------------------------------------- | -------- |
+| Chrome, no proxy                                                    | 0 of 56  |
+| Chrome, no proxy, `--disable-quic`                                  | 13 of 36 |
+| STomp, HTTP/2, wisp-js on the machine                               | 14 of 20 |
+| STomp, HTTP/2, holyWisp 0.5.2 on the machine                        | 13 of 20 |
+| a build with holyWisp as its built-in `/wisp/`, HTTP/2              | 12 of 19 |
+| STomp, `http3`, wisp-js on the machine                              | 1 of 20  |
+| a build with holyWisp as its built-in `/wisp/`, `http3`             | 1 of 16  |
+| STomp, HTTP/3 for every host but googlevideo.com (an experiment)    | 3 of 16  |
+| STomp, HTTP/3 for googlevideo.com only (an experiment)              | 9 of 16  |
+| STomp, HTTP/2, the holyWisp edges                                   | 4 of 36  |
+| STomp, `http3`, the holyWisp edges                                  | 3 of 20  |
+
+What follows from it:
+
+- The wisp server does not matter: wisp-js and holyWisp on the same machine
+  are refused alike. Where its connections leave from does.
+- From that machine every connection, Chrome's and the wisp server's, TCP
+  and UDP, left from one IPv4 address through the tunnel (the sockets'
+  local address, and what STUN and redirector.googlevideo.com/report_mapping
+  answered). Chrome is accepted there because it speaks QUIC: limited to
+  TCP it is refused too. One STomp build ran the wisp-js arms with and
+  without `http3`, so what the page sees of its JavaScript environment is
+  not what decides.
+- The connections that count are the ones the page makes to youtube.com
+  and google.com, where the attestation runs and the token the player
+  attaches is issued, not the one to googlevideo.com the video streams
+  over.
+- What YouTube holds against TCP connections from that address is not
+  known. The tunnel shows in every SYN (an MSS of 1320, the tunnel's 1360
+  MTU), and the refusals over TCP rose through a day of measurements (about
+  one load in four in the morning, two in three by evening; through the
+  edges 0 of 21 in the batch before these, then 1 of 16, then 3 of 20),
+  which looks like the address's history. Over QUIC they stayed where
+  they were.
+- Through the edges `http3` made no difference in 20 loads. There the
+  session is split across two addresses (above).
+
+So a host whose users see YouTube stop turns `http3` on, and one that
+already has looks at where its wisp server's TCP and UDP streams leave
+from.
 
 ## Building and testing
 

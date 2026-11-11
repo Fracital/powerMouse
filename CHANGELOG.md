@@ -3778,23 +3778,31 @@ Fixed while testing real sites and a feature fixture:
   reaches the page as its 401, and a challenge the page has no credentials
   for never prompts (natively the browser asks the user). The credentials
   the worker keeps for a realm last as long as the service worker does.
-- A proxied YouTube video stops at about 45 seconds ("Something went wrong")
-  on roughly one load in four (headful Chrome 152, measured 2026-11-10:
-  about 17 of 80 loads in same-origin mode, isolated mode alike; natively 0
-  of over 100). YouTube's SABR stream answers every request with
-  `STREAM_PROTECTION_STATUS` 2 (attestation pending) until the player's
+- A proxied YouTube video can stop at about 45 seconds ("Something went
+  wrong"), and how often follows the network path of the session's requests
+  to youtube.com, not the page. YouTube's SABR stream answers every request
+  with `STREAM_PROTECTION_STATUS` 2 (attestation pending) until the player's
   PoToken is accepted, then 1; on these loads it never accepts it and sends 3
-  (attestation required) at about 27 to 35 seconds with no media, so playback
-  ends when the buffer does. The transport, the request bodies (the PoToken is
-  attached), the cookies and visitor binding, the timing and the network
-  ad-block probes all match native. The token comes from BotGuard, whose
-  verdict depends on what its VM sees: run unrewritten under the proxy it is
-  rejected every time; rewritten, it is rejected when the program (a new one
-  each load, probing a random set of interfaces) checks something the proxy
-  shows differently. Natively planted proxy tells (wrapped interfaces,
-  stack formatter, outer size, shifted stack positions, no CSP, slower CPU)
-  are all accepted, so the check that rejects it is not identified yet. A
-  reload is a new draw.
+  (attestation required) at about 30 seconds with no media, so playback ends
+  when the buffer does. Measured 2026-11-10 with headful Chrome 152,
+  alternated loads, refused loads of those with a verdict
+  (docs/http3.md, "YouTube's attestation"). From a machine whose traffic
+  leaves through a WireGuard tunnel, over HTTP/2: 14 of 20 through wisp-js,
+  12 of 19 and 13 of 20 through holyWisp on the same machine, so the wisp
+  server makes no difference. Chrome itself from that machine, no proxy: 0
+  of 56, and 13 of 36 with `--disable-quic`, which leaves it the TCP
+  connections the proxy has. With `http3` on, which sends the proxied
+  requests over QUIC as Chrome sends its own: 1 of 20 and 1 of 16. Through
+  the holyWisp edges the same build was refused 4 of 36 times over HTTP/2
+  and 3 of 20 with `http3` on. So where videos stop, turn `http3` on (the
+  wisp server has to relay UDP) or give the wisp server another way out.
+  What YouTube holds against TCP connections from that machine's address
+  is not known: the tunnel shows in every SYN (an MSS of 1320), and the
+  refusals over TCP rose through the day's measurements (about one load in
+  four in the morning, two in three by evening, and from 0 of 21 to 3 of
+  20 through the edges), while those over QUIC did not. Run unrewritten
+  under the proxy, the attestation script is refused every time. A reload
+  is a new draw.
 - Markup a page sets as an SVG or MathML element's `innerHTML` or
   `insertAdjacentHTML` is parsed as if its context were an HTML element, so
   `svg.innerHTML = '<style>...</style>'` makes an HTML `<style>` where
