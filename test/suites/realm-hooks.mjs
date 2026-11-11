@@ -88,7 +88,14 @@ for (const [mode, base] of [
 					onHookError: (info) => events.push({ via: 'callback', ...info }),
 				});
 				controller.addEventListener('hookerror', (event) =>
-					events.push({ via: 'event', ...event.detail.info }),
+					events.push({
+						via: 'event',
+						// which of the controller's frames the event names
+						frame: event.detail.frame
+							? controller.frames.indexOf(event.detail.frame)
+							: null,
+						...event.detail.info,
+					}),
 				);
 				out.events[label] = events;
 				let waitError = null;
@@ -235,6 +242,27 @@ for (const [mode, base] of [
 			throwing.marginTop,
 			boom.slice(0, 2),
 		]),
+	);
+	// the same hook threw in the realms inside the page too: its nested
+	// frame, and the about:blank child and the srcdoc frame, whose URL is
+	// the page's. Each is the realm's own Error (the about:blank child's
+	// hook runs from the page's realm), told with its message and stack
+	const inside = (collected.throwing ?? []).filter(
+		(e) => e.via === 'event' && e.phase === 'pre' && e.message === 'boom',
+	);
+	const child = inside.filter(
+		(e) => e.url === `${FIXTURE}pages/hooks-child.html`,
+	);
+	ok(
+		`${mode}: a hook that throws in a nested frame, an about:blank child and a srcdoc frame reaches the host too, with the frame the page is in`,
+		child.length === 1 &&
+			child[0].kind === 'document' &&
+			inside.length === 4 &&
+			inside.every((e) => e.frame === 0 && typeof e.stack === 'string') &&
+			(collected.throwing ?? []).filter(
+				(e) => e.via === 'callback' && e.message === 'boom',
+			).length === 4,
+		JSON.stringify(inside.map((e) => [e.url, e.frame])),
 	);
 	ok(
 		`${mode}: a hook from a URL is fetched once by the controller and runs`,

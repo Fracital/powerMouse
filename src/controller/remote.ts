@@ -296,6 +296,13 @@ export class RemoteController extends EventTarget {
 			(data) => this.element.contentWindow?.postMessage(data, this.proxyOrigin),
 		);
 
+		// a hook that threw in a realm of `frame`'s page
+		const reportHookError = (info: HookErrorInfo, frame: RemoteFrame) => {
+			init.onHookError?.(info);
+			this.dispatchEvent(
+				new CustomEvent('hookerror', { detail: { info, frame } }),
+			);
+		};
 		window.addEventListener('message', (event) => {
 			if (event.origin !== this.proxyOrigin) return;
 			if (event.source === this.element.contentWindow) {
@@ -307,8 +314,8 @@ export class RemoteController extends EventTarget {
 			if (!found) return;
 			const { frame, nested } = found;
 			// a document in a frame of the page says which client it is (its
-			// requests are this frame's) and when its history moved (see
-			// StompController)
+			// requests are this frame's), when its history moved and that a
+			// hook threw in it, nothing else (see StompController)
 			const announce = (info: NavigateInfo) => {
 				init.onNavigate?.(info, frame);
 				this.dispatchEvent(
@@ -323,6 +330,8 @@ export class RemoteController extends EventTarget {
 				// a frame in the page that navigated is a step of the frame's
 				// history (a tab's Back steps it first): the buttons follow
 				if (moved) frame.historyChanged(announce);
+				const thrown = client || moved ? null : hookErrorReport(event.data);
+				if (thrown) reportHookError(thrown, frame);
 				return;
 			}
 			const navigate = navigateReport(event.data);
@@ -343,12 +352,7 @@ export class RemoteController extends EventTarget {
 			// a hook that threw: the page posts to the real top, which is this
 			// host page (the controller frame only relays URL fetch failures)
 			const hookError = hookErrorReport(event.data);
-			if (hookError) {
-				init.onHookError?.(hookError);
-				this.dispatchEvent(
-					new CustomEvent('hookerror', { detail: { info: hookError, frame } }),
-				);
-			}
+			if (hookError) reportHookError(hookError, frame);
 		});
 
 		(document.body || document.documentElement).append(this.element);

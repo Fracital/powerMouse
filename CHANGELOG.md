@@ -3945,6 +3945,18 @@ url`) carries its value and targets that window. An about:blank child of
   their title and their document 5000 times each posted 25035 more reports
   (4.9 MB) and now post none (Chrome 152). The heap a frame costs is unchanged
   (1132 KB over 20 frames). A top-level document reports as before.
+- A host hook that throws in a document nested in a proxied page reaches
+  the host (`onHookError`, the `hookerror` event, `hookErrors`), with the
+  frame that shows the page, like a request's. The nested document posted
+  the report to the real top as the page does, and both controllers
+  dropped it there with everything else a nested window says: of a `pre`
+  hook throwing in a page, its nested frame, its about:blank child and its
+  srcdoc frame the host heard one error, the page's, and hears four
+  (realm-hooks). The report of an about:blank child's carries the
+  error's message and stack like the others: the hook there throws an
+  Error of the child's realm, which the page's bundle did not take for
+  one (`instanceof`), so the message read `Error: boom` and the stack was
+  left out. A hook that throws in a worker still tells nobody.
 - `history.pushState` and `replaceState` refuse a URL of another origin, or
   one that does not parse, with a SecurityError naming the page's origin and
   URL, like the browser; before this the URL was routed and accepted (every

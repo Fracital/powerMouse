@@ -885,8 +885,19 @@ export default class Client {
 		if (!this.runsHooks()) return;
 		const context = this.hookContext(phase);
 		const report = (error: unknown) => {
-			const message = error instanceof Error ? error.message : String(error);
-			const stack = error instanceof Error ? error.stack : undefined;
+			// by its shape, not its class: the hook threw an Error of its own
+			// realm, which for an about:blank child is not this bundle's (the
+			// page's realm runs it)
+			const thrown =
+				typeof error === 'object' && error !== null
+					? (error as { message?: unknown; stack?: unknown })
+					: null;
+			const message =
+				thrown && typeof thrown.message === 'string'
+					? thrown.message
+					: String(error);
+			const stack =
+				thrown && typeof thrown.stack === 'string' ? thrown.stack : undefined;
 			console.error(
 				`Stomp: the host's ${phase} hook threw in ${context.url}: ${message}`,
 			);

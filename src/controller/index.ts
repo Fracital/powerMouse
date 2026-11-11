@@ -276,7 +276,12 @@ export interface ControllerInit {
 	 * controller serves without that hook.
 	 */
 	hooks?: InitHooks;
-	/** a host hook threw in a proxied realm (or a hook URL failed); also the `hookerror` CustomEvent */
+	/**
+	 * a host hook threw in a proxied realm (or a hook URL failed); also the
+	 * `hookerror` CustomEvent. `frame` is the one showing the page the realm
+	 * belongs to (the page's own document or one in a frame nested in it),
+	 * null for a hook URL
+	 */
 	onHookError?: (info: HookErrorInfo, frame: Frame | null) => void;
 	/**
 	 * The host's own page for a document the proxy failed to produce (the
@@ -903,8 +908,10 @@ export class StompController extends EventTarget {
 			if (!found) return;
 			const { frame, nested } = found;
 			// a document in a frame of the page tells the real top which client
-			// it is: its requests are this frame's, and that is all it says
-			// (where the frame is, is its page's to say)
+			// it is (its requests are this frame's), when its history moved and
+			// that a hook of the host's threw in it, as the page does; nothing
+			// else is taken from it (where the frame is, and what it opens, is
+			// its page's to say)
 			if (nested) {
 				const client = clientReport(event.data);
 				const moved = frameMovedReport(event.data);
@@ -919,6 +926,8 @@ export class StompController extends EventTarget {
 						new CustomEvent('navigate', { detail: { info: changed, frame } }),
 					);
 				}
+				const thrown = client || moved ? null : hookErrorReport(event.data);
+				if (thrown) this.#reportHookError(thrown, frame);
 				return;
 			}
 			const navigate = navigateReport(event.data);
