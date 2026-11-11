@@ -1,0 +1,65 @@
+<!doctype html>
+<title>PERMISSIONS POLICY</title>
+<body>
+	<script>
+		// What the browser's permissions policy lets each document use, read
+		// by the documents themselves: this page (served with a policy that
+		// turns features off, as Cloudflare's challenge pages are), frames of
+		// another site without and with an allow attribute, a frame of this
+		// site, a frame of another site whose own policy turns more off, and
+		// one with `allowfullscreen`.
+		// Each also tries a synchronous XMLHttpRequest, which `sync-xhr`
+		// governs.
+		const report = (name) => {
+			const policy = document.featurePolicy;
+			let syncXhr;
+			try {
+				const request = new XMLHttpRequest();
+				request.open('GET', location.pathname, false);
+				request.send();
+				syncXhr = `sent ${request.status}`;
+			} catch (error) {
+				syncXhr = `${error.name}: ${error.message}`;
+			}
+			return {
+				name,
+				allowed: policy.allowedFeatures().sort(),
+				camera: policy.allowsFeature('camera'),
+				syncXhr,
+			};
+		};
+		const records = { top: report('top') };
+		const other = location.origin.includes('127.0.0.1')
+			? location.origin.replace('127.0.0.1', 'localhost')
+			: location.origin.replace('localhost', '127.0.0.1');
+		const frames = [
+			['cross', `${other}/pages/permissions-policy-frame.html`, ''],
+			[
+				'crossAllowed',
+				`${other}/pages/permissions-policy-frame.html`,
+				'camera; fullscreen; summarizer',
+			],
+			['same', `${location.origin}/pages/permissions-policy-frame.html`, ''],
+			['crossOwn', `${other}/pages/permissions-policy-own.html`, 'camera'],
+			[
+				'crossFullscreen',
+				`${other}/pages/permissions-policy-frame.html`,
+				'',
+				true,
+			],
+		];
+		addEventListener('message', (event) => {
+			if (!event.data?.policyReport) return;
+			records[event.data.policyReport.name] = event.data.policyReport;
+			if (Object.keys(records).length === frames.length + 1)
+				window.__policy = records;
+		});
+		for (const [name, src, allow, fullscreen] of frames) {
+			const frame = document.createElement('iframe');
+			if (allow) frame.allow = allow;
+			if (fullscreen) frame.allowFullscreen = true;
+			frame.src = `${src}?${name}`;
+			document.body.append(frame);
+		}
+	</script>
+</body>

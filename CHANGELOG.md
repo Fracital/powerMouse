@@ -859,6 +859,20 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A document's permissions policy is the browser's own, as natively. The
+  browser sees every proxied frame as same-origin with its parent and never
+  saw a page's `Permissions-Policy`, so a frame of another site had every
+  feature whose default allowlist is `self` (Cloudflare Turnstile's
+  challenge frame on kits4beats.com read Summarizer and LanguageModel as
+  `downloadable`, natively `unavailable`), a page's policy turned nothing
+  off (its `camera=()` read allowed in `document.featurePolicy`), and a
+  synchronous XMLHttpRequest went through under `sync-xhr=()`. The service
+  worker now serves each document with a policy that turns off every
+  feature the document may not use, from its header, its frame's `allow`
+  attribute and its parent's, with Chrome 152's and 156's features and
+  their default allowlists (measured), and the inject's XMLHttpRequest
+  fails a synchronous request with Chrome's NetworkError where the policy
+  refuses it. (permissions-policy suite, natively against both modes.)
 - A frame's window no longer keeps the inject's bootstrap global. When a
   page read a new frame's `contentWindow` before the frame's document came
   (Cloudflare Turnstile's widget does), the browser kept that window for the

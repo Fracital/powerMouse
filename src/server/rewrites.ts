@@ -134,6 +134,7 @@ import {
 	acceptedHints,
 	applyClientHints,
 	applyMeta,
+	browserPolicy,
 	criticalRetry,
 	hintsDocument,
 	persistAcceptCH,
@@ -2479,7 +2480,8 @@ function genericForward(
 		// the document this navigation makes, as its requests' client hints
 		// go: what it may send (a top-level one's Accept-CH is kept for its
 		// origin first) and its Permissions-Policy, which the browser never
-		// sees
+		// sees as the page sent it
+		let navigated: ReturnType<typeof recordHintsDocument> | null = null;
 		if (
 			navigation &&
 			DOCUMENT_DESTINATIONS.has(serverRequest.destination) &&
@@ -2494,7 +2496,7 @@ function genericForward(
 				: topLevel
 					? await persistAcceptCH(top, response.headers.get('accept-ch'))
 					: await acceptedHints(top);
-			recordHintsDocument(serverRequest.url, context?.clientId, {
+			navigated = recordHintsDocument(serverRequest.url, context?.clientId, {
 				origin: url.url.origin,
 				top,
 				topLevel,
@@ -2760,6 +2762,23 @@ function genericForward(
 			additionalResponseFilter,
 		);
 		if (isolation) isolationResponseHeaders(responseHeaders, isolation);
+		// what the document may not use, as the browser's own policy for it
+		// (beside the isolation's `cross-origin-isolated=()`). A frame's needs
+		// its element's allow attribute, which comes with the hint its parent
+		// sends when it sets the frame's src (empty for none); a frame
+		// navigation the worker has no container policy for (one the frame's
+		// own document started, a redirect's next hop) is left to the browser
+		const featuresOff =
+			navigated &&
+			(topLevel || hint?.allow !== undefined) &&
+			browserPolicy(navigated);
+		if (featuresOff) {
+			const isolating = responseHeaders.get('permissions-policy');
+			responseHeaders.set(
+				'permissions-policy',
+				isolating ? `${isolating}, ${featuresOff}` : featuresOff,
+			);
+		}
 		// the browser asks the same of this redirect when the host's page is
 		// of another origin than the proxy's
 		else if (rewriter.isolated && navigation && navigationRedirect)

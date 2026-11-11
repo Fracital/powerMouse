@@ -52,6 +52,19 @@ import { hookWrite, MARKER } from './MutationObserver';
 import NavigationHintModule from './NavigationHint';
 import TokenListsModule from './TokenLists';
 
+/**
+ * A frame element's container policy as its allow attribute says it, with
+ * `allowfullscreen` read as `fullscreen *` where the attribute does not name
+ * the feature, as Chrome reads it (empty: neither attribute)
+ */
+function containerPolicy(element: Element): string {
+	const allow = element.getAttribute('allow');
+	if (!element.hasAttribute('allowfullscreen')) return allow ?? '';
+	if (allow !== null && /(?:^|;)\s*fullscreen(?:\s|;|$)/i.test(allow))
+		return allow;
+	return allow ? `${allow}; fullscreen *` : 'fullscreen *';
+}
+
 const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
@@ -1586,14 +1599,17 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					else this.client.opaqueFrames.delete(element);
 					// the frame navigates for this document, under its activation,
 					// with its element's allow attribute as its container policy
-					// (the worker's client hints for the frame read it)
+					// (the worker's client hints and permissions policy for the
+					// frame read it; empty when the element has none),
+					// `allowfullscreen` being `fullscreen *` where the attribute
+					// does not name the feature
 					if (!opaque)
 						this.client
 							.getModule(NavigationHintModule)
 							?.hint(
 								resource.url.href,
 								element.nodeName === 'IFRAME'
-									? (element.getAttribute('allow') ?? undefined)
+									? containerPolicy(element)
 									: undefined,
 							);
 					element.setAttribute(

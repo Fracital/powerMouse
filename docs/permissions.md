@@ -43,14 +43,32 @@ second is dismissed rather than given the first one's answer.
 ## The policy
 
 A page's permissions policy is simulated too: the worker records each
-document's `Permissions-Policy` header (the browser never sees it) and, for
-a frame, its element's `allow` attribute (sent with the frame's navigation
-hint) under its parent's policy. A frame of another site gets geolocation,
-the camera, the microphone, the clipboard and the other powerful features
-only when its `allow` names them, and never notifications, as natively;
-there `query()` reads `denied`, `getCurrentPosition` fails with "Geolocation
-has been disabled in this document by permissions policy." and
-`getUserMedia` with NotAllowedError (when the device exists, see below).
+document's `Permissions-Policy` header (the browser never sees it as the
+page sent it: its origins are not the proxy's) and, for a frame, its
+element's `allow` attribute (sent with the frame's navigation hint) under
+its parent's policy. A frame of another site gets geolocation, the camera,
+the microphone, the clipboard and the other powerful features only when
+its `allow` names them, and never notifications, as natively; there
+`query()` reads `denied`, `getCurrentPosition` fails with "Geolocation has
+been disabled in this document by permissions policy." and `getUserMedia`
+with NotAllowedError (when the device exists, see below).
+
+The browser itself enforces the result for every feature it knows: the
+worker serves each document with a `Permissions-Policy` that turns off
+each feature the document may not use (`browserPolicy` in
+src/server/clientHints.ts: the features Chrome 152 and 156 know, with
+their default allowlists, `*` or `self`, as measured). To the browser every
+proxied frame is same-origin with its parent, so without it a frame of
+another site had every `self` feature (Cloudflare Turnstile's challenge
+frame read Summarizer and LanguageModel as `downloadable` where natively
+they are `unavailable`), and a page's own policy turned nothing off.
+`document.featurePolicy` now reads as natively, and a document that may
+not make a synchronous XMLHttpRequest (`sync-xhr`) gets the NetworkError
+Chrome gives (the inject makes those requests itself, so it asks the
+browser's policy). `cross-origin-isolated` stays the isolation's
+(src/isolation.ts). (permissions-policy suite: a page with Cloudflare's
+policy, frames of another site with and without `allow`, of its own site,
+and one with a policy of its own, natively against both modes.)
 
 The host's own frame decides what the proxy origin may ask the browser for
 at all. In same-origin mode the proxied frame is same-origin with the host

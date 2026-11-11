@@ -67,6 +67,29 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 
 		const decoder = new TextDecoder('utf-8');
 
+		// whether the document's permissions policy lets it make a
+		// synchronous request (Chrome's `sync-xhr`)
+		const global = that.client.global as typeof globalThis & {
+			FeaturePolicy?: { prototype: { allowsFeature?: unknown } };
+		};
+		const featurePolicy = Reflect.getOwnPropertyDescriptor(
+			global.Document.prototype,
+			'featurePolicy',
+		)?.get;
+		const allowsFeature = global.FeaturePolicy?.prototype.allowsFeature;
+		const syncAllowed = (): boolean => {
+			if (!featurePolicy || typeof allowsFeature !== 'function') return true;
+			try {
+				return !!Reflect.apply(
+					allowsFeature,
+					Reflect.apply(featurePolicy, global.document, []),
+					['sync-xhr'],
+				);
+			} catch (error) {
+				return true;
+			}
+		};
+
 		// A response's document is made by the browser itself: the realm's own
 		// XMLHttpRequest (taken before this module replaces it) reads the
 		// response's bytes from a data: URL of its final type, so the document
@@ -504,6 +527,21 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					}),
 				);
 			}
+			/** a synchronous request's network error: done, no event, send() throws */
+			#syncFailed(url: string): never {
+				this.#readyState = DONE;
+				this.#status = 0;
+				this.#statusText = '';
+				this.#response =
+					this.#responseType === '' || this.#responseType === 'text'
+						? ''
+						: null;
+				this.#responseText = '';
+				throw new that.client.global.DOMException(
+					`Failed to execute 'send' on 'XMLHttpRequest': Failed to load '${url}'.`,
+					'NetworkError',
+				);
+			}
 			#fetch(url: string | URL, init: RequestInit) {
 				// the page's headers as a record the browser reads by its own
 				// properties, without the proxy's markers (see Fetch)
@@ -565,20 +603,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 						// a network error (the site unreachable, the request refused
 						// by CORS) ends a synchronous request with no event: send()
 						// throws, as natively
-						if (error instanceof TypeError) {
-							this.#readyState = DONE;
-							this.#status = 0;
-							this.#statusText = '';
-							this.#response =
-								this.#responseType === '' || this.#responseType === 'text'
-									? ''
-									: null;
-							this.#responseText = '';
-							throw new that.client.global.DOMException(
-								`Failed to execute 'send' on 'XMLHttpRequest': Failed to load '${this.#sentURL}'.`,
-								'NetworkError',
-							);
-						}
+						if (error instanceof TypeError) this.#syncFailed(this.#sentURL);
 						this.#onDone(error);
 					}
 				}
@@ -676,6 +701,17 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			send(body: string) {
 				this.#readyState = OPENED;
 				this.#sent = true;
+
+				// a document whose permissions policy turns `sync-xhr` off (the
+				// browser's, which the service worker gives it) fails a
+				// synchronous request before it starts, as Chrome's does
+				if (!this.#async && !syncAllowed()) {
+					const failed = new URL(this.#url, that.client.baseURL.toString());
+					failed.hash = '';
+					failed.username = '';
+					failed.password = '';
+					this.#syncFailed(failed.href);
+				}
 
 				const options: RequestInit = {
 					method: this.#method,

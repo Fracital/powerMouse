@@ -250,7 +250,171 @@ export interface HintsDocument {
 	 * every frame is same-origin with its parent
 	 */
 	features: Map<string, boolean>;
+	/**
+	 * whether the document may use each feature the browser knows, as
+	 * natively: what reaches the browser (browserPolicy)
+	 */
+	allFeatures: Map<string, boolean>;
 }
+
+/**
+ * Every policy-controlled feature Chrome 152 or 156 knows
+ * (`document.featurePolicy.features()`, measured on both). A document's
+ * policy reaches the browser as `Permissions-Policy` naming the ones it may
+ * not use (browserPolicy), so the browser itself refuses them and
+ * `document.featurePolicy` reads as natively. `cross-origin-isolated` is
+ * not among them: the host's isolation decides it (src/isolation.ts).
+ */
+const BROWSER_FEATURES: string[] = [
+	'accelerometer',
+	'aria-notify',
+	'autoplay',
+	'browsing-topics',
+	'camera',
+	'captured-surface-control',
+	'ch-device-memory',
+	'ch-downlink',
+	'ch-dpr',
+	'ch-ect',
+	'ch-prefers-color-scheme',
+	'ch-prefers-reduced-motion',
+	'ch-prefers-reduced-transparency',
+	'ch-rtt',
+	'ch-save-data',
+	'ch-ua',
+	'ch-ua-arch',
+	'ch-ua-bitness',
+	'ch-ua-form-factors',
+	'ch-ua-full-version',
+	'ch-ua-full-version-list',
+	'ch-ua-high-entropy-values',
+	'ch-ua-mobile',
+	'ch-ua-model',
+	'ch-ua-platform',
+	'ch-ua-platform-version',
+	'ch-ua-wow64',
+	'ch-viewport-height',
+	'ch-viewport-width',
+	'ch-width',
+	'clipboard-read',
+	'clipboard-write',
+	'compute-pressure',
+	'deferred-fetch',
+	'deferred-fetch-minimal',
+	'digital-credentials-create',
+	'digital-credentials-get',
+	'display-capture',
+	'encrypted-media',
+	'fullscreen',
+	'gamepad',
+	'geolocation',
+	'gyroscope',
+	'hid',
+	'identity-credentials-get',
+	'idle-detection',
+	'interest-cohort',
+	'join-ad-interest-group',
+	'keyboard-map',
+	'language-detector',
+	'language-model',
+	'local-fonts',
+	'local-network',
+	'local-network-access',
+	'loopback-network',
+	'magnetometer',
+	'media-playback-while-not-visible',
+	'microphone',
+	'midi',
+	'on-device-speech-recognition',
+	'otp-credentials',
+	'payment',
+	'picture-in-picture',
+	'private-aggregation',
+	'private-state-token-issuance',
+	'private-state-token-redemption',
+	'publickey-credentials-create',
+	'publickey-credentials-get',
+	'run-ad-auction',
+	'screen-wake-lock',
+	'serial',
+	'shared-storage',
+	'shared-storage-select-url',
+	'speaker-selection',
+	'storage-access',
+	'summarizer',
+	'sync-xhr',
+	'translator',
+	'unload',
+	'usb',
+	'window-management',
+	'xr-spatial-tracking',
+];
+
+/**
+ * The features one of those versions does not know, by the first major
+ * version that does (`since`) or the last (`until`): a header naming a
+ * feature the browser does not know earns a console warning
+ */
+const FEATURE_VERSIONS: Record<string, { since?: number; until?: number }> = {
+	'digital-credentials-create': { since: 156 },
+	'media-playback-while-not-visible': { since: 156 },
+	'speaker-selection': { since: 156 },
+	'join-ad-interest-group': { until: 155 },
+	'private-aggregation': { until: 155 },
+	'run-ad-auction': { until: 155 },
+	'shared-storage': { until: 155 },
+	'shared-storage-select-url': { until: 155 },
+};
+
+/** the browser's Chrome major version, from the worker's own user agent */
+function browserMajor(): number {
+	const match = /Chrome\/(\d+)/.exec(globalThis.navigator?.userAgent ?? '');
+	return match ? Number(match[1]) : 0;
+}
+
+/** the features of BROWSER_FEATURES the browser running this worker knows */
+let knownFeatures: string[] | undefined;
+function browserFeatures(): string[] {
+	if (knownFeatures) return knownFeatures;
+	const major = browserMajor();
+	return (knownFeatures = BROWSER_FEATURES.filter((feature) => {
+		const versions = FEATURE_VERSIONS[feature];
+		if (!versions || !major) return true;
+		if (versions.since !== undefined && major < versions.since) return false;
+		if (versions.until !== undefined && major > versions.until) return false;
+		return true;
+	}));
+}
+
+/**
+ * The features whose default allowlist is `*`: a frame of another origin
+ * has them without an allow attribute (measured on Chrome 152 and 156);
+ * every other one's is `self`
+ */
+const DEFAULT_ALL_FEATURES = new Set([
+	'aria-notify',
+	'browsing-topics',
+	'ch-save-data',
+	'ch-ua',
+	'ch-ua-high-entropy-values',
+	'ch-ua-mobile',
+	'ch-ua-platform',
+	'deferred-fetch-minimal',
+	'gamepad',
+	'interest-cohort',
+	'join-ad-interest-group',
+	'media-playback-while-not-visible',
+	'picture-in-picture',
+	'private-aggregation',
+	'private-state-token-issuance',
+	'private-state-token-redemption',
+	'run-ad-auction',
+	'shared-storage',
+	'shared-storage-select-url',
+	'storage-access',
+	'sync-xhr',
+	'unload',
+]);
 
 /**
  * The policy-controlled features behind the permissions a page asks for
@@ -283,28 +447,32 @@ function featuresOf(
 	parent: HintsDocument | null,
 	parentOrigin: string,
 	container: Map<string, Allowlist>,
+	list: Iterable<string> = POLICY_FEATURES,
+	parentFeatures: (doc: HintsDocument) => Map<string, boolean> = (doc) =>
+		doc.features,
 ): Map<string, boolean> {
 	const features = new Map<string, boolean>();
-	for (const feature of POLICY_FEATURES) {
+	for (const feature of list) {
 		// its parent lets it have the feature: the parent has it, and the
 		// parent's header (when it names the feature) names this origin
 		const fromParent =
 			topLevel ||
-			((!parent || parent.features.get(feature) !== false) &&
+			((!parent || parentFeatures(parent).get(feature) !== false) &&
 				(!parent?.policy.declared.has(feature) ||
 					allowlistMatches(
 						parent.policy.declared.get(feature)!,
 						origin,
 						parent.origin,
 					)));
-		// the container's allow attribute, else the default allowlist (self)
+		// the container's allow attribute, else the default allowlist (self,
+		// or * for the few features every frame has)
 		const named = container.get(feature);
 		const inherited =
 			topLevel ||
 			(fromParent &&
 				(named
 					? allowlistMatches(named, origin, parentOrigin)
-					: origin === parentOrigin));
+					: DEFAULT_ALL_FEATURES.has(feature) || origin === parentOrigin));
 		const own = declared.get(feature);
 		features.set(
 			feature,
@@ -521,11 +689,36 @@ export function recordDocument(
 			parentOrigin,
 			container,
 		),
+		allFeatures: featuresOf(
+			init.origin,
+			init.topLevel,
+			declared,
+			parent,
+			parentOrigin,
+			container,
+			browserFeatures(),
+			(doc) => doc.allFeatures,
+		),
 	};
 	keep(`url ${withoutHash(routed)}`, doc);
 	if (clientId) keep(`client ${clientId}`, doc);
 	if (init.topLevel) tops.set(init.origin, doc);
 	return doc;
+}
+
+/**
+ * The `Permissions-Policy` a document is served to the browser with: every
+ * feature the document may not use, off. The browser sees each proxied
+ * document as same-origin with its parent, so a frame of another site would
+ * otherwise have every `self` feature, and a page's own policy (which never
+ * reaches the browser as the page sent it: its origins are not the proxy's)
+ * would turn nothing off. Null when the document may use them all.
+ */
+export function browserPolicy(doc: HintsDocument): string | null {
+	const off: string[] = [];
+	for (const [feature, allowed] of doc.allFeatures)
+		if (!allowed) off.push(`${feature}=()`);
+	return off.length ? off.join(', ') : null;
 }
 
 /** a top-level document's static meta: its own hints, and the hints it delegates */

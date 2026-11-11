@@ -1,0 +1,26 @@
+<!doctype html>
+<title>POLICY FRAME</title>
+<script>
+	// this document's view of the permissions policy, for its parent
+	const policy = document.featurePolicy;
+	let syncXhr;
+	try {
+		const request = new XMLHttpRequest();
+		request.open('GET', location.pathname, false);
+		request.send();
+		syncXhr = `sent ${request.status}`;
+	} catch (error) {
+		syncXhr = `${error.name}: ${error.message}`;
+	}
+	parent.postMessage(
+		{
+			policyReport: {
+				name: location.search.slice(1),
+				allowed: policy.allowedFeatures().sort(),
+				camera: policy.allowsFeature('camera'),
+				syncXhr,
+			},
+		},
+		'*',
+	);
+</script>
