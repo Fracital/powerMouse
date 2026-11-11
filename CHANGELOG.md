@@ -200,25 +200,31 @@ The first release after a four-year gap. Everything below is breaking.
   behind it. The demo reads `STOMP_REWRITER=wasm` (`?wasm` for one visit,
   `?js` for the JavaScript rewriters), and the `wasm-share` suite checks
   that every thread holds the modules.
-- With `rewriter: 'wasm'` the service worker finds what to rewrite in a
-  stylesheet and in a document's markup with a Rust module, `scanner.wasm`
-  (`rust/rwcss`, 25 KB; `init.assets.scanner` names it). Rewriting a large
-  stylesheet was mostly css-tree's lazy parse and the walk over it, which
-  only find the values, preludes and raw text that could hold a URL; the
-  module is css-tree's tokenizer and lazy parser ported, giving those pieces
-  by offset, and each piece is then rewritten by the same JavaScript as
-  before, so the output is byte for byte the same (99 real stylesheets,
-  11.9 MB: 364 ms against 953 ms; 2,297 more from this machine, 57.8 MB:
-  3.3 s against 78 s). The three expressions that find a document's inline
-  scripts, styles and `<base href>` for prewriting are one pass of the same
-  module. A sheet the scanner declines (more than 16.7 million UTF-16
-  units, blocks nested past 64) is parsed by css-tree as before, and
-  `onRequest` says which found a stylesheet's pieces (`rewriteBy`: `wasm`
-  or `js`). A closing bracket with nothing open (`a{} } b{}`) is answered
-  too, as css-tree answers it now that its parse no longer depends on the
-  sheet before (Fixes). The `scanner-parity` suite compares both on
-  hand-written cases, the fixture pages and a seeded fuzz. The page's own
-  CSS paths (CSSOM, style attributes) still use css-tree.
+- With `rewriter: 'wasm'` stylesheets are rewritten in a Rust module,
+  `scanner.wasm` (`rust/rwcss`, 48 KB, 19 KB brotli; `init.assets.scanner`
+  names it), which also finds a document's inline scripts, styles and
+  `<base href>` for prewriting (the three expressions of `src/prewrite.ts`
+  in one pass). The module is css-tree's tokenizer and parsers ported (the
+  lazy parse of a sheet, the full parse of a value, a selector or an
+  at-rule prelude) with the rewrite itself: it decodes each URL, asks the
+  thread what it routes to (one call per URL through the module's routing
+  import: the base URL and the codec stay in JavaScript), and splices the
+  result into the text. The output is the JavaScript rewriter's byte for
+  byte: 2,396 real stylesheets (69.7 MB) and 280,000 fuzzed stylesheets,
+  declaration lists and values rewrite the same both ways. The 99 sheets
+  of the corpus (11.9 MB) take 77 ms against css-tree's 553 ms. What the
+  module cannot answer the same it declines, and css-tree rewrites the text
+  as before: more than 16.7 million UTF-16 units, blocks nested past 64, a
+  value's brackets nested past 96, a lone surrogate, a URL that begins with
+  U+FEFF, a `data:` stylesheet inside a stylesheet (none of the corpus).
+  `onRequest` says which rewrote a stylesheet (`rewriteBy`: `wasm` or
+  `js`). The service worker's `/css/` route and the inline styles of a
+  prewritten document use it; a frame's rewriter library uses it for
+  stylesheets and style attributes once the page holds the module, and
+  css-tree until then. A closing bracket with nothing open (`a{} } b{}`) is
+  answered too, as css-tree answers it now that its parse no longer depends
+  on the sheet before (Fixes). The `scanner-parity` suite compares both on
+  hand-written cases, the fixture pages and a seeded fuzz.
 - With `rewriter: 'wasm'` scripts are rewritten by the Rust rewriter
   (`rust/rwjs`, oxc; `assets/rewriter.wasm`, 427 KB, 151 KB brotli) in the
   rewrite workers and the service worker. It makes the same rewrites as the

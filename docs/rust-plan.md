@@ -1,7 +1,7 @@
 # The Rust rewriter and the built-in blocker
 
 The plan for moving the slow half of STomp (the JS rewriter first, then the
-CSS and markup scanners) from meriyah and escodegen to Rust compiled to
+CSS rewriter and the markup scanner) from meriyah and escodegen to Rust compiled to
 wasm, mirroring scramjet's rewriter where it is right, and for the built-in
 blocker built from adblock-rust. Written 2026-11-10 against master a8a457b.
 
@@ -83,7 +83,11 @@ rust/
 │                       as edits), shape.rs (what is declined), config.rs,
 │                       source.rs (function marks and keys), abi.json (what
 │                       the artifact may import and export)
-├── rwcss/              the CSS and markup scanners, one module (phase 3)
+├── rwcss/              the CSS rewriter and the markup scanner, one module
+│                       (phase 3): css.rs (css-tree's tokenizer and lazy
+│                       parse), full.rs (its value, selector and prelude
+│                       parsers), rewrite.rs (the routing and the splice),
+│                       markup.rs, abi.rs
 ├── block/              adblock-rust wrapped for the service worker (phase 4)
 ├── rtc/                WebRTC over wisp (the other agent's crate, wasip1)
 ├── coverage-macro/     the build time walk proof
@@ -110,9 +114,10 @@ none:
 
 - the rewriter module: 426,993 bytes, 151,391 brotli as built with every
   rewrite family in (the budget is 600 KB, 160 KB brotli).
-- the scanner module (`scanner.wasm`, phase 3): 25 KB, 11 KB brotli. It has
-  no dependencies and shares no code with the rewriter, so it is a module of
-  its own and not 25 KB more of the rewriter's.
+- the scanner module (`scanner.wasm`, phase 3: the CSS rewriter and the
+  markup scan): 48,102 bytes, 19,454 brotli. It has no dependencies and
+  shares no code with the rewriter, so it is a module of its own and not
+  48 KB more of the rewriter's.
 - the blocker module, 1,063 KB, 299 KB brotli (the crate's regex and idna
   tables dominate).
 
@@ -861,30 +866,76 @@ on the 142 sheet corpus. `prewrite.ts`'s regex scan of `<script>` and
 the page's own `DOMParser`: it is correct and free.
 
 As landed (`rust/rwcss`, `scanner.wasm`, `src/wasm/scanner.ts`): the module
-finds and JavaScript rewrites. Nearly all of `modifyCSS`'s time on a large
-sheet is css-tree's lazy parse and the walk over it, which only find the raw
-pieces worth looking into (a declaration's value, an at-rule's prelude, a
-rule's prelude, text no parse shaped) by the test `MAY_ROUTE`. The crate is
-css-tree 3.2.1's tokenizer, token stream and lazy node parsers ported
-literally (its error recovery included: `parseWithFallback`, the balance
-table, the at-rule block table), emitting no tree, only those pieces in
-source order with UTF-16 offsets. Each piece then goes through the code the
-walk called (`deep` and `route` in `src/rewriteCSS.ts`, css-tree's full
-parse of that one piece included), so the output is the JavaScript
-rewriter's by construction and not by a second implementation of the
-rewrite. The module's filter is narrower than `MAY_ROUTE` (`url(`,
-`image-set` and `src(`, which is every case that can produce an edit, plus
-an `@import` prelude), so a piece that could only ever come back unchanged
-is not handed over at all. The markup half is a literal port of
-`src/prewrite.ts`'s three expressions (`<script>`, `<style>`, `<base
-href>`), one pass in place of three, with JavaScript's `\s` and ASCII-only
-case folding.
+rewrites. Its first form only found the raw pieces worth looking into and
+JavaScript rewrote each one; now all of `modifyCSS` for a stylesheet or a
+declaration list (an element's `style`), and `rewriteCSSValueURLs` for a
+single value, is in the crate, and the module's answer is the rewritten
+text (or "unchanged", which costs no copy). The crate is css-tree 3.2.1
+ported literally, in three layers:
 
-The scanner declines (status 5, and css-tree parses the sheet as before)
-only what is past the port: a sheet of more than 0xFFFFFF UTF-16 units
+- `css.rs`: the tokenizer, the token stream and the lazy node parsers
+  (error recovery included: `parseWithFallback`, the balance table, the
+  at-rule block table). They find the pieces that could hold a URL: a
+  declaration's value, an at-rule's prelude, a rule's prelude, text no
+  parse shaped. A piece is looked into when it holds `url(`, `image-set`
+  or `src(` (every case that can produce an edit; found in one pass over
+  the sheet), or is an `@import` prelude.
+- `full.rs`: the parse css-tree gives one such piece, tokenized on its own
+  as css-tree does: the value, selector list and at-rule prelude parsers
+  (`@import`, `@media`, `@supports`, `@container`, `@scope`, `@layer`,
+  `@page`, `@nest`; conditions, features, ranges and ratios; selectors with
+  their pseudo-class parsers, `An+B` and attribute selectors), kept to
+  what the rewrite reads: where each Url, String and Raw stands, and the
+  function, pseudo-class and at-rule it stands in. The quirks a literal
+  port keeps are kept (a feature named `constructor` reads as a general
+  enclosed; `eof` stays set after a fallback; a lone `#` is stepped past
+  before the missing name is reported).
+- `rewrite.rs`: `route` and `deep` of `src/rewriteCSS.ts` and what they
+  call: css-tree's string and url decoders and its url encoder,
+  `JSON.stringify`, `decodeURIComponent`, the two URL expressions of
+  `src/cssURLs.ts` with JavaScript's `\s`, `.` and backtracking order,
+  `originalOf`, `preserveValue`, and the edit list, spliced into the text
+  in the module (an edit that overlaps an earlier one is dropped, as
+  `Edits.replace` drops it).
+
+What stays on the thread is what a URL routes to, because the base URL,
+the codec and the config live there. The module asks through its routing
+import (`e.r`, as the JS rewriter's module does): a kind (a URL the
+expression found or a string of `image-set()` or `src()`, a `url()`, an
+`@import`'s `url()`, an `@import`'s string) and the URL text, and is
+answered the routed URL, or -1 to leave the piece as written (the text is
+no URL, or an `@import` that is routed already). An answer longer than the
+64 KiB scratch (a data: URL, which `preserveValue` carries twice) goes over
+in parts, a protocol between `src/wasm/scanner.ts` and `abi.rs` that needs
+nothing of `src/wasm/module.ts`.
+
+One call per URL, not a batch. Measured on a sheet of 5,000 rules with a
+URL each (0.53 MB), best of 15 runs: the rewrite takes 33.6 ms; the same
+with every call answered at once by a fixed string, 11.5 ms; with every
+call answered -1, 7.5 ms; with no `url(` in the text at all, 4.1 ms; and
+routing the 5,000 URLs in JavaScript alone (`new URL`, the codec), which a
+batch does all the same, 16.9 ms. So everything a call adds (the crossing,
+the text decoded, the answer encoded and copied) is under 7.4 ms, 1.5
+microseconds a URL, and a batch could save part of that at the price of a
+second pass in the module (collect, then splice). On the real corpus
+(1,690 URLs in 11.9 MB) the calls are under 2.5 ms of 77.
+
+The gate is identity: anything the module cannot answer with the JavaScript
+rewriter's bytes it declines (status 5), and JavaScript rewrites the text
+as before. It declines a text of more than 0xFFFFFF UTF-16 units
 (css-tree's 24-bit token offsets wrap), blocks nested more than 64 deep
-(the port recurses), and a parse that stops advancing. None of the corpus
-does, and 24 of 400,000 fuzzed sheets do.
+and brackets or functions nested more than 96 deep in one value (the port
+recurses), a token css-tree ends past the end of the text (an escape cut
+off at the end of a bad `url(`), a parse that stops advancing, and a URL
+whose text begins with U+FEFF (the thread reads what the module hands it
+through a decoder that drops one). The thread keeps to itself a text with
+a lone surrogate (it does not cross as UTF-8) and a rewrite inside a
+rewrite: a `data:` stylesheet imported by a stylesheet is rewritten by
+css-tree while the sheet around it is the module's, because an instance is
+not entered twice. A sheet that begins with U+FEFF is answered (the thread
+puts the mark back). css-tree's walker compares an at-rule's name as
+written, so `@IMPORT url(x)` routes as an image and `@IMPORT "x"` is left
+alone; the module does the same.
 
 It first declined a closing bracket with nothing open as well, because
 css-tree's own answer for one depended on the sheet it had parsed before:
@@ -893,21 +944,69 @@ parses and never writes there. That was a bug of the JavaScript path, not a
 limit of the port (the same sheet parsed differently from load to load,
 and the fuzz found a pair of sheets whose second never stopped parsing), so
 `src/rewriteCSS.ts` now clears the buffer after every parse
-(`css-parse-history` suite) and the scanner answers such a sheet as
+(`css-parse-history` suite) and the module answers such a sheet as
 css-tree does with a clean one.
 
-The corpus on disk is 99 sheets (11.9 MB: `csscorpus`, YouTube's, CNN's),
-not the 142 this plan named: all rewrite byte for byte the same with the
-scanner and without (48 are scanned, the other 51 hold nothing to route),
-in 364 ms against 953 ms. A wider sweep of 2,297 stylesheets from this
-machine's caches and packages (57.8 MB) is identical too, 3.3 s against
-78 s. The `scanner-parity` suite holds the hand-written cases, every
-stylesheet and document under `test/pages`, and a seeded fuzz that mutates
+Parity. The corpus on disk is 99 sheets (11.9 MB: `csscorpus`, YouTube's,
+CNN's), not the 142 this plan named; a wider sweep is 2,297 stylesheets
+from this machine's caches and packages (57.8 MB). All 2,396 rewrite byte
+for byte the same in the module and in JavaScript, none declined (1,104
+hold something to route and are the module's; the rest never leave the
+`MAY_ROUTE` test). The `scanner-parity` suite holds the hand-written cases
+(108 stylesheets and declaration lists and 20 values the module must answer
+itself, and the ones it must decline), every stylesheet and document under
+`test/pages`, the inject library's path, and a seeded fuzz that mutates
 them (`SCANNER_FUZZ` rounds, `SCANNER_CORPUS` for a corpus directory); it
-needs no browser. The service worker is the scanner's only caller: the
-`/css/` route (the request log says `rewriteBy: 'wasm'` or `'js'`), and a
-prewritten document's markup and inline styles. The inject's CSS paths stay
-on css-tree until phase 2 gives the library realm its modules.
+needs no browser. At `SCANNER_FUZZ=120000` it compares 160,000 mutated
+stylesheets and declaration lists and 120,000 mutated values with no
+difference; the module answers 176,273 of them and declines 2,451, nearly
+all for a lone surrogate the fuzz inserts (in a run of 70,000, 605 of 622
+declines), and the rest hold nothing to route.
+
+Speed, in node, best of 9 passes over the 99 sheets: css-tree 553 ms, the
+module's first form (it found, JavaScript rewrote) 145 ms, the module
+77 ms, 154 MB a second. About 12 ms of the 77 is the thread encoding the
+text to UTF-8 and 6 ms is routing; the module's own work is about 40 ms.
+The wider sweep takes 0.5 s against 54 s. An element's style of 57
+characters takes 5.7 microseconds against css-tree's 8.9. A single value is the one place the module loses:
+2.7 microseconds for the expression against 4.7 through the module (the
+text crosses and comes back), and 15 ms against 37 for the 99 sheets taken
+as values, so `rewriteCSSValueURLs` takes the module only when asked and no
+caller asks. Built for speed (`opt-level = 3` for the crate) the module is
+91 KB (27 KB brotli) and its own work about 15% faster; it is built for
+size like the others.
+
+Callers. The service worker's `/css/` route (the request log says
+`rewriteBy: 'wasm'` or `'js'`) and a prewritten document's markup and
+inline styles, under `rewriter: 'wasm'`. The inject's rewriter library
+(`src/rewriterLibDocument.ts`) asks for the module on every stylesheet and
+style attribute a frame rewrites and gets it when its copy of the thread
+state holds the module, which is phase 2's delivery to the page; until a
+page is handed the module, css-tree answers as before. A frame's single
+values (a CSSOM property set, a presentation attribute) stay on the
+expression in the frame.
+
+What still needs css-tree, which is 80 KB of the minified service worker
+and 81 KB of `injectDocument.js` (with `source-map-js`, which only it
+pulls in): nothing calls `modifyCSS` with a context other than the two the
+module rewrites, so what is left is the fallback. For css-tree to leave a
+bundle, each of these needs another answer than css-tree:
+
+- a thread that holds no module: `rewriter: 'js'` (the default), a module
+  that has not arrived yet (the service worker can wait for it, its route
+  is asynchronous; a frame's library cannot), a document outside the
+  controller's agent cluster, an instance that trapped;
+- a lone surrogate (0 of the 2,396 corpus sheets): the text would cross as
+  bytes the thread encodes itself (WTF-8), which `BufferInstance.call`
+  does not offer;
+- a URL that begins with U+FEFF, and the mark put back on a sheet: gone
+  with a decoder that keeps the mark (`ignoreBOM`) in `src/wasm/module.ts`;
+- a `data:` stylesheet inside a stylesheet: a second instance for a call
+  made during a call (`src/wasm/thread.ts`);
+- nesting past 64 or 96, more than 16.7 million units, a token past the
+  end, a parse that does not advance (none in the corpus, 3 of 70,000
+  fuzzed texts): the module's own expression pass (its flag 5) is the
+  answer a sheet css-tree throws on gets today.
 
 **Phase 4. The blocker.** The second artifact, the service worker's network
 path, the cosmetic and scriptlet paths, redirect resources, the option, the
@@ -968,8 +1067,9 @@ not worth it for the printer alone: it only runs on error paths.
   the pool and the service worker rewrite with the module, byte for byte
   alike, untouched text is kept, a function reads back as written, a
   declined script is the JavaScript rewriter's, and a `'js'` controller
-  uses none of it), `scanner-parity` (phase 3: `modifyCSS` and the prewrite
-  scan with the scanner module and without, byte for byte), `wasm-share`
+  uses none of it), `scanner-parity` (phase 3: `modifyCSS`,
+  `rewriteCSSValueURLs` and the prewrite scan with the scanner module and
+  without, byte for byte), `wasm-share`
   (every thread that rewrites holds the
   modules the controller loaded once, a top's library holds the module and
   a frame under it makes no library of its own), `wasm-artifact` (no name
