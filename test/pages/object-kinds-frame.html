@@ -1,0 +1,26 @@
+<!doctype html>
+<title>OBJECT KINDS FRAME</title>
+<body>
+	<object
+		data="object-kinds-doc.html?case=frame-parsed"
+		type="text/html"
+	></object>
+	<object
+		data="object-kinds-base.html?case=frame-base"
+		type="text/html"
+	></object>
+	<script>
+		const object = document.createElement('object');
+		object.type = 'text/html';
+		object.data = 'object-kinds-doc.html?case=frame-script';
+		document.body.append(object);
+		// as markup, by innerHTML and by document.write
+		const holder = document.createElement('div');
+		holder.innerHTML =
+			'<object data="object-kinds-doc.html?case=frame-markup" type="text/html"></object>';
+		document.body.append(holder);
+		document.write(
+			'<object data="object-kinds-doc.html?case=frame-written" type="text/html"></object>',
+		);
+	</script>
+</body>

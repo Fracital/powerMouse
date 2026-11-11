@@ -1,0 +1,24 @@
+<!doctype html>
+<title>OBJECT KINDS DOC</title>
+<img src="blank-pixel.svg?object-kinds" />
+<script>
+	// what the document shows: its image once it settled, and its base
+	const report = (window.__objectKind = {
+		case: new URLSearchParams(location.search).get('case'),
+		width: null,
+		// its site's storage
+		storage: (() => {
+			try {
+				localStorage.setItem('object-kinds', 'kept');
+				return localStorage.getItem('object-kinds');
+			} catch (error) {
+				return error.name;
+			}
+		})(),
+	});
+	const image = document.images[0];
+	const settle = () => (report.width = image.naturalWidth);
+	if (image.complete && image.naturalWidth) settle();
+	image.addEventListener('load', settle);
+	image.addEventListener('error', settle);
+</script>

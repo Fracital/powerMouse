@@ -782,6 +782,22 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- An `<object>`'s HTML document loads wherever the page's markup puts it,
+  and resolves its URLs by its own `<base href>`. An object in the markup
+  of a document a worker controls (the proxied top, a frame, a srcdoc
+  frame, markup a script writes by `innerHTML` or `document.write`) showed
+  nothing: its copy was made for the clone the markup is rewritten on, not
+  for the element the browser parses from it, which kept no URL at all.
+  Only an object a script made loaded. And a document the page made (an
+  object's, a blob: or data: one, an inline one) resolved every URL
+  against its own address, past its `<base href>`, where a document the
+  worker serves resolves by it; its `location.toString()` stays its own
+  URL either way. Its `localStorage` and the rest of STomp's synchronous
+  API threw `TypeError: Invalid URL` (the bridge resolved its routes
+  against the document's `blob:` address, which no worker controls); the
+  nearest document a worker controls answers them, as it does for an
+  about:blank document. (object-documents suite: nine places, natively
+  against both modes; markup-parity.)
 - STomp's own channels in a page (a document's transport, the
   controller's wasm modules, the permission verdicts, the emulated service
   workers' calls, a WebSocket's frames, a body's chunks) are made and

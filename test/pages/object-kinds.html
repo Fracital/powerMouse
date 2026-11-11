@@ -1,0 +1,12 @@
+<!doctype html>
+<title>OBJECT KINDS</title>
+<body>
+	<!-- an <object>'s HTML document, wherever the page puts one: each
+	document reports what it showed (object-kinds-doc.html) -->
+	<object data="object-kinds-doc.html?case=top" type="text/html"></object>
+	<object data="object-kinds-base.html?case=top-base" type="text/html"></object>
+	<iframe src="object-kinds-frame.html?case=frame"></iframe>
+	<iframe
+		srcdoc='<object data="object-kinds-doc.html?case=srcdoc" type="text/html"></object><object data="object-kinds-base.html?case=srcdoc-base" type="text/html"></object>'
+	></iframe>
+</body>

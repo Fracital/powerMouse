@@ -187,7 +187,9 @@ export default class LocationModule extends Module<DocumentClient> {
 			assign: navigation('assign'),
 			replace: navigation('replace'),
 			reload: () => Reflect.apply(real.reload, real, []),
-			toString: () => this.client.url.toString(),
+			// the location's own URL: the client's url is the base URLs resolve
+			// against, which a document's <base href> moves
+			toString: () => this.client.location.toString(),
 		};
 		for (const [name, own] of Object.entries(methods)) {
 			const descriptor = Reflect.getOwnPropertyDescriptor(real, name);

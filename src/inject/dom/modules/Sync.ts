@@ -258,6 +258,28 @@ export default class SyncModule extends Module<DocumentClient> {
 		// with one, a request over it is not sent and the answer is null
 		budget?: number,
 	): SyncResponse | null {
+		// STomp's own API (storage, cookies, timing) from a document no
+		// worker controls that runs a bundle of its own (an <object>'s or
+		// <embed>'s document, a blob: copy): its location resolves no route
+		// and nothing it sends reaches the worker, so the nearest document a
+		// worker controls asks for it, as one injected into an about:blank
+		// document does by running its creator's bundle. A page's own
+		// synchronous request is answered as before
+		if (loopback && !this.client.controlled) {
+			// the bridge as a getter of that client: a bundle of its own has
+			// module classes of its own (DocumentClient.syncBridge)
+			const routed = this.client.routedClient() as {
+				syncBridge?: SyncModule;
+			} | null;
+			const sync =
+				routed && routed !== (this.client as unknown)
+					? (routed.syncBridge ?? null)
+					: null;
+			if (sync && sync !== this)
+				return budget === undefined
+					? sync.fetch(url, init, loopback, limit)
+					: sync.fetch(url, init, loopback, limit, budget);
+		}
 		const processInit: SerializableRequestInit = {};
 
 		processInit.cache = init.cache;

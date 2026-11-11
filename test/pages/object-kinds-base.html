@@ -1,0 +1,20 @@
+<!doctype html>
+<title>OBJECT KINDS DOC</title>
+<!-- its own base: the image is /sop/r of this site, not /pages/r -->
+<base href="/sop/" />
+<img src="r?type=png&k=object-kinds-base" />
+<script>
+	// what the document shows: its image once it settled, and its base
+	const report = (window.__objectKind = {
+		case: new URLSearchParams(location.search).get('case'),
+		width: null,
+		base: document.baseURI.replace(/^https?:\/\/[^/]+/, ''),
+		// its location stays its own
+		location: String(location) === location.href && location.pathname,
+	});
+	const image = document.images[0];
+	const settle = () => (report.width = image.naturalWidth);
+	if (image.complete && image.naturalWidth) settle();
+	image.addEventListener('load', settle);
+	image.addEventListener('error', settle);
+</script>

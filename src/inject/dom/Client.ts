@@ -127,6 +127,10 @@ const namespaceGet = Reflect.getOwnPropertyDescriptor(
 	Element.prototype,
 	'namespaceURI',
 )!.get!;
+const documentURLGetter = Reflect.getOwnPropertyDescriptor(
+	Document.prototype,
+	'URL',
+)?.get;
 
 /**
  * The page's markup (and the worker's prewritten table) from the shell's
@@ -1207,13 +1211,27 @@ export default class DocumentClient extends Client {
 	}
 	#readURL(named: unknown): StompURL {
 		// a document the page made (a blob, a data: frame, an inline document
-		// the worker served): its shell named the URL it shows
-		if (typeof named === 'string')
-			return new StompURL(
-				named,
-				this.codec,
-				`${this.baseURI.origin}${this.directory}`,
-			);
+		// the worker served, an <object>'s document): its shell named the URL
+		// it shows, which is what its URLs resolve against, unless its own
+		// <base href> names another. That base is a routed URL in the real
+		// document (its hook writes it so), and the browser's base URL is it,
+		// as a routed document's is; without one the base is the document's
+		// own URL
+		if (typeof named === 'string') {
+			const base = this.baseURI;
+			const prefix = `${base.origin}${this.directory}`;
+			if (
+				ROUTE_PROTOCOLS.includes(base.protocol) &&
+				base.href.startsWith(prefix) &&
+				base.href !== this.#documentURL()
+			)
+				try {
+					return parseRoutedURL(base.href, this.codec, prefix).url;
+				} catch (error) {
+					// not one of this controller's routes: the named URL stands
+				}
+			return new StompURL(named, this.codec, prefix);
+		}
 		if (ROUTE_PROTOCOLS.includes(this.baseURI.protocol)) {
 			return parseRoutedURL(
 				this.baseURI.href,
@@ -1228,6 +1246,18 @@ export default class DocumentClient extends Client {
 				this.codec,
 				`${this.baseURI.origin}${this.directory}`,
 			);
+		}
+	}
+	/** the document's own URL as the browser has it (Document.prototype.URL) */
+	#documentURL(): string {
+		try {
+			return Reflect.apply(
+				documentURLGetter!,
+				this.global.document,
+				[],
+			) as string;
+		} catch (error) {
+			return '';
 		}
 	}
 	get baseURI(): URL {
@@ -1598,9 +1628,11 @@ export default class DocumentClient extends Client {
 			// script of the page
 			this.runHook('post');
 			this.write.call(this.global.document, newDocument);
-			if (uncontrolled) {
+			{
 				// what the write parsed now; what comes after a script it waits
-				// for, once the parser is through (a copy is not made twice)
+				// for, once the parser is through (a copy is not made twice):
+				// every load in a document no worker controls, an object's and
+				// an embed's in any (DOMAttributes writtenLoads)
 				const document = this.global.document;
 				this.writtenLoads?.(document);
 				document.addEventListener(

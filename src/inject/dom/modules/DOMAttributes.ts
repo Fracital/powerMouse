@@ -2360,13 +2360,23 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const written = LOADS.map((name) => name.replace(':', '\\:'))
 			.map((name) => `[s_o\\:${name}]:not([${name}]):not(script)`)
 			.join(',');
+		// a document a worker controls loads its elements itself, but for an
+		// <object>'s data and an <embed>'s src: Chrome sends no such load
+		// through a worker, so those are copies in every document (proxiedLoad)
+		const OBJECT_LOADS: [string, string][] = [
+			['object', 'data'],
+			['embed', 'src'],
+		];
+		const writtenObjects = OBJECT_LOADS.map(
+			([tag, name]) => `${tag}[s_o\\:${name}]:not([${name}])`,
+		).join(',');
 		this.client.writtenLoads = (document) => {
-			if (!uncontrolled()) return;
+			const all = uncontrolled();
 			let elements: Element[];
 			try {
 				elements = [
 					...(Reflect.apply(nativeQueryAll, document, [
-						written,
+						all ? written : writtenObjects,
 					]) as NodeListOf<Element>),
 				];
 			} catch (error) {
@@ -2374,7 +2384,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			}
 			for (const element of elements)
 				usePrototype(element, CustomElement.prototype, (element) => {
-					for (const name of LOADS) {
+					const names = all
+						? LOADS
+						: OBJECT_LOADS.filter(([tag]) => tag === element.localName).map(
+								([, name]) => name,
+							);
+					for (const name of names) {
 						const page = element.getAttributeOG(name);
 						if (page === null || element.hasAttribute(name)) continue;
 						element.setAttribute(name, page);
@@ -2515,6 +2530,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				return;
 			const written = element.getAttribute(attribute)!;
 			element.setAttributeOG(attribute, written);
+			// the clone a document's markup is rewritten on (an inert
+			// document's, see Client.load and WriteStream): the parser makes the
+			// real element from the markup serialized from it, which gets its
+			// copy after the write (writtenLoads). A copy settled here would
+			// land on the clone, and the real one would load nothing
+			if (element.ownerDocument !== this.client.global.document) {
+				loads.delete(element);
+				element.removeAttribute(attribute);
+				return;
+			}
 			const resource = new StompURL(
 				new URL(written, this.client.url.toString()),
 				this.client.url,
