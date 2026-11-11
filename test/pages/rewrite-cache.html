@@ -3,12 +3,13 @@
 <!-- a parser-inserted script the preload scanner fetches too -->
 <script src="/rewrite-js?name=parsed"></script>
 <script>
-	// ?s=<query for /rewrite-js>&module: one more script, inserted by the page
+	// ?s=<query for /rewrite-js>&module&from=<origin>: one more script,
+	// inserted by the page, from this origin or the one named
 	const query = new URLSearchParams(location.search);
 	if (query.get('s')) {
 		const script = document.createElement('script');
 		if (query.has('module')) script.type = 'module';
-		script.src = `/rewrite-js?${query.get('s')}`;
+		script.src = `${query.get('from') ?? ''}/rewrite-js?${query.get('s')}`;
 		document.head.append(script);
 	}
 </script>

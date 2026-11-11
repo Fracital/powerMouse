@@ -5,8 +5,8 @@
 // open gets an id of its own, tabs that open together too (and none is lost
 // from the kept list), a tab opened after both closed gets the first one
 // again, a reloaded tab keeps its own, a duplicated tab does not take its
-// original's, and a returning visit asks for a script under the URL it
-// had. The ids are kept in
+// original's, and a returning visit asks for a script under the URL it had
+// and is answered with the rewrite cache's own entry. The ids are kept in
 // the host origin's localStorage, in isolated mode too, under a key that
 // names neither the project nor a proxy and is in the build verbatim.
 // `cookies.clear()` for every site forgets them, for every open tab from its
@@ -202,7 +202,8 @@ ok(
 );
 
 // a returning visit: the script a proxied page loads has the routed URL it
-// had
+// had, and is answered with the rewrite cache's own entry for it (what
+// Chrome keeps the compiled code with; DevTools' cacheStorageCacheName)
 {
 	const visit = async (page) => {
 		const scripts = [];
@@ -239,6 +240,13 @@ ok(
 				[...new Set(before.map((script) => script.url))].sort(),
 				[...new Set(after.map((script) => script.url))].sort(),
 			),
+		JSON.stringify({ before, after }),
+	);
+	ok(
+		"and is answered with the rewrite cache's own entry for each",
+		after.length > 0 &&
+			after.every((script) => script.store === 'stomp-rewrite-cache') &&
+			before.some((script) => script.store === ''),
 		JSON.stringify({ before, after }),
 	);
 	await close(again);

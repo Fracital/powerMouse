@@ -179,6 +179,21 @@ on every save (use a `git worktree`).
   keep the key free of the project's name (a host that rewrites such names
   per build would lose its ids on every deploy), and never make an id a
   function of anything a proxied page can read.
+- **Chrome keeps a script's compiled code only for the Cache API's own
+  Response under the request's URL.** A response the worker makes (even
+  from a kept entry's body), or an entry kept under another URL, gets no
+  V8 code cache: every visit compiles again. So the rewrite cache
+  (`src/server/rewriteCache.ts`) keeps a loaded script under its routed
+  URL and the forward returns the matched Response itself; wrapping it in a
+  `new Response` anywhere on the way out loses the code cache silently
+  (rewrite-cache checks DevTools' `cacheStorageCacheName`). The entry is
+  one partition's (the key includes top-level site, frame site and
+  credentials) and has only the headers a browser acts on: do not widen
+  either. Chrome writes the code cache into the entry after the script
+  ran, and the write is lost if the browser exits while the worker still
+  holds the Response (until it is collected or the worker stops): a probe
+  that restarts Chrome right after a load must stop the worker first
+  (`ServiceWorker.stopAllWorkers`) or it measures nothing consumed.
 - **Same-origin `StompController` is for development only.** It is not a
   security boundary: a proxied page is same-origin with the host. Real
   deployments use `RemoteController` with a separate proxy origin

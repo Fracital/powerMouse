@@ -133,6 +133,8 @@ const PAGES = {
 const hits = new Map();
 // the body version of each /rewrite-js script, by name
 const scriptVersions = new Map();
+// how many /rewrite-js responses said which they were (`st`)
+let scriptResponses = 0;
 // every path served, in order (/requests returns it; the assets suite checks
 // that no served URL carries the package name)
 const served = [];
@@ -230,6 +232,9 @@ export function startFixture(port = 8084) {
 			const version = scriptVersions.get(query.get('name')) ?? 0;
 			res.setHeader('content-type', 'text/javascript');
 			if (query.get('cc')) res.setHeader('cache-control', query.get('cc'));
+			// `st`: a Server-Timing metric that says which response this is
+			if (query.has('st'))
+				res.setHeader('server-timing', `nth;desc="${++scriptResponses}"`);
 			// `three=<n>`: n copies of three.js first, a script that takes a
 			// while to rewrite (rewrite-pool suite) or whose output is large
 			// (rewrite-cache suite)

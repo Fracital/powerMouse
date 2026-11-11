@@ -523,6 +523,52 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   top-level site and frame site, as Chrome's network isolation key: a
   resource another site's page loaded was answered from the cache.
   (sop-partitions suite.)
+- The browser keeps the compiled code of the scripts a proxied page loads,
+  as it does natively (V8's code cache). Chrome keeps it for a script a
+  service worker answers only when the response is a Cache API entry kept
+  under the very URL the page asked for; a rewritten script was a response
+  the worker made, so every visit parsed and compiled every script again
+  (Google's bundles: about 50 ms of main-thread compile on a native
+  returning visit, about 580 ms proxied). The rewrite cache now keeps a
+  script the page loads under its routed URL, as the response it was given,
+  and answers the next load with the store's own response when the origin
+  (or the HTTP cache) sent the same bytes and the same headers again; the
+  same document asking twice (its preload scanner, then its parser) gets
+  the entry both times. With a controller id that stays (the kept one,
+  above) the URL repeats across visits: the second visit is answered from
+  the store and Chrome makes the code cache, the third consumes it.
+  Measured on a 4.9 MB script (eight copies of three.js, 10.8 MB
+  rewritten) in a persistent profile, the browser restarted for each
+  visit, 3 runs alternated with a control that mints a new id per visit,
+  medians: from the store without compiled code the script is ready in
+  548 ms (77 ms parsing off the main thread, 188 ms evaluating, which
+  compiles its functions as they run); with the code cache consumed
+  (2.2 MB, `consumedCacheSize` in the trace's `v8.compile`) in 319 ms
+  (5 ms deserializing, 18 ms evaluating); with a new id per visit, as the
+  demo had it, 1433 ms (the rewrite again, and no code cache ever).
+  Isolated mode alike (460 ms with the code cache, 704 ms without, 1600 ms
+  with a new id). Google's home page, 2 alternated runs of 5 visits: with a
+  kept id every script of 1 KB or more consumes its code cache from the
+  fourth visit (9 to 11 scripts, 4.3 MB), off-thread parsing goes from 110
+  ms to none (15 ms deserializing) and script evaluation from 327 ms to
+  166 ms; with a new id per visit nothing is ever consumed. Chrome writes
+  the code cache into the entry after the script ran and keeps it once the
+  worker lets go of the response (when it is collected, or the worker
+  stops): a browser that exits within seconds of a load loses what that
+  load produced, and the next visit produces it again. What is kept is one partition's: an output's key
+  now includes the request's top-level site, the site of the frame or
+  worker that asks and whether it has credentials (the HTTP cache's
+  partition), for inline scripts too, so a page of another site that loads
+  the same script rewrites and compiles it for itself and takes the URL's
+  entry (the first site's output moves under its key, and comes back
+  without a rewrite); before, an output was shared by every site a
+  controller's pages loaded. A client without a site of its own (a
+  sandboxed frame) keeps nothing now, as in the HTTP cache. The kept
+  response has only the headers a browser acts on for a script: the
+  origin's `Server-Timing`, `Date`, `ETag` and request ids are not given
+  to a later load. The cache holds 3000 entries (300 before, which
+  Discord's 450 to 700 scripts pushed out of each other on every visit).
+  (rewrite-cache suite; docs/same-origin-policy.md.)
 - `navigator.storage.estimate()` counts an IndexedDB database as Chrome
   counts it on disk (measured: per database, store and record, and a value
   over 64 KiB at its snappy-compressed size), within 2% for the shapes the

@@ -343,6 +343,29 @@ Filled in commit by commit; see the CHANGELOG for each.
   a redirect chain, whose origin may be "null" by then. A refused request
   is never kept. (sop-escapes: a script of another site plain then
   `crossorigin` without CORS, and the other way.)
+- **The rewrite cache, and the compiled code Chrome keeps with it**
+  (rewrite-cache suite). The worker keeps a script's rewritten output
+  (`src/server/rewriteCache.ts`), and answers a script a page loads again
+  with the store's own response under its routed URL, which Chrome keeps
+  V8's code cache with. Natively that cache is kept per network isolation
+  key, since a site that is handed another's compiled code can time which
+  of the script's functions the other ran. An output's key includes the
+  request's partition: the HTTP cache's (top-level site, site of the frame
+  or worker that asks) and whether the request has credentials. A page of
+  another site that loads the same script (the same routed URL) is a miss:
+  it rewrites the script for itself and its output takes the URL's entry,
+  whose compiled code goes with the entry it replaces (the first site's
+  output moves under its key and comes back, with no code, without a
+  rewrite). A client without a site of its own keeps nothing, as in the
+  HTTP cache. Before, the output was every site's that a controller's
+  pages loaded: the time a rewrite did not take said that some site had
+  loaded that script. The kept response has only the headers a browser
+  acts on when it loads a script and the worker's own marks; the origin's
+  `Server-Timing`, `Date`, `ETag` and request ids are one request's and no
+  later load is given them (a page reads `Server-Timing` from its resource
+  timing). It is given only when the response the worker just got from the
+  origin (or the HTTP cache) has the same bytes and the same headers of
+  that kind, so it never says anything a new response would not.
 
 ## Left
 

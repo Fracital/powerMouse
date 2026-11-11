@@ -406,6 +406,14 @@ type BodyTransform = (
 		navigation: boolean;
 		/** the document's parent upgrades insecure requests (a nested document inherits it) */
 		upgradeInsecure: boolean;
+		/**
+		 * what the rewrite cache keeps this request's output for: its network
+		 * partition (as the HTTP cache's: the top-level site and the site of
+		 * the frame or worker that asks) and whether it has credentials. Null
+		 * when nothing may be kept for it: a client without a site of its own
+		 * (as the HTTP cache)
+		 */
+		partition: string | null;
 	},
 	/** what the transform tells the request log */
 	note: Note,
@@ -417,6 +425,18 @@ interface Note {
 	serviceWorker?: ControlInfo;
 	rewriteCache?: RewriteCacheOutcome;
 	rewriteIn?: 'pool' | 'pool split' | 'service-worker';
+	/**
+	 * a script the rewrite cache keeps as the response it was given
+	 * (RewriteCache.matchServed): its routed URL, the key of its output, the
+	 * partition it is kept for, and the kept response when there was one
+	 * for that key
+	 */
+	served?: {
+		url: string;
+		key: string;
+		partition: string;
+		stored: Response | null;
+	};
 }
 
 interface Rewriter {
@@ -554,7 +574,16 @@ function genericForward(
 			)
 				? takeRecentOutput(recentKey)
 				: null;
-		if (recent) {
+		// what it was given was the rewrite cache's entry for its URL: that
+		// entry again (the response Chrome keeps the compiled code with), if
+		// it is still there
+		const recentServed = recent?.served
+			? ((await rewriter.rewrites?.matchServed(
+					recent.served.url,
+					recent.served.key,
+				)) ?? null)
+			: null;
+		if (recent && (!recent.served || recentServed)) {
 			rewriter.log?.({
 				url: reportURL(url),
 				method: serverRequest.method,
@@ -564,7 +593,9 @@ function genericForward(
 				cached: true,
 				bytes: recent.bytes,
 				client: context?.clientId,
+				...(recentServed ? { rewriteCache: 'hit' as const } : {}),
 			});
+			if (recentServed) return recentServed;
 			return new Response(recent.body, {
 				status: recent.status,
 				statusText: recent.statusText,
@@ -1855,6 +1886,8 @@ function genericForward(
 		}
 
 		let body: BodyInit | undefined;
+		/** the transform's output when it is text: a rewrite made just now */
+		let rewritten: string | null = null;
 
 		if (statusEmpty.includes(+response.status)) {
 			body = undefined;
@@ -1877,6 +1910,14 @@ function genericForward(
 								clientId: context?.clientId,
 								navigation,
 								upgradeInsecure,
+								partition:
+									frameSite === null
+										? null
+										: JSON.stringify([
+												topSite ?? frameSite,
+												frameSite,
+												credentials,
+											]),
 							},
 							note,
 						)
@@ -1885,9 +1926,33 @@ function genericForward(
 				sendReport();
 				throw error;
 			}
+			// a script the rewrite cache kept as the response it was given, which
+			// says what this one would: it goes out as it is (V8's code cache
+			// comes with it). A hop of a redirect chain takes its body instead
+			const stored = note.served?.stored;
+			if (stored) {
+				if (!previousHop) {
+					// the same document asking again (its parser, after its
+					// preload scanner) is given the entry again
+					if (recentKey !== null)
+						rememberOutput(recentKey, {
+							body: new Blob(),
+							status: stored.status,
+							statusText: stored.statusText,
+							headers: [],
+							bytes: Number(stored.headers.get('content-length')) || null,
+							served: { url: note.served!.url, key: note.served!.key },
+						});
+					sendReport();
+					return stored;
+				}
+				output = await stored.blob();
+				note.served!.stored = null;
+			}
 			// text goes out as its UTF-8 bytes, encoded once, natively: the
 			// length is theirs (counting it in JS took 0.2 s for YouTube's 20 MB
 			// bundle) and the Response has nothing left to encode
+			if (typeof output === 'string') rewritten = output;
 			const encoded = typeof output === 'string' ? UTF8.encode(output) : null;
 			const transformed = encoded ?? output;
 
@@ -1940,6 +2005,35 @@ function genericForward(
 			responseHeaders.set('cache-control', 'no-cache');
 			for (const name of ['expires', 'age', 'etag', 'last-modified'])
 				responseHeaders.delete(name);
+		}
+
+		// a script the rewrite cache keeps as the response it was given: this
+		// one, for the next load of its URL (see the transform's hit above).
+		// One that is not what a load of its URL gets (a hop of a redirect
+		// chain, a HEAD, another status) keeps its rewrite under its key
+		const served = note.served;
+		if (served && body !== undefined) {
+			const size =
+				serverRequest.method === 'GET' &&
+				response.status === 200 &&
+				!previousHop
+					? bodyLength(body)
+					: null;
+			if (size !== null)
+				void rewriter.rewrites?.putServed(
+					served.url,
+					served.key,
+					served.partition,
+					body,
+					size,
+					{
+						status: response.status,
+						statusText: response.statusText,
+						headers: servedHeaders(responseHeaders),
+					},
+				);
+			else if (rewritten !== null)
+				void rewriter.rewrites?.put(served.key, rewritten);
 		}
 
 		sendReport();
@@ -2059,6 +2153,8 @@ interface RecentOutput {
 	statusText: string;
 	headers: [string, string][];
 	bytes: number | null;
+	/** the output is the rewrite cache's entry for this URL and key (RewriteCache.matchServed), given as it is: no body is kept here */
+	served?: { url: string; key: string };
 }
 const RECENT_MS = 30 * 1000;
 const outputSize = (body: Uint8Array<ArrayBuffer> | Blob) =>
@@ -2128,6 +2224,87 @@ function rememberOutput(key: string, output: RecentOutput) {
 function forgetRecentOutputs() {
 	recentOutputs.clear();
 	recentBytes = 0;
+}
+
+/**
+ * Headers no browser acts on when it loads a script, which change from one
+ * response to the next for the same bytes (a date, a CDN's request id): a
+ * kept script response (RewriteCache.matchServed) does not carry them, so
+ * nothing of the request it was made from reaches a later one, and one
+ * that differs from a new response only in these is the same to the page
+ */
+const UNACTED_HEADERS = new Set([
+	'age',
+	'akamai-grn',
+	'alt-svc',
+	'connection',
+	'date',
+	'etag',
+	'expires',
+	'keep-alive',
+	'last-modified',
+	'nel',
+	'report-to',
+	'reporting-endpoints',
+	'request-id',
+	'server',
+	'traceparent',
+	'tracestate',
+	'via',
+]);
+/** the x- headers a browser (or the inject: the worker's own) does act on */
+const ACTED_X_HEADERS = new Set([
+	RESPONSE_TYPE_HEADER,
+	'x-content-type-options',
+	'x-frame-options',
+	'x-sourcemap',
+	'x-xss-protection',
+]);
+const actedOn = (name: string) =>
+	!UNACTED_HEADERS.has(name) &&
+	!name.startsWith('cf-') &&
+	(!name.startsWith('x-') || ACTED_X_HEADERS.has(name));
+/** the worker's own Server-Timing marks, which the inject reads */
+const OWN_MARKS = [TAO_MARKER, OPAQUE_MARKER];
+
+/**
+ * The headers a kept script response has, of the ones the page is given
+ * (`headers`): the ones a browser acts on. Of Server-Timing, which a page
+ * reads from its resource timing, only the worker's own marks: the origin's
+ * metrics are one request's, and a later load is not given them as its own.
+ */
+function servedHeaders(headers: Headers): Headers {
+	const out = new Headers();
+	for (const [name, value] of headers)
+		if (name !== 'server-timing' && actedOn(name)) out.append(name, value);
+	const marks = (headers.get('server-timing') ?? '')
+		.split(',')
+		.map((metric) => metric.trim())
+		.filter((metric) => OWN_MARKS.includes(metric));
+	if (marks.length) out.set('server-timing', marks.join(', '));
+	return out;
+}
+
+/** what the forward sets itself on a rewritten body, whatever the origin said */
+const FORWARD_HEADERS = new Set([
+	'age',
+	'cache-control',
+	'content-length',
+	'expires',
+]);
+
+/**
+ * whether a kept script response says what a new one would, whose headers
+ * before the transform are `fresh`
+ */
+function sameServedHeaders(kept: Headers, fresh: Headers): boolean {
+	const list = (headers: Headers) =>
+		JSON.stringify(
+			[...servedHeaders(headers)].filter(
+				([name]) => !FORWARD_HEADERS.has(name),
+			),
+		);
+	return list(kept) === list(fresh);
 }
 
 /** the bytes `body` goes out as, or null when that is not known before it is read */
@@ -2294,7 +2471,8 @@ export function registerRewrites(
 	};
 	// a document's inline scripts and styles, rewritten here (src/prewrite.ts):
 	// the scripts by the rewrite workers, side by side, and kept in the
-	// rewrite cache when the document may be kept; null when no worker is
+	// rewrite cache for `partition` (null: the document may not be kept, or
+	// its request has no partition); null when no worker is
 	// live (the worker's own thread is not spent on them: the page rewrites
 	// them as before). `dispatched`: every script is with a worker (or came
 	// from the cache), so this thread may do other work while they rewrite;
@@ -2302,7 +2480,7 @@ export function registerRewrites(
 	const prewrite = (
 		markup: string,
 		url: StompURL,
-		keep: boolean,
+		partition: string | null,
 	): {
 		dispatched: Promise<void>;
 		finish: () => Promise<Prewritten>;
@@ -2312,7 +2490,7 @@ export function registerRewrites(
 		const { scripts, styles } = inlineSources(markup);
 		if (!scripts.length && !styles.length) return null;
 		const config = rewriter.config;
-		const rewrites = keep ? rewriter.rewrites : undefined;
+		const rewrites = partition !== null ? rewriter.rewrites : undefined;
 		const encoder = new TextEncoder();
 		const dispatches: Promise<void>[] = [];
 		const access = helperNames(config).access;
@@ -2340,6 +2518,7 @@ export function registerRewrites(
 									'inline',
 									cacheConfig(config, type, (name) => source.includes(name)),
 									url.codec.key,
+									partition!,
 								],
 								encoder.encode(source),
 							)
@@ -2392,11 +2571,13 @@ export function registerRewrites(
 	const scriptTypeFactory = (type: ScriptType) =>
 		genericForward(
 			rewriter,
-			async (url, response, _headers, _referrer, request, note) => {
+			async (url, response, headers, _referrer, request, note) => {
 				if (!response.ok) return false;
 				const rewrites = rewriter.rewrites;
+				const partition = request.partition;
 				if (
 					!rewrites ||
+					partition === null ||
 					!mayKeep({
 						method: request.method,
 						requestHeaders: request.headers,
@@ -2408,9 +2589,10 @@ export function registerRewrites(
 					return rewriteScript(await response.text(), url, type, note);
 				}
 				// The key is a digest of the bytes as they came, and a script kept
-				// rewritten goes out as the store's Blob: a hit decodes nothing and
-				// makes no string of the output (YouTube's bundle is 10 MB in and
-				// 20 MB out, read, decoded and encoded again on every load).
+				// rewritten goes out as the store's own Response: a hit decodes
+				// nothing and makes no string of the output (YouTube's bundle is
+				// 10 MB in and 20 MB out, read, decoded and encoded again on
+				// every load).
 				const bytes = new Uint8Array(await response.arrayBuffer());
 				const key = await rewrites.key(
 					[
@@ -2421,9 +2603,32 @@ export function registerRewrites(
 							includesASCII(bytes, name),
 						),
 						url.codec.key,
+						partition,
 					],
 					bytes,
 				);
+				// kept as the response for this very URL: given as it is (the
+				// forward), so its compiled code comes along; or kept under its
+				// key (another partition's load of this URL took its place); else
+				// rewritten. Whatever the page gets is kept under its URL behind
+				// it (the forward)
+				const served = await rewrites.matchServed(request.routed, key);
+				note.served = { url: request.routed, key, partition, stored: null };
+				if (served !== null) {
+					note.rewriteCache = 'hit';
+					if (
+						request.method === 'GET' &&
+						response.status === 200 &&
+						served.status === 200 &&
+						sameServedHeaders(served.headers, headers)
+					) {
+						// the forward gives it as it is; its body is not read here
+						note.served.stored = served;
+						return new Blob();
+					}
+					// its headers say something else now: its body, as a new response
+					return await served.blob();
+				}
 				const kept = await rewrites.match(key);
 				if (kept !== null) {
 					note.rewriteCache = 'hit';
@@ -2432,8 +2637,6 @@ export function registerRewrites(
 				// as Response.text() decodes (a BOM goes, bad bytes are U+FFFD)
 				const text = new TextDecoder().decode(bytes);
 				const output = await rewriteScript(text, url, type, note);
-				// stored behind the page: a match for the same key waits for it
-				void rewrites.put(key, output);
 				note.rewriteCache = 'miss';
 				return output;
 			},
@@ -2612,7 +2815,9 @@ export function registerRewrites(
 						requestHeaders: request.headers,
 						status: response.status,
 						responseHeaders: response.headers,
-					}),
+					})
+						? request.partition
+						: null,
 				);
 				if (!job)
 					return modifyHTML(
