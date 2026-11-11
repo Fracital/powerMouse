@@ -4978,6 +4978,9 @@ token '%'`. The body is decoded before rewriting and re-encoded after.
   pointed where the markup said on the proxy's origin: the browser now
   sanitizes into a copy of the element in the inert document and what it
   keeps goes in through the hooks. (adversarial-scripts suite.)
+- The handler attributes of every element interface are rewritten: an
+  interface's own handlers (an SVG animation's `onbegin`, `onend` and
+  `onrepeat`) ran as the page wrote them. (adversarial-scripts suite.)
 
 ### Origin isolation
 

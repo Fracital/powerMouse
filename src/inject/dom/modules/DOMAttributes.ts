@@ -36,6 +36,7 @@ import {
 import { modifyCSS, modifyJS } from '../../rewriter';
 import { blobLoads, opaqueCopies } from '../blobLoads';
 import DocumentClient, { type StyleElement } from '../Client';
+import { inertDocumentOf } from '../cloneNode';
 import { loadFetch, loadSource } from '../loadGrants';
 import { responseURLOf } from '../responseDocuments';
 import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
@@ -992,8 +993,49 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		])
 			for (const name of Object.getOwnPropertyNames(owner))
 				if (/^on[a-z]+$/.test(name)) handlerNames.add(name);
+		// An interface may carry handlers of its own (an SVG animation's
+		// onbegin, onend and onrepeat, a video's picture-in-picture ones, the
+		// permission elements'), and a name the hooks did not know ran its
+		// attribute as the page wrote it. So the hook watches every `on*`
+		// name, and one outside the set above is a handler where an element of
+		// that name has its property: asked of a fresh element in the inert
+		// document (the hooks run with the element's own prototype set aside),
+		// once per element name, so no interface is made in a frame for a name
+		// its page never writes. A custom element's own property makes no
+		// handler of its attribute.
+		const createElementNS = g.Document.prototype.createElementNS;
+		const ownHandlers = new Map<string, boolean>();
+		const isHandler = (element: Element, name: string): boolean => {
+			if (handlerNames.has(name)) return true;
+			const namespace = element.namespaceURI;
+			const localName = element.localName;
+			if (localName.includes('-')) return false;
+			const key = `${namespace} ${localName} ${name}`;
+			let known = ownHandlers.get(key);
+			if (known === undefined) {
+				try {
+					known =
+						name in
+						(Reflect.apply(createElementNS, inertDocumentOf(g.document), [
+							namespace,
+							localName,
+						]) as Element);
+				} catch (error) {
+					// no element of that name: no handler either
+					known = false;
+				}
+				ownHandlers.set(key, known);
+			}
+			return known;
+		};
+		class HandlerNames extends Set<string> {
+			override has(name: string) {
+				return /^on[a-z]+$/.test(name);
+			}
+		}
 		domHooksModule.useAttributes(
 			(element, name) => {
+				if (!isHandler(element, name)) return;
 				element.restoreAttributesOG(name);
 				if (element.hasAttribute(name)) {
 					const source = element.getAttribute(name)!;
@@ -1014,7 +1056,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					);
 				}
 			},
-			[['*', handlerNames]],
+			[['*', new HandlerNames()]],
 		);
 
 		// SVG references (sprites, images, filters) by href or legacy

@@ -551,6 +551,14 @@
 		document.body.append(document.importNode(parsed.documentElement, true));
 	});
 	// handlers in SVG markup
+	route('svg innerHTML animate onbegin', (p) =>
+		svgIn((svg) => {
+			svg.innerHTML =
+				'<rect width="1" height="1"><animate attributeName="x" dur="1s" onbegin=\'' +
+				p +
+				"'/></rect>";
+		}),
+	);
 	route('div innerHTML svg onload', (p) => {
 		const d = document.createElement('div');
 		document.body.append(d);
