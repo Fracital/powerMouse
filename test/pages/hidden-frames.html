@@ -5,8 +5,9 @@
 <script>
 	// frames in a display:none box and a shown one, of this origin and
 	// another (the fixture's other host name), each reporting its animation
-	// frames to the top (hidden-frames-child.html); go() starts their probes,
-	// reveal() shows the box
+	// frames to the top (hidden-frames-child.html); settle() has Chrome
+	// decide which of them it holds, go() starts their probes, cancel()
+	// cancels the callback each keeps for that, reveal() shows the box
 	const child = '/pages/hidden-frames-child.html';
 	const other = location.origin.replace('127.0.0.1', 'localhost');
 	window.reports = {};
@@ -26,11 +27,24 @@
 		'hidden',
 		`${child}?inner=${encodeURIComponent(`${other}${child}#cross-in-hidden`)}#same-outer`,
 	);
-	// starts every frame's probe (each passes it on to its own frames)
-	window.go = () => {
-		for (let i = 0; i < frames.length; i++)
-			frames[i].postMessage('hidden-frames-go', '*');
+	// to every frame (each passes it on to its own frames)
+	const tell = (message) => {
+		for (let i = 0; i < frames.length; i++) frames[i].postMessage(message, '*');
 	};
+	window.go = () => tell('hidden-frames-go');
+	window.cancel = () => tell('hidden-frames-cancel');
+	// Chrome hands its hold down to a frame of another origin inside a
+	// hidden frame of this one when this document is next laid out and
+	// rendered, which a page that stays as it is never is (measured in
+	// Chrome 152: such a frame ran on about every second load, until the
+	// first change of the top's layout). Lay it out again; resolves once
+	// that was rendered
+	window.settle = () =>
+		new Promise((resolve) => {
+			const style = document.body.style;
+			style.paddingTop = style.paddingTop ? '' : '1px';
+			requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+		});
 	window.reveal = () => {
 		document.getElementById('hidden').style.display = '';
 	};
