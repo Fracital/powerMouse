@@ -1887,6 +1887,7 @@ input:focus-visible {
 .bookmarksTab img {
 	display: block;
 	pointer-events: none;
+	user-select: none;
 }
 
 /* the sidebar slides in from the left over the home page, above the
