@@ -908,9 +908,12 @@ async function wired() {
 			!w.said.some((line) => line.includes('relays no UDP')),
 		JSON.stringify(w.said.map((line) => line.slice(0, 160))),
 	);
-	// an epoxy build with deploy/epoxy's patch 0058 hands the reason through
-	console.log(
-		`NOTE the close reason ${/close reason 0x03/.test(refusal ?? '') ? 'reached the transport (0x03)' : 'is not reported by this epoxy build'}`,
+	// the pinned epoxy build (deploy/epoxy's patch 0058) hands the reason
+	// through
+	ok(
+		"the gate's close reason reaches the transport (0x03)",
+		/close reason 0x03/.test(refusal ?? ''),
+		String(refusal).slice(0, 160),
 	);
 	await w.close();
 }
@@ -958,6 +961,13 @@ async function wired() {
 			streams: gate.seen.map((s) => s.host.split('.')[0]),
 			ms: out.map((r) => r.ms),
 		}),
+	);
+	const refusals = w.said.filter((line) => line.includes('refused UDP to'));
+	ok(
+		'each of those refusals reached the transport with its close reason (0x48)',
+		refusals.length === N &&
+			refusals.every((line) => line.includes('close reason 0x48')),
+		JSON.stringify(refusals.map((line) => line.slice(0, 120))),
 	);
 
 	const before = gate.connections;

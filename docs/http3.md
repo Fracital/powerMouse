@@ -260,7 +260,10 @@ server).
 Epoxy ends the stream's read side the same way whatever the reason was. A
 build with `deploy/epoxy` patch `0058` adds `closeReason()` to the stream
 `connect_udp` returns, and `Http3Transport` reads it when the stream ends;
-a build without it reports no reason and every refusal counts.
+a build without it reports no reason and every refusal counts. The build
+pinned in `package.json` has the patch (EpoxyTransport dist 07d0aa4), and
+http3-fallback checks that `0x03` and `0x48` reach the transport through
+it.
 
 Eight hosts, because a refusal is nearly free (two small wisp packets, in
 the background, and no request waits on it) and a wrong verdict costs every

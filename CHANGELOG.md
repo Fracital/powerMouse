@@ -82,9 +82,10 @@ The first release after a four-year gap. Everything below is breaking.
   transport at once, its stream is not asked for again with each request).
   `Http3Transport.info()` gains `udpCarried`, `udpRefused` and
   `altSvc[].refused`. deploy/epoxy's patch 0058 gives a UDP stream
-  `closeReason()`, which the transport reads where it exists; it is not in
-  the pinned epoxy-transport build yet, and without it every refusal
-  counts as one with no reason reported. docs/http3.md has the rule (5) and
+  `closeReason()`, which the transport reads where it exists; the pinned
+  epoxy-transport build has it (EpoxyTransport dist 07d0aa4), and with a
+  build that does not, every refusal counts as one with no reason
+  reported. docs/http3.md has the rule (5) and
   what each wisp server sends (http3-fallback and demo-http3 suites, with
   `test/wisp-gate.mjs`, a relay that refuses UDP per name).
 
