@@ -286,8 +286,10 @@ function printsHelperOf(node: any, routed: readonly string[]): boolean {
 			);
 		case 'UnaryExpression':
 			return (
-				!(node.operator === 'typeof' && node.argument.type === 'Identifier') &&
-				printsHelper(node.argument, routed)
+				!(
+					(node.operator === 'typeof' || node.operator === 'delete') &&
+					node.argument.type === 'Identifier'
+				) && printsHelper(node.argument, routed)
 			);
 		case 'UpdateExpression':
 		case 'AssignmentExpression': {
@@ -1121,7 +1123,9 @@ export function modifyJS(
 						// binding positions and names: rewriting these turns a valid
 						// script into a SyntaxError (`class A { top = 1 }`,
 						// `catch (location)`, `break top`) or changes its meaning
-						// (`typeof top` must not throw in a worker)
+						// (`typeof top` must not throw in a worker; `delete top` is
+						// strict code's early error, and eval code is strict by a
+						// caller no rewrite sees, so the name stays for V8 to refuse)
 						switch (ctx.parent?.node.type) {
 							case 'ArrayPattern':
 							case 'ObjectPattern':
@@ -1142,7 +1146,11 @@ export function modifyJS(
 								if (ctx.parentKey === 'key') break typeLoop;
 								break;
 							case 'UnaryExpression':
-								if (ctx.parent.node.operator === 'typeof') break typeLoop;
+								if (
+									ctx.parent.node.operator === 'typeof' ||
+									ctx.parent.node.operator === 'delete'
+								)
+									break typeLoop;
 								break;
 							case 'ForInStatement':
 							case 'ForOfStatement':

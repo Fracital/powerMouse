@@ -321,7 +321,7 @@ impl Shapes<'_> {
 				self.prints_helper(&l.left) || self.prints_helper(&l.right)
 			}
 			Expression::UnaryExpression(u) => {
-				!(u.operator == UnaryOperator::Typeof
+				!(matches!(u.operator, UnaryOperator::Typeof | UnaryOperator::Delete)
 					&& matches!(unparen(&u.argument), Expression::Identifier(_)))
 					&& self.prints_helper(&u.argument)
 			}

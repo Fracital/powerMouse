@@ -1320,8 +1320,13 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 			Expression::UnaryExpression(u) => {
 				let argument = unparen(&u.argument);
 				match u.operator {
-					// `typeof top` must not throw in a worker
-					UnaryOperator::Typeof if matches!(argument, Expression::Identifier(_)) => {}
+					// `typeof top` must not throw in a worker, and `delete top`
+					// is strict code's early error: eval code is strict by
+					// its caller, which no rewrite sees, so the name stays
+					// for V8 to refuse (and sloppy code's `delete top`
+					// answers as it does natively)
+					UnaryOperator::Typeof | UnaryOperator::Delete
+						if matches!(argument, Expression::Identifier(_)) => {}
 					UnaryOperator::Delete if Mem::of(argument).is_some() => {
 						if let Some(m) = Mem::of(argument) {
 							self.plain_member(m, Cx::default());

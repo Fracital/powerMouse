@@ -2,6 +2,7 @@
 // esbuild into test/out/ and run directly, so a shape can be asserted on the
 // generated code itself (what the browser suites cannot see). Skips with a
 // message when esbuild is not installed (a tarball install).
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { done, ok, OUT } from '../lib.mjs';
@@ -1253,6 +1254,52 @@ console.warn = warn;
 		"super.postMessage stays the class's own call",
 		/super\.postMessage\(1\)/.test(own) && parses(own),
 		own,
+	);
+}
+{
+	// `delete top` is strict code's early error, and eval code is strict by
+	// a caller no rewrite sees: the name stays as written, so V8 refuses it
+	// there as it does natively (and answers false in sloppy code, as it
+	// does natively). The access API in its place compiled, and ran
+	const out = shape('delete top; x = delete (location); delete top.a');
+	let refused = false;
+	try {
+		new Function(`'use strict';${out}`);
+	} catch (error) {
+		refused = error instanceof SyntaxError;
+	}
+	ok(
+		'delete of a bare name stays as written, for strict code to refuse',
+		/delete top;/.test(out) && /delete \(?location\)?;/.test(out) && refused,
+		out,
+	);
+}
+{
+	// early errors (rust/host/early.mjs): what V8 refuses to compile is
+	// handed back as it was or rewritten into what V8 still refuses, never
+	// into a script that runs; what V8 takes is rewritten, never handed
+	// back unrewritten and never broken. Held for the wasm rewriter on
+	// every text of rust/host/early-errors.txt in every place it is tried;
+	// the JavaScript rewriter's shortfalls are the table's other column.
+	// The verdicts are this node's V8's, and the file records 13.6's: under
+	// another the table is printed and not held (the early-errors suite
+	// holds it to Chrome)
+	const harness = spawnSync(process.execPath, [`${root}rust/host/early.mjs`], {
+		encoding: 'utf8',
+		maxBuffer: 64 * 1024 * 1024,
+	});
+	const out = harness.stdout ?? '';
+	for (const line of out.split('\n').slice(0, 24)) console.log(`  ${line}`);
+	const recorded = process.versions.v8.startsWith('13.6.');
+	if (!recorded)
+		console.log(
+			`  not held: this node's V8 is ${process.versions.v8}, the verdicts are 13.6's`,
+		);
+	ok(
+		'early errors: the wasm rewriter never turns a script V8 refuses into one that runs, nor a script V8 takes into one it refuses or one that goes out unrewritten',
+		!recorded || harness.status === 0,
+		out.split('\n').slice(24).join('\n').slice(0, 4000) +
+			(harness.stderr ?? ''),
 	);
 }
 await done();

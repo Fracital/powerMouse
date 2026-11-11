@@ -8,6 +8,7 @@ use oxc::parser::{ParseOptions, Parser};
 use oxc::span::SourceType;
 
 use crate::config::Config;
+use crate::early::{self, Mode, Verdict};
 use crate::source::{Utf16Offsets, holder_statement, source_key};
 use crate::walk::Walker;
 
@@ -79,11 +80,15 @@ pub struct Output {
 	pub key: String,
 }
 
-/// The revision of what this rewriter writes, which the module answers for
-/// `FLAG_REVISION`: raised whenever the output for any script changes, so a
-/// cache of rewrites keyed on it never serves an older module's text.
+/// The revision of this module, which it answers for `FLAG_REVISION`: raised
+/// whenever what it answers changes for any input, or how it is asked does.
+/// That is the output for any script, the status it declines one with, the
+/// answer to a parse question, and the boundary itself (a flag, a status, the
+/// layout of what crosses), so a cache of rewrites keyed on it never serves
+/// an older module's text and the glue never drives a module it was not
+/// written for (src/wasm/rewriter.ts holds the same number).
 /// rust/host/parity.mjs --cases holds it to the outputs (cases.revision).
-pub const REVISION: &str = "2";
+pub const REVISION: &str = "3";
 
 /// Why the rewriter hands a script back to the JavaScript one
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,9 +97,9 @@ pub enum Decline {
 	Parse,
 	/// a shape this rewriter does not rewrite yet
 	Shape,
-	/// a script no browser runs (a V8 intrinsic, `"use strict"` under a
-	/// parameter pattern): the caller hands it back as it was, as the
-	/// JavaScript rewriter does with what it cannot parse
+	/// a script no browser runs (an early error, a V8 intrinsic): the caller
+	/// hands it back as it was, as the JavaScript rewriter does with what
+	/// it cannot parse, and the browser refuses it as it does natively
 	Invalid,
 	/// the host could not route a URL of it
 	Route,
@@ -137,10 +142,13 @@ fn after_close_comments(source: &str) -> usize {
 	}
 }
 
-/// Whether `source` parses as a classic script (`single`: one of a single
-/// expression statement, with no `return` at its top level), for the
-/// callers that ask the parser alone (src/rewriteJS.ts singleExpression,
-/// src/rewriterLib.ts parsesAsScript)
+/// Whether a browser compiles `source` as a classic script (`single`: one of
+/// a single expression statement, with no `return` at its top level), for
+/// the callers that ask no rewrite (src/rewriteJS.ts singleExpression,
+/// src/rewriterLib.ts parsesAsScript): the parse, a regular expression's
+/// pattern included, and the early errors. A `return` at the top level
+/// passes unless `single`, as it does the JavaScript rewriter's parser
+/// (`globalReturn`).
 pub fn parses(source: &str, single: bool) -> bool {
 	let allocator = Allocator::default();
 	let source_type = SourceType::unambiguous()
@@ -151,16 +159,25 @@ pub fn parses(source: &str, single: bool) -> bool {
 	let parsed = Parser::new(&allocator, source, source_type)
 		.with_options(ParseOptions {
 			allow_return_outside_function: !single,
+			parse_regular_expression: true,
 			..ParseOptions::default()
 		})
 		.parse();
 	if parsed.fatal_error || parsed.diagnostics.has_errors() {
 		return false;
 	}
+	let program = parsed.program;
+	let mode = Mode {
+		module: false,
+		lenient: false,
+		top_return: !single,
+	};
+	if early::check(&program, source, mode) != Verdict::Compiles {
+		return false;
+	}
 	if !single {
 		return true;
 	}
-	let program = parsed.program;
 	match (program.directives.len(), program.body.as_slice()) {
 		(1, []) => true,
 		(0, [statement]) => matches!(statement, oxc::ast::ast::Statement::ExpressionStatement(_)),
@@ -184,6 +201,9 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 			allow_return_outside_function: true,
 			allow_v8_intrinsics: true,
 			preserve_parens: true,
+			// a pattern V8 refuses is a parse error here: the JavaScript
+			// rewriter decides, and the literal reaches V8 as written
+			parse_regular_expression: true,
 			..ParseOptions::default()
 		})
 		.parse();
@@ -191,6 +211,18 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 		return Err(Decline::Parse);
 	}
 	let program = parsed.program;
+	// a classic script's text may be a handler's body or a direct eval's
+	// code, where more may stand at the top level than in a script element
+	let mode = Mode {
+		module: options.module,
+		lenient: !options.module,
+		top_return: !options.module,
+	};
+	match early::check(&program, source, mode) {
+		Verdict::Compiles => {}
+		Verdict::Refused => return Err(Decline::Invalid),
+		Verdict::Unshipped => return Err(Decline::Shape),
+	}
 	let offsets = Utf16Offsets::new(source);
 	let mut walker = Walker::new(source, options, &offsets, route);
 	walker.visit_program(&program);

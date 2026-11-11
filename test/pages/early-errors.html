@@ -1,0 +1,138 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>early errors</title>
+<body>
+	<script>
+		// Every way a page hands the browser code, tried with a text and
+		// answered with what the browser made of it (early-errors suite): a
+		// SyntaxError's message, or that the code compiled or ran. The suite
+		// calls these with the cases of rust/host/early-errors.txt, natively
+		// and through the proxy.
+		window.__early = (() => {
+			const describe = (error) =>
+				error && error.name === 'SyntaxError'
+					? `SyntaxError: ${error.message}`
+					: `ran (${error && error.name})`;
+			const event = (found) => ({
+				message: found.message,
+				lineno: found.lineno,
+				colno: found.colno,
+			});
+			const base = new URL('../early-js', location.href).href;
+			/** `work(item)` for each of `items`, `width` at a time */
+			const pool = async (items, width, work) => {
+				const out = new Array(items.length);
+				let next = 0;
+				await Promise.all(
+					Array.from({ length: width }, async () => {
+						while (next < items.length) {
+							const at = next++;
+							out[at] = await work(items[at]);
+						}
+					}),
+				);
+				return out;
+			};
+			return {
+				/** `new Function(code)`: compiled, never called */
+				compiled: (codes) =>
+					codes.map((code) => {
+						try {
+							new Function(code);
+							return 'compiles';
+						} catch (error) {
+							return describe(error);
+						}
+					}),
+				/** a direct eval in a function */
+				direct: (codes) =>
+					codes.map((code) => {
+						try {
+							eval(code);
+							return 'ran';
+						} catch (error) {
+							return describe(error);
+						}
+					}),
+				indirect: (codes) =>
+					codes.map((code) => {
+						try {
+							(0, eval)(code);
+							return 'ran';
+						} catch (error) {
+							return describe(error);
+						}
+					}),
+				/** an inline script element, which runs as it is inserted */
+				inline: (codes) =>
+					codes.map((code) => {
+						let seen = 'ran';
+						const on = (found) => {
+							seen = event(found);
+							found.preventDefault();
+						};
+						addEventListener('error', on);
+						const script = document.createElement('script');
+						script.textContent = code;
+						document.head.append(script);
+						script.remove();
+						removeEventListener('error', on);
+						return seen;
+					}),
+				/** a script element with a source: `[line, form]` each */
+				network: async (list) => {
+					const seen = new Map();
+					const on = (found) => {
+						const named = /[?&]n=(\d+)/.exec(found.filename || '');
+						if (named) seen.set(named[1], event(found));
+						found.preventDefault();
+					};
+					addEventListener('error', on);
+					await pool(list, 12, ([line, form]) => {
+						const script = document.createElement('script');
+						script.src = `${base}?n=${line}&f=${form}`;
+						const loaded = new Promise((resolve) => {
+							script.onload = script.onerror = resolve;
+						});
+						document.head.append(script);
+						return loaded.then(() => script.remove());
+					});
+					removeEventListener('error', on);
+					return list.map(([line]) => seen.get(String(line)) || 'ran');
+				},
+				/** import(): the text with a last import that throws, so nothing of it runs */
+				imported: (lines) =>
+					pool(lines, 12, (line) =>
+						import(`${base}?n=${line}&f=held`).then(
+							() => 'ran',
+							// (the last import's throw, or a specifier that does not
+							// resolve or load: the text compiled)
+							(error) =>
+								error && error.name === 'SyntaxError'
+									? describe(error)
+									: 'compiles',
+						),
+					),
+				/** a dedicated worker of the text */
+				worker: (list) =>
+					pool(
+						list,
+						6,
+						([line, form]) =>
+							new Promise((resolve) => {
+								const worker = new Worker(`${base}?n=${line}&f=${form}`);
+								const finish = (answer) => {
+									worker.terminate();
+									resolve(answer);
+								};
+								worker.onerror = (found) => {
+									found.preventDefault();
+									finish(event(found));
+								};
+								setTimeout(() => finish('no error'), 8000);
+							}),
+					),
+			};
+		})();
+	</script>
+</body>

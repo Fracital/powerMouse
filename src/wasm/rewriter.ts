@@ -80,7 +80,7 @@ export function rewriterRevision(): string | null {
  * the page wrote it, and a revision 1 module takes the flags of the parse
  * questions for a rewrite.
  */
-export const REVISION = '2';
+export const REVISION = '3';
 
 /** whether an instance answered REVISION, asked once of each */
 const speaks = new WeakMap<BufferInstance, boolean>();

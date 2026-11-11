@@ -1,0 +1,120 @@
+# What the wasm rewriter (rust/rwjs) does short of V8's answer on the texts
+# of rust/host/early-errors.txt, by name: `<kind> <text>` a line. Anything
+# short of it that no line here names fails rust/host/early.mjs, the crate's
+# tests and the rewriter-unit suite, and so does a line nothing needs any
+# more. None of it is a script V8 refuses that runs rewritten, or one V8
+# takes that goes out unrewritten: those have no kind to be named as.
+
+# parser: V8 takes the text and the module's parser refuses it (a call as
+# an assignment target, which V8 compiles to a ReferenceError at run time;
+# `async (...a)` as a call; `yield` as a for-of target; `let (a) = 1`; an
+# optional chain to a private name assigned to; a quantifier past 2^53).
+# The module declines it (status 4) and the JavaScript rewriter decides;
+# the parse questions are answered "no".
+parser /a{99999999999999999999}/
+parser class A extends B { constructor() { super() = 1 } }
+parser class A extends B { constructor() { super()++ } }
+parser a()++
+parser ++a()
+parser a()--
+parser (a())++
+parser a.b()++
+parser a() = 1
+parser a.b() = 1
+parser (a()) = 1
+parser a()() = 1
+parser a() += 1
+parser a() -= 1
+parser a() **= 1
+parser for (a() in b);
+parser for (a() of b);
+parser for ((a()) in b);
+parser for (a.b() in c);
+parser for (a() = 0;;);
+parser a() = b() = 1
+parser async() = 1
+parser async()++
+parser for (async() in a);
+parser eval() = 1
+parser eval()++
+parser async (...a)
+parser async (...a, )
+parser async function f() { for await (a() of b); }
+parser for (async() of a);
+parser for (yield of a);
+parser let (a) = 1
+parser class A { #a; m() { this?.#a = 1 } }
+
+# shape: V8 takes the text and the module's walk does not rewrite the shape
+# yet (a BigInt key in an assignment pattern). The module declines it
+# (status 5) and the JavaScript rewriter rewrites it.
+shape ({ 1n: b } = c)
+
+# top: V8 refuses the text as a script, and takes it at the top of a
+# function's body or of eval code under a method (`super`, a private name
+# of a class around the call) or in a function's body (`using`). A handler
+# attribute's body and a direct eval's code reach the module as classic
+# scripts too, so it rewrites the text, and V8 refuses the rewrite as it
+# refuses the text. The parse questions are answered as V8 does: "no".
+top super.x
+top super()
+top super[x]
+top x = super.y
+top () => super.x
+top () => super()
+top async () => super.x
+top ({ a: super.x })
+top ({ a: () => super.x })
+top ({ [super.x]() {} })
+top class A { [super.x]() {} }
+top class A extends B { [super()]() {} }
+top class A extends B { [super.x]() {} }
+top class A extends super.x {}
+top class A extends super() {}
+top class A extends (() => super.x) {}
+top a?.#b
+top #a in b
+top using a = b
+top using a = b, c = d
+top using a<NL>= b
+top using using = a
+top using await = a
+top using yield = a
+top using static = a
+top using eval = a
+top using arguments = a
+top await<NL>using a = b
+top class A { m() { this.#a } }
+top class A { m() { this.#a = 1 } }
+top class A { m() { this?.#a } }
+top class A { m() { #a in this } }
+top class A { #a; m() { #b in this } }
+top class A { #a; m() { a.#b } }
+top class A { #a; m() { a.#b.#a } }
+top class A { m() { class B { #b } this.#b } }
+top class A extends B.#a { #a }
+top class A extends (class { #a }) { m() { this.#a } }
+top class A { #a; m() { class B extends a.#b { #b } } }
+top this.#a
+top a.#b
+top function f() { this.#a }
+top ({ m() { this.#a } })
+top class A { #a } a.#a
+top class A { #a } class B { m() { this.#a } }
+
+# return: the same of a `return` at the top level, a handler's. Here the
+# first parse question is answered "yes" as well, as the JavaScript
+# rewriter's parser answers it (globalReturn): a text that does not compile
+# as a script does not compile as the module it would be tried as next.
+return return
+return return 1
+return return;
+return { return }
+return if (a) return
+return while (a) return
+return try { return } catch {}
+return switch (a) { case 1: return }
+return l: return
+return with (a) return
+return return<NL>return
+return return yield

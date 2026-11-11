@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { readCases, STRICT } from '../rust/host/early-lib.mjs';
 import { coi } from './coi-server.mjs';
 import { sop } from './sop-server.mjs';
 import { visited } from './visited-server.mjs';
@@ -19,6 +20,8 @@ import { wpt } from './wpt-server.mjs';
 // (the visited suite) by test/visited-server.mjs and /coi/ (the
 // cross-origin isolation suite) by test/coi-server.mjs.
 const pagesDir = fileURLToPath(new URL('./pages/', import.meta.url));
+/** the early-error cases' texts by their line, read at the first request */
+let earlyCases;
 const TYPES = {
 	html: 'text/html; charset=utf-8',
 	js: 'text/javascript; charset=utf-8',
@@ -203,6 +206,33 @@ export function startFixture(port = 8084) {
 			);
 			res.setHeader('cache-control', 'no-cache');
 			return res.end(readFileSync(file));
+		}
+		// a case of rust/host/early-errors.txt by its line, as a script: `f` is
+		// `script` (as written), `strict` (behind 'use strict') or `held` (with
+		// a last import that throws, so a module that compiles never runs)
+		// (early-errors suite)
+		if (path === '/early-js') {
+			const query = new URL(req.url, 'http://x').searchParams;
+			earlyCases ??= new Map(
+				readCases()
+					.filter((entry) => entry.code !== undefined)
+					.map((entry) => [String(entry.line), entry.code]),
+			);
+			const code = earlyCases.get(query.get('n'));
+			if (code === undefined) {
+				res.statusCode = 404;
+				return res.end('no such case');
+			}
+			const form = query.get('f');
+			res.setHeader('content-type', 'text/javascript; charset=utf-8');
+			res.setHeader('cache-control', 'no-store');
+			return res.end(
+				form === 'strict'
+					? STRICT + code
+					: form === 'held'
+						? `${code}\nimport "data:text/javascript,throw 0";`
+						: code,
+			);
 		}
 		// how many request bytes arrived (streamed-body measurement)
 		if (path === '/echo-body') {

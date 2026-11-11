@@ -105,6 +105,50 @@ deploy/rust/
 └── README.md
 ```
 
+Early errors. oxc's parser reports none of them (its crate leaves them to
+a semantic pass), so a script V8 answers with a SyntaxError was rewritten:
+the page read the error at another line and column, and where the rewrite
+replaced the construct the script ran (`delete location` in strict code
+became a call of the access API). `oxc_semantic` was measured and not
+taken: 115 KB more of artifact (39 KB brotli, past the budget), 44% more
+rewrite time, and it refuses eight Annex B scripts a browser takes. The
+module has its own check instead (`rust/rwjs/src/early.rs`, one walk after
+the parse, by the clauses of ECMA-262 as V8 reads them), and the parser is
+told to parse regular expressions' patterns. A script the check refuses is
+answered as one no browser runs (status 7) and goes out as it came, so the
+browser reports its own error at the page's own position; syntax no
+browser has yet (decorators, `accessor` fields, `import.defer()`) is
+declined to the JavaScript rewriter rather than called an error, so the
+day a browser takes it nothing goes out unrewritten. The two parse
+questions ask the check too. `delete` of a bare name keeps the name in
+both rewriters: eval code is strict by its caller, which no rewrite sees,
+and V8 has to refuse `delete top` there. The check errs to one side only:
+what it reports V8 refuses. It is held to V8's verdicts on
+`rust/host/early-errors.txt` (4,418 texts written from the early-error
+clauses and Annex B, each recorded as a classic script, a strict one and a
+module, and run by `rust/host/early.mjs` in 14 more places: 75,092
+scripts) three ways: the crate's tests against the record, `rewriter-unit`
+against node's V8, and the `early-errors` suite against Chrome, natively
+and through the proxy (`new Function`, eval, inline and fetched scripts,
+`import()`, workers). Of the 45,485 scripts V8 refuses none runs
+rewritten; 16,819 the module answers itself, 28,381 its parser refuses
+(the JavaScript rewriter's, which hands nearly all back as they were) and
+285 it rewrites into what V8 refuses with the same message (`super`, a
+private name or `using` at the top level, and a top-level `return`: a
+handler's body and a direct eval's code reach it as classic scripts, where
+those may stand). Of the 29,607 V8 takes none goes out unrewritten or
+broken; 555 are declined (33 texts its parser refuses, one shape).
+`rust/host/early-known.txt` names each of these, and a name nothing needs
+any more fails the run. The other direction, over real scripts
+(`early.mjs --corpus`): of the 28 corpus scripts, the 341 of the suites'
+pages and 2,346 files of `node_modules` (66 MB) nothing V8 takes is
+answered as an error. The JavaScript rewriter on the same table: 161 of
+the refused scripts run rewritten (12 texts), 569 of the taken go out
+unrewritten (120 texts its parser refuses) and 105 come out broken (11
+texts); the wasm backend inherits the first kind for what its own parser
+refuses. Cost: 15,631 bytes of artifact (5,243 brotli) and 12% of rewrite
+time on the corpus (2,341 to 2,613 ms for the module alone, medians of
+five, interleaved, load 18). REVISION is 3.
 The toolchain is pinned by the image digest rather than a
 `rust-toolchain.toml`: the pins in one file, and no toolchain download at
 build time.
@@ -112,7 +156,7 @@ build time.
 Three artifacts, built separately so a deployment that wants none pays for
 none:
 
-- the rewriter module: 426,993 bytes, 151,391 brotli as built with every
+- the rewriter module: 442,624 bytes, 156,634 brotli as built with every
   rewrite family in (the budget is 600 KB, 160 KB brotli).
 - the scanner module (`scanner.wasm`, phase 3: the CSS rewriter and the
   markup scan): 48,518 bytes, 19,673 brotli. It has no dependencies and
@@ -695,7 +739,7 @@ frame never evaluated the library ("As built" below).
 
 **What the wasm side costs in exchange.**
 
-- Bytes, once per controller: `rewriter.wasm` is 426,993 bytes (151,391
+- Bytes, once per controller: `rewriter.wasm` is 442,624 bytes (156,634
   brotli), fetched by the controller, cached by HTTP like any asset, and
   compiled once (21 ms, off the main thread). The service worker is handed
   the bytes (a 423 KB buffer per handshake) and compiles them once more.
@@ -1524,7 +1568,7 @@ Phase 1, measured (2026-11-10, Node 24, load about 20; medians of three):
 | parity, the corpus                               |            | 28 of 28 the same                                                        |
 | parity, 1,309 files of `node_modules` over 2 KB  |            | 1,309 the same                                                           |
 | parity, the 680 cases                            |            | 675 the same, 0 differ, 1 known divergence, 1 declined, 3 neither parses |
-| artifact                                         |            | 426,993 bytes, 151,391 brotli                                            |
+| artifact                                         |            | 442,624 bytes, 156,634 brotli (with the early-error check)               |
 | `dist/injectDocument.js`, master and this branch | 814,491    | 816,570                                                                  |
 
 ## 12. Risks

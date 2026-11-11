@@ -251,7 +251,7 @@ The first release after a four-year gap. Everything below is breaking.
   on the sheet before (Fixes). The `scanner-parity` suite compares both on
   hand-written cases, the fixture pages and a seeded fuzz.
 - With `rewriter: 'wasm'` scripts are rewritten by the Rust rewriter
-  (`rust/rwjs`, oxc; `assets/rewriter.wasm`, 427 KB, 151 KB brotli) in the
+  (`rust/rwjs`, oxc; `assets/rewriter.wasm`, 443 KB, 157 KB brotli) in the
   rewrite workers and the service worker. It makes the same rewrites as the
   JavaScript rewriter as edits to the script's own text, so everything it
   does not touch comes out byte for byte: comments, spacing, literals, line
@@ -271,6 +271,39 @@ The first release after a four-year gap. Everything below is breaking.
   and the corpora: no difference but one known case where the JavaScript
   rewriter is wrong), and `rewriter-unit` and the browser suites run under
   both (`STOMP_REWRITER=wasm`). `'js'` stays the default.
+- Under `rewriter: 'wasm'` a script the browser refuses to compile is
+  refused through the proxy as it is natively. The module's parser reports
+  no early error (a name declared twice, `with` or a legacy octal literal
+  in strict code, `break` outside a loop, a private name no class
+  declares, a regular expression that does not compile), so such a script
+  was rewritten: the page read its SyntaxError at another line and column,
+  and `'use strict'; delete location` ran, as a call of the access API.
+  The module now checks them itself in one walk after the parse
+  (`rust/rwjs/src/early.rs`; oxc's semantic pass costs 115 KB and refuses
+  Annex B scripts a browser takes) and answers such a script as one no
+  browser runs: it goes out as it came and the browser reports its own
+  error at the page's own position. Syntax no browser has yet (decorators,
+  `accessor` fields, `import.defer()`) stays the JavaScript rewriter's to
+  decide. `delete` of a bare name (`delete top`) keeps the name under both
+  rewriters, since eval code is strict by a caller no rewrite sees and V8
+  has to refuse it there. The check is held to V8's verdicts on
+  `rust/host/early-errors.txt`, 4,418 texts written from the
+  specification's early-error clauses and Annex B and tried in 17 places
+  each (`rust/host/early.mjs`, run by `rewriter-unit`; the crate's tests
+  read the record): of 45,485 scripts V8 refuses none runs rewritten, of
+  29,607 it takes none goes out unrewritten or broken, and what falls
+  short of V8's answer without being either is named in
+  `rust/host/early-known.txt`. The new `early-errors` suite holds the
+  record to Chrome and compares the texts natively and through the proxy
+  as `new Function`, eval, inline and fetched scripts, `import()` and
+  workers. Over real scripts (the 46 MB corpus, the suites' pages, 2,346
+  files of `node_modules`) nothing V8 takes is answered as an error. It
+  costs 16 KB of the artifact (5 KB brotli) and 12% of the module's
+  rewrite time. The same table lists what the JavaScript rewriter does
+  with the texts (12 that run though V8 refuses them, 120 its parser
+  refuses though V8 takes them, 11 it prints into a SyntaxError); those
+  are not changed here, and the wasm backend still inherits the first
+  kind for scripts its own parser refuses.
 - With `rewriter: 'wasm'` the page rewrites with the module too (`eval`,
   `new Function`, string timers, written and inserted scripts, every path
   of the inject). A proxied top asks its controller for the compiled

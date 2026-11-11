@@ -52,6 +52,7 @@ export const families = {
 		'top; eval; $P$s',
 		'f(top, location, eval)',
 		'typeof top; typeof location.href; typeof (top)',
+		'delete top; delete location.href; delete (eval); x = delete location',
 		'({ location, top, eval })',
 		'({ location: location, [location]: 1, [top]: top, top() {}, get location() { return location } })',
 		'class A extends top {}; class B extends (location.constructor) {}',

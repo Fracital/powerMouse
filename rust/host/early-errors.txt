@@ -1,0 +1,4475 @@
+# Early errors: scripts a browser refuses to compile, and their neighbours it
+# takes. Written from the "Static Semantics: Early Errors" sections of
+# ECMA-262 (and Annex B, where a browser takes what the main body refuses),
+# by clause. One case a line:
+#
+#   <sloppy script><strict script><module> <text>
+#
+# The three marks are V8's verdicts, `+` compiles and `-` SyntaxError, for
+# the text as a classic script, as one behind `'use strict';` and a line
+# break, and as a module. They are recorded (`node rust/host/early.mjs
+# --record` rewrites the column) and held to the V8 that runs the suites
+# (rewriter-unit) and to Chrome (the early-errors suite); the crate's tests
+# read them, since no V8 runs there. In a text `<NL>` is a line feed, `<CR>`
+# a carriage return, `<LS>` and `<PS>` U+2028 and U+2029, `<U+XXXX>` that
+# code point; nothing else is escaped. rust/host/early.mjs also runs every
+# text inside a function, an arrow, an async function, a generator, a method,
+# a static block and a block, with V8 asked each time.
+
+# 12.5 Hashbang comments; B.1.1 HTML-like comments
++-+ #!shebang<NL>x
+---  #!shebang<NL>x
+--- x<NL>#!shebang
+++- <!-- x
+++- x <!-- y<NL>z
+++- x<NL>--> y
+++- x<NL> /* a */ --> y
+++- x /* a<NL> */ --> y
++++ x --> y
+++- /* a */ --> y<NL>x
+++- --> y<NL>x
+++- x = 1 <!--x;
+++- x<!--y;<NL>-->z
+
+# 12.7 Names and keywords: escapes
+--- var a b
++++ var \u{61}
++++ var a
+--- var a\u{2F}
+--- var \u{110000}
++++ var x
+--- var var
++-- var let
++++ let x
++++ let<NL>x
++-- var yield
+++- var await
++-- var static
++++ class A {}
++++ class A { static m() {} }
++++ ({ get x() {} })
++++ ({ async x() {} })
++++ async function f() {}
++++ x = { var: 1 }
++++ x.var
+--- new.target
++++ function f() { new.target }
++++ for (x of y);
++++ var x = true
+--- var x = \u{74}his
+--- var null
++++ typeof x
++++ var a‍
+--- var ‍
++++ var <U+2118>
++++ var <U+212E>
++++ var a<U+00B7>
+--- var <U+00B7>
++++ var <U+1885>
++++ var a<U+1885>
+
+# 12.7.1 Identifier names; 13.1.1 reserved words as identifiers
+--- var enum
+--- var class
+--- var super
+--- var const
+--- var export
+--- var import
+--- var this
+--- var typeof
++-- var implements
++-- var interface
++-- var package
++-- var private
++-- var protected
++-- var public
++++ var async
++++ var of
++++ var get
++-- var eval
++-- var arguments
++++ var undefined
+--- let let
+--- let let = 1
+--- const let = 1
+--- let [let] = a
+--- let { let } = a
+--- let { a: let } = b
++-- var [let] = a
++-- var { let } = a
+--- for (let let of a);
+--- for (let let in a);
+--- for (let let;;);
++-- for (var let of a);
++++ let async
++++ let of
++-- let static
++-- let yield
+++- let await
++-- let eval
++-- let arguments
++-- const yield = 1
+--- class let {}
+--- class static {}
+--- class yield {}
+++- class await {}
++++ class async {}
+--- class implements {}
+--- class eval {}
+--- class arguments {}
+--- (class let {})
+--- (class yield {})
+++- (class await {})
+--- (class eval {})
+--- (class arguments {})
++-- function let() {}
++-- function static() {}
++-- function yield() {}
+++- function await() {}
++-- function eval() {}
++-- function arguments() {}
++-- function implements() {}
++-- (function eval() {})
++-- (function arguments() {})
++-- (function yield() {})
+++- (function await() {})
++-- (function static() {})
+--- function eval() { 'use strict' }
+--- function arguments() { 'use strict' }
+--- function static() { 'use strict' }
+--- function yield() { 'use strict' }
+--- (function eval() { 'use strict' })
+--- (function interface() { 'use strict' })
++-- function f(eval) {}
++-- function f(arguments) {}
++-- function f(static) {}
++-- function f(yield) {}
+++- function f(await) {}
++-- function f(let) {}
+--- function f(eval) { 'use strict' }
+--- function f(arguments) { 'use strict' }
+--- function f(static) { 'use strict' }
+--- function f(yield) { 'use strict' }
++-- function f([eval]) {}
++-- function f({ arguments }) {}
++-- function f({ a: eval }) {}
++-- function f(...eval) {}
++++ function f(a = eval) {}
++-- (eval) => 1
++-- eval => 1
++-- arguments => 1
++-- (a, arguments) => 1
++-- (...eval) => 1
++-- ([eval]) => 1
++-- ({ eval }) => 1
++-- (yield) => 1
++-- yield => 1
+++- (await) => 1
+++- await => 1
++-- static => 1
++-- (static) => 1
++-- let => 1
++-- (let) => 1
++-- async (eval) => 1
++-- async eval => 1
++-- async (yield) => 1
++-- async yield => 1
+--- async (await) => 1
+--- async await => 1
+--- async (a = await) => 1
+--- async (a = await 1) => 1
+--- async ({ await }) => 1
+--- async ([await]) => 1
+--- async (...await) => 1
++-- try {} catch (eval) {}
++-- try {} catch (arguments) {}
++-- try {} catch ([eval]) {}
++-- try {} catch ({ a: arguments }) {}
++-- try {} catch (yield) {}
+++- try {} catch (await) {}
++-- try {} catch (static) {}
++-- try {} catch (let) {}
++-- eval = 1
++-- arguments = 1
++-- eval += 1
++-- eval ||= 1
++-- arguments ??= 1
++-- eval++
++-- ++eval
++-- arguments--
++-- --arguments
++-- (eval) = 1
++-- (arguments)++
++-- ((eval)) = 1
++-- [eval] = a
++-- [arguments] = a
++-- [...eval] = a
++-- [a = 1, eval] = b
++-- [eval = 1] = a
++-- [[eval]] = a
++-- [(eval)] = a
++-- ({ eval } = a)
++-- ({ arguments } = a)
++-- ({ eval = 1 } = a)
++-- ({ a: eval } = b)
++-- ({ a: arguments = 1 } = b)
++-- ({ a: (eval) } = b)
++-- ({ ...eval } = a)
++-- ({ a: [eval] } = b)
++-- ({ a: { eval } } = b)
++-- for (eval in a);
++-- for (arguments of a);
++-- for ([eval] of a);
++-- for ({ eval } in a);
++-- for (eval = 0;;);
++++ ({ eval })
++++ ({ eval: 1 })
++++ ({ arguments })
++++ ({ eval() {} })
++++ ({ get eval() { return 1 } })
++++ ({ set eval(a) {} })
++-- ({ set a(eval) {} })
++-- ({ a(eval) {} })
++-- ({ a(arguments) {} })
++++ eval.x = 1
++++ arguments[0] = 1
++++ eval?.x
++++ x = eval
++++ x = arguments
++++ eval(a)
++++ arguments.length
++-- yield
++-- yield = 1
++-- yield: 1
++-- yield++
++-- x = yield
++-- x = { yield }
++-- ({ yield } = a)
++++ ({ yield: 1 })
++++ x.yield
+++- await
+++- await = 1
+++- await: 1
+++- await++
+++- x = await
+++- x = { await }
+++- ({ await } = a)
++++ ({ await: 1 })
++++ x.await
+--+ await 1
+--+ await x
++++ await (x)
++++ await [x]
+--+ await /x/
++++ await<NL>x
+--+ x = await 1
++++ x = await<NL>1
+--+ await a.b
++-- let
++-- let = 1
++-- let: 1
++-- let.a
++-- let()
++++ let<NL>a
++++ let<NL>[a] = b
++++ let [a] = b
++++ let<NL>{ a } = b
+--- let<NL>let
++-- let<NL>yield
+--- let<NL>await 0
++-- x = let
+--- let[a]
++-- (let[a] = 1)
++-- (let)[a] = 1
++-- let in a
++-- let instanceof a
++-- l: let<NL>a
++-- if (a) let<NL>b
+--- if (a) let b
+--- if (a) let<NL>[b] = c
+--- if (a) let [b] = c
++-- if (a) let<NL>{}
++-- while (a) let<NL>b
++-- for (;;) let<NL>b
+--- do let<NL>a<NL>while (b)
++-- with (a) let<NL>b
++-- static
++-- static = 1
++-- static: 1
++-- x = static
++++ x.static
++-- ({ static })
++++ ({ static: 1 })
++-- ({ static } = a)
++-- implements = 1
++-- interface: 1
++-- package++
++-- x = private
++-- ({ protected })
++-- ({ public } = a)
++++ async
++++ async = 1
++++ async: 1
++++ async<NL>function f() {}
++++ async<NL>x => 1
+--- async x<NL>=> 1
+--- async (x)<NL>=> 1
+--- async<NL>(x) => 1
++++ async () => 1
++++ async x => 1
++++ async(x)
+--- x<NL>=> 1
+--- (x)<NL>=> 1
++++ x =><NL>1
++++ of = 1
++++ get = 1
++++ set: 1
+--- enum = 1
++++ x.enum
++++ ({ enum: 1 })
+--- ({ enum })
+--- ({ class })
++++ ({ class: 1 })
++++ ({ if: 1, new: 2, typeof: 3 })
+--- ({ if })
++++ x.if.new.typeof
++++ x?.class
++++ class A { if() {} static new() {} get typeof() { return 1 } }
++++ l: 1
+--- l: l: 1
+--- l: { l: 1 }
++++ l: { } l: 1
+--- l: m: l: 1
+--- l: { m: { l: 1 } }
++-- l: function f() { l: 1 }
++++ l: { function f() { l: 1 } }
++++ l: () => { l: 1 }
+--- l: class A { m() { l: 1 } }
+--- l: class A { static { l: 1 } }
+--- l: while (a) l: 1
+--- l: if (a) l: 1; else 2
+--- l: if (a) 1; else l: 2
+--- l: try { l: 1 } catch {}
+--- l: try {} catch { l: 1 }
+--- l: try {} finally { l: 1 }
+--- l: switch (a) { case 1: l: 1 }
+--- l: for (;;) { l: 1 }
+--- l: with (a) l: 1
++++ l: x = function () { l: 1 }
++++ l: m: 1; m: l: 1
++++ eval: 1
++++ arguments: 1
+--- this: 1
+--- if: 1
+--- ab: ab: 1
+
+# 12.9.3 Numeric literals
++-- 010
++-- 00
++-- 07
++-- 08
++-- 09
++-- 08.5
+--- 010.5
++++ 0.10
++++ 0b101
++++ 0B101
++++ 0o17
++++ 0O17
++++ 0x1F
+--- 0b12
+--- 0b
+--- 0o8
+--- 0o
+--- 0x
+--- 0xG
++++ 1_000
+--- 1__000
+--- 1_
++++ _1
+--- 0_1
+--- 0_0
+--- 01_0
+--- 08_0
+--- 0x_1
+--- 0x1_
++++ 0b1_0
+--- 1._5
+--- 1_.5
+--- 1.5_
+--- 1e_5
+--- 1e5_
+--- 1e+_5
+--- 1_e5
++++ 1n
++++ 0n
++++ 0x1n
++++ 0b1n
++++ 0o1n
+--- 01n
+--- 08n
+--- 1.5n
+--- 1e3n
++++ 1_0n
+--- 1_n
+--- 1e
+--- 1e+
+--- .e1
++++ 1.e1
++++ 1..a
+--- 1.a
++++ 1 .a
++++ 1.0.a
+--- 3in []
++++ 3 in[]
+--- 3a
+--- 0x3g
+--- 3.4b
+--- 1e3x
+--- 1n2
+--- 0b1a
++++ 1 instanceof a
+--- 1instanceof a
+--- x = 1if
++++ .5
++++ 5.
++++ 0.
+--- 00.5
++++ 0e1
+--- 00e1
++-- 08e1
++-- 08.
++-- 09.5
+--- 08.a
++-- 010.a
++-- x = 010 + 08
++-- x = [010]
++-- x = { 010: 1 }
++-- x = { 08: 1 }
+--- class A { 010() {} }
+--- class A { 08 = 1 }
++-- x[010]
++-- function f() { 010 }
+--- function f() { 'use strict'; 010 }
++-- function f() { 010; 'use strict' }
+--- function f() { 'use strict'; 08 }
++++ function f() { 'use strict'; 0 }
+--- () => { 'use strict'; 010 }
+--- (function () { 'use strict'; x = 010 })
+--- ({ m() { 'use strict'; 010 } })
+
+# 12.9.4 String literals
++++ '\0'
++-- '\00'
++-- '\01'
++-- '\1'
++-- '\7'
++-- '\8'
++-- '\9'
++-- '\08'
++++ '\0a'
++-- '\377'
++-- '\400'
++-- "\1"
++-- "\8"
++++ '\x41'
+--- '\x4'
+--- '\xg1'
++++ 'A'
+--- '\u004'
++++ '\u{41}'
++++ '\u{10FFFF}'
+--- '\u{110000}'
+--- '\u{}'
+--- '\u{41'
+--- '\u{g}'
++++ '\u{00000041}'
++++ '\a\b\c\-\ '
++++ 'a<LS>b'
++++ 'a<PS>b'
+--- 'a<NL>b'
+--- 'a<CR>b'
++++ 'a\<NL>b'
++++ 'a\<CR><NL>b'
++++ 'a\<LS>b'
+--- 'a
++-- x = '\01'
++-- x = ['\8']
++-- x = { '\01': 1 }
++-- x['\01']
++-- f('\1')
+--- '\01'; 'use strict'
+--- '\8'; 'use strict'
++++ '\0'; 'use strict'
+--- 'use strict'; '\01'
+--- 'use strict'; '\8'
++++ 'use strict'; '\0'
+--- 'use strict'; '\00'
+--- "use strict"; "\1"
+--- 'a'; '\01'; 'use strict'
+--- '\01'; 'a'; "use strict"
+--- '\01'<NL>'use strict'
++-- '\01'; x; 'use strict'
++-- x; '\01'; 'use strict'
+--- function f() { '\01'; 'use strict' }
+--- function f() { '\8'; 'use strict' }
+--- function f() { 'use strict'; '\01' }
++-- function f() { '\01' }
+--- function f() { 'use strict'; x = '\9' }
++-- function f() { '\01'; x; 'use strict' }
+--- () => { '\01'; 'use strict' }
+--- ({ m() { '\07'; 'use strict' } })
+--- class A { m() { '\01' } }
+--- class A { '\01'() {} }
+--- class A { x = '\8' }
+
+# 12.9.6 Template literals
+--- `\01`
+--- `\1`
+--- `\8`
++++ `\0`
+--- `\00`
+--- `\08`
+--- `\xg`
+--- `\u{110000}`
+--- `\u00g`
+--- `\u{`
+--- `\u{g}`
+--- `a${b}\1`
+--- `\1${b}`
+--- `${b}\xg${c}`
++-- `${'\01'}`
+--- `${`\01`}`
++++ x`\01`
++++ x`\1`
++++ x`\8`
++++ x`\xg`
++++ x`\u{110000}`
++++ x`\u00g`
++++ x`\u{`
++++ x`a${b}\1`
++++ x.y`\xg`
++++ x`\xg``\1`
+--- x`${`\xg`}`
+--- `a${}`
+--- `a${b`
+--- `a
++++ `${a}${b}`
++++ `<NL>`
++++ `\<NL>`
++++ `$`
++++ `${a}$`
++++ `$${a}`
+
+# 12.9.5 Regular expression literals; 22.2.1.1 patterns
++++ /a/
++++ /a/g
++++ /a/dgimsuy
++++ /a/dgimsvy
+--- /a/gg
+--- /a/x
+--- /a/uv
+--- /a/vu
++++ /a/gimsuyd
+--- /a/G
++++ /a/gi<NL>.b
++++ /a/ig.b
+--- /(/
+--- /)/
+--- /(a/
+--- /a)/
+--- /[/
++++ /]/
+--- /]/u
+--- /]/v
++++ /{/
+--- /{/u
++++ /}/
+--- /}/u
++++ /a{/
++++ /a{1/
++++ /a{1,/
++++ /a{1}/
++++ /a{1,}/
++++ /a{1,2}/
+--- /a{2,1}/
+--- /a{2,1}/u
+--- /a{1}{2}/
++++ /a{,1}/
+--- /a{,1}/u
+--- /{1}/
+--- /{1}/u
++++ /x{1}{/
+--- /x{1}{/u
+--- /a**/
+--- /a*+/
++++ /a+?/
++++ /a??/
+--- /a???/
+--- /*/
+--- /+/
+--- /?/
+--- /a|*/
+--- /(*)/
+--- /(?:*)/
+--- /^*/
+--- /^*/u
+--- /$+/
+--- /$+/u
+--- /\b+/
+--- /\b+/u
+--- /\B*/
++++ /(?=a)+/
+--- /(?=a)+/u
+--- /(?=a)*/v
++++ /(?!a)+/
++++ /(?!a){1}/
+--- /(?!a){1}/u
+--- /(?<=a)+/
+--- /(?<=a)+/u
+--- /(?<!a)*/
+--- /(?<!a)?/
++++ /(?<=a)/
++++ /(?<!a)/
+--- /(?<a)/
+--- /(?</
+--- /(?a)/
+--- /(?)/
++++ /(?:)/
+--- /(?:a/
+--- /[b-a]/
+--- /[b-a]/u
++++ /[a-b]/
++++ /[\d-a]/
+--- /[\d-a]/u
++++ /[a-\d]/
+--- /[a-\d]/u
++++ /[\d-\w]/
+--- /[\d-\w]/u
+--- /[\d-\w]/v
++++ /[a-]/u
++++ /[-a]/u
+--- /[a--b]/
+--- /[a--b]/u
++++ /[\s-\d]/
++++ /[%-\d]/
+--- /[%-\d]/u
++++ /[\b]/
++++ /[\B]/
+--- /[\B]/u
++++ /[\-]/u
++++ /[\c]/
+--- /[\c]/u
++++ /[\ca]/u
++++ /[\c1]/
++++ /[\c_]/
++++ /[\c*]/
+--- /[\c1]/u
++++ /\c/
+--- /\c/u
++++ /\ca/
++++ /\ca/u
++++ /\c1/
+--- /\c1/u
++++ /\a/
+--- /\a/u
++++ /\-/
+--- /\-/u
++++ /\_/
+--- /\_/u
++++ /\//u
++++ /\$\(\)\*\+\.\?\[\\\]\^\{\|\}/u
+--- /\ /u
+--- /\!/u
++++ /\0/
++++ /\0/u
++++ /\00/
+--- /\00/u
++++ /\01/
+--- /\01/u
++++ /\1/
+--- /\1/u
++++ /\1(a)/
++++ /\1(a)/u
++++ /(a)\1/u
++++ /(a)\2/
+--- /(a)\2/u
++++ /\2(a)(b)/u
++++ /\8/
+--- /\8/u
++++ /[\1]/
+--- /[\1]/u
++++ /[\8]/
+--- /[\8]/u
++++ /[\0]/u
+--- /[\00]/u
++++ /\x/
+--- /\x/u
++++ /\x4/
+--- /\x4/u
++++ /\x41/u
++++ /\xg/
++++ /\u/
+--- /\u/u
++++ /\u00/
+--- /\u00/u
++++ /A/u
++++ /\u{41}/
++++ /\u{41}/u
++++ /\u{110000}/
+--- /\u{110000}/u
++++ /\u{10FFFF}/u
+--- /\u{}/u
+--- /\u{g}/u
+--- /\u{41/u
++++ /\uD800/u
++++ /𐀀/u
++++ /[\uD800-\uDC00]/u
+--- /[\uDC00-\uD800]/
+--- /[\uDC00-\uD800]/u
++++ /[<U+1F600>-<U+1F601>]/u
+--- /[<U+1F601>-<U+1F600>]/u
+--- /[<U+1F601>-<U+1F600>]/
++++ /\p{L}/
++++ /\p{L}/u
++++ /\p{L}/v
++++ /\P{L}/u
+--- /\p{Foo}/u
++++ /\p{Foo}/
++++ /\p{Script=Latin}/u
+--- /\p{Script=Foo}/u
++++ /\p{sc=Latn}/u
+--- /\p{Script}/u
++++ /\p{General_Category=L}/u
++++ /\p{gc=L}/u
+--- /\p{L=Lu}/u
++++ /\p{Lu}/u
+--- /\p{lu}/u
++++ /\p{ASCII}/u
++++ /\p{Any}/u
++++ /\p{Assigned}/u
+--- /\p{ASCII=Yes}/u
+--- /\p{/u
+--- /\p/u
+--- /\p{}/u
+--- /\p{L/u
+--- /\p{ L }/u
++++ /\p/
++++ /\p{/
+--- /\p{RGI_Emoji}/u
++++ /\p{RGI_Emoji}/v
+--- /\P{RGI_Emoji}/v
+--- /[^\p{RGI_Emoji}]/v
++++ /[\p{RGI_Emoji}]/v
++++ /\p{Emoji_Keycap_Sequence}/v
+--- /\p{Basic_Emoji}/u
++++ /\p{Script_Extensions=Greek}/u
++++ /\p{scx=Grek}/v
++++ /[\p{L}--\p{Lu}]/v
++++ /[\p{L}&&\p{Lu}]/v
++++ /[a&&b]/v
+--- /[a&&&b]/v
+--- /[a&&b--c]/v
+--- /[a--b&&c]/v
+--- /[a-z--b]/v
++++ /[[a-z]--b]/v
++++ /[a&&b&&c]/v
++++ /[a--b--c]/v
++++ /[[a]]/v
+--- /[[a]]/u
+--- /[[a]/v
+--- /[a]]/v
+--- /[(]/v
+--- /[)]/v
+--- /[{]/v
+--- /[}]/v
+--- /[/]/v
+--- /[-]/v
+--- /[|]/v
+--- /[a|b]/v
++++ /[\(\)]/v
+--- /[!!]/v
+--- /[##]/v
+--- /[a!!b]/v
+--- /[&&]/v
++++ /[&]/v
++++ /[a&b]/v
+--- /[~~]/v
++++ /[\q{abc}]/v
++++ /[\q{abc|d}]/v
++++ /[\q{}]/v
+--- /[^\q{abc}]/v
++++ /[^\q{a}]/v
+--- /[^\q{a|bc}]/v
+--- /[^[\q{abc}]]/v
++++ /[^[\q{a}]]/v
+--- /\q{abc}/v
+--- /[\q{abc}]/u
+--- /[\q{abc]/v
+--- /[\q{(}]/v
++++ /[\q{\(}]/v
+--- /[a-\q{b}]/v
+--- /[\d-a]/v
++++ /[a-z]/v
+--- /[z-a]/v
++++ /[^]/v
++++ /[]/v
++++ /[\-]/v
++++ /[\&\-\!\#\%\,\:\;\<\=\>\@\`\~]/v
+--- /[\&]/u
++++ /(?<n>a)/
++++ /(?<n>a)\k<n>/
++++ /(?<n>a)\k<n>/u
++++ /\k<n>(?<n>a)/
+--- /(?<n>a)(?<n>b)/
++++ /(?<n>a)|(?<n>b)/
++++ /(?<n>a)|(?<n>b)|(?<n>c)/
+--- /((?<n>a)|(?<n>b))(?<n>c)/
++++ /(?:(?<n>a)|(?<n>b))\k<n>/
+--- /(?<n>a)(?:b|(?<n>c))/
+--- /(?<n>a)\k<m>/
+--- /(?<n>a)\k<m>/u
++++ /\k<n>/
+--- /\k<n>/u
++++ /\k/
+--- /\k/u
++++ /\k<n/
+--- /(?<n>a)\k<n/
+--- /(?<n>a)\k/
+--- /\k<n>(?<m>a)/
+--- /(?<>a)/
+--- /(?<1>a)/
+--- /(?<a b>a)/
+--- /(?<a-b>a)/
++++ /(?<$a_1>a)/
++++ /(?<a>a)/
++++ /(?<\u{61}>a)/
++++ /(?<\u{61}>a)/u
+--- /(?<a\u{20}>a)/
++++ /(?<<U+1D49C>>a)/
++++ /(?<<U+1D49C>>a)/u
++++ /(?<𝒜>a)/
+--- /(?<\ud835>a)/
++++ /(?<n>a)(?<N>b)/
++++ /(?i:a)/
++++ /(?i:a)/u
++++ /(?ims:a)/
++++ /(?i-ms:a)/
++++ /(?-i:a)/
+--- /(?ii:a)/
+--- /(?i-i:a)/
+--- /(?-ii:a)/
+--- /(?-:a)/
+--- /(?g:a)/
+--- /(?u:a)/
++++ /(?i-:a)/
+--- /(?i)/
+--- /(?i:a/
++++ /(?i:(?-i:a))/
++++ /a/u<NL>
++++ /[/]/
++++ /a[/]b/
++++ /\//
+--- /a\<NL>/
+--- /a<NL>/
+--- /[a<NL>]/
++++ x = /=/
++++ x = a / b / c
++++ x = a /b/ c
++++ x = a<NL>/b/g
++++ x = {}<NL>/a/g
++++ x = (a)<NL>/b/g
++++ if (a) /b/.test(c)
++++ x++ / 1
++++ x++<NL>/a/g
++++ a = b ? /c/ : /d/u
+--- /(?<n>(?<n>a))/
+--- /(?<n>a)(?=(?<n>b))/
++++ /(?:a|(?<n>b)|c(?<n>d))/
++++ /(?<n>a)|\k<n>/
++++ /(?<a>.)|(?<b>.)\k<a>/
++++ /./s
++++ /a|/
++++ /|/
++++ /()/
++++ /(?=)/
++++ /a{0}/
++++ /a{99999999999999999999}/
+--- /a{2,1}?/
+--- /a{1,2}{3}/
+--- /a{1,2}{3}/u
++++ /\u{1F600}/v
++++ /[<U+1F600>]/v
++++ /\p{Lu}/iv
++++ /[^\P{Lu}]/iv
++++ /\w/iu
++++ /[\p{Lu}&&\p{ASCII}]/v
++++ /[\d&&\w]/v
+--- /[\d&&a-z]/v
+--- /[a-z&&\d]/v
++++ /[[a-z]&&\d]/v
++++ /[_&&\d]/v
+
+# 13.2.5.1 Object initializer
+--- ({ __proto__: 1, __proto__: 2 })
+--- ({ __proto__: 1, "__proto__": 2 })
+--- ({ '__proto__': 1, "__proto__": 2 })
++++ ({ __proto__: 1, ['__proto__']: 2 })
++++ ({ __proto__: 1, __proto__ })
++++ ({ __proto__, __proto__ })
++++ ({ __proto__: 1, __proto__() {} })
++++ ({ __proto__: 1, get __proto__() { return 1 } })
+--- ({ __proto__: 1, a: 2, __proto__: 3 })
+--- ({ __proto__: 1, ...a, __proto__: 3 })
+--- ({ __proto__: 1, '\x5f_proto__': 2 })
++++ ({ __proto__: a, __proto__: b } = c)
++++ [{ __proto__: a, __proto__: b }] = c
++++ ({ a: { __proto__: b, __proto__: c } } = d)
++++ ({ __proto__: a, __proto__: b }) => 1
+--- ({ __proto__: a, __proto__: b })
+--- x = { __proto__: 1, __proto__: 2 }
+--- f({ __proto__: 1, __proto__: 2 })
+--- ({ __proto__: a, __proto__: b }).c = 1
+--- [{ __proto__: a, __proto__: b }]
+--- ({ a: { __proto__: b, __proto__: c } })
+--- ({ __proto__: 1, __proto__: 2 }) ? 1 : 2
++++ for ({ __proto__: a, __proto__: b } of c);
++++ for ({ __proto__: a, __proto__: b } in c);
+--- for ({ __proto__: a, __proto__: b };;);
++++ async ({ __proto__: a, __proto__: b }) => 1
+--- async ({ __proto__: a, __proto__: b })
+--- ({ a = 1 })
++++ ({ a = 1 } = b)
++++ ({ a = 1 }) => 1
+--- x = { a = 1 }
+--- f({ a = 1 })
+--- [{ a = 1 }]
++++ [{ a = 1 }] = b
+--- ({ b: { a = 1 } })
++++ ({ b: { a = 1 } } = c)
+--- ({ a = 1 }).b
++++ ({ a = 1 }, b) => 1
+--- ({ a = 1 }, b)
+--- async ({ a = 1 })
++++ async ({ a = 1 }) => 1
+--- ({ a = 1 } = b, { c = 1 })
+--- ({ a = 1 }) ? 1 : 2
+--- `${{ a = 1 }}`
++++ for ({ a = 1 } of b);
+--- for ({ a = 1 };;);
++++ ({ a: 1, a: 2 })
++++ ({ a: 1, get a() { return 1 } })
++++ ({ get a() { return 1 }, get a() { return 2 } })
++++ ({ a, a })
+--- ({ get a(b) {} })
+--- ({ get a(...b) {} })
+--- ({ set a() {} })
+--- ({ set a(b, c) {} })
+--- ({ set a(...b) {} })
++++ ({ set a(b = 1) {} })
++++ ({ set a([b]) {} })
++++ ({ set a(b,) {} })
++++ ({ get a() {}, set a(b) {} })
+--- ({ a(b, b) {} })
+--- ({ *a(b, b) {} })
+--- ({ async a(b, b) {} })
+--- ({ async *a(b, b) {} })
+--- ({ set a(b = 1) { 'use strict' } })
+--- ({ a(b = 1) { 'use strict' } })
++++ ({ a(b) { 'use strict' } })
+--- ({ a(b) { let b } })
++++ ({ a(b) { var b } })
+--- ({ async get a() {} })
+--- ({ async set a(b) {} })
++++ ({ get async() { return 1 } })
++++ ({ async async() {} })
++++ ({ async *a() {} })
+--- ({ *async a() {} })
+--- ({ get *a() {} })
+--- ({ static a() {} })
+--- ({ async<NL>a() {} })
++++ ({ get<NL>a() { return 1 } })
++++ ({ a: b, })
+--- ({ , })
+--- ({ a, , b })
+--- ({ a:: 1 })
+--- ({ 1 })
+--- ({ 'a' })
+--- ({ [a] })
+--- ({ a.b })
+--- ({ this })
+--- ({ true })
+--- ({ a b })
+--- ({ a() {} b() {} })
++++ ({ async })
++++ ({ get })
++++ ({ set })
++-- ({ get, set, async, static, of, let })
++++ ({ get: 1, set: 2 })
++++ ({ get() {}, set() {} })
++-- ({ a(yield) {} })
+--- ({ *a(yield) {} })
+--- ({ *a(b = yield) {} })
++++ ({ *a() { yield } })
+++- ({ a(await) {} })
+--- ({ async a(await) {} })
+--- ({ async a(b = await 1) {} })
++++ ({ async a() { await 1 } })
+--- ({ a() { await 1 } })
+--- ({ a() { yield 1 } })
+--- ({ *a() { await 1 } })
++++ ({ async *a() { yield await 1 } })
+
+# 13.3.5 the `new` operator; 13.3.7 super; 13.3.12 meta properties
+--- new.target.x
+--- x = new.target
+--- () => new.target
+--- ({ a: new.target })
++++ function f() { () => new.target }
++++ function f() { return () => () => new.target }
++++ function f(a = new.target) {}
++++ function* f() { new.target }
++++ async function f() { new.target }
+--- async () => new.target
++++ function f() { async () => new.target }
++++ ({ m() { new.target } })
++++ ({ get a() { return new.target } })
++++ class A { constructor() { new.target } }
++++ class A { m() { new.target } }
++++ class A { x = new.target }
++++ class A { static x = new.target }
++++ class A { static { new.target } }
+--- class A { [new.target]() {} }
+--- class A extends new.target {}
++++ function f() { class A { [new.target]() {} } }
++++ function f() { class A extends new.target {} }
+--- function f() { new.target = 1 }
+--- function f() { new.target++ }
+--- function f() { ++new.target }
+--- function f() { [new.target] = a }
+--- function f() { ({ a: new.target } = b) }
+--- function f() { for (new.target in a); }
+--- function f() { for (new.target of a); }
+--- function f() { new.target += 1 }
+--- function f() { new.target ??= 1 }
++++ function f() { new.target() }
++++ function f() { new new.target }
++++ function f() { new.target?.x }
++++ function f() { new.target`a` }
+--- function f() { new.tar }
++++ function f() { new .target }
++++ function f() { new. target }
++++ function f() { new<NL>.<NL>target }
+--- new.target = 1
++++ new a.b()
++++ new a()()
++++ new new a
+--- new a?.b
+--- new a?.b()
+--- new a?.()
++++ new (a?.b)()
+--- new a.b?.()
++++ new a()?.b
+--- new a++
++++ new a`b`
+--- new import('a')
++++ new (import('a'))
+--+ new import.meta
+--- new a => 1
++++ new (a => 1)
+--- new async () => 1
++++ new function () {}
++++ new class {}
+--- new
+--- new;
+--- super
+--- super.x
+--- super()
+--- super[x]
+--- x = super.y
+--- function f() { super.x }
+--- function f() { super() }
+--- function f() { () => super.x }
+--- () => super.x
+--- () => super()
+--- (function () { super.x })
+--- function* f() { super.x }
+--- async function f() { super.x }
+--- async () => super.x
+--- ({ a: super.x })
+--- ({ a: function () { super.x } })
+--- ({ a: () => super.x })
++++ ({ a() { super.x } })
++++ ({ a() { super[x] } })
+--- ({ a() { super() } })
++++ ({ a() { () => super.x } })
++++ ({ a() { () => () => super.x } })
+--- ({ a() { function f() { super.x } } })
++++ ({ a() { ({ b() { super.x } }) } })
+--- ({ a() { ({ b: function () { super.x } }) } })
++++ ({ get a() { return super.x } })
++++ ({ set a(b) { super.x = b } })
++++ ({ *a() { super.x } })
++++ ({ async a() { super.x } })
++++ ({ async *a() { super.x } })
++++ ({ a(b = super.x) {} })
+--- ({ a(b = super()) {} })
+--- ({ [super.x]() {} })
+--- ({ a() { super } })
+--- ({ a() { super?.x } })
+--- ({ a() { super?.() } })
++++ ({ a() { new super.x } })
++++ ({ a() { new super.x() } })
+--- ({ a() { new super() } })
+--- ({ a() { new super } })
++++ ({ a() { super.x() } })
++++ ({ a() { super.x`b` } })
++++ ({ a() { super.x++ } })
++++ ({ a() { super.x = 1 } })
++++ ({ a() { delete super.x } })
++++ ({ a() { delete super[x] } })
+--- ({ a() { super.#x } })
+--- ({ a() { super = 1 } })
+--- ({ a() { typeof super } })
++++ ({ a() { super.x?.y } })
+--- ({ a() { ({ super }) } })
++++ ({ a() { class B { [super.x]() {} } } })
++++ ({ a() { class B extends super.x {} } })
++++ ({ a() { class B { c = super.x } } })
+--- class A { constructor() { super() } }
++++ class A { constructor() { super.x } }
++++ class A { m() { super.x } }
+--- class A { m() { super() } }
++++ class A { static m() { super.x } }
++++ class A { x = super.y }
+--- class A { x = super() }
++++ class A { x = () => super.y }
+--- class A { x = function () { super.y } }
++++ class A { static x = super.y }
++++ class A { static { super.x } }
+--- class A { static { super() } }
++++ class A { static { () => super.x } }
+--- class A { static { function f() { super.x } } }
+--- class A { [super.x]() {} }
++++ class A { get a() { return super.x } }
++++ class A { #a() { super.x } }
++++ class A extends B { constructor() { super() } }
++++ class A extends B { constructor() { super(); super() } }
++++ class A extends B { constructor() { () => super() } }
++++ class A extends B { constructor() { () => () => super() } }
+--- class A extends B { constructor() { function f() { super() } } }
+--- class A extends B { constructor() { ({ a() { super() } }) } }
+--- class A extends B { constructor() { class C { constructor() { super() } } } }
++++ class A extends B { constructor() { class C extends D { constructor() { super() } } } }
++++ class A extends B { constructor() { class C { [super()]() {} } } }
++++ class A extends B { constructor() { class C extends super() {} } }
+--- class A extends B { constructor() { class C { x = super() } } }
++++ class A extends B { constructor(a = super()) {} }
+--- class A extends B { constructor() { super?.() } }
+--- class A extends B { constructor() { super`a` } }
+--- class A extends B { constructor() { new super() } }
++++ class A extends B { constructor() { super().x } }
++++ class A extends B { constructor() { super() = 1 } }
++++ class A extends B { constructor() { super()++ } }
++++ class A extends B { constructor() { super(...a) } }
+--- class A extends B { m() { super() } }
+--- class A extends B { static m() { super() } }
+--- class A extends B { get a() { super() } }
+--- class A extends B { *constructor() {} }
++++ class A extends B { 'constructor'() { super() } }
+--- class A extends B { ['constructor']() { super() } }
+--- class A extends B { static constructor() { super() } }
+--- class A extends B { x = super() }
+--- class A extends B { x = () => super() }
+--- class A extends B { static { super() } }
+--- class A extends B { [super()]() {} }
+--- class A extends B { [super.x]() {} }
+--- class A extends super.x {}
+--- class A extends super() {}
+--- class A extends (() => super.x) {}
++++ class A extends null { constructor() { super() } }
++++ class A extends (B, C) { constructor() { super() } }
++++ (class extends B { constructor() { super() } })
+--- (class { constructor() { super() } })
+--+ import.meta
+--+ import.meta.url
+--+ x = import.meta
+--+ () => import.meta
+--+ function f() { import.meta }
+--- import.meta = 1
+--- import.meta++
+--- [import.meta] = a
+--- ({ a: import.meta } = b)
+--- for (import.meta of a);
+--+ import.meta()
+--+ new import.meta()
+--+ import.meta?.x
+--+ import.meta`a`
+--- import.metaa
+--+ import .meta
+--+ import<NL>.meta
+--+ delete import.meta
+--+ typeof import.meta
++++ import('a')
++++ import('a',)
++++ import('a', b)
++++ import('a', b,)
+--- import('a', b, c)
+--- import()
+--- import(...a)
+--- import(a, ...b)
+--- import(a,,)
++++ import(a => 1)
++++ import(a = 1)
++++ import(a, b = 1)
++-- import(yield)
+++- import(await)
++++ import(a in b)
++++ for (import(a in b);;);
++++ import('a').then(b)
++++ import('a')?.b
++++ import('a')`b`
+--- import('a') = 1
+--- import('a')++
++++ import ('a')
++++ import<NL>('a')
+--- import
+--- import.a
+--- import.defer('a')
+--- x = import
+--- typeof import
+--- import?.('a')
+--- import.call(a)
+--- (import)('a')
+
+# 13.3.9 Optional chains
++++ a?.b
++++ a?.[b]
++++ a?.(b)
++++ a?.b.c
++++ a?.b?.c
+--- a?.b`c`
+--- a?.`c`
+--- a?.b<NL>`c`
+--- a?.[b]`c`
+--- a?.()`c`
+--- a?.b.c`d`
+--- a?.b?.c`d`
++++ (a?.b)`c`
++++ a?.b(`c`)
++++ a?.[`c`]
+--- a.b?.c`d${e}`
+--- a?.b = 1
+--- a?.b += 1
+--- a?.b ??= 1
+--- a?.[b] = 1
+--- a?.() = 1
+--- a?.b.c = 1
+--- (a?.b) = 1
++++ (a?.b).c = 1
+--- a?.b++
+--- ++a?.b
+--- a?.b--
+--- --a?.[b]
+--- (a?.b)++
+--- [a?.b] = c
+--- [...a?.b] = c
+--- ({ a: b?.c } = d)
+--- ({ ...a?.b } = c)
+--- [(a?.b)] = c
+--- for (a?.b in c);
+--- for (a?.b of c);
+--- for ((a?.b) of c);
+--- for (a?.b = 0;;);
++++ delete a?.b
++++ delete a?.[b]
++++ delete a?.b.c
++++ typeof a?.b
++++ a?.3:1
+--- a?.3
++++ a ?.3 : 1
++++ a?.5.b:1
++++ a?. b
++++ a ?. b
++++ a?.<NL>b
+--- a?<NL>.b
++++ a?.b?.()?.[c]
++++ a?.new
++++ a?.class
+--- a?.#b
+--- a?.b => 1
++++ a?.b.c()
++++ a?.().b
+--- a?.b!
+--- a?.
+
+# 13.4 Update expressions; 13.15.1 assignment targets
++++ a++
++++ a.b++
++++ a[b]++
++++ (a)++
++++ ((a))++
++++ ++a
++++ ++(a.b)
+--- 1++
+--- ++1
+--- 'a'++
+--- this++
+--- ++this
+--- null++
+--- true--
+--- /a/++
+--- `a`++
+--- a++ ++
+--- ++a++
+--- ++ ++a
++++ a++<NL>++<NL>b
++++ a<NL>++<NL>b
+--- a<NL>++
+--- a++b
+--- (a + b)++
+--- (a, b)++
+--- (a = b)++
+--- (a ? b : c)++
+--- (a => 1)++
+--- (function () {})++
+--- (class {})++
+--- ({})++
+--- [a]++
+--- ({ a })++
+--- ++[a]
+--- ++{ a }
++++ a()++
++++ ++a()
++++ a()--
++++ (a())++
++++ a.b()++
+--- new a()++
+--- ++new a
+--- a``++
+--- a?.()++
++++ typeof a++
++++ -a++
++++ !a--
+--- ++-a
+--- ++!a
+--- ++typeof a
+--- ++void 0
+--- ++delete a.b
+--- void 0++
++++ a = 1
++++ a.b = 1
++++ a[b] = 1
++++ (a) = 1
++++ ((a)) = 1
++++ (a.b) = 1
++++ (a[b]) = 1
+--- 1 = 2
+--- 'a' = 1
+--- this = 1
+--- null = 1
+--- true = 1
+--- /a/ = 1
+--- `a` = 1
+--- a + b = 1
+--- (a + b) = 1
++++ a, b = 1
+--- (a, b) = 1
+--- (a = b) = 1
++++ a = b = 1
+--- (a ? b : c) = 1
++++ a ? b : c = 1
++++ a ? b = 1 : c
+--- a || b = 1
+--- a ?? b = 1
+--- !a = 1
+--- -a = 1
+--- typeof a = 1
+--- a++ = 1
+--- ++a = 1
++++ a() = 1
++++ a.b() = 1
++++ (a()) = 1
++++ a()() = 1
+--- new a() = 1
+--- new a = 1
+--- a`b` = 1
++++ a() += 1
++++ a() -= 1
++++ a() **= 1
+--- a() ||= 1
+--- a() &&= 1
+--- a() ??= 1
+--- (a()) ||= 1
+--- [a()] = b
+--- [...a()] = b
+--- ({ a: b() } = c)
+--- ({ ...a() } = b)
+--- [(a())] = b
++++ for (a() in b);
++++ for (a() of b);
++++ for ((a()) in b);
++++ for (a.b() in c);
++++ for (a() = 0;;);
++++ a() = b() = 1
++++ async() = 1
++++ async()++
++++ for (async() in a);
++++ eval() = 1
++++ eval()++
+--- (a => 1) = 1
+--- a => 1 = 2
+--- a => {} = 1
+--- () => {} = 1
+--- (function () {}) = 1
+--- (class {}) = 1
+--- function f() {} = 1
++++ [a] = b
+--- [a] += b
+--- [a] ||= b
+--- ([a]) = b
+--- ([a]) += b
++++ [(a)] = b
++++ [((a))] = b
++++ [(a.b)] = c
+--- [(a = 1)] = b
++++ [(a) = 1] = b
+--- [([a])] = b
+--- [({ a })] = b
+--- [(a, b)] = c
++++ [a, b] = c
++++ [a, , b] = c
++++ [, ] = a
++++ [] = a
++++ [a = 1] = b
++++ [a.b = 1] = c
+--- [a = 1 = 2] = b
++++ [...a] = b
+--- [...a, b] = c
+--- [...a, ] = b
+--- [...a = 1] = b
++++ [...[a]] = b
++++ [...{ a }] = b
++++ [...a.b] = c
++++ [...(a)] = b
+--- [...(a = 1)] = b
+--- [...a, ...b] = c
++++ [a, ...b] = c
+--- [a + b] = c
+--- [1] = a
+--- ['a'] = b
+--- [this] = a
+--- [a ? b : c] = d
+--- [a => 1] = b
+--- [function () {}] = a
+--- [new a] = b
+--- [a++] = b
+--- [a`b`] = c
++++ [[a]] = b
++++ [[a] = 1] = b
++++ [{ a }] = b
+--- [{ a: 1 }] = b
+--- [[1]] = a
+--- ({}) = a
++++ ({} = a)
++++ ({ a } = b)
+--- ({ a }) = b
++++ ({ a: b } = c)
+--- ({ a: b }) = c
++++ ({ a: b.c } = d)
++++ ({ a: b[c] } = d)
++++ ({ a: (b) } = c)
++++ ({ a: (b.c) } = d)
+--- ({ a: (b = 1) } = c)
++++ ({ a: (b) = 1 } = c)
+--- ({ a: ({ b }) } = c)
+--- ({ a: ([b]) } = c)
+--- ({ (a) } = b)
+--- ({ (a): b } = c)
+--- ({ a: 1 } = b)
+--- ({ a: 'b' } = c)
+--- ({ a: this } = b)
+--- ({ a: b + c } = d)
+--- ({ a: b ? c : d } = e)
+--- ({ a: b => 1 } = c)
+--- ({ a: function () {} } = b)
+--- ({ a: b++ } = c)
+--- ({ a: new b } = c)
+--- ({ a: b`c` } = d)
+--- ({ a() {} } = b)
+--- ({ get a() { return 1 } } = b)
++++ ({ a: b = 1 } = c)
++++ ({ a = 1, b: c = 2 } = d)
++++ ({ a: { b } } = c)
+--- ({ a: { b: 1 } } = c)
++++ ({ a: [b] } = c)
+--- ({ a: [1] } = b)
++++ ({ [a]: b } = c)
++++ ({ 'a': b } = c)
++++ ({ 1: b } = c)
++++ ({ 1n: b } = c)
++++ ({ ...a } = b)
+--- ({ ...a, } = b)
+--- ({ ...a, b } = c)
++++ ({ a, ...b } = c)
++++ ({ ...a.b } = c)
++++ ({ ...(a) } = b)
+--- ({ ...{ a } } = b)
+--- ({ ...[a] } = b)
+--- ({ ...a = 1 } = b)
+--- ({ ...a, ...b } = c)
++++ ({ a, b, } = c)
+--- ({ if } = a)
++++ ({ if: a } = b)
+--- ({ true } = a)
+--- ({ this } = a)
++++ ({ new: a.b } = c)
+--- ({ a } += b)
+--- ({ a } ||= b)
++++ [a] = [b] = c
++++ ({ a } = { b } = c)
++++ [a, [b, { c, d: [e] }]] = f
++++ x = [a] = b
++++ x = ({ a } = b)
++++ x = { a } = b
+--- { a } = b
+--- { a: b } = c
+--- { a, b } = c
++++ a = { b } = c
++++ (a, { b } = c)
++++ ([a] = b) => 1
++++ ([a]) => 1
++++ (a) => 1
+--- ((a)) => 1
+--- ((a), b) => 1
+--- (a, (b)) => 1
+--- ([(a)]) => 1
+--- ({ a: (b) }) => 1
+--- ([a.b]) => 1
+--- ({ a: b.c }) => 1
+--- (a.b) => 1
+--- (a[b]) => 1
+--- (a()) => 1
+--- (1) => 1
+--- ('a') => 1
+--- (this) => 1
+--- (a + b) => 1
+--- (a ? b : c) => 1
++++ (a = b) => 1
++++ (a = b, c) => 1
++++ (a = b = c) => 1
+--- ((a = b)) => 1
++++ (a = (b)) => 1
++++ (a = (b) => 1) => 1
++++ ([a = 1]) => 1
++++ ({ a: b = 1 }) => 1
++++ ({ a: [b = 1] }) => 1
++++ (...a) => 1
+--- (...a, ) => 1
+--- (...a, b) => 1
+--- (...a = 1) => 1
++++ (...[a]) => 1
++++ (...{ a }) => 1
+--- (...a.b) => 1
+--- (...(a)) => 1
++++ (a, ...b) => 1
++++ (a, ) => 1
+--- (, ) => 1
+--- (a, , b) => 1
++++ () => 1
+--- (()) => 1
+--- ()
+--- (a, )
+--- (...a)
+--- (a, ...b)
+--- (...a) + 1
++++ (a, b) => 1
+--- (a, a) => 1
+--- (a, [a]) => 1
+--- ([a, a]) => 1
+--- ({ a, b: a }) => 1
+--- (a, { a }) => 1
+--- (a, ...a) => 1
+--- (a = 1, a) => 1
+--- a => { let a }
++++ a => { var a }
+--- (a) => { let a }
+--- ([a]) => { let a }
+--- ({ a }) => { const a = 1 }
+--- (...a) => { let a }
++++ (a) => { { let a } }
++++ a => { function a() {} }
+--- a => { class a {} }
+--- (a = 1) => { 'use strict' }
+--- ([a]) => { 'use strict' }
+--- (...a) => { 'use strict' }
++++ (a) => { 'use strict' }
++++ a => { 'use strict' }
++++ () => { 'use strict' }
+--- async (a = 1) => { 'use strict' }
++++ async a => { 'use strict' }
++++ a => a
++++ a => {}
++++ a => ({})
+--- a => {}<NL>()
+--- a => {}()
++++ (a => {})()
+--- a => {} + 1
+--- a => {} ? 1 : 2
+--- a => {}.b
+--- a => {}[b]
+--- a => {}`b`
++++ a => {}, b
+--- a => {} || b
+--- () => {} || a
+--- a = () => {} || b
++++ a => b ? c : d
+--- a || b => 1
+--- a ?? b => 1
+--- a + b => 1
++++ a ? b => 1 : c => 2
++++ a = b => 1
++++ a, b => 1
+--- !a => 1
+--- typeof a => 1
++++ a => b => c
++++ a => (b) => c
++++ x = a => 1 || 2
++++ x = a => 1, 2
++++ async a => {}
+--- async a => {}()
+--- async () => {} + 1
+--- async (a, a) => 1
++++ async (a, b) => 1
+--- async ((a)) => 1
+--- async (a.b) => 1
++++ async (...a) => 1
+--- async (...a, ) => 1
+--- async (...a, b) => 1
++++ async (...a)
++++ async (...a, )
++++ async (a, ...b)
++++ async (a, ) => 1
++++ async (a = 1) => 1
++++ async ([a]) => 1
+--- async ([a.b]) => 1
+--- async ({ a: b.c }) => 1
++++ async ([a.b])
+--- async (a) => { let a }
+--- async a => { let a }
++++ async a => await a
+--- a => await a
++++ async () => { await 1 }
+--- async () => await
+--- async () => { var await }
+--- async () => { function await() {} }
+--- async (a = () => await 1) => 1
++++ async (a = async () => await 1) => 1
+--- async ({ a = await 1 }) => 1
+--- async ([a = await 1]) => 1
+--- async ({ [await 1]: a }) => 1
+--- (a = await 1) => 1
+++- (a = await) => 1
++-- (a = yield) => 1
+--- (a = yield 1) => 1
++-- ({ [yield]: a }) => 1
+++- ({ [await]: a }) => 1
+--- async function f() { (a = await 1) => 1 }
+--- async function f() { (await) => 1 }
+--- async function f() { await => 1 }
+--- async function f() { (a, await) => 1 }
+--- async function f() { ([await]) => 1 }
+--- async function f() { ({ await }) => 1 }
+--- async function f() { ({ a = await 1 }) => 1 }
+--- async function f() { ({ [await 1]: a }) => 1 }
+--- async function f() { (a = b[await 1]) => 1 }
+--- async function f() { (a = () => await 1) => 1 }
++++ async function f() { (a = async () => await 1) => 1 }
+--- async function f() { async (a = await 1) => 1 }
+--- async function f() { async (await) => 1 }
+--- async function f() { async await => 1 }
++++ async function f() { (a = await 1) }
++++ async function f() { async (a = await 1) }
++++ async function f() { async (await 1) }
++++ async function f() { (await 1) }
+--- async function f() { (await 1) => 1 }
++++ async function f() { ((await 1)) }
++++ async function f() { (a, await 1) }
+--- async function f() { (a, await 1) => 1 }
+--- async function f() { ([await 1]) => 1 }
+--- function* f() { (a = yield) => 1 }
+--- function* f() { (a = yield 1) => 1 }
+--- function* f() { (yield) => 1 }
+--- function* f() { yield => 1 }
+--- function* f() { (a, yield) => 1 }
+--- function* f() { ([yield]) => 1 }
+--- function* f() { ({ yield }) => 1 }
+--- function* f() { ({ a = yield }) => 1 }
+--- function* f() { ({ [yield]: a }) => 1 }
+--- function* f() { (a = b[yield]) => 1 }
++++ function* f() { (a = function* () { yield }) => 1 }
++-- function* f() { (a = function () { yield }) => 1 }
+--- function* f() { async (a = yield) => 1 }
+--- function* f() { async (yield) => 1 }
++++ function* f() { async (yield) }
++++ function* f() { (a = yield) }
++++ function* f() { (yield) }
++++ function* f() { (a, yield) }
+--- function* f() { ((yield)) => 1 }
++-- function* f() { a = b => yield }
++-- function* f() { () => { yield } }
+--- function* f() { () => { yield 1 } }
+--- async function* f() { (a = yield) => 1 }
+--- async function* f() { (a = await 1) => 1 }
+--- async function* f() { async (a = yield) => 1 }
+
+# 13.5.1 The delete operator
++-- delete x
++-- delete (x)
++-- delete ((x))
++++ delete x.y
++++ delete x[y]
++++ delete (x.y)
++++ delete x()
++++ delete 1
++++ delete this
++++ delete (x, y)
++++ delete (x = 1)
++++ delete x++
++++ delete -x
++++ delete typeof x
++++ delete void x
++-- delete delete x
++++ delete delete x.y
++++ delete x?.y
++++ delete (x?.y)
++++ delete x`y`
++++ delete new x
++++ delete (x)()
++++ delete (x).y
++++ delete ((x).y)
++++ delete (x + y)
++++ delete (x ? y : z)
++++ delete (x => 1)
++++ delete function () {}
++++ delete class {}
++++ delete [x]
++++ delete { x }
++++ delete 'x'
++++ delete null
++-- delete eval
++-- delete arguments
++-- delete yield
++-- delete await
++-- delete let
++-- delete async
+--- delete async x => 1
+--- delete x => 1
++-- delete location
++-- delete (location)
++-- delete top
++++ delete window.top
++++ delete location.href
++++ delete (0, x)
++-- x = delete y
++-- x = [delete y]
++-- f(delete x)
++-- if (delete x) y
++-- !delete x
++-- typeof delete x
+--- delete x ** 2
++-- (delete x) ** 2
+--- -x ** 2
++++ (-x) ** 2
+--- +x ** 2
+--- !x ** 2
+--- ~x ** 2
+--- typeof x ** 2
+--- void x ** 2
+--- delete x.y ** 2
++++ x ** -y
++++ x ** y ** z
++++ x++ ** 2
++++ ++x ** 2
+--- -x++ ** 2
++++ (-1) ** 2
++++ - (x ** 2)
++++ x **= -y
+--- x ** = y
+--- x * * y
++-- function f() { delete x }
+--- function f() { 'use strict'; delete x }
+--- function f() { 'use strict'; delete (x) }
++++ function f() { 'use strict'; delete x.y }
++-- function f() { delete x; 'use strict' }
+--- function f() { 'use strict'; () => delete x }
+--- function f() { 'use strict'; function g() { delete x } }
+--- () => { 'use strict'; delete x }
+--- ({ m() { 'use strict'; delete x } })
+--- class A { m() { delete x } }
+--- class A { x = delete y }
+--- class A { static { delete x } }
+--- class A { [delete x]() {} }
+--- class A extends (delete x, B) {}
++++ class A { m() { delete x.y } }
+--- class A { #a; m() { delete this.#a } }
+--- class A { #a; m() { delete (this.#a) } }
+--- class A { #a; m() { delete ((this.#a)) } }
+--- class A { #a; m() { delete this?.#a } }
+--- class A { #a; m() { delete this.b.#a } }
+--- class A { #a; m() { delete this?.b.#a } }
+--- class A { #a; m() { delete (this?.b.#a) } }
++++ class A { #a; m() { delete this.#a.b } }
++++ class A { #a; m() { delete this.#a[b] } }
++++ class A { #a; m() { delete this.#a?.b } }
++++ class A { #a; m() { delete this.#a() } }
++++ class A { #a; m() { delete (0, this.#a) } }
++++ class A { #a; m() { delete (this.#a, 0) } }
++++ class A { #a; m() { delete typeof this.#a } }
+--- class A { #a; m() { () => delete this.#a } }
+--- class A { #a; static { delete A.#a } }
+--- class A { #a; b = delete this.#a }
+
+# 13.5.2 await; 13.6-13.13 operators
++++ async function f() { await 1 }
+--- async function f() { await }
++++ async function f() { await<NL>1 }
+--- async function f() { await a ** b }
++++ async function f() { (await a) ** b }
++++ async function f() { a ** await b }
++++ async function f() { await await a }
++++ async function f() { await a++ }
++++ async function f() { -await a }
+--- async function f() { await -a ** b }
+--- async function f() { var await }
+--- async function f() { let await }
+--- async function f() { await = 1 }
+--- async function f() { await: 1 }
+--- async function f() { ({ await }) }
++++ async function f() { ({ await: 1 }) }
++++ async function f() { x.await }
+--- async function f() { class await {} }
+--- async function f() { function await() {} }
+++- async function f() { (function await() {}) }
+--- async function f() { (async function await() {}) }
+++- async function f() { function g(await) {} }
+++- async function f() { function g(a = await) {} }
+++- async function f() { function g() { await } }
+--- async function f() { function g() { await 1 } }
+++- async function f() { function g() { var await } }
+--- async function f() { () => await 1 }
+++- async function f() { () => { var await } }
+--- async function f() { try {} catch (await) {} }
+--- async function f() { ({ await } = a) }
+--- async function f() { [await] = a }
+--- async function f() { for (await of a); }
+--- async function f() { for (await in a); }
++++ async function f() { for await (a of b); }
++++ async function f() { for await (var a of b); }
++++ async function f() { for await (let a of b); }
+--- async function f() { for await (a in b); }
+--- async function f() { for await (;;); }
+--- async function f() { for await (a of b, c); }
++++ async function f() { for await (async of a); }
+--- async function f() { for await (let of a); }
+--- async function f() { for await (var a = 1 of b); }
+--- async function f() { for (async of a); }
+--- async function f() { for (let of a); }
++++ async function f() { for await (a.b of c); }
++++ async function f() { for await ([a] of b); }
++++ async function f() { for await (a() of b); }
++++ async function f() { for await<NL>(a of b); }
++++ async function f() { for<NL>await (a of b); }
+--- function f() { for await (a of b); }
+--+ for await (a of b);
+--- function* f() { for await (a of b); }
++++ async function* f() { for await (a of b); }
++++ async () => { for await (a of b); }
+--- () => { for await (a of b); }
+--- async function f() { function g() { for await (a of b); } }
+--- async function f() { () => { for await (a of b); } }
+--- async function f() { class A { m() { for await (a of b); } } }
+--- class A { static { for await (a of b); } }
++++ class A { async m() { for await (a of b); } }
+--- function f() { await 1 }
+++- function f() { await }
+++- function f() { await: 1 }
+++- function f() { var await }
+++- function f() { async function await() {} }
+--- function f() { (async function await() {}) }
+--- function f(a = await 1) {}
+--- async function f(a = await 1) {}
+--- async function f(a = await) {}
+--- async function f(await) {}
+--- async function f([await]) {}
+--- async function f({ await }) {}
+--- async function f(...await) {}
+--- async function f({ [await 1]: a }) {}
+--- async function f(a = () => await 1) {}
++++ async function f(a = async () => await 1) {}
++++ async function f(a = async function () { await 1 }) {}
+++- async function f(a = function () { await }) {}
+++- async function f(a = function await() {}) {}
+--- async function f(a = class { [await 1]() {} }) {}
+++- async function await() {}
+++- async function await() { await 1 }
+--- (async function await() {})
++++ (async function () { await 1 })
+--- (async function f(a = await 1) {})
+++- async function* await() {}
+--- (async function* await() {})
+--- async function* f(a = await 1) {}
+--- async function* f(a = yield) {}
++++ async function* f() { yield await 1 }
+--- async function* f() { await yield 1 }
++++ async function* f() { yield* a }
++++ async function* f() { yield<NL>await 1 }
+--- async function* f() { var yield }
+--- async function* f() { var await }
++-- async function* yield() {}
+--- (async function* yield() {})
++-- async function f() { yield }
+--- async function f() { yield 1 }
++-- async function f() { var yield }
++++ async function<NL>f() {}
+--- async<NL>function f() { await 1 }
+++- async function f() {}<NL>async function f() {}
+--- async function() {}
+--- async function*() {}
++++ async function *f() {}
++++ async *function f() {}
+--- async function f() { class A { x = await 1 } }
++++ async function f() { class A { [await 1]() {} } }
++++ async function f() { class A { [await 1] = 1 } }
++++ async function f() { class A extends (await 1) {} }
+--- async function f() { class A { static { await 1 } } }
+--- async function f() { class A { static { await } } }
+++- async function f() { class A { x = await } }
+--- async function f() { class A { x = () => await 1 } }
++++ async function f() { class A { x = async () => await 1 } }
+--- async function f() { class A { static x = await 1 } }
+--- async function f() { class A { m(a = await 1) {} } }
++++ async function f() { class A { async m() { await 1 } } }
+--- class A { static { await } }
+--- class A { static { await 1 } }
+--- class A { static { await: 1 } }
+--- class A { static { var await } }
+--- class A { static { let await } }
+--- class A { static { function await() {} } }
+--- class A { static { class await {} } }
+--- class A { static { (await) => 1 } }
+--- class A { static { await => 1 } }
+--- class A { static { async await => 1 } }
+--- class A { static { ({ await }) } }
++++ class A { static { ({ await: 1 }) } }
++++ class A { static { x.await } }
+++- class A { static { function f() { await } } }
+++- class A { static { function f(await) {} } }
+++- class A { static { () => await } }
+++- class A { static { () => { var await } } }
++++ class A { static { async () => await 1 } }
++++ class A { static { async function f() { await 1 } } }
+--- class A { static { class B { [await]() {} } } }
+++- class A { static { class B { x = await } } }
+--- class A { static { class B { static { await } } } }
+++- class A { static { ({ m() { await } }) } }
+++- class A { static { ({ m(await) {} }) } }
+--- class A { static { ({ [await]: 1 }) } }
+--- class A { static { try {} catch (await) {} } }
+++- class A { static { (function await() {}) } }
+--- class A { static { (async function await() {}) } }
+++- class A { x = await }
+--- class A { x = await 1 }
+++- class A { [await]() {} }
+--+ class A { [await 1]() {} }
+++- class A extends await {}
+--+ class A extends (await 1) {}
++++ a ?? b
++++ a ?? b ?? c
+--- a ?? b || c
+--- a || b ?? c
+--- a ?? b && c
+--- a && b ?? c
++++ (a ?? b) || c
++++ a ?? (b || c)
++++ a ?? (b && c)
++++ (a && b) ?? c
++++ a || (b ?? c)
++++ a ?? b | c
++++ a | b ?? c
++++ a ?? b ? c : d
++++ a ? b ?? c : d || e
++++ a || b && c
+--- a ?? b || c ?? d
++++ a ??<NL>b
+--- a ? ? b
++++ a ??= b || c
++++ a ||= b ?? c
++++ a in b
+--- #a in b
++++ 1 in<NL>b
+--- a instanceof
+--- a = b ? c
+--- a ? b :
+--- a ?
+--- , a
+--- a,
+--- a,, b
+--- a b
+--- a 1
+--- a 'b'
+--- 1 2
+--- a = 1 b = 2
+--- var a = 1 b
++++ a<NL>b
++++ a;<NL>;b
++++ {} []
++++ {}<NL>[]
+--- {}.a
+--- {} = a
+--- { a: 1 }.b
++++ ({ a: 1 }).b
+--- { a: 1, b: 2 }
++++ { a: 1 }
++++ { a: b: 2 }
+--- { 'a': 1 }
++++ {} + a
+--- {} / a / b
+--- { get a() {} }
++++ { a }
++++ { a, b }
+--- function f() {}()
+--- function f() {} ()
++++ function f() {}<NL>(1)
++++ (function f() {})()
++++ (function f() {}())
+--- function f() {}.name
++++ function f() {} + 1
++++ function f() {} / 1 /g
+--- class A {}()
++++ class A {}<NL>(1)
+--- class A {}.name
++++ class A {} / 1 /g
+--- function () {}
+--- function* () {}
+--- class {}
++++ (function () {})
++++ (class {})
++++ x = function () {}
++++ x = class {}
++++ !function () {}()
++++ void function f() {}()
++++ function f() {} function g() {}
++++ function f() {}; function g() {};
+--- function f(,) {}
++++ function f(a,) {}
+--- function f(a,,) {}
+--- function f(...a,) {}
+--- function f(...a, b) {}
+--- function f(...a = 1) {}
++++ function f(...[a]) {}
++++ function f(...{ a }) {}
++++ function f(a = 1, b) {}
+--- function f(a.b) {}
+--- function f((a)) {}
+--- function f(1) {}
+--- function f(this) {}
+--- function f(a b) {}
+--- function f(a = ) {}
++++ function f(a) { return }
++++ function f() { return<NL>1 }
+--- function f
+--- function f(
+--- function f()
+--- function f() {
+--- function
+--- f(
+--- f(a,
++++ f(a,)
+--- f(,)
+--- f(a,,)
++++ f(...a)
++++ f(...a, ...b)
+--- f(...)
+--- f(a ...b)
+--- [
+--- [a
+--- [a,
++++ [,]
++++ [,,]
++++ [a,,]
++++ [...a]
++++ [...a, ...b]
+--- [...]
++++ [... a = 1]
+--- {
+--- }
+--- (
+--- )
+--- (a
+--- a)
+--- ]
+--- { a
+--- ({ a
+--- ({ a: 1
+--- ({ a:
+--- ({ a: }
+--- if
+--- if (
+--- if (a
+--- if (a)
+--- if (a) else b
++++ if (a) ; else ;
+--- if (a) {} else
+--- if a b
+--- else a
+--- while
+--- while (a)
+--- while () a
+--- do
+--- do a
+--- do a while (b)
++++ do a; while (b)
++++ do a<NL>while (b)
++++ do a; while (b) c
++++ do ; while (a) b
++++ do ; while (a)<NL>b
++++ do {} while (a) b
++++ do {} while (a); b
++++ do {} while (a) do {} while (b)
++++ do do ; while (a) while (b)
+--- do a while (b);
+--- do {} while a
+--- for
+--- for (
+--- for (;
+--- for (;;
+--- for (;;)
+--- for (a;b)
+--- for (a;b;c;d);
++++ for (;;) {}
+--- for (a of b, c);
++++ for (a of (b, c));
++++ for (a in b, c);
+--- for (a of b of c);
++++ for (a in b in c);
++++ for (a of b in c);
+--- for (var a of b, c);
++++ for (var a in b, c);
+--- for (a, b of c);
+--- for (a, b in c);
+--- for (a = 1 of b);
+--- for (a = 1 in b);
+--- for ((a = 1) in b);
++++ for ((a) of b);
++++ for ((a) in b);
++++ for (a.b of c);
++++ for (a[b] in c);
++++ for ((a.b) of c);
++++ for ([a] of b);
++++ for ({ a } of b);
++++ for ([a = 1] of b);
+--- for ([a] = b of c);
+--- for ({ a } = b in c);
++++ for ([a.b] of c);
++++ for ([(a)] of b);
+--- for (([a]) of b);
+--- for (({ a }) of b);
+--- for (({ a }) in b);
+--- for ([...a, b] of c);
+--- for ({ a: 1 } of b);
+--- for ([1] of a);
+--- for (1 of a);
+--- for (1 in a);
+--- for ('a' of b);
+--- for (this of a);
+--- for (this in a);
+--- for (a + b of c);
+--- for (a + b in c);
+--- for (a ? b : c of d);
+--- for (a++ of b);
+--- for (new a of b);
+--- for (new a in b);
+--- for (new a.b of c);
+--- for (a`b` of c);
+--- for (a => 1 of b);
+--- for (function () {} of a);
++++ for (function () {}.a of b);
+--- for (class {} of a);
++++ for (class {}.a in b);
+--- for (let of a);
++-- for (let in a);
++-- for (let;;);
++-- for (let = 1;;);
+--- for (let.a of b);
++-- for (let.a in b);
++-- for (let.a;;);
++++ for (let[a] of b);
++++ for (let[a] in b);
+--- for (let[a];;);
++++ for (let[a] = b;;);
+--- for (let() of a);
+--- for (let().a of b);
++-- for ((let) of a);
++-- for ((let.a) of b);
++++ for (let of, a;;);
++++ for (let of = 1;;);
++++ for (let of of a);
++++ for (let of in a);
++++ for (let of;;);
+--- for (async of a);
++++ for (async in a);
++++ for (async;;);
++++ for (async of => 1;;);
+--- for (async of => 1 of a);
++++ for ((async) of a);
++++ for (async.a of b);
++++ for (async() of a);
+--- for (async a of b);
++++ for (var async of a);
++++ for (let async of a);
++++ for (of of a);
++++ for (of in a);
++++ for (of;;);
++++ for (var of of a);
++++ for (var of in of);
++++ for (let of of of);
++++ for (const of of a);
++-- for (yield of a);
+++- for (await of a);
++-- for (static of a);
++++ for (var a of b);
++++ for (var a in b);
++++ for (let a of b);
++++ for (let a in b);
++++ for (const a of b);
++++ for (const a in b);
+--- for (var a, b of c);
+--- for (var a, b in c);
+--- for (let a, b of c);
+--- for (const a, b in c);
+--- for (var a = 1 of b);
++-- for (var a = 1 in b);
+--- for (var a = 1, b in c);
++-- for (var a = b in c in d);
++-- for (var a = (b in c) in d);
+--- for (var a = b in c;;);
++++ for (var a = (b in c);;);
+--- for (var a = b ? c in d : e in f;;);
++++ for (var a = [b in c];;);
+--- for (var a = () => b in c;;);
+--- for (a = b in c;;);
++++ for (a = (b in c);;);
+--- for (a in b;;);
++++ for (a ? b in c : d;;);
++++ for (f(a in b);;);
++++ for ([a in b];;);
++++ for ({ a: b in c };;);
++++ for (function () { a in b };;);
++++ for (() => { a in b };;);
+--- for (() => a in b;;);
++++ for (`${a in b}`;;);
++++ for (a[b in c];;);
++++ for (class { [a in b]() {} };;);
++++ for (class { a = b in c };;);
++++ for (x = class extends (a in b) {};;);
+--- for (let a = 1 of b);
+--- for (let a = 1 in b);
+--- for (const a = 1 of b);
+--- for (const a = 1 in b);
+--- for (var [a] = 1 of b);
+--- for (var [a] = 1 in b);
+--- for (var { a } = 1 in b);
+--- for (let [a] = 1 in b);
++++ for (var [a] of b);
++++ for (var { a } in b);
++++ for (let [a] of b);
++++ for (let { a } in b);
+--- for (let [a, a] of b);
+--- for (let { a, b: a } in c);
+--- for (const [a, a] of b);
++++ for (var [a, a] of b);
+--- for (let a of b) { var a }
+--- for (let a in b) { var a }
+--- for (let a;;) { var a }
++++ for (let a of b) { let a }
+--- for (let a of b) { { var a } }
+--- for (let a of b) var a
++++ for (let a in b) { function a() {} }
+--- for (const a of b) { var a }
+--- for (let [a] of b) { var a }
+--- for (let { a } of b) { var a }
++++ for (let a of b) { var b }
++++ for (var a of b) { var a }
++++ for (var a of b) { let a }
++++ for (let a of a);
+--- for (let a = 1;;) { var a }
++++ for (let a = 1;;) { let a }
+--- for (let a, a;;);
+--- for (let a, b;;) { var b }
+--- for (let a;;) function f() {}
++++ for (let a;;) { function a() {} }
+--- for (const a;;);
++++ for (const a = 1;;);
+--- for (const a = 1, b;;);
++++ for (let a;;);
+--- for (let [a];;);
+--- for (let { a };;);
+--- for (var [a];;);
+--- for (var { a };;);
++++ for (var a;;);
++++ for (let<NL>a of b);
+--- for (let<NL>of a);
++++ for (let<NL>[a] of b);
++++ for (let [a] in b);
++++ for (let {} of a);
++++ for (let [] in a);
++++ for (var [] of a);
++-- for (a of b) let<NL>c
+--- for (a of b) let c
+--- for (a of b) function f() {}
+--- for (a in b) function f() {}
+--- for (a of b) class A {}
+--- for (a of b) const c = 1
+--- for (a of b) async function f() {}
+--- for (a of b) l: function f() {}
+--- for (;;) function f() {}
+--- for (;;) l: function f() {}
+--- for (;;) class A {}
+--- for (;;) let a
+--- for (;;) let [a] = b
+--- for (;;) const a = 1
+--- while (a) function f() {}
+--- while (a) l: function f() {}
+--- while (a) l: m: function f() {}
+--- while (a) class A {}
+--- while (a) let b
+--- while (a) const b = 1
+--- while (a) async function f() {}
+--- while (a) function* f() {}
+--- do function f() {} while (a)
+--- do l: function f() {} while (a)
+--- do class A {} while (a)
+--- do let a; while (b)
+--- do async function f() {} while (a)
++-- if (a) function f() {}
++-- if (a) function f() {} else function g() {}
++-- if (a) ; else function f() {}
+--- if (a) function* f() {}
+--- if (a) async function f() {}
+--- if (a) async function* f() {}
+--- if (a) class A {}
+--- if (a) const b = 1
+--- if (a) let b = 1
+--- if (a) l: function f() {}
+--- if (a) ; else l: function f() {}
+--- if (a) l: m: function f() {}
++++ if (a) { function f() {} }
++-- if (a) function f() {}<NL>function f() {}
++-- if (a) function f() {} let f
++-- if (a) function f() {} ; let f
++-- { if (a) function f() {} ; let f }
++-- if (a) if (b) function f() {} else function g() {}
++-- l: function f() {}
++-- l: m: function f() {}
+--- l: function* f() {}
+--- l: async function f() {}
+--- l: async function* f() {}
+--- l: class A {}
+--- l: let a
+--- l: let [a] = b
+--- l: const a = 1
++++ l: var a
++++ l: { function f() {} }
+--- l: function f() {} let f
++-- l: function f() {} var f
+--- { l: function f() {} let f }
+--- { l: function f() {} var f }
++++ l: async<NL>function f() {}
++-- l: if (a) function f() {}
+--- with (a) function f() {}
+--- with (a) l: function f() {}
+--- with (a) class A {}
+--- with (a) let b
++-- with (a) b
++-- with (a) {}
++-- with (a, b) c
+--- with () a
+--- with (a)
++-- with (a) with (b) c
++-- function f() { with (a) b }
+--- function f() { 'use strict'; with (a) b }
++-- function f() { with (a) b; 'use strict' }
+--- function f() { 'use strict'; function g() { with (a) b } }
+--- () => { 'use strict'; with (a) b }
+--- (function () { 'use strict'; with (a) b })
+--- ({ m() { 'use strict'; with (a) b } })
+--- class A { m() { with (a) b } }
+--- class A { x = function () { with (a) b } }
+--- class A { static { with (a) b } }
+--- class A { [function () { with (a) b }]() {} }
+--- class A extends function () { with (a) b } {}
++-- function* f() { with (a) yield }
++-- async function f() { with (a) await b }
+--- with (a) function f() {} ; b
+
+# 14.2 Blocks; 14.3 declarations; 8.3 scope analysis
+--- let a; let a
+--- let a, a
+--- let a; const a = 1
+--- const a = 1; const a = 2
+--- const a = 1, a = 2
+--- let a; var a
+--- var a; let a
++++ var a; var a
++++ var a, a
+--- let a; { var a }
+--- let a; { { var a } }
+--- let a; if (b) var a
+--- let a; for (var a;;);
+--- let a; for (var a of b);
+--- let a; for (var a in b);
+--- let a; while (b) var a
+--- let a; do var a; while (b)
+--- let a; try { var a } catch {}
+--- let a; try {} catch { var a }
+--- let a; try {} finally { var a }
+--- let a; switch (b) { case 1: var a }
+--- let a; l: var a
+--- let a; with (b) var a
++++ let a; { let a }
++++ let a; function f() { var a }
++++ let a; () => { var a }
++++ let a; class A { static { var a } }
++++ let a; { function a() {} }
+--- let a; function a() {}
+--- function a() {} let a
+++- function a() {} var a
+++- function a() {} function a() {}
+--- function a() {} class a {}
+--- class a {} function a() {}
+--- class a {} class a {}
+--- class a {} var a
+--- var a; class a {}
+--- class a {} let a
+--- const a = 1; function a() {}
+--- let a; function* a() {}
+--- let a; async function a() {}
+++- var a; function a() {}
++++ var a; { function a() {} }
++++ var a; { let a }
++++ { let a } var a
++++ { let a } let a
+--- { var a } let a
++++ { var a } var a
+--- { var a; let a }
+--- { let a; var a }
+--- { let a; { var a } }
++++ { let a; { let a } }
+--- { { var a } let a }
+--- { let a; let a }
+--- { const a = 1; let a }
+--- { let a; function a() {} }
+--- { function a() {} let a }
+--- { function a() {} var a }
+--- { var a; function a() {} }
++-- { function a() {} function a() {} }
+--- { function a() {} function* a() {} }
+--- { function* a() {} function a() {} }
+--- { function* a() {} function* a() {} }
+--- { function a() {} async function a() {} }
+--- { async function a() {} async function a() {} }
+--- { async function a() {} function a() {} }
+--- { function a() {} class a {} }
+--- { class a {} function a() {} }
+--- { class a {} class a {} }
+--- { class a {} var a }
+--- { function a() {} { var a } }
++-- { function a() {} function a() {} function a() {} }
++++ { function a() {} { function a() {} } }
++++ function f() { function a() {} function a() {} }
++++ function f() { function a() {} function* a() {} }
++++ function f() { function a() {} var a }
+--- function f() { function a() {} let a }
+--- function f() { let a; function a() {} }
+--- function f() { let a; var a }
+--- function f() { var a; let a }
+--- function f() { let a; { var a } }
++++ function f() { { let a } var a }
++++ function f() { var a; var a }
+--- function f() { let a; let a }
+--- function f() { class a {} function a() {} }
++-- function f() { { function a() {} function a() {} } }
+--- function f() { 'use strict'; { function a() {} function a() {} } }
++++ function f() { 'use strict'; function a() {} function a() {} }
+--- function f() { var a; const a = 1 }
++++ function f() { { function a() {} } let a }
++++ function f() { { function a() {} } var a }
++++ { function a() {} } let a
++++ { function a() {} } var a
++++ { function a() {} } function a() {}
++++ { function a() {} } class a {}
++++ let a; { { function a() {} } }
++-- const a = 1; if (b) function a() {}
++++ { let a; { function a() {} } }
+--- switch (a) { case 1: let b; case 2: let b }
+--- switch (a) { case 1: let b; default: var b }
+--- switch (a) { case 1: var b; default: let b }
++++ switch (a) { case 1: let b; case 2: { let b } }
+--- switch (a) { case 1: let b; case 2: { var b } }
++-- switch (a) { case 1: function b() {} case 2: function b() {} }
+--- switch (a) { case 1: function b() {} default: let b }
+--- switch (a) { case 1: function b() {} default: var b }
+--- switch (a) { case 1: class b {} case 2: function b() {} }
+--- switch (a) { case 1: function b() {} case 2: function* b() {} }
+--- switch (a) { case 1: async function b() {} case 2: async function b() {} }
++++ switch (a) { case 1: var b; case 2: var b }
++++ switch (a) { case 1: let b } let b
++++ let b; switch (a) { case 1: let b }
+--- let b; switch (a) { case 1: var b }
+--- switch (a) { default: default: }
+--- switch (a) { default: case 1: default: }
++++ switch (a) { case 1: case 1: }
++++ switch (a) { case 1: default: case 2: }
++++ switch (a) { }
+--- switch (a) { b }
+--- switch (a) { case: }
+--- switch (a) { case 1 }
+--- switch (a) { default }
++-- switch (a) { case 1: let }
++++ switch (a) { case 1: let<NL>b }
++++ switch (a) { case 1: function f() {} }
++-- switch (a) { case 1: l: function f() {} }
++++ switch (a) { case 1: class A {} }
++-- switch (a) { case 1: if (b) function f() {} }
+--- try {} catch (a) { let a }
+--- try {} catch (a) { const a = 1 }
++++ try {} catch (a) { var a }
++++ try {} catch (a) { var a = 1 }
++++ try {} catch (a) { { var a } }
++++ try {} catch (a) { { let a } }
+--- try {} catch (a) { function a() {} }
++++ try {} catch (a) { { function a() {} } }
+--- try {} catch (a) { class a {} }
++++ try {} catch (a) { for (var a;;); }
++++ try {} catch (a) { for (var a in b); }
++++ try {} catch (a) { for (var a of b); }
++++ try {} catch (a) { for (var [a] of b); }
++-- try {} catch (a) { for (var a = 1 in b); }
++++ try {} catch (a) { { for (var a of b); } }
++++ try {} catch (a) { if (b) for (var a of c); }
++++ try {} catch (a) { for (let a of b); }
++++ try {} catch (a) { for (a of b); }
++++ try {} catch (a) { for (var b of a) { var a } }
++++ try {} catch (a) { () => { for (var a of b); } }
++++ try {} catch (a) { function f() { for (var a of b); } }
++++ try {} catch (a) { function f() { let a } }
++++ try {} catch (a) { try {} catch (a) {} }
++++ try {} catch (a) { try {} catch (b) { var a } }
++++ try {} catch (a) { try {} catch (b) { let a } }
+--- try {} catch ([a]) { var a }
+--- try {} catch ({ a }) { var a }
+--- try {} catch ([a]) { let a }
+--- try {} catch ([a]) { function a() {} }
+--- try {} catch ([a]) { { var a } }
+--- try {} catch ([a]) { for (var a in b); }
+--- try {} catch ([a]) { for (var a;;); }
+--- try {} catch ([a]) { for (var a of b); }
+--- try {} catch ({ a: [b] }) { var b }
+--- try {} catch ([a, a]) {}
+--- try {} catch ({ a, b: a }) {}
+--- try {} catch ({ a, ...a }) {}
++++ try {} catch ([a, b]) {}
+--- try {} catch (a, b) {}
+--- try {} catch (a = 1) {}
+--- try {} catch ([a] = b) {}
+--- try {} catch (...a) {}
+--- try {} catch (a.b) {}
+--- try {} catch ((a)) {}
+--- try {} catch () {}
++++ try {} catch {}
++++ try {} catch (a) {}
+--- try {}
++++ try {} finally {}
++++ try {} catch {} finally {}
+--- try {} catch {} catch {}
+--- try {} finally {} catch {}
+--- try a; catch {}
+--- try {} catch (a) b
+--- try {} finally a
+--- catch {}
+--- finally {}
+--- try {} catch (a) { var a } let a
++++ let a; try {} catch (a) {}
++++ var a; try {} catch (a) {}
++++ try {} catch (a) {} let a
++++ try { let a } catch (a) {}
++++ try {} catch (a) {} finally { let a }
+--- var a; try {} catch ([a]) { var a }
+--- function f(a) { let a }
+--- function f(a) { const a = 1 }
+--- function f(a) { class a {} }
++++ function f(a) { var a }
++++ function f(a) { function a() {} }
++++ function f(a) { { let a } }
++++ function f(a) { { function a() {} } }
++++ function f(a) { for (let a;;); }
++++ function f(a) { try {} catch (a) {} }
+--- function f(a) { l: let a }
+--- function f([a]) { let a }
+--- function f({ a }) { let a }
+--- function f({ b: a }) { let a }
+--- function f(...a) { let a }
+--- function f(a = 1) { let a }
++++ function f(a = 1) { var a }
++++ function f(a, b = () => a) { var a }
+--- function f(a) { 'use strict'; let a }
++-- function f() { let arguments }
++-- function f() { var arguments }
+--- function f() { 'use strict'; var arguments }
++-- function f() { function arguments() {} }
+--- function f(arguments) { let arguments }
++++ function f(a) { let f }
++++ function f() { let f }
++++ (function f() { let f })
++++ (function f() { var f })
++++ (function f(f) {})
++++ (class A { m() { let A } })
++++ (class A { static { let A } })
+--- function* f(a) { let a }
+--- async function f(a) { let a }
+--- async function* f(a) { let a }
+--- ({ m(a) { let a } })
+--- ({ set a(b) { let b } })
+--- ({ *m(a) { let a } })
+--- ({ async m(a) { let a } })
+--- class A { m(a) { let a } }
+--- class A { constructor(a) { let a } }
+--- class A { set a(b) { let b } }
+--- class A { static m(a) { let a } }
+--- class A { #m(a) { let a } }
+--- class A { static { let a; let a } }
+--- class A { static { let a; var a } }
+--- class A { static { var a; let a } }
++++ class A { static { var a; var a } }
+--- class A { static { let a; { var a } } }
++++ class A { static { function a() {} function a() {} } }
+--- class A { static { function a() {} let a } }
+--- class A { static { { function a() {} function a() {} } } }
++++ class A { static { let a } static { let a } }
+--- class A { static { var arguments } }
+--- class A { static { let arguments } }
+--- class A { static { function arguments() {} } }
+--- class A { static { class arguments {} } }
+--- class A { static { arguments } }
+--- class A { static { () => arguments } }
++++ class A { static { function f() { arguments } } }
++++ class A { static { ({ m() { arguments } }) } }
+--- class A { static { ({ arguments }) } }
++++ class A { static { ({ arguments: 1 }) } }
++++ class A { static { x.arguments } }
+--- class A { static { class B { [arguments]() {} } } }
+--- class A { static { class B { x = arguments } } }
+--- class A { static { (arguments) => 1 } }
+--- class A { static { function f(arguments) {} } }
+--- class A { static { try {} catch (arguments) {} } }
+--- class A { static { arguments: 1 } }
+--- class A { static { typeof arguments } }
+--- class A { x = arguments }
+--- class A { x = () => arguments }
+--- class A { x = () => () => arguments }
++++ class A { x = function () { arguments } }
++++ class A { x = function () { () => arguments } }
++++ class A { x = { m() { arguments } } }
+--- class A { x = { arguments } }
++++ class A { x = { arguments: 1 } }
++++ class A { x = y.arguments }
+--- class A { x = typeof arguments }
+--- class A { x = class { [arguments]() {} } }
+--- class A { x = class { y = arguments } }
+--- class A { x = class extends arguments {} }
+--- class A { static x = arguments }
+--- class A { #x = arguments }
++++ class A { [arguments] = 1 }
++++ class A { [arguments]() {} }
+--- class A { x = (arguments) => 1 }
+--- class A { x = function (arguments) {} }
+--- class A { x = function arguments() {} }
+--- class A { 'x' = arguments }
+--- class A { x = `${arguments}` }
+--- class A { x = [...arguments] }
++++ class A { m() { arguments } }
++++ class A { m(a = arguments) {} }
+--- function f() { class A { x = arguments } }
++++ function f() { class A { [arguments] = 1 } }
+--- function f() { class A { static { arguments } } }
+--- let [a, a] = b
+--- let [a, [a]] = b
+--- let { a, a } = b
+--- let { a, b: a } = c
+--- let { a, ...a } = b
+--- let [a, ...a] = b
+--- let a, [a] = b
+--- let { a: [b], c: { b } } = d
+--- const [a, a] = b
+--- const { a, b: { a } } = c
++++ var [a, a] = b
++++ var { a, b: a } = c
++++ var a, [a] = b
+--- let [a] = b, { a } = c
+--- let [...a, b] = c
+--- let [...a, ] = b
+--- let [...a = 1] = b
++++ let [...[a]] = b
++++ let [...{ a }] = b
++++ let [a, ] = b
++++ let [, ] = a
++++ let [] = a
++++ let {} = a
++++ let { ...a } = b
+--- let { ...a, } = b
+--- let { ...a, b } = c
+--- let { ...[a] } = b
+--- let { ...{ a } } = b
+--- let { ...a = 1 } = b
++++ let { a, } = b
+--- let { , } = a
+--- let { a: 1 } = b
+--- let { a: b.c } = d
+--- let { a: (b) } = c
+--- let [(a)] = b
+--- let [a.b] = c
++++ let [a = 1, { b = 2, c: [d = 3] }] = e
++++ let { [a]: b } = c
++++ let { 'a': b } = c
++++ let { 1: b } = c
++++ let { a = 1 } = b
++++ let { if: a } = b
+--- let { if } = a
+--- let { 'a' } = b
+--- let { 1 } = a
+--- let { [a] } = b
+--- var { a: b.c } = d
+--- var [(a)] = b
+--- var (a) = 1
++-- let (a) = 1
+--- const (a) = 1
++++ let a
++++ let a = 1
++++ const a = 1
+--- const a
+--- const a, b = 1
+--- const a = 1, b
+--- const [a]
+--- const { a }
+--- let [a]
+--- let { a }
+--- var [a]
+--- var { a }
+--- let [a], b
+--- let a, [b]
++++ var a, [b] = c
++++ let a = 1, { b } = c
+--- var
++-- let;
+--- const
+--- var 1
+--- var a.b
+--- var a =
+--- var a,
+--- var a = 1,
+--- let a,
+--- let a b
++++ let a<NL>b
++++ var a<NL>b
++++ var a = 1<NL>b
++++ var a<NL>= 1
++++ let a = b<NL>(c)
++-- let a = let
++++ let a = a
++++ const a = a
++++ let [a = a] = b
++++ let { a = b, b } = c
++++ var NaN
++++ var Infinity
++++ var location
++++ var top
++++ var window
++++ var document
+--+ let a; export { a }
++++ var a = 1, a = 2
+
+# 14.3.1 using declarations (explicit resource management)
+--+ using a = b
+--- using a
+--+ using a = b, c = d
+--- using a = b, c
++++ using [a] = b
+--- using { a } = b
++++ using<NL>a = b
+--+ using a<NL>= b
++++ using = 1
++++ using
++++ using.a
++++ using(a)
++++ var using
++++ let using
+--+ using using = a
+--- using let = a
+--- using await = a
+--- using yield = a
+--- using static = a
+--- using eval = a
+--- using arguments = a
+--- using a = b; using a = c
+--- using a = b; let a
+--- using a = b; var a
+--- var a; using a = b
+--- { using a = b; var a }
+--- { using a = b; { var a } }
+--- { using a = b; function a() {} }
++++ { using a = b }
++++ { using a = b; using c = d }
++++ function f() { using a = b }
+--- function f(a) { using a = b }
++++ () => { using a = b }
+--- if (a) using b = c
+--- while (a) using b = c
+--- l: using a = b
++++ for (using a of b);
+--- for (using a in b);
++++ for (using a = b;;);
+--- for (using a;;);
+--- for (using of of a);
++++ for (using of a);
++++ for (using in a);
++++ for (using;;);
+--- for (using a of b) { var a }
++++ for (using a of b) { let a }
++++ for (using [a] of b);
+--- for (using a, b of c);
+--- switch (a) { case 1: using b = c }
++++ switch (a) { case 1: { using b = c } }
+--- switch (a) { default: using b = c }
++++ class A { static { using a = b } }
+--+ await using a = b
+--- await using a
+--- await using [a] = b
+--+ await using<NL>a = b
+--- await<NL>using a = b
+--+ await using
+--+ await using.a
+--+ await using(a)
++++ async function f() { await using a = b }
+--- async function f() { await using a }
++++ async function f() { await using a = b, c = d }
+--- async function f() { await using a = b; var a }
++++ async function f() { await using<NL>a = b }
+--- async function f() { await using [a] = b }
++++ async function f() { for (await using a of b); }
+--- async function f() { for (await using a in b); }
++++ async function f() { for (await using a = b;;); }
++++ async function f() { for await (await using a of b); }
++++ async function f() { for await (using a of b); }
++++ async function f() { for (await using of of a); }
+--- async function f() { switch (a) { case 1: await using b = c } }
+--- async function f() { if (a) await using b = c }
+--- function f() { await using a = b }
+--- export using a = b
+--- export await using a = b
+--+ using a = b; export { a }
+
+# 14.6 if; 14.7 iteration; 14.8 continue; 14.9 break; 14.10 return; 14.13 labels
+--- break
+--- break;
+--- continue
+--- continue;
+--- break l
+--- continue l
+--- { break }
+--- if (a) break
+--- if (a) continue
+--- l: break
++++ l: break l
++++ l: { break l }
+--- l: { break }
+--- l: { continue l }
+--- l: continue l
++++ l: if (a) break l
+--- l: if (a) continue l
++++ l: m: break l
++++ l: m: break m
++++ l: { m: { break l } }
++++ l: { m: { break m } }
+--- l: { break m }
+--- l: break m
+--- l: { } break l
++++ while (a) break
++++ while (a) continue
++++ while (a) { break }
++++ while (a) { continue }
++++ while (a) { { break } }
++++ while (a) { if (b) continue; else break }
+--- while (a) break l
+--- while (a) continue l
++++ l: while (a) break l
++++ l: while (a) continue l
++++ l: while (a) { while (b) continue l }
++++ l: while (a) { while (b) break l }
+--- l: { while (a) continue l }
++++ l: { while (a) break l }
++++ l: m: while (a) continue l
++++ l: m: while (a) continue m
+--- l: { m: while (a) continue l }
+--- l: if (a) while (b) continue l
++++ l: if (a) while (b) break l
++++ l: while (a) m: while (b) continue l
++++ l: while (a) m: { continue l }
+--- l: while (a) m: { continue m }
++++ l: while (a) m: { break m }
+--- l: while (a) m: continue m
++++ l: do continue l; while (a)
++++ l: for (;;) continue l
++++ l: for (a in b) continue l
++++ l: for (a of b) continue l
++++ l: for (;;) { break l; continue l }
++++ l: switch (a) { case 1: break l }
+--- l: switch (a) { case 1: continue l }
++++ l: while (a) switch (b) { case 1: continue l }
++++ l: while (a) switch (b) { case 1: continue }
++++ switch (a) { case 1: break }
+--- switch (a) { case 1: continue }
++++ switch (a) { case 1: { break } }
++++ switch (a) { default: if (b) break }
++++ while (a) { switch (b) { case 1: continue } }
++++ while (a) { switch (b) { case 1: break } }
++++ switch (a) { case 1: while (b) continue }
+--- while (a) { function f() { break } }
+--- while (a) { function f() { continue } }
+--- while (a) { () => { break } }
+--- while (a) { () => { continue } }
+--- while (a) { (function () { break }) }
+--- while (a) { class A { m() { break } } }
+--- while (a) { class A { static { break } } }
+--- while (a) { class A { static { continue } } }
+--- while (a) { class A { x = () => { break } } }
+--- while (a) { ({ m() { break } }) }
+--- while (a) { ({ get a() { continue } }) }
+--- l: while (a) { function f() { break l } }
+--- l: while (a) { function f() { continue l } }
+--- l: while (a) { () => { break l } }
+--- l: while (a) { () => { continue l } }
+--- l: while (a) { class A { m() { break l } } }
+--- l: while (a) { class A { static { break l } } }
+--- l: while (a) { class A { static { continue l } } }
+--- l: { function f() { break l } }
+--- l: { () => { break l } }
+--- l: { class A { static { break l } } }
+--- l: { class A { [(() => { break l })()]() {} } }
+--- while (a) { class A { [(() => { break })()]() {} } }
+--- function f() { break }
+--- function f() { continue }
++++ function f() { l: break l }
++++ function f() { while (a) break }
+--- function f() { while (a) function g() { break } }
+--- () => { break }
++++ () => { while (a) continue }
+--- class A { static { break } }
+--- class A { static { continue } }
++++ class A { static { while (a) break } }
++++ class A { static { l: break l } }
++++ class A { static { while (a) continue } }
++++ class A { static { l: while (a) continue l } }
++++ class A { static { l: { break l } } }
+--- class A { static { while (a) { class B { static { break } } } } }
++++ class A { static { switch (a) { case 1: break } } }
++++ while (a) { try { break } catch { continue } finally { break } }
+--- try { break } catch {}
+--- try {} catch { continue }
+--- try {} finally { break }
+--- with (a) break
++-- while (a) with (b) break
++++ do break; while (a)
++++ do continue; while (a)
++++ for (;;) break
++++ for (a in b) continue
++++ for (a of b) break
++++ for (;;) { for (;;) { break } continue }
+--- break<NL>l
++++ while (a) break<NL>l
++++ l: while (a) break<NL>l
++++ l: while (a) continue<NL>l
+--- while (a) { break 1 }
+--- while (a) { break a.b }
+--- while (a) { continue a + b }
+--- l: while (a) { break l m }
++++ l: while (a) { break l<NL>m }
+--- while (a) break while (b) c
+--- while (a) { break } break
+--- while (a) ; continue
+--- l: while (a) ; break l
+--- l: while (a) ; continue l
++-- yield: while (a) continue yield
+++- await: while (a) break await
++-- let: while (a) continue let
++-- static: while (a) break static
++++ async: while (a) break async
++++ la: while (a) break la
+--- return
+--- return 1
+--- return;
+--- { return }
+--- if (a) return
+--- while (a) return
++++ () => { return }
++++ function f() { return }
++++ function f() { { return } }
++++ function f() { return<NL>a }
+--- function f() { return a b }
++++ class A { m() { return } }
+--- class A { static { return } }
+--- class A { static { { return } } }
+--- class A { static { if (a) return } }
++++ class A { static { () => { return } } }
++++ class A { static { function f() { return } } }
++++ class A { static { ({ m() { return } }) } }
+--- class A { static { class B { static { return } } } }
++++ class A { static { class B { m() { return } } } }
++++ class A { x = () => { return } }
++++ class A { x = function () { return } }
++++ class A { [(() => { return })()]() {} }
+--- try { return } catch {}
+--- switch (a) { case 1: return }
+--- l: return
+--- with (a) return
+--- return<NL>return
+--- return return
+--- return yield
+--- return await a
+--- return new.target
+--- throw
+--- throw<NL>a
++++ throw a
+--- throw a b
++++ throw a<NL>b
+--- throw;
++++ debugger
++++ debugger;
+--- debugger a
++++ debugger<NL>a
++++ ;
++++ ;;
++++ a;;b
++++ if (a) b; else c
+--- if (a) b else c
++++ if (a) b<NL>else c
++++ if (a) {} else {}
+--- if (a) b; else c; else d
++++ if (a) if (b) c; else d; else e
++++ a<NL>++b
++++ a++<NL>b
++++ a<NL>(b)
++++ a<NL>[b]
++++ a<NL>`b`
++++ a<NL>/b/g
++++ a<NL>+b
++++ a<NL>.b
++++ a<NL>?.b
++++ a<NL>? b : c
++++ a<NL>in b
++++ a<NL>instanceof b
+--- a<NL>=> b
++++ var a<NL>, b
++++ var a<NL>b<NL>, c
++++ a = b<NL>++c
++++ a = b<NL>--<NL>c
++++ x<NL>(function () {})()
++++ x = 1<NL>(function () {})()
++++ ;(function () {})()
++++ for (a;<NL>b;<NL>c);
+--- for (a<NL>b<NL>c);
+--- for (a;<NL>b<NL>c);
+--- for (a; b<NL>)
++++ for (;;<NL>);
++++ do a<NL>while (b)<NL>c
++++ if (a)<NL>b
+--- if (a)<NL>
+--- while (a)<NL>
++++ a = <NL>b
++++ a<NL>= b
++++ {<NL>a<NL>}<NL>b
++++ { a } b
++++ { a }<NL>b
++++ a = { b }<NL>c
++++ function f() {}<NL>f()
++++ function f() { return<NL>}<NL>
++++ x = function () {}<NL>(1)
++++ x = () => {}<NL>(1)
++++ x = () => 1<NL>(2)
++++ var a = function () {}<NL>[1].b
++-- yield<NL>a
++++ var x = 1; x<NL>++<NL>x
++++ a ? b : c<NL>d
++++ a<NL>? b<NL>: c
++++ a ?<NL>b :<NL>c
+--- async<NL>() => 1
++++ get<NL>a
++-- static<NL>a
++++ class A { a<NL>b }
++++ class A { a = 1<NL>b = 2 }
++++ class A { a<NL>b() {} }
+--- class A { a b }
+--- class A { a = 1 b = 2 }
++++ class A { a; b }
++++ class A { a = 1; b = 2; }
++++ class A { get<NL>a() {} }
+--- class A { get<NL>a }
++++ class A { get; a }
++++ class A { get<NL>* a() {} }
+--- class A { get = 1<NL>* a() {} }
++++ class A { get<NL>= 1 }
++++ class A { static<NL>a }
++++ class A { static<NL>a() {} }
++++ class A { static; a }
++++ class A { static = 1; a }
++++ class A { static }
++++ class A { static() {} }
++++ class A { static static }
++++ class A { static static() {} }
+--- class A { static static static }
++++ class A { static async }
++++ class A { static async a() {} }
++++ class A { static async<NL>a() {} }
++++ class A { async<NL>a() {} }
++++ class A { async a<NL>() {} }
++++ class A { async }
++++ class A { async = 1 }
++++ class A { async; a }
++++ class A { async * a() {} }
++++ class A { async *<NL>a() {} }
++++ class A { get }
++++ class A { set }
++++ class A { get = 1; set = 2 }
++++ class A { get() {} set() {} }
+--- class A { get a }
+--- class A { set a(b) }
++++ class A { accessor }
++++ class A { accessor = 1 }
+--- class A { accessor a }
++++ class A { accessor<NL>a }
+--- class A { static accessor a }
+--- class A { a = 1, b = 2 }
+--- class A { a, b }
+--- class A { a = b, c }
+--- class A { 'a' 'b' }
++++ class A { 'a'<NL>'b' }
++++ class A { 1<NL>2 }
++++ class A { [a]<NL>[b] }
++++ class A { a<NL>[b] }
++++ class A { a = 1<NL>[b] }
+--- class A { a = 1<NL>*b() {} }
++++ class A { a<NL>*b() {} }
++++ class A { a<NL>in }
++++ class A { a = b<NL>in<NL>c }
++++ class A { a<NL>instanceof }
+--- class A { a = b<NL>instanceof }
++++ class A { #a<NL>#b }
+--- class A { #a #b }
++++ class A { a = 1<NL>(b) }
+--- class A { a = 1<NL>(b)() {} }
++++ class A { in }
++++ class A { in = 1; instanceof = 2; if; new; typeof }
+--- class A { constructor }
+--- class A { 'constructor' }
++++ class A { constructor() {} }
+
+# 14.14 throw; 14.15 try: above. 15.1 Parameter lists
++-- function f(a, a) {}
++-- function f(a, b, a) {}
+--- function f(a, a) { 'use strict' }
+--- function f(a, a) { 'a'; 'use strict' }
++-- function f(a, a) { ; 'use strict' }
++-- function f(a, a) { function g() { 'use strict' } }
+--- function f() { 'use strict'; function g(a, a) {} }
+--- function f() { 'use strict'; (function (a, a) {}) }
+--- function f() { 'use strict'; (a, a) => 1 }
++-- (function (a, a) {})
+--- (function (a, a) { 'use strict' })
+--- function f(a, [a]) {}
+--- function f([a, a]) {}
+--- function f({ a, b: a }) {}
+--- function f(a, { a }) {}
+--- function f([a], a) {}
+--- function f(a, a = 1) {}
+--- function f(a = 1, a) {}
+--- function f(a, ...a) {}
+--- function f(a, a, ...b) {}
+--- function f(a, a, [b]) {}
+--- function f(a, a, b = 1) {}
++++ function f(a, b = a) {}
++++ function f(a = a) {}
++++ function f(a = b, b) {}
++-- function f(a, a,) {}
++-- function* f(a, a) {}
+--- function* f(a, a) { 'use strict' }
++-- async function f(a, a) {}
+--- async function f(a, a) { 'use strict' }
++-- async function* f(a, a) {}
++-- (function* (a, a) {})
++-- (async function (a, a) {})
+--- ({ m(a, a) {} })
+--- ({ set a([b, b]) {} })
+--- ({ *m(a, a) {} })
+--- ({ async m(a, a) {} })
++-- ({ m: function (a, a) {} })
+--- class A { m(a, a) {} }
+--- class A { constructor(a, a) {} }
+--- class A { static m(a, a) {} }
+--- class A { #m(a, a) {} }
+--- class A { *m(a, a) {} }
+--- class A { async m(a, a) {} }
+--- class A { x = function (a, a) {} }
+--- class A { m() { function f(a, a) {} } }
+--- class A { static { function f(a, a) {} } }
+--- class A extends function (a, a) {} {}
+--- function f(a = 1) { 'use strict' }
+--- function f(a = 1) { 'a'; 'use strict' }
+--- function f(a = 1) { 'use strict'; }
+--- function f(a = 1) { "use strict" }
++++ function f(a = 1) { 'use\x20strict' }
++++ function f(a = 1) { ('use strict') }
++++ function f(a = 1) { 'use strict' + 1 }
++++ function f(a = 1) { 'use strict'.a }
++++ function f(a = 1) { 'use strict'<NL>.a }
++++ function f(a = 1) { 'use strict', 1 }
++++ function f(a = 1) { ; 'use strict' }
++++ function f(a = 1) { a; 'use strict' }
++++ function f(a = 1) { 'use  strict' }
++++ function f(a = 1) { 'USE STRICT' }
++++ function f(a = 1) { `use strict` }
++++ function f(a = 1) { function g() { 'use strict' } }
++++ function f(a = 1) { () => { 'use strict' } }
+--- function f([a]) { 'use strict' }
+--- function f({ a }) { 'use strict' }
+--- function f(...a) { 'use strict' }
+--- function f(a, ...b) { 'use strict' }
++++ function f(a, b) { 'use strict' }
++++ function f() { 'use strict' }
++++ function f(a,) { 'use strict' }
+--- function* f(a = 1) { 'use strict' }
+--- async function f(a = 1) { 'use strict' }
+--- async function* f([a]) { 'use strict' }
+--- (function (a = 1) { 'use strict' })
+--- (function* ({ a }) { 'use strict' })
+--- (async function (...a) { 'use strict' })
+--- ({ m(a = 1) { 'use strict' } })
+--- ({ set a([b]) { 'use strict' } })
+--- ({ *m(...a) { 'use strict' } })
+--- ({ async m({ a }) { 'use strict' } })
++++ ({ m(a) { 'use strict' } })
++++ ({ get a() { 'use strict' } })
+--- class A { m(a = 1) { 'use strict' } }
+--- class A { constructor(a = 1) { 'use strict' } }
++++ class A { m(a) { 'use strict' } }
+--- class A { static m([a]) { 'use strict' } }
+--- class A { set a({ b }) { 'use strict' } }
+--- class A { x = function (a = 1) { 'use strict' } }
++++ class A { static { 'use strict' } }
+--- function f(a = 1) { 'use strict'; with (b) c }
++++ function f(a = function () { 'use strict' }) {}
+--- function f(a = function (b = 1) { 'use strict' }) {}
++++ function f(a = () => { 'use strict' }) {}
+--- function f(a = (b = 1) => { 'use strict' }) {}
+--- function f(a = 010) { 'use strict' }
+--- function f(a) { 'use strict'; 010 }
++-- function f(a = 010) {}
+--- function f(a = '\01') { 'use strict' }
+--- function f(a = delete b) { 'use strict' }
+--- function f(a = function () { delete b }) { 'use strict' }
+--- function f(a = function (c, c) {}) { 'use strict' }
+--- function f(a = () => { with (b) c }) { 'use strict' }
+--- function f(public) { 'use strict' }
+--- function f(a, public) { 'use strict' }
+--- function f(a = public) { 'use strict' }
+--- function f(a) { 'use strict'; public }
+--- function public() { 'use strict' }
++-- function f(a = yield) {}
+--- function f(a = yield 1) {}
+++- function f(a = await) {}
+--- function* f(a = yield) {}
+--- function* f(a = yield 1) {}
+--- function* f(yield) {}
+--- function* f([yield]) {}
+--- function* f({ yield }) {}
+--- function* f(...yield) {}
+--- function* f({ [yield]: a }) {}
++-- function* f(a = function () { yield }) {}
++++ function* f(a = function* () { yield }) {}
++-- function* f(a = function yield() {}) {}
++-- function* f(a = () => yield) {}
+--- function* f(a = class { [yield]() {} }) {}
+--- function* f(a = class extends (yield) {}) {}
+--- function* f(a = class { x = yield }) {}
+--- (function* (a = yield) {})
+--- (function* yield() {})
+--- (function* f(yield) {})
++-- function* yield() {}
++-- function* yield() { yield }
++++ function* f() { yield }
++++ function* f() { yield 1 }
++++ function* f() { yield* a }
+--- function* f() { yield* }
+--- function* f() { yield<NL>* a }
++++ function* f() { yield *<NL>a }
++++ function* f() { yield<NL>a }
++++ function* f() { yield yield }
++++ function* f() { yield yield 1 }
+--- function* f() { yield = 1 }
+--- function* f() { yield++ }
+--- function* f() { yield: 1 }
+--- function* f() { var yield }
+--- function* f() { let yield }
+--- function* f() { const yield = 1 }
+--- function* f() { function yield() {} }
+--- function* f() { function* yield() {} }
++-- function* f() { (function yield() {}) }
+--- function* f() { (function* yield() {}) }
+--- function* f() { class yield {} }
++-- function* f() { function g(yield) {} }
++-- function* f() { function g(a = yield) {} }
++-- function* f() { function g() { yield } }
+--- function* f() { function g() { yield 1 } }
++-- function* f() { function g() { var yield } }
+--- function* f() { function* g() { var yield } }
+--- function* f() { 'use strict'; function g() { yield } }
+--- function* f() { try {} catch (yield) {} }
+--- function* f() { ({ yield }) }
++++ function* f() { ({ yield: 1 }) }
+--- function* f() { ({ yield } = a) }
+--- function* f() { ({ a: yield } = b) }
+--- function* f() { [yield] = a }
++++ function* f() { [yield] }
++++ function* f() { x.yield }
++++ function* f() { x = yield }
++++ function* f() { x = yield 1 }
+--- function* f() { x = 1 + yield }
+--- function* f() { x = 1 + yield 1 }
++++ function* f() { x = 1 + (yield 1) }
++++ function* f() { yield + 1 }
++++ function* f() { x = a ? yield : yield }
+--- function* f() { x = yield ? 1 : 2 }
++++ function* f() { yield, yield }
++++ function* f() { f(yield, yield 1) }
++++ function* f() { `${yield}` }
++++ function* f() { x[yield] }
+--- function* f() { typeof yield }
+--- function* f() { void yield }
+--- function* f() { !yield }
+--- function* f() { delete yield }
+--- function* f() { await 1 }
+++- function* f() { yield await }
+--- function* f() { for (yield of a); }
+--- function* f() { for (yield in a); }
++++ function* f() { for (var a of yield); }
++++ function* f() { for (a of yield b); }
++++ function* f() { for (yield;;); }
++++ function* f() { yield<NL>/a/g }
++++ function* f() { yield /a/g }
++++ function* f() { yield<NL>(a) }
++++ function* f() { yield<NL>[a] }
++++ function* f() { yield<NL>`a` }
++++ function* f() { yield<NL>++a }
++++ function* f() { class A { [yield]() {} } }
++++ function* f() { class A { [yield] = 1 } }
++++ function* f() { class A extends (yield) {} }
+--- function* f() { class A extends yield {} }
+--- function* f() { class A { x = yield } }
+--- function* f() { class A { x = yield 1 } }
+--- function* f() { class A { static { yield } } }
+--- function* f() { class A { static x = yield } }
+--- function* f() { class A { m(a = yield) {} } }
++++ function* f() { class A { *m() { yield } } }
++++ function* f() { class A { x = function* () { yield } } }
++++ function* f() { ({ a: function* () { yield } }) }
++-- function* f() { ({ a() { yield } }) }
+--- function* f() { ({ a() { yield 1 } }) }
++++ function* f() { ({ *a() { yield 1 } }) }
++-- function* f() { ({ get a() { yield } }) }
++++ function* f() { ({ [yield]: 1 }) }
++-- function* f() { ({ a(b = yield) {} }) }
+--- function* f() { ({ *a(b = yield) {} }) }
++-- function f() { yield }
+--- function f() { yield 1 }
++-- function f() { yield<NL>1 }
++-- function f() { yield* a }
++-- function f() { yield * a }
++-- function f() { yield: 1 }
++-- function f() { var yield }
+--- function f() { 'use strict'; yield }
+--- function f() { 'use strict'; var yield }
++-- function f() { function* yield() {} }
+--- function f() { (function* yield() {}) }
+--- function f() { 'use strict'; function* yield() {} }
++-- () => yield
+--- () => yield 1
++-- () => { yield }
++++ function *f() {}
++++ function * f() {}
++++ function*<NL>f() {}
+++- function* f() {}<NL>function* f() {}
++++ (function* () {})
++++ (function* f() {})
++++ ({ *f() {} })
++++ ({ * f() {} })
++++ ({ *[a]() {} })
++++ ({ *'a'() {} })
++++ ({ *1() {} })
++++ ({ *get() {} })
+--- ({ *f: 1 })
+--- ({ *f })
+--- ({ f*() {} })
++++ class A { *m() {} }
++++ class A { * m() {} }
++++ class A { *<NL>m() {} }
++++ class A { static *m() {} }
+--- class A { *static m() {} }
++++ class A { *#m() {} }
+--- class A { *get m() {} }
+--- * f() {}
+--- x = *f() {}
+--- x = function* yield() {}
++-- x = function yield() {}
+++- x = function await() {}
+--- x = async function await() {}
+
+# 15.7 Class definitions
++++ class A extends B {}
++++ class A extends B.C {}
++++ class A extends B() {}
++++ class A extends (B, C) {}
+--- class A extends B, C {}
+--- class A extends B = C {}
++++ class A extends (B = C) {}
+--- class A extends B ? C : D {}
++++ class A extends (B ? C : D) {}
+--- class A extends B + C {}
+--- class A extends !B {}
++++ class A extends new B {}
++++ class A extends new B() {}
++++ class A extends B?.C {}
++++ class A extends B`c` {}
+--- class A extends async () => 1 {}
++++ class A extends (async () => 1) {}
+--- class A extends b => 1 {}
++++ class A extends function () {} {}
++++ class A extends class {} {}
++++ class A extends {} {}
++++ class A extends [] {}
++++ class A extends null {}
++++ class A extends this {}
++++ class A extends 1 {}
+--- class A extends await 1 {}
+--- class A extends yield {}
+--- class A extends B++ {}
+--- class A extends typeof B {}
+--- class A extends {}
+--- class A extends
+--- class A
+--- class A {
+--- class extends B {}
++++ (class extends B {})
++++ (class A extends B {})
++++ class A { ; }
++++ class A { ;;; }
++++ class A { m() {}; }
++++ class A { m() {} n() {} }
+--- class A { m() {}, n() {} }
+--- class A { m: 1 }
+--- class A { m() }
++++ class A { m }
++++ class A { m; }
++++ class A { m = 1 }
++++ class A { m = 1; }
+--- class A { m =  }
++++ class A { 'm' = 1; 2 = 3; [n] = 4; 5n = 6 }
++++ class A { 'm'() {} 2() {} [n]() {} 5n() {} }
++++ class A { 0x10() {} 0b1() {} 1e3() {} .5() {} 1.() {} }
++++ class A { static m() {} static n = 1; static [o] = 2 }
++++ class A { static 'm'() {} static 2 = 3 }
++++ class A { get m() { return 1 } set m(a) {} }
+--- class A { get m(a) {} }
+--- class A { set m() {} }
+--- class A { set m(a, b) {} }
+--- class A { set m(...a) {} }
++++ class A { get m() {} get m() {} }
++++ class A { m() {} m() {} }
++++ class A { m; m }
++++ class A { static get m() {} set m(a) {} }
++++ class A { get 'm'() {} set 1(a) {} get [n]() {} }
++++ class A { async m() {} }
++++ class A { async *m() {} }
+--- class A { async get m() {} }
+--- class A { async set m(a) {} }
+--- class A { get async m() {} }
++++ class A { async async() {} }
+--- class A { async m }
+--- class A { async m = 1 }
++++ class A { get get() {} set set(a) {} static static() {} async async() {} }
++++ class A { get static() {} }
++++ class A { static get static() {} }
++++ class A { static get() {} static set() {} static async() {} }
++++ class A { static get; static set; static async; static static }
+--- class A { constructor() {} constructor() {} }
+--- class A { constructor() {} 'constructor'() {} }
+--- class A { 'constructor'() {} "constructor"() {} }
++++ class A { constructor() {} ['constructor']() {} }
++++ class A { constructor() {} static constructor() {} }
++++ class A { 'constructor'() {} }
++++ class A { ['constructor']() {} }
+--- class A { get constructor() {} }
+--- class A { set constructor(a) {} }
+--- class A { get 'constructor'() {} }
+--- class A { *constructor() {} }
+--- class A { async constructor() {} }
+--- class A { async *constructor() {} }
+--- class A { *'constructor'() {} }
++++ class A { static constructor() {} }
++++ class A { static get constructor() {} }
++++ class A { static *constructor() {} }
++++ class A { static async constructor() {} }
++++ class A { static constructor() {} static constructor() {} }
++++ class A { get ['constructor']() {} }
+--- class A { constructor = 1 }
+--- class A { 'constructor' = 1 }
+--- class A { "constructor" }
++++ class A { ['constructor'] = 1 }
+--- class A { static constructor = 1 }
+--- class A { static constructor }
+--- class A { static 'constructor' }
++++ class A { static ['constructor'] }
+--- class A { #constructor }
+--- class A { #constructor() {} }
+--- class A { static #constructor }
+--- class A { get #constructor() {} }
+--- class A { static prototype }
+--- class A { static prototype = 1 }
+--- class A { static prototype() {} }
+--- class A { static 'prototype'() {} }
++++ class A { static ['prototype']() {} }
+--- class A { static get prototype() {} }
+--- class A { static set prototype(a) {} }
+--- class A { static *prototype() {} }
+--- class A { static async prototype() {} }
+--- class A { static 'prototype' }
+--- class A { static "prototype" = 1 }
++++ class A { static ['prototype'] = 1 }
++++ class A { prototype }
++++ class A { prototype() {} }
++++ class A { static #prototype }
++++ class A { #a }
++++ class A { #a; #b }
+--- class A { #a; #a }
+--- class A { #a; #a() {} }
+--- class A { #a() {} #a() {} }
++++ class A { get #a() {} set #a(b) {} }
++++ class A { set #a(b) {} get #a() {} }
+--- class A { get #a() {} get #a() {} }
+--- class A { set #a(b) {} set #a(b) {} }
+--- class A { get #a() {} #a }
+--- class A { #a; get #a() {} }
+--- class A { get #a() {} set #a(b) {} get #a() {} }
+--- class A { get #a() {} set #a(b) {} #a }
+--- class A { static get #a() {} set #a(b) {} }
+--- class A { get #a() {} static set #a(b) {} }
++++ class A { static get #a() {} static set #a(b) {} }
+--- class A { static #a; #a }
+--- class A { #a; static #a }
+--- class A { static #a; static #a }
+--- class A { #a; static #a() {} }
+--- class A { *#a() {} #a }
+--- class A { async #a() {} get #a() {} }
++++ class A { #a = 1; m() { return this.#a } }
++++ class A { m() { return this.#a } #a = 1 }
+--- class A { m() { this.#a } }
+--- class A { m() { this.#a = 1 } }
+--- class A { m() { this?.#a } }
+--- class A { m() { #a in this } }
++++ class A { #a; m() { #a in this } }
+--- class A { #a; m() { #b in this } }
+--- class A { #a; m() { #a } }
+--- class A { #a; m() { #a in #a in this } }
++++ class A { #a; m() { (#a in this) in this } }
++++ class A { #a; m() { #a in (#a in this) } }
+--- class A { #a; m() { 1 in #a in this } }
++++ class A { #a; m() { #a in this in this } }
+--- class A { #a; m() { 1 + #a in this } }
+--- class A { #a; m() { #a + 1 } }
+--- class A { #a; m() { #a = 1 } }
+--- class A { #a; m() { (#a) in this } }
+--- class A { #a; m() { #a instanceof this } }
++++ class A { #a; m() { a = #a in this } }
++++ class A { #a; m() { a ? #a in this : 1 } }
++++ class A { #a; m() { a || #a in this } }
++++ class A { #a; m() { a ?? #a in this } }
++++ class A { #a; m() { a == #a in this } }
+--- class A { #a; m() { a < #a in this } }
++++ class A { #a; m() { #a in this < a } }
+--- class A { #a; m() { a << #a in this } }
+--- class A { #a; m() { !#a in this } }
+--- class A { #a; m() { typeof #a in this } }
++++ class A { #a; m() { [#a in this] } }
++++ class A { #a; m() { f(#a in this) } }
++++ class A { #a; m() { `${#a in this}` } }
+--- class A { #a; m() { for (#a in this;;); } }
+--- class A { #a; m() { for (#a in this); } }
+--- class A { #a; m() { for (var b = #a in this;;); } }
++++ class A { #a; m() { () => #a in this } }
++++ class A { #a; m() { async () => #a in this } }
++++ class A { #a; m() { #a<NL>in this } }
+--- class A { #a; m() { # a in this } }
+--- class A { #a; m() { this.# a } }
++++ class A { #a; m() { this. #a } }
++++ class A { #a; m() { this.<NL>#a } }
+--- class A { # a }
++++ class A { #a; m() { this.#a.b.#a } }
++++ class A { #a; m() { this.#a() } }
++++ class A { #a; m() { this.#a`b` } }
++++ class A { #a; m() { new this.#a } }
++++ class A { #a; m() { this.#a++ } }
++++ class A { #a; m() { [this.#a] = b } }
++++ class A { #a; m() { ({ b: this.#a } = c) } }
++++ class A { #a; m() { for (this.#a of b); } }
++++ class A { #a; m() { this?.#a } }
++++ class A { #a; m() { this?.#a = 1 } }
++++ class A { #a; m() { this?.b.#a } }
++++ class A { #a; m() { this.#a?.b } }
+--- class A { #a; m() { super.#a } }
+--- class A { #a; m() { this.#a => 1 } }
+--- class A { #a; m() { ({ #a: 1 }) } }
+--- class A { #a; m() { ({ #a }) } }
+--- class A { #a; m() { ({ #a() {} }) } }
+--- class A { #a; m() { var #a } }
+--- class A { #a; m() { function #a() {} } }
+--- class A { #a; m() { a.#b } }
+--- class A { #a; m() { a.#b.#a } }
++++ class A { #a; m() { class B { n() { this.#a } } } }
++++ class A { #a; m() { class B { #b; n() { this.#a; this.#b } } } }
++++ class A { #a; m() { class B { #a; n() { this.#a } } } }
+--- class A { m() { class B { #b } this.#b } }
++++ class A { #a; m() { function f() { this.#a } } }
++++ class A { #a; m() { () => this.#a } }
++++ class A { #a; m() { ({ n() { this.#a } }) } }
++++ class A { #a; b = this.#a }
++++ class A { #a; static b = A.#a }
++++ class A { #a; static { A.#a } }
++++ class A { #a; [this.#a]() {} }
++++ class A { #a; [a.#a] = 1 }
++++ class A { [a.#a]() {}; #a }
+--- class A extends B.#a { #a }
+--- class A extends (class { #a }) { m() { this.#a } }
++++ class A { #a; m() { class B extends this.#a {} } }
+--- class A { #a; m() { class B extends a.#b { #b } } }
++++ class A { #a; m() { class B { [this.#a]() {} } } }
++++ class A { #a; m() { class B { [this.#b]() {}; #b } } }
++++ class A { m() { class B { [this.#b]() {} } } #b }
++++ class A { #a; m() { eval('this.#a') } }
+--- this.#a
+--- a.#b
+--- #a
+--- function f() { this.#a }
+--- ({ m() { this.#a } })
+--- ({ #a: 1 })
+--- ({ #a() {} })
+--- class A { #a } a.#a
+--- class A { #a } class B { m() { this.#a } }
++++ class A { #a; #b; m() { this.#a.#b } }
++++ class A { static #a; static m() { A.#a } }
++++ class A { static #a() {} static m() { A.#a() } }
++++ class A { static async *#a() {} }
++++ class A { #a = this.#b; #b }
++++ class A { #a = () => this.#b; #b }
++++ class A { #yield; #await; #let; #static; #if; #class; #async; #get }
++++ class A { #yield; m() { this.#yield } }
+--- class A { #<U+2118>; #<U+00B7> }
++++ class A { #a<U+00B7> }
++++ class A { #\u{61}; m() { this.#a } }
++++ class A { #a; m() { this.#a } }
+--- class A { #1 }
+--- class A { #'a' }
+--- class A { #[a] }
+--- class A { # }
++++ class A { "use strict"; }
++++ class A { m() { "use strict"; } }
+--- class A { m() { yield } }
+--- class A { m() { var yield } }
+--- class A { m() { var let } }
+--- class A { m() { var static } }
+--- class A { m() { var public } }
+--- class A { m() { implements = 1 } }
+--- class A { m(public) {} }
+--- class A { x = yield }
+--- class A { x = let }
+--- class A { x = static }
+--- class A { [yield]() {} }
+--- class A { [let]() {} }
+--- class A extends let {}
+--- class A extends (public) {}
+--- class A { m() { eval = 1 } }
+--- class A { m() { arguments++ } }
+--- class A { m(eval) {} }
+--- class A { x = eval = 1 }
+--- class A { [eval = 1]() {} }
+--- class A extends (eval = 1) {}
+--- class A { m() { 010 } }
+--- class A { x = 010 }
+--- class A { [010]() {} }
+--- class A extends 010 {}
+--- class A extends (a, 010) {}
+--- class A { ['\01']() {} }
+--- class A extends ('\01', B) {}
+--- class A { m() { if (a) function f() {} } }
+--- class A { m() { l: function f() {} } }
+--- class A { m() { { function f() {} function f() {} } } }
+--- class A { m() { for (var a = 1 in b); } }
++++ class A { m() { try {} catch (a) { var a } } }
+++- class A { m() { <!-- a<NL> } }
+++- class A { m() { a<NL>--> b<NL> } }
++++ class A { yield() {} let() {} static() {} public() {} await() {} }
++++ class A { yield; let; public; await; enum; if }
++++ class A { static yield; static let; static await }
++++ class A { get yield() {} set let(a) {} }
++++ class A { async yield() {} *await() {} }
++++ class A extends B { }; class C extends A { }
++++ class A { static x = this }
++++ class A { static x = () => this }
++++ class A { x = this }
++++ class A { [this]() {} }
++++ class A extends this.B {}
++++ class A { x = y = z }
+--- class A { x = y, z }
++++ class A { x = (y, z) }
++++ class A { x = y in z }
++++ class A { x = y => z }
++++ class A { x = async y => z }
++++ class A { x = function () {} }
++++ class A { x = class {} }
+--+ class A { x = import.meta }
++++ class A { x = import('a') }
+--- class A { x = yield y }
+--- class A { x = await y }
+--- class A { x = { yield } }
++++ class A { x = function* () { yield } }
++++ class A { x = async () => await y }
++++ class A { x<NL>= 1 }
++++ class A { x =<NL>1 }
++++ class A { 'x'<NL>= 1 }
++++ class A { static<NL>x = 1 }
++++ class A { static {} }
++++ class A { static { } static { } }
++++ class A { static { a } }
++++ class A { static { this } }
++++ class A { static { this.#a } #a }
++++ class A { static<NL>{ } }
+--- class A { static { static { } } }
+--- class A { static static { } }
+--- class A { static async { } }
+--- class A { static * { } }
+--- class A { static get { } }
+--- class A { { } }
++++ class A { static { ; } }
+--- class A { static { 'use strict'; with (a) b } }
++++ class A { static { function f() { 'use strict' } } }
+--- class A { static { if (a) function f() {} } }
+--- class A { static { l: function f() {} } }
+--- class A { static { yield } }
+--- class A { static { yield 1 } }
+--- class A { static { var yield } }
++++ class A { static { function* f() { yield } } }
+--+ class A { static { import.meta } }
++++ class A { static { import('a') } }
++++ class A { static { super.a } }
+--- class A { static { this.a = arguments } }
++++ class A { static { debugger } }
++++ class A { static { a: 1 } }
++++ class A { static { a: { break a } } }
++++ class A { static { for (;;) break } }
++++ class A { static { var a } m() { let a } }
++++ var a; class A { static { let a } }
+--- let A; class A {}
+--- class A {} let A
+--- var A; class A {}
+--- class A {}; var A
+--- class A {}; function A() {}
+--- function A() {} class A {}
+--- { class A {} function A() {} }
+--- { class A {} var A }
+--- { class A {} { var A } }
++++ (class A {}); (class A {})
++++ x = class A {}; class A {}
++++ class A { m() { class A {} } }
++++ class A { m() { var A } }
++++ class A { m() { let A } }
++++ class A { static { class A {} } }
++++ class A { static { var A } }
+--- @a class A {}
+--- class A { @a m() {} }
+
+# 16.1 Scripts; 11.2.1 directive prologues and the use strict directive
++++ 'use strict'
++++ "use strict"
+--- 'use strict'; with (a) b
+--- "use strict"; with (a) b
+--- 'use strict'<NL>with (a) b
+--- 'use strict'<NL>; with (a) b
+--- 'use strict' /* a */ ; with (a) b
+--- /* a */ 'use strict'; with (a) b
+--- // a<NL>'use strict'; with (a) b
+--- 'a'; 'use strict'; with (b) c
+--- 'a'<NL>'use strict'<NL>with (b) c
+--- 'use strict'; 'a'; with (b) c
+--- 'use asm'; 'use strict'; with (b) c
++-- ; 'use strict'; with (a) b
++-- a; 'use strict'; with (b) c
++-- ('use strict'); with (a) b
++-- 'use strict', 1; with (a) b
++-- 'use strict' + 1; with (a) b
++-- 'use strict'.length; with (a) b
++-- 'use strict'<NL>.length; with (a) b
++-- 'use strict'[0]; with (a) b
++-- 'use strict'<NL>[0]; with (a) b
++-- 'use strict'(); with (a) b
++-- 'use strict'<NL>(a); with (b) c
++-- 'use strict'`a`; with (b) c
++-- 'use strict'<NL>`a`; with (b) c
++-- 'use strict'<NL>/a/g; with (b) c
++-- 'use strict'<NL>+ a; with (b) c
+--- 'use strict'<NL>++a; with (b) c
++-- 'use strict'<NL>in a; with (b) c
++-- 'use strict'<NL>? a : b; with (c) d
++-- 'use strict'<NL>?.a; with (b) c
++-- 'use strict' ? a : b; with (c) d
++-- 'use strict' in a; with (b) c
+--- 'use strict' = 1
+--- 'use strict'++
+--- 'use strict' => 1
+--- 'use strict'<NL>=> 1
++-- "use\x20strict"; with (a) b
++-- 'use\<NL> strict'; with (a) b
++-- 'use  strict'; with (a) b
++-- 'Use Strict'; with (a) b
++-- ' use strict'; with (a) b
++-- 'use strict '; with (a) b
++-- `use strict`; with (a) b
+--- "use strict'; with (a) b
+--- 'use strict'; 'use strict'; with (a) b
+--- 'use strict' 'use strict'
+--- 'use strict' with (a) b
+--- 'use strict'; delete a
+--- 'use strict'; delete location
+--- 'use strict'; delete top
+--- 'use strict'; x = 010
+--- 'use strict'; eval = 1
+--- 'use strict'; var yield
+--- 'use strict'; if (a) function f() {}
+--- 'use strict'; l: function f() {}
+--- 'use strict'; function f(a, a) {}
+--- 'use strict'; { function f() {} function f() {} }
+--- 'use strict'; function f() { with (a) b }
+--- 'use strict'; () => { with (a) b }
+--- 'use strict'; x = { m() { delete a } }
+--- 'use strict'; class A { m() { delete a } }
+--- 'use strict'; for (var a = 1 in b);
++++ 'use strict'; try {} catch (a) { var a }
+++- 'use strict'; <!-- a
+--- 'use strict'; let = 1
+--- 'use strict'; var let
+--- 'use strict'; let<NL>let
+--- 'use strict'; arguments = 1
+--- 'use strict'; function f() { arguments = 1 }
++++ 'use strict'; function f() { arguments[0] = 1 }
++++ 'use strict'; function f(a) { a = 1; arguments[0] }
++++ 'use strict'; function f() { f.caller }
++++ 'use strict'; function f() { f.arguments }
++++ 'use strict'; f.caller = 1
++++ 'use strict'; undefined = 1
++++ 'use strict'; NaN = 1
++++ 'use strict'; this.a = 1
++++ 'use strict'; a = 1
+--- 'use strict'; var a; delete a
+--- 'use strict'; function f() {} delete f
++++ 'use strict'; delete this.a
++++ 'use strict'; delete Object.prototype
+--- 'use strict'; var public
+--- 'use strict'; public = 1
++++ 'use strict'; ({ public: 1 })
++++ 'use strict'; a.public
++++ 'use strict'; function f() {} f.public
+--- 'use strict'; function public() {}
+--- 'use strict'; (function public() {})
+--- 'use strict'; class public {}
+--- 'use strict'; try {} catch (public) {}
+--- 'use strict'; public: 1
+--- 'use strict'; ({ public })
+--- 'use strict'; ({ a: public } = b)
+--- 'use strict'; [public] = a
++++ 'use strict'; import('a')
+--- 'use strict'; 08
++++ 'use strict'; 0o10
++++ 'use strict'; x = `\0`
++++ 'use strict'; x = /\1/
++++ 'use strict'; x = /\08/
++++ 'use strict'; x = /[\1]/
++-- function f() { 'use strict' } with (a) b
++-- function f() { 'use strict' } delete a
++-- (function () { 'use strict' })(); with (a) b
+--- function f() { 'use strict'; return function () { with (a) b } }
+--- function f() { 'use strict'; return () => { delete a } }
+--- function f() { 'use strict'; return { m() { delete a } } }
+--- function f() { 'use strict'; return class { m() { delete a } } }
++-- function f() { return function () { 'use strict' } ; with (a) b }
++-- function f() { function g() { 'use strict' } delete a }
++++ function f() { 'use strict'; eval('with (a) b') }
++++ function f() { 'use strict'; new Function('with (a) b') }
+--- x = function () { 'use strict'; with (a) b }
+--- x = () => { 'use strict'; with (a) b }
+--- x = { m() { 'use strict'; with (a) b } }
+--- x = { get a() { 'use strict'; with (b) c } }
+--- x = { set a(b) { 'use strict'; with (b) c } }
+--- x = { *m() { 'use strict'; with (a) b } }
+--- x = { async m() { 'use strict'; with (a) b } }
+--- x = async () => { 'use strict'; with (a) b }
+--- x = async function () { 'use strict'; with (a) b }
+--- x = function* () { 'use strict'; with (a) b }
++-- x = () => 'use strict'; with (a) b
++-- x = () => ('use strict', 1); with (a) b
++-- function f() { 'use strict' } function g() { with (a) b }
++-- function f() { ('use strict'); with (a) b }
++-- function f() { `use strict`; with (a) b }
++-- function f() { 'use strict', 1; with (a) b }
++-- function f() { 'use strict'.a; with (a) b }
++-- function f() { 'use strict'<NL>.a; with (a) b }
+--- function f() { 'use strict'<NL>with (a) b }
++++ function f() { 'use strict' ; }
++++ function f() { 'use strict'<NL>}
+--- function f() { 'use strict' 1 }
+--- function f() { "use strict" with (a) b }
+--- function f() { 'a'; "b"; 'use strict'; with (a) b }
++-- function f() { 'a'; b; 'use strict'; with (a) b }
+--- function eval() { 'a'; 'use strict' }
+--- function f(a, a) { 'a'; 'b'; 'use strict' }
+--- function f() { '\01'; 'a'; 'use strict' }
+--- function f() { 'a'; '\01'; 'use strict' }
+--- function f() { 'use strict'; 'a'; '\01' }
+--- function f() { 'use strict'; a; '\01' }
++-- function f() { '\01' + 1; 'use strict' }
+--- function f() { '\01'<NL>; 'use strict' }
++-- function f() { '\01', 'use strict' }
++-- function f() { ('\01'); 'use strict' }
+--- function f() { '\00'; 'use strict' }
++++ function f() { '\0'; 'use strict' }
+--- function f() { '\8'; 'a'; 'use strict' }
++++ function f() { '\x01'; 'use strict' }
++++ function f() { '\u{1}'; 'use strict' }
++++ function f() { '\<NL>'; 'use strict' }
+
+# 16.2 Modules: imports and exports
+--+ import a from 'x'
+--+ import a from "x";
+--+ import * as a from 'x'
+--+ import { a } from 'x'
+--+ import { a, b } from 'x'
+--+ import { a, } from 'x'
+--+ import { a as b } from 'x'
+--+ import {} from 'x'
+--+ import a, { b } from 'x'
+--+ import a, * as b from 'x'
+--+ import a, {} from 'x'
+--+ import 'x'
+--+ import 'x' with { type: 'json' }
+--+ import a from 'x' with { type: 'json' }
+--+ import a from 'x' with { }
+--+ import a from 'x' with { type: 'json', }
+--+ import a from 'x' with { 'type': 'json' }
+--- import a from 'x' with { type: 'json', type: 'css' }
+--- import a from 'x' with { type: 'json', 'type': 'css' }
+--- import a from 'x' with { type: json }
+--- import a from 'x' with { type: 1 }
+--- import a from 'x' with { [type]: 'json' }
+--- import a from 'x' with
+--- import a from 'x' assert { type: 'json' }
+--+ import a from 'x'<NL>with { type: 'json' }
+--+ export * from 'x' with { type: 'json' }
+--+ export { a } from 'x' with { type: 'json' }
+--- export { a } from 'x' with { type: 'json', type: 'json' }
+--- import a from x
+--- import a from
+--- import a
+--- import a, b from 'x'
+--- import a, from 'x'
+--- import , a from 'x'
+--- import { a }, b from 'x'
+--- import * as a, b from 'x'
+--- import * as a, { b } from 'x'
+--- import * from 'x'
+--- import * a from 'x'
+--- import { a b } from 'x'
+--- import { a as } from 'x'
+--+ import { as } from 'x'
+--+ import { as as as } from 'x'
+--+ import { a as as } from 'x'
+--+ import { as as a } from 'x'
+--- import { , } from 'x'
+--- import { a,, b } from 'x'
+--- import { a.b } from 'x'
+--- import { 'a' } from 'x'
+--+ import { 'a' as b } from 'x'
+--- import { 'a' as 'b' } from 'x'
+--- import { a as 'b' } from 'x'
+--- import { '\uD800' as a } from 'x'
+--+ import { '😀' as a } from 'x'
+--- import { 1 as a } from 'x'
+--- import { [a] as b } from 'x'
+--- import { if } from 'x'
+--+ import { if as a } from 'x'
+--- import { a as if } from 'x'
+--- import { default } from 'x'
+--+ import { default as a } from 'x'
+--- import { a as default } from 'x'
+--- import { yield } from 'x'
+--- import { a as yield } from 'x'
+--- import { await } from 'x'
+--- import { a as await } from 'x'
+--- import { let } from 'x'
+--- import { a as let } from 'x'
+--- import { static } from 'x'
+--- import { a as static } from 'x'
+--- import { eval } from 'x'
+--- import { a as eval } from 'x'
+--- import { arguments } from 'x'
+--- import { a as arguments } from 'x'
+--+ import { async } from 'x'
+--+ import { of, get, set, from, as } from 'x'
+--- import eval from 'x'
+--- import arguments from 'x'
+--- import yield from 'x'
+--- import await from 'x'
+--- import let from 'x'
+--- import static from 'x'
+--+ import async from 'x'
+--+ import from from 'x'
+--+ import as from 'x'
+--+ import of from 'x'
+--- import if from 'x'
+--- import default from 'x'
+--- import * as eval from 'x'
+--- import * as arguments from 'x'
+--- import * as yield from 'x'
+--- import * as await from 'x'
+--- import * as let from 'x'
+--- import * as if from 'x'
+--+ import * as as from 'x'
+--- import a from 'x'; import a from 'y'
+--- import a from 'x'; import { a } from 'y'
+--- import { a, a } from 'x'
+--- import { a, b as a } from 'x'
+--- import { a as b, c as b } from 'x'
+--- import a, { a } from 'x'
+--- import a, { b as a } from 'x'
+--- import a, * as a from 'x'
+--- import * as a from 'x'; import * as a from 'y'
+--- import { a } from 'x'; import { a } from 'x'
+--+ import { a as b } from 'x'; import { a as c } from 'x'
+--- import a from 'x'; let a
+--- import a from 'x'; const a = 1
+--- import a from 'x'; var a
+--- import a from 'x'; function a() {}
+--- import a from 'x'; class a {}
+--+ import a from 'x'; { let a }
+--- import a from 'x'; { var a }
+--+ import a from 'x'; function f() { var a }
+--+ import a from 'x'; function f(a) {}
+--+ import a from 'x'; try {} catch (a) {}
+--+ import a from 'x'; a = 1
+--+ import a from 'x'; a++
+--+ import a from 'x'; [a] = b
+--+ import a from 'x'; for (a of b);
+--- import a from 'x'; delete a
+--+ import * as a from 'x'; a.b = 1
+--- let a; import a from 'x'
+--- var a; import { a } from 'x'
+--+ a; import a from 'x'
+--- function f() { import a from 'x' }
+--- { import a from 'x' }
+--- if (a) import b from 'x'
+--- () => { import a from 'x' }
+--- class A { static { import a from 'x' } }
+--- l: import a from 'x'
+--- import a from 'x' import b from 'y'
+--- import a from 'x', b from 'y'
+--+ import<NL>a<NL>from<NL>'x'
+--+ import { a<NL>as<NL>b } from 'x'
+--+ import a from 'x'<NL>import b from 'y'
+--+ import a, { b, c as d, } from 'x'; import * as e from 'y'; import 'z'
+--- import defer * as a from 'x'
+--+ import defer from 'x'
+--+ import source from 'x'
+--- import defer a from 'x'
+--- import defer { a } from 'x'
+--+ export {}
+--+ export { }
+--+ export {};
+--- export { a }
+--+ var a; export { a }
+--+ const a = 1; export { a }
+--+ function a() {} export { a }
+--+ class a {} export { a }
+--+ import a from 'x'; export { a }
+--+ import { a } from 'x'; export { a }
+--+ import * as a from 'x'; export { a }
+--+ export { a }; var a
+--+ export { a }; let a
+--+ export { a }; function a() {}
+--+ export { a }; import a from 'x'
+--+ var a; export { a, }
+--+ var a; export { a as b }
+--+ var a; export { a as b, a as c }
+--- var a; export { a, a }
+--- var a; export { a as b, a as b }
+--- var a, b; export { a, b as a }
+--- var a, b; export { a as c, b as c }
+--- var a; export { a }; export { a }
+--+ var a; export { a as default }
+--- var a; export { a as default, a as default }
+--- var a; export { a as default }; export default 1
+--+ var a; export { a as if }
+--+ var a; export { a as 'b' }
+--- var a; export { a as 'b', a as 'b' }
+--- var a; export { a as 'b', a as b }
+--+ var a; export { a as 'a b' }
+--+ var a; export { a as '' }
+--- var a; export { a as '\uD800' }
+--+ var a; export { a as '😀' }
+--+ var a; export { a as '\u{1F600}' }
+--- var a; export { a as '\uD83D' }
+--- var a; export { 'a' as b }
+--- var a; export { 'a' }
+--+ export { 'a' } from 'x'
+--+ export { 'a' as b } from 'x'
+--+ export { 'a' as 'b' } from 'x'
+--+ export { a as 'b' } from 'x'
+--- export { '\uD800' } from 'x'
+--- export { '\uD800' as a } from 'x'
+--- export { a as '\uD800' } from 'x'
+--- export { 'a', 'a' } from 'x'
+--- export { 'a' as b, 'c' as b } from 'x'
+--+ export { a } from 'x'
+--- export { a, a } from 'x'
+--- export { a as b, c as b } from 'x'
+--- export { a, b as a } from 'x'
+--+ export { a as default } from 'x'
+--+ export { default } from 'x'
+--+ export { default as a } from 'x'
+--+ export { default as default } from 'x'
+--- export { default, default } from 'x'
+--+ export { if } from 'x'
+--+ export { if as a } from 'x'
+--+ export { a as if } from 'x'
+--- export { if }
+--- export { if as a }
+--- export { default }
+--- export { default as a }
+--+ export { yield } from 'x'
+--+ export { await } from 'x'
+--+ export { let } from 'x'
+--- export { yield }
+--- export { await }
+--- export { let }
+--- export { static }
+--- export { eval }
+--- export { arguments }
+--+ var async; export { async }
+--- export { a }; export { a } from 'x'
+--- export { a } from 'x'; export { a } from 'y'
+--- export { a } from 'x'; export * as a from 'y'
+--+ export { a } from 'x'; var a
+--- export { a } from 'x'; export var a
+--+ export * from 'x'
+--+ export * from 'x'; export * from 'y'
+--+ export * from 'x'; export * from 'x'
+--+ export * as a from 'x'
+--+ export * as default from 'x'
+--+ export * as if from 'x'
+--+ export * as 'a' from 'x'
+--- export * as '\uD800' from 'x'
+--- export * as a from 'x'; export * as a from 'y'
+--- export * as a from 'x'; export var a
+--+ export * as a from 'x'; var a
+--- export * as default from 'x'; export default 1
+--- export * a from 'x'
+--- export * as from 'x'
+--+ export * as as from 'x'
+--- export *
+--- export * from
+--- export * from x
+--- export *, { a } from 'x'
+--- export a from 'x'
+--- export a, { b } from 'x'
+--- export { a }, b from 'x'
+--+ export var a
+--+ export var a = 1, b
+--+ export let a
+--+ export let a = 1
+--+ export const a = 1
+--- export const a
+--+ export var [a] = b
+--+ export let { a, b: c } = d
+--- export var a; export var a
+--- export var a, a
+--- export var a; export let b; export { a as b }
+--- export let a; export let a
+--- export let a; var a
+--- export var a; let a
+--+ export var a; var a
+--+ var a; export var a
+--- export let [a, a] = b
+--- export var [a, a] = b
+--- export var a; export { a }
+--+ export var a; export { a as b }
+--- export var a; export function a() {}
+--- export let a; export function a() {}
+--+ export function a() {}
+--+ export function* a() {}
+--+ export async function a() {}
+--+ export async function* a() {}
+--+ export class a {}
+--- export function a() {} export function a() {}
+--+ export function a() {} export function b() {}
+--- export function a() {} function a() {}
+--- export function a() {} var a
+--- export function a() {} let a
+--- export class a {} export class a {}
+--- export class a {} var a
+--- export class a {} function a() {}
+--- export function () {}
+--- export function* () {}
+--- export async function () {}
+--- export class {}
+--- export function a() {} ()
+--+ export function a() {}<NL>(1)
+--- export class a {}.b
+--- export async<NL>function a() {}
+--- export async a => 1
+--- export a
+--- export a = 1
+--- export 1
+--- export a.b
+--- export (a)
+--- export if (a) b
+--- export { a } = b
+--- export [a] = b
+--+ export default 1
+--+ export default a
+--+ export default a = 1
+--- export default a, b
+--+ export default (a, b)
+--+ export default a => 1
+--+ export default async a => 1
+--+ export default async () => 1
+--+ export default () => {}
+--+ export default function () {}
+--+ export default function a() {}
+--+ export default function* () {}
+--+ export default function* a() {}
+--+ export default async function () {}
+--+ export default async function a() {}
+--+ export default async function* () {}
+--+ export default class {}
+--+ export default class a {}
+--+ export default class extends a {}
+--+ export default (function () {})
+--+ export default (class {})
+--+ export default { a: 1 }
+--+ export default [a]
+--+ export default 'a'
+--+ export default `a`
+--+ export default /a/
+--+ export default null
+--+ export default this
+--+ export default new a
+--+ export default a ? b : c
+--- export default yield
+--+ export default await 1
+--- export default await
+--- export default let
+--+ export default async
+--+ export default async<NL>function a() {}
+--- export default function () {} ()
+--+ export default function () {}<NL>(1)
+--+ export default function a() {} a()
+--+ export default class {} [1]
+--+ export default class {}<NL>[1]
+--- export default function () {}.name
+--- export default var a
+--- export default let a
+--- export default const a = 1
+--- export default if (a) b
+--+ export default { a } = b
+--- export default
+--- export default;
+--- export default 1; export default 2
+--- export default function () {} export default class {}
+--- export default 1; export { a as default }; var a
+--+ export default function a() {} export { a }
+--- export default function a() {} export function a() {}
+--- export default function a() {} function a() {}
+--- export default function a() {} var a
+--- export default function a() {} let a
+--- export default class a {} let a
+--- export default class a {} var a
+--- export default class a {} class a {}
+--- export default function () {} export { default } from 'x'
+--+ export default function () {} function f() {}
+--+ export default function () {} var a
+--+ export default a; export { a }; var a
+--+ export default a; export { b as a }; var b
+--+ var a; export { a as b }; export { a as c }; export default a
+--- function f() { export default 1 }
+--- function f() { export { a } }
+--- { export var a }
+--- if (a) export default b
+--- () => { export let a }
+--- class A { static { export { a } } }
+--- l: export var a
+--- export export var a
+--- export import a from 'x'
+--- export var a export var b
+--+ export var a<NL>export var b
+--- export { a } export { b }
+--+ export<NL>{<NL>a<NL>}<NL>; var a
+--+ export<NL>default<NL>a
+--+ export {}; export {} from 'x'; export * from 'y'
+--+ export { x }; import x from 'y'
+--+ export { x }; import { y as x } from 'z'
+--+ export { x }; import * as x from 'z'
+--+ export { x }; var x; export default x
+--+ export { a, b }; var a; let b
+--- export { a, b }; var a
+--- export { a as b }
+--+ export { a }; { var a }
+--- export { a }; { let a }
+--- export { a }; function f() { var a }
+--+ export { a }; if (b) var a
+--- export { a }; try {} catch (a) {}
+--- export { a }; for (let a;;);
+--+ export { a }; for (var a;;);
+--- export { a }; { function a() {} }
+--- export { a }; if (b) function a() {}
+--- export { a }; class A { static { var a } }
+--+ export { a }; l: var a
+--- export { undefined }
+--- export { globalThis }
+--- export { Object as a }
+--+ var a; export { a as __proto__ }
+--+ export var __proto__; export var constructor
+--+ await 1; export {}
+--+ await a
++++ await<NL>a
+--+ var x = await a
++++ await (a)
++++ await [a]
++++ await `a`
++++ await +a
+--+ await /a/
+++- await;
+++- ({ await })
+++- function f() { (await) => 1 }
+--- () => await 1
+--- () => { await 1 }
+--- (await 1) => 1
++++ async () => await 1
+--- ({ m() { await 1 } })
+++- ({ m() { await } })
+++- ({ m(await) {} })
+--+ ({ [await 1]: 1 })
+--+ ({ [await 1]() {} })
+--- class A { m() { await 1 } }
+--+ class A { [await 1] = 1 }
+--+ if (a) await b
+--+ for (;;) await a
+--+ while (await a) await b
+--+ for await (var a of b);
+--+ for await (a of await b) await c
+--- for await (a in b);
+--- for await (;;);
+--+ for (await a;;);
+--+ for (a of await b);
+--- for (await a of b);
+--+ { await a }
+--+ try { await a } catch { await b } finally { await c }
+--+ switch (await a) { case await b: await c }
+--+ l: await a
+--- with (a) await b
+--+ x = [await a, await b]
+--+ x = { a: await b, [await c]: 1 }
+--+ x = `${await a}`
+--+ f(await a)
+--+ new (await a)
+--- new await a
+--+ await a()
+--- await a ** 2
+--+ (await a) ** 2
+--+ 2 ** await a
+--+ -await a
++++ await -a
+--+ await await a
+--+ await a ? b : c
+--- await a => 1
+--- await async () => 1
+--+ await function () {}
+--+ await class {}
+--- await new.target
+--+ await import('x')
+--+ await import.meta
+--+ await this
+--- await super.x
+--- await yield
+--+ typeof await a
+--+ delete await a
+--+ void await a
+--+ await typeof a
+--+ await delete a.b
+--+ await ++a
+--+ await a++
+++- [await] = a
+++- ({ a: await } = b)
+++- var { await } = a
+++- var [await] = a
+++- var a = await
+--- export var await
+--- export function await() {}
+--- export class await {}
+--+ export { a as await }; var a
+--+ export * as await from 'x'
+--+ export default await a
+--- export default function await() {}
+--- export default class await {}
+--- export default async function await() {}
+--+ export var a = await b
+--+ export const a = await b, c = await d
+--- export let a = () => await b
+--- yield 1
++++ arguments
++++ this
+++- function a() {} function* a() {}
+++- function* a() {} function* a() {}
+++- async function a() {} async function a() {}
+++- function a() {} async function a() {}
++-- if (a) function b() {}
+++- <!-- a
+++- a<NL>--> b
+++- a <!-- b
++++ a --> b
++-- delete a
++++ this.a = 1
++++ typeof this
++++ let undefined
