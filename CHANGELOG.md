@@ -459,6 +459,28 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   `<anonymous>` where the page's URL stands natively, because a script
   whose text was its own rewrite was taken for one already rewritten and
   skipped when the markup's scripts were named. (error-surfaces suite.)
+- A canvas is tainted by what the image, video or bitmap it draws came
+  through, and by what any document drew into it: an image of the page's
+  own URL that redirects to another site (also one that comes back, one
+  drawn while it loads, and whatever the page does to its resource timing
+  buffer), a canvas a frame or popup of the page tainted and the page reads
+  with its own realm's methods, and the copy of such a load a document no
+  worker controls gets. A tainted ImageBitmap cannot be sent anywhere
+  (`postMessage` to a window, worker, port or channel, `structuredClone`, a
+  history state: DataCloneError), and `new VideoFrame()` of a tainting
+  source is refused, as natively. (sop-escapes suite.)
+- A no-cors response that went through another origin and came back is
+  opaque to `fetch`, as natively; it was `basic` and readable. (sop-escapes
+  suite.)
+- Resource timing: a `fetch` or XMLHttpRequest of another origin whose
+  Timing-Allow-Origin names the page shows its timing (the worker's mark
+  rides in Server-Timing, which the inject takes out of the headers the
+  page reads, and a Server-Timing the page may not read as a header is
+  timing only), an XMLHttpRequest's entry says `xmlhttprequest`, and every
+  entry the page may read has a `transferSize` (its body and 300 bytes, 0
+  for an answer from the worker's caches), a `deliveryType` and a
+  `nextHopProtocol` (the scheme's usual one: no transport reports what the
+  origin spoke). (sop-escapes suite.)
 - A stylesheet is rewritten the same whatever was rewritten before it, and
   its rewrite always ends. css-tree keeps its token buffer between parses
   and reads one entry of it that the parse at hand never writes (the token

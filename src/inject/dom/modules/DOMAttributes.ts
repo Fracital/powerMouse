@@ -19,11 +19,12 @@ import { parseAcceptCH } from '../../../server/hintNames';
 import StompURL from '../../../StompURL';
 import { LOAD_HEADER } from '../../../transport/messages';
 import Module from '../../Module';
+import { opaqueMarked } from '../../modules/Fetch';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { scopePrefix, unrouteCSS, unrouteURL } from '../../modules/Unroute';
 import { modifyCSS, modifyJS } from '../../rewriter';
-import { blobLoads } from '../blobLoads';
+import { blobLoads, opaqueCopies } from '../blobLoads';
 import DocumentClient, { type StyleElement } from '../Client';
 import { responseURLOf } from '../responseDocuments';
 import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
@@ -278,6 +279,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						if (shown.has(url)) state.made.push(url);
 						else {
 							blobLoads.delete(url);
+							opaqueCopies.delete(url);
 							Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
 						}
 				perOwner.set(key, state);
@@ -443,6 +445,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			);
 			state.made.push(url);
 			blobLoads.set(url, page);
+			if (opaqueMarked(response)) opaqueCopies.add(url);
 			return url + fragment;
 		};
 		/**
@@ -496,6 +499,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			if (!state) return;
 			for (const url of state.made.splice(0)) {
 				blobLoads.delete(url);
+				opaqueCopies.delete(url);
 				Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
 			}
 		};

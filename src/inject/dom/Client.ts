@@ -156,6 +156,35 @@ function topClientOf(start: DocumentClient, name: string): DocumentClient {
 
 // runtime document !== document in 0.001 ms!?!?!?
 
+/** what holds another origin's data (canvasTaints) */
+export interface CanvasTaints {
+	canvases: WeakSet<object>;
+	contexts: WeakSet<object>;
+	/** ImageBitmaps and CanvasPatterns made from a cross-origin source */
+	sources: WeakSet<object>;
+	/** the ImageBitmaps of those, and how many were ever made */
+	bitmaps: WeakSet<object>;
+	bitmapCount: number;
+}
+
+const newCanvasTaints = (): CanvasTaints => ({
+	canvases: new WeakSet(),
+	contexts: new WeakSet(),
+	sources: new WeakSet(),
+	bitmaps: new WeakSet(),
+	bitmapCount: 0,
+});
+// a window's parent and opener as the browser has them, taken when the
+// bundle runs: a window's own accessors answer for any window
+const nativeParentGet = Reflect.getOwnPropertyDescriptor(
+	window,
+	'parent',
+)!.get!;
+const nativeOpenerGet = Reflect.getOwnPropertyDescriptor(
+	window,
+	'opener',
+)!.get!;
+
 export default class DocumentClient extends Client {
 	private write: typeof document.write;
 	// native document.open: the hooked one runs the open listeners, which
@@ -292,6 +321,84 @@ export default class DocumentClient extends Client {
 		}
 		return this.#topRewriter;
 	}
+	#canvasTaints?: CanvasTaints;
+	#heldTaints?: CanvasTaints;
+	/**
+	 * What the canvases, contexts, bitmaps and patterns of every proxied
+	 * document that can reach this one hold of another origin (CanvasTaint).
+	 * One set for them all, whichever bundle runs each: a page draws and
+	 * reads a canvas of a frame or of a window it opened, with either
+	 * realm's methods. It is kept by the outermost window of the proxy's
+	 * real origin this one reaches, up its parents and through its opener
+	 * (the controller's frame, the host in same-origin mode, a window the
+	 * page opened that has no opener to go through).
+	 */
+	get canvasTaints(): CanvasTaints {
+		return (this.#canvasTaints ??= this.#sharedTaints());
+	}
+	/** this window's own set, when it is the one that keeps it (canvasTaints) */
+	heldCanvasTaints(): CanvasTaints {
+		return (this.#heldTaints ??= newCanvasTaints());
+	}
+	#sharedTaints(): CanvasTaints {
+		const name = this.names.client;
+		let holder: object = this.global;
+		const seen = new Set<object>();
+		for (let hops = 0; hops < 64 && !seen.has(holder); hops++) {
+			seen.add(holder);
+			let next: unknown;
+			try {
+				const parent: unknown = Reflect.apply(nativeParentGet, holder, []);
+				next =
+					parent && parent !== holder
+						? parent
+						: Reflect.apply(nativeOpenerGet, holder, []);
+				// a window of another real origin refuses the read
+				if (next) Reflect.getOwnPropertyDescriptor(next as object, name);
+			} catch (error) {
+				break;
+			}
+			if (next === null || typeof next !== 'object') break;
+			holder = next;
+		}
+		if (holder === this.global) return this.heldCanvasTaints();
+		try {
+			// a proxied window keeps it on its client, which no page can name
+			const client = (holder as Record<string, unknown>)[name] as
+				DocumentClient | undefined;
+			if (client && typeof client.heldCanvasTaints === 'function')
+				return client.heldCanvasTaints();
+			// the controller's frame or the host: under a name of the client's
+			const key = `${name}$taints`;
+			const kept = Reflect.getOwnPropertyDescriptor(holder, key)?.value as
+				CanvasTaints | undefined;
+			if (kept) return kept;
+			const made = newCanvasTaints();
+			if (
+				Reflect.defineProperty(holder, key, {
+					value: made,
+					enumerable: false,
+					configurable: true,
+					writable: false,
+				})
+			)
+				return made;
+		} catch (error) {
+			// a window that keeps nothing: this document's own
+		}
+		return this.heldCanvasTaints();
+	}
+	/**
+	 * Throws the browser's DataCloneError when a message holds or transfers
+	 * a tainted ImageBitmap (set by CanvasTaint): `iface` and `method` name
+	 * the call, as the browser's message does
+	 */
+	cloneCheck?: (
+		iface: string,
+		method: string,
+		data: unknown,
+		transfer?: unknown,
+	) => void;
 	/** the client of the proxied top this document is under (topClientOf) */
 	#topClient(): DocumentClient {
 		return topClientOf(this, this.names.client);

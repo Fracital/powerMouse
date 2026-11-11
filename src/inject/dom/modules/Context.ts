@@ -458,6 +458,21 @@ export default class ContextModule extends Module<DocumentClient> {
 		else context.location.replace(routed);
 	}
 	/**
+	 * A message that holds or transfers a tainted ImageBitmap is not sent
+	 * (CanvasTaint): the browser serializes it before it delivers anything
+	 */
+	#cloneCheck(args: unknown[]) {
+		const option = args[1];
+		this.client.cloneCheck?.(
+			'Window',
+			'postMessage',
+			args[0],
+			option !== null && typeof option === 'object'
+				? Reflect.get(option, 'transfer')
+				: args[2],
+		);
+	}
+	/**
 	 * Post to `receiver` with this client's window as the incumbent the
 	 * browser names as the event's source: its own native postMessage,
 	 * called through a function of its realm. The bundle's free
@@ -562,6 +577,9 @@ export default class ContextModule extends Module<DocumentClient> {
 						this.client.global.postMessage,
 						(target, that, args) => {
 							catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
+							// the browser serializes the message before it looks at the
+							// target origin
+							this.#cloneCheck(args);
 							if (!this.targetAllows(args, context)) return;
 							return this.#postFromHere(context, args);
 						},
@@ -1073,6 +1091,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			const context = this.restrictedContexts.get(target as Context);
 			if (!context) return false;
 			catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
+			this.#cloneCheck(args);
 			if (this.targetAllows(args, context)) this.#postFromHere(context, args);
 			return true;
 		};
@@ -1080,6 +1099,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			const receiver = (target as Record<string, any>)[
 				this.client.names.client
 			] as Client;
+			this.#cloneCheck(args as unknown[]);
 			if (!this.targetAllows(args as unknown[], target as Context)) return;
 			const [data, options] = this.postMessage(
 				args as PostMessageArgs,
@@ -1095,6 +1115,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			this.client.global.postMessage,
 			(target, that, args) => {
 				catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
+				this.#cloneCheck(args);
 				return Reflect.apply(
 					target,
 					this.client.global,

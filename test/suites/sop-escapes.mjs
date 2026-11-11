@@ -28,8 +28,6 @@ const KNOWN_BY_REASON = {
 	'an about:srcdoc document under no-referrer is judged as an opaque origin': [
 		'fetch/from a srcdoc frame that sends no referrer, ACAO A',
 	],
-	"a fetch's or XMLHttpRequest's timing of another origin is restricted even with Timing-Allow-Origin":
-		['timing/a fetch of another site with ACAO and TAO'],
 };
 const KNOWN = new Map(
 	Object.entries(KNOWN_BY_REASON).flatMap(([why, names]) =>

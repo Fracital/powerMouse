@@ -70,6 +70,36 @@ export const TAO_MARKER = 'stomp-tao';
  */
 export const OPAQUE_MARKER = 'stomp-opaque';
 /**
+ * A Server-Timing metric the worker adds to a cors response of another
+ * origin whose own Server-Timing the browser needs for resource timing (its
+ * Timing-Allow-Origin names the page) but the page may not read as a
+ * header (no Access-Control-Expose-Headers names it): the inject shows the
+ * response without the header
+ */
+export const TIMING_ONLY_MARKER = 'stomp-timing-only';
+/**
+ * A Server-Timing metric the worker adds to the answer of an
+ * XMLHttpRequest: the inject makes it with fetch(), so the browser names
+ * its resource timing entry's initiator `fetch`; the page reads
+ * `xmlhttprequest`
+ */
+export const XHR_MARKER = 'stomp-xhr';
+/**
+ * A Server-Timing metric the worker adds to an answer it gave from a cache
+ * of its own (the HTTP cache, the memory cache) without asking the network:
+ * the entry's `transferSize` is 0 and its `deliveryType` "cache", as the
+ * browser's own cache hit reads natively
+ */
+export const CACHED_MARKER = 'stomp-cached';
+/** every Server-Timing metric of the worker's own, which the page never sees */
+export const PROXY_METRICS: readonly string[] = [
+	TAO_MARKER,
+	OPAQUE_MARKER,
+	TIMING_ONLY_MARKER,
+	XHR_MARKER,
+	CACHED_MARKER,
+];
+/**
  * On the answer of a page's emulated service worker: `<type> <url>`, the
  * response's type (basic, cors, opaque) and URL as the worker's Response
  * had them. To the browser every route is same-origin and the URL is the
@@ -302,6 +332,7 @@ export interface PermissionRequestInfo {
 	/** the requesting document's service worker client id */
 	client?: string;
 }
+
 export interface InlineDocumentMessage {
 	directory: string;
 	token: string;

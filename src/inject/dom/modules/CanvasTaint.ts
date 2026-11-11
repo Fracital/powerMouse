@@ -1,17 +1,10 @@
-import { OPAQUE_MARKER } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
-import { hasProxyMetric } from '../../modules/ResourceTiming';
+import ResourceTimingModule from '../../modules/ResourceTiming';
 import { unrouteURL } from '../../modules/Unroute';
-import { blobLoads } from '../blobLoads';
+import { blobLoads, opaqueCopies } from '../blobLoads';
 import type DocumentClient from '../Client';
-
-// What a canvas has drawn, kept for every realm of the bundle (a canvas of a
-// frame the page reaches into is drawn with that realm's methods)
-const taintedCanvases = new WeakSet<object>();
-const taintedContexts = new WeakSet<object>();
-/** ImageBitmaps and CanvasPatterns made from a cross-origin source */
-const taintedSources = new WeakSet<object>();
+import type { CanvasTaints } from '../Client';
 
 type Kind = 'image' | 'svgImage' | 'video' | 'canvas' | 'other';
 
@@ -48,6 +41,24 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		const global = this.client.global;
 		if (typeof global.CanvasRenderingContext2D !== 'function') return;
 		const proxyModule = this.client.getModule(ProxyModule)!;
+		// What a canvas has drawn, kept for every proxied document that can
+		// reach this one, whichever bundle runs it: a page draws a frame's
+		// canvas (an srcdoc frame runs a bundle of its own) or a popup's, with
+		// either realm's methods
+		const shared = this.client.canvasTaints;
+		const {
+			canvases: taintedCanvases,
+			contexts: taintedContexts,
+			sources: taintedSources,
+			bitmaps: taintedBitmaps,
+		} = shared;
+		const taintBitmap = (bitmap: object) => {
+			taintedSources.add(bitmap);
+			if (!taintedBitmaps.has(bitmap)) {
+				taintedBitmaps.add(bitmap);
+				shared.bitmapCount++;
+			}
+		};
 
 		const getter = (proto: object | undefined, name: string) =>
 			proto
@@ -116,6 +127,8 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		/** whether a loaded URL (as the browser has it) is another origin's */
 		const crossOrigin = (loaded: string): boolean => {
 			if (loaded === '' || loaded.startsWith('data:')) return false;
+			// a copy of a load that came through another origin
+			if (opaqueCopies.has(loaded)) return true;
 			// a copy the inject made for a document no worker controls stands
 			// for the page's URL; any other blob: URL is the page's own
 			const real = loaded.startsWith('blob:')
@@ -129,37 +142,45 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 				return false;
 			}
 		};
-		const answeredOpaque = (loaded: string): boolean => {
-			if (!/^https?:/.test(loaded)) return false;
-			const real = unrouteURL(this.client, loaded) ?? loaded;
-			try {
-				return global.performance
-					.getEntriesByName(real)
-					.some((entry) => hasProxyMetric(entry, OPAQUE_MARKER));
-			} catch (error) {
-				return false;
-			}
-		};
-		/** per element: the URL it was judged by and the verdict */
-		const judged = new WeakMap<object, { url: string; taints: boolean }>();
+		// a load of the page's own URL the worker marked as another origin's
+		// (redirected through one, or answered opaque by the page's emulated
+		// service worker)
+		const opaqueLoad = this.client
+			.getModule(ResourceTimingModule)!
+			.opaqueLoads();
+		/**
+		 * per element: the URL it was judged by, whether that is another
+		 * origin's, the URL its marks are asked by ('' for none), and the
+		 * verdict
+		 */
+		const judged = new WeakMap<
+			object,
+			{ url: string; cross: boolean; real: string; taints: boolean }
+		>();
 		const elementTaints = (
 			element: object,
 			url: string,
 			cors: ((this: unknown) => unknown) | undefined,
 		): boolean => {
-			const last = judged.get(element);
-			if (last && last.url === url) return last.taints;
-			// a crossorigin load reached the page only past the CORS check; a
-			// load of the page's own URL its emulated service worker answered
-			// with another origin's opaque response taints too (the worker
-			// marked its timing entry)
-			const taints = crossOrigin(url)
-				? cors
-					? Reflect.apply(cors, element, []) === null
-					: true
-				: answeredOpaque(url);
-			judged.set(element, { url, taints });
-			return taints;
+			let last = judged.get(element);
+			if (!last || last.url !== url) {
+				const cross = crossOrigin(url);
+				last = {
+					url,
+					cross,
+					real: !cross && /^https?:/.test(url) ? url : '',
+					// a crossorigin load reached the page only past the CORS check
+					taints:
+						cross && (cors ? Reflect.apply(cors, element, []) === null : true),
+				};
+				judged.set(element, last);
+			}
+			if (last.taints || last.cross || last.real === '') return last.taints;
+			// a load of the page's own URL: another origin's when the worker
+			// marked it, which is not known until it has loaded (an element
+			// drawn while it loads draws nothing, and is asked again)
+			if (opaqueLoad(last.real)) last.taints = true;
+			return last.taints;
 		};
 		/** whether drawing `source` taints the canvas it is drawn into */
 		const taints = (source: unknown): boolean => {
@@ -515,7 +536,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 				global.OffscreenCanvas.prototype.transferToImageBitmap =
 					proxyModule.wrapFunction(transfer, (target, that, args) => {
 						const bitmap = Reflect.apply(target, that, args);
-						if (taintedCanvases.has(that as object)) taintedSources.add(bitmap);
+						if (taintedCanvases.has(that as object)) taintBitmap(bitmap);
 						return bitmap;
 					});
 		}
@@ -527,10 +548,28 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 				async (target, that, args) => {
 					const tainted = taints(args[0]);
 					const bitmap = await Reflect.apply(target, that, args);
-					if (tainted) taintedSources.add(bitmap);
+					if (tainted) taintBitmap(bitmap);
 					return bitmap;
 				},
 			);
+		this.#hookClones(shared, proxyModule);
+		// a VideoFrame of a tainting source is refused, as natively
+		const NativeVideoFrame = (global as { VideoFrame?: Function }).VideoFrame;
+		if (typeof NativeVideoFrame === 'function')
+			(global as { VideoFrame?: Function }).VideoFrame =
+				proxyModule.wrapFunction(
+					NativeVideoFrame,
+					(target, that, args, newTarget) => {
+						if (newTarget && args.length && taints(args[0]))
+							throw securityError(
+								"Failed to construct 'VideoFrame': VideoFrames can't be created from tainted sources.",
+							);
+						return newTarget
+							? Reflect.construct(target, args, newTarget)
+							: Reflect.apply(target, that, args);
+					},
+					true,
+				);
 		const bitmapRenderer = global.ImageBitmapRenderingContext?.prototype;
 		if (bitmapRenderer) {
 			const native = bitmapRenderer.transferFromImageBitmap;
@@ -551,5 +590,134 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 				},
 			);
 		}
+	}
+	/**
+	 * A tainted ImageBitmap never leaves its realm: a message that holds one
+	 * (postMessage to a window, worker, port or channel, structuredClone, a
+	 * history state) or transfers one is the browser's DataCloneError. Every
+	 * route is same-origin to the browser, so it clones them all. Only looked
+	 * for once a tainted bitmap exists under the proxied top.
+	 */
+	#hookClones(shared: CanvasTaints, proxyModule: ProxyModule) {
+		const global = this.client.global;
+		const bitmaps = shared.bitmaps;
+		const isView = global.ArrayBuffer.isView;
+		const mapForEach = global.Map.prototype.forEach;
+		const setForEach = global.Set.prototype.forEach;
+		/** what of a message is a tainted bitmap: transferred, held, or neither */
+		const taintIn = (
+			data: unknown,
+			transfer: unknown,
+		): 'transferred' | 'cloned' | null => {
+			if (!shared.bitmapCount) return null;
+			// one the message holds and also transfers is refused as
+			// transferred; one only in the transfer list goes (measured)
+			const how = (bitmap: object) => {
+				if (Array.isArray(transfer))
+					for (let i = 0; i < transfer.length; i++)
+						if (transfer[i] === bitmap) return 'transferred';
+				return 'cloned';
+			};
+			const stack: unknown[] = [data];
+			const seen = new Set<object>();
+			// a bound on the work: past it, the browser's own clone decides
+			let budget = 100_000;
+			const push = (value: unknown) => {
+				if (value !== null && typeof value === 'object') stack.push(value);
+			};
+			while (stack.length && budget-- > 0) {
+				const value = stack.pop() as object;
+				if (seen.has(value)) continue;
+				seen.add(value);
+				if (bitmaps.has(value)) return how(value);
+				try {
+					if (isView(value)) continue;
+					try {
+						Reflect.apply(mapForEach, value, [
+							(entry: unknown, key: unknown) => {
+								push(key);
+								push(entry);
+							},
+						]);
+						continue;
+					} catch (error) {
+						// not a Map
+					}
+					try {
+						Reflect.apply(setForEach, value, [push]);
+						continue;
+					} catch (error) {
+						// not a Set
+					}
+					// what a clone reads: own enumerable data properties (a getter
+					// is left to the browser, which runs it once)
+					for (const key of Reflect.ownKeys(value)) {
+						if (typeof key !== 'string') continue;
+						budget--;
+						const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+						if (descriptor?.enumerable && 'value' in descriptor)
+							push(descriptor.value);
+					}
+				} catch (error) {
+					// a revoked proxy or the like: the browser's clone throws
+				}
+			}
+			return null;
+		};
+		const check = (
+			iface: string,
+			method: string,
+			data: unknown,
+			transfer?: unknown,
+		) => {
+			const how = taintIn(data, transfer);
+			if (how)
+				throw new global.DOMException(
+					`Failed to execute '${method}' on '${iface}': Non-origin-clean ImageBitmap cannot be ${how}.`,
+					'DataCloneError',
+				);
+		};
+		this.client.cloneCheck = check;
+		/** the transfer list of postMessage's second argument, either form */
+		const transferOf = (option: unknown) =>
+			Array.isArray(option)
+				? option
+				: option !== null && typeof option === 'object'
+					? Reflect.get(option, 'transfer')
+					: undefined;
+		for (const [iface, proto] of [
+			['Worker', global.Worker?.prototype],
+			['MessagePort', global.MessagePort?.prototype],
+			['BroadcastChannel', global.BroadcastChannel?.prototype],
+		] as const)
+			if (proto && typeof proto.postMessage === 'function')
+				proto.postMessage = proxyModule.wrapFunction(
+					proto.postMessage,
+					(target, that, args) => {
+						if (args.length)
+							check(iface, 'postMessage', args[0], transferOf(args[1]));
+						return Reflect.apply(target, that, args);
+					},
+				);
+		if (typeof global.structuredClone === 'function')
+			global.structuredClone = proxyModule.wrapFunction(
+				global.structuredClone,
+				(target, that, args) => {
+					if (args.length)
+						check('Window', 'structuredClone', args[0], transferOf(args[1]));
+					return Reflect.apply(target, that, args);
+				},
+			);
+		const history = global.History?.prototype;
+		if (history)
+			for (const name of ['pushState', 'replaceState'] as const)
+				if (typeof history[name] === 'function')
+					history[name] = proxyModule.wrapFunction(
+						history[name],
+						(target, that, args) => {
+							if (args.length) check('History', name, args[0]);
+							return Reflect.apply(target, that, args);
+						},
+					);
 	}
 }

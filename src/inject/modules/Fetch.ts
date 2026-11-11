@@ -8,7 +8,10 @@ import StompURL, { urlLike } from '../../StompURL';
 import {
 	ABORT_HEADER,
 	OPAQUE_HEADER,
+	OPAQUE_MARKER,
+	PROXY_METRICS,
 	RESPONSE_TYPE_HEADER,
+	TIMING_ONLY_MARKER,
 } from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
@@ -63,6 +66,25 @@ const responseURLs = new WeakMap<Response, string>();
 /** responses that came with RESPONSE_TYPE_HEADER, which the page never sees */
 const marked = new WeakSet<Response>();
 
+/** the names of a Server-Timing value's metrics */
+const metricNames = (value: string) =>
+	value.split(',').map((metric) => metric.split(';')[0].trim());
+
+/**
+ * A Server-Timing value without the worker's metrics (PROXY_METRICS), or
+ * null for none left or for a header the page may not read at all
+ * (TIMING_ONLY_MARKER)
+ */
+export function withoutProxyMetrics(value: string): string | null {
+	const metrics = value.split(',');
+	const names = metricNames(value);
+	if (names.includes(TIMING_ONLY_MARKER)) return null;
+	const kept = metrics
+		.filter((metric, index) => !PROXY_METRICS.includes(names[index]))
+		.map((metric) => metric.trim());
+	return kept.length ? kept.join(', ') : null;
+}
+
 /** a response's body stream as the browser has it, whatever its type reads as */
 export const nativeBodyOf = (response: Response) =>
 	Reflect.apply(nativeResponseBody, response, []) as ReadableStream | null;
@@ -96,6 +118,15 @@ export function adoptTypeMark(response: Response): boolean {
 		// not a Response (a worker's synchronous XMLHttpRequest makes its own)
 		return false;
 	}
+	// the worker's Server-Timing metrics (resource timing's marks) are the
+	// proxy's: the page reads the response's headers without them
+	const timing = Reflect.apply(nativeHeadersGet, headers, ['server-timing']) as
+		string | null;
+	if (
+		timing !== null &&
+		metricNames(timing).some((name) => PROXY_METRICS.includes(name))
+	)
+		marked.add(response);
 	const mark = Reflect.apply(nativeHeadersGet, headers, [
 		RESPONSE_TYPE_HEADER,
 	]) as string | null;
@@ -110,6 +141,22 @@ export function adoptTypeMark(response: Response): boolean {
 		url || undefined,
 	);
 	return true;
+}
+
+/**
+ * Whether the worker marked a response as another origin's data whatever its
+ * URL (OPAQUE_MARKER: a no-cors chain that went through another origin)
+ */
+export function opaqueMarked(response: Response): boolean {
+	try {
+		const headers = Reflect.apply(nativeResponseHeaders, response, []);
+		const timing = Reflect.apply(nativeHeadersGet, headers, [
+			'server-timing',
+		]) as string | null;
+		return timing !== null && metricNames(timing).includes(OPAQUE_MARKER);
+	} catch (error) {
+		return false;
+	}
 }
 
 const nativeResponseStatus = Reflect.getOwnPropertyDescriptor(
@@ -449,6 +496,10 @@ export default class FetchModule extends Module<Client> {
 				const type = Reflect.apply(nativeResponseType, res, []);
 				if (type === 'basic' && (finalOrigin !== own || url.origin !== own))
 					responseTypes.set(res, mode === 'no-cors' ? 'opaque' : 'cors');
+				// a no-cors chain from this origin through another and back (A
+				// to B to A): its URLs are this origin's, the worker marks it
+				else if (type === 'basic' && mode === 'no-cors' && opaqueMarked(res))
+					responseTypes.set(res, 'opaque');
 
 				return res;
 			},
@@ -500,8 +551,13 @@ export default class FetchModule extends Module<Client> {
 							shown = new global.Headers();
 							for (const [key, value] of entriesOf(
 								Reflect.apply(target, that, args) as Headers,
-							))
-								if (key !== RESPONSE_TYPE_HEADER) shown.append(key, value);
+							)) {
+								if (key === RESPONSE_TYPE_HEADER) continue;
+								if (key === 'server-timing') {
+									const page = withoutProxyMetrics(value);
+									if (page !== null) shown.append(key, page);
+								} else shown.append(key, value);
+							}
 							shownHeaders.set(that as Response, shown);
 						}
 						return shown;

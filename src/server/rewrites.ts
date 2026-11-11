@@ -59,12 +59,15 @@ import type {
 } from '../transport/messages';
 import {
 	ABORT_HEADER,
+	CACHED_MARKER,
 	CREDENTIALS_HEADER,
 	LOAD_HEADER,
 	OPAQUE_HEADER,
 	OPAQUE_MARKER,
 	RESPONSE_TYPE_HEADER,
 	TAO_MARKER,
+	TIMING_ONLY_MARKER,
+	XHR_MARKER,
 } from '../transport/messages';
 import { BUILD } from '../version';
 import {
@@ -224,6 +227,12 @@ interface RedirectHop {
 	 * "null" from here on (the fetch spec's tainted origin)
 	 */
 	tainted?: boolean;
+	/**
+	 * a hop of the chain was of another origin than its initiator's: a no-cors
+	 * response at its end is opaque whatever origin that end is of (the fetch
+	 * spec's response tainting)
+	 */
+	crossed?: boolean;
 }
 
 /** the destinations and modes a LOAD_HEADER may name: a page's subresource loads, never a navigation */
@@ -1155,6 +1164,9 @@ function genericForward(
 			policyOrigin !== null &&
 			(policyOrigin === 'null' || policyOrigin !== url.url.origin);
 		const corsChecked = crossOrigin && policyMode === 'cors';
+		// some hop of this request's chain, this one or an earlier, was of
+		// another origin: a no-cors answer is opaque (A to B to A included)
+		const chainCrossed = crossOrigin || !!previousHop?.crossed;
 		const credentialsIncluded = serverRequest.credentials === 'include';
 		if (previousHop?.tainted && requestHeaders.has('origin'))
 			requestHeaders.set('origin', 'null');
@@ -1800,7 +1812,7 @@ function genericForward(
 		// so nothing of the response reaches it (the inject shows it as one)
 		const opaqueFetch =
 			fromNetwork &&
-			crossOrigin &&
+			chainCrossed &&
 			policyMode === 'no-cors' &&
 			!internal &&
 			serverRequest.destination === '' &&
@@ -1811,24 +1823,61 @@ function genericForward(
 		const keepOpaqueBody =
 			opaqueFetch &&
 			serviceWorkers.isEmulated(context?.clientId, clientRoute ?? undefined);
+		// another origin's timing the page may see (its Timing-Allow-Origin
+		// names the page): the inject reads the marks below
+		const timingShown =
+			fromNetwork &&
+			crossOrigin &&
+			timingAllowed(response.headers, policyOrigin!);
 		if ((fromNetwork && corsChecked) || opaqueFetch) {
 			const location = responseHeaders.get('location');
+			const serverTiming = responseHeaders.get('server-timing');
 			responseHeaders = opaqueFetch
 				? new Headers()
 				: exposedHeaders(responseHeaders, credentialsIncluded);
 			if (redirect && location !== null)
 				responseHeaders.set('location', location);
+			// the browser takes the entry's Server-Timing from the headers it
+			// gets: kept for it, hidden from the page's reads of the headers
+			if (
+				timingShown &&
+				serverTiming !== null &&
+				!responseHeaders.has('server-timing')
+			)
+				responseHeaders.set(
+					'server-timing',
+					`${serverTiming}, ${TIMING_ONLY_MARKER}`,
+				);
 		}
-		// the page's resource timing of another origin's load is restricted
-		// unless its Timing-Allow-Origin names the page: the inject reads this
-		// mark (never a fetch's or XHR's, whose headers the page reads)
+		// a no-cors load (an image, a video) that came through another origin
+		// is that origin's to the page whatever origin its last hop is of: the
+		// element's URL is its first one, so the inject reads this mark (a
+		// canvas that draws it is tainted), as for an opaque answer of the
+		// page's emulated service worker
+		// (a page's no-cors fetch of the same chain is opaque: its URLs are
+		// the page's own origin's, so the inject's fetch reads the mark too,
+		// and so does the copy the inject makes of a load for a document no
+		// worker controls)
 		if (
 			fromNetwork &&
-			crossOrigin &&
-			serverRequest.destination !== '' &&
-			timingAllowed(response.headers, policyOrigin!)
+			previousHop &&
+			chainCrossed &&
+			policyMode === 'no-cors' &&
+			(serverRequest.destination !== '' || opaqueFetch || internal) &&
+			!redirect
 		)
-			responseHeaders.append('server-timing', TAO_MARKER);
+			responseHeaders.append('server-timing', OPAQUE_MARKER);
+		// the page's resource timing of another origin's load is restricted
+		// unless its Timing-Allow-Origin names the page: the inject reads this
+		// mark (and takes it out of the headers a fetch or XHR shows)
+		if (timingShown) responseHeaders.append('server-timing', TAO_MARKER);
+		// an answer from the worker's own caches reads as the browser's cache
+		// hit in resource timing (CACHED_MARKER)
+		if (cached && !redirect)
+			responseHeaders.append('server-timing', CACHED_MARKER);
+		// an XMLHttpRequest's entry names its initiator (XHR_MARKER)
+		if (requestTypeOf(serverRequest) === 'XMLHttpRequest endpoint' && !redirect)
+			responseHeaders.append('server-timing', XHR_MARKER);
 
 		// the browser follows the redirect in proxy URL space, where every hop
 		// is same-origin and the referrer never narrows: remember what this hop
@@ -1850,6 +1899,7 @@ function genericForward(
 						crossOriginLocation(response.headers.get('location'), url))
 						? { tainted: true }
 						: {}),
+					...(chainCrossed ? { crossed: true } : {}),
 				},
 			);
 
