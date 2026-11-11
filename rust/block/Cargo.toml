@@ -1,0 +1,23 @@
+[package]
+name = "block"
+version = "0.1.0"
+edition = "2024"
+description = "the built-in blocker of stomp: adblock-rust behind the buffer ABI (docs/rust-plan.md, section 8)"
+license = "GPL-3.0-only"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Brave's adblock crate (MPL-2.0), pinned. css-validation is required: without
+# it a procedural rule lands in hide_selectors as plain CSS. No
+# resource-assembler (it wants a filesystem), no content-blocking, no
+# debug-info; the public suffix list comes from the host (e.r), not addr
+adblock = { version = "=0.13.5", default-features = false, features = [
+	"full-regex-handling",
+	"single-thread",
+	"css-validation",
+] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
