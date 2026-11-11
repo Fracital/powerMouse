@@ -83,7 +83,12 @@ const listed = (file, name) =>
 const native = await page.evaluate(() => {
 	const having = (pattern, has) =>
 		Object.getOwnPropertyNames(window)
-			.filter((name) => pattern.test(name) && has(window[name].prototype))
+			.filter((name) => {
+				if (!pattern.test(name)) return false;
+				const prototype =
+					typeof window[name] === 'function' ? window[name].prototype : null;
+				return !!prototype && !!has(prototype);
+			})
 			.sort()
 			.join(' ');
 	const own = (prototype, key) =>
@@ -95,7 +100,17 @@ const native = await page.evaluate(() => {
 				(key) => typeof own(p, key)?.value === 'function',
 			),
 		),
-		style: having(/^CSS\w+Rule$/, (p) => own(p, 'style')?.get),
+		// every `style` getter of the browser is a rule's declarations, an
+		// element's or a font's (a string, FontFace's and FontData's)
+		style: having(/^CSS\w+$/, (p) => own(p, 'style')?.get),
+		elementStyle: having(
+			/^\w+$/,
+			(p) => p instanceof Element && own(p, 'style')?.get,
+		),
+		otherStyle: having(
+			/^(?!CSS)\w+$/,
+			(p) => !(p instanceof Element) && own(p, 'style')?.get,
+		),
 	};
 });
 for (const [what, file, name, found] of [
@@ -107,12 +122,23 @@ for (const [what, file, name, found] of [
 	],
 	['the rule methods', 'cssRules.ts', 'RULE_METHOD_INTERFACES', native.methods],
 	["a rule's style", 'cssRules.ts', 'RULE_STYLE_INTERFACES', native.style],
+	[
+		"an element's style",
+		'cssRules.ts',
+		'ELEMENT_STYLE_INTERFACES',
+		native.elementStyle,
+	],
 ])
 	ok(
 		`the inject hooks ${what} on every interface that has them, and only those`,
 		listed(file, name) === found,
 		`listed ${listed(file, name)}; this browser ${found}`,
 	);
+ok(
+	"every other interface's `style` is a font's, a string",
+	native.otherStyle === 'FontData FontFace',
+	native.otherStyle,
+);
 ok(
 	'href.baseVal is the written value and setting it routes',
 	rb.baseVal === 'sprite.svg#icon' &&

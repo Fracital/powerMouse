@@ -1110,6 +1110,19 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   globals, which made each of them in every frame; style-readback checks
   the lists against the browser. 6 to 11 KB of heap a frame (frame-cost:
   1,086 to 1,092 KB a frame, 1,097 to 1,100 before).
+- A URL a page writes into the declarations that follow a nested rule
+  (`rule.cssRules[i].style.backgroundImage = 'url(...)'`, a
+  CSSNestedDeclarations) or into a MathML element's inline style by a
+  named property loads through the proxy: both blocks reached the page
+  unwrapped, and the image loaded from the site itself, past the proxy,
+  in both modes (setProperty and cssText were routed). Every interface
+  whose `style` is a declaration block is wrapped now: the rules', the
+  nested and @function declarations (src/inject/dom/cssRules.ts) and
+  HTML, SVG and MathML elements', and style-readback checks the lists
+  against the browser (the only other `style` getters, FontFace's and
+  FontData's, are strings). A url() the browser keeps as written (an
+  @function's `result`) reads back as the page wrote it, not quoted or
+  with its parentheses escaped. (css-decl-escapes suite.)
 - A document's navigation timing counts the site's own redirects: a GET
   form's document showed one redirect (the worker's, from the form's
   route) where Chrome shows none. (visited suite.)

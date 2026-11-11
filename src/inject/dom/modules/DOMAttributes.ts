@@ -37,6 +37,7 @@ import { modifyCSS, modifyJS } from '../../rewriter';
 import { blobLoads, opaqueCopies } from '../blobLoads';
 import DocumentClient, { type StyleElement } from '../Client';
 import { inertDocumentOf } from '../cloneNode';
+import { ELEMENT_STYLE_INTERFACES } from '../cssRules';
 import { loadFetch, loadSource } from '../loadGrants';
 import { responseURLOf } from '../responseDocuments';
 import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
@@ -2135,11 +2136,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				return proxy;
 			};
 			this.wrapDeclaration = wrapDeclaration;
+			// every element interface with an inline style of its own (a
+			// MathML element's, too)
+			const styleInterfaces = ELEMENT_STYLE_INTERFACES.flatMap((name) => {
+				const ctor = (this.client.global as unknown as Record<string, unknown>)[
+					name
+				];
+				return typeof ctor === 'function' ? [ctor as typeof HTMLElement] : [];
+			});
 
-			for (const ctor of [
-				this.client.global.HTMLElement,
-				this.client.global.SVGElement,
-			]) {
+			for (const ctor of styleInterfaces) {
 				const descriptor = Reflect.getOwnPropertyDescriptor(
 					ctor.prototype,
 					'style',
@@ -2212,10 +2218,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// there changes its inline style, whose loads are copied in a
 			// document no worker controls (and released by a delete or clear)
 			const mapOwners = new WeakMap<object, Element>();
-			for (const ctor of [
-				this.client.global.HTMLElement,
-				this.client.global.SVGElement,
-			]) {
+			for (const ctor of styleInterfaces) {
 				const descriptor = Reflect.getOwnPropertyDescriptor(
 					ctor.prototype,
 					'attributeStyleMap',

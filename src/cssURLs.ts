@@ -36,7 +36,12 @@ export function preserveValue(url: string, value: string) {
 	return `${url}#${value}`;
 }
 
-function restoreValue(url: string) {
+/**
+ * The page's url() token kept after '#', serialised as the browser does a
+ * property's value, or (`asWritten`, a value the browser keeps as the page
+ * wrote it) as the page wrote it
+ */
+function restoreValue(url: string, asWritten = false) {
 	const hashi = url.indexOf('#');
 
 	if (hashi === -1) {
@@ -45,11 +50,13 @@ function restoreValue(url: string) {
 
 	// the browser percent-encodes the quotes of a serialised url() token
 	const token = url.slice(hashi + 1);
+	let decoded = token;
 	try {
-		return serializeCSSURL(decodeURIComponent(token));
+		decoded = decodeURIComponent(token);
 	} catch (error) {
-		return serializeCSSURL(token);
+		// not percent-encoded
 	}
+	return asWritten ? decoded : serializeCSSURL(decoded);
 }
 
 const RAW_URL = /url\(\s*(['"]?)(.*?)\1\s*\)/g;
@@ -98,11 +105,13 @@ export function rewriteCSSValueURLs(value: string, url: StompURL): string {
 	});
 }
 
-// a url() token whose quoted target may hold escapes: a Typed OM value
-// serialises the routed URL as a CSS string, the quotes of the page's token
-// after '#' escaped with backslashes
+// a url() token whose target may hold escapes: a Typed OM value serialises
+// the routed URL as a CSS string, the quotes of the page's token after '#'
+// escaped with backslashes, and a value the browser keeps as written (an
+// @function's `result`) keeps an unquoted url() whose page token has its
+// parentheses escaped (`url(route#url\(page\))`)
 const QUOTED_URL =
-	/url\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^)]*?))\s*\)/gs;
+	/url\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|((?:[^)\\]|\\.)*?))\s*\)/gs;
 
 /**
  * inverse of rewriteCSSValueURLs for values the page reads back: the CSSOM's
@@ -118,12 +127,12 @@ export function restoreCSSValueURLs(
 		QUOTED_URL,
 		(match, double?: string, single?: string, bare?: string) => {
 			try {
-				const quoted = double ?? single;
-				const text =
-					quoted === undefined ? bare! : quoted.replace(/\\(.)/gs, '$1');
+				const text = (double ?? single ?? bare!).replace(/\\(.)/gs, '$1');
 				const real = resolve?.(text);
 				if (real) return cssURLValue(real);
-				return restoreValue(text);
+				// the browser serialises a property's url() quoted; one left
+				// bare is in a value it keeps as written
+				return restoreValue(text, bare !== undefined);
 			} catch (error) {
 				return match;
 			}

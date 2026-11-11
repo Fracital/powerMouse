@@ -1,0 +1,161 @@
+<!doctype html>
+<html>
+	<head>
+		<title>css declarations</title>
+		<style id="st">
+			.box {
+				width: 4px;
+				height: 4px;
+			}
+		</style>
+	</head>
+	<body>
+		<script>
+			// Every way a page writes a URL into a declaration block that is not
+			// an element's inline style: a rule's own declarations, the
+			// declarations after a nested rule (CSSNestedDeclarations), an
+			// @function's (CSSFunctionDeclarations), by a named property, its
+			// dashed name, setProperty and cssText. Each case points an element
+			// at the fixture's /sop/r under its own key; what reached the fixture
+			// past the proxy is read from the browser's requests by the suite.
+			// each run names its own keys (?p=), the fixture's log being shared
+			const run = new URLSearchParams(location.search).get('p') ?? 'x';
+			const target = (key) =>
+				`${location.protocol}//${location.host}/sop/r?k=${run}-${key}&type=png`;
+			// what the page reads back of a block after the write
+			const read = (style) => style.getPropertyValue('background-image');
+			const done = (window.__cssDecls = {});
+			const sheet = document.getElementById('st').sheet;
+			const writes = {
+				named: (style, key) => {
+					style.backgroundImage = `url(${target(key)})`;
+				},
+				dashed: (style, key) => {
+					style['background-image'] = `url(${target(key)})`;
+				},
+				setProperty: (style, key) => {
+					style.setProperty('background-image', `url(${target(key)})`);
+				},
+				cssText: (style, key) => {
+					style.cssText = `background-image: url(${target(key)})`;
+				},
+			};
+			const box = (cls) => {
+				const el = document.createElement('div');
+				el.className = `box ${cls}`;
+				document.body.append(el);
+				return el;
+			};
+			let n = 0;
+			for (const [how, write] of Object.entries(writes)) {
+				// a style rule's own declarations (CSSStyleRule.style)
+				{
+					const cls = `r${n++}`;
+					const index = sheet.insertRule(
+						`.${cls} { color: red }`,
+						sheet.cssRules.length,
+					);
+					box(cls);
+					try {
+						write(sheet.cssRules[index].style, `rule-${how}`);
+						done[`rule-${how}`] = read(sheet.cssRules[index].style);
+					} catch (error) {
+						done[`rule-${how}`] = String(error);
+					}
+				}
+				// the declarations after a nested rule (CSSNestedDeclarations)
+				{
+					const cls = `n${n++}`;
+					const index = sheet.insertRule(
+						`.${cls} { color: red; & .never { color: blue } color: green }`,
+						sheet.cssRules.length,
+					);
+					box(cls);
+					const nested = [...sheet.cssRules[index].cssRules].find(
+						(rule) => rule.constructor.name === 'CSSNestedDeclarations',
+					);
+					try {
+						write(nested.style, `nested-${how}`);
+						done[`nested-${how}`] = read(nested.style);
+					} catch (error) {
+						done[`nested-${how}`] = String(error);
+					}
+				}
+				// an @function's declarations (CSSFunctionDeclarations)
+				{
+					const cls = `f${n}`;
+					const fn = `--img${n++}`;
+					let index;
+					try {
+						index = sheet.insertRule(
+							`@function ${fn}() { result: none; }`,
+							sheet.cssRules.length,
+						);
+						sheet.insertRule(
+							`.${cls} { background-image: ${fn}() }`,
+							sheet.cssRules.length,
+						);
+						box(cls);
+						const declarations = [...sheet.cssRules[index].cssRules].find(
+							(rule) => rule.constructor.name === 'CSSFunctionDeclarations',
+						);
+						const style = declarations.style;
+						const value = `url(${target(`function-${how}`)})`;
+						if (how === 'named') style.result = value;
+						else if (how === 'dashed') style['result'] = value;
+						else if (how === 'setProperty') style.setProperty('result', value);
+						else style.cssText = `result: ${value}`;
+						done[`function-${how}`] = style.cssText;
+					} catch (error) {
+						done[`function-${how}`] = String(error);
+					}
+				}
+			}
+			// an element's own declarations, of each namespace (element.style)
+			for (const [ns, tag] of [
+				['http://www.w3.org/1999/xhtml', 'div'],
+				['http://www.w3.org/2000/svg', 'svg'],
+				['http://www.w3.org/1998/Math/MathML', 'math'],
+			])
+				for (const [how, write] of Object.entries(writes)) {
+					const el = document.createElementNS(ns, tag);
+					if (tag === 'svg') {
+						el.setAttribute('width', '4');
+						el.setAttribute('height', '4');
+					}
+					el.setAttribute('class', 'box');
+					document.body.append(el);
+					try {
+						write(el.style, `${tag}-${how}`);
+						done[`${tag}-${how}`] = read(el.style);
+					} catch (error) {
+						done[`${tag}-${how}`] = String(error);
+					}
+				}
+			// a URL in the text of a rule put in: declarations after a nested
+			// rule, by the sheet's insertRule and by a style rule's
+			{
+				const index = sheet.insertRule(
+					`.ins0 { & .never { color: blue } background-image: url(${target('insert-sheet')}) }`,
+					sheet.cssRules.length,
+				);
+				box('ins0');
+				done['insert-sheet'] = sheet.cssRules[index].cssText.includes('url(');
+				const own = sheet.insertRule(
+					'.ins1 { color: red }',
+					sheet.cssRules.length,
+				);
+				box('ins1');
+				try {
+					sheet.cssRules[own].insertRule(
+						`& { background-image: url(${target('insert-rule')}) }`,
+					);
+					done['insert-rule'] = sheet.cssRules[own].cssText.includes('url(');
+				} catch (error) {
+					done['insert-rule'] = String(error);
+				}
+			}
+			window.__cssDeclsDone = true;
+		</script>
+	</body>
+</html>
