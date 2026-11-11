@@ -202,6 +202,20 @@ ok(
 					new realm.Function('/* kept */ return location.href;'),
 				);
 			if (work === 'holds') return client.sharedRewriter.holds('rewriter');
+			if (work === 'suffix') {
+				const library = client.sharedRewriter;
+				return {
+					holds: library.holds('suffix'),
+					list: library.suffixList(),
+					answers: [
+						library.domain('a.b.github.io'),
+						library.publicSuffix('a.b.github.io', false),
+						library.publicSuffix('a.b.github.io', true),
+						library.domain('www.example.co.uk'),
+						library.domain('127.0.0.1'),
+					],
+				};
+			}
 			if (work === 'top') return written(top);
 			const frame = top.document.createElement('iframe');
 			top.document.body.append(frame);
@@ -218,6 +232,15 @@ ok(
 		if (!holds) await sleep(100);
 	}
 	ok("the top's rewriter library holds the compiled module", holds);
+	const sites = await inPage('suffix');
+	ok(
+		"the top's library holds the suffix module, and its sites are answered from the module's list",
+		sites.holds &&
+			sites.list === `${pinned('PSL_COMMIT')} ${pinned('PSL_DATE')}` &&
+			JSON.stringify(sites.answers) ===
+				JSON.stringify(['github.io', 'github.io', 'io', 'example.co.uk', null]),
+		JSON.stringify(sites),
+	);
 	const top = await inPage('top');
 	ok(
 		'what the page evaluates is rewritten by the module',

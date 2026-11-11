@@ -3,7 +3,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { routedPrefix } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
-import ContextModule, { sameOrigin } from './Context';
+import ContextModule, { sameSiteClients } from './Context';
 
 /**
  * Makes a proxied document believe it is a top-level page even though the
@@ -52,7 +52,7 @@ export default class FramingModule extends Module<DocumentClient> {
 					if (
 						this.client.sandboxedOpaque ||
 						parentClient.sandboxedOpaque ||
-						!sameOrigin(this.client.url.toString(), parentClient.url.toString())
+						!sameSiteClients(this.client, parentClient)
 					)
 						return null;
 					return Reflect.apply(nativeFrameElement, global, []);

@@ -24,6 +24,7 @@ import { provideRewriters } from '../rewriters';
 import { blobOriginPair, routeScopeList } from '../routeURL';
 import type { ScriptType } from '../scriptRoutes';
 import type StompURL from '../StompURL';
+import { knownSite } from './sites';
 
 // the globals a copy of the library made here reads, as they were when the
 // bundle loaded (URL, Reflect and Function are the inject's snapshots)
@@ -201,8 +202,14 @@ export function printExpression(source: string, part: string): string | null {
 	return nullableString(result);
 }
 
-/** tldts getDomain: the registrable domain of `host`, or null */
+/**
+ * tldts getDomain: the registrable domain of `host`, or null. What the
+ * shell said of the host answers (src/inject/sites.ts); the library's list
+ * is asked about any other.
+ */
 export function getDomain(host: string): string | null {
+	const known = knownSite(host, 0);
+	if (known !== undefined) return known;
 	const lib = library();
 	const result: unknown = lib.domain(text(host));
 	settle(lib, false);
@@ -214,6 +221,8 @@ export function getDomain(host: string): string | null {
  * private domains unless `icann` (the ICANN section alone)
  */
 export function getPublicSuffix(host: string, icann = false): string | null {
+	const known = knownSite(host, icann ? 2 : 1);
+	if (known !== undefined) return known;
 	const lib = library();
 	const result: unknown = lib.publicSuffix(text(host), icann);
 	settle(lib, false);

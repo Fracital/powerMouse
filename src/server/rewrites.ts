@@ -49,6 +49,7 @@ import {
 import { modifyJS, RewrittenBy, routeJS, ScriptType } from '../rewriteJS';
 import { parseRoutedURL, routeBinary, unwrapRoute } from '../routeURL';
 import type { ControlInfo } from '../serviceWorkerTypes';
+import { siteFacts, type SiteFacts } from '../siteFacts';
 import StompURL from '../StompURL';
 import { getDomain, getPublicSuffix } from '../suffix';
 import type {
@@ -497,6 +498,33 @@ const ABORTED = Symbol('aborted');
 
 /** the public suffix with the private list, as the jar and the partitions take it */
 const publicSuffix = (host: string) => getPublicSuffix(host, true);
+
+/**
+ * What the shell of the document at `url` says of sites (src/siteFacts.ts):
+ * this worker's answers for the document's own host, and for its top's
+ * when it is served at a nested route (`routed`), whose site its storage is
+ * keyed by. The inject then asks no list about either.
+ */
+function shellSites(
+	url: StompURL,
+	routed?: string,
+	directory?: string,
+): SiteFacts[] {
+	const hosts = [url.url.hostname];
+	if (routed !== undefined && directory !== undefined)
+		try {
+			const top = nestedTopOf(new URL(routed).pathname, directory);
+			if (top) hosts.push(new URL(top).hostname);
+		} catch (error) {
+			// no top to name
+		}
+	const sites: SiteFacts[] = [];
+	for (const host of new Set(hosts)) {
+		const facts = siteFacts(host, { getDomain, getPublicSuffix });
+		if (facts) sites.push(facts);
+	}
+	return sites;
+}
 
 /**
  * The top-level site a routed URL's kind names: a nested document's (its
@@ -3108,7 +3136,19 @@ export function registerRewrites(
 			if (request.referrerPolicy)
 				headers['referrer-policy'] = request.referrerPolicy;
 			return new Response(
-				modifyHTML(entry.markup, url, rewriter.config, true),
+				modifyHTML(
+					entry.markup,
+					url,
+					rewriter.config,
+					true,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					false,
+					undefined,
+					shellSites(url),
+				),
 				{
 					status: 200,
 					headers,
@@ -3138,6 +3178,7 @@ export function registerRewrites(
 						rewriter.config,
 						mime,
 						referrer,
+						shellSites(url, request.routed, rewriter.directory),
 					);
 				// A Refresh header schedules its navigation on the document the
 				// browser creates for this response, which the shell re-opens to
@@ -3207,6 +3248,7 @@ export function registerRewrites(
 						null,
 						upgradeInsecure,
 						adblock,
+						shellSites(url, request.routed, rewriter.directory),
 					);
 				// The page does not wait for the rewrite workers: the shell's
 				// first part (the inject bundle's script and the markup) goes out
@@ -3225,6 +3267,7 @@ export function registerRewrites(
 					note.serviceWorker,
 					upgradeInsecure,
 					adblock,
+					shellSites(url, request.routed, rewriter.directory),
 				);
 				const first = UTF8.encode(head);
 				return new ReadableStream<Uint8Array>({

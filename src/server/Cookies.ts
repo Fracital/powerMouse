@@ -316,13 +316,17 @@ export function parseCookie(
 	let hostOnly = true;
 	const attribute = (parsed.domain ?? '').replace(/^\./, '').toLowerCase();
 	if (attribute !== '') {
+		// a domain that is neither the host nor a name above it is refused
+		// whatever the list says of it, so the list is asked only about the
+		// host's own names (which a document's shell answers:
+		// src/inject/sites.ts)
+		if (!domainMatches(host, attribute)) return null;
 		// a cookie for a whole public suffix (com, co.uk, github.io) would be
 		// a supercookie; one for the host itself is just host-only
 		const suffix = isIP(attribute) ? null : publicSuffix(attribute);
 		if (suffix === attribute) {
 			if (attribute !== host) return null;
 		} else {
-			if (!domainMatches(host, attribute)) return null;
 			domain = attribute;
 			hostOnly = false;
 		}

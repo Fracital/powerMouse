@@ -12,6 +12,7 @@ import {
 	routeURL,
 } from './routeURL';
 import type { ControlInfo } from './serviceWorkerTypes';
+import type { SiteFacts } from './siteFacts';
 import StompURL from './StompURL';
 import { SHELL_MARKUP, SW_CONTROL, WORKER_BASE } from './transport/messages';
 
@@ -179,6 +180,30 @@ function referred(client: string, referrer: ReferrerInfo | undefined): string {
 }
 
 /**
+ * What a shell written on this thread says of sites when its caller names
+ * none: the inject bundle hands on what it was told (src/inject/sites.ts),
+ * the service worker names them with each document it serves
+ */
+let shellSites: (() => SiteFacts[]) | null = null;
+export function provideShellSites(provider: () => SiteFacts[]): void {
+	shellSites = provider;
+}
+
+/**
+ * The shell's statements that tell the client its host's site and its
+ * top's (src/siteFacts.ts), before anything asks: none without facts. A
+ * host name is letters, digits, dots and hyphens, but the text is in a
+ * script: `<` never closes it. A bundle from before the client took them
+ * (one the browser kept across an update) goes on asking the list.
+ */
+function sited(client: string, sites: SiteFacts[] | undefined): string {
+	let text = '';
+	for (const facts of sites ?? shellSites?.() ?? [])
+		text += `	${client}.learnSites?.(${JSON.stringify(facts).replace(/</g, '\\u003c')});\n`;
+	return text;
+}
+
+/**
  * The shell that stands in for a document: loads the inject bundle, creates
  * the client and hands it the real markup. A document whose own URL cannot
  * carry the page URL (a blob: document the page built) gets `base`: the
@@ -190,6 +215,9 @@ function referred(client: string, referrer: ReferrerInfo | undefined): string {
  * about:srcdoc, about:blank, blob: or data: document inherits that policy,
  * and only the shell's own scripts carry the nonce. `upgradeInsecure`: the
  * document's policy upgrades insecure requests (src/mixedContent.ts).
+ * `sites`: what the service worker's list says of the document's host and
+ * its top's (src/siteFacts.ts); a shell the page realm builds hands on what
+ * its bundle was told.
  */
 export function modifyHTML(
 	script: string,
@@ -205,6 +233,7 @@ export function modifyHTML(
 	upgradeInsecure = false,
 	/** the blocker's cosmetic rules and scriptlets for the document (docs/adblock.md) */
 	adblock?: AdblockPage | null,
+	sites?: SiteFacts[],
 ): string {
 	const { head, tail } = shell(
 		script,
@@ -217,6 +246,7 @@ export function modifyHTML(
 		upgradeInsecure,
 		false,
 		adblock,
+		sites,
 	);
 	return head + tail(prewritten);
 }
@@ -237,6 +267,7 @@ export function modifyHTMLStreamed(
 	control?: ControlInfo,
 	upgradeInsecure = false,
 	adblock?: AdblockPage | null,
+	sites?: SiteFacts[],
 ): { head: string; tail: (prewritten: Prewritten | null) => string } {
 	return shell(
 		script,
@@ -249,6 +280,7 @@ export function modifyHTMLStreamed(
 		upgradeInsecure,
 		true,
 		adblock,
+		sites,
 	);
 }
 
@@ -264,6 +296,7 @@ function shell(
 	/** the markup goes in the head, the client takes it from the global */
 	streamed: boolean,
 	adblock?: AdblockPage | null,
+	sites?: SiteFacts[],
 ): { head: string; tail: (prewritten?: Prewritten | null) => string } {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	const names = helperNames(config);
@@ -291,7 +324,7 @@ function shell(
 	${controlled}if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 
-${referred(names.client, referrer)}${
+${sited(names.client, sites)}${referred(names.client, referrer)}${
 		upgradeInsecure
 			? `
 	${names.client}.upgradeInsecureRequests = true;`
@@ -352,6 +385,7 @@ export function modifyXML(
 	config: Config,
 	mime: string,
 	referrer?: ReferrerInfo,
+	sites?: SiteFacts[],
 ): string {
 	// the root start tag, after the prolog, comments and doctype
 	const tags =
@@ -376,7 +410,7 @@ export function modifyXML(
 } else {
 	if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
-${referred(names.client, referrer)}
+${sited(names.client, sites)}${referred(names.client, referrer)}
 	if (!${names.client}.applied) ${names.client}.apply();
 	${names.client}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});
 }`;

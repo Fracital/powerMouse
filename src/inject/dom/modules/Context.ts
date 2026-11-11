@@ -15,10 +15,13 @@ import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { siteKeyOf } from '../site';
 
 export function sameHost(first: string, second: string): boolean {
-	const a = getDomain(first);
-	const b = getDomain(second);
 	// tldts returns null for IPs / localhost; fall back to exact host match
-	return a !== null && b !== null ? a === b : first === second;
+	// (and the second host is then not asked about: the first is the
+	// document's own, which its shell answered)
+	const a = getDomain(first);
+	if (a === null) return first === second;
+	const b = getDomain(second);
+	return b !== null ? a === b : first === second;
 }
 
 function removeBlob(protocol: string): string {
@@ -31,8 +34,29 @@ export function sameOrigin(first: string, second: string): boolean {
 	return (
 		removeBlob(firstURL.protocol) === removeBlob(secondURL.protocol) &&
 		firstURL.port === secondURL.port &&
-		sameHost(firstURL.host, secondURL.host)
+		// one host is one site, whatever the list says of it; two are asked
+		// about by name, without the port they share (the list's answer for
+		// a host is its answer for the host and a port), so that what the
+		// shell said of a name answers (src/inject/sites.ts)
+		(firstURL.hostname === secondURL.hostname ||
+			sameHost(firstURL.hostname, secondURL.hostname))
 	);
+}
+
+/**
+ * Whether two documents are of one site as the window membrane has it:
+ * by their site keys, each worked out in its own realm from what its shell
+ * said, and by their URLs when either has none (an opaque URL)
+ */
+export function sameSiteClients(
+	first: DocumentClient,
+	second: DocumentClient,
+): boolean {
+	const mine = first.siteKey;
+	const theirs = second.siteKey;
+	return mine !== null && theirs !== null
+		? mine === theirs
+		: sameOrigin(first.url.toString(), second.url.toString());
 }
 
 // taken before the page runs: a page may replace the global
@@ -676,14 +700,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		// walking the frame tree, keep the renderer's main thread busy for
 		// good. An opaque URL (a data: document) has no key: its URLs decide.
 		const other = (context as any)[this.client.names.client] as DocumentClient;
-		const mine = this.client.siteKey;
-		const theirs = other.siteKey;
-		if (
-			!opaque &&
-			(mine !== null && theirs !== null
-				? mine === theirs
-				: sameOrigin(this.client.url.toString(), other.url.toString()))
-		) {
+		if (!opaque && sameSiteClients(this.client, other)) {
 			this.held.add(context);
 			return context;
 		}

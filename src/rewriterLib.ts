@@ -95,6 +95,8 @@ export interface LibraryParts {
 	getDomain?: (host: string) => string | null;
 	/** with the private list unless `icann` (the ICANN section alone) */
 	getPublicSuffix?: (host: string, icann?: boolean) => string | null;
+	/** the public suffix list this copy's suffix module holds (its commit and date), '' while tldts answers */
+	suffixList?: () => string;
 }
 
 function missing(name: string): never {
@@ -169,6 +171,14 @@ export function library(parts: LibraryParts) {
 					),
 				null,
 			);
+		},
+		/**
+		 * The public suffix list `domain` and `publicSuffix` are answered
+		 * from when this copy holds the suffix module: the list's commit and
+		 * date (src/wasm/suffix.ts); '' while tldts answers
+		 */
+		suffixList(): string {
+			return run(() => parts.suffixList?.() ?? '', '');
 		},
 		/**
 		 * A wasm module the controller compiled (`rewriter: 'wasm'`), by its

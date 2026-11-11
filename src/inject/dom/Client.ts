@@ -23,6 +23,7 @@ import {
 	modifyJS,
 	shareRewriter,
 } from '../rewriter';
+import { learnSites, siteAnswers } from '../sites';
 import cloneRawNode, {
 	inertDocumentOf,
 	nativeAttributes,
@@ -512,6 +513,20 @@ export default class DocumentClient extends Client {
 	 */
 	get sandboxedOpaque(): boolean {
 		return !this.allows('allow-same-origin');
+	}
+	/**
+	 * Called by the shell before the page runs: what the service worker's
+	 * list says of a host's site, this document's own or its top's
+	 * (src/inject/sites.ts). The questions this document asks about itself
+	 * are answered from it, and the list in the rewriter library is asked
+	 * only about a host no shell named.
+	 */
+	learnSites(facts: unknown): void {
+		learnSites(facts);
+	}
+	/** @internal the site questions this bundle answered from its shells, and the ones it asked the list (site-facts suite) */
+	get siteAnswers(): { known: number; asked: number } {
+		return { known: siteAnswers.known, asked: siteAnswers.asked };
 	}
 	#siteKey?: { document: Document; opaque: boolean; key: string | null };
 	/**
