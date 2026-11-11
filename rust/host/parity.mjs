@@ -12,8 +12,8 @@
 // --cases runs rust/host/cases.mjs (every rewrite family, by shape); a
 // directory is a corpus (docs/rust-plan.md, section 11): an index.json of
 // {file, url, bytes, module} entries, or plain .js files. TIME=1 times both
-// backends on what they agree on. REWRITER_WASM names another artifact than
-// assets/rewriter.wasm (a fresh deploy/rust/out build).
+// backends on what they agree on. CORE_WASM names another artifact than
+// assets/core.wasm (a fresh deploy/rust/out build).
 //
 // --cases also holds the module's revision (rust/rwjs/src/rewrite.rs
 // REVISION, what a cache of rewrites keys on) to what it writes: the digest
@@ -104,7 +104,7 @@ writeFileSync(
 	`export { modifyJS, scriptLead } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
-export { compileModule, BufferInstance } from ${JSON.stringify(`${root}src/wasm/module.ts`)};
+export { compileModule, CoreInstance } from ${JSON.stringify(`${root}src/wasm/module.ts`)};
 export { rewriteWith, rewriterRoute } from ${JSON.stringify(`${root}src/wasm/rewriter.ts`)};
 `,
 );
@@ -123,7 +123,7 @@ const {
 	StompURL,
 	parseConfig,
 	compileModule,
-	BufferInstance,
+	CoreInstance,
 	rewriteWith,
 	rewriterRoute,
 } = await import(`${out}parity.mjs?${Date.now()}`);
@@ -134,10 +134,14 @@ const { generate } = await import('@javascript-obfuscator/escodegen');
 const config = { directory: '/stomp/', codec: 'xor' };
 const parsed = parseConfig(config, 'k');
 const module = await compileModule(
-	readFileSync(process.env.REWRITER_WASM || `${root}assets/rewriter.wasm`),
+	readFileSync(process.env.CORE_WASM || `${root}assets/core.wasm`),
 );
 let route = () => null;
-let instance = new BufferInstance(module, (kind, text) => route(kind, text));
+/** the rewriter member of a fresh instance of the core */
+const rewriterOf = () =>
+	new CoreInstance(module, (member, kind, text) => route(kind, text)).members
+		.rewriter;
+let instance = rewriterOf();
 // the JavaScript rewriter warns about a script it cannot parse
 console.warn = () => {};
 
@@ -163,7 +167,7 @@ function wasm(text, url, type) {
 		);
 	} catch (error) {
 		// a trap: the instance is dead
-		instance = new BufferInstance(module, (kind, text) => route(kind, text));
+		instance = rewriterOf();
 		return { trap: String(error) };
 	}
 }

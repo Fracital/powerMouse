@@ -228,7 +228,7 @@ export interface ControllerInit {
 	membrane?: boolean;
 	/**
 	 * The rewriter backend, `'js'` by default. `'wasm'` loads the Rust
-	 * modules under `init.assets` (`rewriter`; docs/rust-plan.md) once and
+	 * modules under `init.assets` (`core`; docs/rust-plan.md) once and
 	 * hands them to the rewrite workers (compiled) and the service worker
 	 * (as bytes it compiles itself), which answer from them wherever a
 	 * module takes the input and from the JavaScript rewriters otherwise, so

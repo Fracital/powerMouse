@@ -1,6 +1,7 @@
 // The JavaScript rewriter's wasm backend (docs/rust-plan.md, rust/rwjs): the
 // same rewrites as src/rewriteJS.ts, made as edits to the script's own text
-// by the module `rewriter`. This is the host's half: what the module is told
+// by the rewriter, a member of the core module (rust/core-module). This is
+// the host's half: what the module is told
 // (the helper names once, the script's URL, source key and leading text per
 // script), the routing it asks for, and what is kept of the script's text.
 // Anything the module declines (a shape it leaves alone, a script its parser
@@ -20,7 +21,7 @@ import StompURL from '../StompURL';
 import type { BufferInstance } from './module';
 import { hasModule, withInstance } from './thread';
 
-/** the Assets key of the module */
+/** the core module's member that rewrites scripts (src/wasm/module.ts MEMBERS) */
 export const REWRITER = 'rewriter';
 
 // rust/rwjs/src/abi.rs

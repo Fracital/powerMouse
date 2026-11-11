@@ -3,13 +3,28 @@
 // each rewrite worker beside its REWRITE_PORT (REWRITE_MODULES), to a
 // page's library and from there to its dedicated workers, and as bytes to
 // the service worker with its handshake (ControllerInitMessage.modules, or
-// a later CONTROLLER_MODULES when the load finished after it). Each thread
-// instantiates a module here the first time a rewrite asks, keeps the
-// instance for the next one, and replaces it when it has grown too large.
-// Every caller falls back to the JavaScript rewriter when there is no
-// instance: the module has not arrived, the host runs `rewriter: 'js'`, or
-// the instance trapped.
-import { BufferInstance, type RouteImport } from './module';
+// a later CONTROLLER_MODULES when the load finished after it). The JS
+// rewriter, the scanner and the suffix lookup are members of one module,
+// the core (rust/core-module): an instance of it serves a call of any of
+// them. Each thread instantiates a module here the first time a call asks,
+// keeps the instance for the next one, and replaces it when it has grown
+// too large. Every caller falls back to the JavaScript rewriter when there
+// is no instance: the module has not arrived, the host runs
+// `rewriter: 'js'`, or the instance trapped.
+import {
+	CoreInstance,
+	MEMBERS,
+	type BufferInstance,
+	type MemberName,
+	type RouteImport,
+} from './module';
+
+/** the Assets key of the module that holds the members (src/config.ts) */
+export const CORE = 'core';
+
+/** the module a name stands for: a member's is the core's, a module's its own */
+const moduleName = (name: string): string =>
+	Object.hasOwn(MEMBERS, name) ? CORE : name;
 
 /**
  * What a thread is handed for a module. A dedicated worker shares its
@@ -44,7 +59,7 @@ export const PAGE_MEMORY_LIMIT = 8 * 1024 * 1024;
  */
 export const SERVING_MEMORY_LIMIT = 64 * 1024 * 1024;
 /**
- * The instances of one module a thread runs at a time: a rewrite made
+ * The instances of the core a thread runs at a time: a rewrite made
  * during a rewrite (a `data:` stylesheet a stylesheet imports, a `data:`
  * module a module imports, each rewritten from inside the routing call of
  * the one around it) runs in an instance of its own, and so does one inside
@@ -61,9 +76,13 @@ export function setMemoryLimit(bytes: number): void {
 	memoryLimit = bytes;
 }
 
-/** an instance of a module, and what answers its routing import during the call it is in */
+/**
+ * An instance of the core module, and what answers its member's routing
+ * import during the call it is in (one member's: a call made during it
+ * takes another instance)
+ */
 interface Held {
-	instance: BufferInstance;
+	instance: CoreInstance;
 	module: WebAssembly.Module;
 	route: RouteImport | undefined;
 }
@@ -132,9 +151,9 @@ export async function adoptModules(
 	pending.delete(all);
 }
 
-/** whether this thread holds the module `name` at all */
+/** whether this thread holds the module `name` at all (a member: the core) */
 export function hasModule(name: string): boolean {
-	return modules.has(name);
+	return modules.has(moduleName(name));
 }
 
 /**
@@ -152,71 +171,73 @@ export async function heldModules(): Promise<string[]> {
 	return [...modules.keys()];
 }
 
-/** a new instance of the module `name`, or null when the thread was never handed it or it would not instantiate */
-function instantiate(name: string): Held | null {
-	const module = modules.get(name);
+/** a new instance of the core module, or null when the thread was never handed it or it would not instantiate */
+function instantiate(): Held | null {
+	const module = modules.get(CORE);
 	if (!module) return null;
 	try {
 		const held: Held = {
 			module,
 			route: undefined,
-			instance: new BufferInstance(
+			instance: new CoreInstance(
 				module,
-				(kind, text) => held.route?.(kind, text) ?? null,
+				(member, kind, text) => held.route?.(kind, text) ?? null,
 			),
 		};
 		return held;
 	} catch (error) {
-		console.warn(`Stomp: the ${name} module did not instantiate`, error);
+		console.warn(`Stomp: the ${CORE} module did not instantiate`, error);
 		return null;
 	}
 }
 
 /**
- * `work` run with an instance of `name` that is this call's alone, `route`
- * answering that instance's routing import for as long as it runs. The
- * thread keeps the instance for the next call; a call made during a call
- * (a route that rewrites something itself) takes another, made when there
- * is none, and each route goes on answering its own call.
+ * `work` run with the member `name` of a core instance that is this call's
+ * alone, `route` answering that member's routing import for as long as it
+ * runs. The thread keeps the instance for the next call, of any member; a
+ * call made during a call (a route that rewrites something itself, with
+ * the same member or another) takes another, made when there is none, and
+ * each route goes on answering its own call.
  *
  * Null when there is no instance, when INSTANCES calls are in hand already,
  * and when the call threw (a Rust panic aborts, and a route that throws
  * leaves the module's state half written): the caller does the work in
- * JavaScript this once, and whatever call is around this one goes on.
+ * JavaScript this once, and whatever call is around this one goes on in an
+ * instance of its own.
  *
  * An instance is only ever dropped here, after its own call returned: one
  * that threw, one whose module was replaced meanwhile, and one that ended
  * the call holding more than the thread's memory limit.
  */
 export function withInstance<T>(
-	name: string,
+	name: MemberName,
 	work: (instance: BufferInstance) => T,
 	route?: RouteImport,
 ): T | null {
-	const depth = calls.get(name) ?? 0;
+	const depth = calls.get(CORE) ?? 0;
 	if (depth >= INSTANCES) return null;
-	const held = idle.get(name)?.pop() ?? instantiate(name);
+	const held = idle.get(CORE)?.pop() ?? instantiate();
 	if (!held) return null;
 	held.route = route;
-	calls.set(name, depth + 1);
+	calls.set(CORE, depth + 1);
 	let keep = true;
 	try {
-		return work(held.instance);
+		return work(held.instance.members[name]);
 	} catch (error) {
 		keep = false;
 		console.warn(`Stomp: the ${name} module failed, rewriting in JS`, error);
 		return null;
 	} finally {
 		held.route = undefined;
-		calls.set(name, depth);
+		calls.set(CORE, depth);
 		if (
 			keep &&
-			held.module === modules.get(name) &&
+			held.module === modules.get(CORE) &&
 			held.instance.memoryBytes <= memoryLimit
 		) {
-			const kept = idle.get(name);
+			const kept = idle.get(CORE);
 			if (kept) kept.push(held);
-			else idle.set(name, [held]);
+			else idle.set(CORE, [held]);
 		}
 	}
 }

@@ -56,9 +56,9 @@ async function proxied(workers, name) {
 			for (let i = 0; rewriter.rewriter && i < 100; i++) {
 				const held = await controller.wasmModules();
 				if (
-					held.serviceWorker.includes('rewriter') &&
+					held.serviceWorker.includes('core') &&
 					held.rewriteWorkers.length === workers &&
-					held.rewriteWorkers.every((names) => names.includes('rewriter'))
+					held.rewriteWorkers.every((names) => names.includes('core'))
 				)
 					break;
 				await new Promise((resolve) => setTimeout(resolve, 100));

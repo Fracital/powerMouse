@@ -1,6 +1,6 @@
-// `rewriter: 'wasm'`: the controller loads the wasm modules once and every
-// thread that rewrites holds them (src/wasm/thread.ts). The rewrite workers
-// get the compiled modules; the service worker gets their bytes with the
+// `rewriter: 'wasm'`: the controller loads the core module once and every
+// thread that rewrites holds it (src/wasm/thread.ts). The rewrite workers
+// get the compiled module; the service worker gets its bytes with the
 // handshake, because a message holding a WebAssembly.Module never reaches a
 // service worker (it is an agent cluster of its own) and a handshake that
 // carried one left the controller waiting for the worker forever. A proxied
@@ -8,10 +8,10 @@
 // cluster) for the rewriter library it shares with its frames, so a frame
 // holds no instance. A page loads and runs as before either way: a module
 // only ever answers what the JavaScript rewriter would have. A stylesheet's
-// request says the scanner module rewrote it (`rewriteBy`), and its url() is
-// routed as before. The service worker names the public suffix list its
-// sites are answered from once it holds the suffix module
-// (rust/suffix/src/pins.env), and none while tldts answers.
+// request says the module rewrote it (`rewriteBy`), and its url() is routed
+// as before. The service worker names the public suffix list its sites are
+// answered from once it holds the module (rust/suffix/src/pins.env), and
+// none while tldts answers.
 import { readFileSync } from 'node:fs';
 import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
 
@@ -68,8 +68,8 @@ async function held(settled) {
 	return last;
 }
 
-/** every module of the build: the JS rewriter, the CSS and markup scanner and the public suffix list */
-const MODULES = ['rewriter', 'scanner', 'suffix'];
+/** the module of `rewriter: 'wasm'`: the JS rewriter, the CSS and markup scanner and the public suffix list in one */
+const MODULES = ['core'];
 const holdsAll = (names) => MODULES.every((name) => names.includes(name));
 
 /** load the fixture page with a stylesheet of one url(): how the sheet was scanned and whether its image was fetched */
@@ -157,7 +157,7 @@ ok(
 		JSON.stringify(all),
 	);
 	ok(
-		'every rewrite worker holds the compiled modules',
+		'every rewrite worker holds the compiled module',
 		all.rewriteWorkers.length === 2 && all.rewriteWorkers.every(holdsAll),
 		JSON.stringify(all),
 	);
@@ -235,7 +235,7 @@ ok(
 	ok("the top's rewriter library holds the compiled module", holds);
 	const sites = await inPage('suffix');
 	ok(
-		"the top's library holds the suffix module, and its sites are answered from the module's list",
+		"the top's library answers its sites from the module's list",
 		sites.holds &&
 			sites.list === `${pinned('PSL_COMMIT')} ${pinned('PSL_DATE')}` &&
 			JSON.stringify(sites.answers) ===
@@ -299,7 +299,7 @@ ok(
 {
 	const again = await held((now) => holdsAll(now.serviceWorker));
 	ok(
-		'the service worker still holds the modules',
+		'the service worker still holds the module',
 		holdsAll(again.serviceWorker) && again.rewriteWorkers.length === 0,
 		JSON.stringify(again),
 	);

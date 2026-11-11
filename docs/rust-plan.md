@@ -200,19 +200,23 @@ The toolchain is pinned by the image digest rather than a
 `rust-toolchain.toml`: the pins in one file, and no toolchain download at
 build time.
 
-Three artifacts, built separately so a deployment that wants none pays for
+Two artifacts, built separately so a deployment that wants none pays for
 none:
 
-- the rewriter module: 469,012 bytes, 164,914 brotli as built with every
-  rewrite family in, the rewriter's holes closed and the early-error check
-  in its walk (the budget is 600 KB, 160 KB brotli: the brotli size is
-  4,576 bytes past it).
-- the scanner module (`scanner.wasm`, phase 3: the CSS rewriter and the
-  markup scan): 48,518 bytes, 19,673 brotli. It has no dependencies and
-  shares no code with the rewriter, so it is a module of its own and not
-  49 KB more of the rewriter's.
+- the core module (`core.wasm`, `rust/core-module`): the JS rewriter
+  (`rwjs`), the scanner (`rwcss`, phase 3: the CSS rewriter and the markup
+  scan) and the suffix lookup (`suffix`) built in as libraries, with one
+  export table (each member's exports under a letter of its own, `j`, `s`
+  and `d`), one memory and one allocator. 588,207 bytes, 215,404 brotli,
+  where the three were 475,918 + 48,518 + 81,416 = 605,852 bytes, 224,053
+  brotli: 17,645 bytes less (8,649 brotli), the standard library's
+  allocator and buffer code being there once (the budget is 640 KB, 230 KB
+  brotli). A fresh instance is 1,280 KB of linear memory, where the three
+  were 1,152 + 1,088 + 192 KB. "The core module" below has what it costs
+  and saves per thread.
 - the blocker module, 1,063 KB, 299 KB brotli (the crate's regex and idna
-  tables dominate).
+  tables dominate). Only the service worker runs it, and with
+  `adblock: false` none of it is fetched, so it stays a file of its own.
 
 All are committed under `assets/` with a `.sha256` and an `UPSTREAM` file
 naming the toolchain and crate versions that produced them, and `build.js`
@@ -787,15 +791,41 @@ would have left 461,100, and the removal saves 431,867. Its heap ceiling
 (1,120 KB per frame) moves only by what is measured, and nothing was: a
 frame never evaluated the library ("As built" below).
 
+**The core module.** The rewriter, the scanner and the suffix lookup were
+three artifacts (`rewriter.wasm`, `scanner.wasm`, `suffix.wasm`) until they
+were built into one (`rust/core-module`). Each thread keeps instances of it
+(src/wasm/thread.ts): a call of any member takes one that is in no call,
+so a page's library realm that rewrites scripts and styles holds one
+instance where it held two, and a call made during a call (a `data:`
+module a module imports, a `data:` stylesheet a stylesheet imports, or a
+member asked from inside another's routing call) still runs in an
+instance of its own, which a throw costs alone. Measured on the demo with
+a fixture page (external, module and inline scripts, stylesheets, two
+dedicated workers that evaluate text), Chrome 152, cold:
+
+|                                               | three modules      | the core          |
+| --------------------------------------------- | ------------------ | ----------------- |
+| controller: fetched                           | 3 files, 605,852 B | 1 file, 588,207 B |
+| controller: compiles                          | 3                  | 1                 |
+| service worker: compiles (with the blocker's) | 4                  | 2                 |
+| page library realm: instances, linear memory  | 2, 2,621,440 B     | 1, 1,507,328 B    |
+| page dedicated worker that evaluates text     | 1, 1,376,256 B     | 1, 1,507,328 B    |
+| service worker (scanner and suffix lookup)    | 2, 1,507,328 B     | 1, 1,507,328 B    |
+| rewrite workers, two of them used             | 2, 5,767,168 B     | 2, 6,029,312 B    |
+
+A thread that calls one member alone (a rewrite worker, a page's worker)
+holds the others' data as well: 128 KB more an instance. A proxied tab
+saves 1,088 KB in its top's library realm, so it comes out ahead while it
+has fewer than eight dedicated workers that evaluate text at once.
+
 **What the wasm side costs in exchange.**
 
-- Bytes, once per controller: `rewriter.wasm` is 469,012 bytes (164,914
+- Bytes, once per controller: `core.wasm` is 588,207 bytes (215,404
   brotli), fetched by the controller, cached by HTTP like any asset, and
-  compiled once (21 ms, off the main thread). The service worker is handed
-  the bytes (a 423 KB buffer per handshake) and compiles them once more.
-  The suffix module below adds its own file (`suffix.wasm`, 81,416 bytes,
-  38,783 brotli). Against that, every proxied frame stops fetching, parsing
-  and holding 399 KB of script.
+  compiled once (off the main thread). The service worker is handed the
+  bytes with each handshake and compiles them once more. Against that,
+  every proxied frame stops fetching, parsing and holding 399 KB of
+  script.
 - Memory, per rewriting thread: one instance in each rewrite worker, one in
   the service worker, one in each proxied top's library realm; none in a
   frame. An instance is 1.2 to 1.4 MB of linear memory until it meets a

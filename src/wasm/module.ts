@@ -1,8 +1,10 @@
 // How a wasm artifact of stomp (assets/, built by deploy/rust/build.sh)
 // reaches the realms that run it. One compiled WebAssembly.Module is shared:
 // it is structured cloneable, so the controller compiles it once and posts it
-// to the service worker, the rewrite workers and the page's library realm,
-// where instantiating it is synchronous and cheap. Nothing here reads
+// to the rewrite workers and the page's library realm, where instantiating
+// it is synchronous and cheap. The core module (rust/core-module) holds the
+// JS rewriter, the scanner and the suffix lookup as members of one instance,
+// each called through a view of its own (CoreInstance). Nothing here reads
 // import.meta.url or names a file: the host says where the bytes are (a URL,
 // the bytes themselves, a Response or a module it compiled, decrypted or
 // renamed itself), and a glue that named its own file would break the
@@ -48,24 +50,22 @@ export async function compileModule(
 	return WebAssembly.compile(given);
 }
 
-/** the exports every buffer module of stomp has (rust/<crate>/abi.json) */
-export interface BufferExports {
+/** what a buffer module exports, or a member of the core under its view's names */
+export interface MemberExports {
 	memory: WebAssembly.Memory;
 	/** `len` bytes to write into */
 	a(len: number): number;
-	/** bytes given back unused */
-	f(ptr: number, len: number): void;
-	/** the configuration, once per change; the module owns the bytes */
-	c(ptr: number, len: number): number;
 	/** the call; the module owns the bytes and keeps the output */
 	r(ptr: number, len: number, flags: number): number;
 	/** the output's pointer and length */
 	p(): number;
 	n(): number;
+	/** the configuration, once per change; the module owns the bytes */
+	c?(ptr: number, len: number): number;
 	/** the scratch the host answers a routing call in */
-	b(): number;
+	b?(): number;
 	/**
-	 * A module that keeps its input buffer from call to call (rust/rwcss):
+	 * A member that keeps its input buffer from call to call (the scanner):
 	 * the buffer, at least `len` bytes, what it held kept when it grows
 	 */
 	i?(len: number): number;
@@ -75,7 +75,36 @@ export interface BufferExports {
 	s?(len: number): number;
 }
 
-/** `e.r`: the host's routing of `len` bytes at `ptr`, written to the scratch */
+/** the exports of a buffer module of its own (rust/block/abi.json) */
+export interface BufferExports extends MemberExports {
+	/** bytes given back unused */
+	f(ptr: number, len: number): void;
+	c(ptr: number, len: number): number;
+	b(): number;
+}
+
+/**
+ * The core module's members, and the export each role of a view is read
+ * from (rust/core-module/src/lib.rs, abi.json): `route` is the import that
+ * routes for the member, when it routes anything
+ */
+export const MEMBERS = {
+	rewriter: { a: 'a', c: 'jc', r: 'jr', p: 'jp', n: 'jn', b: 'jb', route: 'j' },
+	scanner: {
+		a: 'a',
+		r: 'sr',
+		p: 'sp',
+		n: 'sn',
+		i: 'si',
+		x: 'sx',
+		s: 'ss',
+		route: 's',
+	},
+	suffix: { a: 'da', r: 'dr', p: 'dp', n: 'dn' },
+} as const;
+export type MemberName = keyof typeof MEMBERS;
+
+/** a member's routing import (`e.j`, `e.s`): the host's routing of the text it asks about, or null when it does not route */
 export type RouteImport = (kind: number, text: string) => string | null;
 
 const encoder = new TextEncoder();
@@ -157,13 +186,76 @@ function decodeLoose(bytes: Uint8Array): string {
 }
 
 /**
- * An instance of a buffer module: strings in, strings out, every call
- * synchronous. A trap (a Rust panic, `panic = "abort"`) is thrown through as
- * a RuntimeError, after which the instance is dead: the caller drops it and
- * makes another from the same compiled module.
+ * One instance of the core module, and its members' views of it. The
+ * members share the memory and nothing else: one can be called from inside
+ * another's routing call. A trap in any of them (a Rust panic, `panic =
+ * "abort"`) is thrown through as a RuntimeError, after which the whole
+ * instance is dead: the caller drops it and makes another from the same
+ * compiled module, whose members start over.
+ */
+export class CoreInstance {
+	readonly members: { readonly [name in MemberName]: BufferInstance };
+	readonly #memory: WebAssembly.Memory;
+	/** `route` answers every member's routing import, by member */
+	constructor(
+		module: WebAssembly.Module,
+		route: (
+			member: MemberName,
+			kind: number,
+			text: string,
+		) => string | null = () => null,
+	) {
+		const imports: Record<
+			string,
+			(kind: number, ptr: number, len: number) => number
+		> = {};
+		const members = {} as Record<MemberName, BufferInstance>;
+		for (const name of Object.keys(MEMBERS) as MemberName[]) {
+			const names = MEMBERS[name];
+			if ('route' in names)
+				imports[names.route] = (kind, ptr, len) =>
+					members[name].answerRoute(kind, ptr, len);
+		}
+		const { exports } = new WebAssembly.Instance(module, { e: imports });
+		this.#memory = exports.memory as WebAssembly.Memory;
+		for (const name of Object.keys(MEMBERS) as MemberName[]) {
+			const view: Record<string, unknown> = { memory: this.#memory };
+			for (const [role, field] of Object.entries(MEMBERS[name]))
+				if (role !== 'route') view[role] = exports[field];
+			members[name] = new BufferInstance(
+				view as unknown as MemberExports,
+				(kind, text) => route(name, kind, text),
+			);
+		}
+		this.members = members;
+	}
+	/** how much linear memory the instance holds now */
+	get memoryBytes(): number {
+		return this.#memory.buffer.byteLength;
+	}
+}
+
+/**
+ * The member `name` of a new core instance, `route` answering its routing
+ * import: for a caller that keeps an instance of its own (a test, a tool
+ * of rust/host) rather than the thread's (src/wasm/thread.ts)
+ */
+export function memberInstance(
+	module: WebAssembly.Module,
+	name: MemberName,
+	route: RouteImport = () => null,
+): BufferInstance {
+	return new CoreInstance(module, (member, kind, text) =>
+		member === name ? route(kind, text) : null,
+	).members[name];
+}
+
+/**
+ * A member of the core module as its callers see it: strings in, strings
+ * out, every call synchronous. A call that traps throws (CoreInstance).
  */
 export class BufferInstance {
-	readonly #exports: BufferExports;
+	readonly #exports: MemberExports;
 	#route: RouteImport;
 	/** the configuration last handed over, so a repeat costs nothing */
 	#config = '';
@@ -175,43 +267,40 @@ export class BufferInstance {
 	 * as well
 	 */
 	#crossing = 0;
-	constructor(module: WebAssembly.Module, route: RouteImport = () => null) {
+	constructor(exports: MemberExports, route: RouteImport) {
+		this.#exports = exports;
 		this.#route = route;
-		const instance = new WebAssembly.Instance(module, {
-			e: {
-				r: (kind: number, ptr: number, len: number): number => {
-					const asked = this.#view(ptr, len);
-					const text =
-						this.#crossing === 0
-							? decoder.decode(asked)
-							: this.#crossing === 1
-								? keeping.decode(asked)
-								: decodeLoose(asked);
-					const answer = this.#route(kind, text);
-					if (answer === null) return -1;
-					const sized = this.#exports.s;
-					if (sized) {
-						// a scratch the module makes as large as the answer,
-						// written where it stands
-						if (!wellFormed(answer)) {
-							// the answer to the call then holds one too
-							this.#crossing = 2;
-							const loose = encodeLoose(answer);
-							this.#view(sized(loose.length), loose.length).set(loose);
-							return loose.length;
-						}
-						const room = answer.length * 3;
-						return encoder.encodeInto(answer, this.#view(sized(room), room))
-							.written;
-					}
-					const bytes = encoder.encode(answer);
-					if (bytes.length > this.#scratch) return -1;
-					this.#view(this.#exports.b(), bytes.length).set(bytes);
-					return bytes.length;
-				},
-			},
-		});
-		this.#exports = instance.exports as unknown as BufferExports;
+	}
+	/** the member's routing import: the host's routing of `len` bytes at `ptr`, written to its scratch */
+	answerRoute(kind: number, ptr: number, len: number): number {
+		const asked = this.#view(ptr, len);
+		const text =
+			this.#crossing === 0
+				? decoder.decode(asked)
+				: this.#crossing === 1
+					? keeping.decode(asked)
+					: decodeLoose(asked);
+		const answer = this.#route(kind, text);
+		if (answer === null) return -1;
+		const { s: sized, b: scratch } = this.#exports;
+		if (sized) {
+			// a scratch the module makes as large as the answer,
+			// written where it stands
+			if (!wellFormed(answer)) {
+				// the answer to the call then holds one too
+				this.#crossing = 2;
+				const loose = encodeLoose(answer);
+				this.#view(sized(loose.length), loose.length).set(loose);
+				return loose.length;
+			}
+			const room = answer.length * 3;
+			return encoder.encodeInto(answer, this.#view(sized(room), room)).written;
+		}
+		if (!scratch) return -1;
+		const bytes = encoder.encode(answer);
+		if (bytes.length > this.#scratch) return -1;
+		this.#view(scratch(), bytes.length).set(bytes);
+		return bytes.length;
 	}
 	#view(ptr: number, len: number): Uint8Array {
 		return new Uint8Array(this.#exports.memory.buffer, ptr, len);
@@ -225,7 +314,9 @@ export class BufferInstance {
 	/** the configuration (JSON or any text), handed over when it changed */
 	configure(config: string): void {
 		if (config === this.#config) return;
-		const status = this.#exports.c(...this.#give(encoder.encode(config)));
+		const configure = this.#exports.c;
+		if (!configure) throw new Error('wasm configure: this member takes none');
+		const status = configure(...this.#give(encoder.encode(config)));
 		if (status !== 0) throw new Error(`wasm configure failed: ${status}`);
 		this.#config = config;
 	}
@@ -289,7 +380,7 @@ export class BufferInstance {
 			output: crossed === 2 ? decodeLoose(answer) : keeping.decode(answer),
 		};
 	}
-	/** how much linear memory the instance holds now */
+	/** how much linear memory the instance holds now (the core's, which its members share) */
 	get memoryBytes(): number {
 		return this.#exports.memory.buffer.byteLength;
 	}

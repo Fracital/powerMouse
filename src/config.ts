@@ -198,14 +198,14 @@ export interface Assets {
 	transportWorker?: string;
 	/** the dedicated Workers that rewrite scripts for the service worker */
 	rewriteWorker?: string;
-	/** the JS rewriter's wasm module (docs/rust-plan.md) */
-	rewriter?: string;
-	/** the CSS rewriter's and markup scanner's wasm module (docs/rust-plan.md, phase 3) */
-	scanner?: string;
+	/**
+	 * The core wasm module (docs/rust-plan.md): the JS rewriter, the CSS
+	 * rewriter and markup scanner, and the public suffix lookup, built into
+	 * one artifact
+	 */
+	core?: string;
 	/** the built-in blocker's wasm module (docs/adblock.md) */
 	blocker?: string;
-	/** the public suffix lookup's wasm module (docs/rust-plan.md, phase 2) */
-	suffix?: string;
 	/**
 	 * The rewriter library (meriyah, escodegen, css-tree, tldts and the
 	 * rewriters on them): no inject bundle carries it. A proxied top's shell
@@ -226,10 +226,8 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 	controllerFrameScript: 'controllerFrame.js',
 	transportWorker: 'transportWorker.js',
 	rewriteWorker: 'rewriteWorker.js',
-	rewriter: 'rewriter.wasm',
-	scanner: 'scanner.wasm',
+	core: 'core.wasm',
 	blocker: 'blocker.wasm',
-	suffix: 'suffix.wasm',
 	rewriterLib: 'rewriterLib.js',
 };
 
@@ -238,11 +236,7 @@ export const DEFAULT_ASSETS: Required<Assets> = {
  * `rewriter: 'wasm'` loads and hands to the service worker and its rewrite
  * workers (src/wasm/thread.ts)
  */
-export const WASM_ASSETS = [
-	'rewriter',
-	'scanner',
-	'suffix',
-] as const satisfies (keyof Assets)[];
+export const WASM_ASSETS = ['core'] as const satisfies (keyof Assets)[];
 
 /** a served file's name: the host's, else the default */
 export function assetName(

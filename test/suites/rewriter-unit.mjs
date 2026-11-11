@@ -80,8 +80,8 @@ const {
 const WASM = process.env.STOMP_REWRITER === 'wasm';
 if (WASM)
 	adoptModule(
-		'rewriter',
-		await compileModule(readFileSync(`${root}assets/rewriter.wasm`)),
+		'core',
+		await compileModule(readFileSync(`${root}assets/core.wasm`)),
 	);
 const config = {
 	directory: '/stomp/',

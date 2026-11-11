@@ -65,19 +65,17 @@ const during = (work) => {
 	return [made - before, result];
 };
 
-const bytes = readFileSync(`${root}dist/rewriter.wasm`);
+// the core module (the rewriter, the scanner and the suffix lookup in one):
+// a call of any member takes an instance of it
+const bytes = readFileSync(`${root}dist/core.wasm`);
 const rewriter = await WebAssembly.compile(bytes);
 const another = await WebAssembly.compile(bytes);
-thread.adoptModule('rewriter', rewriter);
-/** the thread as it is when it has made no instance of the rewriter yet */
+thread.adoptModule('core', rewriter);
+/** the thread as it is when it has made no instance of the core yet */
 const forget = () => {
-	thread.adoptModule('rewriter', another);
-	thread.adoptModule('rewriter', rewriter);
+	thread.adoptModule('core', another);
+	thread.adoptModule('core', rewriter);
 };
-thread.adoptModule(
-	'scanner',
-	await WebAssembly.compile(readFileSync(`${root}dist/scanner.wasm`)),
-);
 const warn = console.warn;
 console.warn = () => {};
 
@@ -347,7 +345,7 @@ const show = (value) => JSON.stringify(value)?.slice(0, 400);
 
 	// a module replaced while an instance of the old one is in a call
 	const replaced = thread.withInstance('rewriter', (it) => {
-		thread.adoptModule('rewriter', another);
+		thread.adoptModule('core', another);
 		return [it, it.call('abc', 0).output, next()];
 	});
 	ok(
@@ -356,17 +354,15 @@ const show = (value) => JSON.stringify(value)?.slice(0, 400);
 			replaced[2] !== replaced[0] &&
 			next() === replaced[2],
 	);
-	thread.adoptModule('rewriter', rewriter);
+	thread.adoptModule('core', rewriter);
 }
 
 // the scanner: a data: stylesheet a stylesheet imports is rewritten from
 // inside the routing call of the sheet around it (routeCSS)
 {
-	const scanner = await WebAssembly.compile(
-		readFileSync(`${root}dist/scanner.wasm`),
-	);
-	// the thread as it is when it has made no instance of the scanner yet
-	thread.adoptModule('scanner', scanner);
+	const scanner = await WebAssembly.compile(bytes);
+	// the thread as it is when it has made no instance of the core yet
+	thread.adoptModule('core', scanner);
 	const pageOf = (from) =>
 		new from.StompURL(
 			'https://example.com/dir/a.css',

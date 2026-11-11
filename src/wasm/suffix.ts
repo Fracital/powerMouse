@@ -1,4 +1,4 @@
-// The suffix module (rust/suffix, `suffix.wasm`) as a thread calls it: what
+// The suffix lookup (rust/suffix, a member of `core.wasm`) as a thread calls it: what
 // tldts's getDomain and getPublicSuffix answer for a string, from a table
 // of the public suffix list in the module instead of tldts's own in the
 // bundle. The answers are tldts's for every input, a URL or a host or
@@ -9,7 +9,7 @@
 import type { BufferInstance } from './module';
 import { withInstance } from './thread';
 
-/** the suffix module's Assets key (src/config.ts) */
+/** the core module's member that looks up public suffixes (src/wasm/module.ts MEMBERS) */
 export const SUFFIX = 'suffix';
 
 // the flags of the module's call (rust/suffix/src/lib.rs)

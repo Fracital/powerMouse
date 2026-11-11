@@ -1,4 +1,4 @@
-// The scanner module (rust/rwcss, `scanner.wasm`) as its callers see it: a
+// The scanner (rust/rwcss, a member of `core.wasm`) as its callers see it: a
 // stylesheet, a declaration list or a single value rewritten, and where a
 // document's inline scripts and styles stand. The CSS rewrite is the whole
 // rewrite, done in the module (css-tree's tokenizer and parsers ported, the
@@ -18,7 +18,7 @@ import StompURL from '../StompURL';
 import type { RouteImport } from './module';
 import { hasModule, heldModules, withInstance } from './thread';
 
-/** the scanner's Assets key (src/config.ts) */
+/** the core module's member that rewrites styles and scans markup (src/wasm/module.ts MEMBERS) */
 export const SCANNER = 'scanner';
 
 // rust/rwcss/src/lib.rs

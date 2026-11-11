@@ -1,9 +1,10 @@
-// The suffix module (rust/suffix, suffix.wasm): "what is this host's site"
-// answered from a table of the public suffix list in wasm instead of tldts
-// in a bundle (docs/rust-plan.md, phase 2). In node, no browser:
+// The suffix lookup (rust/suffix, a member of core.wasm): "what is this
+// host's site" answered from a table of the public suffix list in wasm
+// instead of tldts in a bundle (docs/rust-plan.md, phase 2). In node, no
+// browser:
 //
-// - the module's boundary: what each flag answers, the statuses, the pin
-//   it names, what an instance costs;
+// - the member's boundary: what each flag answers, the statuses, the pin
+//   it names, what a lookup costs the instance;
 // - the glue every thread calls it through (src/wasm/suffix.ts): no answer
 //   without the module, tldts's answer with it, the same answer again;
 // - parity with tldts (rust/host/suffix.mjs, with a smaller fuzz than a
@@ -15,7 +16,6 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { brotliCompressSync } from 'node:zlib';
 import { done, ok, OUT } from '../lib.mjs';
 
 let esbuild;
@@ -33,7 +33,7 @@ mkdirSync(OUT, { recursive: true });
 const entry = `${OUT}suffix-entry.mjs`;
 writeFileSync(
 	entry,
-	`export { compileModule, BufferInstance } from ${JSON.stringify(`${root}src/wasm/module.ts`)};\n` +
+	`export { compileModule, CoreInstance } from ${JSON.stringify(`${root}src/wasm/module.ts`)};\n` +
 		`export * as thread from ${JSON.stringify(`${root}src/wasm/thread.ts`)};\n` +
 		`export * as suffix from ${JSON.stringify(`${root}src/wasm/suffix.ts`)};\n` +
 		`export * as site from ${JSON.stringify(`${root}src/suffix.ts`)};\n`,
@@ -49,19 +49,21 @@ await esbuild.build({
 	outfile: bundle,
 	logLevel: 'silent',
 });
-const { compileModule, BufferInstance, thread, suffix, site } = await import(
+const { compileModule, CoreInstance, thread, suffix, site } = await import(
 	bundle
 );
 
-const bytes = readFileSync(`${root}dist/suffix.wasm`);
+const bytes = readFileSync(`${root}dist/core.wasm`);
 const module = await compileModule(bytes);
-const instance = new BufferInstance(module);
+const core = new CoreInstance(module);
+const fresh = core.memoryBytes;
+const instance = core.members.suffix;
 const answer = (text, flags) => {
 	const result = instance.call(text, flags);
 	return 'output' in result ? result.output : `status ${result.status}`;
 };
 
-// the boundary (rust/suffix/src/lib.rs)
+// the boundary (rust/suffix/src/lib.rs, rust/core-module/src/suffixes.rs)
 ok(
 	'the registrable domain is where it stands in the input',
 	answer('www.example.co.uk', 0) === '4 17',
@@ -122,20 +124,16 @@ ok(
 	answer('', 16),
 );
 
-// what it costs (docs/rust-plan.md: tldts is 131,888 bytes of the inject
-// bundle; the budgets are the measurement and a margin, raised only by the
-// change that needs it)
-const brotli = brotliCompressSync(bytes).length;
-ok(
-	'the artifact is within its budget of 90,000 bytes, 42,000 brotli',
-	bytes.length <= 90_000 && brotli <= 42_000,
-	`${bytes.length} bytes, ${brotli} brotli`,
-);
+// what it costs the instance: its buffers are kept from call to call, and
+// those of an input past 64 KiB are given back after it (the artifact's
+// budget is the wasm-artifact suite's)
 instance.call(`https://${'a.'.repeat(100)}example.com/`, 0);
+instance.call(`https://${'a.'.repeat(100_000)}example.com/`, 0);
+instance.call('www.example.co.uk', 0);
 ok(
-	'an instance is three pages of memory, four once it has seen a long input',
-	instance.memoryBytes <= 4 * 65536,
-	String(instance.memoryBytes),
+	'lookups, a long one among them, grow the memory by a few pages at most',
+	core.memoryBytes - fresh <= 16 * 65536,
+	`${fresh} -> ${core.memoryBytes}`,
 );
 
 // the glue (src/wasm/suffix.ts) and the choice between it and tldts
@@ -148,7 +146,7 @@ ok(
 		site.getDomain('www.example.co.uk') === 'example.co.uk' &&
 		site.getPublicSuffix('a.b.github.io', true) === 'github.io',
 );
-thread.adoptModule(suffix.SUFFIX, module);
+thread.adoptModule('core', module);
 ok(
 	"with the module the answer is the module's, a string or null",
 	suffix.domainOf('www.example.co.uk', false) === 'example.co.uk' &&
@@ -204,7 +202,7 @@ const harness = spawnSync(process.execPath, [`${root}rust/host/suffix.mjs`], {
 	env: {
 		...process.env,
 		FUZZ: process.env.FUZZ ?? '100000',
-		SUFFIX_WASM: `${root}dist/suffix.wasm`,
+		CORE_WASM: `${root}dist/core.wasm`,
 	},
 	encoding: 'utf8',
 	maxBuffer: 16 * 1024 * 1024,

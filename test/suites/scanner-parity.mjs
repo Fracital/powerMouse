@@ -1,4 +1,4 @@
-// The scanner module (rust/rwcss, dist/scanner.wasm) against the JavaScript
+// The scanner (rust/rwcss, a member of dist/core.wasm) against the JavaScript
 // it stands in for, in node: with `rewriter: 'wasm'` the module rewrites a
 // stylesheet, a declaration list (an element's style) and a single value
 // (css-tree's parse and walk, and the URL expression, otherwise), asking
@@ -109,9 +109,9 @@ console.warn = () => {};
 		JSON.stringify(told),
 	);
 }
-const bytes = readFileSync(`${root}dist/scanner.wasm`);
+const bytes = readFileSync(`${root}dist/core.wasm`);
 await adoptModules({
-	scanner: bytes.buffer.slice(
+	core: bytes.buffer.slice(
 		bytes.byteOffset,
 		bytes.byteOffset + bytes.byteLength,
 	),
@@ -252,7 +252,7 @@ function sameMarkup(markup, label) {
 	);
 	const madeBefore = made;
 	await library.adoptModules({
-		scanner: bytes.buffer.slice(
+		core: bytes.buffer.slice(
 			bytes.byteOffset,
 			bytes.byteOffset + bytes.byteLength,
 		),

@@ -32,9 +32,16 @@ a wrapper that adds `--network host` to `docker build`, as for
 
 ## Adding a crate
 
-Four crates share this toolchain (the rewriter, the scanner, the blocker,
-WebRTC), and
-the recipe is the same for each:
+The crates that share this toolchain build two artifacts today: the core
+module (`rust/core-module`, `core.wasm`: the JS rewriter `rwjs`, the CSS
+rewriter and markup scanner `rwcss` and the public suffix lookup `suffix`,
+each a plain library it builds in, behind one export table) and the
+blocker (`rust/block`, `blocker.wasm`), which only the service worker runs
+and only with the blocker on. A new piece that every context running
+`rewriter: 'wasm'` wants (the URL codec) is a member of the core: a library
+crate, a module in `rust/core-module/src/` with its exports under a letter
+of their own, its lines in `rust/core-module/abi.json`, and a view in
+`MEMBERS` (`src/wasm/module.ts`). A new artifact follows this recipe:
 
 1. A directory `rust/<crate>/` with a `cdylib` crate, added to the
    workspace `members` in `rust/Cargo.toml`, and `LOCK=1 build.sh <crate>
@@ -42,9 +49,9 @@ the recipe is the same for each:
    `rust/Cargo.lock`.
 2. `rust/<crate>/abi.json`: the imports (`module.field`) and exports
    (`name:kind`) the artifact may have, and nothing else. A crate that
-   speaks the buffer ABI (`rust/rwjs/src/abi.rs` is the model) is loaded by
-   `src/wasm/module.ts`'s `BufferInstance` with no glue of its own; one
-   that needs WASI names those imports here and answers them in its worker.
+   speaks the buffer ABI (`rust/block/src/lib.rs` is the model) is loaded
+   with the few lines of `src/blocker/instance.ts`; one that needs WASI
+   names those imports here and answers them in its worker.
 3. The markers, if any: `wasm-target`, `bindgen` (below).
 4. A key in `Assets` and `DEFAULT_ASSETS` (`src/config.ts`) naming
    `<name>.wasm`, so a host that renames files can say what it called it,
@@ -60,8 +67,8 @@ the suffix crate's table is made by its `build.rs` from
 publicsuffix/list repository at the commit `rust/suffix/src/pins.env`
 names, with the file's sha256 (`build.rs` stops on any other file). Under
 `src/` both are among the crate's files in its `sources` line, and
-`build.sh` writes a crate's `src/pins.env` into the artifact's `UPSTREAM`
-after the toolchain's pins. The toolchain image does not change with them,
+`build.sh` writes the `src/pins.env` of every crate an artifact builds in
+into its `UPSTREAM` after the toolchain's pins. The toolchain image does not change with them,
 so a new list rebuilds one artifact and changes no other's line.
 
 What the crates share in Rust is `rust/edits`: the span edit model and the
@@ -130,5 +137,8 @@ hands the result over), never reads `import.meta.url`, and compiles once;
 the compiled `WebAssembly.Module` is what crosses to the rewrite workers and
 the page's library realm, each of which instantiates it synchronously. The
 service worker is an agent cluster of its own and cannot be posted a
-module: it is handed the bytes and compiles them (`src/wasm/thread.ts`). `BufferInstance` speaks the buffer ABI: strings in and out,
-one `configure` per change, a routing import the host answers.
+module: it is handed the bytes and compiles them (`src/wasm/thread.ts`).
+`CoreInstance` is one instance of the core and a `BufferInstance` view of
+it per member (`MEMBERS`: which export each role is read from), each
+speaking the buffer ABI: strings in and out, one `configure` per change, a
+routing import of its own the host answers.

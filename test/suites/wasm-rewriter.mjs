@@ -49,14 +49,14 @@ const controller = (id, options = {}) =>
 		{ id, options },
 	);
 
-/** every thread the controller hands modules to holds the rewriter */
+/** every thread the controller hands modules to holds the core module, the rewriter's */
 async function settled(workers) {
 	for (let i = 0; i < 100; i++) {
 		const held = await page.evaluate(() => window.__controller.wasmModules());
 		if (
-			held.serviceWorker.includes('rewriter') &&
+			held.serviceWorker.includes('core') &&
 			held.rewriteWorkers.length === workers &&
-			held.rewriteWorkers.every((names) => names.includes('rewriter'))
+			held.rewriteWorkers.every((names) => names.includes('core'))
 		)
 			return true;
 		await sleep(100);

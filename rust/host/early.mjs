@@ -41,7 +41,8 @@
 // (early-lib.mjs `strictTexts`) and drops a text that is there twice. A
 // file argument is a list of the same format (verdicts are not checked for
 // `?`).
-// REWRITER_WASM names another artifact than assets/rewriter.wasm.
+// CORE_WASM names another artifact than assets/core.wasm (the module the
+// rewriter is a member of).
 //
 // --corpus is the other direction, over real scripts (a corpus directory
 // with an index.json as rust/host/parity.mjs reads it, or any directory:
@@ -137,7 +138,7 @@ writeFileSync(
 	`export { modifyJS, singleExpression, UNREWRITTEN_END } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
-export { compileModule, BufferInstance } from ${JSON.stringify(`${root}src/wasm/module.ts`)};
+export { compileModule, memberInstance } from ${JSON.stringify(`${root}src/wasm/module.ts`)};
 `,
 );
 await esbuild.build({
@@ -155,7 +156,7 @@ const {
 	StompURL,
 	parseConfig,
 	compileModule,
-	BufferInstance,
+	memberInstance,
 } = await import(`${out}early.mjs?${Date.now()}`);
 const { parse } = await import(`${root}node_modules/meriyah/dist/meriyah.mjs`);
 
@@ -167,11 +168,11 @@ const url = new StompURL(
 	'/stomp/',
 );
 const compiled = await compileModule(
-	readFileSync(process.env.REWRITER_WASM || `${root}assets/rewriter.wasm`),
+	readFileSync(process.env.CORE_WASM || `${root}assets/core.wasm`),
 );
 // a static import routes to anything: only what compiles is asked here
 const route = (kind, text) => `/routed/${kind}/${text.length}`;
-let instance = new BufferInstance(compiled, route);
+let instance = memberInstance(compiled, 'rewriter', route);
 /** the JavaScript rewriter gave the last script up (it says so) */
 let gaveUp = false;
 console.warn = (message) => {
@@ -187,7 +188,7 @@ function wasm({ code, module }) {
 		instance.call(`${url}\n\n\n`, 8);
 		return instance.call(code, module ? 2 : 0);
 	} catch (error) {
-		instance = new BufferInstance(compiled, route);
+		instance = memberInstance(compiled, 'rewriter', route);
 		return { status: 'trap' };
 	}
 }

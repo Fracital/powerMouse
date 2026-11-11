@@ -1,4 +1,4 @@
-// The suffix module (rust/suffix, assets/suffix.wasm) against tldts, in
+// The suffix lookup (rust/suffix, in assets/core.wasm) against tldts, in
 // Node, without a browser: the module has to answer what tldts answers for
 // the four calls STomp makes (getDomain and getPublicSuffix, each with the
 // list's private section and without), for a host, a URL, or whatever a
@@ -23,7 +23,8 @@
 //   node rust/host/suffix.mjs --bench    # and lookups per second, sizes,
 //                                        # memory and compile time
 //
-// SUFFIX_WASM names another artifact than assets/suffix.wasm.
+// CORE_WASM names another artifact than assets/core.wasm (the module the
+// lookup is a member of).
 import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -54,9 +55,9 @@ await esbuild.build({
 });
 const { compileModule, thread, suffix } = await import(join(out, 'glue.mjs'));
 
-const artifact = process.env.SUFFIX_WASM || `${root}assets/suffix.wasm`;
+const artifact = process.env.CORE_WASM || `${root}assets/core.wasm`;
 const bytes = readFileSync(artifact);
-thread.adoptModule(suffix.SUFFIX, await compileModule(bytes));
+thread.adoptModule('core', await compileModule(bytes));
 
 /** the four calls STomp makes, as tldts answers them and as the module does */
 const CALLS = [
@@ -853,7 +854,7 @@ if (process.argv.includes('--bench')) {
 	const instanceTimes = [];
 	for (let run = 0; run < 15; run++) {
 		const start = performance.now();
-		new WebAssembly.Instance(module, {});
+		new WebAssembly.Instance(module, { e: { j: () => -1, s: () => -1 } });
 		instanceTimes.push(performance.now() - start);
 	}
 	const median = (times) => times.sort((a, b) => a - b)[times.length >> 1];
@@ -867,12 +868,12 @@ if (process.argv.includes('--bench')) {
 		`compile ${median(compileTimes).toFixed(2)} ms, instantiate ${median(instanceTimes).toFixed(3)} ms`,
 	);
 	console.log(
-		`instance memory after ${compared + 15 * hosts.length} lookups: ${thread.instanceOf(suffix.SUFFIX).memoryBytes} bytes`,
+		`instance memory after ${compared + 15 * hosts.length} lookups: ${thread.withInstance('suffix', (instance) => instance.memoryBytes)} bytes`,
 	);
 	const long = `https://${'a'.repeat(200000)}.example.com/`;
 	suffix.domainOf(long, true);
 	console.log(
-		`and after one input of ${long.length} characters: ${thread.instanceOf(suffix.SUFFIX).memoryBytes} bytes`,
+		`and after one input of ${long.length} characters: ${thread.withInstance('suffix', (instance) => instance.memoryBytes)} bytes`,
 	);
 }
 

@@ -68,9 +68,10 @@ const rewritten = () =>
 	);
 const show = (value) => JSON.stringify(value)?.slice(0, 300);
 
-// A module with the boundary's exports that answers every call with a copy
-// of its input and status 0, as the phase 0 artifact did. Assembled here,
-// so the check does not depend on an artifact no build ships any more.
+// A module with the rewriter member's exports (rust/core-module) that
+// answers every call with a copy of its input and status 0, as the phase 0
+// artifact did. Assembled here, so the check does not depend on an artifact
+// no build ships any more.
 function copyingModule() {
 	const leb = (value) => {
 		const bytes = [];
@@ -104,9 +105,9 @@ function copyingModule() {
 				type([], [I32]),
 			]),
 		),
-		// e.r, the routing import
-		...section(2, vector([[...text('e'), ...text('r'), 0x00, 3]])),
-		// a f c r p n b
+		// e.j, the rewriter's routing import
+		...section(2, vector([[...text('e'), ...text('j'), 0x00, 3]])),
+		// a f jc jr jp jn jb
 		...section(3, vector([[0], [1], [2], [3], [4], [4], [4]])),
 		...section(5, vector([[0x00, 4]])),
 		// where the last input stands and how long it is
@@ -121,7 +122,7 @@ function copyingModule() {
 			7,
 			vector([
 				[...text('memory'), 0x02, 0],
-				...['a', 'f', 'c', 'r', 'p', 'n', 'b'].map((name, i) => [
+				...['a', 'f', 'jc', 'jr', 'jp', 'jn', 'jb'].map((name, i) => [
 					...text(name),
 					0x00,
 					i + 1,
@@ -135,11 +136,11 @@ function copyingModule() {
 				body([0x41, 0x80, 0x80, 0x04]),
 				body([]),
 				body([0x41, 0x00]),
-				// r: the output is the input
+				// jr: the output is the input
 				body([0x20, 0x00, 0x24, 0x00, 0x20, 0x01, 0x24, 0x01, 0x41, 0x00]),
 				body([0x23, 0x00]),
 				body([0x23, 0x01]),
-				// b: the routing scratch at 128 KiB
+				// jb: the routing scratch at 128 KiB
 				body([0x41, 0x80, 0x80, 0x08]),
 			]),
 		),
@@ -152,7 +153,7 @@ ok(
 	show(js),
 );
 
-thread.adoptModule('rewriter', await WebAssembly.compile(copyingModule()));
+thread.adoptModule('core', await WebAssembly.compile(copyingModule()));
 {
 	const answered = thread.rewriterRevision();
 	const outputs = rewritten();
@@ -178,8 +179,8 @@ thread.adoptModule('rewriter', await WebAssembly.compile(copyingModule()));
 	);
 }
 
-const bytes = readFileSync(`${root}dist/rewriter.wasm`);
-thread.adoptModule('rewriter', await WebAssembly.compile(bytes));
+const bytes = readFileSync(`${root}dist/core.wasm`);
+thread.adoptModule('core', await WebAssembly.compile(bytes));
 {
 	const answered = thread.rewriterRevision();
 	const recorded = readFileSync(`${root}rust/host/cases.revision`, 'utf8');

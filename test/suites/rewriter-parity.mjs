@@ -1,6 +1,6 @@
 // The two JavaScript rewriters print the same programs: rust/host/parity.mjs
 // --cases, the differential harness, in node with the module the build
-// ships (dist/rewriter.wasm). Every rewrite family of src/rewriteJS.ts by
+// ships (dist/core.wasm). Every rewrite family of src/rewriteJS.ts by
 // shape (rust/host/cases.mjs), and a family for each hole the JavaScript
 // rewriter had (the `holes` families: what each fix changed, which the wasm
 // rewriter must do too, or shows it never had), are rewritten by both and
@@ -24,7 +24,7 @@ const harness = spawnSync(
 	process.execPath,
 	[`${root}rust/host/parity.mjs`, '--cases'],
 	{
-		env: { ...process.env, REWRITER_WASM: `${root}dist/rewriter.wasm` },
+		env: { ...process.env, CORE_WASM: `${root}dist/core.wasm` },
 		encoding: 'utf8',
 		maxBuffer: 64 * 1024 * 1024,
 	},

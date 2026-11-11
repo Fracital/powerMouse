@@ -7,6 +7,7 @@
 // module, strings in and out, the routing import answered by the host.
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { brotliCompressSync } from 'node:zlib';
 import { inspect, problems, tokensIn } from '../../deploy/rust/check.mjs';
 import { done, ok, OUT } from '../lib.mjs';
 
@@ -99,7 +100,7 @@ mkdirSync(OUT, { recursive: true });
 const entry = `${OUT}wasm-artifact-entry.mjs`;
 writeFileSync(
 	entry,
-	`export { compileModule, BufferInstance } from ${JSON.stringify(`${root}src/wasm/module.ts`)};\n` +
+	`export { compileModule, CoreInstance, BufferInstance } from ${JSON.stringify(`${root}src/wasm/module.ts`)};\n` +
 		`export * as thread from ${JSON.stringify(`${root}src/wasm/thread.ts`)};\n`,
 );
 const bundle = `${OUT}wasm-artifact.mjs`;
@@ -112,20 +113,38 @@ await esbuild.build({
 	outfile: bundle,
 	logLevel: 'silent',
 });
-const { compileModule, BufferInstance, thread } = await import(bundle);
+const { compileModule, CoreInstance, BufferInstance, thread } = await import(
+	bundle
+);
 
-if (artifacts.includes('rewriter.wasm')) {
-	const bytes = readFileSync(`${root}dist/rewriter.wasm`);
+if (artifacts.includes('core.wasm')) {
+	const bytes = readFileSync(`${root}dist/core.wasm`);
+	// what it costs (the rewriter, the scanner and the suffix lookup in one;
+	// the budget is the measurement and a margin, raised only by the change
+	// that needs it)
+	const brotli = brotliCompressSync(bytes).length;
+	ok(
+		'the core is within its budget of 640,000 bytes, 230,000 brotli',
+		bytes.length <= 640_000 && brotli <= 230_000,
+		`${bytes.length} bytes, ${brotli} brotli`,
+	);
 	const module = await compileModule(bytes);
-	ok('the rewriter compiles from bytes', module instanceof WebAssembly.Module);
+	ok('the core compiles from bytes', module instanceof WebAssembly.Module);
 	const same = await compileModule(module);
 	ok('a compiled module is taken as it is', same === module);
 
 	const routed = [];
-	const instance = new BufferInstance(module, (kind, text) => {
-		routed.push([kind, text]);
+	const core = new CoreInstance(module, (member, kind, text) => {
+		routed.push([member, kind, text]);
 		return text === 'decline' ? null : `routed:${text}`;
 	});
+	const instance = core.members.rewriter;
+	ok(
+		'the core has a view of each member',
+		instance instanceof BufferInstance &&
+			core.members.scanner instanceof BufferInstance &&
+			core.members.suffix instanceof BufferInstance,
+	);
 	let refused = false;
 	try {
 		instance.configure('{"names":{"access":"$s$j"}}');
@@ -240,10 +259,11 @@ if (artifacts.includes('rewriter.wasm')) {
 		JSON.stringify(viaHost),
 	);
 	ok(
-		'the import saw the input once',
+		"the rewriter's import saw the input once",
 		routed.length === 1 &&
-			routed[0][0] === 0 &&
-			routed[0][1] === 'https://example.com/a',
+			routed[0][0] === 'rewriter' &&
+			routed[0][1] === 0 &&
+			routed[0][2] === 'https://example.com/a',
 		JSON.stringify(routed),
 	);
 	const declined = instance.call('decline', 1);
@@ -258,7 +278,7 @@ if (artifacts.includes('rewriter.wasm')) {
 		'output' in after && after.output === 'still.alive;',
 	);
 	// a second instance from the same compiled module, as every realm makes
-	const second = new BufferInstance(module);
+	const second = new CoreInstance(module).members.rewriter;
 	const other = second.call('other.realm;', 0);
 	ok(
 		'a second instance of the same module is independent',
@@ -271,23 +291,67 @@ if (artifacts.includes('rewriter.wasm')) {
 		String(instance.memoryBytes),
 	);
 
-	// the thread's copy (src/wasm/thread.ts): an instance per module, made on
-	// first use and kept for the next call, and nothing at all for a module
-	// the thread was not handed (test/suites/wasm-instances.mjs has what
-	// happens to an instance afterwards)
+	// the members share the memory and nothing else: each routes for itself,
+	// one is called from inside another's routing call, and each keeps its
+	// own answer
+	const sheet = core.members.scanner.exchange('a{b:url(x.png)}', 3);
+	ok(
+		"the scanner's routing import is its own",
+		'output' in sheet &&
+			sheet.output.startsWith('a{b:url(routed:x.png') &&
+			routed.at(-1)[0] === 'scanner',
+		JSON.stringify([sheet, routed.at(-1)]),
+	);
+	const nested = new CoreInstance(module, (member, kind, text) =>
+		member === 'rewriter' ? `${text}#${inner('www.example.co.uk')}` : null,
+	);
+	const inner = (text) => {
+		const answer = nested.members.suffix.call(text, 0);
+		return 'output' in answer ? answer.output : `status ${answer.status}`;
+	};
+	const outer = nested.members.rewriter.call('https://a.example/', 1);
+	ok(
+		"a member called inside another's routing answers, and the outer call's answer is its own",
+		'output' in outer &&
+			outer.output === 'https://a.example/#4 17' &&
+			inner('a.b.github.io') === '4 13',
+		JSON.stringify(outer),
+	);
+	ok(
+		'a member with no configuration refuses one',
+		(() => {
+			try {
+				core.members.suffix.configure('x');
+				return false;
+			} catch (error) {
+				return true;
+			}
+		})(),
+	);
+
+	// the thread's copy (src/wasm/thread.ts): instances of the core, made on
+	// first use and kept for the next call of any member, and nothing at all
+	// when the thread was not handed it (test/suites/wasm-instances.mjs has
+	// what happens to an instance afterwards)
 	const used = (name) => thread.withInstance(name, (it) => it);
 	ok(
 		'a module the thread never got has no instance',
-		!thread.hasModule('rewriter') && used('rewriter') === null,
+		!thread.hasModule('core') &&
+			!thread.hasModule('rewriter') &&
+			used('rewriter') === null,
 	);
 	ok(
 		'work without an instance is declined',
 		thread.withInstance('rewriter', () => 'ran') === null,
 	);
-	await thread.adoptModules({ rewriter: module, junk: 'not a module' });
+	await thread.adoptModules({ core: module, junk: 'not a module' });
 	ok(
-		'a handshake adopts the compiled modules it carries',
-		thread.hasModule('rewriter') && !thread.hasModule('junk'),
+		'a handshake adopts the compiled module it carries, which holds every member',
+		thread.hasModule('core') &&
+			thread.hasModule('rewriter') &&
+			thread.hasModule('scanner') &&
+			thread.hasModule('suffix') &&
+			!thread.hasModule('junk'),
 	);
 	const first = used('rewriter');
 	ok(
@@ -299,15 +363,49 @@ if (artifacts.includes('rewriter.wasm')) {
 		thread.withInstance('rewriter', (it) => it.call('abc', 0).output) === 'abc',
 	);
 	ok(
+		'a call of another member runs in the same instance, kept from the last call',
+		thread.withInstance(
+			'suffix',
+			(it) => it.call('a.example.com', 0).output,
+		) === '2 13' && used('rewriter') === first,
+	);
+	ok(
+		"a member asked inside another's routing call answers, from an instance of its own",
+		thread.withInstance(
+			'rewriter',
+			(it) => it.call('u', 1).output,
+			(kind, text) =>
+				`${text}#${thread.withInstance('suffix', (inner) => inner.call('www.example.co.uk', 0).output)}`,
+		) === 'u#4 17',
+	);
+	ok(
 		'work that throws drops the instance and declines',
 		thread.withInstance('rewriter', () => {
 			throw new Error('trap');
 		}) === null && used('rewriter') !== first,
 	);
+	{
+		// a trap in a call made inside another costs the inner call's
+		// instance alone: the call around it goes on and is answered
+		const before = used('rewriter');
+		const around = thread.withInstance(
+			'rewriter',
+			(it) => it.call('v', 1).output,
+			(kind, text) =>
+				thread.withInstance('suffix', () => {
+					throw new WebAssembly.RuntimeError('unreachable');
+				}) ?? `declined:${text}`,
+		);
+		ok(
+			'a trap in a member inside another costs its own instance, and the call around it is answered',
+			around === 'declined:v' && used('rewriter') === before,
+			JSON.stringify(around),
+		);
+	}
 	const replaced = used('rewriter');
-	thread.adoptModule('rewriter', module);
+	thread.adoptModule('core', module);
 	ok('the same module again keeps the instance', used('rewriter') === replaced);
-	thread.adoptModule('rewriter', await compileModule(bytes));
+	thread.adoptModule('core', await compileModule(bytes));
 	ok(
 		'a new module replaces the instance',
 		used('rewriter') instanceof BufferInstance && used('rewriter') !== replaced,
@@ -331,24 +429,25 @@ if (artifacts.includes('rewriter.wasm')) {
 	// it): the bytes, compiled by the thread, once for the same bytes
 	const copy = () =>
 		bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+	const module2 = thread.moduleOf('core');
 	const adopting = thread.adoptModules({
-		other: copy(),
+		core: copy(),
 		bad: new ArrayBuffer(4),
 	});
 	const held = await thread.heldModules();
 	await adopting;
 	ok(
 		'a handshake compiles the bytes it carries, and says so once they are in',
-		held.includes('other') &&
+		held.includes('core') &&
 			!held.includes('bad') &&
-			held.includes('rewriter'),
+			thread.moduleOf('core') !== module2,
 		String(held),
 	);
-	const fromBytes = used('other');
-	await thread.adoptModules({ other: copy() });
+	const fromBytes = used('rewriter');
+	await thread.adoptModules({ core: copy() });
 	ok(
 		'the same bytes again keep the module and its instance',
-		fromBytes instanceof BufferInstance && used('other') === fromBytes,
+		fromBytes instanceof BufferInstance && used('rewriter') === fromBytes,
 	);
 }
 
