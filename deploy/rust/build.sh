@@ -100,6 +100,10 @@ if [[ -f "$out/$name.js" ]]; then cp "$out/$name.js" "$root/assets/$name.js"; fi
 	echo "sources $sources"
 	echo "toolchain $tag"
 	grep -v '^#' "$here/pins.env" | grep .
+	# what the crate itself pins (the suffix crate's list)
+	if [[ -f "$root/rust/$crate/src/pins.env" ]]; then
+		grep -v '^#' "$root/rust/$crate/src/pins.env" | grep .
+	fi
 	echo "built $(date -u +%Y-%m-%d)"
 } > "$root/assets/$name.UPSTREAM"
 echo

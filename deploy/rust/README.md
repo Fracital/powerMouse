@@ -54,6 +54,16 @@ the recipe is the same for each:
    finds there against its crate's `abi.json`, so nothing else registers
    the artifact.
 
+A crate built from data keeps the data in its `src/` and pins it there:
+the suffix crate's table is made by its `build.rs` from
+`rust/suffix/src/public_suffix_list.dat`, vendored byte for byte from the
+publicsuffix/list repository at the commit `rust/suffix/src/pins.env`
+names, with the file's sha256 (`build.rs` stops on any other file). Under
+`src/` both are among the crate's files in its `sources` line, and
+`build.sh` writes a crate's `src/pins.env` into the artifact's `UPSTREAM`
+after the toolchain's pins. The toolchain image does not change with them,
+so a new list rebuilds one artifact and changes no other's line.
+
 What the crates share in Rust is `rust/edits`: the span edit model and the
 splice engine (`Edit::wrap`, `Edit::replace`, `Edit::insert`, `apply`), for
 any rewriter that edits text at byte spans. Its API is the handful of items

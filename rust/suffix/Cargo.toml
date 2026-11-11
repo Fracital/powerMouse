@@ -1,0 +1,13 @@
+[package]
+name = "suffix"
+version = "0.1.0"
+edition = "2024"
+description = "the public suffix lookup of stomp, built to wasm (docs/rust-plan.md, phase 2)"
+license = "GPL-3.0-only"
+publish = false
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]

@@ -196,6 +196,8 @@ export interface Assets {
 	scanner?: string;
 	/** the built-in blocker's wasm module (docs/adblock.md) */
 	blocker?: string;
+	/** the public suffix lookup's wasm module (docs/rust-plan.md, phase 2) */
+	suffix?: string;
 }
 
 export const DEFAULT_ASSETS: Required<Assets> = {
@@ -209,6 +211,7 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 	rewriter: 'rewriter.wasm',
 	scanner: 'scanner.wasm',
 	blocker: 'blocker.wasm',
+	suffix: 'suffix.wasm',
 };
 
 /**
