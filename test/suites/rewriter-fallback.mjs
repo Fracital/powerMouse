@@ -326,10 +326,11 @@ for (const [mode, base] of [
 			.getEntries()
 			.map((entry) => entry.name)
 			.filter((name) => /rewriterLib|injectDocument|\/stomp\//.test(name)),
+		// the file assigns the library and the document's light library
 		names: Object.getOwnPropertyNames(window).filter((name) =>
-			/stompRewriterLib/i.test(name),
+			/stompRewriterLi(b|ght)/i.test(name),
 		),
-		has: '__stompRewriterLib' in window,
+		has: '__stompRewriterLib' in window || '__stompRewriterLight' in window,
 	}));
 	ok(
 		`${mode}: the page sees no script, timing entry or global of the library's`,

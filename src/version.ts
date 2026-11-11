@@ -30,3 +30,10 @@ export const LIBRARY: string =
  * the function that evaluates the text (src/rewriterLight.ts).
  */
 export const LIBRARY_FACTORY = '__stompRewriterLib';
+
+/**
+ * The name the rewriter library's file assigns the document's light library
+ * to, in a second statement after the library's (build.js): a document
+ * bundle carries none of its own (src/inject/rewriter.ts lightFactory)
+ */
+export const LIGHT_FACTORY = '__stompRewriterLight';

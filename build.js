@@ -1,7 +1,13 @@
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { watch } from 'node:fs';
-import { copyFile, mkdir, readdir, readFile } from 'node:fs/promises';
+import {
+	appendFile,
+	copyFile,
+	mkdir,
+	readdir,
+	readFile,
+} from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { build, context, formatMessages } from 'esbuild';
 import { rimraf } from 'rimraf';
@@ -132,6 +138,39 @@ const lazyUnicodeTable = {
  *
  * @type {import('esbuild').Plugin}
  */
+/** the light library's text (`worker`: a worker's), built on its own */
+async function lightLibrary(worker, define) {
+	const result = await build({
+		...common,
+		define,
+		entryPoints: [
+			worker ? 'src/rewriterLightWorker.ts' : 'src/rewriterLightDocument.ts',
+		],
+		format: 'iife',
+		globalName: '__stompLib',
+		inject: [resolve('src/libGlobals.ts')],
+		plugins: [noSourceMaps],
+		sourcemap: false,
+		write: false,
+		metafile: true,
+		logLevel: 'silent',
+	});
+	return {
+		text: result.outputFiles[0].text,
+		inputs: Object.keys(result.metafile.inputs).map((input) => resolve(input)),
+	};
+}
+
+/**
+ * The document's light library is not in the document bundle: a frame uses
+ * its top's and evaluates none, so it is the second statement of the
+ * rewriter library's file, which every proxied top's shell loads already
+ * (`LIGHT_FACTORY`, src/version.ts; src/inject/rewriter.ts lightFactory).
+ * The document bundle's `stomp:rewriter-lib` is null; a worker's carries
+ * its own.
+ */
+const LIGHT_FACTORY = '__stompRewriterLight';
+
 const rewriterLib = {
 	name: 'rewriter-lib',
 	setup(pluginBuild) {
@@ -144,30 +183,16 @@ const rewriterLib = {
 		pluginBuild.onLoad(
 			{ filter: /.*/, namespace: 'rewriter-lib' },
 			async () => {
-				const result = await build({
-					...common,
-					define: pluginBuild.initialOptions.define,
-					entryPoints: [
-						worker
-							? 'src/rewriterLightWorker.ts'
-							: 'src/rewriterLightDocument.ts',
-					],
-					format: 'iife',
-					globalName: '__stompLib',
-					inject: [resolve('src/libGlobals.ts')],
-					plugins: [noSourceMaps],
-					sourcemap: false,
-					write: false,
-					metafile: true,
-					logLevel: 'silent',
-				});
-				const text = result.outputFiles[0].text;
+				if (!worker)
+					return { contents: 'export default null;\n', loader: 'js' };
+				const { text, inputs } = await lightLibrary(
+					worker,
+					pluginBuild.initialOptions.define,
+				);
 				return {
 					contents: `export default function rewriterLib(__stompRealm) {\n${text}\nreturn __stompLib.api;\n}\n`,
 					loader: 'js',
-					watchFiles: Object.keys(result.metafile.inputs).map((input) =>
-						resolve(input),
-					),
+					watchFiles: inputs,
 				};
 			},
 		);
@@ -199,7 +224,25 @@ const rewriterLibrary = {
 	inject: [resolve('src/libGlobals.ts')],
 	banner: { js: '__stompRewriterLib=function(__stompRealm){' },
 	footer: { js: 'return __stompLib.api;};' },
-	plugins: [noSourceMaps, lazyUnicodeTable],
+	plugins: [
+		noSourceMaps,
+		lazyUnicodeTable,
+		{
+			// the document's light library, after the rewriter library in
+			// its file (a watch build's too)
+			name: 'light-library',
+			setup(pluginBuild) {
+				pluginBuild.onEnd(async (result) => {
+					if (result.errors.length) return;
+					const { text } = await lightLibrary(false, common.define);
+					await appendFile(
+						'dist/rewriterLib.js',
+						`\n${LIGHT_FACTORY}=function(__stompRealm){\n${text}\nreturn __stompLib.api;\n};\n`,
+					);
+				});
+			},
+		},
+	],
 };
 
 /**

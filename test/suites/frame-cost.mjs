@@ -11,12 +11,13 @@
 //   instead of through the rewriter library (tldts did, +133 KB, every
 //   frame evaluating its tables again), or a parser or the suffix list
 //   coming back into the light library (css-tree and tldts were 205 KB of
-//   it), goes past it. Deterministic. The budget, 475 KB, holds the
-//   membrane by origin, document identity and URL shapes (the bundle is
-//   461 KB with them) and the escape fixes and sealed URLs that come next;
-//   it comes down again once the eager bundle loses what a frame rarely
-//   uses. Raise it in the same change as code that has to grow the bundle,
-//   and say why.
+//   it), goes past it. Deterministic. The document's light library left
+//   the bundle too (41 KB: a frame uses its top's and evaluated none; it is
+//   the rewriter library file's second statement): the bundle is 434 KB
+//   with the membrane by origin, document identity, URL shapes and the
+//   escape fixes. The budget, 460 KB, holds the sealed URLs that come next
+//   (about 3 KB). Raise it in the same change as code that has to grow the
+//   bundle, and say why.
 // - the JS heap one proxied frame adds (test/frame-memory.mjs, FRAMES frames
 //   of a small ad-like page, same site), against a ceiling above what this
 //   build measures: 1,094 to 1,100 KB with 20 frames on Chrome 152 and 156
@@ -33,7 +34,7 @@ import { measureFrames } from '../frame-memory.mjs';
 import { done, ok } from '../lib.mjs';
 
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
-const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 475;
+const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 460;
 const FRAMES = Number(process.env.FRAMES) || 20;
 const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1150;
 

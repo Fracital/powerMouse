@@ -17,7 +17,7 @@ import type { SiteFacts } from './siteFacts';
 import StompURL from './StompURL';
 import { SHELL_MARKUP, SW_CONTROL, WORKER_BASE } from './transport/messages';
 import { dataBody } from './urlShape';
-import { LIBRARY_FACTORY } from './version';
+import { LIBRARY_FACTORY, LIGHT_FACTORY } from './version';
 
 /**
  * The route of a document. `form`: a GET form's action, whose query the
@@ -424,7 +424,15 @@ ${blocked}
  * XHTML namespace).
  */
 function libraryScripts(url: StompURL, config: Config, attribute: string) {
-	return `<script${attribute}>Reflect.defineProperty(globalThis, ${JSON.stringify(LIBRARY_FACTORY)}, { writable: true, configurable: true });</script><script${attribute} src="${rewriterLibJS(url, config)}"></script>`;
+	// the file assigns two names: the library's and the document's light
+	// library's (build.js)
+	const names = [LIBRARY_FACTORY, LIGHT_FACTORY]
+		.map(
+			(name) =>
+				`Reflect.defineProperty(globalThis, ${JSON.stringify(name)}, { writable: true, configurable: true });`,
+		)
+		.join(' ');
+	return `<script${attribute}>${names}</script><script${attribute} src="${rewriterLibJS(url, config)}"></script>`;
 }
 
 /** the mimes an XML document is served under and parsed with */

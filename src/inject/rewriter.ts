@@ -40,7 +40,7 @@ import { provideRewriters } from '../rewriters';
 import { blobOriginPair, routeScopeList } from '../routeURL';
 import type { ScriptType } from '../scriptRoutes';
 import type StompURL from '../StompURL';
-import { LIBRARY_FACTORY } from '../version';
+import { LIBRARY_FACTORY, LIGHT_FACTORY } from '../version';
 import { knownSite } from './sites';
 
 // the globals a copy of the library made here reads, as they were when the
@@ -100,6 +100,93 @@ const given: Function | null = (() => {
 })();
 
 /**
+ * The document's light library's factory, where the shell loaded the
+ * rewriter library's file (its second statement, build.js), taken the
+ * same way
+ */
+const givenLight: Function | null = (() => {
+	const descriptor = Reflect.getOwnPropertyDescriptor(
+		globalThis,
+		LIGHT_FACTORY,
+	);
+	if (!descriptor) return null;
+	Reflect.deleteProperty(globalThis, LIGHT_FACTORY);
+	return typeof descriptor.value === 'function' ? descriptor.value : null;
+})();
+
+type Factory = (realm?: Record<string, unknown>) => RewriterLib;
+
+/** the light library's factory, once this realm has it (a worker's bundle carries it) */
+let light: Factory | null =
+	rewriterLib ?? (givenLight as Factory | null) ?? null;
+
+/** where the light library's statement starts in the rewriter library's file */
+const LIGHT_START = `\n${LIGHT_FACTORY}=function(`;
+
+/** the rewriter library's own statement of the file's text */
+const libraryPart = (text: string): string => {
+	const at = text.indexOf(LIGHT_START);
+	return at === -1 ? text : text.slice(0, at);
+};
+
+/** the file's text, once this realm asked for it (lightFactory) */
+let fetched: string | null = null;
+
+/**
+ * The light library's factory. A worker's bundle carries it; a document's
+ * does not (a frame uses its top's library and evaluates none): it is the
+ * rewriter library file's second statement, which a top's shell loaded.
+ * Anywhere else (a frame's own copy, a top whose shell did not load the
+ * file) it is made from the statement's text: its top's, or the file's,
+ * asked for with one synchronous request (as the rewriter library is), and
+ * evaluated here as the body of a function that has the name as its
+ * parameter, which writes no global. Throws when it cannot be had.
+ */
+export function lightFactory(): Factory {
+	if (light) return light;
+	let text: string | null = null;
+	try {
+		const held: unknown = sharing.lightText?.();
+		if (typeof held === 'string') text = held;
+	} catch (error) {
+		// the realm above is gone or of another kind: this one asks
+	}
+	if (text === null) {
+		fetched ??= fetchLibrary().source;
+		const at = fetched.indexOf(LIGHT_START);
+		if (at === -1)
+			throw new Error('Stomp: the rewriterLib asset has no light library');
+		text = fetched.slice(at + 1);
+	}
+	let made: unknown;
+	try {
+		made = (
+			Reflect.construct(realm.Function, [
+				LIGHT_FACTORY,
+				`${text}\n;return ${LIGHT_FACTORY};`,
+			]) as () => unknown
+		)();
+	} catch (error) {
+		// a document whose script policy refuses eval: a script of its own
+		made = sharing.factory?.(text, LIGHT_FACTORY) ?? null;
+	}
+	if (typeof made !== 'function')
+		throw new Error('Stomp: the rewriterLib asset has no light library');
+	light = made as Factory;
+	return light;
+}
+
+/**
+ * The light library's statement, for a document under this top that makes
+ * a copy of its own: null where this realm has none
+ */
+export function lightText(): string | null {
+	return light && !rewriterLib
+		? `${LIGHT_FACTORY}=${Reflect.apply(toSource, light, []) as string};`
+		: null;
+}
+
+/**
  * That factory, which makes the library itself: with `rewriter: 'js'` a
  * top evaluates its text in the realm it shares as the whole of its
  * library (src/inject/dom/rewriterRealm.ts), which then never asks for
@@ -136,13 +223,18 @@ export interface RewriterSharing {
 	 */
 	text?: () => string | null;
 	/**
-	 * The rewriter library's factory made from its text in this realm,
-	 * where this realm's own copy cannot make it (a document whose script
-	 * policy refuses eval, src/inject/dom/rewriterRealm.ts); null where it
-	 * can
+	 * The light library's statement from the realm above (lightFactory)
+	 */
+	lightText?: () => string | null;
+	/**
+	 * The rewriter library's factory (or the light library's, by `name`)
+	 * made from its text in this realm, where this realm's own copy cannot
+	 * make it (a document whose script policy refuses eval,
+	 * src/inject/dom/rewriterRealm.ts); null where it can
 	 */
 	factory?: (
 		text: string,
+		name?: string,
 	) => ((realm?: Record<string, unknown>) => RewriterLib) | null;
 }
 
@@ -199,23 +291,12 @@ export function loadRewriterLibrary(lib: RewriterLib): void {
 		}
 	// (negative: no request was made)
 	let waited = -1;
+	if (source === null && fetched !== null) source = libraryPart(fetched);
 	if (source === null) {
-		if (failedLoads >= LOAD_ATTEMPTS)
-			throw new Error('Stomp: the rewriter library did not load');
-		failedLoads++;
-		const url = libraryURL?.();
-		if (!url) throw new Error('Stomp: no rewriter library to load');
-		const started = now();
-		const request = new XMLHttpRequest();
-		Reflect.apply(requestOpen, request, ['GET', url, false]);
-		Reflect.apply(requestSend, request, []);
-		const status: unknown = Reflect.apply(requestStatus, request, []);
-		if (status !== 200)
-			throw new Error(
-				`Stomp: the rewriter library did not load (HTTP ${String(status)})`,
-			);
-		source = text(Reflect.apply(requestText, request, []));
-		waited = now() - started;
+		const answer = fetchLibrary();
+		fetched = answer.source;
+		source = libraryPart(answer.source);
+		waited = answer.waited;
 	}
 	// this realm's own copy, in a document that may not evaluate a string:
 	// the rewriter library takes its place
@@ -226,13 +307,37 @@ export function loadRewriterLibrary(lib: RewriterLib): void {
 }
 
 /**
+ * The rewriter library's file, with one synchronous request for the asset,
+ * which the calling script waits for. Throws when it cannot be had.
+ */
+function fetchLibrary(): { source: string; waited: number } {
+	if (failedLoads >= LOAD_ATTEMPTS)
+		throw new Error('Stomp: the rewriter library did not load');
+	failedLoads++;
+	const url = libraryURL?.();
+	if (!url) throw new Error('Stomp: no rewriter library to load');
+	const started = now();
+	const request = new XMLHttpRequest();
+	Reflect.apply(requestOpen, request, ['GET', url, false]);
+	Reflect.apply(requestSend, request, []);
+	const status: unknown = Reflect.apply(requestStatus, request, []);
+	if (status !== 200)
+		throw new Error(
+			`Stomp: the rewriter library did not load (HTTP ${String(status)})`,
+		);
+	const source = text(Reflect.apply(requestText, request, []));
+	failedLoads = 0;
+	return { source, waited: now() - started };
+}
+
+/**
  * This realm's own copy of the library, evaluated the first time it is
  * needed: the rewriter library itself where the shell loaded it (a top
  * that could make no realm to share), else the bundle's light one.
  */
 export function ownRewriter(): RewriterLib {
 	if (own) return own;
-	const lib = (givenLibrary() ?? rewriterLib)(realm);
+	const lib = ((givenLibrary() as Factory | null) ?? lightFactory())(realm);
 	own = lib;
 	if (handed) adoptHanded(lib, handed);
 	return lib;

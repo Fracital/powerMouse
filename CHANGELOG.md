@@ -6,6 +6,14 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Build
 
+- The document inject bundle no longer carries the light rewriter library
+  (41 KB of its 475): a frame uses its top's library and never evaluated
+  its own. The library is the second statement of `dist/rewriterLib.js`,
+  which every proxied top's shell loads already, so no host serves a new
+  file; a realm without it (a frame's own copy, a top the page made) takes
+  its top's text, or the file's, as it does the rewriter library's.
+  `injectDocument.js` is 434 KB, and frame-cost's budget is 460 KB. The
+  worker bundle keeps its own. (frame-cost, rewriter-fallback suites.)
 - webpack and swc-loader are replaced by esbuild (`build.js`). Type checking
   (`tsc --noEmit`) and lint (eslint 10, flat config) run as separate scripts.
 - Bundles that expose a classic-script global now define it with

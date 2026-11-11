@@ -579,7 +579,8 @@ Per-frame cost therefore goes down, not up, once the JavaScript libraries
 leave the inject bundle: that is a goal of phase 2 with a number on it, set
 out under "The inject bundle without the JavaScript libraries" below. The
 `frame-cost` ceiling (1,150 KB of heap per frame, `injectDocument.js` at
-most 475 KB since the JavaScript libraries left it, 850 before) is a gate
+most 460 KB since the JavaScript libraries and the document's light library
+left it, 850 before) is a gate
 on every phase.
 
 ### Instance memory
@@ -822,9 +823,15 @@ frame never evaluated the library ("As built" below).
   key `rewriterLib` in `Assets`), one file for documents and workers, asked
   for as `rewriterLib.js?<hash of its bytes>` so that a deploy never pairs
   one build's library with another's bundle and a host may let browsers keep
-  the file for good. What the bundles carry is the light library
+  the file for good. What a realm holds is the light library
   (`src/rewriterLight.ts`): the same calls with no parser and no printer
-  behind them. A call that needs the rewriter library it does not hold stops
+  behind them. The worker bundle carries it; the document bundle does not
+  (41 KB: a frame uses its top's library and evaluated none of it), and the
+  document's light library is the file's second statement instead
+  (`__stompRewriterLight`, after the library's), which every top's shell
+  loads already. A realm without it (a frame's own copy, a top the page
+  made) takes its top's text, or the file's, as it does the library's
+  (`lightFactory` in `src/inject/rewriter.ts`). A call that needs the rewriter library it does not hold stops
   and says so; the realm that asked hands it the file's text, and the
   library evaluates it in its own realm with the globals it captured (its
   realm is detached, and a detached realm cannot make a request: `send`

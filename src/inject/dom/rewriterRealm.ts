@@ -1,6 +1,6 @@
-import rewriterLib from 'stomp:rewriter-lib';
 import type { RewriterLib } from '../../rewriterLib';
 import { LIBRARY_FACTORY } from '../../version';
+import { lightFactory } from '../rewriter';
 
 // taken when the bundle loads, before any hook or page code runs: the realm
 // is made through the browser's own methods, so no hook of ours (the IFrame
@@ -42,12 +42,13 @@ const textContentSet = Reflect.getOwnPropertyDescriptor(
  */
 export function createRewriterRealm(
 	document: Document,
-	/** what makes the library: the bundle's light one, or the rewriter library itself when the shell loaded it (src/inject/rewriter.ts givenLibrary) */
-	factory: (realm?: Record<string, unknown>) => RewriterLib = rewriterLib,
+	/** what makes the library: the light one (src/inject/rewriter.ts lightFactory), or the rewriter library itself when the shell loaded it (givenLibrary) */
+	given?: (realm?: Record<string, unknown>) => RewriterLib,
 ): RewriterLib | null {
 	let root: Element | null = null;
 	let frame: HTMLIFrameElement | null = null;
 	try {
+		const factory = given ?? lightFactory();
 		root = Reflect.apply(documentElementGet, document, []) as Element | null;
 		if (!root) return null;
 		frame = Reflect.apply(createElement, document, [
@@ -90,6 +91,8 @@ export function libraryFactoryFromScript(
 	document: Document,
 	text: string,
 	nonce: string,
+	/** the name the text assigns: the rewriter library's, or the light library's */
+	name: string = LIBRARY_FACTORY,
 ): ((realm?: Record<string, unknown>) => RewriterLib) | null {
 	let root: Element | null = null;
 	let script: Element | null = null;
@@ -99,7 +102,7 @@ export function libraryFactoryFromScript(
 		script = Reflect.apply(createElement, document, ['script']) as Element;
 		Reflect.apply(setAttribute, script, ['nonce', nonce]);
 		Reflect.apply(textContentSet, script, [text]);
-		Reflect.defineProperty(globalThis, LIBRARY_FACTORY, {
+		Reflect.defineProperty(globalThis, name, {
 			value: undefined,
 			writable: true,
 			configurable: true,
@@ -107,7 +110,7 @@ export function libraryFactoryFromScript(
 		Reflect.apply(appendChild, root, [script]);
 		const made: unknown = Reflect.getOwnPropertyDescriptor(
 			globalThis,
-			LIBRARY_FACTORY,
+			name,
 		)?.value;
 		return typeof made === 'function'
 			? (made as (realm?: Record<string, unknown>) => RewriterLib)
@@ -115,7 +118,7 @@ export function libraryFactoryFromScript(
 	} catch (error) {
 		return null;
 	} finally {
-		Reflect.deleteProperty(globalThis, LIBRARY_FACTORY);
+		Reflect.deleteProperty(globalThis, name);
 		if (root && script)
 			try {
 				Reflect.apply(removeChild, root, [script]);

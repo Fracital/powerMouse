@@ -30,6 +30,7 @@ import {
 	getPublicSuffix,
 	givenLibrary,
 	libraryText,
+	lightText,
 	loadRewriterLibrary,
 	modifyCSS,
 	modifyJS,
@@ -347,11 +348,15 @@ export default class DocumentClient extends Client {
 					const top = this.#topClient();
 					return top === this ? null : top.rewriterLibraryText(BUILD);
 				},
-				factory: (text) => {
+				lightText: () => {
+					const top = this.#topClient();
+					return top === this ? null : top.rewriterLightText(BUILD);
+				},
+				factory: (text, name) => {
 					const nonce = documentNonce(this.global.document);
 					return nonce === null
 						? null
-						: libraryFactoryFromScript(this.global.document, text, nonce);
+						: libraryFactoryFromScript(this.global.document, text, nonce, name);
 				},
 			}) &&
 			!this.sandboxedOpaque &&
@@ -410,6 +415,14 @@ export default class DocumentClient extends Client {
 	 */
 	rewriterLibraryText(build: string): string | null {
 		return build === BUILD ? libraryText() : null;
+	}
+	/**
+	 * The light library's statement (src/inject/rewriter.ts lightFactory)
+	 * as this top holds it, for a document under it that makes a copy of its
+	 * own; null without it, or for a bundle of another `build`. @internal
+	 */
+	rewriterLightText(build: string): string | null {
+		return build === BUILD ? lightText() : null;
 	}
 	/** a top's library (null: it could not make one), undefined for a frame under a top */
 	#rewriter: RewriterLib | null | undefined;
