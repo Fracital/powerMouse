@@ -28,6 +28,8 @@ export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 export { keepEmbedded, originalSource, sourceKey } from ${JSON.stringify(`${root}src/functionSource.ts`)};
 export { inlineSources, packRewrite, PrewrittenTable, scriptPreamble } from ${JSON.stringify(`${root}src/prewrite.ts`)};
+export { compileModule } from ${JSON.stringify(`${root}src/wasm/module.ts`)};
+export { adoptModule } from ${JSON.stringify(`${root}src/wasm/thread.ts`)};
 `,
 );
 const bundle = `${OUT}rewriter-unit.mjs`;
@@ -64,9 +66,26 @@ const {
 	packRewrite,
 	PrewrittenTable,
 	scriptPreamble,
+	compileModule,
+	adoptModule,
 } = await import(`${bundle}?${Date.now()}`);
 
-const config = { directory: '/stomp/', codec: 'xor' };
+// STOMP_REWRITER=wasm: the same checks with the wasm rewriter answering
+// (rust/rwjs, the committed artifact), which splices its rewrites into the
+// script's own text where the JavaScript rewriter prints its tree. A check
+// of what a rewrite does holds for both; one of how the output is spelled
+// states each backend's spelling.
+const WASM = process.env.STOMP_REWRITER === 'wasm';
+if (WASM)
+	adoptModule(
+		'rewriter',
+		await compileModule(readFileSync(`${root}assets/rewriter.wasm`)),
+	);
+const config = {
+	directory: '/stomp/',
+	codec: 'xor',
+	...(WASM && { rewriter: 'wasm' }),
+};
 const parsed = parseConfig(config, 'k');
 const url = new StompURL('https://example.com/a.js', parsed.codec, '/stomp/');
 // the rewriter warns on the console about a script it cannot parse
@@ -84,7 +103,42 @@ const unmarked = (out) =>
 		.replace(/\/\*[0-9a-z]+\.[0-9a-z]+\.[0-9a-z]+\*\//g, '');
 const marked = (source, type = 'generic', extra = {}) =>
 	modifyJS(source, url, { ...config, ...extra }, type);
+// A check of how a rewrite is spelled is written in the JavaScript
+// rewriter's spelling (what its printer makes of the tree). The wasm
+// rewriter's output is the page's own text with the rewrites spliced in, so
+// in its run such a check (`shape`) parses that output and prints it the
+// same way first: it holds when the two are the same program, which is the
+// contract between the backends (the wasm spelling itself is pinned in
+// rust/rwjs's own tests and in the wasm-artifact suite). What does not
+// parse is compared as it is.
+let spelled = (out) => out;
+if (WASM) {
+	const { parse } = await import('meriyah');
+	const { generate } = await import('@javascript-obfuscator/escodegen');
+	spelled = (out, source, type) => {
+		const lines = source.split('\n').length;
+		try {
+			const tree = parse(out, {
+				module: type === 'genericModule' || type === 'workerModule',
+				next: true,
+				globalReturn: true,
+				webcompat: true,
+			});
+			// (a `debugger` is rewritten to an empty statement, which the
+			// JavaScript rewriter prints and so is kept)
+			return generate(
+				tree,
+				source.length / lines > 200 ? { format: { compact: true } } : undefined,
+			);
+		} catch (error) {
+			return out;
+		}
+	};
+}
 const rewrite = (source, type, extra) => unmarked(marked(source, type, extra));
+/** `rewrite`, in the JavaScript rewriter's spelling whichever backend made it */
+const shape = (source, type, extra) =>
+	spelled(rewrite(source, type, extra), source, type);
 const parses = (code) => {
 	try {
 		new Function(code);
@@ -118,7 +172,7 @@ const parses = (code) => {
 {
 	// an unforgeable reached through an earlier optional link keeps the
 	// chain's short-circuit: get2 gets the flag and the rest stays optional
-	const out = rewrite('a?.b.location.c; a?.b().top.x; (a?.b).location.c');
+	const out = shape('a?.b.location.c; a?.b().top.x; (a?.b).location.c');
 	ok(
 		'an optional chain stays optional past an unforgeable link',
 		/get2\(a\?\.b, 'location', '\(a\?\.b\.location\)', true\)\?\.c/.test(out) &&
@@ -141,7 +195,9 @@ const parses = (code) => {
 		'sourceURL is kept and sourceMappingURL is routed',
 		/\n\/\/# sourceURL=named\.js/.test(out) &&
 			/\n\/\/# sourceMappingURL=\/stomp\/binary\/\S+$/.test(out) &&
-			!/note|block/.test(out) &&
+			// (the JavaScript rewriter prints no other comment; the wasm one
+			// leaves the page's text as it is)
+			(WASM ? /note[^]*block/.test(out) : !/note|block/.test(out)) &&
 			/sourceMappingURL=data:application\/json;base64,e30=$/.test(inline) &&
 			parses(out),
 		JSON.stringify([out, inline]),
@@ -196,9 +252,9 @@ const parses = (code) => {
 	ok(
 		'data: bodies are percent-decoded before rewriting and encoded again',
 		/^data:text\/javascript,/.test(js) &&
-			/\$s\$j\.get\(top, 'top'\)\.x/.test(decoded(js)) &&
+			/\$s\$j\.get\(top, ['"]top['"]\)\.x/.test(decoded(js)) &&
 			/^data:text\/javascript;base64,/.test(b64) &&
-			/\$s\$j\.get\(top, 'top'\)/.test(
+			/\$s\$j\.get\(top, ['"]top['"]\)/.test(
 				Buffer.from(b64.split(',')[1], 'base64').toString(),
 			) &&
 			/^data:text\/html,/.test(html) &&
@@ -223,7 +279,7 @@ const parses = (code) => {
 	const mod = rewrite("'use strict';\nexport const a = top;", 'genericModule');
 	ok(
 		'the directive prologue comes before the worker bootstrap and a preamble',
-		/^["']use strict["'];["']other["'];if \(!\("[^"]+" in globalThis\) && !globalThis\.createClient\)/.test(
+		/^["']use strict["'];\s*["']other["'];if \(!\("[^"]+" in globalThis\) && !globalThis\.createClient\)/.test(
 			worker,
 		) &&
 			/^["']use strict["'];document\.currentScript\.textContent = "x";/.test(
@@ -269,7 +325,7 @@ const parses = (code) => {
 }
 {
 	// every way of posting a message goes through the caller's access API
-	const out = rewrite(
+	const out = shape(
 		"w.postMessage(m, '*'); w?.postMessage(m); w.postMessage.call(w2, m, o); w.postMessage.apply(w2, list); Reflect.apply(w.postMessage, w2, list); port.postMessage(m); x.postmessage(m)",
 	);
 	ok(
@@ -291,7 +347,7 @@ const parses = (code) => {
 	// an `in` whose key is or may be a helper name asks the access API (the
 	// helpers are on the window, natively nothing is); a literal key of
 	// anything else, a private name and for...in are left as they are
-	const out = rewrite(
+	const out = shape(
 		"'$s$j' in window; k in o; `${k}` in o; o.k in top; '$P$s' in w; 'x' in o; 0 in a; class C { #p; m(o) { return #p in o; } } for (k in o);",
 	);
 	ok(
@@ -314,11 +370,11 @@ const parses = (code) => {
 	// a top-level `var` binding location in a classic script assigns the
 	// window's location: bound to a temporary and routed like `location = v`;
 	// inside a function, or in a module, left alone
-	const top = rewrite(
+	const top = shape(
 		"var location = 'x'; var {a, location} = o; var [location] = l;",
 	);
-	const inner = rewrite('function f() { var location = 1; }');
-	const mod = rewrite("var location = 'x';", 'genericModule');
+	const inner = shape('function f() { var location = 1; }');
+	const mod = shape("var location = 'x';", 'genericModule');
 	ok(
 		'a top-level var binding of location routes the assignment',
 		(top.match(/\$s\$j\.set1\(location, 'location'/g) || []).length === 3 &&
@@ -335,10 +391,10 @@ const parses = (code) => {
 	// (`ref2(object, key)` for `x.location`), whose write routes; bindings
 	// and other targets stay as written (a member target named `top` was a
 	// get2 call, which is no assignment target)
-	const targets = rewrite(
+	const targets = shape(
 		'[location] = a; ({location} = o); ({a: location = 1} = o); [...location] = a; for (location of a); for (location in o);',
 	);
-	const members = rewrite(
+	const members = shape(
 		"[top.location] = a; ({a: window['location']} = o); for (frames[0].location of a);",
 	);
 	const kept = [
@@ -354,7 +410,7 @@ const parses = (code) => {
 		(targets.match(/\$s\$j\.ref1\(location, t\$v =>/g) || []).length === 6 &&
 			/location: \$s\$j\.ref1\(/.test(targets) &&
 			/\.value = 1/.test(targets) &&
-			/for \(\$s\$j\.ref1\(location, t\$v =>\s*\(location = t\$v\)\)\.value of a\)/.test(
+			/for \(\$s\$j\.ref1\(location, t\$v =>\s*\(?location = t\$v\)?\)\.value of a\)/.test(
 				targets,
 			) &&
 			members.includes(
@@ -364,10 +420,10 @@ const parses = (code) => {
 			members.includes(
 				"for ($s$j.ref2($s$j.get2(frames, 0, '(frames[0])'), 'location').value of a)",
 			) &&
-			kept.every(([code, out]) => rewrite(code) === out) &&
+			kept.every(([code, out]) => shape(code) === out) &&
 			parses(targets) &&
 			parses(members),
-		JSON.stringify([targets, members, kept.map(([code]) => rewrite(code))]),
+		JSON.stringify([targets, members, kept.map(([code]) => shape(code))]),
 	);
 	// a literal index read can be a child window of another proxied site:
 	// routed like a computed key; a call, a construction, a write, an update,
@@ -375,7 +431,7 @@ const parses = (code) => {
 	// that is no array index
 	{
 		const routed = ['frames[0]', "parent['1']", 'x = w[2].document'].map(
-			(code) => rewrite(code),
+			(code) => shape(code),
 		);
 		const kept = [
 			'a[0] = 1;',
@@ -393,17 +449,17 @@ const parses = (code) => {
 				routed[1].startsWith("$s$j.get2(parent, '1', ") &&
 				routed[2].startsWith('x = $s$j.get2(w, 2, ') &&
 				routed[2].endsWith(').document;') &&
-				kept.every((code) => !rewrite(code).includes('$s$j')),
-			JSON.stringify([routed, kept.map((code) => rewrite(code))]),
+				kept.every((code) => !shape(code).includes('$s$j')),
+			JSON.stringify([routed, kept.map((code) => shape(code))]),
 		);
 	}
 	// a classic script's var outside a function, in a block or a loop head,
 	// assigns the window's location like one at the top; its initialiser is
 	// rewritten like any expression
-	const nested = rewrite(
+	const nested = shape(
 		'{ var location = top.a; } if (x) var location = b; for (var location of a) f(); for (var [location] in o); for (var location = c, i = 0; i < 1; i++);',
 	);
-	const local = rewrite(
+	const local = shape(
 		'function f() { { var location = 1; } for (var location of a); } class A { static { var location = 1; } }',
 	);
 	ok(
@@ -411,7 +467,9 @@ const parses = (code) => {
 		(nested.match(/\$s\$j\.set1\(location, 'location'/g) || []).length === 5 &&
 			nested.includes("var $s$jl0 = $s$j.get(top, 'top').a;") &&
 			/for \(var \$s\$jl0 of a\) \{\s*\$s\$j\.set1\(location/.test(nested) &&
-			/for \(var \$s\$jl0 = c, i = 0, \$s\$jl1 = \(\$s\$j\.set1/.test(nested) &&
+			/for \(var \$s\$jl0 = c, i = 0, \$s\$jl1 = \(?\$s\$j\.set1/.test(
+				nested,
+			) &&
 			!/set1/.test(local) &&
 			parses(nested),
 		JSON.stringify([nested, local]),
@@ -587,7 +645,7 @@ const parses = (code) => {
 	);
 }
 {
-	const out = rewrite('top; location.href; eval(x)');
+	const out = shape('top; location.href; eval(x)');
 	ok(
 		'reads of unforgeables go through the access API',
 		/\$s\$j\.get\(top, 'top'\)/.test(out) && parses(out),
@@ -595,13 +653,13 @@ const parses = (code) => {
 	);
 }
 {
-	const out = rewrite("import('./m.js')");
+	const out = shape("import('./m.js')");
 	ok(
 		'a classic script passes its own URL as the import base',
 		out.includes("$s$j.import('https://example.com/a.js', './m.js')"),
 		out,
 	);
-	const module = rewrite("import('./m.js')", 'genericModule');
+	const module = shape("import('./m.js')", 'genericModule');
 	ok(
 		'a module passes import.meta.url and defines import.meta.resolve',
 		module.includes('$s$j.import(import.meta.url,') &&
@@ -610,7 +668,7 @@ const parses = (code) => {
 	);
 }
 {
-	const out = rewrite('const { a: { top: t } } = o;');
+	const out = shape('const { a: { top: t } } = o;');
 	ok(
 		'a nested pattern wraps its source with the keys to follow',
 		/\$s\$j\.pattern\(o, \{\s*'a': \{\s*'top': true\s*\}\s*\}, '\{ a: \{ top: t \} \} = o'\)/.test(
@@ -647,7 +705,7 @@ const parses = (code) => {
 		'a.b.c(d); new A.B(); [...a.b]; for (x of a()); const { a } = b.c;': `a.b.c(d);\nnew A.B();\n[...a.b];\nfor (x of a());\nconst {a} = b.c;`,
 	};
 	const got = Object.fromEntries(
-		Object.keys(shapes).map((source) => [source, rewrite(source)]),
+		Object.keys(shapes).map((source) => [source, shape(source)]),
 	);
 	const wrong = Object.keys(shapes).filter(
 		(source) =>
@@ -696,9 +754,9 @@ console.warn = warn;
 // any other, so `top`, `location` and the rest inside it are rewritten too
 // (they were handed to set2 raw: `cache[key] = top` stored the real top)
 {
-	const value = rewrite('o[k] = top');
-	const nested = rewrite('o[k] = { a: () => location.href }');
-	const compound = rewrite('o[k] += location.href');
+	const value = shape('o[k] = top');
+	const nested = shape('o[k] = { a: () => location.href }');
+	const compound = shape('o[k] += location.href');
 	ok(
 		'a computed member assignment rewrites the value it assigns',
 		value.includes("$s$j.get(top, 'top')") &&
@@ -717,11 +775,9 @@ console.warn = warn;
 		globalName: 'qC',
 		client: 'qD',
 	};
-	const generic = rewrite(
-		'o[k] = location.href; top.postMessage(1)',
-		'generic',
-		{ names },
-	);
+	const generic = shape('o[k] = location.href; top.postMessage(1)', 'generic', {
+		names,
+	});
 	const worker = rewrite('self.onmessage = () => location.href', 'worker', {
 		names,
 	});
@@ -782,7 +838,7 @@ console.warn = warn;
 		'a single-expression javascript: URL hands a string value to the client; statements are left as they are',
 		expression.startsWith('javascript:((r,c)=>') &&
 			expression.includes('.javascriptDocument(r,document.URL)') &&
-			expression.includes('("<p>x</p>")') &&
+			/\((["'])<p>x<\/p>\1\)/.test(expression) &&
 			!statements.includes('javascriptDocument'),
 		[expression, statements].join('\n'),
 	);
@@ -867,8 +923,18 @@ console.warn = warn;
 	// that could see a name of the window's bound around it, is not split
 	// `preamble`: a document's inline script, rewritten with its client's
 	// preamble, which the skeleton carries (rewritePool's rewriteInline)
+	// (a split is the JavaScript rewriter's: its parts are stitched by what
+	// its printer makes of them, and the wasm rewriter, which takes a bundle
+	// whole in less time than the split's plan, is never handed one. The
+	// whole it is compared with is the JavaScript rewriter's in either run)
 	const whole = (script, preamble = '') =>
-		modifyJS(script, url, config, 'generic', preamble);
+		modifyJS(
+			script,
+			url,
+			{ ...config, rewriter: undefined },
+			'generic',
+			preamble,
+		);
 	const split = (script, parts, preamble = '') => {
 		const plan = planSplit(script, parts);
 		if (!plan) return null;
@@ -1171,7 +1237,7 @@ console.warn = warn;
 	// a direct eval's arguments stand twice in its rewrite (for the real
 	// eval, and for a function the page named eval): rewritten both times.
 	// They were left as written, so `eval(top.x)` read the real top
-	const out = rewrite('eval(o[k], top)');
+	const out = shape('eval(o[k], top)');
 	ok(
 		"a direct eval's arguments are rewritten in both of its branches",
 		(out.match(/\$s\$j\.get2\(o, k, /g) || []).length === 2 &&

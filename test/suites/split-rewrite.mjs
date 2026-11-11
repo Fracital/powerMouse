@@ -13,7 +13,21 @@
 // statements, with statements that end at a line break without a semicolon
 // and function declarations in its blocks. The suite constructs its own
 // controllers on the demo's service worker, as rewrite-cache does.
-import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
+import {
+	done,
+	FIXTURE,
+	launch,
+	ok,
+	openDemo,
+	PROXY,
+	REWRITER,
+	sleep,
+} from '../lib.mjs';
+
+// The wasm rewriter takes a bundle whole in less time than the split's plan
+// alone, so a run with it (STOMP_REWRITER=wasm) splits nothing: the bundle
+// is one worker's, and runs the same.
+const WASM = REWRITER.rewriter === 'wasm';
 
 const browser = await launch();
 
@@ -22,10 +36,11 @@ async function proxied(workers, name) {
 	const PAGE = `${FIXTURE}pages/${name}.html`;
 	const page = await openDemo(browser, PROXY);
 	await page.evaluate(
-		async ({ workers, url }) => {
+		async ({ workers, url, rewriter }) => {
 			const old = window.controller;
 			window.__log = [];
 			const controller = new window.StompController({
+				...rewriter,
 				serviceworker: (
 					await navigator.serviceWorker.getRegistration('/stomp/')
 				).active,
@@ -36,12 +51,24 @@ async function proxied(workers, name) {
 				onRequest: (info) => window.__log.push(info),
 			});
 			await controller.wait();
+			// (until the modules are in, a bundle is split for the JavaScript
+			// rewriter as before)
+			for (let i = 0; rewriter.rewriter && i < 100; i++) {
+				const held = await controller.wasmModules();
+				if (
+					held.serviceWorker.includes('rewriter') &&
+					held.rewriteWorkers.length === workers &&
+					held.rewriteWorkers.every((names) => names.includes('rewriter'))
+				)
+					break;
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			}
 			const element = document.createElement('iframe');
 			element.id = 'split-frame';
 			document.body.append(element);
 			controller.createFrame(element).go(url);
 		},
-		{ workers, url: PAGE },
+		{ workers, url: PAGE, rewriter: REWRITER },
 	);
 	let result = null;
 	let entry = null;
@@ -78,7 +105,7 @@ for (const [name, shape] of [
 		JSON.stringify(native),
 	);
 	for (const [workers, expected] of [
-		[4, 'pool split'],
+		[4, WASM ? 'pool' : 'pool split'],
 		[1, 'pool'],
 	]) {
 		const { result, entry } = await proxied(workers, name);

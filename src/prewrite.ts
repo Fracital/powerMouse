@@ -222,8 +222,13 @@ export function inlineSources(
 	return { scripts: [...scripts.values()], styles: [...styles.values()] };
 }
 
-/** a directive prologue as the rewriter prints it */
-const PROLOGUE = /^(?:(?:'[^'\\\n]*'|"[^"\\\n]*");)*$/;
+/**
+ * A directive prologue as a rewriter writes it: the JavaScript one prints
+ * the directives alone, the wasm one leaves the page's own text, with its
+ * spacing and comments
+ */
+const PROLOGUE =
+	/^(?:\s|\/\*[^]*?\*\/|\/\/[^\n]*\n|(?:'[^'\\\n]*'|"[^"\\\n]*")\s*;)*$/;
 
 /** the client's lookup of a Prewritten table */
 export class PrewrittenTable {

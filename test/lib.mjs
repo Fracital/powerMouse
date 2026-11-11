@@ -24,6 +24,15 @@ export const OUT = fileURLToPath(new URL('./out/', import.meta.url));
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * The controller options of the run's rewriter backend, for a suite that
+ * builds its own controllers: `{ rewriter: 'wasm' }` when the run is the
+ * wasm one (STOMP_REWRITER=wasm, which the demo server reads too), else
+ * nothing. Both runs are the same suites (docs/rust-plan.md, section 10).
+ */
+export const REWRITER =
+	process.env.STOMP_REWRITER === 'wasm' ? { rewriter: 'wasm' } : {};
+
 let failures = 0;
 
 /** one check; `detail` is printed after the name so a failure explains itself */

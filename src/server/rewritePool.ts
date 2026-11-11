@@ -12,6 +12,7 @@ import { routeScopeList } from '../routeURL';
 import { SPLIT_MIN, splitSources, stitch } from '../splitRewrite';
 import type StompURL from '../StompURL';
 import { RpcHelper } from '../transport/rpc';
+import { hasRewriter } from '../wasm/rewriter';
 
 interface Member {
 	rpc: RpcHelper<Record<string, never>, RewriteBound>;
@@ -184,6 +185,11 @@ export class RewritePool {
 		preamble = '',
 	): Promise<string | null> {
 		if (type !== 'generic' || script.length < SPLIT_MIN) return null;
+		// the wasm rewriter takes the whole in less time than the split's
+		// plan alone (12 MB: 0.4 s against a 0.9 s parse), so once the
+		// modules are in (this thread's arrive with the workers') nothing is
+		// split
+		if (config.rewriter === 'wasm' && hasRewriter()) return null;
 		const live = this.#members.filter(
 			(member) => member.alive && member.ready,
 		).length;

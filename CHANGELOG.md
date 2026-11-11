@@ -219,6 +219,21 @@ The first release after a four-year gap. Everything below is breaking.
   sheet before (Fixes). The `scanner-parity` suite compares both on
   hand-written cases, the fixture pages and a seeded fuzz. The page's own
   CSS paths (CSSOM, style attributes) still use css-tree.
+- With `rewriter: 'wasm'` scripts are rewritten by the Rust rewriter
+  (`rust/rwjs`, oxc; `assets/rewriter.wasm`, 423 KB, 150 KB brotli) in the
+  rewrite workers and the service worker. It makes the same rewrites as the
+  JavaScript rewriter as edits to the script's own text, so everything it
+  does not touch comes out byte for byte: comments, spacing, literals, line
+  numbers. Over the 46 MB corpus of CNN, Discord and Docs scripts it takes
+  2.0 s where the JavaScript rewriter takes 13.6 s, and Discord's 12 MB
+  bundle whole in 0.43 s, so a script is no longer split across workers
+  under `'wasm'`. A script the module declines (one its parser refuses, a
+  few rare shapes) is rewritten by the JavaScript rewriter, as is
+  everything while a thread holds no module. The two backends are compared
+  without a browser by `rust/host/parity.mjs` (669 cases by rewrite family
+  and the corpora: no difference but one known case where the JavaScript
+  rewriter is wrong), and `rewriter-unit` and the browser suites run under
+  both (`STOMP_REWRITER=wasm`). `'js'` stays the default.
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

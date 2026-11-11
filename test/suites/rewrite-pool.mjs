@@ -5,10 +5,21 @@
 // timeout (then it is not asked again). The output is
 // byte for byte the service worker's own. The request log says where
 // (`rewriteIn`). The rewrite cache is off, so every load is rewritten.
-import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
+import {
+	done,
+	FIXTURE,
+	launch,
+	ok,
+	openDemo,
+	PROXY,
+	REWRITER,
+	sleep,
+} from '../lib.mjs';
 
 const browser = await launch();
 const page = await openDemo(browser, PROXY);
+// the run's rewriter backend (STOMP_REWRITER), for every controller made here
+await page.evaluate((rewriter) => (window.__rewriter = rewriter), REWRITER);
 
 // every routed script response's body, in order
 const bodies = [];
@@ -37,6 +48,7 @@ const controller = (options = {}) =>
 			// one address throughout: the output names it
 			id: 'rewrite-pool',
 			onRequest: (info) => window.__log.push(info),
+			...window.__rewriter,
 			...options,
 		});
 		await controller.wait();
@@ -175,7 +187,12 @@ await controller({
 await controller({ rewriteWorkers: 1, rewriteTimeout: 150 });
 {
 	const small = await load('name=e');
-	const slow = await load('name=e&three=3');
+	// (the wasm rewriter takes three copies of three.js well inside the
+	// timeout: in its run the script opens with a shape it leaves to the
+	// JavaScript rewriter, a pattern key that is no integer beside `top`)
+	const slow = await load(
+		`name=e&three=3${REWRITER.rewriter ? `&extra=${encodeURIComponent('var { 1.5: half, top: mine } = { top: 0 };')}` : ''}`,
+	);
 	const after = await load('name=e&after');
 	ok(
 		'a ready worker answers first',

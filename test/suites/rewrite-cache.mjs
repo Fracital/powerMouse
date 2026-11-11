@@ -14,10 +14,21 @@
 // request log says
 // which it was (`rewriteCache`: hit, miss or skip). The suite constructs its
 // own controllers on the demo's service worker, as request-log does.
-import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
+import {
+	done,
+	FIXTURE,
+	launch,
+	ok,
+	openDemo,
+	PROXY,
+	REWRITER,
+	sleep,
+} from '../lib.mjs';
 
 const browser = await launch();
 const page = await openDemo(browser, PROXY);
+// the run's rewriter backend (STOMP_REWRITER), for every controller made here
+await page.evaluate((rewriter) => (window.__rewriter = rewriter), REWRITER);
 
 // every routed script response's body, in order
 const bodies = [];
@@ -61,6 +72,7 @@ const controller = (options = {}) =>
 			codec: 'xor',
 			cache: true,
 			onRequest: (info) => window.__log.push(info),
+			...window.__rewriter,
 			...options,
 		});
 		await controller.wait();

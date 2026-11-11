@@ -221,7 +221,7 @@ export function startFixture(port = 8084) {
 		}
 		// a script whose body is the same until /rewrite-js/bump?name=<name>
 		// changes it, whatever else the URL carries; `cc=` is its Cache-Control
-		// (rewrite-cache and rewrite-pool suites)
+		// (rewrite-cache, rewrite-pool and wasm-rewriter suites)
 		if (path === '/rewrite-js/bump') {
 			const name = new URL(req.url, 'http://x').searchParams.get('name');
 			scriptVersions.set(name, (scriptVersions.get(name) ?? 0) + 1);
@@ -245,6 +245,8 @@ export function startFixture(port = 8084) {
 						three,
 					),
 				);
+			// `extra=<code>`: written first, as it is (wasm-rewriter suite)
+			if (query.get('extra')) res.write(`${query.get('extra')}\n`);
 			return res.end(
 				`(window.__rc ??= []).push([${JSON.stringify(query.get('name'))}, ${version}, location.href.length > 0, typeof window.top]);\n`,
 			);

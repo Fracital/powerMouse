@@ -17,7 +17,16 @@
 // (the markup before the table, modifyHTMLStreamed) and the copy of the
 // markup it keeps is gone before the page runs. Same-origin mode (the real
 // text is read through the host's realm).
-import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
+import {
+	done,
+	FIXTURE,
+	launch,
+	ok,
+	openDemo,
+	PROXY,
+	REWRITER,
+	sleep,
+} from '../lib.mjs';
 
 const browser = await launch();
 const PAGE = `${FIXTURE}pages/prewrite.html`;
@@ -48,9 +57,10 @@ ok(
 async function proxied(workers, url, read) {
 	const page = await openDemo(browser, PROXY);
 	await page.evaluate(
-		async ({ workers, url }) => {
+		async ({ workers, url, rewriter }) => {
 			const old = window.controller;
 			const controller = new window.StompController({
+				...rewriter,
 				serviceworker: (
 					await navigator.serviceWorker.getRegistration('/stomp/')
 				).active,
@@ -67,7 +77,7 @@ async function proxied(workers, url, read) {
 			document.body.append(element);
 			controller.createFrame(element).go(url);
 		},
-		{ workers, url },
+		{ workers, url, rewriter: REWRITER },
 	);
 	let result = null;
 	for (let i = 0; i < 240 && !result; i++) {

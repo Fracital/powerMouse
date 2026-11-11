@@ -22,6 +22,7 @@ import {
 	type ScriptType,
 } from './scriptRoutes';
 import StompURL from './StompURL';
+import { rewriteInWasm } from './wasm/rewriter';
 
 export {
 	ACCESS_KEY,
@@ -423,6 +424,73 @@ function attributeType(node: { attributes?: unknown }): unknown {
 	return undefined;
 }
 
+/**
+ * What runs before a script's own code, after its directive prologue: a
+ * worker's bootstrap, a module's `import.meta.url`, and the caller's
+ * `preamble`. The same text whichever backend rewrites the script.
+ */
+export function scriptLead(
+	url: StompURL,
+	config: Config,
+	type: ScriptType,
+	preamble: string,
+): string {
+	const names = helperNames(config);
+	const isModule = type === 'genericModule' || type === 'workerModule';
+	const isWorker = type === 'workerModule' || type === 'worker';
+	const bundle = JSON.stringify(injectWorkerJS(url, config));
+	return (
+		// a module worker has no importScripts: fetch the bundle and run it
+		// as the classic script it is (indirect eval, top-level await),
+		// named for its URL, so its frames are dropped from stacks like
+		// those of a bundle a classic worker imports
+		// (once: the bundle deletes createClient when the client is made,
+		// and a module worker's imports each carry this preamble). The
+		// browser dispatches messages during a top-level await, when the
+		// page's module has not set its handlers yet (natively its top
+		// level runs first): those, and a shared worker's connects, are
+		// held and the client dispatches them again
+		(type === 'workerModule'
+			? `if (!(${JSON.stringify(names.client)} in globalThis)) {
+	let held;
+	if (!globalThis.createClient) {
+		held = [];
+		const hold = (event) => {
+			event.stopImmediatePropagation();
+			held.push(event);
+		};
+		addEventListener('message', hold);
+		addEventListener('connect', hold);
+		try {
+			(0, eval)((await (await fetch(${bundle})).text()) + '\\n//# sourceURL=' + new globalThis.URL(${bundle}, globalThis.location.href).href);
+		} finally {
+			removeEventListener('message', hold);
+			removeEventListener('connect', hold);
+		}
+	}
+	createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)}, held);
+}
+if (!${names.client}.applied)
+	${names.client}.apply();`
+			: isWorker
+				? `if (!(${JSON.stringify(names.client)} in globalThis) && !globalThis.createClient)
+	importScripts(${JSON.stringify(injectWorkerJS(url, config))});
+
+if (!(${JSON.stringify(names.client)} in globalThis))
+	createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
+
+if (!${names.client}.applied) 
+	${names.client}.apply();`
+				: '') +
+		// import.meta.resolve answers with the page's URLs; a bare specifier
+		// belongs to the import map and comes back as it is
+		(isModule
+			? `import.meta.url = ${JSON.stringify(url.toString())};import.meta.resolve = (s) => ${BARE_SPECIFIER}.test(s = String(s)) ? s : new URL(s, import.meta.url).href;`
+			: '') +
+		preamble
+	);
+}
+
 export function modifyJS(
 	script: string,
 	url: StompURL,
@@ -438,6 +506,21 @@ export function modifyJS(
 	/** where the text its functions read back as is kept (a part of a split script, a javascript: URL) */
 	source?: ScriptSource,
 ) {
+	// the wasm backend answers where this thread holds the module; what it
+	// declines (a script its parser refuses, a shape it leaves alone) is
+	// rewritten here. A part of a split script is this rewriter's: its
+	// output is stitched into the whole by what the printer makes of it
+	if (config.rewriter === 'wasm' && compact === undefined) {
+		const output = rewriteInWasm(
+			script,
+			url,
+			config,
+			type,
+			() => scriptLead(url, config, type, preamble),
+			source,
+		);
+		if (output !== null) return output;
+	}
 	const names = helperNames(config);
 	// the names a read of must go through the access API: the unforgeables,
 	// and the client's global, which holds the real windows (the access API
@@ -509,7 +592,6 @@ export function modifyJS(
 			: access('coerce', [result(source), text]);
 	try {
 		const isModule = type === 'genericModule' || type === 'workerModule';
-		const isWorker = type === 'workerModule' || type === 'worker';
 
 		// comments are dropped with the rest of the formatting, except the two
 		// DevTools reads: `//# sourceURL=` names the script (eval'd code, stack
@@ -1541,57 +1623,9 @@ export function modifyJS(
 				holder = holderStatement(names.access, key, text) ?? '';
 		}
 
-		const bundle = JSON.stringify(injectWorkerJS(url, config));
 		return (
 			prologue +
-			// a module worker has no importScripts: fetch the bundle and run it
-			// as the classic script it is (indirect eval, top-level await),
-			// named for its URL, so its frames are dropped from stacks like
-			// those of a bundle a classic worker imports
-			// (once: the bundle deletes createClient when the client is made,
-			// and a module worker's imports each carry this preamble). The
-			// browser dispatches messages during a top-level await, when the
-			// page's module has not set its handlers yet (natively its top
-			// level runs first): those, and a shared worker's connects, are
-			// held and the client dispatches them again
-			(type === 'workerModule'
-				? `if (!(${JSON.stringify(names.client)} in globalThis)) {
-	let held;
-	if (!globalThis.createClient) {
-		held = [];
-		const hold = (event) => {
-			event.stopImmediatePropagation();
-			held.push(event);
-		};
-		addEventListener('message', hold);
-		addEventListener('connect', hold);
-		try {
-			(0, eval)((await (await fetch(${bundle})).text()) + '\\n//# sourceURL=' + new globalThis.URL(${bundle}, globalThis.location.href).href);
-		} finally {
-			removeEventListener('message', hold);
-			removeEventListener('connect', hold);
-		}
-	}
-	createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)}, held);
-}
-if (!${names.client}.applied)
-	${names.client}.apply();`
-				: isWorker
-					? `if (!(${JSON.stringify(names.client)} in globalThis) && !globalThis.createClient)
-	importScripts(${JSON.stringify(injectWorkerJS(url, config))});
-
-if (!(${JSON.stringify(names.client)} in globalThis))
-	createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
-
-if (!${names.client}.applied) 
-	${names.client}.apply();`
-					: '') +
-			// import.meta.resolve answers with the page's URLs; a bare specifier
-			// belongs to the import map and comes back as it is
-			(isModule
-				? `import.meta.url = ${JSON.stringify(url.toString())};import.meta.resolve = (s) => ${BARE_SPECIFIER}.test(s = String(s)) ? s : new URL(s, import.meta.url).href;`
-				: '') +
-			preamble +
+			scriptLead(url, config, type, preamble) +
 			holder +
 			generate(tree, format) +
 			trailer
