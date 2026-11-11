@@ -351,6 +351,7 @@ function shell(
 } else {
 	${controlled}if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
+	else delete globalThis.createClient;
 
 ${sited(names.client, sites)}${referred(names.client, referrer)}${
 		upgradeInsecure
@@ -479,6 +480,7 @@ export function modifyXML(
 } else {
 	if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
+	else delete globalThis.createClient;
 ${sited(names.client, sites)}${referred(names.client, referrer)}
 	if (!${names.client}.applied) ${names.client}.apply();
 	${names.client}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});

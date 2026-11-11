@@ -12,7 +12,10 @@
 //   formatter the page sets runs, reads back as itself and deletes as an own
 //   property does, and deleting the proxy's changes nothing;
 // - getInstalledRelatedApps() answers as a top-level page's (a frame's
-//   rejects, and the host shows every proxied page in one).
+//   rejects, and the host shows every proxied page in one);
+// - the inject's bootstrap global (`createClient`) is gone from the window,
+//   and from a frame's whose window the page touched before its document
+//   came (the browser keeps that window and the client made for it).
 // A read of the access API by its name is recorded, not compared.
 import {
 	done,
@@ -83,6 +86,10 @@ const GROUPS = [
 	[
 		"getInstalledRelatedApps() answers as a top-level page's, not a frame's",
 		['relatedApps'],
+	],
+	[
+		"the inject's bootstrap global is gone, from a frame whose window the page touched before it loaded too",
+		['bootstrapTop', 'bootstrapCross', 'bootstrapSame', 'bootstrapUntouched'],
 	],
 ];
 

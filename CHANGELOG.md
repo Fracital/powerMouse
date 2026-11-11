@@ -859,6 +859,16 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A frame's window no longer keeps the inject's bootstrap global. When a
+  page read a new frame's `contentWindow` before the frame's document came
+  (Cloudflare Turnstile's widget does), the browser kept that window for the
+  document, and with it the client the inject had made for it then; the
+  document's shell then made no client, and the `createClient` function its
+  bundle defined stayed on the window, where `typeof createClient` and
+  `Object.getOwnPropertyNames(window)` found it (the challenge frame on
+  kits4beats.com had it). The shell now deletes it when a client already
+  exists. (tells suite: frames of another site and of the page's own, read
+  before they loaded and not, natively against both modes.)
 - Windows of one site are another origin to each other unless both set
   `document.domain`, as in Chrome, and `Origin-Agent-Cluster: ?0` is
   honoured. The window membrane compared windows by site: a page and a

@@ -207,11 +207,47 @@
 		// the rewrite ran under these names: the real URL, the page as top
 		rewritten: top === window && location.href,
 	};
+	// the inject's bootstrap global (`createClient`) is gone once a client
+	// exists: from this window, and from a frame whose window the page
+	// touched before its document came (the browser keeps that window, and
+	// the client made for it then, so the document's own bootstrap ran no
+	// createClient), of another site or of this one
+	record.bootstrapTop = [
+		Object.getOwnPropertyNames(window).filter((key) => key === 'createClient'),
+		typeof createClient,
+	];
+	const boot = (site, touch) =>
+		new Promise((resolve) => {
+			const id = `${site}-${touch}`;
+			const listen = (event) => {
+				if (event.data?.boot !== id) return;
+				removeEventListener('message', listen);
+				resolve([event.data.names, event.data.type]);
+			};
+			addEventListener('message', listen);
+			const frame = document.createElement('iframe');
+			const origin =
+				site === 'cross'
+					? location.origin.replace('127.0.0.1', 'localhost')
+					: location.origin;
+			frame.src = `${origin}/pages/tells-boot.html?${id}`;
+			document.documentElement.append(frame);
+			if (touch) void frame.contentWindow;
+		});
+	const booted = Promise.all([
+		boot('cross', true),
+		boot('same', true),
+		boot('cross', false),
+	]).then(([cross, same, untouched]) => {
+		record.bootstrapCross = cross;
+		record.bootstrapSame = same;
+		record.bootstrapUntouched = untouched;
+	});
 	// a frame's getInstalledRelatedApps() rejects ("only supported in
 	// top-level browsing contexts"); a top-level page with none installed
 	// gets an empty list
-	navigator
-		.getInstalledRelatedApps()
+	booted
+		.then(() => navigator.getInstalledRelatedApps())
 		.then(
 			(apps) => `resolved ${apps.length}`,
 			(error) => `rejected ${error.name}`,

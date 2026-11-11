@@ -1,0 +1,15 @@
+<!doctype html>
+<title>BOOT</title>
+<script>
+	// what this frame's window holds of the inject's bootstrap global
+	parent.postMessage(
+		{
+			boot: location.search.slice(1),
+			names: Object.getOwnPropertyNames(window).filter(
+				(key) => key === 'createClient',
+			),
+			type: typeof createClient,
+		},
+		'*',
+	);
+</script>
