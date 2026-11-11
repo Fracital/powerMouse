@@ -79,8 +79,7 @@ rust/
 ├── rust-toolchain.toml nightly pinned by date, wasm32 target, rust-src
 ├── edits/              the span edit model and the splice engine (no oxc AST)
 ├── rwjs/               the JS rewriter: oxc parse, visitor, edits
-├── rwcss/              the CSS url scanner (phase 3)
-├── scan/               the markup prewrite scanner (phase 3)
+├── rwcss/              the CSS and markup scanners, one module (phase 3)
 ├── block/              adblock-rust wrapped for the service worker (phase 4)
 ├── coverage-macro/     the build time walk proof
 ├── abi/                the hand written wasm glue side: exports and one import
@@ -92,14 +91,17 @@ deploy/rust/
 └── README.md
 ```
 
-Two artifacts, built separately so a deployment that wants neither pays for
-neither:
+Three artifacts, built separately so a deployment that wants none pays for
+none:
 
 - the rewriter module, about 600 KB, 160 KB brotli.
+- the scanner module (`scanner.wasm`, phase 3): 25 KB, 11 KB brotli. It has
+  no dependencies and shares no code with the rewriter, so it is a module of
+  its own and not 25 KB more of the rewriter's.
 - the blocker module, measured in phase 4 (the crate's regex and idna tables
   dominate; expect a larger one).
 
-Both are committed under `assets/` with a `.sha256` and an `UPSTREAM` file
+All are committed under `assets/` with a `.sha256` and an `UPSTREAM` file
 naming the toolchain and crate versions that produced them, and `build.js`
 copies them into `dist/` as it copies `controllerFrame.html` (with a watch
 of their own in dev mode, since esbuild watches only what it bundles). They
@@ -457,6 +459,47 @@ on the 142 sheet corpus. `prewrite.ts`'s regex scan of `<script>` and
 `<style>` becomes a Rust scanner. The real HTML parse stays where it is, in
 the page's own `DOMParser`: it is correct and free.
 
+As landed (`rust/rwcss`, `scanner.wasm`, `src/wasm/scanner.ts`): the module
+finds and JavaScript rewrites. Nearly all of `modifyCSS`'s time on a large
+sheet is css-tree's lazy parse and the walk over it, which only find the raw
+pieces worth looking into (a declaration's value, an at-rule's prelude, a
+rule's prelude, text no parse shaped) by the test `MAY_ROUTE`. The crate is
+css-tree 3.2.1's tokenizer, token stream and lazy node parsers ported
+literally (its error recovery included: `parseWithFallback`, the balance
+table, the at-rule block table), emitting no tree, only those pieces in
+source order with UTF-16 offsets. Each piece then goes through the code the
+walk called (`deep` and `route` in `src/rewriteCSS.ts`, css-tree's full
+parse of that one piece included), so the output is the JavaScript
+rewriter's by construction and not by a second implementation of the
+rewrite. The module's filter is narrower than `MAY_ROUTE` (`url(`,
+`image-set` and `src(`, which is every case that can produce an edit, plus
+an `@import` prelude), so a piece that could only ever come back unchanged
+is not handed over at all. The markup half is a literal port of
+`src/prewrite.ts`'s three expressions (`<script>`, `<style>`, `<base
+href>`), one pass in place of three, with JavaScript's `\s` and ASCII-only
+case folding.
+
+The scanner declines (status 5, and css-tree parses the sheet as before)
+where css-tree's answer depends on something a port cannot see or should
+not copy: a closing bracket at the top level with nothing open (css-tree
+reads a stale entry of a buffer it reuses between parses, so the answer
+depends on the sheet parsed before), a sheet of more than 0xFFFFFF UTF-16
+units (its 24-bit token offsets wrap), blocks nested more than 64 deep (the
+port recurses), and a parse that stops advancing. None of the corpus does.
+
+The corpus on disk is 99 sheets (11.9 MB: `csscorpus`, YouTube's, CNN's),
+not the 142 this plan named: all rewrite byte for byte the same with the
+scanner and without (48 are scanned, the other 51 hold nothing to route),
+in 364 ms against 953 ms. A wider sweep of 2,297 stylesheets from this
+machine's caches and packages (57.8 MB) is identical too, 3.3 s against
+78 s. The `scanner-parity` suite holds the hand-written cases, every
+stylesheet and document under `test/pages`, and a seeded fuzz that mutates
+them (`SCANNER_FUZZ` rounds, `SCANNER_CORPUS` for a corpus directory); it
+needs no browser. The service worker is the scanner's only caller: the
+`/css/` route (the request log says `rewriteBy: 'wasm'` or `'js'`), and a
+prewritten document's markup and inline styles. The inject's CSS paths stay
+on css-tree until phase 2 gives the library realm its modules.
+
 **Phase 4. The blocker.** The second artifact, the service worker's network
 path, the cosmetic and scriptlet paths, redirect resources, the option, the
 demo toggle, docs and suites.
@@ -505,7 +548,8 @@ paths.
   `src/config.ts`, `src/controller/index.ts`, `remote.ts` and `frame.ts`.
 - **New suites.** `rewriter-parity` (the corpora through both backends: the
   untouched-bytes invariant, the edit log round trip, and a behavioural
-  comparison), `wasm-share` (every thread that rewrites holds the modules
+  comparison), `scanner-parity` (phase 3: `modifyCSS` and the prewrite scan
+  with the scanner module and without, byte for byte), `wasm-share` (every thread that rewrites holds the modules
   the controller loaded once, and no instance per frame), `wasm-artifact` (no name or producers
   section, no project token in the bytes, every export renamable), and in
   phase 4 the three blocker suites.

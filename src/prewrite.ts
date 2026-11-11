@@ -24,6 +24,7 @@
 // not give it byte for byte.
 
 import { holderStatement, sourceKey } from './functionSource';
+import type { MarkupElement, MarkupScan } from './wasm/scanner';
 
 /** an inline classic script's first statement: `document.currentScript.textContent` reads back as the page wrote it */
 export const scriptPreamble = (source: string) =>
@@ -162,32 +163,61 @@ const textRange = (
 };
 
 /**
- * The inline scripts (that run) and styles of `markup`, each text once, with
- * where it first stands in the markup
+ * The elements `pattern` matches in `markup` (start tag attributes, text,
+ * where the text stands), or the same elements as the scanner found them
+ * (src/wasm/scanner.ts)
  */
-export function inlineSources(markup: string): {
+function* elements(
+	markup: string,
+	pattern: RegExp,
+	scanned?: MarkupElement[],
+): Generator<[attributes: string, source: string, start: number, end: number]> {
+	if (scanned) {
+		for (const [attributesStart, attributesEnd, start, end] of scanned)
+			yield [
+				markup.slice(attributesStart, attributesEnd),
+				markup.slice(start, end),
+				start,
+				end,
+			];
+		return;
+	}
+	for (const match of markup.matchAll(pattern))
+		yield [match[1]!, match[2]!, ...textRange(markup, match, match[2]!)];
+}
+
+/**
+ * The inline scripts (that run) and styles of `markup`, each text once, with
+ * where it first stands in the markup. `scan`: the elements as the scanner
+ * found them (`rewriter: 'wasm'`), read here as the expressions' matches
+ * are, so the answer is the same.
+ */
+export function inlineSources(
+	markup: string,
+	scan?: MarkupScan,
+): {
 	scripts: [kind: 'c' | 'm', source: string, start: number, end: number][];
 	styles: [source: string, start: number, end: number][];
 } {
 	const scripts = new Map<string, ['c' | 'm', string, number, number]>();
 	const styles = new Map<string, [string, number, number]>();
 	let total = 0;
-	for (const match of markup.matchAll(SCRIPT)) {
-		const [, attributes, source] = match;
-		if (!source!.trim() || attribute(attributes!, 'src') !== null) continue;
-		const kind = kindOf(attributes!);
+	for (const [attributes, source, start, end] of elements(
+		markup,
+		SCRIPT,
+		scan?.scripts,
+	)) {
+		if (!source.trim() || attribute(attributes, 'src') !== null) continue;
+		const kind = kindOf(attributes);
 		if (kind === null) continue;
-		if ((total += source!.length) > LIMIT) break;
+		if ((total += source.length) > LIMIT) break;
 		const key = `${kind}\u0000${source}`;
-		if (!scripts.has(key))
-			scripts.set(key, [kind, source!, ...textRange(markup, match, source!)]);
+		if (!scripts.has(key)) scripts.set(key, [kind, source, start, end]);
 	}
-	for (const match of markup.matchAll(STYLE)) {
-		const source = match[2]!;
+	for (const [, source, start, end] of elements(markup, STYLE, scan?.styles)) {
 		if (!source.trim()) continue;
 		if ((total += source.length) > LIMIT) break;
-		if (!styles.has(source))
-			styles.set(source, [source, ...textRange(markup, match, source)]);
+		if (!styles.has(source)) styles.set(source, [source, start, end]);
 	}
 	return { scripts: [...scripts.values()], styles: [...styles.values()] };
 }

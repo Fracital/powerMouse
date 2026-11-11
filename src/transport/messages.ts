@@ -572,6 +572,8 @@ export interface RequestInfo {
 	rewriteCache?: 'hit' | 'miss' | 'skip';
 	/** where a script made now was rewritten: one of the controller's rewrite workers, several of them (a large bundle split across them), or the service worker itself */
 	rewriteIn?: 'pool' | 'pool split' | 'service-worker';
+	/** under `rewriter: 'wasm'`, a stylesheet that had something to route: whether the wasm scanner found its pieces (`wasm`) or css-tree's parse did (`js`: the scanner declined the sheet, or the service worker does not hold it yet); the output is the same */
+	rewriteBy?: 'wasm' | 'js';
 	/** Content-Length of the response, when known */
 	bytes: number | null;
 	error?: string;

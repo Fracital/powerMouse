@@ -5,7 +5,7 @@
 # loader treats as a dead instance), so no unwinding tables and no panic
 # strings reach the artifact.
 [workspace]
-members = ["rwjs"]
+members = ["rwjs", "rwcss"]
 resolver = "2"
 
 [profile.release]

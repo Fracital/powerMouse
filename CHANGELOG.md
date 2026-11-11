@@ -141,11 +141,29 @@ The first release after a four-year gap. Everything below is breaking.
   `messageerror`, and a handshake that carried one would be lost). Each
   thread instantiates a module on first use (`src/wasm/thread.ts`): one that
   is missing, declines a call or traps is answered by the JavaScript rewriter
-  for that call, so the option changes speed, never output. Nothing answers
-  from a module yet; the Rust rewriter and scanner come behind it. The demo
-  reads `STOMP_REWRITER=wasm` (`?wasm` for one visit, `?js` for the
-  JavaScript rewriters), and the `wasm-share` suite checks that every thread
-  holds the modules.
+  for that call, so the option changes speed, never output. The first module
+  that answers is the scanner (next entry); the Rust JS rewriter comes
+  behind it. The demo reads `STOMP_REWRITER=wasm` (`?wasm` for one visit,
+  `?js` for the JavaScript rewriters), and the `wasm-share` suite checks
+  that every thread holds the modules.
+- With `rewriter: 'wasm'` the service worker finds what to rewrite in a
+  stylesheet and in a document's markup with a Rust module, `scanner.wasm`
+  (`rust/rwcss`, 25 KB; `init.assets.scanner` names it). Rewriting a large
+  stylesheet was mostly css-tree's lazy parse and the walk over it, which
+  only find the values, preludes and raw text that could hold a URL; the
+  module is css-tree's tokenizer and lazy parser ported, giving those pieces
+  by offset, and each piece is then rewritten by the same JavaScript as
+  before, so the output is byte for byte the same (99 real stylesheets,
+  11.9 MB: 364 ms against 953 ms; 2,297 more from this machine, 57.8 MB:
+  3.3 s against 78 s). The three expressions that find a document's inline
+  scripts, styles and `<base href>` for prewriting are one pass of the same
+  module. A sheet the scanner declines (a stray closing bracket at the top
+  level, more than 16.7 million UTF-16 units, blocks nested past 64) is
+  parsed by css-tree as before, and `onRequest` says which found a
+  stylesheet's pieces (`rewriteBy`: `wasm` or `js`). The `scanner-parity`
+  suite compares both on hand-written cases, the fixture pages and a seeded
+  fuzz. The page's own CSS paths (CSSOM, style attributes) still use
+  css-tree.
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

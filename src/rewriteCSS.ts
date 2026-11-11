@@ -14,6 +14,7 @@ import {
 import { provideRewriters } from './rewriters';
 import { routeBinary } from './routeURL';
 import StompURL from './StompURL';
+import type { StylePiece } from './wasm/scanner';
 
 export { restoreCSSValueURLs, rewriteCSSValueURLs, routeCSS } from './cssURLs';
 
@@ -93,10 +94,22 @@ interface WalkContext {
 	declaration?: { property: string; value: CssNode } | null;
 }
 
+/**
+ * The raw pieces of a lazily parsed stylesheet that the rewrite looks into,
+ * found without css-tree (src/wasm/scanner.ts), or null to have css-tree
+ * find them
+ */
+export type StyleScanner = (
+	script: string,
+	context: string,
+) => StylePiece[] | null;
+
 export function modifyCSS(
 	script: string,
 	url: StompURL,
 	context = 'stylesheet',
+	/** `rewriter: 'wasm'`: the scanner the thread holds; the output is the same with it and without */
+	scan?: StyleScanner,
 ) {
 	// A stylesheet is parsed with its values, at-rule preludes and selectors
 	// left as raw text, and only a piece that could hold a URL is parsed in
@@ -213,6 +226,27 @@ export function modifyCSS(
 			route.call(this as WalkContext, inner, atrule);
 		});
 	};
+
+	// The lazy parse and the walk below only find the raw pieces to look
+	// into, and on a large sheet that is nearly all the time that is left.
+	// The scanner finds the same pieces (it is css-tree's tokenizer and lazy
+	// parser, ported), and each is then handled by the code the walk calls.
+	const pieces = lazy && scan ? scan(script, context) : null;
+	if (pieces) {
+		for (const piece of pieces) {
+			const [kind, start, end] = piece;
+			const node = {
+				type: 'Raw',
+				value: script.slice(start, end),
+				loc: { start: { offset: start }, end: { offset: end } },
+			} as unknown as CssNode;
+			if (kind === 'R') route.call({}, node);
+			else if (kind === 'V') deep(node, 'value');
+			else if (kind === 'S') deep(node, 'selectorList');
+			else deep(node, 'atrulePrelude', script.slice(piece[3], piece[4]));
+		}
+		return edits.result();
+	}
 
 	const tree = parseCleared(
 		script,

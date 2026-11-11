@@ -1,7 +1,7 @@
 # deploy/rust: the toolchain for every Rust/wasm artifact
 
 Every piece of stomp written in Rust and run as wasm (the JS rewriter, the
-blocker, WebRTC over wisp; docs/rust-plan.md) is a crate under `rust/` and
+CSS and markup scanner, the blocker, WebRTC over wisp; docs/rust-plan.md) is a crate under `rust/` and
 is built here, in one pinned container, into a committed artifact under
 `assets/` that `build.js` copies into `dist/`. There is no Rust toolchain on
 CI, on the deploy or on terp, and `dist/` is wiped on every build, so the
@@ -22,7 +22,8 @@ a wrapper that adds `--network host` to `docker build`, as for
 
 ## Adding a crate
 
-Three crates share this toolchain (the rewriter, the blocker, WebRTC), and
+Four crates share this toolchain (the rewriter, the scanner, the blocker,
+WebRTC), and
 the recipe is the same for each:
 
 1. A directory `rust/<crate>/` with a `cdylib` crate, added to the

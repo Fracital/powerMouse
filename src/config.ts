@@ -186,6 +186,8 @@ export interface Assets {
 	rewriteWorker?: string;
 	/** the JS rewriter's wasm module (docs/rust-plan.md) */
 	rewriter?: string;
+	/** the CSS and markup scanners' wasm module (docs/rust-plan.md, phase 3) */
+	scanner?: string;
 }
 
 export const DEFAULT_ASSETS: Required<Assets> = {
@@ -197,6 +199,7 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 	transportWorker: 'transportWorker.js',
 	rewriteWorker: 'rewriteWorker.js',
 	rewriter: 'rewriter.wasm',
+	scanner: 'scanner.wasm',
 };
 
 /**
@@ -204,7 +207,10 @@ export const DEFAULT_ASSETS: Required<Assets> = {
  * `rewriter: 'wasm'` loads and hands to the service worker and its rewrite
  * workers (src/wasm/thread.ts)
  */
-export const WASM_ASSETS = ['rewriter'] as const satisfies (keyof Assets)[];
+export const WASM_ASSETS = [
+	'rewriter',
+	'scanner',
+] as const satisfies (keyof Assets)[];
 
 /** a served file's name: the host's, else the default */
 export function assetName(

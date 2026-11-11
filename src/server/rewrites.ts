@@ -74,6 +74,7 @@ import {
 	XHR_MARKER,
 } from '../transport/messages';
 import { BUILD } from '../version';
+import { scanMarkup, scanStyles } from '../wasm/scanner';
 import {
 	knownOriginOf,
 	knownTopSiteOf,
@@ -464,6 +465,7 @@ interface Note {
 		partition: string;
 		stored: Response | null;
 	};
+	rewriteBy?: 'wasm' | 'js';
 }
 
 interface Rewriter {
@@ -1859,6 +1861,7 @@ function genericForward(
 					...report,
 					...(note.rewriteCache ? { rewriteCache: note.rewriteCache } : {}),
 					...(note.rewriteIn ? { rewriteIn: note.rewriteIn } : {}),
+					...(note.rewriteBy ? { rewriteBy: note.rewriteBy } : {}),
 				});
 			report = null;
 		};
@@ -2682,10 +2685,15 @@ export function registerRewrites(
 		finish: () => Promise<Prewritten>;
 	} | null => {
 		const pool = rewriter.pool;
-		if (!pool?.live || hasBase(markup)) return null;
-		const { scripts, styles } = inlineSources(markup);
-		if (!scripts.length && !styles.length) return null;
+		if (!pool?.live) return null;
 		const config = rewriter.config;
+		// `rewriter: 'wasm'`: one pass of the scanner over the markup in place
+		// of the three expressions, and the same answer
+		const wasm = config.rewriter === 'wasm';
+		const scanned = wasm ? scanMarkup(markup) : null;
+		if (scanned ? scanned.base : hasBase(markup)) return null;
+		const { scripts, styles } = inlineSources(markup, scanned ?? undefined);
+		if (!scripts.length && !styles.length) return null;
 		const rewrites = partition !== null ? rewriter.rewrites : undefined;
 		const encoder = new TextEncoder();
 		const dispatches: Promise<void>[] = [];
@@ -2747,7 +2755,16 @@ export function registerRewrites(
 				const styleOutputs = styles.map(
 					([source, start, end]): Prewritten['styles'][number] => {
 						try {
-							return [start, end, modifyCSS(source, url)];
+							return [
+								start,
+								end,
+								modifyCSS(
+									source,
+									url,
+									'stylesheet',
+									wasm ? scanStyles : undefined,
+								),
+							];
 						} catch (error) {
 							return [start, end, rewriteCSSValueURLs(source, url)];
 						}
@@ -2868,11 +2885,19 @@ export function registerRewrites(
 		/^\/css\//,
 		genericForward(
 			rewriter,
-			async (url, response) => {
+			async (url, response, _headers, _referrer, _request, note) => {
 				if (!response.ok) return false;
 				const text = await response.text();
 				try {
-					return modifyCSS(text, url);
+					if (rewriter.config.rewriter !== 'wasm') return modifyCSS(text, url);
+					// the scanner finds what css-tree's lazy parse finds, and the
+					// request log says whether it did or the parse had to (a sheet
+					// with nothing to route is looked into by neither)
+					return modifyCSS(text, url, 'stylesheet', (script, context) => {
+						const pieces = scanStyles(script, context);
+						note.rewriteBy = pieces ? 'wasm' : 'js';
+						return pieces;
+					});
 				} catch (error) {
 					// a stylesheet the parser rejects still reaches the page, its
 					// url()s routed by the regex (as the CSSOM path does)

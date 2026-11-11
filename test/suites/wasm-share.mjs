@@ -5,7 +5,8 @@
 // service worker (it is an agent cluster of its own) and a handshake that
 // carried one left the controller waiting for the worker forever. A page
 // loads and runs as before either way: a module only ever answers what the
-// JavaScript rewriter would have.
+// JavaScript rewriter would have. A stylesheet's request says the scanner
+// module found its pieces (`rewriteBy`), and its url() is routed as before.
 import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
@@ -61,6 +62,34 @@ async function held(settled) {
 	return last;
 }
 
+/** every module of the build: the JS rewriter and the CSS and markup scanner */
+const MODULES = ['rewriter', 'scanner'];
+const holdsAll = (names) => MODULES.every((name) => names.includes(name));
+
+/** load the fixture page with a stylesheet of one url(): how the sheet was scanned and whether its image was fetched */
+async function loadStyled() {
+	await page.evaluate(
+		(url) => window.__frame.go(url),
+		`${FIXTURE}pages/reqlog.html`,
+	);
+	let result;
+	for (let i = 0; i < 300; i++) {
+		result = await page.evaluate(() => {
+			const sheet = window.__log.find((e) => e.url.endsWith('/reqlog.css'));
+			const image = window.__log.find((e) => e.url.endsWith('/sprite.svg'));
+			return {
+				sheet: sheet?.status,
+				by: sheet?.rewriteBy,
+				image: image?.status,
+				destination: image?.destination,
+			};
+		});
+		if (result.sheet && result.image) break;
+		await sleep(50);
+	}
+	return result;
+}
+
 /** load the fixture page whose script pushes `name`: where it was rewritten and whether it ran */
 async function load(name) {
 	await page.evaluate(
@@ -108,19 +137,18 @@ ok(
 {
 	const all = await held(
 		(now) =>
-			now.serviceWorker.includes('rewriter') &&
+			holdsAll(now.serviceWorker) &&
 			now.rewriteWorkers.length === 2 &&
-			now.rewriteWorkers.every((names) => names.includes('rewriter')),
+			now.rewriteWorkers.every(holdsAll),
 	);
 	ok(
 		'the service worker compiled the bytes it was handed',
-		all.serviceWorker.includes('rewriter'),
+		holdsAll(all.serviceWorker),
 		JSON.stringify(all),
 	);
 	ok(
-		'every rewrite worker holds the compiled module',
-		all.rewriteWorkers.length === 2 &&
-			all.rewriteWorkers.every((names) => names.includes('rewriter')),
+		'every rewrite worker holds the compiled modules',
+		all.rewriteWorkers.length === 2 && all.rewriteWorkers.every(holdsAll),
 		JSON.stringify(all),
 	);
 	const result = await load('w');
@@ -128,6 +156,17 @@ ok(
 		'a page loads and its script runs, rewritten in a worker',
 		result.ran && result.where === 'pool',
 		JSON.stringify(result),
+	);
+	const styled = await loadStyled();
+	ok(
+		"a stylesheet's pieces are found by the scanner module",
+		styled.sheet === 200 && styled.by === 'wasm',
+		JSON.stringify(styled),
+	);
+	ok(
+		'and its url() is routed as before',
+		styled.image === 200 && styled.destination === 'image',
+		JSON.stringify(styled),
 	);
 }
 
@@ -138,11 +177,10 @@ ok(
 	await controller('wasm-share-2', { rewriter: 'wasm', rewriteWorkers: 0 }),
 );
 {
-	const again = await held((now) => now.serviceWorker.includes('rewriter'));
+	const again = await held((now) => holdsAll(now.serviceWorker));
 	ok(
-		'the service worker still holds the module',
-		again.serviceWorker.includes('rewriter') &&
-			again.rewriteWorkers.length === 0,
+		'the service worker still holds the modules',
+		holdsAll(again.serviceWorker) && again.rewriteWorkers.length === 0,
 		JSON.stringify(again),
 	);
 	const result = await load('s');
