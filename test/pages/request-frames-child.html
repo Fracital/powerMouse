@@ -1,0 +1,27 @@
+<!doctype html>
+<title>REQUEST FRAMES CHILD</title>
+<body></body>
+<script>
+	// a nested document of request-frames.html: tells the top when it loaded
+	// and when the fetch a ping asked for was answered; `inner` names a frame
+	// of the other origin it holds itself
+	const params = new URLSearchParams(location.search);
+	const name = params.get('name');
+	const tell = (what) =>
+		top.postMessage({ requestFrames: { what, name, at: Date.now() } }, '*');
+	addEventListener('load', () => tell('loaded'));
+	const inner = params.get('inner');
+	if (inner) {
+		const frame = document.createElement('iframe');
+		const other = location.origin.replace('127.0.0.1', 'localhost');
+		frame.src = `${other}${location.pathname}?name=${inner}`;
+		document.body.append(frame);
+	}
+	addEventListener('message', async (event) => {
+		if (event.data !== 'request-frames-ping') return;
+		for (let i = 0; i < frames.length; i++)
+			frames[i].postMessage('request-frames-ping', '*');
+		await fetch(`/echo-headers?from=${name}`);
+		tell('answered');
+	});
+</script>

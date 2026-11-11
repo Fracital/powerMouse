@@ -279,7 +279,12 @@ export interface ControllerInit {
 	rewriteTimeout?: number;
 }
 
-/** a RequestInfo with the frame it belongs to, when the page reported its client id */
+/**
+ * a RequestInfo with the frame it belongs to: the one showing the page whose
+ * document made the request, a document in a frame nested in the page
+ * included, once that document reported its client id; null for a client
+ * that never does (a worker, a document on about:srcdoc or about:blank)
+ */
 export interface RequestEvent extends RequestInfo {
 	frame: Frame | null;
 }
@@ -323,6 +328,41 @@ export function cookieJar(
 			await run({ op: 'clear', origin });
 		},
 	};
+}
+
+/**
+ * @internal The frame of `frames` a message came from: the one whose window
+ * is its `source`, or (`nested`) the one showing the page that holds the
+ * frame that is, however deep. A proxied page of the host's own origin
+ * answers `parent` itself (it believes it is the top, and a frame of another
+ * site in it sees a stand-in), so the chain is read with the host's own
+ * getter, which no page reached; a window of another origin has only that
+ * answer.
+ */
+export function frameOfSource<F extends { element: HTMLIFrameElement }>(
+	frames: F[],
+	source: MessageEventSource | null,
+): { frame: F; nested: boolean } | null {
+	const parentOf = Reflect.getOwnPropertyDescriptor(window, 'parent')?.get;
+	let context = source as Window | null;
+	// the chain of a frame of ours ends at the host's own window
+	for (let depth = 0; context && context !== window; depth++) {
+		const found = context;
+		const frame = frames.find((frame) => frame.element.contentWindow === found);
+		if (frame) return { frame, nested: depth > 0 };
+		let parent: Window | null;
+		try {
+			parent = parentOf
+				? (Reflect.apply(parentOf, context, []) as Window | null)
+				: context.parent;
+		} catch (error) {
+			// not a window (a port, a worker)
+			return null;
+		}
+		if (parent === context) return null;
+		context = parent;
+	}
+	return null;
 }
 
 /** a navigate report posted by a proxied page, else null */
@@ -570,6 +610,19 @@ export class StompController extends EventTarget {
 	#init: ControllerInit;
 	/** service worker client ids the pages reported, by frame */
 	#clientFrames = new Map<string, Frame>();
+	/**
+	 * clients a request report waited for in vain: a worker, and a document
+	 * on about:srcdoc or about:blank, never say which frame they are in (a
+	 * page learns its client id from the service worker and tells the host),
+	 * so their later reports go out as they come. One that tells after all
+	 * (a page slower than the wait) is a frame's from then on.
+	 */
+	#silentClients = new Set<string>();
+	/** a page said which client it is: its requests are `frame`'s */
+	#attribute(client: string, frame: Frame) {
+		this.#clientFrames.set(client, frame);
+		this.#silentClients.delete(client);
+	}
 	#onRequest?: (info: RequestEvent) => void;
 	#sandbox: string | null;
 	#port?: MessagePort;
@@ -750,13 +803,19 @@ export class StompController extends EventTarget {
 		window.addEventListener('message', (event) => {
 			// only our own frames, same origin as this page in this mode
 			if (event.origin !== location.origin) return;
-			const frame = this.frames.find(
-				(frame) => frame.element.contentWindow === event.source,
-			);
-			if (!frame) return;
+			const found = frameOfSource(this.frames, event.source);
+			if (!found) return;
+			const { frame, nested } = found;
 			const navigate = navigateReport(event.data);
+			// a document in a frame of the page reports to the real top as the
+			// page does: its requests are this frame's, and that is all it
+			// says here (where the frame is, is its page's to say)
+			if (nested) {
+				if (navigate?.client) this.#attribute(navigate.client, frame);
+				return;
+			}
 			if (navigate) {
-				if (navigate.client) this.#clientFrames.set(navigate.client, frame);
+				if (navigate.client) this.#attribute(navigate.client, frame);
 				frame.report(navigate);
 				init.onNavigate?.(navigate, frame);
 				this.dispatchEvent(
@@ -1170,8 +1229,14 @@ export class StompController extends EventTarget {
 					// a document's own request, and the subresources its head fetches,
 					// are reported before the page has told us which frame it is in:
 					// give that report a moment to arrive. Not without frames: the
-					// controller frame relays every report to a host that owns them
-					if (!frame && info.client && this.frames.length) {
+					// controller frame relays every report to a host that owns them.
+					// And once for a client that never tells (see #silentClients)
+					if (
+						!frame &&
+						info.client &&
+						this.frames.length &&
+						!this.#silentClients.has(info.client)
+					) {
 						const deadline =
 							Date.now() +
 							(DOCUMENT_DESTINATIONS.has(info.destination)
@@ -1181,6 +1246,7 @@ export class StompController extends EventTarget {
 							await sleep(50);
 							frame = this.#clientFrames.get(info.client) || null;
 						}
+						if (!frame) this.#silentClients.add(info.client);
 					}
 					const event: RequestEvent = { ...info, frame };
 					this.#onRequest?.(event);

@@ -18,6 +18,7 @@ import { controllerId, forgetControllerIds, keptControllerId } from './id';
 import {
 	CookieJar,
 	cookieJar,
+	frameOfSource,
 	hookErrorReport,
 	navigateReport,
 	NAVIGATION_WAIT_MS,
@@ -125,7 +126,7 @@ export interface RemotePermissionRequest {
 	frame: RemoteFrame | null;
 }
 
-/** a RequestInfo with the frame it belongs to, when the page reported its client id */
+/** a RequestInfo with the frame it belongs to (see StompController's RequestEvent) */
 export interface RemoteRequestEvent extends RequestInfo {
 	frame: RemoteFrame | null;
 }
@@ -158,6 +159,13 @@ export class RemoteController extends EventTarget {
 	isReady = false;
 	/** service worker client ids the pages reported, by frame */
 	#clientFrames = new Map<string, RemoteFrame>();
+	/** clients a request report waited for in vain (see StompController) */
+	#silentClients = new Set<string>();
+	/** a page said which client it is: its requests are `frame`'s */
+	#attribute(client: string, frame: RemoteFrame) {
+		this.#clientFrames.set(client, frame);
+		this.#silentClients.delete(client);
+	}
 	readonly element: HTMLIFrameElement;
 	#rpc: RpcHelper<HostBound, FrameBound>;
 	#ready: Promise<void>;
@@ -217,8 +225,9 @@ export class RemoteController extends EventTarget {
 					let frame =
 						(info.client && this.#clientFrames.get(info.client)) || null;
 					// the document and its head's subresources are reported before the
-					// page has said which frame it is in: give that a moment
-					if (!frame && info.client) {
+					// page has said which frame it is in: give that a moment, once
+					// for a client that never says (see StompController)
+					if (!frame && info.client && !this.#silentClients.has(info.client)) {
 						const deadline =
 							Date.now() +
 							(['document', 'iframe', 'frame', 'embed', 'object'].includes(
@@ -230,6 +239,7 @@ export class RemoteController extends EventTarget {
 							await new Promise((resolve) => setTimeout(resolve, 50));
 							frame = this.#clientFrames.get(info.client) || null;
 						}
+						if (!frame) this.#silentClients.add(info.client);
 					}
 					const event: RemoteRequestEvent = { ...info, frame };
 					init.onRequest?.(event);
@@ -279,13 +289,19 @@ export class RemoteController extends EventTarget {
 				return;
 			}
 			// a report or an open request from one of our proxied frames
-			const frame = this.frames.find(
-				(frame) => frame.element.contentWindow === event.source,
-			);
-			if (!frame) return;
+			const found = frameOfSource(this.frames, event.source);
+			if (!found) return;
+			const { frame, nested } = found;
 			const navigate = navigateReport(event.data);
+			// a document in a frame of the page reports here as the page does:
+			// its requests are this frame's, and that is all it says (see
+			// StompController)
+			if (nested) {
+				if (navigate?.client) this.#attribute(navigate.client, frame);
+				return;
+			}
 			if (navigate) {
-				if (navigate.client) this.#clientFrames.set(navigate.client, frame);
+				if (navigate.client) this.#attribute(navigate.client, frame);
 				frame.report(navigate);
 				init.onNavigate?.(navigate, frame);
 				this.dispatchEvent(

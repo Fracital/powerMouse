@@ -1,0 +1,43 @@
+<!doctype html>
+<title>REQUEST FRAMES</title>
+<body></body>
+<script>
+	// frames nested in this page: one of this origin, one of another (the
+	// fixture's other host name) and one of another origin inside the first
+	// (request-frames-child.html). Every document tells the top when it
+	// loaded and, once ping() asked, when its fetch was answered; so does
+	// this page's worker, each time it is asked
+	const child = '/pages/request-frames-child.html';
+	const other = location.origin.replace('127.0.0.1', 'localhost');
+	window.times = { loaded: {}, answered: {} };
+	addEventListener('message', (event) => {
+		const told = event.data && event.data.requestFrames;
+		if (told) times[told.what][told.name] = told.at;
+	});
+	addEventListener('load', () => {
+		times.loaded.top = Date.now();
+	});
+	for (const src of [
+		`${child}?name=same&inner=deep`,
+		`${other}${child}?name=cross`,
+	]) {
+		const frame = document.createElement('iframe');
+		frame.src = src;
+		document.body.append(frame);
+	}
+	const worker = new Worker('/pages/request-frames-worker.js');
+	worker.addEventListener('message', (event) => {
+		times.answered[event.data] = Date.now();
+	});
+	// every document fetches /echo-headers?from=<its name>, the worker
+	// /echo-headers?from=worker-1
+	window.ping = async () => {
+		for (let i = 0; i < frames.length; i++)
+			frames[i].postMessage('request-frames-ping', '*');
+		worker.postMessage('worker-1');
+		await fetch('/echo-headers?from=top');
+		times.answered.top = Date.now();
+	};
+	// the worker fetches again, /echo-headers?from=worker-2
+	window.again = () => worker.postMessage('worker-2');
+</script>

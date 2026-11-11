@@ -3361,6 +3361,20 @@ url`) carries its value and targets that window. An about:blank child of
   node type. The request report for a failure the host's error page answers
   carries no client id (the page never reports one), so the host gets it at
   once instead of after the attribution wait.
+- `onRequest` and the `request` event carry the frame for a request made by
+  a frame nested in a proxied page (the host's frame that shows the page),
+  and report it as soon as a top-level document's. A nested document told
+  the host which service worker client it is like the page does, but the
+  host took reports only from the windows of its own frames, so the report
+  of a nested frame's document waited out the three seconds a report gets
+  for a page that has yet to say where it is, each of its fetches a second
+  and a half, and all of them came without a frame: the demo's request
+  viewer never showed them. Both controllers now find the frame by walking
+  up from the reporting window (with the host's own `parent` getter: a
+  proxied page of the host's origin answers `parent` itself). A client that
+  never says (a worker, a document on about:srcdoc or about:blank) still
+  has no frame, and holds its reports back for that wait once instead of
+  every time (request-frames suite).
 - `history.pushState` and `replaceState` refuse a URL of another origin, or
   one that does not parse, with a SecurityError naming the page's origin and
   URL, like the browser; before this the URL was routed and accepted (every
