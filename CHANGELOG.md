@@ -1093,6 +1093,10 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   (src/inject/dom/svgReferences.ts), and style-readback checks the list
   against the browser it runs. 33 KB of heap a frame (frame-cost: 1,099 to
   1,101 KB a frame, 1,132 to 1,135 before, Chrome 152).
+- One attribute hook takes every event handler attribute (`onclick`,
+  `onerror`, ...), where each of the 140 names Chrome has had a hook of its
+  own in every frame: 12 to 15 KB of heap a frame (frame-cost: 1,087 to
+  1,090 KB a frame, 1,099 to 1,104 before, Chrome 152).
 - A document's navigation timing counts the site's own redirects: a GET
   form's document showed one redirect (the worker's, from the form's
   route) where Chrome shows none. (visited suite.)

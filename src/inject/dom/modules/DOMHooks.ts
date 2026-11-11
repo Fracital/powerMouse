@@ -265,9 +265,18 @@ determining element.src:
 
 type ElementCtor = { new (): HTMLElement };
 
-type HookCallback = (element: CustomElement) => void;
+/** called with the element and the attribute that changed */
+type HookCallback = (element: CustomElement, attribute: string) => void;
 
-type AttributeHook = [nodeName: Element['nodeName'], attribute: string];
+/**
+ * An element name (or '*') and the attribute watched, or a set of them that
+ * one callback watches (the event handler attributes: an entry each cost
+ * every frame about 120 bytes)
+ */
+type AttributeHook = [
+	nodeName: Element['nodeName'],
+	attribute: string | ReadonlySet<string>,
+];
 
 /**
  * This function is called when the property is accessed on the specified element ctor. If false, the next property hook getter will be called until the result is a string.
@@ -395,6 +404,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 	#hooksByName = new Map<string, Map<string, readonly HookEntry[]>>();
 	/** every attribute name an attribute hook watches, on any element */
 	#hookedNames: Set<string> | null = null;
+	/** the sets of names a hook watches (AttributeHook) */
+	#hookedSets: ReadonlySet<string>[] = [];
 	/**
 	 * Whether an attribute hook watches `attribute` on some element: the
 	 * insertion pass asks before it looks at an element's hooks at all, since
@@ -404,10 +415,18 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 	hooksAttribute(attribute: string): boolean {
 		if (!this.#hookedNames) {
 			this.#hookedNames = new Set();
+			this.#hookedSets = [];
 			for (const entry of this.hooks)
-				if (isAttributeHook(entry.hook)) this.#hookedNames.add(entry.hook[1]);
+				if (isAttributeHook(entry.hook)) {
+					const watched = entry.hook[1];
+					if (typeof watched === 'string') this.#hookedNames.add(watched);
+					else this.#hookedSets.push(watched);
+				}
 		}
-		return this.#hookedNames.has(attribute);
+		return (
+			this.#hookedNames.has(attribute) ||
+			this.#hookedSets.some((names) => names.has(attribute))
+		);
 	}
 	/** the attribute hooks of `attribute` on `element` */
 	private attributeHooks(
@@ -434,7 +453,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(entry) =>
 					isAttributeHook(entry.hook) &&
 					(entry.hook[0] === '*' || entry.hook[0] === name) &&
-					entry.hook[1] === attribute,
+					(typeof entry.hook[1] === 'string'
+						? entry.hook[1] === attribute
+						: entry.hook[1].has(attribute)),
 			);
 			byAttribute.set(attribute, hooks);
 		}
@@ -442,7 +463,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 	}
 	updateAttributeHooks(element: CustomElement, attribute: string) {
 		for (const entry of this.attributeHooks(element, attribute))
-			entry.callback(element);
+			entry.callback(element, attribute);
 	}
 	/**
 	 * The property hooks by property (a read asks every constructor's), and
@@ -481,7 +502,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			);
 			byProperty.set(property, entries);
 		}
-		for (const entry of entries) entry.callback(element);
+		for (const entry of entries)
+			entry.callback(element, propertyAttribute(property));
 	}
 	apply() {
 		// all hooks are in, now apply them

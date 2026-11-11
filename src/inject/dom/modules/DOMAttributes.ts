@@ -978,7 +978,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 		// inline event handler attributes are scripts too: `onclick="top.x()"`
 		// would reach the real top. Every `on*` the platform knows about, from
-		// the prototypes that carry them; a hook per name, like the URL hooks
+		// the prototypes that carry them; one hook watches them all
 		const handlerNames = new Set<string>();
 		const g = this.client.global;
 		for (const owner of [
@@ -992,31 +992,30 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		])
 			for (const name of Object.getOwnPropertyNames(owner))
 				if (/^on[a-z]+$/.test(name)) handlerNames.add(name);
-		for (const name of handlerNames)
-			domHooksModule.useAttributes(
-				(element) => {
-					element.restoreAttributesOG(name);
-					if (element.hasAttribute(name)) {
-						const source = element.getAttribute(name)!;
-						element.setAttributeOG(name, source);
-						// the browser compiles the code as a function's body: marked,
-						// so the function reads back with the page's code in it
-						const key = sourceKey(source);
-						keepSource(key, source);
-						element.setAttribute(
-							name,
-							handlerMark(key) +
-								modifyJS(
-									source,
-									this.client.baseURL,
-									this.client.config,
-									'generic',
-								),
-						);
-					}
-				},
-				[['*', name]],
-			);
+		domHooksModule.useAttributes(
+			(element, name) => {
+				element.restoreAttributesOG(name);
+				if (element.hasAttribute(name)) {
+					const source = element.getAttribute(name)!;
+					element.setAttributeOG(name, source);
+					// the browser compiles the code as a function's body: marked,
+					// so the function reads back with the page's code in it
+					const key = sourceKey(source);
+					keepSource(key, source);
+					element.setAttribute(
+						name,
+						handlerMark(key) +
+							modifyJS(
+								source,
+								this.client.baseURL,
+								this.client.config,
+								'generic',
+							),
+					);
+				}
+			},
+			[['*', handlerNames]],
+		);
 
 		// SVG references (sprites, images, filters) by href or legacy
 		// xlink:href. SVG node names keep their case, and the fragment stays.
