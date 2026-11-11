@@ -4,6 +4,7 @@ import {
 	ABORT_HEADER,
 	CREDENTIALS_HEADER,
 	OPAQUE_HEADER,
+	PREFLIGHT_HEADER,
 } from '../../../transport/messages';
 import Module from '../../Module';
 import {
@@ -13,7 +14,8 @@ import {
 } from '../../modules/Fetch';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
-import { unrouteURL } from '../../modules/Unroute';
+import UnrouteModule, { unrouteURL } from '../../modules/Unroute';
+import { trackUploadListeners } from '../../uploadListeners';
 import {
 	decodeText,
 	finalMime,
@@ -53,6 +55,11 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 		}
 
 		class XMLHttpRequestUploadProxy extends XMLHttpRequestEventTargetProxy {}
+
+		// an upload object with listeners sets the CORS-preflight flag
+		const uploads = trackUploadListeners(that.client.global, proxyModule, () =>
+			that.client.getModule(UnrouteModule)?.noteReportSite(),
+		);
 
 		const decoder = new TextDecoder('utf-8');
 
@@ -195,7 +202,11 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			#withCredentials = false;
 			#sent = false;
 			#bodySize = 0;
-			#upload = new XMLHttpRequestUploadProxy(real);
+			#upload = (() => {
+				const upload = new XMLHttpRequestUploadProxy(real);
+				uploads.track(upload);
+				return upload;
+			})();
 			get upload() {
 				return this.#upload;
 			}
@@ -500,6 +511,15 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					headers[CREDENTIALS_HEADER] = this.#urlCredentials;
 				// a request of an opaque origin goes as one (OPAQUE_HEADER)
 				if (that.client.opaqueRequests) headers[OPAQUE_HEADER] = '1';
+				// a body with upload listeners: the CORS-preflight flag (never a
+				// synchronous request's)
+				if (
+					this.#async &&
+					init.body !== undefined &&
+					init.body !== null &&
+					uploads.listening(this.#upload)
+				)
+					headers[PREFLIGHT_HEADER] = '1';
 				if (this.#async) {
 					const generation = this.#generation;
 					init.signal = this.#abort.signal;

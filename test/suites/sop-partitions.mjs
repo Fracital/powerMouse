@@ -142,6 +142,12 @@ for (const [mode, base] of [
 			want.cacheLoads?.image,
 			got.cacheLoads?.image,
 		);
+		check(
+			mode,
+			`${key}: preflight cache`,
+			want.cacheLoads?.preflight,
+			got.cacheLoads?.preflight,
+		);
 		for (const kind of ['dedicated', 'blob', 'shared'])
 			check(
 				mode,

@@ -64,6 +64,7 @@ import {
 	LOAD_HEADER,
 	OPAQUE_HEADER,
 	OPAQUE_MARKER,
+	PREFLIGHT_HEADER,
 	RESPONSE_TYPE_HEADER,
 	TAO_MARKER,
 	TIMING_ONLY_MARKER,
@@ -687,6 +688,9 @@ function genericForward(
 			serverRequest.mode !== 'navigate' &&
 			serverRequest.headers.has(OPAQUE_HEADER);
 		requestHeaders.delete(OPAQUE_HEADER);
+		// an XMLHttpRequest with upload listeners (the CORS-preflight flag)
+		const forcePreflight = serverRequest.headers.has(PREFLIGHT_HEADER);
+		requestHeaders.delete(PREFLIGHT_HEADER);
 		// an XMLHttpRequest's credentials, for a Basic challenge (httpAuth)
 		const urlCredentials = serverRequest.headers.get(CREDENTIALS_HEADER);
 		requestHeaders.delete(CREDENTIALS_HEADER);
@@ -1181,6 +1185,15 @@ function genericForward(
 			policyOrigin !== null &&
 			(policyOrigin === 'null' || policyOrigin !== url.url.origin);
 		const corsChecked = crossOrigin && policyMode === 'cors';
+		// the site of the frame or worker that makes the request (a
+		// navigation's is its destination's), null for an opaque or unknown
+		// one: with the top-level site, the network partition (the HTTP and
+		// preflight caches)
+		const requestFrameSite = navigation
+			? siteOf(url.url, publicSuffix)
+			: client && client.origin !== 'null' && !opaque
+				? siteOf(client, publicSuffix)
+				: null;
 		// some hop of this request's chain, this one or an earlier, was of
 		// another origin: a no-cors answer is opaque (A to B to A included)
 		const chainCrossed = crossOrigin || !!previousHop?.crossed;
@@ -1384,14 +1397,17 @@ function genericForward(
 		// both, and is kept for its max-age
 		if (corsChecked && !fromWorker) {
 			const unsafe = unsafeHeaderNames(serverRequest.headers, notPagesHeader);
+			// kept per network partition, as Chrome keeps its preflight cache
+			const preflightPartition = `${topSite ?? ''} ${requestFrameSite ?? ''}`;
 			if (
-				needsPreflight(serverRequest.method, unsafe) &&
+				(forcePreflight || needsPreflight(serverRequest.method, unsafe)) &&
 				!preflightCached(
 					corsOrigin!,
 					url.toString(),
 					credentialsIncluded,
 					serverRequest.method,
 					unsafe,
+					preflightPartition,
 				)
 			) {
 				const preflightHeaders = new Headers({
@@ -1437,6 +1453,7 @@ function genericForward(
 						credentialsIncluded,
 						serverRequest.method,
 						unsafe,
+						preflightPartition,
 					);
 				} catch (error) {
 					if (error === ABORTED) {
@@ -1464,11 +1481,7 @@ function genericForward(
 		// site and the site of the frame or worker that asks (a navigation's
 		// is its destination's); a request whose client has no site of its
 		// own (opaque, unknown) is not cached at all.
-		const frameSite = navigation
-			? siteOf(url.url, publicSuffix)
-			: client && client.origin !== 'null' && !opaque
-				? siteOf(client, publicSuffix)
-				: null;
+		const frameSite = requestFrameSite;
 		const cacheKey =
 			frameSite === null
 				? null
@@ -3088,6 +3101,7 @@ const OWN_HEADERS = [
 	LOAD_HEADER,
 	OPAQUE_HEADER,
 	CREDENTIALS_HEADER,
+	PREFLIGHT_HEADER,
 ];
 
 /**

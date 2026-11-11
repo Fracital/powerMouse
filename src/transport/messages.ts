@@ -124,6 +124,12 @@ export const OPAQUE_HEADER = 'x-stomp-opaque';
  */
 export const CREDENTIALS_HEADER = 'x-stomp-credentials';
 /**
+ * set by the inject on an XMLHttpRequest that has upload listeners: the
+ * CORS-preflight flag, which makes a cross-origin request go after a
+ * preflight whatever its method and headers (dropped by the worker)
+ */
+export const PREFLIGHT_HEADER = 'x-stomp-preflight';
+/**
  * SW -> the client that made a request (or, for a navigation, its parent):
  * the console notices Chrome prints for mixed content (src/mixedContent.ts),
  * which the inject writes in Chrome's words

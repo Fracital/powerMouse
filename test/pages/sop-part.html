@@ -134,7 +134,17 @@
 				'max-age=3600',
 			)}`;
 			if (kind === 'fetch') await (await fetch(url)).arrayBuffer();
-			else
+			else if (kind === 'preflight') {
+				// a preflight site A lets be kept for ten minutes: how many
+				// reached it (the preflight cache is per network partition too)
+				const asked = `${site}/sop/r?k=${k}&acao=*&pacah=x-custom&pmaxage=600`;
+				await (
+					await fetch(asked, { headers: { 'x-custom': '1' } })
+				).arrayBuffer();
+				return (await (await fetch(`${site}/sop/log?k=${k}`)).json()).filter(
+					(entry) => entry.method === 'OPTIONS',
+				).length;
+			} else
 				await new Promise((resolve) => {
 					const image = new Image();
 					image.onload = image.onerror = resolve;
@@ -215,6 +225,7 @@
 			out.cacheLoads = {
 				image: await cachedLoad('image'),
 				fetch: await cachedLoad('fetch'),
+				preflight: await cachedLoad('preflight'),
 			};
 			await new Promise((resolve) => setTimeout(resolve, 1000));
 			clearInterval(say);

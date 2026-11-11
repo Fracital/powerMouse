@@ -385,6 +385,21 @@ export default class UnrouteModule extends Module<Client> {
 			}
 		return this.#pageSites.get(error);
 	}
+	/**
+	 * Where the page called a hooked method that the browser may answer with
+	 * a report (a deprecation's names the script and position of the caller,
+	 * which the browser takes to be the hook): the report shows these instead
+	 * (applyReports), oldest first.
+	 */
+	#reportSites: ErrorLocation[] = [];
+	/** the first of the page's frames on the stack now (applyErrorStacks) */
+	#callerLocation?: () => ErrorLocation | undefined;
+	/** note the page's call site, from inside a hook (#reportSites) */
+	noteReportSite() {
+		if (this.#reportSites.length >= 16) return;
+		const site = this.#callerLocation?.();
+		if (site) this.#reportSites.push(site);
+	}
 	/** a URL of the inject's own (a bundle), which no page URL stands for */
 	#isInternal(name: unknown): boolean {
 		return (
@@ -635,24 +650,72 @@ export default class UnrouteModule extends Module<Client> {
 				? (unrouteURL(this.client, value) ?? value)
 				: value;
 		const unrouteJSON = (json: Record<string, unknown>) => {
+			const site = Object.hasOwn(json, 'sourceFile')
+				? siteFor(json.sourceFile)
+				: undefined;
+			if (site) {
+				json.sourceFile = site.filename;
+				if (Object.hasOwn(json, 'lineNumber')) json.lineNumber = site.lineno;
+				if (Object.hasOwn(json, 'columnNumber')) json.columnNumber = site.colno;
+			}
 			for (const key of REPORT_URL_KEYS)
 				if (Object.hasOwn(json, key) && typeof json[key] === 'string')
 					json[key] = unroute(json[key]);
 		};
+		// A report that names one of the inject's bundles as its source was
+		// made inside a hook the page called (a deprecated `unload` listener
+		// added through the hooked addEventListener): the browser takes the
+		// hook for the caller. It shows the page's call site, which the hook
+		// noted (noteReportSite; a deprecation is reported once a document,
+		// so the first one noted is the one reported).
+		const siteFor = (sourceFile: unknown) =>
+			typeof sourceFile === 'string' &&
+			unrouteURL(this.client, sourceFile) === null
+				? this.#reportSites[0]
+				: undefined;
 		const hooked = new WeakSet<object>();
 		const hook = (prototype: any) => {
 			if (!prototype || hooked.has(prototype)) return;
 			hooked.add(prototype);
+			const nativeSource = Reflect.getOwnPropertyDescriptor(
+				prototype,
+				'sourceFile',
+			)?.get;
 			for (const key of REPORT_URL_KEYS) {
 				const descriptor = Reflect.getOwnPropertyDescriptor(prototype, key);
 				if (!descriptor?.get) continue;
 				Reflect.defineProperty(prototype, key, {
 					...descriptor,
-					get: proxyModule.wrapFunction(descriptor.get, (target, that, args) =>
-						unroute(Reflect.apply(target, that, args)),
+					get: proxyModule.wrapFunction(
+						descriptor.get,
+						(target, that, args) => {
+							const value = Reflect.apply(target, that, args);
+							return key === 'sourceFile'
+								? (siteFor(value)?.filename ?? unroute(value))
+								: unroute(value);
+						},
 					),
 				});
 			}
+			if (nativeSource)
+				for (const [key, part] of [
+					['lineNumber', 'lineno'],
+					['columnNumber', 'colno'],
+				] as const) {
+					const descriptor = Reflect.getOwnPropertyDescriptor(prototype, key);
+					if (!descriptor?.get) continue;
+					Reflect.defineProperty(prototype, key, {
+						...descriptor,
+						get: proxyModule.wrapFunction(
+							descriptor.get,
+							(target, that, args) => {
+								const value = Reflect.apply(target, that, args);
+								const site = siteFor(Reflect.apply(nativeSource, that, []));
+								return site ? site[part] : value;
+							},
+						),
+					});
+				}
 			if (Object.hasOwn(prototype, 'toJSON'))
 				prototype.toJSON = proxyModule.wrapFunction(
 					prototype.toJSON,
@@ -914,6 +977,22 @@ export default class UnrouteModule extends Module<Client> {
 			const holder = pageHolder();
 			return holder === null ? undefined : Reflect.get(holder, KEY, receiver);
 		};
+		// The page's frame that called into the inject, for a hook that has to
+		// say where it was called from (noteReportSite): the stack of an error
+		// made here, formatted without the page's formatter.
+		let locating = false;
+		this.#callerLocation = () => {
+			const error = new ErrorCtor();
+			locating = true;
+			try {
+				Reflect.get(error, 'stack');
+			} catch (failure) {
+				// no stack to read
+			} finally {
+				locating = false;
+			}
+			return this.#pageSites.get(error);
+		};
 		const prepare: PrepareStackTrace = (error, sites) => {
 			// V8 passes the error and its call sites. A page that calls the
 			// formatter it read, to hand off to the one installed before its own,
@@ -966,7 +1045,8 @@ export default class UnrouteModule extends Module<Client> {
 					? skippedFrames.get(error)
 					: undefined;
 			if (skip) shown = shown.slice(skip);
-			const own = fromV8 ? pagePrepare(pageError) : undefined;
+			// (a stack the inject formats for itself is not the page's to format)
+			const own = fromV8 && !locating ? pagePrepare(pageError) : undefined;
 			if (typeof own === 'function') {
 				const result = Reflect.apply(own, pageError, [
 					error,

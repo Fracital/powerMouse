@@ -1,6 +1,10 @@
 import { routeXHR } from '../../../routeURL';
 import StompURL from '../../../StompURL';
-import { ABORT_HEADER, CREDENTIALS_HEADER } from '../../../transport/messages';
+import {
+	ABORT_HEADER,
+	CREDENTIALS_HEADER,
+	PREFLIGHT_HEADER,
+} from '../../../transport/messages';
 import Module from '../../Module';
 import {
 	adoptTypeMark,
@@ -9,6 +13,7 @@ import {
 } from '../../modules/Fetch';
 import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
+import { trackUploadListeners } from '../../uploadListeners';
 import {
 	decodeText,
 	finalMime,
@@ -39,6 +44,9 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 		}
 
 		class XMLHttpRequestUploadProxy extends XMLHttpRequestEventTargetProxy {}
+
+		// an upload object with listeners sets the CORS-preflight flag
+		const uploads = trackUploadListeners(that.client.global, proxyModule);
 
 		const decoder = new TextDecoder('utf-8');
 		// the realm's JSON.parse, before page code can replace it: a json
@@ -165,7 +173,11 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			#withCredentials = false;
 			#sent = false;
 			#bodySize = 0;
-			#upload = new XMLHttpRequestUploadProxy(real);
+			#upload = (() => {
+				const upload = new XMLHttpRequestUploadProxy(real);
+				uploads.track(upload);
+				return upload;
+			})();
 			get upload() {
 				return this.#upload;
 			}
@@ -433,6 +445,15 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				// with the page's markers above, so added back here)
 				if (this.#urlCredentials !== null)
 					headers[CREDENTIALS_HEADER] = this.#urlCredentials;
+				// a body with upload listeners: the CORS-preflight flag (never a
+				// synchronous request's)
+				if (
+					this.#async &&
+					init.body !== undefined &&
+					init.body !== null &&
+					uploads.listening(this.#upload)
+				)
+					headers[PREFLIGHT_HEADER] = '1';
 				if (this.#async) {
 					const generation = this.#generation;
 					init.signal = this.#abort.signal;

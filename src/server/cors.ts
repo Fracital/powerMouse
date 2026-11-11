@@ -157,8 +157,16 @@ const PREFLIGHT_KEPT = 1024;
 /** what earlier preflights allowed, by origin, URL and credentials */
 const preflights = new Map<string, PreflightEntry>();
 
-const preflightKey = (origin: string, url: string, credentials: boolean) =>
-	`${origin}\n${credentials ? 1 : 0}\n${url}`;
+/**
+ * a preflight cache entry's key: Chrome keys the cache by the network
+ * partition too (`partition`: the request's top-level and frame sites)
+ */
+const preflightKey = (
+	origin: string,
+	url: string,
+	credentials: boolean,
+	partition: string,
+) => `${partition}\n${origin}\n${credentials ? 1 : 0}\n${url}`;
 
 /** whether an earlier preflight still covers this request */
 export function preflightCached(
@@ -167,8 +175,9 @@ export function preflightCached(
 	credentials: boolean,
 	method: string,
 	unsafe: string[],
+	partition = '',
 ): boolean {
-	const key = preflightKey(origin, url, credentials);
+	const key = preflightKey(origin, url, credentials, partition);
 	const entry = preflights.get(key);
 	if (!entry) return false;
 	if (entry.expires <= Date.now()) {
@@ -199,6 +208,7 @@ export function preflightAllows(
 	credentials: boolean,
 	method: string,
 	unsafe: string[],
+	partition = '',
 ): boolean {
 	if (response.status < 200 || response.status > 299) return false;
 	if (!corsCheck(response.headers, origin, credentials)) return false;
@@ -229,7 +239,7 @@ export function preflightAllows(
 	if (seconds > 0) {
 		if (preflights.size >= PREFLIGHT_KEPT)
 			preflights.delete(preflights.keys().next().value!);
-		const key = preflightKey(origin, url, credentials);
+		const key = preflightKey(origin, url, credentials, partition);
 		const entry = preflights.get(key);
 		preflights.set(key, {
 			expires: Date.now() + seconds * 1000,
