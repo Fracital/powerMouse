@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>sop-coi</title>
+<p>A page that opts into cross-origin isolation (COOP and COEP).</p>
+<script>
+	// what cross-origin isolation gives a page (sop-escapes): the flag,
+	// SharedArrayBuffer, and timers precise below Chrome's 100 us
+	(async () => {
+		let posted;
+		try {
+			postMessage(new SharedArrayBuffer(8), '*');
+			posted = 'ok';
+		} catch (error) {
+			posted = `${error.name}: ${error.message}`;
+		}
+		let step = Infinity;
+		let last = performance.now();
+		for (let i = 0; i < 200000 && step > 0.001; i++) {
+			const now = performance.now();
+			if (now > last) {
+				step = Math.min(step, now - last);
+				last = now;
+			}
+		}
+		window.__coi = {
+			crossOriginIsolated: self.crossOriginIsolated,
+			sharedArrayBuffer: typeof SharedArrayBuffer,
+			posted,
+			preciseTimer: step < 0.05,
+		};
+	})();
+</script>

@@ -805,9 +805,7 @@
 		if (!entry) return 'no entry';
 		const json = entry.toJSON();
 		return {
-			// a response the service worker answers has no transfer size or
-			// protocol of its own, natively it has: whether it is restricted
-			// shows in the rest
+			// (the transfer size and protocol have cases of their own)
 			encodedBodySize: entry.encodedBodySize > 0,
 			decodedBodySize: entry.decodedBodySize > 0,
 			requestStart: entry.requestStart > 0,
@@ -816,8 +814,10 @@
 			domainLookupStart: entry.domainLookupStart > 0,
 			workerStart: entry.workerStart,
 			responseStatus: entry.responseStatus,
+			initiatorType: entry.initiatorType,
 			serverTiming: entry.serverTiming.map((metric) => metric.name),
 			json: {
+				initiatorType: json.initiatorType,
 				requestStart: json.requestStart > 0,
 				encodedBodySize: json.encodedBodySize > 0,
 				workerStart: json.workerStart,
@@ -826,6 +826,33 @@
 		};
 	};
 	add('timing/its own origin', () => timing(A, {}));
+	const wire = async (base, params) => {
+		const { url } = r(base, { type: 'png', ...params });
+		await image(url);
+		await sleep(100);
+		const entry = performance.getEntriesByName(url)[0];
+		if (!entry) return 'no entry';
+		return {
+			transferSize: entry.transferSize - entry.encodedBodySize,
+			encodedBodySize: entry.encodedBodySize,
+			decodedBodySize: entry.decodedBodySize,
+			nextHopProtocol: entry.nextHopProtocol,
+			deliveryType: entry.deliveryType,
+			json: [
+				entry.toJSON().transferSize - entry.encodedBodySize,
+				entry.toJSON().nextHopProtocol,
+			],
+		};
+	};
+	add('timing/the transfer size and protocol of its own resource', () =>
+		wire(A, {}),
+	);
+	add('timing/the transfer size and protocol of another site with TAO', () =>
+		wire(B, { tao: '*' }),
+	);
+	add('timing/the transfer size and protocol of another site without TAO', () =>
+		wire(B, {}),
+	);
 	add('timing/another site without Timing-Allow-Origin', () => timing(B, {}));
 	add('timing/another site with Timing-Allow-Origin *', () =>
 		timing(B, { tao: '*' }),
@@ -845,6 +872,938 @@
 		timing(B, { acao: '*' }),
 	);
 	add('isolation/crossOriginIsolated', () => self.crossOriginIsolated);
+	// --- the rest of the Left list (docs/same-origin-policy.md) -----------
+	add('canvas/an image of its own origin redirected to another', () =>
+		drawn(r(A, { redirect: r(B, { type: 'png' }).url }).url),
+	);
+	add('canvas/an image of another origin redirected back to its own', () =>
+		drawn(r(B, { redirect: r(A, { type: 'png' }).url }).url),
+	);
+	add('canvas/an image redirected to another origin and back', () =>
+		drawn(
+			r(A, { redirect: r(B, { redirect: r(A, { type: 'png' }).url }).url }).url,
+		),
+	);
+	add('canvas/a redirected image in a written about:blank frame', async () => {
+		const frame = document.createElement('iframe');
+		document.body.append(frame);
+		const written = frame.contentDocument;
+		written.open();
+		written.write('<img>');
+		written.close();
+		const element = written.querySelector('img');
+		await new Promise((resolve) => {
+			element.onload = element.onerror = resolve;
+			element.src = r(A, { redirect: r(B, { type: 'png' }).url }).url;
+		});
+		const target = canvas();
+		target.getContext('2d').drawImage(element, 0, 0);
+		frame.remove();
+		return readback(target);
+	});
+	// drawn while it loads (nothing is drawn yet), and again once it has
+	add('canvas/a redirected image drawn before and after it loads', async () => {
+		const element = new Image();
+		const loaded = new Promise((resolve) => {
+			element.onload = () => resolve(true);
+			element.onerror = () => resolve(false);
+		});
+		element.src = r(A, { redirect: r(B, { type: 'png' }).url }).url;
+		const target = canvas();
+		const context = target.getContext('2d');
+		context.drawImage(element, 0, 0);
+		const before = readback(target);
+		if (!(await loaded)) return 'image failed';
+		context.drawImage(element, 0, 0);
+		return { before, after: readback(target) };
+	});
+	// what the page does to its resource timing buffer says nothing about
+	// where an image came from
+	add(
+		'canvas/a redirected image, the timing buffer cleared or full',
+		async () => {
+			const redirected = () =>
+				r(A, { redirect: r(B, { type: 'png' }).url }).url;
+			const result = {};
+			const first = await image(redirected());
+			if (!first) return 'image failed';
+			performance.clearResourceTimings();
+			let target = canvas();
+			target.getContext('2d').drawImage(first, 0, 0);
+			result.cleared = readback(target);
+			performance.setResourceTimingBufferSize(0);
+			const second = await image(redirected());
+			performance.setResourceTimingBufferSize(250);
+			if (!second) return 'image failed';
+			target = canvas();
+			target.getContext('2d').drawImage(second, 0, 0);
+			result.full = readback(target);
+			const getEntriesByName = performance.getEntriesByName;
+			performance.getEntriesByName = () => [];
+			try {
+				const third = await image(redirected());
+				if (!third) return 'image failed';
+				target = canvas();
+				target.getContext('2d').drawImage(third, 0, 0);
+				result.replaced = readback(target);
+			} finally {
+				performance.getEntriesByName = getEntriesByName;
+			}
+			return result;
+		},
+	);
+	// a frame of this origin draws another site's image into its own canvas,
+	// with its own realm's methods; the page then draws that canvas
+	const frameCanvas = async (setup) => {
+		const element = await image(r(B, { type: 'png' }).url);
+		const frame = document.createElement('iframe');
+		const loaded = new Promise((resolve) => (frame.onload = resolve));
+		setup(frame);
+		document.body.append(frame);
+		await loaded;
+		const child = frame.contentDocument.createElement('canvas');
+		child.width = child.height = 4;
+		child.getContext('2d').drawImage(element, 0, 0);
+		const result = { frame: readback(child) };
+		const target = canvas();
+		target.getContext('2d').drawImage(child, 0, 0);
+		result.page = readback(target);
+		frame.remove();
+		return result;
+	};
+	add('canvas/a blank frame tainted its canvas, the page draws it', () =>
+		frameCanvas(() => {}),
+	);
+	add('canvas/a srcdoc frame tainted its canvas, the page draws it', () =>
+		frameCanvas((frame) => {
+			frame.srcdoc = '<p>frame</p>';
+		}),
+	);
+	// a window the page opened, with realms and methods crossed: the popup's
+	// canvas drawn with the popup's methods and read with the page's, and the
+	// page's canvas drawn with the popup's methods
+	add('canvas/a popup tainted its canvas, the opener draws it', async () => {
+		const element = await image(r(B, { type: 'png' }).url);
+		const popup = window.open('about:blank');
+		if (!popup) return 'no popup';
+		try {
+			const child = popup.document.createElement('canvas');
+			child.width = child.height = 4;
+			child.getContext('2d').drawImage(element, 0, 0);
+			const result = { popup: readback(child) };
+			const target = canvas();
+			target.getContext('2d').drawImage(child, 0, 0);
+			result.page = readback(target);
+			const crossed = canvas();
+			popup.CanvasRenderingContext2D.prototype.drawImage.call(
+				crossed.getContext('2d'),
+				element,
+				0,
+				0,
+			);
+			result.crossed = readback(crossed);
+			const bitmap = await popup.createImageBitmap(element);
+			const fromBitmap = canvas();
+			fromBitmap.getContext('2d').drawImage(bitmap, 0, 0);
+			result.bitmap = readback(fromBitmap);
+			return result;
+		} finally {
+			popup.close();
+		}
+	});
+	add('canvas/VideoFrame of a cross-origin image', async () => {
+		if (typeof VideoFrame !== 'function') return 'no VideoFrame';
+		const element = await image(r(B, { type: 'png' }).url);
+		try {
+			new VideoFrame(element, { timestamp: 0 }).close();
+			return 'ok';
+		} catch (error) {
+			return failed(error);
+		}
+	});
+	add('canvas/a tainted ImageBitmap drawn in a worker', async () => {
+		const element = await image(r(B, { type: 'png' }).url);
+		const bitmap = await createImageBitmap(element);
+		const source = `onmessage = async (event) => {
+			const canvas = new OffscreenCanvas(4, 4);
+			canvas.getContext('2d').drawImage(event.data, 0, 0);
+			try {
+				await canvas.convertToBlob();
+				postMessage('ok');
+			} catch (error) {
+				postMessage(error.name + ': ' + error.message);
+			}
+		};`;
+		const worker = new Worker(
+			URL.createObjectURL(new Blob([source], { type: 'text/javascript' })),
+		);
+		const answered = new Promise(
+			(resolve) => (worker.onmessage = (e) => resolve(e.data)),
+		);
+		worker.postMessage(bitmap, [bitmap]);
+		const answer = await Promise.race([
+			answered,
+			sleep(4000).then(() => 'timeout'),
+		]);
+		worker.terminate();
+		return answer;
+	});
+	add('canvas/a tainted ImageBitmap cloned or transferred', async () => {
+		const element = await image(r(B, { type: 'png' }).url);
+		const result = {};
+		const attempt = async (name, send) => {
+			const bitmap = await createImageBitmap(element);
+			try {
+				await send(bitmap);
+				result[name] = 'ok';
+			} catch (error) {
+				result[name] = failed(error);
+			}
+		};
+		const worker = new Worker(
+			URL.createObjectURL(
+				new Blob(['onmessage = () => {};'], { type: 'text/javascript' }),
+			),
+		);
+		await attempt('worker', (bitmap) => worker.postMessage({ list: [bitmap] }));
+		await attempt('worker transfer', (bitmap) =>
+			worker.postMessage(1, { transfer: [bitmap] }),
+		);
+		worker.terminate();
+		await attempt('structuredClone', (bitmap) =>
+			structuredClone(new Map([[1, bitmap]])),
+		);
+		await attempt('window', (bitmap) => window.postMessage(bitmap, '*'));
+		await attempt('window, another origin named', (bitmap) =>
+			window.postMessage(bitmap, B),
+		);
+		await attempt('port', (bitmap) =>
+			new MessageChannel().port1.postMessage(new Set([bitmap])),
+		);
+		await attempt('channel', (bitmap) => {
+			const channel = new BroadcastChannel(`sop-${K}`);
+			try {
+				channel.postMessage(bitmap);
+			} finally {
+				channel.close();
+			}
+		});
+		await attempt('history', (bitmap) => history.replaceState({ bitmap }, ''));
+		const clean = await createImageBitmap(canvas());
+		result.clean = structuredClone(clean) ? 'ok' : 'none';
+		return result;
+	});
+	add('fetch/no-cors redirect to another origin and back', async () => {
+		const back = r(A, {});
+		const away = r(B, { redirect: back.url });
+		const { url } = r(A, { redirect: away.url });
+		const result = await tryFetch(url, { mode: 'no-cors' });
+		return {
+			type: result.type,
+			status: result.status,
+			body: result.body,
+			url: result.url,
+		};
+	});
+	add('timing/an XMLHttpRequest of another site with ACAO and TAO', () =>
+		timing(
+			B,
+			{ acao: '*', tao: '*' },
+			(url) =>
+				new Promise((resolve) => {
+					const request = new XMLHttpRequest();
+					request.open('GET', url);
+					request.onloadend = resolve;
+					request.send();
+				}),
+		),
+	);
+	// the proxy's own Server-Timing metrics are never the page's, and a
+	// site's reach it only as the protocol exposes them
+	add('timing/the Server-Timing header as the page reads it', async () => {
+		const fetched = async (base, params) => {
+			try {
+				const response = await fetch(r(base, { st: '1', ...params }).url);
+				return [
+					response.headers.get('server-timing'),
+					response.clone().headers.get('server-timing'),
+					[...response.headers.keys()].includes('server-timing'),
+				];
+			} catch (error) {
+				return failed(error);
+			}
+		};
+		const requested = (base, params) =>
+			new Promise((resolve) => {
+				const request = new XMLHttpRequest();
+				request.open('GET', r(base, { st: '1', ...params }).url);
+				request.onloadend = () =>
+					resolve([
+						request.status,
+						request.getResponseHeader('server-timing'),
+						/server-timing/i.test(request.getAllResponseHeaders()),
+					]);
+				request.send();
+			});
+		return {
+			own: await fetched(A, {}),
+			ownWithout: await fetched(A, { st: '' }),
+			hidden: await fetched(B, { acao: '*', tao: '*' }),
+			exposed: await fetched(B, {
+				acao: '*',
+				tao: '*',
+				aceh: 'server-timing',
+			}),
+			exposedWithoutTiming: await fetched(B, {
+				acao: '*',
+				aceh: 'server-timing',
+			}),
+			xhrOwn: await requested(A, {}),
+			xhrOwnWithout: await requested(A, { st: '' }),
+			xhrHidden: await requested(B, { acao: '*', tao: '*' }),
+			xhrExposed: await requested(B, {
+				acao: '*',
+				tao: '*',
+				aceh: 'server-timing',
+			}),
+		};
+	});
+	// an upload listener makes a cross-origin request go after a preflight
+	// (the CORS-preflight flag), whatever its method and headers
+	const upload = (listen) => {
+		const { url, key } = r(B, { acao: '*' });
+		return new Promise((resolve) => {
+			const request = new XMLHttpRequest();
+			request.open('POST', url);
+			if (listen) request.upload.onprogress = () => {};
+			request.onloadend = async () =>
+				resolve({ status: request.status, reached: await reached(key) });
+			request.send('body');
+		});
+	};
+	add('xhr/an upload listener before send', () => upload(true));
+	add('xhr/no upload listener', () => upload(false));
+	add('cache/an opaque response read back from the Cache API', async () => {
+		const { url } = r(B, {});
+		const response = await fetch(url, { mode: 'no-cors' });
+		const cache = await caches.open(`sop-${K}`);
+		await cache.put(url, response);
+		const kept = await cache.match(url);
+		await caches.delete(`sop-${K}`);
+		return {
+			type: kept?.type,
+			status: kept?.status,
+			body: kept ? (await kept.arrayBuffer()).byteLength : null,
+			headers: kept ? [...kept.headers.keys()] : null,
+		};
+	});
+	add('isolation/SharedArrayBuffer without COOP and COEP', () => {
+		let memory;
+		try {
+			memory = new WebAssembly.Memory({
+				initial: 1,
+				maximum: 1,
+				shared: true,
+			}).buffer.constructor.name;
+		} catch (error) {
+			memory = failed(error);
+		}
+		let posted;
+		try {
+			postMessage(new SharedArrayBuffer(8), '*');
+			posted = 'ok';
+		} catch (error) {
+			posted = failed(error);
+		}
+		return {
+			type: typeof SharedArrayBuffer,
+			memory,
+			posted,
+		};
+	});
+
+	// --- stylesheets ------------------------------------------------------
+	const CSS = '.sop-rule { color: rgb(1, 2, 3) }';
+	const rulesOf = (styleSheet) => {
+		const result = {};
+		const attempt = (name, run) => {
+			try {
+				result[name] = run();
+			} catch (error) {
+				result[name] = failed(error);
+			}
+		};
+		attempt('cssRules', () => styleSheet.cssRules.length);
+		attempt('rules', () => styleSheet.rules.length);
+		attempt('insertRule', () =>
+			styleSheet.insertRule('.sop-x { color: blue }', 0),
+		);
+		attempt('deleteRule', () => styleSheet.deleteRule(0));
+		attempt('addRule', () => styleSheet.addRule('.sop-y', 'color: blue'));
+		attempt('removeRule', () => styleSheet.removeRule(0));
+		return result;
+	};
+	const sheetCase = (href, crossOrigin) =>
+		new Promise((resolve) => {
+			const link = document.createElement('link');
+			link.rel = 'stylesheet';
+			if (crossOrigin !== undefined) link.crossOrigin = crossOrigin;
+			link.onload = () => {
+				const result = rulesOf(link.sheet);
+				link.remove();
+				resolve(result);
+			};
+			link.onerror = () => {
+				link.remove();
+				resolve('sheet failed');
+			};
+			link.href = href;
+			document.head.append(link);
+		});
+	add("css/the rules of its own origin's stylesheet", () =>
+		sheetCase(r(A, { type: 'css', css: CSS }).url),
+	);
+	add("css/the rules of another site's stylesheet", () =>
+		sheetCase(r(B, { type: 'css', css: CSS }).url),
+	);
+	add("css/the rules of another site's stylesheet, with ACAO only", () =>
+		sheetCase(r(B, { type: 'css', css: CSS, acao: '*' }).url),
+	);
+	add("css/the rules of another site's crossorigin stylesheet with ACAO", () =>
+		sheetCase(r(B, { type: 'css', css: CSS, acao: '*' }).url, 'anonymous'),
+	);
+	add('css/the rules of a stylesheet redirected to another site', () =>
+		sheetCase(r(A, { redirect: r(B, { type: 'css', css: CSS }).url }).url),
+	);
+	add('css/the rules of a stylesheet another site redirects back', () =>
+		sheetCase(r(B, { redirect: r(A, { type: 'css', css: CSS }).url }).url),
+	);
+	add(
+		'css/the rules of a stylesheet imported from another site',
+		() =>
+			new Promise((resolve) => {
+				const style = document.createElement('style');
+				style.textContent = `@import url(${JSON.stringify(
+					r(B, { type: 'css', css: CSS }).url,
+				)});`;
+				style.onload = style.onerror = () => {
+					let result;
+					try {
+						result = {
+							own: style.sheet.cssRules.length,
+							imported: rulesOf(style.sheet.cssRules[0].styleSheet),
+						};
+					} catch (error) {
+						result = failed(error);
+					}
+					style.remove();
+					resolve(result);
+				};
+				document.head.append(style);
+			}),
+	);
+
+	// a stylesheet's imports, by how the stylesheet itself was loaded
+	const imports = (base, params, crossOrigin, inner) =>
+		new Promise((resolve) => {
+			const link = document.createElement('link');
+			link.rel = 'stylesheet';
+			if (crossOrigin !== undefined) link.crossOrigin = crossOrigin;
+			link.onload = () => {
+				let result;
+				try {
+					const rule = link.sheet.cssRules[0];
+					result = rule.styleSheet ? rulesOf(rule.styleSheet) : 'no sheet';
+				} catch (error) {
+					result = failed(error);
+				}
+				link.remove();
+				resolve(result);
+			};
+			link.onerror = () => {
+				link.remove();
+				resolve('sheet failed');
+			};
+			link.href = r(base, {
+				type: 'css',
+				css: `@import url(${JSON.stringify(inner)});`,
+				...params,
+			}).url;
+			document.head.append(link);
+		});
+	add('css/the rules of the stylesheets a stylesheet imports', async () => ({
+		ownImportsOwn: await imports(
+			A,
+			{},
+			undefined,
+			r(A, { type: 'css', css: CSS }).url,
+		),
+		ownImportsOther: await imports(
+			A,
+			{},
+			undefined,
+			r(B, { type: 'css', css: CSS, acao: '*' }).url,
+		),
+		corsImportsWithACAO: await imports(
+			B,
+			{ acao: '*' },
+			'anonymous',
+			r(B, { type: 'css', css: CSS, acao: '*' }).url,
+		),
+		corsImportsWithout: await imports(
+			B,
+			{ acao: '*' },
+			'anonymous',
+			r(B, { type: 'css', css: CSS }).url,
+		),
+		corsImportsOwn: await imports(
+			B,
+			{ acao: '*' },
+			'anonymous',
+			r(A, { type: 'css', css: CSS }).url,
+		),
+		otherImportsOwn: await imports(
+			B,
+			{},
+			undefined,
+			r(A, { type: 'css', css: CSS }).url,
+		),
+	}));
+
+	// --- captured and decoded media --------------------------------------
+	add('canvas/captureStream of a tainted canvas', async () => {
+		const element = await image(r(B, { type: 'png' }).url);
+		const target = canvas();
+		const result = {};
+		const tracks = (stream) =>
+			stream.getVideoTracks().map((track) => track.readyState);
+		result.clean = tracks(target.captureStream());
+		target.getContext('2d').drawImage(element, 0, 0);
+		try {
+			result.tainted = tracks(target.captureStream());
+		} catch (error) {
+			result.tainted = failed(error);
+		}
+		return result;
+	});
+	// a stream captured while the canvas was clean: what its player shows once
+	// the canvas holds another site's image (red), and the track's state
+	const capturedThenTainted = async () => {
+		const element = await image(r(B, { type: 'png' }).url);
+		const target = canvas();
+		const context = target.getContext('2d');
+		const stream = target.captureStream();
+		const clone = stream.getVideoTracks()[0].clone();
+		const player = document.createElement('video');
+		player.muted = true;
+		player.srcObject = new MediaStream([clone]);
+		// (settles with the first frame, which the canvas has yet to give)
+		player.play().catch(() => {});
+		const shown = () => {
+			const probe = canvas();
+			const probing = probe.getContext('2d');
+			probing.drawImage(player, 0, 0, probe.width, probe.height);
+			try {
+				const [red, green, blue] = probing.getImageData(1, 1, 1, 1).data;
+				return green > red + 60 && green > blue + 60
+					? 'green'
+					: red > green + 60 && red > blue + 60
+						? 'red'
+						: 'neither';
+			} catch (error) {
+				return failed(error);
+			}
+		};
+		context.fillStyle = '#00ff00';
+		let before = 'neither';
+		for (let i = 0; i < 40 && before !== 'green'; i++) {
+			context.fillRect(0, 0, target.width, target.height);
+			await sleep(50);
+			before = shown();
+		}
+		context.drawImage(element, 0, 0, target.width, target.height);
+		await sleep(500);
+		const result = {
+			// (Chrome keeps the last clean frame; a track that ended shows none)
+			shown: {
+				before,
+				after: shown() === 'red' ? 'the image' : 'not the image',
+			},
+			tracks: [stream.getVideoTracks()[0].readyState, clone.readyState],
+		};
+		player.srcObject = null;
+		return result;
+	};
+	add(
+		'canvas/what a stream captured before its canvas was tainted shows',
+		async () => (await capturedThenTainted()).shown,
+	);
+	add(
+		'canvas/the tracks of a stream captured before its canvas was tainted',
+		async () => (await capturedThenTainted()).tracks,
+	);
+	const video = (src, crossOrigin) =>
+		new Promise((resolve) => {
+			const element = document.createElement('video');
+			element.muted = true;
+			element.preload = 'auto';
+			if (crossOrigin !== undefined) element.crossOrigin = crossOrigin;
+			element.onloadeddata = () => resolve(element);
+			element.onerror = () => resolve(null);
+			element.src = src;
+		});
+	const videoCase = async (src, crossOrigin) => {
+		const element = await video(src, crossOrigin);
+		if (!element) return 'video failed';
+		const target = canvas();
+		target.getContext('2d').drawImage(element, 0, 0);
+		const result = { canvas: readback(target) };
+		try {
+			const bitmap = await createImageBitmap(element);
+			const drawn = canvas();
+			drawn.getContext('2d').drawImage(bitmap, 0, 0);
+			result.bitmap = readback(drawn).getImageData;
+		} catch (error) {
+			result.bitmap = failed(error);
+		}
+		try {
+			new VideoFrame(element).close();
+			result.videoFrame = 'ok';
+		} catch (error) {
+			result.videoFrame = failed(error);
+		}
+		try {
+			result.captureStream = element.captureStream().getTracks().length;
+		} catch (error) {
+			result.captureStream = failed(error);
+		}
+		element.removeAttribute('src');
+		element.load();
+		return result;
+	};
+	add('media/a video of its own origin', () =>
+		videoCase(r(A, { type: 'webm' }).url),
+	);
+	add('media/a video of another site', () =>
+		videoCase(r(B, { type: 'webm' }).url),
+	);
+	add('media/a crossorigin video of another site with ACAO', () =>
+		videoCase(r(B, { type: 'webm', acao: '*' }).url, 'anonymous'),
+	);
+	add('media/a video redirected to another site', () =>
+		videoCase(r(A, { redirect: r(B, { type: 'webm' }).url }).url),
+	);
+	/** whether Web Audio hears a playing element */
+	const hears = async (audio) => {
+		const context = new AudioContext();
+		try {
+			const analyser = context.createAnalyser();
+			const quiet = context.createGain();
+			quiet.gain.value = 0;
+			context.createMediaElementSource(audio).connect(analyser);
+			analyser.connect(quiet);
+			quiet.connect(context.destination);
+			await context.resume();
+			const data = new Uint8Array(analyser.fftSize);
+			let sound = false;
+			for (let i = 0; i < 30 && !sound; i++) {
+				await sleep(50);
+				analyser.getByteTimeDomainData(data);
+				sound = data.some((value) => value !== 128);
+			}
+			return sound;
+		} finally {
+			await context.close();
+		}
+	};
+	// what Web Audio hears of an element's sound: another site's is silence
+	const heard = async (src, crossOrigin, make) => {
+		const audio = new Audio();
+		if (crossOrigin !== undefined) audio.crossOrigin = crossOrigin;
+		audio.src = src;
+		const context = new AudioContext();
+		try {
+			const source = make
+				? new MediaElementAudioSourceNode(context, { mediaElement: audio })
+				: context.createMediaElementSource(audio);
+			const analyser = context.createAnalyser();
+			const quiet = context.createGain();
+			quiet.gain.value = 0;
+			source.connect(analyser);
+			analyser.connect(quiet);
+			quiet.connect(context.destination);
+			await context.resume();
+			await audio.play();
+			const data = new Uint8Array(analyser.fftSize);
+			let sound = false;
+			for (let i = 0; i < 30 && !sound; i++) {
+				await sleep(50);
+				analyser.getByteTimeDomainData(data);
+				sound = data.some((value) => value !== 128);
+			}
+			return { state: context.state, sound };
+		} catch (error) {
+			return failed(error);
+		} finally {
+			audio.pause();
+			await context.close();
+		}
+	};
+	add('media/Web Audio hears an element of its own origin', () =>
+		heard(r(A, { type: 'wav' }).url),
+	);
+	add('media/Web Audio hears an element of another site', async () => ({
+		method: await heard(r(B, { type: 'wav' }).url),
+		constructor: await heard(r(B, { type: 'wav' }).url, undefined, true),
+	}));
+	add(
+		'media/Web Audio hears a crossorigin element of another site with ACAO',
+		() => heard(r(B, { type: 'wav', acao: '*' }).url, 'anonymous'),
+	);
+	add('media/Web Audio hears an element redirected to another site', () =>
+		heard(r(A, { redirect: r(B, { type: 'wav' }).url }).url),
+	);
+
+	const sound = (src) =>
+		new Promise((resolve) => {
+			const audio = new Audio();
+			audio.onloadedmetadata = () =>
+				resolve(`loaded, ${Math.round(audio.duration)} s`);
+			audio.onerror = () => resolve(`error ${audio.error?.code}`);
+			audio.src = src;
+		});
+	add('media/a sound over 64 KiB behind a redirect', async () => ({
+		own: await sound(
+			r(A, { redirect: r(A, { type: 'wav', long: 1 }).url }).url,
+		),
+		other: await sound(
+			r(A, { redirect: r(B, { type: 'wav', long: 1 }).url }).url,
+		),
+	}));
+	add('media/a captured video that then plays another site', async () => {
+		const element = await video(r(A, { type: 'webm' }).url);
+		if (!element) return 'video failed';
+		const result = {};
+		const states = (tracks) =>
+			tracks.map((track) => `${track.kind} ${track.readyState}`).sort();
+		const stream = element.captureStream();
+		const first = stream.getTracks();
+		const cloned = first.map((track) => track.clone());
+		const copy = stream.clone();
+		await element.play();
+		await sleep(200);
+		result.before = states(stream.getTracks());
+		const loaded = new Promise((resolve) => {
+			element.onloadeddata = () => resolve('loaded');
+			element.onerror = () => resolve('error');
+		});
+		// a listener of the page's that stops the event
+		element.addEventListener('loadedmetadata', (event) =>
+			event.stopImmediatePropagation(),
+		);
+		element.src = r(B, { type: 'webm' }).url;
+		result.switched = await loaded;
+		await element.play().catch(() => {});
+		await sleep(400);
+		result.first = states(first);
+		result.clones = states(cloned);
+		result.copy = states(copy.getTracks());
+		result.active = stream.active;
+		try {
+			result.again = states(element.captureStream().getTracks());
+		} catch (error) {
+			result.again = failed(error);
+		}
+		element.removeAttribute('src');
+		element.load();
+		return result;
+	});
+	add('media/Web Audio hears an element as its source changes', async () => {
+		const audio = new Audio();
+		audio.loop = true;
+		const context = new AudioContext();
+		const source = context.createMediaElementSource(audio);
+		const analyser = context.createAnalyser();
+		const quiet = context.createGain();
+		quiet.gain.value = 0;
+		// connected through the prototype's method, taken before any source
+		AudioNode.prototype.connect.call(source, analyser);
+		analyser.connect(quiet);
+		quiet.connect(context.destination);
+		await context.resume();
+		const listen = async (src) => {
+			audio.src = src;
+			try {
+				if (
+					(await Promise.race([
+						audio.play(),
+						sleep(1500).then(() => 'late'),
+					])) === 'late'
+				)
+					return 'play() did not settle';
+			} catch (error) {
+				return failed(error);
+			}
+			const data = new Uint8Array(analyser.fftSize);
+			let heard = false;
+			for (let i = 0; i < 20 && !heard; i++) {
+				await sleep(50);
+				analyser.getByteTimeDomainData(data);
+				heard = data.some((value) => value !== 128);
+			}
+			return heard;
+		};
+		const result = {
+			own: await listen(r(A, { type: 'wav' }).url),
+			other: await listen(r(B, { type: 'wav' }).url),
+			ownAgain: await listen(r(A, { type: 'wav' }).url),
+			redirected: await listen(
+				r(A, { redirect: r(B, { type: 'wav', long: 1 }).url }).url,
+			),
+		};
+		audio.pause();
+		await context.close();
+		return result;
+	});
+	// a load that is not over (a stream): no resource timing entry says what
+	// it came through
+	const loading = async (src) => {
+		const audio = new Audio();
+		audio.src = src;
+		const result = {};
+		try {
+			if (
+				(await Promise.race([audio.play(), sleep(3000).then(() => 'late')])) ===
+				'late'
+			)
+				return 'play() did not settle';
+			result.entries = performance.getEntriesByName(src).length;
+			result.heard = await hears(audio);
+			result.captureStream = audio.captureStream().getTracks().length;
+		} catch (error) {
+			result.captureStream = failed(error);
+		}
+		audio.pause();
+		audio.removeAttribute('src');
+		audio.load();
+		return result;
+	};
+	add('media/a sound of its own origin that is still loading', () =>
+		loading(r(A, { type: 'wav', long: 1, hold: 1 }).url),
+	);
+	add('media/a sound redirected to another site that is still loading', () =>
+		loading(
+			r(A, { redirect: r(B, { type: 'wav', long: 1, hold: 1 }).url }).url,
+		),
+	);
+
+	// --- other requests the policy governs --------------------------------
+	add('beacon/a JSON beacon to another site', async () => {
+		const { url, key } = r(B, {});
+		const sent = navigator.sendBeacon(
+			url,
+			new Blob(['{}'], { type: 'application/json' }),
+		);
+		await sleep(500);
+		return { sent, reached: await reached(key) };
+	});
+	add('beacon/a text beacon to another site', async () => {
+		const { url, key } = r(B, {});
+		const sent = navigator.sendBeacon(url, 'text');
+		await sleep(500);
+		return { sent, reached: await reached(key) };
+	});
+	const events = (params) =>
+		new Promise((resolve) => {
+			const source = new EventSource(r(B, params).url);
+			source.onopen = () => {
+				source.close();
+				resolve('open');
+			};
+			source.onerror = () => {
+				source.close();
+				resolve('error');
+			};
+		});
+	add('eventsource/another site without ACAO', () =>
+		events({ type: 'raw', ct: 'text/event-stream', body: 'data: x\n\n' }),
+	);
+	add('eventsource/another site with ACAO', () =>
+		events({
+			type: 'raw',
+			ct: 'text/event-stream',
+			body: 'data: x\n\n',
+			acao: '*',
+		}),
+	);
+	// opaque response blocking: a no-cors response of another site that is a
+	// document or data, not a script or media, never reaches the page
+	const blocked = (tag, params) =>
+		new Promise((resolve) => {
+			const element = document.createElement(tag);
+			element.onload = () => {
+				element.remove();
+				resolve('load');
+			};
+			element.onerror = () => {
+				element.remove();
+				resolve('error');
+			};
+			element.src = r(B, { type: 'raw', ...params }).url;
+			document.head.append(element);
+		});
+	add('orb/scripts of another site by type', async () => ({
+		json: await blocked('script', {
+			ct: 'application/json',
+			body: '{"secret": 1}',
+		}),
+		jsonArray: await blocked('script', {
+			ct: 'application/json',
+			body: '[1, 2]',
+		}),
+		jsonThatIsScript: await blocked('script', {
+			ct: 'application/json',
+			body: 'window.sopOrb = 1;',
+		}),
+		html: await blocked('script', {
+			ct: 'text/html',
+			body: '<!doctype html><html><body>secret</body></html>',
+		}),
+		xml: await blocked('script', {
+			ct: 'text/xml',
+			body: '<?xml version="1.0"?><secret/>',
+		}),
+		plain: await blocked('script', { ct: 'text/plain', body: 'var a = 1;' }),
+		plainJson: await blocked('script', {
+			ct: 'text/plain',
+			body: '{"secret": 1}',
+		}),
+		plainNosniff: await blocked('script', {
+			ct: 'text/plain',
+			body: 'var a = 1;',
+			nosniff: '1',
+		}),
+		octets: await blocked('script', {
+			ct: 'application/octet-stream',
+			body: 'var a = 1;',
+		}),
+		javascript: await blocked('script', {
+			ct: 'text/javascript',
+			body: 'var a = 1;',
+		}),
+	}));
+	add('orb/a no-cors fetch of JSON of another site', async () => {
+		const { url, key } = r(B, {
+			type: 'raw',
+			ct: 'application/json',
+			body: '{"secret": 1}',
+		});
+		const result = await tryFetch(url, { mode: 'no-cors' });
+		return {
+			result: typeof result === 'string' ? result : result.type,
+			reached: await reached(key),
+		};
+	});
 
 	// --- document-level policy -------------------------------------------
 	add('document/origins', () => ({
@@ -939,6 +1898,64 @@
 					document.body.append(frame);
 				}),
 		);
+	// the same frame in other shapes: loaded a second time, sandboxed into an
+	// opaque origin (its Origin is null, which ACAO A does not name), nested
+	// in another srcdoc frame, and with a script the parser finds before any
+	// of the frame's own script runs
+	const srcdocFrame = (markup, setup = () => {}, reports = 1) =>
+		new Promise((resolve) => {
+			const frame = document.createElement('iframe');
+			const seen = [];
+			const listen = (event) => {
+				if (!event.data || !('sopSrcdoc2' in event.data)) return;
+				seen.push(event.data.sopSrcdoc2);
+				if (seen.length < reports) {
+					frame.contentWindow.location.reload();
+					return;
+				}
+				window.removeEventListener('message', listen);
+				frame.remove();
+				resolve(reports === 1 ? seen[0] : seen);
+			};
+			window.addEventListener('message', listen);
+			setup(frame);
+			frame.srcdoc = markup;
+			document.body.append(frame);
+		});
+	const noReferrer = '<meta name="referrer" content="no-referrer">';
+	const reads = (params, target = 'parent') => `<script>
+		fetch(${JSON.stringify(r(B, params).url)}).then((response) => response.text()).then(
+			(text) => ${target}.postMessage({ sopSrcdoc2: text }, '*'),
+			(error) => ${target}.postMessage({ sopSrcdoc2: error.name + ': ' + error.message }, '*'),
+		);
+	<\/script>`;
+	add('fetch/from a srcdoc frame that sends no referrer, loaded twice', () =>
+		srcdocFrame(noReferrer + reads({ acao: A }), undefined, 2),
+	);
+	add(
+		'fetch/from a sandboxed srcdoc frame that sends no referrer',
+		async () => ({
+			named: await srcdocFrame(noReferrer + reads({ acao: A }), (frame) =>
+				frame.setAttribute('sandbox', 'allow-scripts'),
+			),
+			any: await srcdocFrame(noReferrer + reads({ acao: '*' }), (frame) =>
+				frame.setAttribute('sandbox', 'allow-scripts'),
+			),
+		}),
+	);
+	add('fetch/from a srcdoc frame in a srcdoc frame, no referrer', () => {
+		const inner = (noReferrer + reads({ acao: A }, 'top'))
+			.replace(/&/g, '&amp;')
+			.replace(/"/g, '&quot;');
+		return srcdocFrame(`${noReferrer}<iframe srcdoc="${inner}"></iframe>`);
+	});
+	add('script/a crossorigin script in a srcdoc frame, no referrer', () =>
+		srcdocFrame(
+			`${noReferrer}<script crossorigin src="${
+				r(B, { type: 'js', js: 'window.ran = 1', acao: A }).url
+			}"><\/script><script>parent.postMessage({ sopSrcdoc2: window.ran ?? 'did not run' }, '*');<\/script>`,
+		),
+	);
 	// documents the page makes itself are of its origin (a data: one is
 	// opaque): their reads of the page's own origin need no CORS
 	const madeDocument = (src) =>
@@ -1119,6 +2136,28 @@
 			try { importScripts(${JSON.stringify(imported)}); out.importScripts = self.imported; } catch (e) { out.importScripts = e.name; }
 			postMessage(out);
 		})();`);
+	});
+	add('worker/XMLHttpRequest with an upload listener', async () => {
+		const { url, key } = r(B, { acao: '*' });
+		const plain = r(B, { acao: '*' });
+		const send = (target, listen) => `await new Promise((resolve) => {
+			const request = new XMLHttpRequest();
+			request.open('POST', ${JSON.stringify(target)});
+			${listen ? "request.upload.addEventListener('progress', () => {});" : ''}
+			request.onloadend = () => resolve(statuses.push(request.status));
+			request.send('body');
+		});`;
+		const statuses = await inWorker(`(async () => {
+			const statuses = [];
+			${send(url, true)}
+			${send(plain.url, false)}
+			postMessage(statuses);
+		})();`);
+		return {
+			statuses,
+			listener: await reached(key),
+			none: await reached(plain.key),
+		};
 	});
 	add('worker/module worker imports another site without ACAO', () =>
 		inWorker(

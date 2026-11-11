@@ -74,21 +74,25 @@ would not give it).
 | Synchronous XMLHttpRequest without ACAO                                                                                                         | `send()` throws NetworkError                                                       | **leak**: status 200, body                                                     | the bridge's request carries its document; a network error throws                  |
 | `Response.type`                                                                                                                                 | `basic`, `cors`, `opaque`, `opaqueredirect`                                        | `basic` for every route                                                        | inject records the type of each fetch's response                                   |
 | A worker's `fetch` (plain, cors, no-cors)                                                                                                       | TypeError / `cors` / `opaque`                                                      | `basic` and readable                                                           | same worker check                                                                  |
-| `fetch` from an about:srcdoc document under `no-referrer`                                                                                       | judged as the parent's origin                                                      | readable without CORS                                                          | judged as an opaque origin: CORS applies (see Left)                                |
+| `fetch` from an about:srcdoc document under `no-referrer`                                                                                       | judged as the parent's origin                                                      | readable without CORS                                                          | judged as the document that made it, which vouches for it (see Fix status)         |
 
 ### 2. Resource-level policy
 
-| Behaviour                                                                                                                                      | Chrome                                                                     | Before                                     | Fix                                                         |
-| ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------- |
-| `Cross-Origin-Resource-Policy: same-origin` / `same-site` on an image of another site; on a no-cors fetch                                      | load fails / TypeError                                                     | loads, readable (the worker stripped CORP) | worker checks CORP on no-cors responses before stripping it |
-| `<img crossorigin>` without ACAO; `use-credentials` with ACAO `*`                                                                              | load fails                                                                 | loads                                      | the CORS check covers every `cors` mode load                |
-| `<script crossorigin>` without ACAO; a module script of another site without ACAO                                                              | `error`                                                                    | runs                                       | as above                                                    |
-| A font of another site without ACAO                                                                                                            | NetworkError                                                               | loads                                      | as above (fonts are `cors` loads)                           |
-| Canvas tainting: `drawImage` of a cross-origin image (also scaled, through a pattern, an ImageBitmap, another tainted canvas, OffscreenCanvas) | `toDataURL`, `toBlob`, `getImageData`, `convertToBlob` throw SecurityError | **leak**: pixels readable                  | inject taints the canvas                                    |
-| WebGL `texImage2D` of a cross-origin image                                                                                                     | SecurityError                                                              | uploads                                    | inject refuses tainted sources                              |
-| Muted errors of a cross-origin classic script                                                                                                  | "Script error.", no location                                               | as natively (Unroute's muted check)        |                                                             |
-| `Timing-Allow-Origin` on resource timing                                                                                                       | without it: no timing details, sizes 0, `responseStatus` 0                 | every detail of another site's resources   | inject restricts entries (see Fix status)                   |
-| `crossOriginIsolated`; COOP and COEP                                                                                                           | false without COOP+COEP                                                    | false; COOP, COEP stripped                 | structural (see Left)                                       |
+| Behaviour                                                                                                                                                                                                                                        | Chrome                                                                     | Before                                              | Fix                                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `Cross-Origin-Resource-Policy: same-origin` / `same-site` on an image of another site; on a no-cors fetch                                                                                                                                        | load fails / TypeError                                                     | loads, readable (the worker stripped CORP)          | worker checks CORP on no-cors responses before stripping it                                                  |
+| `<img crossorigin>` without ACAO; `use-credentials` with ACAO `*`                                                                                                                                                                                | load fails                                                                 | loads                                               | the CORS check covers every `cors` mode load                                                                 |
+| `<script crossorigin>` without ACAO; a module script of another site without ACAO                                                                                                                                                                | `error`                                                                    | runs                                                | as above                                                                                                     |
+| A font of another site without ACAO                                                                                                                                                                                                              | NetworkError                                                               | loads                                               | as above (fonts are `cors` loads)                                                                            |
+| Canvas tainting: `drawImage` of a cross-origin image (also scaled, through a pattern, an ImageBitmap, another tainted canvas, OffscreenCanvas)                                                                                                   | `toDataURL`, `toBlob`, `getImageData`, `convertToBlob` throw SecurityError | **leak**: pixels readable                           | inject taints the canvas                                                                                     |
+| WebGL `texImage2D` of a cross-origin image                                                                                                                                                                                                       | SecurityError                                                              | uploads                                             | inject refuses tainted sources                                                                               |
+| Canvas tainting by what a load came through (the page's own URL redirected to another site, and back), across documents (a frame's or popup's canvas), a tainted ImageBitmap sent to a worker or cloned, `new VideoFrame()` of a tainting source | tainted / DataCloneError / SecurityError                                   | **leak**: judged by the element's URL, per document | the worker marks the load, the taints are kept for every document that can reach the canvas (see Fix status) |
+| `captureStream()` of a tainted canvas or of a media element playing another origin's data; a MediaElementAudioSourceNode of such an element                                                                                                      | SecurityError; silence                                                     | **leak**: the stream and the sound                  | inject (MediaTaint, see Fix status)                                                                          |
+| The rules of another origin's stylesheet (`cssRules`, `rules`, `insertRule`, `deleteRule`, `addRule`, `removeRule`)                                                                                                                              | SecurityError unless loaded with CORS                                      | **leak**: rules readable                            | inject refuses by the sheet's real origin                                                                    |
+| Opaque response blocking: a classic script of another origin that is HTML, XML or JSON                                                                                                                                                           | `error`                                                                    | `load` (a parse failure)                            | the worker blocks it by type and first bytes                                                                 |
+| Muted errors of a cross-origin classic script                                                                                                                                                                                                    | "Script error.", no location                                               | as natively (Unroute's muted check)                 |                                                                                                              |
+| `Timing-Allow-Origin` on resource timing                                                                                                                                                                                                         | without it: no timing details, sizes 0, `responseStatus` 0                 | every detail of another site's resources            | inject restricts entries (see Fix status)                                                                    |
+| `crossOriginIsolated`; COOP and COEP                                                                                                                                                                                                             | false without COOP+COEP                                                    | false; COOP, COEP stripped                          | structural (see Left)                                                                                        |
 
 ### 3. Storage and messaging partitions
 
@@ -128,8 +132,7 @@ would not give it).
 Filled in commit by commit; see the CHANGELOG for each.
 
 - **CORS, CORP and request modes** (sections 1, 2 and 5, sop-escapes: the
-  46 cases that differed read as natively in both modes, one srcdoc case
-  now differs the other way, see Left). The service worker (`src/server/cors.ts`,
+  46 cases that differed read as natively in both modes). The service worker (`src/server/cors.ts`,
   `genericForward`) judges every non-navigation request by its mode and
   its real initiator: a `cors` request of another origin is preflighted when
   its method or the page's headers are not safelisted (OPTIONS with
@@ -367,6 +370,114 @@ Filled in commit by commit; see the CHANGELOG for each.
   origin (or the HTTP cache) has the same bytes and the same headers of
   that kind, so it never says anything a new response would not.
 
+- **Canvas tainting by the load, across documents, bitmaps and frames**
+  (sop-escapes: 9 cases per mode differed). Chrome taints by the origin of
+  the response, not of the element's URL: the worker marks a no-cors load
+  whose redirect chain went through another origin (`crossed` on the hop it
+  remembers, OPAQUE_MARKER in the answer's Server-Timing, which the page
+  never sees), wherever the chain ends. The inject reads the mark from an
+  observer of its own on resource timing (`ResourceTimingModule.opaqueLoads`,
+  natives taken when the bundle loads): its pending records are taken once
+  per run of the page's script, so a load judged in its own `load` event is
+  known, and clearing the timing buffer, letting it fill or replacing the
+  methods that read it changes nothing. An element judged before its load
+  ended is asked again. A copy the inject made of such a load for a
+  document no worker controls is tainted too (`opaqueCopies`). The taints
+  are kept on the outermost window of the proxy's origin a document can
+  reach (its parents, then its opener; non-enumerable, under the client's
+  secret name), so a canvas a frame or popup tainted is tainted for the
+  page that reads it with its own realm's methods. A tainted ImageBitmap is
+  refused by every structured clone (`postMessage` to a window, worker,
+  port or channel, `structuredClone`, `pushState`/`replaceState`) with
+  Chrome's DataCloneError, before the target is looked at, as natively;
+  `new VideoFrame()` of a tainting source throws Chrome's SecurityError.
+- **A no-cors chain through another origin** (sop-escapes: 1 case per
+  mode). A no-cors `fetch` whose chain left the page's origin and came back
+  carries the same mark, and the inject's fetch shows it as opaque (status
+  0, no headers, no body).
+- **Resource timing of fetch and XMLHttpRequest, transfer size and
+  protocol** (sop-escapes: 2 cases per mode differed, 3 more compare the
+  sizes). The worker's marks ride in Server-Timing (PROXY_METRICS), and the
+  inject's fetch and XMLHttpRequest take them out of the headers the page
+  reads, so a cors response can carry TAO_MARKER; when the response's own
+  Server-Timing is not exposed to the page (no
+  Access-Control-Expose-Headers) but its timing is allowed, the worker
+  marks it timing only and the inject hides the header. An
+  XMLHttpRequest's entry says `xmlhttprequest` (XHR_MARKER). An entry the
+  page may read has the `transferSize` Chrome gives a network load (the
+  body and 300 bytes) or a cache hit (0, `deliveryType` "cache": the worker
+  marks an answer from its own caches, CACHED_MARKER), and a
+  `nextHopProtocol` (see Left).
+- **about:srcdoc documents without a referrer** (sop-escapes: 4 cases per
+  mode differed). A srcdoc document's client URL names no origin, and under
+  `no-referrer` no Referer does either. When its client starts, the
+  nearest routed ancestor's bundle tells the worker a token (SRCDOC_VOUCH,
+  from a routed client the worker itself knows the origin of) and the
+  srcdoc client claims it (SRCDOC_CLAIM); the worker binds the claiming
+  client id to the voucher's origin and partition (`srcdocVouches.ts`, kept
+  with the blob: origins, so a restarted worker still knows). Either
+  message may arrive first; a request of a srcdoc client that is not bound
+  yet waits for the pair once (1.5 s at most). A sandboxed srcdoc frame
+  without `allow-same-origin` and one under an opaque-origin ancestor are
+  not vouched for and stay opaque.
+- **Upload listeners and the preflight cache's partition** (sop-escapes: 2
+  cases per mode differed; sop-partitions: 6 per mode). The inject counts
+  the listeners on each XMLHttpRequest's upload object (`uploadListeners.ts`,
+  in pages and workers; `signal` and `removeEventListener` included) and
+  says so on an asynchronous request with a body (PREFLIGHT_HEADER, the
+  inject's own), which the worker preflights whatever its method and
+  headers. The preflight cache is keyed by the top-level site and the
+  frame's site too (Chrome's network isolation key).
+- **Stylesheet rules** (sop-escapes: 6 cases per mode differed). CSSOM
+  refuses `cssRules`, `rules`, `insertRule`, `deleteRule`, `addRule` and
+  `removeRule` with Chrome's messages for a sheet whose real URL is another
+  origin's and whose `<link>` has no `crossorigin` (a CORS load reached the
+  page only past the worker's check), for a sheet of the page's own URL the
+  worker marked as having come through another origin, and for the inject's
+  copy of either; an imported sheet is judged by its own URL, as measured.
+  Inline, constructed and `data:` sheets are the page's.
+- **Media: captured streams, Web Audio, loads that are not over**
+  (sop-escapes: 10 cases per mode differed). MediaTaint applies
+  CanvasTaint's verdicts to what leaves as a stream or as sound.
+  `captureStream()` of a tainted canvas or of an element playing another
+  origin's data throws Chrome's SecurityError. A stream captured earlier
+  ends when its canvas is tainted or its element loads such data: every
+  track that carries the source is known (`MediaStreamTrack.clone` and
+  `MediaStream.clone` are followed) and stopped. A
+  MediaElementAudioSourceNode (from `createMediaElementSource` or the
+  constructor) is connected to a gain node the page cannot reach, and
+  `connect` and `disconnect` on the source act on that node, so the source
+  is heard only while the gate is connected: not for another origin's data.
+  While an element loads, what it will play is not known, so from
+  `loadstart` until its metadata is in and judged its captured tracks are
+  disabled (the page still reads and writes its own `enabled`) and its
+  gate is shut; the inject's listeners run even when a page listener stops
+  the event (`stopImmediatePropagation` runs them first). A video or sound
+  is judged before its load is over, where the resource timing mark is not
+  there yet (a stream's never is): the worker records the first routed URL
+  of every media chain that crossed, in IndexedDB too
+  (`src/server/mediaLoads.ts`), before the answer goes out, and the inject
+  asks over the synchronous bridge the first time an element with data is
+  judged, once a load. Found on the way: a video or sound over 64 KiB
+  behind any redirect did not load at all, because Chrome's media loader
+  gives up when a service worker's redirect says `Content-Length: 0`
+  (reproduced with a plain worker); redirects now go out without the
+  header. Cost: the hooked interfaces (MediaStreamTrack, MediaStream,
+  AudioContext, AudioNode, MediaElementAudioSourceNode) are made in every
+  frame, about 15 KB of heap each frame (frame-cost: 1065 KB a frame, 1050
+  before, ceiling 1120); they cannot be hooked lazily like WebGL's, since
+  a page reaches their prototypes through many other names.
+- **Opaque response blocking** (sop-escapes: 1 case per mode, ten shapes).
+  `src/server/orb.ts` decides as Chrome's ORB v0.2 does for a classic
+  script (a no-cors load) of another origin, or one whose chain crossed:
+  script types, CSS and SVG go; the never-sniffed types, a 206 or
+  `nosniff` on HTML, XML or JSON, and `nosniff` on text/plain are blocked;
+  otherwise the first 1024 bytes decide (media by its signature goes; HTML,
+  XML and JSON types by Chrome's sniffers for each; text/plain by all
+  three; anything else by the JSON sniffer and the prefixes sites put
+  before JSON). A blocked script is a network error to the page. Other
+  no-cors loads of such a response fail or are opaque either way.
+
 ## Left
 
 Ranked by what a page could learn or do. Measured ones are listed in the
@@ -398,36 +509,42 @@ suites' known lists with the same reason.
    a page-side gate, hardened as above. (Also measured: a DevTools or
    extension isolated world's fetch does not reach the service worker at
    all; the proxy server answers it, 404.)
-2. Canvas: an image of the page's own origin that redirects to another is
-   judged by its own URL (Chrome taints by the response's origin); a canvas
-   tainted in one document's bundle is not known to another document's (a
-   same-origin child frame's canvas drawn by its parent); a tainted
-   ImageBitmap sent to a worker is clean there; `new VideoFrame()` of a
-   tainting source is not refused. WebGL's texture uploads are hooked when
-   the realm's first WebGL context is made (making the WebGL interfaces in
-   every frame cost each about 90 KB of heap): a `texImage2D` the page took
-   from a WebGL prototype before any context existed uploads a tainting
-   source, and is not the function the prototype holds afterwards.
-3. A no-cors response that went through another origin and came back (A to
-   B to A) is `basic` and readable; natively it is opaque. B's redirect
-   decides only that A's own resource is shown.
-4. Resource timing: a fetch's or XMLHttpRequest's entry of another origin
-   is restricted even when its Timing-Allow-Origin names the page (the mark
-   would show in the response headers the page reads); a response the
-   worker answers has no `transferSize` or `nextHopProtocol` of its own
-   (every entry, the page's own origin's too).
-5. An about:srcdoc document under a `no-referrer` policy is judged as an
-   opaque origin: its client URL names no origin the worker can read and no
-   Referer names one, so the worker fails closed. A CORS answer naming the
-   document's real origin is refused where Chrome accepts it (`*` works).
-6. An XMLHttpRequest with upload listeners is not preflighted for them
-   (Chrome's CORS-preflight flag); the preflight cache is not keyed by the
-   top-level site as Chrome's is.
-7. `:visited`: Chrome never lets script read it, and partitions it by
-   top-level site and frame origin; through the proxy every link is a
-   proxy URL in one partition, so its timing side channels span every
-   proxied site.
-8. `crossOriginIsolated`: a page that sends COOP and COEP natively gets an
+2. `:visited`: Chrome never lets script read it, and since Chrome 136
+   keeps it per link URL, top-level site and frame origin; through the
+   proxy every link is a proxy URL under one top-level site and one frame
+   origin, so its timing side channels span every proxied site. Not
+   simulated. It would take a link's routed URL to differ by the proxied
+   top-level site and frame origin of the document that holds it (a marker
+   the worker ignores), so that the browser's own history is keyed as
+   natively, and a second form of each visited URL for links to the
+   document's own site, which Chrome shows as visited however the user got
+   there. That changes the shape of every routed link (and what the host
+   stores of them), which is the host's and the lead's decision, and it can
+   only be checked with a profile that keeps history, which no suite uses.
+3. `crossOriginIsolated`: a page that sends COOP and COEP natively gets an
    isolated agent cluster (SharedArrayBuffer, precise timers); through the
-   proxy the frame lives in the host's browsing context group, so it
-   cannot.
+   proxy the frame lives in the host's browsing context group, so it cannot
+   (sop-escapes keeps the case on its known list). Measured in plain Chrome
+   with a worker-served frame: the frame is isolated only when the host's
+   own page sends COOP `same-origin` and COEP, and then a frame that sends
+   no COEP does not load at all; a host on another origin than the proxy
+   (the isolated mode) also needs `allow="cross-origin-isolated"` on the
+   frame and CORP `cross-origin` on its document. So it needs the host to
+   opt in with its own headers, the worker to add COEP to every proxied
+   document, and the inject to hide the isolation (`crossOriginIsolated`,
+   the SharedArrayBuffer global, a clone that carries one, timer
+   precision) from every page that did not send both headers itself. The
+   first is a deployment decision, not the library's.
+4. Smaller differences that are kept, none a read of another site's data:
+   - The tracks of a stream captured from a canvas end when the canvas is
+     tainted (a player of the stream shows nothing), where Chrome keeps
+     them live and sends them no more frames (sop-escapes known list).
+   - A media URL of the page's own origin whose load once came through
+     another origin is another origin's for every element that names it
+     (the worker's record and the timing mark are by URL), where Chrome
+     judges each load.
+   - `nextHopProtocol` is the scheme's usual protocol (`h2` for https,
+     `http/1.1` for http): no transport reports what the origin spoke.
+   - Opaque response blocking is applied to scripts, where a page can tell;
+     Chrome also empties other blocked no-cors responses, which a page
+     cannot read anyway.

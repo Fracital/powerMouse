@@ -24,7 +24,12 @@ import {
 
 // Cases known to differ from Chrome, by why (docs/same-origin-policy.md). A
 // case on the list that now reads as natively fails too: take it off.
-const KNOWN_BY_REASON = {};
+const KNOWN_BY_REASON = {
+	"a page that sends COOP and COEP is not cross-origin isolated: its frame is in the host's browsing context group":
+		['coi/a page that sends COOP and COEP'],
+	'the tracks of a stream captured from a canvas end when the canvas is tainted (their player shows nothing), where Chrome keeps them live and sends them no more frames (their player keeps the last one)':
+		['canvas/the tracks of a stream captured before its canvas was tainted'],
+};
 const KNOWN = new Map(
 	Object.entries(KNOWN_BY_REASON).flatMap(([why, names]) =>
 		names.map((name) => [name, why]),
@@ -54,7 +59,8 @@ async function report(page) {
 const normal = (value) =>
 	JSON.stringify(value ?? null).replace(/k=[\w-]+/g, 'k=KEY');
 
-const browser = await launch();
+// (media plays without a gesture, so Web Audio has an element's sound to hear)
+const browser = await launch(['--autoplay-policy=no-user-gesture-required']);
 
 const nativePage = await browser.newPage();
 await nativePage.goto(pageURL('native'));
@@ -143,6 +149,51 @@ if (!only || only.startsWith('sw/')) {
 			),
 		);
 		compare(mode, swNative?.cases, proxied?.cases);
+		await page.context().close();
+	}
+}
+
+// The third part: a page that opts into cross-origin isolation, top-level
+// natively (only a top-level document's COOP makes an isolated group)
+if (!only || only.startsWith('coi/')) {
+	const coiReport = async (page) => {
+		for (let i = 0; i < 120; i++) {
+			await sleep(250);
+			for (const frame of page.frames()) {
+				const value = await frame
+					?.evaluate(() => window.__coi)
+					.catch(() => null);
+				if (value) return value;
+			}
+		}
+		return null;
+	};
+	const coiURL = `${FIXTURE}pages/sop-coi.html`;
+	const coiNativePage = await browser.newPage();
+	await coiNativePage.goto(coiURL);
+	const coiNative = {
+		'coi/a page that sends COOP and COEP': await coiReport(coiNativePage),
+	};
+	await coiNativePage.context().close();
+	ok(
+		'natively, a page that sends COOP and COEP is cross-origin isolated',
+		coiNative['coi/a page that sends COOP and COEP']?.crossOriginIsolated ===
+			true,
+		normal(coiNative),
+	);
+	for (const [mode, base] of [
+		['same-origin', PROXY],
+		['isolated', HOST],
+	]) {
+		const page = await openDemo(browser, base);
+		await page.evaluate((url) => {
+			const form = document.getElementById('mainForm');
+			form.url.value = url;
+			form.requestSubmit();
+		}, coiURL);
+		compare(mode, coiNative, {
+			'coi/a page that sends COOP and COEP': await coiReport(page),
+		});
 		await page.context().close();
 	}
 }

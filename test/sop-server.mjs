@@ -9,8 +9,19 @@
 //     pacao, pacac=1, pacam, pacah, pmaxage, pstatus
 //                                       the answer to a preflight (OPTIONS);
 //                                       pacao defaults to acao, pacac to acac
-//     type=png|js|mjs|font|text         the body (text: SECRET-BODY)
+//     type=png|js|mjs|font|text|webm|wav|css|raw
+//                                       the body (text: SECRET-BODY; webm: a
+//                                       two-second video with a tone; wav:
+//                                       the tone)
 //     js=<source>                       the script for type=js or mjs
+//     css=<source>                      the stylesheet for type=css
+//     ct=<type>&body=<text>             the content type and body for type=raw
+//     nosniff=1                         X-Content-Type-Options: nosniff
+//     long=1                            for type=wav, thirty seconds of the
+//                                       tone (over 64 KiB)
+//     hold=1                            half the body is sent and the answer
+//                                       left open for 20 s (a load that is
+//                                       not over)
 //     redirect=<url>                    a 302 to url, with the headers above
 //     status=<n>                        the status of a non-preflight answer
 //     cookie=<value>                    a Set-Cookie of the answer
@@ -29,11 +40,40 @@ const PNG = Buffer.from(
 const FONT = readFileSync(
 	fileURLToPath(new URL('./pages/blank-font.ttf', import.meta.url)),
 );
+const page = (name) =>
+	readFileSync(fileURLToPath(new URL(`./pages/${name}`, import.meta.url)));
 const TYPES = {
 	png: ['image/png', PNG],
 	font: ['font/ttf', FONT],
 	text: ['text/plain', 'SECRET-BODY'],
+	webm: ['video/webm', page('sop-video.webm')],
+	wav: ['audio/wav', page('sop-tone.wav')],
 };
+// thirty seconds of the tone, made here: a sound over 64 KiB, and long
+// enough to play while half of it has yet to come
+const LONG_WAV = (() => {
+	const rate = 22050;
+	const samples = rate * 30;
+	const wav = Buffer.alloc(44 + samples * 2);
+	wav.write('RIFF', 0);
+	wav.writeUInt32LE(36 + samples * 2, 4);
+	wav.write('WAVEfmt ', 8);
+	wav.writeUInt32LE(16, 16);
+	wav.writeUInt16LE(1, 20);
+	wav.writeUInt16LE(1, 22);
+	wav.writeUInt32LE(rate, 24);
+	wav.writeUInt32LE(rate * 2, 28);
+	wav.writeUInt16LE(2, 32);
+	wav.writeUInt16LE(16, 34);
+	wav.write('data', 36);
+	wav.writeUInt32LE(samples * 2, 40);
+	for (let i = 0; i < samples; i++)
+		wav.writeInt16LE(
+			Math.round(12000 * Math.sin((2 * Math.PI * 440 * i) / rate)),
+			44 + i * 2,
+		);
+	return wav;
+})();
 
 const logs = new Map();
 
@@ -118,8 +158,28 @@ export function sop(req, res) {
 		res.end(query.get('js') ?? '');
 		return true;
 	}
-	const [mime, body] = TYPES[type] ?? TYPES.text;
+	if (query.get('nosniff')) res.setHeader('x-content-type-options', 'nosniff');
+	if (type === 'css') {
+		res.setHeader('content-type', 'text/css');
+		res.end(query.get('css') ?? '');
+		return true;
+	}
+	if (type === 'raw') {
+		res.setHeader('content-type', query.get('ct') ?? 'text/plain');
+		res.end(query.get('body') ?? '');
+		return true;
+	}
+	const [mime, short] = TYPES[type] ?? TYPES.text;
+	const body = type === 'wav' && query.get('long') ? LONG_WAV : short;
 	res.setHeader('content-type', mime);
+	if (query.get('hold')) {
+		// the first half of the body, and an answer that is not over for a
+		// while (a stream that is still loading)
+		res.setHeader('content-length', body.length);
+		res.write(body.subarray(0, body.length >> 1));
+		setTimeout(() => res.destroy(), 20000).unref();
+		return true;
+	}
 	res.end(body);
 	return true;
 }
