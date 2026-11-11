@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>Discord token fixture</title>
+	</head>
+	<body>
+		<!--
+			The demo-token suite serves this at a discord.com host (through the
+			test transport, test/mixed-transport.mjs) so the demo's "Sign in with
+			token" gate matches. It is a top-level page that does nothing itself:
+			the demo's TOKEN_HOOK runs in it, hands the host a port, and the
+			button writes a token into this page's own localStorage. The suite
+			reads it back here. No real Discord code or credentials are involved.
+		-->
+		<h1 id="here">discord token fixture</h1>
+		<p id="token-readback"></p>
+		<script>
+			// surface whatever is in localStorage.token, for the suite to read
+			// back after the button writes it (it is empty until then)
+			document.getElementById('token-readback').textContent =
+				'token=' + (localStorage.token || '');
+		</script>
+	</body>
+</html>

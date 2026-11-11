@@ -369,9 +369,71 @@ addEventListener('message', (event) => {
 	fillIcons(); // a bookmark that waited for a page to ask through
 });
 
+// "Sign in with token" for Discord, mirroring the well-known community
+// bookmarklet: the user pastes their OWN Discord account token into the
+// chrome button (#toolToken) and it is written straight into the proxied
+// discord.com page's OWN localStorage, so Discord logs in on reload.
+//
+// SECURITY: the token never leaves this browser. It is handed to the proxied
+// Discord document over a same-browser MessagePort only, written only into
+// that document's localStorage, and nowhere else: never a network request,
+// never logged, never stored anywhere else. The host side (the click
+// handler below) posts it to the page's port; the page writes it and
+// navigates. Everything is gated strictly to the real host discord.com /
+// *.discord.com, read from the page's real URL (stomp.origin), so no other
+// site ever gets the port or the button.
+//
+// This is a `post` hook (after the inject installed its storage hooks,
+// before the page's first script): the token must go into the SAME store
+// Discord's client reads, which under STomp is the inject's per-origin
+// localStorage, and that store exists only once the hooks are installed.
+// It still runs before Discord's own scripts, which delete window.localStorage
+// early, so the captured store keeps working after that deletion.
+const TOKEN_MESSAGE = '$stompDemo$token';
+const TOKEN_HOOK = `
+if (stomp.kind === 'document' && stomp.isTop) {
+	const win = stomp.window;
+	let host = '';
+	try { host = new win.URL(stomp.origin).hostname; } catch {}
+	if (host === 'discord.com' || host.endsWith('.discord.com')) {
+		// the page's own localStorage, captured now before Discord deletes it:
+		// the token is written here and nowhere else; it never leaves the browser
+		const store = win.localStorage;
+		const channel = new win.MessageChannel();
+		channel.port1.onmessage = (event) => {
+			const token = event.data && event.data.token;
+			if (typeof token !== 'string') return;
+			try {
+				store.token = win.JSON.stringify(token);
+				// go to the home route so Discord logs in with the token, as the
+				// bookmarklet's reload does. This is raw host code: win.location
+				// is the real, unrouted location, so a click on an <a> is used
+				// instead, whose href the inject routes (as every proxied link),
+				// keeping the navigation inside the proxy.
+				const link = win.document.createElement('a');
+				link.href = '/channels/@me';
+				(win.document.body || win.document.documentElement).appendChild(link);
+				link.click();
+				link.remove();
+			} catch {}
+		};
+		win.top.postMessage({ ${JSON.stringify(TOKEN_MESSAGE)}: true }, '*', [channel.port2]);
+	}
+}`;
+addEventListener('message', (event) => {
+	if (!event.data?.[TOKEN_MESSAGE] || !event.ports[0]) return;
+	const tab = tabs.find((t) => t.element.contentWindow === event.source);
+	if (!tab) return;
+	tab.tokenPort = event.ports[0];
+	syncTokenButton(); // the button can show now the page can take the token
+});
+
 const controllerCallbacks = {
 	hooks: {
-		init: { pre: { source: ICON_HOOK }, post: { source: KEY_HOOK } },
+		init: {
+			pre: { source: ICON_HOOK },
+			post: { source: `${KEY_HOOK}\n${TOKEN_HOOK}` },
+		},
 	},
 	// a site asks for a permission another site was given (the browser's own
 	// prompt asked for the first)
@@ -535,6 +597,7 @@ function createTab() {
 		reported: null, // the URL the tab's document last reported
 		icon: null, // the icon the page declared (NavigateInfo.icon)
 		iconPort: null, // its document's port for fetching that icon (ICON_HOOK)
+		tokenPort: null, // a Discord page's port for its login token (TOKEN_HOOK)
 	};
 	element.addEventListener('load', async () => {
 		// a RemoteFrame's url is polled: refresh before recording, or a redirect
@@ -1397,6 +1460,29 @@ function syncToolbar() {
 	$('toolForward').disabled = !canStep(tab, 'forward');
 	$('toolReload').disabled = !tab;
 	syncStar($('toolStar'), tab);
+	syncTokenButton();
+}
+
+/** whether a URL's real host is Discord: discord.com or a subdomain of it */
+function isDiscordHost(url) {
+	try {
+		const host = new URL(url).hostname;
+		return host === 'discord.com' || host.endsWith('.discord.com');
+	} catch {
+		return false;
+	}
+}
+
+// "Sign in with token" shows only on a Discord page, and only once that page
+// has handed over its port (TOKEN_HOOK): off Discord, or before the port
+// arrives, there is nothing the button could do, so it stays hidden. It
+// refreshes with the toolbar (syncToolbar, so with the star), and again when
+// a port arrives.
+function syncTokenButton() {
+	const button = $('toolToken');
+	if (!button) return;
+	const tab = activeTab;
+	button.hidden = !tab || !tab.tokenPort || !isDiscordHost(pageUrl(tab));
 }
 
 // pages report navigation through onNavigate; this is only a safety net
@@ -2641,6 +2727,27 @@ $('toolSaved').addEventListener('click', () => openBookmarks($('toolSaved')));
 $('bookmarksClose').addEventListener('click', () => closeBookmarks());
 $('bookmarksScrim').addEventListener('click', () => closeBookmarks());
 $('toolStar').addEventListener('click', () => toggleBookmark(activeTab));
+// "Sign in with token": the user pastes their own Discord token; it is sent
+// to the proxied page over its MessagePort and written into that page's own
+// localStorage there. The token is never sent over the network or logged; it
+// stays in this browser. A cancelled, empty, or whitespace-bearing entry
+// sends nothing; a token pasted with its JSON quotes is unwrapped once.
+$('toolToken').addEventListener('click', () => {
+	const tab = activeTab;
+	if (!tab || !tab.tokenPort) return;
+	let token = prompt('Paste your Discord token');
+	if (token === null) return; // cancelled
+	token = token.trim();
+	try {
+		token = JSON.parse(token); // strip surrounding quotes if the user pasted them
+	} catch {}
+	if (typeof token !== 'string' || !token || /\s/.test(token)) {
+		setStatus('That does not look like a token', true);
+		return;
+	}
+	tab.tokenPort.start?.();
+	tab.tokenPort.postMessage({ token });
+});
 // Escape closes the sidebar before anything else sees the key, and the
 // navigation bar takes it down on the way to what it does (Back only closes)
 addEventListener(

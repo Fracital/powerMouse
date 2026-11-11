@@ -1838,9 +1838,37 @@ input:focus-visible {
 
 .starbtn:focus-visible,
 .bookmarksTab:focus-visible,
-.bookmarks button:focus-visible {
+.bookmarks button:focus-visible,
+.tokenbtn:focus-visible {
 	outline: 2px solid #4ca9fb;
 	outline-offset: 1px;
+}
+
+/* "Sign in with token": a sibling of the star at the address bar's right
+   end, in the same Tango style and geometry, shown only on Discord */
+.tokenbtn {
+	flex: none;
+	width: 30px;
+	height: 30px;
+	padding: 0;
+	border: 1px solid transparent;
+	border-radius: 0.25rem;
+	background: url('/pm/icons/token.svg') center / 20px 20px no-repeat;
+	cursor: pointer;
+	transition-property: background-color, border-color;
+}
+
+.tokenbtn[hidden] {
+	display: none;
+}
+
+.tokenbtn:hover {
+	background-color: rgba(0, 0, 0, 0.06);
+	border-color: rgba(0, 0, 0, 0.15);
+}
+
+.tokenbtn:active {
+	background-color: rgba(0, 0, 0, 0.12);
 }
 
 /* the card's bar is a picture the card takes presses for, but its star */

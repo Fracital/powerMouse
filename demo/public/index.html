@@ -168,6 +168,19 @@
 					     status, then whether the active tab's page is bookmarked
 					     (Tango star) -->
 					<div class="omniEnd" id="omniEnd">
+						<!-- "Sign in with token": only on Discord. Writes a pasted
+						     Discord token into the proxied page's own localStorage
+						     (same-browser MessagePort); the token never leaves the
+						     browser. Hidden until the Discord page hands over its
+						     port. -->
+						<button
+							id="toolToken"
+							class="tokenbtn"
+							type="button"
+							title="Sign in with token"
+							aria-label="Sign in with token"
+							hidden
+						></button>
 						<span id="chromeStatus" class="select">…</span>
 						<button
 							id="toolStar"
