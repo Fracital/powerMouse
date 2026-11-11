@@ -4,11 +4,15 @@
 <script>
 	// a nested document of request-frames.html: tells the top when it loaded
 	// and when the fetch a ping asked for was answered; `inner` names a frame
-	// of the other origin it holds itself
+	// of the other origin it holds itself, `worker` gives it a worker, which
+	// fetches on the same ping (as nested-worker)
 	const params = new URLSearchParams(location.search);
 	const name = params.get('name');
-	const tell = (what) =>
-		top.postMessage({ requestFrames: { what, name, at: Date.now() } }, '*');
+	const tell = (what, who = name) =>
+		top.postMessage(
+			{ requestFrames: { what, name: who, at: Date.now() } },
+			'*',
+		);
 	addEventListener('load', () => tell('loaded'));
 	const inner = params.get('inner');
 	if (inner) {
@@ -17,10 +21,15 @@
 		frame.src = `${other}${location.pathname}?name=${inner}`;
 		document.body.append(frame);
 	}
+	const worker = params.get('worker')
+		? new Worker('/pages/request-frames-worker.js?nested')
+		: null;
+	worker?.addEventListener('message', (event) => tell('answered', event.data));
 	addEventListener('message', async (event) => {
 		if (event.data !== 'request-frames-ping') return;
 		for (let i = 0; i < frames.length; i++)
 			frames[i].postMessage('request-frames-ping', '*');
+		worker?.postMessage('nested-worker');
 		await fetch(`/echo-headers?from=${name}`);
 		tell('answered');
 	});

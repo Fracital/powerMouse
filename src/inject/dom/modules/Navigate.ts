@@ -1,4 +1,4 @@
-import { NAVIGATE, NavigateInfo } from '../../../transport/messages';
+import { CLIENT_ID, NAVIGATE, NavigateInfo } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
@@ -21,7 +21,7 @@ export default class NavigateModule extends Module<DocumentClient> {
 		// this document's service worker client id, from the service worker
 		// itself (a page cannot read it); the host attributes requests with it
 		let client: string | undefined;
-		// about:srcdoc and blob: documents have no proxy-origin URL to ask
+		// about: and blob: documents have no proxy-origin URL to ask
 		if (/^https?:$/.test(global.location.protocol))
 			fetch(`${global.location.origin}${this.client.directory}whoami`)
 				.then((response) => response.json())
@@ -32,6 +32,19 @@ export default class NavigateModule extends Module<DocumentClient> {
 					}
 				})
 				.catch(() => {});
+		// a document on about:srcdoc is a client of its own with no such URL:
+		// the service worker says which, once a request of this document is
+		// one the host's log reports (nothing is asked, and nothing sent, for
+		// a document that loads nothing). One on about:blank is no client:
+		// its loads are made by the page that controls it
+		else if (global.location.href === 'about:srcdoc')
+			this.client.onServiceWorkerMessage((data) => {
+				if (typeof data !== 'object' || data === null) return;
+				const id = (data as Record<string, unknown>)[CLIENT_ID];
+				if (typeof id !== 'string' || id === client) return;
+				client = id;
+				post();
+			});
 
 		// the icon as the page declared it: the attribute the page wrote
 		// (getAttribute hands back the original), resolved against the real URL

@@ -1,9 +1,11 @@
-// The host's request log names the frame a request belongs to, and a frame
-// nested in a proxied page belongs to the host's frame that shows the page:
-// the document request of a nested frame and the fetches it makes are
-// reported with that frame, and as soon as a top-level document's are, not
-// after the wait a report gets for a page that has yet to say where it is.
-// A client that never says (a worker; a document on about:srcdoc) holds its
+// The host's request log names the frame a request belongs to: the host's
+// frame that shows the page, whatever in the page made the request. A
+// document in a nested frame, one on about:srcdoc or about:blank, a worker
+// (dedicated, shared, started from a blob: URL, a nested frame's): each
+// one's requests are reported with that frame, and as soon as a top-level
+// document's are, not after the wait a report gets for a page that has yet
+// to say where it is. A client nobody can speak for (the page's service
+// worker, which is its site's and no frame's) has no frame, and holds its
 // reports back for that wait once, not every time. Both controllers: same
 // origin (StompController) and isolated (RemoteController, the report
 // relayed by the controller frame).
@@ -20,8 +22,16 @@ import {
 } from '../lib.mjs';
 
 const NAMES = ['top', 'same', 'cross', 'deep'];
-// what answers a ping: every document, and the top's worker
-const PINGED = [...NAMES, 'worker-1'];
+// what else answers a ping: documents with no URL of the proxy's, and workers
+const OTHERS = {
+	srcdoc: 'a document on about:srcdoc',
+	blank: 'a document on about:blank',
+	worker: 'a worker',
+	'shared-worker': 'a shared worker',
+	'blob-worker': 'a worker started from a blob: URL',
+	'nested-worker': "a nested frame's worker",
+};
+const PINGED = [...NAMES, ...Object.keys(OTHERS)];
 // how long after the page's own event (its load, its fetch's answer) a report
 // may reach the host; the waits it must not sit out are 1.5 s and 3 s
 const SOON_MS = 1000;
@@ -47,18 +57,24 @@ for (const [mode, base] of [
 	});
 	await submitLanding(page, `${FIXTURE}pages/request-frames.html`);
 
-	// the top page's record of when each document loaded and was answered
-	const times = async () => {
+	// the proxied top of the tab in front: the page titled `title`
+	let title = 'REQUEST FRAMES';
+	const top = async () => {
 		for (const frame of page
 			.frames()
-			.filter((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()))) {
-			const value = await frame
-				.evaluate(() => (window.ping ? window.times : null))
-				.catch(() => null);
-			if (value) return value;
-		}
-		return { loaded: {}, answered: {} };
+			.filter((f) => /\/stomp\/[\w-]+\/html\//.test(f.url())))
+			if (
+				(await frame.evaluate(() => document.title).catch(() => '')) === title
+			)
+				return frame;
+		return null;
 	};
+	// its record of when each document loaded and was answered
+	const times = async () =>
+		(await (await top())?.evaluate(() => window.times).catch(() => null)) ?? {
+			loaded: {},
+			answered: {},
+		};
 	const reports = () => page.evaluate(() => window.__reports);
 	const documentOf = (log, name) =>
 		log.find((e) =>
@@ -67,32 +83,28 @@ for (const [mode, base] of [
 				: e.url.includes(`request-frames-child.html?name=${name}`),
 		);
 	const fetchOf = (log, name) =>
-		log.find((e) => e.url.endsWith(`/echo-headers?from=${name}`));
-	// every document loaded and reported, then every fetch answered and
-	// reported: the checks below are on when, so this only has to end
-	const settle = async (what, reportOf, names) => {
+		log.find((e) => e.url.endsWith(`from=${name}`));
+	// what the page told and the host heard, once `done` holds of them: the
+	// checks below are on when each report came, so this only has to end
+	const settle = async (done) => {
 		for (let i = 0; i < 240; i++) {
 			const [told, log] = [await times(), await reports()];
-			if (names.every((name) => told[what][name] && reportOf(log, name))) break;
+			if (await done(told, log)) break;
 			await sleep(250);
 		}
 		return [await times(), await reports()];
 	};
-	const inTop = async (call) => {
-		for (const frame of page.frames())
-			if (await frame.evaluate(() => Boolean(window.ping)).catch(() => false))
-				await frame.evaluate(call);
-	};
+	const inTop = async (call) => (await top())?.evaluate(call);
 
-	const [loaded, documents] = await settle('loaded', documentOf, NAMES);
+	// every document loaded and reported, then every fetch answered and
+	// reported
+	const [loaded, documents] = await settle((told, log) =>
+		NAMES.every((name) => told.loaded[name] && documentOf(log, name)),
+	);
 	await inTop(() => window.ping());
-	// the worker's first report is in once the wait for its frame ran out
-	await settle('answered', fetchOf, PINGED);
-	await inTop(() => window.again());
-	const [answered, fetches] = await settle('answered', fetchOf, [
-		...PINGED,
-		'worker-2',
-	]);
+	const [answered, fetches] = await settle((told, log) =>
+		PINGED.every((name) => told.answered[name] && fetchOf(log, name)),
+	);
 
 	const tab = documentOf(documents, 'top')?.frame;
 	ok(
@@ -129,13 +141,47 @@ for (const [mode, base] of [
 			`${afterAnswer} ms after the answer`,
 		);
 	}
-	const second = fetchOf(fetches, 'worker-2');
-	const afterSecond = second ? second.at - answered.answered['worker-2'] : null;
-	ok(
-		`${mode}: a worker's fetch after the wait for its frame ran out is reported as it is answered`,
-		afterSecond !== null && afterSecond < SOON_MS,
-		`${afterSecond} ms after the answer, ${JSON.stringify(second)}`,
+	for (const [name, kind] of Object.entries(OTHERS)) {
+		const request = fetchOf(fetches, name);
+		const afterAnswer = request ? request.at - answered.answered[name] : null;
+		ok(
+			`${mode}: ${kind}'s fetch carries the frame the page is in`,
+			request?.frame === tab,
+			JSON.stringify(request),
+		);
+		ok(
+			`${mode}: ${kind}'s fetch is reported as it is answered`,
+			afterAnswer !== null && afterAnswer < SOON_MS,
+			`${afterAnswer} ms after the answer`,
+		);
+	}
+	// a client nobody speaks for, in a tab of its own: the first report of
+	// the page's service worker sits the wait out, the second does not
+	await submitLanding(page, `${FIXTURE}pages/request-frames-sw.html`);
+	title = 'REQUEST FRAMES SERVICE WORKER';
+	await settle(() => top());
+	await inTop(() => window.ping());
+	await settle((told, log) => fetchOf(log, 'service-worker-1'));
+	await inTop(() => window.again());
+	const [last, all] = await settle(
+		(told, log) =>
+			told.answered['service-worker-2'] && fetchOf(log, 'service-worker-2'),
 	);
+	await inTop(() => window.finish());
+	for (const [name, soon] of [
+		['service-worker-1', false],
+		['service-worker-2', true],
+	]) {
+		const request = fetchOf(all, name);
+		const after = request ? request.at - last.answered[name] : null;
+		ok(
+			`${mode}: a service worker's ${soon ? 'second' : 'first'} fetch has no frame and ${soon ? 'does not wait again' : 'waits for one once'}`,
+			request?.frame === null &&
+				after !== null &&
+				(soon ? after < SOON_MS : after >= SOON_MS),
+			`${after} ms after the answer, ${JSON.stringify(request)}`,
+		);
+	}
 	errors.push(...page.errors);
 	await page.close();
 }

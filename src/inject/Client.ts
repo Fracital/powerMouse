@@ -612,9 +612,10 @@ export default class Client {
 	}
 	/**
 	 * Ask the controller (through the service worker) to serve a transport on
-	 * a fresh port and return our end of it.
+	 * a fresh port and return our end of it. `worker`: the blob: URL the
+	 * worker it is for starts from (InitRemoteTransportMessage).
 	 */
-	requestTransportPort(): MessagePort {
+	requestTransportPort(worker?: string): MessagePort {
 		const controller = this.#serviceWorkerContainer?.controller;
 
 		if (!controller || !this.#serviceWorkerPostMessage)
@@ -626,7 +627,12 @@ export default class Client {
 
 		this.#serviceWorkerPostMessage.call(
 			controller,
-			{ [INIT_REMOTE_TRANSPORT]: { directory: this.directory } },
+			{
+				[INIT_REMOTE_TRANSPORT]: {
+					directory: this.directory,
+					...(worker ? { worker } : {}),
+				},
+			},
 			[channel.port2],
 		);
 
@@ -771,11 +777,12 @@ export default class Client {
 	/**
 	 * Hand a freshly constructed dedicated worker its own transport port.
 	 * The worker's inject bundle resolves it from the TRANSPORT_INIT message.
+	 * `script`: the blob: URL the worker starts from, when it is one.
 	 */
 	/** the same, for a SharedWorker's port (the worker hears it on connect) */
-	provisionPortTransport(port: MessagePort) {
+	provisionPortTransport(port: MessagePort, script?: string) {
 		try {
-			const transport = this.requestTransportPort();
+			const transport = this.requestTransportPort(script);
 			this.#portPostMessage!.call(port, { [TRANSPORT_INIT]: true }, [
 				transport,
 			]);
@@ -786,7 +793,7 @@ export default class Client {
 			);
 		}
 	}
-	provisionWorkerTransport(worker: Worker) {
+	provisionWorkerTransport(worker: Worker, script?: string) {
 		// the worker's first message: its transport port, and with
 		// `rewriter: 'wasm'` the modules this context holds, so they are
 		// there before anything the page posts to the worker. Measured
@@ -796,7 +803,7 @@ export default class Client {
 		const message: Record<string, unknown> = {};
 		const transfer: Transferable[] = [];
 		try {
-			transfer.push(this.requestTransportPort());
+			transfer.push(this.requestTransportPort(script));
 			message[TRANSPORT_INIT] = true;
 		} catch (error) {
 			console.warn(

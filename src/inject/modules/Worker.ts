@@ -17,6 +17,14 @@ import { reportedLocations, unrouteURL, type ErrorLocation } from './Unroute';
 const WORKER_CTOR_ERROR = (name: string) =>
 	`Failed to construct '${name}': Please use the 'new' operator, this DOM object constructor cannot be called as a function.`;
 
+/**
+ * A worker started from a blob: URL (its bootstrap) makes no request for its
+ * script, so the service worker cannot see who made it: the request for its
+ * transport says (InitRemoteTransportMessage)
+ */
+const blobScript = (url: unknown): string | undefined =>
+	typeof url === 'string' && url.startsWith('blob:') ? url : undefined;
+
 export default class WorkerModule extends Module<Client> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
@@ -277,7 +285,7 @@ export default class WorkerModule extends Module<Client> {
 						own,
 						new URL(source, this.client.url.toString()).href,
 					);
-					this.client.provisionWorkerTransport(worker);
+					this.client.provisionWorkerTransport(worker, blobScript(args[0]));
 					if (own) releaseOnLoad(worker, own);
 					return worker;
 				},
@@ -314,7 +322,7 @@ export default class WorkerModule extends Module<Client> {
 						args,
 						newTarget,
 					);
-					this.client.provisionPortTransport(worker.port);
+					this.client.provisionPortTransport(worker.port, blobScript(args[0]));
 					return worker;
 				},
 				true,

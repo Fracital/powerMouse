@@ -228,6 +228,12 @@ export const MIXED_CONTENT_NOTICE = '$stomp$mixedContent';
 export const KEPT_LOAD = '$stomp$keptLoad';
 /** [when (ms since the epoch), how] */
 export type KeptLoad = [at: number, delivery: Delivery];
+/**
+ * SW -> a document on about:srcdoc that made a request the host's log
+ * reports: its service worker client id, which it has no URL of its own to
+ * ask for (`whoami`); it tells the host like any other document
+ */
+export const CLIENT_ID = '$stomp$clientId';
 /** SW -> every window: the cookie jar changed for `domain` (every host when empty); pages drop their document.cookie cache */
 export const COOKIES_CHANGED = '$stomp$cookiesChanged';
 export interface CookiesChange {
@@ -553,6 +559,12 @@ export const REWRITE_PORT = '$stomp$rewritePort';
 export const REWRITE_MODULES = '$stomp$rewriteModules';
 export interface InitRemoteTransportMessage {
 	directory: string;
+	/**
+	 * the blob: URL the worker this port is for starts from (its bootstrap):
+	 * no request for it reaches the service worker, which names the worker's
+	 * creator in the host's request log by it (RequestInfo.owner)
+	 */
+	worker?: string;
 }
 
 /**
@@ -698,6 +710,11 @@ export interface RequestInfo {
 	kind?: RequestErrorKind;
 	/** the service worker client that made it; the controller maps it to a frame */
 	client?: string;
+	/**
+	 * when a worker made it: the document that made the worker (through the
+	 * workers between them), whose frame the request belongs to
+	 */
+	owner?: string;
 	/** the index, in the host's `rules`, of the rule that applied */
 	rule?: number;
 }

@@ -1,0 +1,19 @@
+<!doctype html>
+<title>REQUEST FRAMES SERVICE WORKER</title>
+<script>
+	// a client nobody speaks for: the page's service worker is the site's,
+	// not a frame's (the proxy runs it for every page of its scope). ping()
+	// and again() have it fetch /echo-headers?from=service-worker-1 and -2;
+	// finish() takes the registration away again
+	window.times = { loaded: {}, answered: {} };
+	navigator.serviceWorker.addEventListener('message', (event) => {
+		times.answered[event.data] = Date.now();
+	});
+	const registered = navigator.serviceWorker
+		.register('/pages/request-frames-sw.js')
+		.then(() => navigator.serviceWorker.ready);
+	const ask = async (name) => (await registered).active.postMessage(name);
+	window.ping = () => ask('service-worker-1');
+	window.again = () => ask('service-worker-2');
+	window.finish = async () => (await registered).unregister();
+</script>

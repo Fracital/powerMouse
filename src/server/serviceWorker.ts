@@ -71,6 +71,11 @@ import {
 	settle,
 	SIMULATED_PERMISSIONS,
 } from './permissions';
+import {
+	noteBlobWorker,
+	noteRequestClients,
+	requestOwner,
+} from './requestClients';
 import { RewriteCache } from './rewriteCache';
 import { RewritePool } from './rewritePool';
 import { abortRequest } from './rewrites';
@@ -186,7 +191,12 @@ function registerController(
 	// the host's request log, only when it asked: one RPC per request. The
 	// rpc is created below; requests only arrive once it exists
 	function report(info: RequestInfo) {
-		rpc.call('request', info);
+		// a worker's request names the document that made the worker
+		const send = (owner?: string) =>
+			rpc.call('request', owner ? { ...info, owner } : info);
+		const owner = info.client ? requestOwner(info.client) : undefined;
+		if (owner instanceof Promise) owner.then(send, () => send());
+		else send(owner);
 	}
 	const server = createServer(
 		config,
@@ -952,10 +962,12 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 		if (ref && ref.owner === sender)
 			ref.client = typeof client === 'string' ? client : sender;
 	} else if (INIT_REMOTE_TRANSPORT in data) {
-		const { directory } = data[
+		const { directory, worker } = data[
 			INIT_REMOTE_TRANSPORT
 		] as InitRemoteTransportMessage;
 		const ref = controllers.get(directory);
+		if (sender && typeof worker === 'string' && worker.startsWith('blob:'))
+			noteBlobWorker(worker, sender);
 
 		if (!ref) {
 			console.error(`Stomp: no controller registered for ${directory}`);
@@ -1065,6 +1077,11 @@ async function serve(event: FetchEvent, ref: ControllerRef): Promise<Response> {
 		// nothing else live under the scope: the controller's own error page
 		return orphanError(request, ref.config, ref.directory, ref.config.codec);
 	}
+	noteRequestClients(
+		request.destination,
+		event.clientId,
+		event.resultingClientId,
+	);
 	const server = ref.ready ?? (await ref.server);
 	// the document this navigation makes is this worker's: its inject's load
 	// channel is the first its client opens (loadGrants.ts)

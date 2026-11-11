@@ -3893,9 +3893,29 @@ url`) carries its value and targets that window. An about:blank child of
   viewer never showed them. Both controllers now find the frame by walking
   up from the reporting window (with the host's own `parent` getter: a
   proxied page of the host's origin answers `parent` itself). A client that
-  never says (a worker, a document on about:srcdoc or about:blank) still
-  has no frame, and holds its reports back for that wait once instead of
-  every time (request-frames suite).
+  never says still has no frame, and holds its reports back for that wait
+  once instead of every time (request-frames suite).
+- A worker's requests, and those of a document on about:srcdoc, carry the
+  frame too, with no wait. Neither could say which client it is: a worker
+  has no window to tell the host from, and an about:srcdoc document no URL
+  of the proxy's to ask `whoami` at. The service worker now names the
+  document that made a worker (`RequestInfo.owner`): the worker script's
+  own request carries both ids (`clientId`, the creator, and
+  `resultingClientId`, the worker; the same in Chrome 152 and 156, for
+  dedicated, module and shared workers and a nested frame's), and a worker
+  started from a blob: URL, whose script never passes the service worker,
+  is matched by the URL its creator names when it asks for the worker's
+  transport port. An about:srcdoc document is told its id by the service
+  worker when the first request of it is reported, and passes it on like a
+  page: no fetch per frame (a `whoami` took 0.4 to 2.3 ms each over twenty
+  frames), and nothing at all for a frame that loads nothing or a host
+  without a request log. A document on about:blank is no client: its loads
+  already went out as its page's. What still has no frame is a client
+  nobody speaks for, a page's emulated service worker (its site's, not a
+  frame's), and it alone waits, once. Per proxied frame nothing changed:
+  1063 KB of heap on Chrome 152 and 1060 KB on 156 before and after, the
+  document bundle 284 bytes larger (frame-cost; request-frames gains the
+  rows).
 - `history.pushState` and `replaceState` refuse a URL of another origin, or
   one that does not parse, with a SecurityError naming the page's origin and
   URL, like the browser; before this the URL was routed and accepted (every

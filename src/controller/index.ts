@@ -325,10 +325,11 @@ export interface ControllerInit {
 }
 
 /**
- * a RequestInfo with the frame it belongs to: the one showing the page whose
- * document made the request, a document in a frame nested in the page
- * included, once that document reported its client id; null for a client
- * that never does (a worker, a document on about:srcdoc or about:blank)
+ * a RequestInfo with the frame it belongs to: the one showing the page that
+ * made the request, whatever in the page did (a document in a nested frame,
+ * one on about:srcdoc or about:blank, a worker), once its document reported
+ * its client id; null for a client no frame holds (a page's emulated
+ * service worker)
  */
 export interface RequestEvent extends RequestInfo {
 	frame: Frame | null;
@@ -660,11 +661,12 @@ export class StompController extends EventTarget {
 	/** service worker client ids the pages reported, by frame */
 	#clientFrames = new Map<string, Frame>();
 	/**
-	 * clients a request report waited for in vain: a worker, and a document
-	 * on about:srcdoc or about:blank, never say which frame they are in (a
-	 * page learns its client id from the service worker and tells the host),
-	 * so their later reports go out as they come. One that tells after all
-	 * (a page slower than the wait) is a frame's from then on.
+	 * clients a request report waited for in vain: nobody says which frame a
+	 * page's emulated service worker is in (it is its site's; a document
+	 * tells the host its own client id, and the service worker names the
+	 * document that made a worker), so its later reports go out as they
+	 * come. One that tells after all (a page slower than the wait) is a
+	 * frame's from then on.
 	 */
 	#silentClients = new Set<string>();
 	/** a page said which client it is: its requests are `frame`'s */
@@ -1460,8 +1462,12 @@ export class StompController extends EventTarget {
 						serveTransport(port, () => this.transport, this.#handshakeHeaders);
 				},
 				request: async (info) => {
-					let frame =
-						(info.client && this.#clientFrames.get(info.client)) || null;
+					// a worker's request is its creator's frame's (info.owner)
+					const known = () =>
+						(info.client && this.#clientFrames.get(info.client)) ||
+						(info.owner && this.#clientFrames.get(info.owner)) ||
+						null;
+					let frame = known();
 					// a document's own request, and the subresources its head fetches,
 					// are reported before the page has told us which frame it is in:
 					// give that report a moment to arrive. Not without frames: the
@@ -1480,10 +1486,14 @@ export class StompController extends EventTarget {
 								: SUBRESOURCE_WAIT_MS);
 						while (!frame && Date.now() < deadline) {
 							await sleep(50);
-							frame = this.#clientFrames.get(info.client) || null;
+							frame = known();
 						}
 						if (!frame) this.#silentClients.add(info.client);
 					}
+					// kept under the worker's own id too: the service worker
+					// forgets who made a worker when it restarts
+					if (frame && info.client && info.owner)
+						this.#attribute(info.client, frame);
 					const event: RequestEvent = { ...info, frame };
 					this.#onRequest?.(event);
 					this.dispatchEvent(new CustomEvent('request', { detail: event }));

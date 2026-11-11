@@ -228,8 +228,12 @@ export class RemoteController extends EventTarget {
 					);
 				},
 				request: async (info) => {
-					let frame =
-						(info.client && this.#clientFrames.get(info.client)) || null;
+					// a worker's request is its creator's frame's (info.owner)
+					const known = () =>
+						(info.client && this.#clientFrames.get(info.client)) ||
+						(info.owner && this.#clientFrames.get(info.owner)) ||
+						null;
+					let frame = known();
 					// the document and its head's subresources are reported before the
 					// page has said which frame it is in: give that a moment, once
 					// for a client that never says (see StompController)
@@ -243,10 +247,12 @@ export class RemoteController extends EventTarget {
 								: 1500);
 						while (!frame && Date.now() < deadline) {
 							await new Promise((resolve) => setTimeout(resolve, 50));
-							frame = this.#clientFrames.get(info.client) || null;
+							frame = known();
 						}
 						if (!frame) this.#silentClients.add(info.client);
 					}
+					if (frame && info.client && info.owner)
+						this.#attribute(info.client, frame);
 					const event: RemoteRequestEvent = { ...info, frame };
 					init.onRequest?.(event);
 					this.dispatchEvent(new CustomEvent('request', { detail: event }));
