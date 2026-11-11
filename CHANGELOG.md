@@ -251,7 +251,7 @@ The first release after a four-year gap. Everything below is breaking.
   on the sheet before (Fixes). The `scanner-parity` suite compares both on
   hand-written cases, the fixture pages and a seeded fuzz.
 - With `rewriter: 'wasm'` scripts are rewritten by the Rust rewriter
-  (`rust/rwjs`, oxc; `assets/rewriter.wasm`, 454 KB, 160 KB brotli) in the
+  (`rust/rwjs`, oxc; `assets/rewriter.wasm`, 468 KB, 165 KB brotli) in the
   rewrite workers and the service worker. It makes the same rewrites as the
   JavaScript rewriter as edits to the script's own text, so everything it
   does not touch comes out byte for byte: comments, spacing, literals, line
@@ -278,9 +278,10 @@ The first release after a four-year gap. Everything below is breaking.
   declares, a regular expression that does not compile), so such a script
   was rewritten: the page read its SyntaxError at another line and column,
   and `'use strict'; delete location` ran, as a call of the access API.
-  The module now checks them itself in one walk after the parse
-  (`rust/rwjs/src/early.rs`; oxc's semantic pass costs 115 KB and refuses
-  Annex B scripts a browser takes) and answers such a script as one no
+  The module now checks them itself in the rewrite's own walk
+  (`rust/rwjs/src/early.rs`, called where the walk meets a node; oxc's
+  semantic pass costs 115 KB and refuses Annex B scripts a browser takes)
+  and answers such a script as one no
   browser runs: it goes out as it came and the browser reports its own
   error at the page's own position. Syntax no browser has yet (decorators,
   `accessor` fields, `import.defer()`) stays the JavaScript rewriter's to
@@ -297,9 +298,12 @@ The first release after a four-year gap. Everything below is breaking.
   record to Chrome and compares the texts natively and through the proxy
   as `new Function`, eval, inline and fetched scripts, `import()` and
   workers. Over real scripts (the 46 MB corpus, the suites' pages, 2,346
-  files of `node_modules`) nothing V8 takes is answered as an error. It
-  costs 16 KB of the artifact (5 KB brotli) and 12% of the module's
-  rewrite time. The same table lists what the JavaScript rewriter does
+  files of `node_modules`) nothing V8 takes is answered as an error. A
+  regular expression's pattern is checked by the same walk, the plainest
+  by a scan of the text (`rust/rwjs/src/pattern.rs`), any other by the
+  parser. It costs 30 KB of the artifact (10 KB brotli) and 3.8% of the
+  module's instructions (0.2% in optimized code alone), where a walk of its
+  own after the parse cost 7.3%. The same table lists what the JavaScript rewriter does
   with the texts (12 that run though V8 refuses them, 120 its parser
   refuses though V8 takes them, 11 it prints into a SyntaxError); those
   are not changed here, and the wasm backend still inherits the first

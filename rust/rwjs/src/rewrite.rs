@@ -10,7 +10,7 @@ use oxc::span::SourceType;
 use crate::config::Config;
 use crate::early::{self, Mode, Verdict};
 use crate::source::{Utf16Offsets, holder_statement, source_key};
-use crate::walk::Walker;
+use crate::walk::{Patterns, Walker};
 
 /// What one rewrite depends on besides the configuration: handed over per
 /// script (`FLAG_PARAMS` in the ABI)
@@ -201,9 +201,10 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 			allow_return_outside_function: true,
 			allow_v8_intrinsics: true,
 			preserve_parens: true,
-			// a pattern V8 refuses is a parse error here: the JavaScript
-			// rewriter decides, and the literal reaches V8 as written
-			parse_regular_expression: true,
+			// (a pattern is asked of the regular expression parser by the
+			// walk, src/pattern.rs: one V8 refuses is a parse error here, the
+			// JavaScript rewriter decides, and the literal reaches V8 as
+			// written)
 			..ParseOptions::default()
 		})
 		.parse();
@@ -218,14 +219,63 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 		lenient: !options.module,
 		top_return: !options.module,
 	};
-	match early::check(&program, source, mode) {
+	let offsets = Utf16Offsets::new(source);
+	// the rewrite's walk drives the early-error check (src/early.rs): one
+	// walk of the tree for both
+	let mut walker = Walker::new(source, options, &offsets, route, mode, &allocator);
+	walker.visit_program(&program);
+	// a walk that declined may have left a part unwalked: the check then
+	// walks the tree on its own, as it does for the parse questions, and the
+	// patterns are read on their own
+	let (verdict, bad_pattern) = match walker.declined() {
+		Some(_) => {
+			let mut patterns = Patterns {
+				src: source,
+				allocator: &allocator,
+				bad: false,
+			};
+			patterns.visit_program(&program);
+			(early::check(&program, source, mode), patterns.bad)
+		}
+		None => (walker.verdict(), walker.bad_pattern()),
+	};
+	// (as the parser answers when it parses the patterns itself: the
+	// crate's tests hold it to that)
+	#[cfg(test)]
+	{
+		let parsed = Parser::new(&allocator, source, source_type)
+			.with_options(ParseOptions {
+				allow_return_outside_function: true,
+				allow_v8_intrinsics: true,
+				preserve_parens: true,
+				parse_regular_expression: true,
+				..ParseOptions::default()
+			})
+			.parse();
+		let refused = parsed.fatal_error || parsed.diagnostics.has_errors();
+		if refused != bad_pattern {
+			tests::DIFFER.with(|differ| {
+				differ.borrow_mut().push(format!("{source:?}: walk's patterns {bad_pattern}, parser {refused}"))
+			});
+		}
+	}
+	if bad_pattern {
+		return Err(Decline::Parse);
+	}
+	// (the two walks answer alike: the crate's tests hold every recorded
+	// text to it, in every place it is tried)
+	#[cfg(test)]
+	if walker.declined().is_none() {
+		let alone = early::check(&program, source, mode);
+		if verdict != alone {
+			tests::DIFFER.with(|differ| differ.borrow_mut().push(format!("{source:?}: walk {verdict:?}, alone {alone:?}")));
+		}
+	}
+	match verdict {
 		Verdict::Compiles => {}
 		Verdict::Refused => return Err(Decline::Invalid),
 		Verdict::Unshipped => return Err(Decline::Shape),
 	}
-	let offsets = Utf16Offsets::new(source);
-	let mut walker = Walker::new(source, options, &offsets, route);
-	walker.visit_program(&program);
 
 	// the two comments DevTools reads keep their place; a source map's URL
 	// resolves against the routed script, so it is routed too
@@ -324,8 +374,14 @@ pub fn js_whitespace(c: char) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
 	use super::*;
+
+	thread_local! {
+		/// the scripts whose verdict the rewrite's walk and the check's own
+		/// walk answer differently (none)
+		pub(crate) static DIFFER: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+	}
 
 	fn run(source: &str, module: bool) -> Result<String, Decline> {
 		let config = Config::default();

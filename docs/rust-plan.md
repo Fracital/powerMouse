@@ -112,9 +112,17 @@ replaced the construct the script ran (`delete location` in strict code
 became a call of the access API). `oxc_semantic` was measured and not
 taken: 115 KB more of artifact (39 KB brotli, past the budget), 44% more
 rewrite time, and it refuses eight Annex B scripts a browser takes. The
-module has its own check instead (`rust/rwjs/src/early.rs`, one walk after
-the parse, by the clauses of ECMA-262 as V8 reads them), and the parser is
-told to parse regular expressions' patterns. A script the check refuses is
+module has its own check instead (`rust/rwjs/src/early.rs`, by the clauses
+of ECMA-262 as V8 reads them), driven by the rewrite's own walk: the walk
+calls its hooks where it meets a node, so the tree is walked once for both.
+A regular expression's pattern is asked of the same walk
+(`rust/rwjs/src/pattern.rs`): a pattern of the plainest kind (99% of the
+corpus's) is answered by a scan of its text, any other by the parser. A
+walk that declines a script may have left a part unwalked, so the check
+then walks the tree on its own, as it does for the two parse questions;
+the crate's tests hold the two walks to one verdict on every recorded text
+in eight places, and the scan to the parser's answer on a fuzz of patterns.
+A script the check refuses is
 answered as one no browser runs (status 7) and goes out as it came, so the
 browser reports its own error at the page's own position; syntax no
 browser has yet (decorators, `accessor` fields, `import.defer()`) is
@@ -146,9 +154,17 @@ answered as an error. The JavaScript rewriter on the same table: 161 of
 the refused scripts run rewritten (12 texts), 569 of the taken go out
 unrewritten (120 texts its parser refuses) and 105 come out broken (11
 texts); the wasm backend inherits the first kind for what its own parser
-refuses. Cost: 15,631 bytes of artifact (5,243 brotli) and 12% of rewrite
-time on the corpus (2,341 to 2,613 ms for the module alone, medians of
-five, interleaved, load 18). REVISION is 3.
+refuses. Cost, as first landed (a walk of its own after the parse, and the
+parser parsing every pattern): 15,631 bytes of artifact (5,243 brotli) and
+12% of rewrite time on the corpus (2,341 to 2,613 ms for the module alone,
+medians of five, interleaved, load 18), +7.3% of the module's
+instructions. Driven by the rewrite's walk, with patterns scanned: +3.8% of
+instructions with V8's default tiering and +0.2% in optimized code alone
+(`perf stat` over 59 `node_modules` scripts, 37 MB, three passes net of
+one; the rest is the check's own work, most of it the declarations' table,
+which V8 does not inline in the walk), at 14,574 more bytes of artifact
+(4,316 brotli). The output and every verdict are byte for byte the
+same.
 The toolchain is pinned by the image digest rather than a
 `rust-toolchain.toml`: the pins in one file, and no toolchain download at
 build time.
@@ -156,9 +172,10 @@ build time.
 Three artifacts, built separately so a deployment that wants none pays for
 none:
 
-- the rewriter module: 453,812 bytes, 160,260 brotli as built with every
-  rewrite family in and the rewriter's holes closed (the budget is 600 KB,
-  160 KB brotli: the brotli size is at it, 260 bytes past).
+- the rewriter module: 468,386 bytes, 164,576 brotli as built with every
+  rewrite family in, the rewriter's holes closed and the early-error check
+  in its walk (the budget is 600 KB, 160 KB brotli: the brotli size is
+  4,576 bytes past it).
 - the scanner module (`scanner.wasm`, phase 3: the CSS rewriter and the
   markup scan): 48,518 bytes, 19,673 brotli. It has no dependencies and
   shares no code with the rewriter, so it is a module of its own and not
@@ -740,7 +757,7 @@ frame never evaluated the library ("As built" below).
 
 **What the wasm side costs in exchange.**
 
-- Bytes, once per controller: `rewriter.wasm` is 453,812 bytes (160,260
+- Bytes, once per controller: `rewriter.wasm` is 468,386 bytes (164,576
   brotli), fetched by the controller, cached by HTTP like any asset, and
   compiled once (21 ms, off the main thread). The service worker is handed
   the bytes (a 423 KB buffer per handshake) and compiles them once more.
@@ -1579,7 +1596,7 @@ Phase 1, measured (2026-11-10, Node 24, load about 20; medians of three):
 | parity, the corpus                               |            | 28 of 28 the same                                                        |
 | parity, 1,309 files of `node_modules` over 2 KB  |            | 1,309 the same                                                           |
 | parity, the 680 cases                            |            | 675 the same, 0 differ, 1 known divergence, 1 declined, 3 neither parses |
-| artifact                                         |            | 453,812 bytes, 160,260 brotli (with the early-error check and the holes) |
+| artifact                                         |            | 468,386 bytes, 164,576 brotli (the check in the walk, patterns scanned)  |
 | `dist/injectDocument.js`, master and this branch | 814,491    | 816,570                                                                  |
 
 ## 12. Risks

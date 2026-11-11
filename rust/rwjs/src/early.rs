@@ -41,48 +41,12 @@ pub enum Verdict {
 
 /// V8's verdict on `program` (the parse of `source`)
 pub fn check<'a>(program: &Program<'a>, source: &str, mode: Mode) -> Verdict {
-	let mut checker = Checker {
-		source: source.as_bytes(),
-		mode,
-		error: false,
-		unshipped: false,
-		cx: Cx {
-			strict: false,
-			yield_kw: false,
-			await_kw: false,
-			in_params: false,
-			no_await: false,
-			no_arguments: false,
-			super_property: mode.lenient,
-			super_call: mode.lenient,
-			returns: mode.top_return,
-			label_base: 0,
-			loops: 0,
-			breakables: 0,
-		},
-		labels: Vec::new(),
-		scopes: Vec::new(),
-		names: Vec::new(),
-		hoisted: Vec::new(),
-		nodes: Vec::new(),
-		free: 0,
-		table: Table::new(),
-		heads: Vec::new(),
-		duplicate_param: false,
-		default_export: false,
-		exports: Vec::new(),
-		privates: Vec::new(),
-		private_uses: Vec::new(),
-	};
+	let mut checker = Checker::new(source, mode);
 	checker.visit_program(program);
-	if checker.error {
-		Verdict::Refused
-	} else if checker.unshipped {
-		Verdict::Unshipped
-	} else {
-		Verdict::Compiles
-	}
+	checker.verdict()
 }
+
+
 
 /// What the code around a node allows, replaced at a function's border
 #[derive(Clone, Copy)]
@@ -157,31 +121,48 @@ struct Node {
 	next: u32,
 }
 
-/// The names declared so far, each with a number: open addressing over the
-/// names' bytes, nothing removed
+/// The names declared so far, each with a number. A name of one ASCII
+/// character (most of a minified script's) is found by its byte; any other
+/// by open addressing over its hash, a slot holding the hash and the number,
+/// the name compared only where the hashes are equal. Nothing is removed.
 struct Table<'a> {
-	slots: Vec<(&'a str, u32)>,
+	/// by an ASCII byte: the number of that one-character name and one, 0
+	/// when it was never declared
+	ascii: [u32; 128],
+	/// the hash in the high half, the number and one in the low, 0 empty
+	slots: Vec<u64>,
+	/// by number: the name
+	names: Vec<&'a str>,
+	/// the slots in use
 	used: u32,
+}
+
+fn hash(name: &str) -> u32 {
+	let mut hash: u32 = 0x811c_9dc5;
+	for byte in name.bytes() {
+		hash = (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193);
+	}
+	hash
 }
 
 impl<'a> Table<'a> {
 	fn new() -> Self {
 		Self {
-			slots: vec![("", 0); 64],
+			ascii: [0; 128],
+			slots: vec![0; 64],
+			names: Vec::new(),
 			used: 0,
 		}
 	}
 
-	fn find(&self, name: &str) -> usize {
-		let mut hash: u32 = 0x811c_9dc5;
-		for byte in name.bytes() {
-			hash = (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193);
-		}
+	/// the slot of `name` (whose hash is `hash`): its own, or the empty one
+	/// it would take
+	fn find(&self, name: &str, hash: u32) -> usize {
 		let mask = self.slots.len() - 1;
 		let mut at = hash as usize & mask;
 		loop {
-			let slot = self.slots[at].0;
-			if slot.is_empty() || slot == name {
+			let slot = self.slots[at];
+			if slot == 0 || ((slot >> 32) as u32 == hash && self.names[(slot as u32 - 1) as usize] == name) {
 				return at;
 			}
 			at = (at + 1) & mask;
@@ -190,29 +171,51 @@ impl<'a> Table<'a> {
 
 	/// the number of `name`, if it was ever declared
 	fn get(&self, name: &str) -> Option<u32> {
-		let (slot, id) = self.slots[self.find(name)];
-		(!slot.is_empty()).then_some(id)
+		if let [byte] = name.as_bytes()
+			&& *byte < 0x80
+		{
+			let id = self.ascii[*byte as usize];
+			return (id != 0).then(|| id - 1);
+		}
+		let slot = self.slots[self.find(name, hash(name))];
+		(slot != 0).then(|| slot as u32 - 1)
 	}
 
 	/// the number of `name`, a new one the first time
 	fn id(&mut self, name: &'a str) -> u32 {
-		let mut at = self.find(name);
-		if self.slots[at].0.is_empty() {
+		if let [byte] = name.as_bytes()
+			&& *byte < 0x80
+		{
+			let at = *byte as usize;
+			if self.ascii[at] == 0 {
+				self.names.push(name);
+				self.ascii[at] = self.names.len() as u32;
+			}
+			return self.ascii[at] - 1;
+		}
+		let hash = hash(name);
+		let mut at = self.find(name, hash);
+		if self.slots[at] == 0 {
 			if (self.used as usize + 1) * 2 > self.slots.len() {
-				let wider = vec![("", 0); self.slots.len() * 2];
+				let wider = vec![0; self.slots.len() * 2];
 				let old = std::mem::replace(&mut self.slots, wider);
-				for (name, id) in old {
-					if !name.is_empty() {
-						let at = self.find(name);
-						self.slots[at] = (name, id);
+				let mask = self.slots.len() - 1;
+				for slot in old {
+					if slot != 0 {
+						let mut to = (slot >> 32) as usize & mask;
+						while self.slots[to] != 0 {
+							to = (to + 1) & mask;
+						}
+						self.slots[to] = slot;
 					}
 				}
-				at = self.find(name);
+				at = self.find(name, hash);
 			}
-			self.slots[at] = (name, self.used);
+			self.names.push(name);
+			self.slots[at] = (u64::from(hash) << 32) | self.names.len() as u64;
 			self.used += 1;
 		}
-		self.slots[at].1
+		(self.slots[at] as u32) - 1
 	}
 }
 
@@ -223,11 +226,29 @@ struct Private<'a> {
 	accessors: u8,
 }
 
-struct Checker<'a, 's> {
+/// what a hook hands back to be handed to the one that closes its node
+#[derive(Clone, Copy)]
+pub(crate) struct Saved {
+	cx: Cx,
+	/// the hook ran (it was not muted)
+	live: bool,
+}
+
+/// what `class_body_enter` hands `class_leave`
+#[derive(Clone, Copy)]
+pub(crate) struct ClassBody {
+	privates: usize,
+	uses: usize,
+	live: bool,
+}
+
+pub(crate) struct Checker<'a, 's> {
 	source: &'s [u8],
 	mode: Mode,
 	error: bool,
 	unshipped: bool,
+	/// inside code the check does not read (`mute`)
+	muted: u32,
 	cx: Cx,
 	/// the labels around the node, and whether each one labels a loop
 	labels: Vec<(&'a str, bool)>,
@@ -253,7 +274,12 @@ struct Checker<'a, 's> {
 	privates: Vec<Private<'a>>,
 	/// the private names used and not declared by a class closed so far
 	private_uses: Vec<&'a str>,
+	/// the open classes: whether each extends another
+	classes: Vec<bool>,
+	/// the `__proto__: value` properties of the object literal being walked
+	protos: u32,
 }
+
 
 fn strict_directive(directives: &[Directive]) -> bool {
 	directives.iter().any(|directive| directive.directive == "use strict")
@@ -274,7 +300,7 @@ fn labelled_function(statement: &Statement) -> bool {
 	}
 }
 
-impl<'a> Checker<'a, '_> {
+impl<'a, 's> Checker<'a, 's> {
 	fn fail(&mut self) {
 		self.error = true;
 	}
@@ -361,6 +387,12 @@ impl<'a> Checker<'a, '_> {
 		let top = (head != 0).then(|| self.nodes[head as usize - 1]);
 		match kind {
 			Kind::Var => {
+				// (declared here already by a `var` or a parameter: whatever
+				// lexical name stands between here and the function failed
+				// that declaration, and none can have come since)
+				if top.is_some_and(|top| top.depth == depth && matches!(top.kind, Kind::Var | Kind::Param)) {
+					return;
+				}
 				// against every lexical name between here and the function
 				let mut at = head;
 				while at != 0 {
@@ -372,9 +404,6 @@ impl<'a> Checker<'a, '_> {
 						return self.fail();
 					}
 					at = node.next;
-				}
-				if top.is_some_and(|top| top.depth == depth && matches!(top.kind, Kind::Var | Kind::Param)) {
-					return;
 				}
 				self.push(id, depth, Kind::Var);
 			}
@@ -430,14 +459,19 @@ impl<'a> Checker<'a, '_> {
 	}
 
 	/// a name where an identifier stands: a reference, a binding, a label
+	#[inline]
 	fn name(&mut self, name: &str, binding: bool) {
 		// (the names below are 3 to 10 bytes and start with one of
 		// `aeilpsy`: most names are neither)
-		if !(3..=10).contains(&name.len())
-			|| !matches!(name.as_bytes()[0], b'a' | b'e' | b'i' | b'l' | b'p' | b's' | b'y')
+		if (3..=10).contains(&name.len())
+			&& matches!(name.as_bytes()[0], b'a' | b'e' | b'i' | b'l' | b'p' | b's' | b'y')
 		{
-			return;
+			self.reserved(name, binding);
 		}
+	}
+
+	#[inline(never)]
+	fn reserved(&mut self, name: &str, binding: bool) {
 		let refused = match name {
 			"implements" | "interface" | "let" | "package" | "private" | "protected" | "public" | "static" => {
 				self.cx.strict
@@ -489,39 +523,271 @@ impl<'a> Checker<'a, '_> {
 
 	/// a parameter list, its names the function scope's: whether it is a
 	/// simple one (names alone)
-	fn params(&mut self, params: &FormalParameters<'a>, unique: bool) -> bool {
-		let simple = params.rest.is_none()
-			&& params.items.iter().all(|param| {
-				param.initializer.is_none() && matches!(param.pattern, BindingPattern::BindingIdentifier(_))
-			});
-		self.duplicate_param = false;
-		for param in &params.items {
-			if !param.decorators.is_empty() {
-				self.unshipped = true;
-			}
-			self.declare_pattern(&param.pattern, Kind::Param);
-			self.visit_binding_pattern(&param.pattern);
-			if let Some(initializer) = &param.initializer {
-				self.visit_expression(initializer);
+	/// a checker for `source` (the text `program` was parsed from)
+	pub(crate) fn new(source: &'s str, mode: Mode) -> Self {
+		Self {
+			source: source.as_bytes(),
+			mode,
+			error: false,
+			unshipped: false,
+			muted: 0,
+			cx: Cx {
+				strict: false,
+				yield_kw: false,
+				await_kw: false,
+				in_params: false,
+				no_await: false,
+				no_arguments: false,
+				super_property: mode.lenient,
+				super_call: mode.lenient,
+				returns: mode.top_return,
+				label_base: 0,
+				loops: 0,
+				breakables: 0,
+			},
+			labels: Vec::new(),
+			scopes: Vec::new(),
+			names: Vec::new(),
+			hoisted: Vec::new(),
+			nodes: Vec::new(),
+			free: 0,
+			table: Table::new(),
+			heads: Vec::new(),
+			duplicate_param: false,
+			default_export: false,
+			exports: Vec::new(),
+			privates: Vec::new(),
+			private_uses: Vec::new(),
+			classes: Vec::new(),
+			protos: 0,
+		}
+	}
+
+	/// what V8 makes of the text, from what was seen of it
+	pub(crate) fn verdict(&self) -> Verdict {
+		if self.error {
+			Verdict::Refused
+		} else if self.unshipped {
+			Verdict::Unshipped
+		} else {
+			Verdict::Compiles
+		}
+	}
+
+	/// what follows is no code the check reads (a decorator's, an
+	/// `accessor` field's: what no browser has yet), until `unmute`
+	pub(crate) fn mute(&mut self) {
+		self.muted += 1;
+	}
+
+	pub(crate) fn unmute(&mut self) {
+		self.muted -= 1;
+	}
+
+	fn on(&self) -> bool {
+		self.muted == 0
+	}
+
+	// ---- the hooks: what a walk calls where it meets a node, in the order
+	// the walk of this module (the Visit impl below) calls them ----
+
+	pub(crate) fn program_enter(&mut self, it: &Program<'a>) {
+		self.cx.strict = self.mode.module || strict_directive(&it.directives);
+		self.enter(if self.mode.module { ScopeKind::Module } else { ScopeKind::Function });
+		self.directives(&it.directives);
+	}
+
+	pub(crate) fn program_leave(&mut self) {
+		// what a module exports by name it declares
+		while let Some(name) = self.exports.pop() {
+			if self.table.get(name).is_none_or(|id| self.heads[id as usize] == 0) {
+				self.fail();
 			}
 		}
-		if let Some(rest) = &params.rest {
-			self.declare_pattern(&rest.rest.argument, Kind::Param);
-			self.visit_binding_pattern(&rest.rest.argument);
-		}
-		if self.duplicate_param && (unique || !simple || self.cx.strict) {
+		if !self.private_uses.is_empty() && !self.mode.lenient {
 			self.fail();
 		}
-		simple
+		self.leave();
 	}
+
+	/// an identifier read (`IdentifierReference`)
+	#[inline]
+	pub(crate) fn reference(&mut self, name: &str) {
+		if self.on() {
+			self.name(name, false);
+		}
+	}
+
+	/// an identifier declared (`BindingIdentifier`)
+	#[inline]
+	pub(crate) fn binding(&mut self, name: &str) {
+		if self.on() {
+			self.name(name, true);
+		}
+	}
+
+	/// an identifier assigned to: also a reference
+	pub(crate) fn assigned(&mut self, name: &str) {
+		if self.on() {
+			self.target(name);
+			self.name(name, false);
+		}
+	}
+
+	pub(crate) fn private_use(&mut self, name: &'a str) {
+		if self.on() {
+			self.private_uses.push(name);
+		}
+	}
+
+	#[inline]
+	pub(crate) fn numeric(&mut self, it: &NumericLiteral<'a>) {
+		// `010`, `08`: legacy octal and its decimal look-alike
+		let start = it.span.start as usize;
+		if self.on()
+			&& self.cx.strict
+			&& it.span.end as usize > start + 1
+			&& self.source[start] == b'0'
+			&& self.source[start + 1].is_ascii_digit()
+		{
+			self.fail();
+		}
+	}
+
+	#[inline]
+	pub(crate) fn string_literal(&mut self, it: &StringLiteral<'a>) {
+		// (a literal as long as its value has no escape to read)
+		if self.on() && self.cx.strict && it.span.size() as usize != it.value.as_bytes().len() + 2 {
+			self.string(it.span);
+		}
+	}
+
+	#[inline]
+	pub(crate) fn unary(&mut self, it: &UnaryExpression<'a>) {
+		if it.operator == UnaryOperator::Delete {
+			self.delete(it);
+		}
+	}
+
+	#[inline(never)]
+	fn delete(&mut self, it: &UnaryExpression<'a>) {
+		if !self.on() {
+			return;
+		}
+		let mut argument = &it.argument;
+		while let Expression::ParenthesizedExpression(inner) = argument {
+			argument = &inner.expression;
+		}
+		let refused = match argument {
+			Expression::Identifier(_) => self.cx.strict,
+			Expression::PrivateFieldExpression(_) => true,
+			Expression::ChainExpression(chain) => {
+				matches!(chain.expression, ChainElement::PrivateFieldExpression(_))
+			}
+			_ => false,
+		};
+		if refused {
+			self.fail();
+		}
+	}
+
+	pub(crate) fn binary(&mut self, it: &BinaryExpression<'a>) {
+		// `a <!--b` is `a < !--b` to the parser, and an HTML comment to V8:
+		// a module's error
+		if self.on()
+			&& self.mode.module
+			&& it.operator == BinaryOperator::LessThan
+			&& let Expression::UnaryExpression(not) = &it.right
+			&& not.operator == UnaryOperator::LogicalNot
+		{
+			let at = not.span.start as usize;
+			if at > 0 && self.source[at - 1] == b'<' && self.source[at + 1..].starts_with(b"--") {
+				self.fail();
+			}
+		}
+	}
+
+	/// `super(...)`: its callee is not visited
+	pub(crate) fn super_call(&mut self) {
+		if self.on() && !self.cx.super_call {
+			self.fail();
+		}
+	}
+
+	/// `super` as a member's object
+	pub(crate) fn super_property(&mut self) {
+		if self.on() && !self.cx.super_property {
+			self.fail();
+		}
+	}
+
+	/// `await`, `yield`
+	pub(crate) fn operator(&mut self) {
+		if self.on() && (self.cx.in_params || self.cx.no_await) {
+			self.fail();
+		}
+	}
+
+	/// an object literal, before its properties (`property` for each,
+	/// then `object_leave` with what this answered)
+	#[inline]
+	pub(crate) fn object_enter(&mut self) -> u32 {
+		std::mem::replace(&mut self.protos, 0)
+	}
+
+	/// a property of an object literal: `__proto__: value` once an object
+	/// (a pattern is no ObjectExpression)
+	#[inline]
+	pub(crate) fn property(&mut self, property: &ObjectProperty<'a>) {
+		if property.kind == PropertyKind::Init && !property.computed && !property.shorthand && !property.method {
+			let proto = match &property.key {
+				PropertyKey::StaticIdentifier(id) => id.name == "__proto__",
+				PropertyKey::StringLiteral(string) => string.value.as_str() == Some("__proto__"),
+				_ => false,
+			};
+			if proto {
+				self.protos += 1;
+			}
+		}
+	}
+
+	pub(crate) fn object_leave(&mut self, around: u32) {
+		if self.protos > 1 && self.on() {
+			self.fail();
+		}
+		self.protos = around;
+	}
+
+	/// syntax no browser has yet (a decorator)
+	pub(crate) fn unshipped(&mut self) {
+		if self.on() {
+			self.unshipped = true;
+		}
+	}
+
+	pub(crate) fn import_expression(&mut self, it: &ImportExpression<'a>) {
+		if it.phase == Some(ImportPhase::Defer) {
+			self.unshipped();
+		}
+	}
+
+	// functions: `function_enter`, then for each parameter `param` (or
+	// `rest_param`) and its walk, then `params_leave`, the body's
+	// statements, `function_leave`
 
 	/// a function that is no arrow; `method` when it is a method's (whether
 	/// it may call `super`)
-	fn function(&mut self, it: &Function<'a>, method: Option<bool>) {
-		let Some(body) = &it.body else {
-			return self.fail();
-		};
-		let own = strict_directive(&body.directives);
+	pub(crate) fn function_enter(&mut self, it: &Function<'a>, method: Option<bool>) -> Saved {
+		let saved = Saved { cx: self.cx, live: self.on() };
+		if !saved.live {
+			return saved;
+		}
+		self.default_export = false;
+		// (one with no body is no JavaScript)
+		if it.body.is_none() {
+			self.fail();
+		}
+		let own = it.body.as_ref().is_some_and(|body| strict_directive(&body.directives));
 		let strict = self.cx.strict || own;
 		let declaration = it.r#type == FunctionType::FunctionDeclaration;
 		if declaration && let Some(id) = &it.id {
@@ -545,7 +811,6 @@ impl<'a> Checker<'a, '_> {
 			self.name(name, true);
 			self.cx.strict = around;
 		}
-		let saved = self.cx;
 		self.cx = Cx {
 			strict,
 			yield_kw: it.generator,
@@ -565,87 +830,588 @@ impl<'a> Checker<'a, '_> {
 			self.name(id.name.as_str(), true);
 		}
 		self.enter(ScopeKind::Function);
-		let simple = self.params(&it.params, method.is_some());
-		if own && !simple {
+		self.duplicate_param = false;
+		saved
+	}
+
+	/// a parameter, before its walk: its names are the function scope's
+	pub(crate) fn param(&mut self, param: &FormalParameter<'a>) {
+		if self.on() {
+			if !param.decorators.is_empty() {
+				self.unshipped = true;
+			}
+			self.declare_pattern(&param.pattern, Kind::Param);
+		}
+	}
+
+	pub(crate) fn rest_param(&mut self, rest: &BindingRestElement<'a>) {
+		if self.on() {
+			self.declare_pattern(&rest.argument, Kind::Param);
+		}
+	}
+
+	/// the parameters walked: `unique` when no name may be there twice (a
+	/// method's, an arrow's), and the body's directives
+	pub(crate) fn params_leave(&mut self, params: &FormalParameters<'a>, unique: bool, directives: &[Directive<'a>]) {
+		if !self.on() {
+			return;
+		}
+		let simple = params.rest.is_none()
+			&& params.items.iter().all(|param| {
+				param.initializer.is_none() && matches!(param.pattern, BindingPattern::BindingIdentifier(_))
+			});
+		if self.duplicate_param && (unique || !simple || self.cx.strict) {
+			self.fail();
+		}
+		if strict_directive(directives) && !simple {
 			self.fail();
 		}
 		self.cx.in_params = false;
-		self.directives(&body.directives);
-		self.visit_statements(&body.statements);
-		self.leave();
-		self.cx = saved;
+		self.directives(directives);
 	}
 
-	/// the statement under `if` or `else`
-	fn branch(&mut self, statement: &Statement<'a>) {
+	pub(crate) fn function_leave(&mut self, saved: Saved) {
+		if saved.live {
+			self.leave();
+			self.cx = saved.cx;
+		}
+	}
+
+	/// an arrow, before its parameters (then `param`, `params_leave` with
+	/// `arrow_body`, the body, `function_leave`)
+	pub(crate) fn arrow_enter(&mut self, it: &ArrowFunctionExpression<'a>) -> Saved {
+		let saved = Saved { cx: self.cx, live: self.on() };
+		if !saved.live {
+			return saved;
+		}
+		let own = match &it.body {
+			ArrowFunctionBody::FunctionBody(body) => strict_directive(&body.directives),
+			_ => false,
+		};
+		// its parameters are read as the code around it is; its body is its own
+		self.cx = Cx {
+			strict: saved.cx.strict || own,
+			await_kw: saved.cx.await_kw || it.r#async,
+			in_params: true,
+			no_await: false,
+			returns: true,
+			label_base: self.labels.len() as u32,
+			loops: 0,
+			breakables: 0,
+			..saved.cx
+		};
+		self.enter(ScopeKind::Function);
+		self.duplicate_param = false;
+		saved
+	}
+
+	/// an arrow's parameters walked (`params_leave` for an arrow)
+	pub(crate) fn arrow_params_leave(&mut self, it: &ArrowFunctionExpression<'a>) {
+		if !self.on() {
+			return;
+		}
+		let directives = match &it.body {
+			ArrowFunctionBody::FunctionBody(body) => &body.directives[..],
+			_ => &[],
+		};
+		let simple = it.params.rest.is_none()
+			&& it.params.items.iter().all(|param| {
+				param.initializer.is_none() && matches!(param.pattern, BindingPattern::BindingIdentifier(_))
+			});
+		if self.duplicate_param {
+			self.fail();
+		}
+		if strict_directive(directives) && !simple {
+			self.fail();
+		}
+		self.cx.in_params = false;
+		self.cx.yield_kw = false;
+		self.cx.await_kw = it.r#async;
+		self.directives(directives);
+	}
+
+	// classes: `class_enter`, the walk of its id and heritage,
+	// `class_body_enter`, the walk of its elements (`method` before a
+	// method's function, `field_enter`/`field_leave` around a field's value,
+	// `static_enter`/`static_leave` around a static block), `class_leave`
+
+	pub(crate) fn class_enter(&mut self, it: &Class<'a>) -> Saved {
+		let saved = Saved { cx: self.cx, live: self.on() };
+		if !saved.live {
+			return saved;
+		}
+		let anonymous_allowed = std::mem::take(&mut self.default_export);
+		if !it.decorators.is_empty() {
+			self.unshipped = true;
+		}
+		let declaration = it.r#type == ClassType::ClassDeclaration;
+		match &it.id {
+			Some(id) => {
+				if declaration {
+					self.declare(id.name.as_str(), Kind::Lexical);
+				}
+				self.cx.strict = true;
+				self.name(id.name.as_str(), true);
+			}
+			None => {
+				if declaration && !anonymous_allowed {
+					self.fail();
+				}
+			}
+		}
+		// all of a class is strict code
+		self.cx.strict = true;
+		saved
+	}
+
+	/// the class's elements, after its heritage: its private names
+	/// declared (what the heritage uses is the code's around the class)
+	pub(crate) fn class_body_enter(&mut self, it: &Class<'a>) -> ClassBody {
+		let body = ClassBody {
+			privates: self.privates.len(),
+			uses: self.private_uses.len(),
+			live: self.on(),
+		};
+		if !body.live {
+			return body;
+		}
+		let mut constructors = 0;
+		for element in &it.body.body {
+			match element {
+				ClassElement::MethodDefinition(method) => {
+					let accessor = match method.kind {
+						MethodDefinitionKind::Get => 1,
+						MethodDefinitionKind::Set => 2,
+						_ => 0,
+					};
+					self.private(body.privates, &method.key, method.r#static, accessor);
+					if !method.decorators.is_empty() {
+						self.unshipped = true;
+					}
+					if method.kind == MethodDefinitionKind::Constructor {
+						constructors += 1;
+					}
+				}
+				ClassElement::PropertyDefinition(property) => {
+					self.private(body.privates, &property.key, property.r#static, 0);
+					if !property.decorators.is_empty() {
+						self.unshipped = true;
+					}
+				}
+				ClassElement::AccessorProperty(_) => self.unshipped = true,
+				ClassElement::TSIndexSignature(_) => self.fail(),
+				ClassElement::StaticBlock(_) => {}
+			}
+		}
+		if constructors > 1 {
+			self.fail();
+		}
+		self.classes.push(it.heritage.is_some());
+		body
+	}
+
+	/// a class method's function is next: what `function_enter` is told
+	/// of it (whether it may call `super`)
+	pub(crate) fn method(&self, method: &MethodDefinition<'a>) -> Option<bool> {
+		let derived = self.classes.last().copied().unwrap_or(false);
+		Some(method.kind == MethodDefinitionKind::Constructor && derived)
+	}
+
+	/// a field's initializer
+	pub(crate) fn field_enter(&mut self) -> Saved {
+		let saved = Saved { cx: self.cx, live: self.on() };
+		if saved.live {
+			self.cx = Cx {
+				strict: true,
+				yield_kw: false,
+				await_kw: false,
+				in_params: false,
+				no_await: true,
+				no_arguments: true,
+				super_property: true,
+				super_call: false,
+				returns: false,
+				label_base: self.labels.len() as u32,
+				loops: 0,
+				breakables: 0,
+			};
+		}
+		saved
+	}
+
+	pub(crate) fn field_leave(&mut self, saved: Saved) {
+		if saved.live {
+			self.cx = saved.cx;
+		}
+	}
+
+	pub(crate) fn static_enter(&mut self) -> Saved {
+		let saved = Saved { cx: self.cx, live: self.on() };
+		if saved.live {
+			self.cx = Cx {
+				strict: true,
+				yield_kw: false,
+				await_kw: true,
+				in_params: false,
+				no_await: true,
+				no_arguments: true,
+				super_property: true,
+				super_call: false,
+				returns: false,
+				label_base: self.labels.len() as u32,
+				loops: 0,
+				breakables: 0,
+			};
+			self.enter(ScopeKind::Function);
+		}
+		saved
+	}
+
+	pub(crate) fn static_leave(&mut self, saved: Saved) {
+		if saved.live {
+			self.leave();
+			self.cx = saved.cx;
+		}
+	}
+
+	pub(crate) fn class_leave(&mut self, body: ClassBody, saved: Saved) {
+		if body.live {
+			self.classes.pop();
+			// a private name used is one of this class's or of a class
+			// around it
+			let mut kept = body.uses;
+			for at in body.uses..self.private_uses.len() {
+				let name = self.private_uses[at];
+				if !self.privates[body.privates..].iter().any(|private| private.name == name) {
+					self.private_uses[kept] = name;
+					kept += 1;
+				}
+			}
+			self.private_uses.truncate(kept);
+			self.privates.truncate(body.privates);
+		}
+		if saved.live {
+			self.cx = saved.cx;
+		}
+	}
+
+	// statements
+
+	pub(crate) fn block_enter(&mut self) {
+		if self.on() {
+			self.enter(ScopeKind::Block);
+		}
+	}
+
+	pub(crate) fn block_leave(&mut self) {
+		if self.on() {
+			self.leave();
+		}
+	}
+
+	/// a declaration's names, before its walk
+	pub(crate) fn variable_declaration(&mut self, it: &VariableDeclaration<'a>) {
+		if !self.on() {
+			return;
+		}
+		let kind = match it.kind {
+			VariableDeclarationKind::Var => Kind::Var,
+			VariableDeclarationKind::Let | VariableDeclarationKind::Const => Kind::Let,
+			VariableDeclarationKind::Using | VariableDeclarationKind::AwaitUsing => {
+				if it.kind == VariableDeclarationKind::AwaitUsing && self.cx.no_await {
+					self.fail();
+				}
+				// not among a switch's cases, and not at a script's top
+				let at_top = self.scopes.len() == 1 && !self.mode.module && !self.mode.lenient;
+				if at_top || self.scopes.last().is_some_and(|scope| scope.kind == ScopeKind::Switch) {
+					self.fail();
+				}
+				Kind::Let
+			}
+		};
+		for declarator in &it.declarations {
+			self.declare_pattern(&declarator.id, kind);
+		}
+	}
+
+	/// the statement under `if` or `else`, before its walk: whether it
+	/// is in a scope of its own (`branch_leave`)
+	pub(crate) fn branch_enter(&mut self, statement: &Statement<'a>) -> bool {
+		if !self.on() {
+			return false;
+		}
 		if labelled_function(statement) {
-			return self.fail();
+			self.fail();
+			return false;
 		}
 		if let Statement::FunctionDeclaration(function) = statement {
 			// Annex B.3.3: sloppy code takes a plain function there, as if
 			// a block held it
 			if self.cx.strict || function.generator || function.r#async {
-				return self.fail();
+				self.fail();
+				return false;
 			}
 			self.enter(ScopeKind::Block);
-			self.visit_statement(statement);
+			return true;
+		}
+		false
+	}
+
+	pub(crate) fn branch_leave(&mut self, scoped: bool) {
+		if scoped {
 			self.leave();
-		} else {
-			self.visit_statement(statement);
 		}
 	}
 
 	/// the statement a loop repeats or `with` runs: no function, labelled
 	/// or not
-	fn body(&mut self, statement: &Statement<'a>) {
-		if matches!(statement, Statement::FunctionDeclaration(_)) || labelled_function(statement) {
-			return self.fail();
+	pub(crate) fn body(&mut self, statement: &Statement<'a>) {
+		if self.on() && (matches!(statement, Statement::FunctionDeclaration(_)) || labelled_function(statement)) {
+			self.fail();
 		}
-		self.visit_statement(statement);
 	}
 
-	fn loop_body(&mut self, statement: &Statement<'a>) {
-		self.cx.loops += 1;
-		self.cx.breakables += 1;
-		self.body(statement);
-		self.cx.loops -= 1;
-		self.cx.breakables -= 1;
+	/// a loop's body, before its walk (`loop_leave` after)
+	pub(crate) fn loop_enter(&mut self, statement: &Statement<'a>) {
+		if self.on() {
+			self.cx.loops += 1;
+			self.cx.breakables += 1;
+			self.body(statement);
+		}
 	}
 
-	fn for_each(&mut self, left: &ForStatementLeft<'a>, right: &Expression<'a>, body: &Statement<'a>, of: bool) {
-		let mut scoped = false;
-		match left {
-			ForStatementLeft::VariableDeclaration(declaration) => {
-				let using = matches!(
-					declaration.kind,
-					VariableDeclarationKind::Using | VariableDeclarationKind::AwaitUsing
-				);
-				if let Some(first) = declaration.declarations.first()
-					&& first.init.is_some()
-				{
-					// Annex B.3.5: `for (var a = 1 in b)` in sloppy code alone
-					if of
-						|| self.cx.strict || declaration.kind != VariableDeclarationKind::Var
-						|| !matches!(first.id, BindingPattern::BindingIdentifier(_))
-					{
-						self.fail();
-					}
-				}
-				if using && !of {
-					self.fail();
-				}
-				scoped = declaration.kind != VariableDeclarationKind::Var;
-				if scoped {
-					self.enter(ScopeKind::Block);
-				}
-				self.visit_variable_declaration(declaration);
+	pub(crate) fn loop_leave(&mut self) {
+		if self.on() {
+			self.cx.loops -= 1;
+			self.cx.breakables -= 1;
+		}
+	}
+
+	/// `for (;;)`, before its init: whether it opened a scope
+	pub(crate) fn for_enter(&mut self, it: &ForStatement<'a>) -> bool {
+		let scoped = self.on()
+			&& matches!(
+				&it.init,
+				Some(ForStatementInit::VariableDeclaration(declaration))
+					if declaration.kind != VariableDeclarationKind::Var
+			);
+		if scoped {
+			self.enter(ScopeKind::Block);
+		}
+		scoped
+	}
+
+	/// `for (... in/of ...)`, before its head: whether it opened a scope
+	/// (`scope_leave` after the body)
+	pub(crate) fn for_each_enter(&mut self, left: &ForStatementLeft<'a>, of: bool, awaits: bool) -> bool {
+		if !self.on() {
+			return false;
+		}
+		if awaits && self.cx.no_await {
+			self.fail();
+		}
+		let ForStatementLeft::VariableDeclaration(declaration) = left else {
+			return false;
+		};
+		let using = matches!(
+			declaration.kind,
+			VariableDeclarationKind::Using | VariableDeclarationKind::AwaitUsing
+		);
+		if let Some(first) = declaration.declarations.first()
+			&& first.init.is_some()
+		{
+			// Annex B.3.5: `for (var a = 1 in b)` in sloppy code alone
+			if of
+				|| self.cx.strict || declaration.kind != VariableDeclarationKind::Var
+				|| !matches!(first.id, BindingPattern::BindingIdentifier(_))
+			{
+				self.fail();
 			}
-			left => self.visit_for_statement_left(left),
 		}
-		self.visit_expression(right);
-		self.loop_body(body);
+		if using && !of {
+			self.fail();
+		}
+		let scoped = declaration.kind != VariableDeclarationKind::Var;
+		if scoped {
+			self.enter(ScopeKind::Block);
+		}
+		scoped
+	}
+
+	pub(crate) fn scope_leave(&mut self, scoped: bool) {
 		if scoped {
 			self.leave();
+		}
+	}
+
+	pub(crate) fn with(&mut self, it: &WithStatement<'a>) {
+		if self.on() && self.cx.strict {
+			self.fail();
+		}
+		self.body(&it.body);
+	}
+
+	/// a switch's cases, before them
+	pub(crate) fn switch_enter(&mut self) {
+		if self.on() {
+			self.enter(ScopeKind::Switch);
+			self.cx.breakables += 1;
+		}
+	}
+
+	pub(crate) fn switch_leave(&mut self) {
+		if self.on() {
+			self.cx.breakables -= 1;
+			self.leave();
+		}
+	}
+
+	/// a catch clause, before its parameter: the parameter and the
+	/// block's own names are one scope's (`block_leave` after its body)
+	pub(crate) fn catch_enter(&mut self, it: &CatchClause<'a>) {
+		if !self.on() {
+			return;
+		}
+		self.enter(ScopeKind::Block);
+		if let Some(param) = &it.param {
+			match &param.pattern {
+				BindingPattern::BindingIdentifier(id) => self.declare(id.name.as_str(), Kind::CatchSimple),
+				pattern => self.declare_pattern(pattern, Kind::Lexical),
+			}
+		}
+	}
+
+	/// a labelled statement, before its body: whether its label was
+	/// pushed (`label_leave` after)
+	pub(crate) fn label_enter(&mut self, it: &LabeledStatement<'a>) -> bool {
+		if !self.on() {
+			return false;
+		}
+		let name = it.label.name.as_str();
+		self.name(name, false);
+		if self.labels[self.cx.label_base as usize..].iter().any(|(label, _)| *label == name) {
+			self.fail();
+			return false;
+		}
+		let mut inner = &it.body;
+		while let Statement::LabeledStatement(labelled) = inner {
+			inner = &labelled.body;
+		}
+		let is_loop = matches!(
+			inner,
+			Statement::DoWhileStatement(_)
+				| Statement::ForInStatement(_)
+				| Statement::ForOfStatement(_)
+				| Statement::ForStatement(_)
+				| Statement::WhileStatement(_)
+		);
+		// Annex B.3.1: sloppy code takes a plain function behind a label
+		if let Statement::FunctionDeclaration(function) = inner
+			&& (self.cx.strict || function.generator || function.r#async)
+		{
+			self.fail();
+			return false;
+		}
+		self.labels.push((name, is_loop));
+		true
+	}
+
+	pub(crate) fn label_leave(&mut self, pushed: bool) {
+		if pushed {
+			self.labels.pop();
+		}
+	}
+
+	pub(crate) fn break_statement(&mut self, it: &BreakStatement<'a>) {
+		if !self.on() {
+			return;
+		}
+		let found = match &it.label {
+			Some(label) => {
+				self.labels[self.cx.label_base as usize..].iter().any(|(name, _)| *name == label.name.as_str())
+			}
+			None => self.cx.breakables > 0,
+		};
+		if !found {
+			self.fail();
+		}
+	}
+
+	pub(crate) fn continue_statement(&mut self, it: &ContinueStatement<'a>) {
+		if !self.on() {
+			return;
+		}
+		let found = match &it.label {
+			Some(label) => self.labels[self.cx.label_base as usize..]
+				.iter()
+				.any(|(name, is_loop)| *is_loop && *name == label.name.as_str()),
+			None => true,
+		};
+		if !found || self.cx.loops == 0 {
+			self.fail();
+		}
+	}
+
+	pub(crate) fn return_statement(&mut self) {
+		if self.on() && !self.cx.returns {
+			self.fail();
+		}
+	}
+
+	/// an import declaration (none of it is walked)
+	pub(crate) fn import_declaration(&mut self, it: &ImportDeclaration<'a>) {
+		if !self.on() {
+			return;
+		}
+		for specifier in it.specifiers.iter().flatten() {
+			let local = match specifier {
+				ImportDeclarationSpecifier::ImportSpecifier(specifier) => &specifier.local,
+				ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) => &specifier.local,
+				ImportDeclarationSpecifier::ImportNamespaceSpecifier(specifier) => &specifier.local,
+			};
+			self.declare(local.name.as_str(), Kind::Lexical);
+			self.name(local.name.as_str(), true);
+		}
+		self.string_literal(&it.source);
+		if let Some(with) = &it.with_clause {
+			self.with_clause(with);
+		}
+	}
+
+	pub(crate) fn with_clause(&mut self, it: &WithClause<'a>) {
+		// `assert { }`: the keyword browsers dropped
+		if self.on() && it.keyword == WithClauseKeyword::Assert {
+			self.fail();
+		}
+	}
+
+	/// `export { a, b as c }` (its specifiers are not walked)
+	pub(crate) fn export_named(&mut self, it: &ExportNamedDeclaration<'a>) {
+		if !self.on() {
+			return;
+		}
+		for specifier in &it.specifiers {
+			if let ModuleExportName::IdentifierReference(local) = &specifier.local {
+				self.name(local.name.as_str(), false);
+				self.exports.push(local.name.as_str());
+			}
+		}
+	}
+
+	/// `export default`, before its declaration (`default_leave` after)
+	pub(crate) fn default_enter(&mut self, it: &ExportDefaultDeclaration<'a>) {
+		if self.on() {
+			self.default_export = matches!(
+				it.declaration,
+				ExportDefaultDeclarationKind::FunctionDeclaration(_)
+					| ExportDefaultDeclarationKind::ClassDeclaration(_)
+			);
+		}
+	}
+
+	pub(crate) fn default_leave(&mut self) {
+		if self.on() {
+			self.default_export = false;
 		}
 	}
 
@@ -674,6 +1440,59 @@ impl<'a> Checker<'a, '_> {
 			accessors: accessor,
 		});
 	}
+}
+
+/// The check on its own: a walk of the whole tree that calls the hooks
+/// (the parse questions and the rewriter's fallback ask it; a rewrite calls
+/// the same hooks from its own walk, src/walk.rs)
+impl<'a> Checker<'a, '_> {
+	fn params(&mut self, params: &FormalParameters<'a>) {
+		for param in &params.items {
+			self.param(param);
+			self.visit_binding_pattern(&param.pattern);
+			if let Some(initializer) = &param.initializer {
+				self.visit_expression(initializer);
+			}
+		}
+		if let Some(rest) = &params.rest {
+			self.rest_param(&rest.rest);
+			self.visit_binding_pattern(&rest.rest.argument);
+		}
+	}
+
+	fn function(&mut self, it: &Function<'a>, method: Option<bool>) {
+		let saved = self.function_enter(it, method);
+		self.params(&it.params);
+		let directives = it.body.as_ref().map_or(&[][..], |body| &body.directives[..]);
+		self.params_leave(&it.params, method.is_some(), directives);
+		if let Some(body) = &it.body {
+			self.visit_statements(&body.statements);
+		}
+		self.function_leave(saved);
+	}
+
+	fn branch(&mut self, statement: &Statement<'a>) {
+		let scoped = self.branch_enter(statement);
+		self.visit_statement(statement);
+		self.branch_leave(scoped);
+	}
+
+	fn loop_body(&mut self, statement: &Statement<'a>) {
+		self.loop_enter(statement);
+		self.visit_statement(statement);
+		self.loop_leave();
+	}
+
+	fn for_each(&mut self, left: &ForStatementLeft<'a>, right: &Expression<'a>, body: &Statement<'a>, of: bool, awaits: bool) {
+		let scoped = self.for_each_enter(left, of, awaits);
+		match left {
+			ForStatementLeft::VariableDeclaration(declaration) => self.visit_variable_declaration(declaration),
+			left => self.visit_for_statement_left(left),
+		}
+		self.visit_expression(right);
+		self.loop_body(body);
+		self.scope_leave(scoped);
+	}
 
 	/// a class element's key: a private name is declared, not used
 	fn key(&mut self, key: &PropertyKey<'a>) {
@@ -685,20 +1504,9 @@ impl<'a> Checker<'a, '_> {
 
 impl<'a> Visit<'a> for Checker<'a, '_> {
 	fn visit_program(&mut self, it: &Program<'a>) {
-		self.cx.strict = self.mode.module || strict_directive(&it.directives);
-		self.enter(if self.mode.module { ScopeKind::Module } else { ScopeKind::Function });
-		self.directives(&it.directives);
+		self.program_enter(it);
 		self.visit_statements(&it.body);
-		// what a module exports by name it declares
-		while let Some(name) = self.exports.pop() {
-			if self.table.get(name).is_none_or(|id| self.heads[id as usize] == 0) {
-				self.fail();
-			}
-		}
-		if !self.private_uses.is_empty() && !self.mode.lenient {
-			self.fail();
-		}
-		self.leave();
+		self.program_leave();
 	}
 
 	fn visit_statements(&mut self, it: &oxc::allocator::Vec<'a, Statement<'a>>) {
@@ -717,94 +1525,60 @@ impl<'a> Visit<'a> for Checker<'a, '_> {
 	}
 
 	fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
-		self.name(it.name.as_str(), false);
+		self.reference(it.name.as_str());
 	}
 
 	fn visit_binding_identifier(&mut self, it: &BindingIdentifier<'a>) {
-		self.name(it.name.as_str(), true);
+		self.binding(it.name.as_str());
 	}
 
 	fn visit_label_identifier(&mut self, it: &LabelIdentifier<'a>) {
-		self.name(it.name.as_str(), false);
+		self.reference(it.name.as_str());
 	}
 
 	fn visit_private_identifier(&mut self, it: &PrivateIdentifier<'a>) {
-		self.private_uses.push(it.name.as_str());
+		self.private_use(it.name.as_str());
 	}
 
 	fn visit_simple_assignment_target(&mut self, it: &SimpleAssignmentTarget<'a>) {
-		if let SimpleAssignmentTarget::AssignmentTargetIdentifier(id) = it {
-			self.target(id.name.as_str());
+		match it {
+			SimpleAssignmentTarget::AssignmentTargetIdentifier(id) => self.assigned(id.name.as_str()),
+			it => walk::walk_simple_assignment_target(self, it),
 		}
-		walk::walk_simple_assignment_target(self, it);
 	}
 
 	fn visit_assignment_target_property_identifier(&mut self, it: &AssignmentTargetPropertyIdentifier<'a>) {
-		self.target(it.binding.name.as_str());
-		walk::walk_assignment_target_property_identifier(self, it);
+		self.assigned(it.binding.name.as_str());
+		if let Some(init) = &it.init {
+			self.visit_expression(init);
+		}
 	}
 
 	fn visit_numeric_literal(&mut self, it: &NumericLiteral<'a>) {
-		// `010`, `08`: legacy octal and its decimal look-alike
-		let start = it.span.start as usize;
-		if self.cx.strict
-			&& it.span.end as usize > start + 1
-			&& self.source[start] == b'0'
-			&& self.source[start + 1].is_ascii_digit()
-		{
-			self.fail();
-		}
+		self.numeric(it);
 	}
 
 	fn visit_string_literal(&mut self, it: &StringLiteral<'a>) {
-		// (a literal as long as its value has no escape to read)
-		if self.cx.strict && it.span.size() as usize != it.value.as_bytes().len() + 2 {
-			self.string(it.span);
-		}
+		self.string_literal(it);
 	}
 
 	fn visit_unary_expression(&mut self, it: &UnaryExpression<'a>) {
-		if it.operator == UnaryOperator::Delete {
-			let mut argument = &it.argument;
-			while let Expression::ParenthesizedExpression(inner) = argument {
-				argument = &inner.expression;
-			}
-			let refused = match argument {
-				Expression::Identifier(_) => self.cx.strict,
-				Expression::PrivateFieldExpression(_) => true,
-				Expression::ChainExpression(chain) => {
-					matches!(chain.expression, ChainElement::PrivateFieldExpression(_))
-				}
-				_ => false,
-			};
-			if refused {
-				return self.fail();
-			}
+		self.unary(it);
+		if !self.error {
+			walk::walk_unary_expression(self, it);
 		}
-		walk::walk_unary_expression(self, it);
 	}
 
 	fn visit_binary_expression(&mut self, it: &BinaryExpression<'a>) {
-		// `a <!--b` is `a < !--b` to the parser, and an HTML comment to V8:
-		// a module's error
-		if self.mode.module
-			&& it.operator == BinaryOperator::LessThan
-			&& let Expression::UnaryExpression(not) = &it.right
-			&& not.operator == UnaryOperator::LogicalNot
-		{
-			let at = not.span.start as usize;
-			if at > 0 && self.source[at - 1] == b'<' && self.source[at + 1..].starts_with(b"--") {
-				return self.fail();
-			}
+		self.binary(it);
+		if !self.error {
+			walk::walk_binary_expression(self, it);
 		}
-		walk::walk_binary_expression(self, it);
 	}
 
 	fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
 		if matches!(it.callee, Expression::Super(_)) {
-			if !self.cx.super_call {
-				return self.fail();
-			}
+			self.super_call();
 			self.visit_arguments(&it.arguments);
 		} else {
 			walk::walk_call_expression(self, it);
@@ -812,52 +1586,27 @@ impl<'a> Visit<'a> for Checker<'a, '_> {
 	}
 
 	fn visit_super(&mut self, _it: &Super) {
-		if !self.cx.super_property {
-			self.fail();
-		}
+		self.super_property();
 	}
 
 	fn visit_await_expression(&mut self, it: &AwaitExpression<'a>) {
-		if self.cx.in_params || self.cx.no_await {
-			return self.fail();
-		}
+		self.operator();
 		walk::walk_await_expression(self, it);
 	}
 
 	fn visit_yield_expression(&mut self, it: &YieldExpression<'a>) {
-		if self.cx.in_params || self.cx.no_await {
-			return self.fail();
-		}
+		self.operator();
 		walk::walk_yield_expression(self, it);
 	}
 
 	fn visit_object_expression(&mut self, it: &ObjectExpression<'a>) {
-		// `__proto__: value` once an object (a pattern is no ObjectExpression)
-		let mut protos = 0;
-		for property in &it.properties {
-			if let ObjectPropertyKind::ObjectProperty(property) = property
-				&& property.kind == PropertyKind::Init
-				&& !property.computed
-				&& !property.shorthand
-				&& !property.method
-			{
-				let proto = match &property.key {
-					PropertyKey::StaticIdentifier(id) => id.name == "__proto__",
-					PropertyKey::StringLiteral(string) => string.value.as_str() == Some("__proto__"),
-					_ => false,
-				};
-				if proto {
-					protos += 1;
-				}
-			}
-		}
-		if protos > 1 {
-			return self.fail();
-		}
+		let around = self.object_enter();
 		walk::walk_object_expression(self, it);
+		self.object_leave(around);
 	}
 
 	fn visit_object_property(&mut self, it: &ObjectProperty<'a>) {
+		self.property(it);
 		self.visit_property_key(&it.key);
 		match &it.value {
 			Expression::FunctionExpression(function) if it.method || it.kind != PropertyKind::Init => {
@@ -868,211 +1617,73 @@ impl<'a> Visit<'a> for Checker<'a, '_> {
 	}
 
 	fn visit_function(&mut self, it: &Function<'a>, _flags: ScopeFlags) {
-		self.default_export = false;
 		self.function(it, None);
 	}
 
 	fn visit_arrow_function_expression(&mut self, it: &ArrowFunctionExpression<'a>) {
-		let own = match &it.body {
-			ArrowFunctionBody::FunctionBody(body) => strict_directive(&body.directives),
-			_ => false,
-		};
-		let saved = self.cx;
-		// its parameters are read as the code around it is; its body is its own
-		self.cx = Cx {
-			strict: saved.strict || own,
-			await_kw: saved.await_kw || it.r#async,
-			in_params: true,
-			no_await: false,
-			returns: true,
-			label_base: self.labels.len() as u32,
-			loops: 0,
-			breakables: 0,
-			..saved
-		};
-		self.enter(ScopeKind::Function);
-		let simple = self.params(&it.params, true);
-		if own && !simple {
-			self.fail();
-		}
-		self.cx.in_params = false;
-		self.cx.yield_kw = false;
-		self.cx.await_kw = it.r#async;
+		let saved = self.arrow_enter(it);
+		self.params(&it.params);
+		self.arrow_params_leave(it);
 		match &it.body {
-			ArrowFunctionBody::FunctionBody(body) => {
-				self.directives(&body.directives);
-				self.visit_statements(&body.statements);
-			}
+			ArrowFunctionBody::FunctionBody(body) => self.visit_statements(&body.statements),
 			body => self.visit_expression(body.to_expression()),
 		}
-		self.leave();
-		self.cx = saved;
+		self.function_leave(saved);
 	}
 
 	fn visit_class(&mut self, it: &Class<'a>) {
-		let anonymous_allowed = std::mem::take(&mut self.default_export);
-		if !it.decorators.is_empty() {
-			self.unshipped = true;
-		}
-		let declaration = it.r#type == ClassType::ClassDeclaration;
-		let saved = self.cx;
-		match &it.id {
-			Some(id) => {
-				if declaration {
-					self.declare(id.name.as_str(), Kind::Lexical);
-				}
-				self.cx.strict = true;
-				self.name(id.name.as_str(), true);
-			}
-			None => {
-				if declaration && !anonymous_allowed {
-					return self.fail();
-				}
-			}
-		}
-		// all of a class is strict code
-		self.cx.strict = true;
+		let saved = self.class_enter(it);
 		if let Some(heritage) = &it.heritage {
 			self.visit_expression(&heritage.expression);
 		}
-		let privates = self.privates.len();
-		let uses = self.private_uses.len();
-		for element in &it.body.body {
-			match element {
-				ClassElement::MethodDefinition(method) => {
-					let accessor = match method.kind {
-						MethodDefinitionKind::Get => 1,
-						MethodDefinitionKind::Set => 2,
-						_ => 0,
-					};
-					self.private(privates, &method.key, method.r#static, accessor);
-				}
-				ClassElement::PropertyDefinition(property) => {
-					self.private(privates, &property.key, property.r#static, 0);
-				}
-				_ => {}
-			}
-		}
-		let derived = it.heritage.is_some();
-		let mut constructors = 0;
+		let body = self.class_body_enter(it);
 		for element in &it.body.body {
 			if self.error {
 				break;
 			}
 			match element {
 				ClassElement::MethodDefinition(method) => {
-					if !method.decorators.is_empty() {
-						self.unshipped = true;
-					}
 					self.key(&method.key);
-					let constructor = method.kind == MethodDefinitionKind::Constructor;
-					if constructor {
-						constructors += 1;
-						if constructors > 1 {
-							self.fail();
-						}
-					}
-					self.function(&method.value, Some(constructor && derived));
+					let method_of = self.method(method);
+					self.function(&method.value, method_of);
 				}
 				ClassElement::PropertyDefinition(property) => {
-					if !property.decorators.is_empty() {
-						self.unshipped = true;
-					}
 					self.key(&property.key);
 					if let Some(value) = &property.value {
-						let around = self.cx;
-						self.cx = Cx {
-							strict: true,
-							yield_kw: false,
-							await_kw: false,
-							in_params: false,
-							no_await: true,
-							no_arguments: true,
-							super_property: true,
-							super_call: false,
-							returns: false,
-							label_base: self.labels.len() as u32,
-							loops: 0,
-							breakables: 0,
-						};
+						let around = self.field_enter();
 						self.visit_expression(value);
-						self.cx = around;
+						self.field_leave(around);
 					}
 				}
 				ClassElement::StaticBlock(block) => {
-					let around = self.cx;
-					self.cx = Cx {
-						strict: true,
-						yield_kw: false,
-						await_kw: true,
-						in_params: false,
-						no_await: true,
-						no_arguments: true,
-						super_property: true,
-						super_call: false,
-						returns: false,
-						label_base: self.labels.len() as u32,
-						loops: 0,
-						breakables: 0,
-					};
-					self.enter(ScopeKind::Function);
+					let around = self.static_enter();
 					self.visit_statements(&block.body);
-					self.leave();
-					self.cx = around;
+					self.static_leave(around);
 				}
-				ClassElement::AccessorProperty(_) => self.unshipped = true,
-				ClassElement::TSIndexSignature(_) => self.fail(),
+				ClassElement::AccessorProperty(_) | ClassElement::TSIndexSignature(_) => {}
 			}
 		}
-		// a private name used is one of this class's or of a class around it
-		let mut kept = uses;
-		for at in uses..self.private_uses.len() {
-			let name = self.private_uses[at];
-			if !self.privates[privates..].iter().any(|private| private.name == name) {
-				self.private_uses[kept] = name;
-				kept += 1;
-			}
-		}
-		self.private_uses.truncate(kept);
-		self.privates.truncate(privates);
-		self.cx = saved;
+		self.class_leave(body, saved);
 	}
 
 	fn visit_decorator(&mut self, _it: &Decorator<'a>) {
-		self.unshipped = true;
+		self.unshipped();
 	}
 
 	fn visit_import_expression(&mut self, it: &ImportExpression<'a>) {
-		if it.phase == Some(ImportPhase::Defer) {
-			self.unshipped = true;
-		}
+		self.import_expression(it);
 		walk::walk_import_expression(self, it);
 	}
 
 	fn visit_block_statement(&mut self, it: &BlockStatement<'a>) {
-		self.enter(ScopeKind::Block);
+		self.block_enter();
 		self.visit_statements(&it.body);
-		self.leave();
+		self.block_leave();
 	}
 
 	fn visit_variable_declaration(&mut self, it: &VariableDeclaration<'a>) {
-		let kind = match it.kind {
-			VariableDeclarationKind::Var => Kind::Var,
-			VariableDeclarationKind::Let | VariableDeclarationKind::Const => Kind::Let,
-			VariableDeclarationKind::Using | VariableDeclarationKind::AwaitUsing => {
-				if it.kind == VariableDeclarationKind::AwaitUsing && self.cx.no_await {
-					self.fail();
-				}
-				// not among a switch's cases, and not at a script's top
-				let at_top = self.scopes.len() == 1 && !self.mode.module && !self.mode.lenient;
-				if at_top || self.scopes.last().is_some_and(|scope| scope.kind == ScopeKind::Switch) {
-					self.fail();
-				}
-				Kind::Let
-			}
-		};
+		self.variable_declaration(it);
 		for declarator in &it.declarations {
-			self.declare_pattern(&declarator.id, kind);
 			self.visit_binding_pattern(&declarator.id);
 			if let Some(init) = &declarator.init {
 				self.visit_expression(init);
@@ -1099,14 +1710,7 @@ impl<'a> Visit<'a> for Checker<'a, '_> {
 	}
 
 	fn visit_for_statement(&mut self, it: &ForStatement<'a>) {
-		let scoped = matches!(
-			&it.init,
-			Some(ForStatementInit::VariableDeclaration(declaration))
-				if declaration.kind != VariableDeclarationKind::Var
-		);
-		if scoped {
-			self.enter(ScopeKind::Block);
-		}
+		let scoped = self.for_enter(it);
 		if let Some(init) = &it.init {
 			self.visit_for_statement_init(init);
 		}
@@ -1117,169 +1721,87 @@ impl<'a> Visit<'a> for Checker<'a, '_> {
 			self.visit_expression(update);
 		}
 		self.loop_body(&it.body);
-		if scoped {
-			self.leave();
-		}
+		self.scope_leave(scoped);
 	}
 
 	fn visit_for_in_statement(&mut self, it: &ForInStatement<'a>) {
-		self.for_each(&it.left, &it.right, &it.body, false);
+		self.for_each(&it.left, &it.right, &it.body, false, false);
 	}
 
 	fn visit_for_of_statement(&mut self, it: &ForOfStatement<'a>) {
-		if it.r#await && self.cx.no_await {
-			return self.fail();
-		}
-		self.for_each(&it.left, &it.right, &it.body, true);
+		self.for_each(&it.left, &it.right, &it.body, true, it.r#await);
 	}
 
 	fn visit_with_statement(&mut self, it: &WithStatement<'a>) {
-		if self.cx.strict {
-			return self.fail();
-		}
+		self.with(it);
 		self.visit_expression(&it.object);
-		self.body(&it.body);
+		self.visit_statement(&it.body);
 	}
 
 	fn visit_switch_statement(&mut self, it: &SwitchStatement<'a>) {
 		self.visit_expression(&it.discriminant);
-		self.enter(ScopeKind::Switch);
-		self.cx.breakables += 1;
+		self.switch_enter();
 		for case in &it.cases {
 			if let Some(test) = &case.test {
 				self.visit_expression(test);
 			}
 			self.visit_statements(&case.consequent);
 		}
-		self.cx.breakables -= 1;
-		self.leave();
+		self.switch_leave();
 	}
 
 	fn visit_catch_clause(&mut self, it: &CatchClause<'a>) {
-		// the parameter and the block's own names are one scope's
-		self.enter(ScopeKind::Block);
+		self.catch_enter(it);
 		if let Some(param) = &it.param {
-			match &param.pattern {
-				BindingPattern::BindingIdentifier(id) => self.declare(id.name.as_str(), Kind::CatchSimple),
-				pattern => self.declare_pattern(pattern, Kind::Lexical),
-			}
 			self.visit_binding_pattern(&param.pattern);
 		}
 		self.visit_statements(&it.body.body);
-		self.leave();
+		self.block_leave();
 	}
 
 	fn visit_labeled_statement(&mut self, it: &LabeledStatement<'a>) {
-		let name = it.label.name.as_str();
-		self.name(name, false);
-		if self.labels[self.cx.label_base as usize..].iter().any(|(label, _)| *label == name) {
-			return self.fail();
-		}
-		let mut inner = &it.body;
-		while let Statement::LabeledStatement(labelled) = inner {
-			inner = &labelled.body;
-		}
-		let is_loop = matches!(
-			inner,
-			Statement::DoWhileStatement(_)
-				| Statement::ForInStatement(_)
-				| Statement::ForOfStatement(_)
-				| Statement::ForStatement(_)
-				| Statement::WhileStatement(_)
-		);
-		// Annex B.3.1: sloppy code takes a plain function behind a label
-		if let Statement::FunctionDeclaration(function) = inner
-			&& (self.cx.strict || function.generator || function.r#async)
-		{
-			return self.fail();
-		}
-		self.labels.push((name, is_loop));
+		let pushed = self.label_enter(it);
 		self.visit_statement(&it.body);
-		self.labels.pop();
+		self.label_leave(pushed);
 	}
 
 	fn visit_break_statement(&mut self, it: &BreakStatement<'a>) {
-		let found = match &it.label {
-			Some(label) => {
-				self.labels[self.cx.label_base as usize..].iter().any(|(name, _)| *name == label.name.as_str())
-			}
-			None => self.cx.breakables > 0,
-		};
-		if !found {
-			self.fail();
-		}
+		self.break_statement(it);
 	}
 
 	fn visit_continue_statement(&mut self, it: &ContinueStatement<'a>) {
-		let found = match &it.label {
-			Some(label) => self.labels[self.cx.label_base as usize..]
-				.iter()
-				.any(|(name, is_loop)| *is_loop && *name == label.name.as_str()),
-			None => true,
-		};
-		if !found || self.cx.loops == 0 {
-			self.fail();
-		}
+		self.continue_statement(it);
 	}
 
 	fn visit_return_statement(&mut self, it: &ReturnStatement<'a>) {
-		if !self.cx.returns {
-			return self.fail();
-		}
+		self.return_statement();
 		walk::walk_return_statement(self, it);
 	}
 
 	fn visit_import_declaration(&mut self, it: &ImportDeclaration<'a>) {
-		for specifier in it.specifiers.iter().flatten() {
-			let local = match specifier {
-				ImportDeclarationSpecifier::ImportSpecifier(specifier) => &specifier.local,
-				ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) => &specifier.local,
-				ImportDeclarationSpecifier::ImportNamespaceSpecifier(specifier) => &specifier.local,
-			};
-			self.declare(local.name.as_str(), Kind::Lexical);
-			self.name(local.name.as_str(), true);
-		}
-		self.visit_string_literal(&it.source);
-		if let Some(with) = &it.with_clause {
-			self.visit_with_clause(with);
-		}
-	}
-
-	fn visit_with_clause(&mut self, it: &WithClause<'a>) {
-		// `assert { }`: the keyword browsers dropped
-		if it.keyword == WithClauseKeyword::Assert {
-			self.fail();
-		}
+		self.import_declaration(it);
 	}
 
 	fn visit_export_named_declaration(&mut self, it: &ExportNamedDeclaration<'a>) {
-		for specifier in &it.specifiers {
-			if let ModuleExportName::IdentifierReference(local) = &specifier.local {
-				self.name(local.name.as_str(), false);
-				self.exports.push(local.name.as_str());
-			}
-		}
+		self.export_named(it);
 	}
 
 	fn visit_export_from_declaration(&mut self, it: &ExportFromDeclaration<'a>) {
 		if let Some(with) = &it.with_clause {
-			self.visit_with_clause(with);
+			self.with_clause(with);
 		}
 	}
 
 	fn visit_export_all_declaration(&mut self, it: &ExportAllDeclaration<'a>) {
 		if let Some(with) = &it.with_clause {
-			self.visit_with_clause(with);
+			self.with_clause(with);
 		}
 	}
 
 	fn visit_export_default_declaration(&mut self, it: &ExportDefaultDeclaration<'a>) {
-		self.default_export = matches!(
-			it.declaration,
-			ExportDefaultDeclarationKind::FunctionDeclaration(_) | ExportDefaultDeclarationKind::ClassDeclaration(_)
-		);
+		self.default_enter(it);
 		walk::walk_export_default_declaration(self, it);
-		self.default_export = false;
+		self.default_leave();
 	}
 }
 
@@ -1415,6 +1937,72 @@ mod tests {
 		assert!(short.is_empty(), "{} short of V8's answer and not named:\n{}", short.len(), short.join("\n"));
 		let idle: Vec<&&str> = known.keys().filter(|text| !needed.contains(text)).collect();
 		assert!(idle.is_empty(), "named in early-known.txt and no longer needed: {idle:?}");
+	}
+
+	#[test]
+	fn the_rewrite_walk_checks_as_the_check_does() {
+		// every recorded text, as a script, behind 'use strict', as a module
+		// and in the places rust/host/early.mjs tries it: the verdict of the
+		// rewrite's walk (which drives the check) is the check's own
+		let places: [(&str, &str); 8] = [
+			("", ""),
+			("function f() {\n", "\n}"),
+			("x = () => {\n", "\n}"),
+			("async function f() {\n", "\n}"),
+			("function* f() {\n", "\n}"),
+			("x = { m() {\n", "\n} }"),
+			("class A { static {\n", "\n} }"),
+			("{\n", "\n}"),
+		];
+		crate::rewrite::tests::DIFFER.with(|differ| differ.borrow_mut().clear());
+		let mut tried = 0;
+		for line in CASES.lines() {
+			let Some((marks, text)) = line.split_once(' ') else {
+				continue;
+			};
+			if marks.len() != 3 || !marks.bytes().all(|mark| matches!(mark, b'+' | b'-')) {
+				continue;
+			}
+			let code = spelled(text.trim_end());
+			for (before, after) in places {
+				let wrapped = format!("{before}{code}{after}");
+				for (source, module) in [
+					(wrapped.clone(), false),
+					(format!("'use strict';\n{wrapped}"), false),
+					(wrapped.clone(), true),
+				] {
+					tried += 1;
+					let _ = run(&source, module);
+				}
+			}
+		}
+		let differ = crate::rewrite::tests::DIFFER.with(|differ| differ.borrow().clone());
+		assert!(tried > 100_000, "{tried} tried");
+		assert!(differ.is_empty(), "{} of {tried} differ:\n{}", differ.len(), differ[..differ.len().min(40)].join("\n"));
+	}
+
+	/// the same over the files of a directory (STOMP_AGREE: the parity
+	/// cases and a corpus of real scripts, run by hand: they are not here)
+	#[test]
+	#[ignore]
+	fn the_rewrite_walk_checks_as_the_check_does_over_files() {
+		let dir = std::env::var("STOMP_AGREE").expect("STOMP_AGREE");
+		crate::rewrite::tests::DIFFER.with(|differ| differ.borrow_mut().clear());
+		let mut tried = 0;
+		for entry in std::fs::read_dir(&dir).unwrap() {
+			let path = entry.unwrap().path();
+			let Ok(text) = std::fs::read_to_string(&path) else {
+				continue;
+			};
+			let module = path.extension().is_some_and(|ext| ext == "mjs");
+			for (source, module) in [(text.clone(), module), (text, !module)] {
+				tried += 1;
+				let _ = run(&source, module);
+			}
+		}
+		let differ = crate::rewrite::tests::DIFFER.with(|differ| differ.borrow().clone());
+		assert!(differ.is_empty(), "{} of {tried} differ:\n{}", differ.len(), differ[..differ.len().min(20)].join("\n"));
+		eprintln!("{tried} scripts, the two walks agree");
 	}
 
 	#[test]

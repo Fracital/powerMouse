@@ -11,6 +11,7 @@
 mod abi;
 pub mod config;
 pub mod early;
+pub mod pattern;
 pub mod rewrite;
 pub mod shape;
 pub mod source;

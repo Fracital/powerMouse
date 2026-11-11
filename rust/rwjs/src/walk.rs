@@ -20,6 +20,9 @@ use oxc::ast_visit::{Visit, walk};
 use oxc::span::{GetSpan, Span};
 use oxc::syntax::scope::ScopeFlags;
 
+use crate::early::{Checker, Mode, Verdict};
+use crate::pattern;
+use oxc::allocator::Allocator;
 use crate::rewrite::{Decline, Options, ROUTE_IMPORT, Route, js_whitespace};
 use crate::shape::{
 	Mem, Post, Shapes, bindings_named, bound_names, in_optional_chain, inner_span, is_literal,
@@ -108,6 +111,16 @@ pub struct Walker<'a, 'c, 'h> {
 	marks: u32,
 	key: Option<String>,
 	declined: Option<Decline>,
+	/// the early-error check, which this walk drives (src/early.rs): one
+	/// walk for the rewrite and the check
+	early: Checker<'a, 'a>,
+	/// the function visited next is a method's value: whether it may call
+	/// `super` (a derived class's constructor), for the check
+	pending_method: Option<(Span, bool)>,
+	/// what a pattern that is no plain one is parsed in (src/pattern.rs)
+	allocator: &'c Allocator,
+	/// a regular expression's pattern does not compile: the parser's error
+	bad_pattern: bool,
 }
 
 fn espan(span: Span) -> EditSpan {
@@ -128,6 +141,8 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		options: &'c Options<'c>,
 		offsets: &'c Utf16Offsets,
 		route: &'c mut Route<'h>,
+		mode: Mode,
+		allocator: &'c Allocator,
 	) -> Self {
 		Self {
 			src,
@@ -150,11 +165,31 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			marks: 0,
 			key: options.params.key.clone(),
 			declined: None,
+			early: Checker::new(src, mode),
+			pending_method: None,
+			allocator,
+			bad_pattern: false,
 		}
+	}
+
+	/// whether a regular expression literal's pattern does not compile
+	pub fn bad_pattern(&self) -> bool {
+		self.bad_pattern
 	}
 
 	pub fn finish(self) -> (Vec<Edit>, u32, Option<String>, Option<Decline>) {
 		(self.edits, self.marks, self.key, self.declined)
+	}
+
+	/// why the walk declined the script, if it did (it may have left a
+	/// part unwalked then)
+	pub fn declined(&self) -> Option<Decline> {
+		self.declined
+	}
+
+	/// V8's verdict on the script, from the check this walk drove
+	pub fn verdict(&self) -> Verdict {
+		self.early.verdict()
 	}
 
 	pub fn push(&mut self, edit: Edit) {
@@ -531,6 +566,9 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	/// a member the rewriter leaves as it is: its object is still read, and
 	/// a computed key too
 	fn plain_member(&mut self, m: Mem<'_, 'a>, cx: Cx) {
+		if let Mem::Private(private) = m {
+			self.early.private_use(private.field.name.as_str());
+		}
 		let object = m.object();
 		self.cx = Cx {
 			no_index: false,
@@ -648,6 +686,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		if cx.tag || matches!(key, SuperKey::Leave) {
 			return self.plain_member(m, cx);
 		}
+		self.early.super_property();
 		let span = m.span();
 		self.paren(span, cx);
 		match key {
@@ -674,6 +713,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		if matches!(key, SuperKey::Leave) {
 			return false;
 		}
+		self.early.super_property();
 		let span = m.span();
 		let access = self.access();
 		let after = format!(
@@ -715,6 +755,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		if matches!(key, SuperKey::Leave) {
 			return false;
 		}
+		self.early.super_property();
 		let access = self.access();
 		let rest = format!(", this, {}, {operate}, ", self.super_arrows());
 		if value.is_some() {
@@ -762,6 +803,9 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		let access = self.access();
 		let rest = format!(", this, {}).value", self.super_arrows());
 		let head = self.head(span.start, "sref");
+		if !matches!(key, SuperKey::Leave) {
+			self.early.super_property();
+		}
 		match key {
 			SuperKey::Leave => return false,
 			SuperKey::Named(name) => {
@@ -779,6 +823,14 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	// ---- calls ----
 
 	fn call(&mut self, c: &CallExpression<'a>, cx: Cx) {
+		if matches!(c.callee, Expression::Super(_)) {
+			// `super(...)`: the callee is no `super` member
+			self.early.super_call();
+			self.cx = Cx::default();
+			self.under(true, |walker| walker.visit_arguments(&c.arguments));
+			self.chain_out = false;
+			return;
+		}
 		if let Some(post) = post_message(c) {
 			return self.post(c, post);
 		}
@@ -1087,6 +1139,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			}
 			AssignmentTarget::AssignmentTargetIdentifier(id) => {
 				let name = id.name.as_str();
+				self.early.assigned(name);
 				if !self.options.config.routes(name) {
 					return self.under(true, |walker| walker.visit_expression(&a.right));
 				}
@@ -1190,6 +1243,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		match &u.argument {
 			SimpleAssignmentTarget::AssignmentTargetIdentifier(id) => {
 				let name = id.name.as_str();
+				self.early.assigned(name);
 				if !self.options.config.routes(name) {
 					return;
 				}
@@ -1225,6 +1279,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	fn pattern_target(&mut self, target: &SimpleAssignmentTarget<'a>) {
 		match target {
 			SimpleAssignmentTarget::AssignmentTargetIdentifier(id) => {
+				self.early.assigned(id.name.as_str());
 				// (and `eval`, whose write the access API stores as the eval
 				// itself: `[eval] = [saved]`)
 				if id.name == "location" || id.name == "eval" {
@@ -1384,6 +1439,9 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		let mut hoisted = Vec::new();
 		let mut names: Vec<&str> = Vec::new();
 		for (index, param) in params.items.iter().enumerate() {
+			// (its names are declared before it is walked, a parameter at a
+			// time, as the check's own walk does)
+			self.early.param(param);
 			let (target, default) = match (&param.pattern, param.initializer.as_deref()) {
 				(BindingPattern::AssignmentPattern(ap), _) => (&ap.left, Some(&ap.right)),
 				(pattern, initializer) => (pattern, initializer),
@@ -1430,6 +1488,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			}
 		}
 		if let Some(rest) = &params.rest {
+			self.early.rest_param(&rest.rest);
 			// `(...[{ top: t }]) => t`: the rest is an array of the arguments
 			let argument = &rest.rest.argument;
 			let mut rests = Vec::new();
@@ -1448,6 +1507,19 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		if hoisted.is_empty() { String::new() } else { format!("var {};", hoisted.join(", ")) }
 	}
 
+	/// a parameter list walked as it is (what the walk does not rewrite),
+	/// with the check's hooks
+	fn plain_parameters(&mut self, params: &FormalParameters<'a>) {
+		for param in &params.items {
+			self.early.param(param);
+			self.visit_formal_parameter(param);
+		}
+		if let Some(rest) = &params.rest {
+			self.early.rest_param(&rest.rest);
+			self.visit_formal_parameter_rest(rest);
+		}
+	}
+
 	/// `for (const { top: t } of a)`, `for ({ top: t } of a)`: a pattern with
 	/// no source expression to wrap, like a parameter's. The head binds a
 	/// temporary and the pattern moves to the top of the body as the
@@ -1461,6 +1533,8 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				return None;
 			};
 			let spec = self.binding_spec(&declarator.id, &mut rests)?;
+			// (the declaration is not walked: its names are declared here)
+			self.early.variable_declaration(decl);
 			let span = declarator.id.span();
 			let page = self.slice(span);
 			// `for (var { location } of a)` outside any function: the
@@ -1576,6 +1650,22 @@ fn is_bare_specifier(specifier: &str) -> bool {
 	true
 }
 
+/// every regular expression literal of a tree compiles (asked of what a
+/// walk that declined may have left unwalked)
+pub struct Patterns<'s, 'c> {
+	pub src: &'s str,
+	pub allocator: &'c Allocator,
+	pub bad: bool,
+}
+
+impl<'a> Visit<'a> for Patterns<'_, '_> {
+	fn visit_reg_exp_literal(&mut self, it: &RegExpLiteral<'a>) {
+		if !self.bad && !pattern::compiles(self.allocator, &self.src[it.span.start as usize..it.span.end as usize]) {
+			self.bad = true;
+		}
+	}
+}
+
 /// whether a parameter names any of `names` anywhere in it, as the
 /// JavaScript rewriter's `mentions` finds an identifier node
 fn mentions_param(param: &FormalParameter, names: &[&str]) -> bool {
@@ -1635,6 +1725,88 @@ impl<'a> Visit<'a> for Mentions<'_> {
 	}
 }
 
+impl<'a> Walker<'a, '_, '_> {
+	fn for_in(&mut self, it: &ForInStatement<'a>) {
+		if !self.rewriting {
+			return walk::walk_for_in_statement(self, it);
+		}
+		self.under(false, |walker| {
+			walker.var_place = VarPlace::Loop;
+			walker.visit_for_statement_left(&it.left);
+			walker.var_place = VarPlace::Statement;
+			let assignments = std::mem::take(&mut walker.loop_assignments);
+			walker.cx = Cx::default();
+			walker.visit_expression(&it.right);
+			if !assignments.is_empty() {
+				walker.wrap(it.body.span(), format!("{{{assignments}"), "}".into());
+			}
+			walker.visit_statement(&it.body);
+		});
+	}
+
+	fn for_of(&mut self, it: &ForOfStatement<'a>) {
+		if !self.rewriting {
+			return walk::walk_for_of_statement(self, it);
+		}
+		self.under(false, |walker| {
+			// a pattern in the head moves to the body (`for ... in` hands out
+			// strings, and keeps its head)
+			let first = walker.head_pattern(&it.left);
+			if first.is_none() {
+				walker.var_place = VarPlace::Loop;
+				walker.visit_for_statement_left(&it.left);
+				walker.var_place = VarPlace::Statement;
+			}
+			let assignments = std::mem::take(&mut walker.loop_assignments);
+			if !it.r#await && walker.shapes.prints_helper(&it.right) {
+				let head = walker.head(it.right.span().start, "iter");
+				let source = quote(walker.slice(inner_span(&it.right)));
+				walker.wrap(it.right.span(), head, format!(", \"of\", {source})"));
+				walker.operand(&it.right);
+			} else {
+				walker.cx = Cx::default();
+				walker.visit_expression(&it.right);
+			}
+			// (the body stays a statement of its own: a block may declare a
+			// name the head binds)
+			if let Some(first) = first {
+				walker.wrap(it.body.span(), format!("{{{first}"), "}".into());
+			} else if !assignments.is_empty() {
+				walker.wrap(it.body.span(), format!("{{{assignments}"), "}".into());
+			}
+			walker.visit_statement(&it.body);
+		});
+	}
+
+	fn catch(&mut self, it: &CatchClause<'a>) {
+		// `catch ({ top: t })`: the clause binds a temporary and the pattern
+		// is declared from it at the top of the block (a name the pattern
+		// binds cannot be declared again there, so the block is its scope)
+		if let Some(param) = it.param.as_ref().filter(|_| self.rewriting) {
+			let mut rests = Vec::new();
+			if let Some(spec) = self.binding_spec(&param.pattern, &mut rests) {
+				let temp = format!("{}c", self.access());
+				let span = param.pattern.span();
+				let page = self.slice(span);
+				let moved = self.moved_pattern(&param.pattern, &rests);
+				self.replace(span.start, span.end, temp.clone());
+				let declaration = format!("let {};", self.moved_declarator(&moved, page, &temp, Some(&spec), false));
+				let open = it.body.span.start;
+				self.replace(open, open + 1, format!("{{{declaration}"));
+				// (the clause's scope is its block's: `catch_enter`)
+				return walk::walk_block_statement(self, &it.body);
+			}
+		}
+		let kind = AstKind::CatchClause(self.alloc(it));
+		self.enter_node(kind);
+		if let Some(param) = &it.param {
+			self.visit_catch_parameter(param);
+		}
+		walk::walk_block_statement(self, &it.body);
+		self.leave_node(kind);
+	}
+}
+
 impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 	fn enter_node(&mut self, kind: AstKind<'a>) {
 		// whether the node is an expression by its ESTree type's name
@@ -1691,7 +1863,10 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 				walk::walk_parenthesized_expression(self, p);
 				self.chain_out = false;
 			}
-			Expression::Identifier(id) => self.identifier_read(id, cx),
+			Expression::Identifier(id) => {
+				self.early.reference(id.name.as_str());
+				self.identifier_read(id, cx)
+			}
 			Expression::StaticMemberExpression(m) => self.member_read(Mem::Static(m), cx),
 			Expression::ComputedMemberExpression(m) => self.member_read(Mem::Computed(m), cx),
 			Expression::PrivateFieldExpression(m) => self.plain_member(Mem::Private(m), cx),
@@ -1700,6 +1875,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 			Expression::AssignmentExpression(a) => self.assignment(a),
 			Expression::UpdateExpression(u) => self.update(u),
 			Expression::BinaryExpression(b) => {
+				self.early.binary(b);
 				// `key in o`: the helpers live on the window, where natively
 				// nothing has their names, so the access API answers an `in`
 				// whose key is one or may be one (any key but a literal)
@@ -1721,6 +1897,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 				self.operand(&b.right);
 			}
 			Expression::UnaryExpression(u) => {
+				self.early.unary(u);
 				let argument = unparen(&u.argument);
 				match u.operator {
 					// `typeof top` must not throw in a worker, and `delete top`
@@ -1729,7 +1906,12 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 					// for V8 to refuse (and sloppy code's `delete top`
 					// answers as it does natively)
 					UnaryOperator::Typeof | UnaryOperator::Delete
-						if matches!(argument, Expression::Identifier(_)) => {}
+						if matches!(argument, Expression::Identifier(_)) =>
+					{
+						if let Expression::Identifier(id) = argument {
+							self.early.reference(id.name.as_str());
+						}
+					}
 					UnaryOperator::Delete if Mem::of(argument).is_some() => {
 						if let Some(m) = Mem::of(argument) {
 							self.plain_member(m, Cx::default());
@@ -1749,6 +1931,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 				self.visit_template_literal(&t.quasi);
 			}
 			Expression::ImportExpression(i) => {
+				self.early.import_expression(i);
 				if i.phase.is_some() {
 					return self.decline(Decline::Shape);
 				}
@@ -1852,6 +2035,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 	}
 
 	fn visit_object_property(&mut self, it: &ObjectProperty<'a>) {
+		self.early.property(it);
 		if it.method || it.kind != PropertyKind::Init {
 			self.mark_method(it.span, &it.key, it.computed, false);
 		}
@@ -1859,6 +2043,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 			// `{ location }` reads the value: written out, with the read
 			if let Expression::Identifier(id) = &it.value {
 				let name = id.name.as_str();
+				self.early.reference(name);
 				if self.options.config.routes(name) {
 					let access = self.access();
 					self.wrap(
@@ -1873,6 +2058,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		self.visit_property_key(&it.key);
 		if it.method || it.kind != PropertyKind::Init {
 			self.method_value = Some(it.value.span());
+			self.pending_method = Some((it.value.span(), false));
 		}
 		self.cx = Cx::default();
 		self.under(false, |walker| walker.visit_expression(&it.value));
@@ -1884,30 +2070,52 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		if it.kind != MethodDefinitionKind::Constructor {
 			self.mark_method(it.span, &it.key, it.computed, it.r#static);
 		}
+		let calls_super = self.early.method(it) == Some(true);
 		self.under(false, |walker| {
 			walker.visit_decorators(&it.decorators);
 			walker.visit_property_key(&it.key);
 			walker.method_value = Some(it.value.span);
+			walker.pending_method = Some((it.value.span, calls_super));
 			walker.visit_function(&it.value, it.kind.scope_flags());
 			walker.method_value = None;
 		});
 	}
 
-	fn visit_function(&mut self, it: &Function<'a>, flags: ScopeFlags) {
+	fn visit_function(&mut self, it: &Function<'a>, _flags: ScopeFlags) {
 		if self.method_value.take() != Some(it.span) {
 			let at = self.first_token_end(it.span.start);
 			self.mark(at, it.span);
 		}
+		// a method's value: whether it may call `super`
+		let method = self
+			.pending_method
+			.take()
+			.filter(|(span, _)| *span == it.span)
+			.map(|(_, calls_super)| calls_super);
 		self.functions += 1;
+		let saved = self.early.function_enter(it, method);
+		let directives = it.body.as_ref().map_or(&[][..], |body| &body.directives[..]);
 		match (&it.body, self.rewriting) {
 			(Some(body), true) => {
 				self.parents.push(false);
 				let hoisted = self.hoist_parameters(&it.params);
+				self.early.params_leave(&it.params, method.is_some(), directives);
 				self.function_body(body, hoisted);
 				self.parents.pop();
 			}
-			_ => walk::walk_function(self, it, flags),
+			_ => {
+				// (its name is the check's, read by `function_enter`)
+				let kind = AstKind::Function(self.alloc(it));
+				self.enter_node(kind);
+				self.plain_parameters(&it.params);
+				self.early.params_leave(&it.params, method.is_some(), directives);
+				if let Some(body) = &it.body {
+					self.visit_function_body(body);
+				}
+				self.leave_node(kind);
+			}
 		}
+		self.early.function_leave(saved);
 		self.functions -= 1;
 	}
 
@@ -1915,9 +2123,11 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		let at = self.first_token_end(it.span.start);
 		self.mark(at, it.span);
 		self.functions += 1;
+		let saved = self.early.arrow_enter(it);
 		if self.rewriting {
 			self.parents.push(false);
 			let hoisted = self.hoist_parameters(&it.params);
+			self.early.arrow_params_leave(it);
 			match &it.body {
 				ArrowFunctionBody::FunctionBody(body) => self.function_body(body, hoisted),
 				body => {
@@ -1934,8 +2144,14 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 			}
 			self.parents.pop();
 		} else {
-			walk::walk_arrow_function_expression(self, it);
+			let kind = AstKind::ArrowFunctionExpression(self.alloc(it));
+			self.enter_node(kind);
+			self.plain_parameters(&it.params);
+			self.early.arrow_params_leave(it);
+			self.visit_arrow_function_body(&it.body);
+			self.leave_node(kind);
 		}
+		self.early.function_leave(saved);
 		self.functions -= 1;
 	}
 
@@ -1946,7 +2162,47 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 			.then(|| self.first_token_end(it.span.start))
 			.flatten();
 		self.mark(at, it.span);
-		walk::walk_class(self, it);
+		let saved = self.early.class_enter(it);
+		let kind = AstKind::Class(self.alloc(it));
+		self.enter_node(kind);
+		self.visit_decorators(&it.decorators);
+		if let Some(id) = &it.id {
+			self.visit_binding_identifier(id);
+		}
+		if let Some(heritage) = &it.heritage {
+			self.visit_class_heritage(heritage);
+		}
+		let body = self.early.class_body_enter(it);
+		self.visit_class_body(&it.body);
+		self.early.class_leave(body, saved);
+		self.leave_node(kind);
+	}
+
+	fn visit_property_definition(&mut self, it: &PropertyDefinition<'a>) {
+		let kind = AstKind::PropertyDefinition(self.alloc(it));
+		self.enter_node(kind);
+		self.visit_decorators(&it.decorators);
+		self.visit_property_key(&it.key);
+		if let Some(value) = &it.value {
+			let saved = self.early.field_enter();
+			self.visit_expression(value);
+			self.early.field_leave(saved);
+		}
+		self.leave_node(kind);
+	}
+
+	fn visit_accessor_property(&mut self, it: &AccessorProperty<'a>) {
+		// (no browser has it yet: the check reads none of it)
+		self.early.mute();
+		walk::walk_accessor_property(self, it);
+		self.early.unmute();
+	}
+
+	fn visit_decorator(&mut self, it: &Decorator<'a>) {
+		self.early.unshipped();
+		self.early.mute();
+		walk::walk_decorator(self, it);
+		self.early.unmute();
 	}
 
 	fn visit_class_heritage(&mut self, it: &ClassHeritage<'a>) {
@@ -1957,7 +2213,9 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 
 	fn visit_static_block(&mut self, it: &StaticBlock<'a>) {
 		self.functions += 1;
+		let saved = self.early.static_enter();
 		walk::walk_static_block(self, it);
+		self.early.static_leave(saved);
 		self.functions -= 1;
 	}
 
@@ -1978,6 +2236,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 	}
 
 	fn visit_variable_declaration(&mut self, it: &VariableDeclaration<'a>) {
+		self.early.variable_declaration(it);
 		let place = std::mem::take(&mut self.var_place);
 		if self.rewriting
 			&& !self.options.module
@@ -2039,87 +2298,210 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		if matches!(it.init, Some(ForStatementInit::VariableDeclaration(_))) {
 			self.var_place = VarPlace::ForInit;
 		}
+		let scoped = self.early.for_enter(it);
+		self.early.loop_enter(&it.body);
 		walk::walk_for_statement(self, it);
+		self.early.loop_leave();
+		self.early.scope_leave(scoped);
 	}
 
 	fn visit_for_in_statement(&mut self, it: &ForInStatement<'a>) {
-		if !self.rewriting {
-			return walk::walk_for_in_statement(self, it);
-		}
-		self.under(false, |walker| {
-			walker.var_place = VarPlace::Loop;
-			walker.visit_for_statement_left(&it.left);
-			walker.var_place = VarPlace::Statement;
-			let assignments = std::mem::take(&mut walker.loop_assignments);
-			walker.cx = Cx::default();
-			walker.visit_expression(&it.right);
-			if !assignments.is_empty() {
-				walker.wrap(it.body.span(), format!("{{{assignments}"), "}".into());
-			}
-			walker.visit_statement(&it.body);
-		});
+		let scoped = self.early.for_each_enter(&it.left, false, false);
+		self.early.loop_enter(&it.body);
+		self.for_in(it);
+		self.early.loop_leave();
+		self.early.scope_leave(scoped);
 	}
 
 	fn visit_for_of_statement(&mut self, it: &ForOfStatement<'a>) {
-		if !self.rewriting {
-			return walk::walk_for_of_statement(self, it);
-		}
-		self.under(false, |walker| {
-			// a pattern in the head moves to the body (`for ... in` hands out
-			// strings, and keeps its head)
-			let first = walker.head_pattern(&it.left);
-			if first.is_none() {
-				walker.var_place = VarPlace::Loop;
-				walker.visit_for_statement_left(&it.left);
-				walker.var_place = VarPlace::Statement;
-			}
-			let assignments = std::mem::take(&mut walker.loop_assignments);
-			if !it.r#await && walker.shapes.prints_helper(&it.right) {
-				let head = walker.head(it.right.span().start, "iter");
-				let source = quote(walker.slice(inner_span(&it.right)));
-				walker.wrap(it.right.span(), head, format!(", \"of\", {source})"));
-				walker.operand(&it.right);
-			} else {
-				walker.cx = Cx::default();
-				walker.visit_expression(&it.right);
-			}
-			// (the body stays a statement of its own: a block may declare a
-			// name the head binds)
-			if let Some(first) = first {
-				walker.wrap(it.body.span(), format!("{{{first}"), "}".into());
-			} else if !assignments.is_empty() {
-				walker.wrap(it.body.span(), format!("{{{assignments}"), "}".into());
-			}
-			walker.visit_statement(&it.body);
-		});
+		let scoped = self.early.for_each_enter(&it.left, true, it.r#await);
+		self.early.loop_enter(&it.body);
+		self.for_of(it);
+		self.early.loop_leave();
+		self.early.scope_leave(scoped);
 	}
 
 	fn visit_catch_clause(&mut self, it: &CatchClause<'a>) {
-		// `catch ({ top: t })`: the clause binds a temporary and the pattern
-		// is declared from it at the top of the block (a name the pattern
-		// binds cannot be declared again there, so the block is its scope)
-		if let Some(param) = it.param.as_ref().filter(|_| self.rewriting) {
-			let mut rests = Vec::new();
-			if let Some(spec) = self.binding_spec(&param.pattern, &mut rests) {
-				let temp = format!("{}c", self.access());
-				let span = param.pattern.span();
-				let page = self.slice(span);
-				let moved = self.moved_pattern(&param.pattern, &rests);
-				self.replace(span.start, span.end, temp.clone());
-				let declaration = format!("let {};", self.moved_declarator(&moved, page, &temp, Some(&spec), false));
-				let open = it.body.span.start;
-				self.replace(open, open + 1, format!("{{{declaration}"));
-				return self.visit_block_statement(&it.body);
-			}
-		}
-		walk::walk_catch_clause(self, it);
+		self.early.catch_enter(it);
+		self.catch(it);
+		self.early.block_leave();
 	}
+
+	fn visit_block_statement(&mut self, it: &BlockStatement<'a>) {
+		self.early.block_enter();
+		walk::walk_block_statement(self, it);
+		self.early.block_leave();
+	}
+
+	fn visit_if_statement(&mut self, it: &IfStatement<'a>) {
+		let kind = AstKind::IfStatement(self.alloc(it));
+		self.enter_node(kind);
+		self.visit_expression(&it.test);
+		let scoped = self.early.branch_enter(&it.consequent);
+		self.visit_statement(&it.consequent);
+		self.early.branch_leave(scoped);
+		if let Some(alternate) = &it.alternate {
+			let scoped = self.early.branch_enter(alternate);
+			self.visit_statement(alternate);
+			self.early.branch_leave(scoped);
+		}
+		self.leave_node(kind);
+	}
+
+	fn visit_while_statement(&mut self, it: &WhileStatement<'a>) {
+		self.early.loop_enter(&it.body);
+		walk::walk_while_statement(self, it);
+		self.early.loop_leave();
+	}
+
+	fn visit_do_while_statement(&mut self, it: &DoWhileStatement<'a>) {
+		self.early.loop_enter(&it.body);
+		walk::walk_do_while_statement(self, it);
+		self.early.loop_leave();
+	}
+
+	fn visit_with_statement(&mut self, it: &WithStatement<'a>) {
+		self.early.with(it);
+		walk::walk_with_statement(self, it);
+	}
+
+	fn visit_switch_statement(&mut self, it: &SwitchStatement<'a>) {
+		let kind = AstKind::SwitchStatement(self.alloc(it));
+		self.enter_node(kind);
+		self.visit_expression(&it.discriminant);
+		self.early.switch_enter();
+		self.visit_switch_cases(&it.cases);
+		self.early.switch_leave();
+		self.leave_node(kind);
+	}
+
+	fn visit_labeled_statement(&mut self, it: &LabeledStatement<'a>) {
+		let pushed = self.early.label_enter(it);
+		walk::walk_labeled_statement(self, it);
+		self.early.label_leave(pushed);
+	}
+
+	fn visit_break_statement(&mut self, it: &BreakStatement<'a>) {
+		self.early.break_statement(it);
+		walk::walk_break_statement(self, it);
+	}
+
+	fn visit_continue_statement(&mut self, it: &ContinueStatement<'a>) {
+		self.early.continue_statement(it);
+		walk::walk_continue_statement(self, it);
+	}
+
+	fn visit_return_statement(&mut self, it: &ReturnStatement<'a>) {
+		self.early.return_statement();
+		walk::walk_return_statement(self, it);
+	}
+
+	fn visit_program(&mut self, it: &Program<'a>) {
+		self.early.program_enter(it);
+		walk::walk_program(self, it);
+		self.early.program_leave();
+	}
+
+	fn visit_directive(&mut self, _it: &Directive<'a>) {
+		// (the check reads a body's directives where it enters the body)
+	}
+
+	fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
+		// (reached where the walk does not rewrite: a rewritten read is
+		// checked where it is rewritten)
+		self.early.reference(it.name.as_str());
+	}
+
+	fn visit_binding_identifier(&mut self, it: &BindingIdentifier<'a>) {
+		self.early.binding(it.name.as_str());
+	}
+
+	fn visit_private_identifier(&mut self, it: &PrivateIdentifier<'a>) {
+		self.early.private_use(it.name.as_str());
+	}
+
+	fn visit_numeric_literal(&mut self, it: &NumericLiteral<'a>) {
+		self.early.numeric(it);
+	}
+
+	fn visit_string_literal(&mut self, it: &StringLiteral<'a>) {
+		self.early.string_literal(it);
+	}
+
+	fn visit_unary_expression(&mut self, it: &UnaryExpression<'a>) {
+		self.early.unary(it);
+		walk::walk_unary_expression(self, it);
+	}
+
+	fn visit_binary_expression(&mut self, it: &BinaryExpression<'a>) {
+		self.early.binary(it);
+		walk::walk_binary_expression(self, it);
+	}
+
+	fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
+		if matches!(it.callee, Expression::Super(_)) {
+			self.early.super_call();
+			let kind = AstKind::CallExpression(self.alloc(it));
+			self.enter_node(kind);
+			self.visit_arguments(&it.arguments);
+			self.leave_node(kind);
+		} else {
+			walk::walk_call_expression(self, it);
+		}
+	}
+
+	fn visit_super(&mut self, _it: &Super) {
+		self.early.super_property();
+	}
+
+	fn visit_await_expression(&mut self, it: &AwaitExpression<'a>) {
+		self.early.operator();
+		walk::walk_await_expression(self, it);
+	}
+
+	fn visit_yield_expression(&mut self, it: &YieldExpression<'a>) {
+		self.early.operator();
+		walk::walk_yield_expression(self, it);
+	}
+
+	fn visit_object_expression(&mut self, it: &ObjectExpression<'a>) {
+		let around = self.early.object_enter();
+		walk::walk_object_expression(self, it);
+		self.early.object_leave(around);
+	}
+
+	fn visit_import_expression(&mut self, it: &ImportExpression<'a>) {
+		self.early.import_expression(it);
+		walk::walk_import_expression(self, it);
+	}
+
+	fn visit_reg_exp_literal(&mut self, it: &RegExpLiteral<'a>) {
+		// (asked here, not of the parser: src/pattern.rs. Never muted: it is
+		// the parse's question, wherever the literal stands)
+		if !self.bad_pattern && !pattern::compiles(self.allocator, self.slice(it.span)) {
+			self.bad_pattern = true;
+		}
+	}
+
+	fn visit_export_named_declaration(&mut self, it: &ExportNamedDeclaration<'a>) {
+		self.early.export_named(it);
+		walk::walk_export_named_declaration(self, it);
+	}
+
+	fn visit_export_default_declaration(&mut self, it: &ExportDefaultDeclaration<'a>) {
+		self.early.default_enter(it);
+		walk::walk_export_default_declaration(self, it);
+		self.early.default_leave();
+	}
+
 
 	fn visit_simple_assignment_target(&mut self, it: &SimpleAssignmentTarget<'a>) {
 		// reached only for a pattern's target or a loop head's: a plain
 		// assignment's and an update's are their expressions' to decide
 		if self.rewriting {
 			self.pattern_target(it);
+		} else if let SimpleAssignmentTarget::AssignmentTargetIdentifier(id) = it {
+			self.early.assigned(id.name.as_str());
 		} else {
 			walk::walk_simple_assignment_target(self, it);
 		}
@@ -2130,6 +2512,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		it: &AssignmentTargetPropertyIdentifier<'a>,
 	) {
 		let name = it.binding.name.as_str();
+		self.early.assigned(name);
 		if self.rewriting && (name == "location" || name == "eval") {
 			// `({ location } = o)`: written out, with the reference
 			let text = format!("{name}: {}", self.ref1(0, name));
@@ -2144,6 +2527,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 	fn visit_export_specifier(&mut self, _it: &ExportSpecifier<'a>) {}
 
 	fn visit_import_declaration(&mut self, it: &ImportDeclaration<'a>) {
+		self.early.import_declaration(it);
 		if it.phase.is_some() {
 			return self.decline(Decline::Shape);
 		}
@@ -2151,10 +2535,16 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 	}
 
 	fn visit_export_all_declaration(&mut self, it: &ExportAllDeclaration<'a>) {
+		if let Some(with) = &it.with_clause {
+			self.early.with_clause(with);
+		}
 		self.route_source(&it.source, it.with_clause.as_deref());
 	}
 
 	fn visit_export_from_declaration(&mut self, it: &ExportFromDeclaration<'a>) {
+		if let Some(with) = &it.with_clause {
+			self.early.with_clause(with);
+		}
 		self.route_source(&it.source, it.with_clause.as_deref());
 	}
 }
