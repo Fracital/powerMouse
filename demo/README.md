@@ -136,6 +136,11 @@ holyWisp is started.
    demo's own prompt (`#permissionPrompt`: Allow, Block, Close).
    `wait()` resolves once the service worker has built a server for this
    controller. The controller is exposed as `window.controller` for devtools.
+   No `id` is given, so the controller keeps the one the tab had last time
+   (in `localStorage` as `kept-tab-ids`, one per tab open at once, held with
+   a Web Lock): routed URLs stay the same from visit to visit and the
+   browser keeps the compiled code of the scripts proxied pages load.
+   `controller.cookies.clear()` forgets the kept ids with the cookies.
    The service worker's HTTP cache is on; `?nocache` on the demo URL turns it
    off for that visit. Emulated service workers (`serviceWorkers`,
    docs/service-workers.md) are on; `?nosw` turns them off for that visit;

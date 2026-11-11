@@ -71,6 +71,31 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- A controller whose host gives no `id` keeps one from visit to visit, where
+  it got a new random one with every page. Every routed URL starts with the
+  id, so a script's routed URL is now the same on the next visit: the rewrite
+  cache, whose key includes the address, has its output (every script was
+  rewritten on every visit), and a browser keeps a script's compiled code by
+  its URL. The ids are kept in the host origin's `localStorage`
+  (`kept-tab-ids`, 16 at most) and each is held by one controller at a time
+  with a Web Lock: a controller takes the id it had before its tab reloaded,
+  else the oldest one nobody holds, else a new one, so two tabs open at once
+  are still two controllers side by side. A `RemoteController` keeps them on
+  the host's origin and hands the controller frame its id. The claim is not
+  instant: `id` and `config.directory` are empty until the controller has its
+  id, which it does before `wait()` resolves, and nothing is routed or
+  registered before that. Without Web Locks or storage, or where they refuse,
+  the id is a new random one that is not kept, as before; a host that passes
+  its own `id` is as before (an empty one now counts as none, where it was a
+  TypeError). What it costs: the id is as random as before and
+  only the host's origin reads where it is kept, but it now lasts, and it is
+  in every routed URL: a proxied page is never shown one, and a page that got
+  one through a hole in the hooks would have a name for the browser that
+  outlives the site's cookies. So `cookies.clear()` without an origin, which
+  forgets every site's cookies, forgets the kept ids too (the next page, and
+  every open tab at its next reload, gets a new one), and they go with the
+  host origin's site data. There is no new API and no option for it.
+  (controller-ids suite.)
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,
@@ -177,13 +202,14 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 - Several controllers share one directory: two host tabs on `/stomp/` no
   longer replace each other in the service worker. Every `StompController`
   (and `RemoteController`) has an id (`init.id`, 1 to 32 characters of
-  `[A-Za-z0-9_-]`, 8 random ones by default, read back as `controller.id`)
+  `[A-Za-z0-9_-]`, 8 random ones the controller keeps by default (the entry
+  on kept ids, above), read back as `controller.id`)
   and its routed URLs carry it: `/stomp/<id>/html/<encoded>` where they were
   `/stomp/html/<encoded>`. `config.directory` is that address and the new
   `config.scope` the directory the host gave (`controller.directory` still
   means that); only the asset URLs (the inject bundles, the transport
   worker, the controller frame) are built from the scope. The same id passed
-  again replaces, as before; a host that keeps tabs stores one id per tab
+  again replaces, as before; a host that gives its own keeps one per tab
   (sessionStorage) and passes it back, so the tab's history entries,
   reloads and copied links keep resolving. A controller is a tab, not a
   browser: the cookie jar, the HTTP cache and the storage partitions are

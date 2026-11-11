@@ -14,7 +14,7 @@ import type {
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
-import { controllerId } from './id';
+import { controllerId, forgetControllerIds, keptControllerId } from './id';
 import {
 	CookieJar,
 	cookieJar,
@@ -143,7 +143,11 @@ export class RemoteController extends EventTarget {
 	proxyOrigin: string;
 	/** the scope on the proxy origin; the controller's address is `config.directory` */
 	directory: string;
-	/** the controller's id (ControllerInit.id), known before the frame answers */
+	/**
+	 * the controller's id (ControllerInit.id): the host's own at once, else
+	 * the one kept here, on the host's origin, which the controller frame is
+	 * given (empty until then, before `wait()` resolves)
+	 */
 	id: string;
 	/** the build this host-side bundle came from (see StompController.build); the controller frame's is `config.build` once it answered */
 	readonly build: string = BUILD;
@@ -167,7 +171,14 @@ export class RemoteController extends EventTarget {
 		this.#init = init;
 		this.proxyOrigin = new URL(init.proxyOrigin).origin;
 		this.directory = init.directory ?? '/stomp/';
-		this.id = controllerId(init.id);
+		// kept on the host's origin, where no proxied page reads it, and
+		// handed to the controller frame as its id: that one never keeps any
+		this.id = init.id ? controllerId(init.id) : '';
+		const idReady: Promise<void> = this.id
+			? Promise.resolve()
+			: keptControllerId().then((id) => {
+					this.id = id;
+				});
 		this.#sandbox = init.sandbox ?? DEFAULT_SANDBOX;
 
 		if (this.proxyOrigin === location.origin)
@@ -301,7 +312,7 @@ export class RemoteController extends EventTarget {
 
 		(document.body || document.documentElement).append(this.element);
 
-		this.#ready = frameReadyPromise
+		this.#ready = Promise.all([frameReadyPromise, idReady])
 			.then(() =>
 				this.#rpc.call('init', {
 					codec: init.codec,
@@ -388,7 +399,11 @@ export class RemoteController extends EventTarget {
 	/** the cookie jar, for the host application only (see StompController.cookies) */
 	readonly cookies: CookieJar = cookieJar(async (command) => {
 		await this.#ready;
-		return this.#rpc.call('cookies', command);
+		const result = await this.#rpc.call('cookies', command);
+		// as on StompController: the kept ids go with every site's cookies
+		if (command.op === 'clear' && command.origin === undefined)
+			await forgetControllerIds();
+		return result;
 	});
 	async setTransport(transport: TransportDescriptor): Promise<void> {
 		await this.#ready;

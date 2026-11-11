@@ -317,6 +317,10 @@ async function startController(name) {
 		`${name} over ${wispURL()}${HTTP3 && name === 'epoxy' ? ', HTTP/3 on' : ''}`,
 	);
 
+	// no id is given: the controller keeps one per open tab from visit to
+	// visit, so the browser keeps the compiled code of the scripts proxied
+	// pages load (it does so only for the same URL, and routed URLs start
+	// with the id)
 	if (ISOLATED) {
 		setStatus('Starting controller frame…');
 		controller = new StompRemoteController({

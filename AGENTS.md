@@ -167,7 +167,18 @@ on every save (use a `git worktree`).
   address whose controller is gone is redirected to the newest live
   controller of the scope with the same codec (the worker keeps each
   address's codec in `stompConfig`); with none, the host's error page
-  answers with kind `controller`.
+  answers with kind `controller`. A controller whose host gives no id
+  keeps one from visit to visit (`keptControllerId`,
+  `src/controller/id.ts`: in the host origin's localStorage under
+  `kept-tab-ids`, one controller at a time by a Web Lock, forgotten on
+  `cookies.clear()` for every site), so its address repeats. The claim is
+  async and the address does not exist before it: `id` and
+  `config.directory` are empty until then, and whatever needs the address
+  waits for `#hostReady` (the first handshake, a viewport report). There is
+  no public call for it and the key is not an option: keep both that way,
+  keep the key free of the project's name (a host that rewrites such names
+  per build would lose its ids on every deploy), and never make an id a
+  function of anything a proxied page can read.
 - **Same-origin `StompController` is for development only.** It is not a
   security boundary: a proxied page is same-origin with the host. Real
   deployments use `RemoteController` with a separate proxy origin

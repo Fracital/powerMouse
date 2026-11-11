@@ -53,7 +53,7 @@ import serveTransport from '../transport/serveTransport';
 import TransportWorker from '../transport/TransportWorker';
 import { BUILD } from '../version';
 import { canTraverse, traverse } from './history';
-import { controllerId } from './id';
+import { controllerId, forgetControllerIds, keptControllerId } from './id';
 import type { StaleInfo, TransportDescriptor } from './messages';
 import { DEFAULT_SANDBOX } from './remote';
 import RewriteWorkers, {
@@ -112,9 +112,14 @@ export interface ControllerInit {
 	 * otherwise); 8 random characters by default. It names the controller's
 	 * address under the directory (`/stomp/<id>/`, `config.directory`), so two
 	 * host tabs on one directory run two controllers side by side; the same id
-	 * passed again replaces the earlier controller. A host that keeps tabs
-	 * stores one id per tab (sessionStorage) and passes it back, so the tab's
-	 * history entries, reloads and copied links keep resolving.
+	 * passed again replaces the earlier controller. Without one the
+	 * controller keeps an id of its own from visit to visit, one for each
+	 * controller open at once (src/controller/id.ts): the tab's history
+	 * entries, reloads and copied links keep resolving, and the browser keeps
+	 * the compiled code of the scripts proxied pages load (it does so only
+	 * for the same URL, and every routed URL starts with the id). That id is
+	 * known once `wait()` resolves (`id` is empty until then), and is
+	 * forgotten with the cookies (`cookies.clear()` for every site).
 	 */
 	id?: string;
 	/** origins allowed to frame proxied documents (CSP frame-ancestors) */
@@ -529,7 +534,11 @@ export class StompController extends EventTarget {
 	stale: StaleInfo | null = null;
 	/** the directory the host gave: the service worker's scope and the asset base (`config.scope`) */
 	directory: URL;
-	/** this controller's id; its address is `config.directory` (`directory` + id + `/`) */
+	/**
+	 * this controller's id; its address is `config.directory` (`directory` +
+	 * id + `/`). Empty, as the address is, until the controller that was
+	 * given none has the one it keeps (before `wait()` resolves)
+	 */
 	id: string;
 	/** the build this controller bundle came from (STOMP_BUILD: version plus commit, or the package version); the worker's build is `config.build`, and `stale` says when the two differ */
 	readonly build: string = BUILD;
@@ -651,7 +660,13 @@ export class StompController extends EventTarget {
 
 		if (this.directory.origin !== location.origin)
 			throw new Error('Stomp directory must be same-origin');
-		this.id = controllerId(init.id);
+		// a host's own id is the address at once; without one the address is
+		// the id this controller keeps, which it has before its first
+		// handshake (#hostReady): until then there is none, and nothing that
+		// needs one (a route, a frame, a report to the worker) happens. An
+		// empty id is none: what a host read off `id` too early and passed
+		// back
+		this.id = init.id ? controllerId(init.id) : '';
 		let errorPage: string | undefined;
 		if (init.errorPage !== undefined) {
 			const page = new URL(init.errorPage, location.href);
@@ -664,7 +679,7 @@ export class StompController extends EventTarget {
 			codec: init.codec ?? 'xor',
 			// the address: the scope plus the id, so controllers of one scope
 			// are told apart in the worker; the assets stay at the scope
-			directory: `${this.directory.pathname}${this.id}/`,
+			directory: this.id ? `${this.directory.pathname}${this.id}/` : '',
 			scope: this.directory.pathname,
 			...(init.frameAncestors ? { frameAncestors: init.frameAncestors } : {}),
 			...(init.onOpen || init.openTab ? { openTab: true } : {}),
@@ -719,10 +734,18 @@ export class StompController extends EventTarget {
 		// the transport is hosted where it will stay (a worker that failed has
 		// fallen back to the page by now, and setTransport keeps the host)
 		// before the first handshake hands the config to any frame
-		this.#hostReady = Promise.all([hooksReady, transportReady]).then(() => {
-			if (this.transportHost === 'worker') this.config.workerTransport = true;
-			else delete this.config.workerTransport;
-		});
+		const idReady: Promise<void> = this.id
+			? Promise.resolve()
+			: keptControllerId().then((id) => {
+					this.id = id;
+					this.config.directory = `${this.directory.pathname}${id}/`;
+				});
+		this.#hostReady = Promise.all([hooksReady, transportReady, idReady]).then(
+			() => {
+				if (this.transportHost === 'worker') this.config.workerTransport = true;
+				else delete this.config.workerTransport;
+			},
+		);
 
 		window.addEventListener('message', (event) => {
 			// only our own frames, same origin as this page in this mode
@@ -798,7 +821,8 @@ export class StompController extends EventTarget {
 		// the worker forgets this controller now, so a link copied from it goes
 		// to a live controller at once rather than to a dead port
 		window.addEventListener('pagehide', (event) => {
-			if (event.persisted) return;
+			// without an address yet the worker never heard of this controller
+			if (event.persisted || !this.id) return;
 			try {
 				this.serviceworker.postMessage({
 					[CONTROLLER_CLOSE]: { directory: this.config.directory },
@@ -1246,8 +1270,11 @@ export class StompController extends EventTarget {
 	 * client hints name until its document reports its own
 	 */
 	reportViewport(width: number, height: number) {
+		// once the controller has its address: a report names it
 		if (width > 0 && height > 0)
-			this.#postClientHints([Math.round(width), Math.round(height)]);
+			this.#hostReady.then(() =>
+				this.#postClientHints([Math.round(width), Math.round(height)]),
+			);
 	}
 	/**
 	 * A page's WebSocket handshake carries the jar's Cookie header for the
@@ -1345,9 +1372,14 @@ export class StompController extends EventTarget {
 	 * port): read what the proxy would send, import Set-Cookie headers,
 	 * export records, or wipe an origin.
 	 */
-	readonly cookies: CookieJar = cookieJar((command) =>
-		this.cookieCommand(command),
-	);
+	readonly cookies: CookieJar = cookieJar(async (command) => {
+		const result = await this.cookieCommand(command);
+		// every site's cookies are gone: so are the ids this origin's
+		// controllers keep, the one name that would have outlived them
+		if (command.op === 'clear' && command.origin === undefined)
+			await forgetControllerIds();
+		return result;
+	});
 	/** the proxied URL a frame should navigate to in order to load `url` */
 	async route(url: string): Promise<string> {
 		await this.#ready;
