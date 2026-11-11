@@ -1,7 +1,13 @@
 import {
 	CACHED_MARKER,
+	Delivery,
+	KEPT_LOAD,
+	KEPT_MARKER,
+	KeptLoad,
+	MEMORY_MARKER,
 	OPAQUE_MARKER,
 	PROXY_METRICS,
+	REVALIDATED_MARKER,
 	TAO_MARKER,
 	XHR_MARKER,
 } from '../../transport/messages';
@@ -44,6 +50,32 @@ const nativeEntryName =
 	typeof PerformanceEntry === 'function'
 		? Reflect.getOwnPropertyDescriptor(PerformanceEntry.prototype, 'name')?.get
 		: undefined;
+
+const nativeEntryStart =
+	typeof PerformanceEntry === 'function'
+		? Reflect.getOwnPropertyDescriptor(PerformanceEntry.prototype, 'startTime')
+				?.get
+		: undefined;
+const nativeResponseEnd =
+	typeof PerformanceResourceTiming === 'function'
+		? Reflect.getOwnPropertyDescriptor(
+				PerformanceResourceTiming.prototype,
+				'responseEnd',
+			)?.get
+		: undefined;
+const nativeTimeOrigin =
+	typeof Performance === 'function'
+		? Reflect.getOwnPropertyDescriptor(Performance.prototype, 'timeOrigin')?.get
+		: undefined;
+const nativeEntriesByType =
+	typeof Performance === 'function'
+		? Performance.prototype.getEntriesByType
+		: undefined;
+
+/** how far a kept load's note may be from its entry's own times (two clocks) */
+const KEPT_SLACK_MS = 2000;
+/** how many kept loads' notes a context keeps */
+const KEPT_NOTES = 4096;
 
 /** a URL without its fragment (a resource timing entry's name has none) */
 const withoutFragment = (url: string) => {
@@ -96,6 +128,14 @@ const RESTRICTED_STRINGS = ['nextHopProtocol', 'deliveryType'];
  * page has no service worker of its own (the proxy's answers them all).
  */
 export default class ResourceTimingModule extends Module<Client> {
+	/**
+	 * Asks the worker how the loads its kept script responses answered were
+	 * delivered (src/server/keptLoads.ts), by their routed URLs: for each,
+	 * [when, how] oldest first. Set by the module that has the synchronous
+	 * bridge (a document's), for a page that reads an entry before the
+	 * worker's note of it has come.
+	 */
+	askKeptLoads?: (urls: string[]) => unknown;
 	#opaqueLoads?: (loaded: string) => boolean;
 	/**
 	 * Whether a load of one of the page's own URLs (as the browser has it:
@@ -229,41 +269,182 @@ export default class ResourceTimingModule extends Module<Client> {
 
 		// What went over the wire is the worker's to say: the browser has a
 		// service worker's answer as 0 bytes transferred, of no protocol, from
-		// a cache. Natively a load from the network transferred its body and
-		// 300 bytes (the specification's stand-in for the headers), and one
-		// from the cache nothing; the worker marks the answers it gave from
-		// its own caches. No transport says which protocol the origin spoke:
-		// the entry names the scheme's usual one.
+		// a cache (or from "cache-storage"). Natively a load from the network
+		// transferred its body and 300 bytes (the specification's stand-in
+		// for the headers), one a 304 confirmed the 300, and one from a cache
+		// nothing; the renderer's memory cache keeps the protocol its
+		// resource came over and the HTTP cache has none (messages.ts
+		// Delivery). The worker marks the answers it gave from its own
+		// caches. No transport says which protocol the origin spoke: the
+		// entry names the scheme's usual one.
 		const bodySize = Reflect.getOwnPropertyDescriptor(
 			proto,
 			'encodedBodySize',
 		)?.get;
-		const fromCache = (entry: object) => hasProxyMetric(entry, CACHED_MARKER);
+		//
+		// A script the rewrite cache kept goes out as the store's own Response
+		// (KEPT_MARKER), which says nothing of the load it answers: the worker
+		// notes each one's delivery by URL and time and tells this window
+		// (KEPT_LOAD). A page that reads an entry before its note has come
+		// asks the worker, which is running (it just answered the load), once
+		// for every such entry it can read now. An entry with no note (a
+		// worker's, which hears nothing and has no bridge) reads as the HTTP
+		// cache's, which a kept response most often is.
+		const keptNotes = new Map<string, KeptLoad[]>();
+		let keptNoted = 0;
+		const noteKept = (url: string, load: KeptLoad) => {
+			const list = keptNotes.get(url);
+			if (list) list.push(load);
+			else keptNotes.set(url, [load]);
+			if (++keptNoted > KEPT_NOTES) {
+				const [oldest, its] = keptNotes.entries().next().value!;
+				its.shift();
+				keptNoted--;
+				if (!its.length) keptNotes.delete(oldest);
+			}
+		};
+		this.client.onServiceWorkerMessage((data) => {
+			if (typeof data !== 'object' || data === null) return;
+			const load = (data as Record<string, unknown>)[KEPT_LOAD];
+			if (Array.isArray(load) && load.length === 3)
+				noteKept(String(load[0]), [Number(load[1]), load[2] as Delivery]);
+		});
+		// (the name the browser has: the routed URL, which the worker notes
+		// the load by)
+		const routedName = (entry: object) =>
+			String(Reflect.apply(nativeEntryName ?? nameGetter, entry, []));
+		/** the note made nearest to the load of `entry`, of `notes` */
+		const noteFor = (
+			entry: object,
+			notes: readonly KeptLoad[] | undefined,
+		): Delivery | undefined => {
+			if (!notes?.length) return undefined;
+			let found: Delivery | undefined;
+			try {
+				const origin = Reflect.apply(
+					nativeTimeOrigin!,
+					global.performance,
+					[],
+				) as number;
+				const start =
+					origin + (Reflect.apply(nativeEntryStart!, entry, []) as number);
+				const end =
+					origin + (Reflect.apply(nativeResponseEnd!, entry, []) as number);
+				let nearest = KEPT_SLACK_MS;
+				for (const [at, how] of notes) {
+					const distance = at < start ? start - at : at > end ? at - end : 0;
+					if (distance >= nearest) continue;
+					nearest = distance;
+					found = how;
+				}
+			} catch (error) {
+				// no clock to place a note by
+			}
+			return found;
+		};
+		const keptDeliveries = new WeakMap<object, Delivery>();
+		const keptDelivery = (entry: object): Delivery => {
+			const known = keptDeliveries.get(entry);
+			if (known) return known;
+			let delivery = noteFor(entry, keptNotes.get(routedName(entry)));
+			if (!delivery && this.askKeptLoads) {
+				// not told yet: the worker is asked, for this entry and every
+				// other one it has not told of
+				const pending = [entry];
+				try {
+					for (const other of Reflect.apply(
+						nativeEntriesByType!,
+						global.performance,
+						['resource'],
+					) as object[])
+						if (
+							other !== entry &&
+							!keptDeliveries.has(other) &&
+							hasProxyMetric(other, KEPT_MARKER) &&
+							!noteFor(other, keptNotes.get(routedName(other)))
+						)
+							pending.push(other);
+				} catch (error) {
+					// this entry alone
+				}
+				const urls = [...new Set(pending.map(routedName))];
+				try {
+					const answer = this.askKeptLoads(urls);
+					if (Array.isArray(answer))
+						urls.forEach((url, index) => {
+							const notes: unknown = answer[index];
+							if (!Array.isArray(notes)) return;
+							const have = new Set(
+								(keptNotes.get(url) ?? []).map(([at]) => at),
+							);
+							for (const note of notes)
+								if (Array.isArray(note) && !have.has(note[0]))
+									noteKept(url, [Number(note[0]), note[1] as Delivery]);
+						});
+				} catch (error) {
+					// no answer in time
+				}
+				for (const other of pending)
+					if (other !== entry)
+						keptDeliveries.set(
+							other,
+							noteFor(other, keptNotes.get(routedName(other))) ?? 'cache',
+						);
+				delivery = noteFor(entry, keptNotes.get(routedName(entry)));
+			}
+			delivery ??= 'cache';
+			keptDeliveries.set(entry, delivery);
+			return delivery;
+		};
+		/** how the worker answered the load of `entry` */
+		const delivery = (entry: object): Delivery => {
+			if (hasProxyMetric(entry, KEPT_MARKER)) return keptDelivery(entry);
+			const memory = hasProxyMetric(entry, MEMORY_MARKER);
+			return hasProxyMetric(entry, CACHED_MARKER)
+				? memory
+					? 'memory'
+					: 'cache'
+				: hasProxyMetric(entry, REVALIDATED_MARKER)
+					? memory
+						? 'memory-revalidated'
+						: 'revalidated'
+					: 'network';
+		};
 		for (const name of RESTRICTED_TIMES)
 			hook(name, (entry, native) => {
 				const result = native();
 				if (judge(entry).restricted) return 0;
 				if (name !== 'transferSize' || result !== 0 || !bodySize) return result;
-				return fromCache(entry)
+				const how = delivery(entry);
+				return how === 'cache' || how === 'memory'
 					? 0
-					: (Reflect.apply(bodySize, entry, []) as number) + 300;
+					: how === 'network'
+						? (Reflect.apply(bodySize, entry, []) as number) + 300
+						: 300;
 			});
 		for (const name of RESTRICTED_STRINGS)
 			hook(name, (entry, native) => {
 				const result = native();
 				const verdict = judge(entry);
 				if (verdict.restricted) return '';
+				const how = delivery(entry);
 				if (name === 'nextHopProtocol')
-					return result !== ''
+					// (the HTTP cache's answer has none)
+					return result !== '' || how === 'cache' || how === 'revalidated'
 						? result
 						: verdict.protocol === 'https:'
 							? 'h2'
 							: verdict.protocol === 'http:'
 								? 'http/1.1'
 								: '';
-				// deliveryType: the worker's cache hit is the cache's, its answer
-				// from the network is not
-				return fromCache(entry) ? 'cache' : result === 'cache' ? '' : result;
+				// deliveryType: a cache's answer is the cache's, but for what the
+				// renderer revalidated; the worker's own way of answering (its
+				// Cache API entry for a kept script) is not the page's to see
+				return how !== 'network' && how !== 'memory-revalidated'
+					? 'cache'
+					: result === 'cache' || result === 'cache-storage'
+						? ''
+						: result;
 			});
 		hook('workerStart', (entry, native) => {
 			native();

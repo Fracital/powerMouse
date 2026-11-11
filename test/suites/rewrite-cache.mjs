@@ -362,4 +362,86 @@ await controller({ cache: false });
 	);
 }
 
+// What resource timing says of a load the entry answered. The entry is the
+// same Response for every load, so the worker notes how each was delivered
+// and tells the window (src/server/keptLoads.ts), which has the note when
+// the page reads the entry, whether or not the worker still runs. Natively (Chrome 152 and
+// 156; sop-escapes compares the first three in one page): the body and 300
+// bytes, "" and the protocol from the network, also when the origin sends
+// the same bytes again; 0, "cache" and the protocol from the renderer's
+// memory cache; 0, "cache" and no protocol from the HTTP cache.
+{
+	await controller();
+	const cdp = await page.context().newCDPSession(page);
+	await cdp.send('ServiceWorker.enable');
+	const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+	const stopWorker = async () => {
+		await sleep(300);
+		await cdp.send('ServiceWorker.stopAllWorkers');
+	};
+	// (the controller gives up the navigation that finds its worker started
+	// anew, and carries on with the next)
+	const revive = async () => {
+		for (let i = 0; i < 10; i++)
+			try {
+				await load('name=r');
+				return;
+			} catch {
+				await sleep(300);
+			}
+	};
+	const timing = async (query, { stop = false } = {}) => {
+		const outcome = await load(query);
+		if (stop) await stopWorker();
+		const frame = page
+			.frames()
+			.findLast((frame) => /\/stomp\/[\w-]+\/html\//.test(frame.url()));
+		const seen = await frame.evaluate((target) => {
+			const entry = performance
+				.getEntriesByType('resource')
+				.findLast((entry) => entry.name.endsWith(target));
+			return (
+				entry && [
+					entry.transferSize && entry.transferSize - entry.encodedBodySize,
+					entry.deliveryType,
+					entry.nextHopProtocol,
+				]
+			);
+		}, `/rewrite-js?${query}`);
+		return [outcome, ...(seen ?? ['no entry'])];
+	};
+	const NETWORK = ['', 'http/1.1'];
+	const again = [
+		await timing('name=tn'),
+		await timing('name=tn'),
+		await timing('name=tn', { stop: true }),
+	];
+	ok(
+		'a script from its entry reads as a network load when the origin sent the same bytes again, also once the worker has stopped',
+		same(again, [
+			['miss', 300, ...NETWORK],
+			['hit', 300, ...NETWORK],
+			['hit', 300, ...NETWORK],
+		]),
+		JSON.stringify(again),
+	);
+	await revive();
+	const fresh = [
+		await timing('name=tf&cc=max-age%3D600'),
+		await timing('name=tf&cc=max-age%3D600'),
+	];
+	await stopWorker();
+	await revive();
+	fresh.push(await timing('name=tf&cc=max-age%3D600'));
+	ok(
+		"and as the memory cache's, then the HTTP cache's, when the worker's caches answered",
+		same(fresh, [
+			['miss', 300, ...NETWORK],
+			['hit', 0, 'cache', 'http/1.1'],
+			['hit', 0, 'cache', ''],
+		]),
+		JSON.stringify(fresh),
+	);
+}
+
 await done(browser, page.errors);

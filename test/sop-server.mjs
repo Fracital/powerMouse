@@ -144,6 +144,16 @@ export function sop(req, res) {
 	set('set-cookie', query.get('cookie'));
 	if (query.get('st')) set('server-timing', 'db;dur=5, cache;desc="hit"');
 	res.setHeader('x-secret', 'S');
+	// a validator, and a 304 for the request that brings it back
+	const etag = query.get('etag');
+	if (etag) {
+		res.setHeader('etag', `"${etag}"`);
+		if (h['if-none-match'] === `"${etag}"`) {
+			res.statusCode = 304;
+			res.end();
+			return true;
+		}
+	}
 	const redirect = query.get('redirect');
 	if (redirect) {
 		res.statusCode = 302;

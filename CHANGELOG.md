@@ -463,6 +463,17 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- Resource timing tells every way the worker answered a load apart, as
+  Chrome does (measured in 152 and 156): the body and 300 bytes from the
+  network; 0 and `deliveryType` "cache" from a cache, with the protocol
+  when it is the renderer's memory cache and without when it is the HTTP
+  cache; 300 after a 304 (it read as a network load). A script answered
+  with the rewrite cache's kept response reads as the load it was: the
+  response is the same for every load (Chrome keeps the compiled code
+  with it), so the worker notes how each was delivered and tells the
+  window, where every such load read as a network load delivered by
+  "cache-storage", also one the worker's caches answered. (sop-escapes
+  and rewrite-cache suites.)
 - A direct `eval`'s arguments are rewritten. They were left as written in
   both branches of its replacement (`eval(top.x)` became
   `$s$j.isEval(eval) ? eval($s$j.evalScope(top.x)) : eval(top.x)`), so an

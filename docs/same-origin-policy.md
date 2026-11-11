@@ -404,10 +404,24 @@ Filled in commit by commit; see the CHANGELOG for each.
   Access-Control-Expose-Headers) but its timing is allowed, the worker
   marks it timing only and the inject hides the header. An
   XMLHttpRequest's entry says `xmlhttprequest` (XHR_MARKER). An entry the
-  page may read has the `transferSize` Chrome gives a network load (the
-  body and 300 bytes) or a cache hit (0, `deliveryType` "cache": the worker
-  marks an answer from its own caches, CACHED_MARKER), and a
-  `nextHopProtocol` (see Left).
+  page may read has the `transferSize`, `deliveryType` and
+  `nextHopProtocol` Chrome gives each way a load is delivered (messages.ts
+  `Delivery`; measured in Chrome 152 and 156): the body and 300 bytes, ""
+  and the protocol from the network (see Left for the protocol); 0, "cache"
+  and the protocol from the renderer's memory cache; 0, "cache" and no
+  protocol from the HTTP cache; 300 after a 304, with "" and the protocol
+  when the renderer revalidated what it had, with "cache" and no protocol
+  when the HTTP cache did. The worker marks its answers (CACHED_MARKER,
+  REVALIDATED_MARKER, MEMORY_MARKER: its MemoryCache stands for the
+  renderer's memory, and what it gave a site's documents since it started
+  for what that renderer has). A script the rewrite cache answers with its
+  kept response cannot carry a mark of the load (the response is the
+  store's own, which Chrome keeps the compiled code with: KEPT_MARKER says
+  only that), so the worker notes how each such load was delivered and
+  tells the window that asked (KEPT_LOAD, src/server/keptLoads.ts); a page
+  that reads the entry before the note has come asks the worker over the
+  synchronous bridge (sop-escapes: 3 cases per mode; rewrite-cache: after
+  the worker stopped, and from the HTTP cache).
 - **about:srcdoc documents without a referrer** (sop-escapes: 4 cases per
   mode differed). A srcdoc document's client URL names no origin, and under
   `no-referrer` no Referer does either. When its client starts, the
@@ -545,6 +559,14 @@ suites' known lists with the same reason.
      judges each load.
    - `nextHopProtocol` is the scheme's usual protocol (`h2` for https,
      `http/1.1` for http): no transport reports what the origin spoke.
+   - A `no-cache` response with a validator transfers its body again
+     (`transferSize` the body and 300 bytes) where Chrome revalidates it
+     with a 304 (300 bytes): the worker's HTTP cache does not keep a
+     `no-cache` response, so it has nothing to revalidate (sop-escapes
+     known list). One with `max-age=0` is kept and revalidated.
+   - A kept script's entry in a worker (`importScripts`, a worker's own
+     script) reads as the HTTP cache's however it was delivered: a worker
+     hears no note and has no synchronous bridge.
    - Opaque response blocking is applied to scripts, where a page can tell;
      Chrome also empties other blocked no-cors responses, which a page
      cannot read anyway.

@@ -5,6 +5,7 @@ import { urlLike } from '../../../StompURL';
 import { ProcessData, SerializableRequestInit, SyncBody } from '../../../sync';
 import { headersRecord } from '../../../syncHeaders';
 import Module from '../../Module';
+import ResourceTimingModule from '../../modules/ResourceTiming';
 import DocumentClient from '../Client';
 
 const statusEmpty: number[] = [101, 204, 205, 304];
@@ -14,6 +15,8 @@ const statusEmpty: number[] = [101, 204, 205, 304];
 // script, which takes seconds for YouTube's main bundle
 const TIMEOUT = 30e3;
 const LOOPBACK_TIMEOUT = 10e3;
+/** how long a page's read of a timing entry waits for the worker's note of it */
+const KEPT_LOADS_LIMIT = 1e3;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -131,6 +134,22 @@ const apiInit = (args: unknown[]) => ({
 });
 
 export default class SyncModule extends Module<DocumentClient> {
+	apply() {
+		// resource timing asks the worker how a load its kept script response
+		// answered was delivered, when a page reads the entry before the
+		// worker's note of it has come
+		const timing = this.client.getModule(ResourceTimingModule);
+		if (timing)
+			timing.askKeptLoads = (urls) =>
+				parseAPI(
+					this.fetch(
+						`${this.client.directory}timing/kept`,
+						apiInit([urls]),
+						true,
+						KEPT_LOADS_LIMIT,
+					),
+				);
+	}
 	jsonAPI(url: urlLike, ...args: any[]) {
 		return parseAPI(this.fetch(url, apiInit(args), true));
 	}

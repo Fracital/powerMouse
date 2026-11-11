@@ -85,12 +85,47 @@ export const TIMING_ONLY_MARKER = 'stomp-timing-only';
  */
 export const XHR_MARKER = 'stomp-xhr';
 /**
+ * How the worker answered a load, as resource timing tells them apart
+ * natively (measured in Chrome 152 and 156; `transferSize`, `deliveryType`,
+ * `nextHopProtocol`):
+ *  - `network`: the body and 300 bytes, "", the protocol
+ *  - `memory`: the renderer's memory cache (the worker's MemoryCache, and a
+ *    document asking again for what it was just given): 0, "cache", the
+ *    protocol the resource came over
+ *  - `cache`: the HTTP cache, fresh: 0, "cache", ""
+ *  - `memory-revalidated`: a resource the renderer has, confirmed by the
+ *    origin with a 304: 300, "", the protocol
+ *  - `revalidated`: an HTTP cache entry confirmed with a 304: 300, "cache", ""
+ */
+export type Delivery =
+	'network' | 'memory' | 'cache' | 'memory-revalidated' | 'revalidated';
+/**
  * A Server-Timing metric the worker adds to an answer it gave from a cache
  * of its own (the HTTP cache, the memory cache) without asking the network:
  * the entry's `transferSize` is 0 and its `deliveryType` "cache", as the
  * browser's own cache hit reads natively
  */
 export const CACHED_MARKER = 'stomp-cached';
+/**
+ * A Server-Timing metric the worker adds to an answer from its HTTP cache
+ * that the origin confirmed with a 304: the entry's `transferSize` is 300
+ * (the headers' stand-in, no body), as a revalidated entry reads natively
+ */
+export const REVALIDATED_MARKER = 'stomp-revalidated';
+/**
+ * A Server-Timing metric the worker adds, with one of the two above, to an
+ * answer that natively is the renderer's memory cache's rather than the
+ * HTTP cache's (Delivery: `memory`, `memory-revalidated`)
+ */
+export const MEMORY_MARKER = 'stomp-memory';
+/**
+ * A Server-Timing metric on a script response the rewrite cache keeps and
+ * hands out again as it is (the store's own Response, which Chrome keeps
+ * the compiled code with): it cannot say how the load it answers was
+ * delivered, so the worker tells the inject apart from it (KEPT_LOAD,
+ * src/server/keptLoads.ts)
+ */
+export const KEPT_MARKER = 'stomp-kept';
 /** every Server-Timing metric of the worker's own, which the page never sees */
 export const PROXY_METRICS: readonly string[] = [
 	TAO_MARKER,
@@ -98,6 +133,9 @@ export const PROXY_METRICS: readonly string[] = [
 	TIMING_ONLY_MARKER,
 	XHR_MARKER,
 	CACHED_MARKER,
+	REVALIDATED_MARKER,
+	MEMORY_MARKER,
+	KEPT_MARKER,
 ];
 /**
  * On the answer of a page's emulated service worker: `<type> <url>`, the
@@ -135,6 +173,15 @@ export const PREFLIGHT_HEADER = 'x-stomp-preflight';
  * which the inject writes in Chrome's words
  */
 export const MIXED_CONTENT_NOTICE = '$stomp$mixedContent';
+/**
+ * SW -> the window that asked for a script the rewrite cache's kept
+ * response answered: [the routed URL, when (ms since the epoch), how it
+ * was delivered] (src/server/keptLoads.ts), which the response itself
+ * cannot say (KEPT_MARKER)
+ */
+export const KEPT_LOAD = '$stomp$keptLoad';
+/** [when (ms since the epoch), how] */
+export type KeptLoad = [at: number, delivery: Delivery];
 /** SW -> every window: the cookie jar changed for `domain` (every host when empty); pages drop their document.cookie cache */
 export const COOKIES_CHANGED = '$stomp$cookiesChanged';
 export interface CookiesChange {

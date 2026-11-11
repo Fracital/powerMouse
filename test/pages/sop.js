@@ -853,6 +853,73 @@
 	add('timing/the transfer size and protocol of another site without TAO', () =>
 		wire(B, {}),
 	);
+	// A script loaded by one document after another: from the network, then
+	// from the cache (nothing transferred), after a 304 (the headers'
+	// stand-in) or from the network again when the origin sends the same
+	// bytes with a 200. Through the proxy the later loads are answered with
+	// the response the rewrite cache keeps, which is the same Response for
+	// each.
+	const scriptLoads = async (params) => {
+		const { url, key } = r(A, {
+			type: 'js',
+			js: `/* ${'padding '.repeat(80)} */ window.sopLoaded = 1;`,
+			...params,
+		});
+		const out = [];
+		for (let visit = 0; visit < 3; visit++) {
+			const frame = document.createElement('iframe');
+			const loaded = new Promise((resolve) => (frame.onload = resolve));
+			frame.src = r(A, {
+				type: 'raw',
+				ct: 'text/html',
+				body: `<!doctype html><script src="${url}"></script>`,
+				visit,
+			}).url;
+			document.body.append(frame);
+			await loaded;
+			const entry = frame.contentWindow.performance.getEntriesByName(url)[0];
+			if (!entry) out.push('no entry');
+			else {
+				const size = (transferSize) =>
+					transferSize === 0
+						? 'nothing'
+						: transferSize === 300
+							? 'the headers'
+							: transferSize - entry.encodedBodySize === 300
+								? 'the body and the headers'
+								: transferSize - entry.encodedBodySize;
+				out.push({
+					transferred: size(entry.transferSize),
+					deliveryType: entry.deliveryType,
+					nextHopProtocol: entry.nextHopProtocol,
+					json: [
+						size(entry.toJSON().transferSize),
+						entry.toJSON().deliveryType,
+						entry.toJSON().nextHopProtocol,
+					],
+					ran: frame.contentWindow.sopLoaded,
+				});
+			}
+			frame.remove();
+			// (the rewrite cache keeps a response after it went out)
+			await sleep(400);
+		}
+		// (how often the origin was asked)
+		out.push((await log(key)).length);
+		return out;
+	};
+	add('timing/a script three documents load, fresh in the cache', () =>
+		scriptLoads({ cc: 'max-age=3600' }),
+	);
+	add('timing/a script three documents load, revalidated with a 304', () =>
+		scriptLoads({ cc: 'max-age=0', etag: 'v1' }),
+	);
+	add('timing/a script three documents load, no-cache with a validator', () =>
+		scriptLoads({ cc: 'no-cache', etag: 'v2' }),
+	);
+	add('timing/a script three documents load, sent again each time', () =>
+		scriptLoads({ cc: 'no-cache' }),
+	);
 	add('timing/another site without Timing-Allow-Origin', () => timing(B, {}));
 	add('timing/another site with Timing-Allow-Origin *', () =>
 		timing(B, { tao: '*' }),

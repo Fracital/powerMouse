@@ -186,7 +186,10 @@ on every save (use a `git worktree`).
   (`src/server/rewriteCache.ts`) keeps a loaded script under its routed
   URL and the forward returns the matched Response itself; wrapping it in a
   `new Response` anywhere on the way out loses the code cache silently
-  (rewrite-cache checks DevTools' `cacheStorageCacheName`). The entry is
+  (rewrite-cache checks DevTools' `cacheStorageCacheName`). For the same
+  reason nothing of one load can ride on it: how each load it answers was
+  delivered (what resource timing shows) is noted beside it and told to
+  the window (`src/server/keptLoads.ts`), never marked on it. The entry is
   one partition's (the key includes top-level site, frame site and
   credentials) and has only the headers a browser acts on: do not widen
   either. Chrome writes the code cache into the entry after the script

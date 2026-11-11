@@ -61,11 +61,14 @@ import {
 	ABORT_HEADER,
 	CACHED_MARKER,
 	CREDENTIALS_HEADER,
+	KEPT_MARKER,
 	LOAD_HEADER,
+	MEMORY_MARKER,
 	OPAQUE_HEADER,
 	OPAQUE_MARKER,
 	PREFLIGHT_HEADER,
 	RESPONSE_TYPE_HEADER,
+	REVALIDATED_MARKER,
 	TAO_MARKER,
 	TIMING_ONLY_MARKER,
 	XHR_MARKER,
@@ -130,6 +133,7 @@ import {
 	rememberUpgradeInsecure,
 	upgradesInsecure,
 } from './insecureRequests';
+import { noteKeptLoad } from './keptLoads';
 import { recordCrossedMedia } from './mediaLoads';
 import {
 	awaitNavigationHint,
@@ -205,6 +209,14 @@ const clientURLs = new Map<string, URL>();
 const clientRoutes = new Map<string, string>();
 /** the top-level site of a client whose URL names none (a partitioned blob: worker's, an inline document's) */
 const clientTopSites = new Map<string, string>();
+/**
+ * What this worker gave each site's documents since it started, by the
+ * memory cache's key (fresh or not, which MemoryCache does not keep): a
+ * renderer that has a resource revalidates it itself, and its timing reads
+ * as the network's 304 rather than the HTTP cache's (messages.ts Delivery)
+ */
+const rendererHas = new Set<string>();
+const RENDERER_HAS = 8192;
 const CLIENT_URLS_KEPT = 256;
 
 /**
@@ -610,7 +622,12 @@ function genericForward(
 				client: context?.clientId,
 				...(recentServed ? { rewriteCache: 'hit' as const } : {}),
 			});
-			if (recentServed) return recentServed;
+			if (recentServed) {
+				// the entry cannot say how this load was delivered: the inject
+				// is told (keptLoads.ts)
+				noteKeptLoad(serverRequest.url, 'memory', context?.clientId);
+				return recentServed;
+			}
 			return new Response(recent.body, {
 				status: recent.status,
 				statusText: recent.statusText,
@@ -1527,6 +1544,11 @@ function genericForward(
 				: null;
 		let response: Response & { rawHeaders?: [string, string][] };
 		let cached = false;
+		// the origin confirmed the HTTP cache's entry with a 304
+		let revalidated = false;
+		// natively the renderer's memory cache answers, or revalidates what it
+		// has, rather than the HTTP cache (messages.ts Delivery)
+		let memory = false;
 		const within = (window: number | null) =>
 			!!hit && !hit.mustRevalidate && window !== null && hit.staleFor <= window;
 		const withValidators = (headers: Headers) => {
@@ -1550,6 +1572,7 @@ function genericForward(
 		} else if (remembered) {
 			response = remembered;
 			cached = true;
+			memory = true;
 		} else if (hit && hit.fresh && !hit.mustRevalidate) {
 			response = hit.response;
 			cached = true;
@@ -1647,6 +1670,8 @@ function genericForward(
 				cached = true;
 			} else if (hit && upstream.status === 304) {
 				response = await cache!.refresh(cacheKey!, hit, upstream.headers);
+				revalidated = true;
+				memory = memoryKey !== null && rendererHas.has(memoryKey);
 			} else if (upstream.body && storable(upstream.status, upstream.headers)) {
 				const [forStore, forPage] = upstream.body.tee();
 				cache!.put(cacheKey!, requestHeaders, upstream, forStore);
@@ -1661,6 +1686,13 @@ function genericForward(
 			}
 		}
 
+		// what this site's renderer has from here on, fresh or not
+		if (memoryKey !== null && response.status === 200) {
+			rendererHas.delete(memoryKey);
+			rendererHas.add(memoryKey);
+			if (rendererHas.size > RENDERER_HAS)
+				rendererHas.delete(rendererHas.values().next().value!);
+		}
 		// what the renderer would keep, from the network or the HTTP cache
 		if (
 			memoryKey !== null &&
@@ -1946,6 +1978,12 @@ function genericForward(
 		// hit in resource timing (CACHED_MARKER)
 		if (cached && !redirect)
 			responseHeaders.append('server-timing', CACHED_MARKER);
+		// and one the origin confirmed with a 304 as the browser's revalidated
+		// entry (REVALIDATED_MARKER)
+		if (revalidated && !redirect)
+			responseHeaders.append('server-timing', REVALIDATED_MARKER);
+		if (memory && !redirect)
+			responseHeaders.append('server-timing', MEMORY_MARKER);
 		// an XMLHttpRequest's entry names its initiator (XHR_MARKER)
 		if (requestTypeOf(serverRequest) === 'XMLHttpRequest endpoint' && !redirect)
 			responseHeaders.append('server-timing', XHR_MARKER);
@@ -2072,6 +2110,22 @@ function genericForward(
 							served: { url: note.served!.url, key: note.served!.key },
 						});
 					sendReport();
+					// the entry is the store's own Response and says nothing of
+					// this load: how it was delivered is noted for the inject,
+					// for when the page reads its timing (keptLoads.ts)
+					noteKeptLoad(
+						serverRequest.url,
+						cached
+							? memory
+								? 'memory'
+								: 'cache'
+							: revalidated
+								? memory
+									? 'memory-revalidated'
+									: 'revalidated'
+								: 'network',
+						context?.clientId,
+					);
 					return stored;
 				}
 				output = await stored.blob();
@@ -2157,7 +2211,7 @@ function genericForward(
 					{
 						status: response.status,
 						statusText: response.statusText,
-						headers: servedHeaders(responseHeaders),
+						headers: keptHeaders(responseHeaders),
 					},
 				);
 			else if (rewritten !== null)
@@ -2410,6 +2464,18 @@ function servedHeaders(headers: Headers): Headers {
 		.map((metric) => metric.trim())
 		.filter((metric) => OWN_MARKS.includes(metric));
 	if (marks.length) out.set('server-timing', marks.join(', '));
+	return out;
+}
+
+/**
+ * The headers of the response the rewrite cache keeps for a script: what a
+ * later load is given of them (servedHeaders), and the mark that says the
+ * response is a kept one, whose delivery the worker tells the inject apart
+ * from it (KEPT_MARKER; not one of the marks two responses are compared by)
+ */
+function keptHeaders(headers: Headers): Headers {
+	const out = servedHeaders(headers);
+	out.append('server-timing', KEPT_MARKER);
 	return out;
 }
 

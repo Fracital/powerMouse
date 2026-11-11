@@ -29,6 +29,8 @@ const KNOWN_BY_REASON = {
 		['coi/a page that sends COOP and COEP'],
 	'the tracks of a stream captured from a canvas end when the canvas is tainted (their player shows nothing), where Chrome keeps them live and sends them no more frames (their player keeps the last one)':
 		['canvas/the tracks of a stream captured before its canvas was tainted'],
+	"a no-cache script with a validator transfers its body again where Chrome gets a 304 (300 bytes): the worker's HTTP cache does not keep a no-cache response, so it has nothing to revalidate":
+		['timing/a script three documents load, no-cache with a validator'],
 };
 const KNOWN = new Map(
 	Object.entries(KNOWN_BY_REASON).flatMap(([why, names]) =>
