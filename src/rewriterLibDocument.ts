@@ -9,7 +9,9 @@ import { getDomain, getPublicSuffix } from './suffix';
 import { suffixListPin } from './wasm/suffix';
 
 export const api = library({
-	modifyCSS,
+	// in the scanner module when this copy holds it (a page of a host with
+	// `rewriter: 'wasm'` is handed it), by css-tree otherwise: the same text
+	modifyCSS: (text, url, context) => modifyCSS(text, url, context, {}),
 	getDomain: (host) => getDomain(host),
 	getPublicSuffix: (host, icann) => getPublicSuffix(host, !icann),
 	suffixList: () => {

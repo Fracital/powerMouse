@@ -56,6 +56,26 @@ await esbuild.build({
 	outfile: bundle,
 	logLevel: 'silent',
 });
+// the document inject's rewriter library, built as build.js builds it (its
+// globals injected), with the thread state its copy of the module lives in
+const libraryEntry = `${OUT}scanner-parity-library-entry.mjs`;
+writeFileSync(
+	libraryEntry,
+	`export { api } from ${JSON.stringify(`${root}src/rewriterLibDocument.ts`)};
+export { adoptModules } from ${JSON.stringify(`${root}src/wasm/thread.ts`)};
+`,
+);
+const libraryBundle = `${OUT}scanner-parity-library.mjs`;
+await esbuild.build({
+	entryPoints: [libraryEntry],
+	bundle: true,
+	platform: 'node',
+	format: 'esm',
+	external: ['css-tree'],
+	inject: [`${root}src/libGlobals.ts`],
+	outfile: libraryBundle,
+	logLevel: 'silent',
+});
 const {
 	modifyCSS,
 	rewriteCSSValueURLs,
@@ -195,6 +215,62 @@ function sameMarkup(markup, label) {
 	markupTally.differ++;
 	if (markupDifferences.length < 5)
 		markupDifferences.push({ label, markup, expected, got });
+}
+
+// The inject side: a frame's stylesheets and style attributes are rewritten
+// by its rewriter library, which takes the module's answer once its copy of
+// the thread state holds the module and css-tree's until then.
+{
+	const library = await import(`${libraryBundle}?${Date.now()}`);
+	const context = JSON.stringify([
+		'https://example.com/dir/page.html',
+		'xor',
+		'k',
+		'/stomp/',
+		null,
+		null,
+		[],
+	]);
+	const page = new StompURL(
+		'https://example.com/dir/page.html',
+		codec,
+		'/stomp/',
+	);
+	const cases = [
+		['a { background: url(a.png) } @import "b.css";', 'stylesheet'],
+		['background: url(a.png); --x: url(b)', 'declarationList'],
+	];
+	// an instance is made the first time a rewrite reaches the module
+	const Instance = WebAssembly.Instance;
+	let made = 0;
+	WebAssembly.Instance = function (...args) {
+		made++;
+		return new Instance(...args);
+	};
+	const before = cases.map(([text, kind]) =>
+		library.api.css(context, text, kind),
+	);
+	const madeBefore = made;
+	await library.adoptModules({
+		scanner: bytes.buffer.slice(
+			bytes.byteOffset,
+			bytes.byteOffset + bytes.byteLength,
+		),
+	});
+	const after = cases.map(([text, kind]) =>
+		library.api.css(context, text, kind),
+	);
+	WebAssembly.Instance = Instance;
+	const expected = cases.map(([text, kind]) => modifyCSS(text, page, kind));
+	ok(
+		"the inject's rewriter library rewrites by css-tree until it holds the module and in the module from then on, the same",
+		madeBefore === 0 &&
+			made === 1 &&
+			JSON.stringify(before) === JSON.stringify(expected) &&
+			JSON.stringify(after) === JSON.stringify(expected) &&
+			expected.every((output, i) => output !== cases[i][0]),
+		JSON.stringify({ madeBefore, made, before, after, expected }),
+	);
 }
 
 // stylesheets the module must rewrite itself, each a shape of its own
