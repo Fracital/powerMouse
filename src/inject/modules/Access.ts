@@ -39,7 +39,9 @@ export function setGlobalProxy(
 		});
 }
 
-type PatternSpec = { [key: string]: true | PatternSpec };
+type PatternSpec = {
+	[key: string]: true | PatternSpec | (0 | PatternSpec | [PatternSpec])[];
+};
 
 export default class AccessModule extends Module<Client> {
 	apply() {
@@ -68,6 +70,16 @@ export default class AccessModule extends Module<Client> {
 		);
 
 		setGlobalProxy(evalSnapshot, 'eval', globalEvalProxy, this.client.names);
+		/**
+		 * What a write of `eval` stores: a page that assigns the eval it read
+		 * (`eval = eval`, one it saved and puts back) holds the stand-in a read
+		 * answers, and the name takes the eval itself, the only value whose
+		 * call is a direct eval
+		 */
+		const evalWritten = (value: unknown): unknown =>
+			globalEvalProxy !== undefined && value === globalEvalProxy
+				? evalSnapshot
+				: value;
 
 		/** the routed URL of a module `url` imports (bare specifiers are the import map's), by its kind */
 		/**
@@ -117,6 +129,81 @@ export default class AccessModule extends Module<Client> {
 		const errors = new ErrorMessages(this.client);
 		const nullish = (value: unknown): value is null | undefined =>
 			value === null || value === undefined;
+		/**
+		 * The property key a computed member's key is (`o[k]`): an object
+		 * there is converted, once, as the member read would. The helpers
+		 * know a name by its string, and `window[{ toString: () => 'top' }]`
+		 * was no name to them: it read the real top.
+		 */
+		const keyOf = (key: any): any =>
+			(typeof key === 'object' && key !== null) || typeof key === 'function'
+				? Reflect.ownKeys({ [key]: 0 })[0]
+				: key;
+		const isObject = (value: unknown): value is object =>
+			(typeof value === 'object' && value !== null) ||
+			typeof value === 'function';
+		/**
+		 * The source of an array pattern (`[a, { top: t }] = source`), whose
+		 * elements the pattern takes from its iterator: an iterable that hands
+		 * out the same values, the ones the pattern destructures further
+		 * (`specs`, by index) wrapped by `pattern`. The source's iterator is
+		 * driven as the pattern would drive it: `next` read once, a result
+		 * that needs no wrapping handed over as it came, `return` passed on.
+		 * An entry that is an array is the rest (`...[{ top: t }]`, which the
+		 * rewriter printed as a plain last element): the values left, as an
+		 * array, wrapped for the pattern that takes it.
+		 */
+		const iterated = (source: any, specs: unknown[]): unknown => {
+			const method = source[Symbol.iterator];
+			// not iterable: the pattern's own error
+			if (typeof method !== 'function') return source;
+			return {
+				[Symbol.iterator]: () => {
+					const iterator = Reflect.apply(method, source, []);
+					if (!isObject(iterator)) return iterator;
+					const next = (iterator as any).next;
+					const step = () => {
+						const result = Reflect.apply(next, iterator, []);
+						if (!isObject(result))
+							throw new TypeError(
+								`Iterator result ${String(result)} is not an object`,
+							);
+						return result as IteratorResult<unknown>;
+					};
+					let index = 0;
+					let drained = false;
+					return {
+						next: () => {
+							if (drained) return { done: true, value: undefined };
+							const spec = specs[index++];
+							if (!spec) return Reflect.apply(next, iterator, []);
+							if (Array.isArray(spec)) {
+								const rest: unknown[] = [];
+								for (let result = step(); !result.done; result = step())
+									rest.push(result.value);
+								drained = true;
+								return { done: false, value: api.pattern(rest, spec[0]) };
+							}
+							const result = step();
+							if (result.done) {
+								drained = true;
+								return { done: true, value: undefined };
+							}
+							return {
+								done: false,
+								value: api.pattern(result.value, spec as PatternSpec),
+							};
+						},
+						return: () => {
+							if (drained) return {};
+							const close = (iterator as any).return;
+							if (close === undefined || close === null) return {};
+							return Reflect.apply(close, iterator, []);
+						},
+					};
+				},
+			};
+		};
 		const api = {
 			get2: (
 				target: any,
@@ -130,6 +217,7 @@ export default class AccessModule extends Module<Client> {
 					throw errors.read(target, key);
 				}
 
+				key = keyOf(key);
 				return api.get(target[key], key, target);
 			},
 			// `container`: what `object` was read from, when the read is a member
@@ -174,11 +262,15 @@ export default class AccessModule extends Module<Client> {
 				operate: (target: any, property: any, value: any) => any,
 				righthand: any,
 			) => {
-				// key = this.normalize_key(key);
-				// possibly a context
+				// (a null or undefined target throws before the key is converted,
+				// as natively)
+				if (!nullish(target)) key = keyOf(key);
 
 				// the client's global is not the page's to replace (see get)
 				if (key === this.client.names.client) return righthand;
+				// `window.eval = saved`
+				if (key === 'eval' && target === this.client.global)
+					righthand = evalWritten(righthand);
 
 				if (typeof key === 'string') {
 					// `document.location = url` is `window.location = url`
@@ -278,7 +370,7 @@ export default class AccessModule extends Module<Client> {
 								),
 					);
 				} else {
-					set(value);
+					set(name === 'eval' ? evalWritten(value) : value);
 				}
 
 				return result;
@@ -290,11 +382,16 @@ export default class AccessModule extends Module<Client> {
 			 * `target` is what the name held, `set` assigns the name in the
 			 * page's own scope (a local, a `with` object, the window).
 			 */
-			ref1: (target: any, set: (value: unknown) => unknown) => ({
+			ref1: (
+				target: any,
+				set: (value: unknown) => unknown,
+				// `location`, or `eval` (`[eval] = [saved]`)
+				name = 'location',
+			) => ({
 				set value(value: unknown) {
 					api.set1(
 						target,
-						'location',
+						name,
 						(object: any, property: any, v: unknown) => (object[property] = v),
 						set,
 						value,
@@ -307,6 +404,87 @@ export default class AccessModule extends Module<Client> {
 					api.set2(
 						target,
 						key,
+						(object: any, property: any, v: unknown) => {
+							object[property] = v;
+						},
+						value,
+					);
+				},
+			}),
+			/** the property key a computed `super[k]` reads (see keyOf) */
+			key: (key: any): any => keyOf(key),
+			/**
+			 * `super.eval(code)`, `super[k](...)`: `super` is no value to hand a
+			 * helper, so the rewriter hands over the method it read (through
+			 * `get`: the eval's stand-in, not the eval) and the method's `this`.
+			 * The function this answers is called with the arguments.
+			 */
+			smethod: (
+				method: any,
+				that: any,
+				partial?: string,
+				optional?: boolean,
+			): ((...args: any[]) => any) | undefined => {
+				if (optional && nullish(method)) return undefined;
+				return (...args: any[]) =>
+					typeof method === 'function'
+						? Reflect.apply(method, that, args)
+						: errors.call(method, that, args, partial);
+			},
+			/**
+			 * `super.location = v`, `super[k] += v`, `super[k]++`: `read` and
+			 * `write` are the member itself (`k => super[k]`,
+			 * `(k, v) => super[k] = v`), `operate` the operator, as for set2. A
+			 * window's location, which `super` reaches when the home object's
+			 * prototype is the window and `this` is, is written through its
+			 * stand-in; anything else through the member, read by `get`.
+			 */
+			sset: (
+				key: any,
+				that: any,
+				read: (key: any) => any,
+				write: (key: any, value: any) => any,
+				operate: (target: any, property: any, value: any) => any,
+				righthand: any,
+			): any => {
+				if (key === this.client.names.client) return righthand;
+				if (key === 'location') {
+					const real = read(key);
+					const standIn = api.get(real, key);
+					if (standIn !== real) return operate(standIn, 'href', righthand);
+				}
+				const property = Symbol();
+				return operate(
+					{
+						get [property]() {
+							return api.get(read(key), key);
+						},
+						set [property](value: unknown) {
+							write(
+								key,
+								key === 'eval' && that === this.client.global
+									? evalWritten(value)
+									: value,
+							);
+						},
+					},
+					property,
+					righthand,
+				);
+			},
+			/** `[super.location] = a`: the pattern-target form of `sset` (see ref2) */
+			sref: (
+				key: any,
+				that: any,
+				read: (key: any) => any,
+				write: (key: any, value: any) => any,
+			) => ({
+				set value(value: unknown) {
+					api.sset(
+						key,
+						that,
+						read,
+						write,
 						(object: any, property: any, v: unknown) => {
 							object[property] = v;
 						},
@@ -335,6 +513,7 @@ export default class AccessModule extends Module<Client> {
 			},
 			new2: (target: any, key: any, args: any, partial?: string): any => {
 				if (nullish(target)) throw errors.read(target, key);
+				key = keyOf(key);
 				return errors.construct(api.get(target[key], key), args, partial);
 			},
 			/**
@@ -350,6 +529,7 @@ export default class AccessModule extends Module<Client> {
 				partial?: string,
 			): any => {
 				if (nullish(target)) throw errors.read(target, key);
+				key = keyOf(key);
 				const object = api.get(target[key], key, target);
 				if (nullish(object)) throw errors.read(object, name);
 				const method = object[name];
@@ -438,6 +618,7 @@ export default class AccessModule extends Module<Client> {
 					throw errors.read(target, key);
 				}
 
+				key = keyOf(key);
 				const method = api.get(target[key], key);
 
 				if (typeof method === 'function')
@@ -455,7 +636,7 @@ export default class AccessModule extends Module<Client> {
 			lazy: (target: any): ((key: any) => unknown) | undefined =>
 				target === null || target === undefined
 					? undefined
-					: (key: any) => api.get(target[key], key, target),
+					: (key: any) => api.get(target[(key = keyOf(key))], key, target),
 			method: (
 				target: any,
 				chained: boolean,
@@ -470,6 +651,7 @@ export default class AccessModule extends Module<Client> {
 					};
 				}
 				return (key: any) => {
+					key = keyOf(key);
 					const method = api.get(target[key], key);
 					if (optionalCall && nullish(method)) return undefined;
 					return (...args: any[]) =>
@@ -524,9 +706,12 @@ export default class AccessModule extends Module<Client> {
 			// so the source is wrapped and every read of an unforgeable through
 			// it resolves like a member read would. `spec` names the keys whose
 			// values are destructured further (`{ a: { top } }`): those are
-			// wrapped again, everything else is handed out as it is. `partial`:
-			// the destructuring's source (`{ top } = o`, '' for a parameter's),
-			// for the error a null or undefined source throws
+			// wrapped again, everything else is handed out as it is. A spec
+			// `{ '{}': [...] }` tells the properties apart by their order (one
+			// of them has a computed key), and `{ '[]': [...] }` is an array
+			// pattern's, whose source is iterated. `partial`: the
+			// destructuring's source (`{ top } = o`, '' for a parameter's), for
+			// the error a null or undefined source throws
 			pattern: (
 				object: unknown,
 				spec?: PatternSpec,
@@ -538,13 +723,22 @@ export default class AccessModule extends Module<Client> {
 					object === null
 				)
 					return object;
+				const elements = spec?.['[]'];
+				if (Array.isArray(elements)) return iterated(object, elements);
+				const positions = spec?.['{}'];
+				const ordered = Array.isArray(positions) ? positions : undefined;
+				// (the pattern reads each of its properties once, in order)
+				let position = 0;
 				return new Proxy(object as object, {
 					get: (target, key) => {
 						const value = api.get(Reflect.get(target, key), key);
-						const nested =
-							spec && typeof key === 'string' ? spec[key] : undefined;
+						const nested = ordered
+							? ordered[position++]
+							: spec && typeof key === 'string'
+								? spec[key]
+								: undefined;
 						return nested && nested !== true
-							? api.pattern(value, nested)
+							? api.pattern(value, nested as PatternSpec)
 							: value;
 					},
 				});

@@ -24,8 +24,10 @@
 import { createHash } from 'node:crypto';
 import {
 	mkdirSync,
+	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	rmSync,
 	statSync,
 	writeFileSync,
 } from 'node:fs';
@@ -91,8 +93,11 @@ if (!inputs.length) {
 
 // both rewriters, bundled as the suites bundle them
 const esbuild = await import('esbuild');
-const out = `${root}test/out/`;
-mkdirSync(out, { recursive: true });
+// (a directory of its own: two runs may share the tree, as the suites'
+// runs under both backends do; under test/out, where the bundle's external
+// css-tree resolves)
+mkdirSync(`${root}test/out/`, { recursive: true });
+const out = `${mkdtempSync(`${root}test/out/parity-`)}/`;
 const entry = `${out}parity-entry.mjs`;
 writeFileSync(
 	entry,
@@ -122,6 +127,7 @@ const {
 	rewriteWith,
 	rewriterRoute,
 } = await import(`${out}parity.mjs?${Date.now()}`);
+rmSync(out, { recursive: true, force: true });
 const { parse } = await import(`${root}node_modules/meriyah/dist/meriyah.mjs`);
 const { generate } = await import('@javascript-obfuscator/escodegen');
 
@@ -176,6 +182,28 @@ const HOLDER = /\.src\("[0-9a-z]+","[^"]*",function\(\)\{\/\*[^]*?\*\/\}\);/;
 /** the statement lists an empty statement means nothing in */
 const LISTS = new Set(['Program', 'BlockStatement', 'StaticBlock']);
 
+/** whether a node names a temporary the rewriter binds a moved pattern's source to */
+function temporary(node, access) {
+	if (Array.isArray(node)) return node.some((item) => temporary(item, access));
+	if (!node || typeof node !== 'object') return false;
+	if (
+		node.type === 'Identifier' &&
+		(node.name === `${access}f` ||
+			node.name === `${access}c` ||
+			(node.name.startsWith(`${access}a`) &&
+				/^\d+$/.test(node.name.slice(access.length + 1))))
+	)
+		return true;
+	for (const key in node)
+		if (
+			node[key] &&
+			typeof node[key] === 'object' &&
+			temporary(node[key], access)
+		)
+			return true;
+	return false;
+}
+
 /** a tree both rewriters' outputs print alike from */
 function clean(node, access) {
 	if (Array.isArray(node)) {
@@ -189,16 +217,19 @@ function clean(node, access) {
 		node.consequent = node.consequent.filter(
 			(item) => item.type !== 'EmptyStatement',
 		);
-	// a hoisted parameter's pattern has no text of its own to name in an
-	// error: the JavaScript rewriter prints the declaration it made, the wasm
-	// one quotes the page's pattern, and neither is checked beyond being there
+	// a pattern moved to where it has a source (a parameter's, a loop
+	// head's, a catch clause's: its source is a temporary, `$s$ja0`,
+	// `$s$jf`, `$s$jc`) has no text of its own to name in an error: the
+	// JavaScript rewriter prints the declaration it made, the wasm one quotes
+	// the page's pattern, and neither is checked beyond being there
 	if (
 		node.type === 'CallExpression' &&
 		node.callee.type === 'MemberExpression' &&
 		node.callee.object.name === access &&
-		node.callee.property.name === 'pattern' &&
-		node.arguments[0]?.type === 'Identifier' &&
-		node.arguments[0].name.startsWith(`${access}a`) &&
+		(node.callee.property.name === 'pattern' ||
+			node.callee.property.name === 'iter') &&
+		node.arguments[0] &&
+		temporary(node.arguments[0], access) &&
 		node.arguments[2]?.type === 'Literal'
 	)
 		node.arguments[2] = { type: 'Literal', value: 'hoisted' };

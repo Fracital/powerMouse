@@ -230,16 +230,13 @@ export class RewritePool {
 				}),
 		);
 		if (outputs.some((output) => output === null)) return null;
-		// a run of statements the rewriter could not parse on its own comes
-		// back as it went (the rewriter's fallback), which would put code
-		// that was never rewritten into the whole: the whole is rewritten
-		// instead (a rewritten run never equals its input, whose wrapper has
-		// line breaks the compact output does not)
-		if (
-			plan.kind === 'statements' &&
-			parts.some((part, i) => outputs[i + 1] === part)
-		)
-			return null;
+		// a part the rewriter could not parse on its own comes back as it
+		// went (the rewriter's fallback), which would put code that was
+		// never rewritten into the whole: the whole is rewritten instead (a
+		// rewritten part never equals its input: a run's wrapper has line
+		// breaks the compact output does not, a group of modules comes back
+		// with a mark in each function)
+		if (parts.some((part, i) => outputs[i + 1] === part)) return null;
 		return stitch(outputs[0]!, outputs.slice(1) as string[], plan);
 	}
 	/**

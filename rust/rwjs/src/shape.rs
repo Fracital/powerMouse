@@ -183,12 +183,18 @@ pub fn post_message<'b, 'a>(call: &'b CallExpression<'a>) -> Option<Post<'b, 'a>
 	};
 	let spread = call.arguments.iter().any(|a| matches!(a, Argument::SpreadElement(_)));
 	let name = named.property.name.as_str();
-	if (name == "call" || name == "apply") && is_post_message(unparen(&named.object)) && !spread {
+	// (`.apply(w, args, more)`: what follows the arguments is evaluated and
+	// ignored, so the call is left as written)
+	if (name == "call" || (name == "apply" && call.arguments.len() <= 2))
+		&& is_post_message(unparen(&named.object))
+		&& !spread
+	{
 		return Some(if name == "call" { Post::Call } else { Post::Apply });
 	}
 	if name == "apply"
 		&& matches!(unparen(&named.object), Expression::Identifier(id) if id.name == "Reflect")
 		&& call.arguments.len() >= 2
+		&& call.arguments.len() <= 3
 		&& !spread
 		&& is_post_message(unparen(call.arguments[0].to_expression()))
 	{
@@ -197,10 +203,30 @@ pub fn post_message<'b, 'a>(call: &'b CallExpression<'a>) -> Option<Post<'b, 'a>
 	None
 }
 
-/// A key of an object pattern the access API resolves, and what is under it
+/// A key of a pattern the access API resolves, and what is under it
 pub enum Spec {
 	True,
 	Nested(Vec<(String, Spec)>),
+	/// under `"[]"` (an array pattern's elements, by index) or `"{}"` (an
+	/// object pattern's properties by their order, when a computed key's
+	/// value is destructured further)
+	List(Vec<Item>),
+}
+
+/// An element of a `Spec::List`
+pub enum Item {
+	/// nothing to wrap
+	Zero,
+	/// a pattern under it
+	Spec(Vec<(String, Spec)>),
+	/// an array pattern's rest that is a pattern (`...[{ top }]`), printed as
+	/// a plain last element: the values left, as an array, wrapped by this
+	Rest(Vec<(String, Spec)>),
+}
+
+/// whether a spec is an array pattern's: its source is iterated
+pub fn iterates(entries: &[(String, Spec)]) -> bool {
+	matches!(entries, [(key, Spec::List(_))] if key == "[]")
 }
 
 /// the entry of `name`, replaced where it stands or added
@@ -238,6 +264,24 @@ pub fn spec_text(entries: &[(String, Spec)], quote: &dyn Fn(&str) -> String) -> 
 		match spec {
 			Spec::True => out.push_str("true"),
 			Spec::Nested(nested) => out.push_str(&spec_text(nested, quote)),
+			Spec::List(items) => {
+				out.push('[');
+				for (i, item) in items.iter().enumerate() {
+					if i > 0 {
+						out.push(',');
+					}
+					match item {
+						Item::Zero => out.push('0'),
+						Item::Spec(nested) => out.push_str(&spec_text(nested, quote)),
+						Item::Rest(nested) => {
+							out.push('[');
+							out.push_str(&spec_text(nested, quote));
+							out.push(']');
+						}
+					}
+				}
+				out.push(']');
+			}
 		}
 	}
 	out.push('}');
@@ -374,83 +418,180 @@ impl Shapes<'_> {
 		})
 	}
 
-	/// Which keys of an object pattern read an unforgeable, at any depth
-	/// (`patternSpec`), for a binding pattern
-	pub fn binding_spec(&self, o: &ObjectPattern) -> Result<Option<Vec<(String, Spec)>>, Unsupported> {
-		let mut entries = Vec::new();
-		let mut any = false;
-		for property in &o.properties {
-			if property.computed {
-				any = true;
-				continue;
+	/// What a pattern reads without a member expression to rewrite, at any
+	/// depth (`patternSpec`), for a binding pattern: an object pattern that
+	/// names an unforgeable or has a computed key, an array pattern with
+	/// such a pattern among its elements. `rests` gets the `...` of each
+	/// array rest that is such a pattern, which is printed as a plain last
+	/// element (the spec says so)
+	pub fn binding_spec(
+		&self,
+		pattern: &BindingPattern,
+		rests: &mut Vec<Span>,
+	) -> Result<Option<Vec<(String, Spec)>>, Unsupported> {
+		let pattern = match pattern {
+			BindingPattern::AssignmentPattern(ap) => &ap.left,
+			pattern => pattern,
+		};
+		match pattern {
+			BindingPattern::ArrayPattern(a) => {
+				let mut items = Vec::new();
+				for element in &a.elements {
+					items.push(match element {
+						Some(element) => self.binding_spec(element, rests)?.map_or(Item::Zero, Item::Spec),
+						None => Item::Zero,
+					});
+				}
+				if let Some(rest) = &a.rest {
+					if let Some(spec) = self.binding_spec(&rest.argument, rests)? {
+						rests.push(Span::new(rest.span.start, rest.argument.span().start));
+						items.push(Item::Rest(spec));
+					}
+				}
+				Ok(list("[]", items))
 			}
-			let name = self.key_name(&property.key)?;
-			let value = match &property.value {
-				BindingPattern::AssignmentPattern(ap) => &ap.left,
-				value => value,
-			};
-			let nested = match value {
-				BindingPattern::ObjectPattern(inner) => self.binding_spec(inner)?,
-				_ => None,
-			};
-			if let Some(nested) = nested {
-				set_spec(&mut entries, name, Spec::Nested(nested));
-				any = true;
-			} else if self.routed(&name) {
-				set_spec(&mut entries, name, Spec::True);
-				any = true;
+			BindingPattern::ObjectPattern(o) => {
+				let mut fields = Fields::default();
+				for property in &o.properties {
+					let nested = self.binding_spec(&property.value, rests)?;
+					let name = if property.computed { None } else { Some(self.key_name(&property.key)?) };
+					fields.add(self, name, nested);
+				}
+				Ok(fields.spec())
 			}
+			_ => Ok(None),
 		}
-		Ok(any.then(|| key_order(entries)))
 	}
 
-	/// the same for the pattern an assignment writes
+	/// the same for the pattern an assignment or a loop head writes
 	pub fn target_spec(
 		&self,
-		o: &ObjectAssignmentTarget,
+		target: &AssignmentTarget,
+		rests: &mut Vec<Span>,
 	) -> Result<Option<Vec<(String, Spec)>>, Unsupported> {
-		let mut entries = Vec::new();
-		let mut any = false;
-		for property in &o.properties {
-			match property {
-				AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(p) => {
-					let name = p.binding.name.as_str();
-					if self.routed(name) {
-						set_spec(&mut entries, name.to_owned(), Spec::True);
-						any = true;
+		match target {
+			AssignmentTarget::ArrayAssignmentTarget(a) => {
+				let mut items = Vec::new();
+				for element in &a.elements {
+					items.push(match element {
+						Some(element) => self.maybe_default_spec(element, rests)?.map_or(Item::Zero, Item::Spec),
+						None => Item::Zero,
+					});
+				}
+				if let Some(rest) = &a.rest {
+					if let Some(spec) = self.target_spec(&rest.target, rests)? {
+						rests.push(Span::new(rest.span.start, rest.target.span().start));
+						items.push(Item::Rest(spec));
 					}
 				}
-				AssignmentTargetProperty::AssignmentTargetPropertyProperty(p) => {
-					if p.computed {
-						any = true;
-						continue;
-					}
-					let name = self.key_name(&p.name)?;
-					let nested = match &p.binding {
-						AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(d) => {
-							match &d.binding {
-								AssignmentTarget::ObjectAssignmentTarget(inner) => {
-									self.target_spec(inner)?
-								}
-								_ => None,
-							}
+				Ok(list("[]", items))
+			}
+			AssignmentTarget::ObjectAssignmentTarget(o) => {
+				let mut fields = Fields::default();
+				for property in &o.properties {
+					match property {
+						AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(p) => {
+							fields.add(self, Some(p.binding.name.as_str().to_owned()), None);
 						}
-						AssignmentTargetMaybeDefault::ObjectAssignmentTarget(inner) => {
-							self.target_spec(inner)?
+						AssignmentTargetProperty::AssignmentTargetPropertyProperty(p) => {
+							let nested = self.maybe_default_spec(&p.binding, rests)?;
+							let name = if p.computed { None } else { Some(self.key_name(&p.name)?) };
+							fields.add(self, name, nested);
 						}
-						_ => None,
-					};
-					if let Some(nested) = nested {
-						set_spec(&mut entries, name, Spec::Nested(nested));
-						any = true;
-					} else if self.routed(&name) {
-						set_spec(&mut entries, name, Spec::True);
-						any = true;
 					}
+				}
+				Ok(fields.spec())
+			}
+			_ => Ok(None),
+		}
+	}
+
+	fn maybe_default_spec(
+		&self,
+		target: &AssignmentTargetMaybeDefault,
+		rests: &mut Vec<Span>,
+	) -> Result<Option<Vec<(String, Spec)>>, Unsupported> {
+		match target {
+			AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(d) => self.target_spec(&d.binding, rests),
+			target => match target.as_assignment_target() {
+				Some(target) => self.target_spec(target, rests),
+				None => Ok(None),
+			},
+		}
+	}
+}
+
+/// `{ "[]": [...] }` up to its last entry that wraps something, or none
+fn list(key: &str, mut items: Vec<Item>) -> Option<Vec<(String, Spec)>> {
+	while matches!(items.last(), Some(Item::Zero)) {
+		items.pop();
+	}
+	(!items.is_empty()).then(|| vec![(key.to_owned(), Spec::List(items))])
+}
+
+/// An object pattern's properties as `patternSpec` takes them
+#[derive(Default)]
+struct Fields {
+	entries: Vec<(String, Spec)>,
+	/// what is under each property, by position
+	positions: Vec<Item>,
+	any: bool,
+	/// a computed key's value is destructured further: told apart by order
+	positional: bool,
+}
+
+impl Fields {
+	/// a property: its name, none when computed (it may name anything: the
+	/// source is wrapped), and the spec of the pattern it destructures to
+	fn add(&mut self, shapes: &Shapes, name: Option<String>, nested: Option<Vec<(String, Spec)>>) {
+		let Some(name) = name else {
+			self.any = true;
+			self.positional |= nested.is_some();
+			self.positions.push(nested.map_or(Item::Zero, Item::Spec));
+			return;
+		};
+		match nested {
+			Some(nested) => {
+				self.positions.push(Item::Spec(clone_entries(&nested)));
+				set_spec(&mut self.entries, name, Spec::Nested(nested));
+				self.any = true;
+			}
+			None => {
+				self.positions.push(Item::Zero);
+				if shapes.routed(&name) {
+					set_spec(&mut self.entries, name, Spec::True);
+					self.any = true;
 				}
 			}
 		}
-		Ok(any.then(|| key_order(entries)))
+	}
+
+	fn spec(self) -> Option<Vec<(String, Spec)>> {
+		if self.positional {
+			return Some(vec![("{}".to_owned(), Spec::List(self.positions))]);
+		}
+		self.any.then(|| key_order(self.entries))
+	}
+}
+
+fn clone_entries(entries: &[(String, Spec)]) -> Vec<(String, Spec)> {
+	entries.iter().map(|(key, spec)| (key.clone(), clone_spec(spec))).collect()
+}
+
+fn clone_spec(spec: &Spec) -> Spec {
+	match spec {
+		Spec::True => Spec::True,
+		Spec::Nested(nested) => Spec::Nested(clone_entries(nested)),
+		Spec::List(items) => Spec::List(
+			items
+				.iter()
+				.map(|item| match item {
+					Item::Zero => Item::Zero,
+					Item::Spec(nested) => Item::Spec(clone_entries(nested)),
+					Item::Rest(nested) => Item::Rest(clone_entries(nested)),
+				})
+				.collect(),
+		),
 	}
 }
 

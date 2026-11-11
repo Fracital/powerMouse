@@ -280,6 +280,15 @@ function planStatements(
 		first++;
 	// a program of a few statements is no list of modules
 	if (!fn && body.length - first < parts * 2) return null;
+	// `var location = url` outside any function assigns the window's
+	// location, which the rewriter routes; a run is rewritten inside a
+	// function, where the same statement declares a local and is left as it
+	// is: a program with one is rewritten whole
+	if (!fn) {
+		const names: string[] = [];
+		declared(body, names);
+		if (names.includes('location')) return null;
+	}
 	take(body.slice(first));
 	if (groups.length < 2) return null;
 

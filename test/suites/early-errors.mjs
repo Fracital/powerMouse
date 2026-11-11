@@ -50,8 +50,9 @@ const cases = readCases().filter((entry) => entry.code !== undefined);
 // it prints of them compiles: the script runs through the proxy. Under the
 // wasm backend too, whose parser refuses them: what it cannot parse is the
 // JavaScript rewriter's to decide
+// (`00e1` no longer: its parser takes it for a string, which is printed as
+// written and refused, as natively)
 const JS_RUNS = [
-	'00e1',
 	'new a.b?.()',
 	"import.defer('a')",
 	'(...(a)) => 1',
@@ -70,19 +71,13 @@ const NEVER_RUN = new Set([
 	'for (() => a in b;;);',
 ]);
 // The JavaScript rewriter alone: scripts V8 takes that it prints into ones
-// V8 refuses (parentheses its printer drops, a string statement in
-// parentheses or with an escape printed as the directive it is not)
+// V8 refuses (parentheses its printer drops around a loop head's target;
+// what it dropped around a class heritage and the string statements it
+// printed as directives are kept now)
 const JS_BREAKS = [
-	'async function f() { class A extends (await 1) {} }',
 	'for ((let) of a);',
 	'for ((let.a) of b);',
 	'for ((async) of a);',
-	"function f(a = 1) { 'use\\x20strict' }",
-	"function f(a = 1) { ('use strict') }",
-	"('use strict'); with (a) b",
-	'"use\\x20strict"; with (a) b',
-	"'use\\<NL> strict'; with (a) b",
-	"function f() { ('use strict'); with (a) b }",
 ];
 const KNOWN = new Map(JS_RUNS.map((text) => [text, 'runs']));
 if (!WASM) for (const text of JS_BREAKS) KNOWN.set(text, 'breaks');

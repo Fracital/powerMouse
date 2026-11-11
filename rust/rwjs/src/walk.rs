@@ -10,8 +10,8 @@
 //! The JavaScript rewriter decides from a node and its parent; here the
 //! parent decides for its operands (a call looks at its callee, an
 //! assignment at its target), which is the same table read the other way.
-//! What it leaves unvisited (`result()` not given) is walked for the
-//! function marks alone, as its tree keeps those nodes as they were.
+//! What it drops from the output (a post's receiver) is walked for the
+//! function marks alone, counted and not written.
 
 use edits::{Edit, Piece, Span as EditSpan, apply_range};
 use oxc::ast::AstKind;
@@ -23,7 +23,7 @@ use oxc::syntax::scope::ScopeFlags;
 use crate::rewrite::{Decline, Options, ROUTE_IMPORT, Route, js_whitespace};
 use crate::shape::{
 	Mem, Post, Shapes, bindings_named, bound_names, in_optional_chain, inner_span, is_literal,
-	is_pattern_call, post_message, pure, pure_arguments, spec_text, unparen,
+	is_pattern_call, iterates, post_message, pure, pure_arguments, spec_text, unparen, Spec,
 };
 use crate::source::{Utf16Offsets, function_mark, quote, source_key};
 
@@ -40,6 +40,8 @@ struct Cx {
 	/// written there would take the `new` for itself (`new top.A()` is not
 	/// `new $s$j.get(top, "top").A()`), so it goes in parentheses
 	new_callee: bool,
+	/// a template's tag: it is called with its own `this`
+	tag: bool,
 }
 
 /// where a `var` declaration stands, for `var location`
@@ -51,6 +53,16 @@ enum VarPlace {
 	Loop,
 	/// the initialiser of a `for (;;)`
 	ForInit,
+}
+
+/// What the access API is handed for `super.x` or `super[k]`
+enum SuperKey<'b, 'a> {
+	/// a name it does not answer for: the member stays as written
+	Leave,
+	/// a name it answers for (`super.top`, `super["location"]`)
+	Named(&'b str),
+	/// a key known only when it runs (`super[k]`)
+	Computed(&'b Expression<'a>),
 }
 
 /// A rewritten node being written: the text waiting to replace whatever
@@ -72,8 +84,8 @@ pub struct Walker<'a, 'c, 'h> {
 	/// is visited next is an expression by its type's name (it puts a
 	/// partial in parentheses then), innermost last
 	parents: Vec<bool>,
-	/// false inside what the JavaScript rewriter does not visit: only the
-	/// function marks are written there
+	/// false inside what the JavaScript rewriter drops (`drop_expression`):
+	/// nothing there is rewritten
 	rewriting: bool,
 	/// inside what the JavaScript rewriter drops: marks are counted, not written
 	dropped: bool,
@@ -312,13 +324,6 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		self.chain_out = false;
 	}
 
-	/// what the JavaScript rewriter leaves unvisited: marks alone
-	fn unvisited(&mut self, walk: impl FnOnce(&mut Self)) {
-		let was = std::mem::replace(&mut self.rewriting, false);
-		walk(self);
-		self.rewriting = was;
-	}
-
 	/// what it drops from the output: nothing written, its marks counted
 	fn drop_expression(&mut self, e: &Expression<'a>) {
 		let rewriting = std::mem::replace(&mut self.rewriting, false);
@@ -524,14 +529,14 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	}
 
 	/// a member the rewriter leaves as it is: its object is still read, and
-	/// a computed key too, unless it is a bare name (which the JavaScript
-	/// rewriter takes for a property's)
+	/// a computed key too
 	fn plain_member(&mut self, m: Mem<'_, 'a>, cx: Cx) {
 		let object = m.object();
 		self.cx = Cx {
 			no_index: false,
 			continues: true,
 			new_callee: cx.new_callee,
+			tag: false,
 		};
 		self.under(true, |walker| walker.visit_expression(object));
 		if std::mem::take(&mut self.chain_out) && !m.optional() {
@@ -546,16 +551,18 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				None => self.decline(Decline::Shape),
 			}
 		}
+		// (a computed key is an expression like any other: `delete o[location]`)
 		if let Mem::Computed(m) = m {
-			if !matches!(unparen(&m.expression), Expression::Identifier(_)) {
-				self.cx = Cx::default();
-				self.under(true, |walker| walker.visit_expression(&m.expression));
-			}
+			self.cx = Cx::default();
+			self.under(true, |walker| walker.visit_expression(&m.expression));
 		}
 		self.chain_out = false;
 	}
 
 	fn member_read(&mut self, m: Mem<'_, 'a>, cx: Cx) {
+		if m.on_super() {
+			return self.super_read(m, cx);
+		}
 		if !self.shapes.routes_member(m, cx.no_index) {
 			return self.plain_member(m, cx);
 		}
@@ -596,6 +603,179 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		self.chain_out = chained && cx.continues;
 	}
 
+	// ---- super ----
+
+	/// `super.top` reads the home object's prototype with `this` as the
+	/// receiver: the window's own getter when both are the window, and
+	/// `super.eval(code)` is the real eval. `super` is no value a helper can
+	/// take, so the member stays where it is and the helper is handed what
+	/// it read, or arrows that read and write it
+	fn super_key<'b>(&self, m: Mem<'b, 'a>) -> SuperKey<'b, 'a> {
+		match m {
+			Mem::Static(s) if self.options.config.routes(s.property.name.as_str()) => {
+				SuperKey::Named(s.property.name.as_str())
+			}
+			Mem::Computed(c) => match unparen(&c.expression) {
+				Expression::StringLiteral(s) => match s.value.as_str() {
+					Some(key) if self.options.config.routes(key) => SuperKey::Named(key),
+					_ => SuperKey::Leave,
+				},
+				key if is_literal(key) => SuperKey::Leave,
+				_ => SuperKey::Computed(&c.expression),
+			},
+			_ => SuperKey::Leave,
+		}
+	}
+
+	/// `t$p => super[t$p], (t$p, t$v) => super[t$p] = t$v`
+	fn super_arrows(&self) -> String {
+		let [_, prop, value] = &self.options.config.temps;
+		format!("{prop} => super[{prop}], ({prop}, {value}) => super[{prop}] = {value}")
+	}
+
+	/// `(t$p => $s$j.get(super[t$p], t$p))($s$j.key(`, for a key known only
+	/// when it runs
+	fn super_computed_read(&self) -> String {
+		let access = self.access();
+		let prop = &self.options.config.temps[1];
+		format!("({prop} => {access}.get(super[{prop}], {prop}))({access}.key(")
+	}
+
+	/// `super.top` as a value: `$s$j.get(super.top, "top")`
+	fn super_read(&mut self, m: Mem<'_, 'a>, cx: Cx) {
+		let key = self.super_key(m);
+		// (a tag keeps its `this`)
+		if cx.tag || matches!(key, SuperKey::Leave) {
+			return self.plain_member(m, cx);
+		}
+		let span = m.span();
+		self.paren(span, cx);
+		match key {
+			SuperKey::Named(name) => {
+				let head = self.head(span.start, "get");
+				self.wrap(span, head, format!(", {})", quote(name)));
+			}
+			SuperKey::Computed(k) => {
+				let open = self.open_paren(span.start);
+				let read = self.super_computed_read();
+				self.replace(span.start, k.span().start, format!("{open}{}", &read[1..]));
+				self.operand(k);
+				self.replace(k.span().end, span.end, "))".into());
+			}
+			SuperKey::Leave => {}
+		}
+		self.chain_out = false;
+	}
+
+	/// `super.eval(code)`, `super[k](...)`: what was read, called with the
+	/// method's `this`; false for a member left as written
+	fn super_call(&mut self, c: &CallExpression<'a>, m: Mem<'_, 'a>) -> bool {
+		let key = self.super_key(m);
+		if matches!(key, SuperKey::Leave) {
+			return false;
+		}
+		let span = m.span();
+		let access = self.access();
+		let after = format!(
+			", this, {}{})",
+			self.call_text(&c.callee, &c.arguments, c.optional, false),
+			if c.optional { ", true" } else { "" }
+		);
+		let head = self.head(span.start, "smethod");
+		match key {
+			SuperKey::Named(name) => {
+				self.wrap(span, format!("{head}{access}.get("), format!(", {}){after}", quote(name)));
+			}
+			SuperKey::Computed(k) => {
+				let read = self.super_computed_read();
+				self.replace(span.start, k.span().start, format!("{head}{read}"));
+				self.operand(k);
+				self.replace(k.span().end, span.end, format!(")){after}"));
+			}
+			SuperKey::Leave => {}
+		}
+		self.cx = Cx::default();
+		self.under(true, |walker| walker.visit_arguments(&c.arguments));
+		self.chain_out = false;
+		true
+	}
+
+	/// `super.location = v`, `super[k] += v`, `super[k]++`:
+	/// `$s$j.sset(key, this, read, write, operate, value)`, where `operate`
+	/// is the operator as for set2; false for a member left as written
+	fn super_write(
+		&mut self,
+		span: Span,
+		m: Mem<'_, 'a>,
+		operate: String,
+		value: Option<&Expression<'a>>,
+		end: &str,
+	) -> bool {
+		let key = self.super_key(m);
+		if matches!(key, SuperKey::Leave) {
+			return false;
+		}
+		let access = self.access();
+		let rest = format!(", this, {}, {operate}, ", self.super_arrows());
+		if value.is_some() {
+			// (the value is the assignment's last operand)
+			self.wrap(span, String::new(), ")".into());
+		}
+		let head = self.head(span.start, "sset");
+		let key_end = match key {
+			SuperKey::Named(name) => {
+				let text = format!("{head}{}{rest}", quote(name));
+				match value {
+					Some(value) => self.replace(span.start, value.span().start, text),
+					None => {
+						self.replace(span.start, span.end, format!("{text}undefined){end}"));
+						return true;
+					}
+				}
+				None
+			}
+			SuperKey::Computed(k) => {
+				self.replace(span.start, k.span().start, format!("{head}{access}.key("));
+				self.operand(k);
+				Some(k.span().end)
+			}
+			SuperKey::Leave => None,
+		};
+		match (key_end, value) {
+			(Some(at), Some(value)) => {
+				self.replace(at, value.span().start, format!("){rest}"));
+				self.operand(value);
+			}
+			(Some(at), None) => self.replace(at, span.end, format!("){rest}undefined){end}")),
+			(None, Some(value)) => self.operand(value),
+			(None, None) => {}
+		}
+		true
+	}
+
+	/// `[super.location] = a`, `for (super[k] of a)`: the pattern-target
+	/// form, `$s$j.sref(key, this, read, write).value`; false for a member
+	/// left as written
+	fn super_ref(&mut self, m: Mem<'_, 'a>) -> bool {
+		let key = self.super_key(m);
+		let span = m.span();
+		let access = self.access();
+		let rest = format!(", this, {}).value", self.super_arrows());
+		let head = self.head(span.start, "sref");
+		match key {
+			SuperKey::Leave => return false,
+			SuperKey::Named(name) => {
+				self.replace(span.start, span.end, format!("{head}{}{rest}", quote(name)))
+			}
+			SuperKey::Computed(k) => {
+				self.replace(span.start, k.span().start, format!("{head}{access}.key("));
+				self.operand(k);
+				self.replace(k.span().end, span.end, format!("){rest}"));
+			}
+		}
+		true
+	}
+
 	// ---- calls ----
 
 	fn call(&mut self, c: &CallExpression<'a>, cx: Cx) {
@@ -605,6 +785,11 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		let callee = unparen(&c.callee);
 		if matches!(callee, Expression::Identifier(id) if id.name == "eval") && !c.arguments.is_empty() {
 			return self.direct_eval(c);
+		}
+		if let Some(m) = Mem::of(callee).filter(|m| m.on_super()) {
+			if self.super_call(c, m) {
+				return;
+			}
 		}
 		let args_pure = pure_arguments(&c.arguments);
 		match Mem::of(callee) {
@@ -617,7 +802,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 					if !chained && !c.optional && args_pure {
 						return self.call2(c, m, 0, true);
 					}
-					return self.method(c, m, chained);
+					return self.method(c, m, chained, cx);
 				}
 				if routed {
 					let key_pure = match m {
@@ -628,7 +813,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 						|| ((chained || c.optional) && !args_pure)
 						|| (m.optional() && cx.continues)
 					{
-						return self.method(c, m, chained);
+						return self.method(c, m, chained, cx);
 					}
 					let links = u8::from(chained) | (u8::from(c.optional) << 1);
 					self.call2(c, m, links, false);
@@ -653,6 +838,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			no_index: true,
 			continues: true,
 			new_callee: false,
+			tag: false,
 		};
 		self.under(true, |walker| {
 			walker.visit_expression(&c.callee);
@@ -688,8 +874,15 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 
 	/// `$s$j.method(o, chained, optional, text)?.(k)?.(...)`: the key and
 	/// the arguments are evaluated only past the links that can short-circuit
-	fn method(&mut self, c: &CallExpression<'a>, m: Mem<'_, 'a>, chained: bool) {
+	fn method(&mut self, c: &CallExpression<'a>, m: Mem<'_, 'a>, chained: bool, cx: Cx) {
 		let partial = self.call_text(&c.callee, &c.arguments, c.optional, false);
+		// a call that was in no optional chain may have what a chain cannot:
+		// a member of it assigned (`o[k].m(f()).x = 1`), a tag. The lazy form
+		// is then a chain of its own, in parentheses
+		if !chained && !c.optional && (cx.continues || cx.tag) {
+			let open = self.open_paren(c.span.start);
+			self.wrap(c.span, open.into(), ")".into());
+		}
 		let mut seq = self.seq(c.span, "method");
 		self.seq_operand(&mut seq, m.object());
 		seq.pending.push_str(&format!(", {chained}, {}, {partial})?.(", c.optional));
@@ -725,30 +918,54 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				seq.pending.push_str(&format!("{optional}, {partial})"));
 			}
 			Post::Call | Post::Apply | Post::Reflect => {
-				// the receiver the method was read from is not in the output
-				self.drop_expression(&c.callee);
+				// the method is the target's own, read by the access API, but
+				// the expression it was written as is still the page's to
+				// evaluate, first (`f().postMessage.call(w, m)` calls f, a
+				// member of null throws): `post((f().postMessage, w), ...)`
+				let method = match post {
+					Post::Reflect => args[0].to_expression(),
+					_ => match unparen(&c.callee) {
+						Expression::StaticMemberExpression(named) => &named.object,
+						_ => return self.decline(Decline::Shape),
+					},
+				};
+				let kept = Mem::of(unparen(method)).is_some_and(|m| {
+					!matches!(
+						unparen(m.object()),
+						Expression::Identifier(_) | Expression::ThisExpression(_)
+					)
+				});
 				let (target, rest) = match post {
-					Post::Reflect => {
-						self.drop_expression(args[0].to_expression());
-						(args.get(1), args.get(2..).unwrap_or(&[]))
-					}
+					Post::Reflect => (args.get(1), args.get(2..).unwrap_or(&[])),
 					_ => (args.first(), args.get(1..).unwrap_or(&[])),
 				};
+				if kept {
+					seq.pending.push('(');
+					self.seq_operand(&mut seq, method);
+					seq.pending.push_str(", ");
+				} else {
+					// the receiver the method was read from is not in the output
+					self.drop_expression(&c.callee);
+					if matches!(post, Post::Reflect) {
+						self.drop_expression(method);
+					}
+				}
 				match target {
 					Some(target) => self.seq_operand(&mut seq, target.to_expression()),
 					None => seq.pending.push_str("undefined"),
 				}
+				if kept {
+					seq.pending.push(')');
+				}
 				if matches!(post, Post::Call) {
 					self.seq_arguments(&mut seq, rest, ", [", Some("], "));
 				} else {
+					// (an `.apply` takes at most its arguments: `post_message`)
 					match rest.first() {
 						Some(array) => {
 							seq.pending.push_str(", ");
 							self.seq_operand(&mut seq, array.to_expression());
 							seq.pending.push_str(", ");
-							for extra in &rest[1..] {
-								self.drop_expression(extra.to_expression());
-							}
 						}
 						None => seq.pending.push_str(", [], "),
 					}
@@ -820,6 +1037,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			no_index: true,
 			continues: false,
 			new_callee: true,
+			tag: false,
 		};
 		self.under(true, |walker| {
 			walker.visit_expression(&n.callee);
@@ -877,14 +1095,20 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				let head = self.set1_head(a.span.start, name, write);
 				self.wrap(a.span, String::new(), format!(", {partial})"));
 				self.replace(a.span.start, a.right.span().start, head);
-				// (the value is not visited by the JavaScript rewriter either)
-				self.unvisited(|walker| walker.visit_expression(&a.right));
+				// the value is the page's expression (`location = f(() => top)`)
+				self.operand(&a.right);
 			}
 			target => {
 				let Some(member) = target.as_member_expression() else {
 					return self.decline(Decline::Shape);
 				};
 				let m = Mem::of_member(member);
+				if m.on_super() {
+					let operate = self.setter(|slot, value| format!("{slot} {operator} {value}"));
+					if self.super_write(a.span, m, operate, Some(&a.right), "") {
+						return;
+					}
+				}
 				if !self.shapes.routes_member(m, true) {
 					self.plain_member(m, Cx::default());
 					return self.under(true, |walker| walker.visit_expression(&a.right));
@@ -906,40 +1130,53 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	/// access API, which resolves the unforgeables the pattern reads and
 	/// fails naming the page's expression
 	fn pattern_assignment(&mut self, a: &AssignmentExpression<'a>) {
-		let spec = match &a.left {
-			AssignmentTarget::ObjectAssignmentTarget(o) => match self.shapes.target_spec(o) {
-				Ok(spec) => spec,
-				Err(_) => return self.decline(Decline::Shape),
-			},
-			_ => None,
+		let mut rests = Vec::new();
+		let spec = match self.shapes.target_spec(&a.left, &mut rests) {
+			Ok(spec) => spec,
+			Err(_) => return self.decline(Decline::Shape),
 		};
 		let right = a.right.span();
-		let wrapped = if let Some(spec) = spec {
-			let after = format!(", {}, {})", spec_text(&spec, &|key| quote(key)), self.partial(a.span));
-			Some(("pattern", after))
-		} else if self.shapes.prints_helper(&a.right) {
-			Some(match &a.left {
-				AssignmentTarget::ArrayAssignmentTarget(_) => (
-					"iter",
-					format!(", \"assign\", {})", quote(self.slice(inner_span(&a.right)))),
-				),
-				_ => ("coerce", format!(", {})", self.partial(a.span))),
-			})
-		} else {
-			None
+		let access = self.access();
+		let source = || quote(self.slice(inner_span(&a.right)));
+		let wrapped = match &spec {
+			// an array pattern's source is iterated: checked by the access API
+			// first, then wrapped
+			Some(spec) if iterates(spec) => Some((
+				format!("{}{access}.iter(", self.head(right.start, "pattern")),
+				format!(", \"assign\", {}), {})", source(), spec_text(spec, &|key| quote(key))),
+			)),
+			Some(spec) => Some((
+				self.head(right.start, "pattern"),
+				format!(", {}, {})", spec_text(spec, &|key| quote(key)), self.partial(a.span)),
+			)),
+			None if self.shapes.prints_helper(&a.right) => Some(match &a.left {
+				AssignmentTarget::ArrayAssignmentTarget(_) => {
+					(self.head(right.start, "iter"), format!(", \"assign\", {})", source()))
+				}
+				_ => (self.head(right.start, "coerce"), format!(", {})", self.partial(a.span))),
+			}),
+			None => None,
 		};
+		self.drop_rest_dots(&rests);
 		self.under(true, |walker| {
 			if let Some(pattern) = a.left.as_assignment_target_pattern() {
 				walker.visit_assignment_target_pattern(pattern);
 			}
 		});
 		match wrapped {
-			Some((name, after)) => {
-				let head = self.head(right.start, name);
-				self.wrap(right, head, after);
+			Some((before, after)) => {
+				self.wrap(right, before, after);
 				self.operand(&a.right);
 			}
 			None => self.under(true, |walker| walker.visit_expression(&a.right)),
+		}
+	}
+
+	/// an array rest that is a pattern the access API wraps is printed as a
+	/// plain last element, which the wrapped source answers with the rest
+	fn drop_rest_dots(&mut self, rests: &[Span]) {
+		for rest in rests {
+			self.replace(rest.start, rest.end, String::new());
 		}
 	}
 
@@ -965,6 +1202,9 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 					return self.decline(Decline::Shape);
 				};
 				let m = Mem::of_member(member);
+				if m.on_super() && self.super_write(u.span, m, self.setter(write), None, end) {
+					return;
+				}
 				if !self.shapes.routes_member(m, true) {
 					return self.plain_member(m, Cx::default());
 				}
@@ -985,8 +1225,10 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	fn pattern_target(&mut self, target: &SimpleAssignmentTarget<'a>) {
 		match target {
 			SimpleAssignmentTarget::AssignmentTargetIdentifier(id) => {
-				if id.name == "location" {
-					let text = self.ref1(id.span.start);
+				// (and `eval`, whose write the access API stores as the eval
+				// itself: `[eval] = [saved]`)
+				if id.name == "location" || id.name == "eval" {
+					let text = self.ref1(id.span.start, id.name.as_str());
 					self.replace(id.span.start, id.span.end, text);
 				}
 			}
@@ -995,10 +1237,22 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 					return self.decline(Decline::Shape);
 				};
 				let m = Mem::of_member(member);
-				if !m.on_super() && m.literal_key() == Some("location") {
+				if m.on_super() {
+					if !self.super_ref(m) {
+						self.plain_member(m, Cx::default());
+					}
+					return;
+				}
+				// (so does `eval`, which a write stores as the eval itself, and
+				// a key known only when it runs, which may be either:
+				// `[window[k]] = [url]`)
+				let computed =
+					matches!(m, Mem::Computed(c) if !is_literal(unparen(&c.expression)));
+				if computed || matches!(m.literal_key(), Some("location" | "eval")) {
 					let mut seq = self.seq(m.span(), "ref2");
 					self.seq_operand(&mut seq, m.object());
-					seq.pending.push_str(", \"location\").value");
+					self.seq_key(&mut seq, m);
+					seq.pending.push_str(").value");
 					self.seq_end(seq);
 				} else {
 					self.plain_member(m, Cx::default());
@@ -1007,10 +1261,12 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		}
 	}
 
-	/// `$s$j.ref1(location, t$v => location = t$v).value`
-	fn ref1(&self, at: u32) -> String {
+	/// `$s$j.ref1(location, t$v => location = t$v).value`, and for `eval`
+	/// the name too: `$s$j.ref1(eval, t$v => eval = t$v, "eval").value`
+	fn ref1(&self, at: u32, name: &str) -> String {
 		let value = &self.options.config.temps[2];
-		format!("{}location, {value} => location = {value}).value", self.head(at, "ref1"))
+		let named = if name == "location" { String::new() } else { format!(", {}", quote(name)) };
+		format!("{}{name}, {value} => {name} = {value}{named}).value", self.head(at, "ref1"))
 	}
 
 	// ---- declarations ----
@@ -1029,18 +1285,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			return;
 		}
 		let access = self.access();
-		let write = self.setter(|slot, value| format!("{slot} = {value}"));
-		let mut assignments = Vec::new();
-		for (index, (span, shorthand)) in sites.iter().enumerate() {
-			let temp = format!("{access}l{index}");
-			let renamed = if *shorthand { format!("location: {temp}") } else { temp.clone() };
-			self.replace(span.start, span.end, renamed);
-			assignments.push(format!(
-				"{}{temp}, {})",
-				self.set1_head(0, "location", write.clone()),
-				quote(&format!("(location={temp})"))
-			));
-		}
+		let assignments = self.location_assignments(&sites);
 		match place {
 			VarPlace::Statement => {
 				let end = if self.slice(decl.span).ends_with(';') { "" } else { ";" };
@@ -1058,71 +1303,208 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		}
 	}
 
+	/// each binding named location renamed to a temporary: the assignments
+	/// that route the temporaries' values
+	fn location_assignments(&mut self, sites: &[(Span, bool)]) -> Vec<String> {
+		let access = self.access();
+		let write = self.setter(|slot, value| format!("{slot} = {value}"));
+		let mut assignments = Vec::new();
+		for (index, (span, shorthand)) in sites.iter().enumerate() {
+			let temp = format!("{access}l{index}");
+			let renamed = if *shorthand { format!("location: {temp}") } else { temp.clone() };
+			self.replace(span.start, span.end, renamed);
+			assignments.push(format!(
+				"{}{temp}, {})",
+				self.set1_head(0, "location", write.clone()),
+				quote(&format!("(location={temp})"))
+			));
+		}
+		assignments
+	}
+
+	/// `PATTERN = SOURCE` for a pattern moved to where it has a source (a
+	/// parameter's, a loop head's, a catch clause's), the source wrapped as
+	/// a declaration's or an assignment's is: `page` is the pattern as the
+	/// page wrote it, for the error a null or undefined source throws
+	fn moved_declarator(
+		&self,
+		moved: &str,
+		page: &str,
+		source: &str,
+		spec: Option<&[(String, Spec)]>,
+		assign: bool,
+	) -> String {
+		let access = self.access();
+		let (open, close) = if assign { ("(", ")") } else { ("", "") };
+		match spec {
+			None => format!("{open}{moved} = {source}{close}"),
+			Some(spec) if iterates(spec) => format!(
+				"{open}{moved} = {access}.pattern({access}.iter({source}, {}, {}), {}){close}",
+				quote(if assign { "assign" } else { "array" }),
+				quote(source),
+				spec_text(spec, &|key| quote(key))
+			),
+			Some(spec) => format!(
+				"{open}{moved} = {access}.pattern({source}, {}, {}){close}",
+				spec_text(spec, &|key| quote(key)),
+				quote(&format!("{open}{page}={source}{close}"))
+			),
+		}
+	}
+
+	/// a pattern as the walk rewrites it (its computed keys and defaults
+	/// are the page's expressions), to be written elsewhere
+	fn moved_pattern(&mut self, pattern: &BindingPattern<'a>, rests: &[Span]) -> String {
+		self.render(pattern.span(), |walker| {
+			walker.drop_rest_dots(rests);
+			walker.under(false, |walker| walker.visit_binding_pattern(pattern));
+		})
+	}
+
+	/// the spec of a binding pattern, declining the script for a key the
+	/// walk cannot name
+	fn binding_spec(&mut self, pattern: &BindingPattern<'a>, rests: &mut Vec<Span>) -> Option<Vec<(String, Spec)>> {
+		match self.shapes.binding_spec(pattern, rests) {
+			Ok(spec) => spec,
+			Err(_) => {
+				self.decline(Decline::Shape);
+				None
+			}
+		}
+	}
+
 	/// `function f({ top: t }) {}`: a parameter pattern has no source to
 	/// wrap, so the parameter becomes a plain one and the pattern a `var`
-	/// at the top of the body. The declarations to write there.
+	/// at the top of the body, from it. A later parameter that mentions a
+	/// name a moved pattern binds (`({ top: t }, u = t) => u`) is evaluated
+	/// after it, in the body too: its own parameter keeps a default, so the
+	/// function's length is what it was. The declarations to write there.
 	fn hoist_parameters(&mut self, params: &FormalParameters<'a>) -> String {
 		let access = self.access();
 		let mut hoisted = Vec::new();
+		let mut names: Vec<&str> = Vec::new();
 		for (index, param) in params.items.iter().enumerate() {
-			let target = match &param.pattern {
-				BindingPattern::AssignmentPattern(ap) => &ap.left,
-				pattern => pattern,
+			let (target, default) = match (&param.pattern, param.initializer.as_deref()) {
+				(BindingPattern::AssignmentPattern(ap), _) => (&ap.left, Some(&ap.right)),
+				(pattern, initializer) => (pattern, initializer),
 			};
-			let BindingPattern::ObjectPattern(pattern) = target else {
-				self.visit_formal_parameter(param);
-				continue;
-			};
-			let spec = match self.shapes.binding_spec(pattern) {
-				Ok(spec) => spec,
-				Err(_) => {
-					self.decline(Decline::Shape);
-					None
-				}
-			};
-			let mut names = Vec::new();
-			bound_names(target, &mut names);
-			let later = params.items[index + 1..].iter().any(|later| mentions_param(later, &names))
-				|| params.rest.as_ref().is_some_and(|rest| {
-					let mut finder = Mentions {
-						names: &names,
-						found: false,
-					};
-					finder.visit_binding_rest_element(&rest.rest);
-					finder.found
-				});
-			let Some(spec) = spec.filter(|_| !later) else {
-				self.visit_formal_parameter(param);
-				continue;
-			};
-			// the pattern moves: its functions keep their marks, nothing
-			// else of it is rewritten (the JavaScript rewriter does not
-			// visit a declaration's pattern it gave a source)
-			let span = target.span();
-			let moved = self.render(span, |walker| {
-				walker.unvisited(|walker| walker.visit_binding_pattern(target));
-			});
+			let mut rests = Vec::new();
+			let spec = self.binding_spec(target, &mut rests);
+			let mentioned = |e: &Expression, names: &[&str]| !names.is_empty() && mentions_expression(e, names);
 			let temp = format!("{access}a{index}");
-			self.replace(span.start, span.end, temp.clone());
-			hoisted.push(format!(
-				"{moved} = {access}.pattern({temp}, {}, {})",
-				spec_text(&spec, &|key| quote(key)),
-				quote(&format!("{}={temp}", self.slice(span)))
-			));
-			// the default stays on the parameter
-			self.under(false, |walker| {
-				if let BindingPattern::AssignmentPattern(ap) = &param.pattern {
-					walker.visit_expression(&ap.right);
+			let span = target.span();
+			let page = self.slice(span);
+			if spec.is_some() && default.is_none_or(|default| !mentioned(default, &names)) {
+				bound_names(target, &mut names);
+				let moved = self.moved_pattern(target, &rests);
+				self.replace(span.start, span.end, temp.clone());
+				hoisted.push(self.moved_declarator(&moved, page, &temp, spec.as_deref(), false));
+				// the default stays on the parameter
+				if let Some(default) = default {
+					self.cx = Cx::default();
+					self.under(false, |walker| walker.visit_expression(default));
 				}
-				if let Some(initializer) = &param.initializer {
-					walker.visit_expression(initializer);
+				continue;
+			}
+			if spec.is_none() && (names.is_empty() || !mentions_param(param, &names)) {
+				self.visit_formal_parameter(param);
+				continue;
+			}
+			bound_names(target, &mut names);
+			let moved = self.moved_pattern(target, &rests);
+			match default {
+				None => {
+					self.replace(span.start, span.end, temp.clone());
+					hoisted.push(self.moved_declarator(&moved, page, &temp, spec.as_deref(), false));
 				}
-			});
+				Some(default) => {
+					// `u = t`: the default is taken in the body, where `t` is bound
+					let right = self.render(default.span(), |walker| {
+						walker.cx = Cx::default();
+						walker.under(true, |walker| walker.visit_expression(default));
+					});
+					self.replace(span.start, default.span().end, format!("{temp} = void 0"));
+					let source = format!("{temp} === void 0 ? {right} : {temp}");
+					hoisted.push(self.moved_declarator(&moved, page, &source, spec.as_deref(), false));
+				}
+			}
 		}
 		if let Some(rest) = &params.rest {
-			self.visit_formal_parameter_rest(rest);
+			// `(...[{ top: t }]) => t`: the rest is an array of the arguments
+			let argument = &rest.rest.argument;
+			let mut rests = Vec::new();
+			let spec = self.binding_spec(argument, &mut rests);
+			if spec.is_none() && (names.is_empty() || !mentions_pattern(argument, &names)) {
+				self.visit_formal_parameter_rest(rest);
+			} else {
+				let temp = format!("{access}a{}", params.items.len());
+				let span = argument.span();
+				let page = self.slice(span);
+				let moved = self.moved_pattern(argument, &rests);
+				self.replace(span.start, span.end, temp.clone());
+				hoisted.push(self.moved_declarator(&moved, page, &temp, spec.as_deref(), false));
+			}
 		}
 		if hoisted.is_empty() { String::new() } else { format!("var {};", hoisted.join(", ")) }
+	}
+
+	/// `for (const { top: t } of a)`, `for ({ top: t } of a)`: a pattern with
+	/// no source expression to wrap, like a parameter's. The head binds a
+	/// temporary and the pattern moves to the top of the body as the
+	/// declaration (or the assignment) it was, from that temporary. The
+	/// statement to put there, the head rewritten.
+	fn head_pattern(&mut self, left: &ForStatementLeft<'a>) -> Option<String> {
+		let temp = format!("{}f", self.access());
+		let mut rests = Vec::new();
+		if let ForStatementLeft::VariableDeclaration(decl) = left {
+			let [declarator] = decl.declarations.as_slice() else {
+				return None;
+			};
+			let spec = self.binding_spec(&declarator.id, &mut rests)?;
+			let span = declarator.id.span();
+			let page = self.slice(span);
+			// `for (var { location } of a)` outside any function: the
+			// declaration in the body assigns the window's location
+			let located = decl.kind == VariableDeclarationKind::Var && !self.options.module && self.functions == 0;
+			let mut assignments = Vec::new();
+			let moved = self.render(span, |walker| {
+				if located {
+					let mut sites = Vec::new();
+					bindings_named(&declarator.id, "location", false, &mut sites);
+					assignments = walker.location_assignments(&sites);
+				}
+				walker.drop_rest_dots(&rests);
+				walker.under(false, |walker| walker.visit_binding_pattern(&declarator.id));
+			});
+			self.replace(decl.span.start, decl.span.end, format!("const {temp}"));
+			let declaration = format!(
+				"{} {};",
+				decl.kind.as_str(),
+				self.moved_declarator(&moved, page, &temp, Some(&spec), false)
+			);
+			return Some(if assignments.is_empty() {
+				declaration
+			} else {
+				format!("{{{declaration}{};}}", assignments.join(";"))
+			});
+		}
+		let target = left.as_assignment_target()?;
+		let pattern = target.as_assignment_target_pattern()?;
+		let spec = match self.shapes.target_spec(target, &mut rests) {
+			Ok(spec) => spec?,
+			Err(_) => {
+				self.decline(Decline::Shape);
+				return None;
+			}
+		};
+		let span = target.span();
+		let page = self.slice(span);
+		let moved = self.render(span, |walker| {
+			walker.drop_rest_dots(&rests);
+			walker.under(true, |walker| walker.visit_assignment_target_pattern(pattern));
+		});
+		self.replace(span.start, span.end, format!("const {temp}"));
+		Some(format!("{};", self.moved_declarator(&moved, page, &temp, Some(&spec), true)))
 	}
 
 	/// a function's body with `hoisted` at its top, after the directive prologue
@@ -1205,6 +1587,26 @@ fn mentions_param(param: &FormalParameter, names: &[&str]) -> bool {
 	finder.found
 }
 
+/// whether an expression names any of `names` anywhere in it
+fn mentions_expression(e: &Expression, names: &[&str]) -> bool {
+	let mut finder = Mentions {
+		names,
+		found: false,
+	};
+	finder.visit_expression(e);
+	finder.found
+}
+
+/// whether a binding pattern names any of `names` anywhere in it
+fn mentions_pattern(pattern: &BindingPattern, names: &[&str]) -> bool {
+	let mut finder = Mentions {
+		names,
+		found: false,
+	};
+	finder.visit_binding_pattern(pattern);
+	finder.found
+}
+
 struct Mentions<'n> {
 	names: &'n [&'n str],
 	found: bool,
@@ -1284,6 +1686,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 					no_index: cx.no_index,
 					continues: false,
 					new_callee: false,
+					tag: false,
 				};
 				walk::walk_parenthesized_expression(self, p);
 				self.chain_out = false;
@@ -1340,6 +1743,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 					no_index: true,
 					continues: false,
 					new_callee: cx.new_callee,
+					tag: true,
 				};
 				self.under(true, |walker| walker.visit_expression(&t.tag));
 				self.visit_template_literal(&t.quasi);
@@ -1369,13 +1773,11 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 				self.replace(i.span.start, i.source.span().start, head);
 				let last = i.options.as_ref().unwrap_or(&i.source);
 				self.replace(last.span().end, i.span.end, ")".into());
-				// (neither is visited by the JavaScript rewriter)
-				self.unvisited(|walker| {
-					walker.visit_expression(&i.source);
-					if let Some(options) = &i.options {
-						walker.visit_expression(options);
-					}
-				});
+				// (both are the page's expressions, rewritten like any)
+				self.operand(&i.source);
+				if let Some(options) = &i.options {
+					self.operand(options);
+				}
 			}
 			Expression::V8IntrinsicExpression(_) => self.decline(Decline::Invalid),
 			_ => walk::walk_expression(self, e),
@@ -1444,11 +1846,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		let Some(key) = it.as_expression() else {
 			return;
 		};
-		// a computed key that is a bare name is a property's to the
-		// JavaScript rewriter, which leaves it
-		if self.rewriting && matches!(unparen(key), Expression::Identifier(_)) {
-			return;
-		}
+		// (a computed key is an expression like any other: `{ [location]: 1 }`)
 		self.cx = Cx::default();
 		self.under(false, |walker| walker.visit_expression(key));
 	}
@@ -1552,10 +1950,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 	}
 
 	fn visit_class_heritage(&mut self, it: &ClassHeritage<'a>) {
-		// `extends top`: a bare name there is the class's to the JavaScript rewriter
-		if self.rewriting && matches!(unparen(&it.expression), Expression::Identifier(_)) {
-			return;
-		}
+		// (`extends top` reads top)
 		self.cx = Cx::default();
 		self.visit_expression(&it.expression);
 	}
@@ -1600,44 +1995,43 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		};
 		// `const { top: t } = o`: the pattern reads `o.top` without a member
 		// expression to rewrite, so the source is wrapped and the reads
-		// resolve through it; a pattern whose source is a helper's value
-		// checks it first, so an error names the page's expression
-		let wrapped = if is_pattern_call(init, self.access()) {
-			None
-		} else {
-			let spec = match &it.id {
-				BindingPattern::ObjectPattern(pattern) => match self.shapes.binding_spec(pattern) {
-					Ok(spec) => spec,
-					Err(_) => {
-						self.decline(Decline::Shape);
-						None
-					}
-				},
-				_ => None,
-			};
-			let text = || quote(self.slice(it.span));
-			match (&it.id, spec) {
-				(_, Some(spec)) => Some((
-					"pattern",
-					format!(", {}, {})", spec_text(&spec, &|key| quote(key)), text()),
-				)),
-				(BindingPattern::ArrayPattern(_), None) if self.shapes.prints_helper(init) => Some((
-					"iter",
-					format!(", \"array\", {})", quote(self.slice(inner_span(init)))),
-				)),
-				(BindingPattern::ObjectPattern(_), None) if self.shapes.prints_helper(init) => {
-					Some(("coerce", format!(", {})", text())))
-				}
-				_ => None,
+		// resolve through it (an array pattern's source is iterated, checked
+		// first); a pattern whose source is a helper's value checks it
+		// first, so an error names the page's expression
+		if is_pattern_call(init, self.access()) {
+			return walk::walk_variable_declarator(self, it);
+		}
+		let mut rests = Vec::new();
+		let spec = self.binding_spec(&it.id, &mut rests);
+		let access = self.access();
+		let start = init.span().start;
+		let text = || quote(self.slice(it.span));
+		let source = || quote(self.slice(inner_span(init)));
+		let wrapped = match (&it.id, &spec) {
+			(_, Some(spec)) if iterates(spec) => Some((
+				format!("{}{access}.iter(", self.head(start, "pattern")),
+				format!(", \"array\", {}), {})", source(), spec_text(spec, &|key| quote(key))),
+			)),
+			(_, Some(spec)) => Some((
+				self.head(start, "pattern"),
+				format!(", {}, {})", spec_text(spec, &|key| quote(key)), text()),
+			)),
+			(BindingPattern::ArrayPattern(_), None) if self.shapes.prints_helper(init) => {
+				Some((self.head(start, "iter"), format!(", \"array\", {})", source())))
 			}
+			(BindingPattern::ObjectPattern(_), None) if self.shapes.prints_helper(init) => {
+				Some((self.head(start, "coerce"), format!(", {})", text())))
+			}
+			_ => None,
 		};
-		let Some((name, after)) = wrapped else {
+		let Some((before, after)) = wrapped else {
 			return walk::walk_variable_declarator(self, it);
 		};
-		// (the pattern of a declaration given a source is not visited)
-		self.unvisited(|walker| walker.visit_binding_pattern(&it.id));
-		let head = self.head(init.span().start, name);
-		self.wrap(init.span(), head, after);
+		// (the pattern is visited too: its computed keys and its defaults
+		// are the page's expressions)
+		self.drop_rest_dots(&rests);
+		self.visit_binding_pattern(&it.id);
+		self.wrap(init.span(), before, after);
 		self.operand(init);
 	}
 
@@ -1671,9 +2065,14 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 			return walk::walk_for_of_statement(self, it);
 		}
 		self.under(false, |walker| {
-			walker.var_place = VarPlace::Loop;
-			walker.visit_for_statement_left(&it.left);
-			walker.var_place = VarPlace::Statement;
+			// a pattern in the head moves to the body (`for ... in` hands out
+			// strings, and keeps its head)
+			let first = walker.head_pattern(&it.left);
+			if first.is_none() {
+				walker.var_place = VarPlace::Loop;
+				walker.visit_for_statement_left(&it.left);
+				walker.var_place = VarPlace::Statement;
+			}
 			let assignments = std::mem::take(&mut walker.loop_assignments);
 			if !it.r#await && walker.shapes.prints_helper(&it.right) {
 				let head = walker.head(it.right.span().start, "iter");
@@ -1684,11 +2083,36 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 				walker.cx = Cx::default();
 				walker.visit_expression(&it.right);
 			}
-			if !assignments.is_empty() {
+			// (the body stays a statement of its own: a block may declare a
+			// name the head binds)
+			if let Some(first) = first {
+				walker.wrap(it.body.span(), format!("{{{first}"), "}".into());
+			} else if !assignments.is_empty() {
 				walker.wrap(it.body.span(), format!("{{{assignments}"), "}".into());
 			}
 			walker.visit_statement(&it.body);
 		});
+	}
+
+	fn visit_catch_clause(&mut self, it: &CatchClause<'a>) {
+		// `catch ({ top: t })`: the clause binds a temporary and the pattern
+		// is declared from it at the top of the block (a name the pattern
+		// binds cannot be declared again there, so the block is its scope)
+		if let Some(param) = it.param.as_ref().filter(|_| self.rewriting) {
+			let mut rests = Vec::new();
+			if let Some(spec) = self.binding_spec(&param.pattern, &mut rests) {
+				let temp = format!("{}c", self.access());
+				let span = param.pattern.span();
+				let page = self.slice(span);
+				let moved = self.moved_pattern(&param.pattern, &rests);
+				self.replace(span.start, span.end, temp.clone());
+				let declaration = format!("let {};", self.moved_declarator(&moved, page, &temp, Some(&spec), false));
+				let open = it.body.span.start;
+				self.replace(open, open + 1, format!("{{{declaration}"));
+				return self.visit_block_statement(&it.body);
+			}
+		}
+		walk::walk_catch_clause(self, it);
 	}
 
 	fn visit_simple_assignment_target(&mut self, it: &SimpleAssignmentTarget<'a>) {
@@ -1705,9 +2129,10 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		&mut self,
 		it: &AssignmentTargetPropertyIdentifier<'a>,
 	) {
-		if self.rewriting && it.binding.name == "location" {
+		let name = it.binding.name.as_str();
+		if self.rewriting && (name == "location" || name == "eval") {
 			// `({ location } = o)`: written out, with the reference
-			let text = format!("location: {}", self.ref1(0));
+			let text = format!("{name}: {}", self.ref1(0, name));
 			self.replace(it.binding.span.start, it.binding.span.end, text);
 		}
 		if let Some(init) = &it.init {

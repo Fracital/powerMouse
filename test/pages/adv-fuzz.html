@@ -1,0 +1,81 @@
+<!doctype html>
+<title>ADV FUZZ</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script type="module">
+	// The rewriter's differential fuzz (rewriter-fuzz.js): a payload that
+	// reads `top` and `location` in code of its own, put into every
+	// expression slot of every node kind the parser produces, one template at
+	// a time and one inside another (a seeded sample: the same cases every
+	// run). Each case is evaluated here, so the proxy rewrites it as it does
+	// any code a page evaluates, and the payload says who `top` and `location`
+	// were. A payload that comes out unrewritten sees the real ones.
+	import { HARNESS, pairs, random, SHAPES, single } from './rewriter-fuzz.js';
+
+	(0, eval)(HARNESS);
+	const SEED = 0x570a9;
+	const run = async (cases, budget) => {
+		const leaks = [];
+		const silent = [];
+		const start = performance.now();
+		let ran = 0;
+		let invalid = 0;
+		for (const made of cases) {
+			// (a module cannot be evaluated: rewriter-unit checks its output)
+			if (made.kind === 'MODULE') continue;
+			if (performance.now() - start > budget) break;
+			ran++;
+			__fzReset();
+			let failed = '';
+			try {
+				const value = (0, eval)(made.code);
+				if (made.wait)
+					await Promise.race([
+						value,
+						new Promise((resolve) => setTimeout(resolve, 1000)),
+					]);
+			} catch (error) {
+				// (one template inside another can be code a class body's
+				// strict mode refuses: it throws as it does natively)
+				if (error instanceof SyntaxError && /strict mode/.test(error.message)) {
+					invalid++;
+					continue;
+				}
+				failed = ` (${error && error.name})`;
+			}
+			const seen = window.__fzSeen;
+			if (
+				seen &&
+				(seen.top !== 'self' || (!made.own && seen.location !== 'self'))
+			)
+				leaks.push(`${made.name}: ${seen.top} ${seen.location}`);
+			else if (!seen && !made.lazy) silent.push(made.name + failed);
+		}
+		return { ran: ran - invalid, leaks, silent };
+	};
+	const report = ({ ran, leaks, silent }) =>
+		leaks.length
+			? `TELL:${leaks.length} of ${ran} payloads ran unrewritten: ${leaks.slice(0, 8).join(' | ')}`
+			: silent.length
+				? `TELL:${silent.length} of ${ran} payloads did not run: ${silent.slice(0, 8).join(' | ')}`
+				: `${ran} cases, every payload saw the page's own top and location`;
+	__advAsync(
+		'every template, every payload shape',
+		async () => {
+			const cases = [];
+			for (const shape of SHAPES) cases.push(...single(() => shape));
+			return report(await run(cases, 60000));
+		},
+		90000,
+	);
+	__advAsync(
+		'templates inside templates, seeded',
+		async () => {
+			const next = random(SEED);
+			const pick = () => SHAPES[Math.floor(next() * SHAPES.length)];
+			return report(await run(pairs(1500, next, pick), 20000));
+		},
+		90000,
+	);
+	__advFinish();
+</script>

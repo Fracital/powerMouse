@@ -592,10 +592,10 @@ export const families = {
 		'for (var location in a) ;',
 		'for (var [location] of a) g()',
 		'for (var { location } of a) g()',
-		d(
-			'for (var location of top.a) ;',
-			'the JavaScript rewriter replaces the loop twice and leaves `top.a` as written; the wasm one rewrites it',
-		),
+		// (a loop the JavaScript rewriter replaces for its head and for its
+		// source: the source stays the walk's through both)
+		'for (var location of top.a) ;',
+		'for (var location of ((s = top), top.list)) f(top); for (var location of o[k]);',
 		'function f() { var location = u }',
 		'x = () => { var location = u }',
 		'class A { static { var location = u } }',
@@ -746,6 +746,179 @@ export const families = {
 		'x = a.b.c.d.e.f',
 		'x = a\n?.b',
 		'x = a?.\nb',
+	],
+
+	// The rewriter's holes (CHANGELOG, Fixes): what each fix in the
+	// JavaScript rewriter changed, compared with the wasm one. A hole that
+	// was only the JavaScript printer dropping parentheses the wasm rewriter
+	// cannot have (it keeps the page's text): those cases show it.
+
+	// a member call in its lazy form with what a chain cannot have on it
+	holesLazy: [
+		'this.items[i].find(x.y).value = 1',
+		'o[k].m(f()).n++',
+		'new (o[k].m(f()))()',
+		'o[k].m(f())`x`',
+		'for (o[k].m(f()).x of a);',
+		'o[k].m(f())',
+		'o[k].m(f())(g)',
+		'o[k].m(f()).p.q',
+		'x = o[k].m(f())[j]',
+		'a\no[k].m(f()).v = 1',
+		'o[k].m(f())?.x',
+		'a?.[k].m(f()).x',
+	],
+
+	// shapes the JavaScript printer printed without the parentheses they need
+	holesPrinter: [
+		m('export default (function () {\nreturn top;\n})();'),
+		m('export default (class {}).name;'),
+		m('export default function () {}'),
+		m('export default (async () => top)()'),
+		'async function g() {\nclass A extends (await f()) {}\nreturn class extends (a || b) {};\n}',
+		'class B extends (-top) {}',
+		'class D extends f(top).x {}',
+		'class E extends (a, top) {}',
+		'({ k: 1 })[k] ||= ([o.a] = []);',
+		'f({ k: 1 }, ([a] = b));',
+		'new F([1], ({ top: t } = w));',
+		'f([1], ([a] = top))',
+		'for (;; [a, b] = [b, a]);',
+		'c, ([a] = b), d;',
+	],
+
+	// a statement that is a string in parentheses is no directive
+	holesDirectives: [
+		"('use strict'); x = top",
+		"function f() {\n('use strict');\nreturn this;\n}\nconst g = () => {\n( 'use strict' );\n};\nclass A {\nm() {\n(\"use asm\");\n}\n}",
+		"'use\\x20strict'; x = top",
+		"function f() {\n'use\\x20strict';\nreturn top;\n}",
+		"'use strict'; function f() {\n\"use strict\";\n'b';\n('c');\n'd';\n}",
+		m("('use strict'); top;"),
+		"function f({ top: t }) {\n'a';\n('use strict');\nreturn t;\n}",
+		"('a')\n'use strict'\nx = top",
+		"'a'; ('b'); 'c'; top",
+	],
+
+	// the method a post was read from is evaluated; super's stays the class's
+	holesPost: [
+		'f().postMessage.call(w, top)',
+		'x.postMessage.apply(w, [1], g())',
+		'Reflect.apply(a.b.postMessage, w, [1])',
+		'Reflect.apply(x.postMessage, w, [1], g())',
+		'x.postMessage.call(w, 1)',
+		'this.postMessage.call(w, 1)',
+		'(f()).postMessage.call(w, 1)',
+		'o[k].postMessage.apply(w, [m])',
+		'top.postMessage.call(w, m)',
+		'f().postMessage.call()',
+		'Reflect.apply(f().postMessage, w)',
+		'class A extends B {\nm() {\nsuper.postMessage.call(this, top);\nsuper.postMessage.apply(this, [top]);\nReflect.apply(super.postMessage, this, [top]);\nsuper.postMessage(top);\n}\n}',
+	],
+
+	// super's members through the access API
+	holesSuper: [
+		'o = { m(k) { return [super.top, super[k], super["location"], super.x, super[0]]; } }',
+		'o = { c(k) { return [super.eval(c), super[k](a, top), super.top?.(a), super.x(top)]; } }',
+		'o = { w(k) { super.location = u; super[k] += top; super[k]++; ++super.top; [super.location, super[k]] = a; super.x = top; return super.top`x`; } }',
+		'class A extends B { m(k) { for (super[k] of a); for (super.location in o); ({ a: super.top } = o); } }',
+		'class A extends B { m() { return new super.top(); } }',
+		'class A extends B { m(k) { delete super[k]; delete super[location]; return typeof super.top; } }',
+		'class A extends B { m() { super.top\n(f)() } }',
+		'class A extends B { m() { x\nsuper[k] = 1 } }',
+		'class A extends B { m(k) { return super[`top`] + super[k + 1] + super[(k)]; } }',
+		'class A extends B { static m() { return () => super.location; } }',
+		'o = { m() { return super.top.location.href; } }',
+		'o = { m() { super[k]?.(); super.eval?.(c) } }',
+	],
+
+	// a pattern's reads wherever the pattern stands
+	holesPatterns: [
+		'const [{ top: t }] = a;',
+		'[, { top: t }] = a;',
+		'const { a: [{ top: t }], [k]: { location: l }, b } = o;',
+		'const [x, ...[{ top: t }]] = a;',
+		'[x, ...[{ top: t }]] = a;',
+		'const [x, ...{ length, top }] = a;',
+		'for (const { top: t } of a) f(t);',
+		'for ({ top: t } of a);',
+		'for (let [{ location: l }] of a) { let x = l; }',
+		'for ([a, { top: t }] of b);',
+		'async function g() { for await (const { top: t } of a); }',
+		'try { g(); } catch ({ top: t }) { h(t); }',
+		'try { g(); } catch ([{ top: t }]) { h(t); }',
+		'function f(...[{ top: t }]) {}',
+		'function f([{ top: t }]) {}',
+		'function f({ top: t }, b = t, c, [d = t] = [], ...[e = t]) {}',
+		'function f({ top: t } = {}, b = () => t) {}',
+		'function f([a] = [], { top: t }, ...r) {}',
+		'x = ({ top: t }, u = t) => u',
+		'x = (...[a, ...[{ top: t }]]) => t',
+		'function f({ top: t }, { a = t } = o) { "x"; return a }',
+		'for (const [k, v] of a) f(k);',
+		'for (const { x, y } of a) f(x);',
+		'try { g(); } catch ({ message }) {}',
+		'const [a, ...b] = c;',
+		'for (const { top: t } in o);',
+		'const { [k]: v } = o',
+		'const { a, [k]: [{ top }] } = o',
+		'({ [k]: { top: t } } = o)',
+		'const [[{ top: t }]] = a',
+		'const [a, [b, { top: t } = {}]] = c',
+		'var [{ location }] = a',
+		'for (var [{ location }] of a) ;',
+		'for (var { top: t, location } of a) f(t)',
+		'function g() { for (var { location } of a) ; }',
+		'const { 0: { top: t }, 1: x } = a',
+		'const [{ top: t = location }] = a',
+	],
+
+	// a pattern target whose key is known only when it runs, or eval
+	holesTargets: [
+		'[window[k]] = [url]',
+		'[a[i], a[j]] = [b, c];',
+		'[a[0], a.x] = [b, c];',
+		'[o.eval] = [saved]',
+		'[o["eval"], o["location"]] = v',
+		'({ a: o[k], b: o[f()] } = p)',
+		'for (o[k] of a);',
+		'for (o[`k`] in a);',
+		'[o[location]] = l',
+		'[...o[k]] = a',
+		'[eval] = [saved]',
+		'({ eval } = o); ({ a: eval = d } = p)',
+		'for (eval of a); for (eval in o);',
+		'[location, eval] = [u, e]',
+		'x = () => { [eval] = [f]; return eval(c) }',
+	],
+
+	// a computed key, and what a class extends, are rewritten
+	holesKeys: [
+		'x = { [location]: 1, location: 2 };',
+		'class A extends top { [location]() {} static [location] = 1; location = 2; top() {} }',
+		'const { [location]: a, top: b } = o;',
+		'delete o[location];',
+		'({ [top]: a } = o)',
+		'x = { get [top]() {}, set [location](v) {}, async *[eval]() {} }',
+		'class A { static [top]() {} #p = 1; [k] = location }',
+		'class A extends top.x {}',
+		'x = class extends location {}',
+		'x = o[top] + o[location]',
+	],
+
+	// what a replacement stands around is rewritten
+	holesInside: [
+		'location = top; location += o[k]; top = (function () { return top; })(); eval &&= location; location = eval(x);',
+		'location = f(() => top)',
+		'top ||= (() => location)()',
+		'import(top); import(o[k], { with: top.x });',
+		'import(`${location}`)',
+		m('import(top.x)'),
+		"const { [(t = top, 'k')]: z, top: u = top } = o; const [a = top] = o[k]; function f({ top: t = top }) {}",
+		'const { top: t = () => location } = o',
+		'let { a = o[k] } = top',
+		'function f({ top: t = function () { return top } }) {}',
+		'const [a = eval(c)] = location',
 	],
 };
 

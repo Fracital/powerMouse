@@ -251,7 +251,7 @@ The first release after a four-year gap. Everything below is breaking.
   on the sheet before (Fixes). The `scanner-parity` suite compares both on
   hand-written cases, the fixture pages and a seeded fuzz.
 - With `rewriter: 'wasm'` scripts are rewritten by the Rust rewriter
-  (`rust/rwjs`, oxc; `assets/rewriter.wasm`, 443 KB, 157 KB brotli) in the
+  (`rust/rwjs`, oxc; `assets/rewriter.wasm`, 454 KB, 160 KB brotli) in the
   rewrite workers and the service worker. It makes the same rewrites as the
   JavaScript rewriter as edits to the script's own text, so everything it
   does not touch comes out byte for byte: comments, spacing, literals, line
@@ -267,10 +267,10 @@ The first release after a four-year gap. Everything below is breaking.
   being asked, and where a thread holds the module its parser also answers
   whether a `javascript:` URL's body is one expression and whether a
   blob's text is a script. The two backends are compared
-  without a browser by `rust/host/parity.mjs` (680 cases by rewrite family
-  and the corpora: no difference but one known case where the JavaScript
-  rewriter is wrong), and `rewriter-unit` and the browser suites run under
-  both (`STOMP_REWRITER=wasm`). `'js'` stays the default.
+  without a browser by `rust/host/parity.mjs` (814 cases by rewrite family
+  and by hole, run by the `rewriter-parity` suite, and the corpora: no
+  difference), and `rewriter-unit` and the browser suites run under both
+  (`STOMP_REWRITER=wasm`). `'js'` stays the default.
 - Under `rewriter: 'wasm'` a script the browser refuses to compile is
   refused through the proxy as it is natively. The module's parser reports
   no early error (a name declared twice, `with` or a legacy octal literal
@@ -943,6 +943,138 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 - A document's navigation timing counts the site's own redirects: a GET
   form's document showed one redirect (the worker's, from the form's
   route) where Chrome shows none. (visited suite.)
+- The rewriter's output is fuzzed for the whole class. A payload that
+  reads `top` and `location` in code of its own (a function, an arrow, a
+  getter, a tagged template) is put into every expression slot of every
+  node kind the parser produces, alone and one template inside another;
+  what the rewriter prints must parse, hold the payload and read neither
+  name but through the access API (rewriter-unit: every slot, and 6000
+  seeded pairs), and the payloads, evaluated in a proxied page, must see
+  the page's own top and location (adversarial-fuzz suite, both modes,
+  seeded and bounded in time). rewriter-unit also fails when the parser
+  has a node field that no template reaches and no exemption names.
+- Four shapes the rewriter printed as code that does not parse, which
+  lost the whole script, are printed with the parentheses they need:
+  a member of a call's value written to when the call is rewritten in its
+  lazy form (`o[k].find(x.y).value = 1`, a tag or a `new` of such a
+  call), `export default (function () {})()`, a class that extends
+  an expression in parentheses (`class A extends (await f()) {}`), and a
+  destructuring assignment that is or becomes an argument after an array
+  or object literal (`f({ a: 1 }, ([b] = c))`,
+  `({ a: 1 })[k] ||= ([b] = c)`), which Chrome refuses without them.
+  Around what a class extends and a call's own argument only the
+  parentheses the page wrote are put back, so `class A extends B++ {}` and
+  `f({ a: 1 }, [b] = c)` stay scripts V8 refuses. Over the early-error
+  texts (`rust/host/early.mjs --narrow`) the JavaScript rewriter now prints
+  5 scripts V8 takes into ones it refuses, where it printed 19, and the
+  `early-errors` suite names none of these as known any more.
+  (rewriter-unit, adversarial-eval and early-errors suites.)
+- `f().postMessage.call(w, m)` still calls `f`. The `.call`, `.apply` and
+  `Reflect.apply` forms of a post dropped the expression the method was
+  read from, so what it did (a call, a throw for a member of null) did
+  not happen; it is evaluated first, as written. An `.apply` or
+  `Reflect.apply` with more arguments than it takes is left as written,
+  where the extra ones were dropped. (rewriter-unit suite.)
+- `super.top`, `super[k]`, `super.eval(code)` and `super.location = url`
+  go through the access API. `super` reads the home object's prototype
+  with `this` as the receiver, so an object whose prototype is the
+  window, with a method called on the window, read the real top-level
+  window and called the real `eval`, which ran its code unrewritten.
+  (rewriter-unit and adversarial-eval suites, both modes.)
+- A pattern's reads go through the access API wherever the pattern
+  stands. Only an object pattern at the top of a declaration, an
+  assignment or a parameter was wrapped; one inside an array pattern
+  (`const [{ top: t }] = [window]`), under a computed key, in a rest
+  element, in a `for ... of` head, a `catch` clause, a rest parameter, an
+  array parameter or a parameter that a later parameter's default reads
+  was left as written and read the real top-level window. A member that
+  is a pattern's target with a key known only when it runs
+  (`[window[k]] = [url]`) is written through the access API too, like
+  `window[k] = url`: it navigated the frame as the page wrote it.
+  (rewriter-unit and adversarial-eval suites, both modes.)
+- A member key that is an object is converted once, before the access API
+  looks at it. `window[{ toString: () => 'top' }]` was no name the
+  helpers knew and read the real top-level window, and the same key
+  wrote `location` as the page wrote it.
+  (adversarial-eval suite, both modes.)
+- A loop the rewriter replaces twice has its source rewritten. A classic
+  script's `for (var location of source)` outside any function is
+  replaced for its head, and again when the source is one the access API
+  iterates (`top.list`, `o[k]`); the second replacement took the first's
+  nodes for its own and the source was printed as the page wrote it, so a
+  `top` there was the real top-level window. What a replacement hands
+  back to the walk stays the walk's, whichever replacement made it.
+  (rewriter-unit and adversarial-eval suites, both modes.)
+- A large script split across the rewrite workers routes its
+  `var location = url` as the whole would. A program split into runs of
+  its own statements has each run rewritten inside a function, where
+  `var location` declares a local and is left as written; outside any
+  function it assigns the window's location, so the stitched script
+  navigated the frame to the URL as written, past the proxy. A program
+  that declares `location` with `var` outside its functions is rewritten
+  whole. A group of modules that comes back from a worker as it went (the
+  rewriter's fallback for text it cannot parse) is refused too, as a run
+  of statements already was. (rewriter-unit suite.)
+- A statement that is a string in parentheses stays an expression.
+  `('use strict'); x = 1` is a sloppy script (the string is no directive),
+  and the rewriter printed it as `"use strict";x = 1`: the script, the
+  function or the evaluated text it began turned strict, where an
+  assignment to an undeclared name throws, `this` is undefined in a
+  called function and `arguments` stops following the parameters. The
+  statement keeps its parentheses. A directive written with an escape
+  (`'use\x20strict'`, which is not "use strict") is printed as written
+  for the same reason: its value was printed, which is.
+  (rewriter-unit and adversarial-eval suites, both modes.)
+- `super.postMessage.call(this, m)`, `.apply` and
+  `Reflect.apply(super.postMessage, this, [m])` stay the class's own
+  calls, like `super.postMessage(m)`. They were handed to the access API
+  as a post to `this`, which called the object's own `postMessage`: the
+  subclass's override where the page asked for its parent's.
+  (rewriter-unit and adversarial-eval suites, both modes.)
+- A computed key is rewritten like any other expression. An identifier in
+  one was taken for a name the rewriter leaves alone, so
+  `{ [location]: 1 }`, a class member `[location]() {}`, a pattern's
+  `{ [location]: a }`, `delete o[location]`, `[o[location]] = a` and
+  `super[location]` named the key with the real location's string, which
+  showed the page the proxy's URL. What a class extends
+  (`class A extends top {}`) is rewritten too. (rewriter-unit and
+  adversarial-eval suites, both modes.)
+- The code inside what the rewriter replaces is rewritten in three more
+  places: the value assigned to a bare `location`, `top` or `eval`
+  (`location = f(() => top)`, and the compound forms), a dynamic
+  `import()`'s specifier and options, and the pattern of a declaration
+  whose source is wrapped (its computed keys and defaults:
+  `const { [k()]: a, top: t = v() } = o`, a destructured parameter's too).
+  Each was printed as the page wrote it, so a `top` there was the real
+  top-level window, a function there ran unrewritten and an `eval(...)`
+  there was not a direct eval. (rewriter-unit and adversarial-eval suites,
+  both modes.)
+- A page that assigns `eval` the `eval` it read keeps its direct eval. A
+  read of `eval` answers the proxy's stand-in, and `eval = saved`,
+  `window.eval = saved` or a pattern that writes `eval`
+  (`[eval] = [saved]`, `({ eval } = o)`, `for (eval of a)`) stored that
+  stand-in under the name: every `eval(code)` after it was a call of a
+  function, which runs the code in the global scope, so it no longer saw
+  its caller's variables. The write stores the eval itself; a pattern's
+  `eval` is the reference `$s$j.ref1(eval, set, 'eval')`, as its
+  `location` is. (rewriter-unit and adversarial-eval suites, both modes.)
+- Under `rewriter: 'wasm'` the module rewrites each of these as the
+  JavaScript rewriter now does. It put no parentheses around a lazy member
+  call with a member, a tag or a call on it, dropped the expression a
+  post's `.call`, `.apply` or `Reflect.apply` read its method from (and
+  took an `.apply` with more arguments for a post), left `super`'s members,
+  a computed key that is a name and what a class extends as written,
+  printed the value of a write to a bare `location`, `top` or `eval`,
+  `import()`'s specifier and options and the pattern of a declaration
+  whose source it wrapped as the page wrote them, left an `eval` a pattern
+  writes as written, and wrapped a pattern's
+  source only for an object pattern at the top of a declaration, an
+  assignment or a parameter. The rest it never had: it keeps the page's
+  text, so its parentheses and its directives stay, and its walk of a loop
+  keeps the loop's source. `rust/host/cases.mjs` has a family for each
+  hole, which the new `rewriter-parity` suite compares between the two
+  backends with the module the build ships (814 cases, no difference); the
+  module's revision is 4, so a kept rewrite of an older one is not served.
 - Resource timing tells every way the worker answered a load apart, as
   Chrome does (measured in 152 and 156): the body and 300 bytes from the
   network; 0 and `deliveryType` "cache" from a cache, with the protocol

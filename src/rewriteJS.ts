@@ -81,8 +81,21 @@ function postMessageCall(
 ): { target: any; args: any; optional: boolean } | null {
 	const { callee } = node;
 	// (`super.postMessage(m)` stays the class's own: `super` is no value to
-	// hand the access API)
-	if (isPostMessage(callee) && callee.object.type === 'Super') return null;
+	// hand the access API. So do `super.postMessage.call(this, m)` and
+	// `Reflect.apply(super.postMessage, this, [m])`: the target's own
+	// postMessage, which the access API would call, may be the one the
+	// class overrides)
+	const ofSuper = (member: any) => member.object.type === 'Super';
+	if (isPostMessage(callee) && ofSuper(callee)) return null;
+	// `f().postMessage.call(w, m)`: the method is the target's own, read by
+	// the access API, but the expression it was written as is still the
+	// page's to evaluate, first, as it was (`f` is called, a member of null
+	// throws)
+	const after = (method: any, target: any) =>
+		method.object.type === 'Identifier' ||
+		method.object.type === 'ThisExpression'
+			? target
+			: b.sequenceExpression([method, target]);
 	if (isPostMessage(callee))
 		return {
 			target: callee.object,
@@ -96,11 +109,15 @@ function postMessageCall(
 		callee.property.type === 'Identifier' &&
 		(callee.property.name === 'call' || callee.property.name === 'apply') &&
 		isPostMessage(callee.object) &&
+		!ofSuper(callee.object) &&
+		// (`.apply(w, args, more)`: what follows the arguments is evaluated
+		// and ignored, so the call is left as written)
+		(callee.property.name === 'call' || node.arguments.length <= 2) &&
 		!node.arguments.some((argument: any) => argument.type === 'SpreadElement')
 	) {
 		const [target = b.identifier('undefined'), ...rest] = node.arguments;
 		return {
-			target,
+			target: after(callee.object, target),
 			args:
 				callee.property.name === 'call'
 					? argumentsArray(rest)
@@ -116,11 +133,13 @@ function postMessageCall(
 		callee.property.type === 'Identifier' &&
 		callee.property.name === 'apply' &&
 		node.arguments.length >= 2 &&
+		node.arguments.length <= 3 &&
 		isPostMessage(node.arguments[0]) &&
+		!ofSuper(node.arguments[0]) &&
 		!node.arguments.some((argument: any) => argument.type === 'SpreadElement')
 	)
 		return {
-			target: node.arguments[1],
+			target: after(node.arguments[0], node.arguments[1]),
 			args: node.arguments[2] ?? b.arrayExpression([]),
 			optional: false,
 		};
@@ -364,6 +383,109 @@ function unshorthand(ctx: AcornContext) {
 	if (parent?.node.type === 'Property') parent.node.shorthand = false;
 }
 
+/** an expression the generator prints in parentheses wherever it stands */
+const parenthesised = (node: any) => ({
+	type: 'SequenceExpression',
+	expressions: [node],
+	range: node.range,
+});
+
+/**
+ * Whether a destructuring assignment under `parent` could be printed as an
+ * argument without parentheses. V8 refuses one that follows an array or
+ * object literal in the same arguments (`f({ a: 1 }, [b] = c)`: "Invalid
+ * destructuring assignment target"), so a page writes it in parentheses,
+ * which the generator drops, and a call of the access API takes page
+ * expressions as arguments that were none. As a statement, in a loop's head
+ * or in a sequence it is never an argument.
+ */
+const unparenthesised = (parent: any, node: any) =>
+	(node.left.type === 'ArrayPattern' || node.left.type === 'ObjectPattern') &&
+	parent.type !== 'ExpressionStatement' &&
+	parent.type !== 'ForStatement' &&
+	parent.type !== 'SequenceExpression';
+
+/**
+ * Whether the page wrote a node in parentheses, which the parser drops: the
+ * printer puts back only those, so a script V8 refuses for their absence
+ * (`class A extends B++ {}`, `f({ a: 1 }, [b] = c)`) stays one it refuses
+ */
+function inParentheses(script: string, node: any): boolean {
+	let at = (node.range?.[0] ?? 0) - 1;
+	for (;;) {
+		while (at >= 0 && /\s/.test(script[at])) at--;
+		if (at > 0 && script[at] === '/' && script[at - 1] === '*') {
+			const open = script.lastIndexOf('/*', at - 2);
+			if (open < 0) return false;
+			at = open - 1;
+			continue;
+		}
+		return script[at] === '(';
+	}
+}
+
+/** what `extends` takes without parentheses */
+const HERITAGE = new Set([
+	'Identifier',
+	'MemberExpression',
+	'CallExpression',
+	'NewExpression',
+	'ThisExpression',
+	'Literal',
+	'TemplateLiteral',
+	'TaggedTemplateExpression',
+	'ArrayExpression',
+	'ObjectExpression',
+	'FunctionExpression',
+	'ClassExpression',
+	'MetaProperty',
+	'ChainExpression',
+]);
+
+/**
+ * Whether an expression's text begins with a function or a class
+ * expression that is part of something larger (a call of it, a member of
+ * it): after `export default` that text is a declaration
+ */
+function startsDeclaration(node: any): boolean {
+	for (let current = node, first = true; current; first = false)
+		switch (current.type) {
+			case 'FunctionExpression':
+			case 'ClassExpression':
+				return !first;
+			case 'CallExpression':
+				current = current.callee;
+				break;
+			case 'MemberExpression':
+				current = current.object;
+				break;
+			case 'TaggedTemplateExpression':
+				current = current.tag;
+				break;
+			case 'ChainExpression':
+				current = current.expression;
+				break;
+			case 'BinaryExpression':
+			case 'LogicalExpression':
+			case 'AssignmentExpression':
+				current = current.left;
+				break;
+			case 'ConditionalExpression':
+				current = current.test;
+				break;
+			case 'SequenceExpression':
+				current = current.expressions[0];
+				break;
+			case 'UpdateExpression':
+				if (current.prefix) return false;
+				current = current.argument;
+				break;
+			default:
+				return false;
+		}
+	return false;
+}
+
 /** inside a function or a class static block: a `var` there is local */
 function inFunction(ctx: AcornContext): boolean {
 	for (let current = ctx.parent; current; current = current.parent)
@@ -377,6 +499,7 @@ function inFunction(ctx: AcornContext): boolean {
 	return false;
 }
 
+const THIS = () => ({ type: 'ThisExpression' });
 const cTarget = 't$t';
 const cProp = 't$p';
 const cValue = 't$v';
@@ -554,19 +677,23 @@ export function modifyJS(
 		if (!isModule) {
 			const body = tree.body as any[];
 			let count = 0;
+			// (a directive is a statement that is a string token and nothing
+			// else, which the parser marks: `('use strict');` is an expression,
+			// and printed without its parentheses it would turn a sloppy
+			// script strict. One written with an escape is printed as written:
+			// `'use\x20strict'` is no "use strict", and its value is)
 			while (
 				count < body.length &&
 				body[count].type === 'ExpressionStatement' &&
-				body[count].expression?.type === 'Literal' &&
-				typeof body[count].expression.value === 'string' &&
-				!body[count].expression.regex
+				typeof body[count].directive === 'string'
 			)
 				count++;
 			prologue = body
 				.splice(0, count)
-				.map(
-					(statement) =>
-						`${statement.expression.raw ?? JSON.stringify(statement.expression.value)};`,
+				.map(({ directive, expression }) =>
+					directive === expression.value
+						? `${JSON.stringify(expression.value)};`
+						: `${script.slice(expression.range[0], expression.range[1])};`,
 				)
 				.join('');
 		}
@@ -592,7 +719,7 @@ export function modifyJS(
 		// the body, where the main pass wraps its source like any declaration
 		// (the functions of the page's, children first, for their marks)
 		const functions: any[] = [];
-		prepareTree(tree, names.access, routed, functions);
+		prepareTree(tree, names.access, routed, functions, script);
 
 		for (const ctx of new AcornIterator(tree)) {
 			typeLoop: switch (ctx.node.type) {
@@ -638,7 +765,7 @@ export function modifyJS(
 									b.identifier(names.access),
 									b.identifier('import'),
 								),
-								[base, ctx.node.source],
+								[base, result(ctx.node.source)],
 							),
 						);
 						break;
@@ -673,7 +800,8 @@ export function modifyJS(
 									],
 								),
 							),
-							[ctx.node.source, options],
+							// (both are the page's expressions, rewritten like any)
+							[result(ctx.node.source), result(options)],
 						),
 					);
 					break;
@@ -690,17 +818,25 @@ export function modifyJS(
 						if (!init || isPatternCall(init, names.access)) break;
 						const source = destructured(ctx);
 						const spec = patternSpec(id, routed);
+						// (the pattern is visited too: its computed keys and its
+						// defaults are the page's expressions)
 						if (spec)
 							ctx.replaceWith(
 								b.variableDeclarator(
-									id,
-									patternCall(result(init), spec, names.access, source),
+									result(id),
+									iterates(spec)
+										? patternCall(
+												sourceCheck(id, init, source, 'array'),
+												spec,
+												names.access,
+											)
+										: patternCall(result(init), spec, names.access, source),
 								),
 							);
 						else if (checksSource(id, init))
 							ctx.replaceWith(
 								b.variableDeclarator(
-									id,
+									result(id),
 									sourceCheck(id, init, source, 'array'),
 								),
 							);
@@ -717,12 +853,18 @@ export function modifyJS(
 									// visited too: a location target and the defaults
 									// (`({ location = top } = o)`) are rewritten there
 									result(left),
-									patternCall(
-										result(right),
-										spec,
-										names.access,
-										destructured(ctx),
-									),
+									iterates(spec)
+										? patternCall(
+												sourceCheck(left, right, destructured(ctx), 'assign'),
+												spec,
+												names.access,
+											)
+										: patternCall(
+												result(right),
+												spec,
+												names.access,
+												destructured(ctx),
+											),
 								),
 							);
 						else if (ctx.node.operator === '=' && checksSource(left, right))
@@ -931,7 +1073,13 @@ export function modifyJS(
 										b.identifier('eval'),
 										ctx.node.arguments.map((arg: unknown) => {
 											const copy = copyNode(arg);
-											prepareTree(copy, names.access, routed, functions);
+											prepareTree(
+												copy,
+												names.access,
+												routed,
+												functions,
+												script,
+											);
 											return result(copy);
 										}),
 									),
@@ -985,21 +1133,33 @@ export function modifyJS(
 												partial(),
 											]),
 								);
-							else
-								ctx.replaceWith(
+							else {
+								const lazy = optionalCall(
 									optionalCall(
-										optionalCall(
-											access('method', [
-												result(callee.object),
-												b.literal(chained),
-												b.literal(!!ctx.node.optional),
-												partial(),
-											]),
-											[key],
-										),
-										args.map((argument: any) => result(argument)),
+										access('method', [
+											result(callee.object),
+											b.literal(chained),
+											b.literal(!!ctx.node.optional),
+											partial(),
+										]),
+										[key],
 									),
+									args.map((argument: any) => result(argument)),
 								);
+								// a call that was in no optional chain may have what a chain
+								// cannot: a member of it assigned (`o[k].m(f()).x = 1`), a
+								// tag, a `new`. The lazy form is then a chain of its own,
+								// which the generator puts in parentheses
+								const alone =
+									!chained &&
+									!ctx.node.optional &&
+									(continuesChain(ctx) ||
+										ctx.parent?.node.type === 'TaggedTemplateExpression' ||
+										ctx.parent?.node.type === 'NewExpression');
+								ctx.replaceWith(
+									alone ? { type: 'ChainExpression', expression: lazy } : lazy,
+								);
+							}
 							break typeLoop;
 						}
 						if (
@@ -1094,7 +1254,14 @@ export function modifyJS(
 						// a)`: a reference no set1 call can stand for, so it becomes
 						// the member `$s$j.ref1(location, setter).value`, whose write
 						// routes like `location = v` (bindings are left below)
-						if (ctx.node.name === 'location' && assignmentTarget(ctx)) {
+						// (so does `eval`, whose write the access API stores as the eval
+						// itself: `[eval] = [saved]` stored the stand-in a read answers,
+						// and every `eval(code)` after it was no direct eval)
+						if (
+							(ctx.node.name === 'location' || ctx.node.name === 'eval') &&
+							assignmentTarget(ctx)
+						) {
+							const { name } = ctx.node;
 							unshorthand(ctx);
 							ctx.replaceWith(
 								b.memberExpression(
@@ -1104,15 +1271,16 @@ export function modifyJS(
 											b.identifier('ref1'),
 										),
 										[
-											b.identifier('location'),
+											b.identifier(name),
 											b.arrowFunctionExpression(
 												[b.identifier(cValue)],
 												b.assignmentExpression(
 													'=',
-													b.identifier('location'),
+													b.identifier(name),
 													b.identifier(cValue),
 												),
 											),
+											...(name === 'eval' ? [b.literal('eval')] : []),
 										],
 									),
 									b.identifier('value'),
@@ -1126,15 +1294,17 @@ export function modifyJS(
 						// (`typeof top` must not throw in a worker; `delete top` is
 						// strict code's early error, and eval code is strict by a
 						// caller no rewrite sees, so the name stays for V8 to refuse)
+						// (a computed key is an expression like any other, in a
+						// literal, a class, a pattern or a member the rewriter
+						// leaves as it is: `{ [location]: 1 }`, `delete o[location]`
+						// named the key with the real location's URL. So is what a
+						// class extends)
 						switch (ctx.parent?.node.type) {
 							case 'ArrayPattern':
 							case 'ObjectPattern':
 							case 'LabeledStatement':
 							case 'BreakStatement':
 							case 'ContinueStatement':
-							case 'MethodDefinition':
-							case 'ClassDeclaration':
-							case 'ClassExpression':
 							case 'CatchClause':
 							case 'RestElement':
 							case 'ExportSpecifier':
@@ -1142,8 +1312,14 @@ export function modifyJS(
 							case 'ImportDefaultSpecifier':
 							case 'ImportNamespaceSpecifier':
 								break typeLoop;
+							case 'ClassDeclaration':
+							case 'ClassExpression':
+								if (ctx.parentKey === 'id') break typeLoop;
+								break;
+							case 'MethodDefinition':
 							case 'PropertyDefinition':
-								if (ctx.parentKey === 'key') break typeLoop;
+								if (ctx.parentKey === 'key' && !ctx.parent.node.computed)
+									break typeLoop;
 								break;
 							case 'UnaryExpression':
 								if (
@@ -1158,13 +1334,17 @@ export function modifyJS(
 								if (ctx.parentKey === 'left') break typeLoop;
 								break;
 							case 'MemberExpression':
-								if (ctx.parentKey === 'property') break typeLoop;
+								if (ctx.parentKey === 'property' && !ctx.parent.node.computed)
+									break typeLoop;
 								break;
 							case 'VariableDeclarator':
 								if (ctx.parentKey === 'id') break typeLoop;
 								break;
 							case 'Property':
-								if (ctx.parentKey === 'key') break typeLoop;
+								if (ctx.parentKey === 'key') {
+									if (!ctx.parent.node.computed) break typeLoop;
+									break;
+								}
 								// `const { g: location } = o` binds; `{ location }` in an
 								// object literal reads (handled below)
 								if (ctx.parent.parent?.node.type === 'ObjectPattern')
@@ -1233,9 +1413,11 @@ export function modifyJS(
 												b.identifier(cValue),
 											),
 										),
+										// the value is the page's expression, rewritten like
+										// any (`location = top`, `location = f(() => top)`)
 										ctx.parent!.node.type === 'UpdateExpression'
 											? b.identifier('undefined')
-											: ctx.parent.node.right,
+											: result(ctx.parent.node.right),
 										b.literal(generatePartial(script, ctx.parent)),
 									],
 								),
@@ -1263,19 +1445,154 @@ export function modifyJS(
 					break;
 				case 'MemberExpression':
 					{
-						// `super.location` reads the prototype chain, never the window,
-						// and `super` is not a value a helper could take
-						if (ctx.node.object.type === 'Super') break typeLoop;
+						// `super.top` reads the home object's prototype with `this` as
+						// the receiver: the window's own getter when both are the
+						// window (`{ __proto__: window, f() { return super.top } }`
+						// called on the window), and `super.eval(code)` is the real
+						// eval. `super` is no value a helper could take, so the member
+						// stays where it is and the helper is handed what it read, or
+						// arrows that read and write it (an arrow keeps `super` and
+						// `this`). Only for a name the access API answers for, or a
+						// key that may be one
+						if (ctx.node.object.type === 'Super') {
+							const { property, computed } = ctx.node;
+							const name = !computed
+								? property.name
+								: property.type === 'Literal'
+									? String(property.value)
+									: null;
+							if (name !== null && !routed.includes(name)) break typeLoop;
+							const parent = ctx.parent?.node;
+							// (a tag keeps its `this`; `delete super.x` throws)
+							if (
+								(parent?.type === 'TaggedTemplateExpression' &&
+									ctx.parentKey === 'tag') ||
+								(parent?.type === 'UnaryExpression' &&
+									parent.operator === 'delete')
+							)
+								break typeLoop;
+							const member = (key: any) =>
+								b.memberExpression(ctx.node.object, key, true);
+							const key =
+								name !== null
+									? b.literal(name)
+									: access('key', [result(property)]);
+							// `t$p => super[t$p]` and `(t$p, t$v) => super[t$p] = t$v`
+							const reads = () =>
+								b.arrowFunctionExpression(
+									[b.identifier(cProp)],
+									member(b.identifier(cProp)),
+								);
+							const writes = () =>
+								b.arrowFunctionExpression(
+									[b.identifier(cProp), b.identifier(cValue)],
+									b.assignmentExpression(
+										'=',
+										member(b.identifier(cProp)),
+										b.identifier(cValue),
+									),
+								);
+							// the value: `$s$j.get(super.top, 'top')`, or for a key
+							// known only when it runs
+							// `(t$p => $s$j.get(super[t$p], t$p))($s$j.key(k))`
+							const read = () =>
+								name !== null
+									? access('get', [ctx.node, b.literal(name)])
+									: b.callExpression(
+											b.arrowFunctionExpression(
+												[b.identifier(cProp)],
+												access('get', [
+													member(b.identifier(cProp)),
+													b.identifier(cProp),
+												]),
+											),
+											[key],
+										);
+							if (assignmentTarget(ctx)) {
+								// `[super.location] = a`, `for (super[k] of a)`
+								unshorthand(ctx);
+								ctx.replaceWith(
+									b.memberExpression(
+										access('sref', [key, THIS(), reads(), writes()]),
+										b.identifier('value'),
+									),
+								);
+							} else if (
+								parent?.type === 'UpdateExpression' ||
+								(parent?.type === 'AssignmentExpression' &&
+									ctx.parentKey === 'left')
+							) {
+								const target = b.memberExpression(
+									b.identifier(cTarget),
+									b.identifier(cProp),
+									true,
+								);
+								ctx.parent!.replaceWith(
+									access('sset', [
+										key,
+										THIS(),
+										reads(),
+										writes(),
+										b.arrowFunctionExpression(
+											[
+												b.identifier(cTarget),
+												b.identifier(cProp),
+												b.identifier(cValue),
+											],
+											parent.type === 'UpdateExpression'
+												? b.updateExpression(
+														parent.operator,
+														target,
+														parent.prefix,
+													)
+												: b.assignmentExpression(
+														parent.operator,
+														target,
+														b.identifier(cValue),
+													),
+										),
+										parent.type === 'UpdateExpression'
+											? b.identifier('undefined')
+											: result(parent.right),
+									]),
+								);
+							} else if (
+								parent?.type === 'CallExpression' &&
+								ctx.parentKey === 'callee'
+							) {
+								// `super.eval(code)`, `super[k](...)`: what was read,
+								// called with the method's `this`
+								const method = access('smethod', [
+									read(),
+									THIS(),
+									b.literal(callText(parent)),
+									...(parent.optional ? [b.literal(true)] : []),
+								]);
+								const args = parent.arguments.map((argument: any) =>
+									result(argument),
+								);
+								ctx.parent!.replaceWith(
+									parent.optional
+										? optionalCall(method, args)
+										: b.callExpression(method, args),
+								);
+							} else ctx.replaceWith(read());
+							break typeLoop;
+						}
 						// `[top.location] = a`, `for (frames[0].location of a)`: a
 						// pattern or loop head target is a reference, never a get2
 						// call; a location there becomes `$s$j.ref2(o, k).value`,
 						// whose write routes like set2, anything else stays as is
+						// (so does `eval`, which a write stores as the eval itself,
+						// and a key known only when it runs, which may be either:
+						// `[window[k]] = [url]` navigated as the page wrote it)
 						if (assignmentTarget(ctx)) {
+							const { property } = ctx.node;
+							const computed = ctx.node.computed && property.type !== 'Literal';
 							const key = ctx.node.computed
-								? ctx.node.property.type === 'Literal' &&
-									ctx.node.property.value
-								: ctx.node.property.name;
-							if (key === 'location') {
+								? property.type === 'Literal' && property.value
+								: property.name;
+							if (computed || key === 'location' || key === 'eval') {
 								unshorthand(ctx);
 								ctx.replaceWith(
 									b.memberExpression(
@@ -1284,7 +1601,10 @@ export function modifyJS(
 												b.identifier(names.access),
 												b.identifier('ref2'),
 											),
-											[result(ctx.node.object), b.literal(key)],
+											[
+												result(ctx.node.object),
+												computed ? result(property) : b.literal(key),
+											],
 										),
 										b.identifier('value'),
 									),
@@ -1302,10 +1622,6 @@ export function modifyJS(
 						}
 
 						if (ctx.node.computed) {
-							if (ctx.node.object.type === 'Super') {
-								break typeLoop;
-							}
-
 							if (ctx.node.property.type === 'Literal') {
 								if (
 									!routed.includes(ctx.node.property.value) &&
@@ -1582,29 +1898,78 @@ export function modifyJS(
 }
 
 /**
- * Which keys of an object pattern read an unforgeable, at any depth:
- * `{ top }` gives `{ top: true }`, `{ a: { location: l } }` gives
- * `{ a: { location: true } }`. The runtime `pattern()` wraps the source so
- * those reads resolve like member reads. Null when the pattern reads none
- * (or is not an object pattern: array patterns read through the iterator,
- * which a proxy cannot redirect).
+ * What a pattern reads without a member expression to rewrite, at any
+ * depth; the runtime `pattern()` wraps the source so those reads resolve
+ * like member reads. Null when the pattern reads nothing of the kind.
+ *
+ * - An object pattern that names an unforgeable or destructures a key
+ *   further: `{ top }` gives `{ top: true }`, `{ a: { location: l } }`
+ *   gives `{ a: { location: true } }`.
+ * - An object pattern with a computed key, which may name anything: the
+ *   source is wrapped (`{}` when nothing else is named), and when a
+ *   computed key's value is destructured further the properties are told
+ *   apart by their order, not their keys:
+ *   `{ a, [k]: { top } }` gives `{ '{}': [0, { top: true }] }`.
+ * - An array pattern with such a pattern among its elements, by index:
+ *   `[a, { top }]` gives `{ '[]': [0, { top: true }] }`. A rest element
+ *   that is such a pattern becomes a plain last element, which the wrapped
+ *   source answers with the rest as an array (wrapped in turn):
+ *   `[a, ...[{ top }]]` is printed `[a, [{ top }]]` with
+ *   `{ '[]': [0, [{ '[]': [{ top: true }] }]] }`, the rest's spec in an
+ *   array of its own.
  */
-type PatternSpec = { [key: string]: true | PatternSpec };
+type PatternSpec = {
+	[key: string]: true | PatternSpec | (0 | PatternSpec | [PatternSpec])[];
+};
 
 function patternSpec(
 	pattern: any,
 	routed: readonly string[] = UNDEFINABLE,
 ): PatternSpec | null {
-	if (!pattern || pattern.type !== 'ObjectPattern') return null;
+	if (pattern?.type === 'ArrayPattern') {
+		const specs: (0 | PatternSpec | [PatternSpec])[] = [];
+		let used = 0;
+		pattern.elements.forEach((element: any, index: number) => {
+			let spec: PatternSpec | [PatternSpec] | null = null;
+			if (element?.type === 'RestElement') {
+				const rest = patternSpec(element.argument, routed);
+				if (rest) {
+					// (the mark is an own property: a copy of the node keeps it)
+					element.argument.restOfPattern = true;
+					pattern.elements[index] = element.argument;
+					spec = [rest];
+				}
+			} else if (element?.restOfPattern) {
+				spec = [patternSpec(element, routed)!];
+			} else if (element)
+				spec = patternSpec(
+					element.type === 'AssignmentPattern' ? element.left : element,
+					routed,
+				);
+			specs.push(spec ?? 0);
+			if (spec) used = index + 1;
+		});
+		return used ? { '[]': specs.slice(0, used) } : null;
+	}
+	if (pattern?.type !== 'ObjectPattern') return null;
 	const spec: PatternSpec = {};
 	let any = false;
+	// by position, when a computed key's value is destructured further
+	const positions: (0 | PatternSpec)[] = [];
+	let positional = false;
 	for (const property of pattern.properties) {
 		if (property.type !== 'Property') continue;
+		const value =
+			property.value.type === 'AssignmentPattern'
+				? property.value.left
+				: property.value;
+		const nested = patternSpec(value, routed);
+		positions.push(nested ?? 0);
 		// a computed key may name anything (the client's global too): the
 		// source is wrapped, so the read resolves like a computed member read
-		// (a pattern under it is not wrapped again: no spec can name its key)
 		if (property.computed) {
 			any = true;
+			if (nested) positional = true;
 			continue;
 		}
 		const key = property.key;
@@ -1614,11 +1979,6 @@ function patternSpec(
 				: key.type === 'Literal'
 					? String(key.value)
 					: '';
-		const value =
-			property.value.type === 'AssignmentPattern'
-				? property.value.left
-				: property.value;
-		const nested = patternSpec(value, routed);
 		if (nested) {
 			spec[name] = nested;
 			any = true;
@@ -1627,31 +1987,53 @@ function patternSpec(
 			any = true;
 		}
 	}
+	if (positional) return { '{}': positions };
 	return any ? spec : null;
 }
 
 function specLiteral(spec: PatternSpec): any {
+	const list = (items: (0 | PatternSpec | [PatternSpec])[]): any =>
+		b.arrayExpression(
+			items.map((item) =>
+				item === 0
+					? b.literal(0)
+					: Array.isArray(item)
+						? b.arrayExpression([specLiteral(item[0])])
+						: specLiteral(item),
+			),
+		);
 	return b.objectExpression(
 		Object.entries(spec).map(([key, value]) =>
 			b.property(
 				'init',
 				b.literal(key),
-				value === true ? b.literal(true) : specLiteral(value),
+				value === true
+					? b.literal(true)
+					: Array.isArray(value)
+						? list(value)
+						: specLiteral(value),
 			),
 		),
 	);
 }
 
-/** `$s$j.pattern(source, spec, text)`: `text` is the destructuring's source */
+/** whether the spec is an array pattern's (its source is iterated) */
+const iterates = (spec: PatternSpec) => Array.isArray(spec['[]']);
+
+/**
+ * `$s$j.pattern(source, spec, text)`: `text` is the destructuring's source,
+ * for the error a null or undefined source throws (an array pattern's
+ * source is checked by `$s$j.iter` first, so it has none)
+ */
 function patternCall(
 	source: any,
 	spec: PatternSpec,
 	access: string,
-	text: any,
+	text?: any,
 ): any {
 	return b.callExpression(
 		b.memberExpression(b.identifier(access), b.identifier('pattern')),
-		[source, specLiteral(spec), text],
+		text ? [source, specLiteral(spec), text] : [source, specLiteral(spec)],
 	);
 }
 
@@ -1749,6 +2131,7 @@ function prepareTree(
 	access: string,
 	routed: readonly string[],
 	functions: any[],
+	script: string,
 ) {
 	if (
 		node.type === 'Literal' &&
@@ -1758,7 +2141,34 @@ function prepareTree(
 		node.raw = `${node.bigint}n`;
 		return;
 	}
-	hoistParamPatterns(node, access, routed, functions);
+	hoistParamPatterns(node, access, routed, functions, script);
+}
+
+/**
+ * The statements at the top of a program or a function body that are a
+ * string and nothing else, printed so that each stays what it was. The
+ * generator prints such a statement as the string's value in quotes, which
+ * is a directive where it stands first: `('use strict');`, an expression,
+ * would come out a directive and turn sloppy code strict (assignments to
+ * undeclared names throw, `this` is undefined in a called function), and so
+ * would `'use\x20strict';`, a directive that is not "use strict" for its
+ * escape. The first keeps its parentheses and the second its text. (Past
+ * the first statement that is no directive nothing is one.)
+ */
+function keepDirectives(body: any[], script: string) {
+	for (const statement of body) {
+		if (statement.type !== 'ExpressionStatement') return;
+		const { expression } = statement;
+		if (expression.type !== 'Literal' || typeof expression.value !== 'string')
+			return;
+		const text = script.slice(expression.range[0], expression.range[1]);
+		if (typeof statement.directive !== 'string') {
+			statement.expression = rawNode(`(${text})`);
+			return;
+		}
+		if (statement.directive !== expression.value)
+			statement.expression = rawNode(text);
+	}
 }
 
 function hoistParamPatterns(
@@ -1766,6 +2176,7 @@ function hoistParamPatterns(
 	access: string,
 	routed: readonly string[],
 	functions: any[],
+	script: string,
 ) {
 	const PARAM_TEMP = `${access}a`;
 	// the children first, in source order (a plain loop: this runs on every
@@ -1777,32 +2188,122 @@ function hoistParamPatterns(
 		if (Array.isArray(value)) {
 			for (let i = 0; i < value.length; i++) {
 				const item = value[i];
-				if (item && typeof item.type === 'string')
-					prepareTree(item, access, routed, functions);
+				if (item && typeof item.type === 'string') {
+					prepareTree(item, access, routed, functions, script);
+					if (
+						item.type === 'AssignmentExpression' &&
+						unparenthesised(node, item) &&
+						// (a call's own argument keeps the parentheses the page
+						// wrote; any other place may become an argument)
+						((node.type !== 'CallExpression' &&
+							node.type !== 'NewExpression') ||
+							inParentheses(script, item))
+					)
+						value[i] = parenthesised(item);
+				}
 			}
-		} else if (typeof value.type === 'string')
-			prepareTree(value, access, routed, functions);
+		} else if (typeof value.type === 'string') {
+			prepareTree(value, access, routed, functions, script);
+			if (value.type === 'AssignmentExpression' && unparenthesised(node, value))
+				node[key] = parenthesised(value);
+		}
 	}
 	if (MARKED.has(node.type)) functions.push(node);
 
+	if (node.type === 'Program') keepDirectives(node.body, script);
+	hoistHeadPatterns(node, access, routed);
+	// what the generator prints without the parentheses it needs: a sequence
+	// of the one expression is printed in them.
+	// `export default (function () {})();`: bare, `function` begins a
+	// declaration and the module does not parse
+	if (
+		node.type === 'ExportDefaultDeclaration' &&
+		startsDeclaration(node.declaration)
+	)
+		node.declaration = {
+			type: 'SequenceExpression',
+			expressions: [node.declaration],
+		};
+	// `class A extends (await f()) {}`, `extends (a || b)`: what a class
+	// extends is a call, a member or a primary expression, or stands in
+	// parentheses
+	if (
+		(node.type === 'ClassDeclaration' || node.type === 'ClassExpression') &&
+		node.superClass &&
+		!HERITAGE.has(node.superClass.type) &&
+		inParentheses(script, node.superClass)
+	)
+		node.superClass = {
+			type: 'SequenceExpression',
+			expressions: [node.superClass],
+		};
 	if (
 		node.type !== 'FunctionDeclaration' &&
 		node.type !== 'FunctionExpression' &&
 		node.type !== 'ArrowFunctionExpression'
 	)
 		return;
+	if (node.body.type === 'BlockStatement')
+		keepDirectives(node.body.body, script);
 
 	const hoisted: any[] = [];
+	// the names the hoisted patterns bind: a later parameter that mentions
+	// one (`({ top: t }, u = t) => u`) is evaluated after them, in the body
+	const names: string[] = [];
 	node.params = node.params.map((param: any, index: number) => {
+		const temp = b.identifier(`${PARAM_TEMP}${index}`);
+		const from = b.identifier(temp.name);
+		// `(...[{ top: t }]) => t`: the rest is an array of the arguments
+		if (param.type === 'RestElement') {
+			if (
+				!patternSpec(param.argument, routed) &&
+				!(names.length && mentions(param.argument, names))
+			)
+				return param;
+			boundNames(param.argument, names);
+			hoisted.push(b.variableDeclarator(param.argument, from));
+			return { type: 'RestElement', argument: temp };
+		}
 		const isDefault = param.type === 'AssignmentPattern';
 		const target = isDefault ? param.left : param;
-		if (!patternSpec(target, routed)) return param;
-		const names = boundNames(target);
-		if (node.params.slice(index + 1).some((p: any) => mentions(p, names)))
-			return param;
-		const temp = b.identifier(`${PARAM_TEMP}${index}`);
-		hoisted.push(b.variableDeclarator(target, b.identifier(temp.name)));
-		return isDefault ? b.assignmentPattern(temp, param.right) : temp;
+		if (patternSpec(target, routed)) {
+			// its default stays on the parameter, unless it mentions a name
+			// hoisted before it
+			if (!isDefault || !(names.length && mentions(param.right, names))) {
+				boundNames(target, names);
+				hoisted.push(b.variableDeclarator(target, from));
+				return isDefault ? b.assignmentPattern(temp, param.right) : temp;
+			}
+		} else if (!(names.length && mentions(param, names))) return param;
+		boundNames(target, names);
+		if (!isDefault) {
+			hoisted.push(b.variableDeclarator(target, from));
+			return temp;
+		}
+		// `u = t`: the default is taken in the body, where `t` is bound; the
+		// parameter keeps a default so the function's length is what it was
+		const unset = () => ({
+			type: 'UnaryExpression',
+			operator: 'void',
+			prefix: true,
+			argument: b.literal(0),
+		});
+		hoisted.push(
+			b.variableDeclarator(
+				target,
+				b.conditionalExpression(
+					{
+						type: 'BinaryExpression',
+						operator: '===',
+						left: from,
+						right: unset(),
+					},
+					param.right,
+					b.identifier(temp.name),
+				),
+			),
+		);
+		return b.assignmentPattern(temp, unset());
 	});
 	if (!hoisted.length) return;
 
@@ -1817,11 +2318,60 @@ function hoistParamPatterns(
 	while (
 		at < body.length &&
 		body[at].type === 'ExpressionStatement' &&
-		body[at].expression.type === 'Literal' &&
-		typeof body[at].expression.value === 'string'
+		typeof body[at].directive === 'string'
 	)
 		at++;
 	body.splice(at, 0, b.variableDeclaration('var', hoisted));
+}
+
+/**
+ * `for (const { top: t } of a)`, `for ({ top: t } of a)`,
+ * `catch ({ top: t })`: a pattern with no source expression to wrap, like a
+ * parameter's. The head binds a plain name and the pattern moves to the top
+ * of the body as a declaration (or the assignment it was) from that name,
+ * whose source the main pass wraps. (`for ... in` hands out strings.)
+ */
+function hoistHeadPatterns(
+	node: any,
+	access: string,
+	routed: readonly string[],
+) {
+	if (node.type === 'CatchClause') {
+		if (!node.param || !patternSpec(node.param, routed)) return;
+		const temp = `${access}c`;
+		// (a name the pattern binds cannot be declared again in the block, so
+		// the block is the pattern's own scope too)
+		node.body.body.unshift(
+			b.variableDeclaration('let', [
+				b.variableDeclarator(node.param, b.identifier(temp)),
+			]),
+		);
+		node.param = b.identifier(temp);
+		return;
+	}
+	if (node.type !== 'ForOfStatement') return;
+	const temp = `${access}f`;
+	const { left } = node;
+	let first;
+	if (left.type === 'VariableDeclaration') {
+		const [declarator] = left.declarations;
+		if (!patternSpec(declarator.id, routed)) return;
+		first = b.variableDeclaration(left.kind, [
+			b.variableDeclarator(declarator.id, b.identifier(temp)),
+		]);
+	} else {
+		if (!patternSpec(left, routed)) return;
+		first = b.expressionStatement(
+			b.assignmentExpression('=', left, b.identifier(temp)),
+		);
+	}
+	// (the temporary is the loop's own: nothing of the page's can name it)
+	node.left = b.variableDeclaration('const', [
+		b.variableDeclarator(b.identifier(temp)),
+	]);
+	// the body stays a statement of its own: a block may declare a name the
+	// head binds
+	node.body = b.blockStatement([first, node.body]);
 }
 
 /**

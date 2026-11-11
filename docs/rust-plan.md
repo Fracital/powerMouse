@@ -156,8 +156,9 @@ build time.
 Three artifacts, built separately so a deployment that wants none pays for
 none:
 
-- the rewriter module: 442,624 bytes, 156,634 brotli as built with every
-  rewrite family in (the budget is 600 KB, 160 KB brotli).
+- the rewriter module: 453,812 bytes, 160,260 brotli as built with every
+  rewrite family in and the rewriter's holes closed (the budget is 600 KB,
+  160 KB brotli: the brotli size is at it, 260 bytes past).
 - the scanner module (`scanner.wasm`, phase 3: the CSS rewriter and the
   markup scan): 48,518 bytes, 19,673 brotli. It has no dependencies and
   shares no code with the rewriter, so it is a module of its own and not
@@ -739,7 +740,7 @@ frame never evaluated the library ("As built" below).
 
 **What the wasm side costs in exchange.**
 
-- Bytes, once per controller: `rewriter.wasm` is 442,624 bytes (156,634
+- Bytes, once per controller: `rewriter.wasm` is 453,812 bytes (160,260
   brotli), fetched by the controller, cached by HTTP like any asset, and
   compiled once (21 ms, off the main thread). The service worker is handed
   the bytes (a 423 KB buffer per handshake) and compiles them once more.
@@ -1521,11 +1522,21 @@ not worth it for the printer alone: it only runs on error paths.
   that ships). The two do not print alike, so each output is parsed again
   and the programs are compared as trees, the function marks as lists and
   the holder as text. `--cases` runs `rust/host/cases.mjs` (every family by
-  shape, 669 scripts), a directory is a corpus. A script the module
-  declines is counted apart with its reason, and one the module rewrites
-  but meriyah refuses is a failure, which is the parse parity sweep.
-  `--cases` also holds the module's revision to its outputs
-  (`cases.revision`).
+  shape, and a `holes` family for each hole the JavaScript rewriter had,
+  what its fix changed: 814 scripts), a directory is a corpus. A script
+  the module declines is counted apart with its reason, and one the module
+  rewrites but meriyah refuses is a failure, which is the parse parity
+  sweep. `--cases` also holds the module's revision to its outputs
+  (`cases.revision`). The `rewriter-parity` suite runs `--cases` with the
+  module the build ships and fails on any difference, known divergence or
+  hole case the module declines. A hole in one rewriter is fixed in both
+  in the same change, or a case shows the other never had it (the wasm
+  rewriter keeps the page's text, so a parenthesis the JavaScript printer
+  dropped it cannot drop). A pattern moved where it has a source (a
+  parameter's, a loop head's, a catch clause's) names the page's text in
+  the error its source throws under the wasm rewriter and the declaration
+  made of it under the JavaScript one; the harness does not compare those
+  two strings.
 - **Property tests** on the splice engine (nested, adjacent and
   point-coincident edits) and on the mark placement.
 - **The coverage macro** fails the build when a visitor method can exit
@@ -1568,7 +1579,7 @@ Phase 1, measured (2026-11-10, Node 24, load about 20; medians of three):
 | parity, the corpus                               |            | 28 of 28 the same                                                        |
 | parity, 1,309 files of `node_modules` over 2 KB  |            | 1,309 the same                                                           |
 | parity, the 680 cases                            |            | 675 the same, 0 differ, 1 known divergence, 1 declined, 3 neither parses |
-| artifact                                         |            | 442,624 bytes, 156,634 brotli (with the early-error check)               |
+| artifact                                         |            | 453,812 bytes, 160,260 brotli (with the early-error check and the holes) |
 | `dist/injectDocument.js`, master and this branch | 814,491    | 816,570                                                                  |
 
 ## 12. Risks

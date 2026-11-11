@@ -88,7 +88,7 @@ pub struct Output {
 /// an older module's text and the glue never drives a module it was not
 /// written for (src/wasm/rewriter.ts holds the same number).
 /// rust/host/parity.mjs --cases holds it to the outputs (cases.revision).
-pub const REVISION: &str = "3";
+pub const REVISION: &str = "4";
 
 /// Why the rewriter hands a script back to the JavaScript one
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -502,6 +502,84 @@ mod tests {
 			plain("var location = u;"),
 			"{var $s$jl0 = u;$s$j.set1(location, \"location\", (t$t, t$p, t$v) => t$t[t$p] = t$v, t$v => location = t$v, $s$jl0, \"(location=$s$jl0)\");}"
 		);
+	}
+
+	#[test]
+	fn the_holes() {
+		// a lazy member call with what a chain cannot have on it stands in
+		// parentheses
+		assert_eq!(
+			plain("o[k].m(f()).v = 1"),
+			"($s$j.method($s$j.get2(o, k, \"(o[k])\"), false, false, \"o[k].m(0)\")?.(\"m\")?.(f())).v = 1"
+		);
+		// the method a post was read from is evaluated
+		assert_eq!(
+			plain("f().postMessage.call(w, m)"),
+			"$s$j.post((f().postMessage, w), [m], false, \"f().postMessage.call(0, 0)\")"
+		);
+		assert_eq!(plain("x.postMessage.apply(w, [1], g())"), "x.postMessage.apply(w, [1], g())");
+		// super's members
+		assert_eq!(plain("o = { m() { super.top } }"), "o = { m() { $s$j.get(super.top, \"top\") } }");
+		assert_eq!(
+			plain("o = { m() { super[k] } }"),
+			"o = { m() { (t$p => $s$j.get(super[t$p], t$p))($s$j.key(k)) } }"
+		);
+		assert_eq!(
+			plain("o = { m() { super.eval(c) } }"),
+			"o = { m() { $s$j.smethod($s$j.get(super.eval, \"eval\"), this, \"super.eval(0)\")(c) } }"
+		);
+		assert_eq!(
+			plain("o = { m() { super.location = u } }"),
+			"o = { m() { $s$j.sset(\"location\", this, t$p => super[t$p], (t$p, t$v) => super[t$p] = t$v, (t$t, t$p, t$v) => t$t[t$p] = t$v, u) } }"
+		);
+		assert_eq!(
+			plain("o = { m() { [super[k]] = a } }"),
+			"o = { m() { [$s$j.sref($s$j.key(k), this, t$p => super[t$p], (t$p, t$v) => super[t$p] = t$v).value] = a } }"
+		);
+		assert_eq!(plain("o = { m() { super.x; super.top`t` } }"), "o = { m() { super.x; super.top`t` } }");
+		// computed keys, heritage, a target whose key is known when it runs
+		assert_eq!(plain("({ [top]: 1 })"), "({ [$s$j.get(top, \"top\")]: 1 })");
+		assert_eq!(plain("class A extends top {}"), "class A extends $s$j.get(top, \"top\") {}");
+		assert_eq!(plain("[o[k]] = a"), "[$s$j.ref2(o, k).value] = a");
+		// what a replacement stands around
+		assert_eq!(
+			plain("import(top)"),
+			"$s$j.import(\"https://a.example/x.js\", $s$j.get(top, \"top\"))"
+		);
+		// patterns wherever they stand
+		assert_eq!(
+			plain("const [{ top: t }] = a"),
+			"const [{ top: t }] = $s$j.pattern($s$j.iter(a, \"array\", \"a\"), {\"[]\":[{\"top\":true}]})"
+		);
+		assert_eq!(
+			plain("const [x, ...[{ top: t }]] = a"),
+			"const [x, [{ top: t }]] = $s$j.pattern($s$j.iter(a, \"array\", \"a\"), {\"[]\":[0,[{\"[]\":[{\"top\":true}]}]]})"
+		);
+		assert_eq!(
+			plain("const { [k]: { top: t }, a } = o"),
+			"const { [k]: { top: t }, a } = $s$j.pattern(o, {\"{}\":[{\"top\":true},0]}, \"{ [k]: { top: t }, a } = o\")"
+		);
+		assert_eq!(
+			plain("for (const { top: t } of a) f(t)"),
+			"for (const $s$jf of a) {const { top: t } = $s$j.pattern($s$jf, {\"top\":true}, \"{ top: t }=$s$jf\");f(t)}"
+		);
+		assert_eq!(
+			plain("try {} catch ({ top: t }) {}"),
+			"try {} catch ($s$jc) {let { top: t } = $s$j.pattern($s$jc, {\"top\":true}, \"{ top: t }=$s$jc\");}"
+		);
+		assert_eq!(
+			plain("function f({ top: t }, b = t) {}"),
+			"function f($s$ja0, $s$ja1 = void 0) {var { top: t } = $s$j.pattern($s$ja0, {\"top\":true}, \"{ top: t }=$s$ja0\"), b = $s$ja1 === void 0 ? t : $s$ja1;}"
+		);
+		// `eval` as a pattern's target is a reference whose write keeps it the eval
+		assert_eq!(plain("[eval] = [e]"), "[$s$j.ref1(eval, t$v => eval = t$v, \"eval\").value] = [e]");
+		assert_eq!(
+			plain("({ eval } = o)"),
+			"({ eval: $s$j.ref1(eval, t$v => eval = t$v, \"eval\").value } = $s$j.pattern(o, {\"eval\":true}, \"({ eval } = o)\"))"
+		);
+		assert_eq!(plain("[location] = a"), "[$s$j.ref1(location, t$v => location = t$v).value] = a");
+		// a parenthesised string stays an expression
+		assert_eq!(plain("('use strict'); top"), "('use strict'); $s$j.get(top, \"top\")");
 	}
 
 	#[test]

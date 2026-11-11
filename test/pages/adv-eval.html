@@ -247,6 +247,50 @@
 			window.eval = orig;
 		}
 	});
+	// a page that puts back the eval it read (the stand-in a read answers)
+	// still has its direct eval, which sees the caller's scope
+	P('eval restored by name is a direct eval', () => {
+		const local = 'scoped';
+		const saved = eval;
+		eval = saved;
+		try {
+			return eval('local');
+		} catch (error) {
+			return 'TELL:' + error.name;
+		}
+	});
+	// so does one that puts it back as a pattern's target
+	P('eval restored through a pattern is a direct eval', () => {
+		const local = 'scoped';
+		const saved = eval;
+		const seen = [];
+		const look = () => {
+			try {
+				seen.push(eval('local'));
+			} catch (error) {
+				seen.push(error.name);
+			}
+		};
+		[eval] = [saved];
+		look();
+		({ eval } = { eval: saved });
+		look();
+		for (eval of [saved]);
+		look();
+		return seen.every((value) => value === 'scoped')
+			? 'scoped'
+			: 'TELL:' + seen;
+	});
+	P('window.eval restored is a direct eval', () => {
+		const local = 'scoped';
+		const saved = window.eval;
+		window.eval = saved;
+		try {
+			return eval('local');
+		} catch (error) {
+			return 'TELL:' + error.name;
+		}
+	});
 	// modules from data: and blob: URLs run in this realm
 	A('import(data:)', () =>
 		import(
@@ -274,6 +318,484 @@
 			return (0, eval)(policy.createScript(C('(0,eval)(TrustedScript)')));
 		});
 	}
+</script>
+<script>
+	// Code that stands inside something the rewriter replaces is page code
+	// like any other: the value a bare location, top or eval is assigned, a
+	// dynamic import's specifier and options, a pattern's computed keys and
+	// defaults. Each reads `top` there and says who it was.
+	const who = (seen) => (seen === window ? 'self' : 'OTHER-WINDOW');
+	P('top = value', () => {
+		let seen;
+		top = (function () {
+			seen = top;
+		})();
+		return who(seen);
+	});
+	P('eval = value', () => {
+		let seen;
+		eval = (function () {
+			seen = top;
+			return eval;
+		})();
+		return who(seen);
+	});
+	P('location = value', () => {
+		let seen;
+		location = (function () {
+			seen = top;
+			return '#assigned';
+		})();
+		return who(seen);
+	});
+	P('location += value', () => {
+		let seen;
+		location += (function () {
+			seen = top;
+			return '#compound';
+		})();
+		return who(seen);
+	});
+	P('location &&= value', () => {
+		let seen;
+		location &&= (function () {
+			seen = top;
+			return '#logical';
+		})();
+		return who(seen);
+	});
+	P('location = (seen = top, value)', () => {
+		let seen;
+		location = ((seen = top), '#sequence');
+		return who(seen);
+	});
+	P('location = eval() is a direct eval', () => {
+		const local = '#evaluated';
+		try {
+			location = eval('local');
+		} catch (error) {
+			return 'TELL:' + error.name;
+		}
+		return 'direct';
+	});
+	A('import(source)', async () => {
+		let seen;
+		await import(((seen = top), 'data:text/javascript,'));
+		return who(seen);
+	});
+	A('import(function source)', async () => {
+		let seen;
+		await import(
+			(function () {
+				seen = top;
+				return 'data:text/javascript,';
+			})()
+		);
+		return who(seen);
+	});
+	A('import(source, options)', async () => {
+		let seen;
+		let other;
+		await import(
+			((seen = top), 'data:text/javascript,'),
+			(function () {
+				other = top;
+				return {};
+			})()
+		);
+		return who(seen) + ' ' + who(other);
+	});
+	P('pattern computed key', () => {
+		let seen;
+		const { [((seen = top), 'k')]: z } = { k: 1 };
+		return who(seen) + ' ' + z;
+	});
+	P('pattern function computed key', () => {
+		let seen;
+		const {
+			[(function () {
+				seen = top;
+				return 'k';
+			})()]: z,
+		} = { k: 1 };
+		return who(seen) + ' ' + z;
+	});
+	P('pattern default beside an unforgeable key', () => {
+		let seen;
+		const { top: t = ((seen = top), 1) } = {};
+		return who(seen) + ' ' + t;
+	});
+	P('array pattern default of a routed source', () => {
+		let seen;
+		const [a = ((seen = top), 1)] = [[]][0];
+		return who(seen) + ' ' + a;
+	});
+	P('parameter pattern default', () => {
+		let seen;
+		(function ({ top: t = ((seen = top), 1) }) {})({});
+		return who(seen);
+	});
+</script>
+<script>
+	// `super.postMessage.call(this, m)` asks for the parent's method: a
+	// rewrite that posts to `this` would call the subclass's own
+	P('super.postMessage.call(this) is the parent method', () => {
+		class Base {
+			postMessage(m) {
+				return 'parent';
+			}
+		}
+		class Sub extends Base {
+			postMessage(m) {
+				return 'TELL:own';
+			}
+			send(m) {
+				return [
+					super.postMessage.call(this, m),
+					super.postMessage.apply(this, [m]),
+					Reflect.apply(super.postMessage, this, [m]),
+				].join(' ');
+			}
+		}
+		return new Sub().send(1);
+	});
+</script>
+<script>
+	// A computed key is an expression like any other: `location` there is
+	// the page's, whose string is the page's URL, wherever the key stands
+	// (an object literal, a class, a pattern, a member the rewriter leaves
+	// as it is)
+	P('{ [location]: 1 } key', () => Object.keys({ [location]: 1 })[0]);
+	P('class members named [location]', () => {
+		class A {
+			[location]() {}
+			static [location] = 1;
+		}
+		return Object.getOwnPropertyNames(A.prototype)[1] + ' ' + Object.keys(A)[0];
+	});
+	P('pattern key [location]', () => {
+		const { [location]: key } = new Proxy({}, { get: (target, k) => k });
+		return key;
+	});
+	P('delete o[location] key', () => {
+		let key;
+		delete new Proxy(
+			{},
+			{
+				deleteProperty(target, k) {
+					key = k;
+					return true;
+				},
+			},
+		)[location];
+		return key;
+	});
+	P('pattern target o[location] key', () => {
+		const o = {};
+		[o[location]] = [1];
+		return Object.keys(o)[0];
+	});
+	P('super[location] key', () => {
+		let key;
+		const base = new Proxy(
+			{},
+			{
+				get(target, k) {
+					key = k;
+				},
+			},
+		);
+		const o = {
+			__proto__: base,
+			read() {
+				return super[location];
+			},
+		};
+		o.read();
+		return key;
+	});
+</script>
+<script>
+	// A pattern reads its keys without a member expression to rewrite,
+	// wherever it stands: nested in an array pattern, in a loop head, a catch
+	// clause, a parameter list
+	P('object pattern in an array pattern', () => {
+		const [{ top: t }] = [window];
+		return who(t);
+	});
+	P('array pattern in an object pattern', () => {
+		const {
+			a: [{ top: t }],
+		} = { a: [window] };
+		return who(t);
+	});
+	P('assignment to a pattern in an array pattern', () => {
+		let t;
+		[{ top: t }] = [window];
+		return who(t);
+	});
+	P('array pattern rest', () => {
+		const [...[{ top: t }]] = [window];
+		return who(t);
+	});
+	P('for-of head pattern', () => {
+		for (const { top: t } of [window]) return who(t);
+	});
+	P('for-of head assignment pattern', () => {
+		let t;
+		for ({ top: t } of [window]);
+		return who(t);
+	});
+	P('catch parameter pattern', () => {
+		try {
+			throw window;
+		} catch ({ top: t }) {
+			return who(t);
+		}
+	});
+	P('parameter pattern a later parameter reads', () =>
+		(({ top: t }, u = t) => who(u))(window),
+	);
+	P('rest parameter pattern', () =>
+		(function (...[{ top: t }]) {
+			return who(t);
+		})(window),
+	);
+	P('array parameter pattern', () =>
+		(function ([{ top: t }]) {
+			return who(t);
+		})([window]),
+	);
+	P('pattern under a computed key', () => {
+		const k = 'a';
+		const {
+			[k]: { top: t },
+		} = { a: window };
+		return who(t);
+	});
+	P('pattern in a rest object pattern', () => {
+		const k = 0;
+		const [
+			...{
+				[k]: { top: t },
+			}
+		] = [window];
+		return who(t);
+	});
+	A('for await head pattern', async () => {
+		for await (const { top: t } of [window]) return who(t);
+	});
+	P('array patterns with a wrapped source keep their meaning', () => {
+		const log = [];
+		const source = {
+			[Symbol.iterator]() {
+				let i = 0;
+				return {
+					next() {
+						log.push('next');
+						return i < 5
+							? { value: { top: i++ }, done: false }
+							: { value: undefined, done: true };
+					},
+					return() {
+						log.push('return');
+						return {};
+					},
+				};
+			},
+		};
+		const [{ top: a }, , { top: b } = {}] = source;
+		const [{ top: c }, ...[{ top: d }, e]] = source;
+		const [f, { top: g } = { top: 'default' }] = [1];
+		function* values() {
+			try {
+				yield { top: 'y' };
+				yield 2;
+			} finally {
+				log.push('finally');
+			}
+		}
+		const [{ top: h }] = values();
+		const seen = [a, b, c, d, e.top, f, g, h, log.join(',')].join(' ');
+		return seen ===
+			'0 2 0 1 2 1 default y next,next,next,return,next,next,next,next,next,next,finally'
+			? 'kept'
+			: 'TELL:' + seen;
+	});
+	P('patterns moved out of a head keep their meaning', () => {
+		const out = [];
+		for (const { top: t = 'd', x } of [{ x: 1 }, { top: 2, x: 3 }])
+			out.push(t, x);
+		let u;
+		for ({ top: u } of [{ top: 4 }]);
+		out.push(u);
+		try {
+			throw { top: 5 };
+		} catch ({ top: t }) {
+			out.push(t);
+		}
+		const f = ({ top: t }, v = t + 1, ...[{ top: w }]) =>
+			[t, v, w, f.length].join('');
+		out.push(f({ top: 6 }, undefined, { top: 8 }));
+		const made = [];
+		for (const { top: t } of [{ top: 'a' }, { top: 'b' }]) made.push(() => t);
+		out.push(made.map((read) => read()).join(''));
+		outer: for (const { top: t } of [{ top: 1 }, { top: 2 }]) {
+			if (t === 1) continue outer;
+			out.push('c' + t);
+		}
+		const [p, q] = [1, 2];
+		[out[out.length], out[out.length]] = [q, p];
+		const seen = out.join(' ');
+		return seen === 'd 1 2 3 4 5 6781 ab c2 2 1' ? 'kept' : 'TELL:' + seen;
+	});
+</script>
+<script>
+	// `super.top` reads the home object's prototype with `this` as the
+	// receiver: the window's own getter when both are the window
+	P('super.top', () => {
+		const o = {
+			__proto__: window,
+			read() {
+				return super.top;
+			},
+		};
+		return who(o.read.call(window));
+	});
+	P('super[key]', () => {
+		const o = {
+			__proto__: window,
+			read(key) {
+				return super[key];
+			},
+		};
+		return who(o.read.call(window, 'top'));
+	});
+	P('super.location', () => {
+		const o = {
+			__proto__: window,
+			read() {
+				return super.location;
+			},
+		};
+		return String(o.read.call(window));
+	});
+	P('static super.top', () => {
+		class A {
+			static read() {
+				return super.top;
+			}
+		}
+		Object.setPrototypeOf(A, window);
+		return who(A.read.call(window));
+	});
+	P('super.eval(code)', () => {
+		const o = {
+			__proto__: window,
+			run(code) {
+				return super.eval(code);
+			},
+		};
+		return o.run.call(window, C('super.eval(code)'));
+	});
+	P('super[key](code)', () => {
+		const o = {
+			__proto__: window,
+			run(key, code) {
+				return super[key](code);
+			},
+		};
+		return o.run.call(window, 'eval', C('super[key](code)'));
+	});
+	P('super[key] reads, writes and calls keep their meaning', () => {
+		class Base {
+			get v() {
+				return this.n;
+			}
+			set v(value) {
+				this.n = value;
+			}
+			who() {
+				return this.n;
+			}
+		}
+		class Sub extends Base {
+			run(k, m) {
+				super[k] = 2;
+				super[k] += 3;
+				super[k]++;
+				[super[k]] = [super[k] + 1];
+				return [super[k], super[m](), super[m]?.(), super.none?.(), this.n];
+			}
+		}
+		const seen = new Sub().run('v', 'who').join(' ');
+		return seen === '7 7 7  7' ? seen : 'TELL:' + seen;
+	});
+</script>
+<script>
+	// a key is whatever converts to the name
+	P('member key that is an object', () =>
+		who(window[{ toString: () => 'top' }]),
+	);
+	P('member key with Symbol.toPrimitive', () =>
+		String(window[{ [Symbol.toPrimitive]: () => 'location' }]),
+	);
+	P('member key that is an array', () => who(window[['top']]));
+</script>
+<script>
+	// Code the generator printed without the parentheses it needs is no
+	// script: the browser refuses all of it, where natively it runs. Each is
+	// evaluated so that one refused script does not take the others with it.
+	const printed = (code) => {
+		try {
+			return (0, eval)(code + '; top === window ? "self" : "OTHER-WINDOW"');
+		} catch (error) {
+			return 'TELL:' + error.name;
+		}
+	};
+	P('a member assigned on a member call with a computed object', () =>
+		printed(
+			'var o1 = { k: { m: (v) => ({ v }) } }, k1 = "k", f1 = () => 1; o1[k1].m(f1()).x = 1',
+		),
+	);
+	P('a tag that is a member call with a computed object', () =>
+		printed(
+			'var o2 = { k: { m: () => () => 1 } }, k2 = "k", f2 = () => 1; o2[k2].m(f2())`x`',
+		),
+	);
+	P('a class that extends an expression in parentheses', () =>
+		printed(
+			'var b3 = class {}; (async function () { class A3 extends (await b3) {} })()',
+		),
+	);
+	P('a destructuring assignment passed after a literal', () =>
+		printed('var a4; (function (x, y) { return y; })({ k: 1 }, ([a4] = [7]))'),
+	);
+	P('a destructuring assignment assigned to a computed member', () =>
+		printed(
+			'var a5, o5 = {}, k5 = "k"; ({ k: 1 })[k5] ||= ([a5] = [7]); o5[k5] = ([a5] = [8])',
+		),
+	);
+</script>
+<script>
+	// a member that is a pattern's target is written like any other
+	P('pattern target window[key] = eval keeps the direct eval', () => {
+		const local = 'direct';
+		const key = 'eval';
+		[window[key]] = [eval];
+		try {
+			return eval('local');
+		} catch (error) {
+			return 'TELL:' + error.name;
+		}
+	});
+</script>
+<script>
+	// a loop the rewriter replaces twice, for its `var location` head and for
+	// its source, which the access API iterates: the source is page code
+	var seenByLoop;
+	for (var location of ((seenByLoop = top), [top].slice(1)));
+	P('for (var location of source) at the top level', () => who(seenByLoop));
 </script>
 <script>
 	__advProbe('with (window)', () => {
@@ -376,6 +898,83 @@
 		};
 		return o.g;
 	});
+</script>
+<script>
+	('use strict');
+	// A string in parentheses is an expression, not a directive: this script
+	// is sloppy, and so is each function and each evaluated text below. A
+	// directive written with an escape is not "use strict" either.
+	var strictAtTop = (function () {
+		return this === undefined;
+	})();
+	const mode = (strict) => (strict ? 'TELL:strict' : 'sloppy');
+	P("('use strict') at the top of a script", () => mode(strictAtTop));
+	P("('use strict') at the top of a function", () =>
+		(function () {
+			('use strict');
+			return mode(this === undefined);
+		})(),
+	);
+	P("('use strict') at the top of an arrow's body", () =>
+		(() => {
+			('use strict');
+			return mode(
+				(function () {
+					return this === undefined;
+				})(),
+			);
+		})(),
+	);
+	P("('use strict') at the top of a method", () =>
+		({
+			m() {
+				('use strict');
+				return (function () {
+					return mode(this === undefined);
+				})();
+			},
+		}).m(),
+	);
+	P("('use strict') at the top of eval text", () =>
+		eval(
+			"('use strict'); (function () { return this === undefined ? 'TELL:strict' : 'sloppy' })()",
+		),
+	);
+	P("('use strict') at the top of indirect eval text", () =>
+		(0, eval)(
+			"('use strict'); (function () { return this === undefined ? 'TELL:strict' : 'sloppy' })()",
+		),
+	);
+	P("('use strict') at the top of a Function body", () =>
+		new Function(
+			"('use strict'); return (function () { return this === undefined ? 'TELL:strict' : 'sloppy' })()",
+		)(),
+	);
+	P('a directive with an escape at the top of a function', () =>
+		(function () {
+			'use\x20strict';
+			return mode(this === undefined);
+		})(),
+	);
+	P('a directive with an escape at the top of eval text', () =>
+		eval(
+			"'use\\x20strict'; (function () { return this === undefined ? 'TELL:strict' : 'sloppy' })()",
+		),
+	);
+	P('a string after a parenthesised string is no directive', () =>
+		(function () {
+			('a');
+			// prettier-ignore
+			'use strict';
+			return mode(this === undefined);
+		})(),
+	);
+	P('use strict itself still is one', () =>
+		(function () {
+			'use strict';
+			return this === undefined ? 'strict' : 'TELL:sloppy';
+		})(),
+	);
 </script>
 <script>
 	__advFinish();

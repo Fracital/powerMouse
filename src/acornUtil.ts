@@ -127,12 +127,29 @@ export class AcornContext {
 
 		created.addEntriesToStack();
 
-		for (const ctx of new AcornIterator(created.node)) {
-			if (ctx.node[symbolResult]) {
-				delete ctx.node[symbolResult];
-				ctx.removeDescendantsFromStack();
-			} else {
-				ctx.node[symbolNoResult] = true;
+		// what the replacement is made of is the rewriter's and is not
+		// visited; what was handed back with result(), and everything under
+		// it, stays the walk's. A node of an earlier replacement handed back
+		// again (a loop whose head and source are both replaced) is one too:
+		// taken for the rewriter's, the page's code under it was never
+		// visited and printed as written
+		const pending: Node[] = [created.node];
+		while (pending.length) {
+			const node = pending.pop();
+			for (const key in node) {
+				if (key === 'range' || key === 'loc') continue;
+				const value = node[key];
+				if (typeof value !== 'object' || value === null) continue;
+				for (const child of value instanceof Array ? value : [value]) {
+					if (typeof child !== 'object' || child === null) continue;
+					if (typeof child.type !== 'string') continue;
+					if (child[symbolResult]) {
+						delete child[symbolResult];
+						continue;
+					}
+					child[symbolNoResult] = true;
+					pending.push(child);
+				}
 			}
 		}
 
