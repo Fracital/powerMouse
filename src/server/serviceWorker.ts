@@ -38,6 +38,8 @@ import {
 	ServiceWorkerApiMessage,
 	SRCDOC_CLAIM,
 	SRCDOC_VOUCH,
+	STANDBY_DECLINED,
+	StandbyDeclined,
 	SW_API,
 	SW_REVIVE,
 	SWbound,
@@ -161,8 +163,13 @@ function registerController(
 	ports: MessagePort[],
 	client?: string,
 ) {
-	// an offer for a worker that lost this controller: this one has it
+	// an offer for a worker that lost this controller: this one has it. It
+	// says so before the ports go, so the controller lets its end go at once
+	// and knows this run is up (it offers no other for a while)
 	if (standby && controllers.has(directory)) {
+		ports[0]?.postMessage({
+			[STANDBY_DECLINED]: { instance: INSTANCE } satisfies StandbyDeclined,
+		});
 		for (const port of ports) port.close();
 		return;
 	}

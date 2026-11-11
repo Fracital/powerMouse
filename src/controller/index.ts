@@ -57,6 +57,7 @@ import {
 	postToPort,
 	RequestInfo,
 	ReviveMessage,
+	STANDBY_DECLINED,
 	SW_KICK,
 	SW_PORT,
 	SW_REVIVE,
@@ -478,6 +479,15 @@ export function hookErrorReport(data: unknown): HookErrorInfo | null {
 	};
 }
 
+/** the run of the worker named by a STANDBY_DECLINED message, or null for any other message */
+function standbyDeclined(data: unknown): string | null {
+	if (typeof data !== 'object' || data === null || !(STANDBY_DECLINED in data))
+		return null;
+	const declined = (data as Record<string, unknown>)[STANDBY_DECLINED] as {
+		instance?: unknown;
+	} | null;
+	return typeof declined?.instance === 'string' ? declined.instance : '';
+}
 /** the URL of an open request posted by a proxied page, else null */
 export function openRequest(data: unknown): string | null {
 	if (typeof data !== 'object' || data === null) return null;
@@ -489,8 +499,20 @@ export function openRequest(data: unknown): string | null {
 const REVIVE_GUARD_MS = 2000;
 /** how long that check waits for the worker to answer */
 const REVIVE_PING_MS = 1000;
-/** how long a handshake offered for a stopped worker stands before a page's wait gets another */
-const STANDBY_MS = 1000;
+/**
+ * How long a handshake offered for a stopped worker stands with no answer
+ * (taken or declined) before a page's wait may withdraw it for another: its
+ * message went to a worker that stopped again before it read it
+ */
+const STANDBY_STALE_MS = 10000;
+/**
+ * After the worker that has this controller declined an offer, how long no
+ * other is made: it was running then, and the keepalive (KEEPALIVE_MS) keeps
+ * it running, where Chrome stops a worker nothing reached for 30 s. Only a
+ * crash in that time would leave a page's wait unanswered, as before offers.
+ * Wall-clock time, so a machine that slept or a tab that was frozen is past it
+ */
+const DECLINED_HOLD_MS = KEEPALIVE_MS;
 /**
  * how long a service worker of another build gets to update and activate
  * before wait() resolves on the one we have (the new one is adopted when it
@@ -719,6 +741,8 @@ export class StompController extends EventTarget {
 	#takenWaiters = new Set<() => void>();
 	/** a handshake offered to a worker that may have stopped (see #standIn) */
 	#standby?: { port: MessagePort; at: number; stopServing?: () => void };
+	/** the run of the worker that last declined an offer, and when */
+	#declined?: { instance: string; at: number };
 	/** a build mismatch is being healed: the next ready answer must agree */
 	#healing = false;
 	#rules: RequestRule[];
@@ -1474,10 +1498,28 @@ export class StompController extends EventTarget {
 	 * handshake the revive would cause is offered now, from inside the
 	 * page's task: every part of it is a message. Offered, not made: a
 	 * worker that is running and only busy keeps the channel it has.
+	 *
+	 * An offer carries all a handshake does (the wasm modules, a port per
+	 * rewrite worker), so one is made only where it can matter: never while
+	 * another is on its way, and not again soon after the worker that has
+	 * this controller declined one (DECLINED_HOLD_MS). A page making slow
+	 * synchronous requests to a running worker, which every one of those
+	 * asks would otherwise answer with an offer, gets one.
 	 */
 	#standIn() {
 		if (!this.lastHandshake || this.#awaiting) return;
-		if (this.#standby && Date.now() - this.#standby.at < STANDBY_MS) return;
+		const now = Date.now();
+		if (this.#standby) {
+			if (now - this.#standby.at < STANDBY_STALE_MS) return;
+			this.#dropStandby();
+		}
+		const declined = this.#declined;
+		if (
+			declined &&
+			declined.instance === this.#instance &&
+			now - declined.at < DECLINED_HOLD_MS
+		)
+			return;
 		this.#handshakeNow(true);
 	}
 	/**
@@ -1692,7 +1734,18 @@ export class StompController extends EventTarget {
 			(data, transfer) => postToPort(port, data, transfer),
 		);
 
-		port.addEventListener('message', (event) => rpc.receive(event.data));
+		port.addEventListener('message', (event) => {
+			const declined = standbyDeclined(event.data);
+			if (declined === null) {
+				rpc.receive(event.data);
+				return;
+			}
+			// a running worker that has this controller: the offer's ports go
+			// now, and it is not made again for a while (see #standIn)
+			if (this.#standby?.port !== port) return;
+			this.#declined = { instance: declined, at: Date.now() };
+			this.#dropStandby();
+		});
 		port.start();
 		if (standby) this.#standby = { port, at: Date.now() };
 		else this.#rpc = rpc;

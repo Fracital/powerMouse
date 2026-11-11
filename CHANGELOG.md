@@ -4020,6 +4020,19 @@ url`) carries its value and targets that window. An about:blank child of
   controllers and an in-page transport). With the keepalive above, a worker
   stops under a live controller only with a frozen tab, a machine that slept
   or a crash.
+- Slow synchronous requests to a running service worker no longer make a
+  handshake offer each. Every ask that waits past 300 ms tells the controller,
+  and an offer carries what a handshake does (the wasm modules, a port per
+  rewrite worker), so 120 synchronous XHRs of 600 ms made 60 offers that the
+  running worker turned down: 63.8 MB of module bytes copied to it and 360
+  ports opened, up to 8.1 MB of the worker's memory waiting for its garbage
+  collector at a time. Nothing stayed after collection but the last offer's
+  port. Now an offer is never made while another is on its way (one with no
+  answer in 10 s is withdrawn), the worker declines in words before it closes
+  the offer's ports, and no other offer follows for 20 s after the worker that
+  has the controller declined one (the keepalive keeps it running that long):
+  4 offers, 4.3 MB, 24 ports, 3.0 MB at the most, no port left (sw-restart:
+  one offer for ten slow requests).
 - `history.pushState` and `replaceState` refuse a URL of another origin, or
   one that does not parse, with a SecurityError naming the page's origin and
   URL, like the browser; before this the URL was routed and accepted (every

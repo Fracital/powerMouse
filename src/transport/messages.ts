@@ -54,6 +54,16 @@ export const KEEPALIVE_MS = 20000;
  * StompController's #standIn.
  */
 export const SW_KICK = '$stomp$swKick';
+/**
+ * SW -> controller, on the first port of a `standby` CONTROLLER_INIT the
+ * worker turns down because it has the controller registered already, right
+ * before it closes the offer's ports: the run of the worker that declined
+ * (ReviveMessage.instance), which is up
+ */
+export const STANDBY_DECLINED = '$stomp$standbyDeclined';
+export interface StandbyDeclined {
+	instance: string;
+}
 /** how long a synchronous ask waits for its answer before the page tells its controller */
 export const SYNC_KICK_MS = 300;
 /**
@@ -577,8 +587,8 @@ export interface ControllerInitMessage {
 	build: string;
 	/**
 	 * An offer for a worker that does not know this controller (one the
-	 * browser stopped): a worker that has it registered closes the ports
-	 * and keeps the channel it has
+	 * browser stopped): a worker that has it registered declines it
+	 * (STANDBY_DECLINED), closes the ports and keeps the channel it has
 	 */
 	standby?: boolean;
 	/**

@@ -13,8 +13,10 @@
 // synchronous asks (document.cookie, localStorage, a synchronous
 // XMLHttpRequest) are answered too: the page waits for them inside a task,
 // on the thread its controller needs to hear the worker's revive on, and
-// spun to the bridge's limit (10 s, 30 s for the request). Stopped over CDP,
-// both modes, and a controller that hosts its transport in the page.
+// spun to the bridge's limit (10 s, 30 s for the request). Slow synchronous
+// requests to a worker that is running make one handshake offer, not one
+// each. Stopped over CDP, both modes, and a controller that hosts its
+// transport in the page.
 import {
 	done,
 	FIXTURE,
@@ -122,6 +124,52 @@ for (const [mode, base] of [
 		loaded && before === 200,
 		JSON.stringify({ loaded, status: before }),
 	);
+	// Slow synchronous requests to a worker that is running: each waits past
+	// the 300 ms after which the page tells its controller, which offers a
+	// handshake in case the worker stopped. The running worker declines, and
+	// no other offer follows for a while: one offer (the wasm modules and a
+	// port per rewrite worker) where every other request made one. Counted
+	// in the controller's realm, on the messages it posts to the worker
+	{
+		const realm =
+			mode === 'same-origin'
+				? page.mainFrame()
+				: page.frames().find((f) => /controllerFrame/.test(f.url()));
+		await realm.evaluate(() => {
+			const proto = ServiceWorker.prototype;
+			const post = proto.postMessage;
+			window.__offers = {
+				standby: 0,
+				restore: () => (proto.postMessage = post),
+			};
+			proto.postMessage = function (data, transfer) {
+				if (data?.['$stomp$controllerInit']?.standby) window.__offers.standby++;
+				return Reflect.apply(post, this, [data, transfer]);
+			};
+		});
+		const took = await frameOf(page).evaluate(async () => {
+			const took = [];
+			for (let i = 0; i < 10; i++) {
+				const started = performance.now();
+				const request = new XMLHttpRequest();
+				request.open('GET', `/slow-js?ms=500&mark=${i}-${Date.now()}`, false);
+				request.send();
+				took.push(Math.round(performance.now() - started));
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			}
+			return took;
+		});
+		await sleep(500);
+		const offers = await realm.evaluate(() => {
+			window.__offers.restore();
+			return window.__offers.standby;
+		});
+		ok(
+			`${mode}: slow synchronous requests to a running worker make one handshake offer, not one each`,
+			offers <= 1 && took.every((ms) => ms >= 500 && ms < 2000),
+			JSON.stringify({ offers, took }),
+		);
+	}
 	const cdp = await page.context().newCDPSession(page);
 	await cdp.send('ServiceWorker.enable');
 	let stops = 0;
