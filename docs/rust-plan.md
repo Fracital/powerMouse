@@ -978,13 +978,19 @@ size like the others.
 
 Callers. The service worker's `/css/` route (the request log says
 `rewriteBy: 'wasm'` or `'js'`) and a prewritten document's markup and
-inline styles, under `rewriter: 'wasm'`. The inject's rewriter library
+inline styles, under `rewriter: 'wasm'`. In the page, the rewriter library
 (`src/rewriterLibDocument.ts`) asks for the module on every stylesheet and
-style attribute a frame rewrites and gets it when its copy of the thread
-state holds the module, which is phase 2's delivery to the page; until a
-page is handed the module, css-tree answers as before. A frame's single
-values (a CSSOM property set, a presentation attribute) stay on the
-expression in the frame.
+style attribute a frame has it rewrite: a proxied top is handed every
+module its controller compiled (phase 2's delivery, `adopt` by name), so
+the top's library holds `scanner` beside `rewriter`, for itself and the
+frames under it, and css-tree answers until the module has arrived and
+wherever it cannot (a tab in another agent cluster, a sandboxed document
+with an opaque origin). The `css-inject-backend` suite writes a style
+element, `insertRule`, `replaceSync`, a style attribute and `cssText` from
+page script under each backend and reads which rewrote them from the
+library's own count (`styleRewrites`), since the text is the same. A
+frame's single values (a CSSOM property set, a presentation attribute)
+stay on the expression in the frame.
 
 What still needs css-tree, which is 80 KB of the minified service worker
 and 81 KB of `injectDocument.js` (with `source-map-js`, which only it

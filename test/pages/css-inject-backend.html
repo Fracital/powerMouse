@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>styles a page's script writes</title>
+<div id="box">x</div>
+<script>
+	// Each way a page's script writes CSS, with a URL of its own, so the
+	// request for it says the text was routed (css-inject-backend suite).
+	// Every one paints #box, each over the one before it.
+	const box = document.getElementById('box');
+	const sprite = (key, n) => `url(/pages/sprite.svg?${key}=${n})`;
+	window.__styles = {
+		element(n) {
+			const style = document.createElement('style');
+			style.textContent = `.painted { background: ${sprite('element', n)} }`;
+			document.head.append(style);
+			box.className = 'painted';
+		},
+		insertRule(n) {
+			const style = document.createElement('style');
+			document.head.append(style);
+			style.sheet.insertRule(`#box { background: ${sprite('insertRule', n)} }`);
+		},
+		replaceSync(n) {
+			const sheet = new CSSStyleSheet();
+			sheet.replaceSync(`#box { background: ${sprite('replaceSync', n)} }`);
+			document.adoptedStyleSheets = [sheet];
+		},
+		attribute(n) {
+			box.setAttribute('style', `background: ${sprite('attribute', n)}`);
+		},
+		cssText(n) {
+			box.style.cssText = `background: ${sprite('cssText', n)}`;
+		},
+	};
+</script>

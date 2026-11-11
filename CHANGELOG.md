@@ -219,9 +219,11 @@ The first release after a four-year gap. Everything below is breaking.
   U+FEFF, a `data:` stylesheet inside a stylesheet (none of the corpus).
   `onRequest` says which rewrote a stylesheet (`rewriteBy`: `wasm` or
   `js`). The service worker's `/css/` route and the inline styles of a
-  prewritten document use it; a frame's rewriter library uses it for
-  stylesheets and style attributes once the page holds the module, and
-  css-tree until then. A closing bracket with nothing open (`a{} } b{}`) is
+  prewritten document use it, and so does the page: a proxied top's
+  rewriter library holds the module beside the script rewriter's and
+  rewrites the style elements, style attributes and CSSOM text a page's
+  script writes with it (`css-inject-backend` suite), css-tree until it
+  has arrived. A closing bracket with nothing open (`a{} } b{}`) is
   answered too, as css-tree answers it now that its parse no longer depends
   on the sheet before (Fixes). The `scanner-parity` suite compares both on
   hand-written cases, the fixture pages and a seeded fuzz.
