@@ -1813,7 +1813,7 @@ input:focus-visible {
 	padding: 0;
 	border: 1px solid transparent;
 	border-radius: 0.25rem;
-	background: url('/pm/icons/star-off.svg') center / 20px 20px no-repeat;
+	background: url('/pm/icons/star-off.svg') center / 24px 24px no-repeat;
 	cursor: pointer;
 	transition-property: background-color, border-color;
 }
@@ -1853,7 +1853,7 @@ input:focus-visible {
 	padding: 0;
 	border: 1px solid transparent;
 	border-radius: 0.25rem;
-	background: url('/pm/icons/token.svg') center / 20px 20px no-repeat;
+	background: url('/pm/icons/token.svg') center / 24px 24px no-repeat;
 	cursor: pointer;
 	transition-property: background-color, border-color;
 }
