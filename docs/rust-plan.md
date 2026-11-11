@@ -705,6 +705,14 @@ phase: a direct eval's arguments were not rewritten at all (`eval(top)`
 handed the page the real top), and `super.postMessage(m)` came out
 unparsable.
 
+The glue asks a module only when it answers the revision the glue was
+written against (`REVISION` in `src/wasm/rewriter.ts`, flag 32), for a
+rewrite and for what parses: the artifact is fetched apart from the
+bundles, and the phase 0 artifact, which copies its input, would otherwise
+hand a script back as the page wrote it (`wasm-rewriter-glue` suite). So
+the revision is raised with the boundary as well as with the output: a
+module that takes a flag the last one did not is another revision.
+
 The option is one selector for every rewriter, not the JS rewriter's own:
 `'wasm'` means each rewriter that has a wasm backend uses it (JS in this
 phase, CSS and the markup scan when phase 3 lands), each from its own

@@ -59,13 +59,40 @@ export function rewriterRevision(): string | null {
 }
 
 /**
+ * The revision this glue was written against (rust/rwjs/src/rewrite.rs
+ * REVISION; test/suites/wasm-rewriter-glue.mjs holds the two together).
+ * The module is an asset fetched apart from the bundles, behind whatever
+ * cache the host has, so a thread may hold another build's: one that
+ * answers another revision is never asked for a rewrite or for what
+ * parses. The phase 0 artifact answers every call with its input, the
+ * revision call included: its "rewrite" of a script would be the script as
+ * the page wrote it, and a revision 1 module takes the flags of the parse
+ * questions for a rewrite.
+ */
+export const REVISION = '2';
+
+/** whether an instance answered REVISION, asked once of each */
+const speaks = new WeakMap<BufferInstance, boolean>();
+
+function sameRevision(instance: BufferInstance): boolean {
+	let same = speaks.get(instance);
+	if (same === undefined) {
+		const answered = instance.call('', FLAG_REVISION);
+		same = 'output' in answered && answered.output === REVISION;
+		speaks.set(instance, same);
+	}
+	return same;
+}
+
+/**
  * Whether `code` parses as a classic script (`single`: as one of a single
  * expression statement), asked of this thread's module, or null when it
- * holds none: the caller asks the JavaScript parser
+ * holds none or another revision's: the caller asks the JavaScript parser
  */
 export function parsesInWasm(code: string, single: boolean): boolean | null {
 	if (!hasModule(REWRITER)) return null;
 	return withInstance(REWRITER, (instance) => {
+		if (!sameRevision(instance)) return null;
 		const answered = instance.call(code, single ? FLAG_SINGLE : FLAG_PARSES);
 		return 'output' in answered ? answered.output === '1' : null;
 	});
@@ -197,8 +224,9 @@ export function rewriterRoute(
 
 /**
  * `script` rewritten by this thread's instance of the module, or null: the
- * thread holds none, it is in a call already (a data: import inside the
- * script being rewritten), it trapped, or it declined the script
+ * thread holds none, it holds another revision's, it is in a call already
+ * (a data: import inside the script being rewritten), it trapped, or it
+ * declined the script
  */
 export function rewriteInWasm(
 	script: string,
@@ -212,7 +240,9 @@ export function rewriteInWasm(
 	return withInstance(
 		REWRITER,
 		(instance) =>
-			rewriteWith(instance, script, url, config, type, lead(), source),
+			sameRevision(instance)
+				? rewriteWith(instance, script, url, config, type, lead(), source)
+				: null,
 		rewriterRoute(url, config, type),
 	);
 }

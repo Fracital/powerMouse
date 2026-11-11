@@ -250,6 +250,12 @@ The first release after a four-year gap. Everything below is breaking.
   origin, a page's worker). docs/rust-plan.md has the measured plan for
   taking the JavaScript parsers out of the inject bundle after it (814 KB
   to at most 416 KB).
+- The wasm rewriter's glue asks a module only when it answers the revision
+  the glue was written against (`wasm-rewriter-glue` suite). The module is
+  fetched apart from the bundles, and an older `rewriter.wasm` served
+  beside newer ones (the first artifact answered every call with its input)
+  would hand scripts back as the page wrote them: such a module is never
+  asked, and the JavaScript rewriter answers.
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,
