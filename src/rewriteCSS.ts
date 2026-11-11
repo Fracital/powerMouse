@@ -25,9 +25,9 @@ export { restoreCSSValueURLs, routeCSS } from './cssURLs';
 /**
  * Asks for the wasm backend (`rewriter: 'wasm'`), and is told which backend
  * did the rewrite: the module (rust/rwcss, `wasm`) or the JavaScript below
- * (`js`: this thread holds no module, or the module was in a call
- * already). Left as it was when there was nothing to look into. The output
- * is the same either way, byte for byte.
+ * (`js`: this thread holds no module, or the sheet is nested deeper than
+ * the thread runs instances). Left as it was when there was nothing to
+ * look into. The output is the same either way, byte for byte.
  */
 export interface StyleRewrittenBy {
 	by?: 'wasm' | 'js';

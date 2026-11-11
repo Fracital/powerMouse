@@ -126,7 +126,8 @@ function collect(lib: RewriterLibrary) {
  * copy's: a URL the call routes holds something to rewrite (a `data:`
  * script that a script the module is rewriting imports, a `data:`
  * stylesheet in a stylesheet: src/scriptRoutes.ts, src/cssURLs.ts), and
- * the module is in that call. Without the library the call under way
+ * no instance of the module took it (src/wasm/thread.ts runs INSTANCES of
+ * it, one inside another). Without the library the call under way
  * cannot be finished here: it is marked as needing it, so the caller loads
  * it and makes the whole call again, whatever the rewriter in between made
  * of this failure (a stylesheet's leaves the URL as written).

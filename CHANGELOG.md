@@ -231,13 +231,13 @@ The first release after a four-year gap. Everything below is breaking.
   megabytes and nesting by the thousand are its own to answer (the text is
   encoded straight into a buffer the module keeps, and a surrogate with no
   other half crosses as the bytes of its code point), so css-tree only
-  rewrites on a thread with no module and for a `data:` stylesheet inside a
-  stylesheet. Two answers are the module's own. Past 1,024 nested blocks
-  or brackets the rest is raw text whose url()s the expression routes
-  (css-tree does that or throws, from 1,400 to 3,000 levels by the state
-  of the stack). A sheet of more than 16.7 million UTF-16 units is
-  rewritten to its end, where css-tree stops parsing at that point and an
-  `@import "x"` after it went out unrouted.
+  rewrites on a thread with no module and for a `data:` stylesheet nested
+  past the fourth inside a stylesheet. Two answers are the module's own.
+  Past 1,024 nested blocks or brackets the rest is raw text whose url()s
+  the expression routes (css-tree does that or throws, from 1,400 to 3,000
+  levels by the state of the stack). A sheet of more than 16.7 million
+  UTF-16 units is rewritten to its end, where css-tree stops parsing at
+  that point and an `@import "x"` after it went out unrouted.
   `onRequest` says which rewrote a stylesheet (`rewriteBy`: `wasm` or
   `js`). The service worker's `/css/` route and the inline styles of a
   prewritten document use it (a worker that was restarted waits the few
@@ -335,6 +335,13 @@ The first release after a four-year gap. Everything below is breaking.
   gives the memory back when it next collects the thread's heap). A page
   that evaluates one 1.2 MB string no longer holds 27 MB for the rest of
   its life, and pays 9 ms more the next time it evaluates one.
+- With `rewriter: 'wasm'` a rewrite made during a rewrite is the module's
+  too: a `data:` module a module imports, or a `data:` stylesheet a
+  stylesheet imports, is rewritten from inside the rewrite of the one
+  around it, and was the JavaScript rewriter's or css-tree's because an
+  instance cannot be entered twice. Such a call now runs in a second
+  instance of the same compiled module (up to four deep, each with its own
+  route; `wasm-instances` suite).
 - The wasm rewriter's glue asks a module only when it answers the revision
   the glue was written against (`wasm-rewriter-glue` suite). The module is
   fetched apart from the bundles, and an older `rewriter.wasm` served

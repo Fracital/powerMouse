@@ -605,14 +605,37 @@ large allocation: over four rounds of a small script, the 3.5 MB one and a
 drop, the renderer never held more than the live instance and one dropped
 one (+98 MB at most).
 
+**A rewrite made during a rewrite** runs in an instance of its own. A
+`data:` module a module imports is rewritten from inside the routing call of
+the module around it, on the same thread and the same stack, and a `data:`
+stylesheet a stylesheet imports is the same shape (`routeCSS` rewrites it
+while the scanner module waits for the route of the `@import`); the instance
+in the call cannot be entered again while its output is half written, and
+until this was built the inner piece was the JavaScript rewriter's, which in
+a thread whose bundle carries no JavaScript rewriter means loading the
+fallback asset. A call takes an instance that is in no call, or makes one,
+and puts it back when it returns: each call has its own instance and its own
+route, the outer route goes on answering the outer call, a trap costs the
+call that trapped its instance and nothing else, and the limit is applied to
+each instance as its own call returns. A thread runs at most four instances
+of a module at a time (`INSTANCES`); a piece nested deeper than that is the
+JavaScript rewriter's, as it was. One inside another is what pages write.
+
 The `wasm-instances` suite holds this in node: the same eight scripts
 rewritten with the limit out of reach (one instance, none made), forced to
 2 MB (every large script costs its instance) and forced to 0 (every call a
-new instance) come out byte for byte the same, and an instance past the
-limit finishes its call and is replaced after it. `worker-rewrites` has it
-in the browser: a function of 410 KB that a worker and a page evaluate
-(16.9 MB, past their limit) and what they evaluate after it are the
-module's rewrite and read as they do natively.
+new instance) come out byte for byte the same; an instance past the limit
+finishes its call and is replaced after it; a call made from inside a
+routing call is answered by a second instance and both are kept; a `data:`
+stylesheet inside a stylesheet is the scanner module's rewrite, by a second
+instance, and css-tree's byte for byte; and the rewriter's glue rewrites a
+`data:` module inside a module with the module. Nested five deep, the
+innermost of either is JavaScript's and the text is the same.
+`worker-rewrites` has both in the browser: a function of 410 KB that a
+worker and a page evaluate (16.9 MB, past their limit) and what they
+evaluate after it are the module's rewrite and read as they do natively, and
+so does a `data:` module a module worker imports statically, which is
+rewritten where the worker's script is served.
 
 The idle drop in the service worker is not built.
 
@@ -720,7 +743,7 @@ frame never evaluated the library ("As built" below).
   | `modifyJS` (every path of phase 2)   | the rewriter module               | no module yet; the module declined the script or trapped              |
   | `singleExpression`, `parsesAsScript` | the rewriter module (parse only)  | no module yet                                                         |
   | `printExpression`                    | the fallback, until phase 5       | something threw and its message names a part of the page's expression |
-  | `modifyCSS`                          | the scanner module (phase 3)      | no module yet, or it trapped; a data: sheet inside a sheet            |
+  | `modifyCSS`                          | the scanner module (phase 3)      | no module yet, or it trapped; a data: sheet nested past the fourth    |
   | `getDomain`, `getPublicSuffix`       | the shell, then the suffix module | no module yet, for a host no shell named                              |
 
   Every row is cut over. The last two were cut second, once their modules
@@ -733,12 +756,14 @@ frame never evaluated the library ("As built" below).
   other change, and that was the whole cut. What it costs is with `'wasm'`
   alone, in the time before a top's modules arrive: a stylesheet a script
   writes then, or a host no shell named, loads the fallback into the top's
-  library, as a script rewritten then already did (from the text the
-  shell loaded, without a request). With `'js'` a top's library is the
-  file itself, as before. A rewrite in the middle of another (a
-  `data:` script that a script the module is rewriting imports, a `data:`
-  stylesheet in a stylesheet) is the fallback's too: without it the outer
-  call is marked as needing it and made again once it is there.
+  library, as a script rewritten then already did (from the text the shell
+  loaded, without a request). With `'js'` a top's library is the file
+  itself, as before. A rewrite in the middle of another (a `data:` script
+  that a script the module is rewriting imports, a `data:` stylesheet in a
+  stylesheet) is a second instance's of the module, down to the fourth one
+  inside another ("Instance memory" in section 6); past that it is the
+  fallback's: without it the outer call is marked as needing it and made
+  again once it is there.
 
   Where the text comes from. The service worker writes the file's script
   into every proxied top's shell, before the bundle: the parser fetches
@@ -1232,9 +1257,10 @@ declines no stylesheet, declaration list or value (its first form declined
 a lone surrogate, a URL that begins with U+FEFF, deep nesting, a large
 sheet and a token past the end of the text, and css-tree rewrote those).
 What is left to JavaScript is a thread with no module, an instance that
-trapped, and a rewrite inside a rewrite: a `data:` stylesheet imported by a
-stylesheet asks for the module as the sheet around it did, and is css-tree's
-until `src/wasm/thread.ts` gives a call made during a call an instance.
+trapped, and a stylesheet nested past the fourth level: a `data:`
+stylesheet imported by a stylesheet asks for the module as the sheet around
+it did, and is rewritten by a second instance of it ("Instance memory" in
+section 6), down to the fourth sheet inside a sheet.
 css-tree's walker compares an at-rule's name as written, so `@IMPORT
 url(x)` routes as an image and `@IMPORT "x"` is left alone; the module does
 the same. Where css-tree itself has no clean answer the module has one:
@@ -1357,10 +1383,11 @@ these needs another answer than css-tree:
   that has not arrived yet (the service worker waits for one that is being
   compiled; a frame's library cannot wait at all), a document outside the
   controller's agent cluster, an instance that trapped;
-- a `data:` stylesheet inside a stylesheet: a second instance for a call
-  made during a call (`src/wasm/thread.ts`). `routeCSS` rewrites it inside
-  the synchronous rewriters, so whatever answers has to be in hand before
-  the rewrite around it starts.
+- `data:` stylesheets nested five deep, each imported by the one around
+  it: the first four are the module's, each in an instance of its own
+  (`src/wasm/thread.ts`), and the fifth asks css-tree. `routeCSS` rewrites
+  it inside the synchronous rewriters, so whatever answers has to be in
+  hand before the rewrite around it starts.
 
 Nothing about a text itself sends it to css-tree any more (above).
 
@@ -1432,8 +1459,9 @@ not worth it for the printer alone: it only runs on error paths.
   classic, module, blob:, nested, framed and service workers evaluate from
   text reads as it does natively under both backends, and under `'wasm'`
   is the module's rewrite from the worker's first message on),
-  `wasm-instances` (a thread's instance: replaced past the memory limit
-  with the same rewrites before and after), `wasm-artifact` (no name
+  `wasm-instances` (a thread's instances: replaced past the memory limit
+  with the same rewrites before and after, a second one for a rewrite made
+  during a rewrite), `wasm-artifact` (no name
   or producers section, no project token in the bytes, every export
   renamable, the flags and statuses of the ABI), `suffix` (the suffix
   module's boundary, budget and glue, and its parity with tldts through

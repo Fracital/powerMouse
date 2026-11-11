@@ -1,6 +1,6 @@
-// The wasm modules a thread was handed and the one instance of each it
-// runs. The controller loads every artifact once and hands it on: compiled,
-// to each rewrite worker beside its REWRITE_PORT (REWRITE_MODULES), to a
+// The wasm modules a thread was handed and the instances of each it runs.
+// The controller loads every artifact once and hands it on: compiled, to
+// each rewrite worker beside its REWRITE_PORT (REWRITE_MODULES), to a
 // page's library and from there to its dedicated workers, and as bytes to
 // the service worker with its handshake (ControllerInitMessage.modules, or
 // a later CONTROLLER_MODULES when the load finished after it). Each thread
@@ -26,7 +26,7 @@ export type ModuleGiven = WebAssembly.Module | ArrayBuffer;
  * never shrinks: an instance keeps what its largest script needed (10 to
  * 34 times the script's length; docs/rust-plan.md, Instance memory) until
  * it is dropped, and a new one costs 0.1 to 0.3 ms. One that ends a call
- * past the thread's limit is dropped, and the next call gets a new one
+ * past the thread's limit is not kept, and the next call gets a new one
  * from the same compiled module.
  *
  * A page's library and a dedicated worker rewrite what the page evaluates,
@@ -43,6 +43,16 @@ export const PAGE_MEMORY_LIMIT = 8 * 1024 * 1024;
  * bundle costs its 200 MB for the one rewrite and then nothing.
  */
 export const SERVING_MEMORY_LIMIT = 64 * 1024 * 1024;
+/**
+ * The instances of one module a thread runs at a time: a rewrite made
+ * during a rewrite (a `data:` stylesheet a stylesheet imports, a `data:`
+ * module a module imports, each rewritten from inside the routing call of
+ * the one around it) runs in an instance of its own, and so does one inside
+ * that. Deeper than this the JavaScript rewriter has the piece, so a page
+ * that nests them without end makes a thread hold four instances and no
+ * more.
+ */
+export const INSTANCES = 4;
 
 let memoryLimit = PAGE_MEMORY_LIMIT;
 
@@ -51,18 +61,32 @@ export function setMemoryLimit(bytes: number): void {
 	memoryLimit = bytes;
 }
 
+/** an instance of a module, and what answers its routing import during the call it is in */
+interface Held {
+	instance: BufferInstance;
+	module: WebAssembly.Module;
+	route: RouteImport | undefined;
+}
+
 const modules = new Map<string, WebAssembly.Module>();
-const instances = new Map<string, BufferInstance>();
+/** the instances of each module that are in no call, the one last used last */
+const idle = new Map<string, Held[]>();
+/** how many calls each module has in hand (one inside another) */
+const calls = new Map<string, number>();
 /** the bytes each module was last compiled from, by length and hash: every handshake of every tab carries them again */
 const compiledFrom = new Map<string, string>();
 /** the compiles in flight */
 const pending = new Set<Promise<void>>();
 
-/** `module` is this thread's copy of the artifact `name` (an Assets key); a new one replaces the old and its instance */
+/**
+ * `module` is this thread's copy of the artifact `name` (an Assets key); a
+ * new one replaces the old and its instances (one in a call finishes the
+ * call and is not kept)
+ */
 export function adoptModule(name: string, module: WebAssembly.Module): void {
 	if (modules.get(name) === module) return;
 	modules.set(name, module);
-	instances.delete(name);
+	idle.delete(name);
 }
 
 function fingerprint(bytes: ArrayBuffer): string {
@@ -128,72 +152,71 @@ export async function heldModules(): Promise<string[]> {
 	return [...modules.keys()];
 }
 
-/** what answers each module's routing import during the call in hand */
-const routes = new Map<string, RouteImport>();
-/** the modules with a call in hand: an instance is not entered twice */
-const busy = new Set<string>();
-
-/**
- * This thread's instance of the module `name`, made on first use, or null
- * when the thread was never handed the module or it would not instantiate
- */
-export function instanceOf(name: string): BufferInstance | null {
-	const kept = instances.get(name);
-	if (kept) return kept;
+/** a new instance of the module `name`, or null when the thread was never handed it or it would not instantiate */
+function instantiate(name: string): Held | null {
 	const module = modules.get(name);
 	if (!module) return null;
 	try {
-		const instance = new BufferInstance(
+		const held: Held = {
 			module,
-			(kind, text) => routes.get(name)?.(kind, text) ?? null,
-		);
-		instances.set(name, instance);
-		return instance;
+			route: undefined,
+			instance: new BufferInstance(
+				module,
+				(kind, text) => held.route?.(kind, text) ?? null,
+			),
+		};
+		return held;
 	} catch (error) {
 		console.warn(`Stomp: the ${name} module did not instantiate`, error);
 		return null;
 	}
 }
 
-/** the instance of `name` is not used again (it trapped, or ended a call past the thread's memory limit) */
-export function dropInstance(name: string): void {
-	instances.delete(name);
-}
-
 /**
- * `work` run with this thread's instance of `name`, `route` answering the
- * module's routing import for as long as it runs. Null when there is no
- * instance, when the call trapped (a Rust panic aborts: the instance is
- * dead and dropped, the caller does the work in JavaScript this once, and
- * the next call gets a new instance) and when the instance is in a call
- * already: a route that rewrites something itself (a data: stylesheet
- * inside a stylesheet) would enter it again while its output is half
- * written, so that inner piece is the JavaScript rewriter's.
+ * `work` run with an instance of `name` that is this call's alone, `route`
+ * answering that instance's routing import for as long as it runs. The
+ * thread keeps the instance for the next call; a call made during a call
+ * (a route that rewrites something itself) takes another, made when there
+ * is none, and each route goes on answering its own call.
  *
- * An instance that ended the call holding more than the thread's memory
- * limit is dropped after the call as well, and only then: one that grows
- * past the limit during a call finishes it.
+ * Null when there is no instance, when INSTANCES calls are in hand already,
+ * and when the call threw (a Rust panic aborts, and a route that throws
+ * leaves the module's state half written): the caller does the work in
+ * JavaScript this once, and whatever call is around this one goes on.
+ *
+ * An instance is only ever dropped here, after its own call returned: one
+ * that threw, one whose module was replaced meanwhile, and one that ended
+ * the call holding more than the thread's memory limit.
  */
 export function withInstance<T>(
 	name: string,
 	work: (instance: BufferInstance) => T,
 	route?: RouteImport,
 ): T | null {
-	if (busy.has(name)) return null;
-	const instance = instanceOf(name);
-	if (!instance) return null;
-	busy.add(name);
-	if (route) routes.set(name, route);
+	const depth = calls.get(name) ?? 0;
+	if (depth >= INSTANCES) return null;
+	const held = idle.get(name)?.pop() ?? instantiate(name);
+	if (!held) return null;
+	held.route = route;
+	calls.set(name, depth + 1);
+	let keep = true;
 	try {
-		return work(instance);
+		return work(held.instance);
 	} catch (error) {
-		dropInstance(name);
+		keep = false;
 		console.warn(`Stomp: the ${name} module failed, rewriting in JS`, error);
 		return null;
 	} finally {
-		busy.delete(name);
-		routes.delete(name);
-		if (instances.get(name) === instance && instance.memoryBytes > memoryLimit)
-			dropInstance(name);
+		held.route = undefined;
+		calls.set(name, depth);
+		if (
+			keep &&
+			held.module === modules.get(name) &&
+			held.instance.memoryBytes <= memoryLimit
+		) {
+			const kept = idle.get(name);
+			if (kept) kept.push(held);
+			else idle.set(name, [held]);
+		}
 	}
 }

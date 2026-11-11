@@ -210,6 +210,10 @@ async function proxied(url, work) {
 		check("a module worker's is from its first statement", 'moduleTop');
 		check('and of a data: module it imports', 'moduleData');
 		check('and for its messages', 'moduleAgain');
+		check(
+			'and of a data: module it imports where it is served, rewritten during its own rewrite',
+			'moduleStatic',
+		);
 		check("a blob: worker's is", 'blobFirst');
 		check(
 			"a frame's worker's is (the frame holds no module: its top does)",

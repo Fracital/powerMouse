@@ -8,8 +8,10 @@
 // which of the two rewrote a sheet shows nowhere but in the time it took.
 // The markup scan only finds; what is done with each element is
 // src/prewrite.ts's own code. Every function answers null when this thread
-// holds no scanner (or one in a call already, or a scan it declined), and
-// the caller then does the work in JavaScript as it always did.
+// holds no scanner (or a scan it declined), and the caller then does the
+// work in JavaScript as it always did. A rewrite made during a rewrite (a
+// data: stylesheet a stylesheet imports) runs in an instance of its own
+// (src/wasm/thread.ts).
 import { routeCSS } from '../cssURLs';
 import { routeBinary } from '../routeURL';
 import StompURL from '../StompURL';
@@ -94,8 +96,9 @@ export const rewritingStyles = (): boolean => inHand > 0;
 /**
  * `text` rewritten by the module under `flags`, or null when it is
  * JavaScript's to rewrite: this thread holds no module that rewrites (none,
- * or one older than this glue), or the module is in a call already. Throws
- * where css-tree would never have come back.
+ * or one older than this glue), or it has INSTANCES rewrites in hand, one
+ * inside another, already. Throws where css-tree would never have come
+ * back.
  */
 function rewritten(text: string, url: StompURL, flags: number): string | null {
 	let result;
@@ -122,8 +125,9 @@ function rewritten(text: string, url: StompURL, flags: number): string | null {
  * modifyCSS in the module: the stylesheet or declaration list `text` of
  * the document at `url` with every URL routed (`context` as modifyCSS
  * takes it), or null when JavaScript has to do it: this thread holds no
- * module, the module is in a call already (a data: stylesheet imported by
- * the sheet being rewritten), or the context is one it does not rewrite.
+ * module, the sheet is nested deeper than the thread runs instances (a
+ * data: stylesheet imported by the sheet being rewritten is the module's
+ * too, down to the fourth), or the context is one it does not rewrite.
  */
 export function rewriteStyles(
 	text: string,

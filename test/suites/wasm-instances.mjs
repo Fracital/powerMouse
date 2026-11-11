@@ -1,10 +1,14 @@
-// The instance a thread keeps of a wasm module (src/wasm/thread.ts), in
+// The instances a thread keeps of a wasm module (src/wasm/thread.ts), in
 // node. wasm memory never shrinks, so an instance that ends a call holding
 // more than the thread's limit is replaced by a new one from the same
 // compiled module, and what the module answers must not depend on which
 // instance answered: the same scripts are rewritten with the limit forced
 // low (every large script, then every script, costs its instance) and with
-// it out of reach, and the outputs compared.
+// it out of reach, and the outputs compared. A rewrite made during a
+// rewrite (a data: module a module imports is rewritten from inside the
+// routing call of the one around it; a data: stylesheet a stylesheet
+// imports is the same shape) runs in an instance of its own, for both
+// modules, and each call keeps its own route.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { done, ok, OUT } from '../lib.mjs';
@@ -27,6 +31,7 @@ export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 export { BufferInstance } from ${JSON.stringify(`${root}src/wasm/module.ts`)};
 export * as thread from ${JSON.stringify(`${root}src/wasm/thread.ts`)};
+export { modifyCSS } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
 `,
 );
 const bundle = `${OUT}wasm-instances.mjs`;
@@ -39,7 +44,10 @@ await esbuild.build({
 	outfile: bundle,
 	logLevel: 'silent',
 });
-const lib = await import(bundle);
+// two threads: one that never holds a module (the JavaScript rewriter) and
+// one that is handed them
+const plain = await import(`${bundle}?js`);
+const lib = await import(`${bundle}?wasm`);
 const { thread, BufferInstance } = lib;
 
 // every instance any thread here makes
@@ -66,6 +74,10 @@ const forget = () => {
 	thread.adoptModule('rewriter', another);
 	thread.adoptModule('rewriter', rewriter);
 };
+thread.adoptModule(
+	'scanner',
+	await WebAssembly.compile(readFileSync(`${root}dist/scanner.wasm`)),
+);
 const warn = console.warn;
 console.warn = () => {};
 
@@ -207,8 +219,11 @@ const show = (value) => JSON.stringify(value)?.slice(0, 400);
 	const inside = thread.withInstance('rewriter', (it) => {
 		const large = it.call(sized(150), 0);
 		const past = it.memoryBytes;
+		const [innerMade, inner] = during(() => next());
 		return {
 			past,
+			innerMade,
+			other: inner !== it,
 			large: 'output' in large && large.output.includes('/* kept 150 */'),
 			after: it.call('abc', 0).output,
 			it,
@@ -216,11 +231,262 @@ const show = (value) => JSON.stringify(value)?.slice(0, 400);
 	});
 	ok(
 		'an instance past the limit goes on answering its own call',
-		inside.past > 2 * MB && inside.large && inside.after === 'abc',
+		inside.past > 2 * MB &&
+			inside.large &&
+			inside.after === 'abc' &&
+			inside.other,
 		show({ ...inside, it: undefined }),
 	);
 	ok('and is dropped once the call returned', next() !== inside.it);
 	thread.setMemoryLimit(thread.PAGE_MEMORY_LIMIT);
+}
+
+// a call made during a call
+{
+	forget();
+	// flag 1 asks the module to route its input through the host (the
+	// boundary's own check, test/suites/wasm-artifact.mjs)
+	const [nestedMade, nested] = during(() =>
+		thread.withInstance(
+			'rewriter',
+			(outer) => {
+				const first = outer.call('u', 1).output;
+				const second = outer.call('w', 1).output;
+				return { outer, first, second };
+			},
+			(kind, text) =>
+				text === 'u'
+					? `outer:${thread.withInstance(
+							'rewriter',
+							(inner) => inner.call('v', 1).output,
+							(kind, text) => `inner:${text}`,
+						)}`
+					: `outer:${text}`,
+		),
+	);
+	ok(
+		'a call made from inside a routing call is answered, by an instance of its own',
+		nested.first === 'outer:inner:v' && nestedMade === 2,
+		show({ first: nested.first, made: nestedMade }),
+	);
+	ok(
+		'and the route of the call around it goes on answering that call',
+		nested.second === 'outer:w',
+		show(nested.second),
+	);
+	const pair = () =>
+		thread.withInstance('rewriter', (outer) => [outer, next()]);
+	const [againMade, again] = during(pair);
+	ok(
+		'both instances are kept: the same two serve the next call and the call inside it',
+		againMade === 0 &&
+			again[0] === nested.outer &&
+			again[1] instanceof BufferInstance &&
+			again[1] !== again[0] &&
+			pair()[1] === again[1],
+		`${againMade} made`,
+	);
+	const thrown = thread.withInstance('rewriter', (outer) => [
+		thread.withInstance('rewriter', () => {
+			throw new Error('trap');
+		}),
+		outer.call('abc', 0).output,
+	]);
+	const afterThrow = pair();
+	ok(
+		'a call that throws inside another declines itself alone and costs its own instance',
+		show(thrown) === show([null, 'abc']) &&
+			afterThrow[0] === again[0] &&
+			afterThrow[1] !== again[1],
+		show(thrown),
+	);
+	thread.setMemoryLimit(2 * MB);
+	const innerLarge = thread.withInstance('rewriter', (outer) => [
+		outer,
+		thread.withInstance('rewriter', (inner) => {
+			inner.call(sized(150), 0);
+			return inner;
+		}),
+	]);
+	const afterInner = pair();
+	ok(
+		'an inner instance past the limit is dropped, the outer one kept',
+		innerLarge[1].memoryBytes > 2 * MB &&
+			afterInner[0] === innerLarge[0] &&
+			afterInner[1] !== innerLarge[1],
+	);
+	const outerLarge = thread.withInstance('rewriter', (outer) => {
+		outer.call(sized(150), 0);
+		return [outer, next()];
+	});
+	ok(
+		'an outer instance past the limit is dropped, the inner one kept for the next call',
+		outerLarge[0].memoryBytes > 2 * MB && next() === outerLarge[1],
+	);
+	thread.setMemoryLimit(thread.PAGE_MEMORY_LIMIT);
+
+	// one inside another, deeper than the thread goes
+	const nest = (levels) =>
+		thread.withInstance('rewriter', (it) => [
+			it,
+			...(levels > 1 ? (nest(levels - 1) ?? [null]) : []),
+		]);
+	const [deepMade, deep] = during(() => nest(thread.INSTANCES + 2));
+	ok(
+		'a thread runs INSTANCES of a module at a time; a call deeper than that is declined and the ones around it go on',
+		thread.INSTANCES === 4 &&
+			deep.length === thread.INSTANCES + 1 &&
+			deep.at(-1) === null &&
+			new Set(deep).size === deep.length &&
+			deep.slice(0, -1).every((it) => it instanceof BufferInstance) &&
+			deepMade === thread.INSTANCES - 1,
+		`${deep.length} levels, ${deepMade} made`,
+	);
+	const [keptMade] = during(() => nest(thread.INSTANCES));
+	ok('and keeps them', keptMade === 0, `${keptMade} made`);
+
+	// a module replaced while an instance of the old one is in a call
+	const replaced = thread.withInstance('rewriter', (it) => {
+		thread.adoptModule('rewriter', another);
+		return [it, it.call('abc', 0).output, next()];
+	});
+	ok(
+		'an instance whose module was replaced during its call finishes the call and is not kept',
+		replaced[1] === 'abc' &&
+			replaced[2] !== replaced[0] &&
+			next() === replaced[2],
+	);
+	thread.adoptModule('rewriter', rewriter);
+}
+
+// the scanner: a data: stylesheet a stylesheet imports is rewritten from
+// inside the routing call of the sheet around it (routeCSS)
+{
+	const scanner = await WebAssembly.compile(
+		readFileSync(`${root}dist/scanner.wasm`),
+	);
+	// the thread as it is when it has made no instance of the scanner yet
+	thread.adoptModule('scanner', scanner);
+	const pageOf = (from) =>
+		new from.StompURL(
+			'https://example.com/dir/a.css',
+			from.parseConfig(config, 'k').codec,
+			'/stomp/',
+		);
+	const styles = (sheet) => {
+		const told = {};
+		return [lib.modifyCSS(sheet, pageOf(lib), 'stylesheet', told), told.by];
+	};
+	const byCSSTree = (sheet) =>
+		plain.modifyCSS(sheet, pageOf(plain), 'stylesheet');
+	const sheet =
+		'@import url("data:text/css,a%7Bb:url(c)%7D"); @import "data:text/css;base64,YXtiOnVybChjKX0="; a { background: url(x.png) }';
+	const [sheetMade, [output, by]] = during(() => styles(sheet));
+	const expected = byCSSTree(sheet);
+	ok(
+		"a data: stylesheet a stylesheet imports is the module's rewrite, as the sheet around it is, and is css-tree's byte for byte",
+		by === 'wasm' && output === expected && output !== sheet,
+		show({ by, output, expected }),
+	);
+	ok(
+		'by an instance of its own: two were made, one for the sheet and one for both sheets inside it',
+		sheetMade === 2,
+		`${sheetMade} made`,
+	);
+	const [againMade, [again]] = during(() => styles(sheet));
+	ok(
+		'and the thread keeps both for the next sheet',
+		againMade === 0 && again === output,
+		`${againMade} made`,
+	);
+	// the route of the sheet around it goes on answering after the sheet
+	// inside returned: the url() after the import resolves against the
+	// outer sheet's own URL
+	ok(
+		"the outer sheet's route answers what follows the import",
+		/\/stomp\/binary\/[^)#"]*x[^)#"]*png/.test(output),
+		show(output),
+	);
+	// one data: stylesheet inside another, deeper than the thread goes:
+	// css-tree has the innermost, and the text is the same
+	const wrap = (text, level) =>
+		`@import url("data:text/css,${encodeURIComponent(text)}"); .level${level} { background: url(l${level}.png) }`;
+	let nested = '.level0 { background: url(l0.png) }';
+	for (let level = 1; level <= thread.INSTANCES; level++)
+		nested = wrap(nested, level);
+	const [nestedMade, [deep, deepBy]] = during(() => styles(nested));
+	ok(
+		'stylesheets nested deeper than INSTANCES are all rewritten, the innermost by css-tree, the same as css-tree rewrites them all',
+		deepBy === 'wasm' &&
+			deep === byCSSTree(nested) &&
+			nestedMade === thread.INSTANCES - 2,
+		show({ deepBy, nestedMade, deep }),
+	);
+}
+
+// the rewriter's glue: a data: module a module imports
+{
+	const script =
+		'import d from "data:text/javascript,/* kept inner */ export default top.location.href;";\n' +
+		'import "./b.js";\n' +
+		'/* kept outer */ export const x = top;\n';
+	next();
+	thread.withInstance('rewriter', () => next());
+	const [glueMade, output] = during(() => rewrite(script, 'genericModule'));
+	const js = plain.modifyJS(
+		script,
+		urlOf(plain),
+		{ ...config, rewriter: 'js' },
+		'genericModule',
+	);
+	const specifier = /import ['"]([^'"]+b[^'"]+js)['"]/;
+	const inner = decodeURIComponent(
+		/from "data:text\/javascript,([^"]*)"/.exec(output)?.[1] ?? '',
+	);
+	ok(
+		"a data: module a module imports is the module's rewrite, as the module around it is",
+		output.includes('/* kept outer */ export const x = $s$j.get(top, "top")') &&
+			inner.includes(
+				'/* kept inner */ export default $s$j.get2($s$j.get(top, "top")',
+			),
+		show(output),
+	);
+	ok(
+		'the import after it is routed as the JavaScript rewriter routes it',
+		specifier.exec(output)?.[1] !== undefined &&
+			specifier.exec(output)?.[1] === specifier.exec(js)?.[1],
+		show([specifier.exec(output)?.[1], specifier.exec(js)?.[1]]),
+	);
+	ok(
+		'by the two instances the thread keeps',
+		glueMade === 0,
+		`${glueMade} made`,
+	);
+	// one data: module inside another, deeper than the thread goes: the
+	// JavaScript rewriter has the innermost, which prints no comment
+	const wrap = (text, level) =>
+		`import v from "data:text/javascript,${encodeURIComponent(text)}"; /* level ${level} */ export default v + top.length;`;
+	let nested = '/* level 0 */ export default top.length;';
+	for (let level = 1; level <= thread.INSTANCES; level++)
+		nested = wrap(nested, level);
+	let text = rewrite(nested, 'genericModule');
+	const levels = [];
+	for (let level = thread.INSTANCES; level >= 0; level--) {
+		levels.push([
+			level,
+			text.includes(`/* level ${level} */`),
+			text.includes('$s$j.get(top, "top")') ||
+				text.includes("$s$j.get(top, 'top')"),
+		]);
+		text = decodeURIComponent(
+			/from "data:text\/javascript,([^"]*)"/.exec(text)?.[1] ?? '',
+		);
+	}
+	ok(
+		'modules nested deeper than INSTANCES are all rewritten, the innermost by the JavaScript rewriter',
+		levels.every(([level, kept, rewritten]) => rewritten && kept === level > 0),
+		show(levels),
+	);
 }
 
 console.warn = warn;

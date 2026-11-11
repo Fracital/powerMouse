@@ -237,10 +237,11 @@ export function rewriterRoute(
 }
 
 /**
- * `script` rewritten by this thread's instance of the module, or null: the
+ * `script` rewritten by an instance of this thread's module, or null: the
  * thread holds none, it holds another revision's, the script is not
- * well-formed UTF-16, the instance is in a call already (a data: import
- * inside the script being rewritten), it trapped, or it declined the script
+ * well-formed UTF-16, it trapped, or it declined the script. A data:
+ * module the script imports is rewritten from inside this call's routing,
+ * by another instance (src/wasm/thread.ts).
  */
 export function rewriteInWasm(
 	script: string,

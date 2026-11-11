@@ -271,11 +271,14 @@ if (artifacts.includes('rewriter.wasm')) {
 		String(instance.memoryBytes),
 	);
 
-	// the thread's copy (src/wasm/thread.ts): one instance per module, made
-	// on first use, and nothing at all for a module the thread was not handed
+	// the thread's copy (src/wasm/thread.ts): an instance per module, made on
+	// first use and kept for the next call, and nothing at all for a module
+	// the thread was not handed (test/suites/wasm-instances.mjs has what
+	// happens to an instance afterwards)
+	const used = (name) => thread.withInstance(name, (it) => it);
 	ok(
 		'a module the thread never got has no instance',
-		!thread.hasModule('rewriter') && thread.instanceOf('rewriter') === null,
+		!thread.hasModule('rewriter') && used('rewriter') === null,
 	);
 	ok(
 		'work without an instance is declined',
@@ -286,10 +289,10 @@ if (artifacts.includes('rewriter.wasm')) {
 		'a handshake adopts the compiled modules it carries',
 		thread.hasModule('rewriter') && !thread.hasModule('junk'),
 	);
-	const first = thread.instanceOf('rewriter');
+	const first = used('rewriter');
 	ok(
 		'the thread instantiates once',
-		first instanceof BufferInstance && thread.instanceOf('rewriter') === first,
+		first instanceof BufferInstance && used('rewriter') === first,
 	);
 	ok(
 		'work runs with the instance',
@@ -299,23 +302,15 @@ if (artifacts.includes('rewriter.wasm')) {
 		'work that throws drops the instance and declines',
 		thread.withInstance('rewriter', () => {
 			throw new Error('trap');
-		}) === null && thread.instanceOf('rewriter') !== first,
+		}) === null && used('rewriter') !== first,
 	);
-	const replaced = thread.instanceOf('rewriter');
+	const replaced = used('rewriter');
 	thread.adoptModule('rewriter', module);
-	ok(
-		'the same module again keeps the instance',
-		thread.instanceOf('rewriter') === replaced,
-	);
+	ok('the same module again keeps the instance', used('rewriter') === replaced);
 	thread.adoptModule('rewriter', await compileModule(bytes));
 	ok(
 		'a new module replaces the instance',
-		thread.instanceOf('rewriter') !== replaced,
-	);
-	thread.dropInstance('rewriter');
-	ok(
-		'a dropped instance is made again',
-		thread.instanceOf('rewriter') !== null,
+		used('rewriter') instanceof BufferInstance && used('rewriter') !== replaced,
 	);
 	ok(
 		'the routing import is answered by the route of the call in hand',
@@ -330,12 +325,6 @@ if (artifacts.includes('rewriter.wasm')) {
 				(kind, text) => `two:${text}`,
 			) === 'two:u' &&
 			thread.withInstance('rewriter', (it) => it.call('u', 1).status) === 2,
-	);
-	ok(
-		'an instance in a call is not entered again',
-		thread.withInstance('rewriter', () =>
-			thread.withInstance('rewriter', () => 'inner'),
-		) === null && thread.withInstance('rewriter', () => 'after') === 'after',
 	);
 
 	// the service worker's way (a WebAssembly.Module cannot be posted to
@@ -355,12 +344,11 @@ if (artifacts.includes('rewriter.wasm')) {
 			held.includes('rewriter'),
 		String(held),
 	);
-	const fromBytes = thread.instanceOf('other');
+	const fromBytes = used('other');
 	await thread.adoptModules({ other: copy() });
 	ok(
 		'the same bytes again keep the module and its instance',
-		fromBytes instanceof BufferInstance &&
-			thread.instanceOf('other') === fromBytes,
+		fromBytes instanceof BufferInstance && used('other') === fromBytes,
 	);
 }
 
