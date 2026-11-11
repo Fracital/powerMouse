@@ -30,7 +30,7 @@ export default class FunctionModule extends Module<Client> {
 					const made = nativeEval(
 						modifyJS(
 							`(${written})`,
-							this.client.url,
+							this.client.baseURL,
 							this.client.config,
 							'generic',
 						),

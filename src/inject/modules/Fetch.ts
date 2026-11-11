@@ -277,7 +277,7 @@ export default class FetchModule extends Module<Client> {
 			(target, that, args, newTarget) => {
 				catchRequiredArguments(args.length, 1, 'EventSource', 'constructor');
 
-				const url = new URL(args[0], this.client.url.toString());
+				const url = new URL(args[0], this.client.baseURL.toString());
 
 				const result = Reflect.construct(
 					target,
@@ -352,7 +352,7 @@ export default class FetchModule extends Module<Client> {
 				else {
 					const text = String(args[0]);
 					try {
-						input = new URL(text, this.client.url.toString());
+						input = new URL(text, this.client.baseURL.toString());
 					} catch (error) {
 						// a URL that does not parse against the page's (a relative
 						// one in a data: worker, whose origin is opaque) throws
@@ -400,7 +400,7 @@ export default class FetchModule extends Module<Client> {
 					const text = String(args[0]);
 					if (args.length && failsToParse(this.client, text))
 						return await Reflect.apply(target, that, [text, ...args.slice(1)]);
-					url = new URL(text, this.client.url.toString());
+					url = new URL(text, this.client.baseURL.toString());
 					init = args[1];
 				}
 				// the request's mode, which decides the response's type
@@ -434,7 +434,7 @@ export default class FetchModule extends Module<Client> {
 				) {
 					const { referrer, ...rest } = init;
 					try {
-						const requested = new URL(referrer, this.client.url.toString());
+						const requested = new URL(referrer, this.client.baseURL.toString());
 						init =
 							requested.origin === this.client.url.url.origin
 								? {

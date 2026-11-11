@@ -1179,14 +1179,109 @@ export default class DocumentClient extends Client {
 	 * (IFrame sets it): called wherever a frame may have just connected
 	 */
 	sweepFrames?: () => void;
-	/** the document's base URL and what `url` made of it, last time */
+	/** the document's base URL and what `baseURL` made of it, last time */
 	#urlMemo: {
 		base: string;
 		named: unknown;
 		href: string;
 		directory: string;
 	} | null = null;
+	/** the document's own URL and what `url` made of it, last time */
+	#documentMemo: {
+		document: Document;
+		location: string;
+		named: unknown;
+		href: string;
+		directory: string;
+	} | null = null;
+	/**
+	 * The page URL of this document itself: what its origin, its site, its
+	 * storage, its cookies, its partition and the window membrane are of.
+	 * Never its base URL: a page names any URL it likes in a <base href>,
+	 * and a document whose identity followed it was another site's to every
+	 * store and window (a page of one site that named another's page as its
+	 * base read that site's localStorage and cookies, and reached its frames'
+	 * realms). A routed document's is its route's page URL; a document the
+	 * page made (blob:, data:, an inline one, an <object>'s) is what its
+	 * shell named; an about:blank or about:srcdoc document is of the
+	 * document that made it, its parent's or its opener's. What a URL the
+	 * page writes resolves against is `baseURL`.
+	 */
 	get url(): StompURL {
+		const named = (this.global as Record<string, unknown>)[WORKER_BASE];
+		let location: string;
+		try {
+			location = this.#locationHref(this.global.location);
+		} catch (error) {
+			return this.baseURL;
+		}
+		const document = this.global.document;
+		const memo = this.#documentMemo;
+		if (
+			memo &&
+			memo.document === document &&
+			memo.location === location &&
+			memo.named === named
+		)
+			return new StompURL(memo.href, this.codec, memo.directory);
+		const url = this.#readDocumentURL(named, location);
+		this.#documentMemo = {
+			document,
+			location,
+			named,
+			href: url.url.href,
+			directory: url.directory,
+		};
+		return url;
+	}
+	#readDocumentURL(named: unknown, location: string): StompURL {
+		const own = this.global.location;
+		const prefix = `${own.origin}${this.directory}`;
+		if (typeof named === 'string')
+			return new StompURL(named, this.codec, prefix);
+		if (ROUTE_PROTOCOLS.includes(own.protocol))
+			return parseRoutedURL(location, this.codec, prefix).url;
+		// about:blank, about:srcdoc: of the document that made it
+		if (own.protocol === 'about:') {
+			const creator = this.#creatorClient();
+			if (creator) return creator.url;
+		}
+		// anything else (a blob: copy no shell named, an <object>'s SVG): its
+		// own address, the proxy's, which is no page's origin
+		return new StompURL(location, this.codec, prefix);
+	}
+	/** the client of the document an about:blank or about:srcdoc document is of: its parent's, else its opener's */
+	#creatorClient(): DocumentClient | null {
+		for (const read of [
+			() => this.global.parent,
+			() => (this.global as unknown as { opener: unknown }).opener,
+		])
+			try {
+				const window = read() as Record<string, unknown> | null;
+				if (!window || window === (this.global as unknown)) continue;
+				const client = window[this.names.client] as DocumentClient | undefined;
+				if (client && client !== this && client.isDOM) return client;
+			} catch (error) {
+				// a window of another real origin
+			}
+		return null;
+	}
+	/**
+	 * location.href as the browser has it: a Location's members are its own
+	 * unforgeable properties, which the page cannot replace (its own reads
+	 * go through the Location module's stand-in)
+	 */
+	#locationHref(location: Location): string {
+		return location.href;
+	}
+	/**
+	 * What a URL this document's page writes resolves against: its base URL
+	 * (its <base href> when it has one, else its own URL), as the browser
+	 * resolves an attribute, a fetch, a script's import. It is the page's
+	 * own base while its markup is rewritten (loadHTML). Never a document's
+	 * identity: that is `url`.
+	 */
+	get baseURL(): StompURL {
 		if (this.#parseBase) return this.#parseBase;
 		// Nearly every hook asks, and decoding the route each time was a
 		// tenth of the hooks' time on a Google keystroke: the answer is a
@@ -1293,7 +1388,7 @@ export default class DocumentClient extends Client {
 			if (
 				(script.getAttribute('type') || '').trim().toLowerCase() === 'importmap'
 			) {
-				write(rewriteImportMap(read(), this.url, this.config));
+				write(rewriteImportMap(read(), this.baseURL, this.config));
 				continue;
 			}
 			if (!shouldRewriteScript(script)) continue;
@@ -1309,7 +1404,7 @@ export default class DocumentClient extends Client {
 				this.#table()?.script(isModule, source) ??
 				modifyJS(
 					source,
-					this.url,
+					this.baseURL,
 					this.config,
 					isModule ? 'genericModule' : 'generic',
 					isModule ? '' : scriptPreamble(source),
@@ -1388,7 +1483,7 @@ export default class DocumentClient extends Client {
 			this.prewrittenScript(module, text, true) ??
 			modifyJS(
 				text,
-				this.url,
+				this.baseURL,
 				this.config,
 				module ? 'genericModule' : 'generic',
 			);
@@ -1422,10 +1517,10 @@ export default class DocumentClient extends Client {
 		}
 		let output: string;
 		try {
-			output = modifyCSS(text, this.url);
+			output = modifyCSS(text, this.baseURL);
 		} catch (error) {
 			// unparsable: route what the regex can find
-			output = rewriteCSSValueURLs(text, this.url);
+			output = rewriteCSSValueURLs(text, this.baseURL);
 		}
 		if (large) this.#rememberStyle(text, output);
 		return output;
@@ -1445,7 +1540,7 @@ export default class DocumentClient extends Client {
 	#table(): PrewrittenTable | null {
 		const table = this.#prewritten;
 		if (!table) return null;
-		if (table.url === this.url.toString()) return table;
+		if (table.url === this.baseURL.toString()) return table;
 		return null;
 	}
 	/** the inline scripts and styles of the document loadHTML wrote, rewritten by the worker */

@@ -83,7 +83,7 @@ export default class NavigatorModule extends Module<DocumentClient> {
 					(target, that, args) => {
 						let url: URL;
 						try {
-							url = new URL(args[0], this.client.url.toString());
+							url = new URL(args[0], this.client.baseURL.toString());
 						} catch (error) {
 							// the browser's own TypeError for a URL that does not parse
 							return Reflect.apply(target, that, args);

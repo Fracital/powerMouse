@@ -49,10 +49,10 @@ export default class CSSOMModule extends Module<DocumentClient> {
 		const rewrite = (text: unknown) => {
 			const source = String(text);
 			try {
-				return modifyCSS(source, this.client.url);
+				return modifyCSS(source, this.client.baseURL);
 			} catch (error) {
 				// unparsable: route what the regex can find
-				return rewriteCSSValueURLs(source, this.client.url);
+				return rewriteCSSValueURLs(source, this.client.baseURL);
 			}
 		};
 
@@ -60,9 +60,9 @@ export default class CSSOMModule extends Module<DocumentClient> {
 		const rewriteDeclarations = (text: unknown) => {
 			const source = String(text);
 			try {
-				return modifyCSS(source, this.client.url, 'declarationList');
+				return modifyCSS(source, this.client.baseURL, 'declarationList');
 			} catch (error) {
-				return rewriteCSSValueURLs(source, this.client.url);
+				return rewriteCSSValueURLs(source, this.client.baseURL);
 			}
 		};
 
@@ -290,7 +290,7 @@ export default class CSSOMModule extends Module<DocumentClient> {
 					// a string source is a CSS `src` value; a buffer is data
 					if (typeof args[1] !== 'string')
 						return Reflect.construct(target, args, newTarget);
-					args[1] = rewriteCSSValueURLs(args[1], this.client.url);
+					args[1] = rewriteCSSValueURLs(args[1], this.client.baseURL);
 					// in a document no worker controls, a face whose source names
 					// routes is made in a controlled realm, so it loads through the
 					// worker; it is still this realm's FontFace (its prototype

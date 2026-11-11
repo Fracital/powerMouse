@@ -780,7 +780,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					routed,
 					page: new URL(
 						element.getAttributeOG(attribute) ?? routed,
-						this.client.url.toString(),
+						this.client.baseURL.toString(),
 					).href,
 				},
 			];
@@ -1003,7 +1003,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							handlerMark(key) +
 								modifyJS(
 									source,
-									this.client.url,
+									this.client.baseURL,
 									this.client.config,
 									'generic',
 								),
@@ -1027,8 +1027,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			element.setAttributeOG(attribute, value);
 			const routed = routeBinary(
 				new StompURL(
-					new URL(value, this.client.url.toString()),
-					this.client.url,
+					new URL(value, this.client.baseURL.toString()),
+					this.client.baseURL,
 				),
 			);
 			if (SVG_LOADS.includes(element.localName.toLowerCase()))
@@ -1070,10 +1070,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			element.setAttributeOG(attribute, value);
 			const routed = routeJS(
 				new StompURL(
-					new URL(value, this.client.url.toString()),
-					this.client.url,
+					new URL(value, this.client.baseURL.toString()),
+					this.client.baseURL,
 				),
-				this.client.url,
+				this.client.baseURL,
 				this.client.config,
 				'generic',
 			);
@@ -1205,7 +1205,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						'srcdoc',
 						modifyHTML(
 							source,
-							this.client.url,
+							this.client.baseURL,
 							this.client.config,
 							false,
 							undefined,
@@ -1239,9 +1239,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							new StompURL(
 								new URL(
 									element.getAttribute('href')!,
-									this.client.url.toString(),
+									this.client.baseURL.toString(),
 								),
-								this.client.url,
+								this.client.baseURL,
 							),
 						),
 					);
@@ -1259,7 +1259,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('href') !== '' &&
 						new URL(
 							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
-							responseURLOf(element) ?? this.client.url.toString(),
+							responseURLOf(element) ?? this.client.baseURL.toString(),
 						).toString(),
 				],
 				// an image map's areas are links too
@@ -1271,7 +1271,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('href') !== '' &&
 						new URL(
 							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
-							responseURLOf(element) ?? this.client.url.toString(),
+							responseURLOf(element) ?? this.client.baseURL.toString(),
 						).toString(),
 				],
 			],
@@ -1295,11 +1295,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							new StompURL(
 								new URL(
 									element.getAttribute('src')!,
-									this.client.url.toString(),
+									this.client.baseURL.toString(),
 								),
-								this.client.url,
+								this.client.baseURL,
 							),
-							this.client.url,
+							this.client.baseURL,
 							this.client.config,
 							scriptType(element),
 						),
@@ -1318,7 +1318,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.url.toString(),
+							this.client.baseURL.toString(),
 						).toString(),
 				],
 			],
@@ -1375,8 +1375,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					);
 					const as = (element.getAttribute('as') || '').trim().toLowerCase();
 					const resource = new StompURL(
-						new URL(element.getAttribute('href')!, this.client.url.toString()),
-						this.client.url,
+						new URL(
+							element.getAttribute('href')!,
+							this.client.baseURL.toString(),
+						),
+						this.client.baseURL,
 					);
 					element.setAttributeOG('href', element.getAttribute('href')!);
 					if (rel.has('manifest')) element.removeAttribute('href');
@@ -1384,14 +1387,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						rel.has('stylesheet') ||
 						((rel.has('preload') || rel.has('prefetch')) && as === 'style')
 					)
-						placeLoad(element, 'href', routeCSS(resource, this.client.url));
+						placeLoad(element, 'href', routeCSS(resource, this.client.baseURL));
 					else if (rel.has('modulepreload'))
 						placeLoad(
 							element,
 							'href',
 							routeJS(
 								resource,
-								this.client.url,
+								this.client.baseURL,
 								this.client.config,
 								'genericModule',
 							),
@@ -1403,7 +1406,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						placeLoad(
 							element,
 							'href',
-							routeJS(resource, this.client.url, this.client.config, 'generic'),
+							routeJS(
+								resource,
+								this.client.baseURL,
+								this.client.config,
+								'generic',
+							),
 						);
 					else placeLoad(element, 'href', routeBinary(resource));
 				}
@@ -1421,7 +1429,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('href') !== '' &&
 						new URL(
 							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
-							responseURLOf(element) ?? this.client.url.toString(),
+							responseURLOf(element) ?? this.client.baseURL.toString(),
 						).toString(),
 				],
 				[this.client.global.HTMLLinkElement, 'rel', () => false],
@@ -1438,8 +1446,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				if (element.hasAttribute('src') && element.getAttribute('src') !== '') {
 					element.setAttributeOG('src', element.getAttribute('src')!);
 					const resource = new StompURL(
-						new URL(element.getAttribute('src')!, this.client.url.toString()),
-						this.client.url,
+						new URL(
+							element.getAttribute('src')!,
+							this.client.baseURL.toString(),
+						),
+						this.client.baseURL,
 					);
 					// a javascript: URL runs in the frame, which a sandbox without
 					// allow-scripts forbids: natively nothing happens, so the frame
@@ -1471,7 +1482,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						opaque ??
 							routeHTML(
 								resource,
-								this.client.url,
+								this.client.baseURL,
 								this.client.config,
 								false,
 								// with the host's page cross-origin isolated, the
@@ -1508,7 +1519,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.url.toString(),
+							this.client.baseURL.toString(),
 						).toString(),
 				],
 				[
@@ -1519,7 +1530,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.url.toString(),
+							this.client.baseURL.toString(),
 						).toString(),
 				],
 			],
@@ -1569,7 +1580,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								'content',
 								modifyRefresh(
 									element.getAttribute('content')!,
-									this.client.url,
+									this.client.baseURL,
 									this.client.config,
 									this.client.nestedRoute,
 								),
@@ -1605,9 +1616,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							new StompURL(
 								new URL(
 									element.getAttribute('src')!,
-									this.client.url.toString(),
+									this.client.baseURL.toString(),
 								),
-								this.client.url,
+								this.client.baseURL,
 							),
 						),
 					);
@@ -1624,7 +1635,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.url.toString(),
+							this.client.baseURL.toString(),
 						).toString(),
 				],
 				[
@@ -1635,7 +1646,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.url.toString(),
+							this.client.baseURL.toString(),
 						).toString(),
 				],
 			],
@@ -1660,8 +1671,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							...src,
 							url: routeImageSet(
 								new StompURL(
-									new URL(src.url, this.client.url.toString()),
-									this.client.url,
+									new URL(src.url, this.client.baseURL.toString()),
+									this.client.baseURL,
 								),
 							),
 						});
@@ -1673,7 +1684,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						stringifySrcset(updated),
 						updated.map((candidate, index) => ({
 							routed: candidate.url,
-							page: new URL(parsed[index].url, this.client.url.toString()).href,
+							page: new URL(parsed[index].url, this.client.baseURL.toString())
+								.href,
 						})),
 						(copied) =>
 							stringifySrcset(
@@ -1722,9 +1734,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							new StompURL(
 								new URL(
 									element.getAttribute('src')!,
-									this.client.url.toString(),
+									this.client.baseURL.toString(),
 								),
-								this.client.url,
+								this.client.baseURL,
 							),
 						),
 					);
@@ -1743,7 +1755,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.url.toString(),
+							this.client.baseURL.toString(),
 						).toString(),
 				],
 				[
@@ -1754,7 +1766,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.url.toString(),
+							this.client.baseURL.toString(),
 						).toString(),
 				],
 				[
@@ -1765,7 +1777,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.url.toString(),
+							this.client.baseURL.toString(),
 						).toString(),
 				],
 			],
@@ -1789,7 +1801,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				if (current !== null && element.hasAttributeOG('style')) {
 					const rewritten = modifyCSS(
 						(element.getAttributeOG('style') ?? element.getAttribute('style'))!,
-						this.client.url,
+						this.client.baseURL,
 						'declarationList',
 					);
 
@@ -1818,7 +1830,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						modifyCSS(
 							(element.getAttributeOG('style') ??
 								element.getAttribute('style'))!,
-							this.client.url,
+							this.client.baseURL,
 							'declarationList',
 						),
 					);
@@ -1922,7 +1934,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					try {
 						const routed = modifyCSS(
 							AS_DECLARATION + value,
-							this.client.url,
+							this.client.baseURL,
 							'declarationList',
 						);
 						if (routed.startsWith(AS_DECLARATION))
@@ -1931,13 +1943,17 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						// not a value the parser takes: the url() tokens it has
 					}
 				return value.includes('url(')
-					? rewriteCSSValueURLs(value, this.client.url)
+					? rewriteCSSValueURLs(value, this.client.baseURL)
 					: value;
 			};
 
 			const rewriteCssText = (value: unknown) => {
 				try {
-					return modifyCSS(String(value), this.client.url, 'declarationList');
+					return modifyCSS(
+						String(value),
+						this.client.baseURL,
+						'declarationList',
+					);
 				} catch (error) {
 					return value;
 				}
@@ -2170,7 +2186,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 									try {
 										return modifyCSS(
 											String(value),
-											this.client.url,
+											this.client.baseURL,
 											'declarationList',
 										);
 									} catch (error) {
@@ -2428,7 +2444,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			 */
 			const action = new URL(
 				(element.getAttributeOG('action') ?? element.getAttribute('action'))!,
-				this.client.url.toString(),
+				this.client.baseURL.toString(),
 			).toString();
 
 			const methodIndex = validMethods.indexOf(
@@ -2441,8 +2457,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.setAttribute(
 						'action',
 						routeHTML(
-							new StompURL(action, this.client.url),
-							this.client.url,
+							new StompURL(action, this.client.baseURL),
+							this.client.baseURL,
 							this.client.config,
 							true,
 							this.client.nestedRoute,
@@ -2453,8 +2469,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.setAttribute(
 						'action',
 						routeHTML(
-							new StompURL(action, this.client.url),
-							this.client.url,
+							new StompURL(action, this.client.baseURL),
+							this.client.baseURL,
 							this.client.config,
 							false,
 							this.client.nestedRoute,
@@ -2471,7 +2487,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			element.getAttribute(attribute) !== '' &&
 			new URL(
 				(element.getAttributeOG(attribute) ?? element.getAttribute(attribute))!,
-				this.client.url.toString(),
+				this.client.baseURL.toString(),
 			).toString();
 
 		/** route one URL attribute, keeping the page's value as the original */
@@ -2493,9 +2509,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						new StompURL(
 							new URL(
 								element.getAttribute(attribute)!,
-								this.client.url.toString(),
+								this.client.baseURL.toString(),
 							),
-							this.client.url,
+							this.client.baseURL,
 						),
 					);
 					if (load) placeLoad(element, attribute, value);
@@ -2541,13 +2557,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				return;
 			}
 			const resource = new StompURL(
-				new URL(written, this.client.url.toString()),
-				this.client.url,
+				new URL(written, this.client.baseURL.toString()),
+				this.client.baseURL,
 			);
 			const routedOf = () =>
 				routeHTML(
 					resource,
-					this.client.url,
+					this.client.baseURL,
 					this.client.config,
 					false,
 					this.client.childRoute,
@@ -2645,7 +2661,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const writtenURL = (attribute: string) => (element: CustomElement) => {
 			const written = element.getAttributeOG(attribute);
 			return written !== null && written !== ''
-				? new URL(written, this.client.url.toString()).toString()
+				? new URL(written, this.client.baseURL.toString()).toString()
 				: false;
 		};
 		domHooksModule.useAttributes(proxiedLoad('data'), [
@@ -2677,8 +2693,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							routed.push(
 								routeXHR(
 									new StompURL(
-										new URL(token, this.client.url.toString()),
-										this.client.url,
+										new URL(token, this.client.baseURL.toString()),
+										this.client.baseURL,
 									),
 								),
 							);
@@ -2717,7 +2733,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			routeAttribute('formaction', (resource) =>
 				routeHTML(
 					resource,
-					this.client.url,
+					this.client.baseURL,
 					this.client.config,
 					true,
 					this.client.nestedRoute,
@@ -2758,8 +2774,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								...src,
 								url: routeBinary(
 									new StompURL(
-										new URL(src.url, this.client.url.toString()),
-										this.client.url,
+										new URL(src.url, this.client.baseURL.toString()),
+										this.client.baseURL,
 									),
 								),
 							})),
@@ -2889,21 +2905,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					new URL(
 						(element.getAttributeOG('action') ??
 							element.getAttribute('action'))!,
-						this.client.url.toString(),
+						this.client.baseURL.toString(),
 					).toString(),
 			],
 			[this.client.global.HTMLFormElement, 'method', () => false],
 		]);
 
 		// a base's href resolves against the document's URL, not against the
-		// base URL (which client.url follows once a base is in place, and is
-		// the page's own base while loadHTML rewrites the markup)
-		const documentURL = () => {
-			const location = this.client.location;
-			return ROUTE_PROTOCOLS.includes(location.url.protocol)
-				? location
-				: this.client.url;
-		};
+		// base URL (which client.baseURL follows once a base is in place, and
+		// is the page's own base while loadHTML rewrites the markup)
+		const documentURL = () => this.client.url;
 		domHooksModule.useAttributes(
 			(element) => {
 				element.restoreAttributesOG('href');

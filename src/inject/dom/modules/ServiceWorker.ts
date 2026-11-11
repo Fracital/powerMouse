@@ -395,7 +395,7 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 				throw new global.TypeError(
 					"Failed to execute 'register' on 'ServiceWorkerContainer': 1 argument required, but only 0 present.",
 				);
-			const base = this.client.url.toString();
+			const base = this.client.baseURL.toString();
 			const text = String(args[0]);
 			let script: URL;
 			try {
@@ -493,7 +493,7 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 			isContainer,
 			0,
 			async (args) => {
-				const base = this.client.url.toString();
+				const base = this.client.baseURL.toString();
 				let url: URL;
 				try {
 					url = new URL(

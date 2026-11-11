@@ -460,7 +460,7 @@ export default class ContextModule extends Module<DocumentClient> {
 	 * that window's own realm, as a navigation the target starts.
 	 */
 	#navigate(context: Context, value: urlLike, member: 'replace' | 'href') {
-		const destination = new URL(value, this.client.url.toString());
+		const destination = new URL(value, this.client.baseURL.toString());
 		if (!this.client.mayNavigate(context))
 			throw this.client.navigationRefused(
 				member,
@@ -654,7 +654,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		if (this.held.has(context)) return context;
 		let target: URL | undefined;
 		try {
-			target = new URL(String(url), this.client.url.toString());
+			target = new URL(String(url), this.client.baseURL.toString());
 		} catch (error) {
 			// no URL: the window's own document decides
 		}

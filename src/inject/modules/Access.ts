@@ -60,7 +60,7 @@ export default class AccessModule extends Module<Client> {
 		const globalEval = (x: unknown) => {
 			if (!isCode(x)) return x;
 			return evalSnapshot(
-				modifyJS(String(x), this.client.url, this.client.config, 'generic'),
+				modifyJS(String(x), this.client.baseURL, this.client.config, 'generic'),
 			);
 		};
 
@@ -116,7 +116,7 @@ export default class AccessModule extends Module<Client> {
 				? url
 				: routeImport(
 						new StompURL(
-							new URL(url, baseURL || this.client.url.toString()),
+							new URL(url, baseURL || this.client.baseURL.toString()),
 							this.client.url,
 						),
 						this.client.url,
@@ -354,7 +354,7 @@ export default class AccessModule extends Module<Client> {
 				if (isLocation) {
 					const destination = new URL(
 						<urlLike>value,
-						this.client.url.toString(),
+						this.client.baseURL.toString(),
 					);
 					set(
 						// this document's own location: a navigation the browser's
@@ -673,7 +673,7 @@ export default class AccessModule extends Module<Client> {
 				if (!isCode(code)) return code;
 				return modifyJS(
 					String(code),
-					this.client.url,
+					this.client.baseURL,
 					this.client.config,
 					'generic',
 				);

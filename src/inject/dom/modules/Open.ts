@@ -53,7 +53,7 @@ export default class OpenModule extends Module<DocumentClient> {
 				return;
 			const url = new URL(
 				link.getAttribute('href')!,
-				this.client.url.toString(),
+				this.client.baseURL.toString(),
 			);
 			if (!['http:', 'https:'].includes(url.protocol)) return;
 			if (sandboxed) {

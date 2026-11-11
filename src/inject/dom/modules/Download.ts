@@ -102,7 +102,10 @@ export default class DownloadModule extends Module<DocumentClient> {
 			let url: URL;
 			try {
 				// the hooked getter answers with what the page wrote
-				url = new URL(link.getAttribute('href')!, this.client.url.toString());
+				url = new URL(
+					link.getAttribute('href')!,
+					this.client.baseURL.toString(),
+				);
 			} catch (error) {
 				return;
 			}

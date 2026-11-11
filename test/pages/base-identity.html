@@ -1,0 +1,58 @@
+<!doctype html>
+<title>BASE IDENTITY</title>
+<body>
+	<script>
+		// `?write`: this site's stores get a secret. `?read=<url>`: the page names
+		// another site's page as its <base href>, then reads its stores and a
+		// frame of that site, which a URL names and no origin follows
+		const query = new URLSearchParams(location.search);
+		const report = (window.__baseIdentity = {});
+		const attempt = (read) => {
+			try {
+				return read();
+			} catch (error) {
+				return error.name;
+			}
+		};
+		(async () => {
+			if (query.has('write')) {
+				localStorage.setItem('base-identity', 'secret');
+				document.cookie = 'base_identity=secret; path=/';
+				await new Promise((resolve) => {
+					const open = indexedDB.open('base-identity-secret');
+					open.onsuccess = () => {
+						open.result.close();
+						resolve();
+					};
+					open.onerror = () => resolve();
+				});
+				report.wrote = true;
+			}
+			if (query.has('read')) {
+				const base = document.createElement('base');
+				base.href = query.get('read');
+				document.head.prepend(base);
+				report.base = document.baseURI === base.href;
+				report.local = attempt(() => localStorage.getItem('base-identity'));
+				report.cookie = attempt(() =>
+					document.cookie.includes('base_identity'),
+				);
+				report.databases = await indexedDB.databases().then(
+					(list) => list.some((db) => db.name === 'base-identity-secret'),
+					(error) => error.name,
+				);
+				const frame = document.createElement('iframe');
+				frame.src = `${query.get('read')}base-identity.html?framed`;
+				await new Promise((resolve) => {
+					frame.onload = resolve;
+					document.body.append(frame);
+				});
+				report.frame = attempt(() => typeof frame.contentWindow.document);
+				report.frameGlobal = attempt(
+					() => typeof frame.contentWindow.__baseIdentity,
+				);
+			}
+			report.done = true;
+		})();
+	</script>
+</body>

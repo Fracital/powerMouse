@@ -46,7 +46,7 @@ export default class WorkerModule extends Module<Client> {
 		let lastPrivate: string | undefined;
 		const workerURL = (source: string, isModule: boolean): string => {
 			lastPrivate = undefined;
-			const url = new URL(source, this.client.url.toString());
+			const url = new URL(source, this.client.baseURL.toString());
 			const type = isModule ? 'workerModule' : 'worker';
 			if (url.protocol === 'blob:') {
 				// resolved now, as the browser resolves it at construction: the
@@ -142,7 +142,7 @@ export default class WorkerModule extends Module<Client> {
 		 * SecurityError naming the script and the page's origin.
 		 */
 		const checkOrigin = (name: string, source: string) => {
-			const url = new URL(source, this.client.url.toString());
+			const url = new URL(source, this.client.baseURL.toString());
 			const { origin } = this.client.url.url;
 			if (['http:', 'https:'].includes(url.protocol) && url.origin !== origin)
 				throw withStack(
@@ -283,7 +283,7 @@ export default class WorkerModule extends Module<Client> {
 					watchErrors(
 						worker,
 						own,
-						new URL(source, this.client.url.toString()).href,
+						new URL(source, this.client.baseURL.toString()).href,
 					);
 					this.client.provisionWorkerTransport(worker, blobScript(args[0]));
 					if (own) releaseOnLoad(worker, own);
@@ -338,7 +338,7 @@ export default class WorkerModule extends Module<Client> {
 					if (args.length)
 						args[0] = routeJS(
 							new StompURL(
-								new URL(String(args[0]), this.client.url.toString()),
+								new URL(String(args[0]), this.client.baseURL.toString()),
 								this.client.url,
 							),
 							this.client.url,

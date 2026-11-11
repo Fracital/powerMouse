@@ -20,7 +20,7 @@ export default class TimersModule extends Module<Client> {
 					if (args.length && typeof args[0] !== 'function')
 						args[0] = modifyJS(
 							String(args[0]),
-							this.client.url,
+							this.client.baseURL,
 							this.client.config,
 							'generic',
 						);

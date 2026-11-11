@@ -786,6 +786,15 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A document's origin is its own URL's, never its base URL's. The inject
+  took a document's identity from the URL it resolves the page's URLs
+  against, which follows `<base href>`: a page of one site that named a
+  page of another site as its base read that site's `localStorage`,
+  IndexedDB and cookies, and reached its frames' documents and globals (and
+  they its own), in both modes. A document's URL is now its own (an
+  about:blank or srcdoc document's maker's), and its base URL is only what
+  the URLs it writes resolve against. (base-identity suite, natively
+  against both modes.)
 - An `<object>`'s HTML document loads wherever the page's markup puts it,
   and resolves its URLs by its own `<base href>`. An object in the markup
   of a document a worker controls (the proxied top, a frame, a srcdoc

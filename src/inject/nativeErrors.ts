@@ -49,5 +49,5 @@ export function failsToParse(client: Client, input: string): boolean {
 	const base = client.isDOM
 		? (client as DocumentClient).baseURI.href
 		: client.global.location.href;
-	return !parses(input, client.url.toString()) && !parses(input, base);
+	return !parses(input, client.baseURL.toString()) && !parses(input, base);
 }

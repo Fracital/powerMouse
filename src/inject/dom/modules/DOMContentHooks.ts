@@ -291,7 +291,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 			for (let i = 0; i < rules.length; i++) {
 				const added = style.sheet!.insertRule(
-					modifyCSS(rules[i].cssText, this.client.url),
+					modifyCSS(rules[i].cssText, this.client.baseURL),
 					i,
 				);
 				(style.sheet!.cssRules[added] as any)[rewrittenRule] = true;
@@ -323,7 +323,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				return;
 			const rewritten = modifyJS(
 				source,
-				this.client.url,
+				this.client.baseURL,
 				this.client.config,
 				scriptType(script),
 			);
@@ -350,7 +350,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				rewrittenScripts.set(script, script.text);
 				script.text = rewriteImportMap(
 					script.text,
-					this.client.url,
+					this.client.baseURL,
 					this.client.config,
 				);
 				return;
@@ -377,7 +377,8 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					type === 'genericModule',
 					script.text,
 					true,
-				) ?? modifyJS(script.text, this.client.url, this.client.config, type);
+				) ??
+				modifyJS(script.text, this.client.baseURL, this.client.config, type);
 			// a rewrite that changed nothing leaves no mark. The mark is the
 			// rewritten text, and a script of the document's markup whose text
 			// is its own rewrite (nothing in it to rewrite, and written as the

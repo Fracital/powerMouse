@@ -245,6 +245,10 @@ export default class Client {
 	get url(): StompURL {
 		return this.location;
 	}
+	/** what a URL this context's code writes resolves against (a document's base URL; a worker's own URL) */
+	get baseURL(): StompURL {
+		return this.url;
+	}
 	/**
 	 * The location of the context
 	 * May not match the context URL

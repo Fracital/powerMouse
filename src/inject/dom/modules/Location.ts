@@ -111,7 +111,7 @@ export default class LocationModule extends Module<DocumentClient> {
 							const temp = new URL(this.client.location.toString());
 
 							if (common === 'href') {
-								args[0] = new URL(args[0], this.client.url.toString());
+								args[0] = new URL(args[0], this.client.baseURL.toString());
 							}
 
 							Reflect.apply(urlDescriptor.set!, temp, args);
@@ -179,7 +179,7 @@ export default class LocationModule extends Module<DocumentClient> {
 		const navigation =
 			(method: 'assign' | 'replace') =>
 			([url]: any[]) => {
-				const destination = new URL(url, this.client.url.toString());
+				const destination = new URL(url, this.client.baseURL.toString());
 				this.client.getModule(NavigationHintModule)?.hint(destination.href);
 				return go(destination, method);
 			};

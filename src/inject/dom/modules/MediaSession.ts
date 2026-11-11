@@ -30,7 +30,7 @@ export default class MediaSessionModule extends Module<DocumentClient> {
 				if (image === null || typeof image !== 'object') return image;
 				let url: URL;
 				try {
-					url = new URL(String(image.src), this.client.url.toString());
+					url = new URL(String(image.src), this.client.baseURL.toString());
 				} catch (error) {
 					// the native constructor throws its own TypeError
 					return image;

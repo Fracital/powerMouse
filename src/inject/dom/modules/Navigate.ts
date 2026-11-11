@@ -203,7 +203,7 @@ export default class NavigateModule extends Module<DocumentClient> {
 				if (!href) continue;
 				let resolved: string;
 				try {
-					resolved = new URL(href, this.client.url.toString()).href;
+					resolved = new URL(href, this.client.baseURL.toString()).href;
 				} catch (error) {
 					continue;
 				}

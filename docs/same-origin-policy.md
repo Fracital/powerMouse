@@ -213,6 +213,16 @@ Filled in commit by commit; see the CHANGELOG for each.
   does nothing: a document is in an origin-keyed agent cluster by default
   (`window.originAgentCluster`), where Chrome's setter has no effect. It
   used to accept a parent domain and read it back.
+- **A document's identity is its own URL, never its base URL.** The inject
+  resolved a URL the page writes and decided whose a document was from one
+  URL, which followed the document's `<base href>`: a page of one site that
+  named another site's page as its base was that site to its stores and to
+  the membrane. It read the other site's `localStorage`, IndexedDB and
+  cookies, its frames' documents were its own to read, and theirs it
+  (base-identity suite, natively against both modes). A document's `url` is
+  now its own (a routed document's route, what the shell of a document the
+  page made named, an about:blank or srcdoc document's maker's), and what a
+  URL it writes resolves against is its `baseURL`.
 - **Where a site ends** (samesite, sop-partitions and site-facts, with
   the names of `test/private-sites.mjs`: `stomp-a`,
   `www.stomp-a` and `stomp-b` under `github.io`, `blogspot.com`,

@@ -531,7 +531,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				// opened as is, injected by the IFrame module's hook
 				let destination: URL | null = null;
 				if (args[0] !== undefined && String(args[0]) !== '')
-					destination = new URL(String(args[0]), this.client.url.toString());
+					destination = new URL(
+						String(args[0]),
+						this.client.baseURL.toString(),
+					);
 				const routable =
 					destination !== null && /^https?:$/.test(destination.protocol);
 				// a javascript: URL runs in the opened window: rewritten, like a
@@ -687,7 +690,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
-					return responseURLOf(that) ?? this.client.url.toString();
+					return responseURLOf(that) ?? this.client.baseURL.toString();
 				},
 			),
 		});

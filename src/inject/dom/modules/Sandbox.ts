@@ -84,7 +84,7 @@ export default class SandboxModule extends Module<DocumentClient> {
 
 		const client = this.client;
 		const resolve = (value: unknown) =>
-			new URL(String(value), client.url.toString());
+			new URL(String(value), client.baseURL.toString());
 		const LOCATION_PARTS = [
 			'href',
 			'protocol',
