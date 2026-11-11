@@ -459,6 +459,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   `<anonymous>` where the page's URL stands natively, because a script
   whose text was its own rewrite was taken for one already rewritten and
   skipped when the markup's scripts were named. (error-surfaces suite.)
+- The rules of a stylesheet of another origin cannot be read or changed:
+  `cssRules`, `rules`, `insertRule`, `deleteRule`, `addRule` and
+  `removeRule` throw the browser's SecurityError for a sheet of another
+  site not loaded with CORS, one the page's own URL redirects to, and one
+  another site redirects back, and for an `@import`ed sheet by its own URL.
+  Every proxied sheet is same-origin to the browser, so a page read another
+  site's rules. (sop-escapes suite.)
 - An XMLHttpRequest with a listener on its upload object is preflighted, as
   natively (in pages and in workers), and the preflight cache is kept per
   top-level site and frame site. (sop-escapes and sop-partitions suites.)

@@ -1,7 +1,10 @@
 import { rewriteCSSValueURLs } from '../../../cssURLs';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import ResourceTimingModule from '../../modules/ResourceTiming';
+import { unrouteURL } from '../../modules/Unroute';
 import { modifyCSS } from '../../rewriter';
+import { blobLoads, opaqueCopies } from '../blobLoads';
 import DocumentClient from '../Client';
 import DOMAttributesModule from './DOMAttributes';
 
@@ -60,8 +63,106 @@ export default class CSSOMModule extends Module<DocumentClient> {
 			if (domAttributes?.uncontrolled())
 				domAttributes.copyConstructed?.(sheet as CSSStyleSheet);
 		};
+		// The rules of another origin's stylesheet are not the page's to read
+		// or change: every route is same-origin to the browser, so it hands
+		// them over. The browser's rule, by the real origins: a sheet a
+		// crossorigin <link> loaded reached the page only past the worker's
+		// CORS check; any other sheet of another origin's URL (an @import is
+		// never a CORS load, whatever loaded the sheet that imports it), and
+		// one of the page's own URL that came through another origin (a
+		// redirect), refuses its rules with the browser's SecurityError.
+		const sheetGetter = (proto: object | undefined, name: string) =>
+			proto
+				? (Reflect.getOwnPropertyDescriptor(proto, name)?.get as
+						((this: unknown) => unknown) | undefined)
+				: undefined;
+		const sheetHref = sheetGetter(global.StyleSheet?.prototype, 'href');
+		const sheetOwner = sheetGetter(global.StyleSheet?.prototype, 'ownerNode');
+		const linkCrossOrigin = sheetGetter(
+			global.HTMLLinkElement?.prototype,
+			'crossOrigin',
+		);
+		const opaqueLoad = this.client
+			.getModule(ResourceTimingModule)
+			?.opaqueLoads();
+		/** per sheet of another origin's URL: whether its rules are refused */
+		const foreignSheets = new WeakMap<object, boolean>();
+		const refused = (styleSheet: unknown): boolean => {
+			if (styleSheet === null || typeof styleSheet !== 'object') return false;
+			const known = foreignSheets.get(styleSheet);
+			if (known !== undefined) return known;
+			let href: unknown;
+			try {
+				href = sheetHref && Reflect.apply(sheetHref, styleSheet, []);
+			} catch (error) {
+				// not a stylesheet: the native member says so
+				return false;
+			}
+			// a <style>'s sheet or a constructed one, and a data: URL's
+			if (typeof href !== 'string' || href === '' || href.startsWith('data:'))
+				return false;
+			let real: string | undefined;
+			if (href.startsWith('blob:')) {
+				// a copy the inject made for a document no worker controls
+				// stands for the page's URL; any other blob: URL is the page's own
+				if (opaqueCopies.has(href)) return true;
+				real = blobLoads.get(href);
+				if (real === undefined) return false;
+			} else real = unrouteURL(this.client, href) ?? href;
+			let cross: boolean;
+			try {
+				cross =
+					new URL(real).origin !==
+					(this.client.opaqueRequests ? 'null' : this.client.url.url.origin);
+			} catch (error) {
+				return false;
+			}
+			if (!cross) return !!opaqueLoad?.(href);
+			let verdict = true;
+			try {
+				const owner = sheetOwner && Reflect.apply(sheetOwner, styleSheet, []);
+				if (owner && linkCrossOrigin)
+					verdict = Reflect.apply(linkCrossOrigin, owner, []) === null;
+			} catch (error) {
+				// an owner that is no <link> (an XML stylesheet's): no CORS load
+			}
+			foreignSheets.set(styleSheet, verdict);
+			return verdict;
+		};
+		const refuse = (message: string) =>
+			new global.DOMException(message, 'SecurityError');
 		const promiseThen = global.Promise.prototype.then;
 		const sheet = global.CSSStyleSheet.prototype;
+		for (const name of ['cssRules', 'rules']) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(sheet, name);
+			if (!descriptor?.get) continue;
+			Reflect.defineProperty(sheet, name, {
+				...descriptor,
+				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
+					if (refused(that))
+						throw refuse(
+							`Failed to read the '${name}' property from 'CSSStyleSheet': Cannot access rules`,
+						);
+					return Reflect.apply(target, that, args);
+				}),
+			});
+		}
+		for (const [method, action] of [
+			['addRule', 'insertRule'],
+			['removeRule', 'deleteRule'],
+		] as const) {
+			if (typeof sheet[method] !== 'function') continue;
+			sheet[method] = proxyModule.wrapFunction(
+				sheet[method] as Function,
+				(target, that, args) => {
+					if (refused(that))
+						throw refuse(
+							`Failed to execute '${method}' on 'CSSStyleSheet': Cannot access StyleSheet to ${action}`,
+						);
+					return Reflect.apply(target, that, args);
+				},
+			) as any;
+		}
 		for (const method of [
 			'insertRule',
 			'replace',
@@ -72,6 +173,13 @@ export default class CSSOMModule extends Module<DocumentClient> {
 			sheet[method] = proxyModule.wrapFunction(
 				sheet[method] as Function,
 				(target, that, args) => {
+					if (
+						(method === 'insertRule' || method === 'deleteRule') &&
+						refused(that)
+					)
+						throw refuse(
+							`Failed to execute '${method}' on 'CSSStyleSheet': Cannot access StyleSheet to ${method}`,
+						);
 					if (method !== 'deleteRule' && args.length)
 						args[0] = rewrite(args[0]);
 					const result = Reflect.apply(target, that, args);
