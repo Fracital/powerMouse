@@ -550,6 +550,17 @@ The first release after a four-year gap. Everything below is breaking.
   browser: Fork us on GitHub, the repository and each of the latest
   commits. A click opens it in the current tab; Ctrl, Cmd, Shift or the
   middle button opens it in a new one. (demo suite.)
+- The demo's bookmarks reorder: a row dragged with the mouse (after a few
+  pixels, so a click still opens it) or a finger (after a long press, so
+  the list still scrolls) lifts and follows, the others slide aside, the
+  list scrolls along near its edges, and the order is kept; Alt+Up and
+  Alt+Down move the focused one. A bookmark's icon no longer depends on
+  one try: any proxied page loads any bookmark's icon as a picture the
+  inject routes (a cross-origin icon host without CORS headers, or the
+  page's CSP, no longer stops it), the bookmarked page's declared icon is
+  found though the page soft-navigated since, and a bookmark without an
+  icon fills itself in whenever a page can ask, those kept from before
+  included (demo-bookmarks suite, both modes).
 - The demo keeps bookmarks. A star at the right end of the address bar,
   in the Tango style of its other icons (Butter when the page is
   bookmarked, hollow Aluminium when not), bookmarks the active tab's page,

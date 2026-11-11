@@ -1,0 +1,14 @@
+<!doctype html>
+<title>Bookmark Cross</title>
+<script>
+	// the icon lives on another origin (localhost, not 127.0.0.1) that sends
+	// no CORS headers, as a CDN's often does not
+	const icon = document.createElement('link');
+	icon.rel = 'icon';
+	icon.href = new URL('bookmark-icon.svg', location.href).href.replace(
+		'//127.0.0.1:',
+		'//localhost:',
+	);
+	document.head.append(icon);
+</script>
+<h1>bookmark cross</h1>

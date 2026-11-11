@@ -222,14 +222,20 @@ holyWisp is started.
     (`stomp-demo:bookmarks`): the real URL the address bar shows (a routed
     one goes through `controller.unroute`), the title and the page's icon
     (`NavigateInfo.icon`, else the site's `/favicon.ico`). The host page
-    never loads that icon itself, which would leave the proxy: a host hook
-    in every proxied top document (`ICON_HOOK`, `hooks.init.post`) posts
-    the host a `MessagePort`, and the host asks the page's own fetch
-    through it, then draws the answer into a 64 px PNG `data:` URL (the
-    Tango globe when there is none to be had). The star tab on the
-    home page's card, or Saved pages after Reload in the address bar,
-    opens a sidebar listing the bookmarks; a click opens one in the current
-    tab, the middle button or Ctrl in a new one. The
+    never loads that icon itself: it is outside the service worker's
+    scope, so the request would leave the proxy. A host hook in every
+    proxied top document (`ICON_HOOK`, `hooks.init.pre`) posts the host a
+    `MessagePort`, and any such page loads any bookmark's icon on request
+    as an `<img>` the inject routes (no CORS or CSP stands in the way), read
+    back with the `createImageBitmap` it took before the inject's hooks;
+    the host draws it into a 64 px PNG `data:` URL. A bookmark without an
+    icon is filled in whenever a page can ask (a port arriving, a page
+    reporting, the list changing, on load), so one kept without an icon
+    mends itself; the Tango globe stays only where the site has none. The
+    star tab on the home page's card, or Saved pages after Reload in the
+    address bar, opens a sidebar listing the bookmarks; a click opens one
+    in the current tab, the middle button or Ctrl in a new one, and a drag
+    (a long press with a finger) or Alt+Up/Down reorders them. The
     first visit bookmarks Fracital, vibeOS, Estro and Krunk, once
     (`stomp-demo:bookmarks-seeded`), so one the user removes stays removed,
     with curated icons and tile colours bundled in `pm/icons/`.

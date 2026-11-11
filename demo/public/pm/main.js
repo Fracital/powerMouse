@@ -325,38 +325,54 @@ function isFrameOf(element, source) {
 	return false;
 }
 
-// A bookmark keeps the page's icon as a small picture. The host page cannot
-// load it itself (that request would leave the proxy), so every proxied top
-// document hands the host a port, and the host asks through it: the page's
-// own fetch (taken before the page's first script) gets the icon through the
-// proxy, under the CORS rules the page lives by, and hands back the bytes
+// A bookmark keeps its site's icon as a small picture. The host page cannot
+// load it itself: it is outside the service worker's scope, so its request
+// would leave the proxy. Every proxied top document hands the host a port,
+// and any of them loads any bookmark's icon on request, as a picture: an
+// <img> whose src the inject routes (so neither the page's CSP nor a
+// cross-origin icon host's missing CORS headers stop it), read back with
+// createImageBitmap as it was before the inject's hooks (the route is the
+// page's own origin to the browser), at 64 px at the most
 const ICON_MESSAGE = '$stompDemo$icon';
 const ICON_HOOK = `
 if (stomp.kind === 'document' && stomp.isTop) {
 	const win = stomp.window;
-	const fetch = win.fetch;
-	const blob = win.Response.prototype.blob;
 	const apply = win.Reflect.apply;
+	const bitmap = win.createImageBitmap;
+	const Image = win.Image;
 	const channel = new win.MessageChannel();
 	channel.port1.onmessage = async (event) => {
 		const { id, url } = event.data || {};
-		let body = null;
+		let picture = null;
 		try {
-			const response = await apply(fetch, win, [url]);
-			if (response.ok) body = await apply(blob, response, []);
+			const image = new Image();
+			image.src = url;
+			await image.decode();
+			const width = image.naturalWidth || 64;
+			const height = image.naturalHeight || 64;
+			const scale = Math.min(1, 64 / Math.max(width, height));
+			picture = await apply(bitmap, win, [image, {
+				resizeWidth: Math.max(1, Math.round(width * scale)),
+				resizeHeight: Math.max(1, Math.round(height * scale)),
+				resizeQuality: 'high',
+			}]);
 		} catch {}
-		channel.port1.postMessage({ id, body });
+		channel.port1.postMessage({ id, picture }, picture ? [picture] : []);
 	};
 	win.top.postMessage({ ${JSON.stringify(ICON_MESSAGE)}: true }, '*', [channel.port2]);
 }`;
 addEventListener('message', (event) => {
 	if (!event.data?.[ICON_MESSAGE] || !event.ports[0]) return;
 	const tab = tabs.find((t) => t.element.contentWindow === event.source);
-	if (tab) tab.iconPort = event.ports[0];
+	if (!tab) return;
+	tab.iconPort = event.ports[0];
+	fillIcons(); // a bookmark that waited for a page to ask through
 });
 
 const controllerCallbacks = {
-	hooks: { init: { post: { source: KEY_HOOK + ICON_HOOK } } },
+	hooks: {
+		init: { pre: { source: ICON_HOOK }, post: { source: KEY_HOOK } },
+	},
 	// a site asks for a permission another site was given (the browser's own
 	// prompt asked for the first)
 	onPermissionRequest: askPermission,
@@ -376,7 +392,7 @@ const controllerCallbacks = {
 		recordUrl(tab);
 		if (tab === activeTab) syncOmnibox();
 		syncCardBar(tab); // its card in the switcher, if there is one
-		completeBookmark(tab);
+		fillIcons(); // its page may have declared an icon a bookmark lacks
 	},
 };
 
@@ -2084,6 +2100,7 @@ addEventListener('storage', (event) => {
 	if (event.key !== BOOKMARKS_KEY && event.key !== null) return;
 	bookmarks = loadBookmarks();
 	renderBookmarks();
+	fillIcons();
 });
 
 /** the URL the address bar shows for a tab, when it is a page to bookmark */
@@ -2136,83 +2153,141 @@ async function toggleBookmark(tab) {
 	const title = tabTitle(tab);
 	bookmarks.unshift({ url, title: title === shown ? '' : title, icon: null });
 	saveBookmarks();
-	completeBookmark(tab);
+	fillIcons();
 }
 
-// the icon is fetched once per URL and visit; a bookmark made before the page
-// reported its icon, or while its document was still loading, gets it later
-const iconsAsked = new Set();
-async function completeBookmark(tab) {
-	const url = pageUrl(tab);
-	const entry = bookmarkOf(url);
-	if (!entry || entry.icon || iconsAsked.has(url) || !tab.iconPort) return;
-	iconsAsked.add(url);
-	// no declared icon: the site's /favicon.ico, as a browser tries
-	const icon = await fetchIcon(
-		tab,
-		tab.icon || new URL('/favicon.ico', url).href,
-	);
-	if (!icon) return;
-	// the list may have changed meanwhile, here or in another window
-	bookmarks = loadBookmarks();
-	const kept = bookmarkOf(url);
-	if (!kept || kept.icon) return renderBookmarks();
-	kept.icon = icon;
-	saveBookmarks();
+// Every bookmark without an icon gets one as soon as some tab's page can ask:
+// the icon its page declared where a tab shows it (whatever its query or
+// fragment became since: a soft navigation), else the site's /favicon.ico,
+// as a browser tries.
+// It runs when a bookmark is made, when a page hands over its port or
+// reports (a soft navigation too), when another window changes the list,
+// and on load, so a bookmark kept without an icon fills itself in. A
+// candidate the page answered without a picture is not asked again this
+// visit; one that went unanswered (the page went away) is.
+const iconMisses = new Map(); // bookmark URL -> icon URLs with no picture
+let iconsRunning = false;
+let iconsAgain = false;
+
+const originOf = (url) => {
+	try {
+		return new URL(url).origin;
+	} catch {
+		return null;
+	}
+};
+/** the page a URL names, without its query and fragment */
+const pageOf = (url) => {
+	try {
+		const parsed = new URL(url);
+		return parsed.origin + parsed.pathname;
+	} catch {
+		return null;
+	}
+};
+
+async function fillIcons() {
+	if (iconsRunning) {
+		iconsAgain = true;
+		return;
+	}
+	iconsRunning = true;
+	try {
+		do {
+			iconsAgain = false;
+			for (const entry of bookmarks.filter((other) => !other.icon)) {
+				const origin = originOf(entry.url);
+				if (!origin) continue;
+				const misses = iconMisses.get(entry.url) || new Set();
+				iconMisses.set(entry.url, misses);
+				const sameSite = tabs.filter(
+					(tab) => originOf(pageUrl(tab)) === origin,
+				);
+				const showing = sameSite.filter(
+					(tab) => pageOf(pageUrl(tab)) === pageOf(entry.url),
+				);
+				const candidates = [
+					...new Set([
+						...showing.map((tab) => tab.icon).filter(Boolean),
+						`${origin}/favicon.ico`,
+					]),
+				].filter((url) => !misses.has(url));
+				for (const url of candidates) {
+					// ask through the bookmarked page itself, else its site's,
+					// where one is open
+					const via =
+						showing.find((tab) => tab.iconPort) ||
+						sameSite.find((tab) => tab.iconPort) ||
+						(activeTab?.iconPort ? activeTab : null) ||
+						tabs.find((tab) => tab.iconPort);
+					if (!via) return; // a port arriving runs this again
+					const icon = await fetchIcon(via, url);
+					if (icon === undefined) break; // unanswered: next time
+					if (!icon) {
+						misses.add(url);
+						continue;
+					}
+					// the list may have changed meanwhile, here or in another window
+					bookmarks = loadBookmarks();
+					const kept = bookmarkOf(entry.url);
+					if (kept && !kept.icon) {
+						kept.icon = icon;
+						saveBookmarks();
+					}
+					break;
+				}
+			}
+		} while (iconsAgain);
+	} finally {
+		iconsRunning = false;
+	}
 }
 
 let iconRequest = 0;
-/** the icon at `url` through the tab's page, as a 64 px PNG data URL, else null */
+/**
+ * The icon at `url` through the tab's page, as a 64 px PNG data URL; null
+ * when the page answered without a picture, undefined when it did not answer
+ */
 async function fetchIcon(tab, url) {
 	const port = tab.iconPort;
 	const id = ++iconRequest;
-	const body = await new Promise((resolve) => {
-		const timer = setTimeout(() => resolve(null), 10000);
+	const reply = await new Promise((resolve) => {
+		const timer = setTimeout(() => resolve(undefined), 8000);
 		port.addEventListener('message', function answer(event) {
 			if (event.data?.id !== id) return;
 			port.removeEventListener('message', answer);
 			clearTimeout(timer);
-			resolve(event.data.body);
+			resolve(event.data);
 		});
 		port.start();
 		port.postMessage({ id, url });
 	});
-	if (!(body instanceof Blob) || !body.size || body.size > 1024 * 1024)
-		return null;
-	// the browser sniffs a raster image whatever its type, never an SVG one
-	let picture = body;
-	if (
-		body.type !== 'image/svg+xml' &&
-		/<svg[\s>]/i.test(await body.slice(0, 1024).text())
-	)
-		picture = new Blob([body], { type: 'image/svg+xml' });
-	const source = URL.createObjectURL(picture);
+	if (!reply) return undefined;
+	const picture = reply.picture;
+	if (!(picture instanceof ImageBitmap)) return null;
 	try {
-		const image = new Image();
-		image.src = source;
-		await image.decode();
 		const size = 64;
 		const canvas = document.createElement('canvas');
 		canvas.width = canvas.height = size;
-		const width = image.naturalWidth || size;
-		const height = image.naturalHeight || size;
-		const scale = Math.min(size / width, size / height);
+		const scale = Math.min(size / picture.width, size / picture.height);
+		const width = picture.width * scale;
+		const height = picture.height * scale;
 		const context = canvas.getContext('2d');
 		context.drawImage(
-			image,
-			(size - width * scale) / 2,
-			(size - height * scale) / 2,
-			width * scale,
-			height * scale,
+			picture,
+			(size - width) / 2,
+			(size - height) / 2,
+			width,
+			height,
 		);
 		// nothing drawn (an SVG sprite sheet): no icon, the globe stands in
 		const { data } = context.getImageData(0, 0, size, size);
 		if (!data.some((value, i) => i % 4 === 3 && value)) return null;
 		return canvas.toDataURL('image/png');
 	} catch {
-		return null; // not an image the browser can draw
+		return null;
 	} finally {
-		URL.revokeObjectURL(source);
+		picture.close();
 	}
 }
 
@@ -2255,9 +2330,10 @@ function bookmarkRow(entry) {
 		closeBookmarks(false);
 		navigate(entry.url, { newTab });
 	};
-	open.addEventListener('click', (event) =>
-		go(event.ctrlKey || event.metaKey || event.shiftKey),
-	);
+	open.addEventListener('click', (event) => {
+		if (dragEnded) return; // the release of a drag, not a click
+		go(event.ctrlKey || event.metaKey || event.shiftKey);
+	});
 	open.addEventListener('mousedown', (event) => {
 		if (event.button === 1) event.preventDefault(); // no autoscroll
 	});
@@ -2284,7 +2360,172 @@ function bookmarkRow(entry) {
 		(target || $('bookmarksClose')).focus();
 	});
 	row.append(open, remove);
+	row.dataset.url = entry.url;
 	return row;
+}
+
+/** move a bookmark to another place in the list and keep the order */
+function moveBookmark(url, to) {
+	const from = bookmarks.findIndex((entry) => entry.url === url);
+	if (from === -1 || to === from || to < 0 || to >= bookmarks.length) return;
+	const [entry] = bookmarks.splice(from, 1);
+	bookmarks.splice(to, 0, entry);
+	saveBookmarks();
+}
+
+// Dragging a row reorders the list: the row lifts and follows the pointer,
+// the others slide aside, the order is kept on release. A mouse or pen drag
+// starts after a few pixels of movement (a click still opens the bookmark);
+// a finger has to rest on the row first (a long press), else it scrolls the
+// list as ever. Near the list's top or bottom edge the list scrolls along.
+let dragEnded = false;
+{
+	const START = 5; // px a mouse moves before a press is a drag
+	const HOLD = 350; // ms a finger rests before a press is a drag
+	const EDGE = 40; // px from the list's edges where it scrolls along
+	let press = null; // { pointer, row, x, y, touch, timer }
+	let drag = null; // { row, rows, from, to, startY, startScroll, height, y }
+	let scrolling = 0;
+
+	const place = () => {
+		const { row, rows, from, startY, startScroll, height } = drag;
+		const dy = drag.y - startY + (bookmarksList.scrollTop - startScroll);
+		row.style.transform = `translateY(${dy}px) scale(1.02)`;
+		// the place whose middle the lifted row's middle has passed
+		const middle = drag.tops[from] + dy + height / 2;
+		let to = 0;
+		for (let i = 0; i < rows.length; i++)
+			if (middle > drag.tops[i] + drag.heights[i] / 2) to = i;
+		drag.to = to;
+		rows.forEach((other, i) => {
+			if (other === row) return;
+			const shift =
+				i > from && i <= to ? -height : i < from && i >= to ? height : 0;
+			other.style.transform = shift ? `translateY(${shift}px)` : '';
+		});
+	};
+	const autoscroll = () => {
+		scrolling = 0;
+		if (!drag) return;
+		const box = bookmarksList.getBoundingClientRect();
+		const step =
+			drag.y < box.top + EDGE
+				? -Math.ceil((box.top + EDGE - drag.y) / 4)
+				: drag.y > box.bottom - EDGE
+					? Math.ceil((drag.y - box.bottom + EDGE) / 4)
+					: 0;
+		if (!step) return;
+		const before = bookmarksList.scrollTop;
+		bookmarksList.scrollTop += step;
+		if (bookmarksList.scrollTop !== before) place();
+		scrolling = requestAnimationFrame(autoscroll);
+	};
+	const begin = () => {
+		const { row } = press;
+		const rows = [...bookmarksList.children];
+		drag = {
+			row,
+			rows,
+			from: rows.indexOf(row),
+			to: rows.indexOf(row),
+			tops: rows.map((other) => other.offsetTop),
+			heights: rows.map((other) => other.offsetHeight),
+			height: row.offsetHeight,
+			startY: press.y,
+			startScroll: bookmarksList.scrollTop,
+			y: press.y,
+		};
+		bookmarksList.classList.add('sorting');
+		row.classList.add('dragging');
+		bookmarksList.setPointerCapture(press.pointer);
+	};
+	const finish = (keep) => {
+		clearTimeout(press?.timer);
+		press = null;
+		cancelAnimationFrame(scrolling);
+		scrolling = 0;
+		if (!drag) return;
+		const { row, rows, to } = drag;
+		const url = row.dataset.url;
+		const moved = keep && to !== drag.from;
+		drag = null;
+		bookmarksList.classList.remove('sorting');
+		row.classList.remove('dragging');
+		for (const other of rows) other.style.transform = '';
+		// the click that follows the release is not a press on the row
+		dragEnded = true;
+		setTimeout(() => (dragEnded = false), 0);
+		if (moved) {
+			moveBookmark(url, to);
+			bookmarksList
+				.querySelector(`.bookmark[data-url="${CSS.escape(url)}"] .bookmarkOpen`)
+				?.focus();
+		}
+	};
+
+	bookmarksList.addEventListener('pointerdown', (event) => {
+		const row = event.target.closest('.bookmark');
+		if (!row || event.button !== 0 || event.target.closest('.bookmarkRemove'))
+			return;
+		finish(false);
+		const touch = event.pointerType === 'touch';
+		press = {
+			pointer: event.pointerId,
+			row,
+			x: event.clientX,
+			y: event.clientY,
+			touch,
+		};
+		if (touch)
+			press.timer = setTimeout(() => {
+				if (press && !drag) begin();
+			}, HOLD);
+	});
+	bookmarksList.addEventListener('pointermove', (event) => {
+		if (!press || event.pointerId !== press.pointer) return;
+		if (!drag) {
+			const far = Math.hypot(event.clientX - press.x, event.clientY - press.y);
+			if (press.touch) {
+				if (far > 10) finish(false); // a scroll, not a long press
+				return;
+			}
+			if (far < START) return;
+			begin();
+		}
+		drag.y = event.clientY;
+		place();
+		if (!scrolling) scrolling = requestAnimationFrame(autoscroll);
+	});
+	bookmarksList.addEventListener('pointerup', (event) => {
+		if (press && event.pointerId === press.pointer) finish(true);
+	});
+	bookmarksList.addEventListener('pointercancel', () => finish(false));
+	// a finger that has lifted a row moves it, not the list
+	bookmarksList.addEventListener(
+		'touchmove',
+		(event) => {
+			if (drag) event.preventDefault();
+		},
+		{ passive: false },
+	);
+	// a long press is a drag, not the browser's menu
+	bookmarksList.addEventListener('contextmenu', (event) => {
+		if (press?.touch || drag) event.preventDefault();
+	});
+	// Alt+Up and Alt+Down move the focused bookmark
+	bookmarksList.addEventListener('keydown', (event) => {
+		if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown'))
+			return;
+		const row = event.target.closest('.bookmark');
+		if (!row) return;
+		event.preventDefault();
+		const at = bookmarks.findIndex((entry) => entry.url === row.dataset.url);
+		moveBookmark(row.dataset.url, at + (event.key === 'ArrowUp' ? -1 : 1));
+	});
+	// a list redrawn under a drag (another window changed it) ends the drag
+	new MutationObserver(() => {
+		if (drag && !drag.row.isConnected) finish(false);
+	}).observe(bookmarksList, { childList: true });
 }
 
 function renderBookmarks() {

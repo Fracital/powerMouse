@@ -2014,6 +2014,34 @@ input:focus-visible {
 	background: #161616;
 }
 
+/* a row is dragged to reorder the list (a finger after a long press, so it
+   still scrolls the list); the others slide aside while it moves */
+.bookmark {
+	touch-action: pan-y;
+	user-select: none;
+	-webkit-user-select: none;
+	-webkit-touch-callout: none;
+}
+
+.bookmarksList.sorting,
+.bookmarksList.sorting * {
+	cursor: grabbing;
+}
+
+.bookmarksList.sorting .bookmark {
+	transition: transform 0.15s ease;
+}
+
+.bookmarksList.sorting .bookmark.dragging {
+	position: relative;
+	z-index: 1;
+	background: #1f1f1f;
+	box-shadow:
+		0 8px 24px rgba(0, 0, 0, 0.7),
+		0 0 0 1px #4a4a4a;
+	transition: none;
+}
+
 .bookmarkOpen {
 	flex: 1 1 auto;
 	min-width: 0;
@@ -2176,7 +2204,8 @@ input:focus-visible {
 	.bookmarksScrim,
 	.bookmarksScrim.open,
 	.bookmarksTab,
-	.starbtn {
+	.starbtn,
+	.bookmarksList.sorting .bookmark {
 		transition: none;
 	}
 }

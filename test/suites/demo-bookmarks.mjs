@@ -23,6 +23,9 @@ import {
 
 const A = `${FIXTURE}pages/bookmark-a.html`;
 const B = `${FIXTURE}pages/bookmark-b.html`;
+const CROSS = `${FIXTURE}pages/bookmark-cross.html`;
+const SOFT = `${FIXTURE}pages/bookmark-soft.html`;
+const SLOW = `${FIXTURE}slow-page?ms=3000`;
 const KEY = 'stomp-demo:bookmarks';
 const DEFAULTS = [
 	{
@@ -804,7 +807,232 @@ async function run(mode, base) {
 			JSON.stringify(['rgb(255, 0, 0)', '/pm/icons/youtube.svg']),
 		JSON.stringify(youtube),
 	);
+
+	// dragging reorders: a mouse after a few pixels, the keyboard with Alt
+	const four = [
+		A,
+		B,
+		`${FIXTURE}pages/hist-1.html`,
+		`${FIXTURE}pages/hist-2.html`,
+	];
+	await page.evaluate(
+		([key, urls]) =>
+			localStorage.setItem(
+				key,
+				JSON.stringify(
+					urls.map((url, i) => ({ url, title: `P${i}`, icon: null })),
+				),
+			),
+		[KEY, four],
+	);
+	await page.keyboard.press('Escape');
+	await reopen();
+	await page.click('#bookmarksTab');
+	await until(
+		page,
+		() => document.querySelectorAll('#bookmarksList .bookmark').length,
+		(n) => n === 4,
+		5000,
+	);
+	await dragRow(page, 0, 2);
+	ok(
+		`${mode}: a mouse drag moves the first bookmark to third`,
+		urlsOf(await stored(page)) ===
+			JSON.stringify([four[1], four[2], four[0], four[3]]) &&
+			urlsOf(await rows(page)) ===
+				JSON.stringify([four[1], four[2], four[0], four[3]]) &&
+			(await sidebarOpen(page)) &&
+			(await page.evaluate(
+				() => document.querySelectorAll('.frames .frame').length,
+			)) === 0,
+		urlsOf(await stored(page)),
+	);
+	await page.focus('#bookmarksList .bookmark:nth-child(3) .bookmarkOpen');
+	await page.keyboard.press('Alt+ArrowUp');
+	await page.keyboard.press('Alt+ArrowUp');
+	await page.keyboard.press('Alt+ArrowDown');
+	ok(
+		`${mode}: Alt+Up and Alt+Down move the focused bookmark, which keeps the focus`,
+		urlsOf(await stored(page)) ===
+			JSON.stringify([four[1], four[0], four[2], four[3]]) &&
+			(await page.evaluate(() => document.activeElement?.title)) === four[0],
+		urlsOf(await stored(page)),
+	);
+	await page.keyboard.press('Escape');
+	await reopen();
+	await page.click('#bookmarksTab');
+	ok(
+		`${mode}: the new order outlives a reload`,
+		urlsOf(await rows(page)) ===
+			JSON.stringify([four[1], four[0], four[2], four[3]]),
+		urlsOf(await rows(page)),
+	);
+
+	// an icon however the page goes: a host of another origin without CORS,
+	await page.keyboard.press('Escape');
+	await sleep(300);
+	const iconOf = (url) =>
+		until(
+			page,
+			(u) =>
+				JSON.parse(localStorage.getItem('stomp-demo:bookmarks') || '[]').find(
+					(entry) => entry.url === u,
+				)?.icon,
+			Boolean,
+			20000,
+			url,
+		);
+	await submitLanding(page, CROSS);
+	await omniIs(page, CROSS);
+	await loaded(page);
+	await page.click('#toolStar');
+	ok(
+		`${mode}: an icon on another origin that sends no CORS headers is kept`,
+		/^data:image\/png;base64,/.test((await iconOf(CROSS)) || ''),
+	);
+	// a bookmark kept without an icon fills itself in once its page is open,
+	// though the page has moved on to another URL (a soft navigation)
+	await page.evaluate(
+		([key, url]) => {
+			const list = JSON.parse(localStorage.getItem(key));
+			list.unshift({ url, title: 'Soft', icon: null });
+			localStorage.setItem(key, JSON.stringify(list));
+		},
+		[KEY, SOFT],
+	);
+	await page.click('#home');
+	await sleep(400);
+	await reopen();
+	await submitLanding(page, SOFT);
+	await omniIs(page, `${SOFT}?zx=1`);
+	ok(
+		`${mode}: a kept bookmark with no icon gets its page's, after the page soft-navigated`,
+		/^data:image\/png;base64,/.test((await iconOf(SOFT)) || ''),
+		await omni(page),
+	);
+	// starred while its document is still on the way (no page to ask yet):
+	// the site's /favicon.ico is asked once the page has come
+	await page.click('#home');
+	await sleep(400);
+	await submitLanding(page, SLOW);
+	await until(
+		page,
+		() => !document.getElementById('toolStar').disabled,
+		Boolean,
+		5000,
+	);
+	await page.click('#toolStar');
+	const early = (await stored(page)).find((entry) => entry.url === SLOW);
+	await page.keyboard.press('Control+Shift+KeyX');
+	ok(
+		`${mode}: a bookmark made before its page has come asks for the icon once it has`,
+		!!early &&
+			early.icon === null &&
+			(await until(
+				page,
+				(url) =>
+					[...document.querySelectorAll('#requestsList .url')].some(
+						(cell) => cell.title === url,
+					),
+				Boolean,
+				20000,
+				`${FIXTURE}favicon.ico`,
+			)) === true,
+		JSON.stringify(early),
+	);
+	await page.keyboard.press('Escape');
 	await context.close();
+
+	// a finger drags after a long press; a quick swipe scrolls instead
+	const touch = await browser.newContext({
+		viewport: { width: 390, height: 844 },
+		hasTouch: true,
+	});
+	const phone = await touch.newPage();
+	phone.on('pageerror', (error) =>
+		errors.push(`${mode} touch: ${error.message}`),
+	);
+	await phone.goto(base);
+	await phone.waitForFunction(
+		() => document.getElementById('logMsg').textContent === 'Ready',
+		null,
+		{ timeout: 45000 },
+	);
+	await phone.tap('#bookmarksTab');
+	await until(
+		phone,
+		() => document.querySelectorAll('#bookmarksList .bookmark').length,
+		(n) => n === 4,
+		5000,
+	);
+	const cdp = await touch.newCDPSession(phone);
+	await touchDrag(phone, cdp, 0, 2, 0);
+	ok(
+		`${mode}: a quick swipe over a row does not move it`,
+		urlsOf(await stored(phone)) === JSON.stringify(DEFAULT_URLS),
+		urlsOf(await stored(phone)),
+	);
+	await touchDrag(phone, cdp, 0, 2, 600);
+	ok(
+		`${mode}: a finger held on a row drags it`,
+		urlsOf(await stored(phone)) ===
+			JSON.stringify([
+				DEFAULT_URLS[1],
+				DEFAULT_URLS[2],
+				DEFAULT_URLS[0],
+				DEFAULT_URLS[3],
+			]) &&
+			(await phone.evaluate(
+				() => document.querySelectorAll('.frames .frame').length,
+			)) === 0,
+		urlsOf(await stored(phone)),
+	);
+	await touch.close();
+}
+
+/** the middle of row `i` of the sidebar's list */
+const rowMiddle = (page, i) =>
+	page.evaluate((index) => {
+		const r = document
+			.querySelectorAll('#bookmarksList .bookmark')
+			[index].querySelector('.bookmarkText')
+			.getBoundingClientRect();
+		return [r.left + r.width / 2, r.top + r.height / 2];
+	}, i);
+
+/** drag row `from` with the mouse to just past the middle of row `to` */
+async function dragRow(page, from, to) {
+	await sleep(400); // the sidebar has slid in
+	const [x, y] = await rowMiddle(page, from);
+	const [, y2] = await rowMiddle(page, to);
+	await page.mouse.move(x, y);
+	await page.mouse.down();
+	await page.mouse.move(x, y + 3, { steps: 2 });
+	await page.mouse.move(x, y2 + 10, { steps: 12 });
+	await sleep(250);
+	await page.mouse.up();
+	await sleep(300);
+}
+
+/** the same with a finger, holding it `hold` ms before it moves */
+async function touchDrag(page, cdp, from, to, hold) {
+	await sleep(400); // the sidebar has slid in
+	const [x, y] = await rowMiddle(page, from);
+	const [, y2] = await rowMiddle(page, to);
+	const touch = (type, at) =>
+		cdp.send('Input.dispatchTouchEvent', {
+			type,
+			touchPoints: at ? [{ x, y: at }] : [],
+		});
+	await touch('touchStart', y);
+	await sleep(hold);
+	for (let i = 1; i <= 12; i++) {
+		await touch('touchMove', y + ((y2 + 10 - y) * i) / 12);
+		await sleep(16);
+	}
+	await sleep(250);
+	await touch('touchEnd');
+	await sleep(400);
 }
 
 await Promise.all([run('same-origin', PROXY), run('isolated', HOST)]);
