@@ -1,0 +1,16 @@
+<!doctype html>
+<title>adblock csp</title>
+<p id="ran">no</p>
+<script>
+	document.getElementById('ran').textContent = 'yes';
+	// a worker the policy refuses throws or fires error, by browser version
+	try {
+		const worker = new Worker(
+			URL.createObjectURL(new Blob(['postMessage(1)'])),
+		);
+		worker.onmessage = () => (window.__worker = 'made');
+		worker.onerror = () => (window.__worker = 'error');
+	} catch (error) {
+		window.__worker = error.name;
+	}
+</script>

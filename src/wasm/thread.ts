@@ -89,6 +89,15 @@ export function hasModule(name: string): boolean {
 	return modules.has(name);
 }
 
+/**
+ * The compiled module `name` itself, or null: for a caller that keeps
+ * instances of its own (the blocker makes one per engine it loads, and
+ * exchanges bytes with it where a BufferInstance exchanges text)
+ */
+export function moduleOf(name: string): WebAssembly.Module | null {
+	return modules.get(name) ?? null;
+}
+
 /** the modules this thread holds, once every compile it was asked for has settled */
 export async function heldModules(): Promise<string[]> {
 	while (pending.size) await Promise.all(pending);

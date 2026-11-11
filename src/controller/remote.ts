@@ -1,3 +1,4 @@
+import type { AdblockOptions } from '../blocker/types';
 import { assetName } from '../config';
 // Host-side controller for origin isolation. The real StompController runs in
 // a hidden controller frame on the proxy origin (dist/controllerFrame.html);
@@ -101,6 +102,8 @@ export interface RemoteControllerInit {
 	names?: Partial<HelperNames>;
 	/** host code for every proxied realm (see StompController.hooks); a `{ url }` must be readable from the proxy origin, where the controller frame fetches it */
 	hooks?: InitHooks;
+	/** the built-in blocker (see StompController.adblock) */
+	adblock?: boolean | AdblockOptions;
 	/** a host hook threw in a proxied realm, or a hook URL failed (see StompController) */
 	onHookError?: (info: HookErrorInfo) => void;
 	/**
@@ -359,6 +362,7 @@ export class RemoteController extends EventTarget {
 						: {}),
 					...(init.rules ? { rules: init.rules } : {}),
 					...(init.assets ? { assets: init.assets } : {}),
+					...(init.adblock ? { adblock: init.adblock } : {}),
 					...(init.names ? { names: init.names } : {}),
 					...(init.hooks ? { hooks: init.hooks } : {}),
 					...(init.errorPage ? { errorPage: init.errorPage } : {}),

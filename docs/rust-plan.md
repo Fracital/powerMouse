@@ -98,8 +98,8 @@ none:
 - the scanner module (`scanner.wasm`, phase 3): 25 KB, 11 KB brotli. It has
   no dependencies and shares no code with the rewriter, so it is a module of
   its own and not 25 KB more of the rewriter's.
-- the blocker module, measured in phase 4 (the crate's regex and idna tables
-  dominate; expect a larger one).
+- the blocker module, 1,063 KB, 299 KB brotli (the crate's regex and idna
+  tables dominate).
 
 All are committed under `assets/` with a `.sha256` and an `UPSTREAM` file
 naming the toolchain and crate versions that produced them, and `build.js`
@@ -358,10 +358,16 @@ Built from `~/src/adblock-rust` (the `adblock` crate 0.13.5, upstream brave
 at 09d297c, MPL-2.0, which is fine to ship alongside GPL-3.0 STomp).
 
 Features: `default-features = false`, plus `full-regex-handling`,
-`single-thread`, `css-validation` (required: without it procedural rules land
-in `hide_selectors`) and `embedded-domain-resolver`. Dropped:
-`resource-assembler` (it wants a filesystem), `content-blocking`,
-`debug-info`.
+`single-thread` and `css-validation` (required: without it procedural rules
+land in `hide_selectors`). Dropped: `resource-assembler` (it wants a
+filesystem), `content-blocking`, `debug-info`, and as built
+`embedded-domain-resolver` too: the module asks the worker for a registrable
+domain through its one import, answered by the tldts the worker already
+carries, so the public suffix list is not in the artifact twice.
+
+As built (phase 4): `docs/adblock.md` is the reference for what follows, and
+says where the result differs from this plan (the option is `adblock`, the
+suites are `adblock-engine` and `adblock`, WebSockets are not blocked yet).
 
 Where each part runs:
 
@@ -407,7 +413,7 @@ Where each part runs:
   skips verification when its own version matches, so only engines our own
   container built, pinned to the crate version, are ever loaded. Resources
   are not in the DAT: `use_resources` is called again from the resource JSON.
-- **The option.** `blocker: false` by default. `true` or an object with list
+- **The option.** `adblock: false` by default. `true` or an object with list
   URLs, a prebuilt engine URL, a resource URL and the trusted list set. In
   the demo it is set the way every controller option is set there (the page
   has no option UI beyond the transport select): a URL parameter

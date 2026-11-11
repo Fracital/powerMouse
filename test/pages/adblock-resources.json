@@ -1,0 +1,42 @@
+[
+	{
+		"name": "noop.js",
+		"aliases": ["noopjs"],
+		"kind": {
+			"mime": "application/javascript"
+		},
+		"content": "KGZ1bmN0aW9uKCkgewogICAgJ3VzZSBzdHJpY3QnOwp9KSgpOwo="
+	},
+	{
+		"name": "1x1.gif",
+		"aliases": ["1x1-transparent.gif"],
+		"kind": {
+			"mime": "image/gif"
+		},
+		"content": "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+	},
+	{
+		"name": "spy-fetch.js",
+		"aliases": [],
+		"kind": {
+			"mime": "application/javascript"
+		},
+		"content": "ZnVuY3Rpb24gc3B5RmV0Y2goa2V5KSB7CiAgICBjb25zdCBuYXRpdmUgPSB3aW5kb3cuZmV0Y2g7CiAgICBjb25zdCBzZWVuID0geyBocmVmOiBsb2NhdGlvbi5ocmVmLCBvcmlnaW46IGxvY2F0aW9uLm9yaWdpbiwgdXJsczogW10gfTsKICAgIHdpbmRvd1trZXldID0gc2VlbjsKICAgIHdpbmRvdy5mZXRjaCA9IGZ1bmN0aW9uIChpbnB1dCkgewogICAgICAgIHNlZW4udXJscy5wdXNoKFN0cmluZyhpbnB1dCAmJiBpbnB1dC51cmwgPyBpbnB1dC51cmwgOiBpbnB1dCkpOwogICAgICAgIHJldHVybiBuYXRpdmUuYXBwbHkodGhpcywgYXJndW1lbnRzKTsKICAgIH07Cn0K"
+	},
+	{
+		"name": "set-flag.js",
+		"aliases": [],
+		"kind": {
+			"mime": "application/javascript"
+		},
+		"content": "ZnVuY3Rpb24gc2V0RmxhZyhrZXkpIHsKICAgIHdpbmRvd1trZXldID0gdHJ1ZTsKfQo="
+	},
+	{
+		"name": "trusted-mark.js",
+		"aliases": [],
+		"kind": {
+			"mime": "application/javascript"
+		},
+		"content": "ZnVuY3Rpb24gdHJ1c3RlZE1hcmsoa2V5KSB7CiAgICB3aW5kb3dba2V5XSA9IHRydWU7Cn0K"
+	}
+]

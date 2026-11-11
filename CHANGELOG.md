@@ -130,6 +130,50 @@ The first release after a four-year gap. Everything below is breaking.
   every open tab at its next reload, gets a new one), and they go with the
   host origin's site data. There is no new API and no option for it.
   (controller-ids suite.)
+- A built-in content blocker, off by default: `init.adblock` on
+  `StompController` and `RemoteController` (docs/adblock.md). The engine is
+  Brave's adblock-rust 0.13.5 compiled to wasm (`rust/block`, shipped as
+  `dist/blocker.wasm`, 1,063 KB, 299 KB with brotli, MPL-2.0; named by
+  `init.assets.blocker`), so it reads EasyList and uBlock Origin syntax.
+  Nothing is bundled: the service worker fetches the lists and the redirect
+  resources through the controller's transport (the list servers never see
+  the user's address), compiles them once and keeps the serialized engine
+  in CacheStorage, where a restarted worker loads it in about 10 ms; the
+  lists are fetched again once a day (`refresh`). `true` uses EasyList,
+  EasyPrivacy and uBlock Origin's lists; an object names other `lists`
+  (`trusted` for the ones allowed `trusted-*` scriptlets, `format: 'hosts'`
+  for a hosts file), the `resources`, or a prebuilt `engine`.
+  - Requests: the worker asks the engine before the host's rules, the cache
+    and the transport, with the request's real URL, the real URL of the
+    document that makes it and its type as a content blocker names it. A
+    blocked request never reaches the transport and is a network error to
+    the page, as `net::ERR_BLOCKED_BY_CLIENT` is; `$redirect` answers with
+    the resource, `$removeparam` sends the request without the parameters,
+    `$csp` reaches the document where the proxy can enforce it. `onRequest`
+    reports a blocked request with status 0 and kind `blocked`.
+  - Cosmetic rules: hide selectors are rules of a constructed style sheet
+    the document adopts (nothing in the DOM, and the page's
+    `document.adoptedStyleSheets` stays its own list); generic class and id
+    rules are asked from the worker for the classes and ids a document
+    really uses; procedural filters (`:has-text()`, `:matches-css()`,
+    `:upward()`, `:xpath()` and the rest) and action filters (`:remove()`,
+    `:style()`, `:remove-attr()`, `:remove-class()`) run in the page.
+  - Scriptlets (`+js(...)`) are rewritten like a page's script and run before
+    the page's first script, over STomp's hooks.
+  - The module travels as one more of the wasm modules
+    (`ControllerInitMessage.modules.blocker`, bytes the service worker
+    compiles); the rewrite workers never get it. With the option off the
+    module is never fetched, the worker has no engine and the inject installs
+    nothing (the frame-cost gate is unchanged).
+  - Not yet: WebSocket connections are not blocked (they do not pass
+    through the service worker), a blocked element is not collapsed, and
+    cosmetic rules do not reach shadow roots or `about:blank`, `srcdoc` and
+    `blob:` documents. The crate does no HTML filtering or `$replace`.
+  - The demo reads `STOMP_ADBLOCK=1` (`?adblock` for one visit,
+    `?noadblock` to turn it off for one). Suites: `adblock-engine` (node:
+    the engine's decisions, types, CSP, cosmetic answers, trust, storage) and
+    `adblock` (browser: a blocked request never reaches the site, elements
+    are hidden, scriptlets run, and off changes nothing).
 - `init.rewriter` on `StompController` and `RemoteController` (`Config.rewriter`,
   `'js'` by default) chooses the rewriter backend (docs/rust-plan.md). With
   `'wasm'` the controller loads the Rust modules named by `init.assets` once

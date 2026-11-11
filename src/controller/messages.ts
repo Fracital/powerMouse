@@ -1,3 +1,4 @@
+import type { AdblockOptions } from '../blocker/types';
 import type { Assets, Config, ConfigCodec } from '../config';
 import type { HelperNames } from '../helperNames';
 import type { HookErrorInfo, InitHooks } from '../hooks';
@@ -79,6 +80,8 @@ export interface ControllerFrameInit {
 	hooks?: InitHooks;
 	/** the host's error page, a path on the proxy origin (RemoteControllerInit.errorPage) */
 	errorPage?: string;
+	/** the built-in blocker (RemoteControllerInit.adblock) */
+	adblock?: boolean | AdblockOptions;
 }
 
 export interface FrameInfo {

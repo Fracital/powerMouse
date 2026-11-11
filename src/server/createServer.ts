@@ -1,5 +1,9 @@
-import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
+import {
+	BareCompatibleClient,
+	type ProxyTransport,
+} from '@mercuryworkshop/proxy-transports';
 import { IDBPDatabase, openDB } from 'idb';
+import type { AdblockInit } from '../blocker/types';
 import {
 	assetName,
 	Assets,
@@ -11,6 +15,8 @@ import {
 import { parseRoutedURL } from '../routeURL';
 import StompURL from '../StompURL';
 import type { RequestInfo, RequestRule } from '../transport/messages';
+import { heldModules, moduleOf } from '../wasm/thread';
+import { Blocker, registerBlocker } from './blocker';
 import { HttpCache, memoryCache } from './cache';
 import Cookies, { openCookies, registerCookies } from './Cookies';
 import { hostErrorPage } from './errorPage';
@@ -56,6 +62,46 @@ interface SharedStores {
 }
 
 const shared = new Map<string, Promise<SharedStores>>();
+
+/**
+ * The blocker of a scope (docs/adblock.md): one engine for every controller
+ * of the scope that asks for the same lists, fetching through the transport
+ * of whichever controller registered last (the earlier one's tab may be gone)
+ */
+const blockers = new Map<
+	string,
+	{ blocker: Blocker; bare: BareCompatibleClient }
+>();
+
+function sharedBlocker(
+	scope: string,
+	init: AdblockInit,
+	bare: BareCompatibleClient,
+): Blocker {
+	const key = JSON.stringify([
+		scope,
+		init.lists,
+		init.resources,
+		init.engine ?? '',
+		init.refreshMs,
+	]);
+	let entry = blockers.get(key);
+	// one that never got an engine (no module, no list fetched) is tried
+	// again by the next controller to shake hands
+	if (!entry || entry.blocker.failed) {
+		const holder = { bare } as { blocker: Blocker; bare: BareCompatibleClient };
+		// the module is this thread's, handed over with the handshake and
+		// compiling behind it (src/wasm/thread.ts)
+		holder.blocker = new Blocker(
+			init,
+			(url) => holder.bare.fetch(url, { redirect: 'follow' }),
+			() => heldModules().then(() => moduleOf('blocker')),
+		);
+		entry = holder;
+		blockers.set(key, entry);
+	} else entry.bare = bare;
+	return entry.blocker;
+}
 
 function sharedStores(scope: string): Promise<SharedStores> {
 	let stores = shared.get(scope);
@@ -142,6 +188,8 @@ export default async function createServer(
 	log?: (info: RequestInfo) => void,
 	/** the controller's rewrite workers, when it started any */
 	pool?: RewritePool,
+	/** the built-in blocker's lists, when the controller turned it on */
+	adblock?: AdblockInit,
 ): Promise<StompServer> {
 	const db = await openConfigDB();
 
@@ -223,6 +271,9 @@ export default async function createServer(
 		json(200, context?.clientId ?? null),
 	);
 	registerAssets(router, init.scope, init.assets);
+	const blocker = adblock
+		? sharedBlocker(init.scope, adblock, new BareCompatibleClient(transport))
+		: undefined;
 	const { route, setRules } = registerRewrites(
 		router,
 		init,
@@ -232,7 +283,9 @@ export default async function createServer(
 		log,
 		rewrites,
 		pool,
+		blocker,
 	);
+	if (blocker) registerBlocker(router, blocker);
 	registerStorage(router, stores.storage);
 	registerMediaLoads(router);
 	registerKeptLoads(router);

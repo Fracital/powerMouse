@@ -70,6 +70,8 @@ export default class Client {
 	wasmRewriter: boolean;
 	/** the host's served file names (config.assets) */
 	assets?: Assets;
+	/** the built-in blocker is on (config.adblock): a document's inject applies the cosmetic rules it is handed */
+	blocking: boolean;
 	applied: boolean;
 	/** @internal called after a response reached this context (fetch, XHR): caches that depend on the jar drop */
 	readonly responseListeners = new Set<() => void>();
@@ -253,6 +255,7 @@ export default class Client {
 		this.serviceWorkers = init.serviceWorkers !== false;
 		this.wasmRewriter = init.rewriter === 'wasm';
 		this.assets = init.assets;
+		this.blocking = !!init.adblock;
 		// a stale cached bundle next to a new service worker: say so once,
 		// the page still gets its best effort
 		if (init.build && init.build !== BUILD)
@@ -288,6 +291,7 @@ export default class Client {
 			...(this.serviceWorkers ? {} : { serviceWorkers: false }),
 			...(this.wasmRewriter ? { rewriter: 'wasm' } : {}),
 			...(this.assets ? { assets: this.assets } : {}),
+			...(this.blocking ? { adblock: true } : {}),
 			...(this.#customNames ? { names: this.names } : {}),
 			...(this.hooks ? { hooks: this.hooks } : {}),
 		};

@@ -1,0 +1,142 @@
+<!doctype html>
+<title>adblock</title>
+<div class="adblock-generic" id="generic">generic</div>
+<div id="adblock-generic-id">generic id</div>
+<div data-adblock-generic id="attr">attr</div>
+<div class="adblock-specific" id="specific">specific</div>
+<div id="procedural"><span>Sponsored by nobody</span></div>
+<div id="upward"><span class="adblock-upward-mark">mark</span></div>
+<div class="adblock-styled" id="styled">styled</div>
+<div class="adblock-gone" id="gone">gone</div>
+<div class="adblock-attr" id="tracked" data-track="1">attr</div>
+<div class="adblock-class tracked" id="classed">class</div>
+<div class="adblock-kept" id="kept">kept</div>
+<script src="/pages/adblock-blocked.js"></script>
+<script src="/pages/adblock-allowed.js"></script>
+<script
+	id="redirected"
+	src="/pages/adblock-redirect.js"
+	onload="window.__redirectLoad = 'load'"
+	onerror="window.__redirectLoad = 'error'"
+></script>
+<script src="/pages/adblock-third.js"></script>
+<script src="/pages/adblock-domain.js"></script>
+<img
+	id="pixel"
+	src="/pages/adblock-pixel.svg"
+	onload="window.__pixel = 'load'"
+	onerror="window.__pixel = 'error'"
+/>
+<iframe id="frame" src="/pages/adblock-frame.html"></iframe>
+<script>
+	// what the page itself sees, by its own (rewritten) code
+	window.__adblockReport = async () => {
+		const shown = (id) => {
+			const element = document.getElementById(id);
+			return element ? getComputedStyle(element).display !== 'none' : null;
+		};
+		const attempt = (url, init) =>
+			fetch(url, init).then(
+				(response) => response.status,
+				(error) => `${error.name}: ${error.message}`,
+			);
+		const other = location.origin.includes('127.0.0.1')
+			? location.origin.replace('127.0.0.1', 'localhost')
+			: location.origin.replace('localhost', '127.0.0.1');
+		const script = (src) =>
+			new Promise((resolve) => {
+				const element = document.createElement('script');
+				element.src = src;
+				element.onload = () => resolve('load');
+				element.onerror = () => resolve('error');
+				document.head.append(element);
+			});
+		const image = (src) =>
+			new Promise((resolve) => {
+				const element = new Image();
+				element.onload = () => resolve('load');
+				element.onerror = () => resolve('error');
+				element.src = src;
+			});
+		const late = document.createElement('div');
+		late.className = 'adblock-late';
+		late.id = 'late';
+		late.textContent = 'late';
+		document.body.append(late);
+		const out = {
+			href: location.href,
+			ran: [...(window.__adblockRan || [])],
+			redirectLoad: window.__redirectLoad,
+			pixel: window.__pixel,
+			typedFetch: await attempt('/pages/adblock-typed.json'),
+			typedImage: await image('/pages/adblock-typed.json?as-image'),
+			thirdParty: await script(`${other}/pages/adblock-third.js`),
+			param: await attempt('/pages/adblock-param.json?utm_source=x&keep=1'),
+			plain: await attempt('/pages/hdr.json'),
+			spy: window.__adblockSpy ?? null,
+			trusted: window.__adblockTrusted ?? null,
+			untrusted: window.__adblockUntrusted ?? null,
+			flag: window.__adblockFlag ?? null,
+			leakedFunctions: ['spyFetch', 'setFlag', 'trustedMark'].filter(
+				(name) => name in window,
+			),
+			gone: document.getElementById('gone') === null,
+			trackAttribute: document.getElementById('tracked').dataset.track ?? null,
+			classes: document.getElementById('classed').className,
+			styledColor: getComputedStyle(document.getElementById('styled')).color,
+			adopted: document.adoptedStyleSheets.length,
+			sheets: document.styleSheets.length,
+			styleElements: document.querySelectorAll('style').length,
+			adoptedGetter: Object.getOwnPropertyDescriptor(
+				Document.prototype,
+				'adoptedStyleSheets',
+			).get.toString(),
+		};
+		// the page's own constructed sheet joins the list it reads, and only it
+		const sheet = new CSSStyleSheet();
+		sheet.replaceSync('#kept { outline: 1px solid red }');
+		document.adoptedStyleSheets = [sheet];
+		const second = new CSSStyleSheet();
+		document.adoptedStyleSheets.push(second);
+		out.adoptedAfter = [
+			document.adoptedStyleSheets.length,
+			document.adoptedStyleSheets[0] === sheet,
+			document.adoptedStyleSheets[1] === second,
+			document.adoptedStyleSheets === document.adoptedStyleSheets,
+			Array.isArray(document.adoptedStyleSheets),
+		];
+		try {
+			document.adoptedStyleSheets = [{}];
+			out.adoptedBad = 'accepted';
+		} catch (error) {
+			out.adoptedBad = error.name;
+		}
+		out.adoptedKept = document.adoptedStyleSheets.length;
+		out.keptOutline = getComputedStyle(
+			document.getElementById('kept'),
+		).outlineStyle;
+		// the late element's class is asked of the worker in the next batch
+		await new Promise((resolve) => setTimeout(resolve, 1500));
+		out.shown = Object.fromEntries(
+			[
+				'generic',
+				'adblock-generic-id',
+				'attr',
+				'specific',
+				'procedural',
+				'upward',
+				'styled',
+				'kept',
+				'late',
+				'frame',
+			].map((id) => [id, shown(id)]),
+		);
+		out.inlineStyles = [...document.querySelectorAll('[style]')].map(
+			(element) => element.id,
+		);
+		out.timing = performance
+			.getEntriesByType('resource')
+			.map((entry) => entry.name);
+		return out;
+	};
+</script>

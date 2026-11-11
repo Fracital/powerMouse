@@ -174,6 +174,7 @@ if (window === window.parent || !origins.length) {
 							: {}),
 						...(init.rules ? { rules: init.rules } : {}),
 						...(init.assets ? { assets: init.assets } : {}),
+						...(init.adblock ? { adblock: init.adblock } : {}),
 						...(init.names ? { names: init.names } : {}),
 						...(init.hooks ? { hooks: init.hooks } : {}),
 						onHookError: (info: HookErrorInfo) => {

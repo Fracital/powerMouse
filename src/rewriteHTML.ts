@@ -1,4 +1,5 @@
 import { escapeText } from 'entities';
+import type { AdblockPage } from './blocker/types';
 import { Config } from './config';
 import { helperNames } from './helperNames';
 import type { Prewritten } from './prewrite';
@@ -202,6 +203,8 @@ export function modifyHTML(
 	/** the document's inline scripts and styles, rewritten already (src/prewrite.ts) */
 	prewritten?: Prewritten | null,
 	upgradeInsecure = false,
+	/** the blocker's cosmetic rules and scriptlets for the document (docs/adblock.md) */
+	adblock?: AdblockPage | null,
 ): string {
 	const { head, tail } = shell(
 		script,
@@ -213,6 +216,7 @@ export function modifyHTML(
 		control,
 		upgradeInsecure,
 		false,
+		adblock,
 	);
 	return head + tail(prewritten);
 }
@@ -232,6 +236,7 @@ export function modifyHTMLStreamed(
 	referrer?: ReferrerInfo,
 	control?: ControlInfo,
 	upgradeInsecure = false,
+	adblock?: AdblockPage | null,
 ): { head: string; tail: (prewritten: Prewritten | null) => string } {
 	return shell(
 		script,
@@ -243,6 +248,7 @@ export function modifyHTMLStreamed(
 		control,
 		upgradeInsecure,
 		true,
+		adblock,
 	);
 }
 
@@ -257,6 +263,7 @@ function shell(
 	upgradeInsecure: boolean,
 	/** the markup goes in the head, the client takes it from the global */
 	streamed: boolean,
+	adblock?: AdblockPage | null,
 ): { head: string; tail: (prewritten?: Prewritten | null) => string } {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	const names = helperNames(config);
@@ -265,6 +272,17 @@ function shell(
 	const controlled = control
 		? `globalThis[${JSON.stringify(SW_CONTROL)}] = ${JSON.stringify(control).replace(/</g, '\\u003c')};\n\t`
 		: '';
+	// the blocker's cosmetic rules and scriptlets, handed to the client before
+	// the markup: the scriptlets run before the page's first script, the
+	// rules apply as the markup lands (docs/adblock.md)
+	const blocked =
+		adblock &&
+		(adblock.hide.length ||
+			adblock.procedural.length ||
+			adblock.script ||
+			!adblock.generichide)
+			? `\n\t${names.client}.adblock(${JSON.stringify(adblock).replace(/</g, '\\u003c')});\n`
+			: '';
 	const inject = (
 		prewritten?: Prewritten | null,
 	) => `if (typeof globalThis.createClient !== 'function') {
@@ -286,6 +304,7 @@ ${referred(names.client, referrer)}${
 		throw error;
 	}
 
+${blocked}
 	try {
 		${names.client}.loadHTML(${
 			streamed

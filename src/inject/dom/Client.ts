@@ -1,3 +1,4 @@
+import type { AdblockPage } from '../../blocker/types';
 import { ParsedConfig } from '../../config';
 import { rewriteCSSValueURLs } from '../../cssURLs';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
@@ -1209,6 +1210,12 @@ export default class DocumentClient extends Client {
 	innerHTMLOf(element: Element): string {
 		return this.innerHTML(element);
 	}
+	/**
+	 * The shell hands over the blocker's cosmetic rules and scriptlets for
+	 * this document (docs/adblock.md); the Adblock module takes them when the
+	 * blocker is on
+	 */
+	adblock: (page: AdblockPage) => void = () => {};
 	loadHTML(script: string, prewritten?: string) {
 		// the shell escaped the markup with escapeText (modifyHTML), which
 		// writes a no-break space as &nbsp;: an XML-level decode leaves that

@@ -1,6 +1,7 @@
 import { createClientFactory } from '../Client';
 import baseModules from '../modules';
 import DocumentClient from './Client';
+import AdblockModule from './modules/Adblock';
 import AnchorModule from './modules/Anchor';
 import AnimationFramesModule from './modules/AnimationFrames';
 import AudioModule from './modules/Audio';
@@ -40,6 +41,9 @@ import WebRTCModule from './modules/WebRTC';
 import XMLHttpRequestModule from './modules/XMLHttpRequest';
 
 export function addClientModules(client: DocumentClient) {
+	// first: it takes the natives the blocker's cosmetic rules use before
+	// any other module hooks them (and nothing at all with the blocker off)
+	client.addModule(AdblockModule);
 	baseModules(client);
 	client.addModule(HistoryModule);
 	client.addModule(NavigatorModule);

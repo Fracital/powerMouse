@@ -85,6 +85,12 @@ export interface Config {
 	fetchTimeout?: number;
 	/** @internal ms a navigation with no referrer waits for its document's hint (tests; default 100) */
 	navigationHintWait?: number;
+	/**
+	 * The built-in blocker is on (ControllerInit.adblock): the service worker
+	 * blocks what the lists block, and every document's inject applies the
+	 * cosmetic rules and the scriptlets it is handed (docs/adblock.md).
+	 */
+	adblock?: boolean;
 	/** the served file names, when the host renamed them (see Assets) */
 	assets?: Assets;
 	/**
@@ -188,6 +194,8 @@ export interface Assets {
 	rewriter?: string;
 	/** the CSS and markup scanners' wasm module (docs/rust-plan.md, phase 3) */
 	scanner?: string;
+	/** the built-in blocker's wasm module (docs/adblock.md) */
+	blocker?: string;
 }
 
 export const DEFAULT_ASSETS: Required<Assets> = {
@@ -200,6 +208,7 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 	rewriteWorker: 'rewriteWorker.js',
 	rewriter: 'rewriter.wasm',
 	scanner: 'scanner.wasm',
+	blocker: 'blocker.wasm',
 };
 
 /**

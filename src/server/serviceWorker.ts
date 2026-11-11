@@ -125,7 +125,13 @@ const controllers = new Map<string, ControllerRef>();
 let serials = 0;
 
 function registerController(
-	{ directory, config: given, rewritePool, modules }: ControllerInitMessage,
+	{
+		directory,
+		config: given,
+		rewritePool,
+		modules,
+		adblock,
+	}: ControllerInitMessage,
 	ports: MessagePort[],
 	client?: string,
 ) {
@@ -169,6 +175,7 @@ function registerController(
 		transport,
 		config.requestLog ? report : undefined,
 		pool,
+		adblock,
 	);
 
 	const rpc = new RpcHelper<SWbound, Controllerbound>(

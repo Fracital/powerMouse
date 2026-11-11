@@ -1,0 +1,31 @@
+! Title: the adblock suites' filter list (test/suites/adblock*.mjs)
+! Network rules. The fixture site is 127.0.0.1 and localhost on one port, so
+! rules name paths and the two hosts stand for two sites.
+/pages/adblock-blocked.js
+/pages/adblock-pixel.svg$image
+/pages/adblock-typed.json$xmlhttprequest
+/pages/adblock-third.js$third-party
+/pages/adblock-domain.js$domain=localhost
+/pages/adblock-frame.html$subdocument
+/pages/adblock-allowed
+@@/pages/adblock-allowed.js$script
+/pages/adblock-redirect.js$script,redirect=noop.js
+/pages/adblock-param.json$removeparam=utm_source
+/pages/adblock-csp.html$csp=worker-src 'none'
+/pages/adblock-csp.html$csp=script-src 'self'
+! Cosmetic rules
+##.adblock-generic
+##.adblock-late
+###adblock-generic-id
+##div[data-adblock-generic]
+localhost#@#.adblock-generic
+127.0.0.1##.adblock-specific
+127.0.0.1##div:has-text(Sponsored by)
+127.0.0.1##.adblock-upward-mark:upward(1)
+127.0.0.1##.adblock-styled:style(color: rgb(1, 2, 3) !important)
+127.0.0.1##.adblock-gone:remove()
+127.0.0.1##.adblock-attr:remove-attr(data-track)
+127.0.0.1##.adblock-class:remove-class(tracked)
+! Scriptlets
+127.0.0.1##+js(spy-fetch, __adblockSpy)
+127.0.0.1##+js(trusted-mark, __adblockTrusted)

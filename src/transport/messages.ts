@@ -3,6 +3,7 @@ import type {
 	TransferrableResponse,
 	WebSocketDataType,
 } from '@mercuryworkshop/proxy-transports';
+import type { AdblockInit } from '../blocker/types';
 import type { Config } from '../config';
 import type { PortBody } from './bodyPort';
 import type { Http3DescriptorOptions } from './construct';
@@ -459,6 +460,8 @@ export interface ControllerInitMessage {
 	 * load that finishes after the handshake sends CONTROLLER_MODULES.
 	 */
 	modules?: Record<string, ArrayBuffer>;
+	/** the built-in blocker: its lists (its module is `modules.blocker`) (docs/adblock.md) */
+	adblock?: AdblockInit;
 }
 
 /** controller -> SW: the wasm modules' bytes, when they were not loaded at the handshake */

@@ -4,6 +4,11 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import { acceptLanguage } from '../acceptLanguage';
 import {
+	resolveAdblockOptions,
+	type AdblockInit,
+	type AdblockOptions,
+} from '../blocker/types';
+import {
 	assetName,
 	Assets,
 	Config,
@@ -72,6 +77,7 @@ export type { Config, ConfigCodec } from '../config';
 export { RemoteController, RemoteFrame, DEFAULT_SANDBOX } from './remote';
 export type { RemoteControllerInit } from './remote';
 export type { TransportDescriptor, FrameInfo } from './messages';
+export type { AdblockList, AdblockOptions } from '../blocker/types';
 export { default as Http3Transport } from '../transport/http3/Http3Transport';
 export type {
 	DatagramChannel,
@@ -268,6 +274,16 @@ export interface ControllerInit {
 	 * `location.reload()` retries. Without it the built-in pages answer.
 	 */
 	errorPage?: string;
+	/**
+	 * The built-in blocker (docs/adblock.md), off by default. `true` fetches
+	 * EasyList, EasyPrivacy and uBlock Origin's lists through the transport
+	 * and blocks, hides and neutralises what they name, as a content blocker
+	 * in the user's browser would; an object names other lists, the
+	 * resources, a prebuilt engine or the refresh interval. A
+	 * blocked request is a network error to the page, nothing more. With no
+	 * list fetched the blocker stays off.
+	 */
+	adblock?: boolean | AdblockOptions;
 	/**
 	 * sandbox flags for proxied frames, default `DEFAULT_SANDBOX`. Same-origin
 	 * frames are not a security boundary, but without a sandbox the browser
@@ -652,6 +668,8 @@ export class StompController extends EventTarget {
 	/** a build mismatch is being healed: the next ready answer must agree */
 	#healing = false;
 	#rules: RequestRule[];
+	/** the blocker's lists, while it is on (docs/adblock.md); its module is `#modules.blocker` */
+	#adblock: AdblockInit | null = null;
 	/**
 	 * Register the STomp service worker served from `directory` (the
 	 * constructor's default when omitted: the directory of the current script)
@@ -769,6 +787,7 @@ export class StompController extends EventTarget {
 				? { navigationHintWait: init.navigationHintWait }
 				: {}),
 			...(init.assets ? { assets: init.assets } : {}),
+			...(init.adblock ? { adblock: true } : {}),
 			// the client's name is this controller's own unless the host chose
 			// one: a page that could name it would reach the real windows it
 			// holds (see mintClientName)
@@ -786,7 +805,7 @@ export class StompController extends EventTarget {
 				new URL(assetName(this.config.assets, 'rewriteWorker'), this.directory),
 				rewriteWorkers,
 			);
-		if (init.rewriter === 'wasm') void this.#compileModules();
+		if (init.rewriter === 'wasm') void this.#compileModules(WASM_ASSETS);
 
 		// a described transport is started where it is hosted before the first
 		// handshake; a failure there never leaves the controller dead
@@ -797,6 +816,18 @@ export class StompController extends EventTarget {
 				for (const error of errors) this.#reportHookError(error, null);
 			},
 		);
+		// the blocker's module is one more of the wasm modules, loaded like
+		// them, and the first handshake waits for it: the service worker
+		// builds the engine once it holds the module. A module that cannot be
+		// had leaves the blocker off (and the config says so to every document)
+		this.#adblock = resolveAdblockOptions(init.adblock);
+		const adblockReady: Promise<void> = this.#adblock
+			? this.#compileModules(['blocker']).then(() => {
+					if (this.#modules?.blocker) return;
+					this.#adblock = null;
+					delete this.config.adblock;
+				})
+			: Promise.resolve();
 		const transportReady: Promise<void> = !isTransportDescriptor(given)
 			? Promise.resolve()
 			: this.transportHost === 'worker'
@@ -811,12 +842,15 @@ export class StompController extends EventTarget {
 					this.id = id;
 					this.config.directory = `${this.directory.pathname}${id}/`;
 				});
-		this.#hostReady = Promise.all([hooksReady, transportReady, idReady]).then(
-			() => {
-				if (this.transportHost === 'worker') this.config.workerTransport = true;
-				else delete this.config.workerTransport;
-			},
-		);
+		this.#hostReady = Promise.all([
+			hooksReady,
+			transportReady,
+			idReady,
+			adblockReady,
+		]).then(() => {
+			if (this.transportHost === 'worker') this.config.workerTransport = true;
+			else delete this.config.workerTransport;
+		});
 
 		window.addEventListener('message', (event) => {
 			// only our own frames, same origin as this page in this mode
@@ -1139,28 +1173,32 @@ export class StompController extends EventTarget {
 	 * holding a WebAssembly.Module never reaches it), so it gets the bytes
 	 * and compiles them on its own thread: with the next handshake, or now
 	 * when it already shook hands. One that fails to load or compile is left
-	 * out, and its JavaScript rewriter answers.
+	 * out, and its JavaScript rewriter answers. The blocker's module
+	 * (`adblock`, docs/adblock.md) runs in the service worker alone: its
+	 * bytes go there and nothing here compiles them.
 	 */
-	async #compileModules() {
+	async #compileModules(names: readonly (keyof Assets)[]) {
 		const compiled: Record<string, WebAssembly.Module> = {};
 		const loaded: Record<string, ArrayBuffer> = {};
 		await Promise.all(
-			WASM_ASSETS.map(async (name) => {
+			names.map(async (name) => {
 				try {
 					const response = await fetch(
 						new URL(assetName(this.config.assets, name), this.directory),
 					);
 					if (!response.ok) throw new Error(`HTTP ${response.status}`);
 					const bytes = await response.arrayBuffer();
-					compiled[name] = await compileModule(bytes);
+					if (name !== 'blocker') compiled[name] = await compileModule(bytes);
 					loaded[name] = bytes;
 				} catch (error) {
 					console.warn(`Stomp: the ${name} module did not load`, error);
 				}
 			}),
 		);
-		this.#modules = loaded;
-		this.#rewriteWorkers?.adopt(compiled);
+		// the rewriter's modules and the blocker's load apart: neither load
+		// drops what the other brought
+		this.#modules = { ...this.#modules, ...loaded };
+		if (Object.keys(compiled).length) this.#rewriteWorkers?.adopt(compiled);
 		if (this.#port) {
 			const message: ControllerModulesMessage = {
 				directory: this.config.directory,
@@ -1359,6 +1397,7 @@ export class StompController extends EventTarget {
 					}
 				: {}),
 			...(this.#modules ? { modules: this.#modules } : {}),
+			...(this.#adblock ? { adblock: this.#adblock } : {}),
 		};
 
 		this.serviceworker.postMessage({ [CONTROLLER_INIT]: message }, transfer);

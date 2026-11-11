@@ -80,6 +80,7 @@ import {
 	knownTopSiteOf,
 	recordInlineOrigin,
 } from './blobOrigins';
+import type { Blocker } from './blocker';
 import {
 	HttpCache,
 	isCacheable,
@@ -488,6 +489,8 @@ interface Rewriter {
 	log?: (info: RequestInfo) => void;
 	/** the host's request rules, compiled */
 	rules: CompiledRule[];
+	/** the built-in blocker, when the host turned it on (docs/adblock.md) */
+	blocker?: Blocker;
 }
 
 /** the page aborted the request (its signal fired) */
@@ -1240,6 +1243,122 @@ function genericForward(
 		};
 		if (crossOrigin && policyMode === 'same-origin')
 			return refuse('blocked: a same-origin request to another origin');
+
+		// the built-in blocker (docs/adblock.md), on the real request and the
+		// real document that makes it (a navigation's: the page that frames
+		// it), before the host's rules, the page's emulated service worker,
+		// the cache and the transport: what the lists block reaches none of
+		// them. A request the worker makes for itself is not the page's
+		const blocker = context?.internal ? undefined : rewriter.blocker;
+		// the first navigation after a start waits for the engine, bounded
+		if (blocker && navigation && !blocker.ready) await blocker.settled();
+		const decision = blocker?.decide({
+			url: reportURL(url),
+			source:
+				(navigation
+					? (refererSource ?? (nestedRoute ? new URL(nestedRoute) : null))
+					: (client ?? refererSource)
+				)?.href ?? '',
+			destination,
+			navigation,
+			topLevel,
+			method: serverRequest.method,
+			ping:
+				serverRequest.headers.has('ping-to') ||
+				(!serverRequest.destination &&
+					serverRequest.keepalive &&
+					serverRequest.mode === 'no-cors' &&
+					serverRequest.method === 'POST'),
+		});
+		if (decision?.block) {
+			// as a content blocker's ERR_BLOCKED_BY_CLIENT reaches a page: a
+			// network error, nothing of the proxy's in it. A top-level
+			// document is the user's own navigation: the host's page says why
+			const page =
+				navigation && topLevel
+					? await hostErrorPage(rewriter, {
+							url: reportURL(url),
+							status: 403,
+							error: 'blocked by the content blocker',
+							kind: 'blocked',
+						})
+					: null;
+			rewriter.log?.({
+				url: reportURL(url),
+				method: serverRequest.method,
+				destination: serverRequest.destination || 'fetch',
+				status: 0,
+				ms: Date.now() - started,
+				cached: false,
+				bytes: null,
+				error: 'blocked by the content blocker',
+				kind: 'blocked',
+				...(page ? {} : { client: context?.clientId }),
+			});
+			return page ?? Response.error();
+		}
+		if (decision?.resource) {
+			// `$redirect`: the lists' stand-in for the resource (an empty
+			// script, a 1x1 image), answered here and rewritten like the
+			// origin's own answer would be
+			const stand = new Response(decision.resource.body, {
+				headers: { 'content-type': decision.resource.type },
+			});
+			const standHeaders = new Headers({
+				'content-type': decision.resource.type,
+				'cache-control': 'no-store',
+			});
+			const output = transformBody
+				? await transformBody(
+						url,
+						stand,
+						standHeaders,
+						referrerInfo,
+						{
+							method: serverRequest.method,
+							headers: requestHeaders,
+							routed: serverRequest.url,
+							clientId: context?.clientId,
+							navigation,
+							upgradeInsecure,
+							// the lists' resource, not the origin's: never kept
+							partition: null,
+						},
+						{},
+					)
+				: false;
+			rewriter.log?.({
+				url: reportURL(url),
+				method: serverRequest.method,
+				destination: serverRequest.destination || 'fetch',
+				status: 200,
+				ms: Date.now() - started,
+				cached: false,
+				bytes: decision.resource.body.length,
+				error: 'redirected by the content blocker',
+				client: context?.clientId,
+			});
+			return new Response(output === false ? stand.body : output, {
+				headers: standHeaders,
+			});
+		}
+		if (decision?.url) {
+			// `$removeparam`: the request goes out without the parameters; a
+			// navigation is redirected, so the document's URL is the one fetched
+			const stripped = new URL(decision.url);
+			if (navigation)
+				return new Response(null, {
+					status: 307,
+					headers: {
+						location: `${oURL.origin}${rewriter.directory}${resource}/${new StompURL(
+							stripped,
+							url,
+						).encode()}`,
+						'cache-control': 'no-store',
+					},
+				});
+			url.url = stripped;
+		}
 
 		// the host's rules, on the real request as it would go out: the first
 		// match blocks, answers, redirects or edits headers. Before the cache
@@ -2561,6 +2680,7 @@ export function registerRewrites(
 	log?: (info: RequestInfo) => void,
 	rewrites?: RewriteCache,
 	pool?: RewritePool,
+	blocker?: Blocker,
 ) {
 	const rewriter: Rewriter = {
 		get config() {
@@ -2581,6 +2701,9 @@ export function registerRewrites(
 				// the wasm rewriters answer where a thread holds them
 				...(init.rewriter === 'wasm' ? { rewriter: 'wasm' as const } : {}),
 				...(init.assets ? { assets: init.assets } : {}),
+				// the blocker is on: every document's inject takes its natives
+				// for the cosmetic rules before it hooks anything
+				...(init.adblock ? { adblock: true } : {}),
 				// the deployment's helper names: the shell and every rewritten
 				// script use them, and the inject reads them from this config
 				...(init.names ? { names: init.names } : {}),
@@ -2595,6 +2718,7 @@ export function registerRewrites(
 		pool,
 		log,
 		rules: [],
+		blocker,
 		codec: init.codec,
 		directory: init.directory,
 		errorPage: init.errorPage,
@@ -3028,6 +3152,21 @@ export function registerRewrites(
 					metaUpgradesInsecureRequests(markup);
 				if (upgradeInsecure && request.navigation)
 					rememberUpgradeInsecure(request.routed, request.clientId);
+				// the blocker's side of the document (docs/adblock.md): the
+				// lists' `$csp=` policies the proxy can enforce, beside its own,
+				// and the cosmetic rules and scriptlets its inject applies
+				const adblock = rewriter.blocker?.ready
+					? rewriter.blocker.cosmetic(url.url.href, (script) =>
+							modifyJS(script, url, rewriter.config, 'generic'),
+						)
+					: null;
+				const listCsp = rewriter.blocker?.ready
+					? rewriter.blocker.documentCsp(
+							url.url.href,
+							nestedTopOf(new URL(request.routed).pathname, rewriter.directory),
+						)
+					: null;
+				if (listCsp) responseHeaders.append('content-security-policy', listCsp);
 				const job = prewrite(
 					markup,
 					url,
@@ -3051,6 +3190,7 @@ export function registerRewrites(
 						note.serviceWorker,
 						null,
 						upgradeInsecure,
+						adblock,
 					);
 				// The page does not wait for the rewrite workers: the shell's
 				// first part (the inject bundle's script and the markup) goes out
@@ -3068,6 +3208,7 @@ export function registerRewrites(
 					referrer,
 					note.serviceWorker,
 					upgradeInsecure,
+					adblock,
 				);
 				const first = UTF8.encode(head);
 				return new ReadableStream<Uint8Array>({
