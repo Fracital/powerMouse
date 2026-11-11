@@ -57,6 +57,7 @@ import {
 	SW_REVIVE,
 	SWbound,
 	TRANSPORT_INIT,
+	WORKER_MODULES,
 } from '../transport/messages';
 import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
@@ -1413,7 +1414,22 @@ export class StompController extends EventTarget {
 							() => this.transport,
 							this.#handshakeHeaders,
 						);
-					worker.postMessage({ [TRANSPORT_INIT]: true }, [transport.port2]);
+					// with `rewriter: 'wasm'` the worker rewrites what it evaluates
+					// in the modules compiled here, as a page's dedicated worker
+					// does in its page's (WORKER_MODULES): it is a worker of this
+					// agent cluster, and they follow on a port of their own once
+					// they are in, so the worker never waits for them
+					if (this.#compiled) {
+						const modules = new MessageChannel();
+						void this.#compiled.then((compiled) =>
+							modules.port1.postMessage({ [WORKER_MODULES]: compiled }),
+						);
+						worker.postMessage(
+							{ [TRANSPORT_INIT]: true, [WORKER_MODULES]: true },
+							[transport.port2, modules.port2],
+						);
+					} else
+						worker.postMessage({ [TRANSPORT_INIT]: true }, [transport.port2]);
 					const channel = new MessageChannel();
 					worker.postMessage({ [SW_PORT]: true }, [channel.port2]);
 					this.#serviceWorkers.get(id)?.terminate();

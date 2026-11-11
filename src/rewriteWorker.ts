@@ -20,7 +20,12 @@ import { planSplit } from './splitRewrite';
 import StompURL from './StompURL';
 import { REWRITE_MODULES, REWRITE_PORT } from './transport/messages';
 import { RpcHelper } from './transport/rpc';
-import { adoptModules, heldModules } from './wasm/thread';
+import {
+	adoptModules,
+	heldModules,
+	SERVING_MEMORY_LIMIT,
+	setMemoryLimit,
+} from './wasm/thread';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -55,6 +60,10 @@ function serve(port: MessagePort) {
 	port.start();
 	port.postMessage({ [REWRITE_READY]: true });
 }
+
+// this thread rewrites a site's scripts: its instances keep what a large
+// one needed for the next
+setMemoryLimit(SERVING_MEMORY_LIMIT);
 
 self.addEventListener('message', (event) => {
 	if (event.data?.[REWRITE_PORT] && event.ports[0]) serve(event.ports[0]);

@@ -2,7 +2,7 @@ import { ParsedConfig } from '../../config';
 import { workerKindPartition } from '../../partition';
 import type { EmulateInfo } from '../../serviceWorkerTypes';
 import { WORKER_PARTITION } from '../../transport/messages';
-import Client from '../Client';
+import Client, { type HandedModules } from '../Client';
 import ServiceWorkerGlobalModule from './modules/ServiceWorkerGlobal';
 
 let transportPort: Promise<MessagePort> | undefined;
@@ -10,6 +10,17 @@ let transportPort: Promise<MessagePort> | undefined;
 /** Called by the worker entry once it has started listening for TRANSPORT_INIT. */
 export function setWorkerTransportPort(port: Promise<MessagePort>) {
 	transportPort = port;
+}
+
+let workerModules: Promise<HandedModules | null> | undefined;
+
+/**
+ * Called by the entry of a dedicated worker: settles with the compiled wasm
+ * modules the worker's first message brought, or that followed it (null
+ * when the context that started it held none)
+ */
+export function setWorkerModules(modules: Promise<HandedModules | null>) {
+	workerModules = modules;
 }
 
 let serviceWorkerPort: Promise<MessagePort> | undefined;
@@ -69,6 +80,12 @@ export default class WorkerClient extends Client {
 		this.isWorker = true;
 		// read before the worker's own script can change what it reads from
 		void this.partition;
+		// the modules this worker is handed are its own workers' too; one it
+		// starts before they are in waits for them with it
+		if (this.wasmRewriter && workerModules) {
+			this.expectModules();
+			void workerModules.then((modules) => this.holdModules(modules));
+		}
 	}
 	#partition?: string;
 	/**

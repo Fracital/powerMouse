@@ -278,7 +278,7 @@ The first release after a four-year gap. Everything below is breaking.
   with its frames instantiates it: one instance per top, none per frame,
   and the JavaScript rewriter until it has arrived and wherever it cannot
   (a tab in another agent cluster, a sandboxed document with an opaque
-  origin, a page's worker). docs/rust-plan.md has the measured plan for
+  origin). docs/rust-plan.md has the measured plan for
   taking the JavaScript parsers out of the inject bundle after it (814 KB
   to at most 416 KB).
 - The JavaScript rewriter is no longer in the inject bundles. meriyah,
@@ -301,15 +301,40 @@ The first release after a four-year gap. Everything below is breaking.
   it, with `'wasm'` the top keeps it for the first rewrite its module has
   not arrived for or declines, and a frame shares its top's as before. A
   top's first page-side rewrite is answered 3 to 5 ms sooner than when the
-  bundle carried the library (`measure-first-rewrite`). A worker, and a
-  frame under a top of another build, load the file with one synchronous
-  request the first time they rewrite. The file is asked for as
+  bundle carried the library (`measure-first-rewrite`). A frame under a
+  top of another build loads the file with one synchronous request the
+  first time it rewrites, and so does a worker: with `rewriter: 'wasm'` a
+  dedicated worker only for what its module has not arrived for or
+  declines (below), a shared worker for all of it. The file is asked for as
   `rewriterLib.js?<hash of its bytes>`, so a host may answer that URL
   `immutable` (the demo does, when the hash is the file's own). The heap
   one proxied frame adds does not change (a frame never evaluated the
   library); `frame-cost`'s bundle budget goes from 850 to 430 KB. New
   suite `rewriter-fallback`; `client.rewriteCounts` says how a page's
   rewrites went (the module, declined, before it arrived, the library).
+- With `rewriter: 'wasm'` a page's dedicated workers rewrite with the module
+  as well (`eval`, `new Function`, string timers, `importScripts` and
+  `import()` of data: URLs, the bootstrap of a worker they start). The
+  context that starts a worker posts it the compiled module with its
+  transport port: nothing is compiled again (0.1 ms to instantiate, about
+  250 KB a worker), a frame's workers get its top's, a worker's workers
+  its own, and a page's service worker the controller's. A 280 KB function
+  made from text in a worker takes 14 ms where the JavaScript rewriter
+  takes 112 ms. What a classic worker evaluates while its own script runs,
+  and what a worker started by a page's first script evaluates before the
+  module has reached the page, is still the JavaScript rewriter's (the
+  file above, loaded then), as is everything in a shared worker
+  (docs/rust-plan.md, "A page's workers"; `worker-rewrites` suite).
+- A thread keeps the instance of a wasm module it rewrote with only while
+  the instance is small (`src/wasm/thread.ts`). wasm memory never shrinks,
+  and an instance ends a rewrite holding 10 to 34 times the script's
+  length: one that ends a call holding more than 8 MB in a page's library
+  or a dedicated worker, or more than 64 MB in the service worker or a
+  rewrite worker (the limit they already had), is replaced by a new one
+  from the same compiled module after the call (0.1 to 0.6 ms, and Chrome
+  gives the memory back when it next collects the thread's heap). A page
+  that evaluates one 1.2 MB string no longer holds 27 MB for the rest of
+  its life, and pays 9 ms more the next time it evaluates one.
 - The wasm rewriter's glue asks a module only when it answers the revision
   the glue was written against (`wasm-rewriter-glue` suite). The module is
   fetched apart from the bundles, and an older `rewriter.wasm` served

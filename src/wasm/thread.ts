@@ -1,12 +1,14 @@
 // The wasm modules a thread was handed and the one instance of each it
 // runs. The controller loads every artifact once and hands it on: compiled,
-// to each rewrite worker beside its REWRITE_PORT (REWRITE_MODULES), and as
-// bytes to the service worker with its handshake
-// (ControllerInitMessage.modules, or a later CONTROLLER_MODULES when the
-// load finished after it). Each thread instantiates a module here, once,
-// the first time a rewrite asks. Every caller falls back to the JavaScript
-// rewriter when there is no instance: the module has not arrived, the host
-// runs `rewriter: 'js'`, or the instance trapped.
+// to each rewrite worker beside its REWRITE_PORT (REWRITE_MODULES), to a
+// page's library and from there to its dedicated workers, and as bytes to
+// the service worker with its handshake (ControllerInitMessage.modules, or
+// a later CONTROLLER_MODULES when the load finished after it). Each thread
+// instantiates a module here the first time a rewrite asks, keeps the
+// instance for the next one, and replaces it when it has grown too large.
+// Every caller falls back to the JavaScript rewriter when there is no
+// instance: the module has not arrived, the host runs `rewriter: 'js'`, or
+// the instance trapped.
 import { BufferInstance, type RouteImport } from './module';
 
 /**
@@ -20,12 +22,34 @@ import { BufferInstance, type RouteImport } from './module';
 export type ModuleGiven = WebAssembly.Module | ArrayBuffer;
 
 /**
- * Past this much linear memory an instance is dropped after its call and
- * the next call gets a fresh one from the same compiled module: wasm memory
- * never shrinks, and one 13 MB script would leave tens of MB behind in a
- * service worker that lives for hours
+ * How much linear memory an instance may hold between calls. wasm memory
+ * never shrinks: an instance keeps what its largest script needed (10 to
+ * 34 times the script's length; docs/rust-plan.md, Instance memory) until
+ * it is dropped, and a new one costs 0.1 to 0.3 ms. One that ends a call
+ * past the thread's limit is dropped, and the next call gets a new one
+ * from the same compiled module.
+ *
+ * A page's library and a dedicated worker rewrite what the page evaluates,
+ * mostly a few lines at a time, and there is one of them for every tab and
+ * every worker: they keep at most 8 MB, which is what a script of 250 to
+ * 300 KB leaves behind.
  */
-export const MEMORY_LIMIT = 64 * 1024 * 1024;
+export const PAGE_MEMORY_LIMIT = 8 * 1024 * 1024;
+/**
+ * The service worker and the rewrite workers rewrite a site's scripts, one
+ * large one after another, where a new instance costs 0.2 to 1.2 ms for
+ * every MB it has to grow again (37% over the 28 corpus scripts): they
+ * keep up to 64 MB, which every script up to 1.4 MB fits in, and a 12 MB
+ * bundle costs its 200 MB for the one rewrite and then nothing.
+ */
+export const SERVING_MEMORY_LIMIT = 64 * 1024 * 1024;
+
+let memoryLimit = PAGE_MEMORY_LIMIT;
+
+/** this thread keeps an instance that holds up to `bytes` (the service worker and the rewrite workers say so; a suite forces it low) */
+export function setMemoryLimit(bytes: number): void {
+	memoryLimit = bytes;
+}
 
 const modules = new Map<string, WebAssembly.Module>();
 const instances = new Map<string, BufferInstance>();
@@ -131,7 +155,7 @@ export function instanceOf(name: string): BufferInstance | null {
 	}
 }
 
-/** the instance of `name` is not used again (it trapped, or grew too large) */
+/** the instance of `name` is not used again (it trapped, or ended a call past the thread's memory limit) */
 export function dropInstance(name: string): void {
 	instances.delete(name);
 }
@@ -144,8 +168,11 @@ export function dropInstance(name: string): void {
  * the next call gets a new instance) and when the instance is in a call
  * already: a route that rewrites something itself (a data: stylesheet
  * inside a stylesheet) would enter it again while its output is half
- * written, so that inner piece is the JavaScript rewriter's. An instance
- * that grew past MEMORY_LIMIT is dropped after the call as well.
+ * written, so that inner piece is the JavaScript rewriter's.
+ *
+ * An instance that ended the call holding more than the thread's memory
+ * limit is dropped after the call as well, and only then: one that grows
+ * past the limit during a call finishes it.
  */
 export function withInstance<T>(
 	name: string,
@@ -166,7 +193,7 @@ export function withInstance<T>(
 	} finally {
 		busy.delete(name);
 		routes.delete(name);
-		if (instances.get(name) === instance && instance.memoryBytes > MEMORY_LIMIT)
+		if (instances.get(name) === instance && instance.memoryBytes > memoryLimit)
 			dropInstance(name);
 	}
 }

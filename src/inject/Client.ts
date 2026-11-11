@@ -31,6 +31,7 @@ import {
 	SRCDOC_VOUCH,
 	TRANSPORT_INIT,
 	WORKER_BASE,
+	WORKER_MODULES,
 } from '../transport/messages';
 import RemoteTransport from '../transport/RemoteTransport';
 import { BUILD } from '../version';
@@ -49,6 +50,9 @@ type PostMessage = (
 
 type CallIn = (method: Function, that: unknown, args: unknown[]) => unknown;
 
+/** compiled wasm modules by Assets key, as a context is handed them */
+export type HandedModules = Record<string, WebAssembly.Module>;
+
 /** the largest markup an inline document takes (the worker refuses more) */
 const INLINE_DOCUMENT_MAX = 4 * 1024 * 1024;
 
@@ -61,6 +65,40 @@ const messageData = Reflect.getOwnPropertyDescriptor(
 	MessageEvent.prototype,
 	'data',
 )?.get;
+
+/**
+ * A field of a message's data, read with nothing a page can have replaced
+ * by the time the message arrives (`MessageEvent.prototype.data`): what
+ * the message really carries
+ */
+export function messageField(event: Event, key: string): unknown {
+	const data: unknown = messageData
+		? Reflect.apply(messageData, event, [])
+		: undefined;
+	return typeof data === 'object' && data !== null
+		? Reflect.getOwnPropertyDescriptor(data, key)?.value
+		: undefined;
+}
+
+/**
+ * The compiled modules a message carries under `key`, or null when it
+ * carries none. Read with nothing a page can have replaced (messageField,
+ * no `Object.keys`, no array iterator): a module of the page's own
+ * choosing would be the rewriter of everything the context evaluates.
+ */
+export function readModules(event: Event, key: string): HandedModules | null {
+	const modules = messageField(event, key);
+	if (typeof modules !== 'object' || modules === null) return null;
+	const read: HandedModules = { __proto__: null } as unknown as HandedModules;
+	const names = Reflect.ownKeys(modules);
+	for (let i = 0; i < names.length; i++) {
+		const name = names[i];
+		if (typeof name === 'string')
+			read[name] = Reflect.getOwnPropertyDescriptor(modules, name)
+				?.value as WebAssembly.Module;
+	}
+	return read;
+}
 
 export default class Client {
 	modules: Map<ModuleCtor, Module<any>>;
@@ -611,30 +649,18 @@ export default class Client {
 		if (!controller || !this.#serviceWorkerPostMessage) return;
 		const channel = new MessageChannel();
 		const port = channel.port1;
+		// the workers this context starts meanwhile are sent them too
+		this.expectModules();
 		port.addEventListener('message', (event) => {
-			// read with nothing the page can have replaced by now
-			// (`MessageEvent.prototype.data`, `Object.keys`, an array's
-			// iterator): a module of the page's own choosing would be the
-			// rewriter of everything this top and its frames evaluate
-			const own = (from: unknown, key: string): unknown =>
-				typeof from === 'object' && from !== null
-					? Reflect.getOwnPropertyDescriptor(from, key)?.value
-					: undefined;
-			const modules = own(
-				messageData ? Reflect.apply(messageData, event, []) : undefined,
-				PAGE_MODULES,
-			);
-			if (typeof modules === 'object' && modules !== null) {
-				const names = Reflect.ownKeys(modules);
-				for (let i = 0; i < names.length; i++) {
-					const name = names[i];
-					if (typeof name === 'string')
-						adopt(name, own(modules, name) as WebAssembly.Module);
-				}
-			}
+			const modules = readModules(event, PAGE_MODULES);
+			if (modules) for (const name in modules) adopt(name, modules[name]);
+			this.holdModules(modules);
 			port.close();
 		});
-		port.addEventListener('messageerror', () => port.close());
+		port.addEventListener('messageerror', () => {
+			this.holdModules(null);
+			port.close();
+		});
 		port.start();
 		try {
 			this.#serviceWorkerPostMessage.call(
@@ -643,8 +669,54 @@ export default class Client {
 				[channel.port2],
 			);
 		} catch (error) {
+			this.holdModules(null);
 			port.close();
 		}
+	}
+	/** the compiled wasm modules this context was handed: what a dedicated worker it starts is handed in turn */
+	#modules: HandedModules | null = null;
+	/**
+	 * The far ends of the ports given to the workers this context started
+	 * while its own modules were on their way (WORKER_MODULES): each is told
+	 * when they arrive. Null when none are on their way.
+	 */
+	#modulePorts: MessagePort[] | null = null;
+	/** @internal this context was promised its modules: a worker started before they arrive waits for them with it */
+	expectModules() {
+		if (!this.#modules) this.#modulePorts ??= [];
+	}
+	/** @internal the modules arrived (null: they never will), for this context's workers and for those that waited */
+	holdModules(modules: HandedModules | null) {
+		this.#modules = modules;
+		const ports = this.#modulePorts;
+		this.#modulePorts = null;
+		if (!ports) return;
+		for (const port of ports)
+			try {
+				// null as well: the worker stops waiting, and so do its own
+				this.#portPostMessage!.call(port, { [WORKER_MODULES]: modules }, []);
+			} catch (error) {
+				// the worker is gone
+			}
+	}
+	/** @internal the modules a worker started now is handed, or null */
+	get workerModules(): HandedModules | null {
+		return this.#modules;
+	}
+	/** @internal a port that hears this context's modules when they arrive (WORKER_MODULES), or null when none are on their way */
+	laterModules(): MessagePort | null {
+		if (!this.#modulePorts) return null;
+		const channel = new MessageChannel();
+		this.#modulePorts.push(channel.port1);
+		return channel.port2;
+	}
+	/**
+	 * The client whose modules this context's workers are handed: its own,
+	 * or for a document under a proxied top that top's, which asked for
+	 * them for the library it shares (a document client decides)
+	 */
+	protected moduleHolder(): Client | null {
+		return this;
 	}
 	/**
 	 * Messages the service worker posts to this document (storage changes),
@@ -715,14 +787,57 @@ export default class Client {
 		}
 	}
 	provisionWorkerTransport(worker: Worker) {
+		// the worker's first message: its transport port, and with
+		// `rewriter: 'wasm'` the modules this context holds, so they are
+		// there before anything the page posts to the worker. Measured
+		// (docs/rust-plan.md): a compiled module costs nothing to post,
+		// 0.1 ms to instantiate and about 250 KB a worker. When they are
+		// still on their way here, a port they will follow on
+		const message: Record<string, unknown> = {};
+		const transfer: Transferable[] = [];
 		try {
-			const port = this.requestTransportPort();
-			this.#workerPostMessage!.call(worker, { [TRANSPORT_INIT]: true }, [port]);
+			transfer.push(this.requestTransportPort());
+			message[TRANSPORT_INIT] = true;
 		} catch (error) {
 			console.warn(
 				'Stomp: could not provision a transport for a worker',
 				error,
 			);
+		}
+		let modules: HandedModules | null = null;
+		if (this.wasmRewriter)
+			try {
+				const holder = this.moduleHolder();
+				modules = holder?.workerModules ?? null;
+				if (modules) message[WORKER_MODULES] = modules;
+				else if (typeof holder?.laterModules === 'function') {
+					const later = holder.laterModules();
+					if (later) {
+						message[WORKER_MODULES] = true;
+						transfer.push(later);
+					}
+				}
+			} catch (error) {
+				// a top of another kind: the worker rewrites in JavaScript
+			}
+		if (!transfer.length && !modules) return;
+		try {
+			this.#workerPostMessage!.call(worker, message, transfer);
+		} catch (error) {
+			// modules that cannot be posted after all: the port alone
+			if (!modules || !message[TRANSPORT_INIT]) return;
+			try {
+				this.#workerPostMessage!.call(
+					worker,
+					{ [TRANSPORT_INIT]: true },
+					transfer,
+				);
+			} catch (failed) {
+				console.warn(
+					'Stomp: could not provision a transport for a worker',
+					failed,
+				);
+			}
 		}
 	}
 	/*

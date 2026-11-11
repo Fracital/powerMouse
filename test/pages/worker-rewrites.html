@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>what a worker evaluates</title>
+<body></body>
+<script src="/pages/worker-rewrites-large.js"></script>
+<script>
+	// Dedicated workers that evaluate text they were not served: a classic
+	// worker, a module worker and a blob: worker, each of which answers with
+	// what its evaluated code read. The worker-rewrites suite compares the
+	// answers of a native load and a proxied one, and under `rewriter:
+	// 'wasm'` reads the functions the workers made as the browser holds
+	// them. `start()` starts the workers (at once with `?early`, in the
+	// page's first script, before anything can have reached the page) and
+	// a frame that starts one of its own; `again()` sends each a second
+	// message and evaluates a large function in the page; `forge()` starts
+	// a worker that tries to choose its own rewriter.
+	window.__wr = {};
+	const workers = {};
+	window.forge = () => {
+		const worker = new Worker('/pages/worker-rewrites-forge.js');
+		worker.onmessage = (event) => {
+			__wr.forge = event.data;
+		};
+		worker.postMessage('first');
+	};
+	window.start = () => {
+		const frame = document.createElement('iframe');
+		frame.src = '/pages/worker-rewrites-frame.html';
+		document.body.append(frame);
+		addEventListener('message', (event) => {
+			if (event.source === frame.contentWindow) __wr.frame = event.data;
+		});
+		const begin = (name, worker) => {
+			workers[name] = worker;
+			let answered = false;
+			worker.onmessage = (event) => {
+				__wr[answered ? name + 'Again' : name] = event.data;
+				answered = true;
+			};
+			worker.onerror = (event) => {
+				__wr[name] = 'error ' + event.message;
+			};
+			// the page's first message, posted before the worker has run
+			worker.postMessage('First');
+		};
+		begin('classic', new Worker('/pages/worker-rewrites.js'));
+		begin(
+			'module',
+			new Worker('/pages/worker-rewrites-mod.js', { type: 'module' }),
+		);
+		begin(
+			'blob',
+			new Worker(
+				URL.createObjectURL(
+					new Blob(
+						[
+							`const made = (self.__made = {});
+onmessage = (event) => {
+	const fn = new Function('/* kept */ return [location.protocol, typeof top];');
+	made['blob' + event.data] = fn;
+	postMessage({ [event.data]: [String(fn), fn()] });
+};`,
+						],
+						{ type: 'text/javascript' },
+					),
+				),
+			),
+		);
+	};
+	window.again = () => {
+		for (const name in workers) workers[name].postMessage('Again');
+		// the page itself: a function large enough that the instance that
+		// rewrote it is not kept, and what the page evaluates after it
+		const made = (window.__made = {});
+		made.pageLarge = new Function('a', largeScript());
+		made.pageAfterLarge = new Function('/* kept */ return location.href;');
+		__wr.pageLarge = [made.pageLarge('page'), made.pageAfterLarge()];
+	};
+	if (location.search.includes('early')) start();
+</script>

@@ -18,11 +18,13 @@
 // needs it (a rewrite the module has not arrived for or declines, an error
 // message's expression). A frame asks its top for that. Either way nothing
 // under a top waits for a request. A realm with no such top (a worker, a
-// frame under a top of another build) loads the file itself, with a
-// synchronous request: every rewrite is synchronous, and the light library
-// cannot fetch (its realm is usually detached, and a detached realm makes
-// no request). The controller fetched the same URL when it started, so the
-// answer comes from the HTTP cache.
+// frame under a top of another build) loads the file itself the first time a
+// call needs it (for a dedicated worker handed the module, handModules: what
+// its module has not arrived for or declines), with a synchronous request:
+// every rewrite is synchronous, and the light library cannot fetch (its
+// realm is usually detached, and a detached realm makes no request). The
+// controller fetched the same URL when it started, so the answer comes from
+// the HTTP cache.
 //
 // The library may be another realm's, so only strings, numbers and
 // booleans cross: arguments are made strings here, results are checked to
@@ -51,6 +53,13 @@ const realm = {
 	btoa: globalThis.btoa,
 	TextEncoder: globalThis.TextEncoder,
 	TextDecoder: globalThis.TextDecoder,
+	// what a copy made here instantiates a module it is handed with (a
+	// worker's: handModules): the constructors as they were, not what the
+	// namespace object holds when the copy is first needed
+	WebAssembly: {
+		Module: globalThis.WebAssembly?.Module,
+		Instance: globalThis.WebAssembly?.Instance,
+	},
 };
 const nativeConsole = globalThis.console;
 
@@ -222,7 +231,35 @@ export function loadRewriterLibrary(lib: RewriterLib): void {
  * that could make no realm to share), else the bundle's light one.
  */
 export function ownRewriter(): RewriterLib {
-	return (own ??= (givenLibrary() ?? rewriterLib)(realm));
+	if (own) return own;
+	const lib = (givenLibrary() ?? rewriterLib)(realm);
+	own = lib;
+	if (handed) adoptHanded(lib, handed);
+	return lib;
+}
+
+/** the compiled wasm modules this realm's own copy rewrites with (handModules) */
+let handed: Record<string, unknown> | null = null;
+
+function adoptHanded(lib: RewriterLib, modules: Record<string, unknown>) {
+	for (const name in modules)
+		try {
+			lib.adopt(name, modules[name]);
+		} catch (error) {
+			// not a module this copy can hold: the rewriter library answers
+		}
+}
+
+/**
+ * The compiled wasm modules (`rewriter: 'wasm'`, by Assets key) this
+ * realm's own copy of the library rewrites with, from the context that
+ * started this one: a dedicated worker's, which shares no library with
+ * anyone. They are adopted when the copy exists, so a worker that never
+ * rewrites anything evaluates no library for them.
+ */
+export function handModules(modules: Record<string, unknown>): void {
+	handed = modules;
+	if (own) adoptHanded(own, modules);
 }
 
 function library(): RewriterLib {

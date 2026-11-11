@@ -1,0 +1,9 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>a frame that starts a worker</title>
+<script>
+	// framed by worker-rewrites.html: a frame's worker evaluates text too
+	const worker = new Worker('/pages/worker-rewrites-nested.js');
+	worker.onmessage = (event) => parent.postMessage(event.data, '*');
+	worker.postMessage('frame');
+</script>

@@ -343,9 +343,13 @@ would lose the controller. So:
   (`src/inject/dom/rewriterRealm.ts`), which a top makes once and its frames
   share. A frame never instantiates anything: it already speaks to that
   realm in strings only, synchronously, through its top's client. A document
-  with no shareable top (a sandboxed frame without `allow-same-origin`, a
-  worker) holds no module yet and keeps the JavaScript library copy it
-  evaluates today (phase 2, below).
+  with no shareable top (a sandboxed frame without `allow-same-origin`)
+  holds no module and rewrites with the rewriter library, whose text its top
+  hands it ("The inject bundle without the JavaScript libraries", below).
+- a page's dedicated worker keeps one instance in its own copy of the light
+  library, made from the compiled module the context that started it hands
+  it ("A page's workers", below). A shared worker is another agent cluster
+  and loads the rewriter library the first time it rewrites.
 
 How the page's realm gets the module, given how that realm is made: the top
 evaluates the library's own source text in an about:blank frame and removes
@@ -379,6 +383,98 @@ bundle and its DOM globals are captured while it is still attached
   so a document whose first inline script runs before the module lands is
   rewritten correctly, just by the slower backend.
 
+### A page's workers
+
+A dedicated worker is in the agent cluster of the context that starts it, so
+the compiled module is posted to it as it is. The worker's first message,
+the one that carries its transport port (`TRANSPORT_INIT`), carries the
+modules its creating context holds (`WORKER_MODULES`,
+`Client.provisionWorkerTransport`), and the worker's own copy of the
+rewriter library adopts them when it is first needed
+(`handModules` in `src/inject/rewriter.ts`): a worker that evaluates no text
+makes no library and no instance. A frame holds no module, so its workers
+are handed its top's. A worker hands what it was handed to the workers it
+starts. A page's emulated service worker is a dedicated worker of the
+controller's and is handed the controller's the same way. Only the
+browser's own first message is taken, read with getters taken before the
+worker's script ran: a worker that dispatches a message of that shape at
+itself, or replaces what a message's data is read with, would otherwise
+choose the rewriter of everything it evaluates (`worker-rewrites` suite).
+
+Measured in Chrome 152 and 156 (16 workers, the module posted compiled
+against its bytes posted and compiled in the worker; medians, the two
+Chromes within 0.2 ms of each other):
+
+| Per worker                    | Handed compiled | Handed the bytes       |
+| ----------------------------- | --------------- | ---------------------- |
+| posting                       | 0.0 ms          | 0.2 ms (a 427 KB copy) |
+| compiling                     | none            | 0.4 to 0.5 ms          |
+| instantiating                 | 0.1 to 0.3 ms   | 0.1 ms                 |
+| first rewrite of a few lines  | 0.2 ms          | 0.2 ms                 |
+| private memory, once it wrote | 230 to 280 KB   | 1,150 to 1,360 KB      |
+
+It arrives without a recompile, and with what other threads compiled: V8
+compiles a function of the module when it is first called, and that code
+belongs to the module, not to the thread. The first rewrite in the first
+worker takes 2.9 ms when no thread has run the module and 0.2 ms when the
+creating document has, and a 280 KB script 17.5 ms against 8.4 ms (7 ms in
+every worker after).
+
+In the product (a proxied page, 12 workers started once the page holds the
+module, each making a function from text): the first rewrite takes 6.3 ms
+in a worker that holds the module (nearly all of it evaluating the library,
+which carried the JavaScript rewriter when this was measured, before it
+became the asset `rewriterLib`) and 0.2 ms after, against 10.1 ms and 0.6 ms with the JavaScript rewriter; a
+280 KB function 13.6 ms against 112 ms; and a worker that has rewritten
+holds 225 KB more than an idle one against 731 KB.
+
+Why with the first message and not asked for over the worker's transport
+port: the order of what a classic worker runs was measured (9 of 9 runs in
+both Chromes):
+
+| Order | With the first message          | Asked for over a port           |
+| ----- | ------------------------------- | ------------------------------- |
+| 1     | the worker's script, to its end | the worker's script, to its end |
+| 2     | its microtasks                  | its microtasks                  |
+| 3     | a 0 ms timer it set             | a 0 ms timer it set             |
+| 4     | a fetch it started (local)      | a fetch it started (local)      |
+| 5     | **the module**                  | the page's first message        |
+| 6     | the page's first message        | **the module** (0.2 ms later)   |
+
+Chrome keeps what is posted to a worker in the thread that started it until
+the worker's script has run to its end, and relays it then. So nothing
+posted reaches a classic worker's top level, or the timers and fetches of
+it that beat the relay: what those evaluate is rewritten by the JavaScript
+rewriter whichever way the module travels, and asking adds the page's first
+message to them. A module worker is better off: its preamble awaits the
+inject bundle, the first message arrives during that await, and the modules
+it brought are adopted before the page's module runs, so a module worker
+rewrites with the module from its first statement.
+
+What stays with the JavaScript rewriter, then (the asset `rewriterLib.js`,
+which a worker loads with a synchronous request the first time it needs
+it):
+
+- a classic worker's own top level, as above;
+- a worker started before its creating context holds the module, until
+  the module has followed. The first message then carries a port in place
+  of the modules, and they come on it when the context has them; the
+  page's first message is handled before that. A page asks for its module
+  when its client is made and the answer takes three hops, so a worker
+  that a page's first script starts is in this case (in the fixture, its
+  first message is the JavaScript rewriter's and what it evaluates 50 ms
+  later the module's);
+- shared workers, and a worker of a sandboxed document with an opaque
+  origin.
+
+Both windows close only with the module held synchronously: by the page
+when its client is made (read from the controller's window, which is of its
+origin, in place of the message), and for a classic worker's top level by
+fetching and compiling the bytes in the worker (0.5 ms and 1.2 MB a
+worker, above). Neither is built.
+
+### Config and cache
+
 The rewrite workers hold no config between requests today (every
 `RewriteRequest` carries the whole config). The worker keeps the last
 config's JSON, as `src/rewriterLib.ts`'s `enter` does, and calls `configure`
@@ -396,7 +492,7 @@ on every phase.
 ### Instance memory
 
 wasm linear memory never shrinks. A 13 MB script will grow an instance to
-tens of megabytes and keep it. Three mitigations, all measured in phase 1:
+tens of megabytes and keep it. Three mitigations:
 
 - `Allocator::reset` after every rewrite, as scramjet does.
 - an instance that has grown past a threshold is dropped and replaced
@@ -417,13 +513,108 @@ Measured (Node 24, the artifact above, one instance per row):
 | after the whole 46 MB corpus, one by one | 247 MB        |
 
 Of the fresh 1,152 KB, 1 MB is the stack the linker reserves; pages nothing
-has touched are not committed by the system. The second mitigation is built
-(`MEMORY_LIMIT` in `src/wasm/thread.ts`: past 64 MB the instance is dropped
-after the call, so Discord's bundle costs its 204 MB for one rewrite and
-then nothing); the idle drop in the service worker is not, and the 64 MB
-threshold is the workers': the page's instance wants a lower one (phase 2).
-Compiling the module takes 21 ms off the main thread and instantiating it
-0.2 ms.
+has touched are not committed by the system. Over the 28 corpus scripts
+(214 KB to 12 MB) a new instance ends the rewrite holding 9.7 to 33.9 times
+the script's length in UTF-16 units, 23.9 at the median: 3.7 to 11.8 MB for
+the eleven scripts of 214 to 355 KB, 8.6 to 41.1 MB for the eleven of 0.5
+to 1.4 MB, 31.9 to 86.8 MB for the four of 3.1 to 3.5 MB. Compiling the
+module takes 21 ms off the main thread.
+
+**The second mitigation is built** (`src/wasm/thread.ts`), for every thread
+that holds an instance. A thread keeps the instance a call used for the next
+call, unless it ended the call holding more than the thread's limit: then
+the next call gets a new one from the same compiled module. The check is
+made when the call has returned and nowhere else, so an instance is never
+replaced under a rewrite, and one that grows past the limit during a call
+finishes it.
+
+What replacing an instance costs (Node 24; Chrome 152 and 156 agree where
+they were measured):
+
+| What                                                             | Cost            |
+| ---------------------------------------------------------------- | --------------- |
+| a new instance from the compiled module                          | 0.14 ms         |
+| the same in Chrome, in a page and in a worker                    | 0.1 to 0.6 ms   |
+| its first small rewrite (the configuration is handed over again) | 0.14 ms         |
+| a small rewrite on a kept instance                               | 0.02 ms         |
+| growing again, per MB the next script needs (page faults)        | 0.19 to 1.16 ms |
+| the 28 corpus scripts, each on an instance already grown         | 1,783 ms        |
+| the same, each on a new instance                                 | 2,451 ms (+37%) |
+
+The last three rows are the CPU time of the process, the least of seven
+runs per script. Growing again is what a limit costs: 0.7 to 4.2 ms for a
+script of 214 to 355 KB (on 6 to 17 ms), 3.7 to 10.7 ms for one of 0.5 to
+1.4 MB (on 16 to 67 ms), 19 to 82 ms for one of 3.1 to 3.5 MB (on 78 to
+155 ms), 231 ms for Discord's 12 MB bundle (on 444 ms).
+
+What a limit does to a site's load: each site's large scripts through one
+thread in the order the site serves them, twice (a load and a reload),
+growth priced at the corpus average of 0.71 ms per MB:
+
+| Limit  | CNN (12 scripts)                | Discord (7)                      | Docs (9)                        |
+| ------ | ------------------------------- | -------------------------------- | ------------------------------- |
+| none   | no drop, +38 ms (4%), 54.8 MB   | no drop, +141 ms (12%), 199.5 MB | no drop, +124 ms (8%), 174.9 MB |
+| 128 MB | no drop, +38 ms (4%), 54.8 MB   | 2 drops, +294 ms (25%), 16.4 MB  | 2 drops, +264 ms (18%), 23.2 MB |
+| 64 MB  | no drop, +38 ms (4%), 54.8 MB   | 2 drops, +294 ms (25%), 16.4 MB  | 6 drops, +505 ms (34%), 23.2 MB |
+| 32 MB  | 2 drops, +99 ms (11%), 31.9 MB  | 2 drops, +294 ms (25%), 16.4 MB  | 8 drops, +562 ms (38%), 23.2 MB |
+| 16 MB  | 8 drops, +189 ms (21%), 1.1 MB  | 8 drops, +373 ms (32%), 1.1 MB   | 10 drops, +578 ms (39%), 1.1 MB |
+| 8 MB   | 14 drops, +235 ms (26%), 1.1 MB | 10 drops, +387 ms (33%), 1.1 MB  | 12 drops, +593 ms (40%), 1.1 MB |
+| 4 MB   | 24 drops, +271 ms (30%), 1.1 MB | 14 drops, +405 ms (35%), 1.1 MB  | 16 drops, +611 ms (41%), 1.1 MB |
+
+(drops, the time growing cost and its share of the rewrite time, and what
+the thread holds when the load is over.)
+
+Two limits follow from who holds the instance:
+
+- **64 MB for the service worker and the rewrite workers**
+  (`SERVING_MEMORY_LIMIT`). They rewrite a site's scripts, one large one
+  after another: at most four rewrite workers for a controller, and one
+  service worker. Every corpus script up to 1.4 MB fits (41.1 MB at most),
+  so CNN's load never drops an instance; the scripts that do not fit are
+  Discord's 12 MB bundle (199.5 MB, held for the one rewrite and then not
+  at all) and three of Docs' (84.9, 86.8 and 174.9 MB). A higher limit buys
+  little (128 MB saves Docs 241 ms over two loads) for twice what five idle
+  threads may hold; a lower one makes every script past it pay the growth
+  again, 21% of CNN's rewrite time at 16 MB.
+- **8 MB for a page's library and for a dedicated worker**
+  (`PAGE_MEMORY_LIMIT`, what a thread has unless it says otherwise). They
+  rewrite what the page evaluates, mostly a few lines at a time (1,344 KB,
+  of which a worker commits 230 to 280 KB), and there is one for every tab
+  and one more for every worker of every tab, for as long as the tab lives.
+  8 MB is what a script of 250 to 300 KB leaves behind (4.9 to 7.6 MB for
+  the corpus scripts of 214 to 327 KB), so everything up to that size keeps
+  its instance; a page that evaluates a 1.2 MB string pays 9 ms more each
+  time (76 ms against 67) and holds nothing for it afterwards.
+
+Chrome gives the memory of a dropped instance back when the thread's heap
+is next collected (private memory of the renderer, a 3.5 MB script, an
+instance of 88,960 KB; Chrome 152 and 156 alike):
+
+| State of the renderer                                   | Over its start         |
+| ------------------------------------------------------- | ---------------------- |
+| the instance kept                                       | +76 to +86 MB          |
+| dropped, after a `gc()`                                 | +2 to +5 MB            |
+| dropped, the thread idle and no `gc()`: 1 to 20 s later | +82 to +85 MB          |
+| the same, 30 s later                                    | less than at the start |
+
+Nothing frees it sooner: the buffer of a `WebAssembly.Memory` cannot be
+detached, and a page has no call that collects. An idle thread, a page's
+or a worker's, gave the memory back between 20 and 30 s after the drop in
+every run. A thread that goes on rewriting collects it with its next
+large allocation: over four rounds of a small script, the 3.5 MB one and a
+drop, the renderer never held more than the live instance and one dropped
+one (+98 MB at most).
+
+The `wasm-instances` suite holds this in node: the same eight scripts
+rewritten with the limit out of reach (one instance, none made), forced to
+2 MB (every large script costs its instance) and forced to 0 (every call a
+new instance) come out byte for byte the same, and an instance past the
+limit finishes its call and is replaced after it. `worker-rewrites` has it
+in the browser: a function of 410 KB that a worker and a page evaluate
+(16.9 MB, past their limit) and what they evaluate after it are the
+module's rewrite and read as they do natively.
+
+The idle drop in the service worker is not built.
 
 ### The inject bundle without the JavaScript libraries
 
@@ -514,11 +705,11 @@ frame never evaluated the library ("As built" below).
   4): the library as it was is an asset of its own (`rewriterLib.js`, the
   key `rewriterLib` in `Assets`), one file for documents and workers, asked
   for as `rewriterLib.js?<hash of its bytes>` so that a deploy never pairs
-  one build's library with another's bundle and a host may let browsers
-  keep the file for good. What the bundles carry is the light library
+  one build's library with another's bundle and a host may let browsers keep
+  the file for good. What the bundles carry is the light library
   (`src/rewriterLight.ts`): the same calls with no parser and no printer
-  behind them. A call that needs the rewriter library it does not hold
-  stops and says so; the realm that asked hands it the file's text, and the
+  behind them. A call that needs the rewriter library it does not hold stops
+  and says so; the realm that asked hands it the file's text, and the
   library evaluates it in its own realm with the globals it captured (its
   realm is detached, and a detached realm cannot make a request: `send`
   throws, Chrome 152 and 156). That happens the first time one of these
@@ -585,21 +776,25 @@ frame never evaluated the library ("As built" below).
   key) instead of in some page later.
 
   A document's own site and its top's are needed while the client is made,
-  before any message can have arrived: the service worker, which keeps
-  tldts (its bundle is one per scope, not per frame), writes them into the
-  shell (built: "The shell carries the site" below). A realm the module
-  cannot reach at all keeps a light library of its own and loads the
-  fallback on its first rewrite. A document
-  sandboxed with an opaque origin is handed the text by its top, as a
-  string; where its script policy refuses eval (a sandbox without
-  allow-scripts) the text is run as a script with the policy's nonce
-  instead. A page's dedicated worker is in its document's agent cluster
-  and is handed the module with its transport port; a shared worker and
-  the page's service worker are not. A worker fetches the file with a
-  synchronous request (3 to 7 ms from the HTTP cache for the 471 KB), which
-  no report follows there. So does a frame under a top of another build
-  (during a deploy), the one document that still makes that request: its
-  page is not shown the deprecation report (`applyReports` in
+  before any message can have arrived: the service worker, which keeps tldts
+  (its bundle is one per scope, not per frame), writes them into the shell
+  (built: "The shell carries the site" below). A realm the module cannot
+  reach at all keeps a light library of its own and loads the fallback on
+  its first rewrite. A document sandboxed with an opaque origin is handed
+  the text by its top, as a string; where its script policy refuses eval (a
+  sandbox without allow-scripts) the text is run as a script with the
+  policy's nonce instead. A page's dedicated worker is in its document's
+  agent cluster and is handed the module with its transport port, and so is
+  a page's emulated service worker, a dedicated worker of the controller's
+  (built: "A page's workers", which also says what a worker evaluates before
+  the module can have reached it); a shared worker is not. A worker fetches
+  the file with a synchronous request (3 to 7 ms from the HTTP cache for the
+  471 KB), which no report follows there, the first time it needs it: a
+  worker handed the module only for what the module has not arrived for or
+  declines, a shared worker and every worker under `rewriter: 'js'` for
+  every rewrite. So does a frame under a top of another build (during a
+  deploy), the one document that still makes that request: its page is not
+  shown the deprecation report (`applyReports` in
   `src/inject/modules/Unroute.ts`). A rewrite that can be made by neither
   backend (the fallback did not load) is refused, as a failed rewrite is
   today: the script does not run unrewritten.
@@ -932,7 +1127,10 @@ Its definition of done, in the order the work goes:
    closed or shown to be scripts no browser runs (built: flags 64 and 128,
    status 7, "The ABI" above; what is still declined is listed above);
 2. a page's dedicated workers are handed the module with their transport
-   port, and the page's instance gets a memory threshold of its own;
+   port (built: "A page's workers" in section 6, the `worker-rewrites`
+   suite), and the page's instance gets a memory threshold of its own
+   (built: 8 MB, "Instance memory" in section 6, the `wasm-instances`
+   suite);
 3. the suffix module (`suffix.wasm`, its table built by `rust/suffix` from
    the pinned list), with the parity suite against tldts, and the service
    worker writing a document's own site and its top's into the shell
@@ -1230,7 +1428,12 @@ not worth it for the printer alone: it only runs on error paths.
   without, byte for byte), `wasm-share`
   (every thread that rewrites holds the
   modules the controller loaded once, a top's library holds the module and
-  a frame under it makes no library of its own), `wasm-artifact` (no name
+  a frame under it makes no library of its own), `worker-rewrites` (what
+  classic, module, blob:, nested, framed and service workers evaluate from
+  text reads as it does natively under both backends, and under `'wasm'`
+  is the module's rewrite from the worker's first message on),
+  `wasm-instances` (a thread's instance: replaced past the memory limit
+  with the same rewrites before and after), `wasm-artifact` (no name
   or producers section, no project token in the bytes, every export
   renamable, the flags and statuses of the ABI), `suffix` (the suffix
   module's boundary, budget and glue, and its parity with tldts through

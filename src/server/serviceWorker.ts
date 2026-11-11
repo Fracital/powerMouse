@@ -46,7 +46,12 @@ import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
 import { suffixListPin } from '../wasm/suffix';
-import { adoptModules, heldModules } from '../wasm/thread';
+import {
+	adoptModules,
+	heldModules,
+	SERVING_MEMORY_LIMIT,
+	setMemoryLimit,
+} from '../wasm/thread';
 import { knownOriginOf, knownTopSiteOf, recordBlobOrigin } from './blobOrigins';
 import {
 	hintsDocument,
@@ -130,6 +135,11 @@ function siteOf(
  * stores (createServer); only the same id again replaces
  */
 const controllers = new Map<string, ControllerRef>();
+
+// this thread rewrites a site's scripts whenever no rewrite worker does:
+// its instances keep what a large one needed for the next
+setMemoryLimit(SERVING_MEMORY_LIMIT);
+
 let serials = 0;
 
 function registerController(

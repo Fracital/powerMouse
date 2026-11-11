@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>what a service worker evaluates</title>
+<script>
+	// A service worker that evaluates text for a message (the
+	// worker-rewrites suite; under /pages/deep/wrsw/).
+	(async () => {
+		const container = navigator.serviceWorker;
+		const answer = new Promise((resolve) => {
+			container.addEventListener('message', (event) => resolve(event.data));
+		});
+		await container.register('worker-rewrites-sw.js');
+		while (!container.controller)
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		container.controller.postMessage('first');
+		window.__wrsw = await answer;
+	})().catch((error) => {
+		window.__wrsw = 'error ' + error;
+	});
+</script>

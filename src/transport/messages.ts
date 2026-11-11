@@ -236,6 +236,18 @@ export interface CookiesChange {
 /** proxied page -> dedicated worker, with [port]: the worker's transport port */
 export const TRANSPORT_INIT = '$stomp$transportInit';
 /**
+ * The compiled wasm modules by Assets key (`rewriter: 'wasm'`), from the
+ * context that starts a dedicated worker to the worker, which is in its
+ * agent cluster: a field of the worker's first message (the one that
+ * carries TRANSPORT_INIT, when a transport could be had) when that context
+ * holds them, so they are in the worker's queue before anything the page
+ * posts. When they are still on their way to that context the field is
+ * `true` and the message's last port is one they follow on, in a message
+ * of this field alone (null there: they never came). A shared worker is
+ * another agent cluster and is sent none of it.
+ */
+export const WORKER_MODULES = '$stomp$workerModules';
+/**
  * a proxied page asking the host application to open a URL in a new tab
  * (`window.open`, `target="_blank"`); posted to the real top window, only
  * when the host opted in with `onOpen` (config `openTab`)

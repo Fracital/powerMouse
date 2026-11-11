@@ -495,6 +495,15 @@ export default class DocumentClient extends Client {
 	#topClient(): DocumentClient {
 		return topClientOf(this, this.names.client);
 	}
+	/**
+	 * A frame's workers are handed the modules its top asked for (a frame
+	 * asks for none: it rewrites in its top's library). A document with no
+	 * top to reach (sandboxed to an opaque origin) is its own, and holds
+	 * none.
+	 */
+	protected override moduleHolder(): Client | null {
+		return this.#topClient();
+	}
 	/** the page's flags of the document in `context`, or null */
 	#flagsOf(context: unknown): Set<string> | null {
 		const client = (context as Record<string, unknown>)[this.names.client] as
