@@ -30,9 +30,17 @@
 // code and compiled behind `'use strict'`: V8 must refuse the rewrite as it
 // refuses the text ("inherited strictness").
 //
+// The recorded verdicts are Chrome's, which for a text with an escape is
+// V8 parsing every function in full (early-lib.mjs `eager`); node's V8 is
+// asked as it compiles (lazily), as Chrome 137 did: so a text Chrome
+// refuses that the module rewrites is named in early-known.txt, and none
+// either takes is answered as one no browser runs.
+//
 // --narrow runs only the three recorded forms. --record rewrites the file's
-// verdict column from this V8 and drops a text that is there twice. A file
-// argument is a list of the same format (verdicts are not checked for `?`).
+// verdict column from this V8, writes its generated section anew
+// (early-lib.mjs `strictTexts`) and drops a text that is there twice. A
+// file argument is a list of the same format (verdicts are not checked for
+// `?`).
 // REWRITER_WASM names another artifact than assets/rewriter.wasm.
 //
 // --corpus is the other direction, over real scripts (a corpus directory
@@ -51,10 +59,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
 	CASES,
+	eager,
+	GENERATED,
 	NODE_DIFFERS,
 	readCases,
 	readKnown,
+	spelled,
 	STRICT,
+	strictTexts,
 	v8Verdicts,
 	variants,
 } from './early-lib.mjs';
@@ -68,7 +80,23 @@ const files = args.filter(
 );
 
 if (args.includes('--record')) {
-	const lines = readCases();
+	let lines = readCases();
+	// the generated section anew, below its comment, its recorded marks
+	// recorded again
+	const header = lines.findIndex((entry) => entry.raw.startsWith(GENERATED));
+	if (header < 0) throw new Error(`no line starts with ${GENERATED}`);
+	let body = header;
+	while (lines[body + 1]?.raw.startsWith('#')) body++;
+	lines = [
+		...lines.slice(0, body + 1),
+		...strictTexts().map((text) => ({
+			line: 0,
+			raw: `??? ${text}`,
+			text,
+			code: spelled(text),
+			recorded: '???',
+		})),
+	];
 	const seen = new Set();
 	const kept = lines.filter((entry) => {
 		if (entry.code === undefined) return true;
@@ -77,7 +105,14 @@ if (args.includes('--record')) {
 		return true;
 	});
 	const entries = kept.filter((entry) => entry.code !== undefined);
-	const verdicts = v8Verdicts(entries.flatMap((entry) => variants(entry)));
+	const verdicts = v8Verdicts(
+		entries.flatMap((entry) =>
+			variants(entry).map((script) => ({
+				...script,
+				eager: eager(entry.text),
+			})),
+		),
+	);
 	entries.forEach((entry, index) => {
 		// (recorded from Chrome, by hand)
 		if (NODE_DIFFERS.has(entry.text) && !entry.recorded.includes('?')) return;
@@ -86,7 +121,7 @@ if (args.includes('--record')) {
 			.join('');
 		entry.raw = `${marks} ${entry.text}`;
 	});
-	writeFileSync(CASES, kept.map((entry) => entry.raw).join('\n'));
+	writeFileSync(CASES, `${kept.map((entry) => entry.raw).join('\n')}\n`);
 	console.log(
 		`${entries.length} cases recorded (${lines.length - kept.length} dropped as repeated)`,
 	);
@@ -327,6 +362,15 @@ scripts.forEach((script, index) => {
 		refused[index] =
 			script.recorded === '-' ? 'SyntaxError: (as recorded from Chrome)' : null;
 });
+// and the record's own: Chrome's, which for a text with an escape is V8's
+// parsing in full (early-lib.mjs `eager`)
+const recordedForms = scripts
+	.map((script, index) => [script, index])
+	.filter(([script]) => script.recorded !== undefined && eager(script.text));
+const recordedVerdicts = [...refused];
+v8Verdicts(
+	recordedForms.map(([script]) => ({ ...script, eager: true })),
+).forEach((verdict, at) => (recordedVerdicts[recordedForms[at][1]] = verdict));
 const rewrites = [];
 for (const script of scripts) {
 	script.js = javascript(script);
@@ -395,13 +439,24 @@ scripts.forEach((script, index) => {
 	if (
 		script.recorded !== undefined &&
 		script.recorded !== '?' &&
-		(script.recorded === '-') !== sourceRefused
+		(script.recorded === '-') !== (recordedVerdicts[index] !== null)
 	) {
 		stale++;
 		console.log(
-			`STALE line ${script.line} (${script.name}): recorded ${script.recorded}, this V8 says ${verdict ?? 'compiles'}\n      ${JSON.stringify(script.code)}`,
+			`STALE line ${script.line} (${script.name}): recorded ${script.recorded}, this V8 says ${recordedVerdicts[index] ?? 'compiles'}\n      ${JSON.stringify(script.code)}`,
 		);
 	}
+	// held to the record too, where it is not node's lazy verdict (a text
+	// with an escape): one Chrome refuses, rewritten, is named
+	if (
+		script.recorded === '-' &&
+		!sourceRefused &&
+		'output' in script.wasm &&
+		!named(script, 'top', 'return', 'lazy')
+	)
+		unnamed.push({ script, what: 'rewritten, and Chrome refuses it' });
+	if (script.recorded === '+' && script.wasm.status === 7)
+		unnamed.push({ script, what: 'no browser runs it, and Chrome takes it' });
 	const classify = (backend, output) => {
 		let outcome;
 		let detail = '';
@@ -429,7 +484,10 @@ scripts.forEach((script, index) => {
 	const ended = classify('js', script.js);
 	if ('output' in script.wasm) {
 		const outcome = classify('wasm', script.wasm.output);
-		if (outcome.startsWith('still refused') && !named(script, 'top', 'return'))
+		if (
+			outcome.startsWith('still refused') &&
+			!named(script, 'top', 'return', 'lazy')
+		)
 			unnamed.push({ script, what: outcome });
 	} else if (script.wasm.status === 7) classify('wasm', null);
 	else {
@@ -453,7 +511,7 @@ scripts.forEach((script, index) => {
 		const answer = asked(script.code, 64);
 		if (answer !== !sourceRefused) {
 			parseWrong++;
-			if (sourceRefused || !named(script, 'parser'))
+			if (!named(script, sourceRefused ? 'lazy' : 'parser'))
 				unnamed.push({
 					script,
 					what: `parses as a script: the module says ${answer}, V8 ${verdict ?? 'compiles'}`,
@@ -471,7 +529,7 @@ scripts.forEach((script, index) => {
 		}
 		if (sourceRefused ? single !== false : shape !== null && single !== shape) {
 			singleWrong++;
-			if (sourceRefused || !named(script, 'parser'))
+			if (!named(script, sourceRefused ? 'lazy' : 'parser'))
 				unnamed.push({
 					script,
 					what: `single expression: the module says ${single}, ${sourceRefused ? `V8 ${verdict}` : `it is ${shape}`}`,

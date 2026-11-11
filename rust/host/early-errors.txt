@@ -5,16 +5,18 @@
 #
 #   <sloppy script><strict script><module> <text>
 #
-# The three marks are V8's verdicts, `+` compiles and `-` SyntaxError, for
-# the text as a classic script, as one behind `'use strict';` and a line
-# break, and as a module. They are recorded (`node rust/host/early.mjs
-# --record` rewrites the column) and held to the V8 that runs the suites
-# (rewriter-unit) and to Chrome (the early-errors suite); the crate's tests
-# read them, since no V8 runs there. In a text `<NL>` is a line feed, `<CR>`
-# a carriage return, `<LS>` and `<PS>` U+2028 and U+2029, `<U+XXXX>` that
-# code point; nothing else is escaped. rust/host/early.mjs also runs every
-# text inside a function, an arrow, an async function, a generator, a method,
-# a static block and a block, with V8 asked each time.
+# The three marks are Chrome's verdicts, `+` compiles and `-` SyntaxError,
+# for the text as a classic script, as one behind `'use strict';` and a
+# line break, and as a module. They are recorded (`node rust/host/early.mjs
+# --record` rewrites the column from node's V8, which parses every function
+# in full for a text with a `\u` escape, as Chrome 138 and later answer it:
+# `eager` in rust/host/early-lib.mjs) and held to the V8 that runs the
+# suites (rewriter-unit) and to Chrome (the early-errors suite); the
+# crate's tests read them, since no V8 runs there. In a text `<NL>` is a
+# line feed, `<CR>` a carriage return, `<LS>` and `<PS>` U+2028 and U+2029,
+# `<U+XXXX>` that code point; nothing else is escaped. rust/host/early.mjs
+# also runs every text inside a function, an arrow, an async function, a
+# generator, a method, a static block and a block, with V8 asked each time.
 
 # 12.5 Hashbang comments; B.1.1 HTML-like comments
 +-+ #!shebang<NL>x
@@ -4473,3 +4475,942 @@
 +++ this.a = 1
 +++ typeof this
 +++ let undefined
+
+# 11.2.2 Strict mode code, generated: each early error strict code has and
+# sloppy code does not (`eval` and `arguments` bound or assigned, a reserved
+# word as a name, a legacy octal literal or escape, `with`, `delete` of a
+# name, a parameter's name twice, a function declared as a statement), and
+# `use strict` after parameters that are not simple, in each place that
+# makes code strict: a directive, a class, a module. Written by
+# `node rust/host/early.mjs --record` from strictTexts in
+# rust/host/early-lib.mjs, less the texts above; edit the lists there.
++-- var \u0065val
++-- var argument\u0073
++-- var impl\u0065ments
++-- var st\u0061tic
++-- var l\u0065t
++-- var yi\u0065ld
+++- var aw\u0061it
++-- let implements
++-- let package
++-- let \u0065val
++-- let argument\u0073
++-- let impl\u0065ments
++-- let st\u0061tic
+--- let l\u0065t
++-- let yi\u0065ld
+++- let aw\u0061it
++-- const eval = 1
++-- const arguments = 1
++-- const implements = 1
++-- const package = 1
++-- const static = 1
+++- const await = 1
++-- const \u0065val = 1
++-- const argument\u0073 = 1
++-- const impl\u0065ments = 1
++-- const st\u0061tic = 1
+--- const l\u0065t = 1
++-- const yi\u0065ld = 1
+++- const aw\u0061it = 1
++-- function package() {}
++-- function \u0065val() {}
++-- function argument\u0073() {}
++-- function impl\u0065ments() {}
++-- function st\u0061tic() {}
++-- function l\u0065t() {}
++-- function yi\u0065ld() {}
+++- function aw\u0061it() {}
++-- function* eval() {}
++-- function* arguments() {}
++-- function* implements() {}
++-- function* package() {}
++-- function* static() {}
++-- function* let() {}
+++- function* await() {}
++-- function* \u0065val() {}
++-- function* argument\u0073() {}
++-- function* impl\u0065ments() {}
++-- function* st\u0061tic() {}
++-- function* l\u0065t() {}
++-- function* yi\u0065ld() {}
+++- function* aw\u0061it() {}
++-- async function eval() {}
++-- async function arguments() {}
++-- async function implements() {}
++-- async function package() {}
++-- async function static() {}
++-- async function let() {}
++-- async function yield() {}
++-- async function \u0065val() {}
++-- async function argument\u0073() {}
++-- async function impl\u0065ments() {}
++-- async function st\u0061tic() {}
++-- async function l\u0065t() {}
++-- async function yi\u0065ld() {}
+++- async function aw\u0061it() {}
++-- (function implements() {})
++-- (function package() {})
++-- (function let() {})
++-- (function \u0065val() {})
++-- (function argument\u0073() {})
++-- (function impl\u0065ments() {})
++-- (function st\u0061tic() {})
++-- (function l\u0065t() {})
++-- (function yi\u0065ld() {})
+++- (function aw\u0061it() {})
++-- function f(implements) {}
++-- function f(package) {}
++-- function f(\u0065val) {}
++-- function f(argument\u0073) {}
++-- function f(impl\u0065ments) {}
++-- function f(st\u0061tic) {}
++-- function f(l\u0065t) {}
++-- function f(yi\u0065ld) {}
+++- function f(aw\u0061it) {}
++-- function f(...arguments) {}
++-- function f(...implements) {}
++-- function f(...package) {}
++-- function f(...static) {}
++-- function f(...let) {}
++-- function f(...yield) {}
+++- function f(...await) {}
++-- function f(...\u0065val) {}
++-- function f(...argument\u0073) {}
++-- function f(...impl\u0065ments) {}
++-- function f(...st\u0061tic) {}
++-- function f(...l\u0065t) {}
++-- function f(...yi\u0065ld) {}
+++- function f(...aw\u0061it) {}
++-- function f(eval = 1) {}
++-- function f(arguments = 1) {}
++-- function f(implements = 1) {}
++-- function f(package = 1) {}
++-- function f(static = 1) {}
++-- function f(let = 1) {}
++-- function f(yield = 1) {}
+++- function f(await = 1) {}
++-- function f(\u0065val = 1) {}
++-- function f(argument\u0073 = 1) {}
++-- function f(impl\u0065ments = 1) {}
++-- function f(st\u0061tic = 1) {}
++-- function f(l\u0065t = 1) {}
++-- function f(yi\u0065ld = 1) {}
+++- function f(aw\u0061it = 1) {}
++-- function f({ eval }) {}
++-- function f({ implements }) {}
++-- function f({ package }) {}
++-- function f({ static }) {}
++-- function f({ let }) {}
++-- function f({ yield }) {}
+++- function f({ await }) {}
++-- function f({ \u0065val }) {}
++-- function f({ argument\u0073 }) {}
++-- function f({ impl\u0065ments }) {}
++-- function f({ st\u0061tic }) {}
++-- function f({ l\u0065t }) {}
++-- function f({ yi\u0065ld }) {}
+++- function f({ aw\u0061it }) {}
++-- function f([arguments]) {}
++-- function f([implements]) {}
++-- function f([package]) {}
++-- function f([static]) {}
++-- function f([let]) {}
++-- function f([yield]) {}
+++- function f([await]) {}
++-- function f([\u0065val]) {}
++-- function f([argument\u0073]) {}
++-- function f([impl\u0065ments]) {}
++-- function f([st\u0061tic]) {}
++-- function f([l\u0065t]) {}
++-- function f([yi\u0065ld]) {}
+++- function f([aw\u0061it]) {}
++-- function f({ a: arguments }) {}
++-- function f({ a: implements }) {}
++-- function f({ a: package }) {}
++-- function f({ a: static }) {}
++-- function f({ a: let }) {}
++-- function f({ a: yield }) {}
+++- function f({ a: await }) {}
++-- function f({ a: \u0065val }) {}
++-- function f({ a: argument\u0073 }) {}
++-- function f({ a: impl\u0065ments }) {}
++-- function f({ a: st\u0061tic }) {}
++-- function f({ a: l\u0065t }) {}
++-- function f({ a: yi\u0065ld }) {}
+++- function f({ a: aw\u0061it }) {}
++-- (arguments) => 1
++-- (implements) => 1
++-- (package) => 1
++-- (\u0065val) => 1
++-- (argument\u0073) => 1
++-- (impl\u0065ments) => 1
++-- (st\u0061tic) => 1
++-- (l\u0065t) => 1
++-- (yi\u0065ld) => 1
+++- (aw\u0061it) => 1
++-- implements => 1
++-- package => 1
++-- \u0065val => 1
++-- argument\u0073 => 1
++-- impl\u0065ments => 1
++-- st\u0061tic => 1
++-- l\u0065t => 1
++-- yi\u0065ld => 1
+++- aw\u0061it => 1
++-- async arguments => 1
++-- async implements => 1
++-- async package => 1
++-- async static => 1
++-- async let => 1
++-- async \u0065val => 1
++-- async argument\u0073 => 1
++-- async impl\u0065ments => 1
++-- async st\u0061tic => 1
++-- async l\u0065t => 1
++-- async yi\u0065ld => 1
+--- async aw\u0061it => 1
++-- async (arguments) => 1
++-- async (implements) => 1
++-- async (package) => 1
++-- async (static) => 1
++-- async (let) => 1
++-- async (\u0065val) => 1
++-- async (argument\u0073) => 1
++-- async (impl\u0065ments) => 1
++-- async (st\u0061tic) => 1
++-- async (l\u0065t) => 1
++-- async (yi\u0065ld) => 1
+--- async (aw\u0061it) => 1
++-- try {} catch (implements) {}
++-- try {} catch (package) {}
++-- try {} catch (\u0065val) {}
++-- try {} catch (argument\u0073) {}
++-- try {} catch (impl\u0065ments) {}
++-- try {} catch (st\u0061tic) {}
++-- try {} catch (l\u0065t) {}
++-- try {} catch (yi\u0065ld) {}
+++- try {} catch (aw\u0061it) {}
++-- try {} catch ({ eval }) {}
++-- try {} catch ({ arguments }) {}
++-- try {} catch ({ implements }) {}
++-- try {} catch ({ package }) {}
++-- try {} catch ({ static }) {}
+--- try {} catch ({ let }) {}
++-- try {} catch ({ yield }) {}
+++- try {} catch ({ await }) {}
++-- try {} catch ({ \u0065val }) {}
++-- try {} catch ({ argument\u0073 }) {}
++-- try {} catch ({ impl\u0065ments }) {}
++-- try {} catch ({ st\u0061tic }) {}
+--- try {} catch ({ l\u0065t }) {}
++-- try {} catch ({ yi\u0065ld }) {}
+++- try {} catch ({ aw\u0061it }) {}
++++ eval: ;
++++ arguments: ;
++-- implements: ;
++-- package: ;
++-- static: ;
++-- let: ;
++-- yield: ;
+++- await: ;
++++ \u0065val: ;
++++ argument\u0073: ;
++-- impl\u0065ments: ;
++-- st\u0061tic: ;
++-- l\u0065t: ;
++-- yi\u0065ld: ;
+++- aw\u0061it: ;
++-- package = 1
++-- \u0065val = 1
++-- argument\u0073 = 1
++-- impl\u0065ments = 1
++-- st\u0061tic = 1
++-- l\u0065t = 1
++-- yi\u0065ld = 1
+++- aw\u0061it = 1
++-- arguments++
++-- implements++
++-- static++
++-- let++
++-- \u0065val++
++-- argument\u0073++
++-- impl\u0065ments++
++-- st\u0061tic++
++-- l\u0065t++
++-- yi\u0065ld++
+++- aw\u0061it++
++-- --eval
++-- --implements
++-- --package
++-- --static
++-- --let
++-- --yield
+++- --await
++-- --\u0065val
++-- --argument\u0073
++-- --impl\u0065ments
++-- --st\u0061tic
++-- --l\u0065t
++-- --yi\u0065ld
+++- --aw\u0061it
++-- arguments += 1
++-- implements += 1
++-- package += 1
++-- static += 1
++-- let += 1
++-- yield += 1
+++- await += 1
++-- \u0065val += 1
++-- argument\u0073 += 1
++-- impl\u0065ments += 1
++-- st\u0061tic += 1
++-- l\u0065t += 1
++-- yi\u0065ld += 1
+++- aw\u0061it += 1
++-- arguments ||= 1
++-- implements ||= 1
++-- package ||= 1
++-- static ||= 1
++-- let ||= 1
++-- yield ||= 1
+++- await ||= 1
++-- \u0065val ||= 1
++-- argument\u0073 ||= 1
++-- impl\u0065ments ||= 1
++-- st\u0061tic ||= 1
++-- l\u0065t ||= 1
++-- yi\u0065ld ||= 1
+++- aw\u0061it ||= 1
++-- [implements] = a
++-- [package] = a
++-- [static] = a
++-- [let] = a
++-- [yield] = a
++-- [\u0065val] = a
++-- [argument\u0073] = a
++-- [impl\u0065ments] = a
++-- [st\u0061tic] = a
++-- [l\u0065t] = a
++-- [yi\u0065ld] = a
+++- [aw\u0061it] = a
++-- [...arguments] = a
++-- [...implements] = a
++-- [...package] = a
++-- [...static] = a
++-- [...let] = a
++-- [...yield] = a
+++- [...await] = a
++-- [...\u0065val] = a
++-- [...argument\u0073] = a
++-- [...impl\u0065ments] = a
++-- [...st\u0061tic] = a
++-- [...l\u0065t] = a
++-- [...yi\u0065ld] = a
+++- [...aw\u0061it] = a
++-- ({ implements } = a)
++-- ({ package } = a)
++-- ({ let } = a)
++-- ({ \u0065val } = a)
++-- ({ argument\u0073 } = a)
++-- ({ impl\u0065ments } = a)
++-- ({ st\u0061tic } = a)
++-- ({ l\u0065t } = a)
++-- ({ yi\u0065ld } = a)
+++- ({ aw\u0061it } = a)
++-- ({ arguments = 1 } = a)
++-- ({ implements = 1 } = a)
++-- ({ package = 1 } = a)
++-- ({ static = 1 } = a)
++-- ({ let = 1 } = a)
++-- ({ yield = 1 } = a)
+++- ({ await = 1 } = a)
++-- ({ \u0065val = 1 } = a)
++-- ({ argument\u0073 = 1 } = a)
++-- ({ impl\u0065ments = 1 } = a)
++-- ({ st\u0061tic = 1 } = a)
++-- ({ l\u0065t = 1 } = a)
++-- ({ yi\u0065ld = 1 } = a)
+++- ({ aw\u0061it = 1 } = a)
++-- ({ a: eval } = a)
++-- ({ a: arguments } = a)
++-- ({ a: implements } = a)
++-- ({ a: package } = a)
++-- ({ a: static } = a)
++-- ({ a: let } = a)
++-- ({ a: yield } = a)
+++- ({ a: await } = a)
++-- ({ a: \u0065val } = a)
++-- ({ a: argument\u0073 } = a)
++-- ({ a: impl\u0065ments } = a)
++-- ({ a: st\u0061tic } = a)
++-- ({ a: l\u0065t } = a)
++-- ({ a: yi\u0065ld } = a)
+++- ({ a: aw\u0061it } = a)
++-- for (arguments in a);
++-- for (implements in a);
++-- for (package in a);
++-- for (static in a);
++-- for (yield in a);
+++- for (await in a);
++-- for (\u0065val in a);
++-- for (argument\u0073 in a);
++-- for (impl\u0065ments in a);
++-- for (st\u0061tic in a);
++-- for (l\u0065t in a);
++-- for (yi\u0065ld in a);
+++- for (aw\u0061it in a);
++-- for (eval of a);
++-- for (implements of a);
++-- for (package of a);
++-- for (\u0065val of a);
++-- for (argument\u0073 of a);
++-- for (impl\u0065ments of a);
++-- for (st\u0061tic of a);
++-- for (l\u0065t of a);
++-- for (yi\u0065ld of a);
+++- for (aw\u0061it of a);
++-- for (var eval in a);
++-- for (var arguments in a);
++-- for (var implements in a);
++-- for (var package in a);
++-- for (var static in a);
++-- for (var let in a);
++-- for (var yield in a);
+++- for (var await in a);
++-- for (var \u0065val in a);
++-- for (var argument\u0073 in a);
++-- for (var impl\u0065ments in a);
++-- for (var st\u0061tic in a);
++-- for (var l\u0065t in a);
++-- for (var yi\u0065ld in a);
+++- for (var aw\u0061it in a);
++-- for (let eval of a);
++-- for (let arguments of a);
++-- for (let implements of a);
++-- for (let package of a);
++-- for (let static of a);
++-- for (let yield of a);
+++- for (let await of a);
++-- for (let \u0065val of a);
++-- for (let argument\u0073 of a);
++-- for (let impl\u0065ments of a);
++-- for (let st\u0061tic of a);
+--- for (let l\u0065t of a);
++-- for (let yi\u0065ld of a);
+++- for (let aw\u0061it of a);
++++ eval
++-- implements
++-- package
++++ \u0065val
++++ argument\u0073
++-- impl\u0065ments
++-- st\u0061tic
++-- l\u0065t
++-- yi\u0065ld
+++- aw\u0061it
++++ typeof eval
++++ typeof arguments
++-- typeof implements
++-- typeof package
++-- typeof static
++-- typeof let
++-- typeof yield
+++- typeof await
++++ typeof \u0065val
++++ typeof argument\u0073
++-- typeof impl\u0065ments
++-- typeof st\u0061tic
++-- typeof l\u0065t
++-- typeof yi\u0065ld
+++- typeof aw\u0061it
++-- ({ implements })
++-- ({ package })
++-- ({ let })
++-- ({ yield })
++++ ({ \u0065val })
++++ ({ argument\u0073 })
++-- ({ impl\u0065ments })
++-- ({ st\u0061tic })
++-- ({ l\u0065t })
++-- ({ yi\u0065ld })
+++- ({ aw\u0061it })
++-- ({ m(eval) {} })
++-- ({ m(arguments) {} })
++-- ({ m(implements) {} })
++-- ({ m(package) {} })
++-- ({ m(static) {} })
++-- ({ m(let) {} })
++-- ({ m(yield) {} })
++-- ({ m(\u0065val) {} })
++-- ({ m(argument\u0073) {} })
++-- ({ m(impl\u0065ments) {} })
++-- ({ m(st\u0061tic) {} })
++-- ({ m(l\u0065t) {} })
++-- ({ m(yi\u0065ld) {} })
+++- ({ m(aw\u0061it) {} })
++-- ({ set m(eval) {} })
++-- ({ set m(arguments) {} })
++-- ({ set m(implements) {} })
++-- ({ set m(package) {} })
++-- ({ set m(static) {} })
++-- ({ set m(let) {} })
++-- ({ set m(yield) {} })
+++- ({ set m(await) {} })
++-- ({ set m(\u0065val) {} })
++-- ({ set m(argument\u0073) {} })
++-- ({ set m(impl\u0065ments) {} })
++-- ({ set m(st\u0061tic) {} })
++-- ({ set m(l\u0065t) {} })
++-- ({ set m(yi\u0065ld) {} })
+++- ({ set m(aw\u0061it) {} })
+--- function eval() { "use strict" }
+--- function arguments() { "use strict" }
+--- function implements() { "use strict" }
+--- function package() { "use strict" }
+--- function static() { "use strict" }
+--- function let() { "use strict" }
+--- function yield() { "use strict" }
+++- function await() { "use strict" }
+--- function \u0065val() { "use strict" }
+--- function argument\u0073() { "use strict" }
+--- function impl\u0065ments() { "use strict" }
+--- function st\u0061tic() { "use strict" }
+--- function l\u0065t() { "use strict" }
+--- function yi\u0065ld() { "use strict" }
+++- function aw\u0061it() { "use strict" }
+--- function f(eval) { "use strict" }
+--- function f(arguments) { "use strict" }
+--- function f(implements) { "use strict" }
+--- function f(package) { "use strict" }
+--- function f(static) { "use strict" }
+--- function f(let) { "use strict" }
+--- function f(yield) { "use strict" }
+++- function f(await) { "use strict" }
+--- function f(\u0065val) { "use strict" }
+--- function f(argument\u0073) { "use strict" }
+--- function f(impl\u0065ments) { "use strict" }
+--- function f(st\u0061tic) { "use strict" }
+--- function f(l\u0065t) { "use strict" }
+--- function f(yi\u0065ld) { "use strict" }
+++- function f(aw\u0061it) { "use strict" }
+--- (function eval() { "use strict" })
+--- (function arguments() { "use strict" })
+--- (function implements() { "use strict" })
+--- (function package() { "use strict" })
+--- (function static() { "use strict" })
+--- (function let() { "use strict" })
+--- (function yield() { "use strict" })
+++- (function await() { "use strict" })
+--- (function \u0065val() { "use strict" })
+--- (function argument\u0073() { "use strict" })
+--- (function impl\u0065ments() { "use strict" })
+--- (function st\u0061tic() { "use strict" })
+--- (function l\u0065t() { "use strict" })
+--- (function yi\u0065ld() { "use strict" })
+++- (function aw\u0061it() { "use strict" })
+--- (eval) => { "use strict" }
+--- (arguments) => { "use strict" }
+--- (implements) => { "use strict" }
+--- (package) => { "use strict" }
+--- (static) => { "use strict" }
+--- (let) => { "use strict" }
+--- (yield) => { "use strict" }
+++- (await) => { "use strict" }
+--- (\u0065val) => { "use strict" }
+--- (argument\u0073) => { "use strict" }
+--- (impl\u0065ments) => { "use strict" }
+--- (st\u0061tic) => { "use strict" }
+--- (l\u0065t) => { "use strict" }
+--- (yi\u0065ld) => { "use strict" }
+++- (aw\u0061it) => { "use strict" }
+--- eval => { "use strict" }
+--- arguments => { "use strict" }
+--- implements => { "use strict" }
+--- package => { "use strict" }
+--- static => { "use strict" }
+--- let => { "use strict" }
+--- yield => { "use strict" }
+++- await => { "use strict" }
+--- \u0065val => { "use strict" }
+--- argument\u0073 => { "use strict" }
+--- impl\u0065ments => { "use strict" }
+--- st\u0061tic => { "use strict" }
+--- l\u0065t => { "use strict" }
+--- yi\u0065ld => { "use strict" }
+++- aw\u0061it => { "use strict" }
+--- function f() { "use strict"; var eval }
+--- function f() { "use strict"; var arguments }
+--- function f() { "use strict"; var implements }
+--- function f() { "use strict"; var package }
+--- function f() { "use strict"; var static }
+--- function f() { "use strict"; var let }
+--- function f() { "use strict"; var yield }
+++- function f() { "use strict"; var await }
+--- function f() { "use strict"; var \u0065val }
+--- function f() { "use strict"; var argument\u0073 }
+--- function f() { "use strict"; var impl\u0065ments }
+--- function f() { "use strict"; var st\u0061tic }
+--- function f() { "use strict"; var l\u0065t }
+--- function f() { "use strict"; var yi\u0065ld }
+++- function f() { "use strict"; var aw\u0061it }
+--- function f() { "use strict"; eval = 1 }
+--- function f() { "use strict"; arguments = 1 }
+--- function f() { "use strict"; implements = 1 }
+--- function f() { "use strict"; package = 1 }
+--- function f() { "use strict"; static = 1 }
+--- function f() { "use strict"; let = 1 }
+--- function f() { "use strict"; yield = 1 }
+++- function f() { "use strict"; await = 1 }
+--- function f() { "use strict"; \u0065val = 1 }
+--- function f() { "use strict"; argument\u0073 = 1 }
+--- function f() { "use strict"; impl\u0065ments = 1 }
+--- function f() { "use strict"; st\u0061tic = 1 }
+--- function f() { "use strict"; l\u0065t = 1 }
+--- function f() { "use strict"; yi\u0065ld = 1 }
+++- function f() { "use strict"; aw\u0061it = 1 }
+--- class package {}
+--- class \u0065val {}
+--- class argument\u0073 {}
+--- class impl\u0065ments {}
+--- class st\u0061tic {}
+--- class l\u0065t {}
+--- class yi\u0065ld {}
+++- class aw\u0061it {}
+--- (class implements {})
+--- (class package {})
+--- (class static {})
+--- (class \u0065val {})
+--- (class argument\u0073 {})
+--- (class impl\u0065ments {})
+--- (class st\u0061tic {})
+--- (class l\u0065t {})
+--- (class yi\u0065ld {})
+++- (class aw\u0061it {})
+--- class A { m(arguments) {} }
+--- class A { m(implements) {} }
+--- class A { m(package) {} }
+--- class A { m(static) {} }
+--- class A { m(let) {} }
+--- class A { m(yield) {} }
+++- class A { m(await) {} }
+--- class A { m(\u0065val) {} }
+--- class A { m(argument\u0073) {} }
+--- class A { m(impl\u0065ments) {} }
+--- class A { m(st\u0061tic) {} }
+--- class A { m(l\u0065t) {} }
+--- class A { m(yi\u0065ld) {} }
+++- class A { m(aw\u0061it) {} }
+--- class A { static m(eval) {} }
+--- class A { static m(arguments) {} }
+--- class A { static m(implements) {} }
+--- class A { static m(package) {} }
+--- class A { static m(static) {} }
+--- class A { static m(let) {} }
+--- class A { static m(yield) {} }
+++- class A { static m(await) {} }
+--- class A { static m(\u0065val) {} }
+--- class A { static m(argument\u0073) {} }
+--- class A { static m(impl\u0065ments) {} }
+--- class A { static m(st\u0061tic) {} }
+--- class A { static m(l\u0065t) {} }
+--- class A { static m(yi\u0065ld) {} }
+++- class A { static m(aw\u0061it) {} }
+--- class A { set m(eval) {} }
+--- class A { set m(arguments) {} }
+--- class A { set m(implements) {} }
+--- class A { set m(package) {} }
+--- class A { set m(static) {} }
+--- class A { set m(let) {} }
+--- class A { set m(yield) {} }
+++- class A { set m(await) {} }
+--- class A { set m(\u0065val) {} }
+--- class A { set m(argument\u0073) {} }
+--- class A { set m(impl\u0065ments) {} }
+--- class A { set m(st\u0061tic) {} }
+--- class A { set m(l\u0065t) {} }
+--- class A { set m(yi\u0065ld) {} }
+++- class A { set m(aw\u0061it) {} }
+--- class A { m() { var eval } }
+--- class A { m() { var arguments } }
+--- class A { m() { var implements } }
+--- class A { m() { var package } }
+++- class A { m() { var await } }
+--- class A { m() { var \u0065val } }
+--- class A { m() { var argument\u0073 } }
+--- class A { m() { var impl\u0065ments } }
+--- class A { m() { var st\u0061tic } }
+--- class A { m() { var l\u0065t } }
+--- class A { m() { var yi\u0065ld } }
+++- class A { m() { var aw\u0061it } }
+--- class A { m() { arguments = 1 } }
+--- class A { m() { package = 1 } }
+--- class A { m() { static = 1 } }
+--- class A { m() { let = 1 } }
+--- class A { m() { yield = 1 } }
+++- class A { m() { await = 1 } }
+--- class A { m() { \u0065val = 1 } }
+--- class A { m() { argument\u0073 = 1 } }
+--- class A { m() { impl\u0065ments = 1 } }
+--- class A { m() { st\u0061tic = 1 } }
+--- class A { m() { l\u0065t = 1 } }
+--- class A { m() { yi\u0065ld = 1 } }
+++- class A { m() { aw\u0061it = 1 } }
++++ class A { m() { eval } }
+--- class A { m() { implements } }
+--- class A { m() { package } }
+--- class A { m() { static } }
+--- class A { m() { let } }
+++- class A { m() { await } }
++++ class A { m() { \u0065val } }
++++ class A { m() { argument\u0073 } }
+--- class A { m() { impl\u0065ments } }
+--- class A { m() { st\u0061tic } }
+--- class A { m() { l\u0065t } }
+--- class A { m() { yi\u0065ld } }
+++- class A { m() { aw\u0061it } }
++++ class A { [eval]() {} }
+--- class A { [implements]() {} }
+--- class A { [package]() {} }
+--- class A { [static]() {} }
++++ class A { [\u0065val]() {} }
++++ class A { [argument\u0073]() {} }
+--- class A { [impl\u0065ments]() {} }
+--- class A { [st\u0061tic]() {} }
+--- class A { [l\u0065t]() {} }
+--- class A { [yi\u0065ld]() {} }
+++- class A { [aw\u0061it]() {} }
+--- class A { [arguments = 1]() {} }
+--- class A { [implements = 1]() {} }
+--- class A { [package = 1]() {} }
+--- class A { [static = 1]() {} }
+--- class A { [let = 1]() {} }
+--- class A { [yield = 1]() {} }
+++- class A { [await = 1]() {} }
+--- class A { [\u0065val = 1]() {} }
+--- class A { [argument\u0073 = 1]() {} }
+--- class A { [impl\u0065ments = 1]() {} }
+--- class A { [st\u0061tic = 1]() {} }
+--- class A { [l\u0065t = 1]() {} }
+--- class A { [yi\u0065ld = 1]() {} }
+++- class A { [aw\u0061it = 1]() {} }
++++ class A { a = eval }
+--- class A { a = arguments }
+--- class A { a = implements }
+--- class A { a = package }
+--- class A { a = static }
+--- class A { a = let }
+--- class A { a = yield }
+++- class A { a = await }
++++ class A { a = \u0065val }
+--- class A { a = argument\u0073 }
+--- class A { a = impl\u0065ments }
+--- class A { a = st\u0061tic }
+--- class A { a = l\u0065t }
+--- class A { a = yi\u0065ld }
+++- class A { a = aw\u0061it }
+--- class A { static { var eval } }
+--- class A { static { var implements } }
+--- class A { static { var package } }
+--- class A { static { var static } }
+--- class A { static { var let } }
+--- class A { static { var \u0065val } }
+--- class A { static { var argument\u0073 } }
+--- class A { static { var impl\u0065ments } }
+--- class A { static { var st\u0061tic } }
+--- class A { static { var l\u0065t } }
+--- class A { static { var yi\u0065ld } }
+--- class A { static { var aw\u0061it } }
+--- class A extends (arguments = 1) {}
+--- class A extends (implements = 1) {}
+--- class A extends (package = 1) {}
+--- class A extends (static = 1) {}
+--- class A extends (let = 1) {}
+--- class A extends (yield = 1) {}
+++- class A extends (await = 1) {}
+--- class A extends (\u0065val = 1) {}
+--- class A extends (argument\u0073 = 1) {}
+--- class A extends (impl\u0065ments = 1) {}
+--- class A extends (st\u0061tic = 1) {}
+--- class A extends (l\u0065t = 1) {}
+--- class A extends (yi\u0065ld = 1) {}
+++- class A extends (aw\u0061it = 1) {}
++++ class A extends eval {}
++++ class A extends arguments {}
+--- class A extends implements {}
+--- class A extends package {}
+--- class A extends static {}
++++ class A extends \u0065val {}
++++ class A extends argument\u0073 {}
+--- class A extends impl\u0065ments {}
+--- class A extends st\u0061tic {}
+--- class A extends l\u0065t {}
+--- class A extends yi\u0065ld {}
+++- class A extends aw\u0061it {}
+--- class A { constructor(eval) {} }
+--- class A { constructor(arguments) {} }
+--- class A { constructor(implements) {} }
+--- class A { constructor(package) {} }
+--- class A { constructor(static) {} }
+--- class A { constructor(let) {} }
+--- class A { constructor(yield) {} }
+++- class A { constructor(await) {} }
+--- class A { constructor(\u0065val) {} }
+--- class A { constructor(argument\u0073) {} }
+--- class A { constructor(impl\u0065ments) {} }
+--- class A { constructor(st\u0061tic) {} }
+--- class A { constructor(l\u0065t) {} }
+--- class A { constructor(yi\u0065ld) {} }
+++- class A { constructor(aw\u0061it) {} }
+--- ({ m() { "use strict"; var eval } })
+--- ({ m() { "use strict"; var arguments } })
+--- ({ m() { "use strict"; var implements } })
+--- ({ m() { "use strict"; var package } })
+--- ({ m() { "use strict"; var static } })
+--- ({ m() { "use strict"; var let } })
+--- ({ m() { "use strict"; var yield } })
+++- ({ m() { "use strict"; var await } })
+--- ({ m() { "use strict"; var \u0065val } })
+--- ({ m() { "use strict"; var argument\u0073 } })
+--- ({ m() { "use strict"; var impl\u0065ments } })
+--- ({ m() { "use strict"; var st\u0061tic } })
+--- ({ m() { "use strict"; var l\u0065t } })
+--- ({ m() { "use strict"; var yi\u0065ld } })
+++- ({ m() { "use strict"; var aw\u0061it } })
++-- 01
+--- 07.5
++-- 09e1
++-- x = 01 + 1
++-- ({ 01: 1 })
++-- ({ get 01() {} })
+--- class A { 01() {} }
+--- class A { 01 = 1 }
+--- class A { [01]() {} }
+--- class A { m() { 01 } }
+--- class A { static { 01 } }
+--- class A extends (01, B) {}
+--- class A { a = 08 }
+--- function f() { "use strict"; 01 }
++-- function f() { "use strict" } 01
++-- class A {} 01
++-- (class {}, 01)
+--- 01..toString()
++-- '\09'
++-- 'a\1b'
++++ '\\1'
++++ '\x01'
++++ '\u0001'
++-- ({ '\01': 1 })
+--- class A { a = '\8' }
++-- function f() { 'use strict' } '\01'
++-- function f() { '\01' } 'use strict'
+--- ({ m() { '\8'; 'use strict' } })
+--- '\01'<NL>;'use strict'
++-- '\01' + 1; 'use strict'
++++ a`\01`
++++ '\<NL>01'
+--- class A { m() { with (a) {} } }
+--- class A { static { with (a) {} } }
+--- class A { [function () { with (a) {} }]() {} }
+--- function f() { "use strict"; with (a) {} }
++-- function f() { "use strict" } with (a) {}
++-- function f() { with (a) {} "use strict" }
++-- function f() { with (a) {} } "use strict"
+--- ({ m() { "use strict"; with (a) {} } })
+--- () => { "use strict"; with (a) {} }
++-- class A {} with (a) {}
++++ delete (1, x)
+--- class A { a = delete x }
+--- function f() { "use strict"; delete x }
++-- function f() { "use strict" } delete x
+--- function f(a, a) { "use strict" }
+--- (function (a, a) { "use strict" })
+--- ({ set m(a, a) {} })
+--- class A { static { (function (a, a) {}) } }
+--- class A extends (function (a, a) {}) {}
++-- function f(a, a) {} function g() { "use strict" }
++-- function f(a, a) { function g() { "use strict" } }
+--- function f({ a }) { "use strict" }
+--- function f(...a) { "use strict" }
+--- (a = 1) => { "use strict" }
+--- ({ m(a = 1) { "use strict" } })
+--- class A { m(a = 1) { "use strict" } }
+--- function f(a = 1) { "a"; "use strict" }
++++ function f(a = 1) { "use\u0020strict" }
++++ function f(a = 1) { ("use strict") }
++++ function f(a = 1) { x; "use strict" }
++-- if (a) function f() {} else ;
++-- l: l2: function f() {}
++-- { function f() {} function f() {} }
++-- switch (a) { case 1: function f() {} case 2: function f() {} }
+--- function f() { "use strict"; { function g() {} function g() {} } }
+--- function f() { "use strict"; l: function g() {} }
+--- { async function f() {} async function f() {} }
+--- { function f() {} async function f() {} }
++-- 'use\u0020strict'; with (a) {}
++-- ('use strict'); with (a) {}
++-- 'use strict' + 1; with (a) {}
++-- a; 'use strict'; with (a) {}
++-- 'use strict'<NL>+ 1; with (a) {}
++-- 'use strict'<NL>(a); with (a) {}
++-- 'use strict'<NL>[0]; with (a) {}
++-- 'use strict'.x; with (a) {}
++-- 'use strict'`x`; with (a) {}
++-- 'use strict', 1; with (a) {}
++-- 'use strict' in a; with (a) {}
+--- class A { a = () => arguments }
++++ class A { a = function () { arguments } }
+--- class A { a = typeof arguments }
+--- class A { a = { arguments } }
++++ a.eval = 1
++++ class A { arguments() {} }
++++ class A { static eval() {} }
++++ class A { implements() {} }
++++ class A { #eval }
++++ ({ implements: 1 })
++-- let.a = 1
++++ let<NL>a = 1
++-- if (a) let<NL>b = 1
+--- function f() { "use strict"; let }
+--- try {} catch ([let]) {}
+--- try {} catch ({ a: let }) {}
+--- try {} catch ([...let]) {}
+--- try {} catch ({ ...let }) {}
+--- try {} catch ({ let = 1 }) {}
+--- try {} catch ([[let]]) {}
++++ try {} catch ({ let: a }) {}
+--- try {} catch ([l\u0065t]) {}
++-- x => { var \u0065val }
++-- (x => { var \u0065val })
++-- x => \u0065val = 1
++-- x => { argument\u0073 = 1 }
++-- (function () { var \u0065val })
++-- (function () { var \u0065val })()
++-- !function () { var \u0065val }()
++-- (function (\u0065val) {})
+--- (function () { "use strict"; var \u0065val })
++-- function f() { return x => { var \u0065val } }
++-- function f(a = \u0065val = 1) {}
++-- function f(a = () => { var \u0065val }) {}
++-- async function f() { var \u0065val }
++-- function* g() { var \u0065val }
++-- (async () => { var \u0065val })
++-- ({ get a() { \u0065val = 1 } })
+--- class A { a = () => argument\u0073 }
+--- class A { a = () => { argument\u0073 } }
+--- class A { static { () => { var \u0065val } } }
+--- class A { static { \u0065val = 1 } }
+--- class A { static a = \u0065val = 1 }
+--- class A { [() => { var \u0065val }]() {} }
+--- class A extends (() => { var \u0065val }) {}
+--- class A { m() { class \u0065val {} } }
+--- class A { m() { (function \u0065val() {}) } }
++-- function f() {} var \u0065val
++-- function f() { "use strict" } var \u0065val
++++ \u0065val(1)
++++ a.\u0065val = 1
++++ ({ \u0065val: 1 })
++++ class A { \u0065val() {} }
+--- import \u0065val from "a"
+--- import { a as \u0065val } from "a"
+--- export function \u0065val() {}

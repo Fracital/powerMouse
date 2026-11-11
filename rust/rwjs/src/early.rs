@@ -66,6 +66,9 @@ struct Cx {
 	/// in a field's initializer or a static block, through arrows: no
 	/// `arguments`
 	no_arguments: bool,
+	/// in a function's parameters or body, which V8 may compile lazily
+	/// (see `escaped_lazily`)
+	lazy: bool,
 	super_property: bool,
 	super_call: bool,
 	returns: bool,
@@ -81,10 +84,11 @@ enum Kind {
 	/// `var`, and a function declared at the top of a script or a function
 	Var,
 	Param,
-	/// `let`, `const`, `using`: lexical, and never the name `let`
+	/// `let`, `const`, `using`, a catch clause's pattern: lexical, and
+	/// never the name `let`
 	Let,
 	/// a class, an import, a function declared at a module's top, a
-	/// generator or async function in a block, a catch clause's pattern
+	/// generator or async function in a block
 	Lexical,
 	/// a plain function in a block: sloppy code may declare it twice
 	BlockFunction,
@@ -478,8 +482,8 @@ impl<'a, 's> Checker<'a, 's> {
 			}
 			"yield" => self.cx.strict || self.cx.yield_kw,
 			"await" => self.mode.module || self.cx.await_kw,
-			"arguments" => self.cx.no_arguments || (binding && self.cx.strict),
-			"eval" => binding && self.cx.strict,
+			"arguments" => (self.cx.no_arguments || (binding && self.cx.strict)) && !self.escaped_lazily(name),
+			"eval" => binding && self.cx.strict && !self.escaped_lazily(name),
 			_ => false,
 		};
 		if refused {
@@ -489,9 +493,29 @@ impl<'a, 's> Checker<'a, 's> {
 
 	/// a name assigned to
 	fn target(&mut self, name: &str) {
-		if self.cx.strict && (name == "eval" || name == "arguments") {
+		if self.cx.strict && (name == "eval" || name == "arguments") && !self.escaped_lazily(name) {
 			self.fail();
 		}
+	}
+
+	/// `eval` or `arguments` written with an escape (`\u0065val`) where
+	/// V8 may compile the code lazily. Chrome 138 (V8 13.8) and later refuse
+	/// the name wherever strict code refuses `eval`; V8 13.7 and before
+	/// (Chrome 137, node 24) take it in a function they compile lazily,
+	/// whose preparser reads the name as written (`function f(\u0065val) {}`
+	/// in strict code, `class A { m() { \u0065val = 1 } }`), and refuse it
+	/// in one they parse in full at once, as their heuristics decide. A
+	/// script handed back as one no browser runs would run unrewritten in
+	/// such a browser, so the name is refused only outside every function,
+	/// where V8 always parses in full; inside one the script is rewritten,
+	/// the rewrite keeping the escape, and a browser refuses the rewrite as
+	/// it refuses the script (rust/host/early-known.txt, `lazy`).
+	fn escaped_lazily(&self, name: &str) -> bool {
+		// (the parser hands a name written without an escape as a slice
+		// of the source, and one with an escape as a string of its own)
+		let at = name.as_ptr() as usize;
+		let start = self.source.as_ptr() as usize;
+		self.cx.lazy && !(start..start + self.source.len()).contains(&at)
 	}
 
 	/// a string literal as written, in strict code: no octal escape, no
@@ -538,6 +562,7 @@ impl<'a, 's> Checker<'a, 's> {
 				in_params: false,
 				no_await: false,
 				no_arguments: false,
+				lazy: false,
 				super_property: mode.lenient,
 				super_call: mode.lenient,
 				returns: mode.top_return,
@@ -818,6 +843,8 @@ impl<'a, 's> Checker<'a, 's> {
 			in_params: true,
 			no_await: false,
 			no_arguments: false,
+			// (its name is not: V8 reads it with the code around it)
+			lazy: saved.cx.lazy,
 			super_property: method.is_some(),
 			super_call: method == Some(true),
 			returns: true,
@@ -829,6 +856,7 @@ impl<'a, 's> Checker<'a, 's> {
 			// a function expression's name is its own code's
 			self.name(id.name.as_str(), true);
 		}
+		self.cx.lazy = true;
 		self.enter(ScopeKind::Function);
 		self.duplicate_param = false;
 		saved
@@ -927,6 +955,9 @@ impl<'a, 's> Checker<'a, 's> {
 		self.cx.in_params = false;
 		self.cx.yield_kw = false;
 		self.cx.await_kw = it.r#async;
+		// (its parameters are read with the code around it, and so is a
+		// body that is one expression; a body in braces V8 may skip)
+		self.cx.lazy |= matches!(it.body, ArrowFunctionBody::FunctionBody(_));
 		self.directives(directives);
 	}
 
@@ -1028,6 +1059,7 @@ impl<'a, 's> Checker<'a, 's> {
 				in_params: false,
 				no_await: true,
 				no_arguments: true,
+				lazy: saved.cx.lazy,
 				super_property: true,
 				super_call: false,
 				returns: false,
@@ -1055,6 +1087,7 @@ impl<'a, 's> Checker<'a, 's> {
 				in_params: false,
 				no_await: true,
 				no_arguments: true,
+				lazy: saved.cx.lazy,
 				super_property: true,
 				super_call: false,
 				returns: false,
@@ -1276,7 +1309,9 @@ impl<'a, 's> Checker<'a, 's> {
 		if let Some(param) = &it.param {
 			match &param.pattern {
 				BindingPattern::BindingIdentifier(id) => self.declare(id.name.as_str(), Kind::CatchSimple),
-				pattern => self.declare_pattern(pattern, Kind::Lexical),
+				// (V8 refuses the name `let` in a pattern here, as in a
+				// `let`'s, and takes it alone)
+				pattern => self.declare_pattern(pattern, Kind::Let),
 			}
 		}
 	}
@@ -1911,7 +1946,7 @@ mod tests {
 					// V8 refuses it: handed back as it was, or the
 					// JavaScript rewriter's to decide
 					(Err(_), false) => true,
-					(Ok(_), false) => name(&["top", "return"]),
+					(Ok(_), false) => name(&["top", "return", "lazy"]),
 					(Ok(_), true) => true,
 					(Err(Decline::Parse), true) => name(&["parser"]),
 					(Err(Decline::Shape), true) => name(&["shape"]),
@@ -1925,17 +1960,20 @@ mod tests {
 					continue;
 				}
 				let asked = parses(source, false);
-				if asked != taken && !(taken && name(&["parser"])) {
+				if asked != taken && !name(&[if taken { "parser" } else { "lazy" }]) {
 					short.push(format!("{form}: {text}: parses as a script: {asked}, V8 {taken}"));
 				}
-				if !taken && parses(source, true) {
+				if !taken && parses(source, true) && !name(&["lazy"]) {
 					short.push(format!("{form}: {text}: a single expression, and V8 refuses it"));
 				}
 			}
 		}
 		assert!(cases > 4000, "{cases} cases read");
 		assert!(short.is_empty(), "{} short of V8's answer and not named:\n{}", short.len(), short.join("\n"));
-		let idle: Vec<&&str> = known.keys().filter(|text| !needed.contains(text)).collect();
+		// (a `lazy` text may fall short only inside a function around it,
+		// where rust/host/early.mjs tries it and holds the name)
+		let idle: Vec<&&str> =
+			known.iter().filter(|(text, kind)| **kind != "lazy" && !needed.contains(text)).map(|(text, _)| text).collect();
 		assert!(idle.is_empty(), "named in early-known.txt and no longer needed: {idle:?}");
 	}
 
@@ -2043,5 +2081,54 @@ mod tests {
 		assert_eq!(run("@a class A {}", false), Err(Decline::Shape));
 		// `delete` keeps the name it is asked of, for strict eval code to refuse
 		assert_eq!(run("delete top", false).unwrap(), "delete top");
+	}
+
+	#[test]
+	fn an_escaped_eval_is_refused_only_where_v8_parses_in_full() {
+		// outside every function: V8 refuses it as it refuses `eval`
+		for source in [
+			"'use strict'; var \\u0065val",
+			"'use strict'; \\u0065val = 1",
+			"'use strict'; (\\u0065val) => 1",
+			"'use strict'; (function \\u0065val() {})",
+			"class \\u0065val {}",
+			"class A { a = argument\\u0073 }",
+			"class A { static { var \\u0065val } }",
+			"function \\u0065val() { 'use strict' }",
+		] {
+			assert_eq!(run(source, false), Err(Decline::Invalid), "{source}");
+			assert!(!parses(source, false), "{source}");
+		}
+		// inside one, which V8 may compile lazily, taking the name: the
+		// script is rewritten, the name written as the page wrote it
+		for source in [
+			"'use strict'; function f(\\u0065val) {}",
+			"'use strict'; function f() { var \\u0065val }",
+			"class A { m() { argument\\u0073 = 1 } }",
+			"class A { m(\\u0065val) {} }",
+			"'use strict'; x => { [\\u0065val] = a }",
+		] {
+			assert!(run(source, false).is_ok(), "{source}");
+			assert!(run(source, true).is_ok(), "{source}");
+			assert!(parses(source, false), "{source}");
+		}
+		let out = run("class A { m() { \\u0065val = 1 } }", false).unwrap();
+		assert!(out.contains("t$v => \\u0065val = t$v"), "{out}");
+		let out = run("class A { m() { [\\u0065val] = a } }", false).unwrap();
+		assert!(out.contains("t$v => \\u0065val = t$v"), "{out}");
+		let out = run("class A { m() { ({ \\u0065val } = a) } }", false).unwrap();
+		assert!(out.contains("t$v => \\u0065val = t$v"), "{out}");
+		// (and `eval` as written, which V8 refuses wherever strict code does)
+		assert_eq!(run("class A { m() { eval = 1 } }", false), Err(Decline::Invalid));
+	}
+
+	#[test]
+	fn let_is_refused_in_a_catch_clause_s_pattern() {
+		for source in ["try {} catch ({ let }) {}", "try {} catch ([let]) {}", "try {} catch ({ a: [l\\u0065t] }) {}"] {
+			assert_eq!(run(source, false), Err(Decline::Invalid), "{source}");
+		}
+		for source in ["try {} catch (let) {}", "try {} catch ({ let: a }) {}"] {
+			assert!(run(source, false).is_ok(), "{source}");
+		}
 	}
 }

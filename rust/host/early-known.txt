@@ -44,6 +44,7 @@ parser for (async() of a);
 parser for (yield of a);
 parser let (a) = 1
 parser class A { #a; m() { this?.#a = 1 } }
+parser for (yi\u0065ld of a);
 
 # shape: V8 takes the text and the module's walk does not rewrite the shape
 # yet (a BigInt key in an assignment pattern). The module declines it
@@ -118,3 +119,151 @@ return l: return
 return with (a) return
 return return<NL>return
 return return yield
+
+# lazy: `eval` or `arguments` written with an escape (`\u0065val`) where
+# strict code refuses the name, inside a function. Chrome 138 (V8 13.8) and
+# later refuse it there as they refuse `eval`; V8 13.7 and before (Chrome
+# 137, node 24) take it in a function they compile lazily, whose preparser
+# reads the name as written, and refuse it in one they parse in full at
+# once, as their heuristics decide. A script handed back as one no browser
+# runs would run unrewritten in such a browser, so the module refuses the
+# escaped name only outside every function, where V8 always parses in
+# full, and rewrites the text inside one, the rewrite keeping the escape:
+# V8 refuses the rewrite as it refuses the text, at times with another
+# message. The parse questions are answered "yes".
+lazy var \u0065val
+lazy var argument\u0073
+lazy let \u0065val
+lazy let argument\u0073
+lazy const \u0065val = 1
+lazy const argument\u0073 = 1
+lazy function \u0065val() {}
+lazy function argument\u0073() {}
+lazy function* \u0065val() {}
+lazy function* argument\u0073() {}
+lazy async function \u0065val() {}
+lazy async function argument\u0073() {}
+lazy (function \u0065val() {})
+lazy (function argument\u0073() {})
+lazy function f(\u0065val) {}
+lazy function f(argument\u0073) {}
+lazy function f(...\u0065val) {}
+lazy function f(...argument\u0073) {}
+lazy function f(\u0065val = 1) {}
+lazy function f(argument\u0073 = 1) {}
+lazy function f({ \u0065val }) {}
+lazy function f({ argument\u0073 }) {}
+lazy function f([\u0065val]) {}
+lazy function f([argument\u0073]) {}
+lazy function f({ a: \u0065val }) {}
+lazy function f({ a: argument\u0073 }) {}
+lazy (\u0065val) => 1
+lazy (argument\u0073) => 1
+lazy \u0065val => 1
+lazy argument\u0073 => 1
+lazy async \u0065val => 1
+lazy async argument\u0073 => 1
+lazy async (\u0065val) => 1
+lazy async (argument\u0073) => 1
+lazy try {} catch (\u0065val) {}
+lazy try {} catch (argument\u0073) {}
+lazy try {} catch ({ \u0065val }) {}
+lazy try {} catch ({ argument\u0073 }) {}
+lazy \u0065val = 1
+lazy argument\u0073 = 1
+lazy \u0065val++
+lazy argument\u0073++
+lazy --\u0065val
+lazy --argument\u0073
+lazy \u0065val += 1
+lazy argument\u0073 += 1
+lazy \u0065val ||= 1
+lazy argument\u0073 ||= 1
+lazy [\u0065val] = a
+lazy [argument\u0073] = a
+lazy [...\u0065val] = a
+lazy [...argument\u0073] = a
+lazy ({ \u0065val } = a)
+lazy ({ argument\u0073 } = a)
+lazy ({ \u0065val = 1 } = a)
+lazy ({ argument\u0073 = 1 } = a)
+lazy ({ a: \u0065val } = a)
+lazy ({ a: argument\u0073 } = a)
+lazy for (\u0065val in a);
+lazy for (argument\u0073 in a);
+lazy for (\u0065val of a);
+lazy for (argument\u0073 of a);
+lazy for (var \u0065val in a);
+lazy for (var argument\u0073 in a);
+lazy for (let \u0065val of a);
+lazy for (let argument\u0073 of a);
+lazy ({ m(\u0065val) {} })
+lazy ({ m(argument\u0073) {} })
+lazy ({ set m(\u0065val) {} })
+lazy ({ set m(argument\u0073) {} })
+lazy function \u0065val() { "use strict" }
+lazy function argument\u0073() { "use strict" }
+lazy function f(\u0065val) { "use strict" }
+lazy function f(argument\u0073) { "use strict" }
+lazy (function \u0065val() { "use strict" })
+lazy (function argument\u0073() { "use strict" })
+lazy (\u0065val) => { "use strict" }
+lazy (argument\u0073) => { "use strict" }
+lazy \u0065val => { "use strict" }
+lazy argument\u0073 => { "use strict" }
+lazy function f() { "use strict"; var \u0065val }
+lazy function f() { "use strict"; var argument\u0073 }
+lazy function f() { "use strict"; \u0065val = 1 }
+lazy function f() { "use strict"; argument\u0073 = 1 }
+lazy class \u0065val {}
+lazy class argument\u0073 {}
+lazy (class \u0065val {})
+lazy (class argument\u0073 {})
+lazy class A { m(\u0065val) {} }
+lazy class A { m(argument\u0073) {} }
+lazy class A { static m(\u0065val) {} }
+lazy class A { static m(argument\u0073) {} }
+lazy class A { set m(\u0065val) {} }
+lazy class A { set m(argument\u0073) {} }
+lazy class A { m() { var \u0065val } }
+lazy class A { m() { var argument\u0073 } }
+lazy class A { m() { \u0065val = 1 } }
+lazy class A { m() { argument\u0073 = 1 } }
+lazy class A { [\u0065val = 1]() {} }
+lazy class A { [argument\u0073 = 1]() {} }
+lazy class A { a = argument\u0073 }
+lazy class A { static { var \u0065val } }
+lazy class A { static { var argument\u0073 } }
+lazy class A extends (\u0065val = 1) {}
+lazy class A extends (argument\u0073 = 1) {}
+lazy class A { constructor(\u0065val) {} }
+lazy class A { constructor(argument\u0073) {} }
+lazy ({ m() { "use strict"; var \u0065val } })
+lazy ({ m() { "use strict"; var argument\u0073 } })
+lazy x => { var \u0065val }
+lazy (x => { var \u0065val })
+lazy x => \u0065val = 1
+lazy x => { argument\u0073 = 1 }
+lazy (function () { var \u0065val })
+lazy (function () { var \u0065val })()
+lazy !function () { var \u0065val }()
+lazy (function (\u0065val) {})
+lazy (function () { "use strict"; var \u0065val })
+lazy function f() { return x => { var \u0065val } }
+lazy function f(a = \u0065val = 1) {}
+lazy function f(a = () => { var \u0065val }) {}
+lazy async function f() { var \u0065val }
+lazy function* g() { var \u0065val }
+lazy (async () => { var \u0065val })
+lazy ({ get a() { \u0065val = 1 } })
+lazy class A { a = () => argument\u0073 }
+lazy class A { a = () => { argument\u0073 } }
+lazy class A { static { () => { var \u0065val } } }
+lazy class A { static { \u0065val = 1 } }
+lazy class A { static a = \u0065val = 1 }
+lazy class A { [() => { var \u0065val }]() {} }
+lazy class A extends (() => { var \u0065val }) {}
+lazy class A { m() { class \u0065val {} } }
+lazy class A { m() { (function \u0065val() {}) } }
+lazy function f() {} var \u0065val
+lazy function f() { "use strict" } var \u0065val

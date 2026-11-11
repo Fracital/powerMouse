@@ -1,5 +1,5 @@
 crate rust/rwjs
-sources 921dc6807b37
+sources 3b3fad729c6a
 toolchain stomp-rust-toolchain:eda716cbc2c6
 RUST_IMAGE=rustlang/rust@sha256:dde6da7d1b5fa1ba0ebd311488ddc916f36311a2ce0038420ceba5ce76fdcc23
 RUST_NIGHTLY=2026-11-09

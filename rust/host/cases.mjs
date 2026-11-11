@@ -920,6 +920,22 @@ export const families = {
 		'function f({ top: t = function () { return top } }) {}',
 		'const [a = eval(c)] = location',
 	],
+
+	// strict code's early errors and their neighbours: what V8 refuses
+	// comes back as it was from both, and the sloppy code around it is
+	// rewritten. (An escaped `eval` inside a function, which V8 13.7 took,
+	// the module rewrites keeping the escape and the JavaScript rewriter
+	// prints plain: the early-errors texts hold the module's, not parity)
+	strictMode: [
+		'l\\u006Fcation = "/a"; [l\\u006Fcation] = ["/b"]',
+		'try {} catch (let) { let = top }',
+		'function f() { "use strict" } with (o) location = top',
+		'class A {} with (o) delete top',
+		'"use\\u0020strict"; with (o) location',
+		'x = 010 + top; class A { m() { return 0.10 } }',
+		'class A { m() { with (o) top } }',
+		m('location = 01'),
+	],
 };
 
 /** every case as {name, code, module} */

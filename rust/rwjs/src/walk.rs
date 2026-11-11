@@ -1121,11 +1121,14 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		)
 	}
 
-	/// `$s$j.set1(name, "name", write, set, ` up to the value
-	fn set1_head(&self, at: u32, name: &str, write: String) -> String {
+	/// `$s$j.set1(name, "name", write, set, ` up to the value; `written`
+	/// the name as the page wrote it, which `set` assigns (V8 13.7 and
+	/// before take an escaped `eval` assigned to in strict code they compile
+	/// lazily, and not the plain one)
+	fn set1_head(&self, at: u32, name: &str, written: &str, write: String) -> String {
 		let value = &self.options.config.temps[2];
 		format!(
-			"{}{name}, {}, {write}, {value} => {name} = {value}, ",
+			"{}{name}, {}, {write}, {value} => {written} = {value}, ",
 			self.head(at, "set1"),
 			quote(name)
 		)
@@ -1145,7 +1148,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				}
 				let partial = self.partial(a.span);
 				let write = self.setter(|slot, value| format!("{slot} {operator} {value}"));
-				let head = self.set1_head(a.span.start, name, write);
+				let head = self.set1_head(a.span.start, name, self.slice(id.span), write);
 				self.wrap(a.span, String::new(), format!(", {partial})"));
 				self.replace(a.span.start, a.right.span().start, head);
 				// the value is the page's expression (`location = f(() => top)`)
@@ -1248,7 +1251,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 					return;
 				}
 				let partial = self.partial(u.span);
-				let head = self.set1_head(u.span.start, name, self.setter(write));
+				let head = self.set1_head(u.span.start, name, self.slice(id.span), self.setter(write));
 				self.replace(u.span.start, u.span.end, format!("{head}undefined, {partial}){end}"));
 			}
 			target => {
@@ -1283,7 +1286,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				// (and `eval`, whose write the access API stores as the eval
 				// itself: `[eval] = [saved]`)
 				if id.name == "location" || id.name == "eval" {
-					let text = self.ref1(id.span.start, id.name.as_str());
+					let text = self.ref1(id.span.start, id.name.as_str(), self.slice(id.span));
 					self.replace(id.span.start, id.span.end, text);
 				}
 			}
@@ -1318,10 +1321,11 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 
 	/// `$s$j.ref1(location, t$v => location = t$v).value`, and for `eval`
 	/// the name too: `$s$j.ref1(eval, t$v => eval = t$v, "eval").value`
-	fn ref1(&self, at: u32, name: &str) -> String {
+	/// (`written` as `set1_head`'s)
+	fn ref1(&self, at: u32, name: &str, written: &str) -> String {
 		let value = &self.options.config.temps[2];
 		let named = if name == "location" { String::new() } else { format!(", {}", quote(name)) };
-		format!("{}{name}, {value} => {name} = {value}{named}).value", self.head(at, "ref1"))
+		format!("{}{name}, {value} => {written} = {value}{named}).value", self.head(at, "ref1"))
 	}
 
 	// ---- declarations ----
@@ -1370,7 +1374,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			self.replace(span.start, span.end, renamed);
 			assignments.push(format!(
 				"{}{temp}, {})",
-				self.set1_head(0, "location", write.clone()),
+				self.set1_head(0, "location", "location", write.clone()),
 				quote(&format!("(location={temp})"))
 			));
 		}
@@ -2515,7 +2519,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		self.early.assigned(name);
 		if self.rewriting && (name == "location" || name == "eval") {
 			// `({ location } = o)`: written out, with the reference
-			let text = format!("{name}: {}", self.ref1(0, name));
+			let text = format!("{name}: {}", self.ref1(0, name, self.slice(it.binding.span)));
 			self.replace(it.binding.span.start, it.binding.span.end, text);
 		}
 		if let Some(init) = &it.init {

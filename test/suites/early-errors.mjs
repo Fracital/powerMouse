@@ -1,9 +1,9 @@
 // Early errors: a script the browser refuses to compile is refused through
 // the proxy as it is natively, with the SyntaxError the page would read
 // natively, however the page hands the code over; and a script the browser
-// takes still compiles. The cases are rust/host/early-errors.txt (4,418
+// takes still compiles. The cases are rust/host/early-errors.txt (5,348
 // texts written from the specification's early-error clauses, each with
-// V8's verdict as a classic script, a strict one and a module).
+// Chrome's verdict as a classic script, a strict one and a module).
 //
 // First the record is held to this Chrome: every classic form is compiled
 // (never run) over the protocol, every module form imported with a last
@@ -71,16 +71,33 @@ const NEVER_RUN = new Set([
 	'for (() => a in b;;);',
 ]);
 // The JavaScript rewriter alone: scripts V8 takes that it prints into ones
-// V8 refuses (parentheses its printer drops around a loop head's target;
-// what it dropped around a class heritage and the string statements it
-// printed as directives are kept now)
+// V8 refuses (parentheses its printer drops around a loop head's target, a
+// name written with an escape that it prints plain; what it dropped around
+// a class heritage and the string statements it printed as directives are
+// kept now)
 const JS_BREAKS = [
 	'for ((let) of a);',
 	'for ((let.a) of b);',
 	'for ((async) of a);',
+	'for (l\\u0065t of a);',
+];
+// ... and scripts V8 refuses that it prints into ones V8 refuses with
+// another message: V8 refuses `\\u0065val` as a target and an escaped
+// keyword as a shorthand property for being written so, and the plain names
+// it prints as names strict code does not take
+const JS_MESSAGES = [
+	'[\\u0065val] = a',
+	'[...\\u0065val] = a',
+	'({ a: \\u0065val } = a)',
+	'({ impl\\u0065ments })',
+	'({ st\\u0061tic })',
+	'({ l\\u0065t })',
 ];
 const KNOWN = new Map(JS_RUNS.map((text) => [text, 'runs']));
-if (!WASM) for (const text of JS_BREAKS) KNOWN.set(text, 'breaks');
+if (!WASM) {
+	for (const text of JS_BREAKS) KNOWN.set(text, 'breaks');
+	for (const text of JS_MESSAGES) KNOWN.set(text, 'message');
+}
 const needed = new Set();
 
 const browser = await launch();
