@@ -550,6 +550,13 @@ The first release after a four-year gap. Everything below is breaking.
   browser: Fork us on GitHub, the repository and each of the latest
   commits. A click opens it in the current tab; Ctrl, Cmd, Shift or the
   middle button opens it in a new one. (demo suite.)
+- The demo's address bar shows where a tab is going from the moment a
+  navigation starts until the new document commits, as a browser's does:
+  the document it leaves still reports while a slow page is on its way,
+  and that put the old URL back in the bar for a moment, on the tab's card
+  and in the star. A navigation that never commits (Reload or Back while
+  it is on its way, a failure, nothing after 30 s) shows the page the tab
+  stayed on again (address-pending suite, both modes).
 - The demo's bookmarks reorder: a row dragged with the mouse (after a few
   pixels, so a click still opens it) or a finger (after a long press, so
   the list still scrolls) lifts and follows, the others slide aside, the

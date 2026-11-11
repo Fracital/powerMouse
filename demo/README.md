@@ -166,7 +166,12 @@ holyWisp is started.
    navigates to focus (`document.hasFocus()`, the keys typed next).
 6. **Keep the address bar honest.** `frame.url` reads the real location of the
    proxied document (through its inject client), and the page polls it so
-   `pushState` navigations inside the frame show up too.
+   `pushState` navigations inside the frame show up too. From the moment
+   the demo navigates a tab until the new document commits, the address
+   bar, the tab's card and the star show where it is going, as a browser's
+   do, whatever the document it leaves still reports; a navigation that
+   never commits (stopped by Reload or Back, failed, or still uncommitted
+   after 30 s) shows the page the tab stayed on again.
 7. **Tabs.** Each tab is its own `controller.createFrame()`; only the active
    frame is visible. The landing page doubles as the new-tab page: submitting
    there or clicking a quick link opens a new tab. Closing the last tab goes

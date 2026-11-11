@@ -387,7 +387,12 @@ const controllerCallbacks = {
 	onNavigate: (info, frame) => {
 		const tab = tabs.find((t) => t.frame === frame);
 		if (!tab) return;
-		tab.url = info.url;
+		// while a navigation is on its way, the document it leaves still
+		// reports: that is not where the tab is going
+		tab.reported = info.url;
+		tab.stayedOn = null;
+		settleGoing(tab);
+		if (!tab.goingTo) tab.url = info.url;
 		tab.icon = info.icon;
 		recordUrl(tab);
 		if (tab === activeTab) syncOmnibox();
@@ -525,6 +530,9 @@ function createTab() {
 		index: -1,
 		traversal: null, // 'back' / 'forward' while a step we issued is in flight
 		pending: Promise.resolve(false), // queue of back/forward presses
+		goingTo: null, // { url, from }: a navigation not yet committed (navigate)
+		stayedOn: null, // the URL a stopped navigation left the tab on, until it reports
+		reported: null, // the URL the tab's document last reported
 		icon: null, // the icon the page declared (NavigateInfo.icon)
 		iconPort: null, // its document's port for fetching that icon (ICON_HOOK)
 	};
@@ -532,6 +540,9 @@ function createTab() {
 		// a RemoteFrame's url is polled: refresh before recording, or a redirect
 		// leaves both the requested and the final URL in the list
 		if (frame.refresh) await frame.refresh();
+		// a document loaded: the navigation committed, whatever its URL
+		tab.goingTo = null;
+		tab.stayedOn = null;
 		recordUrl(tab);
 		if (tab === activeTab) {
 			setStatus(frame.url ? 'Ready' : 'Loaded');
@@ -582,6 +593,7 @@ function step(tab, direction) {
 	if (!tab) return Promise.resolve(false);
 	const run = async () => {
 		const back = direction === 'back';
+		stopGoing(tab); // a step ends a navigation on its way, as a browser's
 		// no Navigation API: our list is all there is, and history.back() from
 		// the first entry would leave the site
 		if (back ? tab.frame.canGoBack === null : tab.frame.canGoForward === null) {
@@ -813,7 +825,7 @@ function syncCardBar(tab) {
 	const tools = label.querySelectorAll('.toolbtn');
 	tools[0].classList.toggle('disabled', !canStep(tab, 'back'));
 	tools[1].classList.toggle('disabled', !canStep(tab, 'forward'));
-	label.querySelector('.urlText').textContent = tab.url || '';
+	label.querySelector('.urlText').textContent = shownUrl(tab);
 	syncStar(label.querySelector('.starbtn'), tab);
 }
 
@@ -911,8 +923,9 @@ function renderRecents(fromFullScreen = false) {
 		empty.remove();
 
 	for (const tab of tabs) {
-		// labels show where the frame actually is, redirects included
-		tab.url = tab.frame.url || tab.url;
+		// labels show where the frame actually is, redirects included (or
+		// where it is going)
+		if (!tab.goingTo) tab.url = tab.frame.url || tab.url;
 
 		let label = labelFor.get(tab);
 		if (!label) {
@@ -1296,8 +1309,19 @@ async function navigate(input, { newTab = false } = {}) {
 	if (newTab || !activeTab) activateTab(createTab());
 	else showBrowser();
 	const tab = activeTab;
+	// the page the tab is on: what the bar shows once this navigation is
+	// over without committing (a navigation still on its way never committed)
+	const from = tab.goingTo ? tab.goingTo.from : normalizeUrl(shownUrl(tab));
 	tab.url = url;
+	// the address bar, the card and the star show where the tab is going
+	// from now until the new document commits, as a browser's do; if it never
+	// does (a download, a 204), the page it stayed on again
+	const going = { url, from };
+	tab.goingTo = going;
+	tab.stayedOn = null;
 	omni.url.value = url;
+	syncToolbar();
+	syncCardBar(tab);
 	// the page a browser navigates to from its address bar has focus (its
 	// document.hasFocus() is true, its keyboard events arrive), not the
 	// address bar: the frame takes it, and the document it loads keeps it
@@ -1306,17 +1330,48 @@ async function navigate(input, { newTab = false } = {}) {
 	try {
 		await tab.frame.go(url);
 		history.replaceState(null, '', `#${encodeURIComponent(url)}`);
+		settleGoing(tab);
+		// the frame answered without moving (the leaving document reported, or
+		// nothing came): give the navigation the time a browser would, then
+		// show the page the tab stayed on
+		if (tab.goingTo === going)
+			setTimeout(() => {
+				if (tab.goingTo === going) stopGoing(tab);
+			}, 30000);
 	} catch (error) {
+		if (tab.goingTo === going) stopGoing(tab);
 		setStatus(`Error: ${error.message}`, true);
 	}
+}
+
+/** the URL a tab's address bar shows: where it is going, else where it is */
+const shownUrl = (tab) =>
+	tab.goingTo?.url || tab.stayedOn || tab.frame.url || tab.url || '';
+
+/** the frame has a document other than the one the navigation leaves: committed */
+function settleGoing(tab, reported = tab.reported) {
+	if (!tab.goingTo) return;
+	const now = normalizeUrl(reported || '');
+	if (now && now !== tab.goingTo.from) tab.goingTo = null;
+}
+
+/** a navigation that will not commit (stopped, replaced, failed) */
+function stopGoing(tab) {
+	if (!tab.goingTo) return;
+	// the frame may already name the URL it was sent to (a remote frame
+	// does): the page it stayed on is the one the bar showed before
+	tab.stayedOn = tab.goingTo.from || null;
+	tab.goingTo = null;
+	if (tab === activeTab) syncOmnibox(true);
+	syncCardBar(tab);
 }
 
 // keep the omnibox and hash in sync with the active tab (pushState included)
 function syncOmnibox(force = false) {
 	if (!activeTab || browser.classList.contains('hidden')) return;
-	const url = activeTab.frame.url || activeTab.url;
+	const url = shownUrl(activeTab);
 	if (!url) return;
-	activeTab.url = url;
+	if (!activeTab.goingTo) activeTab.url = url;
 	recordUrl(activeTab);
 	syncToolbar();
 	if (!force && document.activeElement === omni.url) return;
@@ -1451,6 +1506,7 @@ $('toolBack').addEventListener('click', () => stepActive('back'));
 $('toolForward').addEventListener('click', () => stepActive('forward'));
 $('toolReload').addEventListener('click', () => {
 	if (!activeTab) return;
+	stopGoing(activeTab); // Reload stays on the page the tab shows
 	setStatus('Loading…');
 	activeTab.frame.reload();
 });
@@ -2105,7 +2161,7 @@ addEventListener('storage', (event) => {
 
 /** the URL the address bar shows for a tab, when it is a page to bookmark */
 function pageUrl(tab) {
-	const url = tab ? normalizeUrl(tab.frame.url || tab.url || '') : '';
+	const url = tab ? normalizeUrl(shownUrl(tab)) : '';
 	return /^https?:\/\//i.test(url) ? url : null;
 }
 
@@ -2150,7 +2206,8 @@ async function toggleBookmark(tab) {
 		saveBookmarks();
 		return;
 	}
-	const title = tabTitle(tab);
+	// still on its way: the title is the page it leaves, so none yet
+	const title = tab.goingTo ? shown : tabTitle(tab);
 	bookmarks.unshift({ url, title: title === shown ? '' : title, icon: null });
 	saveBookmarks();
 	fillIcons();

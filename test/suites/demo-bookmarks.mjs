@@ -25,7 +25,9 @@ const A = `${FIXTURE}pages/bookmark-a.html`;
 const B = `${FIXTURE}pages/bookmark-b.html`;
 const CROSS = `${FIXTURE}pages/bookmark-cross.html`;
 const SOFT = `${FIXTURE}pages/bookmark-soft.html`;
-const SLOW = `${FIXTURE}slow-page?ms=3000`;
+// on another origin than every other page here (localhost, not 127.0.0.1),
+// so no open page of its site can ask for its icon before it has come
+const SLOW = `${FIXTURE.replace('//127.0.0.1:', '//localhost:')}slow-page?ms=3000`;
 const KEY = 'stomp-demo:bookmarks';
 const DEFAULTS = [
 	{
@@ -910,10 +912,13 @@ async function run(mode, base) {
 		/^data:image\/png;base64,/.test((await iconOf(SOFT)) || ''),
 		await omni(page),
 	);
-	// starred while its document is still on the way (no page to ask yet):
-	// the site's /favicon.ico is asked once the page has come
-	await page.click('#home');
+	// starred while its document is still on the way, with no other tab
+	// open (no page at all to ask yet): the site's /favicon.ico is asked, by
+	// that page, once it has come
+	await page.click('#recents');
 	await sleep(400);
+	await page.click('#closeAll');
+	await sleep(600);
 	await submitLanding(page, SLOW);
 	await until(
 		page,
@@ -936,7 +941,7 @@ async function run(mode, base) {
 					),
 				Boolean,
 				20000,
-				`${FIXTURE}favicon.ico`,
+				new URL('/favicon.ico', SLOW).href,
 			)) === true,
 		JSON.stringify(early),
 	);
