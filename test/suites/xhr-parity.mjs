@@ -4,7 +4,8 @@
 // arraybuffer, blob, json, document) over JSON, HTML, XML, SVG, XHTML, RSS,
 // binary and malformed bodies with and without a charset, overrideMimeType,
 // open() again after a request finished, synchronous requests (and the
-// types and timeouts a document may not set on them), and open()'s user and
+// types and timeouts a document may not set on them, and a worker's timeout
+// running out on a response five seconds away), and open()'s user and
 // password and a URL's credentials against an HTTP Basic challenge. Each
 // case's description (status, response, responseText, responseXML and its
 // document's type, charset, URL and links, the readystatechange and event
@@ -73,7 +74,9 @@ ok(
 	native?.done === true &&
 		!native.fatal &&
 		sides.every((side) => typeof native[side] === 'object'),
-	JSON.stringify(native && { fatal: native.fatal, worker: native.worker }),
+	JSON.stringify(
+		native && { fatal: native.fatal, at: native.at, worker: native.worker },
+	),
 );
 // what the battery relies on, so a change in the browser shows here first
 ok(
@@ -97,7 +100,9 @@ for (const [mode, base] of [
 		state?.done === true &&
 			!state.fatal &&
 			sides.every((side) => typeof state[side] === 'object'),
-		JSON.stringify(state && { fatal: state.fatal, worker: state.worker }),
+		JSON.stringify(
+			state && { fatal: state.fatal, at: state.at, worker: state.worker },
+		),
 	);
 	for (const side of sides)
 		for (const name of Object.keys(native?.[side] ?? {})) {

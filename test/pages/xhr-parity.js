@@ -175,7 +175,15 @@
 	}
 
 	/** one synchronous request, or the error the browser refuses it with */
-	async function syncCase({ url, type, override, user, password, before }) {
+	async function syncCase({
+		url,
+		type,
+		override,
+		user,
+		password,
+		before,
+		timeout,
+	}) {
 		const x = new XMLHttpRequest();
 		const out = {};
 		let states = [];
@@ -194,12 +202,17 @@
 		}
 		if (type !== undefined)
 			out.setType = errorName(() => (x.responseType = type));
-		out.setTimeout = errorName(() => (x.timeout = 10));
+		// whether a timeout may be set is what every case reads, so the one
+		// set is far past any load: 10 ms ran out for the native worker's
+		// request on a busy machine and not for the proxied one. The case
+		// that does time out names its own
+		out.setTimeout = errorName(() => (x.timeout = timeout ?? 60000));
 		if (override !== undefined) x.overrideMimeType(override);
 		try {
 			x.send();
 		} catch (error) {
 			out.sendThrown = error.name;
+			out.sendMessage = error.message;
 		}
 		Object.assign(out, await readBack(x), { states });
 		return out;
@@ -344,6 +357,15 @@
 			user: 'user',
 			password: 'pass',
 		});
+		// a worker's timeout ends a synchronous request the site has not
+		// answered: send() throws and no event fires (/slow answers after 5 s)
+		if (!inWindow)
+			await run('sync timeout fires', syncCase, {
+				url: '/slow?sync#named',
+				user: 'user',
+				password: 'pass',
+				timeout: 300,
+			});
 
 		// overrideMimeType once the request is done throws
 		await run('override after done', async () => {

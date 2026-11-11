@@ -1213,6 +1213,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   browser's `InvalidAccessError` from `open()` instead of a synchronous
   request, and a worker ignores the type `document`, which it has no
   documents for.
+- A worker's synchronous `XMLHttpRequest` keeps its `timeout`, as natively:
+  past it `send()` throws a `TimeoutError` naming the URL, with no event,
+  `readyState` 4 and status 0. The timeout was ignored and `send()` waited
+  for the site however long it took (xhr-parity suite, against a response
+  five seconds away; the suite's other synchronous cases set a timeout no
+  load comes near, where 10 ms used to time the native worker out on a busy
+  machine).
 - The `in` operator no longer finds the proxy's helpers:
   `'$s$j' in window` and `key in window` for the access API's or the
   client's name (a deployment's own names too) were true, natively false,

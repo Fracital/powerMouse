@@ -63,15 +63,20 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 		const nativeAllHeaders = method('getAllResponseHeaders');
 		const nativeResponseType = accessor('responseType').set!;
 		const nativeCredentials = accessor('withCredentials').set!;
+		const nativeTimeout = accessor('timeout').set!;
 		const nativeStatus = accessor('status').get!;
 		const nativeStatusText = accessor('statusText').get!;
 		const nativeResponse = accessor('response').get!;
 		const nativeResponseURL = accessor('responseURL').get!;
-		const syncRequest = (url: string, init: RequestInit) => {
+		const syncRequest = (url: string, init: RequestInit, timeout: number) => {
 			const xhr = new NativeXHR();
 			Reflect.apply(nativeOpen, xhr, [init.method, url, false]);
 			Reflect.apply(nativeResponseType, xhr, ['arraybuffer']);
 			Reflect.apply(nativeCredentials, xhr, [init.credentials === 'include']);
+			// a worker's synchronous request may have a timeout (a document's
+			// may not): the browser's own request keeps it, and its send()
+			// throws TimeoutError
+			if (timeout > 0) Reflect.apply(nativeTimeout, xhr, [timeout]);
 			const sent = init.headers as Record<string, string>;
 			for (const name of Object.keys(sent)) {
 				const value = sent[name];
@@ -143,6 +148,9 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			#responseText = '';
 			#readyState = UNSENT;
 			#responseURL = '';
+			// the URL send() requested, with its credentials and fragment (a
+			// synchronous request's TimeoutError names it)
+			#sentURL = '';
 			#responseXML: Document | null = null;
 			#response: unknown = null;
 			// the response's bytes once it is done (json is parsed from them)
@@ -455,10 +463,27 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 							response,
 							url: final,
 							buffer,
-						} = syncRequest(String(url), init);
+						} = syncRequest(String(url), init, this.#timeout);
 						this.#onHeaders(undefined, response, final);
 						this.#onDone(undefined, response, buffer);
 					} catch (error) {
+						// the timeout ends a synchronous request with no event:
+						// send() throws, as natively
+						if ((error as { name?: unknown } | null)?.name === 'TimeoutError') {
+							this.#readyState = DONE;
+							this.#status = 0;
+							this.#statusText = '';
+							this.#body = null;
+							this.#response =
+								this.#responseType === '' || this.#responseType === 'text'
+									? ''
+									: null;
+							this.#responseText = '';
+							throw new that.client.global.DOMException(
+								`Failed to execute 'send' on 'XMLHttpRequest': Failed to load '${this.#sentURL}'.`,
+								'TimeoutError',
+							);
+						}
 						this.#onDone(error);
 					}
 				}
@@ -587,6 +612,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				const target = new URL(this.#url, that.client.url.toString());
 				if (this.#username !== null) target.username = this.#username;
 				if (this.#password !== null) target.password = this.#password;
+				this.#sentURL = target.href;
 				this.#credentialed = null;
 				if (target.username !== '' || target.password !== '') {
 					this.#urlCredentials = `${target.username}:${target.password}`;
