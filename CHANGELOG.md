@@ -265,6 +265,32 @@ The first release after a four-year gap. Everything below is breaking.
   JavaScript rewriter: it has no UTF-8, and the module would have been
   handed U+FFFD in its place and written that into the page's text
   (`wasm-rewriter-glue` suite).
+- `suffix.wasm` (`rust/suffix`, `init.assets.suffix`): the public suffix
+  list as a table in a wasm module of 81,416 bytes (38,783 brotli), which
+  answers what tldts's `getDomain` and `getPublicSuffix` answer for any
+  string, with or without the private section. The list is vendored and
+  pinned by commit and sha256 (publicsuffix/list 52b71b3c, 2026-10-17, the
+  list of the tldts the lockfile pins). `rust/host/suffix.mjs` compares the
+  two over every rule, the hosts in the test data, IDN, IP and malformed
+  forms and a seeded fuzz (5.5 million comparisons, no differences); the
+  `suffix` suite runs it and holds the artifact to a size budget. Under
+  `rewriter: 'wasm'` the service worker asks the module for a request's
+  site, a route's partition, the cookie jar's public suffix and the
+  blocker's registrable domain, and a proxied top's rewriter library asks
+  it for the frames under it; tldts answers under `rewriter: 'js'`, until
+  the module has arrived and whenever it declines, and stays in both
+  bundles for now (docs/rust-plan.md, phase 2).
+- A document knows its own site from its shell: the service worker writes
+  in what the list says of the document's host, of its top's and of every
+  name above them, and the inject asks the rewriter library's list only
+  about a host no shell named (a navigation to another host, a cookie
+  `Domain` that is no name of the document's host). Before, a document's
+  site key, storage partition, cookie key, cookie `Domain` and
+  `document.domain` checks each went to the library's copy of tldts (a
+  call into the top's library realm, or a copy of the library evaluated
+  for it in a document that shares none), which is what kept tldts in the
+  inject bundle. `frameElement` compares the two documents' site keys, as
+  the window membrane does (`site-facts` suite).
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

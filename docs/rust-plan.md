@@ -473,8 +473,9 @@ suite then measures plus its usual margin.
   brotli), fetched by the controller, cached by HTTP like any asset, and
   compiled once (21 ms, off the main thread). The service worker is handed
   the bytes (a 423 KB buffer per handshake) and compiles them once more.
-  The suffix module below adds its own file. Against that, every proxied
-  frame stops fetching, parsing and holding 399 KB of script.
+  The suffix module below adds its own file (`suffix.wasm`, 81,416 bytes,
+  38,783 brotli). Against that, every proxied frame stops fetching, parsing
+  and holding 399 KB of script.
 - Memory, per rewriting thread: one instance in each rewrite worker, one in
   the service worker, one in each proxied top's library realm; none in a
   frame. An instance is 1.2 to 1.4 MB of linear memory until it meets a
@@ -504,18 +505,19 @@ suite then measures plus its usual margin.
   in its own realm, with the globals it captured, the first time one of
   these happens:
 
-  | Inject path                          | Served by                        | The fallback loads when                                               |
-  | ------------------------------------ | -------------------------------- | --------------------------------------------------------------------- |
-  | `modifyJS` (every path of phase 2)   | the rewriter module              | no module yet; the module declined the script or trapped              |
-  | `singleExpression`, `parsesAsScript` | the rewriter module (parse only) | no module yet                                                         |
-  | `printExpression`                    | the fallback, until phase 5      | something threw and its message names a part of the page's expression |
-  | `modifyCSS`                          | the scanner module (phase 3)     | no module yet; the scanner declined the sheet                         |
-  | `getDomain`, `getPublicSuffix`       | the suffix module                | no module yet, for a host other than the document's and its top's own |
+  | Inject path                          | Served by                         | The fallback loads when                                               |
+  | ------------------------------------ | --------------------------------- | --------------------------------------------------------------------- |
+  | `modifyJS` (every path of phase 2)   | the rewriter module               | no module yet; the module declined the script or trapped              |
+  | `singleExpression`, `parsesAsScript` | the rewriter module (parse only)  | no module yet                                                         |
+  | `printExpression`                    | the fallback, until phase 5       | something threw and its message names a part of the page's expression |
+  | `modifyCSS`                          | the scanner module (phase 3)      | no module yet; the scanner declined the sheet                         |
+  | `getDomain`, `getPublicSuffix`       | the shell, then the suffix module | no module yet, for a host no shell named                              |
 
   A document's own site and its top's are needed while the client is made,
   before any message can have arrived: the service worker, which keeps
   tldts (its bundle is one per scope, not per frame), writes them into the
-  shell. A realm the module cannot reach at all (a sandboxed document with
+  shell (built: "The shell carries the site" below). A realm the module
+  cannot reach at all (a sandboxed document with
   an opaque origin, a tab in another agent cluster) loads the fallback on
   its first rewrite, which is what it costs today. A page's dedicated
   worker is in its document's agent cluster and is handed the module with
@@ -526,20 +528,96 @@ suite then measures plus its usual margin.
 
 - _The public suffix list._ A table of its own, not a crate's: the `psl`
   crate compiles the list into match code, which costs more than the data
-  does, and `publicsuffix` parses the list's text at startup. `deploy/rust` fetches
-  `public_suffix_list.dat` from the publicsuffix/list repository at a commit
-  pinned with its checksum in `pins.env`, and builds a sorted table of the
-  rules with their ICANN or private section and wildcard and exception
-  marks, which a crate of a few hundred lines searches by label. It is an
-  artifact of its own (`suffix.wasm`; an estimate from the list's ten
-  thousand rules is 130 KB, 45 KB brotli, to be measured when it is built):
-  `rewriter.wasm` has 10 KB of its brotli budget left, and the rewrite
-  workers need no suffix list. The list stays current the
-  way epoxy's pins do: the pin is raised by hand with the nightly, and a
-  suite compares the module's answers with tldts's (which stays a
-  dependency of the service worker) over a host corpus, so a tldts update
-  that knows a suffix the table does not fails the suite until the pin is
-  raised.
+  does, and `publicsuffix` parses the list's text at startup. Built
+  (`rust/suffix`, `suffix.wasm`): the list is vendored byte for byte at
+  `rust/suffix/src/public_suffix_list.dat` and pinned beside it
+  (`src/pins.env`: publicsuffix/list 52b71b3c of 2026-10-17 and the file's
+  sha256, which `build.rs` checks before it builds anything). Vendored and
+  not fetched, so the toolchain image does not change with the list and a
+  build needs no network for it; the pins are in the artifact's `UPSTREAM`.
+  `build.rs` turns the rules into a trie by label from the right, names
+  equal subtrees once and writes it as four byte tables (70,776 bytes for
+  10,857 rules); the crate has no dependency, no allocator and no `std` on
+  wasm, and searches the tables by label.
+
+  The module answers what tldts answers, not what the list's own
+  algorithm would: `getDomain` and `getPublicSuffix` for any string (a
+  host, a URL, neither), with the private section or the ICANN section
+  alone. That means tldts's hostname extraction and validation, its trie
+  walk (the exact label before the wildcard and no way back, a wildcard
+  matching an empty label, the six suffixes it answers before the table)
+  and its two spellings of a rule that is not ASCII, which a host has to
+  keep to. The answer is where the piece stands in the input, in UTF-16
+  code units, and the glue (`src/wasm/suffix.ts`) slices it; the two things
+  tldts does with the string itself (ECMAScript's lower case, dropping
+  tabs and newlines) are the glue's, each one more call. `src/suffix.ts`
+  is the one place a bundle asks: the module when the thread holds it,
+  tldts otherwise.
+
+  | `suffix.wasm`                                  | Measured                               |
+  | ---------------------------------------------- | -------------------------------------- |
+  | size                                           | 81,416 bytes, 38,783 brotli            |
+  | (tldts in the inject bundle)                   | (131,888 bytes)                        |
+  | compile, instantiate                           | 0.1 ms, 0.07 ms                        |
+  | instance memory                                | 196,608 bytes (three pages)            |
+  | lookups a second, a million distinct hosts     | 0.3 to 0.6 million (tldts: 1.5 to 2.1) |
+  | lookups a second, 2,000 hosts asked over again | 8 to 11 million (tldts: 1.6 to 2.1)    |
+
+  (On a machine under load, across runs.) A lookup that reaches the module
+  costs three to five of tldts's, nearly all of it the boundary (the string
+  encoded in, the call, the answer decoded), so the glue keeps the last
+  2,048 answers: a browsing session asks about the same few hosts with
+  every request. The estimate before it was built was 130 KB, 45 KB brotli.
+
+  Parity is a harness and a suite. `rust/host/suffix.mjs` compares the
+  module with tldts over every rule of the list (as the list spells it and
+  in punycode, the rule itself and one and two labels under it, each
+  wildcard and exception case, upper case, trailing dots, as a URL), every
+  host and URL in the test data, IDN, IP and malformed forms, and a seeded
+  fuzz: 5,517,300 comparisons at a million fuzz inputs, no differences. It
+  also compares the pinned list with the table of the tldts the lockfile
+  pins (10,857 rules either way), so a tldts update that knows a rule the
+  list does not fails until the pin is raised, and runs the list's own
+  `test_psl.txt`: the module and tldts agree on all 77 vectors, and both
+  differ from the file on the two hosts with a leading dot, where tldts
+  answers the domain. The `suffix` suite runs the harness with a smaller
+  fuzz and holds the artifact to a budget (90,000 bytes, 42,000 brotli).
+
+  Who asks it under `rewriter: 'wasm'`: the service worker (a request's
+  fetch-metadata site, a route's storage partition, the cookie jar, the
+  blocker's import), and a proxied top's rewriter library for the frames
+  under it, each handed the module as it is handed the rewriter. The
+  rewrite workers hold it and compute no site.
+
+- _The shell carries the site._ The service worker writes into each
+  document's shell what the list says of the document's host and of its
+  top's (`src/siteFacts.ts`): for the host and every name above it, the
+  registrable domain and the public suffix with and without the private
+  section, as spans of the host (about 70 bytes for a host of four labels).
+  Every name, and each asked on its own, because a name's suffix does not
+  follow from the suffix of the name below it (`city.kobe.jp` is
+  registrable under `kobe.jp`, whose own suffix is `jp`). The inject keeps
+  them by name (`src/inject/sites.ts`) and asks the list only about a name
+  no shell gave it; a shell the page realm writes (an srcdoc, a blob:
+  document) hands on what its bundle was told. What that answers without
+  a list, in every realm and before any module arrives:
+
+  | The inject asks                                         | About                                 | Answered by                                 |
+  | ------------------------------------------------------- | ------------------------------------- | ------------------------------------------- |
+  | a document's site key (the window membrane)             | its own host                          | the shell                                   |
+  | its storage partition                                   | its own host and its top's            | the shell (the nested route names the top)  |
+  | the key its cookie cache is versioned by                | its own host                          | the shell                                   |
+  | a cookie's `Domain` (is it a public suffix)             | the host or a name above it           | the shell                                   |
+  | a `document.domain` write (is it a public suffix)       | a name above the host                 | the shell                                   |
+  | `frameElement`, a window of another document            | the two documents                     | each document's own site key                |
+  | whether a navigation's target is of the document's site | the target's host, when it is another | the list, unless a shell named the host     |
+  | a cookie's `Domain` that is no name of the host         | that name                             | the list (the cookie is refused either way) |
+
+  The last two are what is left for the list in a page: the suffix module
+  in the top's library when it has arrived, the fallback otherwise. The
+  `site-facts` suite counts them: a page, a frame of its site on another
+  host, a frame of another site, an srcdoc frame and a frame two deep ask
+  the list nothing for the first six rows.
 
 What is left of the library in the bundle after the removal: the codecs and
 URL routing (the 18,632 bytes of crypto-js and STomp's own routing code),
@@ -581,8 +659,9 @@ Features: `default-features = false`, plus `full-regex-handling`,
 land in `hide_selectors`). Dropped: `resource-assembler` (it wants a
 filesystem), `content-blocking`, `debug-info`, and as built
 `embedded-domain-resolver` too: the module asks the worker for a registrable
-domain through its one import, answered by the tldts the worker already
-carries, so the public suffix list is not in the artifact twice.
+domain through its one import, answered by what the worker asks for its
+own sites (`src/suffix.ts`: the suffix module under `rewriter: 'wasm'`,
+tldts otherwise), so the public suffix list is not in the artifact twice.
 
 As built (phase 4): `docs/adblock.md` is the reference for what follows, and
 says where the result differs from this plan (the option is `adblock`, the
@@ -754,9 +833,12 @@ Its definition of done, in the order the work goes:
    status 7, "The ABI" above; what is still declined is listed above);
 2. a page's dedicated workers are handed the module with their transport
    port, and the page's instance gets a memory threshold of its own;
-3. the suffix module (`suffix.wasm`, its table built in `deploy/rust` from
+3. the suffix module (`suffix.wasm`, its table built by `rust/suffix` from
    the pinned list), with the parity suite against tldts, and the service
-   worker writing a document's own site and its top's into the shell;
+   worker writing a document's own site and its top's into the shell
+   (built: the service worker and a top's library ask the module, the
+   shell carries the site; tldts is still in both bundles and leaves with
+   step 4);
 4. the JavaScript library becomes the asset `rewriterLib.js` (and its
    worker flavour), loaded on first need as section 6 sets out, and
    meriyah, escodegen, css-tree and tldts leave `dist/injectDocument.js`:
@@ -892,8 +974,11 @@ not worth it for the printer alone: it only runs on error paths.
   modules the controller loaded once, a top's library holds the module and
   a frame under it makes no library of its own), `wasm-artifact` (no name
   or producers section, no project token in the bytes, every export
-  renamable, the flags and statuses of the ABI), and in phase 4 the three
-  blocker suites. The corpora are not a suite: they live in `/tmp` and
+  renamable, the flags and statuses of the ABI), `suffix` (the suffix
+  module's boundary, budget and glue, and its parity with tldts through
+  `rust/host/suffix.mjs`), `site-facts` (what a shell says of a host is the
+  list's answer for it and every name above it, and a document asks the
+  list nothing about itself), and in phase 4 the three blocker suites. The corpora are not a suite: they live in `/tmp` and
   take minutes, so `rust/host/parity.mjs` runs them by hand each phase.
 - **Differential harness.** `rust/host/parity.mjs` runs the artifact and
   `modifyJS` over the same scripts in Node, so a disagreement is found

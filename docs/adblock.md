@@ -232,8 +232,9 @@ an unlisted socket to a local server opens in 2.6 ms with the blocker on.
 (`deploy/rust/README.md`). The crate's features are `full-regex-handling`,
 `single-thread` and `css-validation` (without it a procedural rule would be
 handed over as a plain selector). The public suffix list is not compiled
-in: the module asks the worker (its one import), which already carries
-tldts for the cookie jar.
+in: the module asks the worker (its one import), which already answers
+sites for the cookie jar (`src/suffix.ts`: the suffix module under
+`rewriter: 'wasm'`, tldts otherwise).
 
 The `adblock` crate is used unmodified from crates.io, pinned to 0.13.5
 (`rust/Cargo.lock`); its source is https://github.com/brave/adblock-rust
