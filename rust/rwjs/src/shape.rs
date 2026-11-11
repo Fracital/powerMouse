@@ -103,6 +103,56 @@ fn index_text(text: &str) -> bool {
 		&& (text == "0" || !text.starts_with('0'))
 }
 
+/// `0`, `1e3`: a number that is an array index
+fn index_number(value: f64) -> bool {
+	value.is_finite() && value >= 0.0 && value.fract() == 0.0
+}
+
+/// a member whose key is a literal array index (`o[0]`, `o["1"]`)
+fn literal_index(m: Mem) -> bool {
+	match m {
+		Mem::Computed(m) => match unparen(&m.expression) {
+			Expression::StringLiteral(s) => s.value.as_str().is_some_and(index_text),
+			Expression::NumericLiteral(n) => index_number(n.value),
+			_ => false,
+		},
+		_ => false,
+	}
+}
+
+/// Whether an expression's value is never an object the page was handed
+/// (a primitive, or an object the expression itself makes), from its
+/// shape alone (`madeHere`)
+pub fn made_here(e: &Expression) -> bool {
+	match unparen(e) {
+		e if is_literal(e) => true,
+		Expression::TemplateLiteral(_)
+		| Expression::BinaryExpression(_)
+		| Expression::PrivateInExpression(_)
+		| Expression::UnaryExpression(_)
+		| Expression::UpdateExpression(_)
+		| Expression::ArrayExpression(_)
+		| Expression::ObjectExpression(_)
+		| Expression::FunctionExpression(_)
+		| Expression::ArrowFunctionExpression(_)
+		| Expression::ClassExpression(_) => true,
+		Expression::ConditionalExpression(c) => made_here(&c.consequent) && made_here(&c.alternate),
+		Expression::SequenceExpression(s) => s.expressions.last().is_some_and(made_here),
+		_ => false,
+	}
+}
+
+/// `select[0] = option`, `select.options[0] = option` (`indexWrite`): a
+/// plain write of a literal index whose value may be a node goes through
+/// the access API, as the indexed setter it reaches is no function a hook
+/// could wrap
+pub fn index_write(m: Mem, a: &AssignmentExpression) -> bool {
+	a.operator == AssignmentOperator::Assign
+		&& !m.on_super()
+		&& literal_index(m)
+		&& !made_here(&a.right)
+}
+
 /// Whether evaluating an expression can do nothing observable
 pub fn pure(e: &Expression) -> bool {
 	match unparen(e) {
@@ -315,9 +365,7 @@ impl Shapes<'_> {
 					.value
 					.as_str()
 					.is_some_and(|key| self.routed(key) || (!callee && index_text(key))),
-				Expression::NumericLiteral(n) => {
-					!callee && n.value.is_finite() && n.value >= 0.0 && n.value.fract() == 0.0
-				}
+				Expression::NumericLiteral(n) => !callee && index_number(n.value),
 				key => !is_literal(key),
 			},
 		}

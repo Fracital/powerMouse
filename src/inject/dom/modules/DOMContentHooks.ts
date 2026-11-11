@@ -902,11 +902,13 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// copy: a shadow root (a DocumentFragment) connected through its host
 		// runs a script appended to it like any connected parent
 		// (a Text's before, after and replaceWith put text into its style)
+		// (a doctype's before, after and replaceWith put nodes into its document)
 		for (const proto of [
 			this.client.global.Element.prototype,
 			this.client.global.DocumentFragment.prototype,
 			this.client.global.Document.prototype,
 			this.client.global.CharacterData.prototype,
+			this.client.global.DocumentType.prototype,
 		])
 			for (const method of [
 				'append',
@@ -1074,6 +1076,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				},
 			);
 
+		// The other ways one node of the page's reaches a tree: a range puts
+		// it at its start (insertNode) or around its contents
+		// (surroundContents), a document takes it for its body, a table for
+		// its caption, head or foot, a select (or its options collection) for
+		// an option. None of them goes through an insertion method the page
+		// could have called itself, so each is run through the hooks here: a
+		// script in the node ran as the page wrote it, and a node another
+		// parser made kept the handlers and URLs of its markup.
 		const global = this.client.global;
 		const wrapMethod = (
 			prototype: object | undefined,
@@ -1087,6 +1097,77 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				handler,
 			);
 		};
+		const wrapSetter = (
+			prototype: object | undefined,
+			name: string,
+			handler: (target: Function, that: any, args: any[]) => unknown,
+		) => {
+			const descriptor =
+				prototype && Reflect.getOwnPropertyDescriptor(prototype, name);
+			if (!descriptor?.set) return;
+			Reflect.defineProperty(prototype!, name, {
+				...descriptor,
+				set: proxyModule.wrapFunction(descriptor.set, handler),
+			});
+		};
+		const rangeStart = nativeGetter(global.Range.prototype, 'startContainer');
+		// where a range inserts: its start node, or the parent of the text,
+		// comment or processing instruction it starts in. Null when the
+		// receiver is no range (the call throws on its own)
+		const rangeParent = (range: unknown): Node | null => {
+			try {
+				const start = Reflect.apply(rangeStart, range, []) as Node;
+				const type = nodeTypeOf(start);
+				return type === 3 || type === 4 || type === 7 || type === 8
+					? parentOf(start)
+					: start;
+			} catch (error) {
+				return null;
+			}
+		};
+		wrapMethod(global.Range.prototype, 'insertNode', (target, that, args) => {
+			const parent = rangeParent(that);
+			return landing(
+				parent,
+				parent,
+				args,
+				Math.min(args.length, 1),
+				false,
+				() => Reflect.apply(target, that, args),
+			);
+		});
+		wrapMethod(
+			global.Range.prototype,
+			'surroundContents',
+			(target, that, args) => {
+				const parent = rangeParent(that);
+				// the new parent lands empty and takes the range's contents
+				// once it is in: a script runs them then
+				const wrapper = args[0];
+				const script =
+					parent !== null &&
+					Reflect.apply(nativeIsConnected, parent, []) &&
+					isScriptElement(wrapper) &&
+					runnable(wrapper, '') !== null
+						? wrapper
+						: null;
+				return landing(
+					parent,
+					parent,
+					args,
+					Math.min(args.length, 1),
+					false,
+					() => {
+						const release = script ? holdScript(script) : undefined;
+						try {
+							return Reflect.apply(target, that, args);
+						} finally {
+							release?.();
+						}
+					},
+				);
+			},
+		);
 		// a Text split in two puts the second half in as a new child: a script
 		// that holds text it has not run runs it then
 		wrapMethod(global.Text.prototype, 'splitText', (target, that, args) => {
@@ -1103,6 +1184,105 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				release?.();
 			}
 		});
+		const documentElementGet = nativeGetter(
+			global.Document.prototype,
+			'documentElement',
+		);
+		wrapSetter(global.Document.prototype, 'body', (target, that, args) => {
+			let root: Node | null = null;
+			try {
+				root = Reflect.apply(documentElementGet, that, []) as Node | null;
+			} catch (error) {
+				// not a document: the setter throws on its own
+			}
+			return landing(root, root, args, 1, false, () =>
+				Reflect.apply(target, that, args),
+			);
+		});
+		for (const section of ['caption', 'tHead', 'tFoot'])
+			wrapSetter(
+				global.HTMLTableElement?.prototype,
+				section,
+				(target, that, args) =>
+					landing(that, that, args, 1, false, () =>
+						Reflect.apply(target, that, args),
+					),
+			);
+		wrapMethod(
+			global.HTMLSelectElement?.prototype,
+			'add',
+			(target, that, args) =>
+				landing(that, that, args, Math.min(args.length, 1), false, () =>
+					Reflect.apply(target, that, args),
+				),
+		);
+		// an options collection does not say whose it is: the select that
+		// handed it out is remembered
+		const selects = new WeakMap<object, Node>();
+		{
+			const prototype = global.HTMLSelectElement?.prototype;
+			const descriptor =
+				prototype && Reflect.getOwnPropertyDescriptor(prototype, 'options');
+			if (descriptor?.get)
+				Reflect.defineProperty(prototype, 'options', {
+					...descriptor,
+					get: proxyModule.wrapFunction(
+						descriptor.get,
+						(target, that, args) => {
+							const options = Reflect.apply(target, that, args);
+							if (options && typeof options === 'object')
+								selects.set(options, that);
+							return options;
+						},
+					),
+				});
+		}
+		wrapMethod(
+			global.HTMLOptionsCollection?.prototype,
+			'add',
+			(target, that, args) => {
+				const select = selects.get(that) ?? null;
+				return landing(
+					select,
+					select,
+					args,
+					Math.min(args.length, 1),
+					false,
+					() => Reflect.apply(target, that, args),
+				);
+			},
+		);
+
+		// `select[0] = option` and `select.options[0] = option` insert through
+		// the indexed setter, which is no method: the access API brings the
+		// write here (set2), and the node lands as it does through `add`
+		{
+			const lengthGet = Reflect.getOwnPropertyDescriptor(
+				global.HTMLOptionsCollection?.prototype ?? {},
+				'length',
+			)?.get;
+			this.client.landIndexed = (target, value, assign) => {
+				if (nodeTypeOf(value) === null) return assign();
+				let select: Node | null;
+				if (nodeTypeOf(target) === 1) {
+					if (htmlName(target as Node) !== 'SELECT') return assign();
+					select = target as Node;
+				} else {
+					// the select that handed the collection out, when it was
+					// this realm's getter that did
+					select = selects.get(target) ?? null;
+					if (!select)
+						try {
+							if (!lengthGet) return assign();
+							Reflect.apply(lengthGet, target, []);
+						} catch (error) {
+							// no options collection
+							return assign();
+						}
+				}
+				return landing(select, select, [value], 1, false, assign);
+			};
+		}
 
 		// does not insert element
 		this.client.global.Node.prototype.removeChild = proxyModule.wrapFunction(

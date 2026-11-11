@@ -1217,6 +1217,96 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			releaseMarkup(div);
 			return html;
 		};
+		// execCommand edits the document from inside the browser: the markup
+		// of insertHTML is parsed and inserted with no hook in the way (an
+		// `<img onerror>` in it ran as the page wrote it, a srcdoc frame in it
+		// loaded with no inject), insertImage makes an image of a URL and
+		// createLink a link. The markup is rewritten first, as for
+		// setHTMLUnsafe; an image is inserted as its markup, which is what the
+		// command makes; a link's URL is routed, and the links the command
+		// made are then given the URL through the hook, which keeps what the
+		// page wrote for it to read back.
+		const nativeExecCommand = this.client.global.Document.prototype.execCommand;
+		if (typeof nativeExecCommand === 'function') {
+			const nativeGetSelection =
+				this.client.global.Document.prototype.getSelection;
+			const nativeQuerySelectorAll =
+				this.client.global.Document.prototype.querySelectorAll;
+			// the element the selection starts in: the context the browser
+			// parses inserted markup in
+			const editingContext = (document: Document): Element | null => {
+				try {
+					const selection = Reflect.apply(
+						nativeGetSelection,
+						document,
+						[],
+					) as Selection | null;
+					if (!selection || selection.rangeCount === 0) return null;
+					const start = selection.getRangeAt(0).startContainer;
+					return usePrototype(start, nativeNode, (node) =>
+						node.nodeType === 1 ? (node as Element) : node.parentElement,
+					);
+				} catch (error) {
+					return null;
+				}
+			};
+			const escapeAttribute = (value: string) =>
+				value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+			this.client.global.Document.prototype.execCommand =
+				proxyModule.wrapFunction(nativeExecCommand, (target, that, args) => {
+					const command = String(args[0]).toLowerCase();
+					if (args.length < 3 || args[2] === undefined || args[2] === null)
+						return Reflect.apply(target, that, args);
+					const value = String(args[2]);
+					let made: string | null = null;
+					if (command === 'inserthtml')
+						args[2] = rewriteMarkup(value, editingContext(that));
+					else if (command === 'insertimage' && value !== '') {
+						args[0] = 'insertHTML';
+						args[2] = rewriteMarkup(
+							`<img src="${escapeAttribute(value)}">`,
+							editingContext(that),
+						);
+					} else if (command === 'createlink' && value !== '') {
+						try {
+							made = routeHTML(
+								new StompURL(
+									new URL(value, this.client.baseURL.toString()),
+									this.client.baseURL,
+								),
+								this.client.baseURL,
+								this.client.config,
+								false,
+								this.client.nestedRoute,
+							);
+							args[2] = made;
+						} catch (error) {
+							// no URL: the link is made of it as it is
+						}
+					} else return Reflect.apply(target, that, args);
+					const result = Reflect.apply(target, that, args);
+					if (made !== null)
+						for (const link of [
+							...(Reflect.apply(nativeQuerySelectorAll, that, [
+								'a[href]',
+							]) as NodeListOf<Element>),
+						])
+							// the ones the command made: the routed URL, and no record
+							// of what the page wrote
+							if (
+								usePrototype(
+									link,
+									CustomElement.prototype,
+									(element) =>
+										element.getAttribute('href') === made &&
+										!element.hasAttributeOG('href'),
+								)
+							)
+								link.setAttribute('href', value);
+					this.client.sweepFrames?.();
+					return result;
+				});
+		}
 		// Range.createContextualFragment parses in the page's document, so an
 		// element in the fragment starts its load as it is parsed, inserted or
 		// not: the page's raw URLs went straight to the site, or unrouted to
@@ -1295,6 +1385,94 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						const result = Reflect.apply(target, that, args);
 						this.client.sweepFrames?.();
 						return result;
+					},
+				);
+		}
+		// setHTML is the setter that sanitizes: the browser parses the markup
+		// in the element's context and keeps what its sanitizer allows. On the
+		// page's own element that leaves nodes as the page wrote them (a link
+		// to the address in the markup, where the proxy's own origin answers),
+		// and rewriting the markup first would hand the sanitizer attributes
+		// it drops. So the browser sanitizes into a copy of the element in the
+		// inert document, where nothing loads, and what it leaves goes in
+		// through the insertion hook, like the nodes of any other parser.
+		const elementSetHTML = (
+			this.client.global.Element.prototype as { setHTML?: unknown }
+		).setHTML;
+		const shadowHost =
+			shadowRootPrototype &&
+			Reflect.getOwnPropertyDescriptor(shadowRootPrototype, 'host')?.get;
+		const contentOf = Reflect.getOwnPropertyDescriptor(
+			this.client.global.HTMLTemplateElement.prototype,
+			'content',
+		)!.get!;
+		const importNode = this.client.global.Document.prototype.importNode;
+		const hookedReplaceChildren = {
+			element: this.client.global.Element.prototype.replaceChildren,
+			fragment: this.client.global.DocumentFragment.prototype.replaceChildren,
+		};
+		const hookedTextContent = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Node.prototype,
+			'textContent',
+		)!;
+		for (const proto of [
+			this.client.global.Element.prototype,
+			shadowRootPrototype,
+		]) {
+			const native = (proto as { setHTML?: unknown } | undefined)?.setHTML;
+			if (typeof native !== 'function' || typeof elementSetHTML !== 'function')
+				continue;
+			const ofShadow = proto === shadowRootPrototype;
+			(proto as unknown as { setHTML: unknown }).setHTML =
+				proxyModule.wrapFunction(
+					native as (html: string, options?: unknown) => void,
+					(target, that, args) => {
+						// the element whose context the markup is parsed in: a shadow
+						// root's host, or the element itself
+						let context: Element | null = null;
+						try {
+							if (ofShadow)
+								context = Reflect.apply(shadowHost!, that, []) as Element;
+							else if (isScriptElement(that))
+								// the browser leaves a script as it is
+								context = null;
+							else if ((that as Node).nodeType === 1) context = that as Element;
+						} catch (error) {
+							// no shadow root: the native call throws what the browser does
+						}
+						if (!context || !args.length)
+							return Reflect.apply(target, that, args);
+						const shell = Reflect.apply(
+							importNode,
+							inertDocumentOf(this.client.global.document),
+							[context, false],
+						) as Element;
+						// (a sanitizer the browser refuses throws here, as natively)
+						Reflect.apply(elementSetHTML, shell, args);
+						const kind = ofShadow ? null : this.client.styleKind(that);
+						if (kind) {
+							// a style's markup is its text, which is routed as it goes in
+							const text = String(
+								Reflect.apply(hookedTextContent.get!, shell, []) ?? '',
+							);
+							if (kind === 'html') setStyleText(that as Element, text);
+							else Reflect.apply(hookedTextContent.set!, that, [text]);
+							return;
+						}
+						// a template's markup is its content's
+						const template = !ofShadow && isHTMLTemplate(that);
+						const left = template
+							? (Reflect.apply(contentOf, shell, []) as DocumentFragment)
+							: shell;
+						Reflect.apply(
+							ofShadow || template
+								? hookedReplaceChildren.fragment
+								: hookedReplaceChildren.element,
+							template ? Reflect.apply(contentOf, that, []) : that,
+							[...left.childNodes],
+						);
+						// a frame the sanitizer was told to keep is injected as it connects
+						this.client.sweepFrames?.();
 					},
 				);
 		}

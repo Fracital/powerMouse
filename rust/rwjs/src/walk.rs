@@ -25,8 +25,9 @@ use crate::pattern;
 use oxc::allocator::Allocator;
 use crate::rewrite::{Decline, Options, ROUTE_IMPORT, Route, js_whitespace};
 use crate::shape::{
-	Mem, Post, Shapes, bindings_named, bound_names, in_optional_chain, inner_span, is_literal,
-	is_pattern_call, iterates, post_message, pure, pure_arguments, spec_text, unparen, Spec,
+	Mem, Post, Shapes, bindings_named, bound_names, in_optional_chain, index_write, inner_span,
+	is_literal, is_pattern_call, iterates, post_message, pure, pure_arguments, spec_text, unparen,
+	Spec,
 };
 use crate::source::{Utf16Offsets, function_mark, quote, source_key};
 
@@ -1165,7 +1166,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 						return;
 					}
 				}
-				if !self.shapes.routes_member(m, true) {
+				if !self.shapes.routes_member(m, true) && !index_write(m, a) {
 					self.plain_member(m, Cx::default());
 					return self.under(true, |walker| walker.visit_expression(&a.right));
 				}

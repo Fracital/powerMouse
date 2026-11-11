@@ -310,6 +310,26 @@ export default class AccessModule extends Module<Client> {
 					}
 				}
 
+				// `select[0] = option`, `select.options[i] = option`: the node
+				// lands through the hooks, as `select.add(option)` does (the
+				// indexed setter is no function a hook could wrap). An array
+				// is asked nothing.
+				if (
+					typeof righthand === 'object' &&
+					righthand !== null &&
+					typeof target === 'object' &&
+					target !== null &&
+					this.client.landIndexed &&
+					(typeof key === 'number'
+						? Number.isInteger(key) && key >= 0
+						: typeof key === 'string' && /^(0|[1-9]\d*)$/.test(key)) &&
+					!Array.isArray(target) &&
+					'selectedIndex' in target
+				)
+					return this.client.landIndexed(target, righthand, () =>
+						operate(api.get(target, key), key, righthand),
+					);
+
 				return operate(api.get(target, key), key, righthand);
 			},
 			set1: (

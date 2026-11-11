@@ -200,6 +200,19 @@ export default class Client {
 	hookedPostMessage?: unknown;
 	/** @internal set by the Context module: post `args` to a STomp window from this realm, so this context is the incumbent (source and origin are its own) */
 	postToWindow?: (target: object, args: unknown[]) => unknown;
+	/**
+	 * @internal set by the DOM content hooks: `assign` writes the node
+	 * `value` into `target` by an index (`select[0] = option`,
+	 * `select.options[0] = option`), which the indexed setter of a select
+	 * or of its options turns into an insertion no hook sees; the node lands
+	 * through the insertion hooks first, as `select.add` does. Anything else
+	 * is `assign` alone.
+	 */
+	landIndexed?: (
+		target: object,
+		value: object,
+		assign: () => unknown,
+	) => unknown;
 	readonly #callIn: CallIn;
 	readonly #ownCallback: (callback: () => void) => () => void;
 	/**

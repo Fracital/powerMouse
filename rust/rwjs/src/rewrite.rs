@@ -88,7 +88,7 @@ pub struct Output {
 /// an older module's text and the glue never drives a module it was not
 /// written for (src/wasm/rewriter.ts holds the same number).
 /// rust/host/parity.mjs --cases holds it to the outputs (cases.revision).
-pub const REVISION: &str = "5";
+pub const REVISION: &str = "6";
 
 /// Why the rewriter hands a script back to the JavaScript one
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -499,6 +499,34 @@ pub(crate) mod tests {
 			plain("new top"),
 			"$s$j.fnew($s$j.get(top, \"top\"), [], \"new (top)()\")"
 		);
+	}
+
+	#[test]
+	fn index_writes() {
+		assert_eq!(
+			plain("s[0] = o"),
+			"$s$j.set2(s, 0, (t$t, t$p, t$v) => t$t[t$p] = t$v, o, \"(s[0] = o)\")"
+		);
+		assert_eq!(
+			plain("s.options['1'] = (o)"),
+			"$s$j.set2(s.options, '1', (t$t, t$p, t$v) => t$t[t$p] = t$v, (o), \"(s.options['1'] = (o))\")"
+		);
+		// a value made where it is written is no node
+		for kept in [
+			"m[0] = a * b",
+			"m[0] = (1)",
+			"m[0] = `t`",
+			"m[0] = [a]",
+			"m[0] = {}",
+			"m[0] = () => a",
+			"m[0] = a ? 1 : (2)",
+			"m[0] = (a, -b)",
+			"m[0] += o",
+			"m[0.5] = o",
+			"m['01'] = o",
+		] {
+			assert_eq!(plain(kept), kept);
+		}
 	}
 
 	#[test]

@@ -593,6 +593,11 @@
 			f.append(p);
 			s.append(f);
 		},
+		'Range.insertNode(textNode)': (s, p) => {
+			const range = document.createRange();
+			range.selectNodeContents(s);
+			range.insertNode(document.createTextNode(p));
+		},
 		'comment.replaceWith(string)': (s, p) => {
 			// a comment is no script text: the script has not run yet
 			const c = document.createComment('');
@@ -612,6 +617,124 @@
 		route('script connected ' + fill, (p) => connected(false, (s) => fn(s, p)));
 	}
 	route('script connected text', (p) => connected(false, (s) => (s.text = p)));
+	// setHTML is the markup setter that sanitizes: what it leaves is the
+	// page's (a link to the address in the markup), in an element, a shadow
+	// root and a template's content, with the browser's sanitizer or one
+	// the page configures, and it leaves a script as it was
+	P('setHTML leaves what the browser leaves', () => {
+		const div = document.createElement('div');
+		if (!div.setHTML) return 'no setHTML';
+		const markup =
+			'<a href="/y?a=1" onclick="window.__sanitized = 1">a</a>' +
+			'<b style="color: red">b</b><script>window.__sanitized = 2<\/script>';
+		const where = (a) =>
+			a.href === new URL('/y?a=1', location.href).href
+				? a.getAttribute('href')
+				: 'TELL:' + a.href;
+		document.body.append(div);
+		div.setHTML(markup);
+		const host = document.createElement('div');
+		document.body.append(host);
+		const root = host.attachShadow({ mode: 'open' });
+		root.setHTML(markup);
+		const template = document.createElement('template');
+		template.setHTML(markup);
+		const configured = document.createElement('div');
+		document.body.append(configured);
+		configured.setHTML('<a href="/y?a=1" title="t">a</a><i>i</i>', {
+			sanitizer: { elements: ['a'], attributes: ['href'] },
+		});
+		const script = document.createElement('script');
+		script.type = 'text/plain';
+		script.textContent = 'kept';
+		script.setHTML('<b>gone</b>');
+		let refused;
+		try {
+			div.cloneNode().setHTML('x', { sanitizer: 'no such sanitizer' });
+			refused = 'took a sanitizer of no name';
+		} catch (error) {
+			refused = error.name;
+		}
+		// a style's markup is its text, and the page's observer gets the one
+		// record of the children replaced
+		const style = document.createElement('style');
+		document.body.append(style);
+		style.setHTML('b { color: red } <i>x</i>');
+		const watched = document.createElement('div');
+		watched.append('1', '2');
+		const observer = new MutationObserver(() => {});
+		observer.observe(watched, { childList: true });
+		watched.setHTML('<i>1</i><i>2</i>');
+		const records = observer
+			.takeRecords()
+			.map((r) => r.removedNodes.length + '>' + r.addedNodes.length)
+			.join(',');
+		const saw = [
+			div.innerHTML,
+			where(div.querySelector('a')),
+			root.innerHTML,
+			where(root.querySelector('a')),
+			template.childNodes.length + ':' + template.innerHTML,
+			template.content.querySelector('a').getAttribute('href'),
+			configured.innerHTML,
+			where(configured.querySelector('a')),
+			script.textContent,
+			refused,
+			String(window.__sanitized),
+			style.childNodes.length + ':' + style.innerHTML,
+			records,
+		].join(' | ');
+		const kept = '<a href="/y?a=1">a</a>';
+		return saw ===
+			[
+				kept + '<b>b</b>',
+				'/y?a=1',
+				kept + '<b>b</b>',
+				'/y?a=1',
+				'0:' + kept + '<b>b</b>',
+				'/y?a=1',
+				kept,
+				'/y?a=1',
+				'kept',
+				'TypeError',
+				'undefined',
+				'1:b { color: red } <i>x</i>',
+				'2>2',
+			].join(' | ')
+			? 'as natively'
+			: 'TELL:' + saw;
+	});
+	// and a link it leaves goes where the page's own link would
+	for (const [how, address] of [
+		['a relative', 'adv-worker-dep.js?sanitized=relative'],
+		[
+			'an absolute',
+			new URL('adv-worker-dep.js?sanitized=absolute', location.href).href,
+		],
+	])
+		A('setHTML link with ' + how + ' address click', () => {
+			const f = document.createElement('iframe');
+			document.body.append(f);
+			const d = f.contentDocument;
+			if (!d.body.setHTML) return 'no setHTML';
+			d.body.setHTML('<a href="' + address + '">x</a>');
+			return new Promise((resolve) => {
+				f.addEventListener('load', () => {
+					let landed;
+					try {
+						landed = f.contentWindow.location.href;
+					} catch (error) {
+						landed = 'TELL:' + error.name;
+					}
+					resolve(
+						landed === new URL(address, location.href).href
+							? 'the page address'
+							: 'TELL:' + landed,
+					);
+				});
+				d.querySelector('a').click();
+			});
+		});
 	// What the text setters leave in an element: nothing for null and for
 	// the empty string, and innerText's line breaks as <br> elements
 	P('textContent and innerText leave what the browser leaves', () => {
@@ -782,6 +905,31 @@
 				s.moveBefore(t, null);
 			}),
 		);
+		route(kind + ' Range.surroundContents', (p) => {
+			const holder = document.createElement('div');
+			holder.hidden = true;
+			holder.append(p);
+			document.body.append(holder);
+			const s = ns
+				? document.createElementNS(SVG, 'script')
+				: document.createElement('script');
+			const range = document.createRange();
+			range.selectNodeContents(holder);
+			range.surroundContents(s);
+		});
+		route(kind + ' Range.insertNode(script)', (p) => {
+			const s = ns
+				? document.createElementNS(SVG, 'script')
+				: document.createElement('script');
+			s.textContent = p;
+			const range = document.createRange();
+			range.selectNodeContents(
+				ns
+					? document.body.appendChild(document.createElementNS(SVG, 'svg'))
+					: document.body,
+			);
+			range.insertNode(s);
+		});
 		route(kind + ' moveBefore(script) from a template', (p) => {
 			const s = ns
 				? document.createElementNS(SVG, 'script')
@@ -797,6 +945,149 @@
 			}
 		});
 	}
+	// nodes another parser made, put in by the insertion APIs that take one
+	// node at a place
+	const foreignImg = (p) =>
+		new DOMParser()
+			.parseFromString("<img src='x:' onerror='" + p + "'>", 'text/html')
+			.querySelector('img');
+	route('DOMParser img onerror Range.insertNode', (p) => {
+		const range = document.createRange();
+		range.selectNodeContents(document.body);
+		range.insertNode(foreignImg(p));
+	});
+	route('DOMParser img onerror insertAdjacentElement', (p) =>
+		document.body.insertAdjacentElement('beforeend', foreignImg(p)),
+	);
+	route('DOMParser img onerror replaceChild', (p) => {
+		const c = document.createComment('');
+		document.body.append(c);
+		document.body.replaceChild(foreignImg(p), c);
+	});
+	route('DOMParser img onerror Range.surroundContents', (p) => {
+		const holder = document.createElement('div');
+		const wrap = new DOMParser()
+			.parseFromString("<b><img src='x:' onerror='" + p + "'></b>", 'text/html')
+			.querySelector('b');
+		holder.append('x');
+		document.body.append(holder);
+		const range = document.createRange();
+		range.selectNodeContents(holder);
+		range.surroundContents(wrap);
+	});
+	// the setters and methods that put one node of the page's in place: a
+	// document's body, a table's sections, a select's options, a node beside
+	// the doctype. Each in a frame of its own where it replaces the document
+	const inFrame = (fn) => {
+		const f = document.createElement('iframe');
+		document.body.append(f);
+		fn(f.contentDocument, f.contentWindow);
+	};
+	childRoute('document.body = body with script', (p) =>
+		inFrame((d) => {
+			const b = d.createElement('body');
+			const s = d.createElement('script');
+			s.textContent = p;
+			b.append(s);
+			d.body = b;
+		}),
+	);
+	childRoute('doctype.after(root with script)', (p) =>
+		inFrame((d) => {
+			const doctype = d.implementation.createDocumentType('html', '', '');
+			d.documentElement.remove();
+			d.append(doctype);
+			const root = d.createElement('html');
+			const s = d.createElement('script');
+			s.textContent = p;
+			root.append(s);
+			doctype.after(root);
+		}),
+	);
+	childRoute('doctype.replaceWith(root with script)', (p) =>
+		inFrame((d) => {
+			const doctype = d.implementation.createDocumentType('html', '', '');
+			d.documentElement.remove();
+			d.append(doctype);
+			const root = d.createElement('html');
+			const s = d.createElement('script');
+			s.textContent = p;
+			root.append(s);
+			doctype.replaceWith(root);
+		}),
+	);
+	const foreign = (markup, selector) =>
+		new DOMParser()
+			.parseFromString(markup, 'text/html')
+			.querySelector(selector);
+	route('select.add(option onclick) click', (p) => {
+		const select = document.createElement('select');
+		document.body.append(select);
+		const option = foreign(
+			"<select><option onclick='" + p + "'>x</option></select>",
+			'option',
+		);
+		select.add(option);
+		option.click();
+	});
+	route('select.options.add(option onclick) click', (p) => {
+		const select = document.createElement('select');
+		document.body.append(select);
+		const option = foreign(
+			"<select><option onclick='" + p + "'>x</option></select>",
+			'option',
+		);
+		select.options.add(option);
+		option.click();
+	});
+	route('select.options[0] = option onclick click', (p) => {
+		const select = document.createElement('select');
+		document.body.append(select);
+		const option = foreign(
+			"<select><option onclick='" + p + "'>x</option></select>",
+			'option',
+		);
+		select.options[0] = option;
+		option.click();
+	});
+	route('select[0] = option onclick click', (p) => {
+		const select = document.createElement('select');
+		document.body.append(select);
+		const option = foreign(
+			"<select><option onclick='" + p + "'>x</option></select>",
+			'option',
+		);
+		select[0] = option;
+		option.click();
+	});
+	route('table.tHead = thead with img onerror', (p) => {
+		const table = document.createElement('table');
+		document.body.append(table);
+		table.tHead = foreign(
+			"<table><thead><tr><td><img src='x:' onerror='" +
+				p +
+				"'></td></tr></thead></table>",
+			'thead',
+		);
+	});
+	route('table.caption = caption with img onerror', (p) => {
+		const table = document.createElement('table');
+		document.body.append(table);
+		table.caption = foreign(
+			"<table><caption><img src='x:' onerror='" + p + "'></caption></table>",
+			'caption',
+		);
+	});
+	route('table.tFoot = tfoot with img onerror', (p) => {
+		const table = document.createElement('table');
+		document.body.append(table);
+		table.tFoot = foreign(
+			"<table><tfoot><tr><td><img src='x:' onerror='" +
+				p +
+				"'></td></tr></tfoot></table>",
+			'tfoot',
+		);
+	});
 	route('svg script appended to a connected svg', (p) =>
 		svgIn((svg) => {
 			const s = document.createElementNS(SVG, 'script');
@@ -811,9 +1102,82 @@
 			svg.insertAdjacentElement('beforeend', s);
 		}),
 	);
+	// editing commands write markup into an editable element
+	const editable = (fn) => {
+		const d = document.createElement('div');
+		d.contentEditable = 'true';
+		d.textContent = 'x';
+		document.body.append(d);
+		d.focus();
+		getSelection().selectAllChildren(d);
+		fn(d);
+	};
+	route('execCommand insertHTML img onerror', (p) =>
+		editable(() =>
+			document.execCommand(
+				'insertHTML',
+				false,
+				"<img src='x:' onerror='" + p + "'>",
+			),
+		),
+	);
+	route('execCommand insertHTML script', (p) =>
+		editable(() =>
+			document.execCommand('insertHTML', false, '<script>' + p + '<\/script>'),
+		),
+	);
+	route('execCommand insertHTML a href=javascript: click', (p) =>
+		editable((d) => {
+			document.execCommand(
+				'insertHTML',
+				false,
+				"<a href='javascript:" + p + "'>x</a>",
+			);
+			const a = d.querySelector('a');
+			if (a) a.click();
+		}),
+	);
+	route('execCommand insertHTML iframe srcdoc', (p) =>
+		editable(() =>
+			document.execCommand(
+				'insertHTML',
+				false,
+				'<iframe srcdoc="<script>' +
+					__advChildPayload('execCommand insertHTML iframe srcdoc').replace(
+						/"/g,
+						'&quot;',
+					) +
+					'<\/script>"></iframe>',
+			),
+		),
+	);
+	route('execCommand createLink javascript: click', (p) =>
+		editable((d) => {
+			document.execCommand('createLink', false, 'javascript:' + p);
+			const a = d.querySelector('a');
+			if (a) a.click();
+		}),
+	);
+	route('execCommand insertText into an editable script', (p) => {
+		const s = document.createElement('script');
+		s.style.display = 'block';
+		s.contentEditable = 'true';
+		document.body.append(s);
+		s.focus();
+		getSelection().selectAllChildren(s);
+		document.execCommand('insertText', false, p);
+	});
 	route('script connected innerText', (p) =>
 		connected(false, (s) => (s.innerText = p)),
 	);
+	route('math annotation-xml script', (p) => {
+		const d = document.createElement('div');
+		d.innerHTML =
+			'<math><annotation-xml encoding="text/html"><img src="x:" onerror=\'' +
+			p +
+			"'></annotation-xml></math>";
+		document.body.append(d);
+	});
 	// srcdoc frames through every attribute API
 	const frame = (fn) => {
 		const f = document.createElement('iframe');

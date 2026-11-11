@@ -228,6 +228,56 @@ function indexRead(ctx: AcornContext): boolean {
 }
 
 /**
+ * Whether an expression's value is never an object the page was handed (a
+ * primitive, or an object the expression itself makes), from its shape alone
+ */
+function madeHere(node: any): boolean {
+	switch (node?.type) {
+		case 'Literal':
+		case 'TemplateLiteral':
+		case 'BinaryExpression':
+		case 'UnaryExpression':
+		case 'UpdateExpression':
+		case 'ArrayExpression':
+		case 'ObjectExpression':
+		case 'FunctionExpression':
+		case 'ArrowFunctionExpression':
+		case 'ClassExpression':
+			return true;
+		case 'ConditionalExpression':
+			return madeHere(node.consequent) && madeHere(node.alternate);
+		case 'SequenceExpression':
+			return madeHere(node.expressions[node.expressions.length - 1]);
+	}
+	return false;
+}
+
+/**
+ * `select[0] = option`, `select.options[0] = option`: an index write puts a
+ * node into a select through the indexed setter of the element or of its
+ * options, which is no function a hook could wrap, so the write goes
+ * through the access API like a computed one (set2 lands the node as
+ * `select.add` does). Only `=`, and only a value that may be a node: `m[0]
+ * = a * b` stays as it is.
+ */
+function indexWrite(ctx: AcornContext): boolean {
+	const key = ctx.node.property.value;
+	if (
+		typeof key === 'number'
+			? !Number.isInteger(key) || key < 0
+			: typeof key !== 'string' || !/^(0|[1-9]\d*)$/.test(key)
+	)
+		return false;
+	const parent = ctx.parent?.node;
+	return (
+		parent?.type === 'AssignmentExpression' &&
+		ctx.parentKey === 'left' &&
+		parent.operator === '=' &&
+		!madeHere(parent.right)
+	);
+}
+
+/**
  * Whether the rewriter routes a member read through the access API: a
  * computed key that is no literal, an unforgeable's name, an index (read
  * anywhere but as a callee: `callee`)
@@ -1628,7 +1678,8 @@ export function modifyJS(
 							if (ctx.node.property.type === 'Literal') {
 								if (
 									!routed.includes(ctx.node.property.value) &&
-									!indexRead(ctx)
+									!indexRead(ctx) &&
+									!indexWrite(ctx)
 								) {
 									break typeLoop;
 								}

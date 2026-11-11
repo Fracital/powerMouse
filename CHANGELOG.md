@@ -4965,6 +4965,19 @@ token '%'`. The body is decoded before rewriting and re-encoded after.
   "already started", and the text a connected script will run is
   rewritten where it stands, read back as the page wrote it, with no
   record of the hooks' own for an observer. (adversarial-scripts suite.)
+- A node that reaches a document by a way other than the insertion methods
+  goes through the hooks: `Range.insertNode` and `surroundContents`, the
+  `document.body`, `table.caption`, `tHead` and `tFoot` setters,
+  `select.add`, `options.add` and an indexed write (`select[0] = option`,
+  `select.options[0] = option`, which the rewriter routes), a doctype's
+  `before`, `after` and `replaceWith`, and `execCommand` (`insertHTML`,
+  `insertImage`, `createLink`). A script in such a node ran as the page
+  wrote it, and a node another parser made kept the handlers and URLs of
+  its markup. `setHTML`, the markup setter that sanitizes, was the
+  browser's own call on an element and on a shadow root, so a link it kept
+  pointed where the markup said on the proxy's origin: the browser now
+  sanitizes into a copy of the element in the inert document and what it
+  keeps goes in through the hooks. (adversarial-scripts suite.)
 
 ### Origin isolation
 
