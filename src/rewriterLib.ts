@@ -14,7 +14,7 @@
 // the route scopes) comes with the call; nothing of one caller is kept for
 // the next but the parsed form of the last context, which is the next one's
 // only when the next one sends the same text.
-import { parse } from 'meriyah';
+import { parse } from '../vendor/meriyah/meriyah.mjs';
 import { printExpression } from './callPrinter';
 import { reportKeptSources } from './functionSource';
 import { messages } from './libGlobals';

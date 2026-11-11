@@ -6,7 +6,7 @@
 // expression the same way, so this prints a page's expression the way
 // CallPrinter would: from the source the rewriter hands the helper, parsed
 // again only when something throws.
-import { parse } from 'meriyah';
+import { parse } from '../vendor/meriyah/meriyah.mjs';
 
 const INTERMEDIATE = '(intermediate value)';
 

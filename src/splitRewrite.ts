@@ -12,7 +12,7 @@
 // A Closure module bundle (YouTube, Google Docs) is cut into runs of its
 // function's statements instead (planStatements). Only shapes recognised
 // here are split; anything else is rewritten whole.
-import { parse } from 'meriyah';
+import { parse } from '../vendor/meriyah/meriyah.mjs';
 import { sourceKey } from './functionSource';
 import { PROVIDERS, UNDEFINABLE, type ScriptSource } from './rewriteJS';
 

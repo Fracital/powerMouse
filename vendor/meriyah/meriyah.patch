@@ -1,0 +1,438 @@
+meriyah 7.4.1, dist/meriyah.mjs (sha256 ae9b3f2529b31705ce00397c4282df9e
+6e84695d3a9e1e1c3b624515fe9cc4ce), patched for STomp: vendor/meriyah/
+meriyah.mjs is that file with this diff applied and a header comment. The
+JavaScript rewriter (src/rewriteJS.ts) parses with it. Each change lets the
+parser take what V8 takes and it refused, where the rewriter then had to
+refuse the page's script for STomp (UNREWRITTEN_END) and the page broke:
+
+ 1. `eval` and `arguments` written with an escape are names like any
+    other: V8 13.7 and before take them where strict code refuses the plain
+    ones, in a function they compile lazily.
+ 2. A generator's body is no strict code: `static`, `implements` and the
+    rest of strict code's reserved words are names there, `yield` is not.
+ 3. A call is an assignment target in strict code too (`a() = 1`,
+    `super()++`, `for (a() of b)`), as it is in sloppy code under webcompat:
+    V8 compiles it to a ReferenceError when it runs.
+ 4. A string followed on the next line by what carries on its expression
+    (`.length`, `[0]`, `(a)`, a template, an operator) is no directive, and
+    the prologue ends at the first statement that is none.
+ 5. The token after a strict function's or a class's closing brace is read
+    as the code around it reads it (`function f() { 'use strict' } 01`).
+ 6. `__proto__` twice in a loop head's pattern.
+ 7. A template right after a template is tagged by it (x`\xg``\1`).
+ 8. `in` inside `import()` in a loop's head.
+ 9. `#a in o` as an array's element.
+10. An optional chain to a private name as a target (`this?.#a = 1`), which
+    V8 takes in a function it compiles lazily; the rewrite keeps it, for V8
+    to refuse where it refuses it.
+11. `using static = a` and the like in sloppy code.
+12. A field's initializer and a function expression's name are read in
+    their own context: an escaped `await` or `yield` there is a name.
+
+On every script of the corpus, the suites' pages and node_modules (2,493
+files, each as a script and as a module) the trees are the unpatched
+parser's. To carry this to another meriyah: `patch -p1 < meriyah.patch` in
+its package directory, then `node rust/host/early.mjs` (the JavaScript
+columns: nothing refused for STomp).
+
+--- a/dist/meriyah.mjs
++++ b/dist/meriyah.mjs
+@@ -957,6 +957,12 @@
+             return 208897 | (hasEscape ? -2147483648 : 0);
+         if (!hasEscape)
+             return token;
++        // STomp: `eval` and `arguments` written with an escape are names like
++        // any other: V8 13.7 and before take them where strict code refuses
++        // the plain ones (in a function compiled lazily), and V8 decides
++        // what it refuses of a rewrite that keeps the escape
++        if (token === 537079927 || token === 537079928)
++            return 208897 | -2147483648;
+         if (token === 209006) {
+             if ((context & (2 | 2048)) === 0) {
+                 return token | -2147483648;
+@@ -2141,12 +2147,31 @@
+ }
+ function isValidStrictMode(parser, index, tokenIndex, tokenValue) {
+     if (index - tokenIndex < 13 && tokenValue === 'use strict') {
+-        if ((parser.getToken() & 1048576) === 1048576 || parser.flags & 1) {
++        if ((parser.getToken() & 1048576) === 1048576 ||
++            (parser.flags & 1 && !continuesExpression(parser))) {
+             return 1;
+         }
+     }
+     return 0;
+ }
++// STomp: whether the token after a line break carries on the expression
++// before it (`'use strict'` then `.length`, `[0]`, `(a)`, a template, an
++// operator), which then is no directive: no semicolon is inserted there
++function continuesExpression(parser) {
++    const at = parser.tokenStart.index;
++    const char = parser.source.charCodeAt(at);
++    const next = parser.source.charCodeAt(at + 1);
++    switch (char) {
++        case 46: case 91: case 40: case 96: case 63: case 44: case 61:
++        case 42: case 47: case 37: case 38: case 124: case 94: case 60: case 62:
++            return true;
++        case 43: case 45:
++            return next !== char;
++        case 33:
++            return next === 61;
++    }
++    return /^in(?:stanceof)?(?![\w$\\])/.test(parser.source.slice(at, at + 11));
++}
+ function optionalBit(parser, context, t) {
+     if (parser.getToken() !== t)
+         return 0;
+@@ -2298,13 +2323,18 @@
+     }
+ }
+ function isValidIdentifier(context, t) {
+-    if (context & (1 | 1024)) {
++    // STomp: a generator's body is not strict code: `yield` is no name
++    // there, and `implements`, `static` and the rest of strict code's
++    // reserved words are
++    if (context & 1) {
+         if (context & 2 && t === 209006)
+             return false;
+         if (context & 1024 && t === 241771)
+             return false;
+         return (t & 12288) === 12288;
+     }
++    if (context & 1024 && t === 241771)
++        return false;
+     return (t & 12288) === 12288 || (t & 36864) === 36864;
+ }
+ function classifyIdentifier(parser, context, t) {
+@@ -3123,7 +3153,12 @@
+                 throw new ParseError(parser.tokenStart, parser.currentLocation, 15);
+             }
+         }
+-        statements.push(parseDirective(parser, context, expr, token, tokenStart));
++        const statement = parseDirective(parser, context, expr, token, tokenStart);
++        statements.push(statement);
++        // STomp: the prologue ends at the first statement that is not a
++        // directive (`'\01' + 1; 'use strict'` is sloppy code)
++        if (statement.directive === undefined)
++            break;
+     }
+     while (parser.getToken() !== 1048576) {
+         statements.push(parseStatementListItem(parser, context, scope, undefined, {}, 4));
+@@ -3717,14 +3752,22 @@
+     const following = source.codePointAt(index + 5);
+     return following === undefined || (following !== 0x5c && !isIdentifierPart(following));
+ }
+-function isResourceBindingStart(token) {
++function isResourceBindingStart(token, context = 0) {
++    // STomp: sloppy code may name a binding `static`, `implements` and the
++    // rest of strict code's reserved words (`using static = a`), not `let`
++    // or `yield`
++    if ((context & 1) === 0 &&
++        (token & 36864) === 36864 &&
++        token !== 241737 &&
++        token !== 241771)
++        return true;
+     return (token & 143360) === 143360 && (token & 20480) !== 20480;
+ }
+ function parseUsingDeclarationOrExpressionStatement(parser, context, scope, privateScope, labels, origin) {
+     const { tokenStart, tokenValue, currentLocation } = parser;
+     const token = parser.getToken();
+     const expression = parseIdentifier(parser, context);
+-    if ((parser.flags & 1) === 0 && isResourceBindingStart(parser.getToken())) {
++    if ((parser.flags & 1) === 0 && isResourceBindingStart(parser.getToken(), context)) {
+         if (origin & 4 &&
+             context & 8 &&
+             (context & 2) === 0 &&
+@@ -3753,7 +3796,7 @@
+     if ((parser.flags & 1) === 0 && parser.getToken() === 209013) {
+         const usingStart = parser.tokenStart;
+         const usingIdentifier = parseIdentifier(parser, context);
+-        if ((parser.flags & 1) === 0 && isResourceBindingStart(parser.getToken())) {
++        if ((parser.flags & 1) === 0 && isResourceBindingStart(parser.getToken(), context)) {
+             return parseLexicalDeclaration(parser, context, scope, privateScope, 16, origin, 'await using', start, 1);
+         }
+         argument = parseMemberOrUpdateExpression(parser, context, privateScope, usingIdentifier, 0, 0, usingStart);
+@@ -3856,6 +3899,7 @@
+     let test = null;
+     let update = null;
+     let destructible = 0;
++    let protoTwice = 0;
+     let init = null;
+     let isVarDecl = parser.getToken() === 86088 ||
+         parser.getToken() === 241737 ||
+@@ -3891,7 +3935,7 @@
+         }
+         else if (token === 209013) {
+             const usingIdentifier = parseIdentifier(parser, context);
+-            if ((parser.flags & 1) !== 0 || !isResourceBindingStart(parser.getToken())) {
++            if ((parser.flags & 1) !== 0 || !isResourceBindingStart(parser.getToken(), context)) {
+                 isVarDecl = false;
+                 parser.assignable = 1;
+                 init = parseMemberOrUpdateExpression(parser, context, privateScope, usingIdentifier, 0, 0, tokenStart);
+@@ -3990,7 +4034,7 @@
+         if ((parser.flags & 1) === 0 && parser.getToken() === 209013) {
+             const usingStart = parser.tokenStart;
+             const usingIdentifier = parseIdentifier(parser, context);
+-            if ((parser.flags & 1) === 0 && isResourceBindingStart(parser.getToken())) {
++            if ((parser.flags & 1) === 0 && isResourceBindingStart(parser.getToken(), context)) {
+                 resourceDeclarationKind = 'await using';
+                 isVarDecl = true;
+                 init = parser.finishNode({
+@@ -4033,12 +4077,14 @@
+                 ? parseObjectLiteralOrPattern(parser, context, void 0, privateScope, 1, 0, 0, 2, 32)
+                 : parseArrayExpressionOrPattern(parser, context, void 0, privateScope, 1, 0, 0, 2, 32);
+         destructible = parser.destructible;
+-        if (destructible & 64) {
+-            parser.report(63);
+-        }
+         parser.assignable =
+             destructible & 16 ? 2 : 1;
+         init = parseMemberOrUpdateExpression(parser, context | 131072, privateScope, init, 0, 0, patternStart);
++        // STomp: `__proto__` twice is a pattern's to have, in a loop's
++        // head as anywhere (`for ({ __proto__: a, __proto__: b } of c);`)
++        protoTwice = destructible & 64;
++        if (protoTwice && init.type !== 'ObjectExpression')
++            parser.report(63);
+     }
+     else {
+         init = parseLeftHandSideExpression(parser, context | 131072, privateScope, 1, 0, 1);
+@@ -4081,6 +4127,8 @@
+     }
+     if (forAwait)
+         parser.report(82);
++    if (protoTwice && parser.getToken() !== 1077936155)
++        parser.report(63);
+     if (!isVarDecl) {
+         if (destructible & 8 && parser.getToken() !== 1077936155) {
+             parser.report(80, 'loop');
+@@ -4784,6 +4832,9 @@
+ }
+ function parseFunctionBody(parser, context, scope, privateScope, funcNameToken, functionScope, origin = 0) {
+     const { tokenStart } = parser;
++    // STomp: the token after the body is read as the code around it is
++    // (`function f() { 'use strict' } 01` is sloppy code)
++    const outerStrict = context & 1;
+     parser.flags &= -4161;
+     consume(parser, context | 32, 2162700);
+     const body = [];
+@@ -4805,7 +4856,12 @@
+                 }
+                 functionScope?.reportScopeError();
+             }
+-            body.push(parseDirective(parser, context, expr, token, tokenStart));
++            const statement = parseDirective(parser, context, expr, token, tokenStart);
++            body.push(statement);
++            // STomp: as in a script, the prologue ends at a statement that
++            // is not a directive
++            if (statement.directive === undefined)
++                break;
+         }
+         if (context & 1) {
+             if (funcNameToken) {
+@@ -4833,7 +4889,8 @@
+     while (parser.getToken() !== 1074790415) {
+         body.push(parseStatementListItem(parser, context, scope, privateScope, {}, 4));
+     }
+-    consume(parser, origin & (16 | 8) ? context | 32 : context, 1074790415);
++    const closing = (context & -2) | outerStrict;
++    consume(parser, origin & (16 | 8) ? closing | 32 : closing, 1074790415);
+     parser.flags &= -4289;
+     if (parser.getToken() === 1077936155)
+         parser.report(26);
+@@ -4905,6 +4962,9 @@
+                         ? 2
+                         : 1;
+                 const property = parsePropertyOrPrivatePropertyName(parser, context | 64, privateScope, 1);
++                // STomp: as `?.#a` above (`a?.b.#a = 1`)
++                if (property.type === 'PrivateIdentifier')
++                    parser.assignable = 1;
+                 expr = parser.finishNode({
+                     type: 'MemberExpression',
+                     object: expr,
+@@ -4952,7 +5012,7 @@
+                     parser.flags = (parser.flags | 2048) ^ 2048;
+                 }
+                 const args = parseArguments(parser, context, privateScope, inGroup);
+-                if (!(context & 1) && parser.options.webcompat) {
++                if (parser.options.webcompat) { // STomp: V8 takes a call assigned to in strict code too (a ReferenceError when it runs)
+                     parser.assignable = 4;
+                 }
+                 else {
+@@ -5040,7 +5100,10 @@
+     }
+     else {
+         const property = parsePropertyOrPrivatePropertyName(parser, context, privateScope, 1);
+-        parser.assignable = 2;
++        // STomp: V8 takes an optional chain to a private name as a target
++        // in a function it compiles lazily (`this?.#a = 1`); what V8 refuses
++        // of it the rewrite keeps, for V8 to refuse
++        parser.assignable = property.type === 'PrivateIdentifier' ? 1 : 2;
+         node = parser.finishNode({
+             type: 'MemberExpression',
+             object: expr,
+@@ -5238,7 +5301,9 @@
+     consume(parser, context | 32, 67174411);
+     if (parser.getToken() === 14)
+         parser.report(145);
+-    const source = parseExpression(parser, context, privateScope, 1, inGroup, parser.tokenStart);
++    // STomp: `in` is an operator in the parentheses, in a loop's head too
++    // (`for (import(a in b);;);`), as in the options below
++    const source = parseExpression(parser, (context | 131072) ^ 131072, privateScope, 1, inGroup, parser.tokenStart);
+     let options = null;
+     if (parser.getToken() === 18) {
+         consume(parser, context, 18);
+@@ -5336,7 +5401,8 @@
+ function parseTemplateLiteral(parser, context) {
+     parser.assignable = 2;
+     const { tokenValue, tokenRaw, tokenStart } = parser;
+-    consume(parser, context, 67174409);
++    // STomp: a template right after a template is tagged by it (``x`a``\1` ``)
++    consume(parser, context | 64, 67174409);
+     const quasis = [parseTemplateElement(parser, tokenValue, tokenRaw, tokenStart, true)];
+     return parser.finishNode({
+         type: 'TemplateLiteral',
+@@ -5364,7 +5430,8 @@
+     }
+     {
+         const { tokenValue, tokenRaw, tokenStart } = parser;
+-        consume(parser, context, 67174409);
++        // STomp: as after a template literal
++        consume(parser, context | 64, 67174409);
+         quasis.push(parseTemplateElement(parser, tokenValue, tokenRaw, tokenStart, true));
+     }
+     parser.assignable = 2;
+@@ -5542,8 +5609,11 @@
+     }, start);
+ }
+ function parseFunctionExpression(parser, context, privateScope, isAsync, inGroup, start) {
+-    nextToken(parser, context | 32);
+-    const isGenerator = optionalBit(parser, context, 8391476);
++    // STomp: the name is read as the function's own code reads it, not the
++    // code around it's (`(function aw\u0061it() {})` in an async function)
++    const nameContext = ((context | 1024 | 2048) ^ (1024 | 2048)) | (isAsync ? 2048 : 0);
++    nextToken(parser, nameContext | 32);
++    const isGenerator = optionalBit(parser, nameContext | 1024, 8391476);
+     const generatorAndAsyncFlags = (isAsync ? 2048 : 0) | (isGenerator ? 1024 : 0);
+     let id = null;
+     let funcNameToken;
+@@ -5700,11 +5770,15 @@
+                     parser.report(30, KeywordDescTable[parser.getToken() & 255]);
+             }
+             else {
+-                left = parseLeftHandSideExpression(parser, context, privateScope, 1, 0, 1);
++                // STomp: an element may be `#a in o`, as any expression may
++                left = parseLeftHandSideExpression(parser, context, privateScope, 1, 0, 1, 1);
+                 if (parser.getToken() !== 18 && parser.getToken() !== 20) {
+                     left = parseAssignmentExpression(parser, context, privateScope, inGroup, isPattern, tokenStart, left);
+                     if ((kind & (2 | 1)) === 0 && token === 67174411)
+                         destructible |= 16;
++                    // (`#a in o` is no target)
++                    if (token === 131)
++                        destructible |= 16;
+                 }
+                 else if (parser.assignable & 2) {
+                     destructible |= 16;
+@@ -7013,7 +7087,7 @@
+                 parser.report(48);
+             return parseParenthesizedArrow(parser, context, scope, privateScope, [], canAssign, 1, start);
+         }
+-        if (!(context & 1) && parser.options.webcompat) {
++        if (parser.options.webcompat) { // STomp: V8 takes a call assigned to in strict code too (a ReferenceError when it runs)
+             parser.assignable = 4;
+         }
+         else {
+@@ -7103,7 +7177,7 @@
+             destructible |= parser.assignable;
+             consume(parser, context, 16);
+             parser.destructible = destructible | 16;
+-            if (!(context & 1) && parser.options.webcompat) {
++            if (parser.options.webcompat) { // STomp: V8 takes a call assigned to in strict code too (a ReferenceError when it runs)
+                 parser.assignable = 4;
+             }
+             else {
+@@ -7155,7 +7229,7 @@
+     if (destructible & 8) {
+         parser.report(62);
+     }
+-    if (!(context & 1) && parser.options.webcompat) {
++    if (parser.options.webcompat) { // STomp: V8 takes a call assigned to in strict code too (a ReferenceError when it runs)
+         parser.assignable = 4;
+     }
+     else {
+@@ -7198,6 +7272,7 @@
+         start = parser.tokenStart;
+         decorators = parseDecorators(parser, context, privateScope);
+     }
++    const outerStrict = context & 1;
+     context = (context | 16384 | 1) ^ 16384;
+     consume(parser, context, 86094);
+     let id = null;
+@@ -7232,7 +7307,7 @@
+     else {
+         inheritedContext = (inheritedContext | 512) ^ 512;
+     }
+-    const body = parseClassBody(parser, inheritedContext, context, scope, privateScope, 2, 0, 8);
++    const body = parseClassBody(parser, inheritedContext, context, scope, privateScope, 2, 0, 8, outerStrict);
+     return parser.finishNode({
+         type: 'ClassDeclaration',
+         id,
+@@ -7245,6 +7320,7 @@
+     let id = null;
+     let superClass = null;
+     const decorators = parseDecorators(parser, context, privateScope);
++    const outerStrict = context & 1;
+     context = (context | 1 | 16384) ^ 16384;
+     consume(parser, context, 86094);
+     if (parser.getToken() & 4096 && parser.getToken() !== 20565) {
+@@ -7263,7 +7339,7 @@
+     else {
+         inheritedContext = (inheritedContext | 512) ^ 512;
+     }
+-    const body = parseClassBody(parser, inheritedContext, context, void 0, privateScope, 2, inGroup);
++    const body = parseClassBody(parser, inheritedContext, context, void 0, privateScope, 2, inGroup, 0, outerStrict);
+     parser.assignable = 2;
+     return parser.finishNode({
+         type: 'ClassExpression',
+@@ -7330,7 +7406,7 @@
+         expression,
+     }, start);
+ }
+-function parseClassBody(parser, context, inheritedContext, scope, parentScope, kind, inGroup, origin = 0) {
++function parseClassBody(parser, context, inheritedContext, scope, parentScope, kind, inGroup, origin = 0, outerStrict = context & 1) {
+     const { tokenStart } = parser;
+     const privateScope = parser.createPrivateScopeIfLexical(parentScope);
+     consume(parser, context | 32, 2162700);
+@@ -7354,7 +7430,9 @@
+         }
+         body.push(parseClassElementList(parser, context, scope, privateScope, inheritedContext, kind, decorators, 0, inGroup, decorators.length > 0 ? decoratorStart : parser.tokenStart));
+     }
+-    consume(parser, origin & 8 ? context | 32 : context, 1074790415);
++    // STomp: the token after a class is the code around it's
++    const closing = (context & -2) | outerStrict;
++    consume(parser, origin & 8 ? closing | 32 : closing, 1074790415);
+     privateScope?.validatePrivateIdentifierRefs();
+     parser.flags = (parser.flags & -33) | hasConstr;
+     return parser.finishNode({
+@@ -7538,10 +7616,6 @@
+     if (state & 8)
+         parser.report(0);
+     if (parser.getToken() === 1077936155) {
+-        nextToken(parser, context | 32);
+-        const { tokenStart } = parser;
+-        if (parser.getToken() === 537079928)
+-            parser.report(121);
+         const modifierFlags = 1024 |
+             2048 |
+             8 |
+@@ -7554,6 +7628,12 @@
+                 (state & 64 ? 16384 : 0) |
+                 256 |
+                 65536;
++        // STomp: the initializer's first token is read as the initializer's
++        // code (`a = aw\u0061it` in a class in an async function)
++        nextToken(parser, context | 32);
++        const { tokenStart } = parser;
++        if (parser.getToken() === 537079928)
++            parser.report(121);
+         value = parsePrimaryExpression(parser, context | 16, privateScope, 2, 0, 1, 0, 1, tokenStart, 0, 1);
+         if ((parser.getToken() & 1073741824) !== 1073741824 ||
+             (parser.getToken() & 4194304) === 4194304) {

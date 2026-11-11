@@ -1,6 +1,6 @@
 import { generate } from '@javascript-obfuscator/escodegen';
-import { parse } from 'meriyah';
 import type { ESTree } from 'meriyah';
+import { parse } from '../vendor/meriyah/meriyah.mjs';
 import { AcornContext, AcornIterator, result } from './acornUtil';
 import { builders as b } from './builders';
 import { Config } from './config';
@@ -1979,7 +1979,7 @@ export const UNREWRITTEN_END =
  * must not run unrewritten, where its code would reach the real globals:
  * it goes with an end no browser compiles (UNREWRITTEN_END).
  */
-function cannotRewrite(
+export function cannotRewrite(
 	script: string,
 	url: StompURL,
 	config: Config,

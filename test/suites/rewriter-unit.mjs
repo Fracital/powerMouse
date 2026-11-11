@@ -20,7 +20,7 @@ mkdirSync(OUT, { recursive: true });
 const entry = `${OUT}rewriter-unit-entry.mjs`;
 writeFileSync(
 	entry,
-	`export { modifyJS, postMessageMethod, routeJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
+	`export { cannotRewrite, modifyJS, postMessageMethod, routeJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
 export { planSplit, splitSources, stitch } from ${JSON.stringify(`${root}src/splitRewrite.ts`)};
 export { routeHTML, modifyHTML, modifyRefresh, parseRefresh } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
 export { parseDataURI, createDataURI } from ${JSON.stringify(`${root}src/routeURL.ts`)};
@@ -45,6 +45,7 @@ await esbuild.build({
 	logLevel: 'silent',
 });
 const {
+	cannotRewrite,
 	modifyJS,
 	planSplit,
 	splitSources,
@@ -811,8 +812,12 @@ const parses = (code) => {
 	// rewriter's parser refuses a reserved word of strict code as a name in a
 	// generator, which V8 takes in sloppy code
 	const js = { rewriter: 'js' };
+	// one the browser would run must not run unrewritten, where the rewrite
+	// fails (its parser takes what V8 takes: what is left is a rewrite that
+	// throws, which this calls as the rewriter does)
+	const jsConfig = { ...config, ...js };
 	const taken = 'function* g() { implements = 1 }\ntop.location = "/x";';
-	const refused = rewrite(taken, 'generic', js);
+	const refused = cannotRewrite(taken, url, jsConfig, 'generic', 'a test');
 	ok(
 		'one the browser would run goes with an end no browser compiles',
 		parses(taken) &&
@@ -821,16 +826,84 @@ const parses = (code) => {
 			!parses(refused),
 		refused,
 	);
-	const module = rewrite('a() = 1;\ntop.x = 1;', 'genericModule', js);
+	const module = cannotRewrite(
+		'a() = 1;\ntop.x = 1;',
+		url,
+		jsConfig,
+		'genericModule',
+		'a test',
+	);
 	ok(
 		'so does a module (V8 takes a call assigned to, a ReferenceError when it runs)',
 		module.includes('#STomp_could_not_rewrite_this_script'),
 		module,
 	);
 	ok(
-		'a part of a split script it cannot rewrite comes back as it went',
-		modifyJS(taken, url, { ...config, ...js }, 'generic', '', true) === taken,
+		'one the browser refuses goes as it came',
+		cannotRewrite('var 1 = 2;', url, jsConfig, 'generic', 'a test') ===
+			'var 1 = 2;',
 	);
+	ok(
+		'a part of a split script it cannot rewrite comes back as it went',
+		modifyJS('var 1 = 2;', url, jsConfig, 'generic', '', true) === 'var 1 = 2;',
+	);
+	// and its parser (vendor/meriyah, patched) takes what V8 takes and
+	// meriyah refused: each of these is rewritten
+	for (const [what, source, type = 'generic'] of [
+		[
+			'a reserved word of strict code as a name in a generator',
+			'function* g() { implements = 1; var static; }\ntop.x = 1;',
+		],
+		[
+			'a call assigned to in strict code',
+			'"use strict"; f() = top;',
+			'generic',
+		],
+		['a call assigned to in a module', 'a()++;\nx = top;', 'genericModule'],
+		[
+			'super() assigned to',
+			'class A extends B { constructor() { super() = 1 } }\nx = top;',
+		],
+		[
+			'a string that is no directive',
+			"'use strict'\n.length; with (o) x = top;",
+		],
+		['a prologue that ended', "'\\01' + 1; 'use strict'; with (o) x = top;"],
+		[
+			'sloppy code after a strict function',
+			'function f() { "use strict" } x = top + 010;',
+		],
+		['sloppy code after a class', 'class A {} x = top + 010;'],
+		[
+			'__proto__ twice in a loop head',
+			'for ({ __proto__: a, __proto__: b } of top);',
+		],
+		['a template tagged by a template', 'x = top`\\xg``\\1`;'],
+		['in in import() in a loop head', 'for (import(a in top);;);'],
+		['#a in o as an element', 'class A { #a; m() { return [#a in top]; } }'],
+		[
+			'an optional private chain assigned to',
+			'class A { #a; m() { this?.#a = top; } }',
+		],
+		['using static in sloppy code', 'function f() { using static = top; }'],
+		[
+			'an escaped await as a function name in an async function',
+			'async function f() { return (function aw\\u0061it() { return top; }); }',
+		],
+		[
+			'an escaped eval bound in strict code',
+			'class A { m(\\u0065val) { return top; } }',
+		],
+	]) {
+		const out = rewrite(source, type, js);
+		ok(
+			`rewritten, not refused: ${what}`,
+			!out.includes('STomp_could_not_rewrite') &&
+				out !== source &&
+				/\$s\$j/.test(out),
+			out,
+		);
+	}
 	// a name written with an escape is printed as written
 	const lets = rewrite('for (l\\u0065t of a);', 'generic', js);
 	ok(
@@ -848,6 +921,46 @@ const parses = (code) => {
 	);
 }
 console.warn = warn;
+
+// vendor/meriyah/meriyah.mjs is the package's dist/meriyah.mjs with
+// vendor/meriyah/meriyah.patch applied (and a header): held while the
+// package installed is the one the patch names
+{
+	const { createHash } = await import('node:crypto');
+	const patch = readFileSync(`${root}vendor/meriyah/meriyah.patch`, 'utf8');
+	const upstream = readFileSync(
+		`${root}node_modules/meriyah/dist/meriyah.mjs`,
+		'utf8',
+	);
+	const named = /sha256 ([0-9a-f]+)\s+([0-9a-f]+)\)/.exec(patch);
+	const digest = createHash('sha256').update(upstream).digest('hex');
+	if (named && digest === named[1] + named[2]) {
+		// the hunks, in order, each its context and removals replaced
+		const lines = upstream.split('\n');
+		const out = [];
+		let at = 0;
+		let fits = true;
+		for (const hunk of patch.split(/^@@ /m).slice(1)) {
+			const [, from] = /^-(\d+)/.exec(hunk);
+			const body = hunk.split('\n').slice(1);
+			while (at < +from - 1) out.push(lines[at++]);
+			for (const line of body) {
+				if (line.startsWith('+')) out.push(line.slice(1));
+				else if (line.startsWith('-') || line.startsWith(' ')) {
+					if (lines[at] !== line.slice(1)) fits = false;
+					if (line.startsWith(' ')) out.push(lines[at]);
+					at++;
+				}
+			}
+		}
+		while (at < lines.length) out.push(lines[at++]);
+		const vendored = readFileSync(`${root}vendor/meriyah/meriyah.mjs`, 'utf8');
+		ok(
+			'the vendored meriyah is the package with its patch',
+			fits && vendored.endsWith(`\n\n${out.join('\n')}`),
+		);
+	} else console.log('(the installed meriyah is not the one the patch names)');
+}
 
 // `o[k] = v` becomes set2(o, k, operate, v): the value is an expression like
 // any other, so `top`, `location` and the rest inside it are rewritten too
