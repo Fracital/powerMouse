@@ -45,6 +45,18 @@ export const SW_WAKE = '$stomp$swWake';
  */
 export const KEEPALIVE_MS = 20000;
 /**
+ * A proxied page -> its controller, as an event dispatched on the windows
+ * around the page (the type is this name followed by the controller's
+ * address, which only the two of them know): the page has waited
+ * SYNC_KICK_MS inside one of its own tasks for the worker's answer to a
+ * synchronous ask. A controller on the page's thread hears nothing else
+ * until that task ends, the worker's revive included; see
+ * StompController's #standIn.
+ */
+export const SW_KICK = '$stomp$swKick';
+/** how long a synchronous ask waits for its answer before the page tells its controller */
+export const SYNC_KICK_MS = 300;
+/**
  * @internal page -> SW: re-point the client the worker checks a controller
  * against before serving a document at its address (the suites stand in
  * for a host tab in the back/forward cache with it; nothing else sends it)
@@ -563,6 +575,12 @@ export interface ControllerInitMessage {
 	config: Config;
 	/** the controller bundle's build id (src/version.ts) */
 	build: string;
+	/**
+	 * An offer for a worker that does not know this controller (one the
+	 * browser stopped): a worker that has it registered closes the ports
+	 * and keeps the channel it has
+	 */
+	standby?: boolean;
 	/**
 	 * The controller's rewrite workers: the last `ports` ports of the
 	 * handshake are theirs, one each; a rewrite that has no answer within

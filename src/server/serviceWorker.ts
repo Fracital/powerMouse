@@ -156,10 +156,16 @@ function registerController(
 		rewritePool,
 		modules,
 		adblock,
+		standby,
 	}: ControllerInitMessage,
 	ports: MessagePort[],
 	client?: string,
 ) {
+	// an offer for a worker that lost this controller: this one has it
+	if (standby && controllers.has(directory)) {
+		for (const port of ports) port.close();
+		return;
+	}
 	// the controller's wasm modules, for this thread (src/wasm/thread.ts):
 	// compiled behind the handshake, the JavaScript rewriters answer until then
 	void adoptModules(modules);

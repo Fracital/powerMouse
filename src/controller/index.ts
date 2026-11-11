@@ -57,6 +57,7 @@ import {
 	postToPort,
 	RequestInfo,
 	ReviveMessage,
+	SW_KICK,
 	SW_PORT,
 	SW_REVIVE,
 	SW_WAKE,
@@ -488,6 +489,8 @@ export function openRequest(data: unknown): string | null {
 const REVIVE_GUARD_MS = 2000;
 /** how long that check waits for the worker to answer */
 const REVIVE_PING_MS = 1000;
+/** how long a handshake offered for a stopped worker stands before a page's wait gets another */
+const STANDBY_MS = 1000;
 /**
  * how long a service worker of another build gets to update and activate
  * before wait() resolves on the one we have (the new one is adopted when it
@@ -714,6 +717,8 @@ export class StompController extends EventTarget {
 	/** the run of the worker that took our handshake (ReviveMessage.instance) */
 	#instance: string | undefined;
 	#takenWaiters = new Set<() => void>();
+	/** a handshake offered to a worker that may have stopped (see #standIn) */
+	#standby?: { port: MessagePort; at: number; stopServing?: () => void };
 	/** a build mismatch is being healed: the next ready answer must agree */
 	#healing = false;
 	#rules: RequestRule[];
@@ -910,6 +915,11 @@ export class StompController extends EventTarget {
 			if (this.transportHost === 'worker') this.config.workerTransport = true;
 			else delete this.config.workerTransport;
 			if (!this.#worker) this.#startClock();
+			// a page of ours waits for the worker inside one of its tasks (the
+			// event names the address, which exists from here on)
+			window.addEventListener(`${SW_KICK}${this.config.directory}`, () =>
+				this.#standIn(),
+			);
 		});
 
 		window.addEventListener('message', (event) => {
@@ -1009,7 +1019,7 @@ export class StompController extends EventTarget {
 			const instance =
 				typeof revive?.instance === 'string' ? revive.instance : null;
 			if (instance !== null) {
-				if (this.#awaiting) await this.#taken(REVIVE_PING_MS);
+				if (this.#awaiting || this.#standby) await this.#taken(REVIVE_PING_MS);
 				if (this.#instance === instance) return;
 			} else if (
 				// a worker of a build that does not name itself: soon after a
@@ -1426,8 +1436,8 @@ export class StompController extends EventTarget {
 		});
 		this.#ready.catch(() => {});
 	}
-	/** (re)register with the service worker over a fresh MessageChannel */
-	#handshakeNow() {
+	/** the channel in use goes: what waits for the worker waits for the next handshake's answer */
+	#retire() {
 		if (this.#port) {
 			this.#rpc?.abort('Service worker replaced');
 			this.#stopServing?.();
@@ -1443,10 +1453,60 @@ export class StompController extends EventTarget {
 		// again when it needs them
 		for (const worker of this.#serviceWorkers.values()) worker.terminate();
 		this.#serviceWorkers.clear();
+	}
+	/** a handshake offered for a stopped worker only (see #handshakeNow) is withdrawn */
+	#dropStandby() {
+		const standby = this.#standby;
+		if (!standby) return;
+		this.#standby = undefined;
+		standby.stopServing?.();
+		standby.port.close();
+		for (const done of [...this.#takenWaiters]) done();
+	}
+	/**
+	 * A page of ours has waited a moment for the worker inside one of its
+	 * own tasks (a synchronous ask: document.cookie, localStorage, a
+	 * synchronous XMLHttpRequest; see the bundle's Sync module) and says so
+	 * with an event on this window. When the browser stopped the worker, the
+	 * one the page's ask started knows no controller, and its revive waits
+	 * in this thread's queue behind the page: the page spun to its limit (10
+	 * seconds, 30 for a request) for an answer that could not come. So the
+	 * handshake the revive would cause is offered now, from inside the
+	 * page's task: every part of it is a message. Offered, not made: a
+	 * worker that is running and only busy keeps the channel it has.
+	 */
+	#standIn() {
+		if (!this.lastHandshake || this.#awaiting) return;
+		if (this.#standby && Date.now() - this.#standby.at < STANDBY_MS) return;
+		this.#handshakeNow(true);
+	}
+	/**
+	 * (Re)register with the service worker over a fresh MessageChannel. A
+	 * `standby` handshake is for a worker that does not know this controller
+	 * (one the browser stopped and something started again): a worker that
+	 * knows it closes the offer's ports and nothing changes, a worker that
+	 * takes it says so (hello), and the channel is this one from then on.
+	 */
+	#handshakeNow(standby = false) {
+		this.#dropStandby();
+		if (!standby) this.#retire();
 
 		const channel = new MessageChannel();
 		const port = channel.port1;
-		this.#port = port;
+		if (!standby) this.#port = port;
+		let stopServing: (() => void) | undefined;
+		/** whether this channel is the one in use; a standby offer the worker answers becomes it */
+		const current = (): boolean => {
+			if (this.#port === port) return true;
+			if (this.#standby?.port !== port) return false;
+			this.#standby = undefined;
+			this.#retire();
+			this.#port = port;
+			this.#rpc = rpc;
+			this.#stopServing = stopServing;
+			this.#postClientHints();
+			return true;
+		};
 		// the worker dropped this controller (another took its id) or went
 		// away: a call on the dead port would wait forever, so every pending
 		// and later one fails at once
@@ -1455,23 +1515,25 @@ export class StompController extends EventTarget {
 		// another took the id of has nothing to wait for)
 		let superseded = false;
 		port.addEventListener('close', () => {
+			// the worker knows this controller and declined the offer
+			if (this.#standby?.port === port) this.#dropStandby();
 			if (this.#port !== port) return;
-			this.#rpc?.abort('Service worker port closed');
+			rpc.abort('Service worker port closed');
 			this.#settleTaken();
 			if (!superseded) this.#expectHandshake();
 		});
 
-		this.#rpc = new RpcHelper<Controllerbound, SWbound>(
+		const rpc = new RpcHelper<Controllerbound, SWbound>(
 			{
 				hello: async (info) => {
-					if (this.#port !== port) return;
+					if (!current()) return;
 					this.#instance = info?.instance;
 					this.#settleTaken();
 				},
 				replaced: async () => {
 					if (this.#port !== port) return;
 					superseded = true;
-					this.#rpc?.abort('Controller replaced');
+					rpc.abort('Controller replaced');
 				},
 				mediaVerdict: async (constraints) => [
 					await mediaVerdict(constraints),
@@ -1493,8 +1555,9 @@ export class StompController extends EventTarget {
 					}
 				},
 				ready: async (info) => {
+					if (!current()) return;
 					// a worker of a build that says no hello
-					if (this.#port === port && this.#awaiting) this.#settleTaken();
+					if (this.#awaiting) this.#settleTaken();
 					const build = info?.build;
 					// the worker we already settled on as stale answers again
 					// (it restarted): nothing new to heal
@@ -1510,13 +1573,13 @@ export class StompController extends EventTarget {
 					// the id both sides agreed on, visible to the host
 					if (build !== undefined) this.config = { ...this.config, build };
 					// the rules travel with every handshake (a new worker starts empty)
-					if (this.#rules.length) await this.#rpc!.call('rules', this.#rules);
+					if (this.#rules.length) await rpc.call('rules', this.#rules);
 					// how the host was loaded is said once: it is about the pages
 					// the host shows again right after
 					const reloaded = this.#hostReload;
 					this.#hostReload = null;
 					const mode = await reloaded;
-					if (mode) await this.#rpc!.call('hostReload', mode);
+					if (mode) await rpc.call('hostReload', mode);
 					if (this.stale && build === BUILD) {
 						this.stale = null;
 						this.dispatchEvent(
@@ -1629,8 +1692,10 @@ export class StompController extends EventTarget {
 			(data, transfer) => postToPort(port, data, transfer),
 		);
 
-		port.addEventListener('message', (event) => this.#rpc!.receive(event.data));
+		port.addEventListener('message', (event) => rpc.receive(event.data));
 		port.start();
+		if (standby) this.#standby = { port, at: Date.now() };
+		else this.#rpc = rpc;
 
 		const transfer: Transferable[] = [channel.port2];
 		if (this.#worker) {
@@ -1639,14 +1704,15 @@ export class StompController extends EventTarget {
 			const transportChannel = new MessageChannel();
 			this.#worker.servePort(transportChannel.port1);
 			transfer.push(transportChannel.port2);
-			this.#stopServing = undefined;
 		} else
 			// the service worker's own transport shares this port with the rpc above
-			this.#stopServing = serveTransport(
+			stopServing = serveTransport(
 				port,
 				() => this.transport,
 				this.#handshakeHeaders,
 			);
+		if (this.#standby?.port === port) this.#standby.stopServing = stopServing;
+		else this.#stopServing = stopServing;
 
 		// the rewrite workers' ports come last (see ControllerInitMessage)
 		const rewritePorts = this.#rewriteWorkers?.ports() ?? [];
@@ -1656,6 +1722,7 @@ export class StompController extends EventTarget {
 			directory: this.config.directory,
 			config: this.config,
 			build: BUILD,
+			...(standby ? { standby: true } : {}),
 			...(rewritePorts.length
 				? {
 						rewritePool: {
@@ -1670,7 +1737,7 @@ export class StompController extends EventTarget {
 
 		this.serviceworker.postMessage({ [CONTROLLER_INIT]: message }, transfer);
 		// what the pages' client hints carry before any page reported it
-		this.#postClientHints();
+		if (!standby) this.#postClientHints();
 	}
 	/**
 	 * Tell the worker what the browser's client hints carry that a worker

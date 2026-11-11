@@ -4,6 +4,7 @@ import { geckoXHR, queueXHR } from '../../../routeURL';
 import { urlLike } from '../../../StompURL';
 import { ProcessData, SerializableRequestInit, SyncBody } from '../../../sync';
 import { headersRecord } from '../../../syncHeaders';
+import { SW_KICK, SYNC_KICK_MS } from '../../../transport/messages';
 import Module from '../../Module';
 import ResourceTimingModule from '../../modules/ResourceTiming';
 import DocumentClient from '../Client';
@@ -85,6 +86,68 @@ const readCookies = (): string =>
 	Reflect.apply(nativeCookie.get!, globalThis.document, []);
 const writeCookie = (value: string) =>
 	Reflect.apply(nativeCookie.set!, globalThis.document, [value]);
+
+// taken when the bundle loads, like the rest: what tells the controller
+const NativeEvent = globalThis.Event;
+const dispatchEvent = EventTarget.prototype.dispatchEvent;
+const parentOf = Reflect.getOwnPropertyDescriptor(globalThis, 'parent')?.get;
+const framesIn = Reflect.getOwnPropertyDescriptor(globalThis, 'length')?.get;
+/** how far up, and how far along each window's frames, the controller is looked for */
+const KICK_DEPTH = 8;
+const KICK_FRAMES = 64;
+
+/**
+ * Tell the controller at `directory` that this page waits for the worker
+ * inside one of its own tasks. The answer to a synchronous ask comes from
+ * the service worker, and a worker the browser stopped (it stops one
+ * nothing reached for 30 seconds) starts again knowing no controller: it
+ * asks for a handshake, which the controller hears in a task of its own.
+ * A controller on this page's thread (the host's document, or the
+ * controller frame beside this page's) gets no task while the page spins
+ * here, so the first document.cookie or localStorage a page touched after
+ * sitting idle froze it for the bridge's whole limit. An event is
+ * dispatched where it stands: on every window above this one and on their
+ * frames, of a type only the page and its controller know (the address is
+ * in no page's reach). Its listener offers the handshake from inside this
+ * task (StompController's #standIn); windows of another origin refuse the
+ * event, and no other window listens for it.
+ */
+function kick(from: Window, directory: string) {
+	if (!parentOf || !framesIn) return;
+	const event = new NativeEvent(`${SW_KICK}${directory}`);
+	const tell = (target: Window) => {
+		try {
+			Reflect.apply(dispatchEvent, target, [event]);
+		} catch (error) {
+			// a window of another origin
+		}
+	};
+	let window = from;
+	for (let depth = 0; depth < KICK_DEPTH; depth++) {
+		let parent: Window | null;
+		try {
+			parent = Reflect.apply(parentOf, window, []);
+		} catch (error) {
+			return;
+		}
+		if (!parent || parent === window) return;
+		tell(parent);
+		let frames = 0;
+		try {
+			frames = Reflect.apply(framesIn, parent, []);
+		} catch (error) {
+			// no frames to look in
+		}
+		for (let index = 0; index < frames && index < KICK_FRAMES; index++) {
+			try {
+				tell(parent[index]);
+			} catch (error) {
+				// gone since it was counted
+			}
+		}
+		window = parent;
+	}
+}
 
 function createResponse(init: SyncResponseInit): SyncResponse {
 	if (init.error) {
@@ -288,6 +351,9 @@ export default class SyncModule extends Module<DocumentClient> {
 
 		const timeout = limit ?? (loopback ? LOOPBACK_TIMEOUT : TIMEOUT);
 		const deadline = Date.now() + timeout;
+		// an answer this late may be one that cannot come: the controller is
+		// told once (see kick)
+		let kickAt = Date.now() + SYNC_KICK_MS;
 
 		for (let cycles = 0; Date.now() < deadline; cycles++) {
 			if (cycles % 3 !== 0) continue;
@@ -295,7 +361,13 @@ export default class SyncModule extends Module<DocumentClient> {
 			// a piece missing would leave a cut answer, whose last escape decodes
 			// to a control character: wait for the whole of it
 			const answer = joinAnswer(readCookies(), id);
-			if (!answer) continue;
+			if (!answer) {
+				if (kickAt && Date.now() >= kickAt) {
+					kickAt = 0;
+					kick(this.client.global as unknown as Window, this.client.directory);
+				}
+				continue;
+			}
 
 			// same attributes as the service worker set, or a cross-site frame
 			// cannot delete them and they pile up until the next request to the

@@ -9,8 +9,12 @@
 // the controller never shook hands again and every routed request fell
 // through to the host until a later restart. The host's own first act
 // after a restart is carried through as well (a navigation, a call to a
-// worker nothing else starts), and so is a page's first WebSocket. Stopped
-// over CDP, both modes.
+// worker nothing else starts), and so is a page's first WebSocket. A page's
+// synchronous asks (document.cookie, localStorage, a synchronous
+// XMLHttpRequest) are answered too: the page waits for them inside a task,
+// on the thread its controller needs to hear the worker's revive on, and
+// spun to the bridge's limit (10 s, 30 s for the request). Stopped over CDP,
+// both modes, and a controller that hosts its transport in the page.
 import {
 	done,
 	FIXTURE,
@@ -18,6 +22,7 @@ import {
 	launch,
 	ok,
 	openDemo,
+	PORT,
 	PROXY,
 	sleep,
 	submitLanding,
@@ -25,8 +30,64 @@ import {
 
 const browser = await launch();
 
-const frameOf = (page) =>
-	page.frames().findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
+const frameOf = (page, scope = 'stomp') =>
+	page
+		.frames()
+		.findLast((f) => new RegExp(`/${scope}/[\\w-]+/html/`).test(f.url()));
+
+/** the page's synchronous asks: each answers [what it got, ms] */
+const SYNC_ASKS = [
+	[
+		'document.cookie',
+		() => {
+			const started = performance.now();
+			const took = () => Math.round(performance.now() - started);
+			try {
+				document.cookie = `restart=${Date.now()}`;
+				return [/restart=/.test(document.cookie), took()];
+			} catch (error) {
+				return [String(error).slice(0, 140), took()];
+			}
+		},
+		true,
+	],
+	[
+		'localStorage',
+		() => {
+			const started = performance.now();
+			const took = () => Math.round(performance.now() - started);
+			try {
+				localStorage.setItem('restart', String(Date.now()));
+				return [localStorage.getItem('restart') !== null, took()];
+			} catch (error) {
+				return [String(error).slice(0, 140), took()];
+			}
+		},
+		true,
+	],
+	[
+		'a synchronous XMLHttpRequest',
+		() => {
+			const started = performance.now();
+			const took = () => Math.round(performance.now() - started);
+			try {
+				const request = new XMLHttpRequest();
+				request.open('GET', '/echo-headers', false);
+				request.send();
+				return [request.status, took()];
+			} catch (error) {
+				return [String(error).slice(0, 140), took()];
+			}
+		},
+		200,
+	],
+];
+/** `ask` in the proxied page, bounded: a page that spins answers nothing meanwhile */
+const asked = (frame, ask) =>
+	Promise.race([
+		frame.evaluate(ask).catch((error) => [String(error).slice(0, 140), 0]),
+		sleep(40000).then(() => ['nothing in 40 s', 40000]),
+	]);
 
 for (const [mode, base] of [
 	['same-origin', PROXY],
@@ -232,6 +293,97 @@ for (const [mode, base] of [
 		socket[0] === 'message' && socket[1] < 10000,
 		JSON.stringify(socket),
 	);
+	// The synchronous asks: the worker the page's ask started knows no
+	// controller, and the controller hears its revive only once the page's
+	// task ends, which waits for the answer. The page tells its controller
+	// from inside the task, and the handshake is offered from there
+	for (const [name, ask, wanted] of SYNC_ASKS) {
+		await sleep(2500);
+		await stop();
+		const answer = await asked(frameOf(page), ask);
+		ok(
+			`${mode}: ${name} first after a restart is answered, not waited out`,
+			answer[0] === wanted && answer[1] < 5000,
+			JSON.stringify(answer),
+		);
+	}
+	// and the controller is on that handshake afterwards: the host's next
+	// call is answered, the page's next request too
+	const after = await timed(() => {
+		const started = performance.now();
+		return window.controller.route('https://example.com/').then(
+			(url) => [
+				/\/stomp\/[\w-]+\/html\//.test(url),
+				Math.round(performance.now() - started),
+			],
+			(error) => [`rejected: ${error.message}`, 0],
+		);
+	});
+	const then = await status();
+	ok(
+		`${mode}: after it the host's calls and the page's requests answer`,
+		after[0] === true && after[1] < 5000 && then === 200,
+		JSON.stringify([after, then]),
+	);
+	await cdp.detach();
+	await page.close();
+}
+
+// A controller that hosts its transport in the page: the asks the worker
+// answers by itself (the jar, the storage) come through the same way. A
+// synchronous request to the network does not, restart or not: its
+// transport runs on the thread the page waits on (transport-worker)
+{
+	const page = await browser.newPage();
+	const query = new URLSearchParams({
+		wisp: `ws://127.0.0.1:${PORT}/wisp/`,
+		transport: 'instance',
+	});
+	await page.goto(`${FIXTURE}pages/transport-host.html?${query}`);
+	await page
+		.waitForFunction(() => window.__th?.ready, null, { timeout: 60000 })
+		.catch(() => {});
+	const host = await page.evaluate(async () => {
+		const element = document.createElement('iframe');
+		document.body.append(element);
+		const origin = location.origin.replace('127.0.0.1', 'localhost');
+		await window.controller
+			.createFrame(element)
+			.go(`${origin}/pages/hist-1.html`);
+		return window.__th.host;
+	});
+	let loaded = false;
+	for (let i = 0; i < 80 && !loaded; i++) {
+		await sleep(250);
+		loaded =
+			(await frameOf(page, 'neutral')
+				?.evaluate(() => document.title)
+				.catch(() => null)) === 'HIST 1';
+	}
+	ok(
+		'in-page transport: a page loads under a controller hosted in the page',
+		loaded && host === 'page',
+		JSON.stringify({ loaded, host }),
+	);
+	const cdp = await page.context().newCDPSession(page);
+	await cdp.send('ServiceWorker.enable');
+	let stops = 0;
+	cdp.on('ServiceWorker.workerVersionUpdated', ({ versions }) => {
+		if (versions.some((version) => version.runningStatus === 'stopped'))
+			stops++;
+	});
+	for (const [name, ask, wanted] of SYNC_ASKS.slice(0, 2)) {
+		await sleep(2500);
+		const before = stops;
+		await cdp.send('ServiceWorker.stopAllWorkers');
+		for (let i = 0; i < 40 && stops === before; i++) await sleep(100);
+		const answer = await asked(frameOf(page, 'neutral'), ask);
+		ok(
+			`in-page transport: ${name} first after a restart is answered, not waited out`,
+			answer[0] === wanted && answer[1] < 5000,
+			JSON.stringify(answer),
+		);
+	}
 	await cdp.detach();
 	await page.close();
 }

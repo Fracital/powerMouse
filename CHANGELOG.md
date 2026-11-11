@@ -3981,8 +3981,8 @@ url`) carries its value and targets that window. An about:blank child of
     219 to 260 ms after the stop (about 1.2 s inside the two seconds in
     which a revive is checked first), a bare `route()` in 113 to 119 ms,
     the WebSocket's first message in 114 to 118 ms. The synchronous calls
-    (cookies, storage, a synchronous XHR) still freeze the page until
-    their limit after a stop.
+    (cookies, storage, a synchronous XHR) still froze the page until
+    their limit after a stop (see below).
 - A controller tells a restarted service worker's revive from the worker it
   has just shaken hands with at once. The revive names the run of the worker
   it is from, and the worker that takes a handshake says which run it is
@@ -4006,6 +4006,20 @@ url`) carries its value and targets that window. An about:blank child of
   clock alone), and nothing else: no request, nothing per frame, no event held
   open. sw-keepalive (new): 45 s idle under each kind of controller, the
   worker never stopped.
+- A page's synchronous ask (`document.cookie`, `localStorage`, a synchronous
+  XHR) first after the service worker stopped is answered, where it froze the
+  page for the bridge's whole limit (10 s for a cookie or a storage call, 30 s
+  for a request, then an error or status 0): the worker it started knew no
+  controller, and the controller, on the thread the page spun on (the host
+  page, or the controller frame in isolated mode), could not hear the worker
+  ask for one. After 300 ms of waiting the page tells its controller with an
+  event dispatched on the windows above it, of a type only the two of them
+  know, and the controller offers the handshake from inside the page's task; a
+  worker that has the controller declines the offer and nothing changes. Each
+  ask is now answered in 306 to 362 ms, the 300 ms included (sw-restart, both
+  controllers and an in-page transport). With the keepalive above, a worker
+  stops under a live controller only with a frozen tab, a machine that slept
+  or a crash.
 - `history.pushState` and `replaceState` refuse a URL of another origin, or
   one that does not parse, with a SecurityError naming the page's origin and
   URL, like the browser; before this the URL was routed and accepted (every

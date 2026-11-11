@@ -153,6 +153,11 @@ on every save (use a `git worktree`).
   network waits out the spin limit. A descriptor (the default) runs the
   transport in the transport worker (`src/transport/worker.ts`), off that
   thread, and the request completes. Don't add new synchronous paths.
+  A worker the browser stopped starts again knowing no controller, and the
+  controller on the spinning thread cannot hear it ask: after
+  `SYNC_KICK_MS` the bridge dispatches `SW_KICK` + the address on the
+  windows above the page, and the controller offers a `standby` handshake
+  from inside the page's task (`#standIn`). Keep that path message-only.
   The beacon that carries a request is capped at 64 KiB per document and per
   synchronous call, and a beacon's completion is a main-thread task the
   spinning page never runs, so a request over the cap cannot be split across
