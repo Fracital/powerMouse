@@ -286,6 +286,60 @@ both transports. It is documented in
 in use. It is live at https://stomp.fracit.al, deployed from `master` by
 `.github/workflows/deploy.yml`.
 
+## Benchmarks
+
+`bench/` runs STomp against four other web proxies, powerMouseV1, stompV1,
+[Scramjet](https://github.com/MercuryWorkshop/scramjet) and
+[Ultraviolet](https://github.com/titaniumnetwork-dev/Ultraviolet), and against native
+Chrome, on one host, through the same holyWisp relay and the same real sites and
+fixtures. Full tables are in [bench/RESULTS.md](bench/RESULTS.md); the method, every
+contender's pinned version and how to rerun it (`npm run bench`) are in
+[bench/README.md](bench/README.md). These are the medians of five runs on a 16-vCPU
+Xeon Gold 6348 VM that ran nothing else, the best proxy in each row in bold. Native
+Chrome is the reference and never the winner.
+
+|                                           | native | STomp (js) | STomp (wasm) | STomp (no adblock) | Scramjet | Ultraviolet | stompV1 | powerMouseV1 |
+| ----------------------------------------- | ------ | ---------- | ------------ | ------------------ | -------- | ----------- | ------- | ------------ |
+| site support score (0-100)                | 99     | **89**     | 87           | 89                 | 88       | 79          | 58      | 54           |
+| sites passed (of 85)                      | 70     | **56**     | 55           | 55                 | **56**   | 48          | 25      | 19           |
+| fidelity checks equal to native (of 169)  | 169    | **154**    | **154**      | **154**            | 101      | 90          | 61      | 36           |
+| escape vectors leaked (of 80, lower best) | 0      | **0**      | **0**        | **0**              | 5        | 10          | 12      | 35           |
+| real-site load, x native (geomean, lower) | 1.00x  | 3.81x      | 3.56x        | 2.79x              | 2.90x    | 2.70x       | 1.56x   | **1.30x**    |
+| in-browser rewrite (MB/s, higher best)    | 25.5   | 2.8        | 4.8          | 2.8                | 8.8      | 3.5         | 4.3     | **12.4**     |
+| download bundle (brotli KB, lower best)   | -      | 2,691      | 2,901        | 2,399              | 828      | 702         | 385     | **1**        |
+
+STomp reproduces the real browser most faithfully, by a wide margin: it matches native
+on 154 of 169 fidelity checks, where the next proxy matches 101, and it is the only one
+that leaks none of the 80 address and identity escape vectors (the others leak 5 to 35).
+It supports the most sites, passing 56 of 85 and scoring 89. That fidelity has a price,
+and it is the slowest proxy: a real site loads 2.8 to 3.8 times slower than native, its
+in-browser rewriter runs at a third to a half of the fastest contender's, and its
+download is about three times the next-heaviest. Much of the load gap is the content
+blocker fetching its filter lists on each fresh context (the `no adblock` column is the
+like-for-like row against the blocker-less proxies); the WebRTC stack is a lazy load on
+the first `RTCPeerConnection` and is not in the download figure. Closing the speed and
+size gaps, without giving up the fidelity, is the ongoing work.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="bench/charts/fidelity-dark.png">
+  <img alt="Fidelity checks matching native Chrome, per proxy" src="bench/charts/fidelity.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="bench/charts/leaks-dark.png">
+  <img alt="Address and identity escape vectors leaked, per proxy" src="bench/charts/leaks.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="bench/charts/load-real-dark.png">
+  <img alt="Real-site load time as a multiple of native, per proxy" src="bench/charts/load-real.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="bench/charts/size-dark.png">
+  <img alt="Download bundle size, brotli, per proxy" src="bench/charts/size.png">
+</picture>
+
 ## Development
 
 ```sh
