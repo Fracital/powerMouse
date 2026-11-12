@@ -47,20 +47,63 @@ site begin alike; nothing of either reads as the site.
   same codec.
 - The storage bridge's asynchronous writes name their origin and key in
   their URL (`<address>localStorage/ordered?...&origin=<sealed>&key=<sealed>`).
-- A GET form without an action submits to the document's own address, and
-  the browser writes its fields after the route; the worker answers that
-  request with a redirect to the sealed address. A form with an action goes
-  through `html:form`, which does the same. The fields are in clear for that
-  one request, as the browser wrote them.
+- A document's fragment, and a link route's: `#~<sealed>` (empty stays
+  `#`, as an empty query stays `?`: src/urlShape.ts). A subresource's
+  fragment stays as written: the browser reads it there (an SVG sprite's
+  `#icon`, a filter's `url(#blur)`) and never sends it. See "Fragments"
+  below for how the page still gets every native fragment behaviour.
+- A GET form's fields. The browser writes a GET submission's entries after
+  the action's route; once the page's own formdata listeners have seen
+  them, the inject (`FormQuery`) replaces them with one unnamed entry
+  holding the query sealed, so the request reads `?=<sealed>` and names no
+  field. The worker opens it (`html:form` and the document route redirect
+  to the sealed address with the query inside the seal). A FormData the
+  page makes itself (`new FormData(form)`, which fires formdata too) is
+  left as it is.
 - The demo keeps its active tab in its own fragment as the tab's route
   (`#html/<sealed>`, from `controller.route()`), read back with
   `controller.unroute()`; a fragment holding the URL itself, as the demo
   wrote it before, still opens. Its address-bar suggestions post what was
   typed in the body.
 
-Not sealed: a URL's fragment. It stays after the route as the page wrote
-it, because the browser itself reads it there (scrolling to an anchor,
-`:target`, `hashchange`, a same-document navigation).
+## Fragments
+
+The browser reads a document's fragment itself: it scrolls to the element
+it names (and keeps it in view while the page loads), matches `:target`,
+opens a closed `<details>` around it, decides whether a navigation stays in
+the document and whether `hashchange` fires. The inject's Fragment module
+keeps all of that native while the frame's address and its history entries
+hold only the seal:
+
+- A fragment navigation the page makes in its own document
+  (location.hash, href, assign and replace, `navigation.navigate()`, a
+  link to it the page or the user clicks, the steps the Visited module
+  makes of one) goes to the fragment as written, the current entry turned to its fragment as
+  written a moment before, so every comparison the browser makes is the
+  native one. For a link, its href is that URL for the time of the click
+  only (not for a modifier click or a new window, where the route shows).
+  Once the navigation succeeded the entry is sealed again (a
+  `replaceState`), before the page's hashchange listeners.
+- Where the browser arrives at a sealed fragment on its own (a document
+  loaded at one: an iframe's src, a redirect, a reload; a traversal to an
+  entry), the module has the browser apply the fragment as written: the
+  entry turned to it, a replacing navigation to it, the entry sealed
+  again, all in one call (a traversal and a reload keep the position they
+  restore).
+- Those history calls are the proxy's, not the page's: every event they
+  fire (navigate, currententrychange, popstate, navigatesuccess,
+  navigateerror, an entry's dispose) is stopped before the page's
+  listeners, the Navigation API state is kept, and the page keeps the entry
+  object it had (same object, same id: `navigation.currentEntry`,
+  `entries()`, `from`).
+- A fragment directive (`#frag:~:text=word`) is taken out of the document's
+  URL as the browser does. What it highlights is not applied through the
+  proxy: the browser applies it to the document it navigates to, which is
+  the shell, before the page is written into it.
+
+What differs: `history.state` after the proxy's own `replaceState` is an
+equal copy, not the same object; an entry the page holds that the proxy
+re-wrote gets no `dispose` when the page later prunes it.
 
 ## Where it runs
 
@@ -89,7 +132,16 @@ the page), a bundle built without the module, an instance that trapped.
 - The `codec` suite runs that over a smaller corpus, checks the documented
   vectors and that each bundle carries the module once, and in a browser
   that a top seals in its own instance and its frames in its top's, that no
-  routed address the browser loads names the site or its path, and that a
-  GET form without an action lands at its sealed address.
+  routed address the browser loads names the site, its path, a fragment or
+  a form field, and that a GET form without an action lands at its sealed
+  address.
+- The `fragments` suite compares a page natively and through the proxy at
+  every fragment behaviour above (load, location.hash read and written,
+  links clicked once and twice, back and forward, replace, pushState,
+  `navigation.navigate()`, `<a name>`, empty and non-ASCII fragments, a
+  closed `<details>`, a reload, cross-document navigations and their
+  referrer, text directives, GET forms with and without an action), every
+  event the page hears with its URLs and state, and that no address or
+  request shows a fragment or a field.
 - `deploy/rust/test.sh -p codec` runs the crate's own tests (the same
   vectors, round trips of every length, pieces, refusals).

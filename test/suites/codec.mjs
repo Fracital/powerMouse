@@ -5,9 +5,9 @@
 // (rust/host/codec.mjs runs the large one); every bundle that seals a URL
 // carries the module once. In a browser: a proxied top seals in its own
 // instance and a frame under it in its top's; no routed address of a page,
-// a nested frame or a worker names the site or its path, and a GET form
-// without an action lands at a sealed address with its fields as the page
-// submitted them.
+// a nested frame or a worker names the site, its path, its fragment or a
+// form field in clear, and a GET form without an action lands at a sealed
+// address with its fields as the page submitted them.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { check, corpus, loadCodec } from '../../rust/host/codec.mjs';
@@ -237,9 +237,9 @@ ok(
 );
 
 // every address under the controller's the browser loaded or showed: no
-// site, no path; a query only where the browser wrote a form's fields after
-// a route (one request, answered with the sealed address) or on the
-// worker's own API calls, which hold nothing of the page in clear
+// site, no path, no fragment but a sealed one (`#~...`); after a document's
+// route only a GET form's sealed query (`?=...`), and the worker's own API
+// calls, which hold nothing of the page in clear
 const addresses = [
 	...seen,
 	...recorder.log
@@ -249,9 +249,10 @@ const addresses = [
 const leaks = addresses.filter((url) => {
 	const parsed = new URL(url);
 	if (CLEAR.test(routeText(url))) return true;
+	if (parsed.hash && !/^#~[\w-]+$/.test(parsed.hash)) return true;
 	if (!parsed.search) return false;
 	if (/^html(:form)?(:nested:[\w-]+)?\//.test(routeText(url)))
-		return parsed.search !== '?field=value';
+		return !/^\?=[\w-]*$/.test(parsed.search);
 	return CLEAR.test(decodeURIComponent(parsed.search));
 });
 ok(

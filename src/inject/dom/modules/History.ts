@@ -5,6 +5,7 @@ import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import DocumentClient from '../Client';
+import FragmentModule from './Fragment';
 import VisitedModule from './Visited';
 
 /**
@@ -42,6 +43,13 @@ export default class HistoryModule extends Module<DocumentClient> {
 	canStep: (step: -1 | 1) => boolean | null = () => null;
 	/** the browser's own pushState and replaceState, from before any module wrapped them */
 	native?: Pick<History, 'pushState' | 'replaceState'>;
+	/**
+	 * `after` replaced the current entry `before` for the proxy's own reasons
+	 * (the Fragment module seals the URL the browser committed): to the page
+	 * it is still the entry it had, the same object with the same id, which
+	 * natively was never replaced. Unset without the Navigation API.
+	 */
+	alias: (before: object, after: object) => void = () => {};
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const global = this.client.global;
@@ -163,7 +171,13 @@ export default class HistoryModule extends Module<DocumentClient> {
 									this.client.nestedRoute,
 								)
 							: this.client.navigationRoute(destination);
-					return Reflect.apply(target, that, [routed, ...args.slice(1)]);
+					// to a fragment of this document as written (the Fragment module)
+					const live =
+						this.client
+							.getModule(FragmentModule)
+							?.live(new URL(routed, this.client.global.location.href).href) ??
+						routed;
+					return Reflect.apply(target, that, [live, ...args.slice(1)]);
 				},
 			);
 		const nativeEntries = method('entries');
@@ -231,6 +245,61 @@ export default class HistoryModule extends Module<DocumentClient> {
 		});
 
 		if (!entryProto || !nativeEntryURL) return;
+
+		// the entries the page holds for the ones the proxy re-wrote (alias)
+		const toPage = new WeakMap<object, Entry>();
+		const toReal = new WeakMap<object, Entry>();
+		const pageOf = <T>(entry: T): T =>
+			(entry && (toPage.get(entry as object) as T)) ?? entry;
+		const realOf = <T>(entry: T): T =>
+			(entry && (toReal.get(entry as object) as T)) ?? entry;
+		this.alias = (before, after) => {
+			const page = pageOf(before) as Entry;
+			toPage.set(after, page);
+			toReal.set(page, after as Entry);
+		};
+		const currentDescriptor = Reflect.getOwnPropertyDescriptor(
+			navigationProto,
+			'currentEntry',
+		)!;
+		Reflect.defineProperty(navigationProto, 'currentEntry', {
+			...currentDescriptor,
+			get: proxyModule.wrapFunction(nativeCurrent, (target, that, args) =>
+				pageOf(Reflect.apply(target, that, args)),
+			),
+		});
+		// an alias answers for the entry it stands for (its id is its own: the
+		// page's entry was never replaced natively)
+		for (const name of ['key', 'url', 'sameDocument']) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(entryProto, name);
+			if (!descriptor?.get) continue;
+			Reflect.defineProperty(entryProto, name, {
+				...descriptor,
+				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) =>
+					Reflect.apply(target, realOf(that), args),
+				),
+			});
+		}
+		const getState = Reflect.getOwnPropertyDescriptor(entryProto, 'getState');
+		if (typeof getState?.value === 'function')
+			Reflect.defineProperty(entryProto, 'getState', {
+				...getState,
+				value: proxyModule.wrapFunction(getState.value, (target, that, args) =>
+					Reflect.apply(target, realOf(that), args),
+				),
+			});
+		const changeProto = (
+			global as { NavigationCurrentEntryChangeEvent?: { prototype: object } }
+		).NavigationCurrentEntryChangeEvent?.prototype;
+		const changeFrom =
+			changeProto && Reflect.getOwnPropertyDescriptor(changeProto, 'from');
+		if (changeProto && changeFrom?.get)
+			Reflect.defineProperty(changeProto, 'from', {
+				...changeFrom,
+				get: proxyModule.wrapFunction(changeFrom.get, (target, that, args) =>
+					pageOf(Reflect.apply(target, that, args)),
+				),
+			});
 		// The Navigation API shows a document only the entries of its own
 		// origin around it: every route is same-origin to the browser, so the
 		// entries of another site's documents in this frame (their URLs, their
@@ -285,15 +354,15 @@ export default class HistoryModule extends Module<DocumentClient> {
 			nativeEntries,
 			(target, that, args) => {
 				Reflect.apply(target, that, args);
-				return visible();
+				return visible().map(pageOf);
 			},
 		);
 		Reflect.defineProperty(entryProto, 'index', {
 			...Reflect.getOwnPropertyDescriptor(entryProto, 'index')!,
 			get: proxyModule.wrapFunction(nativeIndex!, (target, that, args) => {
-				const index = Reflect.apply(target, that, args) as number;
+				const index = Reflect.apply(target, realOf(that), args) as number;
 				if (index < 0) return index;
-				return visible().indexOf(that as Entry);
+				return visible().indexOf(realOf(that) as Entry);
 			}),
 		});
 		for (const [name, step] of [

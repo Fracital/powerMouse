@@ -109,12 +109,13 @@ ok(
 // A link's route (src/visited.ts): the browser's history is asked for it
 // by its exact text, so every codec writes it the same way each time (the
 // aes codec's salt is random for any other route), and it reads back as
-// the URL it stands for, with its fragment
+// the URL it stands for, with its fragment, which the route holds sealed
+// (docs/codec.md)
 const suffix = (host) => host.split('.').pop();
 const target = new URL('https://example.com/a/b?c=d&e=%20f#part');
 for (const [name, linkCodec] of [
 	['plain', new GenericCodec('')],
-	['xor', new XORCodec('91')],
+	['xor', new XORCodec('0123456789abcdef')],
 	['aes', new AESCodec('a key')],
 	['base64', new Base64Codec('')],
 ])
@@ -128,7 +129,10 @@ for (const [name, linkCodec] of [
 		ok(
 			`${name}: a link route of ${context} is the same text each time, and reads back`,
 			route === linkRoute(`${origin}/stomp/`, linkCodec, context, target) &&
-				/^http:\/\/127\.0\.0\.1:8090\/stomp\/~\/[^/?#]+#part$/.test(route) &&
+				/^http:\/\/127\.0\.0\.1:8090\/stomp\/~\/[^/?#]+#~[^/?#]+$/.test(
+					route,
+				) &&
+				(name !== 'xor' || !route.includes('part')) &&
 				parsed?.url.href === target.href &&
 				(context.includes('^')
 					? parsed.context.frame === 'https://frame.example' &&

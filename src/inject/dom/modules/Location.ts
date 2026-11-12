@@ -4,6 +4,7 @@ import Module from '../../Module';
 import { setGlobalProxy } from '../../modules/Access';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
+import FragmentModule from './Fragment';
 import NavigationHintModule from './NavigationHint';
 
 // the parts of the URL a Location shares with URL.prototype
@@ -45,14 +46,18 @@ export default class LocationModule extends Module<DocumentClient> {
 			proxyModule.wrapFunction(native, (target, that, args) =>
 				ours(that) ? own(args) : Reflect.apply(target, that, args),
 			);
-		const navigateTo = (destination: URL) =>
-			routeHTML(
+		// a fragment's navigation goes to it as written (the Fragment module)
+		const fragments = this.client.getModule(FragmentModule);
+		const navigateTo = (destination: URL) => {
+			const routed = routeHTML(
 				new StompURL(destination, this.client.url),
 				this.client.url,
 				this.client.config,
 				false,
 				this.client.nestedRoute,
 			);
+			return fragments ? fragments.live(routed) : routed;
+		};
 
 		// Chrome replaces the current entry when a page's script navigates it
 		// before its load event (a redirect while loading, measured right
@@ -68,7 +73,8 @@ export default class LocationModule extends Module<DocumentClient> {
 			const how = loading ? 'replace' : method;
 			return Reflect.apply(real[how], real, [
 				how === 'assign'
-					? this.client.navigationRoute(destination)
+					? (fragments?.live(this.client.navigationRoute(destination)) ??
+						this.client.navigationRoute(destination))
 					: navigateTo(destination),
 			]);
 		};
@@ -95,9 +101,6 @@ export default class LocationModule extends Module<DocumentClient> {
 				...locationDescriptor,
 				get: locationDescriptor.get
 					? member(locationDescriptor.get, (args) => {
-							if (common === 'hash')
-								return Reflect.apply(locationDescriptor.get!, real, args);
-
 							const temp = new URL(this.client.location.toString());
 
 							return Reflect.apply(urlDescriptor.get!, temp, args);
@@ -105,16 +108,23 @@ export default class LocationModule extends Module<DocumentClient> {
 					: undefined,
 				set: locationDescriptor.set
 					? member(locationDescriptor.set, (args) => {
-							if (common === 'hash')
-								return Reflect.apply(locationDescriptor.set!, real, args);
-
 							const temp = new URL(this.client.location.toString());
 
 							if (common === 'href') {
 								args[0] = new URL(args[0], this.client.baseURL.toString());
 							}
 
-							Reflect.apply(urlDescriptor.set!, temp, args);
+							if (common === 'hash') {
+								// Location's own: '' is an empty fragment (`page#`), and
+								// the fragment the document is at already is no navigation
+								// (nor is '' where it has none: measured, url-shapes)
+								const input = String(args[0]).replace(/^#/, '');
+								const at = this.client.url.toString();
+								if (!input && !at.includes('#')) return;
+								if (input) Reflect.apply(urlDescriptor.set!, temp, [input]);
+								else temp.href = `${temp.href.split('#')[0]}#`;
+								if (temp.href === at) return;
+							} else Reflect.apply(urlDescriptor.set!, temp, args);
 
 							this.client.getModule(NavigationHintModule)?.hint(temp.href);
 							go(temp, 'assign');

@@ -18,6 +18,7 @@ import { routeHTML } from '../rewriteHTML';
 import {
 	addRouteScope,
 	linkRouteURL,
+	openFragment,
 	parseRoutedURL,
 	rewriterLibJS,
 	ROUTE_PROTOCOLS,
@@ -110,6 +111,23 @@ export function readModules(event: Event, key: string): HandedModules | null {
 				?.value as WebAssembly.Module;
 	}
 	return read;
+}
+
+/**
+ * A document's URL without the fragment directive (`#x:~:text=word`): the
+ * browser takes it out of the URL it navigates to before any script reads
+ * the URL, and one that arrives sealed in a route is taken out here
+ */
+function withoutDirective(url: URL): URL {
+	const href = url.href;
+	const at = href.indexOf('#');
+	if (at === -1) return url;
+	const directive = href.indexOf(':~:', at);
+	if (directive === -1) return url;
+	const kept = new URL(href);
+	// nothing before the directive: no fragment at all
+	kept.hash = directive === at + 1 ? '' : href.slice(at, directive);
+	return kept;
 }
 
 export default class Client {
@@ -296,9 +314,9 @@ export default class Client {
 			const url = new URL(named);
 			// an empty fragment too, which `location.hash` reads as ''
 			const hash = fragmentOf(this.global.location.href);
-			if (hash) url.hash = hash;
+			if (hash) url.hash = `#${openFragment(this.codec, hash.slice(1))}`;
 			return new StompURL(
-				url,
+				withoutDirective(url),
 				this.codec,
 				`${this.global.location.origin}${this.directory}`,
 			);
@@ -315,16 +333,18 @@ export default class Client {
 				const url = linkRouteURL(location.href.slice(link.length), this.codec);
 				if (url)
 					return new StompURL(
-						url,
+						this.isDOM ? withoutDirective(url) : url,
 						this.codec,
 						`${location.origin}${this.directory}`,
 					);
 			}
-			return parseRoutedURL(
+			const parsed = parseRoutedURL(
 				location.toString(),
 				this.codec,
 				`${location.origin}${this.directory}`,
 			).url;
+			if (this.isDOM) parsed.url = withoutDirective(parsed.url);
+			return parsed;
 		} else {
 			// a worker started from a blob: URL belongs to the page that made it
 			const base = (this.global as Record<string, unknown>)[WORKER_BASE];

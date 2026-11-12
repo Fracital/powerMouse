@@ -1,9 +1,11 @@
 import GenericCodec from './Codecs';
 import { assetName, type Assets, type Config } from './config';
-import StompURL from './StompURL';
+import StompURL, { openFragment, sealedFragmentText } from './StompURL';
 import { withQuery } from './urlShape';
 import { BUILD, LIBRARY } from './version';
 import { decodeLinkRoute, LINK_SEGMENT } from './visited';
+
+export { openFragment, sealedFragmentText };
 
 export const ROUTE_PROTOCOLS = ['http:', 'https:'];
 
@@ -135,7 +137,36 @@ export function routeURL(resourceType: string, url: StompURL) {
 	const real = routeScopes.size ? unwrapRoute(url.url, url.codec) : null;
 	if (real) url = new StompURL(real, url);
 
-	return `${url.directory}${resourceType}/${url.encode()}`;
+	return `${url.directory}${resourceType}/${url.encode(isDocumentKind(resourceType))}`;
+}
+
+/**
+ * The name of the one entry a GET form's submission carries through the
+ * proxy (the inject's FormQuery module): its value is the form's query,
+ * sealed, so the route reads `?=<sealed>`
+ */
+export const FORM_QUERY_NAME = '';
+
+/**
+ * The query a route's own query stands for (`?` and the text, as a URL's
+ * `search`): a GET form's sealed query opened, anything else (a query the
+ * browser wrote after the route as it was) as it is
+ */
+export function formQuery(codec: GenericCodec, search: string): string {
+	const sealed = /^\?=([A-Za-z0-9_-]*)$/.exec(search);
+	if (!sealed) return search;
+	if (!sealed[1]) return '?';
+	try {
+		const query = codec.decode(sealed[1]);
+		return query ? `?${query}` : search;
+	} catch (error) {
+		return search;
+	}
+}
+
+/** whether routes of `kind` are documents (src/rewriteHTML.ts routeHTML), whose fragment is sealed */
+export function isDocumentKind(kind: string): boolean {
+	return kind === 'html' || kind.startsWith('html:');
 }
 
 /**
@@ -280,10 +311,14 @@ export function parseRoutedURL(
 		query === -1 ? path.slice(split + 1) : path.slice(split + 1, query);
 	const decoded = codec.decode(encoded);
 	let url = new URL(decoded);
-	// as written: a query of `?` alone is an empty one (src/urlShape.ts)
-	if (query !== -1) url = withQuery(url, path.slice(query));
+	// as written: a query of `?` alone is an empty one (src/urlShape.ts); a
+	// GET form's sealed query opened (formQuery)
+	if (query !== -1) url = withQuery(url, formQuery(codec, path.slice(query)));
 
-	url.hash = hashIndex === -1 ? '' : routed.slice(hashIndex);
+	if (hashIndex !== -1) {
+		const fragment = routed.slice(hashIndex + 1);
+		url.hash = `#${isDocumentKind(resource) ? openFragment(codec, fragment) : fragment}`;
+	} else url.hash = '';
 
 	return {
 		resource: resource,

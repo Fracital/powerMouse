@@ -67,6 +67,7 @@ import {
 } from '../rewriteHTML';
 import { modifyJS, RewrittenBy, routeJS, ScriptType } from '../rewriteJS';
 import {
+	formQuery,
 	linkRouteURL,
 	parseRoutedURL,
 	routeBinary,
@@ -4322,8 +4323,10 @@ export function registerRewrites(
 			`${oURL.origin}${rewriter.directory}`,
 		);
 
-		// a form without fields submits to `action?`, an empty query
-		url.url = withQuery(url.url, queryOf(oURL));
+		// a form without fields submits to `action?`, an empty query; a GET
+		// form's query comes sealed (the inject's FormQuery module), or as the
+		// browser wrote the fields
+		url.url = withQuery(url.url, formQuery(rewriter.codec, queryOf(oURL)));
 
 		// a form an https page (or one under an https top) submits to http:
 		// warned about, blocked in a nested frame, stopped at Chrome's
