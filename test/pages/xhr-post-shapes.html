@@ -1,0 +1,99 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>xhr post shapes</title>
+<body>
+	<pre id="out">pending</pre>
+	<script>
+		// Fires a battery of POSTs whose shapes match what a Cloudflare Turnstile
+		// challenge submits (and the shapes most likely to trip a proxy): empty body,
+		// url-encoded form, text/plain, application/json, octet-stream, a non-ASCII
+		// binary body (invalid UTF-8, to catch any text round-trip), a credentialed
+		// cross-origin JSON POST with a custom header (forces a CORS preflight), and
+		// a ReadableStream (duplex) body. Each goes to <to>/echo-post, which records
+		// exactly what arrived under (k, shape). `window.__shapes` turns to the list
+		// of shapes that completed, so the suite knows the run is done.
+		const q = new URL(location.href).searchParams;
+		const to = q.get('to');
+		const k = q.get('k');
+		const url = (shape) =>
+			new URL(`/echo-post?k=${encodeURIComponent(k)}&shape=${shape}`, to).href;
+
+		const bin = new Uint8Array([
+			0, 1, 2, 0x41, 0x80, 0xc3, 0x28, 0xfd, 0xfe, 0xff,
+		]);
+
+		const shapes = {
+			empty: () =>
+				fetch(url('empty'), { method: 'POST', credentials: 'include' }),
+			form: () =>
+				fetch(url('form'), {
+					method: 'POST',
+					credentials: 'include',
+					headers: { 'content-type': 'application/x-www-form-urlencoded' },
+					body: 'cf_chl_rt_tk=abc.def&md=ONE_TWO-3&v=xyz',
+				}),
+			text: () =>
+				fetch(url('text'), { method: 'POST', body: 'plain SECRET body éè' }),
+			json: () =>
+				fetch(url('json'), {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ token: 'cf-abc', n: 3, s: 'eé' }),
+				}),
+			octet: () =>
+				fetch(url('octet'), {
+					method: 'POST',
+					headers: { 'content-type': 'application/octet-stream' },
+					body: new Uint8Array([0x41, 0x42, 0x43, 0x44, 0x45]),
+				}),
+			binary: () =>
+				fetch(url('binary'), {
+					method: 'POST',
+					headers: { 'content-type': 'application/octet-stream' },
+					body: bin,
+				}),
+			credentialed: () =>
+				fetch(url('credentialed'), {
+					method: 'POST',
+					credentials: 'include',
+					headers: {
+						'content-type': 'application/json',
+						'x-cf-token': 'CHL-TOKEN-9',
+					},
+					body: JSON.stringify({ response: 'turnstile-answer' }),
+				}),
+			stream: () => {
+				const body = new ReadableStream({
+					start(c) {
+						c.enqueue(new Uint8Array([0x73, 0x74, 0x72])); // "str"
+						c.enqueue(new Uint8Array([0xfe, 0xff, 0x00])); // non-ASCII tail
+						c.close();
+					},
+				});
+				return fetch(url('stream'), {
+					method: 'POST',
+					headers: { 'content-type': 'application/octet-stream' },
+					body,
+					duplex: 'half',
+				});
+			},
+		};
+
+		(async () => {
+			const done = [];
+			const errors = {};
+			for (const [name, run] of Object.entries(shapes)) {
+				try {
+					const res = await run();
+					done.push(`${name}:${res.status}`);
+				} catch (e) {
+					errors[name] = String(e);
+					done.push(`${name}:ERR`);
+				}
+				document.getElementById('out').textContent = done.join(' ');
+			}
+			window.__shapesErrors = errors;
+			window.__shapes = done;
+		})();
+	</script>
+</body>

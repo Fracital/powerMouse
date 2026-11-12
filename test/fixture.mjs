@@ -309,6 +309,60 @@ export function startFixture(port = 8084) {
 			});
 			return;
 		}
+		// Turnstile-shaped POST echo (xhr-post-shapes suite): records exactly
+		// what reached the origin for a POST, keyed by `k` and `shape`, so a
+		// proxied request can be compared byte-for-byte with the same native
+		// one. Reflects the Origin and allows credentials and the custom
+		// header, and answers the CORS preflight, so a cross-origin
+		// credentialed POST with a non-safelisted content-type goes out.
+		// `/echo-post/log?k=<key>` returns the records.
+		if (path === '/echo-post' || path === '/echo-post/log') {
+			const query = new URL(req.url, 'http://x').searchParams;
+			const origin = req.headers.origin;
+			if (origin) {
+				res.setHeader('access-control-allow-origin', origin);
+				res.setHeader('access-control-allow-credentials', 'true');
+			} else res.setHeader('access-control-allow-origin', '*');
+			res.setHeader('cache-control', 'no-store');
+			if (req.method === 'OPTIONS') {
+				res.setHeader('access-control-allow-methods', 'POST, OPTIONS');
+				res.setHeader(
+					'access-control-allow-headers',
+					req.headers['access-control-request-headers'] ?? 'content-type',
+				);
+				res.setHeader('access-control-max-age', '0');
+				res.statusCode = 204;
+				return res.end();
+			}
+			if (path === '/echo-post/log') {
+				res.setHeader('content-type', 'application/json');
+				return res.end(
+					JSON.stringify(recorded.get(`post:${query.get('k')}`) ?? null),
+				);
+			}
+			const chunks = [];
+			req.on('data', (chunk) => chunks.push(chunk));
+			req.on('end', () => {
+				const body = Buffer.concat(chunks);
+				const key = `post:${query.get('k')}`;
+				const log = recorded.get(key) ?? {};
+				recorded.set(key, log);
+				log[query.get('shape') ?? ''] = {
+					method: req.method,
+					contentType: req.headers['content-type'] ?? null,
+					contentLength: req.headers['content-length'] ?? null,
+					transferEncoding: req.headers['transfer-encoding'] ?? null,
+					origin: req.headers.origin ?? null,
+					cookie: req.headers.cookie ?? null,
+					custom: req.headers['x-cf-token'] ?? null,
+					bodyHex: body.toString('hex'),
+					bodyLen: body.length,
+				};
+				res.setHeader('content-type', 'application/json');
+				res.end(JSON.stringify({ ok: true }));
+			});
+			return;
+		}
 		// a script that arrives after `ms` and records `mark` in the order its
 		// document runs scripts (blank-loads suite)
 		if (path === '/slow-js') {
