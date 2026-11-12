@@ -14,6 +14,7 @@ import {
 	bindHistory,
 	canTraverse,
 	clientView,
+	earlierWindows,
 	noteActivation,
 	noteBrowserNavigation,
 	traverse,
@@ -111,7 +112,12 @@ if (window === window.parent || !origins.length) {
 		/** a proxied frame's window, its history told how to read its documents */
 		function historyWindow(index: number) {
 			const win = proxiedWindow(index);
-			bindHistory(win, (target) => clientView(target, clientName()));
+			if (win)
+				bindHistory(
+					win,
+					(target) => clientView(target, clientName()),
+					earlierWindows(win, clientName()),
+				);
 			return win;
 		}
 		function proxiedWindow(index: number): (Window & typeof globalThis) | null {

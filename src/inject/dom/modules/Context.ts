@@ -11,6 +11,7 @@ import { routedPrefix } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import { nativeFunction } from '../../nativeUtil';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { frameDestination, frameOfHeld, heldBefore } from '../freshContext';
 
 function removeBlob(protocol: string): string {
 	return protocol.startsWith('blob:') ? protocol.slice(5) : protocol;
@@ -654,6 +655,23 @@ export default class ContextModule extends Module<DocumentClient> {
 	 * A window the page already holds is handed back as it is.
 	 */
 	pending(context: Context, url: unknown): RestrictedContext {
+		const restricted = this.#pending(context, url);
+		return restricted === context
+			? restricted
+			: (this.#handle(context) ?? restricted);
+	}
+	/**
+	 * The window `context` (a frame's) showed before the fresh browsing
+	 * context it was given, when this realm held that one: the frame's
+	 * window to this realm still, as natively (freshContext.ts)
+	 */
+	#handle(context: Context): Context | null {
+		for (const old of heldBefore(this.client, context))
+			if (old !== context && this.held.has(old as Context))
+				return old as Context;
+		return null;
+	}
+	#pending(context: Context, url: unknown): RestrictedContext {
 		if (this.held.has(context)) return context;
 		let target: URL | undefined;
 		try {
@@ -670,6 +688,12 @@ export default class ContextModule extends Module<DocumentClient> {
 		return this.restrictOpaque(context);
 	}
 	newRestricted(context: Context): RestrictedContext {
+		const restricted = this.#restrict(context);
+		return restricted === context
+			? restricted
+			: (this.#handle(context) ?? restricted);
+	}
+	#restrict(context: Context): RestrictedContext {
 		// a cross-origin window (the host application in isolation mode) throws
 		// on the `in` check; it is never a STomp context
 		if (!isStomp(context, this.client.names.client))
@@ -944,6 +968,17 @@ export default class ContextModule extends Module<DocumentClient> {
 			}
 		};
 
+		// a window this realm held, whose frame got a fresh context since: what
+		// is done to it through the access API (a message, a location set, a
+		// read or write of another origin's window) is done to the frame's
+		// window now, as this realm has it (freshContext.ts)
+		this.client.liveWindow = (target) => {
+			if (!this.held.has(target as Context)) return undefined;
+			const frame = frameOfHeld(this.client, target);
+			if (!frame?.now || (frame.now as unknown) === target) return undefined;
+			return this.#restrict(frame.now as unknown as Context);
+		};
+
 		this.client.resolveTop = (value) => {
 			if (!isWindow(value)) return value;
 			// a stand-in answers with its own `top` (the top of its world, as
@@ -1004,7 +1039,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				if (element)
 					return this.pending(
 						value as Context,
-						Reflect.get(element as object, 'src'),
+						frameDestination(this.client, element as object),
 					);
 			}
 			return this.newRestricted(value as Context);

@@ -392,6 +392,8 @@ const VISITS = {
 // not recorded natively either (the frame rows above). Each must read
 // unvisited everywhere: never a visit the browser did not see.
 const NO_ENTRY = 'replaces the entry of a frame: no history entry is made';
+const FRESH_CONTEXT =
+	"another origin's document comes in a fresh browsing context: no history entry is made";
 const KNOWN = {
 	'location.replace': NO_ENTRY,
 	'history.replaceState': NO_ENTRY,
@@ -407,6 +409,11 @@ const KNOWN = {
 		'the page may intercept the navigation, which commits the URL it names: the link is followed at the document address',
 	'pushState on a page that listens for currententrychange':
 		'the entry would be made in two steps the page would hear of: it is made at the document address',
+	// a frame that is to show another origin gets a fresh browsing context
+	// (src/inject/dom/freshContext.ts), whose first document makes none
+	'a link clicked in a frame of B under A': FRESH_CONTEXT,
+	'location.href in a frame of B under A': FRESH_CONTEXT,
+	'a link clicked in a srcdoc frame of A': FRESH_CONTEXT,
 };
 
 /** where every URL is looked at: top-level on a site, or `[top, frame]` */

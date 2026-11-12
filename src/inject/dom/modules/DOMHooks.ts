@@ -28,6 +28,7 @@ import cloneRawNode, {
 	releaseMarkup,
 	templateContentDocument,
 } from '../cloneNode';
+import { frameWindow } from '../freshContext';
 import { responseURLOf } from '../responseDocuments';
 import WriteStream from '../WriteStream';
 import {
@@ -60,6 +61,21 @@ const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
  */
 export function pendingAttributes(element: unknown): boolean {
 	return attributeTab.has(element as CustomElement);
+}
+
+/**
+ * `attribute` of `element` made real by STomp itself, natively, now (a frame
+ * given a fresh context, freshContext.ts): the hooks' view, while they work
+ * on it, drops a write of it, and `value` is the one they applied
+ */
+export function appliedAttribute(
+	element: Element,
+	attribute: string,
+	value: string | null,
+) {
+	attributeTab.get(element as CustomElement)?.delete(attribute);
+	if (!appliedTab.has(element)) appliedTab.set(element, new Map());
+	appliedTab.get(element)!.set(attribute, value);
 }
 
 /** a value the hooks' view of `element` holds (null: removed) made real */
@@ -623,6 +639,26 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						'_self',
 						...args.slice(2),
 					]);
+
+				// a frame of this document by that name still on its initial
+				// about:blank fires no navigate event: one sent to another
+				// origin gets a fresh context first, which the browser then
+				// navigates by its name
+				if (routable && destination) {
+					const element = this.client.frameNamed(name);
+					const view = element && frameWindow(element);
+					let client: DocumentClient | undefined;
+					try {
+						client = view
+							? ((view as unknown as Record<string, unknown>)[
+									this.client.names.client
+								] as DocumentClient | undefined)
+							: undefined;
+					} catch (error) {
+						// another real origin's
+					}
+					client?.freshTo?.(destination, null, true);
+				}
 
 				// a top-level page is its own top and parent: navigate the frame
 				// (a sandboxed frame's too)

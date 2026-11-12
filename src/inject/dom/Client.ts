@@ -773,6 +773,23 @@ export default class DocumentClient extends Client {
 	}
 	/** the keying map of this document's browsing context group: its top's, or its opener's top's */
 	#agentGroup(): Map<string, boolean> {
+		return (this.groupClient.agentClusters ??= new Map());
+	}
+	/**
+	 * @internal the client that keeps what this document's browsing context
+	 * group shares: its top's, or its opener's top's
+	 */
+	get groupClient(): DocumentClient {
+		const document = this.global.document;
+		const kept = this.#group;
+		if (kept && kept.document === document) return kept.client;
+		const client = this.#findGroup();
+		this.#group = { document, client };
+		return client;
+	}
+	/** the group's client, kept per document (every stand-in handed out asks, IFrame) */
+	#group?: { document: Document; client: DocumentClient };
+	#findGroup(): DocumentClient {
 		const topOf = (client: DocumentClient): DocumentClient => {
 			try {
 				const top = (client.proxiedTop as Record<string, unknown>)[
@@ -802,8 +819,17 @@ export default class DocumentClient extends Client {
 			if (!opener?.isDOM || opener === group) break;
 			group = topOf(opener);
 		}
-		return (group.agentClusters ??= new Map());
+		return group;
 	}
+	/**
+	 * @internal the windows each frame element showed before the fresh
+	 * browsing contexts it was given (freshContext.ts), kept by the group's
+	 * client, and the element each such window was the frame of
+	 */
+	freshRegistry?: {
+		frames: WeakMap<Element, { windows: object[]; destination: string | null }>;
+		elements: WeakMap<object, Element>;
+	};
 	/** the nonce the inject's own scripts carry in a document without allow-scripts, else null */
 	get scriptNonce(): string | null {
 		return this.allows('allow-scripts')
@@ -1260,12 +1286,16 @@ export default class DocumentClient extends Client {
 	 * names.
 	 */
 	hasFrameNamed(name: string): boolean {
-		if (!name || name.startsWith('_')) return false;
+		return this.frameNamed(name) !== null;
+	}
+	/** the frame element of this document named `name` (`target`, window.open), if any */
+	frameNamed(name: string): Element | null {
+		if (!name || name.startsWith('_')) return null;
 		for (const frame of this.global.document.querySelectorAll(
 			'iframe[name], frame[name]',
 		))
-			if (frame.getAttribute('name') === name) return true;
-		return false;
+			if (frame.getAttribute('name') === name) return frame;
+		return null;
 	}
 	/**
 	 * Ask the host application to open `url` in a new tab. Only when the host
@@ -1355,6 +1385,29 @@ export default class DocumentClient extends Client {
 	}
 	/** the document was opened (document.open(), or a write once it had loaded): its URL is its opener's, its loads may still have no worker */
 	opened = false;
+	/**
+	 * @internal this document, a frame still on its initial about:blank, is
+	 * to show `destination` (a POST's body: `formData`): a fresh context for
+	 * it when that is of another origin, navigated there, or `empty` for the
+	 * browser to navigate by the frame's name; whether it was given (IFrame)
+	 */
+	freshTo?: (
+		destination: URL,
+		formData?: FormData | null,
+		empty?: boolean,
+	) => boolean;
+	/**
+	 * @internal give a frame of this document a fresh browsing context
+	 * navigated to `routed` (a POST's body: `formData`), before a document
+	 * of another origin than the one it shows loads in it (IFrame,
+	 * freshContext.ts); a method, so a frame running another bundle asks
+	 */
+	freshFrame?: (
+		element: Element,
+		routed: string | null,
+		formData?: FormData | null,
+		page?: string,
+	) => boolean;
 	/** @internal give the loads the parser made from markup the page wrote their copies (DOMAttributes; DOMHooks' write calls it) */
 	writtenLoads?: (document: Document) => void;
 	/**

@@ -79,6 +79,7 @@ import {
 	bindHistory,
 	canTraverse,
 	clientView,
+	earlierWindows,
 	noteActivation,
 	noteBrowserNavigation,
 	traverse,
@@ -2156,9 +2157,13 @@ export class Frame extends EventTarget {
 	/** @internal the frame's window, its history told how to read its documents */
 	historyWindow(): Window | null {
 		const win = this.element.contentWindow;
-		bindHistory(win, (target) =>
-			clientView(target, helperNames(this.controller.config).client),
-		);
+		const name = helperNames(this.controller.config).client;
+		if (win)
+			bindHistory(
+				win,
+				(target) => clientView(target, name),
+				earlierWindows(win, name),
+			);
 		return win;
 	}
 	/**
