@@ -7,6 +7,7 @@
 // which need no WebCodecs; G.722 also against the output of the ITU-T
 // reference codec (G.191 STL) for one signal. The browser's part (Opus, tracks) is the webrtc-media
 // suite's. Skips when esbuild is not installed, as rewriter-unit does.
+import { X509Certificate } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { done, ok, OUT, sleep } from '../lib.mjs';
@@ -1035,7 +1036,7 @@ const certificate = await m.generateCertificate();
 const formats = m.stackFormats(template('152'));
 
 class Peer {
-	constructor(engine, address) {
+	constructor(engine, address, own = certificate) {
 		this.engine = engine;
 		this.address = address;
 		this.events = [];
@@ -1043,8 +1044,8 @@ class Peer {
 		this.onFrame = null;
 		this.id = engine.create({
 			local: address,
-			cert: m.hex(certificate.certificate),
-			key: m.hex(certificate.privateKey),
+			cert: m.hex(own.certificate),
+			key: m.hex(own.privateKey),
 			...formats,
 		});
 	}
@@ -1565,5 +1566,96 @@ receiver.close();
 }
 a.engine.destroy(a.id);
 b.engine.destroy(b.id);
+
+// --- the certificate's DER ---
+
+// A serial is 64 random bits, as Chrome's. Written with a zero byte first
+// where none belongs (the first random byte zero and the next under 0x80,
+// one certificate in 256), the far end's parser refused the certificate:
+// the handshake stopped there and the connection stayed "connecting"
+const random = crypto.getRandomValues.bind(crypto);
+async function withSerial(first) {
+	crypto.getRandomValues = (array) => {
+		random(array);
+		if (array.length === 8) array.set(first);
+		return array;
+	};
+	try {
+		return await m.generateCertificate();
+	} finally {
+		crypto.getRandomValues = random;
+	}
+}
+const serials = [];
+for (const first of [
+	[0x00, 0x01],
+	[0x00, 0x00, 0x00],
+	[0x00, 0x80],
+	[0x80, 0x01],
+	[0x7f],
+]) {
+	const made = await withSerial(first);
+	let read;
+	try {
+		const parsed = new X509Certificate(made.certificate);
+		read = parsed.verify(parsed.publicKey) ? parsed.serialNumber : 'unsigned';
+	} catch (error) {
+		read = `refused: ${error.message}`;
+	}
+	serials.push([first.map((byte) => byte.toString(16)).join(), read, made]);
+}
+ok(
+	'a certificate parses and verifies whatever its serial begins with, the serial in the fewest bytes DER allows',
+	serials.every(
+		([first, read]) =>
+			/^[0-9A-F]+$/.test(read) &&
+			read.length <= 18 &&
+			// a serial that begins with a set bit has a sign byte (not shown)
+			(first.startsWith('80') ? read.startsWith('80') : true),
+	),
+	JSON.stringify(serials.map(([first, read]) => [first, read])),
+);
+{
+	// two stacks, each with a certificate whose serial begins with a zero byte
+	const own = serials[0][2];
+	const c = new Peer(await stack(), '198.51.100.3:5000', own);
+	const d = new Peer(await stack(), '198.51.100.4:5000', serials[1][2]);
+	c.other = d;
+	d.other = c;
+	c.control({
+		op: 'media',
+		kind: 'audio',
+		dir: 'sendrecv',
+		stream: 's',
+		track: 't',
+	});
+	const offered = c.control({ op: 'offer' });
+	const answered = d.control({
+		op: 'remote_offer',
+		sdp: offered.sdp,
+		dir0: 'sendrecv',
+	});
+	c.control({ op: 'answer', sdp: answered.sdp });
+	c.control({
+		op: 'remote_candidate',
+		candidate: `candidate:1 1 udp 2113937151 198.51.100.4 5000 typ host`,
+	});
+	d.control({
+		op: 'remote_candidate',
+		candidate: `candidate:1 1 udp 2113937151 198.51.100.3 5000 typ host`,
+	});
+	for (let i = 0; i < 1500 && !(connected(c) && connected(d)); i++) {
+		c.tick();
+		d.tick();
+		await sleep(2);
+	}
+	ok(
+		'two stacks whose serials begin with a zero byte connect',
+		connected(c) && connected(d),
+		JSON.stringify([...c.events, ...d.events].filter((e) => e.ev === 'error')),
+	);
+	c.engine.destroy(c.id);
+	d.engine.destroy(d.id);
+}
 
 await done();

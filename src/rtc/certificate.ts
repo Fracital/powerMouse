@@ -40,8 +40,19 @@ function tlv(tag: number, ...parts: Uint8Array[]): Uint8Array {
 }
 const seq = (...parts: Uint8Array[]) => tlv(0x30, ...parts);
 const set = (...parts: Uint8Array[]) => tlv(0x31, ...parts);
-const integer = (bytes: Uint8Array) =>
-	tlv(0x02, bytes[0] & 0x80 ? new Uint8Array([0, ...bytes]) : bytes);
+/**
+ * A non-negative INTEGER from its big-endian bytes, as DER has it: in the
+ * fewest bytes, with a zero byte first only where the first would read as
+ * a sign. A parser of the far end refuses any other (dimpl's, OpenSSL's),
+ * and with it the certificate and the handshake.
+ */
+function integer(bytes: Uint8Array): Uint8Array {
+	let at = 0;
+	while (at < bytes.length - 1 && bytes[at] === 0 && !(bytes[at + 1] & 0x80))
+		at++;
+	const value = bytes.subarray(at);
+	return tlv(0x02, value[0] & 0x80 ? new Uint8Array([0, ...value]) : value);
+}
 const bitString = (bytes: Uint8Array) =>
 	tlv(0x03, new Uint8Array([0, ...bytes]));
 const utf8 = (text: string) => tlv(0x0c, new TextEncoder().encode(text));
@@ -72,15 +83,7 @@ const COMMON_NAME = oid('2.5.4.3');
 /** an ECDSA signature from WebCrypto's raw r||s to DER */
 function derSignature(raw: Uint8Array): Uint8Array {
 	const half = raw.length / 2;
-	const trim = (part: Uint8Array) => {
-		let at = 0;
-		while (at < part.length - 1 && part[at] === 0) at++;
-		return part.subarray(at);
-	};
-	return seq(
-		integer(trim(raw.subarray(0, half))),
-		integer(trim(raw.subarray(half))),
-	);
+	return seq(integer(raw.subarray(0, half)), integer(raw.subarray(half)));
 }
 
 const hex = (bytes: Uint8Array) =>
@@ -98,8 +101,8 @@ export async function generateCertificate(): Promise<Certificate> {
 	const privateKey = new Uint8Array(
 		await crypto.subtle.exportKey('pkcs8', keys.privateKey),
 	);
+	// 64 random bits, as Chrome's: eight bytes, or nine with the sign byte
 	const serial = crypto.getRandomValues(new Uint8Array(8));
-	serial[0] &= 0x7f;
 	const name = seq(set(seq(COMMON_NAME, utf8('WebRTC'))));
 	const notBefore = Date.now() - DAY_MS;
 	const expires = Date.now() + 30 * DAY_MS;

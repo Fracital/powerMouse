@@ -775,7 +775,10 @@ TURN server.
   "once per controller" waits for it to.
 - **The DTLS certificate** is made by the worker with WebCrypto (ECDSA
   P-256, a self-signed X.509 written by `src/rtc/certificate.ts`) and
-  handed to the stack. str0m's crypto backend makes one with rcgen on
+  handed to the stack. Its serial is 64 random bits, as Chrome's, and
+  every INTEGER is in the fewest bytes DER allows: the far end's parser
+  (dimpl's, OpenSSL's) refuses a certificate with a padded one, and the
+  handshake stops there. str0m's crypto backend makes one with rcgen on
   aws-lc-rs, which has no wasm build: `rust/vendor/str0m-rust-crypto` is
   the published crate without that feature.
 - **The browser's `RTCPeerConnection` is not the validator.** (With media,
