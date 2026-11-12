@@ -1,6 +1,7 @@
 import { routeXHR } from '../../../routeURL';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
+import { reportOnly } from '../../modules/Fetch';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
@@ -99,6 +100,7 @@ export default class NavigatorModule extends Module<DocumentClient> {
 							return false;
 						}
 						if (mixed?.action === 'upgrade') url = mixed.url;
+						reportOnly(this.client, url, 2);
 						args[0] = routeXHR(new StompURL(url, this.client.url));
 
 						return Reflect.apply(target, that, args);
