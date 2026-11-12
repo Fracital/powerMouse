@@ -633,6 +633,11 @@ The first release after a four-year gap. Everything below is breaking.
   and in its shape, until speech comes again, instead of silence; and a
   peer's DTMF events as their two tones at Chrome's levels in place of the
   sound of their time (docs/webrtc-over-wisp.md section 16).
+- A proxied page's audio receiver makes up a frame that comes too late
+  (a delay the jitter buffer did not cover) from the sound before it, as
+  Chrome's NetEq does, instead of playing 20 ms of silence: the last period
+  repeated in phase and fading, the next frame faded in from it
+  (docs/webrtc-over-wisp.md section 16).
 - A proxied page sends comfort noise where Chrome does: with G.711 or G.722
   and CN negotiated, WebRTC's voice detector, comfort noise encoder and
   AudioEncoderCng framing, ported bit for bit (`src/rtc/vad.ts`,

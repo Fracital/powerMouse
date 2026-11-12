@@ -198,10 +198,13 @@ export class Playout<T> {
 		}
 		const head = this.#held[0];
 		if (!head) {
-			// nothing held: the time stands still, and a stream that stays
-			// silent fills the buffer again before it plays
+			// Nothing held: the frame due has not come. Its time passes, as
+			// NetEq's does (the caller plays something in its place), and
+			// the frame is late when it comes; a stream that stays silent
+			// fills the buffer again before it plays.
 			this.stats.gaps++;
 			if (++this.#empty >= EMPTY_PULLS) this.#next = null;
+			else this.#next += Math.round(this.frameMs * this.#rate);
 			return null;
 		}
 		this.#empty = 0;

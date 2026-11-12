@@ -1155,14 +1155,28 @@ channels from the first packet whose first byte says stereo; G.711 by hand
 and drawn out to 48 kHz. Decoded frames wait in a playout buffer
 (`src/rtc/playout.ts`): it starts playing once two frames are held, plays
 one frame per 20 ms on the worker's clock (corrected for timers that fire
-late), plays silence for a frame that is not there when it is due, lets the
-time stand still when nothing at all is held (which is how the delay grows
-when arrivals vary more than it covers), jumps over a hole longer than
-200 ms (a sender that left a silence out), drops a frame that comes after
-its time, and, when it has stayed deeper than the spread of the arrival
-times asks for over a hundred frames, gives up the quietest of the next few
-frames without a gap. The track's time is a steady count of what was
-written.
+late), makes up a frame that is not there when it is due (below), jumps
+over a hole longer than 200 ms (a sender that left a silence out), drops a
+frame that comes after its time, grows its delay with the spread of the
+arrival times, and, when it has stayed deeper than that spread asks for
+over a hundred frames, gives up the quietest of the next few frames
+without a gap. The track's time is a steady count of what was written.
+
+A frame that has not come when it is due (a delay longer than the buffer
+covers: the wisp server or the worker held up on a loaded machine) is made
+up as NetEq's expand makes it up, not left silent: the last period of what
+was played (the lag between 10 and 20 ms its repeats correlate best at) is
+repeated, in phase, fading by a tenth a frame where it repeats well and
+by nearly half where it does not, and the frame that comes next fades in
+from it over 2.5 ms; the late frame is dropped when it comes, and its time
+has passed. After a telephone event what is missing stays silent, and
+after three frames with nothing held the stream is taken to have paused.
+Measured with the far end's tone held up four times for 80 ms on its way
+(a relay of the suite's in `webrtc-media`): Chrome's receiver plays it on
+with 0 to 1 dips of its 5 ms windows and 0 to 6 breaks of phase, and so
+does the page now (0 and 0 in its runs); it used to play 20 ms of silence
+each time (8 dips, 2 breaks, the pitch read at 652 Hz for 660), which is
+how the suite's tone checks failed now and then on a loaded machine.
 
 Measured in headless Chrome 152 with two connections of one worker joined
 over the bridge of section 5.4 (a 440 Hz tone written to a generator track

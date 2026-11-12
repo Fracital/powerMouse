@@ -467,9 +467,11 @@ async function tones(own, far, prefer) {
  * each is given name only the relay), which loses a tenth of the far end's
  * Opus packets, one at a time: each lost packet is one the next one's FEC
  * copy can rebuild, once the far end's encoder makes copies (libopus makes
- * them when the receiver's reports say packets are lost).
+ * them when the receiver's reports say packets are lost). Without `lossy`
+ * it loses nothing, and `pause(ms)` holds what the far end sends for `ms`
+ * and then lets it all through: a delay the jitter buffer has to ride out.
  */
-async function lossyRelay() {
+async function lossyRelay(lossy) {
 	const near = createSocket('udp4');
 	const toward = createSocket('udp4');
 	await Promise.all(
@@ -501,13 +503,25 @@ async function lossyRelay() {
 			message.length > 12 &&
 			(message[0] & 0xe0) === 0x80 &&
 			(message[1] & 0x7f) === 111 &&
-			relay.opus++ % 10 === 5
+			relay.opus++ % 10 === 5 &&
+			lossy
 		) {
 			relay.dropped++;
 			return;
 		}
-		if (relay.own) near.send(message, relay.own.port, relay.own.address);
+		if (!relay.own) return;
+		if (relay.held) relay.held.push(message);
+		else near.send(message, relay.own.port, relay.own.address);
 	});
+	relay.held = null;
+	relay.pause = (ms) => {
+		relay.held ??= [];
+		setTimeout(() => {
+			for (const message of relay.held ?? [])
+				near.send(message, relay.own.port, relay.own.address);
+			relay.held = null;
+		}, ms);
+	};
 	return relay;
 }
 /** a description whose only candidate is `address`:`port` */
@@ -532,9 +546,9 @@ function through(sdp, address, port) {
  * must rebuild each lost packet from the next one's copy, as the browser's
  * own receiver does.
  */
-async function lossy(own, far) {
+async function lossy(own, far, spikes = false) {
 	const record = { failure: null };
-	const relay = await lossyRelay();
+	const relay = await lossyRelay(!spikes);
 	try {
 		await own.call('open');
 		await far.call('open');
@@ -562,14 +576,19 @@ async function lossy(own, far) {
 		await own.call('muted', 0, false);
 		// the far end's encoder makes copies once a report of the loss
 		// reaches it (receiver reports come every five seconds or so)
-		const until = Date.now() + 20000;
+		const until = Date.now() + (spikes ? 1000 : 20000);
 		while (Date.now() < until) {
-			if ((await far.call('sentFec')).copies > 25) break;
+			if (!spikes && (await far.call('sentFec')).copies > 25) break;
 			await sleep(500);
 		}
 		record.before = await far.call('sentFec');
 		const dropped = relay.dropped;
-		record.heard = await own.call('hear', 0, 660, 3000);
+		const hearing = own.call('hear', 0, 660, 3000);
+		// four delays of 80 ms while it listens
+		if (spikes)
+			for (const at of [500, 1200, 1900, 2600])
+				setTimeout(() => relay.pause(80), at);
+		record.heard = await hearing;
 		record.lost = relay.dropped - dropped;
 		record.sent = await far.call('sentFec');
 		record.stats = await own.call('lossStats');
@@ -781,6 +800,12 @@ for (const prefer of ['audio/PCMU', 'audio/G722']) {
 	);
 }
 natively.lossy = await lossy(end(control), end(native, 'the far end'));
+natively.spikes = await lossy(end(control), end(native, 'the far end'), true);
+ok(
+	"natively: the far end's tone held up four times for 80 ms plays on with no break (NetEq makes up what is missing)",
+	!natively.spikes.failure && natively.spikes.heard.level > 0.25,
+	JSON.stringify(natively.spikes),
+);
 ok(
 	"natively: with a tenth of the far end's Opus packets lost, its encoder makes FEC copies and the receiver rebuilds the lost packets from them",
 	copied(natively.lossy) &&
@@ -1084,6 +1109,26 @@ for (const proxied of pages) {
 				quietRuns(control.frames),
 				got.owner,
 			]),
+		);
+	}
+	// the far end's packets held up on the way four times
+	{
+		const got = await lossy(end(proxied), end(native, 'the far end'), true);
+		const want = natively.spikes;
+		// a frame that had not come was 20 ms of silence (a dip of four 5 ms
+		// windows and a break either side, the pitch read 8 Hz low)
+		ok(
+			`${label}: the far end's tone held up four times for 80 ms on its way plays on as Chrome's receiver plays it: what is missing is made up, not silence`,
+			!got.failure &&
+				got.owner === 'server' &&
+				got.heard.level > 0.25 &&
+				// natively 0 or 1 dips and up to 6 breaks (measured); the
+				// bar is absolute, as Chrome's own playout of the control
+				// sometimes falls apart on a loaded machine
+				got.heard.dips <= 2 &&
+				got.heard.jumps <= 6 &&
+				Math.abs(got.heard.pitch - 660) <= 3,
+			JSON.stringify([got.failure, got.heard, want.heard, got.owner]),
 		);
 	}
 	// a tenth of the far end's packets lost on the way
