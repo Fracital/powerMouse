@@ -1,0 +1,62 @@
+<!doctype html>
+<title>IMPORTMAP</title>
+<!-- the import map a modern SPA ships: a bare specifier mapped to a module, a
+     trailing-slash prefix mapped to a package directory, a dependency mapped
+     globally and overridden for modules under a scope. Each target is routed
+     through the proxy; every case below must resolve as it does natively. -->
+<script type="importmap">
+	{
+		"imports": {
+			"react": "/vendor/react.js",
+			"react-dom/": "/vendor/reactdom/",
+			"dep": "/vendor/dep-global.js"
+		},
+		"scopes": {
+			"/vendor/scoped/": { "dep": "/vendor/dep-scoped.js" }
+		}
+	}
+</script>
+<script>
+	window.__im = {};
+</script>
+<!-- each static import in its own module, so one that fails to resolve does
+     not keep the others from running -->
+<script type="module">
+	import React from 'react';
+
+	window.__im.staticBare = React;
+</script>
+<script type="module">
+	import rd, { createRoot } from 'react-dom/client';
+
+	window.__im.staticPrefix = rd + ':' + createRoot();
+</script>
+<script type="module">
+	import dep from 'dep';
+
+	window.__im.staticGlobalDep = dep;
+</script>
+<script type="module">
+	import scoped from '/vendor/scoped/host.js';
+
+	window.__im.scopedDep = scoped;
+</script>
+<script type="module">
+	const rec = async (name, run) => {
+		try {
+			window.__im[name] = await run();
+		} catch (error) {
+			window.__im[name] = 'ERR:' + String(error?.message || error).slice(0, 70);
+		}
+	};
+	await rec('dynBare', async () => (await import('react')).default);
+	await rec(
+		'dynPrefix',
+		async () => (await import('react-dom/client')).default,
+	);
+	await rec('metaResolveBare', async () => import.meta.resolve('react'));
+	await rec('metaResolvePrefix', async () =>
+		import.meta.resolve('react-dom/client'),
+	);
+	window.__im.done = true;
+</script>

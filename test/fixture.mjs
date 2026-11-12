@@ -128,6 +128,17 @@ const MODULES = {
 		"import('./mod-a.js').then((m) => { __rw.classicImportBase = m.a === 'SUB'; });",
 	'/mod-re.js':
 		"export * from './mod-a.js'; export { a as b } from './mod-a.js';",
+	// the import-map fixture's module targets (importmap suite): a bare
+	// specifier maps to one, a trailing-slash prefix to a directory, and a
+	// scope overrides a dependency for modules under it
+	'/vendor/react.js': "export default 'REACT-DEFAULT'; export const v = 18;",
+	// a trailing-slash prefix maps `react-dom/client` here, with no extension,
+	// the way a package directory on a CDN serves a subpath
+	'/vendor/reactdom/client':
+		"export default 'RD-CLIENT'; export const createRoot = () => 'ROOT';",
+	'/vendor/dep-global.js': "export default 'DEP-GLOBAL';",
+	'/vendor/dep-scoped.js': "export default 'DEP-SCOPED';",
+	'/vendor/scoped/host.js': "import dep from 'dep'; export default dep;",
 };
 
 const PAGES = {
