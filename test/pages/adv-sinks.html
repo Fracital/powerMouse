@@ -1,0 +1,621 @@
+<!doctype html>
+<title>ADV SINKS</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// Every sink the browser has, found at run time from its own interfaces
+	// rather than from a list: each element it knows, each interface it can
+	// make without arguments, and the window's own objects, in a frame of
+	// their own. Every method of an interface's own prototype is called and
+	// every writable property set with one payload at a time: an absolute URL
+	// of this site that names the sink (a request for it that reaches the
+	// network without the proxy is a leak the suite reports), markup and code
+	// that say who `top` is, and a javascript: URL that does the same. A
+	// payload that ran with another top is a leak this page reports.
+	(() => {
+		const P = __advProbe;
+		const A = __advAsync;
+		const SKIP = new RegExp(
+			[
+				// blocks, prompts, leaves the page or the session
+				'^(alert|confirm|prompt|print|close|stop|showModalDialog|blur|focus|moveTo|moveBy|resizeTo|resizeBy|scroll\\w*)$',
+				'^(back|forward|go|traverseTo|reload|updateCurrentEntry)$',
+				'^(requestFullscreen|webkitRequestFullscreen|webkitRequestFullScreen|exitFullscreen|requestPointerLock|exitPointerLock|showPicker|showModal|showPopover|requestStorageAccess\\w*|requestPermission)$',
+				// devices, permissions, payment, identity: nothing of the page's
+				'^(getUserMedia|getDisplayMedia|webkitGetUserMedia|requestDevice|requestPort|requestMIDIAccess|requestMediaKeySystemAccess|share|vibrate|registerProtocolHandler|unregisterProtocolHandler|requestAdapter|requestLock|query|setAppBadge|clearAppBadge|getInstalledRelatedApps|getBattery|requestWakeLock|request|login|logout|preventSilentAccess|store|create|get)$',
+				// the harness and the proxy's own probes
+				'^__adv',
+			].join('|'),
+		);
+		const SKIP_INTERFACES =
+			/^(Credentials|CredentialsContainer|MediaDevices|Bluetooth|USB|HID|Serial|XRSystem|Clipboard|PaymentRequest|PresentationRequest|Keyboard|WakeLock|IdleDetector|EyeDropper|FileSystem\w*|StorageManager|Notification|ServiceWorkerContainer|ServiceWorkerRegistration|LockManager|Permissions)$/;
+		const NS = {
+			html: 'http://www.w3.org/1999/xhtml',
+			svg: 'http://www.w3.org/2000/svg',
+			math: 'http://www.w3.org/1998/Math/MathML',
+		};
+		// (#trace logs each call, to find one that takes the renderer down)
+		const TRACE = /trace/.test(location.hash);
+		// (#skip=Selection,Range leaves those labels out, to find a call that
+		// takes the renderer down)
+		const SKIP_LABELS =
+			/skip=([\w,:.()]+)/.exec(location.hash)?.[1]?.split(',') ?? [];
+		const hits = new Map();
+		const leaks = [];
+		let next = 0;
+		window.__advSinkHit = (id, top, href) => {
+			hits.set(id, top);
+			if (top !== 'ok')
+				leaks.push(`${id} saw ${top} ${String(href).slice(0, 80)}`);
+		};
+		const sinks = new Map();
+		// a sink is also given its payload as a Trusted Types object (a
+		// TrustedHTML, a TrustedScript, a TrustedScriptURL, from a policy that
+		// passes it through): a hook that rewrites only strings let those in
+		// as the page wrote them
+		const policy = window.trustedTypes?.createPolicy('adv-sinks', {
+			createHTML: (value) => value,
+			createScript: (value) => value,
+			createScriptURL: (value) => value,
+		});
+		const KINDS = ['url', 'markup', 'code', 'js'].concat(
+			policy ? ['trustedURL', 'trustedMarkup', 'trustedCode'] : [],
+		);
+		const payloads = (sink) => {
+			const id = `s${next++}`;
+			sinks.set(id, sink);
+			// it reports to the first window up its chain that listens (a
+			// payload may run in a document of a frame it made: a srcdoc, a
+			// popup), saying whether its top is that window, this page
+			const report = `(function (w) { for (;;) { try { if (w.__advSinkHit) return w.__advSinkHit(${JSON.stringify(id)}, top === w ? "ok" : "OTHER-WINDOW", location.href); } catch (e) {} if (w === w.parent) return; w = w.parent; } })(window)`;
+			return {
+				url: `${location.origin}/sink?${encodeURIComponent(sink)}`,
+				markup: `<img src="x:" onerror='${report}'><svg><script>${report}<\/script></svg><script>${report}<\/script>`,
+				code: report,
+				js: `javascript:${report}`,
+				get trustedURL() {
+					return policy.createScriptURL(this.url);
+				},
+				get trustedMarkup() {
+					return policy.createHTML(this.markup);
+				},
+				get trustedCode() {
+					return policy.createScript(this.code);
+				},
+			};
+		};
+		// A call may navigate its frame, write over it or remove its document,
+		// so each gets a genuinely fresh one. The live frames are a ring of at
+		// most POOL: Chrome makes no more than a thousand frames in a page, and
+		// thousands of injected cross-origin frames exhaust the renderer, so
+		// the oldest goes when a new one is made. A bypass is caught by the
+		// test's request recorder whether or not the frame that made it is
+		// still attached, and a payload reports up its window chain as it runs,
+		// so dropping old frames costs only a few of the very latest handlers,
+		// not the detection of an escape.
+		const POOL = 12;
+		let frame = null;
+		const frames = [];
+		const fresh = () => {
+			frame = document.createElement('iframe');
+			frame.style.display = 'none';
+			document.body.append(frame);
+			frames.push(frame);
+			while (frames.length > POOL) frames.shift().remove();
+			return frame.contentWindow;
+		};
+		const alive = (w) => {
+			try {
+				return w.document && w.location.href === 'about:blank';
+			} catch (error) {
+				return false;
+			}
+		};
+		// element names: the lowercased tail of every element interface the
+		// browser has, kept where the browser makes that interface for it
+		const elementNames = () => {
+			const names = [];
+			const seen = new Set();
+			for (const name of Object.getOwnPropertyNames(window)) {
+				const m = /^(HTML|SVG|MathML)(\w*)Element$/.exec(name);
+				if (!m || !m[2]) continue;
+				const ns = m[1] === 'HTML' ? 'html' : m[1] === 'SVG' ? 'svg' : 'math';
+				const tail = m[2];
+				const lower = tail.toLowerCase();
+				const camel = tail[0].toLowerCase() + tail.slice(1);
+				const guesses = [lower, camel, lower.replace(/element$/, '')];
+				if (ns === 'html')
+					guesses.push(
+						...({
+							Anchor: ['a'],
+							Paragraph: ['p'],
+							Image: ['img'],
+							TableRow: ['tr'],
+							TableCell: ['td', 'th'],
+							TableSection: ['tbody', 'thead', 'tfoot'],
+							TableCaption: ['caption'],
+							TableCol: ['col', 'colgroup'],
+							OList: ['ol'],
+							UList: ['ul'],
+							DList: ['dl'],
+							LI: ['li'],
+							Heading: ['h1'],
+							Quote: ['q', 'blockquote'],
+							Mod: ['ins', 'del'],
+							Directory: ['dir'],
+							Paragraph2: [],
+							TextArea: ['textarea'],
+							FieldSet: ['fieldset'],
+							OptGroup: ['optgroup'],
+							BR: ['br'],
+							HR: ['hr'],
+							Pre: ['pre', 'listing', 'xmp'],
+							DataList: ['datalist'],
+							FencedFrame: ['fencedframe'],
+							Span: ['span'],
+							Unknown: [],
+							Selected: ['selectedcontent'],
+						}[tail] ?? []),
+					);
+				for (const tag of guesses) {
+					const key = `${ns}:${tag}`;
+					if (seen.has(key)) continue;
+					try {
+						if (
+							document.createElementNS(NS[ns], tag).constructor.name === name
+						) {
+							names.push([ns, tag, name]);
+							seen.add(key);
+						}
+					} catch (error) {
+						// no such name
+					}
+				}
+			}
+			return names;
+		};
+		// what a member of `proto` may be given: its own methods and setters
+		const membersOf = (proto) => {
+			const out = [];
+			for (const key of Object.getOwnPropertyNames(proto)) {
+				if (key === 'constructor' || SKIP.test(key)) continue;
+				const d = Object.getOwnPropertyDescriptor(proto, key);
+				if (typeof d.value === 'function')
+					out.push([key, 'method', d.value.length]);
+				else if (d.set && !/^on/.test(key)) out.push([key, 'set']);
+			}
+			return out;
+		};
+		// Where a method takes the payload: each argument in turn, the others
+		// strings a method of that kind often wants (insertAdjacentHTML's
+		// position, parseFromString's type), and every argument at once.
+		// What each argument is the browser does not say; its count it does
+		const FILLERS = ['beforeend', 'text/html'];
+		// Arguments a member is given at most: document.open with three is
+		// window.open (the Window group's), and in a frame that has had
+		// elements of every kind made in it Chrome 152 and 156 take the
+		// renderer down with it (SIGSEGV, measured)
+		const ARITY = { 'Document.open': 2 };
+		const placements = (length, member) => {
+			const n = Math.min(Math.max(length, 1), ARITY[member] ?? 3);
+			const out = [[-1, null]];
+			for (let slot = 0; slot < n; slot++)
+				for (const filler of n > 1 ? FILLERS : [null]) out.push([slot, filler]);
+			return out;
+		};
+		const args = (method, p, slot, filler, member) => {
+			const n = Math.min(Math.max(method.length, 1), ARITY[member] ?? 3);
+			if (slot === -1) return Array.from({ length: Math.min(n, 3) }, () => p);
+			const out = Array.from({ length: Math.min(n, 3) }, () => filler ?? p);
+			out[slot] = p;
+			return out;
+		};
+		// one member of an instance (made by `make` in a fresh frame when
+		// the last one is gone), with each payload in turn
+		// (`own`: every call in a frame of its own, for members that navigate
+		// it, where one payload's navigation would cancel the last's)
+		// every so often the loop yields a task, so a frame's loads, timers and
+		// error handlers run and report before the ring drops the frame
+		let ops = 0;
+		const breathe = async () => {
+			if (++ops % 150 === 0)
+				await new Promise((resolve) => setTimeout(resolve, 0));
+		};
+		let lastLabel = '';
+		// A wall-clock budget so the page always finishes well under the
+		// suite's limit, whatever the machine: once it passes, every hammer
+		// returns at once and the remaining groups drain. The sink families
+		// that matter run first (elements, their attributes, the shared
+		// members, the document, the window), so a slow run only truncates the
+		// long tail of rarely-interesting constructors; what ran is still held
+		// against the native run, and a bypass or a leak is caught whenever it
+		// happens. (#budget=<ms> overrides for a probe of a single slow sink.)
+		const BUDGET = Number(/budget=(\d+)/.exec(location.hash)?.[1]) || 90000;
+		const DEADLINE = Date.now() + BUDGET;
+		const hammer = async (label, make, key, kind, length = 1, own = false) => {
+			if (Date.now() > DEADLINE) return;
+			await breathe();
+			if (
+				SKIP_LABELS.some((skip) => label === skip || `${label}.${key}` === skip)
+			)
+				return;
+			// an interface's calls start in a frame of their own: what one left
+			// in a document (an element, a selection, a written document) is
+			// none of the next one's
+			let scopeFresh = label !== lastLabel;
+			lastLabel = label;
+			const slots =
+				kind === 'set' ? [[0, null]] : placements(length, `${label}.${key}`);
+			for (const [slot, filler] of slots)
+				for (const which of KINDS) {
+					let w = frame?.contentWindow;
+					if (own || scopeFresh || !w || !alive(w)) w = fresh();
+					scopeFresh = false;
+					let target;
+					try {
+						target = make(w);
+					} catch (error) {
+						return;
+					}
+					if (target === null || target === undefined) return;
+					const p = payloads(`${label}.${key}`)[which];
+					if (TRACE) console.log(`sink ${label}.${key} ${which}`);
+					try {
+						if (kind === 'set') target[key] = p;
+						else {
+							const result = Reflect.apply(
+								target[key],
+								target,
+								args(target[key], p, slot, filler, `${label}.${key}`),
+							);
+							// a promise's rejection is the member's answer, not a leak
+							if (result && typeof result.catch === 'function')
+								result.catch(() => {});
+						}
+					} catch (error) {
+						// refused: the browser's answer
+					}
+				}
+		};
+		const groups = [];
+		// every element interface, connected, its own prototype's members
+		groups.push(async () => {
+			let count = 0;
+			for (const [ns, tag, iface] of elementNames()) {
+				const proto = window[iface].prototype;
+				for (const [key, kind, length] of membersOf(proto)) {
+					await hammer(
+						`${ns}:${tag}`,
+						(w) => {
+							const el = w.document.createElementNS(NS[ns], tag);
+							(w.document.body ?? w.document.documentElement).append(el);
+							return el;
+						},
+						key,
+						kind,
+						length,
+					);
+					count++;
+				}
+			}
+			return count;
+		});
+		// every element's content attributes, set as markup would: the ones
+		// its own interface reflects, and the ones that carry URLs with no
+		// accessor that reads them as one (a list of URLs, a namespaced name)
+		const CONTENT_ONLY = [
+			'ping',
+			'srcset',
+			'imagesrcset',
+			'xlink:href',
+			'background',
+			'poster',
+			'archive',
+			'longdesc',
+			'cite',
+			'itemid',
+			'manifest',
+		];
+		groups.push(async () => {
+			let count = 0;
+			for (const [ns, tag, iface] of elementNames()) {
+				const names = new Set(CONTENT_ONLY);
+				for (const key of Object.getOwnPropertyNames(window[iface].prototype)) {
+					const d = Object.getOwnPropertyDescriptor(
+						window[iface].prototype,
+						key,
+					);
+					if (d.set && !/^on/.test(key)) names.add(key.toLowerCase());
+				}
+				for (const name of names) {
+					await hammer(
+						`${ns}:${tag}@${name}`,
+						(w) => {
+							const el = w.document.createElementNS(NS[ns], tag);
+							(w.document.body ?? w.document.documentElement).append(el);
+							return {
+								set: (value) =>
+									name === 'xlink:href'
+										? el.setAttributeNS(
+												'http://www.w3.org/1999/xlink',
+												name,
+												value,
+											)
+										: el.setAttribute(name, value),
+							};
+						},
+						'set',
+						'method',
+						1,
+					);
+					count++;
+				}
+			}
+			return count;
+		});
+		// the members every element shares, on a div and an svg <g>
+		groups.push(async () => {
+			let count = 0;
+			for (const iface of [
+				'Element',
+				'HTMLElement',
+				'SVGElement',
+				'Node',
+				'ChildNode',
+				'ParentNode',
+			]) {
+				const proto = window[iface]?.prototype;
+				if (!proto) continue;
+				for (const [key, kind, length] of membersOf(proto))
+					for (const [ns, tag] of [
+						['html', 'div'],
+						['svg', 'g'],
+					]) {
+						await hammer(
+							`${iface}(${tag})`,
+							(w) => {
+								const el = w.document.createElementNS(NS[ns], tag);
+								(w.document.body ?? w.document.documentElement).append(el);
+								return el;
+							},
+							key,
+							kind,
+							length,
+						);
+						count++;
+					}
+			}
+			return count;
+		});
+		// the document, its shadow roots and its other nodes
+		groups.push(async () => {
+			let count = 0;
+			const makers = {
+				Document: (w) => w.document,
+				ShadowRoot: (w) => {
+					const host = w.document.createElement('div');
+					(w.document.body ?? w.document.documentElement).append(host);
+					return host.attachShadow({ mode: 'open' });
+				},
+				DocumentFragment: (w) => w.document.createDocumentFragment(),
+				Text: (w) =>
+					(w.document.body ?? w.document.documentElement).appendChild(
+						w.document.createTextNode(''),
+					),
+				CharacterData: (w) =>
+					(w.document.body ?? w.document.documentElement).appendChild(
+						w.document.createTextNode(''),
+					),
+				Comment: (w) =>
+					(w.document.body ?? w.document.documentElement).appendChild(
+						w.document.createComment(''),
+					),
+				Range: (w) => {
+					const r = w.document.createRange();
+					r.selectNodeContents(w.document.body ?? w.document.documentElement);
+					return r;
+				},
+				Selection: (w) => w.getSelection(),
+				DocumentType: (w) => w.document.doctype,
+			};
+			for (const [iface, make] of Object.entries(makers)) {
+				const proto = window[iface]?.prototype;
+				if (!proto) continue;
+				for (const [key, kind, length] of membersOf(proto)) {
+					await hammer(iface, make, key, kind, length);
+					count++;
+				}
+			}
+			return count;
+		});
+		// everything the window holds an instance of, and every interface it
+		// can make with no arguments
+		groups.push(async () => {
+			let count = 0;
+			const done = new Set([
+				'Document',
+				'ShadowRoot',
+				'DocumentFragment',
+				'Text',
+				'CharacterData',
+				'Comment',
+				'Range',
+				'Selection',
+				'DocumentType',
+				'Element',
+				'HTMLElement',
+				'SVGElement',
+				'Node',
+			]);
+			for (const name of Object.getOwnPropertyNames(window)) {
+				const d = Object.getOwnPropertyDescriptor(window, name);
+				const ctor = d && d.value;
+				if (
+					typeof ctor !== 'function' ||
+					!/^[A-Z]/.test(name) ||
+					!ctor.prototype
+				)
+					continue;
+				if (
+					done.has(name) ||
+					SKIP_INTERFACES.test(name) ||
+					/Element$/.test(name)
+				)
+					continue;
+				// an instance the window holds (navigator, document.fonts, ...),
+				// else one made with no arguments
+				// an instance the window holds (navigator, document.fonts, ...),
+				// found once in this window, else one made with no arguments
+				const held = Object.getOwnPropertyNames(window).find((key) => {
+					try {
+						const v = window[key];
+						return v && typeof v === 'object' && v instanceof ctor;
+					} catch (error) {
+						return false;
+					}
+				});
+				const make = (w) => {
+					if (held) return w[held];
+					try {
+						return new w[name]();
+					} catch (error) {
+						return null;
+					}
+				};
+				let probe;
+				try {
+					probe = make(fresh());
+				} catch (error) {
+					probe = null;
+				}
+				if (!probe) continue;
+				for (const [key, kind, length] of membersOf(ctor.prototype)) {
+					await hammer(name, make, key, kind, length);
+					count++;
+				}
+				// statics that take a string (Document.parseHTMLUnsafe, URL.parse)
+				for (const key of Object.getOwnPropertyNames(ctor)) {
+					if (['length', 'name', 'prototype'].includes(key) || SKIP.test(key))
+						continue;
+					if (typeof ctor[key] !== 'function') continue;
+					await hammer(
+						`${name}(static)`,
+						(w) => w[name],
+						key,
+						'method',
+						ctor[key].length,
+					);
+					count++;
+				}
+			}
+			return count;
+		});
+		// the frame's own window and what it holds of its navigation: its
+		// timers, fetch, open, its location's and navigation's methods
+		groups.push(async () => {
+			let count = 0;
+			const makers = {
+				Window: (w) => w,
+				Location: (w) => w.location,
+				Navigation: (w) => w.navigation,
+				History: (w) => w.history,
+			};
+			for (const [iface, make] of Object.entries(makers)) {
+				const proto = window[iface]?.prototype;
+				const own = make(window);
+				if (!own) continue;
+				// a Window's and a Location's members are its own
+				for (const source of [
+					proto,
+					iface === 'Window' || iface === 'Location' ? own : null,
+				])
+					if (source)
+						for (const [key, kind, length] of membersOf(source)) {
+							// (the window's interfaces are the constructors group's)
+							if (iface === 'Window' && /^(on|webkit|__|[A-Z])/.test(key))
+								continue;
+							await hammer(iface, make, key, kind, length, iface !== 'Window');
+							count++;
+						}
+			}
+			return count;
+		});
+		// every constructor given the payload (new Image(url) is no load, new
+		// Audio(url) is, new Worker(url) is the workers suite's)
+		groups.push(async () => {
+			let count = 0;
+			for (const name of Object.getOwnPropertyNames(window)) {
+				const d = Object.getOwnPropertyDescriptor(window, name);
+				const ctor = d && d.value;
+				if (
+					typeof ctor !== 'function' ||
+					!/^[A-Z]/.test(name) ||
+					!ctor.prototype
+				)
+					continue;
+				if (SKIP_INTERFACES.test(name)) continue;
+				for (const which of KINDS) {
+					const w = alive(frame?.contentWindow) ? frame.contentWindow : fresh();
+					const p = payloads(`new ${name}`)[which];
+					if (TRACE) console.log(`sink new ${name} ${which}`);
+					try {
+						const made = new w[name](p, p, p);
+						if (made instanceof w.Node)
+							(w.document.body ?? w.document.documentElement).append(made);
+					} catch (error) {
+						// refused
+					}
+				}
+				count++;
+			}
+			return count;
+		});
+		A(
+			'every sink the browser has',
+			async () => {
+				// (#groups=0,2 runs only those, to find one that takes the
+				// renderer down)
+				const only = /groups=([\d,]+)/.exec(location.hash)?.[1]?.split(',');
+				const counts = [];
+				for (const [index, group] of groups.entries()) {
+					if (
+						(only && !only.includes(String(index))) ||
+						Date.now() > DEADLINE
+					) {
+						counts.push(
+							only && !only.includes(String(index)) ? 'skipped' : 'deadline',
+						);
+						continue;
+					}
+					try {
+						counts.push(await group());
+					} catch (error) {
+						counts.push(`threw ${error.name}`);
+					}
+				}
+				// loads, timers and handlers land late
+				await new Promise((resolve) => setTimeout(resolve, 3000));
+				for (const f of frames) f.remove();
+				// each sink whose payload ran, by name, to hold against the run of
+				// this page with no proxy
+				for (const name of new Set(hits.keys().map((id) => sinks.get(id))))
+					__advRecord(`ran: ${name}`, 'ran');
+				// (the page is done once this probe is: the harness waits for a
+				// pending probe only so long)
+				__advFinish(1000);
+				return leaks.length
+					? `TELL: ${leaks.length} payloads ran with another top: ${leaks.slice(0, 40).join(' | ')}`
+					: {
+							members: counts,
+							payloads: next,
+							ran: hits.size,
+							sinks: [
+								...new Set([...hits.keys()].map((id) => sinks.get(id))),
+							].sort(),
+							frames: frames.length,
+						};
+			},
+			170000,
+		);
+	})();
+</script>
