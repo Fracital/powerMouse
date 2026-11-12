@@ -2023,6 +2023,16 @@ sinkId })` and made in a track's settings, capabilities and constraints
   connection and a server with ECH off one without it, as Chrome does
   (docs/fingerprint.md). Sites without a config see the same GREASE ECH and
   JA4 as before.
+- A site whose HTTPS record advertises ECH but drops the TLS connection with
+  no alert when it reads the real-ECH ClientHello now loads anyway: epoxy
+  reconnects once without ECH, as the demo's `?noech` switch does by hand.
+  duckduckgo.com closed the handshake (an UnexpectedEof) where Chrome's hello
+  to it was accepted, and the page never loaded; the ECH-rejection retry only
+  covered a rustls ECH rejection, not a bare drop. ECH is privacy hardening,
+  not required for correctness, and a host whose real-ECH hello is accepted
+  (cloudflare.com, tls-ech.dev) still gets it. This is a fallback for a
+  ClientHello encoding those hosts reject; the real fix is a TODO in the
+  epoxy-tls patch (ech-fallback suite).
 - A close the server starts reaches a proxied WebSocket with the server's
   code and reason, as natively: epoxy never read the close frame and
   reported every close as 1000 "Closed by remote", so a page saw 1000 for

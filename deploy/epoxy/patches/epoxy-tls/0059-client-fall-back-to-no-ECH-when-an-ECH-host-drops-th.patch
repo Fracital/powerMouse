@@ -1,0 +1,68 @@
+From d3ece14998ad761295fd547356f13145e8fa2c49 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Wed, 11 Nov 2026 21:17:38 -0500
+Subject: [PATCH] client: fall back to no ECH when an ECH host drops the
+ handshake
+
+A site whose HTTPS record advertises ECH (duckduckgo.com) drops the TLS
+connection with no alert when it reads STomp's real-ECH ClientHello, an
+UnexpectedEof mid-handshake, where Chrome's hello to the same site is
+accepted. The ECH-rejection retry only covered a rustls
+ServerRejectedEncryptedClientHello, so the drop surfaced as a handshake
+EOF and the page never loaded; the demo's ?noech switch (GREASE ECH only)
+reached the site.
+
+Treat that drop like a rejection without retry configs and reconnect once
+without ECH, matching ?noech automatically. The EOF reaches us as Io or,
+when the wisp stream closed first, as WispCloseReason, so cover both. ECH
+is privacy hardening, not required for correctness, so the site stays
+reachable; a host whose ECH hello is accepted (cloudflare.com, tls-ech.dev)
+keeps real ECH. This is a fallback: the ClientHello encoding those hosts
+reject (likely the inner hello on a HelloRetryRequest) is the real fix and
+is left as a TODO.
+---
+ client/src/stream_provider.rs | 24 +++++++++++++++++++++++-
+ 1 file changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/client/src/stream_provider.rs b/client/src/stream_provider.rs
+index 7c0610c..e1af353 100644
+--- a/client/src/stream_provider.rs
++++ b/client/src/stream_provider.rs
+@@ -114,6 +114,14 @@ fn ech_rejection(err: &std::io::Error) -> Option<EchRejection> {
+ 	}
+ }
+ 
++/// An ECH handshake that ended with the peer closing mid-handshake and no TLS
++/// alert (an UnexpectedEof): reconnect without ECH. Some hosts that advertise
++/// ECH drop our real-ECH ClientHello where Chrome's is accepted.
++#[cfg(feature = "full")]
++fn ech_eof(err: &std::io::Error) -> Option<EchRejection> {
++	matches!(err.kind(), ErrorKind::UnexpectedEof).then_some(EchRejection::Disabled)
++}
++
+ /// What a TLS connection offers in ALPN.
+ pub enum TlsAlpn {
+ 	/// nothing: a raw TLS stream (`connect_tls`)
+@@ -325,7 +333,21 @@ impl StreamProvider {
+ 			// (Chrome does, then fails), or none when ECH is off there, and
+ 			// Chrome connects again without it
+ 			let retry = match &ret {
+-				Err(EpoxyError::Io(err)) => ech_rejection(err),
++				// a rustls ECH rejection first; failing that, a host that
++				// dropped our real-ECH ClientHello with no alert (below)
++				Err(EpoxyError::Io(err)) => ech_rejection(err).or_else(|| ech_eof(err)),
++				// Some hosts that advertise ECH drop the connection with no
++				// TLS alert when they read our real-ECH ClientHello, where
++				// Chrome's is accepted (duckduckgo.com). The drop reaches us
++				// as a handshake UnexpectedEof, as Io or, when the wisp stream
++				// closed first, as WispCloseReason; either way reconnect once
++				// without ECH, as the demo's ?noech switch does by hand. ECH
++				// is privacy hardening, not required for correctness, so the
++				// site stays reachable.
++				// TODO: fix the ClientHello encoding those hosts reject where
++				// Chrome is accepted (likely the inner hello on a
++				// HelloRetryRequest) and drop this fallback.
++				Err(EpoxyError::WispCloseReason(_, err)) => ech_eof(err),
+ 				_ => None,
+ 			};
+ 			match retry {
