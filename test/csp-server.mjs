@@ -238,6 +238,8 @@ function policies(res, query) {
 		res.appendHeader('content-security-policy', policy);
 	for (const policy of query.getAll('ro'))
 		res.appendHeader('content-security-policy-report-only', policy);
+	for (const policy of query.getAll('pp'))
+		res.appendHeader('permissions-policy', policy);
 	return query
 		.getAll('m')
 		.map(
