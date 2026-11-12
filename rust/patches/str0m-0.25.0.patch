@@ -15,7 +15,48 @@
          // One arming deref, then split-borrow the real `&mut Rtc`.
 --- a/src/change/sdp.rs
 +++ b/src/change/sdp.rs
-@@ -465,6 +465,19 @@
+@@ -37,6 +37,8 @@
+     // `RtcMut` arms the readiness on mutable deref only; see [`crate::poll`].
+     rtc: RtcMut<'a>,
+     changes: Changes,
++    // The names the next m-sections of this change set take.
++    names: std::collections::VecDeque<Mid>,
+ }
+ 
+ impl<'a> SdpApi<'a> {
+@@ -44,12 +46,29 @@
+         SdpApi {
+             rtc: RtcMut::new(rtc),
+             changes: Changes::default(),
++            names: std::collections::VecDeque::new(),
+         }
+     }
+ 
+-    fn new_mid(&self) -> Mid {
++    /// Names for the m-sections this change set adds (media, and the one
++    /// for data channels), taken in the order the sections are added. A
++    /// name the session or the change set already has is passed over, and
++    /// a section added once the names are used up gets a random one.
++    ///
++    /// A section's name is what its packets carry (the MID header
++    /// extension), so an application that shows its peer other names than
++    /// the stack's own has to give them here.
++    pub fn name_mids(&mut self, names: impl IntoIterator<Item = Mid>) {
++        self.names.extend(names);
++    }
++
++    fn new_mid(&mut self) -> Mid {
+         loop {
+-            let mid = self.rtc.new_mid();
++            let mid = match self.names.pop_front() {
++                Some(mid) if self.rtc.session.has_mid(mid) => continue,
++                Some(mid) => mid,
++                None => self.rtc.new_mid(),
++            };
+             if !self.changes.has_mid(mid) {
+                 break mid;
+             }
+@@ -465,6 +484,19 @@
              self.changes.0.push(Change::AddApp(mid));
          }
  

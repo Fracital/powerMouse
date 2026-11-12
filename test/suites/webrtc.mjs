@@ -216,13 +216,20 @@ const REDACTED = /^(?:0\.0\.0\.x|\[0:0:0:x:x:x:x:x\])(?::\d+)?$/;
 
 /**
  * Run in every document before any script of it (the inject's included):
- * the browser's RTCPeerConnection reports each connection it really makes.
- * The stand-in is built on what it finds there, so a connection of the
- * browser's made on a proxied page's behalf, a validation probe included,
- * is counted; one the constructor refuses is not.
+ * the browser's RTCPeerConnection reports each connection it really makes,
+ * whether it was given a configuration, and every call that could make it
+ * gather or send (a description, a candidate, a configuration, an ICE
+ * restart, a channel). The stand-in is built on what it finds there, so a
+ * connection of the browser's made on a proxied page's behalf is counted;
+ * one the constructor refuses is not. The one such connection a document
+ * may make is the stand-in's format template (docs/webrtc-over-wisp.md,
+ * section 16): made with no configuration, asked for one offer and closed,
+ * so it never gathers, has no server and sends nothing.
  */
 const NATIVE_MADE = 'native RTCPeerConnection made';
-const countNative = (mark) => {
+const NATIVE_CONFIGURED = 'native RTCPeerConnection made with a configuration';
+const NATIVE_USED = 'native RTCPeerConnection used';
+const countNative = ([mark, configured, used]) => {
 	const Native = window.RTCPeerConnection;
 	if (typeof Native !== 'function') return;
 	const debug = console.debug.bind(console);
@@ -233,22 +240,52 @@ const countNative = (mark) => {
 				args,
 				newTarget === Counting ? target : newTarget,
 			);
-			debug(mark);
+			debug(args[0] === undefined || args[0] === null ? mark : configured);
 			return made;
 		},
 	});
+	for (const name of [
+		'setLocalDescription',
+		'setRemoteDescription',
+		'addIceCandidate',
+		'setConfiguration',
+		'restartIce',
+		'createDataChannel',
+	]) {
+		const original = Native.prototype[name];
+		if (typeof original !== 'function') continue;
+		Native.prototype[name] = {
+			[name](...args) {
+				debug(used);
+				return Reflect.apply(original, this, args);
+			},
+		}[name];
+	}
 	Native.prototype.constructor = Counting;
 	window.RTCPeerConnection = Counting;
 	if ('webkitRTCPeerConnection' in window)
 		window.webkitRTCPeerConnection = Counting;
 };
-/** counts them for `page`'s context from here on: `page.nativeMade` */
+/**
+ * counts them for `page`'s context from here on: `page.nativeMade` (all of
+ * them), `page.nativeConfigured` (those given a configuration) and
+ * `page.nativeUsed` (the calls on any of them that could gather)
+ */
 async function watchNative(page) {
 	page.nativeMade = 0;
+	page.nativeConfigured = 0;
+	page.nativeUsed = 0;
 	page.context().on('console', (message) => {
-		if (message.text() === NATIVE_MADE) page.nativeMade++;
+		const text = message.text();
+		if (text === NATIVE_MADE) page.nativeMade++;
+		else if (text === NATIVE_CONFIGURED) {
+			page.nativeMade++;
+			page.nativeConfigured++;
+		} else if (text === NATIVE_USED) page.nativeUsed++;
 	});
-	await page.context().addInitScript(countNative, NATIVE_MADE);
+	await page
+		.context()
+		.addInitScript(countNative, [NATIVE_MADE, NATIVE_CONFIGURED, NATIVE_USED]);
 }
 
 async function nativePage(browser) {
@@ -875,9 +912,13 @@ async function suite(name, flags, raw) {
 	);
 	for (const entry of proxied)
 		ok(
-			`${entry.label}: no native RTCPeerConnection is ever constructed, in any realm, by any call above`,
-			entry.page.nativeMade === 0,
-			String(entry.page.nativeMade),
+			`${entry.label}: no native RTCPeerConnection is given a configuration, a description, a candidate or a channel, in any realm, by any call above (the format template aside, none is made)`,
+			entry.page.nativeConfigured === 0 && entry.page.nativeUsed === 0,
+			JSON.stringify({
+				made: entry.page.nativeMade,
+				configured: entry.page.nativeConfigured,
+				used: entry.page.nativeUsed,
+			}),
 		);
 
 	const errors = proxied.flatMap((entry) => entry.page.errors);

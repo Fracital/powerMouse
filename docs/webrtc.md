@@ -91,12 +91,21 @@ addressed by the names they showed, without the network. Two proxied pages
 in different browsers are each behind the wisp server as behind a symmetric
 NAT, and connect when the page names a TURN server.
 
-**The browser's own connection is never constructed.** The errors of a bad
-configuration, a bad remote description, a bad candidate and a bad channel
-dictionary are STomp's own reading of them (`src/inject/rtcValidation.ts`),
-in Chrome's words: the suite runs some 600 such calls natively and proxied
-and compares them case by case, and counts the connections the browser
-itself makes for a proxied page (none). The same tables hold what Chrome
+**The browser's own connection is never asked anything that could make it
+gather.** The errors of a bad configuration, a bad remote description, a
+bad candidate and a bad channel dictionary are STomp's own reading of them
+(`src/inject/rtcValidation.ts`), in Chrome's words: the suite runs some 600
+such calls natively and proxied and compares them case by case. The one
+native connection a document makes is the template of the browser's audio
+and video formats (docs/webrtc-over-wisp.md, section 16): no configuration,
+two transceivers, one `createOffer()`, closed at once. Constructing it makes
+Chrome join the mDNS multicast group (one IGMP report to the local network,
+as a page's own `RTCPeerConnection` makes natively); captured with the
+browser in a network namespace of its own, it sends no mDNS query and no
+other packet. The suite counts the
+native connections made for a proxied page with a configuration, and every
+description, candidate, configuration, ICE restart and channel given to
+one (none). The same tables hold what Chrome
 does with the offers it takes although it would not write them (no
 section at all, a section without a name, no BUNDLE group, a data section
 over TCP/DTLS/SCTP, an offer over the connection's own offer): the answer,
@@ -163,9 +172,9 @@ those packets are gone too.
 
 ## Limits
 
-- **What Phase 1 does not carry**: media, TURN over TCP and TLS, ICE-TCP,
-  most of `getStats()`. docs/webrtc-over-wisp.md section 15
-  lists them.
+- **What is not carried yet**: video, G.722, comfort noise and DTMF, TURN
+  over TCP and TLS, ICE-TCP, most of `getStats()`. docs/webrtc-over-wisp.md
+  sections 15 and 16 list them.
 - **A peer behind a restrictive NAT, with no TURN server.** The page's
   packets leave from a socket the wisp server connected to one address, so
   only peers that answer where they are asked connect directly (servers,

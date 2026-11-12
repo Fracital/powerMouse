@@ -618,6 +618,63 @@ fn directions_as_a_browser_answers() {
 }
 
 #[test]
+fn a_section_paired_and_narrowed_by_the_answerer() {
+	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let mut a = Peer::media("10.0.0.1:5000");
+	let mut b = Peer::media("10.0.0.2:5000");
+	a.control(&[("op", "media"), ("kind", "audio"), ("dir", "sendonly")]);
+	// the answerer's page added a track before the offer came: a section
+	// of its own, which the offer's takes the place of
+	assert_eq!(get(&b.control(&[("op", "media"), ("kind", "audio")]), "index"), "0");
+	let offer = get(&a.control(&[("op", "offer")]), "sdp").to_string();
+	let accepted = b.control(&[("op", "remote_offer"), ("sdp", &offer), ("dir0", "sendrecv")]);
+	assert!(get(&accepted, "mids").starts_with("1:"), "{accepted:?}");
+	b.control(&[("op", "withdraw"), ("index", "0")]);
+	assert!(!b.refused(&[("op", "withdraw"), ("index", "1")]).is_empty());
+	assert!(!b.refused(&[("op", "withdraw"), ("index", "7")]).is_empty());
+	// the offer only sends: the section does not send here, and still
+	// has a source to name, the same one every time it is asked
+	assert_eq!(get(&b.control(&[("op", "payloads"), ("index", "1")]), "dir"), "recvonly");
+	let source = get(&b.control(&[("op", "ssrc"), ("index", "1")]), "ssrc").to_string();
+	assert!(source.parse::<u32>().is_ok(), "{source}");
+	assert_eq!(get(&b.control(&[("op", "ssrc"), ("index", "1")]), "ssrc"), source);
+	assert!(!b.refused(&[("op", "ssrc"), ("index", "0")]).is_empty());
+	a.control(&[("op", "answer"), ("sdp", get(&accepted, "sdp"))]);
+	let (ca, cb) = (a.candidate(), b.candidate());
+	a.control(&[("op", "remote_candidate"), ("candidate", &cb)]);
+	b.control(&[("op", "remote_candidate"), ("candidate", &ca)]);
+	pump(&mut a, &mut b, "the connection", |a, b| a.connected() && b.connected());
+	a.write(0, 111, 0, media::ABSENT, media::ABSENT, 0, "", &[0xfc, 1]);
+	pump(&mut a, &mut b, "a frame", |_, b| b.frames.len() == 1);
+	assert_eq!(b.frames[0].media, 1);
+
+	// the page answers with less than the stack took: nothing arrives
+	b.control(&[("op", "direction_now"), ("index", "1"), ("dir", "inactive")]);
+	assert_eq!(get(&b.control(&[("op", "payloads"), ("index", "1")]), "dir"), "inactive");
+	a.write(0, 111, 0, media::ABSENT, media::ABSENT, 960, "", &[0xfc, 2]);
+	for _ in 0..50 {
+		pump(&mut a, &mut b, "quiet", |_, _| true);
+	}
+	assert_eq!(b.frames.len(), 1, "{:?}", b.frames);
+	pump(&mut a, &mut b, "the change", |_, b| {
+		b.events_named("media_changed").iter().any(|e| get(e, "dir") == "inactive")
+	});
+	b.control(&[("op", "direction_now"), ("index", "1"), ("dir", "recvonly")]);
+	a.write(0, 111, 0, media::ABSENT, media::ABSENT, 1920, "", &[0xfc, 3]);
+	pump(&mut a, &mut b, "a frame again", |_, b| b.frames.len() == 2);
+	assert_eq!(b.frames[1].data, [0xfc, 3]);
+	assert!(!b.refused(&[("op", "direction_now"), ("index", "0"), ("dir", "recvonly")]).is_empty());
+	assert!(!b.refused(&[("op", "direction_now"), ("index", "1"), ("dir", "up")]).is_empty());
+
+	// the answerer's own offer: the one section, sending from the source
+	// it named, and nothing of the section it took back
+	let offer = get(&b.control(&[("op", "offer")]), "sdp").to_string();
+	assert_eq!(offer.matches("m=audio").count(), 1, "{offer}");
+	assert!(has(&section(&offer, 0), "a=sendrecv"), "{offer}");
+	assert!(offer.contains(&format!("a=ssrc:{source} ")), "{source}\n{offer}");
+}
+
+#[test]
 fn rollback_keeps_what_was_added() {
 	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let mut a = Peer::media("10.0.0.1:5000");
@@ -631,12 +688,13 @@ fn rollback_keeps_what_was_added() {
 			.map(|l| l.split(' ').next().unwrap_or("").to_string())
 			.collect()
 	};
-	// sections in the order their owners were made
-	assert_eq!(order(&first), ["application", "audio"], "{first}");
+	// media sections first, the data section after them, as a browser
+	// orders a first offer whichever the page made first
+	assert_eq!(order(&first), ["audio", "application"], "{first}");
 	// a second offer before the first is answered carries the same sections
 	a.control(&[("op", "media"), ("kind", "video"), ("rids", "h,m,l")]);
 	let second = get(&a.control(&[("op", "offer")]), "sdp").to_string();
-	assert_eq!(order(&second), ["application", "audio", "video"], "{second}");
+	assert_eq!(order(&second), ["audio", "video", "application"], "{second}");
 	{
 		let mut c = Peer::media("10.0.0.3:5000");
 		c.control(&[("op", "media"), ("kind", "video")]);
@@ -644,7 +702,7 @@ fn rollback_keeps_what_was_added() {
 		c.control(&[("op", "media"), ("kind", "audio")]);
 		c.control(&[("op", "channel"), ("label", "two")]);
 		let offer = get(&c.control(&[("op", "offer")]), "sdp").to_string();
-		assert_eq!(order(&offer), ["video", "application", "audio"], "{offer}");
+		assert_eq!(order(&offer), ["video", "audio", "application"], "{offer}");
 	}
 	// the layers of a simulcast section, as the offer names them
 	let video = second.lines().skip_while(|l| !l.starts_with("m=video")).collect::<Vec<_>>();
@@ -652,8 +710,8 @@ fn rollback_keeps_what_was_added() {
 		assert!(has(&video, line), "the offer has no {line}:\n{second}");
 	}
 	a.control(&[("op", "rollback")]);
-	let (offer, _) = negotiate(&mut a, &mut b, &["", "sendrecv", "recvonly"]);
-	assert_eq!(order(&offer), ["application", "audio", "video"], "{offer}");
+	let (offer, _) = negotiate(&mut a, &mut b, &["sendrecv", "recvonly", ""]);
+	assert_eq!(order(&offer), ["audio", "video", "application"], "{offer}");
 	pump(&mut a, &mut b, "the connection and the channel", |a, b| {
 		a.connected() && b.connected() && a.event("channel_open").is_some() && b.event("channel_open").is_some()
 	});
@@ -688,7 +746,7 @@ fn an_offer_read_twice_and_one_replaced() {
 	let replaced = get(&a.control(&[("op", "offer")]), "sdp").to_string();
 	assert_eq!(replaced.matches("m=application").count(), 1, "{replaced}");
 	assert_eq!(replaced.matches("m=audio").count(), 1, "{replaced}");
-	negotiate(&mut a, &mut b, &["", "sendrecv"]);
+	negotiate(&mut a, &mut b, &["sendrecv", ""]);
 	pump(&mut a, &mut b, "the channel and the section", |a, b| {
 		a.connected()
 			&& b.connected()
@@ -696,6 +754,54 @@ fn an_offer_read_twice_and_one_replaced() {
 			&& b.event("channel_open").is_some()
 			&& a.event("media").is_some()
 	});
+}
+
+#[test]
+fn sections_take_the_names_the_host_gives() {
+	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let mut a = Peer::media("10.0.0.1:5000");
+	let mut b = Peer::media("10.0.0.2:5000");
+	a.control(&[("op", "channel"), ("label", "chat")]);
+	a.control(&[("op", "media"), ("kind", "audio")]);
+	// the names in the order a browser gives them: media, then data
+	let made = a.control(&[("op", "offer"), ("names", "0,1,2")]);
+	let first = get(&made, "sdp").to_string();
+	assert!(first.contains("a=group:BUNDLE 0 1\r\n"), "{first}");
+	assert!(has(&section(&first, 0), "a=mid:0") && section(&first, 0)[0].starts_with("m=audio"), "{first}");
+	assert!(has(&section(&first, 1), "a=mid:1") && section(&first, 1)[0].starts_with("m=application"), "{first}");
+	assert_eq!(get(&made, "mids"), "0:0");
+	// asked again with nothing new, the offer stands under its names
+	assert_eq!(get(&a.control(&[("op", "offer"), ("names", "2,3,4")]), "sdp"), first);
+	// rolled back and offered again: the names it is given now
+	a.control(&[("op", "rollback")]);
+	let made = a.control(&[("op", "offer"), ("names", "2,3,4")]);
+	let offer = get(&made, "sdp").to_string();
+	assert!(offer.contains("a=group:BUNDLE 2 3\r\n"), "{offer}");
+	assert_eq!(get(&made, "mids"), "0:2");
+	let answer = get(&b.control(&[("op", "remote_offer"), ("sdp", &offer), ("dir0", "sendrecv")]), "sdp").to_string();
+	a.control(&[("op", "answer"), ("sdp", &answer)]);
+	let (ca, cb) = (a.candidate(), b.candidate());
+	a.control(&[("op", "remote_candidate"), ("candidate", &cb)]);
+	b.control(&[("op", "remote_candidate"), ("candidate", &ca)]);
+	pump(&mut a, &mut b, "the connection", |a, b| a.connected() && b.connected());
+	// what the offerer sends arrives on the section of that name
+	a.write(0, 111, 0, media::ABSENT, media::ABSENT, 0, "", &[0xfc, 1]);
+	pump(&mut a, &mut b, "a frame", |_, b| b.frames.len() == 1);
+	// a name a section has is passed over, and a section there is no
+	// name left for is named as the stack names one
+	a.control(&[("op", "media"), ("kind", "video")]);
+	a.control(&[("op", "media"), ("kind", "audio")]);
+	let named = get(&a.control(&[("op", "offer"), ("names", "3,2,5")]), "mids").to_string();
+	assert!(named.starts_with("0:2,1:5,2:") && !named.ends_with(":"), "{named}");
+	a.control(&[("op", "rollback")]);
+	let unnamed = get(&a.control(&[("op", "offer")]), "mids").to_string();
+	assert!(unnamed.starts_with("0:2,1:") && !unnamed.starts_with("0:2,1:5,"), "{unnamed}");
+	// the answerer's own offer: the offer's names stay, its new section
+	// takes the one it is given
+	b.control(&[("op", "media"), ("kind", "video")]);
+	let made = b.control(&[("op", "offer"), ("names", "0,1")]);
+	let offer = get(&made, "sdp").to_string();
+	assert!(offer.contains("a=group:BUNDLE 2 3 0\r\n"), "{offer}");
 }
 
 #[test]

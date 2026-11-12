@@ -594,6 +594,18 @@ The first release after a four-year gap. Everything below is breaking.
   way, `getConfiguration()` gives certificates of its own each time,
   `getStats()` answers on a closed connection, and a document's 501st
   connection is refused as Chrome refuses it.
+- A proxied page's WebRTC connections carry audio (docs/webrtc-over-wisp.md
+  section 16): `addTrack`, `addTransceiver`, `removeTrack`, the
+  transceivers, senders and receivers and the `track` event are STomp's,
+  over its own stack on wisp streams, and the descriptions a page makes
+  read line for line as Chrome's (its payloads, format lines, extensions
+  and section names, taken from an offer the browser's own connection
+  writes once per document and never sets). Opus is encoded and decoded in
+  the worker with WebCodecs, G.711 by hand, on tracks the page hands over
+  as streams. The `webrtc-media` suite holds a call with Chrome's own stack
+  to what the browser's own connection reads at every step, in both demo
+  modes, with the tone unbroken both ways and every packet from the wisp
+  server. Video, G.722, comfort noise and DTMF are not carried yet.
 - When a peer closes its connection, a proxied page's data channels hear
   what Chrome's own hear: `closing`, an `error` event (an `RTCError` of
   detail `sctp-failure`, cause code 12, "User-Initiated Abort, reason=Close
@@ -5265,9 +5277,10 @@ Fixed while testing real sites and a feature fixture:
   the way out is an origin per proxied site (a subdomain of the proxy's),
   which needs the service worker, the cookie jar and the stores, one per
   origin today, shared between those origins.
-- WebRTC carries data channels only so far (docs/webrtc-over-wisp.md
-  section 15): `addTrack` and `addTransceiver` throw, TURN over TCP or TLS
-  and TCP candidates are not carried,
+- WebRTC carries data channels and audio so far (docs/webrtc-over-wisp.md
+  sections 15 and 16): video sections negotiate and their frames are
+  dropped, G.722, comfort noise and DTMF are not carried, a lost Opus packet
+  is silence, TURN over TCP or TLS and TCP candidates are not carried,
   `getStats()` has no candidate entries and `pc.sctp` is null. A peer behind
   a restrictive NAT is reached only through a TURN server the page names.
 - The same-origin policy between proxied sites is simulated by the proxy

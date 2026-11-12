@@ -78,6 +78,8 @@ export interface MediaSection {
 		streams: string[];
 		track: string | null;
 	};
+	/** the section is stopped: this side stopped it, or the peer's description has */
+	stopped?: boolean;
 }
 
 /** the answer to setLocal and setRemote: the connection's media sections as they are now */
@@ -123,11 +125,17 @@ export type Request =
 			handle: number;
 			kind: 'audio' | 'video';
 			direction: Direction;
+			/** the ids of the streams the sender is in, and the sender's own (`a=msid`) */
 			streams: string[];
-			track: string | null;
+			track: string;
+			/** made by addTrack: a section the peer offers may take the transceiver */
+			byTrack: boolean;
 	  }
 	| { seq: number; op: 'mediaDirection'; handle: number; direction: Direction }
+	| { seq: number; op: 'mediaStreams'; handle: number; streams: string[] }
 	| { seq: number; op: 'stopMedia'; handle: number }
+	/** the sender's encoding, as setParameters left it: whether it sends at all */
+	| { seq: number; op: 'mediaEncoding'; handle: number; active: boolean }
 	/** what the section sends: a MediaStreamTrackProcessor's readable (transferred), or null for no track */
 	| {
 			seq: number;

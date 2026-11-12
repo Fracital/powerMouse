@@ -497,8 +497,11 @@ class FakeEncoder {
 }
 globalThis.AudioEncoder = FakeEncoder;
 
-/** what a sender makes of `inputs`, configured with `payloads` */
-async function send(inputs, payloads) {
+/**
+ * What a sender makes of `inputs`, configured with `payloads`; with
+ * `pause`, the track gives nothing for `ms` before input number `before`
+ */
+async function send(inputs, payloads, pause = { before: Infinity, ms: 0 }) {
 	const frames = [];
 	const sender = new m.AudioSender(3, (frame, age) =>
 		frames.push({ ...frame, age }),
@@ -507,13 +510,16 @@ async function send(inputs, payloads) {
 	sender.setActive(true);
 	sender.setTrack(
 		new ReadableStream({
-			start(controller) {
-				for (const input of inputs) controller.enqueue(input);
+			async start(controller) {
+				for (const [at, input] of inputs.entries()) {
+					if (at === pause.before) await sleep(pause.ms);
+					controller.enqueue(input);
+				}
 				controller.close();
 			},
 		}),
 	);
-	await sleep(50);
+	await sleep(50 + (pause.before < inputs.length ? pause.ms : 0));
 	sender.close();
 	return frames;
 }
@@ -565,19 +571,41 @@ const talkspurts = (frames) =>
 	);
 }
 {
-	// the track stops for a second after half a second
+	// the track stops for 0.3 s after half a second, and so do its times
 	const inputs = Array.from({ length: 100 }, (_, i) =>
-		sound(i, { at: 7777 + i * 10000 + (i >= 50 ? 1000000 : 0) }),
+		sound(i, { at: 7777 + i * 10000 + (i >= 50 ? 300000 : 0) }),
 	);
-	const frames = await send(inputs, opus());
+	const frames = await send(inputs, opus(), { before: 50, ms: 300 });
 	const jump = steps(frames).findIndex((step) => step !== 960);
+	const gap = steps(frames)[jump] - 960;
 	ok(
-		'a break in the track is a break in the times, and a new talkspurt',
+		'a break in the track is a break in the times, as long as the clock says, and a new talkspurt',
 		frames.length === 50 &&
 			jump === 24 &&
-			steps(frames)[jump] === 960 + 48000 &&
+			gap % 120 === 0 &&
+			gap > 0.2 * 48000 &&
+			gap < 0.5 * 48000 &&
+			steps(frames).filter((step) => step !== 960).length === 1 &&
 			talkspurts(frames).join() === '0,25',
-		`${frames.length} frames, step ${steps(frames)[jump]} after frame ${jump}, talkspurts ${talkspurts(frames)}`,
+		`${frames.length} frames, ${gap / 48} ms after frame ${jump}, talkspurts ${talkspurts(frames)}`,
+	);
+}
+{
+	// a track whose times are another clock's: below zero, and five
+	// seconds back in the middle of the sound (Chrome 152 and 156 hand a
+	// worker times below zero for a track a page writes itself)
+	const inputs = Array.from({ length: 100 }, (_, i) =>
+		sound(i, { at: -1035000 + i * 10000 - (i >= 50 ? 5000000 : 0) }),
+	);
+	const frames = await send(inputs, opus());
+	ok(
+		"the times that go out are the sender's own: they start at its number and never go back, whatever the track's are",
+		frames.length === 50 &&
+			steps(frames).every((step) => step === 960) &&
+			frames[0].time >= 0n &&
+			frames[0].time < 2n ** 32n &&
+			talkspurts(frames).join() === '0,25',
+		`${frames.length} frames, steps ${[...new Set(steps(frames))]}, talkspurts ${talkspurts(frames)}`,
 	);
 }
 {

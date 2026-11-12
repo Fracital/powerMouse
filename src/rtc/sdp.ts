@@ -5,6 +5,14 @@
 // the worker chose to show. What the page hands over for the remote side
 // goes to the stack as it is, minus what the stack cannot read (a candidate
 // at a name instead of an address, which the worker maps itself).
+//
+// A media section is written the way this browser writes one: the lines
+// its own offer has (the template), in its order, for what the stack
+// negotiated. The stack's SDP says which payloads, header extensions and
+// sources the section has; the template says how Chrome lists them, which
+// feedback each codec names and which lines stand around them; the worker
+// says what the transceiver wants and what its sender is called.
+import type { Direction } from './protocol';
 
 export interface Media {
 	kind: string;
@@ -136,6 +144,33 @@ export interface RenderOptions {
 	ufrag: string;
 	pwd: string;
 	fingerprint: string;
+	/** this browser's own offer: the shape of its media sections */
+	template?: ParsedSdp | null;
+	/** the description is an offer: it leaves the DTLS roles open, whatever they are */
+	offer?: boolean;
+	/** the offer this description answers */
+	answers?: ParsedSdp | null;
+	/** the name every source of the connection is listed under */
+	cname?: string;
+	/** how each media section is written, by mid */
+	sections?: Map<string, SectionStyle>;
+}
+
+/** what the worker knows of a media section that the stack's SDP does not say */
+export interface SectionStyle {
+	/** the direction the description states */
+	direction: Direction;
+	/**
+	 * What the section's sender is called (`a=msid`): Chrome names it once
+	 * the transceiver wants to send, and from then on whatever the
+	 * direction; null for one that never has
+	 */
+	sender: { streams: string[]; track: string } | null;
+	/** the sources the sender sends from, and their `a=ssrc-group` values */
+	ssrcs: string[];
+	groups: string[];
+	/** the header extensions the section last agreed on, by URI; null before it has */
+	exts: Set<string> | null;
 }
 
 const CRLF = '\r\n';
@@ -157,16 +192,55 @@ export function renderChrome(
 	const mids = parsed.medias.map(
 		(media) => first(media.attributes, 'mid') ?? '',
 	);
-	const group = first(parsed.session, 'group');
-	if (!parsed.ungrouped && (group !== null || mids.length))
-		lines.push(`a=group:${group ?? `BUNDLE ${mids.join(' ')}`}`);
+	const group = first(parsed.session, 'group') ?? `BUNDLE ${mids.join(' ')}`;
+	// no section left in the bundle (none at all, or each one stopped), or
+	// an answer to an offer that had no group: no line
+	if (!parsed.ungrouped && group.trim() !== 'BUNDLE')
+		lines.push(`a=group:${group}`);
 	if (!parsed.bare) lines.push('a=extmap-allow-mixed');
-	lines.push('a=msid-semantic: WMS');
+	// the streams the description's senders are in, in name order
+	const streams = new Set<string>();
 	for (const media of parsed.medias) {
-		// the port and the connection address are the default candidate's
+		const style = options.sections?.get(first(media.attributes, 'mid') ?? '');
+		if (style?.sender && media.port !== '0')
+			for (const stream of style.sender.streams) streams.add(stream);
+	}
+	lines.push(['a=msid-semantic: WMS', ...[...streams].sort()].join(' '));
+	// How the answered offer names what it sends: Chrome answers `a=msid`
+	// lines with `a=msid` lines alone, and an offer that has the names
+	// only on its `a=ssrc` lines the same way; its own offers have both.
+	const theirs = options.answers?.medias ?? [];
+	const onLines = theirs.some((media) => first(media.attributes, 'msid'));
+	const onSources = theirs.some((media) =>
+		all(media.attributes, 'ssrc').some((value) => value.includes(' msid:')),
+	);
+	const names = options.answers
+		? { line: onLines || !onSources, source: !onLines && onSources }
+		: { line: true, source: true };
+	for (const media of parsed.medias) {
+		// the port and the connection address are the default candidate's;
+		// a stopped section has no port
 		const preferred = defaultCandidate(options.candidates);
+		const mid = first(media.attributes, 'mid') ?? '';
+		const style = options.sections?.get(mid);
+		const model = options.template?.medias.find(
+			(section) => section.kind === media.kind,
+		);
+		const shape =
+			style && model
+				? shaped(
+						media,
+						model,
+						style,
+						theirs.find(
+							(section) => first(section.attributes, 'mid') === mid,
+						) ?? null,
+						names,
+						options.cname ?? '',
+					)
+				: null;
 		lines.push(
-			`m=${media.kind} ${preferred?.port ?? media.port} ${media.protocol} ${media.formats.join(' ')}`,
+			`m=${media.kind} ${media.port === '0' ? '0' : (preferred?.port ?? media.port)} ${media.protocol} ${(shape?.formats ?? media.formats).join(' ')}`,
 		);
 		lines.push(
 			preferred
@@ -183,7 +257,9 @@ export function renderChrome(
 		lines.push(`a=ice-pwd:${own('ice-pwd') ?? options.pwd}`);
 		lines.push('a=ice-options:trickle');
 		lines.push(`a=fingerprint:${own('fingerprint') ?? options.fingerprint}`);
-		lines.push(`a=setup:${own('setup') ?? 'actpass'}`);
+		lines.push(
+			`a=setup:${options.offer ? 'actpass' : (own('setup') ?? 'actpass')}`,
+		);
 		lines.push(`a=mid:${first(media.attributes, 'mid') ?? ''}`);
 		if (media.kind === 'application') {
 			lines.push(
@@ -192,9 +268,10 @@ export function renderChrome(
 			lines.push(
 				`a=max-message-size:${first(media.attributes, 'max-message-size') ?? '262144'}`,
 			);
-		} else {
-			// the stack's own order for what Chrome lists next (extmaps,
-			// direction, msid, rtcp-mux, rtpmap, rtcp-fb, fmtp, ssrc)
+		} else if (shape) lines.push(...shape.lines);
+		else {
+			// no template (a browser that would not make one): the stack's
+			// own lines for what Chrome lists next
 			for (const [name, value] of media.attributes) {
 				if (RENDERED.has(name)) continue;
 				lines.push(value === null ? `a=${name}` : `a=${name}:${value}`);
@@ -202,6 +279,206 @@ export function renderChrome(
 		}
 	}
 	return lines.join(CRLF) + CRLF;
+}
+
+/** a section's payloads: each one's `a=rtpmap`, `a=fmtp` and `a=rtcp-fb` values */
+interface Payloads {
+	map: Map<string, string>;
+	fmtp: Map<string, string>;
+	/** the feedback listed with the payload, after its `a=rtpmap` */
+	fb: Map<string, string[]>;
+	/** the feedback listed before any payload (Chrome 152 lists `rrtr` there) */
+	lead: Map<string, string[]>;
+}
+function payloadsOf(media: Media): Payloads {
+	const out: Payloads = {
+		map: new Map(),
+		fmtp: new Map(),
+		fb: new Map(),
+		lead: new Map(),
+	};
+	let mapped = false;
+	for (const [name, value] of media.attributes) {
+		const at = value?.indexOf(' ') ?? -1;
+		if (value === null || at === -1) continue;
+		const pt = value.slice(0, at);
+		const rest = value.slice(at + 1);
+		if (name === 'rtpmap') {
+			out.map.set(pt, rest);
+			mapped = true;
+		} else if (name === 'fmtp') out.fmtp.set(pt, rest);
+		else if (name === 'rtcp-fb') {
+			const into = mapped ? out.fb : out.lead;
+			const list = into.get(pt);
+			if (list) list.push(rest);
+			else into.set(pt, [rest]);
+		}
+	}
+	return out;
+}
+
+/** the attributes of a media section that `shaped` and the renderer write by rule */
+const SHAPED = new Set([
+	'ice-ufrag',
+	'ice-pwd',
+	'ice-options',
+	'fingerprint',
+	'setup',
+	'mid',
+	'candidate',
+	'end-of-candidates',
+	'rtcp',
+	'extmap',
+	'sendrecv',
+	'sendonly',
+	'recvonly',
+	'inactive',
+	'msid',
+	'rtcp-mux',
+	'rtpmap',
+	'rtcp-fb',
+	'fmtp',
+	'ssrc',
+	'ssrc-group',
+]);
+
+/**
+ * A media section's payload list and the lines after `a=mid`, as Chrome
+ * writes them. `media` is the stack's section, `model` the template's of
+ * the same kind, `offered` the section of the offer this one answers.
+ *
+ * - Header extensions: the template's, in its order, under the ids the
+ *   stack has them at (an answer uses the offer's ids), and after a
+ *   negotiation only the ones it agreed on.
+ * - Payloads: an offer lists them in the stack's order with redundant
+ *   audio after the codec it carries (the stack lists it before), an answer
+ *   in the offer's order. Each one's feedback is what the template names
+ *   for that codec, and in an answer what the offer names too; a format
+ *   line is written where the template has one.
+ * - The lines the template has besides (`a=rtcp-rsize`, `a=rtcp-xr`): all
+ *   of them in an offer, the ones the offer has in an answer.
+ * - The sender: its `a=msid` and `a=ssrc` lines, under the connection's
+ *   cname.
+ */
+function shaped(
+	media: Media,
+	model: Media,
+	style: SectionStyle,
+	offered: Media | null,
+	names: { line: boolean; source: boolean },
+	cname: string,
+): { formats: string[]; lines: string[] } {
+	const lines: string[] = [];
+	const own = payloadsOf(media);
+	const browser = payloadsOf(model);
+	const theirs = offered && payloadsOf(offered);
+	const ids = new Map<string, string>();
+	for (const value of all(media.attributes, 'extmap')) {
+		const [id, uri] = value.split(' ');
+		if (uri) ids.set(uri, id.split('/')[0]);
+	}
+	for (const value of all(model.attributes, 'extmap')) {
+		const uri = value.split(' ')[1];
+		const id = ids.get(uri);
+		if (id !== undefined && (!style.exts || style.exts.has(uri)))
+			lines.push(`a=extmap:${id} ${uri}`);
+	}
+	lines.push(`a=${style.direction}`);
+	const sender = style.sender;
+	if (sender && names.line)
+		for (const stream of sender.streams.length ? sender.streams : ['-'])
+			lines.push(`a=msid:${stream} ${sender.track}`);
+	lines.push('a=rtcp-mux');
+	for (const [name, value] of model.attributes) {
+		if (SHAPED.has(name)) continue;
+		if (
+			offered &&
+			!offered.attributes.some(([key, said]) => key === name && said === value)
+		)
+			continue;
+		lines.push(value === null ? `a=${name}` : `a=${name}:${value}`);
+	}
+
+	// the payloads, in Chrome's order
+	const isRed = (pt: string) => /^red\//i.test(own.map.get(pt) ?? '');
+	let formats: string[];
+	if (offered) {
+		const taken = new Set(media.formats);
+		formats = offered.formats.filter((pt) => taken.has(pt));
+		for (const pt of media.formats) if (!formats.includes(pt)) formats.push(pt);
+	} else {
+		const after = new Map<string, string>();
+		for (const pt of media.formats) {
+			const carried = isRed(pt) ? own.fmtp.get(pt)?.split('/')[0] : undefined;
+			if (carried !== undefined && media.formats.includes(carried))
+				after.set(carried, pt);
+		}
+		const moved = new Set(after.values());
+		formats = [];
+		for (const pt of media.formats) {
+			if (moved.has(pt)) continue;
+			formats.push(pt);
+			const red = after.get(pt);
+			if (red !== undefined) formats.push(red);
+		}
+	}
+	// the template's payload for the same codec: the same number where
+	// the peer did not renumber it
+	const twins = new Map<string, string | undefined>();
+	const twin = (pt: string) => {
+		if (twins.has(pt)) return twins.get(pt);
+		const map = own.map.get(pt)?.toLowerCase();
+		let found: string | undefined;
+		for (const [candidate, value] of browser.map) {
+			if (value.toLowerCase() !== map) continue;
+			if (candidate === pt) {
+				found = candidate;
+				break;
+			}
+			if (
+				found === undefined ||
+				browser.fmtp.get(candidate) === own.fmtp.get(pt)
+			)
+				found = candidate;
+		}
+		twins.set(pt, found);
+		return found;
+	};
+	const named = (pt: string, value: string) =>
+		!theirs ||
+		[pt, '*'].some(
+			(key) =>
+				theirs.lead.get(key)?.includes(value) ||
+				theirs.fb.get(key)?.includes(value),
+		);
+	for (const pt of formats)
+		for (const value of browser.lead.get(twin(pt) ?? '') ?? [])
+			if (named(pt, value)) lines.push(`a=rtcp-fb:${pt} ${value}`);
+	for (const pt of formats) {
+		const like = twin(pt);
+		const map = like === pt ? browser.map.get(pt) : own.map.get(pt);
+		if (map === undefined) continue;
+		lines.push(`a=rtpmap:${pt} ${map}`);
+		const feedback =
+			like === undefined
+				? (own.fb.get(pt) ?? [])
+				: (browser.fb.get(like) ?? []).filter((value) => named(pt, value));
+		for (const value of feedback) lines.push(`a=rtcp-fb:${pt} ${value}`);
+		const fmtp = like === pt ? browser.fmtp.get(pt) : own.fmtp.get(pt);
+		if (fmtp !== undefined && (like === undefined || browser.fmtp.has(like)))
+			lines.push(`a=fmtp:${pt} ${fmtp}`);
+	}
+	if (sender) {
+		for (const group of style.groups) lines.push(`a=ssrc-group:${group}`);
+		for (const ssrc of style.ssrcs) {
+			lines.push(`a=ssrc:${ssrc} cname:${cname}`);
+			if (names.source)
+				lines.push(
+					`a=ssrc:${ssrc} msid:${sender.streams[0] ?? '-'} ${sender.track}`,
+				);
+		}
+	}
+	return { formats, lines };
 }
 
 /**
@@ -288,11 +565,13 @@ export function offerForStack(
 	if (!starts.length) return null;
 	const protocols: (string | null)[] = [];
 	const mids: string[] = [];
+	const rejected: boolean[] = [];
 	// from the last section to the first: an inserted line moves none before it
 	for (let index = starts.length - 1; index >= 0; index--) {
 		const start = starts[index];
 		const end = starts[index + 1] ?? lines.length;
 		const fields = lines[start].split(' ');
+		rejected[index] = fields[1] === '0';
 		protocols[index] = null;
 		if (fields[0] === 'm=application' && fields[2] === 'TCP/DTLS/SCTP') {
 			protocols[index] = fields[2];
@@ -314,8 +593,24 @@ export function offerForStack(
 	const grouped = lines
 		.slice(0, starts[0])
 		.some((line) => line.startsWith('a=group:BUNDLE'));
-	if (!grouped) lines.splice(starts[0], 0, `a=group:BUNDLE ${mids.join(' ')}`);
+	// a rejected section (port 0) is in no bundle
+	const bundled = mids.filter((_, index) => !rejected[index]);
+	if (!grouped)
+		lines.splice(starts[0], 0, `a=group:BUNDLE ${bundled.join(' ')}`.trim());
 	return { sdp: lines.join(CRLF), grouped, protocols };
+}
+
+/**
+ * A remote description for the stack: one whose sections are all stopped
+ * has no bundle left and Chrome writes no `a=group` line, which the stack
+ * insists on; it reads an empty one.
+ */
+export function withGroup(sdp: string): string {
+	if (/^a=group:/m.test(sdp) || /^m=\S+ (?!0 )/m.test(sdp)) return sdp;
+	const at = sdp.search(/^m=/m);
+	return at === -1
+		? sdp
+		: `${sdp.slice(0, at)}a=group:BUNDLE${CRLF}${sdp.slice(at)}`;
 }
 
 /** the first m-section's index whose mid is `mid` */
@@ -330,65 +625,30 @@ export function midIndex(sdp: string, mid: string): number {
 }
 
 /**
- * The names of the m-sections. The stack names one it creates at random
- * (three letters); Chrome names them by position ("0", "1", ...) and pages
- * lean on that (a hard-coded `sdpMid: '0'`). So a section the stack named
- * is shown under Chrome's name, and what the page hands back is turned
- * around; a section the remote side named keeps its name both ways.
+ * The names of the m-sections this side creates. A section's name is what
+ * its packets carry (the MID header extension), so the stack's name for a
+ * section is the one both ends read, and for one this side offers first it
+ * is the name Chrome would give: Chrome counts up from "0" and passes over
+ * every number a description has used, its own or the peer's, and never
+ * goes back (a section whose offer was rolled back gets the next number
+ * when it is offered again). Pages lean on the names (a hard-coded
+ * `sdpMid: '0'`).
  */
 export class MidNames {
-	#shown = new Map<string, string>();
-	#stack = new Map<string, string>();
-	#rewrite(sdp: string, name: (mid: string, index: number) => string): string {
-		const lines = sdp.split(/\r?\n/);
-		// the names first (the group line comes before the sections)
-		let index = -1;
-		for (const line of lines) {
-			if (line.startsWith('m=')) index++;
-			else if (line.startsWith('a=mid:')) name(line.slice(6).trim(), index);
+	#known = new Set<number>();
+	/** the names of the next `count` sections this side creates */
+	next(count: number): string[] {
+		const names: string[] = [];
+		for (let number = 0; names.length < count; number++)
+			if (!this.#known.has(number)) names.push(String(number));
+		return names;
+	}
+	/** a description, made here or set: the numbers among its names are used */
+	saw(sdp: string) {
+		for (const raw of sdp.split(/\r?\n/)) {
+			if (!raw.startsWith('a=mid:')) continue;
+			const name = raw.slice(6).trim();
+			if (/^\d{1,9}$/.test(name)) this.#known.add(Number(name));
 		}
-		index = -1;
-		for (let at = 0; at < lines.length; at++) {
-			const line = lines[at];
-			if (line.startsWith('m=')) index++;
-			else if (line.startsWith('a=mid:'))
-				lines[at] = `a=mid:${name(line.slice(6).trim(), index)}`;
-			else if (line.startsWith('a=group:BUNDLE '))
-				lines[at] = `a=group:BUNDLE ${line
-					.slice(15)
-					.trim()
-					.split(' ')
-					.map((mid) => name(mid, -1))
-					.join(' ')}`;
-		}
-		return lines.join(CRLF);
-	}
-	/** the name the page reads for the section the stack names `mid` */
-	shown(mid: string): string {
-		return this.#shown.get(mid) ?? mid;
-	}
-	/** the stack's SDP with the names the page reads */
-	toShown(sdp: string): string {
-		return this.#rewrite(sdp, (mid, index) => {
-			let shown = this.#shown.get(mid);
-			if (shown === undefined) {
-				let next = Math.max(index, 0);
-				while (this.#stack.has(String(next))) next++;
-				shown = String(next);
-				this.#shown.set(mid, shown);
-				this.#stack.set(shown, mid);
-			}
-			return shown;
-		});
-	}
-	/** the page's SDP (a remote description) with the names the stack knows */
-	toStack(sdp: string): string {
-		return this.#rewrite(sdp, (mid) => {
-			const stack = this.#stack.get(mid);
-			if (stack !== undefined) return stack;
-			this.#shown.set(mid, mid);
-			this.#stack.set(mid, mid);
-			return mid;
-		});
 	}
 }

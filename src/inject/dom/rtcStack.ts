@@ -1,10 +1,14 @@
 import type {
 	ChannelOptions,
 	ConnectionConfig,
+	Direction,
+	MediaSection,
+	Negotiated,
 	Reply,
 	Request,
 	RtcWorkerConnection,
 	RtcWorkerInit,
+	RtcWorkerTemplate,
 	Unsequenced,
 	WorkerEvent,
 	WorkerMessage,
@@ -44,6 +48,15 @@ import type { RtcContext } from './rtcLazy';
  * and generateCertificate. RTCIceCandidate and RTCSessionDescription stay
  * native: they parse and hold text.
  *
+ * Media (section 16 of the document): a transceiver, its sender and its
+ * receiver are objects of STomp's own on the browser's own prototypes,
+ * whose members answer for them and are the browser's for anything else.
+ * A track the page sends is read through a MediaStreamTrackProcessor whose
+ * stream goes to the worker; a track the page receives is a
+ * MediaStreamTrackGenerator's, which the worker writes and the page reads
+ * as the remote track Chrome would have made (its prototype, id, label
+ * and muted state).
+ *
  * The browser checks what an object is, not which document's prototype a
  * member came from: another document's addIceCandidate works on this
  * document's connection. Documents that can reach each other (a frame and
@@ -53,6 +66,7 @@ import type { RtcContext } from './rtcLazy';
  */
 
 // taken before any hook or page script, by the inject module (modules/WebRTC.ts)
+let objectCreate: typeof Object.create;
 let mapEntries: typeof Map.prototype.entries;
 let mapNext: () => IteratorResult<[string, unknown]>;
 
@@ -65,6 +79,14 @@ interface Shared {
 	reports: WeakMap<object, Members>;
 	/** every connection made and not yet collected, a closed one included */
 	made: WeakRef<object>[];
+	transceivers: WeakMap<object, Members>;
+	senders: WeakMap<object, Members>;
+	receivers: WeakMap<object, Members>;
+	trackEvents: WeakMap<object, Members>;
+	/** a received track as the page reads it: Chrome's id, label and muted state for one */
+	tracks: WeakMap<object, { id?: string; label: string; muted: boolean }>;
+	/** the id of a stream a peer named */
+	streams: WeakMap<object, string>;
 }
 // an about:blank child (a frame, a popup) runs its creator's bundle: its
 // worker when the child has no controller
@@ -83,6 +105,7 @@ const method = (name: string, what: string) =>
 export default class WebRTCStack {
 	install(ctx: RtcContext) {
 		const client = ctx.client;
+		objectCreate = ctx.captures.objectCreate;
 		mapEntries = ctx.captures.mapEntries;
 		mapNext = ctx.captures.mapNext;
 		weakDeref = ctx.captures.weakDeref;
@@ -135,6 +158,12 @@ export default class WebRTCStack {
 		shared.channelEvents ??= new WeakMap();
 		shared.reports ??= new WeakMap();
 		shared.made ??= [];
+		shared.transceivers ??= new WeakMap();
+		shared.senders ??= new WeakMap();
+		shared.receivers ??= new WeakMap();
+		shared.trackEvents ??= new WeakMap();
+		shared.tracks ??= new WeakMap();
+		shared.streams ??= new WeakMap();
 
 		// --- the document's worker, started on the first connection ---
 
@@ -147,15 +176,42 @@ export default class WebRTCStack {
 				return bundleWorker();
 			const NativeWorker = workerModule?.nativeWorker ?? global.Worker;
 			const transport = (controlled ?? client).requestTransportPort();
-			worker = new NativeWorker(ctx.workerURL());
-			worker.postMessage(
+			const started = new NativeWorker(ctx.workerURL());
+			worker = started;
+			started.postMessage(
 				{
 					kind: 'init',
 					transport,
 					module: ctx.moduleURL(),
+					template: true,
 				} satisfies RtcWorkerInit,
 				[transport],
 			);
+			// What this browser offers for audio and video, from a connection
+			// of its own that is closed with nothing set on it (no socket):
+			// the stack negotiates these formats, and the sections a page
+			// reads are written in this shape.
+			const probe = Reflect.construct(
+				NativePeerConnection,
+				[],
+			) as RTCPeerConnection;
+			const template = (sdp: string) => {
+				probe.close();
+				started.postMessage({
+					kind: 'template',
+					sdp,
+				} satisfies RtcWorkerTemplate);
+			};
+			try {
+				probe.addTransceiver('audio');
+				probe.addTransceiver('video');
+				probe.createOffer().then(
+					(offer) => template(offer.sdp ?? ''),
+					() => template(''),
+				);
+			} catch (error) {
+				template('');
+			}
 			return worker;
 		};
 		bundleWorker ??= startWorker;
@@ -682,6 +738,860 @@ export default class WebRTCStack {
 			unsupported('RTCStatsReport'),
 		);
 
+		// --- media: transceivers, senders, receivers and their tracks ---
+
+		const NativeTrack = global.MediaStreamTrack as Function | undefined;
+		const NativeStream = global.MediaStream as Function | undefined;
+		const Processor = global.MediaStreamTrackProcessor as Function | undefined;
+		const Generator = global.MediaStreamTrackGenerator as Function | undefined;
+		const NativeTransceiver = global.RTCRtpTransceiver as Function | undefined;
+		const NativeSender = global.RTCRtpSender as Function | undefined;
+		const NativeReceiver = global.RTCRtpReceiver as Function | undefined;
+		const NativeTrackEvent = global.RTCTrackEvent as Function | undefined;
+		const NativeStreamTrackEvent = global.MediaStreamTrackEvent as
+			typeof MediaStreamTrackEvent | undefined;
+		/** the browser has what media through the worker takes */
+		const hasMedia = [
+			NativeTrack,
+			NativeStream,
+			Processor,
+			Generator,
+			NativeTransceiver,
+			NativeSender,
+			NativeReceiver,
+			NativeTrackEvent,
+			NativeStreamTrackEvent,
+		].every((made) => typeof made === 'function');
+		// the browser's own accessors, taken before anything is hooked: what
+		// an object is, is asked of them
+		const getterOf = (Class: Function | undefined, key: string) =>
+			(Class && Reflect.getOwnPropertyDescriptor(Class.prototype, key)?.get) as
+				(() => any) | undefined;
+		const trackKind = getterOf(NativeTrack, 'kind');
+		const trackId = getterOf(NativeTrack, 'id');
+		const trackState = getterOf(NativeTrack, 'readyState');
+		const streamId = getterOf(NativeStream, 'id');
+		const writableOf = getterOf(Generator, 'writable');
+		const readableOf = getterOf(Processor, 'readable');
+		const stopTrack = NativeTrack?.prototype.stop as Function;
+		const streamAdd = NativeStream?.prototype.addTrack as Function;
+		const streamRemove = NativeStream?.prototype.removeTrack as Function;
+		const kindOf = (value: unknown): 'audio' | 'video' | null => {
+			try {
+				return Reflect.apply(trackKind!, value, []);
+			} catch (error) {
+				return null;
+			}
+		};
+		const streamIdOf = (value: unknown): string | null => {
+			try {
+				return (
+					shared.streams.get(value as object) ??
+					Reflect.apply(streamId!, value, [])
+				);
+			} catch (error) {
+				return null;
+			}
+		};
+		/** an id as the browser makes them */
+		const uuid = (): string =>
+			Reflect.apply(streamId!, Reflect.construct(NativeStream!, []), []);
+		const sends = (direction: Direction) =>
+			direction === 'sendrecv' || direction === 'sendonly';
+		const receives = (direction: Direction) =>
+			direction === 'sendrecv' || direction === 'recvonly';
+		const directionOf = (send: boolean, receive: boolean): Direction =>
+			send
+				? receive
+					? 'sendrecv'
+					: 'sendonly'
+				: receive
+					? 'recvonly'
+					: 'inactive';
+		const DIRECTIONS = ['sendrecv', 'sendonly', 'recvonly', 'inactive'];
+
+		/** a transceiver, with its sender and its receiver */
+		interface MediaSlot {
+			pc: PeerState;
+			/** the worker's name for it (protocol.ts, MediaSection) */
+			handle: number;
+			kind: 'audio' | 'video';
+			mid: string | null;
+			direction: Direction;
+			current: Direction | 'stopped' | null;
+			/** stop() was called, or the peer stopped it */
+			stopping: boolean;
+			/** and a negotiation has taken it out of the connection */
+			stopped: boolean;
+			transceiver: object;
+			sender: object;
+			receiver: object;
+			/** what the sender sends */
+			track: MediaStreamTrack | null;
+			/** the receiver's track: what the worker plays into */
+			remote: MediaStreamTrack;
+			/** the peer's streams the receiver's track is in */
+			remoteStreams: MediaStream[];
+			/** the peer's description has the section send */
+			receptive: boolean;
+			/** media has arrived on it */
+			live: boolean;
+			/** a description has had it send: addTrack leaves it alone */
+			sent: boolean;
+			/** its direction in this side's last offer, and the peer's in its last description */
+			offered: Direction | null;
+			theirs: Direction | null;
+			/** setStreams since the last local description */
+			restated: boolean;
+			encoding: Record<string, unknown>;
+			/** the transactionId getParameters last gave */
+			transaction: string | null;
+			jitter: unknown;
+		}
+		const mediaSlots = new WeakMap<object, MediaSlot>();
+		const slotOf = (that: unknown): MediaSlot => {
+			const slot = mediaSlots.get(that as object);
+			if (!slot) throw illegal();
+			return slot;
+		};
+		const emptyReport = () =>
+			RealmPromise.resolve(Reflect.construct(MockStatsReport, [new Map()]));
+		const SET_DIRECTION =
+			"Failed to set the 'direction' property on 'RTCRtpTransceiver': ";
+		const onSender = (name: string, what: string) =>
+			`Failed to execute '${name}' on 'RTCRtpSender': ${what}`;
+
+		class TransceiverMembers {
+			get mid() {
+				return slotOf(this).mid;
+			}
+			get sender() {
+				return slotOf(this).sender;
+			}
+			get receiver() {
+				return slotOf(this).receiver;
+			}
+			get stopped() {
+				return slotOf(this).stopping;
+			}
+			get direction(): any {
+				const slot = slotOf(this);
+				return slot.stopping ? 'stopped' : slot.direction;
+			}
+			set direction(value: any) {
+				const slot = slotOf(this);
+				const direction = String(value);
+				if (slot.pc.closed)
+					throw domException(
+						`${SET_DIRECTION}The peer connection is closed.`,
+						'InvalidStateError',
+					);
+				if (slot.stopping)
+					throw domException(
+						`${SET_DIRECTION}The transceiver is stopping.`,
+						'InvalidStateError',
+					);
+				if (direction === 'stopped')
+					throw new RealmTypeError(
+						`${SET_DIRECTION}Invalid RTCRtpTransceiverDirection.`,
+					);
+				// any other word: the browser warns and leaves it
+				if (!DIRECTIONS.includes(direction) || direction === slot.direction)
+					return;
+				setDirection(slot, direction as Direction);
+				negotiate(slot.pc);
+			}
+			get currentDirection() {
+				return slotOf(this).current;
+			}
+			stop() {
+				const slot = slotOf(this);
+				if (slot.pc.closed)
+					throw domException(
+						"Failed to execute 'stop' on 'RTCRtpTransceiver': The peer connection is closed.",
+						'InvalidStateError',
+					);
+				if (slot.stopping) return;
+				slot.stopping = true;
+				slot.pc.call({ op: 'stopMedia', handle: slot.handle }).catch(() => {});
+				queue(() => endRemote(slot));
+				negotiate(slot.pc);
+			}
+			// every codec the stack has is offered, in the browser's order
+			setCodecPreferences() {
+				slotOf(this);
+			}
+		}
+		class SenderMembers {
+			get track() {
+				return slotOf(this).track;
+			}
+			get transport() {
+				slotOf(this);
+				return null;
+			}
+			get rtcpTransport() {
+				slotOf(this);
+				return null;
+			}
+			get dtmf() {
+				slotOf(this);
+				return null;
+			}
+			getParameters() {
+				const slot = slotOf(this);
+				slot.transaction = uuid();
+				const encodings = new RealmArray();
+				if (!slot.stopping) encodings.push({ ...slot.encoding });
+				return {
+					codecs: new RealmArray(),
+					headerExtensions: new RealmArray(),
+					rtcp: { cname: '', reducedSize: false },
+					encodings,
+					transactionId: slot.transaction,
+				};
+			}
+			setParameters(...args: any[]) {
+				const slot = slotOf(this);
+				if (!args.length)
+					return RealmPromise.reject(
+						new RealmTypeError(
+							onSender(
+								'setParameters',
+								'1 argument required, but only 0 present.',
+							),
+						),
+					);
+				if (slot.stopping)
+					return rejected(
+						onSender(
+							'setParameters',
+							// Chrome 156 words it anew; isLegacy() tells 152 from it
+							isLegacy()
+								? 'Cannot set parameters on a stopped sender.'
+								: 'setParameters cannot be called on a stopped sender.',
+						),
+						'InvalidStateError',
+					);
+				if (slot.transaction === null)
+					return rejected(
+						onSender(
+							'setParameters',
+							'getParameters() needs to be called before setParameters().',
+						),
+						'InvalidStateError',
+					);
+				const given = args[0];
+				if (!isObject(given) || given.transactionId !== slot.transaction)
+					return rejected(
+						onSender(
+							'setParameters',
+							'Read-only field modified in setParameters().',
+						),
+						'InvalidModificationError',
+					);
+				slot.transaction = null;
+				const encoding = isObject(given.encodings)
+					? (given.encodings as Record<number, unknown>)[0]
+					: undefined;
+				if (isObject(encoding)) {
+					slot.encoding = encodingOf(encoding);
+					slot.pc
+						.call({
+							op: 'mediaEncoding',
+							handle: slot.handle,
+							active: slot.encoding.active !== false,
+						})
+						.catch(() => {});
+				}
+				return RealmPromise.resolve(undefined);
+			}
+			replaceTrack(...args: any[]) {
+				const slot = slotOf(this);
+				const track = args[0] ?? null;
+				let refusal: string | null = null;
+				if (!args.length) refusal = '1 argument required, but only 0 present.';
+				else if (track !== null && !kindOf(track))
+					refusal = "parameter 1 is not of type 'MediaStreamTrack'.";
+				if (refusal)
+					return RealmPromise.reject(
+						new RealmTypeError(onSender('replaceTrack', refusal)),
+					);
+				if (slot.pc.closed)
+					return rejected(
+						onSender('replaceTrack', 'The peer connection is closed.'),
+						'InvalidStateError',
+					);
+				if (slot.stopping)
+					return rejected(
+						onSender(
+							'replaceTrack',
+							'replaceTrack cannot be called on a stopped sender',
+						),
+						'InvalidStateError',
+					);
+				if (track !== null && kindOf(track) !== slot.kind)
+					return RealmPromise.reject(
+						new RealmTypeError(
+							onSender('replaceTrack', 'Track kind does not match Sender kind'),
+						),
+					);
+				slot.track = track;
+				return new RealmPromise<void>((resolve) => {
+					const done = () => resolve();
+					sendTrack(slot).then(done, done);
+				});
+			}
+			getStats() {
+				slotOf(this);
+				return emptyReport();
+			}
+			setStreams(...streams: unknown[]) {
+				const slot = slotOf(this);
+				const ids = streamIds(streams, 0, 'setStreams', 'RTCRtpSender');
+				if (slot.pc.closed)
+					throw domException(
+						onSender('setStreams', 'The peer connection is closed.'),
+						'InvalidStateError',
+					);
+				slot.restated = true;
+				slot.pc
+					.call({ op: 'mediaStreams', handle: slot.handle, streams: ids })
+					.catch(() => {});
+				negotiate(slot.pc);
+			}
+		}
+		class ReceiverMembers {
+			get track() {
+				return slotOf(this).remote;
+			}
+			get transport() {
+				slotOf(this);
+				return null;
+			}
+			get rtcpTransport() {
+				slotOf(this);
+				return null;
+			}
+			get jitterBufferTarget(): any {
+				return slotOf(this).jitter;
+			}
+			set jitterBufferTarget(value: any) {
+				slotOf(this).jitter = value;
+			}
+			getParameters() {
+				slotOf(this);
+				return {
+					codecs: new RealmArray(),
+					headerExtensions: new RealmArray(),
+					rtcp: { reducedSize: false },
+					encodings: new RealmArray(),
+				};
+			}
+			getStats() {
+				slotOf(this);
+				return emptyReport();
+			}
+			getContributingSources() {
+				slotOf(this);
+				return new RealmArray();
+			}
+			getSynchronizationSources() {
+				slotOf(this);
+				return new RealmArray();
+			}
+		}
+		interface TrackEventParts {
+			receiver: object;
+			track: MediaStreamTrack;
+			streams: readonly MediaStream[];
+			transceiver: object;
+		}
+		const trackEvents = new WeakMap<object, TrackEventParts>();
+		const trackEventOf = (that: unknown): TrackEventParts => {
+			const parts = trackEvents.get(that as object);
+			if (!parts) throw illegal();
+			return parts;
+		};
+		class TrackEventMembers {
+			get receiver() {
+				return trackEventOf(this).receiver;
+			}
+			get track() {
+				return trackEventOf(this).track;
+			}
+			get streams() {
+				return trackEventOf(this).streams;
+			}
+			get transceiver() {
+				return trackEventOf(this).transceiver;
+			}
+		}
+
+		/**
+		 * The browser's own prototype answering for objects of ours: each of
+		 * its functions is one that reads as it, runs `Mock`'s member for an
+		 * object in `table` (`missing` where there is none) and is the
+		 * browser's own for anything else, so its errors for a stranger are
+		 * the browser's. The members are returned, for the objects this
+		 * document makes.
+		 */
+		const adopt = (
+			Native: Function,
+			Mock: Function,
+			table: WeakMap<object, Members>,
+			name: string,
+		): Members => {
+			const members = noMembers();
+			const missing = unsupported(name);
+			for (const key of Reflect.ownKeys(Mock.prototype))
+				if (key !== 'constructor')
+					members[key] = Reflect.getOwnPropertyDescriptor(Mock.prototype, key);
+			const prototype = Native.prototype as object;
+			for (const key of Reflect.ownKeys(prototype)) {
+				if (key === 'constructor') continue;
+				const descriptor = Reflect.getOwnPropertyDescriptor(prototype, key)!;
+				for (const part of ['value', 'get', 'set'] as const) {
+					const native = descriptor[part];
+					if (typeof native !== 'function') continue;
+					descriptor[part] = proxyModule.wrapFunction(
+						native as Function,
+						(target, that, args) => {
+							const own = table.get(that);
+							if (!own) return Reflect.apply(target, that, args);
+							const implemented = own[key]?.[part];
+							return implemented
+								? Reflect.apply(implemented, that, args)
+								: missing(String(key), part !== 'value');
+						},
+					);
+				}
+				Reflect.defineProperty(prototype, key, descriptor);
+			}
+			return members;
+		};
+		/** a getter of the browser's that answers `read` where it has an answer */
+		const override = (
+			Native: Function,
+			key: string,
+			read: (that: object) => unknown,
+		) => {
+			const descriptor = Reflect.getOwnPropertyDescriptor(
+				Native.prototype,
+				key,
+			)!;
+			descriptor.get = proxyModule.wrapFunction(
+				descriptor.get!,
+				(target, that, args) => {
+					const value = read(that);
+					return value === undefined
+						? Reflect.apply(target, that, args)
+						: value;
+				},
+			);
+			Reflect.defineProperty(Native.prototype, key, descriptor);
+		};
+		let transceiverMembers = noMembers();
+		let senderMembers = noMembers();
+		let receiverMembers = noMembers();
+		let trackEventMembers = noMembers();
+		if (hasMedia) {
+			transceiverMembers = adopt(
+				NativeTransceiver!,
+				TransceiverMembers,
+				shared.transceivers,
+				'RTCRtpTransceiver',
+			);
+			senderMembers = adopt(
+				NativeSender!,
+				SenderMembers,
+				shared.senders,
+				'RTCRtpSender',
+			);
+			receiverMembers = adopt(
+				NativeReceiver!,
+				ReceiverMembers,
+				shared.receivers,
+				'RTCRtpReceiver',
+			);
+			trackEventMembers = adopt(
+				NativeTrackEvent!,
+				TrackEventMembers,
+				shared.trackEvents,
+				'RTCTrackEvent',
+			);
+			override(NativeTrack!, 'id', (that) => shared.tracks.get(that)?.id);
+			override(NativeTrack!, 'label', (that) => shared.tracks.get(that)?.label);
+			override(NativeTrack!, 'muted', (that) => shared.tracks.get(that)?.muted);
+			override(NativeStream!, 'id', (that) => shared.streams.get(that));
+		}
+
+		/** the ids of `args` from `from` on, each a MediaStream */
+		const streamIds = (
+			args: unknown[],
+			from: number,
+			name: string,
+			on: string,
+		): string[] => {
+			const ids: string[] = [];
+			for (let at = from; at < args.length; at++) {
+				const id = streamIdOf(args[at]);
+				if (id === null)
+					throw new RealmTypeError(
+						`Failed to execute '${name}' on '${on}': parameter ${at + 1} is not of type 'MediaStream'.`,
+					);
+				if (!ids.includes(id)) ids.push(id);
+			}
+			return ids;
+		};
+		/** an encoding as getParameters lists one: the members in name order */
+		const encodingOf = (given: Record<string, unknown>) => {
+			const encoding: Record<string, unknown> = {
+				active: given.active !== false,
+				adaptivePtime: !!given.adaptivePtime,
+			};
+			if (given.maxBitrate !== undefined)
+				encoding.maxBitrate = Number(given.maxBitrate);
+			encoding.networkPriority = given.networkPriority ?? 'low';
+			encoding.priority = given.priority ?? 'low';
+			return encoding;
+		};
+		/**
+		 * A transceiver. `added` is what the worker hears of one the page
+		 * made (the sender's streams and name); one the peer offered first is
+		 * the worker's already. `remoteId` is the id the peer gave what it
+		 * sends: the receiver's track has it.
+		 */
+		const makeSlot = (
+			state: PeerState,
+			handle: number,
+			kind: 'audio' | 'video',
+			direction: Direction,
+			track: MediaStreamTrack | null,
+			added: { streams: string[]; id: string; byTrack: boolean } | null,
+			remoteId?: string,
+		): MediaSlot => {
+			const remote = Reflect.construct(Generator!, [
+				{ kind },
+			]) as MediaStreamTrack;
+			const writable = Reflect.apply(writableOf!, remote, []) as WritableStream;
+			Reflect.setPrototypeOf(remote, NativeTrack!.prototype);
+			shared.tracks.set(remote, {
+				id: remoteId,
+				label: `remote ${kind}`,
+				muted: true,
+			});
+			const part = (
+				Native: Function,
+				table: WeakMap<object, Members>,
+				members: Members,
+			) => {
+				const object = objectCreate(Native.prototype) as object;
+				table.set(object, members);
+				return object;
+			};
+			const slot: MediaSlot = {
+				pc: state,
+				handle,
+				kind,
+				mid: null,
+				direction,
+				current: null,
+				stopping: false,
+				stopped: false,
+				transceiver: part(
+					NativeTransceiver!,
+					shared.transceivers,
+					transceiverMembers,
+				),
+				sender: part(NativeSender!, shared.senders, senderMembers),
+				receiver: part(NativeReceiver!, shared.receivers, receiverMembers),
+				track,
+				remote,
+				remoteStreams: [],
+				receptive: false,
+				live: false,
+				sent: false,
+				offered: null,
+				theirs: null,
+				restated: false,
+				encoding: encodingOf({}),
+				transaction: null,
+				jitter: null,
+			};
+			mediaSlots.set(slot.transceiver, slot);
+			mediaSlots.set(slot.sender, slot);
+			mediaSlots.set(slot.receiver, slot);
+			state.slots.push(slot);
+			if (added)
+				state
+					.call({
+						op: 'addMedia',
+						handle,
+						kind,
+						direction,
+						streams: added.streams,
+						track: added.id,
+						byTrack: added.byTrack,
+					})
+					.catch(() => {});
+			state
+				.call({ op: 'receiveTrack', handle, writable }, [writable])
+				.catch(() => {});
+			return slot;
+		};
+		/** the sender's track to the worker: a stream of its frames, or none */
+		const sendTrack = (slot: MediaSlot) => {
+			let readable: ReadableStream | null = null;
+			// sound only: the worker has no picture path yet
+			if (slot.track && slot.kind === 'audio')
+				try {
+					if (Reflect.apply(trackState!, slot.track, []) === 'live')
+						readable = Reflect.apply(
+							readableOf!,
+							Reflect.construct(Processor!, [{ track: slot.track }]),
+							[],
+						);
+				} catch (error) {
+					// a track the browser will not read: nothing is sent
+				}
+			return slot.pc.call(
+				{ op: 'sendTrack', handle: slot.handle, readable },
+				readable ? [readable] : [],
+			);
+		};
+		const setDirection = (slot: MediaSlot, direction: Direction) => {
+			slot.direction = direction;
+			slot.pc
+				.call({ op: 'mediaDirection', handle: slot.handle, direction })
+				.catch(() => {});
+		};
+		/** the receiver's track is over: `ended`, as the browser fires it for a stopped transceiver */
+		const endRemote = (slot: MediaSlot) => {
+			if (Reflect.apply(trackState!, slot.remote, []) === 'ended') return;
+			Reflect.apply(stopTrack, slot.remote, []);
+			slot.remote.dispatchEvent(new RealmEvent('ended'));
+		};
+		const setMuted = (slot: MediaSlot, muted: boolean) => {
+			const shown = shared.tracks.get(slot.remote)!;
+			if (shown.muted === muted) return;
+			shown.muted = muted;
+			slot.remote.dispatchEvent(new RealmEvent(muted ? 'mute' : 'unmute'));
+		};
+		/** the transceivers call for an offer (the specification's check, for what a page can change here) */
+		const mediaNeeds = (state: PeerState) =>
+			state.slots.some((slot) => {
+				if (slot.stopped) return false;
+				if (slot.stopping) return slot.mid !== null;
+				if (slot.mid === null) return true;
+				if (slot.current === null) return false;
+				if (slot.restated && sends(slot.direction)) return true;
+				if (state.localOffer)
+					return (
+						slot.direction !== slot.offered && slot.direction !== slot.current
+					);
+				const theirs = slot.theirs ?? 'inactive';
+				return (
+					slot.current !==
+					directionOf(
+						sends(slot.direction) && receives(theirs),
+						receives(slot.direction) && sends(theirs),
+					)
+				);
+			});
+		const ufragOf = (description: { sdp: string } | null) =>
+			description
+				? (/^a=ice-ufrag:(.*)$/m.exec(description.sdp)?.[1] ?? '')
+				: '';
+		/** the specification's check: an offer is called for */
+		const needs = (state: PeerState) =>
+			(state.restart !== null &&
+				state.restart === ufragOf(state.currentLocal)) ||
+			!state.currentLocal ||
+			// a channel counts from createDataChannel on, before the worker
+			// has numbered it
+			((state.created.length > 0 || state.channels.size > 0) &&
+				!/^m=application /m.test(state.currentLocal.sdp)) ||
+			mediaNeeds(state);
+		/**
+		 * The specification's "update the negotiation-needed flag": the event
+		 * comes once for whatever calls for an offer, and not again until a
+		 * negotiation has ended and something still does
+		 */
+		const negotiate = (state: PeerState) => {
+			if (state.closed) return;
+			// the operations under way come first: the flag is updated when
+			// the last of them is done
+			if (state.busy) {
+				state.updateOnEmpty = true;
+				return;
+			}
+			if (state.signalingState !== 'stable') return;
+			if (!needs(state)) {
+				state.needsNegotiation = false;
+				return;
+			}
+			if (state.needsNegotiation) return;
+			state.needsNegotiation = true;
+			queue(() => {
+				if (state.closed) return;
+				if (state.busy) {
+					state.needsNegotiation = false;
+					state.updateOnEmpty = true;
+					return;
+				}
+				if (state.signalingState !== 'stable') return;
+				if (!needs(state)) {
+					state.needsNegotiation = false;
+					return;
+				}
+				state.target.dispatchEvent(new RealmEvent('negotiationneeded'));
+			});
+		};
+		/**
+		 * A description was set: the worker's sections onto the transceivers
+		 * (`remote`: the peer's description; `answer`: it ends a negotiation).
+		 * What the page is told of it comes after the signaling state has
+		 * changed, in the browser's order: tracks muted, tracks out of
+		 * streams, tracks into streams, then a `track` event for each
+		 * receiver the peer now sends to.
+		 */
+		const settle = (
+			state: PeerState,
+			reply: unknown,
+			remote: boolean,
+			answer: boolean,
+		): (() => void) => {
+			const muted: MediaSlot[] = [];
+			const leaves: [MediaStream, MediaSlot][] = [];
+			const joins: [MediaStream, MediaSlot][] = [];
+			const announced: MediaSlot[] = [];
+			const fresh = new Set<MediaStream>();
+			const medias: MediaSection[] = (reply as Negotiated | null)?.medias ?? [];
+			for (const section of medias) {
+				let slot = state.slots.find((known) => known.handle === section.handle);
+				if (!slot) {
+					// a section the peer offered first
+					if (!hasMedia || section.handle >= 0 || section.stopped) continue;
+					slot = makeSlot(
+						state,
+						section.handle,
+						section.kind,
+						'recvonly',
+						null,
+						null,
+						section.remote?.track ?? undefined,
+					);
+				}
+				slot.mid = section.mid;
+				if (section.mid === null) continue;
+				if (section.stopped) {
+					if (!slot.stopping) {
+						slot.stopping = true;
+						endRemote(slot);
+					}
+					if (remote || answer) slot.current = 'stopped';
+					if (answer) slot.stopped = true;
+					slot.receptive = false;
+					for (const stream of slot.remoteStreams) leaves.push([stream, slot]);
+					continue;
+				}
+				if (answer) {
+					slot.current = section.direction;
+					if (section.direction && sends(section.direction)) slot.sent = true;
+				}
+				if (!remote) {
+					if (!answer) slot.offered = slot.direction;
+					slot.restated = false;
+					continue;
+				}
+				const theirs = section.remote;
+				if (!theirs) continue;
+				slot.theirs = theirs.direction;
+				if (sends(theirs.direction)) {
+					for (const stream of slot.remoteStreams)
+						if (!theirs.streams.includes(streamIdOf(stream)!))
+							leaves.push([stream, slot]);
+					for (const id of theirs.streams) {
+						let stream = state.remoteStreams.get(id);
+						if (!stream) {
+							stream = Reflect.construct(NativeStream!, []) as MediaStream;
+							shared.streams.set(stream, id);
+							state.remoteStreams.set(id, stream);
+							fresh.add(stream);
+						}
+						if (!slot.remoteStreams.includes(stream))
+							joins.push([stream, slot]);
+					}
+					if (!slot.receptive) {
+						slot.receptive = true;
+						announced.push(slot);
+					}
+				} else if (slot.receptive) {
+					slot.receptive = false;
+					slot.live = false;
+					muted.push(slot);
+					for (const stream of slot.remoteStreams) leaves.push([stream, slot]);
+				}
+			}
+			if (answer) {
+				state.localOffer = !remote;
+				state.slots = state.slots.filter((slot) => !slot.stopped);
+			}
+			return () => {
+				for (const slot of muted) setMuted(slot, true);
+				for (const [stream, slot] of leaves) {
+					slot.remoteStreams = slot.remoteStreams.filter(
+						(known) => known !== stream,
+					);
+					Reflect.apply(streamRemove, stream, [slot.remote]);
+					stream.dispatchEvent(
+						new NativeStreamTrackEvent!('removetrack', { track: slot.remote }),
+					);
+					// a stream nothing is left in is not the peer's stream of
+					// that name any more
+					if (
+						!state.slots.some((other) => other.remoteStreams.includes(stream))
+					)
+						state.remoteStreams.delete(streamIdOf(stream)!);
+				}
+				for (const [stream, slot] of joins) {
+					slot.remoteStreams.push(stream);
+					Reflect.apply(streamAdd, stream, [slot.remote]);
+					if (!fresh.has(stream))
+						stream.dispatchEvent(
+							new NativeStreamTrackEvent!('addtrack', { track: slot.remote }),
+						);
+				}
+				for (const slot of announced) {
+					const event = new RealmEvent('track');
+					Reflect.setPrototypeOf(event, NativeTrackEvent!.prototype);
+					shared.trackEvents.set(event, trackEventMembers);
+					const streams = new RealmArray();
+					for (const stream of slot.remoteStreams) streams.push(stream);
+					trackEvents.set(event, {
+						receiver: slot.receiver,
+						track: slot.remote,
+						streams: Object.freeze(streams),
+						transceiver: slot.transceiver,
+					});
+					state.target.dispatchEvent(event);
+					// media that came before the description did
+					if (slot.live) queue(() => setMuted(slot, false));
+				}
+			};
+		};
+		const noMedia = (name: string) =>
+			domException(
+				method(name, 'not supported through the proxy yet'),
+				'NotSupportedError',
+			);
+		const closedState = (name: string) =>
+			domException(
+				method(name, "The RTCPeerConnection's signalingState is 'closed'."),
+				'InvalidStateError',
+			);
+
 		// --- RTCPeerConnection ---
 
 		const peerMembers = noMembers();
@@ -717,12 +1627,22 @@ export default class WebRTCStack {
 			channels: Map<number, MockDataChannel>;
 			/** the channels createDataChannel made */
 			created: MockDataChannel[];
-			negotiated: boolean;
+			/** the transceivers, in the order they were made */
+			slots: MediaSlot[];
+			/** the number of the next transceiver the page makes */
+			nextHandle: number;
+			/** this side made the offer of the last negotiation */
+			localOffer: boolean;
+			/** the peer's streams, by the id it gave them */
+			remoteStreams: Map<string, MediaStream>;
+			/** the ICE user name restartIce() wants replaced, until it is */
+			restart: string | null;
+			/** the specification's negotiation-needed flag */
 			needsNegotiation: boolean;
-			/** negotiation is needed for a data section alone, not for an ICE restart */
-			forChannel: boolean;
-			/** operations on the chain: the event waits for it to empty */
+			/** operations on the chain: the flag is updated once it empties */
 			busy: number;
+			/** the flag was to be updated while operations were under way */
+			updateOnEmpty: boolean;
 			chain: Promise<unknown>;
 			closed: boolean;
 		}
@@ -786,10 +1706,14 @@ export default class WebRTCStack {
 					remoteCandidates: [],
 					channels: new Map(),
 					created: [],
-					negotiated: false,
+					slots: [],
+					nextHandle: 0,
+					localOffer: false,
+					remoteStreams: new Map(),
+					restart: null,
 					needsNegotiation: false,
-					forChannel: false,
 					busy: 0,
+					updateOnEmpty: false,
 					chain: RealmPromise.resolve(),
 					closed: false,
 				};
@@ -936,6 +1860,31 @@ export default class WebRTCStack {
 				const options = (legacy ? args[2] : args[0]) as
 					RTCOfferOptions | undefined;
 				const result = chained(state, 'createOffer', async () => {
+					// the legacy options: a transceiver to receive on where
+					// there is none of the kind, or none that receives
+					if (hasMedia && isObject(options))
+						for (const kind of ['audio', 'video'] as const) {
+							const receive = (options as Record<string, unknown>)[
+								kind === 'audio' ? 'offerToReceiveAudio' : 'offerToReceiveVideo'
+							];
+							if (receive === undefined) continue;
+							const slots = state.slots.filter(
+								(slot) => slot.kind === kind && !slot.stopping,
+							);
+							if (!receive) {
+								for (const slot of slots)
+									if (receives(slot.direction))
+										setDirection(
+											slot,
+											directionOf(sends(slot.direction), false),
+										);
+							} else if (!slots.length)
+								makeSlot(state, state.nextHandle++, kind, 'recvonly', null, {
+									streams: [],
+									id: uuid(),
+									byTrack: false,
+								});
+						}
 					const sdp = (await state.call({
 						op: 'createOffer',
 						iceRestart: !!options?.iceRestart,
@@ -1017,10 +1966,16 @@ export default class WebRTCStack {
 								'rollback',
 								state.signalingState,
 							);
-						await state.call({ op: 'setLocal', type: 'rollback' });
+						const after = settle(
+							state,
+							await state.call({ op: 'setLocal', type: 'rollback' }),
+							false,
+							false,
+						);
 						state.pendingLocal = null;
 						state.pendingRemote = null;
 						setSignaling(state, 'stable');
+						after();
 						return;
 					}
 					if (type === 'offer') {
@@ -1041,13 +1996,18 @@ export default class WebRTCStack {
 							})) as string;
 							state.generatedLocal = sdp;
 						}
-						await state.call({ op: 'setLocal', type: 'offer' });
+						const after = settle(
+							state,
+							await state.call({ op: 'setLocal', type: 'offer' }),
+							false,
+							false,
+						);
 						// the rendering with its candidates comes as they are
 						// gathered; the last description's is not this one's
 						state.liveLocal = null;
 						state.pendingLocal = { type: 'offer', sdp };
-						state.negotiated ||= hasData(sdp);
 						setSignaling(state, 'have-local-offer');
+						after();
 						return;
 					}
 					// answer, pranswer
@@ -1065,19 +2025,25 @@ export default class WebRTCStack {
 						sdp = (await state.call({ op: 'createAnswer' })) as string;
 						state.generatedLocal = sdp;
 					}
-					await state.call({ op: 'setLocal', type: 'answer' });
+					const after = settle(
+						state,
+						await state.call({ op: 'setLocal', type: 'answer' }),
+						false,
+						type === 'answer',
+					);
 					state.liveLocal = null;
 					if (type === 'pranswer') {
 						state.pendingLocal = { type: 'pranswer', sdp };
 						setSignaling(state, 'have-local-pranswer');
+						after();
 						return;
 					}
 					state.currentLocal = { type: 'answer', sdp };
 					state.pendingLocal = null;
 					state.currentRemote = state.pendingRemote ?? state.currentRemote;
 					state.pendingRemote = null;
-					state.negotiated ||= hasData(sdp);
 					setSignaling(state, 'stable');
+					after();
 				});
 				return legacyForm(
 					result,
@@ -1164,10 +2130,16 @@ export default class WebRTCStack {
 								'rollback',
 								state.signalingState,
 							);
-						await state.call({ op: 'setRemote', type: 'rollback', sdp: '' });
+						const after = settle(
+							state,
+							await state.call({ op: 'setRemote', type: 'rollback', sdp: '' }),
+							false,
+							false,
+						);
 						state.pendingLocal = null;
 						state.pendingRemote = null;
 						setSignaling(state, 'stable');
+						after();
 						return;
 					}
 					const offer = type === 'offer';
@@ -1182,9 +2154,15 @@ export default class WebRTCStack {
 						throw wrongState(name, 'remote', type!, state.signalingState);
 					// an offer over the connection's own takes that one back first
 					if (offer && state.signalingState === 'have-local-offer') {
-						await state.call({ op: 'setRemote', type: 'rollback', sdp: '' });
+						const back = settle(
+							state,
+							await state.call({ op: 'setRemote', type: 'rollback', sdp: '' }),
+							false,
+							false,
+						);
 						state.pendingLocal = null;
 						setSignaling(state, 'stable');
+						back();
 					}
 					const refusal = remoteRefusal(
 						parsed!,
@@ -1201,21 +2179,28 @@ export default class WebRTCStack {
 							method(name, `Failed to set remote ${type} sdp: ${refusal}`),
 							'InvalidAccessError',
 						);
-					await stackCall(state, name, `remote ${type}`, {
-						op: 'setRemote',
-						type: offer ? 'offer' : 'answer',
-						sdp,
-					});
+					const after = settle(
+						state,
+						await stackCall(state, name, `remote ${type}`, {
+							op: 'setRemote',
+							type: offer ? 'offer' : 'answer',
+							sdp,
+						}),
+						true,
+						type === 'answer',
+					);
 					state.remoteMids = parsed!.sections.map((section) => section.mid);
 					state.remoteCandidates = [];
 					if (offer) {
 						state.pendingRemote = { type: 'offer', sdp };
 						setSignaling(state, 'have-remote-offer');
+						after();
 						return;
 					}
 					if (type === 'pranswer') {
 						state.pendingRemote = { type: 'pranswer', sdp };
 						setSignaling(state, 'have-remote-pranswer');
+						after();
 						return;
 					}
 					state.currentRemote = { type: 'answer', sdp };
@@ -1223,6 +2208,7 @@ export default class WebRTCStack {
 					state.currentLocal = state.pendingLocal ?? state.currentLocal;
 					state.pendingLocal = null;
 					setSignaling(state, 'stable');
+					after();
 				});
 				return legacyForm(
 					result,
@@ -1315,22 +2301,179 @@ export default class WebRTCStack {
 				const state = peerOf(this);
 				if (state.closed) return;
 				state.call({ op: 'restartIce' }).catch(() => {});
-				state.needsNegotiation = true;
-				state.forChannel = false;
-				queue(() => fireNegotiationNeeded(state));
+				state.restart = ufragOf(state.currentLocal);
+				negotiate(state);
 			}
-			// no media through the proxy yet: a connection has none of these
 			getSenders() {
-				peerOf(this);
-				return new RealmArray();
+				const list = new RealmArray();
+				for (const slot of peerOf(this).slots) list.push(slot.sender);
+				return list;
 			}
 			getReceivers() {
-				peerOf(this);
-				return new RealmArray();
+				const list = new RealmArray();
+				for (const slot of peerOf(this).slots) list.push(slot.receiver);
+				return list;
 			}
 			getTransceivers() {
-				peerOf(this);
-				return new RealmArray();
+				const list = new RealmArray();
+				for (const slot of peerOf(this).slots) list.push(slot.transceiver);
+				return list;
+			}
+			addTrack(...args: unknown[]) {
+				const state = peerOf(this);
+				if (!hasMedia) throw noMedia('addTrack');
+				if (!args.length)
+					throw new RealmTypeError(
+						method('addTrack', '1 argument required, but only 0 present.'),
+					);
+				const track = args[0] as MediaStreamTrack;
+				const kind = kindOf(track);
+				if (!kind)
+					throw new RealmTypeError(
+						method(
+							'addTrack',
+							"parameter 1 is not of type 'MediaStreamTrack'.",
+						),
+					);
+				const streams = streamIds(args, 1, 'addTrack', 'RTCPeerConnection');
+				if (state.closed) throw closedState('addTrack');
+				if (state.slots.some((slot) => slot.track === track))
+					throw domException(
+						method('addTrack', 'A sender already exists for the track.'),
+						'InvalidAccessError',
+					);
+				// a transceiver that has sent nothing takes the track: the one
+				// the peer's offer made, most of all
+				let slot = state.slots.find(
+					(known) =>
+						!known.track &&
+						known.kind === kind &&
+						!known.stopping &&
+						!known.sent,
+				);
+				if (slot) {
+					slot.track = track;
+					state
+						.call({ op: 'mediaStreams', handle: slot.handle, streams })
+						.catch(() => {});
+					if (!sends(slot.direction))
+						setDirection(slot, directionOf(true, receives(slot.direction)));
+				} else
+					slot = makeSlot(state, state.nextHandle++, kind, 'sendrecv', track, {
+						streams,
+						id:
+							shared.tracks.get(track)?.id ??
+							Reflect.apply(trackId!, track, []),
+						byTrack: true,
+					});
+				sendTrack(slot).catch(() => {});
+				negotiate(state);
+				return slot.sender;
+			}
+			addTransceiver(...args: unknown[]) {
+				const state = peerOf(this);
+				if (!hasMedia) throw noMedia('addTransceiver');
+				if (!args.length)
+					throw new RealmTypeError(
+						method(
+							'addTransceiver',
+							'1 argument required, but only 0 present.',
+						),
+					);
+				let track: MediaStreamTrack | null = null;
+				let kind = kindOf(args[0]);
+				if (kind) track = args[0] as MediaStreamTrack;
+				else {
+					const word = String(args[0]);
+					if (word !== 'audio' && word !== 'video')
+						throw new RealmTypeError(
+							method(
+								'addTransceiver',
+								"The argument provided as parameter 1 is not a valid MediaStreamTrack kind ('audio' or 'video').",
+							),
+						);
+					kind = word;
+				}
+				const init = args[1];
+				if (init !== undefined && init !== null && !isObject(init))
+					throw new RealmTypeError(
+						method(
+							'addTransceiver',
+							"The provided value is not of type 'RTCRtpTransceiverInit'.",
+						),
+					);
+				let direction: Direction = 'sendrecv';
+				let streams: string[] = [];
+				let encoding: unknown;
+				if (isObject(init)) {
+					if (init.direction !== undefined) {
+						const word = String(init.direction);
+						if (!DIRECTIONS.includes(word))
+							throw new RealmTypeError(
+								method(
+									'addTransceiver',
+									`Failed to read the 'direction' property from 'RTCRtpTransceiverInit': The provided value '${word}' is not a valid enum value of type RTCRtpTransceiverDirection.`,
+								),
+							);
+						direction = word as Direction;
+					}
+					if (isObject(init.streams))
+						streams = streamIds(
+							[...(init.streams as unknown as unknown[])],
+							0,
+							'addTransceiver',
+							'RTCPeerConnection',
+						);
+					if (isObject(init.sendEncodings))
+						encoding = (init.sendEncodings as unknown as unknown[])[0];
+				}
+				if (state.closed) throw closedState('addTransceiver');
+				const slot = makeSlot(
+					state,
+					state.nextHandle++,
+					kind,
+					direction,
+					track,
+					{
+						streams,
+						id: track
+							? (shared.tracks.get(track)?.id ??
+								Reflect.apply(trackId!, track, []))
+							: uuid(),
+						byTrack: false,
+					},
+				);
+				if (isObject(encoding)) slot.encoding = encodingOf(encoding);
+				if (track) sendTrack(slot).catch(() => {});
+				negotiate(state);
+				return slot.transceiver;
+			}
+			removeTrack(...args: unknown[]) {
+				const state = peerOf(this);
+				if (!args.length)
+					throw new RealmTypeError(
+						method('removeTrack', '1 argument required, but only 0 present.'),
+					);
+				if (!shared.senders.has(args[0] as object))
+					throw new RealmTypeError(
+						method('removeTrack', "parameter 1 is not of type 'RTCRtpSender'."),
+					);
+				if (state.closed) throw closedState('removeTrack');
+				const slot = mediaSlots.get(args[0] as object);
+				if (slot?.pc !== state)
+					throw domException(
+						method(
+							'removeTrack',
+							'The sender was not created by this peer connection.',
+						),
+						'InvalidAccessError',
+					);
+				if (!slot.track || slot.stopping) return;
+				slot.track = null;
+				sendTrack(slot).catch(() => {});
+				if (sends(slot.direction))
+					setDirection(slot, directionOf(false, receives(slot.direction)));
+				negotiate(state);
 			}
 			createDataChannel(...args: any[]) {
 				const state = peerOf(this);
@@ -1380,11 +2523,7 @@ export default class WebRTCStack {
 					},
 				);
 				// the first channel wants an offer (an SCTP section); later ones ride on it
-				if (!state.negotiated && !state.needsNegotiation) {
-					state.needsNegotiation = true;
-					state.forChannel = true;
-					queue(() => fireNegotiationNeeded(state));
-				}
+				negotiate(state);
 				return channel;
 			}
 			getStats(...args: any[]) {
@@ -1423,6 +2562,11 @@ export default class WebRTCStack {
 					if (channelState.readyState === 'closed') continue;
 					channelState.readyState = 'closed';
 					channel.dispatchEvent(new RealmEvent('close'));
+				}
+				for (const slot of state.slots) {
+					slot.stopping = true;
+					slot.current = 'stopped';
+					slot.mid = null;
 				}
 				state.signalingState = 'closed';
 				state.iceConnectionState = 'closed';
@@ -1545,28 +2689,20 @@ export default class WebRTCStack {
 			}
 			return out.join('\r\n');
 		};
-		/** a description with a data section: channels need no offer after it */
-		const hasData = (sdp: string) => /^m=application /m.test(sdp);
 		const setSignaling = (state: PeerState, next: RTCSignalingState) => {
 			if (state.closed || state.signalingState === next) return;
 			state.signalingState = next;
 			state.target.dispatchEvent(new RealmEvent('signalingstatechange'));
-			if (next === 'stable' && state.needsNegotiation)
-				queue(() => fireNegotiationNeeded(state));
-		};
-		const fireNegotiationNeeded = (state: PeerState) => {
-			// the event waits for the operations under way, and is not due at
-			// all once an answer has brought the data section it was for
-			if (
-				state.closed ||
-				state.busy ||
-				state.signalingState !== 'stable' ||
-				!state.needsNegotiation
-			)
-				return;
-			state.needsNegotiation = false;
-			if (state.forChannel && state.negotiated) return;
-			state.target.dispatchEvent(new RealmEvent('negotiationneeded'));
+			// a negotiation has ended: what still calls for an offer says so
+			if (next === 'stable') {
+				if (
+					state.restart !== null &&
+					state.restart !== ufragOf(state.currentLocal)
+				)
+					state.restart = null;
+				state.needsNegotiation = false;
+				negotiate(state);
+			}
 		};
 		const wrongState = (
 			name: string,
@@ -1614,7 +2750,9 @@ export default class WebRTCStack {
 			state.busy++;
 			const run = state.chain.then(operation, operation);
 			const done = () => {
-				if (!--state.busy) queue(() => fireNegotiationNeeded(state));
+				if (--state.busy || !state.updateOnEmpty) return;
+				state.updateOnEmpty = false;
+				negotiate(state);
 			};
 			// the caller hears the result before the event is thought of: what
 			// it does next (the next operation, as a rule) is under way by then
@@ -1858,6 +2996,15 @@ export default class WebRTCStack {
 							}),
 						);
 					channel.dispatchEvent(new RealmEvent('close'));
+					break;
+				}
+				case 'unmute': {
+					const slot = state.slots.find(
+						(known) => known.handle === event.handle,
+					);
+					if (!slot) break;
+					slot.live = true;
+					if (slot.receptive) setMuted(slot, false);
 					break;
 				}
 				case 'error':

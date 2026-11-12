@@ -340,7 +340,6 @@ impl Conn {
 			track: None,
 			rids: Vec::new(),
 			stop: false,
-			after: self.channels.len(),
 			announced: false,
 		});
 		self.medias.len() - 1
@@ -801,7 +800,6 @@ impl Conn {
 						})
 						.unwrap_or_default(),
 					stop: false,
-					after: self.channels.len(),
 					announced: false,
 				});
 				self.media_to_add.push(index);
@@ -820,6 +818,63 @@ impl Conn {
 				let index = self.media_field(fields)?;
 				self.medias[index].stop = true;
 				self.result(&[]);
+			}
+			// A section the host added and no offer has carried, taken back:
+			// the page's transceiver goes with a section the peer offered
+			// instead (a browser pairs a track added before the peer's
+			// offer with the offer's section).
+			"withdraw" => {
+				let index = self.media_field(fields)?;
+				if self.medias[index].mid.is_some() {
+					return Err("the section is offered".to_string());
+				}
+				self.media_to_add.retain(|queued| *queued != index);
+				self.result(&[]);
+			}
+			// The direction of a negotiated section, at once and without
+			// an offer: an answer of this side that takes less than the
+			// offer gave (the stack answered when it read the offer, with
+			// all of it; the page decides when it answers).
+			"direction_now" => {
+				let mid = self.media_mid(fields)?;
+				let direction = field(fields, "dir").and_then(media::direction).ok_or("bad dir")?;
+				self.rtc.sdp_api().set_direction(mid, direction);
+				self.result(&[]);
+			}
+			// What a section sends from, made now if the section has not
+			// sent yet: a browser's description names it as soon as the
+			// transceiver wants to send, whatever was negotiated.
+			"ssrc" => {
+				let mid = self.media_mid(fields)?;
+				let existing = self
+					.rtc
+					.direct_api()
+					.stream_tx_by_mid(mid, None)
+					.map(|stream| (stream.ssrc(), stream.rtx()));
+				let (ssrc, rtx) = match existing {
+					Some(pair) => pair,
+					None => {
+						let resends = self.rtc.media(mid).is_some_and(|media| {
+							self.rtc
+								.codec_config()
+								.find(|p| media.remote_pts().contains(&p.pt()) && p.resend().is_some())
+								.is_some()
+						});
+						let mut api = self.rtc.direct_api();
+						let ssrc = api.new_ssrc();
+						let rtx = resends.then(|| loop {
+							let rtx = api.new_ssrc();
+							if rtx != ssrc {
+								break rtx;
+							}
+						});
+						api.declare_stream_tx(ssrc, rtx, mid, None);
+						(ssrc, rtx)
+					}
+				};
+				let ssrc = ssrc.to_string();
+				let rtx = rtx.map(|rtx| rtx.to_string()).unwrap_or_default();
+				self.result(&[("ssrc", &ssrc), ("rtx", &rtx)]);
 			}
 			// ask the peer for a keyframe: a decoder that lost a picture
 			"keyframe" => {
@@ -913,6 +968,13 @@ impl Conn {
 					})
 					.collect();
 				let mut api = self.rtc.sdp_api();
+				// `names`: what the sections this offer adds are called, in
+				// the order a browser would name them. A section's name is
+				// what its packets carry, so it has to be the one the peer
+				// reads in the description.
+				if let Some(names) = field(fields, "names") {
+					api.name_mids(names.split(',').filter(|name| !name.is_empty()).map(Mid::from));
+				}
 				if self.restart {
 					api.ice_restart(true);
 					self.restart = false;
@@ -930,21 +992,18 @@ impl Conn {
 						simulcast,
 					));
 				};
-				// sections in the order their owners were made: a media
-				// section before the channels that came after it
-				let mut media_to_add = self.media_to_add.drain(..).peekable();
+				// A browser's offer has its new media sections first, in the
+				// order their transceivers were made, and a new data section
+				// after them, whichever the page made first.
+				for media in self.media_to_add.drain(..) {
+					add_media(&mut api, &mut self.medias[media]);
+				}
 				for index in self.to_add.drain(..) {
-					while let Some(media) = media_to_add.next_if(|m| self.medias[*m].after <= index) {
-						add_media(&mut api, &mut self.medias[media]);
-					}
 					let Some(config) = self.configs.get(index).cloned().flatten() else {
 						continue;
 					};
 					let id = api.add_channel_with_config(config);
 					self.channels[index] = Some(id);
-				}
-				for media in media_to_add {
-					add_media(&mut api, &mut self.medias[media]);
 				}
 				// a browser's offer states what each transceiver wants,
 				// whatever the last answer left of it
@@ -1028,7 +1087,10 @@ impl Conn {
 			}
 			"rollback" => {
 				self.roll_back();
-				self.result(&[]);
+				// the sections that still have a name: one the rolled back
+				// offer carried first has none again
+				let mids = self.mids();
+				self.result(&[("mids", &mids)]);
 			}
 			"remote_candidate" => {
 				let line = field(fields, "candidate").unwrap_or("");

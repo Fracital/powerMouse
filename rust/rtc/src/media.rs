@@ -32,10 +32,6 @@ pub struct MediaSlot {
 	pub rids: Vec<String>,
 	/// the next offer stops the section
 	pub stop: bool,
-	/// how many channels there were when the host added the section: an
-	/// offer's sections are in the order their owners were made, as a
-	/// browser's are
-	pub after: usize,
 	/// the host has been told the stack has the section
 	pub announced: bool,
 }

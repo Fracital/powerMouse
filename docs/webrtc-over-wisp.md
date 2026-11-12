@@ -741,7 +741,9 @@ TURN server.
   handed to the stack. str0m's crypto backend makes one with rcgen on
   aws-lc-rs, which has no wasm build: `rust/vendor/str0m-rust-crypto` is
   the published crate without that feature.
-- **The browser's `RTCPeerConnection` is never constructed.** What Chrome
+- **The browser's `RTCPeerConnection` is not the validator.** (With media,
+  section 16, a document makes one native connection as the template of
+  its formats; it is given nothing that could make it gather.) What Chrome
   says to a bad configuration, a bad remote description, a bad candidate
   and a bad channel dictionary is produced by `src/inject/rtcValidation.ts`:
   the WebIDL conversions (members read in name order), Blink's checks of
@@ -842,9 +844,8 @@ TURN server.
   4): a `turn:...?transport=tcp` or `turns:` server gets the 701 "Failed to
   establish connection" at once, where Chrome reports it when the
   connection fails; a TCP candidate is never paired.
-- **Media is not carried** (Phases 2 and 3): `addTrack` and `addTransceiver`
-  throw `NotSupportedError`, the sender, receiver and transceiver lists are
-  empty.
+- **Media** came after Phase 1: audio is carried (section 16), video is
+  not yet.
 - **Stats and transports are thin** (Phase 4): `getStats()` has the
   peer-connection, transport and data-channel entries and no
   candidate pairs or candidates; `pc.sctp` is null; `candidate.url` is null
@@ -1045,14 +1046,57 @@ as Chrome's was measured to (a break in the track, a stereo peer, a track
 at 44.1 kHz, `usedtx`), and a tone sent as G.711 through two stacks back to
 back and written by the receiver.
 
-Limits of this slice. The page's stand-in does not make transceivers yet
-(the next slice), so nothing here is reachable from a page; the SDP the
-page would read still carries the stack's own lines and order (RED before
-Opus, extensions audio does not use); the answer to a section the peer
-offered first is not yet narrowed to what the answering page wants of it
-(a section this side already has is, by its transceiver's direction);
-video sections negotiate and their frames are dropped. A lost Opus packet is silence: WebCodecs has no
-way to ask the decoder for concealment or for the copy in the next
-packet's FEC. Playout runs on the worker's clock, not the sound card's, so
-a long call drifts against it by the difference of the two clocks and the
-track's sink absorbs that. G.722, comfort noise and DTMF are not carried.
+### Transceivers in the page
+
+The stand-in has the browser's media objects: `addTrack`, `addTransceiver`,
+`removeTrack`, `getTransceivers`, `getSenders` and `getReceivers`, the
+`track` event, and `RTCRtpTransceiver` (`mid`, `direction`,
+`currentDirection`, `stop()`), `RTCRtpSender` (`track`, `replaceTrack`,
+`setStreams`, `getParameters`, `setParameters`) and `RTCRtpReceiver`
+(`track`, `getParameters`), with Chrome's members in Chrome's order and its
+errors. A sender's track goes to the worker as a
+`MediaStreamTrackProcessor`'s readable; a receiver's track is a
+`MediaStreamTrackGenerator` the worker writes into, muted until its first
+frame, with Chrome's id and label, in the streams the peer's `a=msid` names.
+`negotiationneeded` follows the specification's flag (Chrome's check of
+it: no current local description, a channel with no data section, a
+transceiver whose direction or `a=msid` the last description did not
+state, an ICE restart) and waits for the operations under way.
+
+Sections are named as Chrome names them: the stack takes the names the
+worker gives (`SdpApi::name_mids`, a hunk of the str0m patch), which count
+up from "0" past every number a description has used, so a section's name
+in its packets (the MID header extension) is the one both ends read. The
+media sections a page reads are written in the shape of the browser's own
+offer (the template of the previous section): its payloads, format lines,
+extensions and attribute order, the sender's `a=msid` and `a=ssrc` lines,
+and an answer that names its sources the way the offer did.
+
+The template is the one native `RTCPeerConnection` a document makes: with
+no configuration, two transceivers and one `createOffer()`, closed at
+once. It is never given a description, a candidate or a server, so it
+gathers nothing and sends nothing (the `webrtc` suite counts every call on
+a native connection that could). Every other connection of the page is
+the stand-in's.
+
+The `webrtc-media` suite runs two scenarios against Chrome's own stack in
+a second browser, in both demo modes, each first between two native
+connections as the control: the page offers a tone and a channel and the
+far end answers with its own tone, then takes its track away and the page
+stops its transceiver; and the far end offers, the page answers and later
+offers one more transceiver. At every step the page's transceivers, its
+events in their order and the descriptions it makes read as natively; the
+tone arrives unbroken both ways, a paused sender sends nothing and a
+replaced track is what is sent; the far end hears the page from a socket
+of the wisp server, and nothing the page reads holds an address of this
+machine.
+
+Limits: audio only (video sections negotiate and their frames are
+dropped); a lost Opus packet is silence (WebCodecs has no way to ask the
+decoder for concealment or for the copy in the next packet's FEC);
+playout runs on the worker's clock, not the sound card's, so a long call
+drifts against it by the difference of the two clocks and the track's
+sink absorbs that; G.722, comfort noise and DTMF are not carried, and
+`sender.dtmf` is null; `getStats()` of a sender or a receiver is empty;
+the far ends in the suite are Chrome's own stack, not werift or a TURN
+relayed proxied page.

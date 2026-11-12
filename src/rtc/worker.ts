@@ -16,6 +16,7 @@ import type {
 	RtcWorkerTemplate,
 	WorkerEvent,
 } from './protocol';
+import { parseSdp, type ParsedSdp } from './sdp';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -24,8 +25,13 @@ declare const self: DedicatedWorkerGlobalScope;
 let stack: Promise<Stack> | null = null;
 let transport: StreamTransport | null = null;
 let certificate: Promise<Certificate> | null = null;
-/** what the stack negotiates: this browser's own formats, or the stack's when it was told none */
-let formats: Promise<Formats | null> = Promise.resolve(null);
+/**
+ * This browser's own offer: what the stack negotiates is read from it (its
+ * formats; the stack's own when it was told none), and the media sections
+ * the page reads are written in its shape
+ */
+let formats: Promise<{ formats: Formats; template: ParsedSdp } | null> =
+	Promise.resolve(null);
 let templated: ((sdp: string) => void) | null = null;
 
 self.onmessage = async ({
@@ -34,7 +40,10 @@ self.onmessage = async ({
 	if (data?.kind === 'init') {
 		if (data.template)
 			formats = new Promise((resolve) => {
-				templated = (sdp) => resolve(stackFormats(sdp));
+				templated = (sdp) => {
+					const read = stackFormats(sdp);
+					resolve(read && { formats: read, template: parseSdp(sdp) });
+				};
 			});
 		transport = new StreamTransport(data.transport);
 		transport.init().catch(() => {});
@@ -52,7 +61,15 @@ self.onmessage = async ({
 				certificate!,
 				formats,
 			]);
-			new Connection(loaded, port, transport!, config, cert, negotiable);
+			new Connection(
+				loaded,
+				port,
+				transport!,
+				config,
+				cert,
+				negotiable?.formats,
+				negotiable?.template,
+			);
 		} catch (error) {
 			port.postMessage({
 				ev: 'error',

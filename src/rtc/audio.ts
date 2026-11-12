@@ -120,8 +120,22 @@ export class AudioSender {
 	/** the power of what was fed since the last frame went out */
 	#squares = 0;
 	#count = 0;
-	/** the time the last frame sent ended at, before the sender's own start is added */
+	/** the time the last frame of this run ended at, on the track's own count */
 	#last: number | null = null;
+	/**
+	 * The sender's own time. A track's times start anywhere (a track a page
+	 * writes itself reads below zero here) and another track's start
+	 * somewhere else, so the times that go out are the sender's: a run
+	 * goes on from the last frame sent, by as much as the clock has moved
+	 * since, and within a run they are the encoder's count.
+	 */
+	#shift = 0;
+	/** a run has begun and its first frame has yet to place it */
+	#placed = false;
+	/** where the last frame sent ended on the sender's time, in which clock, and when */
+	#sentEnd = 0;
+	#sentRate = 0;
+	#sentAt = 0;
 	#down: Downsampler | null = null;
 	#pcm = new Float32Array(G711_FRAME);
 	#fill = 0;
@@ -192,6 +206,7 @@ export class AudioSender {
 		this.#epoch = null;
 		this.#expected = null;
 		this.#last = null;
+		this.#placed = false;
 		this.#down = null;
 		this.#fill = 0;
 		this.#made = 0;
@@ -332,6 +347,7 @@ export class AudioSender {
 		}
 		this.#send(
 			payload.pt,
+			48000,
 			Math.round(this.#epoch * OPUS_UNITS) + counted,
 			Math.round((chunk.duration ?? FRAME_US) * OPUS_UNITS),
 			bytes,
@@ -366,6 +382,7 @@ export class AudioSender {
 			this.#fill = 0;
 			this.#send(
 				payload.pt,
+				8000,
 				Math.round(this.#epoch * 0.008) + this.#made++ * G711_FRAME,
 				G711_FRAME,
 				g711Encode(law, this.#pcm),
@@ -379,11 +396,45 @@ export class AudioSender {
 
 	#send(
 		pt: number,
+		rate: number,
 		time: number,
 		length: number,
 		payload: Uint8Array,
 		age: number,
 	) {
+		const now = performance.now();
+		if (!this.#placed) {
+			this.#placed = true;
+			// The run's place on the sender's time. The first run starts
+			// it. A later one starts where the clock says: the last frame
+			// sent ended when it went out, and this one ends now. A run of
+			// the same track that the track's own times put within a
+			// tenth of a second of that keeps them (an encoder made
+			// again in the middle of a sound).
+			let place = 0;
+			if (this.#sentRate) {
+				const end = Math.round((this.#sentEnd * rate) / this.#sentRate);
+				const step = rate / 400;
+				place = Math.max(
+					end,
+					end +
+						Math.round(((now - this.#sentAt) * rate) / 1000 / step) * step -
+						length,
+				);
+				const kept = time + this.#shift;
+				if (
+					rate === this.#sentRate &&
+					kept >= end &&
+					Math.abs(kept - place) <= rate / 10
+				)
+					place = kept;
+			}
+			this.#shift = place - time;
+		}
+		const at = time + this.#shift;
+		this.#sentEnd = at + length;
+		this.#sentRate = rate;
+		this.#sentAt = now;
 		const level = levelOf(this.#squares, this.#count);
 		this.#squares = 0;
 		this.#count = 0;
@@ -401,7 +452,7 @@ export class AudioSender {
 				flags,
 				level,
 				orientation: ABSENT,
-				time: BigInt(Math.max(0, time) + this.#offset),
+				time: BigInt(at + this.#offset),
 				rid: '',
 				payload,
 			},
@@ -466,6 +517,10 @@ export class AudioReceiver {
 	#counts = { frames: 0, bytes: 0, written: 0 };
 	/** the first frame arrived: the track has sound now */
 	onStart: (() => void) | null = null;
+	/** the next frame heard is a start again (the section had stopped receiving) */
+	rearm() {
+		this.#started = false;
+	}
 
 	get stats(): ReceiverStats {
 		return { ...this.#playout.stats, ...this.#counts };

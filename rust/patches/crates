@@ -12,4 +12,9 @@
 # The first error cause of an ABORT chunk the peer sends is kept
 # (DirectApi::sctp_abort_cause): as published, the association is reported
 # lost without a word of why.
+# The m-sections an offer adds take the names the host gives
+# (SdpApi::name_mids). As published a new section is named at random, and
+# that name is what its packets carry (the MID header extension): a peer
+# shown the browser's names ("0", "1", ...) for the sections drops every
+# packet of an offer's media as one for a section it does not know.
 str0m 0.25.0 357c7e453c033c8bb59e912312f9f9ff07c2a9ce7268bcb94f0c828a5b47e58f
