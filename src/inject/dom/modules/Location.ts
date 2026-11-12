@@ -46,6 +46,16 @@ export default class LocationModule extends Module<DocumentClient> {
 			proxyModule.wrapFunction(native, (target, that, args) =>
 				ours(that) ? own(args) : Reflect.apply(target, that, args),
 			);
+		/** a javascript: URL's code, as the browser hands it a default policy */
+		const decoded = (url: string) => {
+			// (a URL keeps no tab or line break)
+			const code = url.slice('javascript:'.length).replace(/[\t\n\r]/g, '');
+			try {
+				return decodeURIComponent(code);
+			} catch (error) {
+				return code;
+			}
+		};
 		// a fragment's navigation goes to it as written (the Fragment module)
 		const fragments = this.client.getModule(FragmentModule);
 		const navigateTo = (destination: URL) => {
@@ -74,12 +84,25 @@ export default class LocationModule extends Module<DocumentClient> {
 			if (this.client.freshTo?.(destination)) return;
 			const loading = this.client.global.document.readyState !== 'complete';
 			const how = loading ? 'replace' : method;
-			return Reflect.apply(real[how], real, [
+			// a javascript: URL's code is the page's Trusted Types' to judge
+			// (as Chrome does: the default policy's sink `Location href`, the
+			// code decoded); refused, the browser is handed the page's URL,
+			// which it refuses and reports itself
+			const route =
 				how === 'assign'
 					? (fragments?.live(this.client.navigationRoute(destination)) ??
 						this.client.navigationRoute(destination))
-					: navigateTo(destination),
-			]);
+					: navigateTo(destination);
+			if (
+				destination.protocol === 'javascript:' &&
+				this.client.trustedJavascript?.(
+					decoded(destination.href),
+					decoded(route),
+					() => Reflect.apply(real[how], real, [destination.href]),
+				) === false
+			)
+				return;
+			return Reflect.apply(real[how], real, [route]);
 		};
 
 		const members = new Map<string | symbol, PropertyDescriptor>();

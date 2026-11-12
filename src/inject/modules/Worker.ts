@@ -2,6 +2,7 @@ import { injectWorkerJS, pageBlobURL, proxyBlobURL } from '../../routeURL';
 import { routeJS } from '../../scriptRoutes';
 import StompURL from '../../StompURL';
 import {
+	CSP_FACTS,
 	WORKER_BASE,
 	WORKER_ERROR,
 	WORKER_PARTITION,
@@ -10,6 +11,12 @@ import Client from '../Client';
 import Module from '../Module';
 import { failsToParse, withStack } from '../nativeErrors';
 import { modifyJS } from '../rewriter';
+import {
+	trustedScriptURL,
+	trustedTypesUsed,
+	trustedWorker,
+	useTrustedTypes,
+} from '../trusted';
 import { blobsByURL, PRIVATE_URL_MS, WORKER_LOADED } from '../workerBlobs';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
 import { reportedLocations, unrouteURL, type ErrorLocation } from './Unroute';
@@ -58,11 +65,22 @@ export default class WorkerModule extends Module<Client> {
 				// (workerBlobs). A URL whose Blob is not known here is imported
 				// as it is
 				const blob = blobsByURL.get(proxyBlobURL(url.href));
+				// a classic worker of a document whose policy refuses a blob:
+				// script (src/csp.ts) cannot import the page's: its Blob is the
+				// bootstrap's own text, after the preamble
+				const inline =
+					!!blob &&
+					!isModule &&
+					!!(
+						this.client as {
+							browserRefuses?: (directive: string, scheme: string) => boolean;
+						}
+					).browserRefuses?.('script-src-elem', 'blob:');
 				let script = url.href;
 				// once the import is done the bootstrap says so, on a message
 				// the hook below takes before any of the page's listeners
 				let loaded = '';
-				if (blob) {
+				if (blob && !inline) {
 					script = lastPrivate = proxyBlobURL(global.URL.createObjectURL(blob));
 					// (a shared worker's scope has no postMessage)
 					loaded = `\nif (typeof postMessage === 'function') postMessage({ [${JSON.stringify(WORKER_LOADED)}]: ${JSON.stringify(script)} });`;
@@ -72,13 +90,42 @@ export default class WorkerModule extends Module<Client> {
 				// and its partition, which the client reads before the page's
 				// script runs (a routed worker's route names it)
 				const partition = this.client.partition;
+				// and its document's script policy, which a blob: worker
+				// inherits (src/csp.ts ScriptFacts)
 				const base =
 					`globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(
 						this.client.url.toString(),
 					)};` +
 					(partition
 						? `globalThis[${JSON.stringify(WORKER_PARTITION)}] = ${JSON.stringify(partition)};`
-						: '');
+						: '') +
+					// (and its Trusted Types, which a worker's own code meets too)
+					(this.client.trustedTypesRequired() && trustedTypesUsed()
+						? trustedWorker(
+								JSON.stringify(CSP_FACTS),
+								JSON.stringify({
+									evaluates: this.client.scriptFacts.evaluates,
+									tt: useTrustedTypes(),
+									rtt: this.client.trustedTypesRequired(),
+								}),
+							)
+						: this.client.scriptFacts.evaluates
+							? ''
+							: `globalThis[${JSON.stringify(CSP_FACTS)}] = { evaluates: false };`);
+				if (inline)
+					return proxyBlobURL(
+						global.URL.createObjectURL(
+							new NativeBlob(
+								[
+									base +
+										modifyJS('', this.client.url, this.client.config, type) +
+										'\n',
+									blob!,
+								],
+								{ type: 'text/javascript' },
+							),
+						),
+					);
 				const bootstrap =
 					base +
 					(isModule
@@ -275,12 +322,20 @@ export default class WorkerModule extends Module<Client> {
 				(target, that, args, newTarget) => {
 					if (!newTarget) throw new TypeError(WORKER_CTOR_ERROR('Worker'));
 					catchRequiredArguments(args.length, 1, 'Worker', 'constructor');
-					const source = String(args[0]);
+					// (the page's Trusted Types judge the URL first)
+					const source = this.client.trustedValue(
+						args[0],
+						'TrustedScriptURL',
+						'Worker constructor',
+						() => Reflect.construct(target, args, newTarget),
+					);
+					if (source === null) return undefined;
 					// the browser's own SyntaxError
 					if (failsToParse(this.client, source))
 						return Reflect.construct(target, args, newTarget);
 					checkOrigin('Worker', source);
-					args[0] = workerURL(source, isModuleOptions(args[1]));
+					const url = workerURL(source, isModuleOptions(args[1]));
+					args[0] = trustedScriptURL(url);
 					const own = lastPrivate;
 					const worker: Worker = Reflect.construct(target, args, newTarget);
 					watchErrors(
@@ -288,7 +343,7 @@ export default class WorkerModule extends Module<Client> {
 						own,
 						new URL(source, this.client.baseURL.toString()).href,
 					);
-					this.client.provisionWorkerTransport(worker, blobScript(args[0]));
+					this.client.provisionWorkerTransport(worker, blobScript(url));
 					if (own) releaseOnLoad(worker, own);
 					return worker;
 				},
@@ -303,11 +358,19 @@ export default class WorkerModule extends Module<Client> {
 					if (!newTarget)
 						throw new TypeError(WORKER_CTOR_ERROR('SharedWorker'));
 					catchRequiredArguments(args.length, 1, 'SharedWorker', 'constructor');
-					const source = String(args[0]);
+					// (the page's Trusted Types judge the URL first)
+					const source = this.client.trustedValue(
+						args[0],
+						'TrustedScriptURL',
+						'SharedWorker constructor',
+						() => Reflect.construct(target, args, newTarget),
+					);
+					if (source === null) return undefined;
 					if (failsToParse(this.client, source))
 						return Reflect.construct(target, args, newTarget);
 					checkOrigin('SharedWorker', source);
-					args[0] = workerURL(source, isModuleOptions(args[1]));
+					const url = workerURL(source, isModuleOptions(args[1]));
+					args[0] = trustedScriptURL(url);
 					// a shared worker has no postMessage to say it took its
 					// private URL: that one goes after PRIVATE_URL_MS
 					const own = lastPrivate;
@@ -325,7 +388,7 @@ export default class WorkerModule extends Module<Client> {
 						args,
 						newTarget,
 					);
-					this.client.provisionPortTransport(worker.port, blobScript(args[0]));
+					this.client.provisionPortTransport(worker.port, blobScript(url));
 					return worker;
 				},
 				true,

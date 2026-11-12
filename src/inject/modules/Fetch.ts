@@ -266,6 +266,24 @@ const abortId = () =>
 		? crypto.randomUUID()
 		: `${Date.now()}-${Math.random()}`;
 
+/**
+ * Report a request of the page's for `url` that a report-only policy of
+ * its connect-src refuses (src/csp.ts), `times` events as the browser fires
+ * them: a document's client does (DocumentClient.reportRefusal)
+ */
+export function reportOnly(client: Client, url: URL, times: number) {
+	(
+		client as {
+			reportRefusal?: (
+				directive: string,
+				url: URL,
+				navigation: boolean,
+				times: number,
+			) => void;
+		}
+	).reportRefusal?.('connect-src', url, false, times);
+}
+
 export default class FetchModule extends Module<Client> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
@@ -286,6 +304,7 @@ export default class FetchModule extends Module<Client> {
 				);
 
 				eventSourceURLs.set(result, url.toString());
+				reportOnly(this.client, url, 1);
 
 				return result;
 			},
@@ -420,6 +439,9 @@ export default class FetchModule extends Module<Client> {
 						return await fetch(request, args[1]);
 					return await fetch(browserURL, init);
 				}
+				// a report-only policy's refusal (an enforced one is the
+				// worker's): a fetch is judged twice natively
+				reportOnly(this.client, url, 2);
 
 				// an explicit referrer is a page URL: in proxy space (routed) the
 				// browser takes it as same-origin and the worker reads the real
