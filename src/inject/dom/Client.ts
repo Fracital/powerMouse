@@ -1,5 +1,18 @@
 import type { AdblockPage } from '../../blocker/types';
 import { ParsedConfig } from '../../config';
+import {
+	BLOB_COPIES,
+	browserPolicy,
+	browserRefuses,
+	governing,
+	markedPolicy,
+	parsePolicies,
+	policyMark,
+	policySandbox,
+	sourcesMatch,
+	type Policy,
+	type PolicyText,
+} from '../../csp';
 import { rewriteCSSValueURLs } from '../../cssURLs';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
 import { allowDelegates } from '../../isolation';
@@ -18,7 +31,12 @@ import {
 import { refererFor, type ReferrerInfo } from '../../referrerPolicy';
 import { modifyHTML, nestedMarkOf, routeHTML } from '../../rewriteHTML';
 import type { RewriterLib } from '../../rewriterLib';
-import { parseRoutedURL, ROUTE_PROTOCOLS, unwrapRoute } from '../../routeURL';
+import {
+	parseRoutedURL,
+	proxyBlobURL,
+	ROUTE_PROTOCOLS,
+	unwrapRoute,
+} from '../../routeURL';
 import { rewriteImportMap } from '../../scriptRoutes';
 import StompURL from '../../StompURL';
 import { HOOK_ERROR, OPEN_TAB, WORKER_BASE } from '../../transport/messages';
@@ -283,6 +301,8 @@ export default class DocumentClient extends Client {
 	} | null = null;
 	/** the window's native frameElement getter (the Framing module hooks it) */
 	#frameElementGet: (() => Element | null) | undefined;
+	/** whether this window's opener was an opaque origin when it was created */
+	#openerOpaque = false;
 	/** the flags a popup inherited from its opener when it was created */
 	#inheritedFlags: Set<string> | null = null;
 	/** the nonce the shell script that made this client carried, in its document (guardScripts) */
@@ -557,6 +577,9 @@ export default class DocumentClient extends Client {
 			)?.get;
 			const opener = openerGet && Reflect.apply(openerGet, this.global, []);
 			if (!opener || opener === this.global) return null;
+			const client = (opener as Record<string, unknown>)[this.names.client] as
+				DocumentClient | undefined;
+			this.#openerOpaque = client?.sandboxedOpaque === true;
 			const flags = this.#flagsOf(opener);
 			if (!flags || flags.has('allow-popups-to-escape-sandbox')) return null;
 			return flags;
@@ -573,6 +596,9 @@ export default class DocumentClient extends Client {
 				? new Set([...flags].filter((token) => other.has(token)))
 				: new Set(other);
 		};
+		// its own policies' sandbox (a header's: the browser gets only what it
+		// can enforce of it, src/csp.ts)
+		narrow(this.#policyFlags);
 		try {
 			const frame =
 				this.#frameElementGet &&
@@ -581,9 +607,14 @@ export default class DocumentClient extends Client {
 					this.global,
 					[],
 				) as Element | null);
+			this.#frameTopNavigation = false;
 			if (frame) {
 				const sandbox = pageSandbox(frame, MARKER);
-				if (sandbox !== null) narrow(sandboxTokens(sandbox));
+				if (sandbox !== null) {
+					const tokens = sandboxTokens(sandbox);
+					narrow(tokens);
+					this.#frameTopNavigation = tokens.has('allow-top-navigation');
+				}
 			}
 			const parent = this.parent;
 			if (parent !== this.global) narrow(this.#flagsOf(parent));
@@ -601,6 +632,8 @@ export default class DocumentClient extends Client {
 			return null;
 		}
 	}
+	/** whether this document's frame's sandbox attribute grants allow-top-navigation */
+	#frameTopNavigation = false;
 	/** decide this document's sandbox again: a new document of this window starts */
 	refreshSandbox() {
 		this.sandboxFlags = this.#sandbox();
@@ -764,6 +797,263 @@ export default class DocumentClient extends Client {
 			group = topOf(opener);
 		}
 		return (group.agentClusters ??= new Map());
+	}
+	/**
+	 * The policies the browser applies to this document for the page's own
+	 * (src/csp.ts): its headers' (the shell's) and its metas', each browser
+	 * policy's text with the page's text it stands for
+	 */
+	get policyTexts(): PolicyText[] {
+		return this.#policyTexts;
+	}
+	/**
+	 * Set by the shell before the page runs, with its headers' policies:
+	 * their `sandbox` directives sandbox the document (sandboxFlags), which
+	 * is decided again now
+	 */
+	set policyTexts(texts: PolicyText[]) {
+		this.#policyTexts = texts;
+		this.#policyFlags = policySandbox(
+			texts.flatMap(([, page, disposition]) =>
+				parsePolicies(page, disposition, 'header'),
+			),
+		);
+		this.refreshSandbox();
+	}
+	#policyTexts: PolicyText[] = [];
+	/** the flags of the `sandbox` directives of this document's header policies, or null */
+	#policyFlags: Set<string> | null = null;
+	/** the mark this document's meta policies share (markedPolicy) */
+	#policyMark: string | null = null;
+	/**
+	 * The content the browser gets for a page's `<meta
+	 * http-equiv="Content-Security-Policy">` whose content is `content`, or
+	 * null when it holds nothing the browser can apply (src/csp.ts)
+	 */
+	metaPolicy(content: string): string | null {
+		const known = this.#metaPolicies.get(content);
+		if (known !== undefined) return known;
+		this.#policyMark ??= policyMark();
+		const texts: string[] = [];
+		for (const policy of parsePolicies(content, 'enforce', 'meta')) {
+			const text = browserPolicy(policy);
+			if (text === null) {
+				this.policyTexts.push(['', policy.text, 'enforce']);
+				continue;
+			}
+			const marked = markedPolicy(
+				text,
+				`${this.#policyMark}${this.policyTexts.length}`,
+			);
+			this.policyTexts.push([marked, policy.text, 'enforce']);
+			texts.push(marked);
+		}
+		const value = texts.length ? texts.join(', ') : null;
+		this.#metaPolicies.set(content, value);
+		return value;
+	}
+	/** what metaPolicy made of each content */
+	readonly #metaPolicies = new Map<string, string | null>();
+	/**
+	 * The page's text of the policy the browser reports as `text` (a
+	 * violation's originalPolicy), or null for none of the page's: this
+	 * document's own, or one it inherited from the document that made it
+	 * (an about:blank, srcdoc, blob: or data: document has its creator's
+	 * policies)
+	 */
+	pagePolicyText(text: string): string | null {
+		if (text)
+			for (const [browser, page] of this.policyTexts)
+				if (browser === text) return page;
+		return this.#policyCreator()?.pagePolicyText(text) ?? null;
+	}
+	/** the browser policies of this document, its own and those it inherited */
+	browserPolicies(): string[] {
+		return [
+			...this.policyTexts.map(([browser]) => browser).filter(Boolean),
+			...(this.#policyCreator()?.browserPolicies() ?? []),
+		];
+	}
+	/**
+	 * The page's policies of this document, its own and those it inherited,
+	 * each with the browser policy it stands for and what 'self' means in it
+	 * (the real URL of the document whose policy it is)
+	 */
+	pagePolicies(): { policy: Policy; browser: string; self: URL }[] {
+		if (this.#parsedPolicies?.count !== this.policyTexts.length) {
+			const own: { policy: Policy; browser: string; self: URL }[] = [];
+			for (const [browser, page, disposition] of this.policyTexts)
+				for (const policy of parsePolicies(page, disposition, 'header'))
+					own.push({ policy, browser, self: this.url.url });
+			this.#parsedPolicies = { count: this.policyTexts.length, own };
+		}
+		return [
+			...this.#parsedPolicies.own,
+			...(this.#policyCreator()?.pagePolicies() ?? []),
+		];
+	}
+	#parsedPolicies: {
+		count: number;
+		own: { policy: Policy; browser: string; self: URL }[];
+	} | null = null;
+	/** the page's policies of this document that natively refuse (or report) `url` for `directive` */
+	pageRefusals(
+		directive: string,
+		url: URL,
+		redirected = false,
+	): { policy: Policy; browser: string; self: URL }[] {
+		return this.pagePolicies().filter(({ policy, self }) => {
+			const governed = governing(policy, directive);
+			return (
+				governed !== null &&
+				!sourcesMatch(governed.sources, url, self, redirected)
+			);
+		});
+	}
+	/**
+	 * Where a load of this document that no worker sees (a frame, an
+	 * object's copy) goes instead of `url` when the page's enforced policy
+	 * refuses it for `directive`, or null when it may load: a data: or
+	 * blob: URL as it is where the browser's copy of the policy refuses
+	 * that scheme as the page's does (it names them as natively), any other
+	 * a refusal URL that reads as Chrome names the load (a navigation of
+	 * another origin by its origin)
+	 */
+	loadRefusal(directive: string, url: URL, navigation = false): string | null {
+		if (!/^(https?|data|blob):$/.test(url.protocol)) return null;
+		const refusing = this.pageRefusals(directive, url).some(
+			({ policy }) => policy.disposition === 'enforce',
+		);
+		if (!refusing) {
+			// (a data: or blob: URL's scheme is the browser's to report; a
+			// frame's refusal is reported twice, measured)
+			this.reportRefusal(directive, url, navigation, navigation ? 2 : 1);
+			return null;
+		}
+		if (url.protocol === 'data:') return url.href;
+		if (url.protocol === 'blob:' && !BLOB_COPIES.includes(directive))
+			return proxyBlobURL(url.href);
+		const blocked =
+			url.protocol === 'blob:'
+				? 'blob'
+				: navigation && url.origin !== this.url.url.origin
+					? url.origin
+					: url.href.replace(/#.*$/s, '');
+		return this.refusalURL('https', url.href, blocked);
+	}
+	/** where a WebSocket to `url` goes instead when the page's enforced connect-src refuses it, or null */
+	socketRefusal(url: URL): string | null {
+		const refusing = this.pageRefusals('connect-src', url).some(
+			({ policy }) => policy.disposition === 'enforce',
+		);
+		if (refusing)
+			return this.refusalURL('wss', url.href, url.href.replace(/#.*$/s, ''));
+		this.reportRefusal('connect-src', url);
+		return null;
+	}
+	/**
+	 * Report a load of `url` for `directive` that a report-only policy of
+	 * the page's refuses and that went out (no enforced one refuses it): an
+	 * event for each such policy, as the browser fires it, named as Chrome
+	 * names the load (a navigation of another origin by its origin). The
+	 * browser cannot be made to report it itself without refusing the load,
+	 * so the event is the inject's: the same fields, but not trusted.
+	 */
+	reportRefusal(
+		directive: string,
+		url: URL,
+		navigation = false,
+		/** how many events the browser fires for one (a fetch is judged twice, measured) */
+		times = 1,
+	) {
+		if (!/^(https?|wss?):$/.test(url.protocol)) return;
+		const refusals = this.pageRefusals(directive, url);
+		// an enforced refusal is the browser's to report, every policy's
+		if (refusals.some(({ policy }) => policy.disposition === 'enforce')) return;
+		const reporting = refusals.filter(
+			({ policy }) => policy.disposition === 'report',
+		);
+		if (!reporting.length) return;
+		const global = this.global as typeof globalThis;
+		const Event = global.SecurityPolicyViolationEvent;
+		if (typeof Event !== 'function') return;
+		const blocked =
+			navigation && url.origin !== this.url.url.origin
+				? url.origin
+				: url.href.replace(/#.*$/s, '');
+		const document = global.document;
+		for (const { policy } of reporting)
+			for (let time = 0; time < times; time++)
+				Reflect.apply(global.EventTarget.prototype.dispatchEvent, document, [
+					new Event('securitypolicyviolation', {
+						bubbles: true,
+						composed: true,
+						blockedURI: blocked,
+						documentURI: this.url.url.href.replace(/#.*$/s, ''),
+						referrer: this.referrerOf(document) ?? '',
+						violatedDirective: directive,
+						effectiveDirective: directive,
+						originalPolicy: policy.text,
+						disposition: 'report',
+						sourceFile: '',
+						statusCode: 200,
+						lineNumber: 0,
+						columnNumber: 0,
+						sample: '',
+					}),
+				]);
+	}
+	/** the URLs refusalURL made, by their host: the URL each stands for, and what a report names it by */
+	readonly refusals = new Map<string, { url: string; blocked: string }>();
+	/**
+	 * A URL the browser's copy of every page policy refuses (src/csp.ts),
+	 * for a load of the page's that its own policy refuses where no worker
+	 * sees it (a frame, a WebSocket): the browser refuses and reports it,
+	 * and the violation reads `blocked` (what Chrome names the load by) as
+	 * its blockedURI. Its host is its own, for a report that names only an
+	 * origin (a frame's).
+	 */
+	refusalURL(scheme: 'https' | 'wss', url: string, blocked: string): string {
+		const host = `r${this.refusals.size}${Math.random().toString(36).slice(2, 8)}.refused.invalid`;
+		this.refusals.set(host, { url, blocked });
+		return `${scheme}://${host}/`;
+	}
+	/** what a blockedURI the browser reports for a URL of refusalURL's stands for, or null for another */
+	refusedURI(value: string): { url: string; blocked: string } | null {
+		const host = /^[a-z]+:\/\/([^/:]+\.refused\.invalid)(?:[:/]|$)/.exec(
+			value,
+		)?.[1];
+		if (!host) return null;
+		const known = this.refusals.get(host);
+		if (known !== undefined) return known;
+		try {
+			return this.#policyCreator()?.refusedURI(value) ?? null;
+		} catch (error) {
+			return null;
+		}
+	}
+	/**
+	 * Whether the browser refuses (or reports) a URL of `scheme` for
+	 * `directive` in this document: a policy of the page's says so
+	 * (src/csp.ts), and a request of the proxy's own of that kind would show
+	 * the page a violation it never made
+	 */
+	browserRefuses(directive: string, scheme: string): boolean {
+		return browserRefuses(this.browserPolicies(), directive, scheme);
+	}
+	/**
+	 * The client of the document this one inherited its policies from (its
+	 * creator's, for a document the browser made of its creator's:
+	 * about:blank, srcdoc, blob:, data:), or null for one it loaded (a
+	 * routed URL's, which has its own)
+	 */
+	#policyCreator(): DocumentClient | null {
+		try {
+			if (/^https?:$/.test(this.global.location.protocol)) return null;
+		} catch (error) {
+			return null;
+		}
+		return this.#creatorClient();
 	}
 	/** the nonce the inject's own scripts carry in a document without allow-scripts, else null */
 	get scriptNonce(): string | null {
@@ -1065,11 +1355,18 @@ export default class DocumentClient extends Client {
 			context = parent;
 		}
 		if (target !== this.proxiedTop) return false;
-		if (this.allows('allow-top-navigation')) return true;
-		return (
-			this.allows('allow-top-navigation-by-user-activation') &&
-			this.global.navigator.userActivation?.isActive === true
-		);
+		const activated = this.global.navigator.userActivation?.isActive === true;
+		// a document of another origin than its top's (an opaque one) needs
+		// a user activation all the same, unless its frame's attribute grants
+		// the flag: a policy's sandbox does not lift Chrome's framebusting
+		// intervention (csp-sandbox suite, measured)
+		if (this.allows('allow-top-navigation'))
+			return (
+				activated ||
+				this.#frameTopNavigation ||
+				(!this.sandboxedOpaque && this.origin === this.topOrigin)
+			);
+		return this.allows('allow-top-navigation-by-user-activation') && activated;
 	}
 	/**
 	 * The SecurityError a sandboxed document gets for navigating a window it
@@ -1186,6 +1483,12 @@ export default class DocumentClient extends Client {
 	 * initiator is taken to be its parent, the one proxied page it can see.
 	 */
 	setReferrer(document: Document, info: ReferrerInfo) {
+		// a document an opaque origin made (a sandboxed document's frame or
+		// popup) has none: an opaque origin sends no referrer, natively
+		if (this.#openerOpaque || this.#creatorClient()?.sandboxedOpaque) {
+			this.#referrers.set(document, '');
+			return;
+		}
 		if ('referrer' in info) {
 			this.#referrers.set(document, info.referrer);
 			return;

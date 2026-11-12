@@ -5,6 +5,13 @@ import {
 import { acceptLanguage } from '../acceptLanguage';
 import GenericCodec from '../Codecs';
 import { codecType, Config, ParsedConfig } from '../config';
+import {
+	browserHeaders,
+	parsePolicies,
+	policyMark,
+	REFUSED_URL,
+	WORKER_DIRECTIVES,
+} from '../csp';
 import { rewriteLinkHeader } from '../headers';
 import { helperNames } from '../helperNames';
 import {
@@ -142,6 +149,13 @@ import {
 	topDocument,
 	type HintsContext,
 } from './clientHints';
+import {
+	directiveOf,
+	metaPolicies,
+	postReport,
+	refusingPolicies,
+	rememberPolicies,
+} from './contentPolicies';
 import Cookies from './Cookies';
 import {
 	corpBlocks,
@@ -1545,6 +1559,57 @@ function genericForward(
 		// it), before the host's rules, the page's emulated service worker,
 		// the cache and the transport: what the lists block reaches none of
 		// them. A request the worker makes for itself is not the page's
+		// The page's own policy refuses what natively it refuses, before
+		// anything else sees the request (src/csp.ts): the browser judged it
+		// by the proxy's URL, where the hosts the policy names mean nothing.
+		// It is sent on to a URL the browser's copy of the policy refuses,
+		// and the browser refuses it there as the page's policy would have:
+		// the load fails as natively, and the violation it reports is the
+		// browser's own, naming the first URL of the chain (the inject reads
+		// it back as the page's). A copy the inject makes for a document no
+		// worker controls fails as a network error.
+		if (!navigation && (!context?.internal || granted !== null)) {
+			const directive = directiveOf(destination);
+			const refusals =
+				directive !== null && WORKER_DIRECTIVES.includes(directive)
+					? refusingPolicies(
+							context?.clientId,
+							requestReferrer,
+							destination,
+							url.url,
+							!!previousHop,
+						)
+					: [];
+			const refusing = refusals.filter(
+				(policy) => policy.disposition === 'enforce',
+			);
+			// only a report-only policy refuses it: it goes out, and the
+			// document is told to report it (a request of its connect-src it
+			// reported itself, knowing which API made it)
+			if (
+				!refusing.length &&
+				refusals.length &&
+				granted === null &&
+				directive !== 'connect-src'
+			)
+				postReport(context?.clientId, directive!, url.url);
+			if (refusing.length) {
+				rewriter.log?.({
+					url: reportURL(url),
+					method: serverRequest.method,
+					destination: serverRequest.destination || 'fetch',
+					status: 0,
+					ms: Date.now() - started,
+					cached: false,
+					bytes: null,
+					error: `refused by the page's ${directive}`,
+					client: context?.clientId,
+				});
+				return granted !== null
+					? Response.error()
+					: Response.redirect(REFUSED_URL, 302);
+			}
+		}
 		const blocker = context?.internal ? undefined : rewriter.blocker;
 		// the first navigation after a start waits for the engine: the stored
 		// one, and, when the host asked for the blocker, a first fetch of the
@@ -2761,6 +2826,18 @@ function genericForward(
 			(target, base) => transformRoute(target, base, resource),
 			additionalResponseFilter,
 		);
+		// a fetch or an XMLHttpRequest reads a response's policy headers as
+		// natively (the browser applies none of them to such a response); a
+		// document's and a worker's reach the browser as the proxy gives them
+		// (src/csp.ts)
+		if (serverRequest.destination === '' && !navigation)
+			for (const name of [
+				'content-security-policy',
+				'content-security-policy-report-only',
+			]) {
+				const value = response.headers.get(name);
+				if (value !== null) responseHeaders.set(name, value);
+			}
 		if (isolation) isolationResponseHeaders(responseHeaders, isolation);
 		// what the document may not use, as the browser's own policy for it
 		// (beside the isolation's `cross-origin-isolated=()`). A frame's needs
@@ -4005,6 +4082,17 @@ export function registerRewrites(
 					request.navigation &&
 					nestedTopOf(new URL(request.routed).pathname, rewriter.directory) ===
 						null;
+				// the page's own policies, as far as the browser can apply them
+				// to the proxy's URLs (src/csp.ts); the inject is told which
+				// page policy each one stands for
+				const policies = browserHeaders(response.headers, policyMark());
+				if (policies.enforce)
+					responseHeaders.append('content-security-policy', policies.enforce);
+				if (policies.report)
+					responseHeaders.append(
+						'content-security-policy-report-only',
+						policies.report,
+					);
 				// an XML document (a standalone SVG, an XHTML page) keeps its mime
 				// and gets an XML shell: the HTML one is not well-formed XML
 				if (XML_DOCUMENT_MIMES.includes(mime))
@@ -4016,6 +4104,7 @@ export function registerRewrites(
 						referrer,
 						shellSites(url, request.routed, rewriter.directory),
 						top,
+						policies.texts,
 					);
 				// A Refresh header schedules its navigation on the document the
 				// browser creates for this response, which the shell re-opens to
@@ -4046,6 +4135,22 @@ export function registerRewrites(
 					metaUpgradesInsecureRequests(markup);
 				if (upgradeInsecure && request.navigation)
 					rememberUpgradeInsecure(request.routed, request.clientId);
+				// what of its policies names hosts is the worker's to apply to
+				// its requests (src/server/contentPolicies.ts)
+				if (request.navigation)
+					rememberPolicies(request.routed, request.clientId, url.url, [
+						...parsePolicies(
+							response.headers.get('content-security-policy'),
+							'enforce',
+							'header',
+						),
+						...parsePolicies(
+							response.headers.get('content-security-policy-report-only'),
+							'report',
+							'header',
+						),
+						...metaPolicies(markup),
+					]);
 				// the blocker's side of the document (docs/adblock.md): the
 				// lists' `$csp=` policies the proxy can enforce, beside its own,
 				// and the cosmetic rules and scriptlets its inject applies
@@ -4090,6 +4195,7 @@ export function registerRewrites(
 						top,
 						note.isolation,
 						note.agentCluster,
+						policies.texts,
 					);
 				// The page does not wait for the rewrite workers: the shell's
 				// first part (the inject bundle's script and the markup) goes out
@@ -4112,6 +4218,7 @@ export function registerRewrites(
 					top,
 					note.isolation,
 					note.agentCluster,
+					policies.texts,
 				);
 				const first = UTF8.encode(head);
 				return new ReadableStream<Uint8Array>({

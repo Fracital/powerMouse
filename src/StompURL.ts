@@ -6,7 +6,10 @@ export declare type urlLike = URL | string;
 export function isUrlLike(object: unknown): object is urlLike {
 	return (
 		typeof object === 'string' ||
-		(typeof object === 'object' && object instanceof URL)
+		(typeof object === 'object' &&
+			(object instanceof URL ||
+				// a URL of another realm's (a frame's bundle hands its client one)
+				Object.prototype.toString.call(object) === '[object URL]'))
 	);
 }
 
