@@ -15,8 +15,12 @@
 //   the bundle too (41 KB: a frame uses its top's and evaluated none; it is
 //   the rewriter library file's second statement): the bundle is 434 KB
 //   with the membrane by origin, document identity, URL shapes and the
-//   escape fixes. The budget, 460 KB, holds the sealed URLs that come next
-//   (about 3 KB). Raise it in the same change as code that has to grow the
+//   escape fixes. The budget was 460 KB, for the sealed URLs that came
+//   next (about 3 KB); a page's Content-Security-Policy (its fetch, script
+//   and style directives) took it to 456 KB, and its Trusted Types (every
+//   sink the inject writes judging the page's value, the inject's own
+//   writes carrying trusted values of its own policy) to 465 KB: the budget
+//   is 468 KB. Raise it in the same change as code that has to grow the
 //   bundle, and say why.
 // - the JS heap one proxied frame adds (test/frame-memory.mjs, FRAMES frames
 //   of a small ad-like page, same site), against a ceiling above what this
@@ -34,7 +38,7 @@ import { measureFrames } from '../frame-memory.mjs';
 import { done, ok } from '../lib.mjs';
 
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
-const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 460;
+const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 468;
 const FRAMES = Number(process.env.FRAMES) || 20;
 const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1150;
 
