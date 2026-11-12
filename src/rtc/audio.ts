@@ -6,6 +6,8 @@
 // hand) and the
 // stack packetizes and depacketizes. What crosses to the stack is whole
 // encoded frames with their RTP time.
+import { ComfortNoise, parseNoise, type NoiseDescription } from './cn';
+import { eventPayload, TONES, ToneSender } from './dtmf';
 import type { Payload } from './formats';
 import { Downsampler, g711Decode, g711Encode } from './g711';
 import { g722Decode, G722Decoder, g722Encode, G722Encoder } from './g722';
@@ -160,6 +162,9 @@ export class AudioSender {
 	#g722: G722Encoder | null = null;
 	#fill = 0;
 	#made = 0;
+	/** the telephone-event payload DTMF goes on, and the tones to play */
+	#event: Payload | null = null;
+	#tones = new ToneSender();
 	stats: SenderStats = { frames: 0, bytes: 0 };
 
 	constructor(media: number, write: FrameWriter) {
@@ -185,9 +190,25 @@ export class AudioSender {
 			payloads.find((candidate) =>
 				['opus', 'g722', 'pcmu', 'pcma'].includes(candidate.name.toLowerCase()),
 			) ?? null;
+		this.#event = payload ? eventPayload(payloads) : null;
 		if (JSON.stringify(payload) === JSON.stringify(this.#payload)) return;
 		this.#payload = payload;
 		this.#restart();
+	}
+
+	/** whether the section negotiated a payload for DTMF */
+	get canTone(): boolean {
+		return this.#event !== null;
+	}
+
+	/**
+	 * A tone of the page's RTCDTMFSender (one of TONES), for `ms`: it goes
+	 * out with the next frames the track makes, as Chrome's does
+	 */
+	tone(tone: string, ms: number) {
+		const code = TONES.indexOf(tone.toUpperCase());
+		if (code !== -1 && tone.length === 1 && this.#event)
+			this.#tones.add(code, ms);
 	}
 
 	/** whether the section sends now (its direction, and a connection that is up) */
@@ -199,6 +220,7 @@ export class AudioSender {
 
 	close() {
 		this.setTrack(null);
+		this.#tones.clear();
 	}
 
 	async #pump(reader: ReadableStreamDefaultReader<AudioData>) {
@@ -470,6 +492,33 @@ export class AudioSender {
 		// (silence it did not send)
 		if (this.#last !== time) flags |= FLAG_TALKSPURT;
 		this.#last = time + length;
+		const event = this.#event;
+		if (event) {
+			// a tone under way goes out in place of the frame, stamped on the
+			// wire's clock (G.722's is half the stack's count)
+			const wire =
+				this.#payload?.name.toLowerCase() === 'g722'
+					? Math.floor((at + this.#offset) / 2)
+					: at + this.#offset;
+			const tones = this.#tones.frame(wire, event.clock, now);
+			if (tones) {
+				for (const tone of tones)
+					this.#write(
+						{
+							media: this.media,
+							pt: event.pt,
+							flags: tone.marker ? FLAG_TALKSPURT : 0,
+							level: ABSENT,
+							orientation: ABSENT,
+							time: BigInt(tone.time),
+							rid: '',
+							payload: tone.payload,
+						},
+						Math.max(0, age),
+					);
+				return;
+			}
+		}
 		this.stats.frames++;
 		this.stats.bytes += payload.length;
 		this.#write(
@@ -495,8 +544,46 @@ interface Sound {
 	samples: Float32Array<ArrayBuffer>;
 	frames: number;
 	channels: number;
+	/** a comfort noise packet: from its time on, noise plays until speech does */
+	noise?: NoiseDescription;
 }
 
+/** a comfort noise packet stands for this much at least */
+const NOISE_MS = 20;
+/** the rate comfort noise is made at after each speech codec, as Chrome's decoders run */
+const NOISE_RATES = { opus: 48000, G711: 8000, G722: 16000 };
+/** a telephone event is played 20 ms at a time */
+const TONE_FRAME = 960;
+/** DTMF's frequencies (RFC 4733, 3.2): the row and the column of each event code */
+const ROWS = [697, 770, 852, 941];
+const COLUMNS = [1209, 1336, 1477, 1633];
+const KEYS = '31 00 01 02 10 11 12 20 21 22 30 32 03 13 23 33'.split(' ');
+
+/**
+ * `frames` samples of an event's two tones from `from` on (48 kHz), at the
+ * levels Chrome's NetEq plays them (measured: 9.2 dB and, for the column's
+ * tone, 6.2 dB below full scale more than the event's volume)
+ */
+function toneSamples(
+	code: number,
+	volume: number,
+	from: number,
+	frames: number,
+): Float32Array<ArrayBuffer> {
+	const key = KEYS[code];
+	const low = ROWS[Number(key[0])];
+	const high = COLUMNS[Number(key[1])];
+	const a = 10 ** ((-9.2 - volume) / 20);
+	const b = 10 ** ((-6.2 - volume) / 20);
+	const out = new Float32Array(frames);
+	for (let at = 0; at < frames; at++) {
+		const t = (from + at) / 48000;
+		out[at] =
+			a * Math.sin(2 * Math.PI * low * t) +
+			b * Math.sin(2 * Math.PI * high * t);
+	}
+	return out;
+}
 /** how long after the last frame the receiver's clock stops */
 const IDLE_MS = 2000;
 /** a clock this far behind starts again from now (the worker stalled) */
@@ -507,6 +594,8 @@ const BACKLOG = 25;
 /** a received frame, as the stack hands it over */
 export interface Received {
 	codec: string;
+	/** the payload type, for a telephone event's clock */
+	pt?: number;
 	time: bigint;
 	payload: Uint8Array;
 	/** FLAG_CONTIGUOUS: nothing was lost before it; FLAG_TALKSPURT: it starts a talkspurt */
@@ -550,6 +639,24 @@ export class AudioReceiver {
 	#counts = { frames: 0, bytes: 0, written: 0 };
 	/** lost Opus packets the decoder concealed */
 	#concealed = 0;
+	/**
+	 * What the sound is being decoded from: the clock comfort noise and
+	 * telephone events are placed on (Chrome's sender stamps them on the
+	 * audio's) and the rate the noise is made at (Chrome's NetEq makes it at
+	 * the decoder's: white to 4 kHz after G.711, to 24 kHz after Opus)
+	 */
+	#speech: 'opus' | 'G711' | 'G722' = 'G711';
+	/** the noise a comfort noise packet described */
+	#noise = new ComfortNoise(8000);
+	/** the clock of each telephone-event payload the section negotiated */
+	#eventClocks = new Map<number, number>();
+	/** the telephone event playing: where it starts on the track's count, how much is made */
+	#tone: {
+		start: number;
+		code: number;
+		volume: number;
+		made: number;
+	} | null = null;
 	/** the first frame arrived: the track has sound now */
 	onStart: (() => void) | null = null;
 	/** the next frame heard is a start again (the section had stopped receiving) */
@@ -563,6 +670,14 @@ export class AudioReceiver {
 			...this.#counts,
 			concealed: this.#concealed,
 		};
+	}
+
+	/** what the section negotiated: the telephone-event payloads' clocks */
+	configure(payloads: Payload[]) {
+		this.#eventClocks.clear();
+		for (const payload of payloads)
+			if (payload.name.toLowerCase() === 'telephone-event')
+				this.#eventClocks.set(payload.pt, payload.clock);
 	}
 
 	/** the track's sink (a MediaStreamTrackGenerator's writable), or null */
@@ -597,10 +712,15 @@ export class AudioReceiver {
 			this.onStart?.();
 		}
 		if (!this.#writer) return;
-		const time = Number(frame.time);
-		if (frame.codec === 'opus')
+		// the stack's count runs below zero when a sender's times jump back
+		// (it reads them as a wrap the other way); as a signed number it
+		// keeps its precision, and the playout buffer starts over
+		const time = Number(BigInt.asIntN(64, frame.time));
+		if (frame.codec === 'opus') {
+			this.#speak('opus');
 			this.#opus(frame.payload, time, now, frame.flags ?? FLAG_CONTIGUOUS);
-		else if (frame.codec === 'PCMU' || frame.codec === 'PCMA')
+		} else if (frame.codec === 'PCMU' || frame.codec === 'PCMA') {
+			this.#speak('G711');
 			// 8 kHz on the wire, 48 kHz on the track
 			this.#hold(
 				time * 6,
@@ -608,7 +728,8 @@ export class AudioReceiver {
 				1,
 				now,
 			);
-		else if (frame.codec === 'G722')
+		} else if (frame.codec === 'G722') {
+			this.#speak('G722');
 			// 16 kHz (the stack's count of it), 48 kHz on the track
 			this.#hold(
 				time * 3,
@@ -616,11 +737,72 @@ export class AudioReceiver {
 				1,
 				now,
 			);
+		} else if (frame.codec === 'CN') {
+			// noise from the packet's time on, until speech comes again
+			const noise = parseNoise(frame.payload);
+			if (!noise) return;
+			const frames = Math.round(NOISE_MS * 48);
+			this.#playout.push(
+				time * this.#scale(),
+				frames,
+				{ samples: new Float32Array(0), frames, channels: 1, noise },
+				now,
+				0,
+			);
+		} else if (frame.codec === 'telephone-event') this.#event(frame, time, now);
 		else return;
 		this.#heard = now;
 		if (this.#timer === null) {
 			this.#due = now;
 			this.#timer = setTimeout(this.#tick, 0);
+		}
+	}
+
+	/** the speech codec now: comfort noise is made at its rate */
+	#speak(codec: 'opus' | 'G711' | 'G722') {
+		if (this.#speech === codec) return;
+		this.#speech = codec;
+		this.#noise = new ComfortNoise(NOISE_RATES[codec]);
+	}
+
+	/** a time on the stack's count of a noise or event payload, as the track counts it */
+	#scale(): number {
+		// stamped on the audio's RTP clock: Opus counts at 48 kHz, G.711
+		// and G.722 at 8000 on the wire
+		return this.#speech === 'opus' ? 1 : 6;
+	}
+
+	/**
+	 * A telephone event (RFC 4733): Chrome's NetEq plays it as its two
+	 * tones in place of the sound of its time, so does this, a frame at a
+	 * time as its duration grows
+	 */
+	#event(frame: Received, time: number, now: number) {
+		const bytes = frame.payload;
+		if (bytes.length < 4 || bytes[0] >= TONES.length) return;
+		const start = time * this.#scale();
+		const end = (bytes[1] & 0x80) !== 0;
+		const clock = this.#eventClocks.get(frame.pt ?? -1) ?? 8000;
+		const length = Math.round((((bytes[2] << 8) | bytes[3]) * 48000) / clock);
+		let tone = this.#tone;
+		if (!tone || tone.start !== start || tone.code !== bytes[0])
+			tone = this.#tone = {
+				start,
+				code: bytes[0],
+				volume: bytes[1] & 0x3f,
+				made: 0,
+			};
+		while (length - tone.made >= TONE_FRAME || (end && tone.made < length)) {
+			const frames = Math.min(TONE_FRAME, length - tone.made);
+			const samples = toneSamples(tone.code, tone.volume, tone.made, frames);
+			this.#playout.push(
+				start + tone.made,
+				frames,
+				{ samples, frames, channels: 1 },
+				now,
+				power(samples) / frames,
+			);
+			tone.made += frames;
 		}
 	}
 
@@ -736,6 +918,9 @@ export class AudioReceiver {
 	) {
 		const frames = samples.length / channels;
 		if (!frames) return;
+		// a telephone event plays in place of the sound of its time
+		const tone = this.#tone;
+		if (tone && time >= tone.start && time < tone.start + tone.made) return;
 		this.#playout.push(
 			time,
 			frames,
@@ -754,21 +939,45 @@ export class AudioReceiver {
 		while (this.#due <= now) {
 			const sound = this.#playout.pull(now);
 			const ms = sound ? sound.frames / 48 : this.#playout.frameMs;
-			if (sound)
+			if (sound?.noise) this.#noise.update(sound.noise);
+			else if (sound) this.#noise.stop();
+			const channels = this.#stereo ? 2 : 1;
+			if (sound && !sound.noise)
 				this.#emit(writer, sound.samples, sound.frames, sound.channels);
+			// the peer said what its silence sounds like: that, until it
+			// speaks again (as Chrome's NetEq plays comfort noise)
+			else if (this.#noise.active)
+				this.#emit(writer, this.#noiseOf(ms, channels), ms * 48, channels);
 			// a frame that is missing while the stream plays is silence of
 			// its length; a stream that is not playing writes nothing
 			else if (this.#playout.running)
-				this.#emit(writer, null, Math.round(ms * 48), this.#stereo ? 2 : 1);
+				this.#emit(writer, null, Math.round(ms * 48), channels);
 			this.#due += ms;
 		}
 		// a stream that went quiet stops the clock until it is heard again
-		if (now - this.#heard > IDLE_MS && !this.#playout.running) return;
+		if (
+			now - this.#heard > IDLE_MS &&
+			!this.#playout.running &&
+			!this.#noise.active
+		)
+			return;
 		this.#timer = setTimeout(
 			this.#tick,
 			Math.max(0, this.#due - performance.now()),
 		);
 	};
+
+	/** `ms` of the comfort noise at 48 kHz, in `channels` */
+	#noiseOf(ms: number, channels: number): Float32Array<ArrayBuffer> {
+		const rate = NOISE_RATES[this.#speech];
+		const made = this.#noise.make(Math.round((ms * rate) / 1000));
+		const narrow = rate === 48000 ? made : this.#widen(made, 48000 / rate);
+		if (channels === 1) return narrow;
+		const out = new Float32Array(narrow.length * 2);
+		out.set(narrow);
+		out.set(narrow, narrow.length);
+		return out;
+	}
 
 	#emit(
 		writer: WritableStreamDefaultWriter<AudioData>,

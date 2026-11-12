@@ -1,5 +1,5 @@
 crate rust/rtc
-sources 0769e05759d1
+sources ff9178dfa8e8
 toolchain stomp-rust-toolchain:eda716cbc2c6
 RUST_IMAGE=rustlang/rust@sha256:dde6da7d1b5fa1ba0ebd311488ddc916f36311a2ce0038420ceba5ce76fdcc23
 RUST_NIGHTLY=2026-11-09

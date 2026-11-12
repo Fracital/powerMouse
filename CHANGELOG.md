@@ -605,13 +605,28 @@ The first release after a four-year gap. Everything below is breaking.
   as streams. The `webrtc-media` suite holds a call with Chrome's own stack
   to what the browser's own connection reads at every step, in both demo
   modes, with the tone unbroken both ways and every packet from the wisp
-  server. Video, comfort noise and DTMF are not carried yet.
+  server. Video is not carried yet.
 - WebRTC audio carries G.722, written by hand in the worker
   (`src/rtc/g722.ts`, bit-exact against the ITU-T reference codec and its
   test sequences), so a proxied page offers every audio payload Chrome
   offers, in Chrome's order, and sends G.722 to a peer that lists it first.
   A lost Opus packet is concealed by the decoder, as natively, instead of
   being 20 ms of silence (docs/webrtc-over-wisp.md section 16).
+- A proxied page's audio senders have Chrome's `RTCDTMFSender`
+  (`sender.dtmf`): `insertDTMF` with Chrome's checks, clamps and messages,
+  `toneBuffer`, `canInsertDTMF` and `tonechange` events at Chrome's times
+  (duration + 2 x gap apart), and each tone goes on the wire as Chrome's
+  sender puts it there: RFC 4733 events on the negotiated telephone-event
+  payload of the lowest clock, in place of the audio frames of its time,
+  the end report three times. The `webrtc-media` suite has Chrome's own
+  receiver see the same packets from a proxied page as from Chrome, with
+  Opus and with PCMU (docs/webrtc-over-wisp.md section 16).
+- A proxied page plays what Chrome's receiver plays for a peer's comfort
+  noise (RFC 3389): noise at the packet's level (2.6 dB below it, measured)
+  and in its shape, until speech comes again, instead of silence; and a
+  peer's DTMF events as their two tones at Chrome's levels in place of the
+  sound of their time. The worker does not send comfort noise yet, where
+  Chrome does with G.711 or G.722 (docs/webrtc-over-wisp.md section 16).
 - When a peer closes its connection, a proxied page's data channels hear
   what Chrome's own hear: `closing`, an `error` event (an `RTCError` of
   detail `sctp-failure`, cause code 12, "User-Initiated Abort, reason=Close
@@ -5297,7 +5312,7 @@ Fixed while testing real sites and a feature fixture:
   origin today, shared between those origins.
 - WebRTC carries data channels and audio so far (docs/webrtc-over-wisp.md
   sections 15 and 16): video sections negotiate and their frames are
-  dropped, comfort noise and DTMF are not carried, a lost Opus packet's
+  dropped, comfort noise is not sent (a peer's is played), a lost Opus packet's
   in-band FEC copy is not used, TURN over TCP or TLS and TCP candidates are
   not carried,
   `getStats()` has no media entries. A peer behind

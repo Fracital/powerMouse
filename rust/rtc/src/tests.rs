@@ -428,6 +428,32 @@ fn audio_both_ways() {
 	assert_eq!(b.frames[before + 4].data, [0xfc, 0x77, 4]);
 	assert_eq!(b.frames.len(), before + 5, "a redundant block was delivered twice");
 
+	// DTMF and comfort noise: payloads of their own, which the stack
+	// passes on as they are, the first event packet marked
+	let before = b.frames.len();
+	let events: [(u8, &[u8]); 4] = [
+		(media::FLAG_TALKSPURT, &[5, 0x0a, 0x00, 0xa0]),
+		(0, &[5, 0x8a, 0x01, 0x40]),
+		(0, &[5, 0x8a, 0x01, 0x40]),
+		(0, &[5, 0x8a, 0x01, 0x40]),
+	];
+	for (n, (flags, payload)) in events.iter().enumerate() {
+		assert_eq!(a.write(0, 126, *flags, media::ABSENT, media::ABSENT, 8000, "", payload), STATUS_OK);
+		pump(&mut a, &mut b, "a telephone event", |_, b| b.frames.len() > before + n);
+	}
+	assert_eq!(a.write(0, 13, 0, media::ABSENT, media::ABSENT, 8160, "", &[40, 127]), STATUS_OK);
+	pump(&mut a, &mut b, "comfort noise", |_, b| b.frames.len() > before + 4);
+	let heard = &b.frames[before..];
+	assert_eq!(heard.len(), 5);
+	for (n, (_, payload)) in events.iter().enumerate() {
+		assert_eq!((heard[n].pt, heard[n].codec), (126, 6), "event {n}");
+		assert_eq!(heard[n].data, *payload, "event {n}");
+		assert_eq!(heard[n].level, media::ABSENT, "event {n}");
+	}
+	assert!(heard[0].flags & media::FLAG_TALKSPURT != 0);
+	assert_eq!((heard[4].pt, heard[4].codec), (13, 5));
+	assert_eq!(heard[4].data, [40, 127]);
+
 	// a payload the section never negotiated and a section that is not
 	// there are dropped and say so in the status
 	assert_eq!(a.write(0, 96, 0, media::ABSENT, media::ABSENT, 0, "", &[1]), STATUS_FAILED);

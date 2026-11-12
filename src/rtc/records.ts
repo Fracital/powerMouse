@@ -36,6 +36,7 @@ export const CODECS: Record<number, string> = {
 	3: 'PCMA',
 	4: 'G722',
 	5: 'CN',
+	6: 'telephone-event',
 	10: 'VP8',
 	11: 'VP9',
 	12: 'H264',

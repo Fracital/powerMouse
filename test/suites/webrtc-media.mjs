@@ -353,6 +353,89 @@ async function wideband(own, far) {
 	await far.call('close').catch(() => {});
 	return record;
 }
+/**
+ * DTMF: the page offers its tone, the far end answers with its own (listing
+ * `prefer` first, so the page sends with it) and notes every
+ * telephone-event frame its receiver gets; the page plays tones on its
+ * sender's RTCDTMFSender, then the far end plays some of its own while the
+ * page listens to its tone.
+ */
+async function tones(own, far, prefer) {
+	const record = { failure: null };
+	try {
+		await own.call('open');
+		await far.call('open');
+		record.sent = await own.call('tone', 440);
+		const offer = await own.call('local', 'offer');
+		await far.call('remote', 'offer', offer.sdp, 0);
+		await far.call('tone', 660);
+		if (prefer) await far.call('prefer', 0, prefer);
+		await describe(far, own, 'answer');
+		await own.call('connected');
+		await far.call('connected');
+		await own.call('muted', 0, false);
+		await far.call('muted', 0, false);
+		// the far end sends with it too
+		if (prefer) await far.call('sendWith', 0, prefer);
+		await sleep(300);
+		record.codecs = await far.call('codecs');
+		record.played = [
+			await own.call('dtmf', 0, '1#', 100, 70),
+			await own.call('dtmf', 0, 'a', 40, 30),
+		];
+		await sleep(300);
+		record.heard = await far.call('heardTones');
+		// the far end's tones, which Chrome's receiver plays in place of
+		// the sound of their time, and the sound after them
+		[record.farPlayed, record.keys] = await Promise.all([
+			far.call('dtmf', 0, '159', 100, 70),
+			own.call('keys', 0, 1500),
+		]);
+		record.after = await own.call('hear', 0, 660, 1500);
+		if (prefer === 'audio/PCMU') {
+			// a quiet noise and no tone: Chrome's sender says what its
+			// silence sounds like with comfort noise, and its receiver plays it
+			await far.call('level', 0, 0);
+			await far.call('noise', 0, 0.002);
+			await sleep(1000);
+			record.quiet = await own.call('loudness', 0, 1500);
+			await far.call('noise', 0, 0);
+			await far.call('level', 0, 0.5);
+		}
+		record.seen = await far.call('far');
+		record.owner = record.seen?.remote
+			? await sockets.owner(record.seen.remote.port)
+			: 'no pair';
+	} catch (error) {
+		record.failure = String(error).slice(0, 400);
+	}
+	await own.call('close').catch(() => {});
+	await far.call('close').catch(() => {});
+	return record;
+}
+/** the telephone events of `heard` grouped by RTP time: each event's payloads */
+const events = (heard) => {
+	const out = new Map();
+	for (const [pt, time, bytes] of heard ?? []) {
+		const key = `${pt}@${time}`;
+		if (!out.has(key)) out.set(key, []);
+		out.get(key).push(bytes);
+	}
+	return [...out].map(([key, payloads]) => [key.split('@')[0], ...payloads]);
+};
+/** the tonechange events of a play: their tones and buffers, and when each came */
+const toneOrder = (played) =>
+	JSON.stringify(
+		played?.map(({ can, call, buffer, events }) => [
+			can,
+			call,
+			buffer,
+			events.map(([tone, , rest, ...flags]) => [tone, rest, ...flags]),
+		]),
+	);
+const toneTimes = (played) =>
+	played?.flatMap(({ events }) => events.map(([, ms]) => ms)) ?? [];
+
 const g722 = (record) =>
 	!record.failure &&
 	record.codecs?.['inbound-rtp'] === 'audio/G722' &&
@@ -395,6 +478,20 @@ for (const [name, record] of Object.entries(natively))
 		record.failure ?? JSON.stringify(record.heard),
 	);
 
+natively.tones = await tones(end(control), end(native, 'the far end'));
+natively.pcmuTones = await tones(
+	end(control),
+	end(native, 'the far end'),
+	'audio/PCMU',
+);
+for (const key of ['tones', 'pcmuTones']) {
+	const record = natively[key];
+	ok(
+		`natively (${key}): Chrome's receiver sees the tones as telephone events`,
+		!record.failure && events(record.heard).length === 3,
+		record.failure ?? JSON.stringify(record.heard),
+	);
+}
 ok(
 	'natively: with G.722 first in the answer, the offerer sends G.722 and the answerer Opus',
 	g722(natively.wideband),
@@ -562,6 +659,63 @@ for (const proxied of pages) {
 			leaks.length === 0 && /typ host/.test(JSON.stringify(got.read)),
 			JSON.stringify(leaks),
 		);
+	}
+	// DTMF with Chrome's own stack, sent with Opus and with PCMU
+	for (const [key, prefer] of [
+		['tones', null],
+		['pcmuTones', 'audio/PCMU'],
+	]) {
+		const want = natively[key];
+		const got = await tones(end(proxied), end(native, 'the far end'), prefer);
+		const codec = got.codecs?.['inbound-rtp'];
+		ok(
+			`${label} (${key}): the page plays DTMF tones with ${codec}, its RTCDTMFSender reads as natively and its tonechange events come in order`,
+			!got.failure &&
+				codec === want.codecs?.['inbound-rtp'] &&
+				toneOrder(got.played) === toneOrder(want.played),
+			got.failure ??
+				`${toneOrder(got.played)} | natively ${toneOrder(want.played)}`,
+		);
+		const times = toneTimes(got.played);
+		const wanted = toneTimes(want.played);
+		ok(
+			`${label} (${key}): each tonechange event comes when Chrome's does`,
+			times.length === wanted.length &&
+				times.every((ms, i) => Math.abs(ms - wanted[i]) <= 60),
+			`${times} | natively ${wanted}`,
+		);
+		ok(
+			`${label} (${key}): Chrome's receiver gets each tone as the RFC 4733 events Chrome sends, on the same payload, from a socket of the wisp server`,
+			JSON.stringify(events(got.heard)) ===
+				JSON.stringify(events(want.heard)) && got.owner === 'server',
+			`${JSON.stringify(events(got.heard))} | natively ${JSON.stringify(events(want.heard))} (${got.owner})`,
+		);
+		const keys = (record) => record.keys?.map(([key]) => key).join('') ?? '';
+		// Chrome's receiver plays Opus's events on telephone-event/8000
+		// (Chrome's own durations, counted at 48 kHz) in pieces, which read
+		// as more digits than were sent; the three come in order all the
+		// same. With PCMU Chrome's sender sends no speech for the far end's
+		// steady tone (a few comfort noise packets in seconds, measured), so
+		// no audio is there for the events to replace, and its receiver
+		// plays them for 40 ms at most (docs/webrtc-over-wisp.md, section
+		// 16): only Opus is held to it.
+		if (!prefer)
+			ok(
+				`${label} (${key}): the page plays the far end's tones as Chrome's receiver plays them, and its sound after them as it was`,
+				keys(got) === '159' &&
+					/1.*5.*9/.test(keys(want)) &&
+					!!got.after &&
+					sounds(got.after, want.after),
+				JSON.stringify([got.keys, want.keys, got.after, want.after]),
+			);
+		if (want.quiet !== undefined)
+			ok(
+				`${label} (${key}): in the far end's quiet the page plays Chrome's comfort noise at Chrome's level`,
+				typeof got.quiet === 'number' &&
+					want.quiet > -90 &&
+					Math.abs(got.quiet - want.quiet) < 4,
+				`${got.quiet} dB | natively ${want.quiet} dB`,
+			);
 	}
 	// G.722 both ways with Chrome's own stack
 	{

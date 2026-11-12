@@ -353,7 +353,7 @@ native prototypes, as the Location stand-in's does).
 | `RTCRtpTransceiver`, `RTCRtpSender`, `RTCRtpReceiver`        | `mid`, `direction`, `currentDirection`, `stop`, `stopped`, `setCodecPreferences`; sender `track`, `replaceTrack`, `getParameters` and `setParameters` (encodings with `maxBitrate`, `scaleResolutionDownBy`, `active`, `rid`, `priority`), `getStats`, `setStreams`, `transport`, `dtmf`; receiver `track`, `getParameters`, `getStats`, `getContributingSources`, `getSynchronizationSources`, `jitterBufferTarget`; static `getCapabilities` answering Chrome's codec and header extension lists                                                                                                                                                                                                                                                                                                                                        |
 | `RTCIceTransport`, `RTCDtlsTransport`, `RTCSctpTransport`    | `role`, `state`, `gatheringState`, `getLocalCandidates`, `getRemoteCandidates`, `getSelectedCandidatePair`, `getLocalParameters`, `getRemoteParameters`; DTLS `state`, `getRemoteCertificates`; SCTP `maxMessageSize`, `maxChannels`, `transport`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `RTCIceCandidate`, `RTCSessionDescription`, `RTCCertificate` | the parsed fields (`foundation`, `component`, `priority`, `address`, `protocol`, `port`, `type`, `tcpType`, `relatedAddress`, `relatedPort`, `usernameFragment`, `url`), `toJSON`; `RTCCertificate.expires`, `getFingerprints`, a certificate handed in `certificates` is the DTLS certificate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `RTCDTMFSender`                                              | `insertDTMF`, `toneBuffer`, `canInsertDTMF`, `tonechange`: RFC 4733 telephone-event packets through str0m's writer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `RTCDTMFSender`                                              | `insertDTMF`, `toneBuffer`, `canInsertDTMF`, `tonechange`: RFC 4733 telephone-event packets as Chrome's sender writes them (section 16)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | events                                                       | `RTCPeerConnectionIceEvent`, `RTCPeerConnectionIceErrorEvent`, `RTCTrackEvent`, `RTCDataChannelEvent`, `RTCDTMFToneChangeEvent`, `RTCErrorEvent` with `RTCError` (`errorDetail`, `sdpLineNumber`, `sctpCauseCode`, `receivedAlert`, `sentAlert`, `httpRequestStatusCode`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `getStats`                                                   | an `RTCStatsReport` (a real `Map` subclass with the native prototype shape) of Chrome's report types with Chrome's fields and ids: `peer-connection`, `transport`, `candidate-pair`, `local-candidate`, `remote-candidate`, `certificate`, `codec`, `inbound-rtp`, `outbound-rtp`, `remote-inbound-rtp`, `remote-outbound-rtp`, `media-source`, `media-playout`, `data-channel`; the numbers from str0m's `PeerStats`, `MediaIngressStats` and `MediaEgressStats` and the worker's encoder and decoder counters. Candidate addresses in the report are the edge's or empty, as in 5.1                                                                                                                                                                                                                                                     |
 | out of scope, left as the browser leaves them in a worker    | `RTCRtpScriptTransform` and encoded insertable streams (the frames are in the worker already; a page's transform runs there in a later phase), `RTCIceTransport.getStats`, `RTCIdentityAssertion`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -1167,11 +1167,121 @@ copy can be rewritten as a packet of its own (a prototype matched
 libopus's FEC decode on SILK streams); a decoder in the crate instead
 would cost 47 KB with brotli.
 
+### DTMF
+
+Every audio sender has an `RTCDTMFSender` (`sender.dtmf`, the same object
+on every read, before negotiation and after `stop()` and `close()`; a video
+sender's is null): an EventTarget on the browser's own prototype, whose
+members answer for it as the sender's do. Measured on Chrome 152 and 156
+and done the same way:
+
+- `canInsertDTMF` is true while the connection is `connected`, the last
+  negotiation has the transceiver send (`sendrecv` or `sendonly`, whatever
+  its `direction` says since) with a telephone-event payload among what it
+  sends with (at any clock), and it is not stopped or closed. A track is not
+  needed. (156 reads it true as soon as the transport is writable, a moment
+  before `connectionState` says `connected`; here it waits for that.)
+- `insertDTMF(tones, duration = 100, interToneGap = 70)` converts its
+  arguments first (WebIDL `DOMString` and `unsigned long`, Chrome's
+  messages), then throws `InvalidStateError` when `canInsertDTMF` is false
+  and `InvalidCharacterError` for anything but `0-9`, `A-D`, `a-d`, `#`,
+  `*` and `,`, then clamps the duration to 40 to 6000 ms and the gap to 30
+  to 6000 as signed numbers (2^31 and up is the least), and sets
+  `toneBuffer` to the tones in upper case, replacing what was left.
+- The first `tonechange` comes in a task of its own (before a timer or a
+  message the page queues after the call); each event's tone has left
+  `toneBuffer` when it is told; the next comes duration + 2 x gap later
+  (2000 ms + gap after a `,`; Chrome waits the gap once more after the
+  tone's own gap, and reads that second gap as it is then), and an event
+  with an empty tone ends the run. `stop()` or `close()` ends it with no
+  event and leaves the buffer as it was.
+
+Each tone is a request to the worker (`dtmf`: the transceiver, the tone,
+its duration), and the worker puts it on the wire as WebRTC's
+RTPSenderAudio does (`src/rtc/dtmf.ts`), measured with a werift peer that
+logged every packet of Chrome's:
+
+- The events go on the telephone-event payload of the lowest clock the
+  section negotiated, whatever the send codec: with Opus and both 110/48000
+  and 126/8000 negotiated, Chrome sends on 126.
+- A tone starts with the next audio frame, at least 50 ms after the last
+  ended, and its packets go out in place of the audio frames of its time:
+  nothing for the first, then one packet per frame, all stamped with the
+  first frame's RTP time, the first marked, the duration counted up on the
+  audio's clock, volume 10. When the duration reaches the tone's length
+  (counted on the event payload's clock) the report with the end bit goes
+  out three times at once. So with Opus on 126 a tone of 100 ms is three
+  end reports of 960 (120 ms at 8 kHz) after one frame, and one of 500 ms
+  ends at 4800: Chrome's arithmetic, kept. Past 65535 units an event goes
+  on in a new segment (RFC 4733, 2.5.2.3), as Chrome's does.
+- The frames go through the frame records of the boundary like the audio's
+  (input kind 4, the event payload's number, `FLAG_TALKSPURT` for the
+  marker, no level), and str0m's telephone-event packetizer writes each
+  as it is; nothing in the crate times them. A peer that has no track
+  sends no frames, so no events either (Chrome's sender with
+  `replaceTrack(null)` sends none, and its `tonechange` events come all the
+  same).
+
+Received events come out of the crate as frames of codec 6. Chrome's
+receiver (NetEq) plays an event as its two tones in place of the sound of
+its time, the column's tone 3 dB louder (-9.2 and -6.2 dBFS less the
+event's volume: -19.2 and -16.2 for Chrome's 10), even where audio packets
+go on arriving beside it; the receiver here does the same, a 20 ms frame of
+the tones for each 20 ms the event's duration has grown, on the duration's
+clock, with the audio frames of that time dropped. The `webrtc-media`
+suite has Chrome play `159` to the page with Opus, and the page hears the
+three digits in order, as the browser's own connection does (which plays
+Chrome's events on telephone-event/8000 in pieces, their durations being
+counted at 48 kHz). Where nothing else arrives (a pause in the audio, or
+comfort noise) Chrome plays an event for 40 ms at most; here it plays all
+of it.
+
+### Comfort noise
+
+Chrome's sender, with G.711 or G.722 and CN (13) in the peer's description,
+stops sending speech once its voice detector has heard 160 to 180 ms of
+silence and sends a comfort noise packet every 100 ms instead (RFC 3389:
+nine bytes, the level and eight reflection coefficients; digital silence is
+`5e7f7f7f7f7f7f7f7f`), and marks the first speech packet after it. With
+Opus it never does (`usedtx` leaves the silence out instead). The worker
+does not send comfort noise (below).
+
+Chrome's receiver plays the noise a packet describes from the packet's time
+until speech comes again, whether the packet comes once or every 100 ms,
+whatever the codec (Opus too) and whether or not CN was negotiated, about
+2.6 dB below the level the packet states (-22.5 dBFS for level 20, -52.7
+for 50, -63.0 for 60, measured on 152 and 156), shaped by the
+coefficients, at the rate of the decoder before it: band-limited to 4 kHz
+after G.711, white to 24 kHz after Opus. Without comfort noise its
+concealment fades out in about 320 ms. The receiver here
+(`src/rtc/cn.ts`) makes the noise the same way: white noise through the
+coefficients' all-pole filter (the step-up recursion, as WebRTC's decoder
+turns them into a predictor), scaled to the level less 2.6 dB, moving to a
+new packet's description over a few 10 ms blocks, at 8 kHz after G.711,
+16 kHz after G.722 and 48 kHz after Opus, placed on the audio's RTP clock,
+and written where the playout buffer would otherwise write silence or
+nothing. The `webrtc-media` suite has Chrome send the page PCMU and then a
+quiet noise, which Chrome's sender turns into comfort noise packets, and
+holds the level the page plays to the level the browser's own connection
+plays.
+
+Limits: the worker sends no comfort noise. With G.711 or G.722 and CN
+negotiated it goes on sending encoded silence, as Chrome does when CN is
+not negotiated; matching Chrome would take WebRTC's voice detector (its
+GMM detector in `kVadNormal` mode, with its hangover) and its comfort noise
+encoder (the level and an LPC analysis of order 8, every 100 ms), in the
+worker as G.722 is, and neither is there.
+
 Limits: audio only (video sections negotiate and their frames are
 dropped); no in-band FEC; playout runs on the worker's clock, not the
 sound card's, so a long call drifts against it by the difference of the
-two clocks and the track's sink absorbs that; comfort noise and DTMF are
-negotiated as Chrome offers them but not carried, and `sender.dtmf` is
-null; `getStats()` of a sender or a receiver is empty;
+two clocks and the track's sink absorbs that; Chrome sends its DTMF
+packets with no header extension and the stack gives them the section's
+(the MID, the send time and the transport-wide sequence number), and a
+page's own `dispatchEvent` of a `tonechange`, as every event the stand-ins
+fire, is untrusted and runs no microtask checkpoint between listeners;
+the worker sends no comfort noise (Chrome does with G.711 and G.722
+when CN is negotiated: that takes WebRTC's voice detector and CN encoder);
+`getStats()` of a sender or a receiver is empty;
 the far ends in the suite are Chrome's own stack, not werift or a TURN
 relayed proxied page.

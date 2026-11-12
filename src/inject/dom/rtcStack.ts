@@ -86,6 +86,7 @@ interface Shared {
 	trackEvents: WeakMap<object, Members>;
 	/** pc.sctp, its RTCDtlsTransport and their RTCIceTransport */
 	transports: WeakMap<object, Members>;
+	dtmf: WeakMap<object, Members>;
 	/** a received track as the page reads it: Chrome's id, label and muted state for one */
 	tracks: WeakMap<object, { id?: string; label: string; muted: boolean }>;
 	/** the id of a stream a peer named */
@@ -98,6 +99,10 @@ let bundleWorker: (() => Worker) | null = null;
 const MAX_MESSAGE_SIZE = 262144;
 /** Chrome numbers a renderer's channels as they are made: their stats ids */
 let channelSerial = 0;
+/** Blink's: a tone's default length and gap, and the pause a ',' is, in ms */
+const DTMF_DURATION = 100;
+const DTMF_GAP = 70;
+const DTMF_COMMA_MS = 2000;
 /** Chrome's: connections a renderer holds at once, closed ones until collected */
 const MAX_CONNECTIONS = 500;
 let weakDeref: typeof WeakRef.prototype.deref;
@@ -190,6 +195,7 @@ export default class WebRTCStack {
 		shared.receivers ??= new WeakMap();
 		shared.trackEvents ??= new WeakMap();
 		shared.transports ??= new WeakMap();
+		shared.dtmf ??= new WeakMap();
 		shared.tracks ??= new WeakMap();
 		shared.streams ??= new WeakMap();
 
@@ -793,6 +799,28 @@ export default class WebRTCStack {
 		const NativeSender = global.RTCRtpSender as Function | undefined;
 		const NativeReceiver = global.RTCRtpReceiver as Function | undefined;
 		const NativeTrackEvent = global.RTCTrackEvent as Function | undefined;
+		const NativeDtmfSender = global.RTCDTMFSender as Function | undefined;
+		const NativeToneEvent = global.RTCDTMFToneChangeEvent as
+			typeof RTCDTMFToneChangeEvent | undefined;
+		const realmTimeout = global.setTimeout as typeof setTimeout;
+		const realmPerformance = global.performance as Performance;
+		const performanceNow = global.Performance?.prototype.now as Function;
+		// taken before the page runs: a page that hooks them never sees ours
+		const RealmChannel = global.MessageChannel as typeof MessageChannel;
+		const portPost = global.MessagePort?.prototype.postMessage as Function;
+		const portHandler = global.MessagePort
+			? Reflect.getOwnPropertyDescriptor(
+					global.MessagePort.prototype,
+					'onmessage',
+				)?.set
+			: undefined;
+		const channelPorts = [1, 2].map(
+			(index) =>
+				Reflect.getOwnPropertyDescriptor(
+					RealmChannel?.prototype ?? {},
+					`port${index}`,
+				)?.get,
+		);
 		const NativeStreamTrackEvent = global.MediaStreamTrackEvent as
 			typeof MediaStreamTrackEvent | undefined;
 		/** the browser has what media through the worker takes */
@@ -892,6 +920,10 @@ export default class WebRTCStack {
 			/** the transactionId getParameters last gave */
 			transaction: string | null;
 			jitter: unknown;
+			/** what it sends with has a telephone-event payload (the worker's word) */
+			events: boolean;
+			/** the sender's RTCDTMFSender, once it is read */
+			dtmf: object | null;
 		}
 		const mediaSlots = new WeakMap<object, MediaSlot>();
 		const slotOf = (that: unknown): MediaSlot => {
@@ -980,8 +1012,10 @@ export default class WebRTCStack {
 				return null;
 			}
 			get dtmf() {
-				slotOf(this);
-				return null;
+				const slot = slotOf(this);
+				if (slot.kind !== 'audio' || !NativeDtmfSender) return null;
+				slot.dtmf ??= makeDtmf(slot);
+				return slot.dtmf;
 			}
 			getParameters() {
 				const slot = slotOf(this);
@@ -1173,6 +1207,160 @@ export default class WebRTCStack {
 			}
 		}
 
+		// --- RTCDTMFSender (docs/webrtc-over-wisp.md, section 16) ---
+
+		/**
+		 * Blink's tone player: the tones a page inserted, played one at a
+		 * time from a task of their own, each a request to the worker, which
+		 * sends it on the wire with the frames of its time
+		 */
+		interface DtmfState {
+			slot: MediaSlot;
+			buffer: string;
+			duration: number;
+			gap: number;
+			scheduled: boolean;
+		}
+		const dtmfStates = new WeakMap<object, DtmfState>();
+		const dtmfOf = (that: unknown): DtmfState => {
+			const state = dtmfStates.get(that as object);
+			if (!state) throw illegal();
+			return state;
+		};
+		/**
+		 * Chrome's answer: the transceiver sends on a connection that is up,
+		 * as the last negotiation settled it, with a telephone-event payload
+		 */
+		const canInsert = (slot: MediaSlot) =>
+			!slot.stopping &&
+			!slot.pc.closed &&
+			slot.events &&
+			slot.pc.connectionState === 'connected' &&
+			(slot.current === 'sendrecv' || slot.current === 'sendonly');
+		const onDtmf = (what: string) =>
+			`Failed to execute 'insertDTMF' on 'RTCDTMFSender': ${what}`;
+		/** WebIDL's DOMString */
+		const toText = (value: unknown) => {
+			if (typeof value === 'symbol')
+				throw new RealmTypeError(
+					onDtmf(`Cannot convert a Symbol value to a string`),
+				);
+			return String(value);
+		};
+		/** WebIDL's unsigned long */
+		const toUnsigned = (value: unknown) => {
+			if (typeof value === 'symbol')
+				throw new RealmTypeError(
+					onDtmf('Cannot convert a Symbol value to a number'),
+				);
+			if (typeof value === 'bigint')
+				throw new RealmTypeError(
+					onDtmf('Cannot convert a BigInt value to a number'),
+				);
+			const number = Number(value);
+			if (!Number.isFinite(number)) return 0;
+			const whole = Math.trunc(number) % 2 ** 32;
+			return whole < 0 ? whole + 2 ** 32 : whole;
+		};
+		const later = (run: () => void, ms: number) =>
+			Reflect.apply(realmTimeout, global, [run, Math.max(0, ms)]);
+		const now = (): number =>
+			Reflect.apply(performanceNow, realmPerformance, []);
+		// The first tone plays in a task of its own, ahead of a timer or a
+		// message the page queues after the call (as Chrome's does): a
+		// message on a channel of the document's own
+		const queued: (() => void)[] = [];
+		let channel: MessagePort | null = null;
+		const soon = (run: () => void) => {
+			if (!channel) {
+				const made = Reflect.construct(RealmChannel, []) as MessageChannel;
+				Reflect.apply(portHandler!, Reflect.apply(channelPorts[0]!, made, []), [
+					() => queued.shift()?.(),
+				]);
+				channel = Reflect.apply(channelPorts[1]!, made, []) as MessagePort;
+			}
+			queued.push(run);
+			Reflect.apply(portPost, channel, [null]);
+		};
+		const toneEvent = (tone: string) =>
+			new NativeToneEvent!('tonechange', { tone });
+		const playTones = (target: object) => {
+			const state = dtmfStates.get(target)!;
+			state.scheduled = false;
+			const { slot } = state;
+			if (slot.stopping) return;
+			if (!state.buffer) {
+				(target as EventTarget).dispatchEvent(toneEvent(''));
+				return;
+			}
+			const tone = state.buffer[0];
+			state.buffer = state.buffer.slice(1);
+			// The next tone comes after this one, its gap, and the gap again
+			// (measured on Chrome 152 and 156: duration + 2 x gap, and 2000 ms
+			// + gap after a ','), the second gap as it is then: a page that
+			// inserts again while a tone plays moves only that one
+			let delay = DTMF_COMMA_MS;
+			if (tone !== ',') {
+				if (!canInsert(slot)) return;
+				slot.pc
+					.call({
+						op: 'dtmf',
+						handle: slot.handle,
+						tone,
+						duration: state.duration,
+					})
+					.catch(() => {});
+				delay = state.duration + state.gap;
+			}
+			state.scheduled = true;
+			// the second wait is counted from when the first should have
+			// ended, so a late timer does not push the next tone back
+			const due = now() + delay;
+			later(
+				() => later(() => playTones(target), due + state.gap - now()),
+				delay,
+			);
+			(target as EventTarget).dispatchEvent(toneEvent(tone));
+		};
+		class DtmfMembers {
+			get canInsertDTMF() {
+				return canInsert(dtmfOf(this).slot);
+			}
+			get toneBuffer() {
+				return dtmfOf(this).buffer;
+			}
+			insertDTMF(...args: any[]) {
+				const state = dtmfOf(this);
+				if (!args.length)
+					throw new RealmTypeError(
+						onDtmf('1 argument required, but only 0 present.'),
+					);
+				const tones = toText(args[0]);
+				const duration =
+					args[1] === undefined ? DTMF_DURATION : toUnsigned(args[1]);
+				const gap = args[2] === undefined ? DTMF_GAP : toUnsigned(args[2]);
+				if (!canInsert(state.slot))
+					throw domException(
+						onDtmf(
+							"The 'canInsertDTMF' attribute is false: this sender cannot send DTMF.",
+						),
+						'InvalidStateError',
+					);
+				if (!/^[0-9a-dA-D#*,]*$/.test(tones))
+					throw domException(
+						onDtmf('Illegal characters in InsertDTMF tone argument'),
+						'InvalidCharacterError',
+					);
+				// Blink clamps them as signed numbers: 2 ** 31 and up is the least
+				state.duration = Math.min(Math.max(duration | 0, 40), 6000);
+				state.gap = Math.min(Math.max(gap | 0, 30), 6000);
+				state.buffer = tones.toUpperCase();
+				if (!state.buffer || state.scheduled) return;
+				state.scheduled = true;
+				soon(() => playTones(this));
+			}
+		}
+
 		/**
 		 * The browser's own prototype answering for objects of ours: each of
 		 * its functions is one that reads as it, runs `Mock`'s member for an
@@ -1240,6 +1428,24 @@ export default class WebRTCStack {
 		let senderMembers = noMembers();
 		let receiverMembers = noMembers();
 		let trackEventMembers = noMembers();
+		let dtmfMembers = noMembers();
+		/** a sender's RTCDTMFSender: an EventTarget on the browser's prototype */
+		const makeDtmf = (slot: MediaSlot): object => {
+			const made = Reflect.construct(
+				RealmEventTarget,
+				[],
+				NativeDtmfSender!,
+			) as object;
+			shared.dtmf.set(made, dtmfMembers);
+			dtmfStates.set(made, {
+				slot,
+				buffer: '',
+				duration: DTMF_DURATION,
+				gap: DTMF_GAP,
+				scheduled: false,
+			});
+			return made;
+		};
 		if (hasMedia) {
 			transceiverMembers = adopt(
 				NativeTransceiver!,
@@ -1265,6 +1471,15 @@ export default class WebRTCStack {
 				shared.trackEvents,
 				'RTCTrackEvent',
 			);
+			if (NativeDtmfSender && NativeToneEvent) {
+				dtmfMembers = adopt(
+					NativeDtmfSender,
+					DtmfMembers,
+					shared.dtmf,
+					'RTCDTMFSender',
+				);
+				dtmfMembers.ontonechange = handlerAttribute('tonechange');
+			}
 			override(NativeTrack!, 'id', (that) => shared.tracks.get(that)?.id);
 			override(NativeTrack!, 'label', (that) => shared.tracks.get(that)?.label);
 			override(NativeTrack!, 'muted', (that) => shared.tracks.get(that)?.muted);
@@ -1363,6 +1578,8 @@ export default class WebRTCStack {
 				encoding: encodingOf({}),
 				transaction: null,
 				jitter: null,
+				events: false,
+				dtmf: null,
 			};
 			mediaSlots.set(slot.transceiver, slot);
 			mediaSlots.set(slot.sender, slot);
@@ -1529,6 +1746,7 @@ export default class WebRTCStack {
 					);
 				}
 				slot.mid = section.mid;
+				slot.events = !!section.dtmf;
 				if (section.mid === null) continue;
 				if (section.stopped) {
 					if (!slot.stopping) {

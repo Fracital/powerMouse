@@ -664,6 +664,7 @@ export class Connection {
 					);
 			}
 		state.sender?.configure(payloads);
+		state.receiver?.configure(payloads);
 		this.#activate(state);
 	}
 
@@ -699,6 +700,7 @@ export class Connection {
 				if (described.port === '0') this.#stopped(state);
 			}
 			if (state.stopped) section.stopped = true;
+			if (state.sender?.canTone) section.dtmf = true;
 			medias.push(section);
 		}
 		return { medias };
@@ -1804,6 +1806,13 @@ export class Connection {
 					const state = this.#handles.get(request.handle);
 					if (!state) throw 'no such media section';
 					state.receiver?.setTrack(request.writable);
+					reply(null);
+					break;
+				}
+				case 'dtmf': {
+					const state = this.#handles.get(request.handle);
+					if (!state) throw 'no such media section';
+					state.sender?.tone(request.tone, request.duration);
 					reply(null);
 					break;
 				}

@@ -28,6 +28,8 @@ writeFileSync(
 export * from ${from('g711.ts')};
 export * from ${from('g722.ts')};
 export { AudioSender, AudioReceiver, levelOf } from ${from('audio.ts')};
+export { ToneSender, eventPayload, TONES } from ${from('dtmf.ts')};
+export { ComfortNoise, parseNoise } from ${from('cn.ts')};
 export { stackFormats, parsePayloads, parseParameters } from ${from('formats.ts')};
 export * as records from ${from('records.ts')};
 export { Stack } from ${from('connection.ts')};
@@ -717,6 +719,185 @@ const talkspurts = (frames) =>
 	ok('and nothing where no payload can be encoded here', none.length === 0);
 }
 
+// --- DTMF (RFC 4733), as Chrome's sender puts it on the wire ---
+
+/**
+ * The packets a ToneSender makes in place of audio frames `step` apart (on
+ * the audio's clock) for an event of `ms` on a payload of clock `rate`,
+ * frames coming every 20 ms; null where the audio frame goes out
+ */
+function tonePackets(ms, rate, step, { frames = 40, start = 1000 } = {}) {
+	const tones = new m.ToneSender();
+	tones.add(5, ms);
+	const out = [];
+	for (let n = 0; n < frames; n++) {
+		const packets = tones.frame(start + n * step, rate, 1000 + n * 20);
+		out.push(
+			packets &&
+				packets.map(
+					(packet) =>
+						`${packet.marker ? 'M' : '-'}${packet.time - start}:${[...packet.payload].map((b) => b.toString(16).padStart(2, '0')).join('')}`,
+				),
+		);
+	}
+	return out;
+}
+{
+	// measured on Chrome 152 and 156 against a peer that logged every
+	// packet: '1' for 100 ms with PCMU and telephone-event/8000
+	const pcmu = tonePackets(100, 8000, 160);
+	ok(
+		"an event's packets replace the audio frames of its time, counting its duration up, then end three times",
+		JSON.stringify(pcmu.slice(0, 7)) ===
+			JSON.stringify([
+				[],
+				['M0:050a00a0'],
+				['-0:050a0140'],
+				['-0:050a01e0'],
+				['-0:050a0280'],
+				['-0:058a0320', '-0:058a0320', '-0:058a0320'],
+				null,
+			]) && pcmu.slice(6).every((packets) => packets === null),
+		JSON.stringify(pcmu.slice(0, 7)),
+	);
+	// Opus's events go on telephone-event/8000 and count on Opus's clock:
+	// 100 ms is 800 units, which the first packet (960) is already past
+	const opus = tonePackets(100, 8000, 960);
+	ok(
+		"with Opus and an event payload at 8 kHz, Chrome's arithmetic: the first packet ends it, marked three times",
+		JSON.stringify(opus.slice(0, 3)) ===
+			JSON.stringify([[], ['M0:058a03c0', 'M0:058a03c0', 'M0:058a03c0'], null]),
+		JSON.stringify(opus.slice(0, 3)),
+	);
+	const long = tonePackets(500, 8000, 960);
+	ok(
+		'and 500 ms of it five packets, the last 4800',
+		JSON.stringify(long.slice(0, 7)) ===
+			JSON.stringify([
+				[],
+				['M0:050a03c0'],
+				['-0:050a0780'],
+				['-0:050a0b40'],
+				['-0:050a0f00'],
+				['-0:058a12c0', '-0:058a12c0', '-0:058a12c0'],
+				null,
+			]),
+		JSON.stringify(long.slice(0, 7)),
+	);
+	// at 48 kHz on both sides an event longer than 65535 units goes on in
+	// a segment of its own (RFC 4733, 2.5.2.3)
+	const segments = tonePackets(2000, 48000, 960, { frames: 110 })
+		.flat()
+		.filter((packet) => packet && packet.length);
+	const restart = segments.findIndex((packet) => /^-66240:/.test(packet));
+	ok(
+		'an event longer than a report holds goes on in a new segment',
+		segments.includes('-0:050affff') &&
+			restart !== -1 &&
+			segments.at(-1).includes(':058a') &&
+			segments.slice(-3).every((packet) => packet === segments.at(-1)),
+		JSON.stringify(segments.slice(66, 72)),
+	);
+	const tones = new m.ToneSender();
+	tones.add(1, 40);
+	tones.add(2, 40);
+	const gaps = [];
+	for (let n = 0; n < 12; n++)
+		gaps.push(tones.frame(n * 160, 8000, n * 20)?.length ?? null);
+	ok(
+		'the next tone waits for 50 ms after the last ended, the audio going out meanwhile',
+		JSON.stringify(gaps) ===
+			JSON.stringify([0, 1, 3, null, null, 0, 1, 3, null, null, null, null]),
+		JSON.stringify(gaps),
+	);
+	const payloads = m.parsePayloads(
+		'111,opus,48000,2,minptime=10;useinbandfec=1|110,telephone-event,48000,,0-15|126,telephone-event,8000,,0-15',
+	);
+	ok(
+		"the event payload is the first of the lowest clock, as Chrome's sender picks it",
+		m.eventPayload(payloads)?.pt === 126 &&
+			m.eventPayload(payloads.slice(0, 2))?.pt === 110 &&
+			m.eventPayload(payloads.slice(0, 1)) === null,
+	);
+}
+{
+	// the sender: tones go out on the event payload in place of its frames
+	const payloads = m.parsePayloads(
+		'0,PCMU,8000,1,|110,telephone-event,48000,,0-15|126,telephone-event,8000,,0-15',
+	);
+	const frames = [];
+	const sender = new m.AudioSender(2, (frame) => frames.push(frame));
+	sender.configure(payloads);
+	sender.setActive(true);
+	sender.tone('#', 100);
+	sender.tone('x', 100);
+	sender.setTrack(
+		new ReadableStream({
+			start(controller) {
+				for (let n = 0; n < 30; n++) controller.enqueue(sound(n));
+				controller.close();
+			},
+		}),
+	);
+	await sleep(50);
+	sender.close();
+	const kinds = frames.map((frame) => frame.pt);
+	const events = frames.filter((frame) => frame.pt === 126);
+	const first = events[0];
+	const audioAfter = frames[kinds.lastIndexOf(126) + 1];
+	ok(
+		'a tone goes out on telephone-event/8000 in place of the frames of its time, stamped with the time its event began, without a level',
+		sender.canTone &&
+			kinds.join() === '126,126,126,126,126,126,126,0,0,0,0,0,0,0,0,0' &&
+			events.every(
+				(frame) =>
+					frame.time === first.time &&
+					frame.level === records.ABSENT &&
+					frame.media === 2,
+			) &&
+			first.flags === records.FLAG_TALKSPURT &&
+			events.slice(1).every((frame) => frame.flags === 0) &&
+			[...events.at(-1).payload].join() === '11,138,3,32' &&
+			Number(audioAfter.time - first.time) === 6 * 160 &&
+			!(audioAfter.flags & records.FLAG_TALKSPURT),
+		JSON.stringify(
+			frames.map((frame) => [frame.pt, Number(frame.time), frame.flags]),
+		),
+	);
+	const none = new m.AudioSender(2, () => {});
+	none.configure(m.parsePayloads('0,PCMU,8000,1,'));
+	ok('a section without an event payload cannot tone', !none.canTone);
+}
+
+// --- comfort noise (RFC 3389) ---
+{
+	const flat = m.parseNoise(Uint8Array.of(40));
+	const shaped = m.parseNoise(Uint8Array.of(60, 200, 90, 127));
+	const rms = (samples) =>
+		Math.sqrt(samples.reduce((sum, x) => sum + x * x, 0) / samples.length);
+	const db = (samples) => 20 * Math.log10(rms(samples));
+	const noise = new m.ComfortNoise(8000);
+	noise.update(flat);
+	noise.make(800);
+	const at40 = db(noise.make(8000));
+	const other = new m.ComfortNoise(8000);
+	other.update(shaped);
+	other.make(800);
+	const at60 = db(other.make(8000));
+	ok(
+		'a comfort noise packet reads as its level and its reflection coefficients',
+		flat.level === 40 &&
+			flat.reflections.length === 0 &&
+			shaped.level === 60 &&
+			shaped.reflections.join() === [73 / 128, -37 / 128, 0].join(),
+	);
+	ok(
+		"the noise made of it is where Chrome plays it, 2.6 dB below the packet's level, whatever its shape",
+		Math.abs(at40 + 42.6) < 1 && Math.abs(at60 + 62.6) < 1,
+		`${at40.toFixed(2)} dB, ${at60.toFixed(2)} dB`,
+	);
+}
+
 // --- G.722 against the ITU-T reference ---
 
 {
@@ -1208,6 +1389,178 @@ receiver.close();
 			amplitudes.length > 100 &&
 			strong.length >= amplitudes.length - 8,
 		`${frames.length} frames, ${strong.length} of ${amplitudes.length} windows at the tone's strength`,
+	);
+}
+// DTMF through the stacks: the events of a tone arrive on their own
+// payload as the sender wrote them, and the receiver plays no sound of them
+{
+	const toneSender = new m.AudioSender(index, (frame, age) => {
+		a.engine.input(
+			a.id,
+			records.IN_MEDIA_WRITE,
+			records.encodeFrame(frame, age),
+		);
+		a.drain();
+	});
+	toneSender.configure(
+		m
+			.parsePayloads(negotiated.codecs ?? '')
+			.filter((payload) => ['PCMU', 'telephone-event'].includes(payload.name)),
+	);
+	toneSender.setActive(true);
+	toneSender.tone('7', 100);
+	const toneReceiver = new m.AudioReceiver();
+	const heard = [];
+	toneReceiver.setTrack(
+		new WritableStream({
+			write(data) {
+				heard.push(data);
+			},
+		}),
+	);
+	const first = b.frames.length;
+	// from the first event on: the last frames of the runs before, on
+	// another clock, would have the receiver hold far more than it needs
+	let begun = false;
+	b.onFrame = (frame) => {
+		begun ||= frame.codec === 'telephone-event';
+		if (frame.media === remote && begun) toneReceiver.frame(frame);
+	};
+	let toneSource = null;
+	toneSender.setTrack(
+		new ReadableStream({
+			start(controller) {
+				toneSource = controller;
+			},
+		}),
+	);
+	const start = performance.now();
+	for (let n = 0; performance.now() - start < 1600;) {
+		while (n < 120 && n * 10 <= performance.now() - start)
+			toneSource.enqueue(sound(n++));
+		a.tick();
+		b.tick();
+		await sleep(2);
+	}
+	toneSource.close();
+	toneSender.close();
+	toneReceiver.close();
+	const frames = b.frames.slice(first);
+	frames.splice(
+		0,
+		frames.findIndex((frame) => frame.codec === 'telephone-event'),
+	);
+	const events = frames.filter((frame) => frame.codec === 'telephone-event');
+	const voice = frames.filter((frame) => frame.codec === 'PCMU');
+	ok(
+		'a tone crosses the stacks as its RFC 4733 events, on telephone-event/8000, and the sound after it as PCMU',
+		events.length === 7 &&
+			events.every(
+				(frame) => frame.pt === 126 && frame.time === events[0].time,
+			) &&
+			events.map((frame) => [...frame.payload].join(' ')).join() ===
+				[
+					'7 10 0 160',
+					'7 10 1 64',
+					'7 10 1 224',
+					'7 10 2 128',
+					'7 138 3 32',
+					'7 138 3 32',
+					'7 138 3 32',
+				].join() &&
+			(events[0].flags & records.FLAG_TALKSPURT) !== 0 &&
+			voice.length >= 20 &&
+			Number(voice[0].time - events[0].time) === 6 * 160,
+		JSON.stringify(
+			frames.map((frame) => [
+				frame.codec,
+				Number(frame.time),
+				[...frame.payload.slice(0, 4)],
+			]),
+		).slice(0, 600),
+	);
+	// what the receiver wrote: the event's two tones (852 and 1209 Hz for
+	// '7') where the sound of its time would be, at Chrome's levels
+	const all = new Float32Array(
+		heard.reduce((sum, data) => sum + data.numberOfFrames, 0),
+	);
+	let at = 0;
+	for (const data of heard) {
+		all.set(data.data.subarray(0, data.numberOfFrames), at);
+		at += data.numberOfFrames;
+	}
+	const amplitude = (from, hz) => {
+		let I = 0;
+		let Q = 0;
+		for (let k = 0; k < 960; k++) {
+			I += all[from + k] * Math.cos((2 * Math.PI * hz * k) / 48000);
+			Q += all[from + k] * Math.sin((2 * Math.PI * hz * k) / 48000);
+		}
+		return Math.hypot(I, Q) / 480;
+	};
+	// 20 ms windows every 5 ms: a tone of 100 ms fills 17 of them
+	const windows = [];
+	for (let from = 0; from + 960 <= all.length; from += 240)
+		windows.push([amplitude(from, 852), amplitude(from, 1209)]);
+	const toned = windows.filter(
+		([low, high]) =>
+			Math.abs(20 * Math.log10(low) + 19.2) < 1 &&
+			Math.abs(20 * Math.log10(high) + 16.2) < 1,
+	);
+	ok(
+		"the receiver plays the event as its two tones, at Chrome's levels, for its 100 ms",
+		toneReceiver.stats.frames === frames.length &&
+			heard.every((data) => data.sampleRate === 48000) &&
+			toned.length >= 14 &&
+			toned.length <= 20,
+		`${toned.length} windows of the tones; ${JSON.stringify(toneReceiver.stats)}`,
+	);
+}
+// comfort noise after G.711, as Chrome's sender sends it in a silence
+{
+	const quiet = [];
+	const noiseReceiver = new m.AudioReceiver();
+	noiseReceiver.setTrack(
+		new WritableStream({
+			write(data) {
+				quiet.push(data);
+			},
+		}),
+	);
+	const start = performance.now();
+	const pcm = new Uint8Array(160).fill(0xff);
+	for (let n = 0; n < 50; n++) {
+		const now = start + n * 20;
+		while (performance.now() < now) await sleep(2);
+		// one second of silence, then a noise packet each 100 ms
+		const frame =
+			n < 10
+				? { codec: 'PCMU', pt: 0, time: BigInt(n * 160), payload: pcm }
+				: (n - 10) % 5 === 0
+					? {
+							codec: 'CN',
+							pt: 13,
+							time: BigInt(n * 160),
+							payload: Uint8Array.of(40),
+						}
+					: null;
+		if (frame) noiseReceiver.frame(frame);
+	}
+	await sleep(100);
+	noiseReceiver.close();
+	const tail = quiet.slice(-20);
+	let squares = 0;
+	let count = 0;
+	for (const data of tail)
+		for (const value of data.data) {
+			squares += value * value;
+			count++;
+		}
+	const level = 10 * Math.log10(squares / count);
+	ok(
+		"after speech the receiver plays a comfort noise packet's noise, at Chrome's level, until speech comes again",
+		tail.length === 20 && Math.abs(level + 42.6) < 2,
+		`${level.toFixed(2)} dB over ${tail.length} frames of ${quiet.length}`,
 	);
 }
 a.engine.destroy(a.id);

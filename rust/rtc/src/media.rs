@@ -57,6 +57,8 @@ pub fn codec_id(codec: Codec) -> u8 {
 		Codec::PCMA => 3,
 		Codec::G722 => 4,
 		Codec::CN => 5,
+		// RFC 4733 events: the host reads them, and plays no sound of them
+		Codec::Tele => 6,
 		Codec::Vp8 => 10,
 		Codec::Vp9 => 11,
 		Codec::H264 => 12,
@@ -403,7 +405,7 @@ pub fn parse_frame(bytes: &[u8]) -> Option<Frame<'_>> {
 
 /// A frame the stack received, after the tag:
 /// `[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][time u64][rid len u8][rid][bytes]`.
-/// None for what is not a frame of a codec (telephone events).
+/// None for a payload of no codec the host knows.
 pub fn data_record(tag: u8, media: u8, data: &MediaData) -> Option<Vec<u8>> {
 	let codec = codec_id(data.params.spec().codec);
 	if codec == 0 {

@@ -82,6 +82,8 @@ export interface MediaSection {
 	};
 	/** the section is stopped: this side stopped it, or the peer's description has */
 	stopped?: boolean;
+	/** what the section sends with has a telephone-event payload: DTMF can go out */
+	dtmf?: boolean;
 }
 
 /** the answer to setLocal and setRemote: the connection's media sections as they are now */
@@ -151,6 +153,14 @@ export type Request =
 			op: 'receiveTrack';
 			handle: number;
 			writable: WritableStream<AudioData> | null;
+	  }
+	/** a tone of the sender's RTCDTMFSender, one of 0-9, A-D, * and #, for `duration` ms */
+	| {
+			seq: number;
+			op: 'dtmf';
+			handle: number;
+			tone: string;
+			duration: number;
 	  }
 	| { seq: number; op: 'setConfiguration'; config: ConnectionConfig }
 	| { seq: number; op: 'restartIce' }

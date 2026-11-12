@@ -31,7 +31,7 @@
 		const size = rate / 100;
 		let frames = 0;
 		const started = performance.now();
-		const source = { track: generator, level: 0.5 };
+		const source = { track: generator, level: 0.5, noise: 0 };
 		source.timer = setInterval(() => {
 			const target = Math.floor((performance.now() - started) / 10);
 			while (frames < target) {
@@ -39,7 +39,8 @@
 				for (let i = 0; i < size; i++)
 					data[i] =
 						source.level *
-						Math.sin((2 * Math.PI * hz * (frames * size + i)) / rate);
+							Math.sin((2 * Math.PI * hz * (frames * size + i)) / rate) +
+						source.noise * (Math.random() * 2 - 1);
 				writer
 					.write(
 						new AudioData({
@@ -139,6 +140,43 @@
 			jumps,
 			dips,
 		};
+	}
+
+	const ROWS = [697, 770, 852, 941];
+	const COLUMNS = [1209, 1336, 1477, 1633];
+	const KEYS = ['123A', '456B', '789C', '*0#D'];
+	/** the DTMF digits in a sound, in order, and how many 20 ms windows each held */
+	function digits({ all, rate }) {
+		const size = Math.round(rate / 50);
+		const strength = (from, hz) => {
+			let re = 0;
+			let im = 0;
+			for (let k = 0; k < size; k++) {
+				re += all[from + k] * Math.cos((2 * Math.PI * hz * k) / rate);
+				im += all[from + k] * Math.sin((2 * Math.PI * hz * k) / rate);
+			}
+			return (2 * Math.hypot(re, im)) / size;
+		};
+		const out = [];
+		let quiet = 0;
+		for (let from = 0; from + size <= all.length; from += size) {
+			const best = (list) =>
+				list
+					.map((hz, i) => [strength(from, hz), i])
+					.sort((a, b) => b[0] - a[0])[0];
+			const [row, r] = best(ROWS);
+			const [column, c] = best(COLUMNS);
+			if (row < 0.03 || column < 0.03) {
+				quiet++;
+				continue;
+			}
+			const key = KEYS[r][c];
+			// a tone broken by less than 100 ms is one tone
+			if (out.length && out.at(-1)[0] === key && quiet < 5) out.at(-1)[1]++;
+			else out.push([key, 1]);
+			quiet = 0;
+		}
+		return out;
 	}
 
 	// --- what a page can read ---
@@ -318,8 +356,15 @@
 			await gathered(entry);
 			return { created: description.sdp, sdp: pc.localDescription.sdp };
 		},
-		async remote(name, type, sdp) {
+		/**
+		 * setRemoteDescription; with `listen`, the receiver of that
+		 * transceiver is listened to from then on (window.__media.listen)
+		 */
+		async remote(name, type, sdp, listen) {
 			await peer(name).pc.setRemoteDescription({ type, sdp });
+			// in the same task: a transform given later is never handed a
+			// frame (Chrome 152 and 156)
+			if (listen !== undefined) window.__media.listen(name, listen);
 		},
 		async connected(name, ms = 30000) {
 			const { pc } = peer(name);
@@ -375,6 +420,23 @@
 			const track = transceiver(name, at).receiver.track;
 			return judge(await samples(track, ms), hz);
 		},
+		/** the DTMF digits the receiver of transceiver `at` plays in `ms` */
+		async keys(name, at, ms) {
+			const track = transceiver(name, at).receiver.track;
+			return digits(await samples(track, ms));
+		},
+		/** the sound's level in dBFS the receiver of transceiver `at` plays for `ms` */
+		async loudness(name, at, ms) {
+			const { all } = await samples(transceiver(name, at).receiver.track, ms);
+			let squares = 0;
+			for (const value of all) squares += value * value;
+			return all.length
+				? +(10 * Math.log10(squares / all.length || 1e-20)).toFixed(1)
+				: null;
+		},
+		noise(name, at, level) {
+			peer(name).sources[at].noise = level;
+		},
 		/** how far the element playing the track gets in `ms` */
 		async plays(name, at, ms = 1500) {
 			const audio = peer(name).players.get(
@@ -416,6 +478,15 @@
 				...codecs.filter((codec) => codec.mimeType !== mime),
 			]);
 		},
+		/** the sender of transceiver `at` sends with `mime` (an encoding's codec) */
+		async sendWith(name, at, mime) {
+			const { sender } = transceiver(name, at);
+			const parameters = sender.getParameters();
+			parameters.encodings[0].codec = parameters.codecs.find(
+				(codec) => codec.mimeType === mime,
+			);
+			await sender.setParameters(parameters);
+		},
 		/** the codec each RTP stream of the connection sends or receives with */
 		async codecs(name) {
 			const stats = await peer(name).pc.getStats();
@@ -427,6 +498,84 @@
 		},
 		stop(name, at) {
 			transceiver(name, at).stop();
+		},
+		/**
+		 * The receiver of transceiver `at` passes what it gets through an
+		 * encoded transform that notes each telephone-event frame (natively
+		 * only: the far end is the browser's own stack). Called by `remote`.
+		 */
+		listen(name, at) {
+			const entry = peer(name);
+			const source = `addEventListener('rtctransform', (event) => {
+				const { readable, writable } = event.transformer;
+				readable.pipeThrough(new TransformStream({
+					transform(frame, controller) {
+						const meta = frame.getMetadata();
+						if (meta.mimeType === 'audio/telephone-event')
+							postMessage([meta.payloadType, meta.rtpTimestamp,
+								[...new Uint8Array(frame.data)]]);
+						controller.enqueue(frame);
+					},
+				})).pipeTo(writable);
+			});`;
+			const worker = new Worker(
+				URL.createObjectURL(new Blob([source], { type: 'text/javascript' })),
+			);
+			entry.events = [];
+			// kept: a worker nobody holds is collected with its handler
+			entry.worker = worker;
+			worker.onmessage = (event) => entry.events.push(event.data);
+			transceiver(name, at).receiver.transform = new RTCRtpScriptTransform(
+				worker,
+				{},
+			);
+		},
+		/**
+		 * The telephone events heard since the last call: for each, its
+		 * payload type, its RTP time less the first one's and its four bytes
+		 */
+		heardTones(name) {
+			const events = peer(name).events.splice(0);
+			const first = events[0]?.[1] ?? 0;
+			return events.map(([pt, time, bytes]) => [
+				pt,
+				(time - first) >>> 0,
+				bytes.join(' '),
+			]);
+		},
+		/**
+		 * The sender of transceiver `at` plays `tones`: what its
+		 * RTCDTMFSender reads, and each tonechange event (its tone, when it
+		 * came after the call, the buffer then), until the last one
+		 */
+		async dtmf(name, at, tones, duration, gap, ms = 15000) {
+			const { dtmf } = transceiver(name, at).sender;
+			const events = [];
+			const started = performance.now();
+			const done = new Promise((resolve) => {
+				const timer = setTimeout(resolve, ms);
+				dtmf.ontonechange = (event) => {
+					events.push([
+						event.tone,
+						Math.round(performance.now() - started),
+						dtmf.toneBuffer,
+						event instanceof RTCDTMFToneChangeEvent,
+						event.bubbles,
+						event.cancelable,
+					]);
+					if (event.tone === '') {
+						clearTimeout(timer);
+						resolve();
+					}
+				};
+			});
+			const can = dtmf.canInsertDTMF;
+			const args = [tones, duration, gap].filter((arg) => arg !== undefined);
+			const call = await attempt(() => dtmf.insertDTMF(...args));
+			const buffer = dtmf.toneBuffer;
+			await done;
+			dtmf.ontonechange = null;
+			return { can, call, buffer, events };
 		},
 		async active(name, at, active) {
 			const { sender } = transceiver(name, at);
@@ -459,6 +608,8 @@
 				RTCRtpSender,
 				RTCRtpReceiver,
 				RTCTrackEvent,
+				RTCDTMFSender,
+				RTCDTMFToneChangeEvent,
 			])
 				out[Class.name] = members(Class);
 			const pc = new RTCPeerConnection();
@@ -577,6 +728,62 @@
 					).get.call(stranger),
 				),
 			};
+			// the sender's RTCDTMFSender before any negotiation
+			const { dtmf } = sender;
+			const picture = pc.addTransceiver('video');
+			out.dtmf = {
+				read: [
+					tag(dtmf),
+					dtmf instanceof RTCDTMFSender,
+					dtmf instanceof EventTarget,
+					dtmf === sender.dtmf,
+					Object.getOwnPropertyNames(dtmf).length,
+					dtmf.canInsertDTMF,
+					dtmf.toneBuffer,
+					dtmf.ontonechange,
+					picture.sender.dtmf,
+					pc.addTransceiver('audio', { direction: 'recvonly' }).sender.dtmf
+						?.canInsertDTMF,
+					String(RTCDTMFSender.prototype.insertDTMF),
+				],
+				insert: await attempt(() => dtmf.insertDTMF('1')),
+				insertNone: await attempt(() => dtmf.insertDTMF()),
+				insertSymbol: await attempt(() => dtmf.insertDTMF(Symbol('1'))),
+				insertBigInt: await attempt(() => dtmf.insertDTMF('1', 10n)),
+				construct: await attempt(() => new RTCDTMFSender()),
+				illegal: await attempt(() =>
+					Object.getOwnPropertyDescriptor(
+						RTCDTMFSender.prototype,
+						'toneBuffer',
+					).get.call(stranger),
+				),
+				illegalInsert: await attempt(() =>
+					RTCDTMFSender.prototype.insertDTMF.call(stranger, '1'),
+				),
+				event: await attempt(() => {
+					const event = new RTCDTMFToneChangeEvent('tonechange', {
+						tone: '5',
+					});
+					return [
+						event.tone,
+						tag(event),
+						event.bubbles,
+						event.cancelable,
+						dtmf.dispatchEvent(event),
+					];
+				}),
+				handler: await attempt(() => {
+					const seen = [];
+					dtmf.ontonechange = (event) => seen.push(event.tone);
+					dtmf.dispatchEvent(
+						new RTCDTMFToneChangeEvent('tonechange', { tone: '#' }),
+					);
+					const handler = typeof dtmf.ontonechange;
+					dtmf.ontonechange = null;
+					return [seen, handler, dtmf.ontonechange];
+				}),
+			};
+			picture.stop();
 			made.stop();
 			out.stopped = {
 				view: JSON.stringify(transceiverView(made)).replace(
@@ -593,6 +800,11 @@
 				),
 				read: JSON.stringify({ ...sender.getParameters(), transactionId: 'X' }),
 			};
+			out.dtmf.stopped = [
+				sender.dtmf === dtmf,
+				dtmf.canInsertDTMF,
+				...(await attempt(() => dtmf.insertDTMF('1'))),
+			];
 			await wait(50);
 			out.stopped.ended = receiver.track.readyState;
 			pc.close();
@@ -606,6 +818,11 @@
 				}),
 				stop: await attempt(() => made.stop()),
 				transceivers: pc.getTransceivers().length,
+				dtmf: [
+					sender.dtmf === dtmf,
+					dtmf.canInsertDTMF,
+					...(await attempt(() => dtmf.insertDTMF('1'))),
+				],
 			};
 			other.close();
 			clearInterval(source.timer);
