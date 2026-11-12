@@ -96,6 +96,11 @@ The first release after a four-year gap. Everything below is breaking.
   reported. docs/http3.md has the rule (5) and
   what each wisp server sends (http3-fallback and demo-http3 suites, with
   `test/wisp-gate.mjs`, a relay that refuses UDP per name).
+- The transport RPC opens raw streams: `udp(host, port)` and
+  `tcp(host, port, tls)` each answer a MessagePort that carries one datagram
+  or chunk per message, on epoxy's `connect_udp`, `connect_tcp` and
+  `connect_tls`. A proxied page's WebRTC connections travel on them;
+  libcurl has none.
 
 ### Demo and API
 

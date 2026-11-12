@@ -24,7 +24,7 @@ export default class RemoteTransport implements ProxyTransport {
 	ready = false;
 	private readyPromise: Promise<void>;
 	private readyResolve!: () => void;
-	private rpc: RpcHelper<HostToTransport, TransportToHost>;
+	protected rpc: RpcHelper<HostToTransport, TransportToHost>;
 	private port: Promise<MessagePort>;
 	constructor(port: MessagePort | Promise<MessagePort>) {
 		this.readyPromise = new Promise((resolve) => (this.readyResolve = resolve));

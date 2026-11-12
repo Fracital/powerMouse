@@ -8,6 +8,7 @@ import {
 	HostToTransport,
 	postToPort,
 	SOCKET_PARTITION,
+	StreamMessage,
 	transferablesOf,
 	TRANSPORT_RPC,
 	TransportToHost,
@@ -62,6 +63,122 @@ export function fitHeaders(
 
 /** how long a decorate hook may take before the handshake goes out without it */
 const DECORATE_TIMEOUT_MS = 2000;
+
+/** what epoxy's connect_udp, connect_tcp and connect_tls answer */
+interface RawStream {
+	read: ReadableStream<Uint8Array>;
+	write: WritableStream<Uint8Array>;
+	/** a UDP stream's: one datagram, failing that send alone when it is too large */
+	send?: (datagram: Uint8Array) => Promise<void>;
+}
+interface RawClient {
+	connect_udp?: (url: string) => Promise<RawStream>;
+	connect_tcp?: (url: string) => Promise<RawStream>;
+	connect_tls?: (url: string) => Promise<RawStream>;
+}
+
+/** the wisp client under the wrappers (RevivingTransport, Http3Transport expose `client` and `base`) */
+function rawClient(transport: ProxyTransport): RawClient | null {
+	let current: unknown = transport;
+	for (let depth = 0; depth < 4 && current; depth++) {
+		const client = (current as { client?: unknown }).client;
+		if (client && typeof client === 'object') return client as RawClient;
+		current = (current as { base?: unknown }).base;
+	}
+	return null;
+}
+
+const bracket = (host: string) => (host.includes(':') ? `[${host}]` : host);
+
+/** how long a closing stream waits for its last sends */
+const CLOSE_FLUSH_MS = 2000;
+
+/**
+ * Serve a raw stream (opened by `opening`) on `port`: each datagram or chunk
+ * read is posted as a StreamMessage, each one posted is written, a close
+ * from either side closes both. Answers the rpc result once the stream is
+ * open or refused.
+ */
+async function openStream(
+	port: MessagePort,
+	opening: Promise<RawStream>,
+): Promise<[TransportToHost['udp'][1], Transferable[]]> {
+	let raw: RawStream;
+	try {
+		raw = await opening;
+	} catch (error) {
+		port.close();
+		return [
+			{ result: 'failure', error: String((error as Error)?.message || error) },
+			[],
+		];
+	}
+	let closed = false;
+	/** sends that have not settled, and the close that waits for them */
+	let sending = 0;
+	let finish: (() => void) | null = null;
+	const writer = raw.write.getWriter();
+	const close = (reason?: string) => {
+		if (closed) return;
+		closed = true;
+		postToPort(port, { type: 'close', reason } satisfies StreamMessage);
+		port.close();
+		writer.close().catch(() => {});
+	};
+	port.onmessage = ({ data }: MessageEvent<StreamMessage>) => {
+		if (closed) return;
+		if (data.type === 'data') {
+			const bytes = new Uint8Array(data.data);
+			// a datagram too large fails that send alone (epoxy's send); a
+			// failed write on the stream ends it
+			const sent = raw.send ? raw.send(bytes) : writer.write(bytes);
+			sending++;
+			sent
+				.catch((error) => {
+					if (!raw.send) close(String((error as Error)?.message || error));
+				})
+				.finally(() => {
+					if (--sending === 0) finish?.();
+				});
+		} else if (data.type === 'close') {
+			if (closed) return;
+			closed = true;
+			port.close();
+			// what was sent just before the close still leaves (a WebRTC
+			// connection's goodbye is its last datagram): the stream closes
+			// once those sends have settled, or after a moment if one never
+			// does
+			let finished = false;
+			finish = () => {
+				if (finished) return;
+				finished = true;
+				writer.close().catch(() => {});
+			};
+			if (sending === 0) finish();
+			else setTimeout(finish, CLOSE_FLUSH_MS);
+		}
+	};
+	port.start();
+	(async () => {
+		const reader = raw.read.getReader();
+		try {
+			for (;;) {
+				const { value, done } = await reader.read();
+				if (done || closed) break;
+				const copy = new Uint8Array(value).slice();
+				postToPort(
+					port,
+					{ type: 'data', data: copy.buffer } satisfies StreamMessage,
+					[copy.buffer],
+				);
+			}
+			close();
+		} catch (error) {
+			close(String((error as Error)?.message || error));
+		}
+	})();
+	return [{ result: 'success' }, []];
+}
 
 /**
  * One init() at a time per transport, however many ports and requests find
@@ -189,6 +306,29 @@ export default function serveTransport(
 				socket.start();
 
 				return [await result, []];
+			},
+			udp: async ({ host, port: remotePort, stream }) => {
+				const transport = await readyTransport();
+				const client = rawClient(transport);
+				if (!client?.connect_udp)
+					return [{ result: 'failure', error: 'no UDP on this transport' }, []];
+				return openStream(
+					stream,
+					client.connect_udp(`udp://${bracket(host)}:${remotePort}`),
+				);
+			},
+			tcp: async ({ host, port: remotePort, tls, stream }) => {
+				const transport = await readyTransport();
+				const client = rawClient(transport);
+				const connect = tls ? client?.connect_tls : client?.connect_tcp;
+				if (!connect)
+					return [{ result: 'failure', error: 'no TCP on this transport' }, []];
+				return openStream(
+					stream,
+					Reflect.apply(connect, client, [
+						`${tls ? 'tls' : 'tcp'}://${bracket(host)}:${remotePort}`,
+					]),
+				);
 			},
 		},
 		TRANSPORT_RPC,
