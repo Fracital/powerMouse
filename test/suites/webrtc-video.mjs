@@ -87,6 +87,14 @@ async function open(browser, label, base) {
 	return { label, page: opened, frame };
 }
 
+/**
+ * The header extensions Chrome offers with simulcast that the stack does
+ * not know: the dependency descriptor and the layers allocation
+ */
+const UNKNOWN_EXTENSIONS = [
+	'https://aomediacodec.github.io/av1-rtp-spec/#dependency-descriptor-rtp-header-extension',
+	'http://www.webrtc.org/experiments/rtp-hdrext/video-layers-allocation00',
+].map((uri) => uri.replace(/[.*+?^${}()|[\]\\/#]/g, '\\$&'));
 /** the payloads of Chrome's video section the stack does not carry: video RED, its rtx, ULPFEC */
 const UNCARRIED = ['118', '119', '120'];
 /**
@@ -99,7 +107,7 @@ const UNCARRIED = ['118', '119', '120'];
  */
 function shape(sdp) {
 	const uncarried = new RegExp(
-		`^a=(rtpmap|fmtp|rtcp-fb):(${UNCARRIED.join('|')}) `,
+		`^a=(rtpmap|fmtp|rtcp-fb):(${UNCARRIED.join('|')}) |^a=extmap:\\d+ (${UNKNOWN_EXTENSIONS.join('|')})$`,
 	);
 	const seen = new Map();
 	const nth = (kind, value) => {
@@ -361,6 +369,82 @@ async function limits(own, far) {
 	return record;
 }
 
+// a 640x360 picture in three layers: Chrome sends the two smallest
+// (measured), 160x90 and 320x180
+const LAYERED = { ...OWN, width: 640, height: 360 };
+const LAYERS = [
+	{ rid: 'q', scaleResolutionDownBy: 4 },
+	{ rid: 'h', scaleResolutionDownBy: 2 },
+	{ rid: 'f' },
+];
+/**
+ * Simulcast: the page sends its canvas in three layers to a far end that
+ * takes each layer in a section of its own (Chrome receives no simulcast:
+ * see `layersRemote` in the page); the page turns the middle layer off and
+ * on again. Before that, what a page reads of simulcast senders made and
+ * set each way, and what is refused.
+ */
+async function layering(own, far) {
+	const record = { failure: null, steps: [] };
+	try {
+		await own.call('open');
+		await far.call('open');
+		record.shapes = await own.call('layerShapes');
+		await own.call('layered', LAYERED, LAYERS);
+		const made = await own.call('local', 'offer');
+		record.steps.push({ step: 'offered', sdp: made.created });
+		record.rids = await far.call('layersRemote', made.sdp);
+		await own.call('remote', 'answer', await far.call('layersAnswer'));
+		await own.call('connected');
+		await far.call('connected');
+		await sleep(2500);
+		record.start = await far.call('layers');
+		record.off = await own.call('encodeLayers', 0, { 1: { active: false } });
+		record.line = await own.call('simulcastLine');
+		await sleep(1000);
+		record.without = await far.call('layers');
+		record.on = await own.call('encodeLayers', 0, { 1: { active: true } });
+		await sleep(1500);
+		record.again = await far.call('layers');
+		record.seen = await far.call('far');
+		record.owner = record.seen?.remote
+			? await sockets.owner(record.seen.remote.port)
+			: 'no pair';
+		record.read = await own.call('own');
+	} catch (error) {
+		record.failure = String(error).slice(0, 400);
+	}
+	await own.call('close').catch(() => {});
+	await far.call('close').catch(() => {});
+	return record;
+}
+const sends = (layer) => layer?.fps >= 5;
+/**
+ * Simulcast to a browser: the far end answers as Chrome does, taking no
+ * simulcast, and the page sends its first layer alone (as Chrome does)
+ */
+async function declined(own, far) {
+	const record = { failure: null };
+	try {
+		await own.call('open');
+		await far.call('open');
+		await own.call('layered', LAYERED, LAYERS);
+		await describe(own, far, 'offer');
+		await describe(far, own, 'answer');
+		await own.call('connected');
+		await far.call('connected');
+		await far.call('muted', 0, false);
+		record.encodings = await own.call('encodeLayers', 0, {});
+		record.line = await own.call('simulcastLine');
+		record.saw = await far.call('see', 0, 1500);
+	} catch (error) {
+		record.failure = String(error).slice(0, 400);
+	}
+	await own.call('close').catch(() => {});
+	await far.call('close').catch(() => {});
+	return record;
+}
+
 // --- pages ---
 
 const browser = await launch(FAKE);
@@ -407,6 +491,32 @@ for (const [codec, name] of Object.entries(ALL)) {
 const natively = { answering: await answering(end(control), end(native)) };
 for (const codec of CODECS)
 	natively[codec] = await offering(end(control), end(native), codec);
+natively.layering = await layering(end(control), end(native));
+ok(
+	'natively: a 640x360 picture in three layers is sent as two, 160x90 and 320x180, and the middle one turned off stops',
+	!natively.layering.failure &&
+		sends(natively.layering.start?.q) &&
+		natively.layering.start.q.size === '160x90' &&
+		sends(natively.layering.start.h) &&
+		natively.layering.start.h.size === '320x180' &&
+		natively.layering.start.f.fps === 0 &&
+		natively.layering.without?.h.fps === 0 &&
+		sends(natively.layering.again?.h),
+	natively.layering.failure ??
+		JSON.stringify([
+			natively.layering.start,
+			natively.layering.without,
+			natively.layering.again,
+		]),
+);
+natively.declined = await declined(end(control), end(native));
+ok(
+	'natively: to a browser, which takes no simulcast, the first layer alone is sent and listed',
+	!natively.declined.failure &&
+		natively.declined.saw?.sizes.join() === '160x90' &&
+		natively.declined.saw.frames >= 10,
+	natively.declined.failure ?? JSON.stringify(natively.declined),
+);
 natively.limits = await limits(end(control), end(native));
 ok(
 	'natively: limited, the sender sends what it is let send',
@@ -419,7 +529,7 @@ ok(
 	natively.limits.failure ?? JSON.stringify(natively.limits.rates),
 );
 for (const [name, record] of Object.entries(natively))
-	if (name !== 'limits')
+	if (!['limits', 'layering', 'declined'].includes(name))
 		ok(
 			`natively: the ${name} scenario runs to its end, with pictures both ways`,
 			!record.failure &&
@@ -614,6 +724,92 @@ for (const proxied of pages) {
 		`${label}, limited: a frame rate of 0 or an encoding turned off sends nothing, turned on again it sends`,
 		rates.still?.fps === 0 && rates.off?.fps === 0 && rates.on?.fps > 2,
 		detail,
+	);
+}
+
+for (const proxied of pages) {
+	const { label } = proxied;
+	const want = natively.layering;
+	const got = await layering(end(proxied), end(native, 'the far end'));
+	ok(
+		`${label}, simulcast: the scenario runs to its end`,
+		!got.failure,
+		got.failure ?? '',
+	);
+	const reads = [];
+	for (const [name, read] of Object.entries(want.shapes ?? {}))
+		if (JSON.stringify(got.shapes?.[name]) !== JSON.stringify(read))
+			reads.push(
+				`${name}: ${JSON.stringify(got.shapes?.[name])} | natively ${JSON.stringify(read)}`,
+			);
+	for (const name of ['off', 'on', 'line'])
+		if (JSON.stringify(got[name]) !== JSON.stringify(want[name]))
+			reads.push(
+				`${name}: ${JSON.stringify(got[name])} | natively ${JSON.stringify(want[name])}`,
+			);
+	ok(
+		`${label}, simulcast: the encodings of simulcast senders read as natively, made and set each way, and what Chrome refuses is refused alike`,
+		!reads.length,
+		reads.slice(0, 4).join('; '),
+	);
+	const offer = got.steps[0]?.sdp
+		? differ(got.steps[0].sdp, want.steps[0].sdp)
+		: ['none made'];
+	ok(
+		`${label}, simulcast: the offer names the layers as Chrome's does, line for line`,
+		!offer.length,
+		offer.join('; '),
+	);
+	const detail = JSON.stringify([
+		got.start,
+		got.without,
+		got.again,
+		want.start,
+		want.without,
+		want.again,
+	]);
+	ok(
+		`${label}, simulcast: the far end gets the layers Chrome sends, at their sizes (160x90 and 320x180, the largest left out)`,
+		['q', 'h', 'f'].every(
+			(rid) =>
+				sends(got.start?.[rid]) === sends(want.start?.[rid]) &&
+				(!sends(want.start?.[rid]) ||
+					got.start[rid].size === want.start[rid].size),
+		),
+		detail,
+	);
+	ok(
+		`${label}, simulcast: the middle layer turned off stops and the others go on, turned on it comes back`,
+		got.without?.h.fps === 0 &&
+			sends(got.without.q) &&
+			sends(got.without.f) === sends(want.without?.f) &&
+			sends(got.again?.h) &&
+			sends(got.again.q),
+		detail,
+	);
+	ok(
+		`${label}, simulcast: the far end hears the page from a socket of the wisp server, and the page reads no address of this machine`,
+		got.owner === 'server' && got.read && ownAddresses(got.read).length === 0,
+		JSON.stringify([got.owner, got.read && ownAddresses(got.read)]),
+	);
+	const plain = await declined(end(proxied), end(native, 'the far end'));
+	const wanted = natively.declined;
+	ok(
+		`${label}, simulcast to a browser: the page sends its first layer alone (160x90), lists it alone, and offers the others paused, as Chrome does`,
+		!plain.failure &&
+			plain.saw?.sizes.join() === wanted.saw?.sizes.join() &&
+			plain.saw.frames >= 10 &&
+			JSON.stringify(plain.encodings) === JSON.stringify(wanted.encodings) &&
+			plain.line === wanted.line,
+		plain.failure ??
+			JSON.stringify([
+				plain.saw,
+				plain.encodings,
+				plain.line,
+				wanted.saw,
+				wanted.encodings,
+				wanted.line,
+			]),
 	);
 }
 

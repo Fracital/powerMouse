@@ -545,6 +545,244 @@
 				current: pc.currentLocalDescription && pc.currentLocalDescription.sdp,
 			};
 		},
+		/**
+		 * A canvas the connection sends in simulcast layers: addTransceiver
+		 * with `encodings` as its sendEncodings
+		 */
+		layered(name, options, encodings) {
+			const entry = peer(name);
+			const source = picture(options);
+			entry.sources.push(source);
+			entry.pc.addTransceiver(source.track, {
+				streams: [new MediaStream()],
+				sendEncodings: encodings,
+			});
+		},
+		/**
+		 * Natively only: a peer that takes each layer of a simulcast offer
+		 * in a section of its own. Chrome receives no simulcast, so the
+		 * layers of the offer's first video section become sections named
+		 * by their rids, with the rid's header extension read as the MID's
+		 * (and the MID's as the rid's): each layer's packets then name their
+		 * section. `remote` gives it such an offer, `layersAnswer` turns its
+		 * answer back into one section that receives the layers.
+		 */
+		async layersRemote(name, sdp) {
+			const entry = peer(name);
+			const lines = sdp.split('\r\n');
+			const at = lines.findIndex((line) => line.startsWith('m=video'));
+			const next = lines.findIndex(
+				(line, i) => i > at && line.startsWith('m='),
+			);
+			const section = lines.slice(at, next === -1 ? undefined : next);
+			const rids = section
+				.filter((line) => line.startsWith('a=rid:'))
+				.map((line) => line.slice(6).split(' ')[0]);
+			const id = (uri) =>
+				section
+					.find(
+						(line) => line.startsWith('a=extmap:') && line.endsWith(` ${uri}`),
+					)
+					?.slice(9)
+					.split(' ')[0];
+			const RID = 'urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id';
+			const MID = 'urn:ietf:params:rtp-hdrext:sdes:mid';
+			const swap = { rid: id(RID), mid: id(MID) };
+			const swapped = (line) =>
+				line === `a=extmap:${swap.rid} ${RID}`
+					? `a=extmap:${swap.rid} ${MID}`
+					: line === `a=extmap:${swap.mid} ${MID}`
+						? `a=extmap:${swap.mid} ${RID}`
+						: line;
+			const mid = section.find((line) => line.startsWith('a=mid:')).slice(6);
+			entry.layers = { rids, swap, mid, RID, MID };
+			const head = lines
+				.slice(
+					0,
+					lines.findIndex((line) => line.startsWith('m=')),
+				)
+				.map((line) =>
+					line.startsWith('a=group:BUNDLE')
+						? `a=group:BUNDLE ${rids.join(' ')}`
+						: line,
+				);
+			const body = section
+				.filter(
+					(line) => line && !/^a=(rid|simulcast|mid|ssrc|msid)/.test(line),
+				)
+				.map(swapped);
+			const offer = [
+				...head,
+				...rids.flatMap((rid) => [...body, `a=mid:${rid}`]),
+				'',
+			].join('\r\n');
+			await entry.pc.setRemoteDescription({ type: 'offer', sdp: offer });
+			for (const transceiver of entry.pc.getTransceivers())
+				transceiver.direction = 'recvonly';
+			return rids;
+		},
+		async layersAnswer(name) {
+			const entry = peer(name);
+			const { pc } = entry;
+			await pc.setLocalDescription(await pc.createAnswer());
+			described(entry);
+			await gathered(entry);
+			const { rids, swap, mid, RID, MID } = entry.layers;
+			const lines = pc.localDescription.sdp.split('\r\n');
+			const at = lines.findIndex((line) => line.startsWith('m=video'));
+			const next = lines.findIndex(
+				(line, i) => i > at && line.startsWith('m='),
+			);
+			const back = (line) =>
+				line === `a=extmap:${swap.rid} ${MID}`
+					? `a=extmap:${swap.rid} ${RID}`
+					: line === `a=extmap:${swap.mid} ${RID}`
+						? `a=extmap:${swap.mid} ${MID}`
+						: line;
+			const head = lines
+				.slice(0, at)
+				.map((line) =>
+					line.startsWith('a=group:BUNDLE') ? `a=group:BUNDLE ${mid}` : line,
+				);
+			const section = lines
+				.slice(at, next === -1 ? undefined : next)
+				.filter((line) => line && !line.startsWith('a=mid:'))
+				.map(back);
+			return [
+				...head,
+				...section,
+				`a=mid:${mid}`,
+				...rids.map((rid) => `a=rid:${rid} recv`),
+				`a=simulcast:recv ${rids.join(';')}`,
+				'',
+			].join('\r\n');
+		},
+		/**
+		 * Natively only: what each section of a layered receiver decodes in
+		 * `ms`, by rid: pictures a second and their size
+		 */
+		async layers(name, ms = 1500) {
+			const { pc, layers } = peer(name);
+			const read = async () => {
+				const out = {};
+				for (const [at, transceiver] of pc.getTransceivers().entries())
+					for (const report of (await transceiver.receiver.getStats()).values())
+						if (report.type === 'inbound-rtp') out[layers.rids[at]] = report;
+				return out;
+			};
+			const before = await read();
+			await wait(ms);
+			const after = await read();
+			const out = {};
+			for (const rid of layers.rids) {
+				const a = before[rid];
+				const b = after[rid];
+				out[rid] = b
+					? {
+							fps: Math.round(
+								((b.framesDecoded - (a?.framesDecoded ?? 0)) * 1000) / ms,
+							),
+							size: `${b.frameWidth ?? 0}x${b.frameHeight ?? 0}`,
+						}
+					: { fps: 0, size: 'none' };
+			}
+			return out;
+		},
+		/** setParameters on the sender of transceiver `at` with `changes` to each encoding, by index */
+		async encodeLayers(name, at, changes) {
+			const { sender } = transceiver(name, at);
+			try {
+				const parameters = sender.getParameters();
+				for (const [index, change] of Object.entries(changes))
+					Object.assign(parameters.encodings[index], change);
+				await sender.setParameters(parameters);
+				return JSON.stringify(sender.getParameters().encodings);
+			} catch (error) {
+				return [error.name, error.message];
+			}
+		},
+		/** the `a=simulcast` line of the offer the connection would make now */
+		async simulcastLine(name) {
+			const { sdp } = await peer(name).pc.createOffer();
+			return sdp.split('\r\n').find((line) => line.startsWith('a=simulcast:'));
+		},
+		/** a simulcast sender's encodings as made each way and as set, and what is refused */
+		async layerShapes() {
+			const pc = new RTCPeerConnection();
+			const read = (sender) => JSON.stringify(sender.getParameters().encodings);
+			const attempt = async (run) => {
+				try {
+					return await run();
+				} catch (error) {
+					return [error.name, error.message];
+				}
+			};
+			const made = (sendEncodings, kind = 'video') =>
+				attempt(() => read(pc.addTransceiver(kind, { sendEncodings }).sender));
+			const out = {
+				plain: await made([{ rid: 'a' }, { rid: 'b' }, { rid: 'c' }]),
+				scaled: await made([
+					{ rid: 'q', scaleResolutionDownBy: 4 },
+					{ rid: 'h', scaleResolutionDownBy: 2 },
+					{ rid: 'f' },
+				]),
+				two: await made([{ rid: 'lo' }, { rid: 'hi' }]),
+				four: await made([
+					{ rid: 'a' },
+					{ rid: 'b' },
+					{ rid: 'c' },
+					{ rid: 'd' },
+				]),
+				twice: await made([{ rid: 'a' }, { rid: 'a' }]),
+				missing: await made([{ rid: 'a' }, {}]),
+				empty: await made([{ rid: '' }, { rid: 'c' }]),
+				alone: await made([{ rid: 'a' }]),
+				space: await made([{ rid: 'a b' }, { rid: 'c' }]),
+				dash: await made([{ rid: 'a-b' }, { rid: 'c_d' }]),
+				long: await made([{ rid: 'x'.repeat(17) }, { rid: 'c' }]),
+				sixteen: await made([{ rid: 'x'.repeat(16) }, { rid: 'c' }]),
+				small: await made([
+					{ rid: 'a', scaleResolutionDownBy: 0.5 },
+					{ rid: 'b' },
+				]),
+				sound: await made([{ rid: 'a' }, { rid: 'b' }], 'audio'),
+			};
+			const { sender } = pc.addTransceiver('video', {
+				sendEncodings: [
+					{ rid: 'q', scaleResolutionDownBy: 4 },
+					{ rid: 'h', scaleResolutionDownBy: 2 },
+					{ rid: 'f' },
+				],
+			});
+			const set = (change) =>
+				attempt(async () => {
+					const parameters = sender.getParameters();
+					change(parameters);
+					await sender.setParameters(parameters);
+					return read(sender);
+				});
+			out.middleOff = await set((p) => {
+				p.encodings[1].active = false;
+			});
+			out.renamed = await set((p) => {
+				p.encodings[0].rid = 'z';
+			});
+			out.dropped = await set((p) => {
+				p.encodings.pop();
+			});
+			out.reversed = await set((p) => {
+				p.encodings.reverse();
+			});
+			out.bitrates = await set((p) => {
+				p.encodings[0].maxBitrate = 100000;
+				p.encodings[2].maxBitrate = 900000;
+			});
+			out.badScale = await set((p) => {
+				p.encodings[2].scaleResolutionDownBy = 0.5;
+			});
+			pc.close();
+			return out;
+		},
 		close(name) {
 			const entry = peer(name);
 			for (const source of entry.sources) {

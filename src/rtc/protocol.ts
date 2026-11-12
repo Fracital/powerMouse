@@ -8,7 +8,7 @@ import type { PeerAbort } from './abort';
 import type { ReceiverStats, SenderStats } from './audio';
 import type { PlayedStats, SourceStats } from './level';
 import type { RtpCount, TransportReport } from './stats';
-import type { VideoReceiverStats } from './video';
+import type { EncodingLimits, VideoReceiverStats } from './video';
 
 /** the worker's first message: where everything comes from */
 export interface RtcWorkerInit {
@@ -91,6 +91,12 @@ export interface MediaSection {
 	stopped?: boolean;
 	/** what the section sends with has a telephone-event payload: DTMF can go out */
 	dtmf?: boolean;
+	/**
+	 * A simulcast sender's layers the peer's description takes (its
+	 * `a=simulcast:recv`): none when it takes no simulcast, and then only
+	 * the first encoding is sent and listed
+	 */
+	layers?: string[];
 }
 
 /** a codec as RTCRtpSender.getCapabilities() names one */
@@ -149,6 +155,8 @@ export type Request =
 			track: string;
 			/** made by addTrack: a section the peer offers may take the transceiver */
 			byTrack: boolean;
+			/** the simulcast layers it sends, by rid, the page's order (none without simulcast) */
+			rids?: string[];
 	  }
 	| { seq: number; op: 'mediaDirection'; handle: number; direction: Direction }
 	| { seq: number; op: 'mediaStreams'; handle: number; streams: string[] }
@@ -168,11 +176,8 @@ export type Request =
 			op: 'mediaEncoding';
 			handle: number;
 			active: boolean;
-			/** a video sender's limits (setParameters): bits a second and pictures a second, null for none */
-			maxBitrate?: number | null;
-			maxFramerate?: number | null;
-			/** what the picture's sides are divided by */
-			scale?: number;
+			/** a video sender's encodings (setParameters), one per simulcast layer */
+			encodings?: EncodingLimits[];
 	  }
 	/** what the section sends: a MediaStreamTrackProcessor's readable (transferred), or null for no track */
 	| {

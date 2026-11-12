@@ -1701,10 +1701,69 @@ it sends 5.3, and at a frame rate of 0 or turned off nothing.
 `dist/rtcWorker.js` grew by 1982 bytes more (652 with brotli), the lazily
 loaded `dist/rtcStack.js` by 1418 (403).
 
+Simulcast. Measured first on Chrome 152 and 156, against a far end that
+takes each layer in a section of its own (Chrome receives no simulcast;
+the suite's far end reads the rid's header extension as the MID's):
+
+- `addTransceiver` with several `sendEncodings` that have rids makes a
+  sender with one encoding per layer, the rid first among each one's
+  members, at most three (a fourth and fifth are dropped), a rid given
+  twice taken as it is; one encoding with a rid has no rid; a sound has
+  one encoding. Refused, in this order: a rid longer than 16 ("Illegal
+  length of rid") or with a character other than a letter, a digit, `-`
+  or `_` ("Illegal character in rid"), both TypeErrors; a rid for some
+  layers and not others, an empty one counting as none ("RIDs must be
+  provided for either all or none of the send encodings.") or one with
+  `-` or `_` ("Invalid RID value provided."), both InvalidAccessErrors.
+  `setParameters` refuses another number of encodings, another order or
+  another rid (InvalidModificationError, "Read-only field modified").
+  Chrome 156 lists `scaleResolutionDownBy` 4, 2 and 1 from the first layer
+  of three (2 and 1 of two) where the page gave none; 152 lists none, and
+  sends at those scales all the same.
+- The offer names the layers after the payloads (`a=rid:q send` for each,
+  `a=simulcast:send q;h;f`) and no sources; a layer the page turned off is
+  `~h` in the next offer.
+- A peer that takes no simulcast (a browser: its answer has no
+  `a=simulcast:recv`) gets the first layer alone, at its scale (160x90),
+  as a stream without layers; `getParameters` lists that encoding alone,
+  and the next offer names every layer with the others paused
+  (`q;~h;~f`). A peer that takes some layers gets those.
+- What goes out follows WebRTC's simulcast formats: a 640x360 track in
+  three layers sends the two smallest (160x90 and 320x180), a 960x540 one
+  all three, and the limit counts every layer, on or off (with the middle
+  one off, the largest stays out). The estimate gives each layer its
+  least, the smaller first, as far as it goes (the layers it does not
+  reach are left out), and what is left goes to the smaller layers up to
+  each one's target (150 kbit/s at 160x90) and to the largest up to its
+  most (200 kbit/s at 320x180).
+
+The worker does the same (`Layer` in `src/rtc/video.ts`): one encoder per
+layer, each made for its scaled size, its own keyframes (a PLI or FIR
+names the layer's rid), frame rate, bitrate share and frame dropper, each
+frame written under its rid on the RTP time of the picture they share;
+the stack sends each layer on a stream of its own with its RTX
+(`media` with `rids`). The page's `addMedia` carries the rids and
+`mediaEncoding` an encoding per layer; the answer to `setRemote` says
+which layers the peer takes (`layers`), and the worker sends the first
+layer without its rid to a peer that takes none. The suite's simulcast scenario
+holds both demo modes to Chrome's: the encodings read and refused at every
+step above, the offer line for line, the layers the far end decodes
+(160x90 and 320x180 at 15 pictures a second, the largest not sent), and
+the middle layer off (it stops, the others go on, the largest stays out)
+and on again; and, sent to Chrome answering as a browser does, the first
+layer alone at 160x90, listed alone, the others offered paused.
+`dist/rtcWorker.js` grew by 3252 bytes more for it (1165 with brotli),
+`dist/rtcStack.js` by 1489 (523).
+
 Limits of video so far: H.264 is not sent in packetization mode 0 and
-VP9 of profiles 1 and 3 not at all (Chrome offers neither to send); no
-simulcast; `scalabilityMode` and `degradationPreference` are not kept
-(Chrome sends temporal layers when asked; here a single layer goes out);
+VP9 of profiles 1 and 3 not at all (Chrome offers neither to send);
+`scalabilityMode` and `degradationPreference` are not kept, and each
+layer is a single temporal layer where Chrome sends simulcast layers as
+L1T3 (three temporal layers each, measured) and temporal layers when
+asked; Chrome's offer with simulcast also lists the dependency descriptor
+and the video layers allocation extensions, which the stack does not
+know, so they are left out; a simulcast sender only sends (a section that
+receives simulcast is not taken apart);
 the estimate is shared equally where Chrome weighs each stream's
 `priority`. The descriptions
 leave out Chrome's video RED, its rtx and ULPFEC (118, 119 and 120 in

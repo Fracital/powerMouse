@@ -759,6 +759,14 @@ The first release after a four-year gap. Everything below is breaking.
   0 and on the scale a new transceiver lists, and each version is matched).
   The worker lets pictures go when the encoder runs ahead of its bitrate,
   as Chrome's sender does (docs/webrtc-over-wisp.md section 16).
+- A proxied page sends video in simulcast layers as Chrome does:
+  `sendEncodings` with rids make one encoder per layer in the worker, each
+  sent under its rid at its scale, with its own keyframes and share of the
+  estimate, as many layers as WebRTC sends for the track's size (two of
+  three at 640x360), or the first alone to a peer that takes no
+  simulcast (a browser). The encodings read and are refused as Chrome's, and
+  the offer names the layers with Chrome's `a=rid` and `a=simulcast` lines
+  (docs/webrtc-over-wisp.md section 16).
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,
@@ -5426,8 +5434,7 @@ Fixed while testing real sites and a feature fixture:
   which needs the service worker, the cookie jar and the stores, one per
   origin today, shared between those origins.
 - WebRTC carries data channels, audio and video so far
-  (docs/webrtc-over-wisp.md sections 15 and 16): no video simulcast yet,
-  comfort noise is not sent (a peer's is played), a lost Opus packet's
+  (docs/webrtc-over-wisp.md sections 15 and 16): comfort noise is not sent (a peer's is played), a lost Opus packet's
   in-band FEC copy is not used, TURN over TCP or TLS and TCP candidates are
   not carried,
   `getStats()` has no media entries. A peer behind

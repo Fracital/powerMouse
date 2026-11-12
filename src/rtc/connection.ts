@@ -277,6 +277,12 @@ interface MediaState {
 	legacyCodecs: boolean;
 	/** the answer this side made rejects it: nothing it prefers was offered */
 	rejected: boolean;
+	/** the simulcast layers it sends, by rid; none without simulcast */
+	rids: string[];
+	/** the layers the page has turned off (setParameters), which an offer marks paused */
+	ridsOff: Set<string>;
+	/** the layers the peer's description did not take, which an offer marks paused too */
+	ridsDeclined: Set<string>;
 	sender: AudioSender | VideoSender | null;
 	receiver: AudioReceiver | VideoReceiver | null;
 }
@@ -331,6 +337,17 @@ function remoteOf(media: Media): NonNullable<MediaSection['remote']> {
 		if (id) track = id;
 	}
 	return { direction, streams, track };
+}
+
+/** the simulcast layers a description's section receives (`a=simulcast:recv q;~h`), by rid */
+function layersOf(media: Media): string[] {
+	const value = first(media.attributes, 'simulcast') ?? '';
+	const words = value.trim().split(/\s+/);
+	const at = words.indexOf('recv');
+	if (at === -1 || !words[at + 1]) return [];
+	return words[at + 1]
+		.split(/[;,]/)
+		.filter((rid) => rid && !rid.startsWith('~'));
 }
 
 /** something that gathers a candidate: a Binding request, a TURN allocation */
@@ -682,6 +699,9 @@ export class Connection {
 			legacyCodecs: false,
 			rejected: false,
 			exts: null,
+			rids: [],
+			ridsOff: new Set(),
+			ridsDeclined: new Set(),
 			sender: null,
 			receiver: null,
 		};
@@ -933,6 +953,24 @@ export class Connection {
 				direction: state.direction,
 			};
 			const described = midOf(remote, state.mid);
+			if (described && state.rids.length) {
+				// the layers the peer takes; a browser takes no simulcast, and
+				// Chrome then sends the first layer alone (measured)
+				const taken = layersOf(described);
+				// (the first layer goes on when it takes none)
+				const sent = taken.length ? taken : state.rids.slice(0, 1);
+				state.ridsDeclined = new Set(
+					state.rids.filter((rid) => !sent.includes(rid)),
+				);
+				if (state.sender instanceof VideoSender)
+					state.sender.setAccepted(
+						state.rids.filter((rid) => taken.includes(rid)),
+					);
+			}
+			if (state.rids.length)
+				section.layers = state.rids.filter(
+					(rid) => !state.ridsDeclined.has(rid),
+				);
 			if (described) {
 				section.remote = remoteOf(described);
 				// a section the peer stopped: its port is 0
@@ -1051,7 +1089,7 @@ export class Connection {
 					if (!ssrcs.includes(ssrc)) ssrcs.push(ssrc);
 				}
 				// a section that has not sent: the source it will send from
-				if (!ssrcs.length && state.direction !== null) {
+				if (!ssrcs.length && state.direction !== null && !state.rids.length) {
 					const made = this.#control({ op: 'ssrc', index: state.index });
 					if (made.ssrc) ssrcs.push(made.ssrc);
 					if (made.ssrc && made.rtx) {
@@ -1071,6 +1109,8 @@ export class Connection {
 				codecs: state.codecs,
 				rejected: state.rejected,
 				legacy: state.legacyCodecs,
+				rids: state.rids,
+				paused: new Set([...state.ridsOff, ...state.ridsDeclined]),
 			});
 		}
 		this.#styles = styles;
@@ -1318,7 +1358,7 @@ export class Connection {
 			// the peer lost a picture (a PLI or a FIR): the next is a keyframe
 			case 'keyframe': {
 				const sender = this.#medias.get(Number(fields.index))?.sender;
-				if (sender instanceof VideoSender) sender.keyframe();
+				if (sender instanceof VideoSender) sender.keyframe(fields.rid ?? '');
 				break;
 			}
 			case 'channel_open': {
@@ -2155,9 +2195,11 @@ export class Connection {
 						// the stack names the section's source after its track
 						// (the RTCP CNAME): the connection's one name
 						track: this.#cname,
+						// simulcast: the layers the offer names
+						...(request.rids?.length ? { rids: request.rids.join(',') } : {}),
 					});
 					if (result.error) throw result.error;
-					this.#addMedia(
+					const added = this.#addMedia(
 						Number(result.index),
 						request.kind,
 						request.handle,
@@ -2166,6 +2208,7 @@ export class Connection {
 						request.track,
 						request.byTrack,
 					);
+					added.rids = request.rids ?? [];
 					reply(null);
 					break;
 				}
@@ -2213,12 +2256,14 @@ export class Connection {
 					const state = this.#handles.get(request.handle);
 					if (!state) throw 'no such media section';
 					state.paused = !request.active;
-					if (state.sender instanceof VideoSender)
-						state.sender.setEncoding(
-							request.maxBitrate ?? null,
-							request.maxFramerate ?? null,
-							request.scale ?? 1,
+					if (state.sender instanceof VideoSender && request.encodings) {
+						state.sender.setEncodings(request.encodings);
+						state.ridsOff = new Set(
+							request.encodings
+								.filter((encoding) => encoding.rid && !encoding.active)
+								.map((encoding) => encoding.rid),
 						);
+					}
 					this.#activate(state);
 					reply(null);
 					break;

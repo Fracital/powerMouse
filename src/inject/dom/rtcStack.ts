@@ -938,7 +938,10 @@ export default class WebRTCStack {
 			theirs: Direction | null;
 			/** setStreams since the last local description */
 			restated: boolean;
-			encoding: Record<string, unknown>;
+			/** its encodings: one, or one per simulcast layer */
+			encodings: Record<string, unknown>[];
+			/** the simulcast layers the peer took, null before it has said */
+			layers: string[] | null;
 			/** the transactionId getParameters last gave */
 			transaction: string | null;
 			jitter: unknown;
@@ -1118,7 +1121,9 @@ export default class WebRTCStack {
 				const slot = slotOf(this);
 				slot.transaction = uuid();
 				const encodings = new RealmArray();
-				if (!slot.stopping) encodings.push({ ...slot.encoding });
+				if (!slot.stopping)
+					for (const encoding of shownEncodings(slot))
+						encodings.push({ ...encoding });
 				return {
 					codecs: new RealmArray(),
 					headerExtensions: new RealmArray(),
@@ -1169,11 +1174,19 @@ export default class WebRTCStack {
 				const encodings = isObject(given.encodings)
 					? (given.encodings as unknown as unknown[])
 					: null;
-				// as many encodings as there are, each with the rid it had
+				// as many encodings as there are, in their order, each with the
+				// rid it had
+				const shown = shownEncodings(slot);
 				if (
 					encodings &&
-					(encodings.length !== 1 ||
-						(isObject(encodings[0]) && encodings[0].rid !== undefined))
+					(encodings.length !== shown.length ||
+						encodings.some(
+							(encoding, at) =>
+								!isObject(encoding) ||
+								(encoding.rid === undefined
+									? undefined
+									: String(encoding.rid)) !== shown[at].rid,
+						))
 				)
 					return rejected(
 						onSender(
@@ -1182,18 +1195,23 @@ export default class WebRTCStack {
 						),
 						'InvalidModificationError',
 					);
-				const encoding = encodings?.[0];
-				const refusal =
-					slot.kind === 'video' && isObject(encoding)
-						? badEncoding(encoding)
-						: null;
+				let refusal: string | null = null;
+				if (slot.kind === 'video')
+					for (const encoding of encodings ?? [])
+						refusal ??= badEncoding(encoding as Record<string, unknown>);
 				if (refusal)
 					return RealmPromise.reject(
 						new RealmRangeError(onSender('setParameters', refusal)),
 					);
 				slot.transaction = null;
-				if (isObject(encoding)) {
-					slot.encoding = encodingOf(encoding, slot.kind === 'video');
+				if (encodings) {
+					encodings.forEach((encoding, at) => {
+						slot.encodings[slot.encodings.indexOf(shown[at])] = encodingOf(
+							encoding as Record<string, unknown>,
+							slot.kind === 'video',
+							shown[at].rid as string | undefined,
+						);
+					});
 					sendEncoding(slot);
 				}
 				return RealmPromise.resolve(undefined);
@@ -1656,11 +1674,16 @@ export default class WebRTCStack {
 		 * for a video sender only, as Chrome keeps them. `maxBitrate` is a
 		 * WebIDL unsigned long, which Chrome holds as an int.
 		 */
-		const encodingOf = (given: Record<string, unknown>, video = false) => {
-			const encoding: Record<string, unknown> = {
-				active: given.active !== false,
-				adaptivePtime: !!given.adaptivePtime,
-			};
+		const encodingOf = (
+			given: Record<string, unknown>,
+			video = false,
+			rid?: string,
+		) => {
+			const encoding: Record<string, unknown> = {};
+			// a simulcast layer's name comes first
+			if (rid !== undefined) encoding.rid = rid;
+			encoding.active = given.active !== false;
+			encoding.adaptivePtime = !!given.adaptivePtime;
 			if (given.maxBitrate !== undefined) {
 				const number = Number(given.maxBitrate);
 				const whole = Number.isFinite(number)
@@ -1689,19 +1712,70 @@ export default class WebRTCStack {
 			return null;
 		};
 		/**
-		 * The sender's encoding to the worker. A picture's encoding with a
+		 * What Chrome refuses in a transceiver's encodings, in the order it
+		 * checks: Blink's words for a rid (16 letters, digits, `-` and `_`
+		 * at most, a TypeError), then WebRTC's for the layers (a rid for
+		 * every one or none, letters and digits only: InvalidAccessError),
+		 * measured on 152 and 156
+		 */
+		const badLayers = (
+			encodings: Record<string, unknown>[],
+		): [Function, string] | null => {
+			for (const encoding of encodings) {
+				if (encoding.rid === undefined) continue;
+				const rid = String(encoding.rid);
+				if (rid.length > 16) return [RealmTypeError, 'Illegal length of rid'];
+				if (/[^A-Za-z0-9_-]/.test(rid))
+					return [RealmTypeError, 'Illegal character in rid'];
+			}
+			if (encodings.length > 1) {
+				const named = encodings.filter(
+					(encoding) =>
+						encoding.rid !== undefined && String(encoding.rid) !== '',
+				);
+				if (named.length && named.length !== encodings.length)
+					return [
+						Error,
+						'RIDs must be provided for either all or none of the send encodings.',
+					];
+				if (named.some((encoding) => /[^A-Za-z0-9]/.test(String(encoding.rid))))
+					return [Error, 'Invalid RID value provided.'];
+			}
+			return null;
+		};
+		/** the encodings getParameters lists: those of the layers the peer took */
+		const shownEncodings = (slot: MediaSlot) => {
+			const layers = slot.layers;
+			if (layers === null || slot.encodings.length < 2) return slot.encodings;
+			const taken = slot.encodings.filter((encoding) =>
+				layers.includes(encoding.rid as string),
+			);
+			return taken.length ? taken : slot.encodings.slice(0, 1);
+		};
+		/** Chrome sends three simulcast layers at most, and drops the others */
+		const MAX_LAYERS = 3;
+		/**
+		 * The sender's encodings to the worker. A picture's encoding with a
 		 * frame rate of 0 sends nothing, and so does one with a bitrate of 0
-		 * in Chrome 156 (152 takes that for no limit), measured.
+		 * in Chrome 156 (152 takes that for no limit), measured. A simulcast
+		 * layer without a scale is sent at WebRTC's (4, 2 and 1 from the
+		 * smallest), which Chrome 156 also lists and 152 does not. A rid
+		 * given twice (Chrome takes that) is sent once.
 		 */
 		const sendEncoding = (slot: MediaSlot) => {
-			const encoding = slot.encoding;
 			const video = slot.kind === 'video';
-			const bitrate = encoding.maxBitrate as number | undefined;
-			const rate = encoding.maxFramerate as number | undefined;
-			slot.pc
-				.call({
-					op: 'mediaEncoding',
-					handle: slot.handle,
+			const count = slot.encodings.length;
+			const seen = new Set<string>();
+			const layers = [];
+			for (let at = 0; at < count; at++) {
+				const encoding = slot.encodings[at];
+				const rid = (encoding.rid as string | undefined) ?? '';
+				if (rid && seen.has(rid)) continue;
+				seen.add(rid);
+				const bitrate = encoding.maxBitrate as number | undefined;
+				const rate = encoding.maxFramerate as number | undefined;
+				layers.push({
+					rid,
 					active:
 						encoding.active !== false &&
 						!(video && rate === 0) &&
@@ -1709,8 +1783,17 @@ export default class WebRTCStack {
 					maxBitrate: bitrate ? bitrate : null,
 					maxFramerate: video && rate ? rate : null,
 					scale: video
-						? ((encoding.scaleResolutionDownBy as number | undefined) ?? 1)
+						? ((encoding.scaleResolutionDownBy as number | undefined) ??
+							(rid ? 2 ** (count - 1 - at) : 1))
 						: 1,
+				});
+			}
+			slot.pc
+				.call({
+					op: 'mediaEncoding',
+					handle: slot.handle,
+					active: layers.some((layer) => layer.active),
+					encodings: layers,
 				})
 				.catch(() => {});
 		};
@@ -1726,7 +1809,12 @@ export default class WebRTCStack {
 			kind: 'audio' | 'video',
 			direction: Direction,
 			track: MediaStreamTrack | null,
-			added: { streams: string[]; id: string; byTrack: boolean } | null,
+			added: {
+				streams: string[];
+				id: string;
+				byTrack: boolean;
+				rids?: string[];
+			} | null,
 			remoteId?: string,
 		): MediaSlot => {
 			const remote = Reflect.construct(Generator!, [
@@ -1773,7 +1861,8 @@ export default class WebRTCStack {
 				offered: null,
 				theirs: null,
 				restated: false,
-				encoding: encodingOf({}),
+				encodings: [encodingOf({})],
+				layers: null,
 				transaction: null,
 				jitter: null,
 				events: false,
@@ -1794,6 +1883,7 @@ export default class WebRTCStack {
 						streams: added.streams,
 						track: added.id,
 						byTrack: added.byTrack,
+						...(added.rids?.length ? { rids: added.rids } : {}),
 					})
 					.catch(() => {});
 			state
@@ -1945,6 +2035,10 @@ export default class WebRTCStack {
 				}
 				slot.mid = section.mid;
 				slot.events = !!section.dtmf;
+				// a simulcast sender lists the layers the peer took, the first
+				// alone when it took none (as Chrome does, measured)
+				if (remote && section.layers && slot.encodings.length > 1)
+					slot.layers = section.layers;
 				if (section.mid === null) continue;
 				if (section.stopped) {
 					if (!slot.stopping) {
@@ -3093,7 +3187,7 @@ export default class WebRTCStack {
 					);
 				let direction: Direction = 'sendrecv';
 				let streams: string[] = [];
-				let encoding: unknown;
+				let given: Record<string, unknown>[] = [];
 				if (isObject(init)) {
 					if (init.direction !== undefined) {
 						const word = String(init.direction);
@@ -3114,12 +3208,32 @@ export default class WebRTCStack {
 							'RTCPeerConnection',
 						);
 					if (isObject(init.sendEncodings))
-						encoding = (init.sendEncodings as unknown as unknown[])[0];
+						given = [...(init.sendEncodings as unknown as unknown[])].map(
+							(encoding) =>
+								(isObject(encoding) ? encoding : {}) as Record<string, unknown>,
+						);
 				}
-				const refusal =
-					kind === 'video' && isObject(encoding) ? badEncoding(encoding) : null;
+				const layered = badLayers(given);
+				if (layered) {
+					const [Kind, words] = layered;
+					if (Kind === Error)
+						throw domException(
+							method('addTransceiver', words),
+							'InvalidAccessError',
+						);
+					throw Reflect.construct(Kind, [method('addTransceiver', words)]);
+				}
+				let refusal: string | null = null;
+				if (kind === 'video')
+					for (const encoding of given) refusal ??= badEncoding(encoding);
 				if (refusal)
 					throw new RealmRangeError(method('addTransceiver', refusal));
+				// a sound has one encoding, and so has a picture with one
+				// layer; a picture has three layers at most
+				if (kind === 'audio' || given.length < 2) given = given.slice(0, 1);
+				else given = given.slice(0, MAX_LAYERS);
+				const rids =
+					given.length > 1 ? given.map((encoding) => String(encoding.rid)) : [];
 				if (state.closed) throw closedState('addTransceiver');
 				const slot = makeSlot(
 					state,
@@ -3134,20 +3248,28 @@ export default class WebRTCStack {
 								Reflect.apply(trackId!, track, []))
 							: uuid(),
 						byTrack: false,
+						rids: [...new Set(rids)],
 					},
 				);
 				// Chrome 156 lists a picture's scale from the start for a
-				// transceiver the page added (not for addTrack's)
-				if (isObject(encoding) || (kind === 'video' && !isLegacy())) {
-					slot.encoding = encodingOf(
-						{
-							...(kind === 'video' && !isLegacy()
-								? { scaleResolutionDownBy: 1 }
-								: {}),
-							...(isObject(encoding) ? encoding : {}),
-						},
-						kind === 'video',
-					);
+				// transceiver the page added (not for addTrack's): 1, or a
+				// simulcast layer's 4, 2 and 1 from the smallest
+				if (given.length || (kind === 'video' && !isLegacy())) {
+					const count = Math.max(1, given.length);
+					slot.encodings = [];
+					for (let at = 0; at < count; at++)
+						slot.encodings.push(
+							encodingOf(
+								{
+									...(kind === 'video' && !isLegacy()
+										? { scaleResolutionDownBy: 2 ** (count - 1 - at) }
+										: {}),
+									...(given[at] ?? {}),
+								},
+								kind === 'video',
+								rids.length ? rids[at] : undefined,
+							),
+						);
 					sendEncoding(slot);
 				}
 				if (track) sendTrack(slot).catch(() => {});

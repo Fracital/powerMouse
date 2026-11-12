@@ -166,9 +166,85 @@ export function sendable(payload: Payload): boolean {
 }
 
 /**
+ * WebRTC's simulcast formats (simulcast.cc, kSimulcastFormats): for a
+ * picture of at least this many pixels, how many layers are sent at most,
+ * and a layer's most, target and least bitrate. Measured on Chrome 152
+ * and 156: a 640x360 track with three layers sends two (160x90 at a
+ * target of 150 kbit/s, 320x180 at 200), a 960x540 one all three (150,
+ * 350 and 1200).
+ */
+const SIMULCAST_FORMATS: [number, number, number, number, number][] = [
+	[1920 * 1080, 3, 5000000, 4000000, 800000],
+	[1280 * 720, 3, 2500000, 2500000, 600000],
+	[960 * 540, 3, 1200000, 1200000, 350000],
+	[640 * 360, 2, 700000, 500000, 150000],
+	[480 * 270, 2, 450000, 350000, 150000],
+	[320 * 180, 1, 200000, 150000, 30000],
+	[0, 1, 200000, 150000, 30000],
+];
+const simulcastFormat = (pixels: number) =>
+	SIMULCAST_FORMATS.find(([least]) => pixels >= least)!;
+
+/** an encoding a sender sends (setParameters): one, or one per simulcast layer */
+export interface EncodingLimits {
+	/** the layer's name, '' for a sender without simulcast */
+	rid: string;
+	active: boolean;
+	maxBitrate: number | null;
+	maxFramerate: number | null;
+	/** what the picture's sides are divided by */
+	scale: number;
+}
+
+/** one encoding's encoder: its own size, bitrate, keyframes and frame rate */
+class Layer {
+	limits: EncodingLimits;
+	encoder: VideoEncoder | null = null;
+	/** what the encoder was made for: codec, input and output sizes */
+	made = '';
+	/** a configuration the browser refused, not to be tried on every frame */
+	refused = '';
+	/** the next picture is a keyframe: the first of an encoder, or one the peer asked for */
+	keyframe = true;
+	/** what the encoder was configured with, and when its bitrate last changed */
+	config: VideoEncoderConfig | null = null;
+	tunedAt = 0;
+	/** the timestamp of the last picture encoded, for the frame rate's limit */
+	lastTaken: number | null = null;
+	/** the size it sends, from the last picture read */
+	pixels = 0;
+	/** bytes made beyond the bitrate, and when that was counted */
+	debt = 0;
+	debtAt = 0;
+	/** the color space the encoder last said it encoded in (the extension's bytes) */
+	colour = 0;
+	/** its share of the estimate, null before there is one; 0 for a layer left out */
+	target: number | null = null;
+	/** when each picture under way was read, by its timestamp */
+	readAt = new Map<number, number>();
+
+	constructor(limits: EncodingLimits) {
+		this.limits = limits;
+	}
+
+	restart() {
+		const encoder = this.encoder;
+		this.encoder = null;
+		this.made = '';
+		if (encoder && encoder.state !== 'closed') encoder.close();
+		this.config = null;
+		this.keyframe = true;
+		this.lastTaken = null;
+		this.readAt.clear();
+	}
+}
+
+/**
  * What a track's pictures become on the wire. The track is read whether
  * or not anything is sent (a track nobody reads stops); a picture is
- * encoded only while the section sends and the connection is up.
+ * encoded only while the section sends and the connection is up, once for
+ * each encoding: one, or one per simulcast layer, each written under its
+ * rid.
  */
 export class VideoSender {
 	/** the stack's index of the section this sends on */
@@ -178,45 +254,38 @@ export class VideoSender {
 	#codec: string | null = null;
 	#active = false;
 	#reader: ReadableStreamDefaultReader<VideoFrame> | null = null;
-	#encoder: VideoEncoder | null = null;
-	/** what the encoder was made for: codec, width and height */
-	#made = '';
-	/** a configuration the browser refused, not to be tried on every frame */
-	#refused = '';
-	/** the next picture is a keyframe: the first of an encoder, or one the peer asked for */
-	#keyframe = true;
+	#layers: Layer[] = [
+		new Layer({
+			rid: '',
+			active: true,
+			maxBitrate: null,
+			maxFramerate: null,
+			scale: 1,
+		}),
+	];
 	/** RTP times start at a number of the sender's own */
 	#offset = crypto.getRandomValues(new Uint32Array(1))[0];
 	/**
 	 * The sender's own time, in microseconds: a track's timestamps start
 	 * anywhere (a track the page writes itself starts at zero), so a run
 	 * of one track goes on from the last picture sent, by as much as the
-	 * clock moved since, and within a run follows the track's timestamps
+	 * clock moved since, and within a run follows the track's timestamps.
+	 * The layers of one picture share its time.
 	 */
 	#shift: number | null = null;
 	#sentUs = 0;
 	#sentAt = 0;
 	#sent = false;
-	/** when each picture under way was read, by its timestamp: its age when it goes out */
-	#readAt = new Map<number, number>();
-	/** the page's limits (setParameters): bits and pictures a second, and the scale */
-	#maxBitrate: number | null = null;
-	#maxFramerate: number | null = null;
-	#scale = 1;
 	/** the share of the bandwidth estimate this sender is given, null before there is one */
 	#target: number | null = null;
-	/** what the encoder was configured with, and when its bitrate last changed */
-	#config: VideoEncoderConfig | null = null;
-	#tunedAt = 0;
-	/** the timestamp of the last picture encoded, for the frame rate's limit */
-	#lastTaken: number | null = null;
-	/** the size of the last picture read, as sent */
-	#pixels = 0;
-	/** bytes made beyond the bitrate, and when that was counted */
-	#debt = 0;
-	#debtAt = 0;
-	/** the color space the encoder last said it encoded in (the extension's bytes) */
-	#colour = 0;
+	/** the size of the track's last picture */
+	#inputPixels = 0;
+	/**
+	 * The layers the peer takes, null before it has said: none (a peer
+	 * that takes no simulcast) has the first layer sent alone, as a stream
+	 * without a rid
+	 */
+	#accepted: string[] | null = null;
 	stats: SenderStats = { frames: 0, bytes: 0 };
 
 	constructor(media: number, write: FrameWriter) {
@@ -260,72 +329,206 @@ export class VideoSender {
 	}
 
 	/**
-	 * The page's encoding (setParameters): a picture's sides divided by
-	 * `scale`, at most `maxFramerate` pictures and `maxBitrate` bits a
-	 * second. A new frame rate or scale starts with a keyframe, as Chrome's
-	 * encoder does (measured).
+	 * The page's encodings (setParameters), in its order: each one's
+	 * picture with its sides divided by `scale`, at most `maxFramerate`
+	 * pictures and `maxBitrate` bits a second, and whether it is sent. A
+	 * new frame rate or scale starts with a keyframe, as Chrome's encoder
+	 * does (measured). The layers are the page's from the first call on;
+	 * a later call changes their limits.
 	 */
-	setEncoding(
-		maxBitrate: number | null,
-		maxFramerate: number | null,
-		scale: number,
-	) {
-		const reshaped =
-			maxFramerate !== this.#maxFramerate || scale !== this.#scale;
-		this.#maxBitrate = maxBitrate;
-		this.#maxFramerate = maxFramerate;
-		this.#scale = scale >= 1 ? scale : 1;
-		if (reshaped) this.#keyframe = true;
-		this.#retune(true);
+	setEncodings(list: EncodingLimits[]) {
+		if (!list.length) return;
+		const named = list.map((limits) => ({
+			...limits,
+			scale: limits.scale >= 1 ? limits.scale : 1,
+		}));
+		const same =
+			named.length === this.#layers.length &&
+			named.every((limits, at) => limits.rid === this.#layers[at].limits.rid);
+		if (!same) {
+			for (const layer of this.#layers) layer.restart();
+			this.#layers = named.map((limits) => new Layer(limits));
+			return;
+		}
+		named.forEach((limits, at) => {
+			const layer = this.#layers[at];
+			const old = layer.limits;
+			layer.limits = limits;
+			if (old.active !== limits.active) layer.restart();
+			else if (
+				old.maxFramerate !== limits.maxFramerate ||
+				old.scale !== limits.scale
+			)
+				layer.keyframe = true;
+		});
+		this.#share();
+		for (const layer of this.#layers) this.#retune(layer, true);
 	}
 
 	/** what this sender would send at most now, for the estimator */
 	get desired(): number {
-		const most = maxBitrate(this.#pixels || 640 * 480);
-		return this.#maxBitrate ? Math.min(most, this.#maxBitrate) : most;
+		const layers = this.#sendable();
+		if (layers.length === 1 && this.#layers.length === 1) {
+			const layer = layers[0];
+			const most = maxBitrate(layer.pixels || 640 * 480);
+			return layer.limits.maxBitrate
+				? Math.min(most, layer.limits.maxBitrate)
+				: most;
+		}
+		let sum = 0;
+		for (const layer of layers) {
+			const most = simulcastFormat(layer.pixels)[2];
+			sum += layer.limits.maxBitrate
+				? Math.min(most, layer.limits.maxBitrate)
+				: most;
+		}
+		return sum;
+	}
+
+	/** the layers the peer's description takes, by rid */
+	setAccepted(rids: string[]) {
+		this.#accepted = rids;
+		this.#share();
+	}
+
+	/** a layer goes out as a stream without a rid: the first, to a peer that takes no simulcast */
+	#plain(layer: Layer): boolean {
+		return (
+			this.#layers.length > 1 &&
+			this.#accepted !== null &&
+			!this.#accepted.length &&
+			layer === this.#layers[0]
+		);
 	}
 
 	/** whether it is sending now (pictures of a track, on a section that sends) */
 	get sending(): boolean {
-		return this.#active && !!this.#codec && !!this.#reader;
+		return (
+			this.#active &&
+			!!this.#codec &&
+			!!this.#reader &&
+			this.#layers.some((layer) => layer.limits.active)
+		);
 	}
 
 	/** its share of the bandwidth estimate, in bits a second */
 	setTarget(bps: number) {
 		this.#target = bps;
-		this.#retune(false);
+		this.#share();
+		for (const layer of this.#layers) this.#retune(layer, false);
 	}
 
-	/** the bitrate the encoder is given: the least of its size's most, the page's limit and the estimate's share */
-	#bitrate(pixels: number): number {
-		let bps = maxBitrate(pixels);
-		if (this.#maxBitrate) bps = Math.min(bps, this.#maxBitrate);
-		if (this.#target !== null) bps = Math.min(bps, this.#target);
+	/**
+	 * The layers sent: those the page has on, and of a simulcast sender
+	 * only those within as many as a picture of the track's size sends,
+	 * the smallest first (WebRTC's limit by resolution, measured above)
+	 */
+	#sendable(): Layer[] {
+		if (this.#layers.length === 1)
+			return this.#layers.filter((layer) => layer.limits.active);
+		// what the peer takes: the layers it named, or the first alone
+		if (this.#accepted !== null) {
+			const accepted = this.#accepted;
+			if (!accepted.length)
+				return this.#layers[0].limits.active ? [this.#layers[0]] : [];
+			const taken = this.#layers.filter((layer) =>
+				accepted.includes(layer.limits.rid),
+			);
+			if (taken.length < this.#layers.length)
+				return taken.filter((layer) => layer.limits.active);
+		}
+		// the limit counts every layer, on or not (a 640x360 track whose
+		// middle layer is off sends its smallest alone, measured)
+		const most = this.#inputPixels
+			? simulcastFormat(this.#inputPixels)[1]
+			: this.#layers.length;
+		return this.#layers
+			.slice()
+			.sort((a, b) => b.limits.scale - a.limits.scale)
+			.slice(0, most)
+			.filter((layer) => layer.limits.active);
+	}
+
+	/**
+	 * The estimate shared among the layers, as WebRTC allocates it: as many
+	 * of the layers, the smaller first, as the estimate gives each its least
+	 * (the others are left out until it does), then what is left goes to
+	 * the smaller layers first up to each one's target and to the largest
+	 * up to its most
+	 */
+	#share() {
+		if (this.#layers.length === 1) {
+			this.#layers[0].target = this.#target;
+			return;
+		}
+		const layers = this.#sendable();
+		const budget = this.#target ?? Infinity;
+		const formats = layers.map((layer) => simulcastFormat(layer.pixels));
+		let enabled = 0;
+		let least = 0;
+		while (
+			enabled < layers.length &&
+			(enabled === 0 || least + formats[enabled][4] <= budget)
+		) {
+			least += formats[enabled][4];
+			enabled++;
+		}
+		let left = budget - least;
+		layers.forEach((layer, at) => {
+			if (at >= enabled) {
+				layer.target = 0;
+				return;
+			}
+			const [, , most, target, floor] = formats[at];
+			const cap = layer.limits.maxBitrate
+				? Math.min(most, layer.limits.maxBitrate)
+				: most;
+			const want = Math.max(
+				0,
+				(at === enabled - 1 ? cap : Math.min(cap, target)) - floor,
+			);
+			const extra = Math.min(want, Math.max(0, left));
+			left -= extra;
+			layer.target = floor + extra;
+		});
+		for (const layer of this.#layers)
+			if (!layers.includes(layer)) layer.target = 0;
+	}
+
+	/** the bitrate a layer's encoder is given: the least of its size's most, the page's limit and the estimate's share */
+	#bitrate(layer: Layer, pixels: number): number {
+		let bps =
+			this.#layers.length === 1
+				? maxBitrate(pixels)
+				: simulcastFormat(pixels)[2];
+		if (layer.limits.maxBitrate) bps = Math.min(bps, layer.limits.maxBitrate);
+		if (layer.target) bps = Math.min(bps, layer.target);
 		return Math.max(MIN_BITRATE, Math.round(bps));
 	}
 
-	/** the encoder follows a new bitrate: at once when it falls or the page asked, otherwise now and then */
-	#retune(now: boolean) {
-		const encoder = this.#encoder;
-		const config = this.#config;
+	/** an encoder follows a new bitrate: at once when it falls or the page asked, otherwise now and then */
+	#retune(layer: Layer, now: boolean) {
+		const encoder = layer.encoder;
+		const config = layer.config;
 		if (!encoder || !config || encoder.state !== 'configured') return;
-		const bitrate = this.#bitrate(config.width * config.height);
+		const bitrate = this.#bitrate(layer, config.width * config.height);
 		const old = config.bitrate ?? bitrate;
 		if (Math.abs(bitrate - old) < old * 0.05) return;
 		const at = performance.now();
-		if (!now && bitrate > old && at - this.#tunedAt < RETUNE_MS) return;
-		this.#tunedAt = at;
-		this.#config = { ...config, bitrate };
+		if (!now && bitrate > old && at - layer.tunedAt < RETUNE_MS) return;
+		layer.tunedAt = at;
+		layer.config = { ...config, bitrate };
 		try {
-			encoder.configure(this.#config);
+			encoder.configure(layer.config);
 		} catch (error) {
-			this.#restart();
+			layer.restart();
 		}
 	}
 
-	/** the peer asked for a keyframe (PLI or FIR): the next picture is one */
-	keyframe() {
-		this.#keyframe = true;
+	/** the peer asked for a keyframe (PLI or FIR) of a layer, or of all: the next picture is one */
+	keyframe(rid = '') {
+		for (const layer of this.#layers)
+			if (!rid || layer.limits.rid === rid) layer.keyframe = true;
 	}
 
 	close() {
@@ -346,17 +549,10 @@ export class VideoSender {
 		}
 	}
 
-	/** a new run: the encoder goes, and the next picture is a keyframe at its own time */
+	/** a new run: the encoders go, and the next pictures are keyframes at their own time */
 	#restart() {
-		const encoder = this.#encoder;
-		this.#encoder = null;
-		this.#made = '';
-		if (encoder && encoder.state !== 'closed') encoder.close();
-		this.#config = null;
-		this.#keyframe = true;
+		for (const layer of this.#layers) layer.restart();
 		this.#shift = null;
-		this.#lastTaken = null;
-		this.#readAt.clear();
 	}
 
 	#input(frame: VideoFrame) {
@@ -365,127 +561,152 @@ export class VideoSender {
 			frame.close();
 			return;
 		}
-		// a frame rate's limit: a picture that comes too soon after the
-		// last one encoded is let go
-		const rate = this.#maxFramerate;
-		if (
-			rate &&
-			this.#lastTaken !== null &&
-			frame.timestamp - this.#lastTaken < (1e6 / rate) * 0.95
-		) {
-			frame.close();
-			return;
-		}
 		// H.264 is made of 2x2 blocks of colour: an odd size is cut down
 		const even = codec.startsWith('avc1.');
 		const width = even ? frame.displayWidth & ~1 : frame.displayWidth;
 		const height = even ? frame.displayHeight & ~1 : frame.displayHeight;
-		// what goes out: the sides divided by the scale (the encoder scales
-		// the picture to the size it was made for)
-		const scaled = (side: number) => {
-			const out = Math.max(
-				Math.min(side, MIN_SIDE),
-				Math.floor(side / this.#scale),
-			);
-			return even ? out & ~1 : out;
-		};
-		const outWidth = scaled(width);
-		const outHeight = scaled(height);
-		this.#pixels = outWidth * outHeight;
-		const made = `${codec}/${width}x${height}/${outWidth}x${outHeight}`;
-		if (!this.#encoder || this.#made !== made) {
-			this.#restart();
-			this.#start(codec, outWidth, outHeight, made);
-		}
-		const encoder = this.#encoder;
-		// a picture the encoder cannot take now is let go: the next one is
-		// newer
-		if (!encoder || encoder.encodeQueueSize > ENCODE_QUEUE) {
-			frame.close();
-			return;
+		if (width * height !== this.#inputPixels) {
+			this.#inputPixels = width * height;
+			this.#share();
 		}
 		const now = performance.now();
-		// and so is one while what was made runs ahead of the bitrate
-		const bitrate = this.#config?.bitrate ?? 0;
-		if (bitrate) {
-			this.#debt = Math.max(
-				0,
-				this.#debt - ((now - this.#debtAt) * bitrate) / 8000,
-			);
-			this.#debtAt = now;
-			if (this.#debt > (bitrate / 8) * DROP_WINDOW && !this.#keyframe) {
-				frame.close();
-				return;
-			}
-		}
-		if (this.#shift === null) {
-			this.#shift =
-				(this.#sent ? this.#sentUs + (now - this.#sentAt) * 1000 : 0) -
-				frame.timestamp;
-		}
-		this.#readAt.set(frame.timestamp, now);
 		let input = frame;
 		try {
-			if (width !== frame.displayWidth || height !== frame.displayHeight)
-				input = new VideoFrame(frame, {
-					visibleRect: { x: 0, y: 0, width, height },
-					displayWidth: width,
-					displayHeight: height,
-				});
-			encoder.encode(input, { keyFrame: this.#keyframe });
-			this.#keyframe = false;
-			this.#lastTaken = frame.timestamp;
-		} catch (error) {
-			this.#restart();
+			for (const layer of this.#sendable()) {
+				if (layer.target === 0) continue;
+				if (
+					input === frame &&
+					(width !== frame.displayWidth || height !== frame.displayHeight)
+				)
+					input = new VideoFrame(frame, {
+						visibleRect: { x: 0, y: 0, width, height },
+						displayWidth: width,
+						displayHeight: height,
+					});
+				this.#encode(layer, codec, input, width, height, now);
+			}
 		} finally {
 			if (input !== frame) input.close();
 			frame.close();
 		}
 	}
 
-	#start(codec: string, width: number, height: number, made: string) {
-		if (this.#refused === made) return;
+	#encode(
+		layer: Layer,
+		codec: string,
+		input: VideoFrame,
+		width: number,
+		height: number,
+		now: number,
+	) {
+		// a frame rate's limit: a picture that comes too soon after the
+		// last one encoded is let go
+		const rate = layer.limits.maxFramerate;
+		if (
+			rate &&
+			layer.lastTaken !== null &&
+			input.timestamp - layer.lastTaken < (1e6 / rate) * 0.95
+		)
+			return;
+		// what goes out: the sides divided by the scale (the encoder scales
+		// the picture to the size it was made for)
+		const even = codec.startsWith('avc1.');
+		const scaled = (side: number) => {
+			const out = Math.max(
+				Math.min(side, MIN_SIDE),
+				Math.floor(side / layer.limits.scale),
+			);
+			return even ? out & ~1 : out;
+		};
+		const outWidth = scaled(width);
+		const outHeight = scaled(height);
+		if (layer.pixels !== outWidth * outHeight) {
+			layer.pixels = outWidth * outHeight;
+			this.#share();
+		}
+		const made = `${codec}/${width}x${height}/${outWidth}x${outHeight}`;
+		if (!layer.encoder || layer.made !== made) {
+			layer.restart();
+			this.#start(layer, codec, outWidth, outHeight, made);
+		}
+		const encoder = layer.encoder;
+		// a picture the encoder cannot take now is let go: the next one is
+		// newer
+		if (!encoder || encoder.encodeQueueSize > ENCODE_QUEUE) return;
+		// and so is one while what was made runs ahead of the bitrate
+		const bitrate = layer.config?.bitrate ?? 0;
+		if (bitrate) {
+			layer.debt = Math.max(
+				0,
+				layer.debt - ((now - layer.debtAt) * bitrate) / 8000,
+			);
+			layer.debtAt = now;
+			if (layer.debt > (bitrate / 8) * DROP_WINDOW && !layer.keyframe) return;
+		}
+		if (this.#shift === null) {
+			this.#shift =
+				(this.#sent ? this.#sentUs + (now - this.#sentAt) * 1000 : 0) -
+				input.timestamp;
+		}
+		layer.readAt.set(input.timestamp, now);
+		try {
+			encoder.encode(input, { keyFrame: layer.keyframe });
+			layer.keyframe = false;
+			layer.lastTaken = input.timestamp;
+		} catch (error) {
+			layer.restart();
+		}
+	}
+
+	#start(
+		layer: Layer,
+		codec: string,
+		width: number,
+		height: number,
+		made: string,
+	) {
+		if (layer.refused === made) return;
 		try {
 			const encoder: VideoEncoder = new VideoEncoder({
 				output: (chunk, metadata) => {
 					// what the encoder encoded in, told with its keyframes
 					const space = metadata?.decoderConfig?.colorSpace;
-					if (space) this.#colour = colourBytes(space);
-					this.#chunk(encoder, chunk);
+					if (space) layer.colour = colourBytes(space);
+					this.#chunk(layer, encoder, chunk);
 				},
 				error: () => {
-					if (this.#encoder === encoder) this.#restart();
+					if (layer.encoder === encoder) layer.restart();
 				},
 			});
 			const config: VideoEncoderConfig = {
 				codec,
 				width,
 				height,
-				bitrate: this.#bitrate(width * height),
+				bitrate: this.#bitrate(layer, width * height),
 				latencyMode: 'realtime',
 				...(codec.startsWith('avc1.')
 					? { avc: { format: 'annexb' as const } }
 					: {}),
 			};
 			encoder.configure(config);
-			this.#config = config;
-			this.#tunedAt = performance.now();
-			this.#encoder = encoder;
-			this.#made = made;
+			layer.config = config;
+			layer.tunedAt = performance.now();
+			layer.encoder = encoder;
+			layer.made = made;
 		} catch (error) {
-			this.#refused = made;
+			layer.refused = made;
 		}
 	}
 
-	#chunk(encoder: VideoEncoder, chunk: EncodedVideoChunk) {
+	#chunk(layer: Layer, encoder: VideoEncoder, chunk: EncodedVideoChunk) {
 		const payload = this.#payload;
-		if (encoder !== this.#encoder || !payload || this.#shift === null) return;
-		const readAt = this.#readAt.get(chunk.timestamp);
-		this.#readAt.delete(chunk.timestamp);
+		if (encoder !== layer.encoder || !payload || this.#shift === null) return;
+		const readAt = layer.readAt.get(chunk.timestamp);
+		layer.readAt.delete(chunk.timestamp);
 		const bytes = new Uint8Array(chunk.byteLength);
 		chunk.copyTo(bytes);
 		const now = performance.now();
-		this.#debt += bytes.length;
+		layer.debt += bytes.length;
 		const us = chunk.timestamp + this.#shift;
 		this.#sent = true;
 		this.#sentUs = us;
@@ -499,9 +720,9 @@ export class VideoSender {
 				flags: 0,
 				level: ABSENT,
 				orientation: ABSENT,
-				colour: chunk.type === 'key' ? this.#colour : 0,
+				colour: chunk.type === 'key' ? layer.colour : 0,
 				time: BigInt(Math.round(us * VIDEO_UNITS) + this.#offset),
-				rid: '',
+				rid: this.#plain(layer) ? '' : layer.limits.rid,
 				payload: bytes,
 			},
 			readAt === undefined ? 0 : Math.max(0, now - readAt),

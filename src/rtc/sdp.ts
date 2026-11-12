@@ -177,6 +177,13 @@ export interface SectionStyle {
 	rejected?: boolean;
 	/** Chrome 152's way with them (protocol.ts, codecPreferences) */
 	legacy?: boolean;
+	/**
+	 * The simulcast layers the sender sends, by rid, and those the page
+	 * turned off: Chrome names them with `a=rid` and `a=simulcast` lines
+	 * (a paused one with `~`) in place of its sources
+	 */
+	rids?: string[];
+	paused?: Set<string>;
 }
 
 const CRLF = '\r\n';
@@ -608,7 +615,14 @@ function shaped(
 		if (fmtp !== undefined && (like === undefined || browser.fmtp.has(like)))
 			lines.push(`a=fmtp:${pt} ${fmtp}`);
 	}
-	if (sender) {
+	if (sender && style.rids?.length) {
+		for (const rid of style.rids) lines.push(`a=rid:${rid} send`);
+		lines.push(
+			`a=simulcast:send ${style.rids
+				.map((rid) => (style.paused?.has(rid) ? `~${rid}` : rid))
+				.join(';')}`,
+		);
+	} else if (sender) {
 		for (const group of style.groups) lines.push(`a=ssrc-group:${group}`);
 		for (const ssrc of style.ssrcs) {
 			lines.push(`a=ssrc:${ssrc} cname:${cname}`);

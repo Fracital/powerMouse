@@ -206,9 +206,9 @@ those packets are gone too.
 
 ## Limits
 
-- **What is not carried yet**: video simulcast (comfort noise and DTMF
-  go both ways, a lost Opus packet is rebuilt from its FEC copy).
-  `getStats()` has Chrome's entries
+- **What is not carried yet**: video's entries in `getStats()` (comfort
+  noise and DTMF go both ways, a lost Opus packet is rebuilt from its FEC
+  copy, video goes in simulcast layers). `getStats()` has Chrome's entries
   for the sound, its candidates, pairs, transport, certificates and data
   channels, and `pc.sctp` with its transports reads as Chrome's; docs/webrtc-over-wisp.md sections 15 and
   16 list what differs (no `roundTripTime` from the peer's sender reports,
