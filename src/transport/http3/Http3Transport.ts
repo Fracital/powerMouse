@@ -221,6 +221,47 @@ async function h3Body(body: BodyInit | null): Promise<{
 	};
 }
 
+/**
+ * The request header list stomp-h3 sends: the caller's, lowercased, with
+ * User-Agent and (for a typed body) Content-Type added as epoxy adds them,
+ * and Content-Length for a body whose length stomp-h3 has measured. Chrome
+ * sends Content-Length over HTTP/3 for every body it has in hand; HTTP/1 and
+ * HTTP/2 through hyper add it for a buffered body on their own, but stomp-h3
+ * does not, so without this a server that needs a length refuses the request
+ * (IIS answers 411 Length Required, as every Bing API POST did). A body of
+ * unknown length (a page's own ReadableStream) goes out without one, as
+ * natively, and a bodyless POST/PUT/PATCH says zero.
+ */
+export function h3RequestHeaders(
+	method: string,
+	headers: RawHeaders,
+	contentType: string | null,
+	h3: Uint8Array | ReadableStream<Uint8Array> | null,
+): RawHeaders {
+	const out: RawHeaders = [];
+	let agent = false;
+	let type = false;
+	let length = false;
+	for (const [name, value] of headers) {
+		const lower = name.toLowerCase();
+		agent ||= lower === 'user-agent';
+		type ||= lower === 'content-type';
+		length ||= lower === 'content-length';
+		out.push([lower, value]);
+	}
+	// what epoxy adds when the caller leaves them out
+	if (!agent) out.push(['user-agent', navigator.userAgent]);
+	if (!type && contentType) out.push(['content-type', contentType]);
+	const upper = method.toUpperCase();
+	const bodyMethod = upper === 'POST' || upper === 'PUT' || upper === 'PATCH';
+	if (!length) {
+		if (h3 instanceof Uint8Array)
+			out.push(['content-length', String(h3.byteLength)]);
+		else if (h3 === null && bodyMethod) out.push(['content-length', '0']);
+	}
+	return out;
+}
+
 export default class Http3Transport implements ProxyTransport {
 	readonly base: ProxyTransport;
 	#options: Http3Options;
@@ -700,25 +741,13 @@ export default class Http3Transport implements ProxyTransport {
 		body: Awaited<ReturnType<typeof h3Body>>,
 		headers: RawHeaders,
 	): Promise<TransferrableResponse> {
-		const out: RawHeaders = [];
-		let agent = false;
-		let type = false;
-		for (const [name, value] of headers) {
-			const lower = name.toLowerCase();
-			agent ||= lower === 'user-agent';
-			type ||= lower === 'content-type';
-			out.push([lower, value]);
-		}
-		// what epoxy adds when the caller leaves them out
-		if (!agent) out.push(['user-agent', navigator.userAgent]);
-		if (!type && body.contentType) out.push(['content-type', body.contentType]);
-		const upper = method.toUpperCase();
-		if (
-			body.h3 === null &&
-			(upper === 'POST' || upper === 'PUT' || upper === 'PATCH')
-		)
-			out.push(['content-length', '0']);
-		const response = await conn.request(upper, remote.href, out, body.h3);
+		const out = h3RequestHeaders(method, headers, body.contentType, body.h3);
+		const response = await conn.request(
+			method.toUpperCase(),
+			remote.href,
+			out,
+			body.h3,
+		);
 		return {
 			body: response.body as unknown as TransferrableResponse['body'],
 			headers: response.headers,
