@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity url resolution</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+		<link id="sheet" rel="stylesheet" href="url.css" />
+		<script id="ext" src="url-ext.js"></script>
+		<style>
+			#bg {
+				background-image: url(px.png);
+			}
+		</style>
+	</head>
+	<body>
+		<a id="rel" href="dir/page.html?x=1#f">rel</a>
+		<a id="up" href="../up.html">up</a>
+		<a id="abs" href="/root.html">abs</a>
+		<a id="proto" href="//b.bench.test:__PORT__/p.html">proto-relative</a>
+		<a id="cross" href="http://b.bench.test:__PORT__/fidelity/x.html?y=2"
+			>cross</a
+		>
+		<img id="img" src="px.png" srcset="px.png 1x, px.png?2 2x" alt="" />
+		<form id="form"></form>
+		<form id="form2" action="submit?z=1"></form>
+		<div id="bg">bg</div>
+		<div id="inline" style="background-image: url('px.png?inline')">inline</div>
+		<script type="module">
+			window.fidModuleUrl = import.meta.url;
+		</script>
+		<script>
+			FID.main(async function () {
+				var s = FID.sync;
+				var $ = function (id) {
+					return document.getElementById(id);
+				};
+				s('url.anchor-relative', function () {
+					return [$('rel').href, $('up').href, $('abs').href, $('proto').href];
+				});
+				s('url.anchor-cross-origin', function () {
+					var a = $('cross');
+					return [a.href, a.origin, a.host, a.pathname, a.search];
+				});
+				s('url.anchor-attribute', function () {
+					return [
+						$('rel').getAttribute('href'),
+						$('cross').getAttribute('href'),
+					];
+				});
+				s('url.img-src', function () {
+					var img = $('img');
+					return [
+						img.src,
+						img.getAttribute('src'),
+						img.currentSrc,
+						img.getAttribute('srcset'),
+					];
+				});
+				s('url.set-then-read', function () {
+					var img = document.createElement('img');
+					img.src = 'set/one.png';
+					var a = document.createElement('a');
+					a.setAttribute('href', 'set/two.html');
+					var script = document.createElement('script');
+					script.src = '/set/three.js';
+					return [img.src, img.getAttribute('src'), a.href, script.src];
+				});
+				s('url.form-action', function () {
+					return [
+						$('form').action,
+						$('form2').action,
+						$('form2').getAttribute('action'),
+					];
+				});
+				s('url.link-and-script', function () {
+					return [$('sheet').href, $('ext').src, document.styleSheets[0].href];
+				});
+				s('url.current-script', function () {
+					return window.fidExtScript;
+				});
+				s('url.module-meta', function () {
+					return window.fidModuleUrl;
+				});
+				s('url.new-url', function () {
+					return [
+						new URL('a/b?c', document.baseURI).href,
+						new Request('req?x').url,
+					];
+				});
+				s('url.computed-style', function () {
+					return [
+						getComputedStyle($('bg')).backgroundImage,
+						getComputedStyle($('inline')).backgroundImage,
+					];
+				});
+				s('url.style-readback', function () {
+					var el = document.createElement('div');
+					el.style.backgroundImage = 'url(set.png)';
+					return [
+						el.style.backgroundImage,
+						$('inline').style.backgroundImage,
+						$('inline').getAttribute('style'),
+					];
+				});
+				s('url.outer-html', function () {
+					return [$('cross').outerHTML, $('img').outerHTML];
+				});
+				s('url.inner-html-roundtrip', function () {
+					var div = document.createElement('div');
+					div.innerHTML = '<a href="ih/x.html">x</a><img src="ih/y.png">';
+					return [div.innerHTML, div.firstChild.href];
+				});
+				s('url.blob-url', function () {
+					return URL.createObjectURL(new Blob(['x']));
+				});
+				s('url.performance-entries', function () {
+					var nav = performance.getEntriesByType('navigation')[0];
+					var names = performance
+						.getEntriesByType('resource')
+						.map(function (e) {
+							return e.name;
+						})
+						.filter(function (n) {
+							return /px\.png|url\.css|url-ext\.js|lib\.js/.test(n);
+						})
+						.sort();
+					return [nav && nav.name, names];
+				});
+				await FID.check('url.css-rule-href', function () {
+					var rule = $('sheet').sheet.cssRules[0];
+					return [rule.cssText, $('sheet').sheet.href];
+				});
+			});
+		</script>
+	</body>
+</html>

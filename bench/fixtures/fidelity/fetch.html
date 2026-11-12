@@ -1,0 +1,257 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity fetch and XHR</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+	</head>
+	<body>
+		<p>fetch and XHR</p>
+		<script>
+			// the request headers the server saw, as an echo answer gives them
+			function seenBy(data) {
+				var h = data.headers;
+				return [data.method, h.host, h.origin || null, h.referer || null];
+			}
+			// the Fetch Metadata headers the server saw
+			function secFetch(h) {
+				return [
+					h['sec-fetch-site'] || null,
+					h['sec-fetch-mode'] || null,
+					h['sec-fetch-dest'] || null,
+				];
+			}
+			function xhr(method, url, options) {
+				options = options || {};
+				return new Promise(function (resolve) {
+					var x = new XMLHttpRequest();
+					x.open(method, url);
+					if (options.header) x.setRequestHeader('X-Custom', options.header);
+					x.onload = function () {
+						resolve(x);
+					};
+					x.onerror = function () {
+						resolve(x);
+					};
+					x.send(options.body || null);
+				});
+			}
+			FID.main(async function () {
+				var check = FID.check;
+				var B = function (path) {
+					return FID.url('b', path);
+				};
+				await check('fetch.same-origin', async function () {
+					var res = await fetch('/fidelity/echo?q=1');
+					return [
+						res.url,
+						res.status,
+						res.type,
+						res.redirected,
+						res.headers.get('content-type'),
+						seenBy(await res.json()),
+					];
+				});
+				await check('fetch.same-origin-post', async function () {
+					var res = await fetch('echo', {
+						method: 'POST',
+						body: 'hello',
+						headers: { 'Content-Type': 'text/plain' },
+					});
+					var data = await res.json();
+					return [
+						res.url,
+						seenBy(data),
+						data.body,
+						data.headers['content-type'],
+					];
+				});
+				await check('fetch.cross-origin-cors', async function () {
+					var res = await fetch(B('/fidelity/echo?cors=1&hdr=1'));
+					return [
+						res.url,
+						res.type,
+						res.headers.get('x-fid'),
+						seenBy(await res.json()),
+					];
+				});
+				await check('fetch.cross-origin-no-acao', async function () {
+					try {
+						await fetch(B('/fidelity/echo'));
+						return 'resolved';
+					} catch (e) {
+						return FID.err(e);
+					}
+				});
+				await check('fetch.no-cors', async function () {
+					var res = await fetch(B('/fidelity/echo'), { mode: 'no-cors' });
+					return [res.type, res.status, res.url, (await res.text()).length];
+				});
+				await check('fetch.preflight', async function () {
+					var res = await fetch(B(FID.q('/fidelity/echo?cors=1&tag=pre')), {
+						headers: { 'X-Custom': 'v1' },
+					});
+					var data = await res.json();
+					var seen = await FID.seen('pre');
+					return [
+						data.headers['x-custom'],
+						seen.map(function (r) {
+							return [
+								r.method,
+								r.headers['access-control-request-method'] || null,
+								r.headers['access-control-request-headers'] || null,
+							];
+						}),
+					];
+				});
+				await check('fetch.redirect', async function () {
+					var res = await fetch(
+						'/fidelity/redirect?to=' +
+							encodeURIComponent('/fidelity/echo?after=1'),
+					);
+					return [
+						res.url,
+						res.redirected,
+						res.status,
+						seenBy(await res.json()),
+					];
+				});
+				await check('fetch.redirect-cross-origin', async function () {
+					var res = await fetch(
+						'/fidelity/redirect?code=307&to=' +
+							encodeURIComponent(B('/fidelity/echo?cors=1')),
+					);
+					return [res.url, res.redirected, res.type, seenBy(await res.json())];
+				});
+				await check('fetch.redirect-manual', async function () {
+					var res = await fetch('/fidelity/redirect?to=/fidelity/echo', {
+						redirect: 'manual',
+					});
+					return [res.type, res.status, res.url];
+				});
+				await check('fetch.redirect-error', async function () {
+					try {
+						await fetch('/fidelity/redirect?to=/fidelity/echo', {
+							redirect: 'error',
+						});
+						return 'resolved';
+					} catch (e) {
+						return FID.err(e);
+					}
+				});
+				await check('fetch.referrer-policy', async function () {
+					var none = await (
+						await fetch('/fidelity/echo', { referrerPolicy: 'no-referrer' })
+					).json();
+					var origin = await (
+						await fetch('/fidelity/echo', { referrerPolicy: 'origin' })
+					).json();
+					var custom = await (
+						await fetch('/fidelity/echo', { referrer: '/fidelity/custom-ref' })
+					).json();
+					return [
+						none.headers.referer || null,
+						origin.headers.referer || null,
+						custom.headers.referer || null,
+					];
+				});
+				await check('fetch.request-object', function () {
+					var req = new Request('echo?r=1', { method: 'POST' });
+					return [req.url, req.referrer, req.mode, req.credentials, req.method];
+				});
+				await check('fetch.data-and-blob', async function () {
+					var data = await fetch('data:text/plain,hi%20there');
+					var blobUrl = URL.createObjectURL(
+						new Blob(['blob body'], { type: 'text/x-fid' }),
+					);
+					var blob = await fetch(blobUrl);
+					return [
+						data.url,
+						await data.text(),
+						blob.url,
+						blob.headers.get('content-type'),
+						await blob.text(),
+					];
+				});
+				await check('fetch.xhr-same-origin', async function () {
+					var x = await xhr('GET', 'echo?x=1');
+					return [x.status, x.responseURL, seenBy(JSON.parse(x.responseText))];
+				});
+				await check('fetch.xhr-redirect', async function () {
+					var x = await xhr(
+						'GET',
+						'/fidelity/redirect?to=' +
+							encodeURIComponent('/fidelity/echo?xr=1'),
+					);
+					return [x.status, x.responseURL];
+				});
+				await check('fetch.xhr-cross-origin', async function () {
+					var ok = await xhr('POST', B('/fidelity/echo?cors=1&hdr=1'), {
+						header: 'v2',
+						body: 'b',
+					});
+					var blocked = await xhr('GET', B('/fidelity/echo'));
+					return [
+						ok.status,
+						ok.responseURL,
+						ok.getResponseHeader('x-fid'),
+						seenBy(JSON.parse(ok.responseText)),
+						blocked.status,
+						blocked.responseText,
+					];
+				});
+				await check('fetch.xhr-response-headers', async function () {
+					var x = await xhr('GET', 'echo?h=1&hdr=1');
+					return x
+						.getAllResponseHeaders()
+						.split('\r\n')
+						.filter(function (line) {
+							return /^(content-type|x-fid|cache-control):/.test(line);
+						})
+						.sort();
+				});
+				await check('fetch.subresource-headers', async function () {
+					var img = new Image();
+					await new Promise(function (resolve) {
+						img.onload = img.onerror = resolve;
+						img.src = B(FID.q('/fidelity/rec', 'tag=simg&t=img'));
+					});
+					var seen = await FID.seen('simg');
+					return seen.map(function (r) {
+						var h = r.headers;
+						return [r.method, h.host, h.referer || null];
+					});
+				});
+				await check('secure.sec-fetch-headers', async function () {
+					var same = await (await fetch('/fidelity/echo?sf=1')).json();
+					var cross = await (
+						await fetch(B('/fidelity/echo?cors=1&sf=2'))
+					).json();
+					var img = (await FID.seen('simg'))[0];
+					return [
+						secFetch(same.headers),
+						secFetch(cross.headers),
+						img ? secFetch(img.headers) : null,
+					];
+				});
+				await check('fetch.beacon', async function () {
+					var sent = navigator.sendBeacon(
+						FID.q('/fidelity/rec', 'tag=beacon'),
+						'beacon body',
+					);
+					await FID.sleep(800);
+					var seen = await FID.seen('beacon');
+					return [
+						sent,
+						seen.map(function (r) {
+							return [r.method, r.headers['content-type'] || null];
+						}),
+					];
+				});
+			});
+		</script>
+	</body>
+</html>

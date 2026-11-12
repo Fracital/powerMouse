@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity history</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+	</head>
+	<body>
+		<p>history</p>
+		<script>
+			function navigationApi() {
+				if (typeof navigation === 'undefined') return 'unavailable';
+				return [
+					navigation.currentEntry.url,
+					navigation.entries().map(function (e) {
+						return e.url;
+					}),
+					navigation.canGoBack,
+				];
+			}
+			// history.length relative to the page's first look at it (how many
+			// entries came before the page depends on how the tab was opened)
+			var base = history.length;
+			function added() {
+				return history.length - base;
+			}
+			FID.main(async function () {
+				var check = FID.check;
+				var s = FID.sync;
+				s('history.initial', function () {
+					return [history.state, history.scrollRestoration];
+				});
+				s('history.navigation-api', navigationApi);
+				await check(
+					'history.link-navigation',
+					async function () {
+						var child = await FID.child('a', 'h-a');
+						var next = FID.message(function (d) {
+							return d.fid === 'hello' && d.role === 'h-a-next';
+						}, 6000);
+						await FID.ask(child.frame.contentWindow, 'followLink');
+						var i = (await next).data.info;
+						return [i.href, i.referrer, i.historyLength - base, added()];
+					},
+					9000,
+				);
+				s('history.push-state', function () {
+					history.pushState({ n: 1 }, '', 'pushed/one?p=1#ph');
+					return [
+						location.href,
+						location.pathname,
+						location.hash,
+						document.URL,
+						added(),
+						history.state,
+					];
+				});
+				s('history.push-state-base', function () {
+					var a = document.createElement('a');
+					a.href = 'rel?r=1';
+					return [document.baseURI, a.href, new Request('req').url];
+				});
+				s('history.replace-state', function () {
+					history.replaceState({ n: 2 }, '', '/fidelity/replaced?r=2');
+					return [location.href, added(), history.state];
+				});
+				s('history.push-state-cross-origin', function () {
+					try {
+						history.pushState(null, '', FID.url('b', '/fidelity/elsewhere'));
+						return location.href;
+					} catch (e) {
+						return FID.err(e);
+					}
+				});
+				s('history.push-state-uncloneable', function () {
+					try {
+						history.pushState({ f: function () {} }, '');
+						return 'no error';
+					} catch (e) {
+						return FID.err(e);
+					}
+				});
+				await check('history.popstate', async function () {
+					var pop = new Promise(function (resolve) {
+						addEventListener('popstate', resolve, { once: true });
+					});
+					history.back();
+					var e = await pop;
+					return [e.state, location.href, history.state, added()];
+				});
+				await check('history.hashchange', async function () {
+					var change = new Promise(function (resolve) {
+						addEventListener('hashchange', resolve, { once: true });
+					});
+					location.hash = 'h2';
+					var e = await change;
+					return [e.oldURL, e.newURL, location.href, added()];
+				});
+				s('history.navigation-api-after', navigationApi);
+			});
+		</script>
+	</body>
+</html>

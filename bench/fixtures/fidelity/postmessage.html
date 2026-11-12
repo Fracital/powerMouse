@@ -1,0 +1,230 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity postMessage</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+	</head>
+	<body>
+		<p>postMessage</p>
+		<script>
+			// whether a command reaches a frame.html child in `ms`
+			async function delivered(win, targetOrigin, ms) {
+				try {
+					await FID.ask(win, 'echo', ['x'], targetOrigin, ms || 1500);
+					return true;
+				} catch (e) {
+					if (e === FID.TIMEOUT) return false;
+					throw e;
+				}
+			}
+			FID.main(async function () {
+				var check = FID.check;
+				var same = null;
+				var other = null;
+				await check(
+					'postmessage.from-same-origin-child',
+					async function () {
+						same = await FID.child('a', 'pm-a');
+						return [
+							same.event.origin,
+							same.event.source === same.frame.contentWindow,
+						];
+					},
+					8000,
+				);
+				await check(
+					'postmessage.from-cross-origin-child',
+					async function () {
+						other = await FID.child('b', 'pm-b');
+						return [
+							other.event.origin,
+							other.event.source === other.frame.contentWindow,
+						];
+					},
+					8000,
+				);
+				await check('postmessage.event-shape', function () {
+					var e = other.event;
+					return [
+						e.type,
+						e.lastEventId,
+						e.ports.length,
+						e.isTrusted,
+						e.bubbles,
+						e.cancelable,
+					];
+				});
+				await check('postmessage.child-sees-parent', async function () {
+					var a = await FID.ask(same.frame.contentWindow, 'echo', ['x']);
+					var b = await FID.ask(other.frame.contentWindow, 'echo', ['x']);
+					return [a.origin, a.sourceIsParent, b.origin, b.sourceIsParent];
+				});
+				await check(
+					'postmessage.target-origin',
+					async function () {
+						var win = other.frame.contentWindow;
+						return [
+							await delivered(win, FID.url('b', '')),
+							await delivered(win, FID.url('b', '/some/path?q')),
+							await delivered(win, FID.url('a', '')),
+							await delivered(win, 'http://b.bench.test'),
+						];
+					},
+					9000,
+				);
+				await check(
+					'postmessage.target-origin-slash',
+					async function () {
+						return [
+							await delivered(same.frame.contentWindow, '/'),
+							await delivered(other.frame.contentWindow, '/'),
+						];
+					},
+					5000,
+				);
+				await check('postmessage.invalid-target', function () {
+					try {
+						window.postMessage('x', 'not a url');
+						return 'no error';
+					} catch (e) {
+						return FID.err(e);
+					}
+				});
+				await check('postmessage.self', async function () {
+					var got = FID.message(function (d) {
+						return d.fid === 'self';
+					});
+					window.postMessage({ fid: 'self' }, '*');
+					var e = await got;
+					return [e.origin, e.source === window];
+				});
+				await check('postmessage.urls-in-data', async function () {
+					var data = {
+						a: FID.url('a', '/fidelity/x.html'),
+						b: FID.url('b', '/y?z=1'),
+						html: '<img src="' + FID.url('c', '/i.png') + '">',
+					};
+					return (await FID.ask(other.frame.contentWindow, 'echo', [data]))
+						.value;
+				});
+				await check('postmessage.structured-clone', async function () {
+					var got = FID.message(function (d) {
+						return d.fid === 'clone';
+					});
+					window.postMessage(
+						{
+							fid: 'clone',
+							d: new Date(0),
+							m: new Map([[1, 2]]),
+							re: /x/g,
+							u: new Uint8Array([1, 2, 3]),
+							set: new Set(['s']),
+						},
+						'*',
+					);
+					var d = (await got).data;
+					return [
+						d.d instanceof Date,
+						d.d.getTime(),
+						d.m.get(1),
+						d.re.source + d.re.flags,
+						d.u.length,
+						d.set.has('s'),
+					];
+				});
+				await check('postmessage.uncloneable', function () {
+					try {
+						window.postMessage({ f: function () {} }, '*');
+						return 'no error';
+					} catch (e) {
+						return FID.err(e);
+					}
+				});
+				await check('postmessage.message-channel', async function () {
+					var channel = new MessageChannel();
+					var got = new Promise(function (resolve) {
+						channel.port2.onmessage = resolve;
+					});
+					channel.port1.postMessage('via port');
+					var e = await got;
+					return [e.data, e.origin, e.source, e.ports.length];
+				});
+				await check('postmessage.transfer-port', async function () {
+					var channel = new MessageChannel();
+					var got = new Promise(function (resolve) {
+						channel.port1.onmessage = resolve;
+					});
+					var reply = FID.message(function (d) {
+						return d.fid === 'port-in';
+					});
+					window.postMessage({ fid: 'port-in' }, '*', [channel.port2]);
+					var e = await reply;
+					e.ports[0].postMessage('back');
+					var back = await got;
+					return [e.ports.length, back.data];
+				});
+				await check(
+					'postmessage.nested-cross-origin',
+					async function () {
+						var nestedHello = await FID.ask(
+							other.frame.contentWindow,
+							'frame',
+							['a', 'pm-aba'],
+							'*',
+							8000,
+						);
+						var nested = other.frame.contentWindow[0];
+						var got = FID.message(function (d) {
+							return d.fid === 'reply' && d.role === 'pm-aba';
+						});
+						nested.postMessage(
+							{ fid: 'cmd', id: 'nested', op: 'echo', args: ['n'] },
+							'*',
+						);
+						var e = await got;
+						return [
+							nestedHello.value.info.parentIsTop,
+							e.origin,
+							e.data.origin,
+							e.data.sourceIsParent,
+							e.source === nested,
+						];
+					},
+					9000,
+				);
+				await check(
+					'postmessage.broadcast-channel',
+					async function () {
+						var sameGot = FID.message(function (d) {
+							return d.fid === 'bc' && d.role === 'pm-a';
+						}, 2000).then(
+							function (e) {
+								return e.data.data;
+							},
+							function () {
+								return null;
+							},
+						);
+						var otherGot = FID.message(function (d) {
+							return d.fid === 'bc' && d.role === 'pm-b';
+						}, 2000).then(
+							function (e) {
+								return e.data.data;
+							},
+							function () {
+								return null;
+							},
+						);
+						new BroadcastChannel('fid').postMessage('to same origin');
+						return [await sameGot, await otherGot];
+					},
+					5000,
+				);
+			});
+		</script>
+	</body>
+</html>

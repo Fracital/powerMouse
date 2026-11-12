@@ -1,0 +1,159 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity storage</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+	</head>
+	<body>
+		<p>storage</p>
+		<script>
+			FID.main(async function () {
+				var s = FID.sync;
+				var check = FID.check;
+				s('storage.local', function () {
+					localStorage.setItem('k1', 'v1');
+					localStorage.k2 = 'v2';
+					return [
+						localStorage.getItem('k2'),
+						localStorage.k1,
+						localStorage.length,
+						Object.keys(localStorage).sort(),
+						'k1' in localStorage,
+					];
+				});
+				s('storage.session', function () {
+					sessionStorage.setItem('s1', 'x');
+					return [
+						sessionStorage.getItem('s1'),
+						sessionStorage.length,
+						Object.keys(sessionStorage),
+						localStorage.getItem('s1'),
+					];
+				});
+				s('storage.remove-and-clear', function () {
+					sessionStorage.setItem('s2', 'y');
+					sessionStorage.removeItem('s1');
+					var afterRemove = Object.keys(sessionStorage);
+					sessionStorage.clear();
+					return [afterRemove, sessionStorage.length];
+				});
+				var same = null;
+				await check(
+					'storage.same-origin-frame',
+					async function () {
+						same = await FID.child('a', 'store-a');
+						return same.hello.info.lsKeys;
+					},
+					8000,
+				);
+				await check('storage.event', async function () {
+					var event = FID.message(function (d) {
+						return (
+							d.fid === 'storage' && d.role === 'store-a' && d.key === 'k3'
+						);
+					});
+					localStorage.setItem('k3', 'v3');
+					var d = (await event).data;
+					return [d.key, d.newValue, d.url, d.isLocal];
+				});
+				var other = null;
+				await check(
+					'storage.other-origin-frame',
+					async function () {
+						other = await FID.child('b', 'store-b');
+						return other.hello.info.lsKeys;
+					},
+					8000,
+				);
+				await check('storage.other-origin-write', async function () {
+					var reply = await FID.ask(other.frame.contentWindow, 'lsSet', [
+						'fromB',
+						'1',
+					]);
+					return [
+						reply.value,
+						localStorage.getItem('fromB'),
+						Object.keys(localStorage).sort(),
+					];
+				});
+				await check('storage.indexeddb', async function () {
+					var db = await new Promise(function (resolve, reject) {
+						var open = indexedDB.open('fid-db', 2);
+						open.onupgradeneeded = function () {
+							open.result.createObjectStore('things');
+						};
+						open.onsuccess = function () {
+							resolve(open.result);
+						};
+						open.onerror = function () {
+							reject(open.error);
+						};
+					});
+					var value = await new Promise(function (resolve, reject) {
+						var tx = db.transaction('things', 'readwrite');
+						tx.objectStore('things').put({ n: 1, s: 'x' }, 'key');
+						var get = tx.objectStore('things').get('key');
+						get.onsuccess = function () {
+							resolve(get.result);
+						};
+						tx.onerror = function () {
+							reject(tx.error);
+						};
+					});
+					var names = (await indexedDB.databases()).map(function (d) {
+						return d.name + '@' + d.version;
+					});
+					db.close();
+					return [value, db.name, db.version, names];
+				});
+				await check('storage.indexeddb-other-origin', async function () {
+					return (await FID.ask(other.frame.contentWindow, 'idbNames')).value;
+				});
+				await check('secure.cache-storage', async function () {
+					if (typeof caches === 'undefined') return 'unavailable';
+					var cache = await caches.open('fid-cache');
+					await cache.put('/fidelity/cached', new Response('cached body'));
+					var keys = await cache.keys();
+					var hit = await caches.match('/fidelity/cached');
+					return [
+						await caches.keys(),
+						keys.map(function (r) {
+							return r.url;
+						}),
+						hit ? await hit.text() : null,
+					];
+				});
+				var third = null;
+				await check(
+					'storage.third-party-frame',
+					async function () {
+						document.cookie = 'topc=1; path=/';
+						third = await FID.child('x', 'store-x');
+						var info = third.hello.info;
+						return [info.origin, info.lsKeys, info.cookie];
+					},
+					8000,
+				);
+				await check(
+					'storage.cross-site-ancestor',
+					async function () {
+						var reply = await FID.ask(
+							third.frame.contentWindow,
+							'frame',
+							['a', 'store-aba'],
+							'*',
+							8000,
+						);
+						var info = reply.value.info;
+						return [info.origin, info.lsKeys, info.cookie, info.topIsSelf];
+					},
+					9000,
+				);
+			});
+		</script>
+	</body>
+</html>

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>embedded slot</title>
+		<style>
+			body {
+				margin: 0;
+				font: 13px sans-serif;
+				background: #f3f0e8;
+			}
+			.card {
+				padding: 10px;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="card">
+			<img id="picture" width="280" height="140" alt="" />
+			<p id="copy"></p>
+			<a id="more" href="/speed/article.html">Learn more</a>
+		</div>
+		<script src="/speed/r/js/7.js"></script>
+		<script>
+			// what a typical embedded widget (an ad tag, a social embed) does:
+			// pick an image, draw, keep a timer and a few listeners alive,
+			// watch its visibility. Named neutrally so no content blocker
+			// filter list matches it: every row must load all of them.
+			const slot = Number(new URLSearchParams(location.search).get('slot'));
+			document.getElementById('picture').src = `/speed/r/img/${slot}.png`;
+			document.getElementById('copy').textContent =
+				`Embedded card number ${slot}, with some text to lay out.`;
+			const canvas = document.createElement('canvas');
+			canvas.width = 280;
+			canvas.height = 40;
+			const ctx = canvas.getContext('2d');
+			ctx.fillStyle = `hsl(${slot * 17}, 60%, 60%)`;
+			ctx.fillRect(0, 0, 280, 40);
+			document.querySelector('.card').append(canvas);
+			const seen = [];
+			new IntersectionObserver((entries) => seen.push(entries.length)).observe(
+				canvas,
+			);
+			let ticks = 0;
+			setInterval(() => ticks++, 1000);
+			addEventListener('message', () => {});
+			parent.postMessage({ slot, ready: true }, '*');
+		</script>
+	</body>
+</html>

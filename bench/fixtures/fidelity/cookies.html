@@ -1,0 +1,170 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity cookies</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+	</head>
+	<body>
+		<p>cookies (the response set srv=1 and ho=1; HttpOnly)</p>
+		<script>
+			// cookie strings and Cookie headers as sorted name=value lists
+			function jar(text) {
+				return text ? text.split(/;\s*/).filter(Boolean).sort() : [];
+			}
+			// only the cookies a check is about, so one wrong cookie fails one check
+			function only(list, names) {
+				return list === null
+					? null
+					: list.filter(function (c) {
+							return names.indexOf(c.split('=')[0]) >= 0;
+						});
+			}
+			function own(names) {
+				return only(jar(document.cookie), names);
+			}
+			async function echo(url, init) {
+				var data = await (await fetch(url, init)).json();
+				return data.headers.cookie === undefined
+					? null
+					: jar(data.headers.cookie);
+			}
+			FID.main(async function () {
+				var s = FID.sync;
+				var check = FID.check;
+				s('cookies.from-response', function () {
+					return jar(document.cookie);
+				});
+				s('cookies.script-set', function () {
+					document.cookie = 'js=1';
+					document.cookie = 'js2=two words; path=/';
+					return own(['js', 'js2']);
+				});
+				s('cookies.path-scope', function () {
+					document.cookie = 'other=1; path=/other/';
+					document.cookie = 'here=1; path=/fidelity/';
+					return own(['other', 'here']);
+				});
+				s('cookies.delete', function () {
+					document.cookie = 'gone1=1';
+					document.cookie = 'gone2=1';
+					document.cookie = 'gone1=; Max-Age=0';
+					document.cookie = 'gone2=; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+					return own(['gone1', 'gone2']);
+				});
+				s('cookies.attributes', function () {
+					document.cookie = 'sn=1; SameSite=None';
+					document.cookie = 'lax=1; SameSite=Lax';
+					document.cookie = 'foreign=1; domain=example.com';
+					return own(['sn', 'lax', 'foreign']);
+				});
+				s('cookies.domain-attribute', function () {
+					document.cookie = 'dc=1; domain=bench.test; path=/';
+					document.cookie = 'cc=1; domain=c.bench.test; path=/';
+					return own(['dc', 'cc']);
+				});
+				await check('cookies.sent-same-origin', async function () {
+					return only(await echo('/fidelity/echo'), [
+						'srv',
+						'ho',
+						'js',
+						'here',
+						'lax',
+						'dc',
+						'other',
+					]);
+				});
+				await check('cookies.fetch-set-cookie', async function () {
+					await fetch(
+						'/fidelity/set-cookie?c=' +
+							encodeURIComponent('fc=1; Path=/') +
+							'&c=' +
+							encodeURIComponent('fh=1; Path=/; HttpOnly'),
+					);
+					return [
+						own(['fc', 'fh']),
+						only(await echo('/fidelity/echo'), ['fc', 'fh']),
+					];
+				});
+				await check('cookies.credentials-omit', function () {
+					return echo('/fidelity/echo', { credentials: 'omit' });
+				});
+				await check('cookies.cross-origin-include', function () {
+					return echo(FID.url('b', '/fidelity/echo?cors=1'), {
+						credentials: 'include',
+					});
+				});
+				await check('cookies.cross-origin-default', function () {
+					return echo(FID.url('b', '/fidelity/echo?cors=1'));
+				});
+				await check('cookies.cross-origin-set', async function () {
+					await fetch(
+						FID.url(
+							'b',
+							'/fidelity/set-cookie?cors=1&c=' +
+								encodeURIComponent('bset=1; Path=/'),
+						),
+						{
+							credentials: 'include',
+						},
+					);
+					return [
+						own(['bset']),
+						only(
+							await echo(FID.url('b', '/fidelity/echo?cors=1'), {
+								credentials: 'include',
+							}),
+							['bset'],
+						),
+					];
+				});
+				var b = null;
+				await check(
+					'cookies.other-origin-frame',
+					async function () {
+						b = await FID.child('b', 'cookie-b');
+						return jar(b.hello.info.cookie);
+					},
+					8000,
+				);
+				await check('cookies.other-origin-frame-set', async function () {
+					var reply = await FID.ask(b.frame.contentWindow, 'setCookie', [
+						'bframe=1; path=/',
+					]);
+					return [only(jar(reply.value), ['bframe']), own(['bframe'])];
+				});
+				await check('cookies.subresource', async function () {
+					var img = new Image();
+					await new Promise(function (resolve) {
+						img.onload = img.onerror = resolve;
+						img.src = FID.q('/fidelity/rec', 'tag=img&t=img');
+					});
+					var seen = await FID.seen('img');
+					return seen.map(function (r) {
+						return only(jar(r.headers.cookie), ['srv', 'ho', 'fc', 'fh']);
+					});
+				});
+				// last: whether Secure is accepted depends on the scheme
+				FID.sync('secure.cookie-secure-attribute', function () {
+					document.cookie = 'sec=1; Secure';
+					return jar(document.cookie).indexOf('sec=1') >= 0;
+				});
+				await check('secure.cookie-store', async function () {
+					if (typeof cookieStore === 'undefined') return 'unavailable';
+					await cookieStore.set('cs', '1');
+					return only(
+						(await cookieStore.getAll())
+							.map(function (c) {
+								return c.name + '=' + c.value;
+							})
+							.sort(),
+						['cs', 'srv', 'ho'],
+					);
+				});
+			});
+		</script>
+	</body>
+</html>

@@ -1,0 +1,210 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity iframes</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+	</head>
+	<body>
+		<p>iframes</p>
+		<script>
+			function attempt(fn) {
+				try {
+					var value = fn();
+					return value === undefined ? 'undefined' : value;
+				} catch (e) {
+					return FID.err(e);
+				}
+			}
+			function loaded(frame) {
+				return new Promise(function (resolve) {
+					frame.addEventListener('load', resolve, { once: true });
+				});
+			}
+			FID.main(async function () {
+				var check = FID.check;
+				var same = null;
+				var other = null;
+				await check(
+					'iframes.same-origin-child',
+					async function () {
+						same = await FID.child('a', 'if-a', {
+							id: 'same-frame',
+							name: 'sameName',
+						});
+						var i = same.hello.info;
+						return [
+							i.href,
+							i.origin,
+							i.referrer,
+							i.ancestorOrigins,
+							i.topIsSelf,
+							i.parentIsTop,
+							i.frameElement,
+							i.name,
+							i.parentHref,
+						];
+					},
+					8000,
+				);
+				await check('iframes.same-origin-access', function () {
+					var win = same.frame.contentWindow;
+					return [
+						attempt(function () {
+							return win.location.href;
+						}),
+						attempt(function () {
+							return same.frame.contentDocument.title;
+						}),
+						win.parent === window,
+						win.top === window.top,
+						window.frames.length,
+						window[0] === win,
+						window.sameName === win,
+						attempt(function () {
+							return win.frameElement === same.frame;
+						}),
+					];
+				});
+				await check(
+					'iframes.cross-origin-child',
+					async function () {
+						other = await FID.child('b', 'if-b', { id: 'other-frame' });
+						var i = other.hello.info;
+						return [
+							i.href,
+							i.origin,
+							i.referrer,
+							i.ancestorOrigins,
+							i.topIsSelf,
+							i.parentIsTop,
+							i.frameElement,
+							i.parentHref,
+							i.domain,
+						];
+					},
+					8000,
+				);
+				await check('iframes.cross-origin-access', function () {
+					var win = other.frame.contentWindow;
+					return [
+						attempt(function () {
+							return win.document;
+						}),
+						other.frame.contentDocument,
+						attempt(function () {
+							return win.location.href;
+						}),
+						attempt(function () {
+							return win.name;
+						}),
+						attempt(function () {
+							return win.parent === window;
+						}),
+						attempt(function () {
+							return typeof win.postMessage;
+						}),
+						attempt(function () {
+							return win.length;
+						}),
+					];
+				});
+				await check(
+					'iframes.cross-origin-navigate',
+					async function () {
+						var next = FID.message(function (d) {
+							return d.fid === 'hello' && d.role === 'if-b2';
+						}, 6000);
+						other.frame.contentWindow.location = FID.url(
+							'b',
+							FID.q('/fidelity/frame.html', 'role=if-b2'),
+						);
+						var d = (await next).data;
+						return [d.info.href, d.info.referrer, other.frame.src];
+					},
+					8000,
+				);
+				await check('iframes.srcdoc', async function () {
+					var frame = FID.frame(null, {
+						srcdoc: '<a id="l" href="rel/x.html">x</a><p>srcdoc</p>',
+					});
+					await loaded(frame);
+					var w = frame.contentWindow;
+					return [
+						w.location.href,
+						w.origin,
+						w.document.baseURI,
+						w.document.getElementById('l').href,
+						w.document.referrer,
+					];
+				});
+				await check('iframes.about-blank', function () {
+					var frame = FID.frame(null);
+					var w = frame.contentWindow;
+					w.document.open();
+					w.document.write('<a id="l" href="rel/y.html">y</a>');
+					w.document.close();
+					return [
+						w.location.href,
+						w.document.URL,
+						w.origin,
+						w.document.baseURI,
+						w.document.getElementById('l').href,
+					];
+				});
+				await check('iframes.javascript-url', async function () {
+					var frame = FID.frame('javascript:"<p id=j>from javascript</p>"');
+					await loaded(frame);
+					var w = frame.contentWindow;
+					return [
+						w.location.href,
+						w.origin,
+						w.document.getElementById('j') &&
+							w.document.getElementById('j').textContent,
+					];
+				});
+				await check('iframes.sandboxed', async function () {
+					var hello = FID.message(function (d) {
+						return d.fid === 'hello' && d.role === 'if-sandbox';
+					}, 6000);
+					var frame = FID.frame(
+						FID.url('a', FID.q('/fidelity/frame.html', 'role=if-sandbox')),
+						{ sandbox: 'allow-scripts' },
+					);
+					var e = await hello;
+					var i = e.data.info;
+					return [
+						e.origin,
+						i.origin,
+						i.href,
+						i.cookie,
+						i.lsKeys,
+						attempt(function () {
+							return frame.contentDocument;
+						}),
+					];
+				});
+				await check('iframes.relative-src', async function () {
+					var frame = FID.frame(null);
+					frame.src = 'px.png';
+					await loaded(frame);
+					return [
+						frame.src,
+						frame.getAttribute('src'),
+						frame.contentWindow.location.href,
+						frame.contentDocument.contentType,
+					];
+				});
+				await check('iframes.frame-count', function () {
+					return [
+						window.length,
+						document.getElementsByTagName('iframe').length,
+					];
+				});
+			});
+		</script>
+	</body>
+</html>

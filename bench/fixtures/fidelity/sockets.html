@@ -1,0 +1,159 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity WebSocket and EventSource</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+	</head>
+	<body>
+		<p>WebSocket and EventSource</p>
+		<script>
+			// opens a socket, collects its first `count` messages
+			function socket(url, protocols, count) {
+				return new Promise(function (resolve, reject) {
+					var ws = protocols
+						? new WebSocket(url, protocols)
+						: new WebSocket(url);
+					var messages = [];
+					var opened = {
+						url: ws.url,
+						readyState: ws.readyState,
+						binaryType: ws.binaryType,
+					};
+					ws.onmessage = function (e) {
+						messages.push(e);
+						if (messages.length === count)
+							resolve({ ws: ws, opened: opened, messages: messages });
+					};
+					ws.onerror = function () {
+						reject({ name: 'WebSocketError' });
+					};
+				});
+			}
+			function hello(e) {
+				var d = JSON.parse(e.data);
+				return [d.path, d.host, d.origin || null, d.cookie || null];
+			}
+			FID.main(async function () {
+				var check = FID.check;
+				document.cookie = 'wsc=1; path=/';
+				var first = null;
+				await check('sockets.websocket-open', async function () {
+					first = await socket(
+						FID.url('a', '/fidelity/ws?x=1').replace('http:', 'ws:'),
+						null,
+						1,
+					);
+					return [
+						first.opened,
+						first.ws.url,
+						first.ws.protocol,
+						first.ws.extensions,
+						first.ws.readyState,
+					];
+				});
+				await check('sockets.websocket-handshake', function () {
+					return hello(first.messages[0]);
+				});
+				await check('sockets.websocket-message-event', function () {
+					var e = first.messages[0];
+					return [e.origin, e.lastEventId, e.source, typeof e.data];
+				});
+				await check('sockets.websocket-echo', async function () {
+					var ws = first.ws;
+					ws.binaryType = 'arraybuffer';
+					var got = [];
+					var done = new Promise(function (resolve) {
+						ws.onmessage = function (e) {
+							got.push(
+								typeof e.data === 'string'
+									? e.data
+									: Array.from(new Uint8Array(e.data)),
+							);
+							if (got.length === 2) resolve();
+						};
+					});
+					ws.send('text ' + FID.url('a', '/u'));
+					ws.send(new Uint8Array([1, 2, 250]));
+					await done;
+					return got;
+				});
+				await check('sockets.websocket-close', async function () {
+					var ws = first.ws;
+					var closed = new Promise(function (resolve) {
+						ws.onclose = resolve;
+					});
+					ws.send('close-me');
+					var e = await closed;
+					return [e.code, e.reason, e.wasClean, ws.readyState];
+				});
+				await check('sockets.websocket-relative', async function () {
+					var r = await socket('/fidelity/ws?rel=1', null, 1);
+					r.ws.close();
+					return [r.opened.url, hello(r.messages[0])];
+				});
+				await check('sockets.websocket-subprotocol', async function () {
+					var r = await socket(
+						FID.url('a', '/fidelity/ws?p=1').replace('http:', 'ws:'),
+						['p1', 'p2'],
+						1,
+					);
+					r.ws.close();
+					return r.ws.protocol;
+				});
+				await check('sockets.websocket-cross-origin', async function () {
+					var r = await socket(
+						FID.url('b', '/fidelity/ws?b=1').replace('http:', 'ws:'),
+						null,
+						1,
+					);
+					r.ws.close();
+					return [r.ws.url, hello(r.messages[0])];
+				});
+				await check('sockets.websocket-bad-url', function () {
+					try {
+						new WebSocket('ftp://a.bench.test/x');
+						return 'constructed';
+					} catch (e) {
+						return FID.err(e);
+					}
+				});
+				await check('sockets.eventsource', async function () {
+					var es = new EventSource('/fidelity/sse?e=1');
+					var opened = [es.url, es.readyState, es.withCredentials];
+					var named = new Promise(function (resolve) {
+						es.addEventListener('named', resolve);
+					});
+					var message = new Promise(function (resolve) {
+						es.onmessage = resolve;
+					});
+					var n = await named;
+					var m = await message;
+					es.close();
+					return [
+						opened,
+						[n.type, n.data, n.lastEventId, n.origin],
+						[m.type, m.data, m.lastEventId, m.origin],
+						es.readyState,
+					];
+				});
+				await check('sockets.eventsource-cross-origin', async function () {
+					var es = new EventSource(FID.url('b', '/fidelity/sse?nocors=1'));
+					var result = await new Promise(function (resolve) {
+						es.onerror = function () {
+							resolve(['error', es.readyState]);
+						};
+						es.onmessage = function () {
+							resolve(['message', es.readyState]);
+						};
+					});
+					es.close();
+					return result;
+				});
+			});
+		</script>
+	</body>
+</html>

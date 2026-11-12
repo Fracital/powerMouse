@@ -13,3 +13,7 @@ rust/patched/
 # screenshots from SHOTS=1 npm test
 test/out/
 /.claude/
+# benchmark output and the contenders bench/setup.mjs builds (bench/README.md)
+/bench/results/
+/bench/.contenders/
+__pycache__/

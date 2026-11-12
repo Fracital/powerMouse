@@ -1,0 +1,104 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity location</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+	</head>
+	<body>
+		<p>location</p>
+		<script>
+			FID.main(async function () {
+				var s = FID.sync;
+				s('location.href', function () {
+					return location.href;
+				});
+				s('location.origin', function () {
+					return location.origin;
+				});
+				s('location.protocol', function () {
+					return location.protocol;
+				});
+				s('location.host', function () {
+					return location.host;
+				});
+				s('location.hostname', function () {
+					return location.hostname;
+				});
+				s('location.port', function () {
+					return location.port === FID.port ? '<port>' : location.port;
+				});
+				s('location.pathname', function () {
+					return location.pathname;
+				});
+				s('location.search', function () {
+					return location.search;
+				});
+				s('location.hash', function () {
+					return location.hash;
+				});
+				s('location.to-string', function () {
+					return String(location);
+				});
+				s('location.document-url', function () {
+					return [document.URL, document.documentURI];
+				});
+				s('location.base-uri', function () {
+					return document.baseURI;
+				});
+				s('location.window-origin', function () {
+					return [window.origin, self.origin];
+				});
+				s('location.document-domain', function () {
+					return document.domain;
+				});
+				s('location.document-location', function () {
+					return [document.location === location, document.location.href];
+				});
+				s('location.ancestor-origins', function () {
+					return Array.from(location.ancestorOrigins);
+				});
+				s('location.top-is-self', function () {
+					return [
+						window.top === window,
+						window.parent === window,
+						self === window,
+					];
+				});
+				s('location.frame-element', function () {
+					return frameElement;
+				});
+				s('location.opener', function () {
+					return window.opener;
+				});
+				s('location.referrer', function () {
+					return document.referrer;
+				});
+				s('location.url-of-location', function () {
+					return new URL('sibling?a=1', location).href;
+				});
+				s('location.computed-access', function () {
+					var key = ['loc', 'ation'].join('');
+					return [
+						window[key].href,
+						document[key].host,
+						globalThis[key].pathname,
+					];
+				});
+				s('location.eval', function () {
+					return [
+						eval('location.href'),
+						new Function('return location.origin')(),
+					];
+				});
+				s('location.hash-set', function () {
+					location.hash = 'second';
+					return [location.href, location.hash];
+				});
+			});
+		</script>
+	</body>
+</html>

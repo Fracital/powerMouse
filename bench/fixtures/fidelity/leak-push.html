@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity leak: pushState then a relative fetch</title>
+	</head>
+	<body>
+		<script>
+			history.pushState(null, '', '/leak/');
+			fetch('push-state-relative?run=__RUN__&t=text').catch(function () {});
+		</script>
+	</body>
+</html>

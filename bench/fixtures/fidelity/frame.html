@@ -1,0 +1,109 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity frame</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__', role: '__ROLE__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+	</head>
+	<body>
+		<a id="next" href="frame.html?run=__RUN__&amp;role=__ROLE__-next">next</a>
+		<script>
+			(function () {
+				var role = FID.role;
+				function post(message) {
+					message.role = role;
+					parent.postMessage(message, '*');
+				}
+				var ops = {
+					info: function () {
+						return FID.info();
+					},
+					lsSet: function (k, v) {
+						localStorage.setItem(k, v);
+						return Object.keys(localStorage).sort();
+					},
+					lsGet: function (k) {
+						return localStorage.getItem(k);
+					},
+					cookie: function () {
+						return document.cookie;
+					},
+					setCookie: function (c) {
+						document.cookie = c;
+						return document.cookie;
+					},
+					// a nested frame.html child; resolves with its hello
+					frame: async function (name, childRole) {
+						var event = await FID.child(name, childRole);
+						return event.hello;
+					},
+					// follows the link to frame.html?role=<role>-next
+					followLink: function () {
+						document.getElementById('next').click();
+						return true;
+					},
+					idbNames: async function () {
+						return (await indexedDB.databases()).map(function (d) {
+							return d.name;
+						});
+					},
+					echo: function (value) {
+						return value;
+					},
+					bcPost: function (data) {
+						new BroadcastChannel('fid').postMessage(data);
+						return true;
+					},
+				};
+				addEventListener('message', async function (e) {
+					var d = e.data;
+					if (!d || typeof d !== 'object') return;
+					if (d.fid === 'cmd') {
+						var reply = {
+							fid: 'reply',
+							id: d.id,
+							role: role,
+							origin: FID.norm(e.origin),
+							sourceIsParent: e.source === parent,
+						};
+						try {
+							reply.value = FID.norm(await ops[d.op].apply(null, d.args));
+						} catch (error) {
+							reply.value = FID.err(error);
+						}
+						(e.source || parent).postMessage(reply, '*');
+					} else if (
+						(d.fid === 'hello' || d.fid === 'relay') &&
+						e.source !== parent
+					) {
+						post({ fid: 'relay', data: d });
+					}
+				});
+				addEventListener('storage', function (e) {
+					post({
+						fid: 'storage',
+						key: e.key,
+						newValue: e.newValue,
+						url: FID.norm(e.url),
+						isLocal: e.storageArea === localStorage,
+					});
+				});
+				try {
+					new BroadcastChannel('fid').onmessage = function (e) {
+						post({ fid: 'bc', data: e.data });
+					};
+				} catch (e) {
+					// no BroadcastChannel in an opaque origin
+				}
+				function hello() {
+					post({ fid: 'hello', info: FID.info() });
+				}
+				if (document.readyState === 'complete') hello();
+				else addEventListener('load', hello);
+			})();
+		</script>
+	</body>
+</html>

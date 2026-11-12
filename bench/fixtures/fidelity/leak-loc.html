@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity leak: location in a frame</title>
+	</head>
+	<body>
+		<script>
+			(function () {
+				var role = '__ROLE__';
+				var url = '__LEAK__/frame-' + role + '?run=__RUN__&t=html';
+				if (role === 'location-assign') location.href = url;
+				else if (role === 'location-replace') location.replace(url);
+				else if (role === 'open-self') window.open(url, '_self');
+			})();
+		</script>
+	</body>
+</html>

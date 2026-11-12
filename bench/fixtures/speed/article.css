@@ -1,0 +1,37 @@
+body {
+	font:
+		17px/1.6 Georgia,
+		serif;
+	margin: 0;
+	color: #222;
+	background: #fafaf7;
+}
+header {
+	background: #20324a;
+	color: #fff;
+	padding: 24px 48px;
+}
+header nav a {
+	color: #cfe0f5;
+	margin-right: 14px;
+	font: 14px sans-serif;
+}
+main {
+	max-width: 960px;
+	margin: 0 auto;
+	padding: 24px;
+}
+.hero {
+	width: 100%;
+	height: auto;
+	display: block;
+}
+figure img {
+	max-width: 100%;
+	height: auto;
+}
+footer {
+	text-align: center;
+	padding: 40px;
+	color: #777;
+}

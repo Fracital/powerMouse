@@ -13,3 +13,8 @@
 /test/wpt/resources/testdriver.js
 test/pages/vendor-*.js
 /vendor/meriyah/meriyah.mjs
+# benchmark output and the contenders bench/setup.mjs builds
+/bench/results
+/bench/.contenders
+# lockfiles the bench adapters pin for the contenders they install
+bench/contenders/**/package-lock.json

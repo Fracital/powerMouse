@@ -49,11 +49,12 @@
 		"build": "npm run check && node build.js && tsc -p tsconfig.types.json",
 		"dev": "node scripts/dev.mjs",
 		"check": "tsc --noEmit",
-		"lint": "eslint src build.js demo/server.js demo/public/pm/dev.js scripts test",
+		"lint": "eslint src build.js demo/server.js demo/public/pm/dev.js scripts test bench",
 		"format": "prettier --write .",
 		"check:prose": "node scripts/check-prose.mjs",
 		"demo": "node demo/server.js",
 		"test": "node test/run.mjs",
+		"bench": "python3 -I bench/run.py",
 		"prepack": "npm run build"
 	},
 	"dependencies": {

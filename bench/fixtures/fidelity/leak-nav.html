@@ -1,0 +1,158 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity leak vectors: navigations, frames, headers</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+		<style>
+			iframe {
+				width: 40px;
+				height: 30px;
+			}
+		</style>
+	</head>
+	<body>
+		<p>
+			leak vectors: navigations, frames, headers (this response carries a Link
+			preload header)
+		</p>
+		<iframe name="form-get-frame"></iframe>
+		<iframe name="form-post-frame"></iframe>
+		<iframe name="ping-frame"></iframe>
+		<iframe name="link-frame"></iframe>
+		<form
+			id="form-get"
+			action="__LEAK__/form-get"
+			target="form-get-frame"
+			method="get"
+		>
+			<input type="hidden" name="run" value="__RUN__" />
+			<input type="hidden" name="t" value="html" />
+		</form>
+		<form
+			id="form-post"
+			action="__LEAK__/form-post?run=__RUN__&amp;t=html"
+			target="form-post-frame"
+			method="post"
+		>
+			<input type="hidden" name="field" value="x" />
+		</form>
+		<a
+			id="ping"
+			href="/fidelity/px.png?ping"
+			ping="__LEAK__/a-ping?run=__RUN__&amp;t=text"
+			target="ping-frame"
+			>ping</a
+		>
+		<a
+			id="link"
+			href="__LEAK__/link-click?run=__RUN__&amp;t=html"
+			target="link-frame"
+			>link</a
+		>
+		<script>
+			(function () {
+				var fire = FID.fire;
+				var L = FID.leak;
+				function frame(src, attrs) {
+					return FID.frame(src, attrs);
+				}
+				FID.vectors['link-header'] = 'markup';
+				fire('form-get', function () {
+					document.getElementById('form-get').submit();
+				});
+				fire('form-post', function () {
+					document.getElementById('form-post').submit();
+				});
+				fire('a-ping', function () {
+					document.getElementById('ping').click();
+				});
+				fire('link-click', function () {
+					document.getElementById('link').click();
+				});
+				fire('meta-refresh', function () {
+					frame(FID.q('/fidelity/leak-meta.html'));
+				});
+				fire('refresh-header', function () {
+					frame(FID.q('/fidelity/leak-refresh.html'));
+				});
+				['location-assign', 'location-replace', 'open-self'].forEach(
+					function (role) {
+						fire('frame-' + role, function () {
+							frame(FID.q('/fidelity/leak-loc.html', 'role=' + role));
+						});
+					},
+				);
+				fire('frame-location-parent', function () {
+					var f = frame(null);
+					f.contentWindow.location.href = L('frame-location-parent', 'html');
+				});
+				fire('window-open', function () {
+					var w = window.open(
+						L('window-open', 'html'),
+						'fidleak',
+						'width=200,height=200',
+					);
+					setTimeout(function () {
+						try {
+							if (w) w.close();
+						} catch (e) {
+							// a proxy's stand-in may not close
+						}
+					}, 2000);
+				});
+				fire('iframe-javascript-url', function () {
+					frame(
+						'javascript:' +
+							JSON.stringify(
+								'<img src="' + L('iframe-javascript-url', 'img') + '">',
+							),
+					);
+				});
+				fire('iframe-data-url', function () {
+					frame(
+						'data:text/html,' +
+							encodeURIComponent(
+								'<img src="' + L('iframe-data-url', 'img') + '">',
+							),
+					);
+				});
+				fire('iframe-srcdoc', function () {
+					frame(null, {
+						srcdoc: '<img src="' + L('iframe-srcdoc', 'img') + '">',
+					});
+				});
+				fire('iframe-blob-url', function () {
+					var blob = new Blob(
+						['<img src="' + L('iframe-blob-url', 'img') + '">'],
+						{ type: 'text/html' },
+					);
+					frame(URL.createObjectURL(blob));
+				});
+				fire('about-blank-write', function () {
+					var f = frame(null);
+					f.contentDocument.open();
+					f.contentDocument.write(
+						'<img src="' + L('about-blank-write', 'img') + '">',
+					);
+					f.contentDocument.close();
+				});
+				fire('base-href', function () {
+					frame(FID.q('/fidelity/leak-base.html'));
+				});
+				fire('push-state-relative', function () {
+					frame(FID.q('/fidelity/leak-push.html'));
+				});
+				fire('csp-report', function () {
+					frame(FID.q('/fidelity/leak-csp.html'));
+				});
+			})();
+			FID.main(function () {
+				return FID.sleep(3500);
+			});
+		</script>
+	</body>
+</html>

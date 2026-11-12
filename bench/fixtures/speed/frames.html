@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>Speed fixture: ad-like frames</title>
+		<style>
+			body {
+				margin: 8px;
+				font: 14px sans-serif;
+			}
+			iframe {
+				width: 300px;
+				height: 250px;
+				border: 1px solid #ccc;
+				margin: 4px;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>Twenty ad-like frames</h1>
+		<div id="slots"></div>
+		<script>
+			// N cross-origin frames (another name of the fixture server), the
+			// shape of a page full of display ads
+			const params = new URLSearchParams(location.search);
+			const n = Number(params.get('n') || 20);
+			const other = location.host.replace(/^[^.]+/, 'b');
+			// the load events say every frame finished; how many frames ran
+			// their script and told us is reported too (the harness checks
+			// that the fixture server served every frame, since a load event
+			// also fires for a frame a content blocker refused)
+			let loaded = 0;
+			let ready = 0;
+			const done = () => {
+				document.documentElement.setAttribute(
+					'data-bench-result',
+					JSON.stringify({ done: true, frames: n, loaded, ready }),
+				);
+			};
+			addEventListener('message', (event) => {
+				if (!event.data || !event.data.ready) return;
+				ready++;
+				if (loaded === n) done();
+			});
+			for (let i = 0; i < n; i++) {
+				const frame = document.createElement('iframe');
+				frame.src = `${location.protocol}//${other}/speed/frame.html?slot=${i}`;
+				frame.addEventListener('load', () => {
+					loaded++;
+					if (loaded === n) done();
+				});
+				document.getElementById('slots').append(frame);
+			}
+			if (!n) done();
+		</script>
+	</body>
+</html>

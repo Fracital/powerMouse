@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>rewrite throughput</title>
+	</head>
+	<body>
+		<p id="status">loading</p>
+		<script>
+			// In-browser rewrite throughput: every corpus script (scripts.json,
+			// bench/lib/scripts.mjs) loaded one after another through whatever
+			// serves this page, each timed from its insert to its load or error
+			// event (fetch, the proxy's rewrite, compile and run). The scripts
+			// run outside their usual environment and may throw at top level:
+			// that is caught and recorded, and the next one loads.
+			// ?set=all (default) | classic | module | <id>,<id>,...
+			// The summary goes into document.documentElement.dataset.benchResult
+			// as { done, total_ms, scripts: [{ id, bytes, module, ms, ok, threw }] }.
+			(() => {
+				// taken before any corpus script runs and can replace them
+				const now = performance.now.bind(performance);
+				const stringify = JSON.stringify;
+				const root = document.documentElement;
+				const head = document.head;
+				const status = document.getElementById('status');
+				const createElement = document.createElement.bind(document);
+				const setTimer = setTimeout;
+				const clearTimer = clearTimeout;
+				const PER_SCRIPT_TIMEOUT = 180000;
+
+				let current = null;
+				const caught = (message) => {
+					if (current && current.threw === null)
+						current.threw = String(message).slice(0, 300);
+				};
+				addEventListener(
+					'error',
+					(event) => {
+						if (event.target === window || event.target === undefined)
+							caught(event.message || event.error);
+					},
+					true,
+				);
+				addEventListener('unhandledrejection', (event) =>
+					caught(`unhandled rejection: ${event.reason}`),
+				);
+
+				const finish = (result) => {
+					root.dataset.benchResult = stringify(result);
+					status.textContent = result.error
+						? `error: ${result.error}`
+						: `done in ${result.total_ms.toFixed(0)} ms`;
+				};
+
+				const load = (entry) =>
+					new Promise((resolve) => {
+						const script = createElement('script');
+						if (entry.module) script.type = 'module';
+						const record = {
+							id: entry.id,
+							bytes: entry.bytes,
+							module: entry.module,
+							ms: null,
+							ok: false,
+							threw: null,
+						};
+						current = record;
+						let timer;
+						const settle = (ok, why) => {
+							if (record.ms !== null) return;
+							record.ms = now() - start;
+							record.ok = ok;
+							if (why) record.threw = why;
+							clearTimer(timer);
+							resolve(record);
+						};
+						script.addEventListener('load', () => settle(true));
+						script.addEventListener('error', () =>
+							settle(false, record.threw ?? 'error event'),
+						);
+						timer = setTimer(
+							() =>
+								settle(false, `no load or error in ${PER_SCRIPT_TIMEOUT} ms`),
+							PER_SCRIPT_TIMEOUT,
+						);
+						script.src = `scripts/${entry.id}.js`;
+						const start = now();
+						head.appendChild(script);
+					});
+
+				const run = async () => {
+					const set = new URLSearchParams(location.search).get('set') || 'all';
+					const response = await fetch('scripts.json', { cache: 'no-store' });
+					if (!response.ok)
+						throw new Error(`scripts.json: HTTP ${response.status}`);
+					const all = await response.json();
+					const ids = set.split(',');
+					const list =
+						set === 'all'
+							? all
+							: set === 'classic'
+								? all.filter((entry) => !entry.module)
+								: set === 'module'
+									? all.filter((entry) => entry.module)
+									: all.filter((entry) => ids.includes(entry.id));
+					if (!list.length) throw new Error(`no scripts in set ${set}`);
+					const scripts = [];
+					const start = now();
+					for (const entry of list) {
+						status.textContent = `${scripts.length + 1}/${list.length} ${entry.id}`;
+						scripts.push(await load(entry));
+					}
+					current = null;
+					finish({ done: true, set, total_ms: now() - start, scripts });
+				};
+
+				run().catch((error) =>
+					finish({
+						done: true,
+						error: String(error && error.message ? error.message : error),
+						total_ms: null,
+						scripts: [],
+					}),
+				);
+			})();
+		</script>
+	</body>
+</html>

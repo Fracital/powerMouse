@@ -1,0 +1,127 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity leak vectors: JavaScript network APIs</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+	</head>
+	<body>
+		<p>leak vectors: JavaScript network APIs</p>
+		<script>
+			(function () {
+				var fire = FID.fire;
+				var L = FID.leak;
+				var quiet = function () {};
+				fire('fetch', function () {
+					return fetch(L('fetch')).catch(quiet);
+				});
+				fire('fetch-request', function () {
+					return fetch(
+						new Request(L('fetch-request'), { mode: 'no-cors' }),
+					).catch(quiet);
+				});
+				fire('xhr', function () {
+					var x = new XMLHttpRequest();
+					x.open('GET', L('xhr'));
+					x.onerror = quiet;
+					x.send();
+				});
+				fire('beacon', function () {
+					if (!navigator.sendBeacon(L('beacon'), 'x'))
+						throw { name: 'NotQueued' };
+				});
+				fire('websocket', function () {
+					var ws = new WebSocket(L('websocket').replace('http:', 'ws:'));
+					ws.onerror = quiet;
+				});
+				fire('eventsource', function () {
+					var es = new EventSource(L('eventsource', 'sse'));
+					es.onerror = function () {
+						es.close();
+					};
+				});
+				fire('new-image', function () {
+					new Image().src = L('new-image', 'img');
+				});
+				fire('new-audio', function () {
+					var audio = new Audio(L('new-audio'));
+					audio.onerror = quiet;
+				});
+				fire('worker-script', function () {
+					var worker = new Worker(L('worker-script', 'js', 'a'));
+					worker.onerror = quiet;
+				});
+				fire('worker-module', function () {
+					var worker = new Worker(L('worker-module', 'js', 'a'), {
+						type: 'module',
+					});
+					worker.onerror = quiet;
+				});
+				fire('shared-worker', function () {
+					var worker = new SharedWorker(L('shared-worker', 'js', 'a'));
+					worker.onerror = quiet;
+				});
+				// a same-origin worker of the page's own, which fires its own vectors
+				var inWorker = [
+					'worker-importscripts',
+					'worker-fetch',
+					'worker-websocket',
+				];
+				try {
+					var worker = new Worker(FID.q('/fidelity/leak-worker.js'));
+					worker.onmessage = function (e) {
+						inWorker.forEach(function (id) {
+							FID.vectors[id] = e.data[id] || 'unknown';
+						});
+					};
+					worker.onerror = function (e) {
+						inWorker.forEach(function (id) {
+							FID.vectors[id] = { error: 'WorkerError' };
+						});
+					};
+				} catch (e) {
+					inWorker.forEach(function (id) {
+						FID.vectors[id] = FID.err(e);
+					});
+				}
+				fire('blob-worker-fetch', function () {
+					var code =
+						'fetch(' +
+						JSON.stringify(L('blob-worker-fetch')) +
+						').catch(function () {})';
+					new Worker(
+						URL.createObjectURL(new Blob([code], { type: 'text/javascript' })),
+					);
+				});
+				fire('sw-register', function () {
+					if (!navigator.serviceWorker) throw { name: 'Unavailable' };
+					return navigator.serviceWorker.register(L('sw-register', 'js', 'a'));
+				});
+				fire('paint-worklet', function () {
+					if (typeof CSS === 'undefined' || !CSS.paintWorklet)
+						throw { name: 'Unavailable' };
+					return CSS.paintWorklet.addModule(L('paint-worklet', 'js'));
+				});
+				fire('audio-worklet', function () {
+					var context = new OfflineAudioContext(1, 128, 44100);
+					if (!context.audioWorklet) throw { name: 'Unavailable' };
+					return context.audioWorklet.addModule(L('audio-worklet', 'js'));
+				});
+			})();
+		</script>
+		<script>
+			// alone in its script: a rewriter that cannot parse import() loses only this vector
+			FID.fire('dynamic-import', function () {
+				return import(FID.leak('dynamic-import', 'js'));
+			});
+		</script>
+		<script>
+			FID.main(function () {
+				return FID.sleep(3000);
+			});
+		</script>
+	</body>
+</html>

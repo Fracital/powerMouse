@@ -1,0 +1,152 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity workers</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+	</head>
+	<body>
+		<p>workers</p>
+		<script>
+			function ask(worker, data) {
+				return new Promise(function (resolve, reject) {
+					worker.onmessage = resolve;
+					worker.onerror = function (e) {
+						reject({ name: 'WorkerError', message: e.message });
+					};
+					worker.postMessage(data);
+				});
+			}
+			FID.main(async function () {
+				var check = FID.check;
+				var probe = null;
+				var workerEvent = null;
+				await check('workers.dedicated-location', async function () {
+					workerEvent = await ask(new Worker('worker.js?w=1'), 'probe');
+					probe = workerEvent.data;
+					return [probe.href, probe.origin, probe.toString];
+				});
+				await check('workers.dedicated-resolve', function () {
+					return [probe.imported, probe.resolve];
+				});
+				await check('workers.dedicated-fetch', function () {
+					return probe.fetch;
+				});
+				await check('workers.message-event', function () {
+					return [
+						probe.event,
+						workerEvent.origin,
+						workerEvent.source,
+						workerEvent.lastEventId,
+					];
+				});
+				await check('workers.module', async function () {
+					return (
+						await ask(
+							new Worker('worker-module.mjs', { type: 'module' }),
+							'probe',
+						)
+					).data;
+				});
+				await check('workers.blob', async function () {
+					var code =
+						'onmessage = function () { var r; try { r = new URL("/abs", location.href).href } catch (e) { r = { error: e.name } } postMessage([location.href, self.origin, location.protocol, r]) }';
+					var url = URL.createObjectURL(
+						new Blob([code], { type: 'text/javascript' }),
+					);
+					return (await ask(new Worker(url), 'probe')).data;
+				});
+				await check('workers.blob-module', async function () {
+					var code =
+						'onmessage = function () { postMessage([import.meta.url, self.origin]) }';
+					var url = URL.createObjectURL(
+						new Blob([code], { type: 'text/javascript' }),
+					);
+					return (await ask(new Worker(url, { type: 'module' }), 'probe')).data;
+				});
+				await check('workers.data-url', async function () {
+					var url =
+						'data:text/javascript,' +
+						encodeURIComponent(
+							'onmessage = function () { postMessage([self.origin, location.protocol]) }',
+						);
+					return (await ask(new Worker(url), 'probe')).data;
+				});
+				await check('workers.cross-origin-script', function () {
+					try {
+						new Worker(FID.url('b', '/fidelity/worker.js'));
+						return 'constructed';
+					} catch (e) {
+						return FID.err(e);
+					}
+				});
+				await check('workers.shared', async function () {
+					function connect() {
+						return new Promise(function (resolve) {
+							var worker = new SharedWorker('shared.js', {
+								name: 'fid-shared',
+							});
+							worker.port.onmessage = function (e) {
+								resolve(e.data);
+							};
+						});
+					}
+					var first = await connect();
+					var second = await connect();
+					return [first, second[0]];
+				});
+				var registration = null;
+				await check(
+					'secure.service-worker-register',
+					async function () {
+						if (!('serviceWorker' in navigator)) return 'unavailable';
+						registration = await navigator.serviceWorker.register('sw.js', {
+							scope: '/fidelity/sw-scope/',
+						});
+						var worker =
+							registration.installing ||
+							registration.waiting ||
+							registration.active;
+						if (worker.state !== 'activated')
+							await new Promise(function (resolve) {
+								worker.addEventListener('statechange', function () {
+									if (worker.state === 'activated') resolve();
+								});
+							});
+						return [
+							registration.scope,
+							registration.active.scriptURL,
+							!!navigator.serviceWorker.controller,
+						];
+					},
+					8000,
+				);
+				await check(
+					'secure.service-worker-page',
+					async function () {
+						if (!registration) return 'unavailable';
+						var got = FID.message(function (d) {
+							return d.fid === 'sw-page';
+						}, 6000);
+						FID.frame('/fidelity/sw-scope/page?x=1');
+						var d = (await got).data;
+						return [FID.norm(JSON.parse(d.info)), d.href, d.controlled];
+					},
+					8000,
+				);
+				await check('secure.service-worker-registrations', async function () {
+					if (!('serviceWorker' in navigator)) return 'unavailable';
+					var list = await navigator.serviceWorker.getRegistrations();
+					return list
+						.map(function (r) {
+							return r.scope;
+						})
+						.sort();
+				});
+			}, 25000);
+		</script>
+	</body>
+</html>

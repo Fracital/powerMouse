@@ -20,6 +20,15 @@ export default defineConfig([
 			// scripts of ours in test/wpt/resources/ run in a page too
 			'test/wpt/**/*.html',
 			'test/wpt/**/*.js',
+			// benchmark output, the contenders it builds, and the pages it
+			// serves (host pages and fixtures run in the browser with their
+			// own globals)
+			'bench/results/',
+			'bench/.contenders/',
+			'bench/contenders/*/host/',
+			'bench/contenders/*/pkg/',
+			'bench/fixtures/',
+			'bench/lib/probe.js',
 		],
 	},
 	js.configs.recommended,

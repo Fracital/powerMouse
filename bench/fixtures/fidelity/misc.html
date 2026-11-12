@@ -1,0 +1,199 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity misc</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+		<script id="inline">
+			/*fid*/ var fidInline = location.pathname;
+		</script>
+	</head>
+	<body>
+		<p id="p">misc</p>
+		<script>
+			FID.main(async function () {
+				var s = FID.sync;
+				var check = FID.check;
+				s('misc.native-to-string', function () {
+					var show = Function.prototype.toString;
+					return [
+						show.call(fetch),
+						show.call(document.createElement),
+						show.call(XMLHttpRequest.prototype.open),
+						show.call(
+							Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML')
+								.set,
+						),
+						show.call(
+							Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
+								.get,
+						),
+						show.call(window.postMessage),
+						show.call(show),
+						show.call(
+							Object.getOwnPropertyDescriptor(Document.prototype, 'cookie').get,
+						),
+					];
+				});
+				s('misc.location-descriptors', function () {
+					var d = Object.getOwnPropertyDescriptor(window, 'location');
+					var assign = Object.getOwnPropertyDescriptor(location, 'assign');
+					return [
+						typeof d.get,
+						typeof d.set,
+						d.configurable,
+						Function.prototype.toString.call(d.get),
+						assign.writable,
+						assign.configurable,
+						Function.prototype.toString.call(location.assign),
+					];
+				});
+				s('misc.window-own-keys', function () {
+					// own enumerable names of the global, minus the page's and the
+					// battery's own and those only a secure context has (whether the
+					// page is one is secure.is-secure-context's business)
+					var skip = [
+						'FID',
+						'fidInline',
+						'caches',
+						'cookieStore',
+						'documentPictureInPicture',
+						'fetchLater',
+						'getScreenDetails',
+						'ondevicemotion',
+						'ondeviceorientation',
+						'ondeviceorientationabsolute',
+						'onpointerrawupdate',
+						'queryLocalFonts',
+						'showDirectoryPicker',
+						'showOpenFilePicker',
+						'showSaveFilePicker',
+					];
+					return Object.keys(window)
+						.filter(function (k) {
+							return skip.indexOf(k) < 0;
+						})
+						.sort();
+				});
+				s('misc.document-own-keys', function () {
+					return [
+						Object.keys(document).sort(),
+						Object.getOwnPropertyNames(location).sort(),
+					];
+				});
+				s('misc.inline-script-text', function () {
+					return document.getElementById('inline').textContent;
+				});
+				s('misc.script-elements', function () {
+					return [
+						document.scripts.length,
+						document.head.children.length,
+						document.body.children.length,
+					];
+				});
+				s('misc.markup', function () {
+					return document.getElementById('p').outerHTML;
+				});
+				s('misc.error-stack-url', function () {
+					var stack = String(new Error('x').stack);
+					var urls = stack.match(/https?:\/\/[^\s)]+?(?=:\d+:\d+)/g) || [];
+					return urls;
+				});
+				s('misc.document-props', function () {
+					return [
+						document.title,
+						document.characterSet,
+						document.compatMode,
+						document.contentType,
+						document.readyState,
+						document.visibilityState,
+						document.designMode,
+					];
+				});
+				s('secure.is-secure-context', function () {
+					return [
+						window.isSecureContext,
+						typeof crypto.subtle,
+						typeof navigator.serviceWorker,
+						typeof cookieStore,
+					];
+				});
+				s('misc.cross-origin-isolated', function () {
+					return [self.crossOriginIsolated, typeof SharedArrayBuffer];
+				});
+				s('misc.viewport', function () {
+					return [
+						innerWidth,
+						innerHeight,
+						devicePixelRatio,
+						screen.width,
+						screen.height,
+						outerWidth > 0,
+					];
+				});
+				s('misc.window-name', function () {
+					return window.name;
+				});
+				s('misc.eval-forms', function () {
+					return [
+						eval('location.host'),
+						(0, eval)('this === window'),
+						new Function('return this.location.origin')(),
+						setTimeout.length,
+					];
+				});
+				s('misc.dom-url-attributes', function () {
+					var div = document.createElement('div');
+					div.innerHTML =
+						'<img src="/m/a.png" srcset="/m/b.png 2x"><a href="http://b.bench.test/z">z</a><form action="/m/f"></form>';
+					var attrs = Array.from(div.querySelectorAll('*')).map(function (el) {
+						return Array.from(el.attributes)
+							.map(function (a) {
+								return a.name + '=' + a.value;
+							})
+							.join(' ');
+					});
+					return [attrs, div.innerHTML];
+				});
+				s('misc.reflect-src', function () {
+					var img = document.createElement('img');
+					Reflect.set(img, 'src', '/m/reflect.png');
+					var setter = Object.getOwnPropertyDescriptor(
+						HTMLImageElement.prototype,
+						'src',
+					).set;
+					var img2 = document.createElement('img');
+					setter.call(img2, '/m/setter.png');
+					return [
+						img.src,
+						img.getAttribute('src'),
+						img2.src,
+						img2.getAttribute('src'),
+					];
+				});
+				s('misc.dom-parser', function () {
+					var doc = new DOMParser().parseFromString(
+						'<a href="rel.html">x</a><img src="i.png">',
+						'text/html',
+					);
+					return [
+						doc.URL,
+						doc.baseURI,
+						doc.querySelector('a').href,
+						doc.querySelector('img').getAttribute('src'),
+					];
+				});
+				await check('misc.navigator', function () {
+					return [
+						navigator.webdriver,
+						navigator.cookieEnabled,
+						navigator.onLine,
+					];
+				});
+			});
+		</script>
+	</body>
+</html>

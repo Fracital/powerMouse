@@ -1,0 +1,269 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fidelity leak vectors: elements, CSS, DOM</title>
+		<script>
+			window.FID = { port: '__PORT__', run: '__RUN__' };
+		</script>
+		<script src="/fidelity/lib.js"></script>
+		<link
+			rel="stylesheet"
+			href="__LEAK__/link-stylesheet?run=__RUN__&amp;t=css"
+		/>
+		<link
+			rel="preload"
+			as="image"
+			href="__LEAK__/link-preload?run=__RUN__&amp;t=img"
+		/>
+		<link rel="prefetch" href="__LEAK__/link-prefetch?run=__RUN__&amp;t=text" />
+		<link rel="icon" href="__LEAK__/link-icon?run=__RUN__&amp;t=img" />
+		<style>
+			@import url('__LEAK__/css-import?run=__RUN__&t=css');
+			@font-face {
+				font-family: fidleak;
+				src: url('__LEAK__/css-font-face?run=__RUN__&t=font');
+			}
+			.ff {
+				font-family: fidleak;
+			}
+			.box {
+				width: 4px;
+				height: 4px;
+			}
+		</style>
+	</head>
+	<body>
+		<p>leak vectors: elements, CSS, DOM</p>
+		<script src="__LEAK__/script-attr?run=__RUN__&amp;t=js"></script>
+		<img src="__LEAK__/img-attr?run=__RUN__&amp;t=img" alt="" />
+		<img srcset="__LEAK__/img-srcset?run=__RUN__&amp;t=img 1x" alt="" />
+		<picture>
+			<source srcset="__LEAK__/picture-source?run=__RUN__&amp;t=img" />
+			<img src="/fidelity/px.png" alt="" />
+		</picture>
+		<iframe src="__LEAK__/iframe-attr?run=__RUN__&amp;t=html"></iframe>
+		<video
+			poster="__LEAK__/video-poster?run=__RUN__&amp;t=img"
+			width="4"
+			height="4"
+		></video>
+		<audio
+			src="__LEAK__/audio-src?run=__RUN__&amp;t=text"
+			preload="auto"
+		></audio>
+		<video preload="auto" width="4" height="4">
+			<source src="__LEAK__/video-source?run=__RUN__&amp;t=text" />
+		</video>
+		<video preload="auto" src="/fidelity/px.png" width="4" height="4">
+			<track
+				default
+				kind="subtitles"
+				src="__SAMELEAK__/track?run=__RUN__&amp;t=vtt"
+			/>
+		</video>
+		<embed
+			src="__LEAK__/embed?run=__RUN__&amp;t=html"
+			type="text/html"
+			width="4"
+			height="4"
+		/>
+		<object
+			data="__LEAK__/object?run=__RUN__&amp;t=html"
+			type="text/html"
+			width="4"
+			height="4"
+		></object>
+		<input
+			type="image"
+			src="__LEAK__/input-image?run=__RUN__&amp;t=img"
+			alt="i"
+		/>
+		<svg width="4" height="4">
+			<image
+				href="__LEAK__/svg-image?run=__RUN__&amp;t=img"
+				width="4"
+				height="4"
+			/>
+			<use href="__SAMELEAK__/svg-use?run=__RUN__&amp;t=svg#r" />
+		</svg>
+		<div
+			class="box"
+			style="
+				background-image: url('__LEAK__/css-style-attr?run=__RUN__&amp;t=img');
+			"
+		></div>
+		<span class="ff">font</span>
+		<template id="tpl"
+			><img src="__LEAK__/template-clone?run=__RUN__&amp;t=img" alt=""
+		/></template>
+		<div id="slot"></div>
+		<div id="outer"></div>
+		<script>
+			document.write('<img src="' + FID.leak('document-write', 'img') + '">');
+		</script>
+		<script>
+			(function () {
+				var fire = FID.fire;
+				var L = FID.leak;
+				var slot = document.getElementById('slot');
+				function box() {
+					var div = document.createElement('div');
+					div.className = 'box';
+					slot.appendChild(div);
+					return div;
+				}
+				fire('cssom-property', function () {
+					box().style.backgroundImage =
+						'url("' + L('cssom-property', 'img') + '")';
+				});
+				fire('cssom-csstext', function () {
+					box().style.cssText =
+						'width:4px;height:4px;background-image:url("' +
+						L('cssom-csstext', 'img') +
+						'")';
+				});
+				fire('cssom-setproperty', function () {
+					box().style.setProperty(
+						'background-image',
+						'url("' + L('cssom-setproperty', 'img') + '")',
+					);
+				});
+				fire('cssom-insertrule', function () {
+					var style = document.createElement('style');
+					document.head.appendChild(style);
+					style.sheet.insertRule(
+						'.ir { background-image: url("' +
+							L('cssom-insertrule', 'img') +
+							'") }',
+					);
+					box().classList.add('ir');
+				});
+				fire('adopted-stylesheet', function () {
+					var sheet = new CSSStyleSheet();
+					sheet.replaceSync(
+						'.ad { background-image: url("' +
+							L('adopted-stylesheet', 'img') +
+							'") }',
+					);
+					document.adoptedStyleSheets = document.adoptedStyleSheets.concat([
+						sheet,
+					]);
+					box().classList.add('ad');
+				});
+				fire('style-element-text', function () {
+					var style = document.createElement('style');
+					style.textContent =
+						'.st { background-image: url("' +
+						L('style-element-text', 'img') +
+						'") }';
+					document.head.appendChild(style);
+					box().classList.add('st');
+				});
+				fire('dom-innerhtml', function () {
+					box().innerHTML = '<img src="' + L('dom-innerhtml', 'img') + '">';
+				});
+				fire('dom-outerhtml', function () {
+					document.getElementById('outer').outerHTML =
+						'<img src="' + L('dom-outerhtml', 'img') + '">';
+				});
+				fire('dom-insertadjacent', function () {
+					slot.insertAdjacentHTML(
+						'beforeend',
+						'<img src="' + L('dom-insertadjacent', 'img') + '">',
+					);
+				});
+				fire('contextual-fragment', function () {
+					var fragment = document
+						.createRange()
+						.createContextualFragment(
+							'<img src="' + L('contextual-fragment', 'img') + '">',
+						);
+					slot.appendChild(fragment);
+				});
+				fire('domparser-import', function () {
+					var doc = new DOMParser().parseFromString(
+						'<img src="' + L('domparser-import', 'img') + '">',
+						'text/html',
+					);
+					slot.appendChild(document.importNode(doc.body.firstChild, true));
+				});
+				fire('template-clone', function () {
+					slot.appendChild(
+						document.getElementById('tpl').content.cloneNode(true),
+					);
+				});
+				fire('set-attribute', function () {
+					var img = document.createElement('img');
+					img.setAttribute('src', L('set-attribute', 'img'));
+					slot.appendChild(img);
+				});
+				fire('set-attribute-ns', function () {
+					var img = document.createElement('img');
+					img.setAttributeNS(null, 'src', L('set-attribute-ns', 'img'));
+					slot.appendChild(img);
+				});
+				fire('attribute-node', function () {
+					var img = document.createElement('img');
+					var attr = document.createAttribute('src');
+					attr.value = L('attribute-node', 'img');
+					img.setAttributeNode(attr);
+					slot.appendChild(img);
+				});
+				fire('reflect-set', function () {
+					var img = document.createElement('img');
+					Reflect.set(img, 'src', L('reflect-set', 'img'));
+					slot.appendChild(img);
+				});
+				fire('prototype-setter', function () {
+					var img = document.createElement('img');
+					Object.getOwnPropertyDescriptor(
+						HTMLImageElement.prototype,
+						'src',
+					).set.call(img, L('prototype-setter', 'img'));
+					slot.appendChild(img);
+				});
+				fire('srcset-property', function () {
+					var img = document.createElement('img');
+					img.srcset = L('srcset-property', 'img') + ' 1x';
+					slot.appendChild(img);
+				});
+				fire('script-dynamic', function () {
+					var script = document.createElement('script');
+					script.src = L('script-dynamic', 'js');
+					document.head.appendChild(script);
+				});
+				// the markup vectors are in the document itself
+				[
+					'link-stylesheet',
+					'link-preload',
+					'link-prefetch',
+					'link-icon',
+					'css-import',
+					'css-font-face',
+					'script-attr',
+					'img-attr',
+					'img-srcset',
+					'picture-source',
+					'iframe-attr',
+					'video-poster',
+					'audio-src',
+					'video-source',
+					'track',
+					'embed',
+					'object',
+					'input-image',
+					'svg-image',
+					'svg-use',
+					'css-style-attr',
+					'document-write',
+				].forEach(function (id) {
+					FID.vectors[id] = 'markup';
+				});
+			})();
+			FID.main(function () {
+				return FID.sleep(3000);
+			});
+		</script>
+	</body>
+</html>

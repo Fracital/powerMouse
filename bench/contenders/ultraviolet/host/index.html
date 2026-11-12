@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>Ultraviolet bench host</title>
+		<style>
+			html,
+			body {
+				margin: 0;
+				overflow: hidden;
+			}
+			#bench-frame {
+				position: fixed;
+				left: 0;
+				top: 0;
+				width: 100vw;
+				height: 100vh;
+				border: 0;
+			}
+		</style>
+		<script src="/bench-config.js"></script>
+		<!-- as Ultraviolet-App's public/index.html -->
+		<script src="/baremux/index.js"></script>
+		<script src="/uv/uv.bundle.js"></script>
+		<script src="/uv/uv.config.js"></script>
+	</head>
+	<body>
+		<iframe id="bench-frame"></iframe>
+		<script src="/bench.js"></script>
+	</body>
+</html>
