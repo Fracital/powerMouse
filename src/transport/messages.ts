@@ -141,11 +141,21 @@ export const OPAQUE_COPY_HEADER = 'x-stomp-copy';
  * its script, made a blob: URL by the inject, and the route under the
  * controller's address where the service worker answers the same script
  * for a document whose policy refuses a blob: worker (the blocker's
- * `$csp=`, which names that route among its worker sources)
+ * `$csp=`, which names that route among its worker sources). Given a URL
+ * instead of a blob, the worker says whether a fetch of it succeeds: a
+ * worker from the route has no policy of the page's, and asks for a
+ * document whose policy refuses blob: requests (src/csp.ts).
  */
 export const SEALER_SOURCE =
-	'onmessage=function(e){postMessage([e.data[0],URL.createObjectURL(e.data[1])])}';
+	"onmessage=function(e){var d=e.data;typeof d[1]=='string'?fetch(d[1]).then(function(){postMessage([d[0],'1'])},function(){postMessage([d[0],''])}):postMessage([d[0],URL.createObjectURL(d[1])])}";
 export const SEALER_ROUTE = 'sealer';
+/**
+ * The service worker's route under an address that answers a POST with
+ * its body, as the type its last segment names: what the inject's XHR
+ * module makes a response document of where the document's policy refuses
+ * a data: URL (src/csp.ts)
+ */
+export const ECHO_ROUTE = 'echo';
 /**
  * A Server-Timing metric the worker adds to a response of another origin
  * whose Timing-Allow-Origin lets the page see its timing: every route is
@@ -272,6 +282,21 @@ export const PREFLIGHT_HEADER = 'x-stomp-preflight';
  * which the inject writes in Chrome's words
  */
 export const MIXED_CONTENT_NOTICE = '$stomp$mixedContent';
+/**
+ * The service worker tells a document of a request it let through that a
+ * report-only policy of the page's refuses (src/server/contentPolicies.ts):
+ * `[directive, url]`, for the inject to report as the browser would have.
+ * A navigation's later hop adds what the report names (`blocked`), how
+ * many times the browser fires it, and whether the policy is the parent's
+ * of the document told (a frame's, which told the worker of its own
+ * navigation): `[directive, url, blocked, times, parent]`.
+ */
+export const CSP_REPORT = '$stomp$cspReport';
+/**
+ * The global the shell names its document's script policy in for the
+ * client it makes (src/csp.ts ScriptFacts), taken and deleted by the client
+ */
+export const CSP_FACTS = '$stomp$cspFacts';
 /**
  * SW -> the window that asked for a script the rewrite cache's kept
  * response answered: [the routed URL, when (ms since the epoch), how it
@@ -472,6 +497,18 @@ export interface NavigationHintMessage {
 	 * another document, in another frame
 	 */
 	own?: boolean;
+	/**
+	 * The page's policies that judge the navigation's later hops (a form's
+	 * form-action, a frame's parent's frame-src; src/csp.ts HopPolicy), and
+	 * a frame's real ancestors' origins, nearest first (the frame-ancestors
+	 * of the document it ends in). `parent`: the policies are the parent's,
+	 * and the frame that navigates sends them
+	 */
+	csp?: {
+		policies: [string, string[], 'enforce' | 'report', string][];
+		ancestors?: string[];
+		parent?: boolean;
+	};
 }
 /**
  * What a proxied document (or the controller) sees that its requests'

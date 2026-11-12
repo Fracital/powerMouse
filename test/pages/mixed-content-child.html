@@ -9,7 +9,8 @@
 		<script>
 			// A nested document of the mixed-content page: the same loads, each
 			// reported to the parent. With ?uir=1 or ?uirmeta=1 its policy is
-			// upgrade-insecure-requests (header or meta), with ?bamc=1
+			// upgrade-insecure-requests (header or meta), with ?uirro=1 a
+			// report-only one (which upgrades nothing), with ?bamc=1
 			// block-all-mixed-content (header).
 			const params = new URLSearchParams(location.search);
 			const B = params.get('b');
