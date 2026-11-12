@@ -859,6 +859,36 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A page's script-src and style-src (and their -elem and -attr forms) run,
+  refuse and report its code as natively (docs/csp.md): inline code by
+  'unsafe-inline', by its nonce and by the hash of the page's own text
+  (the rewrite changes it; the inject hashes the page's text), scripts by
+  URL, 'strict-dynamic', eval, `Function`, string timers and WebAssembly
+  compilation, event handler attributes, inline and linked styles. The
+  browser applies the page's keywords, nonces and hashes itself; the
+  proxy's own scripts carry a nonce of the document's, the inject makes no
+  code from a string where the page's policy refuses it (the browser would
+  report each attempt), the EvalError and CompileError name the page's
+  directive, and a violation's sample is the page's code. (csp-scripts
+  suite, natively against both modes.)
+- A page's own Content-Security-Policy refuses and reports the loads its
+  fetch directives refuse natively (docs/csp.md). Every policy was
+  stripped, so nothing it refuses was refused and no
+  `securitypolicyviolation` fired; Cloudflare's challenge frame expects its
+  connect-src to refuse `fetch('data:,')`, and it went through. The browser
+  now gets each fetch directive of the page's headers (enforced and
+  report-only) and metas with `'self'` and the page's local schemes, so a
+  `data:` or `blob:` load is refused and reported by the browser itself;
+  the hosts the policy names are applied by the service worker (a request
+  a policy refuses is redirected to a URL the browser refuses, which
+  reports the load's first URL) and by the inject for a frame's src, an
+  object and a WebSocket. Violations and report bodies name the page's
+  URLs and its policy as it wrote it; a report-only refusal of a load
+  that goes out is the inject's event, untrusted. The inject's own
+  `data:` and `blob:` requests take the worker's routes instead where the
+  page refuses them. Sandbox, Trusted Types, base-uri, form-action and
+  frame-ancestors are not applied yet. (csp-fetch and csp-hosts suites,
+  natively against both modes.)
 - A document's permissions policy is the browser's own, as natively. The
   browser sees every proxied frame as same-origin with its parent and never
   saw a page's `Permissions-Policy`, so a frame of another site had every
@@ -3013,8 +3043,8 @@ destructure property 'a' of 'o[k]' as it is undefined.`. V8 names the
   without the call Blink prefixes later, read a `new Function` frame as
   `eval`, and leave out a frame name V8 inferred from the rewriter's code.
   Reporting API reports name the page's URLs. Left as they are: source
-  positions of rewritten code, a page's CSP (not forwarded, so no violation
-  fires), resources the page's markup loads listed twice in resource timing.
+  positions of rewritten code, resources the page's markup loads listed
+  twice in resource timing.
 - A body the worker rewrites says its own length. A document's shell, a
   rewritten script (from the rewrite cache too) and a rewritten stylesheet
   went out with the origin's Content-Length, which counted the origin's
@@ -5251,10 +5281,10 @@ Fixed while testing real sites and a feature fixture:
   where). With a formatter installed V8 builds a stack's first line when the
   stack is first read, not when the error is made, so a page that changes an
   error's message before reading its stack sees the new message there
-  (Blink's own prefix is handled). A page's CSP is not forwarded, so no
-  `securitypolicyviolation` fires; a classic script of another origin that a
-  worker imports does not mute its errors; DevTools' structured call frames
-  (not readable by the page) still show routes.
+  (Blink's own prefix is handled). A page's CSP is applied to its fetch,
+  script and style directives (docs/csp.md); a classic script of another
+  origin that a worker imports does not mute its errors; DevTools'
+  structured call frames (not readable by the page) still show routes.
 - Aborting a fetch does not cancel the request on the transport (epoxy
   ignores the signal); the response is discarded.
 - The HTTP cache differs from Chrome's in one listed way

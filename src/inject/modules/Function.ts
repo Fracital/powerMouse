@@ -27,14 +27,14 @@ export default class FunctionModule extends Module<Client> {
 					// their own function, and made by the realm's eval at global
 					// scope, as the constructor would
 					const written = `${prefix} anonymous(${args.map(String).join(',')}\n) {\n${String(code)}\n}`;
-					const made = nativeEval(
-						modifyJS(
-							`(${written})`,
-							this.client.baseURL,
-							this.client.config,
-							'generic',
-						),
+					const rewritten = modifyJS(
+						`(${written})`,
+						this.client.baseURL,
+						this.client.config,
+						'generic',
 					);
+					this.client.noteCodeSample(rewritten, `(${written})`);
+					const made = nativeEval(rewritten);
 					// toString shows the source the page gave, not the rewritten body
 					if (typeof made === 'function')
 						proxyModule.functionStrings.set(made, written);
@@ -48,7 +48,24 @@ export default class FunctionModule extends Module<Client> {
 		// of each kind. A document the page sandboxed without allow-scripts
 		// compiles nothing (its script policy refuses eval, sandbox.ts), and
 		// neither can its page: those stay as they are there
+		// (a document whose policy refuses code made from a string, src/csp.ts:
+		// its own realm's constructors from the bundle's own functions, which
+		// are its realm's, and none for another realm's, whose page cannot
+		// compile either; the browser would report every attempt)
+		const ownRealm = this.client.global.Function === Function;
 		const constructorOf = (source: string): FunctionConstructor | null => {
+			if (!this.client.scriptFacts.evaluates)
+				return ownRealm
+					? (
+							Reflect.getPrototypeOf(
+								{
+									'return async () => {}': async () => {},
+									'return function* () {}': function* () {},
+									'return async function* () {}': async function* () {},
+								}[source] ?? (() => {}),
+							) as { constructor: FunctionConstructor }
+						).constructor
+					: null;
 			try {
 				return (new this.client.global.Function(source)() as () => unknown)
 					.constructor as FunctionConstructor;

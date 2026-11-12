@@ -59,9 +59,14 @@ export default class AccessModule extends Module<Client> {
 		};
 		const globalEval = (x: unknown) => {
 			if (!isCode(x)) return x;
-			return evalSnapshot(
-				modifyJS(String(x), this.client.baseURL, this.client.config, 'generic'),
+			const code = modifyJS(
+				String(x),
+				this.client.baseURL,
+				this.client.config,
+				'generic',
 			);
+			this.client.noteCodeSample(code, String(x));
+			return evalSnapshot(code);
 		};
 
 		const globalEvalProxy = proxyModule?.wrapFunction(
@@ -737,12 +742,14 @@ export default class AccessModule extends Module<Client> {
 				// `eval(x)` with anything but a string returns x: handed back as it
 				// is, the direct eval then returns it
 				if (!isCode(code)) return code;
-				return modifyJS(
+				const rewritten = modifyJS(
 					String(code),
 					this.client.baseURL,
 					this.client.config,
 					'generic',
 				);
+				this.client.noteCodeSample(rewritten, String(code));
+				return rewritten;
 			},
 			import: (baseURL: string | undefined, url: string): Promise<unknown> =>
 				imported(

@@ -1,5 +1,21 @@
 import type { AdblockPage } from '../../blocker/types';
 import { ParsedConfig } from '../../config';
+import {
+	BLOB_COPIES,
+	browserPolicy,
+	browserRefuses,
+	governing,
+	hashMatches,
+	hostsApply,
+	inlineAllowed,
+	integrityMatches,
+	markedPolicy,
+	parsePolicies,
+	policyMark,
+	sourcesMatch,
+	type Policy,
+	type PolicyText,
+} from '../../csp';
 import { rewriteCSSValueURLs } from '../../cssURLs';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
 import { allowDelegates } from '../../isolation';
@@ -16,9 +32,21 @@ import {
 	type Prewritten,
 } from '../../prewrite';
 import { refererFor, type ReferrerInfo } from '../../referrerPolicy';
-import { modifyHTML, nestedMarkOf, routeHTML } from '../../rewriteHTML';
+import {
+	modifyHTML,
+	nestedMarkOf,
+	provideShellFacts,
+	routeHTML,
+} from '../../rewriteHTML';
 import type { RewriterLib } from '../../rewriterLib';
-import { parseRoutedURL, ROUTE_PROTOCOLS, unwrapRoute } from '../../routeURL';
+import {
+	injectWorkerJS,
+	parseRoutedURL,
+	proxyBlobURL,
+	rewriterLibJS,
+	ROUTE_PROTOCOLS,
+	unwrapRoute,
+} from '../../routeURL';
 import { rewriteImportMap } from '../../scriptRoutes';
 import StompURL from '../../StompURL';
 import { HOOK_ERROR, OPEN_TAB, WORKER_BASE } from '../../transport/messages';
@@ -66,6 +94,18 @@ import {
 import { siteKeyOf } from './site';
 
 type OpenCallback = () => void;
+
+// taken when the bundle loads, before any hook
+const nativeSetAttribute = Element.prototype.setAttribute;
+const nativeQuerySelectorAll = Element.prototype.querySelectorAll;
+const nativeGetAttribute = Element.prototype.getAttribute;
+const nativeParent = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'parentNode',
+)!.get!;
+
+/** the name a function compile() makes is assigned to while its script runs */
+const COMPILED = '$stomp$compiled';
 
 const onDocumentOpen = new WeakMap<typeof globalThis, OpenCallback[]>();
 
@@ -331,6 +371,9 @@ export default class DocumentClient extends Client {
 		)?.get as (() => Element | null) | undefined;
 		this.#inheritedFlags = this.#openerFlags();
 		this.sandboxFlags = this.#sandbox();
+		// what the shells this realm builds say of their documents' script
+		// policy: this document's, which they inherit (src/csp.ts)
+		provideShellFacts(() => this.scriptFacts);
 		this.isDOM = true;
 		// read while the shell's own script makes this client, never later: a
 		// script running then could be the page's
@@ -353,11 +396,17 @@ export default class DocumentClient extends Client {
 					return top === this ? null : top.rewriterLightText(BUILD);
 				},
 				factory: (text, name) => {
-					const nonce = documentNonce(this.global.document);
+					// only where the document refuses eval: a document without
+					// allow-scripts (its guard's nonce), or one whose policy refuses
+					// code made from a string (its own nonce, src/csp.ts)
+					const nonce = this.scriptFacts.evaluates
+						? documentNonce(this.global.document)
+						: this.scriptNonce;
 					return nonce === null
 						? null
 						: libraryFactoryFromScript(this.global.document, text, nonce, name);
 				},
+				evaluates: () => this.scriptFacts.evaluates,
 			}) &&
 			!this.sandboxedOpaque &&
 			this.#topClient() === this
@@ -366,9 +415,16 @@ export default class DocumentClient extends Client {
 			// itself, made from the file this top's shell loaded; with
 			// `'wasm'` the light library, which is handed that file's text
 			// when a call needs it
+			// (in a document whose policy refuses code made from a string the
+			// realm is made by a script with the document's nonce, and holds
+			// the rewriter library itself whatever the option: the light one
+			// would make it from its text)
 			this.#rewriter = createRewriterRealm(
 				this.global.document,
-				this.wasmRewriter ? undefined : (givenLibrary() ?? undefined),
+				this.wasmRewriter && this.scriptFacts.evaluates
+					? undefined
+					: (givenLibrary() ?? undefined),
+				this.scriptFacts.evaluates ? null : this.scriptNonce,
 			);
 		// with `rewriter: 'wasm'` the library a top shares rewrites in the
 		// module the controller compiled, once it has arrived: the realm
@@ -765,11 +821,432 @@ export default class DocumentClient extends Client {
 		}
 		return (group.agentClusters ??= new Map());
 	}
-	/** the nonce the inject's own scripts carry in a document without allow-scripts, else null */
+	/**
+	 * The policies the browser applies to this document for the page's own
+	 * (src/csp.ts): its headers' (the shell's) and its metas', each browser
+	 * policy's text with the page's text it stands for
+	 */
+	policyTexts: PolicyText[] = [];
+	/** the mark this document's meta policies share (markedPolicy) */
+	#policyMark: string | null = null;
+	/**
+	 * The content the browser gets for a page's `<meta
+	 * http-equiv="Content-Security-Policy">` whose content is `content`, or
+	 * null when it holds nothing the browser can apply (src/csp.ts)
+	 */
+	metaPolicy(content: string): string | null {
+		const known = this.#metaPolicies.get(content);
+		if (known !== undefined) return known.value;
+		this.#policyMark ??= policyMark();
+		const texts: PolicyText[] = [];
+		// (its script and style directives name the document's nonce, and the
+		// inject's files a worker imports, as the headers' do: src/csp.ts)
+		const nonce = this.scriptFacts.nonce;
+		const code = nonce
+			? {
+					nonce,
+					assets: [
+						injectWorkerJS(this.url, this.config),
+						rewriterLibJS(this.url, this.config),
+					].map((asset) => asset.split('?')[0]),
+				}
+			: undefined;
+		for (const policy of parsePolicies(content, 'enforce', 'meta')) {
+			const text = browserPolicy(policy, code);
+			texts.push([
+				text === null
+					? ''
+					: markedPolicy(
+							text,
+							`${this.#policyMark}${this.#metaPolicies.size}-${texts.length}`,
+						),
+				policy.text,
+				'enforce',
+			]);
+		}
+		const value =
+			texts
+				.map(([browser]) => browser)
+				.filter(Boolean)
+				.join(', ') || null;
+		this.#metaPolicies.set(content, { value, texts });
+		return value;
+	}
+	/** what metaPolicy made of each content: the browser's, and each policy's texts */
+	readonly #metaPolicies = new Map<
+		string,
+		{ value: string | null; texts: PolicyText[] }
+	>();
+	/**
+	 * The policies of the metas the browser applied in this document: a
+	 * meta of the head's when it is seen there (a meta counts once it was
+	 * inserted, natively, even when it is removed later; one outside the head
+	 * counts for nothing), by the content the page wrote. Each is looked for
+	 * whenever the policies are read.
+	 */
+	readonly #appliedMetas = new Map<string, PolicyText[]>();
+	#metaTexts(): PolicyText[] {
+		try {
+			const head = this.global.document.head;
+			if (head)
+				for (const meta of Reflect.apply(nativeQuerySelectorAll, head, [
+					'meta[http-equiv]',
+				]) as Iterable<Element>) {
+					if (
+						Reflect.apply(nativeParent, meta, []) !== head ||
+						(
+							Reflect.apply(nativeGetAttribute, meta, ['http-equiv']) ?? ''
+						).toLowerCase() !== 'content-security-policy'
+					)
+						continue;
+					const content = Reflect.apply(nativeGetAttribute, meta, [
+						`${MARKER}content`,
+					]) as string | null;
+					if (content === null || this.#appliedMetas.has(content)) continue;
+					const made = this.#metaPolicies.get(content);
+					if (made) this.#appliedMetas.set(content, made.texts);
+				}
+		} catch (error) {
+			// a document being torn down
+		}
+		return [...this.#appliedMetas.values()].flat();
+	}
+	/**
+	 * The page's text of the policy the browser reports as `text` (a
+	 * violation's originalPolicy), or null for none of the page's: this
+	 * document's own, or one it inherited from the document that made it
+	 * (an about:blank, srcdoc, blob: or data: document has its creator's
+	 * policies)
+	 */
+	pagePolicyText(text: string): string | null {
+		if (text) {
+			for (const [browser, page] of this.policyTexts)
+				if (browser === text) return page;
+			for (const { texts } of this.#metaPolicies.values())
+				for (const [browser, page] of texts) if (browser === text) return page;
+		}
+		return this.#policyCreator()?.pagePolicyText(text) ?? null;
+	}
+	/** the browser policies of this document, its own and those it inherited */
+	browserPolicies(): string[] {
+		return [
+			...[...this.policyTexts, ...this.#metaTexts()]
+				.map(([browser]) => browser)
+				.filter(Boolean),
+			...(this.#policyCreator()?.browserPolicies() ?? []),
+		];
+	}
+	/**
+	 * The page's policies of this document, its own and those it inherited,
+	 * each with the browser policy it stands for and what 'self' means in it
+	 * (the real URL of the document whose policy it is)
+	 */
+	pagePolicies(): { policy: Policy; browser: string; self: URL }[] {
+		const texts = [...this.policyTexts, ...this.#metaTexts()];
+		if (this.#parsedPolicies?.count !== texts.length) {
+			const own: { policy: Policy; browser: string; self: URL }[] = [];
+			for (const [browser, page, disposition] of texts)
+				for (const policy of parsePolicies(page, disposition, 'header'))
+					own.push({ policy, browser, self: this.url.url });
+			this.#parsedPolicies = { count: texts.length, own };
+		}
+		return [
+			...this.#parsedPolicies.own,
+			...(this.#policyCreator()?.pagePolicies() ?? []),
+		];
+	}
+	#parsedPolicies: {
+		count: number;
+		own: { policy: Policy; browser: string; self: URL }[];
+	} | null = null;
+	/** the page's policies of this document that natively refuse (or report) `url` for `directive` */
+	pageRefusals(
+		directive: string,
+		url: URL,
+		redirected = false,
+	): { policy: Policy; browser: string; self: URL }[] {
+		return this.pagePolicies().filter(({ policy, self }) => {
+			const governed = governing(policy, directive);
+			return (
+				governed !== null &&
+				!sourcesMatch(governed.sources, url, self, redirected)
+			);
+		});
+	}
+	/**
+	 * Where a load of this document that no worker sees (a frame, an
+	 * object's copy) goes instead of `url` when the page's enforced policy
+	 * refuses it for `directive`, or null when it may load: a data: or
+	 * blob: URL as it is where the browser's copy of the policy refuses
+	 * that scheme as the page's does (it names them as natively), any other
+	 * a refusal URL that reads as Chrome names the load (a navigation of
+	 * another origin by its origin)
+	 */
+	loadRefusal(directive: string, url: URL, navigation = false): string | null {
+		if (!/^(https?|data|blob):$/.test(url.protocol)) return null;
+		const refusing = this.pageRefusals(directive, url).some(
+			({ policy }) => policy.disposition === 'enforce',
+		);
+		if (!refusing) {
+			// (a data: or blob: URL's scheme is the browser's to report; a
+			// frame's refusal is reported twice, measured)
+			this.reportRefusal(directive, url, navigation, navigation ? 2 : 1);
+			return null;
+		}
+		if (url.protocol === 'data:') return url.href;
+		if (url.protocol === 'blob:' && !BLOB_COPIES.includes(directive))
+			return proxyBlobURL(url.href);
+		const blocked =
+			url.protocol === 'blob:'
+				? 'blob'
+				: navigation && url.origin !== this.url.url.origin
+					? url.origin
+					: url.href.replace(/#.*$/s, '');
+		return this.refusalURL('https', url.href, blocked);
+	}
+	/**
+	 * Whether the page's enforced connect-src refuses a request for `url`
+	 * that no worker sees as the page's (a synchronous XMLHttpRequest, which
+	 * the bridge carries): the browser is made to refuse and report it, by a
+	 * request to a refusal URL that reads as `url`
+	 */
+	connectRefusal(url: URL): boolean {
+		if (!/^https?:$/.test(url.protocol)) return false;
+		const refusing = this.pageRefusals('connect-src', url).some(
+			({ policy }) => policy.disposition === 'enforce',
+		);
+		if (!refusing) return false;
+		this.nativeFetch(
+			this.refusalURL('https', url.href, url.href.replace(/#.*$/s, '')),
+		).catch(() => {});
+		return true;
+	}
+	/** where a WebSocket to `url` goes instead when the page's enforced connect-src refuses it, or null */
+	socketRefusal(url: URL): string | null {
+		const refusing = this.pageRefusals('connect-src', url).some(
+			({ policy }) => policy.disposition === 'enforce',
+		);
+		if (refusing)
+			return this.refusalURL('wss', url.href, url.href.replace(/#.*$/s, ''));
+		this.reportRefusal('connect-src', url);
+		return null;
+	}
+	/**
+	 * Report a load of `url` for `directive` that a report-only policy of
+	 * the page's refuses and that went out (no enforced one refuses it): an
+	 * event for each such policy, as the browser fires it, named as Chrome
+	 * names the load (a navigation of another origin by its origin). The
+	 * browser cannot be made to report it itself without refusing the load,
+	 * so the event is the inject's: the same fields, but not trusted.
+	 */
+	reportRefusal(
+		directive: string,
+		url: URL,
+		navigation = false,
+		/** how many events the browser fires for one (a fetch is judged twice, measured) */
+		times = 1,
+	) {
+		if (!/^(https?|wss?):$/.test(url.protocol)) return;
+		const refusals = this.pageRefusals(directive, url);
+		// an enforced refusal is the browser's to report, every policy's
+		if (refusals.some(({ policy }) => policy.disposition === 'enforce')) return;
+		const reporting = refusals.filter(
+			({ policy }) => policy.disposition === 'report',
+		);
+		if (!reporting.length) return;
+		const global = this.global as typeof globalThis;
+		const Event = global.SecurityPolicyViolationEvent;
+		if (typeof Event !== 'function') return;
+		const blocked =
+			navigation && url.origin !== this.url.url.origin
+				? url.origin
+				: url.href.replace(/#.*$/s, '');
+		const document = global.document;
+		for (const { policy } of reporting)
+			for (let time = 0; time < times; time++)
+				Reflect.apply(global.EventTarget.prototype.dispatchEvent, document, [
+					new Event('securitypolicyviolation', {
+						bubbles: true,
+						composed: true,
+						blockedURI: blocked,
+						documentURI: this.url.url.href.replace(/#.*$/s, ''),
+						referrer: this.referrerOf(document) ?? '',
+						violatedDirective: directive,
+						effectiveDirective: directive,
+						originalPolicy: policy.text,
+						disposition: 'report',
+						sourceFile: '',
+						statusCode: 200,
+						lineNumber: 0,
+						columnNumber: 0,
+						sample: '',
+					}),
+				]);
+	}
+	/**
+	 * The nonce a script or style element of the page's (`directive`
+	 * script-src-elem or style-src-elem) gets to be let through by the
+	 * browser where every enforced policy of the page's allows it natively
+	 * but the browser's copy of one would not (src/csp.ts codeSources): an
+	 * inline one by the hash of its text (`text`, the page's, which the
+	 * rewrite changed), an external one (`url`, the real URL) by its host
+	 * where the policy also takes nonces, or by its integrity. Null where
+	 * the browser decides as natively. `parser`: the element is the parser's
+	 * (the page's markup, a document.write), which 'strict-dynamic' does
+	 * not let through.
+	 */
+	codeNonce(
+		element: Element,
+		directive: 'script-src-elem' | 'style-src-elem',
+		url: URL | null,
+		text: string | null,
+		parser: boolean,
+	): string | null {
+		const nonce = this.scriptNonce;
+		if (nonce === null) return null;
+		const enforced = this.pagePolicies().filter(
+			({ policy }) => policy.disposition === 'enforce',
+		);
+		if (!enforced.length) return null;
+		let own: string | null = null;
+		try {
+			own = (element as HTMLElement).nonce || element.getAttribute('nonce');
+		} catch (error) {
+			// an element of another kind
+		}
+		// (the page's integrity, which the browser never gets: the rewritten
+		// body is not the one it names)
+		const integrity =
+			url &&
+			((
+				element as Element & {
+					getAttributeOG?: (name: string) => string | null;
+				}
+			).getAttributeOG?.('integrity') ??
+				element.getAttribute('integrity'));
+		let needed = false;
+		for (const { policy, self } of enforced) {
+			const governed = governing(policy, directive);
+			if (!governed) continue;
+			const { sources } = governed;
+			const lower = sources.map((source) => source.toLowerCase());
+			const dynamic =
+				directive === 'script-src-elem' && lower.includes("'strict-dynamic'");
+			if (own && sources.includes(`'nonce-${own}'`)) continue;
+			if (dynamic && !parser) continue;
+			if (url === null) {
+				if (inlineAllowed(sources, directive)) continue;
+				if (text !== null && hashMatches(sources, text)) {
+					needed = true;
+					continue;
+				}
+				return null;
+			}
+			if (integrity && integrityMatches(sources, integrity)) {
+				needed = true;
+				continue;
+			}
+			if (!dynamic && sourcesMatch(sources, url, self)) {
+				// the browser lets it through by 'self', and the worker applies the hosts
+				if (!hostsApply(sources)) needed = true;
+				continue;
+			}
+			return null;
+		}
+		return needed ? nonce : null;
+	}
+	/** give `element` the nonce codeNonce says it needs (a script's or a style's) */
+	giveCodeNonce(
+		element: Element,
+		url: URL | null,
+		text: string | null,
+		parser: boolean,
+	) {
+		const directive =
+			(element.localName || '').toLowerCase() === 'script'
+				? 'script-src-elem'
+				: 'style-src-elem';
+		const nonce = this.codeNonce(element, directive, url, text, parser);
+		if (nonce !== null)
+			Reflect.apply(nativeSetAttribute, element, ['nonce', nonce]);
+	}
+	/** the URLs refusalURL made, by their host: the URL each stands for, and what a report names it by */
+	readonly refusals = new Map<string, { url: string; blocked: string }>();
+	/**
+	 * A URL the browser's copy of every page policy refuses (src/csp.ts),
+	 * for a load of the page's that its own policy refuses where no worker
+	 * sees it (a frame, a WebSocket): the browser refuses and reports it,
+	 * and the violation reads `blocked` (what Chrome names the load by) as
+	 * its blockedURI. Its host is its own, for a report that names only an
+	 * origin (a frame's).
+	 */
+	refusalURL(scheme: 'https' | 'wss', url: string, blocked: string): string {
+		const host = `r${this.refusals.size}${Math.random().toString(36).slice(2, 8)}.refused.invalid`;
+		this.refusals.set(host, { url, blocked });
+		return `${scheme}://${host}/`;
+	}
+	/** what a blockedURI the browser reports for a URL of refusalURL's stands for, or null for another */
+	refusedURI(value: string): { url: string; blocked: string } | null {
+		const host = /^[a-z]+:\/\/([^/:]+\.refused\.invalid)(?:[:/]|$)/.exec(
+			value,
+		)?.[1];
+		if (!host) return null;
+		const known = this.refusals.get(host);
+		if (known !== undefined) return known;
+		try {
+			return this.#policyCreator()?.refusedURI(value) ?? null;
+		} catch (error) {
+			return null;
+		}
+	}
+	/**
+	 * Whether the browser refuses (or reports) a URL of `scheme` for
+	 * `directive` in this document: a policy of the page's says so
+	 * (src/csp.ts), and a request of the proxy's own of that kind would show
+	 * the page a violation it never made
+	 */
+	browserRefuses(directive: string, scheme: string): boolean {
+		return browserRefuses(this.browserPolicies(), directive, scheme);
+	}
+	/**
+	 * The client of the document this one inherited its policies from (its
+	 * creator's, for a document the browser made of its creator's:
+	 * about:blank, srcdoc, blob:, data:), or null for one it loaded (a
+	 * routed URL's, which has its own)
+	 */
+	#policyCreator(): DocumentClient | null {
+		try {
+			if (/^https?:$/.test(this.global.location.protocol)) return null;
+		} catch (error) {
+			return null;
+		}
+		return this.#creatorClient();
+	}
+	/**
+	 * The nonce the inject's own scripts carry: the document's (its shell's,
+	 * which the browser's copy of the page's script policy names, src/csp.ts),
+	 * or the policy's of a document without allow-scripts; null for none
+	 */
 	get scriptNonce(): string | null {
 		return this.allows('allow-scripts')
-			? null
+			? (this.scriptFacts.nonce ?? null)
 			: documentNonce(this.global.document);
+	}
+	/** a function of this realm made by a script with the document's nonce, where its policy refuses code made from a string */
+	override compile(parameters: string[], source: string): Function | null {
+		if (this.scriptFacts.evaluates) return null;
+		const nonce = this.scriptNonce;
+		const made =
+			nonce === null
+				? null
+				: libraryFactoryFromScript(
+						this.global.document,
+						`${COMPILED}=function(${parameters.join(',')}){${source}\n};`,
+						nonce,
+						COMPILED,
+					);
+		if (typeof made !== 'function') return super.compile(parameters, source);
+		return made as Function;
 	}
 	/**
 	 * A document without allow-scripts runs no script of the page: the real
@@ -1298,7 +1775,9 @@ export default class DocumentClient extends Client {
 				undefined,
 				this.scriptNonce,
 			);
-		return `<!doctype html><script>location.replace(${JSON.stringify(route).replace(/</g, '\\u003c')})</script>`;
+		// (with the nonce of the policy the document inherits from this one)
+		const nonce = this.scriptNonce;
+		return `<!doctype html><script${nonce ? ` nonce="${nonce.replace(/[^\w+/=-]/g, '')}"` : ''}>location.replace(${JSON.stringify(route).replace(/</g, '\\u003c')})</script>`;
 	}
 
 	postToHost(message: object): boolean {
@@ -1553,6 +2032,10 @@ export default class DocumentClient extends Client {
 			// the client's own (a style's stand-in, DOMContentHooks)
 			if (isHTMLScript && this.rewrittenScripts.get(script) === source)
 				continue;
+			// let through by the hash of its text where the page's policy says
+			// so: the rewrite is not that text (src/csp.ts)
+			if (!script.hasAttribute('src'))
+				this.giveCodeNonce(script, null, source, true);
 			const isModule = scriptKind(script) === 'module';
 			// the restore runs after the script's directive prologue, so a strict
 			// script stays strict
@@ -1647,6 +2130,8 @@ export default class DocumentClient extends Client {
 			return text;
 		}
 		if (!this.isConnected(script) || !shouldRewriteScript(script)) return text;
+		if (!script.hasAttribute('src'))
+			this.giveCodeNonce(script, null, text, false);
 		const module = scriptKind(script) === 'module';
 		const rewritten =
 			this.prewrittenScript(module, text, true) ??

@@ -155,8 +155,41 @@ function open(route: string | null): Batch | null {
 	}
 }
 
-/** end a worker, and wait until what it made is gone */
-async function close(ended: Batch) {
+/** the route's worker that asks whether a URL is alive, for a document whose policy refuses a blob: fetch */
+let prober: Batch | null = null;
+
+/** whether a fetch of `url` succeeds, asked of the route's worker (null when it cannot say) */
+async function probe(url: string, route: string): Promise<boolean | null> {
+	if (!prober || prober.closed) {
+		const routed = blobRefused;
+		blobRefused = true;
+		prober = open(route);
+		blobRefused = routed;
+	}
+	const asked = prober;
+	if (!asked) return null;
+	const answer = await new Promise<string | null>((resolve) => {
+		const id = asked.next++;
+		asked.waiting.set(id, resolve);
+		taken!.setTimeout(() => {
+			if (asked.waiting.delete(id)) resolve(null);
+		}, MINT_MS);
+		try {
+			Reflect.apply(taken!.post, asked.worker, [[id, url]]);
+		} catch (error) {
+			asked.waiting.delete(id);
+			resolve(null);
+		}
+	});
+	return answer === null ? null : answer === '1';
+}
+
+/**
+ * End a worker, and wait until what it made is gone. `route`: the route's
+ * worker asks, for a document whose policy refuses a blob: fetch (the
+ * page would see the violation)
+ */
+async function close(ended: Batch, route: string | null) {
 	ended.closed = true;
 	if (batch === ended) batch = null;
 	const sentinel = await ended.sentinel;
@@ -168,11 +201,14 @@ async function close(ended: Batch) {
 	fail(ended);
 	if (sentinel !== null)
 		for (let tries = 0; tries < 400; tries++) {
-			try {
-				await fetch(sentinel);
-			} catch (error) {
-				break;
-			}
+			if (route !== null) {
+				if ((await probe(sentinel, route)) !== true) break;
+			} else
+				try {
+					await fetch(sentinel);
+				} catch (error) {
+					break;
+				}
 			await new Promise((resolve) => taken!.setTimeout(resolve, 1));
 		}
 	ended.die();
@@ -190,7 +226,15 @@ export async function sealedURL(
 	blob: Blob,
 	prime: (url: string) => Promise<boolean>,
 	route: string | null = null,
+	/** what the document's own policy refuses of blob: URLs (src/csp.ts): a worker, a fetch */
+	refuses: { worker: boolean; fetch: boolean } = {
+		worker: false,
+		fetch: false,
+	},
 ): Promise<string | null> {
+	// a refusal the page's policy makes would show the page a violation:
+	// the route's worker, from the start
+	if (refuses.worker && route !== null) blobRefused = true;
 	for (;;) {
 		if (
 			!batch ||
@@ -209,7 +253,7 @@ export async function sealedURL(
 			})
 			.catch(() => null);
 		if (--mine.pending === 0 && !mine.closed)
-			close(mine).catch(() => mine.die());
+			close(mine, refuses.fetch ? route : null).catch(() => mine.die());
 		await mine.dead;
 		// refused: once more, from the route (a routed worker is not refused again)
 		if (made !== null || !mine.refused || route === null) return url;
