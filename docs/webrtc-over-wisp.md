@@ -973,8 +973,7 @@ TURN server.
   pair of an ICE-TCP connection from a peer reflexive local candidate at
   the port its socket got; here it is the TCP candidate at port 9, as the
   stack has no socket of its own.
-- **Media** came after Phase 1: audio is carried (section 16), video is
-  not yet.
+- **Media** came after Phase 1: audio and video are carried (section 16).
 - **The stats report lists only the candidates the page was shown.**
   Chrome's lists a candidate for every socket it opened, also ones it never
   signals behind mDNS names (the IPv6 "any" address, TCP active ones at
@@ -1063,13 +1062,13 @@ for one; `bitrate` (`kind` `twcc` or `remb`, `bps`); `paused` (`index`,
 Frames are binary. A frame to send is input kind 4:
 
 ```
-[media u8][pt u8][flags u8][level u8][orientation u8][age ms u16][time u64][rid len u8][rid][bytes]
+[media u8][pt u8][flags u8][level u8][orientation u8][colour u32][age ms u16][time u64][rid len u8][rid][bytes]
 ```
 
 and a received frame is output tag 6:
 
 ```
-[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][time u64][rid len u8][rid][bytes]
+[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][colour u32][time u64][rid len u8][rid][bytes]
 ```
 
 `time` is in units of the payload's clock (48000 for Opus, 90000 for
@@ -1077,7 +1076,11 @@ video); `age` is how long ago the frame was captured, which makes the
 wallclock the sender reports pair with the RTP time, and so lines audio up
 with video at the peer. `level` is the audio level in -dBov for the
 `ssrc-audio-level` extension, `orientation` the rotation as
-`urn:3gpp:video-orientation` numbers it, 255 for neither. Flags: 1 a
+`urn:3gpp:video-orientation` numbers it, 255 for neither; `colour` a
+picture's color space as the `color-space` extension states it (its four
+bytes: primaries, transfer, matrix, range and chroma siting; 0 for none,
+which str0m 0.25.0 left unread and unwritten, and the patch reads and
+writes). Flags: 1 a
 keyframe (received frames; the stack reads it off the payload), 2 nothing
 was lost before this frame, 4 the first frame after a silence, 8 a voice
 is speaking. `codec` says what the payload type carries so the worker picks
@@ -1577,8 +1580,88 @@ comfort noise byte can differ from Chrome's; and the G.711 and G.722
 encoders round a sample where Chrome truncates, one step apart now and
 then.
 
-Limits: audio only (video sections negotiate and their frames are
-dropped); in-band FEC of a hybrid Opus packet is decoded as wideband
+### Video in the worker
+
+Pictures take the path sound takes (`src/rtc/video.ts`): the page hands
+over a `MediaStreamTrackProcessor`'s readable of the track it sends and a
+`MediaStreamTrackGenerator`'s writable for the track it receives, and the
+worker encodes and decodes with WebCodecs. Measured first on Chrome 152
+and 156 headless on Linux: `VideoEncoder` and `VideoDecoder` have VP8,
+VP9, H.264 and AV1 in software (no hardware codec, no H.265), the payloads
+Chrome offers.
+
+Sending (`VideoSender`): VP8 for now, the first payload the section
+negotiated that this side encodes. Each picture of the track is encoded
+while the section sends and the connection is up (`latencyMode:
+'realtime'`, at the most WebRTC sends a picture of its size: 600 kbit/s up
+to 320x240, 1.7 Mbit/s to 640x480, 2 Mbit/s to 960x540, 2.5 Mbit/s above),
+a new encoder for a new size, and a picture the encoder cannot take at
+once is let go, as Chrome's realtime encoder lets one go. The first
+picture is a keyframe, and so is the next after the peer asks (the stack's
+`keyframe` event, a PLI or a FIR). The RTP time is the picture's timestamp
+on the 90 kHz clock from a number of the sender's own; another track goes
+on from where the last left off, by as much as the clock moved, and `age`
+is how long ago the picture was read.
+
+Colour: Chrome's encoder says what it encoded in (Chrome 156 encodes a
+canvas in BT.709 at full range, 152 in BT.601 at limited range, measured
+with WebCodecs and with its own sender), its sender states it in the
+`color-space` header extension, and its receiver reads a picture without
+the extension as BT.601 at limited range; without the extension the far
+end saw the page's red of 200,40,40 as 195,10,30 on 156. So each keyframe
+carries what the encoder's `decoderConfig.colorSpace` says, and the
+decoder is configured with the color space the peer last stated (BT.601
+at limited range until it states one): the pictures read back as natively,
+their `colorSpace` too.
+
+Receiving (`VideoReceiver`): each frame is decoded as it arrives and the
+picture written to the track (the track is unmuted by the first). Nothing
+is decoded before a keyframe: a first frame that is not one, a frame after
+a loss (the stack says nothing was lost before a frame, or not), a decoder
+that failed or fell behind all have the worker ask the peer for a keyframe
+(a PLI, the `keyframe` op, at most every 200 ms as Chrome's receive
+stream asks) and let the frames go until it comes.
+
+A received track reads as Chrome's: label `remote video`, muted until its
+first picture, and its source named by the track's id in `getSettings()`
+and `getCapabilities()` (a generator names its own source and states no
+capabilities; the same holds for a received sound, whose capabilities are
+Chrome's: no gain control, echo cancellation or noise suppression,
+16-bit samples).
+
+Measured with Chrome's own stack as the far end (the `webrtc-video` suite,
+both demo modes, each scenario first between two native connections): a
+canvas of 320x180 the page draws (15 frames a second) arrives at that size
+and in its colours, and the far end's 160x96 arrives at the page, where an
+element plays it, 31 pictures in 2 s at both ends, as natively. When the
+far end's sender lets its first keyframe go, the page's receiver asks for
+another (Chrome's sender counts the PLI, as it does from Chrome's own
+receiver) and the pictures start; when Chrome's receiver asks the page for
+a keyframe (`sendKeyFrameRequest()` of a receive transform), it decodes
+one more, as natively. The page's transceivers and events read as
+natively at every step, and its descriptions line for line but for the
+two differences below, and on Chrome 152 and 156 the colours each end
+sees are Chrome's within 6 of 255 and in the same color space.
+`dist/rtcWorker.js` grew by 5173 bytes (1395 with brotli), the lazily
+loaded `dist/rtcStack.js` by 512 (137); `rtc.wasm` by 251 for the color
+space (11 fewer with brotli); every document's bundle is as it was.
+
+Limits of video so far: VP8 only (a section that negotiated another codec
+first sends nothing); a fixed bitrate, not the estimate; no simulcast and
+no `setParameters` of a video encoding but `active`. The descriptions
+leave out Chrome's video RED, its rtx and ULPFEC (118, 119 and 120 in
+Chrome's numbering: the stack has no format for them; Chrome sends none
+of them by default, measured), and the header extensions are numbered as
+Chrome numbers them in an offer with sound before pictures (an offer with
+pictures alone numbers them from 1 natively). A received picture's
+timestamp is when it arrived on the worker's clock, where Chrome's counts
+microseconds since the machine started. A picture the peer's sender left
+out (no RTP packet lost, a frame the far end's own transform dropped) is
+not noticed, where Chrome's receiver stops until it asks for a keyframe
+3 s later. `getStats()` has no entries for video yet (its `codec`,
+`inbound-rtp` and `outbound-rtp` are the sound's only).
+
+Limits: in-band FEC of a hybrid Opus packet is decoded as wideband
 SILK, without the concealment of the band above it that Chrome's FEC
 decode adds, and FEC copies of stereo or 40 and 60 ms packets are not
 used (Chrome sends 20 ms, one channel unless asked); the worker's Opus

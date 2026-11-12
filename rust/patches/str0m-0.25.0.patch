@@ -336,6 +336,71 @@
          debug!("Mid ({}) remote PT order is: {:?}", self.mid, pts);
          self.remote_pts = pts;
      }
+--- a/src/media/writer.rs
++++ b/src/media/writer.rs
+@@ -111,6 +111,14 @@
+         self
+     }
+ 
++    /// Add the color space of a video frame: the first four bytes of the
++    /// color-space extension (primaries, transfer, matrix, range and
++    /// chroma siting).
++    pub fn color_space(mut self, value: [u8; 4]) -> Self {
++        self.ext_vals.color_space = Some(value);
++        self
++    }
++
+     /// Set absolute capture time for this frame.
+     pub fn abs_capture_time(mut self, capture_time: AbsCaptureTime) -> Self {
+         self.ext_vals.abs_capture_time = Some(capture_time);
+--- a/src/rtp/ext.rs
++++ b/src/rtp/ext.rs
+@@ -737,8 +737,9 @@
+                 Some(4)
+             }
+             ColorSpace => {
+-                // TODO HDR color space
+-                None
++                let v = ev.color_space?;
++                buf[..4].copy_from_slice(&v);
++                Some(4)
+             }
+             UnknownUri(_, serializer) => {
+                 let n = serializer.write_to(buf, ev);
+@@ -866,7 +867,11 @@
+                 ev.frame_mark = Some(u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]));
+             }
+             ColorSpace => {
+-                // TODO HDR color space
++                // 4 bytes, or 28 with HDR metadata, which is not kept
++                if buf.len() < 4 {
++                    return None;
++                }
++                ev.color_space = Some([buf[0], buf[1], buf[2], buf[3]]);
+             }
+             UnknownUri(_, serializer) => {
+                 let success = serializer.parse_value(buf, ev);
+@@ -922,6 +927,10 @@
+     pub mid: Option<Mid>,
+     #[doc(hidden)]
+     pub frame_mark: Option<u32>,
++    /// The color space of a video frame: the first four bytes of WebRTC's
++    /// color-space extension (primaries, transfer, matrix, range and chroma
++    /// siting; the HDR metadata that may follow is not kept)
++    pub color_space: Option<[u8; 4]>,
+ 
+     /// User values for [`ExtensionSerializer`] to parse into and write from.
+     pub user_values: UserExtensionValues,
+@@ -1118,6 +1127,9 @@
+         if let Some(t) = self.transport_cc {
+             write!(f, " transport_cc: {t}")?;
+         }
++        if let Some(t) = self.color_space {
++            write!(f, " color_space: {t:?}")?;
++        }
+         if let Some(t) = self.play_delay_min {
+             write!(f, " play_delay_min: {}", t.as_seconds())?;
+         }
 --- a/src/sctp/mod.rs
 +++ b/src/sctp/mod.rs
 @@ -54,6 +54,8 @@

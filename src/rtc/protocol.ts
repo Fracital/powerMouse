@@ -8,6 +8,7 @@ import type { PeerAbort } from './abort';
 import type { ReceiverStats, SenderStats } from './audio';
 import type { PlayedStats, SourceStats } from './level';
 import type { RtpCount, TransportReport } from './stats';
+import type { VideoReceiverStats } from './video';
 
 /** the worker's first message: where everything comes from */
 export interface RtcWorkerInit {
@@ -168,14 +169,14 @@ export type Request =
 			seq: number;
 			op: 'sendTrack';
 			handle: number;
-			readable: ReadableStream<AudioData> | null;
+			readable: ReadableStream<AudioData | VideoFrame> | null;
 	  }
 	/** where the section's received sound goes: a MediaStreamTrackGenerator's writable (transferred) */
 	| {
 			seq: number;
 			op: 'receiveTrack';
 			handle: number;
-			writable: WritableStream<AudioData> | null;
+			writable: WritableStream<AudioData | VideoFrame> | null;
 	  }
 	/** a tone of the sender's RTCDTMFSender, one of 0-9, A-D, * and #, for `duration` ms */
 	| {
@@ -227,7 +228,7 @@ export interface StatsReply {
 		mid: string | null;
 		direction: string | null;
 		sent: SenderStats | null;
-		received: ReceiverStats | null;
+		received: ReceiverStats | VideoReceiverStats | null;
 	} & MediaStats)[];
 }
 

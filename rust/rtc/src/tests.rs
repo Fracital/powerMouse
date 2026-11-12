@@ -48,6 +48,7 @@ const EXTS: &str = "1:urn:ietf:params:rtp-hdrext:ssrc-audio-level\
 |5:http://www.webrtc.org/experiments/rtp-hdrext/playout-delay\
 |10:urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id\
 |11:urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id\
+|8:http://www.webrtc.org/experiments/rtp-hdrext/color-space\
 |12:http://example.invalid/not-an-extension";
 
 type Fields = Vec<(String, String)>;
@@ -79,6 +80,7 @@ struct Received {
 	time: u64,
 	rid: String,
 	data: Vec<u8>,
+	colour: [u8; 4],
 }
 
 struct Peer {
@@ -148,7 +150,7 @@ impl Peer {
 				OUT_EVENT => self.events.push(owned(&bytes[1..])),
 				OUT_RESULT => result = Some(owned(&bytes[1..])),
 				OUT_MEDIA_DATA => {
-					let rid_len = bytes[15] as usize;
+					let rid_len = bytes[19] as usize;
 					self.frames.push(Received {
 						media: bytes[1],
 						pt: bytes[2],
@@ -156,9 +158,10 @@ impl Peer {
 						flags: bytes[4],
 						level: bytes[5],
 						orientation: bytes[6],
-						time: u64::from_be_bytes(bytes[7..15].try_into().unwrap()),
-						rid: String::from_utf8(bytes[16..16 + rid_len].to_vec()).unwrap(),
-						data: bytes[16 + rid_len..].to_vec(),
+						colour: bytes[7..11].try_into().unwrap(),
+						time: u64::from_be_bytes(bytes[11..19].try_into().unwrap()),
+						rid: String::from_utf8(bytes[20..20 + rid_len].to_vec()).unwrap(),
+						data: bytes[20 + rid_len..].to_vec(),
 					});
 				}
 				_ => {}
@@ -202,7 +205,26 @@ impl Peer {
 		rid: &str,
 		data: &[u8],
 	) -> i32 {
-		let mut bytes = vec![media, pt, flags, level, orientation, 0, 5];
+		self.write_coloured(media, pt, flags, level, orientation, [0; 4], time, rid, data)
+	}
+
+	/// a frame with its color space (the color-space extension's bytes)
+	#[allow(clippy::too_many_arguments)]
+	fn write_coloured(
+		&mut self,
+		media: u8,
+		pt: u8,
+		flags: u8,
+		level: u8,
+		orientation: u8,
+		colour: [u8; 4],
+		time: u64,
+		rid: &str,
+		data: &[u8],
+	) -> i32 {
+		let mut bytes = vec![media, pt, flags, level, orientation];
+		bytes.extend_from_slice(&colour);
+		bytes.extend_from_slice(&[0, 5]);
 		bytes.extend_from_slice(&time.to_be_bytes());
 		bytes.push(rid.len() as u8);
 		bytes.extend_from_slice(rid.as_bytes());
@@ -525,13 +547,17 @@ fn video_frames_keyframes_and_estimate() {
 	// a keyframe of several packets, then deltas: whole frames come out,
 	// the first marked as a keyframe, with the rotation it was sent with
 	let key = vp8(true, 5000, 0xa5);
-	assert_eq!(a.write(1, 96, 0, media::ABSENT, 3, 0, "", &key), STATUS_OK);
+	// BT.709 primaries, sRGB transfer, BT.709 matrix, full range: Chrome
+	// 156's canvas pictures
+	let colour = [1, 13, 1, 2 << 4];
+	assert_eq!(a.write_coloured(1, 96, 0, media::ABSENT, 3, colour, 0, "", &key), STATUS_OK);
 	pump(&mut a, &mut b, "the keyframe", |_, b| !b.frames.is_empty());
 	assert_eq!(b.frames[0].data, key);
 	assert_eq!(b.frames[0].media, 1);
 	assert_eq!(b.frames[0].codec, 10);
 	assert!(b.frames[0].flags & media::FLAG_KEYFRAME != 0);
 	assert_eq!(b.frames[0].orientation, 3);
+	assert_eq!(b.frames[0].colour, colour, "the color space did not cross");
 	for n in 1..=30u64 {
 		let delta = vp8(false, 900 + n as usize, n as u8);
 		a.write(1, 96, 0, media::ABSENT, media::ABSENT, 3000 * n, "", &delta);
@@ -539,6 +565,7 @@ fn video_frames_keyframes_and_estimate() {
 		assert_eq!(b.frames[n as usize].data, delta, "frame {n}");
 		assert!(b.frames[n as usize].flags & media::FLAG_KEYFRAME == 0, "frame {n}");
 		assert_eq!(b.frames[n as usize].time - b.frames[n as usize - 1].time, 3000, "frame {n}");
+		assert_eq!(b.frames[n as usize].colour, [0; 4], "frame {n} says a color space");
 	}
 
 	// H.264 in Annex B both ways: the parameter sets and the picture of a

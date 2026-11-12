@@ -206,7 +206,8 @@ those packets are gone too.
 
 ## Limits
 
-- **What is not carried yet**: video (comfort noise and DTMF go both
+- **What is not carried yet**: video codecs other than VP8, simulcast
+  and the bandwidth estimate for video (comfort noise and DTMF go both
   ways, a lost Opus packet is rebuilt from its FEC copy). `getStats()` has Chrome's entries
   for the sound, its candidates, pairs, transport, certificates and data
   channels, and `pc.sctp` with its transports reads as Chrome's; docs/webrtc-over-wisp.md sections 15 and

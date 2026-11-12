@@ -76,6 +76,7 @@ import {
 	STUN_SCHEDULE_MS,
 } from './stun';
 import { TurnAllocation } from './turn';
+import { VideoReceiver, VideoSender } from './video';
 import { wasiImports } from './wasi';
 
 /** what opens a wisp stream: the document's transport (StreamTransport.stream) */
@@ -276,8 +277,8 @@ interface MediaState {
 	legacyCodecs: boolean;
 	/** the answer this side made rejects it: nothing it prefers was offered */
 	rejected: boolean;
-	sender: AudioSender | null;
-	receiver: AudioReceiver | null;
+	sender: AudioSender | VideoSender | null;
+	receiver: AudioReceiver | VideoReceiver | null;
 }
 
 const sends = (direction: Direction) =>
@@ -675,11 +676,25 @@ export class Connection {
 		if (kind === 'audio') {
 			state.sender = new AudioSender(index, this.#writeFrame);
 			state.receiver = new AudioReceiver();
-			state.receiver.onStart = () => this.#event({ ev: 'unmute', handle });
+		} else {
+			state.sender = new VideoSender(index, this.#writeFrame);
+			const receiver = new VideoReceiver();
+			// asked once the stack's records are all read: a control call
+			// in the middle of them would take a result another waits for
+			receiver.onKeyframe = () =>
+				queueMicrotask(() => this.#askKeyframe(state));
+			state.receiver = receiver;
 		}
+		state.receiver.onStart = () => this.#event({ ev: 'unmute', handle });
 		this.#medias.set(index, state);
 		this.#handles.set(handle, state);
 		return state;
+	}
+
+	/** ask the peer for a keyframe of what it sends on a section (a PLI) */
+	#askKeyframe(state: MediaState) {
+		if (this.#closed || this.#ended || !this.#connected) return;
+		this.#control({ op: 'keyframe', index: state.index, rid: '', kind: 'pli' });
 	}
 
 	/** an encoded frame for the stack to packetize and send */
@@ -768,7 +783,9 @@ export class Connection {
 		const stats: MediaStats = {};
 		if (state.mid === null || state.stopped || state.kind !== 'audio')
 			return stats;
-		const source = state.sender?.source;
+		const sender = state.sender as AudioSender | null;
+		const receiver = state.receiver as AudioReceiver | null;
+		const source = sender?.source;
 		if (source) stats.source = source;
 		// the streams are the stack's once a negotiation has the section
 		const reports = this.#control({ op: 'rtcp', index: state.index });
@@ -781,7 +798,7 @@ export class Connection {
 		const seconds = (key: string) =>
 			number(key) === undefined ? undefined : number(key)! / 1e6;
 		const tx = number('tx');
-		const sending = state.sender?.sending ?? null;
+		const sending = sender?.sending ?? null;
 		if (
 			tx !== undefined &&
 			state.direction !== null &&
@@ -814,7 +831,7 @@ export class Connection {
 			stats.inbound = {
 				...heard,
 				codec: this.#codecOf(state.kind, heard.pt),
-				played: state.receiver?.played ?? null,
+				played: receiver?.played ?? null,
 			};
 			if (number('sr_age') !== undefined)
 				stats.remoteOutbound = {
@@ -1234,6 +1251,12 @@ export class Connection {
 			case 'media_changed':
 				this.#stale.add(Number(fields.index));
 				break;
+			// the peer lost a picture (a PLI or a FIR): the next is a keyframe
+			case 'keyframe': {
+				const sender = this.#medias.get(Number(fields.index))?.sender;
+				if (sender instanceof VideoSender) sender.keyframe();
+				break;
+			}
 			case 'channel_open': {
 				const channel = Number(fields.index);
 				const id = fields.stream === undefined ? null : Number(fields.stream);
@@ -1859,7 +1882,11 @@ export class Connection {
 					}
 					// a sender's track is measured from its first local description
 					for (const state of this.#medias.values())
-						if (midOf(this.#lastLocal, state.mid)) state.sender?.measure();
+						if (
+							midOf(this.#lastLocal, state.mid) &&
+							state.sender instanceof AudioSender
+						)
+							state.sender.measure();
 					// The answer takes effect: the stack answered when it read
 					// the offer, with all the offer gave; what the page's
 					// transceivers took of it is the sections' direction now.
@@ -2129,14 +2156,30 @@ export class Connection {
 				case 'sendTrack': {
 					const state = this.#handles.get(request.handle);
 					if (!state) throw 'no such media section';
-					state.sender?.setTrack(request.readable);
+					const { sender } = state;
+					if (sender instanceof VideoSender)
+						sender.setTrack(
+							request.readable as ReadableStream<VideoFrame> | null,
+						);
+					else
+						sender?.setTrack(
+							request.readable as ReadableStream<AudioData> | null,
+						);
 					reply(null);
 					break;
 				}
 				case 'receiveTrack': {
 					const state = this.#handles.get(request.handle);
 					if (!state) throw 'no such media section';
-					state.receiver?.setTrack(request.writable);
+					const { receiver } = state;
+					if (receiver instanceof VideoReceiver)
+						receiver.setTrack(
+							request.writable as WritableStream<VideoFrame> | null,
+						);
+					else
+						receiver?.setTrack(
+							request.writable as WritableStream<AudioData> | null,
+						);
 					reply(null);
 					break;
 				}

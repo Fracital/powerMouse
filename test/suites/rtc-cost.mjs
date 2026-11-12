@@ -34,8 +34,15 @@ const FILES = /\/(rtcStack\.js|rtcWorker\.js|rtc\.wasm)(\?|$)/;
 
 // as built: rtcStack.js 66 KB, rtcWorker.js 82 KB, rtc.wasm 1481 KB; the
 // budgets leave room for the media work under way (video).
-// Raise one only in the change that needs it, and say why
-const SIZE_KB = { 'rtcStack.js': 80, 'rtcWorker.js': 110, 'rtc.wasm': 1700 };
+// Raise one only in the change that needs it, and say why.
+// rtcWorker.js went from 110 KB to 128 KB with video: VP8 to simulcast
+// (src/rtc/video.ts and its use) take it from 106758 bytes (37079 with
+// brotli) to 117940 (40592), 11182 more (3513), on top of Opus FEC and
+// comfort noise. Only a document's first use of WebRTC fetches it, once,
+// and from the HTTP cache after that; a module of its own for video would
+// save those 3.5 KB compressed at the cost of a fetch when a call's first
+// video section comes
+const SIZE_KB = { 'rtcStack.js': 80, 'rtcWorker.js': 128, 'rtc.wasm': 1700 };
 // measured on Chrome 152 and 156 here, at loads of 15 to 50: the first
 // offer 55 to 172 ms (natively 3 to 188: Chrome's own first offer starts
 // its WebRTC threads), a later one 10 to 60 ms (natively 0.7 to 4), the

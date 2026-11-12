@@ -612,7 +612,7 @@ The first release after a four-year gap. Everything below is breaking.
   as streams. The `webrtc-media` suite holds a call with Chrome's own stack
   to what the browser's own connection reads at every step, in both demo
   modes, with the tone unbroken both ways and every packet from the wisp
-  server. Video is not carried yet.
+  server.
 - WebRTC audio carries G.722, written by hand in the worker
   (`src/rtc/g722.ts`, bit-exact against the ITU-T reference codec and its
   test sequences), so a proxied page offers every audio payload Chrome
@@ -737,6 +737,19 @@ The first release after a four-year gap. Everything below is breaking.
   A page that hooked these before its first connection used to be handed
   the channel to the worker and the transport port the worker gets, and
   its connections' promises were its own `Promise`'s (`webrtc-lazy`).
+- A proxied page's WebRTC connections carry video: the page's video
+  tracks are encoded with VP8 in the worker with
+  WebCodecs and a peer's are decoded there and played on the received
+  track, which reads as Chrome's (`remote video`, unmuted by its first
+  picture, its source named by its id), in the color space Chrome's
+  encoder encodes in, stated in the `color-space` extension as Chrome's
+  sender states it (without it Chrome 156's receiver showed a canvas's
+  red as orange). The first picture and the next
+  after a peer's keyframe request are keyframes, and the page's receiver
+  asks for one (a PLI) when it cannot decode. The `webrtc-video` suite
+  holds a call with Chrome's own stack to what the browser's own
+  connection reads and sees, in both demo modes (docs/webrtc-over-wisp.md
+  section 16). Video sections used to negotiate and drop their frames.
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,
@@ -5403,10 +5416,10 @@ Fixed while testing real sites and a feature fixture:
   the way out is an origin per proxied site (a subdomain of the proxy's),
   which needs the service worker, the cookie jar and the stores, one per
   origin today, shared between those origins.
-- WebRTC carries data channels and audio so far (docs/webrtc-over-wisp.md
-  sections 15 and 16): video sections negotiate and their frames are
-  dropped, comfort noise is not sent (a peer's is played), a lost Opus packet's
-  in-band FEC copy is not used, TURN over TCP or TLS and TCP candidates are
+- WebRTC carries data channels, audio and VP8 video so far
+  (docs/webrtc-over-wisp.md sections 15 and 16): no other video codec,
+  simulcast or bandwidth estimate for video yet, comfort noise is not sent
+  (a peer's is played), a lost Opus packet's in-band FEC copy is not used, TURN over TCP or TLS and TCP candidates are
   not carried,
   `getStats()` has no media entries. A peer behind
   a restrictive NAT is reached only through a TURN server the page names.

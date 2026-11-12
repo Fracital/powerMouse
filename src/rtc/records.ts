@@ -157,6 +157,12 @@ export interface Frame {
 	level: number;
 	/** the rotation as `urn:3gpp:video-orientation` numbers it, or ABSENT */
 	orientation: number;
+	/**
+	 * A picture's color space as the color-space extension states it, its
+	 * four bytes as one number (primaries, transfer, matrix, range and
+	 * chroma siting); 0 or none for none
+	 */
+	colour?: number;
 	/** the frame's time in units of its payload's clock */
 	time: bigint;
 	/** the simulcast layer, '' for none */
@@ -165,33 +171,34 @@ export interface Frame {
 }
 
 /**
- * `[media u8][pt u8][flags u8][level u8][orientation u8][age ms u16][time u64][rid len u8][rid][bytes]`:
+ * `[media u8][pt u8][flags u8][level u8][orientation u8][colour u32][age ms u16][time u64][rid len u8][rid][bytes]`:
  * `age` is how long ago the frame was captured
  */
 export function encodeFrame(frame: Frame, age: number): Uint8Array {
 	const rid = encoder.encode(frame.rid);
-	const out = new Uint8Array(16 + rid.length + frame.payload.length);
+	const out = new Uint8Array(20 + rid.length + frame.payload.length);
 	const view = new DataView(out.buffer);
 	out[0] = frame.media;
 	out[1] = frame.pt;
 	out[2] = frame.flags;
 	out[3] = frame.level;
 	out[4] = frame.orientation;
-	view.setUint16(5, Math.max(0, Math.min(65535, Math.round(age))));
-	view.setBigUint64(7, frame.time);
-	out[15] = rid.length;
-	out.set(rid, 16);
-	out.set(frame.payload, 16 + rid.length);
+	view.setUint32(5, frame.colour ?? 0);
+	view.setUint16(9, Math.max(0, Math.min(65535, Math.round(age))));
+	view.setBigUint64(11, frame.time);
+	out[19] = rid.length;
+	out.set(rid, 20);
+	out.set(frame.payload, 20 + rid.length);
 	return out;
 }
 
 /**
  * the payload of an OUT_MEDIA_DATA record (after its tag):
- * `[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][time u64][rid len u8][rid][bytes]`
+ * `[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][colour u32][time u64][rid len u8][rid][bytes]`
  */
 export function decodeMediaData(bytes: Uint8Array): Frame & { codec: string } {
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-	const ridLen = bytes[14];
+	const ridLen = bytes[18];
 	return {
 		media: bytes[0],
 		pt: bytes[1],
@@ -199,9 +206,10 @@ export function decodeMediaData(bytes: Uint8Array): Frame & { codec: string } {
 		flags: bytes[3],
 		level: bytes[4],
 		orientation: bytes[5],
-		time: view.getBigUint64(6),
-		rid: decoder.decode(bytes.subarray(15, 15 + ridLen)),
-		payload: bytes.subarray(15 + ridLen),
+		colour: view.getUint32(6),
+		time: view.getBigUint64(10),
+		rid: decoder.decode(bytes.subarray(19, 19 + ridLen)),
+		payload: bytes.subarray(19 + ridLen),
 	};
 }
 

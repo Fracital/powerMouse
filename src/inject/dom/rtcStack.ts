@@ -1561,6 +1561,42 @@ export default class WebRTCStack {
 			override(NativeTrack!, 'label', (that) => shared.tracks.get(that)?.label);
 			override(NativeTrack!, 'muted', (that) => shared.tracks.get(that)?.muted);
 			override(NativeStream!, 'id', (that) => shared.streams.get(that));
+			// A remote track's source is named by the track's id, in its
+			// settings and its capabilities, and a remote sound says what
+			// it carries (Chrome 152 and 156): the generator's name its own
+			// source, and state no capabilities
+			const describes = (key: 'getSettings' | 'getCapabilities') => {
+				const descriptor = Reflect.getOwnPropertyDescriptor(
+					NativeTrack!.prototype,
+					key,
+				)!;
+				descriptor.value = proxyModule.wrapFunction(
+					descriptor.value,
+					(target, that, args) => {
+						const read = Reflect.apply(target, that, args);
+						const shown = shared.tracks.get(that);
+						if (!shown || !isObject(read)) return read;
+						read.deviceId = shown.id ?? Reflect.apply(trackId!, that, []);
+						if (key === 'getCapabilities' && 'autoGainControl' in read) {
+							const off = () => {
+								const list = new RealmArray();
+								list.push(false);
+								return list;
+							};
+							read.autoGainControl = off();
+							read.echoCancellation = off();
+							read.noiseSuppression = off();
+							Reflect.deleteProperty(read, 'voiceIsolation');
+							read.sampleSize = { max: 16, min: 16 };
+							read.voiceIsolation = off();
+						}
+						return read;
+					},
+				);
+				Reflect.defineProperty(NativeTrack!.prototype, key, descriptor);
+			};
+			describes('getSettings');
+			describes('getCapabilities');
 		}
 
 		/** the ids of `args` from `from` on, each a MediaStream */
@@ -1683,8 +1719,7 @@ export default class WebRTCStack {
 		/** the sender's track to the worker: a stream of its frames, or none */
 		const sendTrack = (slot: MediaSlot) => {
 			let readable: ReadableStream | null = null;
-			// sound only: the worker has no picture path yet
-			if (slot.track && slot.kind === 'audio')
+			if (slot.track)
 				try {
 					if (Reflect.apply(trackState!, slot.track, []) === 'live')
 						readable = Reflect.apply(

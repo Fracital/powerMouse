@@ -511,6 +511,9 @@ impl Conn {
 		if frame.orientation != media::ABSENT {
 			writer = writer.video_orientation(VideoOrientation::from(frame.orientation));
 		}
+		if frame.colour != [0; 4] {
+			writer = writer.color_space(frame.colour);
+		}
 		// when the frame was captured: the sender reports pair this with
 		// the frame's RTP time, which is what lines audio up with video
 		let wallclock = now

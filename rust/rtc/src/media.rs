@@ -364,7 +364,7 @@ pub fn extensions(list: &str) -> Result<ExtensionMap, String> {
 }
 
 /// A frame the host sends:
-/// `[media u8][pt u8][flags u8][level u8][orientation u8][age ms u16][time u64][rid len u8][rid][bytes]`
+/// `[media u8][pt u8][flags u8][level u8][orientation u8][colour 4][age ms u16][time u64][rid len u8][rid][bytes]`
 pub struct Frame<'a> {
 	pub media: usize,
 	pub pt: u8,
@@ -373,6 +373,10 @@ pub struct Frame<'a> {
 	pub level: u8,
 	/// the rotation, as `urn:3gpp:video-orientation` numbers it, or `ABSENT`
 	pub orientation: u8,
+	/// a picture's color space as the color-space extension states it
+	/// (primaries, transfer, matrix, range and chroma siting), all zero for
+	/// none
+	pub colour: [u8; 4],
 	/// how long ago the frame was captured, for the wallclock the sender
 	/// reports give its RTP time
 	pub age: u16,
@@ -383,28 +387,29 @@ pub struct Frame<'a> {
 }
 
 pub fn parse_frame(bytes: &[u8]) -> Option<Frame<'_>> {
-	let head = bytes.get(..16)?;
-	let rid_len = head[15] as usize;
-	let rid = bytes.get(16..16 + rid_len)?;
+	let head = bytes.get(..20)?;
+	let rid_len = head[19] as usize;
+	let rid = bytes.get(20..20 + rid_len)?;
 	Some(Frame {
 		media: head[0] as usize,
 		pt: head[1],
 		flags: head[2],
 		level: head[3],
 		orientation: head[4],
-		age: u16::from_be_bytes([head[5], head[6]]),
-		time: u64::from_be_bytes(head[7..15].try_into().ok()?),
+		colour: head[5..9].try_into().ok()?,
+		age: u16::from_be_bytes([head[9], head[10]]),
+		time: u64::from_be_bytes(head[11..19].try_into().ok()?),
 		rid: if rid_len == 0 {
 			None
 		} else {
 			Some(std::str::from_utf8(rid).ok()?)
 		},
-		data: &bytes[16 + rid_len..],
+		data: &bytes[20 + rid_len..],
 	})
 }
 
 /// A frame the stack received, after the tag:
-/// `[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][time u64][rid len u8][rid][bytes]`.
+/// `[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][colour 4][time u64][rid len u8][rid][bytes]`.
 /// None for a payload of no codec the host knows.
 pub fn data_record(tag: u8, media: u8, data: &MediaData) -> Option<Vec<u8>> {
 	let codec = codec_id(data.params.spec().codec);
@@ -433,7 +438,7 @@ pub fn data_record(tag: u8, media: u8, data: &MediaData) -> Option<Vec<u8>> {
 		None => ABSENT,
 	};
 	let rid = data.rid.as_ref().map(|rid| rid.as_bytes()).unwrap_or(&[]);
-	let mut out = Vec::with_capacity(17 + rid.len() + data.data.len());
+	let mut out = Vec::with_capacity(21 + rid.len() + data.data.len());
 	out.push(tag);
 	out.push(media);
 	out.push(*data.pt);
@@ -441,6 +446,7 @@ pub fn data_record(tag: u8, media: u8, data: &MediaData) -> Option<Vec<u8>> {
 	out.push(flags);
 	out.push(level);
 	out.push(orientation);
+	out.extend_from_slice(&data.ext_vals.color_space.unwrap_or([0; 4]));
 	out.extend_from_slice(&data.time.numer().to_be_bytes());
 	out.push(rid.len() as u8);
 	out.extend_from_slice(rid);
