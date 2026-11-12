@@ -157,7 +157,7 @@ const proxiedFrame = (page) =>
  * that navigates away mid-run (an escape in itself) yields its last snapshot
  * with `navigated` set.
  */
-async function measure(browser, base, group) {
+async function measure(browser, base, group, limit = 60000) {
 	const page = await openDemo(browser, base);
 	const recorder = await recordRequests(page.context());
 	const host = await page.evaluate(() => {
@@ -194,7 +194,7 @@ async function measure(browser, base, group) {
 	let lastSeen = 0;
 	let navigated = false;
 	const started = Date.now();
-	while (Date.now() - started < 60000) {
+	while (Date.now() - started < limit) {
 		await sleep(300);
 		const frame = proxiedFrame(page);
 		let current;
@@ -242,9 +242,15 @@ async function measure(browser, base, group) {
 
 /**
  * Run one group in both modes. `scramjet` maps a probe name to the scramjet
- * test it mirrors, for the "also fails" annotation.
+ * test it mirrors, for the "also fails" annotation. `limit`: how long the
+ * page may run; `bypass: 'fail'` makes a request past the proxy a failure of
+ * its own instead of a line outside the counts.
  */
-export async function runGroup(group, scramjet = {}) {
+export async function runGroup(
+	group,
+	scramjet = {},
+	{ limit = 60000, bypass = 'report' } = {},
+) {
 	const browser = await launch();
 	const errors = [];
 	for (const [mode, base] of MODES) {
@@ -255,7 +261,7 @@ export async function runGroup(group, scramjet = {}) {
 			navigated,
 			errors: pageErrors,
 			raw,
-		} = await measure(browser, base, group);
+		} = await measure(browser, base, group, limit);
 		errors.push(...pageErrors.map((e) => `${mode}: ${e}`));
 		const leak = new RegExp(
 			[
@@ -307,6 +313,15 @@ export async function runGroup(group, scramjet = {}) {
 		for (const entry of raw)
 			console.log(
 				`BYPASS: ${mode}: ${group} ${entry.url.slice(0, 160)} (${entry.type}, ${entry.source})`,
+			);
+		if (bypass === 'fail')
+			ok(
+				`${mode}: ${group} makes no request past the proxy`,
+				raw.length === 0,
+				raw
+					.map((entry) => `${entry.url.slice(0, 160)} (${entry.type})`)
+					.slice(0, 40)
+					.join(' | '),
 			);
 	}
 	await done(browser, errors);

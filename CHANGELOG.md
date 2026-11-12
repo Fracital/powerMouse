@@ -5402,6 +5402,16 @@ token '%'`. The body is decoded before rewriting and re-encoded after.
   browser's own keywords cannot be used); the window the page means now
   navigates, from its own realm, with the URL routed as its document.
   (adversarial-scripts suite.)
+- `fetchLater` (a deferred fetch, sent when the document is unloaded or
+  after its `activateAfter`) went to the address the page named, past the
+  proxy, to the real site: Chrome hands a deferred request to no service
+  worker. It is emulated with the page's own `fetch` at that moment,
+  routed as any fetch is, so the request reaches the site through the
+  proxy and the worker answers it; the page gets a `FetchLaterResult`
+  whose `activated` says whether it was sent, and the browser's own
+  refusals (a negative `activateAfter`, an aborted signal, a streaming or
+  a GET body, a non-HTTP URL) are thrown as the browser throws them.
+  (adversarial-urls suite; adversarial-sinks finds the sink.)
 - `window.postMessage` acts on its receiver, and a message names the
   window whose code posted it as its `event.source`, as natively.
   `postMessage.call(parent, m)` posted to the calling window, a timer of
