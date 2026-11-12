@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>duplicate content-type</title>
+	</head>
+	<body>
+		<p>A script served with two Content-Type values, as tiktok's sw.js is</p>
+		<script>
+			// The script is served with two Content-Type headers. A resource has
+			// one Content-Type to the browser, so a module and a service worker
+			// script must still count as executable JavaScript. The worker joined
+			// the two with ", " and Chrome refused the MIME; it now keeps one.
+			window.__dup = { done: false };
+			const bust = () => Math.random().toString(36).slice(2);
+			(async () => {
+				const out = { done: true };
+				try {
+					const response = await fetch(`/dup-content-type?a=${bust()}`);
+					out.contentType = response.headers.get('content-type');
+				} catch (error) {
+					out.fetchError = String(error);
+				}
+				// a module script with two Content-Types must run (Chrome refuses a
+				// comma-joined MIME for a module)
+				out.moduleRan = await new Promise((resolve) => {
+					window.__dupModule = () => resolve(true);
+					const script = document.createElement('script');
+					script.type = 'module';
+					script.src = `/dup-content-type?module=1&a=${bust()}`;
+					script.onerror = () => resolve(false);
+					document.head.appendChild(script);
+					setTimeout(() => resolve(false), 8000);
+				});
+				// a service worker whose script has two Content-Types must register
+				// (the exact tiktok failure)
+				try {
+					const registration = await navigator.serviceWorker.register(
+						`/dup-content-type-sw.js?a=${bust()}`,
+						{ scope: '/pages/dup-sw-scope/' },
+					);
+					out.swRegistered = !!registration;
+					await registration.unregister().catch(() => {});
+				} catch (error) {
+					out.swRegistered = false;
+					out.swError = String((error && error.name) || error);
+				}
+				window.__dup = out;
+			})();
+		</script>
+	</body>
+</html>

@@ -65,6 +65,27 @@ export declare type AdditionalFilter = (
 	url: StompURL,
 ) => void;
 
+// A response may carry more than one Content-Type: two upstream headers,
+// which the fetch Headers object joins into one value with ", ", or a single
+// value a server wrote as a comma list. A resource has one Content-Type to
+// the browser, so a joined value like "application/javascript, text/javascript"
+// (seen on tiktok's sw.js) makes Chrome refuse a service worker or module
+// script for an unsupported MIME type. Keep the first value, as the browser
+// uses one type; a comma inside a quoted parameter is not a separator.
+function firstContentType(value: string): string {
+	let quoted = false;
+	for (let i = 0; i < value.length; i++) {
+		const ch = value[i];
+		if (ch === '\\' && quoted) {
+			i++;
+			continue;
+		}
+		if (ch === '"') quoted = !quoted;
+		else if (ch === ',' && !quoted) return value.slice(0, i).trim();
+	}
+	return value.trim();
+}
+
 // native as in the browser requesting an image from /binary/ or document from /html/
 export function filterNativeRequestHeaders(
 	headers: Readonly<Headers>,
@@ -104,6 +125,12 @@ export function filterResponseHeaders(
 
 	for (const header of removeHeaders) {
 		filteredHeaders.delete(header);
+	}
+
+	const contentType = filteredHeaders.get('content-type');
+	if (contentType !== null) {
+		const first = firstContentType(contentType);
+		if (first !== contentType) filteredHeaders.set('content-type', first);
 	}
 
 	if (additionalFilter) {

@@ -237,6 +237,35 @@ export function startFixture(port = 8084) {
 						: code,
 			);
 		}
+		// a script served with two Content-Type values, as tiktok's CDN sends
+		// for sw.js ("application/javascript, text/javascript"): the fetch
+		// Headers object joins them with ", " and Chrome refuses the script's
+		// MIME, so the worker must collapse it to one value. `mode=joined`:
+		// one header already written as a comma list; otherwise two separate
+		// Content-Type headers. `module`: a module body; `-sw.js`: a worker
+		// body; else a classic body. Each records that it ran.
+		if (path === '/dup-content-type' || path === '/dup-content-type-sw.js') {
+			const query = new URL(req.url, 'http://x').searchParams;
+			if (query.get('mode') === 'joined')
+				res.setHeader(
+					'content-type',
+					'application/javascript, text/javascript',
+				);
+			else
+				res.setHeader('content-type', [
+					'application/javascript',
+					'text/javascript',
+				]);
+			res.setHeader('cache-control', 'no-store');
+			res.setHeader('service-worker-allowed', '/');
+			return res.end(
+				path.endsWith('-sw.js')
+					? "self.addEventListener('install', () => self.skipWaiting());"
+					: query.has('module')
+						? 'globalThis.__dupModule && globalThis.__dupModule();'
+						: 'globalThis.__dupClassic = true;',
+			);
+		}
 		// how many request bytes arrived (streamed-body measurement)
 		if (path === '/echo-body') {
 			let bytes = 0;
