@@ -1,0 +1,18 @@
+{
+	"imports": [
+		"wasi_snapshot_preview1.clock_time_get",
+		"wasi_snapshot_preview1.random_get"
+	],
+	"exports": [
+		"memory:memory",
+		"_initialize:function",
+		"a:function",
+		"f:function",
+		"c:function",
+		"i:function",
+		"t:function",
+		"o:function",
+		"p:function",
+		"d:function"
+	]
+}

@@ -30,6 +30,13 @@ The first release after a four-year gap. Everything below is breaking.
   compiled `WebAssembly.Module` from a URL, bytes or a module the host
   compiled, never from `import.meta.url`. Nothing uses it yet; the
   `rewriter: 'wasm'` option comes with the rewriter itself.
+- `rtc.wasm` (`rust/rtc`, 1474162 bytes, 504310 with brotli) is the WebRTC
+  stack: str0m with its pure Rust crypto, built for `wasm32-wasip1` (a
+  crate names its target in a `wasm-target` file and extra flags in
+  `rustflags`), whose only imports are WASI's clock and randomness.
+  `rust/vendor/str0m-rust-crypto` is the published crate without the
+  certificate generator that needs a C library; the worker makes the DTLS
+  certificate with WebCrypto.
 
 ### Transport
 

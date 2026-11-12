@@ -5,7 +5,7 @@
 # loader treats as a dead instance), so no unwinding tables and no panic
 # strings reach the artifact.
 [workspace]
-members = ["edits", "rwjs", "rwcss", "block", "suffix", "core-module"]
+members = ["edits", "rwjs", "rwcss", "block", "suffix", "core-module", "rtc"]
 resolver = "2"
 
 [profile.release]
@@ -15,3 +15,10 @@ codegen-units = 1
 panic = "abort"
 debug = false
 strip = true
+
+# str0m-rust-crypto 0.7.0 as published, minus dimpl's `rcgen` feature: it
+# generates the DTLS certificate with rcgen on aws-lc-rs (C, no wasm build);
+# the WebRTC worker generates the certificate with WebCrypto instead and
+# hands it to the stack (rust/vendor/str0m-rust-crypto/src/dtls.rs)
+[patch.crates-io]
+str0m-rust-crypto = { path = "vendor/str0m-rust-crypto" }
