@@ -26,6 +26,12 @@
 				allowed: policy.allowedFeatures().sort(),
 				camera: policy.allowsFeature('camera'),
 				syncXhr,
+				// what the browser's enforced header says of sync-xhr, which
+				// gates STomp's own inject (the WebRTC loader's synchronous
+				// request): proxied, the served header never disables it, so
+				// this reads true though the page's real policy turned it off
+				// and the guest's request above still fails
+				allowsSyncXhr: policy.allowsFeature('sync-xhr'),
 			};
 		};
 		const records = { top: report('top') };

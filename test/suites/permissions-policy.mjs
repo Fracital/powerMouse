@@ -6,7 +6,13 @@
 // turns more off, and one with `allowfullscreen`. Each reports
 // `document.featurePolicy`'s allowed features, whether it allows the
 // camera, and what a synchronous XMLHttpRequest does (`sync-xhr`),
-// compared with the page loaded natively, in both modes. The browser sees
+// compared with the page loaded natively, in both modes. sync-xhr is the
+// one exception the proxy keeps a double standard on: STomp's own inject
+// makes a synchronous XHR (the WebRTC rtcStack loader), so the served
+// Permissions-Policy never disables the feature and the browser lets the
+// inject's request through in every proxied document, while the guest's own
+// synchronous request is emulated to fail exactly as the real page's policy
+// would (src/server/clientHints.ts, src/inject/dom/modules/XMLHttpRequest.ts). The browser sees
 // every proxied document as same-origin with its parent and never sees a
 // page's own policy, so a frame of another site had every `self` feature
 // (Turnstile's challenge frame read Summarizer and LanguageModel as
@@ -55,6 +61,19 @@ ok(
 	native && Object.keys(native).length === 6,
 	JSON.stringify(native && Object.keys(native)),
 );
+// the policy under test really disables sync-xhr on the top document (as
+// Cloudflare's challenge pages do), so the double standard the proxy keeps
+// below is meaningful: the browser refuses the top's synchronous request and
+// reads the feature as not allowed
+ok(
+	'natively the page disables sync-xhr',
+	native?.top?.allowsSyncXhr === false &&
+		!native.top.syncXhr.startsWith('sent'),
+	JSON.stringify({
+		allowsSyncXhr: native?.top?.allowsSyncXhr,
+		syncXhr: native?.top?.syncXhr,
+	}),
+);
 
 for (const [mode, base] of [
 	['same-origin', PROXY],
@@ -75,7 +94,15 @@ for (const [mode, base] of [
 	const proxied = await find(page, () => window.__policy, 'PERMISSIONS POLICY');
 	const view = (record) =>
 		record && {
-			allowed: record.allowed.filter((feature) => host.has(feature)),
+			// sync-xhr is never compared as a browser-allowed feature: STomp
+			// always serves it on (its own inject makes a synchronous XHR), so
+			// the proxied documents read it allowed though the page's real
+			// policy turned it off. The guest's own synchronous request
+			// (syncXhr) is emulated to fail exactly as natively, and that is
+			// what is compared, beside the browser-level double standard below
+			allowed: record.allowed.filter(
+				(feature) => feature !== 'sync-xhr' && host.has(feature),
+			),
 			camera: record.camera && host.has('camera'),
 			syncXhr: record.syncXhr,
 		};
@@ -106,6 +133,17 @@ for (const [mode, base] of [
 				camera: [want?.camera, got?.camera],
 				syncXhr: [want?.syncXhr, got?.syncXhr],
 			}).slice(0, 1500),
+		);
+		// the double standard: STomp's served Permissions-Policy never
+		// disables sync-xhr, so its own inject (the WebRTC loader's
+		// synchronous request) is never refused by the browser in any proxied
+		// document, even this one whose real policy turned the feature off and
+		// whose guest synchronous request (syncXhr, compared above) still
+		// fails exactly as natively
+		ok(
+			`${mode}: ${name}: the browser serves sync-xhr on, so STomp's inject can make a synchronous request`,
+			proxied?.[name]?.allowsSyncXhr === true,
+			JSON.stringify({ allowsSyncXhr: proxied?.[name]?.allowsSyncXhr }),
 		);
 	}
 	await page.close();

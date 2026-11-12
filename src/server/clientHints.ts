@@ -717,8 +717,23 @@ export function recordDocument(
 export function browserPolicy(doc: HintsDocument): string | null {
 	const off: string[] = [];
 	for (const [feature, allowed] of doc.allFeatures)
-		if (!allowed) off.push(`${feature}=()`);
+		// `sync-xhr` is never served off: STomp's own inject makes a
+		// synchronous XMLHttpRequest (the WebRTC rtcStack loader,
+		// src/inject/dom/modules/WebRTC.ts), which the browser would refuse
+		// along with the page's own. The real state is kept (syncXHRBlocked)
+		// and the inject emulates it for the guest's requests
+		// (src/inject/dom/modules/XMLHttpRequest.ts).
+		if (!allowed && feature !== 'sync-xhr') off.push(`${feature}=()`);
 	return off.length ? off.join(', ') : null;
+}
+
+/**
+ * Whether `doc`'s real permissions policy blocks a synchronous XMLHttpRequest
+ * (its `sync-xhr` feature is off, as the page declared or inherited): what
+ * browserPolicy no longer serves, so the inject enforces it for the guest.
+ */
+export function syncXHRBlocked(doc: HintsDocument): boolean {
+	return doc.allFeatures.get('sync-xhr') === false;
 }
 
 /** a top-level document's static meta: its own hints, and the hints it delegates */

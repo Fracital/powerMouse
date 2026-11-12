@@ -153,6 +153,7 @@ import {
 	hintsDocument,
 	persistAcceptCH,
 	recordDocument as recordHintsDocument,
+	syncXHRBlocked,
 	topDocument,
 	type HintsContext,
 } from './clientHints';
@@ -4295,6 +4296,14 @@ export function registerRewrites(
 					...scriptFacts(texts, nonce),
 					...trustedFacts(texts, tt),
 				};
+				// the document the hints machinery recorded for this response
+				// (its permissions policy, under its parent's): whether its real
+				// `sync-xhr` is off, which the served Permissions-Policy no longer
+				// carries (browserPolicy keeps the feature on so STomp's own inject
+				// can make a synchronous XHR), for the inject to emulate for the
+				// guest (src/server/clientHints.ts, src/inject/dom/modules/XMLHttpRequest.ts)
+				const hints = hintsDocument(request.clientId, request.routed);
+				const syncBlocked = hints ? syncXHRBlocked(hints) : false;
 				if (policies.enforce)
 					responseHeaders.append('content-security-policy', policies.enforce);
 				// a frame whose own frame-ancestors refuses one of its real
@@ -4326,6 +4335,7 @@ export function registerRewrites(
 						top,
 						policies.texts,
 						facts,
+						syncBlocked,
 					);
 				// A Refresh header schedules its navigation on the document the
 				// browser creates for this response, which the shell re-opens to
@@ -4335,10 +4345,7 @@ export function registerRewrites(
 				let markup = decoded;
 				// a top-level page's Accept-CH and delegate-ch metas count from
 				// its first subresource (the preload scanner's)
-				if (request.navigation) {
-					const hints = hintsDocument(request.clientId, request.routed);
-					if (hints) applyMeta(hints, markup);
-				}
+				if (request.navigation && hints) applyMeta(hints, markup);
 				const refresh = response.headers.get('refresh');
 				if (refresh !== null) {
 					responseHeaders.delete('refresh');
@@ -4427,6 +4434,7 @@ export function registerRewrites(
 						note.agentCluster,
 						policies.texts,
 						facts,
+						syncBlocked,
 					);
 				// The page does not wait for the rewrite workers: the shell's
 				// first part (the inject bundle's script and the markup) goes out
@@ -4451,6 +4459,7 @@ export function registerRewrites(
 					note.agentCluster,
 					policies.texts,
 					facts,
+					syncBlocked,
 				);
 				const first = UTF8.encode(head);
 				return new ReadableStream<Uint8Array>({

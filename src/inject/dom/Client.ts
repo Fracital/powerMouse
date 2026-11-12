@@ -40,6 +40,7 @@ import {
 	modifyHTML,
 	nestedMarkOf,
 	provideShellFacts,
+	provideShellSyncXHR,
 	routeHTML,
 } from '../../rewriteHTML';
 import type { RewriterLib } from '../../rewriterLib';
@@ -386,8 +387,10 @@ export default class DocumentClient extends Client {
 		this.#inheritedFlags = this.#openerFlags();
 		this.sandboxFlags = this.#sandbox();
 		// what the shells this realm builds say of their documents' script
-		// policy: this document's, which they inherit (src/csp.ts)
+		// policy and their `sync-xhr` state: this document's, which they
+		// inherit (src/csp.ts, src/server/clientHints.ts)
 		provideShellFacts(() => this.scriptFacts);
+		provideShellSyncXHR(() => this.syncXHRBlocked);
 		this.isDOM = true;
 		// read while the shell's own script makes this client, never later: a
 		// script running then could be the page's

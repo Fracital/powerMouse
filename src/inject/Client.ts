@@ -189,6 +189,14 @@ export default class Client {
 	/** the document's policy upgrades insecure requests (its shell says so; src/mixedContent.ts) */
 	upgradeInsecureRequests = false;
 	/**
+	 * The document's real permissions policy blocks a synchronous XMLHttpRequest
+	 * (its shell says so; src/server/clientHints.ts syncXHRBlocked). The served
+	 * Permissions-Policy no longer disables `sync-xhr` (STomp's own inject makes
+	 * one), so the guest's synchronous requests are refused here instead
+	 * (src/inject/dom/modules/XMLHttpRequest.ts).
+	 */
+	syncXHRBlocked = false;
+	/**
 	 * What the document is by its own headers, when the host's page is
 	 * cross-origin isolated (its shell says so; src/isolation.ts
 	 * isolationFacts): null for a document no response made

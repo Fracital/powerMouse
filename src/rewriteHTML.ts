@@ -209,6 +209,17 @@ export function provideShellFacts(provider: () => ScriptFacts | undefined) {
 }
 
 /**
+ * What a shell written on this thread says of its document's `sync-xhr` state
+ * when its caller names none: the inject's client's, which the documents it
+ * builds (a blob:, an srcdoc, a document.write) inherit from it, as the
+ * permissions policy is inherited (src/server/clientHints.ts)
+ */
+let shellSyncXHR: (() => boolean) | null = null;
+export function provideShellSyncXHR(provider: () => boolean) {
+	shellSyncXHR = provider;
+}
+
+/**
  * The shell's statement that names its document's script policy for the
  * client it makes (src/csp.ts ScriptFacts), when it has one
  */
@@ -241,6 +252,18 @@ function policyTexts(
 ): string {
 	if (!policies?.length) return '';
 	return `\t${client}.policyTexts = ${JSON.stringify(policies).replace(/</g, '\\u003c')};\n`;
+}
+
+/**
+ * The shell's statement that tells the client its document's real permissions
+ * policy blocks a synchronous XMLHttpRequest (src/server/clientHints.ts
+ * syncXHRBlocked): the inject throws for the guest's synchronous requests as
+ * the browser would, though the served Permissions-Policy no longer disables
+ * the feature (STomp's own inject needs it). Nothing when it is allowed.
+ */
+function syncXHR(client: string, blocked: boolean | undefined): string {
+	if (!blocked) return '';
+	return `\t${client}.syncXHRBlocked = true;\n`;
 }
 
 /**
@@ -309,6 +332,8 @@ export function modifyHTML(
 	policies?: PolicyText[],
 	/** its script policy, for the client (src/csp.ts ScriptFacts); its nonce is the shell's scripts' */
 	facts?: ScriptFacts,
+	/** its real permissions policy blocks a synchronous XHR (src/server/clientHints.ts syncXHRBlocked) */
+	syncXHRBlocked?: boolean,
 ): string {
 	const { head, tail } = shell(
 		script,
@@ -327,6 +352,7 @@ export function modifyHTML(
 		agentCluster,
 		policies,
 		facts,
+		syncXHRBlocked,
 	);
 	return head + tail(prewritten);
 }
@@ -357,6 +383,8 @@ export function modifyHTMLStreamed(
 	policies?: PolicyText[],
 	/** as modifyHTML's */
 	facts?: ScriptFacts,
+	/** as modifyHTML's */
+	syncXHRBlocked?: boolean,
 ): { head: string; tail: (prewritten: Prewritten | null) => string } {
 	return shell(
 		script,
@@ -375,6 +403,7 @@ export function modifyHTMLStreamed(
 		agentCluster,
 		policies,
 		facts,
+		syncXHRBlocked,
 	);
 }
 
@@ -397,11 +426,13 @@ function shell(
 	agentCluster?: 'site' | 'origin',
 	policies?: PolicyText[],
 	facts?: ScriptFacts,
+	syncXHRBlocked?: boolean,
 ): { head: string; tail: (prewritten?: Prewritten | null) => string } {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	// a shell the page realm builds is of a document that inherits the
-	// builder's policy, and its facts with it
+	// builder's policy, and its facts (and its sync-xhr state) with it
 	facts ??= shellFacts?.();
+	syncXHRBlocked ??= shellSyncXHR?.();
 	nonce ??= facts?.nonce;
 	const names = helperNames(config);
 	const markupKey = JSON.stringify(SHELL_MARKUP);
@@ -430,7 +461,7 @@ function shell(
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 	else delete globalThis.createClient;${keptFacts(names.client, facts)}
 
-${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}${
+${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}${syncXHR(names.client, syncXHRBlocked)}${
 		upgradeInsecure
 			? `
 	${names.client}.upgradeInsecureRequests = true;`
@@ -548,8 +579,11 @@ export function modifyXML(
 	policies?: PolicyText[],
 	/** as modifyHTML's */
 	facts?: ScriptFacts,
+	/** as modifyHTML's */
+	syncXHRBlocked?: boolean,
 ): string {
 	facts ??= shellFacts?.();
+	syncXHRBlocked ??= shellSyncXHR?.();
 	// the root start tag, after the prolog, comments and doctype
 	const tags =
 		/<\?[^>]*\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>|<([A-Za-z_][\w.:-]*)(\s[^>]*?)?(\/?)>/g;
@@ -574,7 +608,7 @@ export function modifyXML(
 	${scriptFacts(facts)}if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 	else delete globalThis.createClient;${keptFacts(names.client, facts)}
-${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}
+${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}${syncXHR(names.client, syncXHRBlocked)}
 	if (!${names.client}.applied) ${names.client}.apply();
 	${names.client}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});
 }`;

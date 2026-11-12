@@ -71,28 +71,15 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 
 		const decoder = new TextDecoder('utf-8');
 
-		// whether the document's permissions policy lets it make a
-		// synchronous request (Chrome's `sync-xhr`)
-		const global = that.client.global as typeof globalThis & {
-			FeaturePolicy?: { prototype: { allowsFeature?: unknown } };
-		};
-		const featurePolicy = Reflect.getOwnPropertyDescriptor(
-			global.Document.prototype,
-			'featurePolicy',
-		)?.get;
-		const allowsFeature = global.FeaturePolicy?.prototype.allowsFeature;
-		const syncAllowed = (): boolean => {
-			if (!featurePolicy || typeof allowsFeature !== 'function') return true;
-			try {
-				return !!Reflect.apply(
-					allowsFeature,
-					Reflect.apply(featurePolicy, global.document, []),
-					['sync-xhr'],
-				);
-			} catch (error) {
-				return true;
-			}
-		};
+		// whether the document's permissions policy lets the guest make a
+		// synchronous request (Chrome's `sync-xhr`). The served
+		// Permissions-Policy no longer disables the feature, so the browser's
+		// enforced header (document.featurePolicy) would always say yes:
+		// STomp's own inject must be able to make a synchronous XHR (the WebRTC
+		// rtcStack loader, WebRTC.ts, with captured native XHR, which never
+		// reaches this check). The worker's recorded real state decides it for
+		// the guest instead (src/server/clientHints.ts syncXHRBlocked)
+		const syncAllowed = (): boolean => !that.client.syncXHRBlocked;
 
 		// A response's document is made by the browser itself: the realm's own
 		// XMLHttpRequest (taken before this module replaces it) reads the
