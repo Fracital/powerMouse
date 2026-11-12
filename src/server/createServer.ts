@@ -22,7 +22,7 @@ import type {
 	RequestInfo,
 	RequestRule,
 } from '../transport/messages';
-import { SEALER_ROUTE, SEALER_SOURCE } from '../transport/messages';
+import { ECHO_ROUTE, SEALER_ROUTE, SEALER_SOURCE } from '../transport/messages';
 import {
 	contextText,
 	linkRoute,
@@ -314,6 +314,19 @@ export default async function createServer(
 		json(200, context?.clientId ?? null),
 	);
 	registerAssets(router, init.scope, init.assets);
+	// a body as the type the path names (messages.ts ECHO_ROUTE)
+	router.routes.set(new RegExp(`^/${ECHO_ROUTE}/`), async (request, url) => {
+		if (request.method !== 'POST') return new Response(null, { status: 405 });
+		let type = 'text/plain';
+		try {
+			type = decodeURIComponent(url.slice(ECHO_ROUTE.length + 2));
+		} catch (error) {
+			// not a type: plain text
+		}
+		return new Response(await request.arrayBuffer(), {
+			headers: { 'content-type': type, 'cache-control': 'no-store' },
+		});
+	});
 	// the sealed copies' worker, for a document whose policy refuses one
 	// from a blob: URL (messages.ts)
 	router.routes.set(
