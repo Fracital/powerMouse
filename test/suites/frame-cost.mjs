@@ -16,12 +16,21 @@
 //   the rewriter library file's second statement): the bundle is 434 KB
 //   with the membrane by origin, document identity, URL shapes and the
 //   escape fixes. The budget was 460 KB, for the sealed URLs that came
-//   next (about 3 KB); a page's Content-Security-Policy (its fetch, script
-//   and style directives) took it to 456 KB, and its Trusted Types (every
-//   sink the inject writes judging the page's value, the inject's own
-//   writes carrying trusted values of its own policy) to 465 KB: the budget
-//   is 468 KB. Raise it in the same change as code that has to grow the
-//   bundle, and say why.
+//   next (about 3 KB). Enforcing a page's own Content-Security-Policy as
+//   Chrome does (docs/csp.md) adds 36 KB over the WebRTC/XOR base (449 KB),
+//   by directive: fetch and host sources +11 (policy parse and match, the
+//   worker's host refusals, the violation read-back), script and style
+//   +10 (the nonce and hash rules, SHA-256/384/512 to hash the page's own
+//   text), navigation +4.5 (base-uri, form-action, frame-ancestors), the
+//   sandbox directive +1 (it reuses the iframe-sandbox emulation), and
+//   Trusted Types +9 (every sink the inject writes judging the page's
+//   value, the inject's own writes carrying trusted values of a policy of
+//   its own). None of it defers: the hooks intercept the document's script,
+//   style, request and Trusted Types sinks and its violation events, so
+//   they are in place before the page's first script, whether or not the
+//   page sends a policy; what a policy-less document skips is the work, not
+//   the code. So the budget is 490 KB. Raise it in the same change as code
+//   that has to grow the bundle, and say why.
 // - the JS heap one proxied frame adds (test/frame-memory.mjs, FRAMES frames
 //   of a small ad-like page, same site), against a ceiling above what this
 //   build measures: 1,094 to 1,100 KB with 20 frames on Chrome 152 and 156
@@ -38,7 +47,7 @@ import { measureFrames } from '../frame-memory.mjs';
 import { done, ok } from '../lib.mjs';
 
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
-const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 468;
+const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 490;
 const FRAMES = Number(process.env.FRAMES) || 20;
 const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1150;
 

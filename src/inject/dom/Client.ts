@@ -15,8 +15,8 @@ import {
 	policySandbox,
 	refusalNamed,
 	sourcesMatch,
-	type HopPolicy,
 	trustedTypesRequired,
+	type HopPolicy,
 	type Policy,
 	type PolicyText,
 } from '../../csp';
