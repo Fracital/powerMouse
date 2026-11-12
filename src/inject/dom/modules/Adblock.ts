@@ -569,7 +569,11 @@ function start(
 		if (ran) return;
 		ran = true;
 		try {
-			Reflect.apply(new natives.Function(page.script), global, []);
+			Reflect.apply(
+				client.compile([], page.script) ?? new natives.Function(page.script),
+				global,
+				[],
+			);
 		} catch (error) {
 			// a scriptlet threw: the page runs without it, as natively
 		}

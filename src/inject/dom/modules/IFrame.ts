@@ -1,4 +1,5 @@
 import { parseConfig } from '../../../config';
+import { CSP_FACTS } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
@@ -15,6 +16,12 @@ export default class IFrameModule extends Module<DocumentClient> {
 		const injectContext = (context: typeof globalThis) => {
 			if (this.client.names.client in context) return;
 
+			// the document is its creator's, and so is its script policy
+			// (src/csp.ts): the client takes what this one was told
+			Reflect.defineProperty(context, CSP_FACTS, {
+				value: { ...this.client.scriptFacts },
+				configurable: true,
+			});
 			const client = new DocumentClient(
 				parseConfig(this.client.config, this.client.codec.key),
 				context,

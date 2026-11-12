@@ -7,6 +7,7 @@ import {
 	parseConfig,
 	ParsedConfig,
 } from '../config';
+import type { ScriptFacts } from '../csp';
 import { HelperNames, helperNames } from '../helperNames';
 import type {
 	HookContext,
@@ -25,6 +26,7 @@ import {
 import StompURL from '../StompURL';
 import {
 	ABORT_REQUEST,
+	CSP_FACTS,
 	INIT_PAGE_MODULES,
 	INIT_REMOTE_TRANSPORT,
 	INLINE_DOCUMENT,
@@ -48,6 +50,7 @@ import { BUILD } from '../version';
 import { LINK_SEGMENT } from '../visited';
 import Module from './Module';
 import { rewriteCounts, rewriterLibraryAt } from './rewriter';
+import { trustedFunction, useTrustedTypes, type TrustedKind } from './trusted';
 
 export interface ModuleCtor {
 	new (client: any): Module<any>;
@@ -340,11 +343,84 @@ export default class Client {
 	readonly hooks?: ResolvedHooks;
 	/** the realm's Function before the Function module wraps it: a hook is host code, not rewritten */
 	readonly #nativeFunction: FunctionConstructor;
+	/**
+	 * What the document's (or worker's) policy says of scripts, as its
+	 * shell named it (src/csp.ts ScriptFacts): where code made from a
+	 * string is refused, the inject makes none of its own (the browser would
+	 * report each attempt to the page)
+	 */
+	get scriptFacts(): ScriptFacts {
+		return this.#scriptFacts;
+	}
+	set scriptFacts(facts: ScriptFacts) {
+		this.#scriptFacts = facts;
+		// its writes into Trusted Types sinks carry trusted values (trusted.ts)
+		if (facts.tt) useTrustedTypes(facts.tt, facts.policy);
+	}
+	#scriptFacts!: ScriptFacts;
+	/** set by the TrustedTypes module: the page's value at a sink, as Chrome judges it (trustedValue) */
+	trustedCheck?: (
+		value: unknown,
+		type: TrustedKind,
+		sink: string,
+		refuse: () => unknown,
+		convert: (value: unknown) => string,
+	) => string | null;
+	/**
+	 * What the page's sink named `sink` (Chrome's name: `Element
+	 * innerHTML`) takes of `value`, under the page's Trusted Types: the
+	 * string to go on with, or null where it is refused, after `refuse`
+	 * (the native sink, handed the page's value) threw or reported as
+	 * natively. `convert` makes the string of a value that is not trusted.
+	 */
+	trustedValue(
+		value: unknown,
+		type: TrustedKind,
+		sink: string,
+		refuse: () => unknown,
+		convert: (value: unknown) => string = String,
+	): string | null {
+		return this.trustedCheck
+			? this.trustedCheck(value, type, sink, refuse, convert)
+			: convert(value);
+	}
+	/**
+	 * Set by the TrustedTypes module: whether a javascript: URL whose code
+	 * is `page` may navigate as its rewrite `routed` (the code the browser
+	 * hands a default policy), under the page's Trusted Types; false after
+	 * `refuse` (the native navigation to the page's URL) where it may not
+	 */
+	trustedJavascript?: (
+		page: string,
+		routed: string,
+		refuse: () => unknown,
+	) => boolean;
+	/** set by the TrustedTypes module: a script text of the inject's own the page's default policy is not asked of */
+	trustedApprove?: (value: string) => void;
+	/** how a policy of this context requires Trusted Types of its sinks (src/csp.ts trustedTypesRequired) */
+	trustedTypesRequired(): 'enforce' | 'report' | null {
+		return this.#scriptFacts.rtt ?? null;
+	}
+	/** report a sink's refusal of `value` that only a report-only policy makes (documents dispatch it) */
+	reportTrustedTypes(_sink: string, _value: string) {}
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		this.names = helperNames(init);
 		this.#customNames = !!(init as { names?: unknown }).names;
 		this.hooks = init.hooks;
 		this.#nativeFunction = global.Function;
+		const facts = Reflect.getOwnPropertyDescriptor(global, CSP_FACTS)?.value as
+			ScriptFacts | undefined;
+		Reflect.deleteProperty(global, CSP_FACTS);
+		this.scriptFacts =
+			typeof facts === 'object' && facts !== null
+				? {
+						nonce: facts.nonce,
+						evaluates: facts.evaluates !== false,
+						tt: facts.tt,
+						rtt: facts.rtt,
+						policy: facts.policy,
+					}
+				: { evaluates: true };
 		// built now, before any page script runs, from the window's own
 		// Function, over the bundle's snapshot of Reflect.apply: a page that
 		// later replaces Reflect.apply or Function never sees the method, the
@@ -359,11 +435,17 @@ export default class Client {
 				? `\n//# sourceURL=${realmOrigin}${init.scope || init.directory}`
 				: '';
 		try {
-			this.#callIn = new this.#nativeFunction(
-				'apply',
+			if (!this.scriptFacts.evaluates) throw new Error('no eval');
+			// (where Trusted Types are in use, eval makes them: trusted.ts)
+			const made = (parameters: string[], body: string) =>
+				trustedFunction(global, parameters, body) ??
+				new this.#nativeFunction(...parameters, body);
+			this.#callIn = made(
+				['apply'],
 				`return function (method, that, args) { return apply(method, that, args); };${sourceURL}`,
 			)(Reflect.apply) as CallIn;
-			this.#ownCallback = new this.#nativeFunction(
+			this.#ownCallback = made(
+				[],
 				`return function (callback) { return function () { callback(); }; };${sourceURL}`,
 			)() as (callback: () => void) => () => void;
 		} catch (error) {
@@ -1016,7 +1098,8 @@ export default class Client {
 		};
 		try {
 			const result: unknown = Reflect.apply(
-				new this.#nativeFunction('stomp', source),
+				this.compile(['stomp'], source) ??
+					new this.#nativeFunction('stomp', source),
 				this.global,
 				[context],
 			);
@@ -1029,6 +1112,38 @@ export default class Client {
 		} catch (error) {
 			report(error);
 		}
+	}
+	/**
+	 * The page's code behind the code a violation's sample shows (the
+	 * first 40 characters, with 'report-sample'): what the rewriter made of
+	 * the last strings the page evaluated, by the start of each
+	 */
+	readonly #codeSamples = new Map<string, string>();
+	/** note that the page's code `page` was evaluated as `native` (codeSample) */
+	noteCodeSample(native: string, page: string) {
+		if (native === page) return;
+		const key = native.slice(0, SAMPLE_LENGTH);
+		this.#codeSamples.delete(key);
+		this.#codeSamples.set(key, page.slice(0, SAMPLE_LENGTH));
+		if (this.#codeSamples.size > 16)
+			this.#codeSamples.delete(this.#codeSamples.keys().next().value!);
+	}
+	/** the page's sample for a violation's `sample` of code it evaluated, or the sample as it is */
+	codeSample(sample: string): string {
+		return this.#codeSamples.get(sample) ?? sample;
+	}
+	/**
+	 * A function of the realm's made from `source` with `parameters`, where
+	 * its policy refuses code made from a string (a document makes it with
+	 * a script that carries its nonce, DocumentClient), else null: the
+	 * realm's own Function makes it
+	 */
+	compile(parameters: string[], source: string): Function | null {
+		if (this.scriptFacts.evaluates)
+			return trustedFunction(this.global, parameters, source);
+		throw new this.global.EvalError(
+			'Stomp: this context refuses code made from a string',
+		);
 	}
 	/** what a hook is handed; documents add what they know (DocumentClient) */
 	protected hookContext(phase: HookPhase): HookContext {
@@ -1063,6 +1178,9 @@ export default class Client {
 		return <InstanceType<T>>this.modules.get(Module);
 	}
 }
+
+/** how much of the code a violation's sample shows (measured) */
+const SAMPLE_LENGTH = 40;
 
 export function createClientFactory<T>(
 	Client: {
