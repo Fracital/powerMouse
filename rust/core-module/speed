@@ -1,0 +1,6 @@
+# This crate is built for speed, not the size the workspace release profile
+# asks: the standard library is rebuilt without optimize_for_size and
+# wasm-opt runs -O2 instead of -Oz (deploy/rust/compile.sh reads this file by
+# its presence). The core module is the JavaScript and CSS rewriters and the
+# markup scanner, the rewrite hot path, where the throughput is worth the
+# extra bytes of an opt-in, separately fetched module (src/config.ts core).

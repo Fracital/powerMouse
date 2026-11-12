@@ -48,16 +48,27 @@ fi
 # no panic location, no Debug formatting, plus the flags the crate names in
 # rust/<crate>/rustflags (`-Cpanic=immediate-abort` for one whose
 # dependencies can panic: the panic machinery and its messages, "panicked
-# at", stay out of the bytes and a panic is a plain trap)
+# at", stay out of the bytes and a panic is a plain trap; `-Copt-level=3`
+# for the core module, which is optimized for speed over the size the
+# workspace profile asks, since it is the rewrite hot path)
 flags='-Zlocation-detail=none -Zfmt-debug=none'
 if [[ -f "$crate/rustflags" ]]; then
 	flags="$flags $(tr '\n' ' ' < "$crate/rustflags")"
 fi
 
 export RUSTFLAGS=$flags
+# the standard library is rebuilt for size, unless the crate opts into speed
+# (rust/<crate>/speed): the core module's code runs std hot (the rewriters'
+# allocation, the scanner, the function marks), so it takes the larger,
+# faster build of std and the faster opt-level its rustflags name, where the
+# WebRTC and blocker artifacts stay on the small build
+buildstd='-Z build-std=std,panic_abort -Z build-std-features=optimize_for_size'
+if [[ -f "$crate/speed" ]]; then
+	buildstd='-Z build-std=std,panic_abort'
+fi
 # shellcheck disable=SC2086
 cargo build $locked --release --target "$triple" \
-	-Z build-std=std,panic_abort -Z build-std-features=optimize_for_size \
+	$buildstd \
 	-p "$crate"
 
 built="target/$triple/release/${crate//-/_}.wasm"
@@ -73,7 +84,14 @@ else
 	cp "$built" "/work/out/$name.unopt.wasm"
 fi
 
-wasm-opt -Oz --strip-debug --strip-producers --strip-target-features \
+# wasm-opt optimizes for size, unless the crate opts into speed
+# (rust/<crate>/speed): -O2 keeps the faster opt-level 3 codegen where -Oz
+# would trade some of it back for bytes
+wopt=-Oz
+if [[ -f "$crate/speed" ]]; then
+	wopt=-O2
+fi
+wasm-opt "$wopt" --strip-debug --strip-producers --strip-target-features \
 	--enable-bulk-memory --enable-nontrapping-float-to-int \
 	--enable-sign-ext --enable-mutable-globals \
 	-o "/work/out/$name.wasm" "/work/out/$name.unopt.wasm"
