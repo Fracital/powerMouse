@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Fidelity Probe</title>
+		<style>
+			body {
+				font:
+					13px/1.4 ui-monospace,
+					Menlo,
+					Consolas,
+					monospace;
+				margin: 0;
+				background: #111;
+				color: #ddd;
+			}
+			header {
+				position: sticky;
+				top: 0;
+				padding: 10px 16px;
+				background: #1b1b1b;
+				border-bottom: 1px solid #333;
+			}
+			button {
+				font: inherit;
+				padding: 6px 12px;
+				margin-right: 8px;
+				cursor: pointer;
+			}
+			#note {
+				color: #9ad1f5;
+			}
+			textarea {
+				width: 100%;
+				height: 70vh;
+				box-sizing: border-box;
+				border: 0;
+				padding: 12px 16px;
+				background: #111;
+				color: #cfe9cf;
+				white-space: pre;
+			}
+		</style>
+	</head>
+	<body>
+		<header>
+			<button id="copy">Copy JSON</button>
+			<span id="note"
+				>Load this page BOTH directly and through the proxy, then diff the two
+				dumps.</span
+			>
+		</header>
+		<textarea id="out" readonly spellcheck="false"></textarea>
+		<script>
+			// A fingerprint-fidelity probe: it reads the signals a managed challenge
+			// reads, so the SAME page served direct vs through the proxy can be
+			// diffed. Every difference is something the proxy changed. It never
+			// touches a challenge and solves nothing; it only reports this browser.
+			(async () => {
+				const out = {};
+				const safe = (label, fn) => {
+					try {
+						out[label] = fn();
+					} catch (e) {
+						out[label] = 'throw: ' + (e && e.message);
+					}
+				};
+				const nativeStr = (fn) => {
+					try {
+						return Function.prototype.toString.call(fn);
+					} catch (e) {
+						return 'throw: ' + (e && e.message);
+					}
+				};
+				// --- is a function reported as native? the first-order proxy tell ---
+				const NATIVES = {
+					fetch: self.fetch,
+					XMLHttpRequest: self.XMLHttpRequest,
+					'XHR.open': self.XMLHttpRequest && XMLHttpRequest.prototype.open,
+					'XHR.send': self.XMLHttpRequest && XMLHttpRequest.prototype.send,
+					RTCPeerConnection: self.RTCPeerConnection,
+					Worker: self.Worker,
+					'Worker.postMessage': self.Worker && Worker.prototype.postMessage,
+					'canvas.getContext':
+						self.HTMLCanvasElement && HTMLCanvasElement.prototype.getContext,
+					'canvas.toDataURL':
+						self.HTMLCanvasElement && HTMLCanvasElement.prototype.toDataURL,
+					'canvas.toBlob':
+						self.HTMLCanvasElement && HTMLCanvasElement.prototype.toBlob,
+					getImageData:
+						self.CanvasRenderingContext2D &&
+						CanvasRenderingContext2D.prototype.getImageData,
+					'Function.toString': Function.prototype.toString,
+					Function: self.Function,
+					eval: self.eval,
+					setTimeout: self.setTimeout,
+					'navigator.permissions.query':
+						navigator.permissions && navigator.permissions.query,
+					'perf.now': performance.now,
+					structuredClone: self.structuredClone,
+					FontFace: self.FontFace,
+					'Element.attachShadow':
+						self.Element && Element.prototype.attachShadow,
+					'MessagePort.postMessage':
+						self.MessagePort && MessagePort.prototype.postMessage,
+					'history.pushState': history.pushState,
+					'Notification.permission getter': Object.getOwnPropertyDescriptor(
+						self.Notification || {},
+						'permission',
+					),
+				};
+				const toStr = {};
+				for (const k in NATIVES) {
+					const v = NATIVES[k];
+					const s =
+						v && typeof v === 'object' && v.get
+							? nativeStr(v.get)
+							: nativeStr(v);
+					toStr[k] =
+						typeof s === 'string'
+							? s.includes('[native code]')
+								? 'native'
+								: 'HOOKED: ' + s.slice(0, 90)
+							: String(s);
+				}
+				out.nativeToString = toStr;
+				// meta: can the toString hook itself be unmasked?
+				safe('toString.toString', () =>
+					Function.prototype.toString.toString().slice(0, 80),
+				);
+				safe('fnToStringName', () =>
+					Object.getOwnPropertyDescriptor(Function.prototype.toString, 'name')
+						? Function.prototype.toString.name
+						: '(no name desc)',
+				);
+
+				// --- navigator / environment ---
+				safe('ua', () => navigator.userAgent);
+				safe('platform', () => navigator.platform);
+				safe('languages', () => navigator.languages.join(','));
+				safe('hardwareConcurrency', () => navigator.hardwareConcurrency);
+				safe('deviceMemory', () => navigator.deviceMemory);
+				safe('webdriver', () => navigator.webdriver);
+				safe('vendor', () => navigator.vendor);
+				safe('maxTouchPoints', () => navigator.maxTouchPoints);
+				safe('pluginsLen', () => navigator.plugins.length);
+				safe('mimeTypesLen', () => navigator.mimeTypes.length);
+				safe('pdfViewerEnabled', () => navigator.pdfViewerEnabled);
+				safe('cookieEnabled', () => navigator.cookieEnabled);
+				safe('doNotTrack', () => navigator.doNotTrack);
+				await (async () => {
+					try {
+						const d = await navigator.userAgentData.getHighEntropyValues([
+							'architecture',
+							'bitness',
+							'model',
+							'platformVersion',
+							'uaFullVersion',
+							'fullVersionList',
+						]);
+						out.uaData = {
+							brands: (navigator.userAgentData.brands || [])
+								.map((b) => b.brand + ' ' + b.version)
+								.join(' | '),
+							mobile: navigator.userAgentData.mobile,
+							platform: navigator.userAgentData.platform,
+							arch: d.architecture,
+							bitness: d.bitness,
+							platformVersion: d.platformVersion,
+							uaFullVersion: d.uaFullVersion,
+							fullVersionList: (d.fullVersionList || [])
+								.map((b) => b.brand + ' ' + b.version)
+								.join(' | '),
+						};
+					} catch (e) {
+						out.uaData = 'throw: ' + (e && e.message);
+					}
+				})();
+
+				// --- screen / window / timing ---
+				safe(
+					'screen',
+					() =>
+						`${screen.width}x${screen.height} avail ${screen.availWidth}x${screen.availHeight} depth ${screen.colorDepth}`,
+				);
+				safe('dpr', () => devicePixelRatio);
+				safe('innerWH', () => `${innerWidth}x${innerHeight}`);
+				safe('outerWH', () => `${outerWidth}x${outerHeight}`);
+				safe('tz', () => Intl.DateTimeFormat().resolvedOptions().timeZone);
+				safe('locale', () => Intl.DateTimeFormat().resolvedOptions().locale);
+				safe('tzOffset', () => new Date().getTimezoneOffset());
+				safe('perfMemory', () =>
+					performance.memory
+						? `used ${performance.memory.usedJSHeapSize} limit ${performance.memory.jsHeapSizeLimit}`
+						: '(none)',
+				);
+				safe('nowResolution', () => {
+					let min = Infinity;
+					for (let i = 0; i < 50; i++) {
+						const a = performance.now();
+						let b = performance.now();
+						while (b === a) b = performance.now();
+						min = Math.min(min, b - a);
+					}
+					return min;
+				});
+
+				// --- frame / origin hierarchy ---
+				safe('isTop', () => window === window.top);
+				safe('hasOpener', () => !!window.opener);
+				safe('frameElement', () => {
+					try {
+						return String(window.frameElement);
+					} catch (e) {
+						return 'cross-origin throw';
+					}
+				});
+				safe('origin', () => location.origin);
+				safe('href', () => location.href);
+				safe('ancestorOrigins', () =>
+					location.ancestorOrigins
+						? Array.from(location.ancestorOrigins).join(',')
+						: '(none)',
+				);
+				safe('referrer', () => document.referrer);
+				safe('documentDomain', () => document.domain);
+				safe('cookie', () => document.cookie.slice(0, 40));
+
+				// --- WebGL fingerprint (UNMASKED renderer is a core attestation signal) ---
+				safe('webgl', () => {
+					const c = document.createElement('canvas');
+					const gl =
+						c.getContext('webgl2') ||
+						c.getContext('webgl') ||
+						c.getContext('experimental-webgl');
+					if (!gl) return '(no webgl)';
+					const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+					return {
+						vendor: gl.getParameter(gl.VENDOR),
+						renderer: gl.getParameter(gl.RENDERER),
+						unmaskedVendor: dbg && gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL),
+						unmaskedRenderer:
+							dbg && gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL),
+						version: gl.getParameter(gl.VERSION),
+						shading: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+						maxTex: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+						extns: (gl.getSupportedExtensions() || []).length,
+					};
+				});
+				safe('webgpu', () => (navigator.gpu ? 'present' : 'absent'));
+
+				// --- canvas 2d fingerprint hash ---
+				safe('canvas2d', () => {
+					const c = document.createElement('canvas');
+					c.width = 240;
+					c.height = 60;
+					const ctx = c.getContext('2d');
+					ctx.textBaseline = 'top';
+					ctx.font = "14px 'Arial'";
+					ctx.fillStyle = '#f60';
+					ctx.fillRect(2, 2, 180, 24);
+					ctx.fillStyle = '#069';
+					ctx.fillText('STomp fidelity \u{1F600} ABCxyz', 4, 4);
+					ctx.fillStyle = 'rgba(102,204,0,0.7)';
+					ctx.fillText('STomp fidelity \u{1F600} ABCxyz', 6, 20);
+					const url = c.toDataURL();
+					let h = 2166136261;
+					for (let i = 0; i < url.length; i++) {
+						h ^= url.charCodeAt(i);
+						h = Math.imul(h, 16777619);
+					}
+					return (h >>> 0).toString(16) + ' len ' + url.length;
+				});
+
+				// --- audio fingerprint ---
+				await (async () => {
+					try {
+						const Ctx =
+							self.OfflineAudioContext || self.webkitOfflineAudioContext;
+						const ac = new Ctx(1, 44100, 44100);
+						const osc = ac.createOscillator();
+						osc.type = 'triangle';
+						osc.frequency.value = 10000;
+						const comp = ac.createDynamicsCompressor();
+						osc.connect(comp);
+						comp.connect(ac.destination);
+						osc.start(0);
+						const buf = await ac.startRendering();
+						const data = buf.getChannelData(0);
+						let sum = 0;
+						for (let i = 4500; i < 5000; i++) sum += Math.abs(data[i]);
+						out.audio = sum.toString();
+					} catch (e) {
+						out.audio = 'throw: ' + (e && e.message);
+					}
+				})();
+
+				// --- blob worker environment (STomp hosts workers; the challenge spawns them) ---
+				await (async () => {
+					try {
+						const src =
+							'self.postMessage({loc:String(self.location),origin:self.origin,' +
+							'fetch:Function.prototype.toString.call(self.fetch).includes("[native code]"),' +
+							'importScripts:typeof self.importScripts,ua:navigator.userAgent===' +
+							JSON.stringify(navigator.userAgent) +
+							'})';
+						const url = URL.createObjectURL(
+							new Blob([src], { type: 'text/javascript' }),
+						);
+						const w = new Worker(url);
+						out.worker = await new Promise((res, rej) => {
+							const t = setTimeout(() => rej(new Error('timeout')), 3000);
+							w.onmessage = (e) => {
+								clearTimeout(t);
+								res(e.data);
+							};
+							w.onerror = (e) => {
+								clearTimeout(t);
+								rej(new Error(e.message || 'worker error'));
+							};
+						});
+						w.terminate();
+						URL.revokeObjectURL(url);
+					} catch (e) {
+						out.worker = 'throw: ' + (e && e.message);
+					}
+				})();
+
+				// --- error stack shape (challenges parse this) ---
+				safe('stackShape', () => {
+					const s = new Error('x').stack || '';
+					return s
+						.split('\n')
+						.slice(0, 3)
+						.map((l) => l.replace(/https?:\/\/[^\s)]+/g, '<url>').trim())
+						.join(' | ');
+				});
+
+				// --- does any stomp internal leak onto globals the page can see? ---
+				safe(
+					'leakedGlobals',
+					() =>
+						Object.getOwnPropertyNames(self)
+							.filter((n) => /stomp|__stomp|inject|wisp|epoxy/i.test(n))
+							.join(',') || '(none)',
+				);
+
+				const text = JSON.stringify(out, null, 2);
+				document.getElementById('out').value = text;
+				document.getElementById('copy').onclick = () => {
+					navigator.clipboard &&
+						navigator.clipboard.writeText(text).then(
+							() => (document.getElementById('note').textContent = 'copied'),
+							() => {},
+						);
+				};
+			})();
+		</script>
+	</body>
+</html>
