@@ -1,0 +1,638 @@
+# WebRTC over wisp
+
+The plan for giving a proxied page real WebRTC (data channels, audio, video,
+with real peers on the internet) while every packet travels through the wisp
+tunnel and nothing leaves from the user's machine. Written 2026-11-10 against
+master a8a457b, after the leak fix in docs/webrtc.md (which keeps the
+browser's own `RTCPeerConnection` and sends it nowhere). This document
+replaces that design's "no peer outside the browser" limit with a WebRTC
+stack of STomp's own, in wasm, in a worker next to the page, fed by wisp UDP
+and TCP streams.
+
+Nothing here lands at once: the phases in section 11 each pass the full
+suite set and the `webrtc` suite's leak checks, which stay strict
+throughout.
+
+## 1. Why not the browser's stack, and why not an operator TURN server
+
+The browser's ICE agent sends from the network service, from the user's
+address, to whatever the page names; a service worker or a page can neither
+carry those packets nor see them. docs/webrtc.md measured it: a STUN server
+hears the user's address, a TURN server gets allocations, a remote candidate
+gets connectivity checks, and with media access the page reads the LAN
+addresses. The fix there makes the browser behave as on a network that
+drops UDP, so today a proxied page connects to nothing outside this browser.
+
+The operator TURN server (option 1 in docs/webrtc.md) keeps the browser's
+stack and points it, relay-only, at a TURN server the host runs. It cannot be
+shown leak-free from inside the page:
+
+- the browser still resolves the TURN host through the user's resolver and
+  connects to it from the user's address, so the TURN operator sees the user,
+  as the wisp operator does today, but a second party does;
+- `iceTransportPolicy: 'relay'` is applied by a hook; every path that reaches
+  the native constructor or `setConfiguration` (another realm's member, a
+  realm the inject does not cover) is a path around it, and the suite can
+  only enumerate the ones it knows;
+- the relay candidate's `raddr` is the user's public address and has to be
+  hidden by hand everywhere it can be read, which is the whole redaction
+  surface of docs/webrtc.md again, forever;
+- the host has to run TURN servers with short-lived credentials and pay for
+  their bandwidth, outside this repository.
+
+So the stack moves into STomp. The page's own STUN and TURN servers are
+reached through wisp (they hear from the edge), peers are reached through
+wisp (they see the edge), and the browser's `RTCPeerConnection` is never
+constructed by a page: the threat model becomes "no packet outside wisp"
+by construction, the same as HTTP and WebSockets, instead of "no packet the
+hooks failed to redirect".
+
+## 2. What the wire allows
+
+A wisp UDP stream (protocol v1 and v2, wisp-js 0.5, holyWisp with
+`allow-udp = on`) is a socket the server opens to one `host:port` and
+connects: wisp-js calls `dgram.Socket.connect(port, ip)` on it
+(`node_modules/@mercuryworkshop/wisp-js/src/server/net.mjs`), so datagrams
+from any other peer are dropped by the kernel, and the client learns neither
+the socket's own address nor the sender of what it reads. A wisp TCP stream
+is one connection to one `host:port`. That shapes the whole ICE design:
+
+| ICE needs                                                       | What wisp gives                                                                                                                                                                                                                       |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| one socket per host candidate, talking to every remote          | one stream per remote: a `(local candidate, remote address)` pair is a stream, opened when the agent first sends to that remote                                                                                                       |
+| a srflx candidate the peer can send to                          | the STUN Binding goes out on a stream connected to the STUN server, so the address it reports (the edge's socket) only accepts packets from the STUN server; a peer sending there reaches nothing                                     |
+| host candidates                                                 | none exist: the "host" is the edge, whose socket is not known before it sends                                                                                                                                                         |
+| a relay candidate                                               | works as designed: one stream to the TURN server carries every peer's traffic in TURN indications and channels, with the peer's address inside the message                                                                            |
+| the peer learning our address                                   | peer-reflexive discovery: the first connectivity check we send to a remote candidate reaches it from the edge socket of that stream; the peer adds a prflx candidate for it and its checks come back to the same connected socket     |
+| an ICE-lite peer (SFUs: mediasoup, Janus, LiveKit, Pion-based)  | sends no checks of its own, answers ours, uses the prflx pair: works on the stream path with no STUN or TURN at all                                                                                                                   |
+| a full-ICE peer (another browser) behind a cone NAT             | its checks to our srflx reach nothing; its triggered checks to the prflx pair reach the stream: works                                                                                                                                 |
+| a full-ICE peer behind a port-restricted or symmetric NAT       | its NAT opened for the address it sent to (our srflx), not for the stream's socket; the direct path fails; the pair through the page's TURN server works                                                                              |
+| TCP candidates (`tcptype passive` peers, TURN over TCP and TLS) | a wisp TCP stream per remote, RFC 4571 framing for ICE-TCP, epoxy's `connect_tls` for `turns:` (Chrome's ClientHello, the same TLS stack HTTPS uses)                                                                                  |
+| mDNS host candidates                                            | nothing on the LAN ever: each document shows a random `<uuid>.local` host candidate (what Chrome shows without media access) that resolves only through STomp's own bridge between two proxied documents of one browser (section 5.4) |
+
+Every real WebRTC service that matters routes through servers with public
+addresses (SFUs) or offers TURN; a browser-to-browser call without TURN
+across two restrictive NATs is the one shape that stays out of reach, and
+it is the one the page's own `iceServers` exist for. Where the wisp server
+refuses UDP (`allow-udp = off`), connections fall back to TURN over TCP or
+TLS, as Chrome does on a UDP-blocked network, with the same 701 errors.
+
+The holyWisp edges relay UDP since abulxt 853761c7 (`holywisp_allow_udp`,
+`proxy_udp_direct`), the demo's wisp-js relays it by default, and both
+refuse private, loopback and link-local destinations (so a peer's private
+host candidates fail at once, as they would from another network). A
+proxied page's packets leave from the edge; browserleaks.com/webrtc shows
+the edge's address under "Public IP", which is what every other row of that
+page already shows for a proxied user.
+
+## 3. Pieces
+
+| Piece                       | Where                                                                            | What it does                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| the stack                   | `rust/rtc/` (Rust, wasm32), built by `deploy/rust/build.sh` to `assets/rtc.wasm` | str0m 0.25 (sans-IO: ICE, DTLS 1.2 and 1.3 through dimpl with the pure Rust crypto backend, SRTP, SCTP, RTP packetizing and depacketizing for Opus, VP8, VP9, H.264, AV1, RTCP feedback, bandwidth estimation, stats), plus STomp's own STUN Binding client, TURN client and ICE-TCP framing. One wasm instance per rtc worker holds every connection of that document.                                              |
+| the rtc worker              | `src/rtc/worker.ts`, built to `dist/rtcWorker.js`, an `Assets` key               | A dedicated Worker the inject starts for a document the first time it constructs an `RTCPeerConnection`. Instantiates the module from bytes the host supplies through the shared loader, drives the stack (input, output, timers), owns the wisp streams through the document's transport port, runs the WebCodecs encoders and decoders, and speaks to the page over MessagePorts.                                  |
+| the stand-in                | `src/inject/dom/modules/WebRTC.ts` (rewritten) and `src/rtc/api/`                | `RTCPeerConnection` and the objects around it as classes of STomp's own that read as native (section 7). Thin: every method is a message to the worker and a promise of the page's realm; every event is a message back.                                                                                                                                                                                             |
+| the datagram and stream RPC | `src/transport/messages.ts`, `serveTransport.ts`, `RemoteTransport.ts`           | Two calls on the transport port a page already has (`TRANSPORT_RPC`): `udp(host, port)` and `tcp(host, port, tls)`, each answered with a MessagePort that carries one datagram (or one chunk) per message. The transport worker opens them on epoxy's `connect_udp`, `connect_tcp` and `connect_tls`; libcurl has none, so with libcurl `RTCPeerConnection` behaves as on a network without UDP or TCP (section 10). |
+| the media bridge            | `src/rtc/media/` (page side and worker side)                                     | `MediaStreamTrackProcessor` on the page's thread hands its `readable` of `VideoFrame`s or `AudioData` to the worker by transfer; `MediaStreamTrackGenerator` hands its `writable` the same way, so the page gets a real `MediaStreamTrack` for `<video>` and `<audio>`. Encoding and decoding run in the worker with WebCodecs.                                                                                      |
+| the loader                  | `src/wasm/` (the Rust rewriter agent's, docs/rust-plan.md section 6)             | Compiles `assets/rtc.wasm` once per controller from bytes, a URL or a `WebAssembly.Module` the host hands over, and posts the compiled module to the rtc worker. Nothing is fetched until a page makes a connection.                                                                                                                                                                                                 |
+| the same-browser bridge     | `src/rtc/local.ts`                                                               | Two proxied documents of one browser (frames, tabs) connect without the network: their rtc workers exchange datagrams over a MessagePort brokered on the `$stomp$webrtc` BroadcastChannel, keyed by the `.local` names they showed (section 5.4).                                                                                                                                                                    |
+
+Measured on Chrome 152 (headless, `/home/user/.claude/jobs/482f9578/tmp/webrtc-fable/caps1.mjs`, `caps2.mjs`): `VideoEncoder`, `VideoDecoder`, `AudioEncoder`, `AudioDecoder`
+exist in dedicated workers on a secure context (not on `about:blank`) and
+report VP8, VP9, H.264 (`avc1.42001f`), AV1 and Opus supported;
+`MediaStreamTrackProcessor` and `MediaStreamTrackGenerator` exist on the
+window only, `VideoTrackGenerator` does not exist, and a `MediaStreamTrack`
+is not transferable to a worker (`DataCloneError`). The processor's
+`readable` and the generator's `writable` are transferable, which is the
+bridge above.
+
+## 4. The stack's boundary
+
+The crate follows the conventions of `rust/` (docs/rust-plan.md sections 3,
+6 and 7): a `cdylib`, single-letter exports listed in `rust/rtc/abi.json`,
+no wasm-bindgen, no `import.meta.url`, the artifact checked by
+`deploy/rust/check.mjs` (no custom sections, no token of the list in the
+bytes), built by `deploy/rust/build.sh rtc rtc` in the pinned toolchain
+container, committed as `assets/rtc.wasm` with its `.sha256` and
+`UPSTREAM`, and copied into `dist/` by `build.js`.
+
+Sans-IO fits a hand-written boundary exactly: the host feeds records in,
+asks for records out, and tells the stack when its next timer is due.
+
+| Export | Meaning                                                                                                                   |
+| ------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `m`    | the memory                                                                                                                |
+| `a`    | `alloc(len) -> ptr`, `f(ptr, len)` frees                                                                                  |
+| `c`    | `create(ptr, len) -> id`: a connection from a configuration record (ICE servers, policy, certificates, codec choices)     |
+| `i`    | `input(id, kind, ptr, len) -> status`: a datagram received on a stream, a stream's open or close, a page call (section 6) |
+| `t`    | `tick(id, now_ms) -> status`: the clock advanced; timers run                                                              |
+| `o`    | `output(id) -> len`: the next output record into the scratch (`p()` its pointer), 0 when there is none                    |
+| `d`    | `destroy(id)`                                                                                                             |
+| `p`    | the scratch pointer the output records are written at                                                                     |
+
+Input records (`kind`): `datagram` (stream handle, bytes), `stream-open`
+(handle, the address it was opened to), `stream-closed` (handle, why), and
+the page's calls as tagged records: `offer`, `answer`, `set-local`,
+`set-remote`, `candidate`, `channel-open`, `channel-send`,
+`channel-close`, `media-add`, `media-direction`, `media-frame` (an encoded
+frame to packetize: mid, rid, pt, timestamp, keyframe, bytes),
+`media-stop`, `bitrate`, `stats`, `close`.
+
+Output records: `send` (open a stream to this address, or send on this
+handle, bytes), `event` (the page-visible events: candidate, gathering and
+connection states, channel open and message and close, track added, stats
+reports), `frame` (a depacketized encoded frame to decode: mid, rid, codec,
+timestamp, keyframe, bytes, which the worker feeds its decoder), `keyframe`
+(the peer asked for one, PLI or FIR), `bitrate` (the estimate the encoder
+should follow), `timer` (the next tick wanted, in ms).
+
+Records are a flat binary layout (a u8 tag, u32 lengths, UTF-8 for text),
+written and read by the worker with a `DataView`: no JSON on the media
+path, where a frame of VP8 is a copy into the stack's memory and a copy out
+again and nothing else.
+
+### Clock and randomness
+
+str0m, sctp-proto and the ICE agent take `Instant` from the caller for every
+decision (the rest of the `Instant::now()` calls in their sources are in
+tests), but sctp-proto's `connect` path still calls it, and an `Instant`
+cannot be made any other way; `rand::rng()` seeds from `getrandom`, and DTLS
+keys, ICE credentials and SCTP cookies need real randomness. On
+`wasm32-unknown-unknown` the standard library has no clock (`Instant::now`
+aborts) and `getrandom` has no source without wasm-bindgen glue. The crate
+is therefore built for `wasm32-wasip1`: the standard library's clock,
+randomness and stdout become a handful of imports in the
+`wasi_snapshot_preview1` module (`clock_time_get`, `random_get`,
+`fd_write`, `environ_get`, `environ_sizes_get`, `proc_exit`,
+`sched_yield`), which the worker answers in about forty lines
+(`performance.now()` and `Date.now()`, `crypto.getRandomValues`, a write
+that discards, an exit that throws). They are listed in `abi.json` like
+any import, their names are the WASI standard's (every Emscripten module
+carries the same, so they are no signature of this project), and the
+toolchain needs the `wasm32-wasip1` target added next to
+`wasm32-unknown-unknown` plus a per-crate target marker read by
+`compile.sh` (a `target` file in the crate directory, the way `bindgen` is
+read today). The `-Z build-std` flags apply unchanged; the wasi libc
+objects come with the rustup target. If that target is unwelcome in the
+shared image, the fallback is `wasm32-unknown-unknown` with `getrandom`'s
+`custom` backend answered by a one-function import and a patched
+`std::time::Instant` source in the few crates that call `now()`; the
+WASI route is smaller and touches no dependency.
+
+### What is in the bytes
+
+str0m writes `o=str0m-<version>` into every SDP it generates; STomp never
+hands that text to a page (section 6), and the token scan does not look
+for the library's name, but the string is in the artifact and says what
+the stack is. If that matters to a host, the SDP renderer below can be the
+only SDP writer (str0m's `DirectApi` path) and the string goes away; that is
+noted as a later option, not a phase.
+
+Estimated size: str0m with the pure Rust crypto backend, SCTP, the ICE
+agent and the codec packetizers is in the order of 1 to 1.5 MB of wasm
+before `-Oz` and `optimize_for_size`, about 350 to 450 KB over the wire with
+brotli. The exact figure is reported with phase 1 and becomes the budget.
+
+## 5. ICE as the page sees it
+
+### 5.1 Local candidates
+
+For each connection, in the order Chrome emits them:
+
+1. **One host candidate per component** with a random `<uuid>.local`
+   address, UDP, the priority Chrome gives a host candidate. This is what
+   Chrome shows without media access. It resolves nowhere on the network;
+   it is the key of the same-browser bridge (5.4). With a candidate pool or
+   `iceCandidatePoolSize`, gathered at construction as Chrome does.
+2. **One srflx candidate per STUN server the page named** (and per TURN
+   server, which Chrome also asks as STUN), from a Binding request sent on
+   a stream to that server through wisp: `address` is the edge's, `raddr`
+   `0.0.0.0` (what Chrome shows for the related host address without media
+   access). The peer cannot reach it (section 2); it exists because pages
+   and leak tests read it, and because a full-ICE peer uses it as the
+   address its NAT opens for.
+3. **One relay candidate per TURN server** the page named, from an
+   Allocate on a stream to that server (UDP, TCP, or TLS through
+   `connect_tls`), with the long-term credential flow (401, realm, nonce,
+   MESSAGE-INTEGRITY, the credentials from the page's `iceServers`), a
+   refresh timer, permissions for each remote candidate the agent pairs it
+   with, and channel bindings once a pair is nominated (ChannelData, not
+   Send indications, on the selected pair).
+4. **`icecandidateerror`** for a server that does not answer: 701, the
+   texts and the timing of Chrome's (docs/webrtc.md measured them: about
+   39.9 s for STUN, 60 ms later for TURN over UDP, at once for TCP that
+   fails), `address` `0.0.0.x`, `hostCandidate` as Chrome redacts it. A
+   server name that does not resolve fails as Chrome's does; the resolution
+   happens on the wisp server.
+5. **Gathering states** `new`, `gathering`, `complete` as Chrome sequences
+   them, the end-of-candidates event (`candidate: null`, then the
+   `candidate: ''` Chrome fires), and `iceTransportPolicy: 'relay'` keeping
+   only (3).
+
+Every address the page can read is the edge's or `0.0.0.0` or a `.local`
+name. The user's addresses never exist in the worker.
+
+### 5.2 Remote candidates
+
+A remote candidate (from `addIceCandidate` or the `a=candidate` lines of a
+remote description) is handed to the agent as it is. When the agent first
+transmits to it, the worker opens a wisp stream to its address, on the
+transport kind the candidate names:
+
+- UDP host, srflx and relay candidates: a UDP stream each;
+- TCP candidates with `tcptype passive` or `so`: a TCP stream each, with
+  RFC 4571 length framing; `active` candidates cannot be reached (Chrome
+  does not connect to them either);
+- a candidate whose address the wisp server refuses (private, loopback,
+  link-local) gets its stream closed at once, which fails the pair as
+  "unreachable" without a timeout.
+
+Each stream is the `(local candidate, remote address)` pair for the agent:
+received datagrams enter the stack with `source` = the remote address the
+stream was opened to and `destination` = the local candidate's address, so
+pair matching, prflx discovery on our side and the selected pair are the
+agent's own logic. The relay candidate's streams are different: one stream
+to the TURN server carries every remote, as TURN messages, and the TURN
+client in the crate unwraps Data indications and ChannelData into
+`(source: the peer, destination: the relayed address)` inputs.
+
+A connection never has more than about a dozen streams (remote candidates
+of a typical offer), and streams of failed pairs are closed when the agent
+drops the pair; a nominated pair keeps one stream open, and ICE restarts
+start over.
+
+### 5.3 Connectivity
+
+str0m's agent runs the checks, retransmissions, nominations (the
+controlling role per the offer), keepalives, consent freshness, and
+restarts; `iceconnectionstatechange` and `connectionstatechange` follow
+the agent's and DTLS's states with Chrome's state machine (`checking` on
+the first pair, `connected` on the first nomination, `completed` when every
+pair is settled, `failed` after the agent gives up, `disconnected` on
+consent timeouts). The timing differs from Chrome's where the tunnel adds
+its round trip; the suites assert order and the page-visible values, not
+milliseconds.
+
+### 5.4 Two proxied pages in one browser
+
+Today two proxied documents open a data channel through the browser's own
+stack (mDNS names shared on `$stomp$webrtc`). That stays, without the
+network: an rtc worker that is asked to transmit to a `.local` name
+announced by another document of this browser (the BroadcastChannel carries
+the announcements, as today) brokers a MessagePort to that document's
+worker over the same channel and exchanges datagrams on it, with the two
+names as the pair's addresses. It is the path the existing suite's local
+checks exercise, it costs nothing on the wire, and it is the only place a
+`.local` name ever means anything. A name no document announced waits the
+200 ms the current module waits, then fails the pair.
+
+## 6. SDP
+
+Negotiation is str0m's (`SdpApi`: `add_media`, `add_channel`,
+`set_direction`, `apply` for an offer, `accept_offer` for an answer,
+`accept_answer` to complete, `ice_restart`), so payload type negotiation,
+extension maps, SSRC allocation, simulcast rids, BUNDLE and rtcp-mux are one
+implementation with the packets. What the page reads is not str0m's text.
+A renderer in the worker turns the negotiated state into SDP in Chrome's
+shape, from the `o=- <id> <version> IN IP4 127.0.0.1` line and
+`a=msid-semantic: WMS` through each `m=` section's line order (`c=`,
+`a=rtcp:9 IN IP4 0.0.0.0`, `a=ice-ufrag`, `a=ice-pwd`, `a=ice-options:trickle`,
+`a=fingerprint:sha-256`, `a=setup`, `a=mid`, extmaps, direction, `a=msid`,
+`a=rtcp-mux`, `a=rtcp-rsize`, `rtpmap`, `rtcp-fb`, `fmtp` per payload type in
+Chrome's default codec order and payload numbers, `a=ssrc-group:FID` and the
+`a=ssrc` lines with cname and msid, `a=sctp-port:5000` and
+`a=max-message-size:262144` for the application section), with the
+candidates rendered per 5.1. The renderer is measured against Chrome 152
+and 156 offers and answers recorded by the suite (data channel only, audio,
+video, both, simulcast, after `addTransceiver` of each direction) and
+compared line by line with the identifiers normalised. The IDs the page can
+match across calls (ufrag, fingerprint, mids, SSRCs, payload types,
+extension ids) are the stack's real ones, so what the page signals is what
+the wire uses.
+
+Remote descriptions go to str0m's parser as the page gave them: Chrome's,
+Firefox's, Safari's and the Node and native stacks' SDP parse. Errors
+become `RTCError`s and `DOMException`s with Chrome's names and texts for the
+cases the suite records (a missing `type`, an answer without an offer, a
+`rollback` in the wrong state, a bad `sdpMid`, a candidate for an unknown
+section).
+
+What a page changes in a local description before `setLocalDescription`
+(munging) is kept as the presented description; the stack applies what it
+can (removed codecs, `b=AS` and `x-google-*` bitrate hints, reordered
+codecs) and ignores the rest, which is Chrome's current policy (it rejects
+munged ufrag and pwd and most other edits). `setLocalDescription()` with no
+argument and `createOffer({ iceRestart })` behave as Chrome's.
+
+## 7. The API surface and how it reads as native
+
+Everything on this list is a class of STomp's own in the page's realm,
+installed by the WebRTC module in every document the inject covers, in
+place of the browser's (`RTCPeerConnection` and `webkitRTCPeerConnection`
+are the same function, as natively). It follows the patterns of
+docs/scramjet-parity.md and the memory notes on inject hooks: realm
+constructors from `client.global`, natives captured at load, promises of the
+page's realm (`realmThen`), `ProxyModule.wrapFunction` for every function so
+`toString`, `name` and `length` are the native's, prototype chains and own
+property descriptors copied from the native prototypes (the `native-shapes`
+suite already compares every constructor's shape natively and proxied, so
+these join its list), events dispatched as trusted events on the objects
+(`isTrusted` true: the objects are real `EventTarget`s, the events are
+constructed by the inject and dispatched natively), and `instanceof` against
+the native classes holding (the stand-ins' prototypes inherit from the
+native prototypes, as the Location stand-in's does).
+
+| Object                                                       | Surface                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RTCPeerConnection`                                          | constructor with configuration validation (Chrome's errors for a bad URL, a TURN URL without credentials, a bad policy), `createOffer` and `createAnswer` (promise and legacy callback forms, `offerToReceiveAudio/Video`, `iceRestart`), `setLocalDescription` and `setRemoteDescription` (implicit and `rollback`), `addIceCandidate` (both forms, end-of-candidates), the six description getters, `signalingState`, `iceGatheringState`, `iceConnectionState`, `connectionState`, `canTrickleIceCandidates`, `sctp`, `addTrack`, `removeTrack`, `addTransceiver`, `getTransceivers/Senders/Receivers`, `createDataChannel`, `getStats`, `getConfiguration`, `setConfiguration`, `restartIce`, `close`, `generateCertificate` (static), every `on*` handler, the operations chain (calls queue behind one another as the browser's do) |
+| `RTCDataChannel`                                             | `label`, `ordered`, `maxPacketLifeTime`, `maxRetransmits`, `protocol`, `negotiated`, `id`, `readyState`, `bufferedAmount`, `bufferedAmountLowThreshold`, `binaryType` (`arraybuffer` default, `blob`), `send` (string, ArrayBuffer, view, Blob), `close`, `open/message/closing/close/error/bufferedamountlow` events, in-order and partial reliability through SCTP, the 256 KiB message limit with Chrome's error                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `RTCRtpTransceiver`, `RTCRtpSender`, `RTCRtpReceiver`        | `mid`, `direction`, `currentDirection`, `stop`, `stopped`, `setCodecPreferences`; sender `track`, `replaceTrack`, `getParameters` and `setParameters` (encodings with `maxBitrate`, `scaleResolutionDownBy`, `active`, `rid`, `priority`), `getStats`, `setStreams`, `transport`, `dtmf`; receiver `track`, `getParameters`, `getStats`, `getContributingSources`, `getSynchronizationSources`, `jitterBufferTarget`; static `getCapabilities` answering Chrome's codec and header extension lists                                                                                                                                                                                                                                                                                                                                        |
+| `RTCIceTransport`, `RTCDtlsTransport`, `RTCSctpTransport`    | `role`, `state`, `gatheringState`, `getLocalCandidates`, `getRemoteCandidates`, `getSelectedCandidatePair`, `getLocalParameters`, `getRemoteParameters`; DTLS `state`, `getRemoteCertificates`; SCTP `maxMessageSize`, `maxChannels`, `transport`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `RTCIceCandidate`, `RTCSessionDescription`, `RTCCertificate` | the parsed fields (`foundation`, `component`, `priority`, `address`, `protocol`, `port`, `type`, `tcpType`, `relatedAddress`, `relatedPort`, `usernameFragment`, `url`), `toJSON`; `RTCCertificate.expires`, `getFingerprints`, a certificate handed in `certificates` is the DTLS certificate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `RTCDTMFSender`                                              | `insertDTMF`, `toneBuffer`, `canInsertDTMF`, `tonechange`: RFC 4733 telephone-event packets through str0m's writer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| events                                                       | `RTCPeerConnectionIceEvent`, `RTCPeerConnectionIceErrorEvent`, `RTCTrackEvent`, `RTCDataChannelEvent`, `RTCDTMFToneChangeEvent`, `RTCErrorEvent` with `RTCError` (`errorDetail`, `sdpLineNumber`, `sctpCauseCode`, `receivedAlert`, `sentAlert`, `httpRequestStatusCode`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `getStats`                                                   | an `RTCStatsReport` (a real `Map` subclass with the native prototype shape) of Chrome's report types with Chrome's fields and ids: `peer-connection`, `transport`, `candidate-pair`, `local-candidate`, `remote-candidate`, `certificate`, `codec`, `inbound-rtp`, `outbound-rtp`, `remote-inbound-rtp`, `remote-outbound-rtp`, `media-source`, `media-playout`, `data-channel`; the numbers from str0m's `PeerStats`, `MediaIngressStats` and `MediaEgressStats` and the worker's encoder and decoder counters. Candidate addresses in the report are the edge's or empty, as in 5.1                                                                                                                                                                                                                                                     |
+| out of scope, left as the browser leaves them in a worker    | `RTCRtpScriptTransform` and encoded insertable streams (the frames are in the worker already; a page's transform runs there in a later phase), `RTCIceTransport.getStats`, `RTCIdentityAssertion`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+
+Errors and their texts are copied from Chrome 152 and 156 as the suite
+records them, the way `src/inject/errorMessages.ts` and the
+`error-messages` suite do for the rewriter.
+
+## 8. Media
+
+### Send
+
+`addTrack(track)` and `addTransceiver(track)` on the page's thread wrap the
+track in a `MediaStreamTrackProcessor` (video) or one with `maxBufferSize`
+(audio) and transfer its `readable` to the worker with the track's settings
+(`width`, `height`, `frameRate`, `sampleRate`, `channelCount`). In the
+worker:
+
+- video: a `VideoEncoder` per encoding (one, or one per rid for simulcast,
+  with `scaleResolutionDownBy` applied by `VideoFrame` cropping and the
+  encoder's output size), configured with the negotiated codec
+  (`vp8`, `vp09.00.10.08`, `avc1.42001f` constrained baseline packetization
+  mode 1 as Chrome offers, `av01.0.04M.08`), `latencyMode: 'realtime'`,
+  `bitrate` from the stack's estimate (`EgressBitrateEstimate` from
+  transport-cc or REMB, scaled across layers as Chrome does), a keyframe
+  forced on `KeyframeRequest` (PLI, FIR) and on a new layer; each
+  `EncodedVideoChunk` goes to str0m's `Writer::write` with the pt and an
+  RTP timestamp from the frame's timestamp at 90 kHz, and str0m packetizes
+  (VP8 and VP9 payload descriptors, H.264 FU-A, AV1 OBU aggregation),
+  paces and retransmits (NACK through its rtx streams);
+- audio: an `AudioEncoder` with Opus at 48 kHz, 20 ms frames, the channel
+  count of the track, `opus: { application: 'voip' }`, FEC and DTX as
+  negotiated (`useinbandfec`, `usedtx` in the fmtp), audio level for the
+  `ssrc-audio-level` extension computed from the `AudioData`;
+  each chunk written with the 48 kHz timestamp;
+- `replaceTrack` swaps the readable without renegotiation; a muted or
+  ended track stops the encoder and str0m stops the stream (Chrome sends
+  silence or nothing, matched per case);
+- `setParameters` changes bitrate caps and active layers on the running
+  encoders.
+
+### Receive
+
+A `MediaAdded` from the stack creates the transceiver's receiver and its
+track: on the page's thread a `MediaStreamTrackGenerator` of the kind,
+whose `writable` is transferred to the worker, and the `track` event with
+the generator's track and a `MediaStream` carrying the signalled msid. In
+the worker each `MediaData` (str0m's depacketized frame, with its jitter
+buffer, reordering window and contiguity flag) goes to a `VideoDecoder` or
+`AudioDecoder`; a video frame that is not contiguous after a loss asks the
+stack for a keyframe (PLI) and the decoder waits for it; decoded
+`VideoFrame`s and `AudioData` are written to the generator's writable with
+their timestamps. Playout delay is the generator's and the element's; the
+worker keeps a small target (`jitterBufferTarget` when the page sets it)
+and drops late frames the way Chrome's renderer does. Audio and video of
+one stream are kept in sync through the RTCP sender reports' NTP mapping
+(str0m's `last_sender_info`).
+
+Simulcast reception (an SFU forwarding one layer) is one decoder; the
+layer switches are keyframes. `getSynchronizationSources` and
+`getContributingSources` come from the RTP headers and the CSRC lists str0m
+reports.
+
+WebCodecs uses hardware encoders where Chrome has them and software ones
+otherwise, the same pool `RTCPeerConnection` draws from; the cost is the
+copy of each frame into the worker and back, which `VideoFrame` transfer
+makes a reference, not a copy. The memory notes on per-frame inject cost
+apply: nothing of this exists in a document that never makes a connection.
+
+### Where audio can need an AudioWorklet
+
+Not for the codec: `AudioEncoder` and `AudioDecoder` with Opus are in
+workers. A page that reads the remote audio through the Web Audio API
+(`createMediaStreamSource`) gets it from the generator's track as from any
+track. If a measured case shows the generator's audio timing drifting
+(the one place the probe cannot settle in advance), the fallback is an
+`AudioWorklet` fed over a `SharedArrayBuffer` ring from the worker, which
+the proxy origin's headers would have to allow (cross-origin isolation);
+that is a risk entry, not a plan.
+
+## 9. Where it runs, and how it talks
+
+```
+page realm                     rtc worker (one per document)              transport worker
+RTCPeerConnection stand-in --> connection state, str0m instance,  --udp/tcp RPC-->  epoxy connect_udp /
+  methods: records on a port   TURN client, timers, WebCodecs,                      connect_tcp / connect_tls
+  events: records back         stream table (handle <-> port)                       (one wisp connection)
+  tracks: readable/writable
+    transferred
+```
+
+- The inject starts the rtc worker with the native `Worker` captured at
+  load, on the `rtcWorker` asset URL built from `assetBase` (the proxy
+  origin, so the worker is in the document's agent cluster and the
+  transfers above are allowed), the first time a document constructs an
+  `RTCPeerConnection`, and hands it a transport port (`requestTransportPort`,
+  as `provisionWorkerTransport` does for a page's own workers) and the
+  compiled module from the loader. Every connection of the document shares
+  the worker; the worker ends with the document.
+- Page to worker: one `MessagePort` per connection for calls and events
+  (small records, structured clone), one per data channel for its messages
+  (`send` posts the bytes, `message` events come back, `bufferedAmount` is
+  mirrored by acknowledgements so a tight send loop reads a rising number
+  as natively), and the transferred media streams.
+- Worker to transport: `udp` and `tcp` calls on the transport RPC answer a
+  `MessagePort` each; a datagram is one message with its `ArrayBuffer`
+  transferred, as the HTTP/3 path moves QUIC datagrams through the
+  transport worker today (docs/http3.md). The transport worker is the only
+  holder of the wisp connection, so a document never loads a transport
+  module and never sees a wisp URL, as now.
+- The page's thread does nothing per packet. Per frame it does nothing
+  either: the processor and generator streams run between the browser's
+  media pipeline and the worker.
+
+The rtc worker is a classic worker script (like `transportWorker.js`), its
+own esbuild entry in `build.js`, its own `Assets` key (`rtcWorker`) and
+renamable like every other asset. Its size does not count against
+`injectDocument.js`; the stand-in in the inject does, and stays small
+(the classes are declarative: the budget for the module is 40 KB of the
+850 KB, measured by `frame-cost` as it measures everything).
+
+## 10. Threat model
+
+- **No packet outside wisp.** No code in a page, the inject, the rtc worker
+  or the transport worker opens a socket: the only network the rtc worker
+  can reach is the transport port, which carries wisp streams. The
+  browser's `RTCPeerConnection` is constructed by no one; the stand-in
+  replaces it in every realm the inject covers (the realm list the current
+  module and the `webrtc` suite enumerate: about:blank children, srcdoc,
+  nested, blob:, data:, sandboxed frames, popups). The native constructor
+  remains reachable only to the inject's own closures. Workers have no
+  `RTCPeerConnection` natively and get none.
+- **No address of the user anywhere.** The worker never learns one: the
+  wisp server opens the sockets. What the page reads (candidates,
+  descriptions, stats, errors) is generated from the stack's state, which
+  holds the edge's addresses, `0.0.0.0`, and `.local` names.
+- **No mDNS, no DNS, no LAN packets.** Names resolve on the wisp server;
+  `.local` names resolve only through the same-browser bridge.
+- **Realms.** The stand-in classes are installed per document realm with
+  the realm's own prototypes, as the current module does per realm; an
+  object of another document's realm is just that realm's stand-in.
+- **A page's intrinsics.** The stand-in handles no secret (there is none
+  to leak), so the hardening the current module needed for real addresses
+  (null-prototype tables, own iterators, natives for string work) reduces
+  to the usual rules: natives captured at load for anything the stand-in
+  calls, promises of the page's realm for what it returns.
+- **The wisp server's policy.** Destinations the server refuses (private
+  ranges) fail; the server's egress address is what peers see. A server
+  with UDP off leaves TURN over TCP and TLS.
+- **Adjacent, out of scope here:** `WebTransport` is another API that
+  sends from the network service and is not hooked today; it needs its own
+  stand-in over wisp UDP (the QUIC stack of docs/http3.md is most of it)
+  and is noted for a later plan.
+
+## 11. Phases
+
+Each phase ends with the gate (`npm run build`, `npx tsc --noEmit`,
+`npm run lint`, `npx prettier --check .`, `npm run check:prose`), the full
+suite set as CI runs it (`SKIP_NETWORK=1 SKIP_TIMING=1 SKIP_MEASUREMENT=1
+PARALLEL=2 npm test`, failures rerun alone with `PARALLEL=1`), the `webrtc`
+suite and the new suites, a Chrome 156 run of the touched suites, and a
+commit on the branch with a CHANGELOG bullet.
+
+**Phase 0 (this document).** The design; the toolchain request
+(`wasm32-wasip1`, the per-crate target marker) to the Rust rewriter agent
+whose Phase 0 provides `deploy/rust/`, `rust/`, the loader and the artifact
+checks; the first container build of a `rust/rtc` crate that only
+instantiates str0m, to measure size and prove the WASI shim.
+
+**Phase 1. Data channels end to end with a real external peer.** The
+crate's boundary and records, the STUN client, the TURN client (UDP first),
+the rtc worker, the `udp` and `tcp` transport RPC, the stand-in with
+`RTCPeerConnection`, `RTCDataChannel`, `RTCIceCandidate`,
+`RTCSessionDescription`, the ICE events and states, the SDP renderer for
+the application section, the same-browser bridge (the existing local checks
+keep passing). Peers: a Node peer in the suite (`werift`, a pure JavaScript
+WebRTC stack with data channels, run by the fixture and reached through the
+demo's loopback-allowed wisp) and a native Chrome page in a second browser
+context signalling through the fixture's WebSocket relay. The `webrtc`
+suite's leak checks are rewritten for the new meaning (section 12) and stay
+strict.
+
+**Phase 2. Audio.** The media bridge, `AudioEncoder` and `AudioDecoder`
+with Opus, `addTrack`, the `track` event, senders and receivers with
+`replaceTrack`, audio level, the audio stats; a loopback call to the Node
+peer (werift carries Opus through) and to native Chrome, with a measured
+round trip and no drift over a minute.
+
+**Phase 3. Video.** `VideoEncoder` and `VideoDecoder` for VP8, VP9, H.264
+and AV1, keyframe requests, bandwidth estimation driving the encoders,
+simulcast send, `setParameters`, `getDisplayMedia` and `canvas.captureStream`
+sources (both are tracks; nothing differs), video stats.
+
+**Phase 4. Stats, renegotiation and the rest.** The full `getStats` report,
+`RTCRtpTransceiver` semantics (`stop`, `setCodecPreferences`, directions),
+`negotiationneeded` timing, rollback and perfect negotiation, `restartIce`
+and ICE restarts, `setConfiguration`, certificates (`generateCertificate`,
+`certificates` in the configuration, `RTCCertificate`), `RTCDTMFSender`,
+TURN over TCP and TLS, ICE-TCP, `RTCSctpTransport`, `RTCDtlsTransport`,
+`RTCIceTransport` getters.
+
+**Phase 5. Fidelity.** The `native-shapes` and `tells` additions for every
+class, error texts recorded against Chrome 152 and 156, SDP line-by-line
+parity, the realm matrix, live checks (browserleaks.com/webrtc shows the
+edge's address, a public data channel echo and a public WebRTC test page
+complete, Google Meet's pre-join screen shows the local preview and reaches
+"connected" on a test meeting, Discord voice joins when its servers accept
+the edge), Firefox as the remote peer (a native Firefox page in the suite
+when a binary is available, else recorded), timing of events against
+native where pages depend on it.
+
+## 12. Tests
+
+- **The `webrtc` suite's leak checks** assert today that the fixture STUN
+  and TURN servers and the fixture remote candidate hear nothing. Through
+  wisp they do hear from the demo's wisp server, which on the test machine
+  is the same loopback address as the browser, so the check becomes: no
+  packet from a socket of the browser's. The suite samples `ss -uanp` and
+  `ss -tanp` for the ports owned by the Chrome process tree while each
+  probe runs (every 100 ms; an ICE socket lives for the connection) and
+  fails on a fixture packet from any of them; the native control shows
+  Chrome's ports hitting the fixtures, as the precondition. The namespace
+  recipe (`unshare -rn`, a dummy uplink, tcpdump; docs/webrtc.md) stays the
+  packet-level proof and is rerun by hand for the report of each phase.
+  Everything else in the suite (no address of this machine readable
+  anywhere, every realm, the tampered-intrinsics probe, the API surface
+  against native) stays and now runs against the stand-in.
+- **`webrtc-peer`** (new): the Node peer and the native-Chrome peer, data
+  channels both ways (ordered, unordered, `maxRetransmits`, `blob`
+  `binaryType`, 256 KiB messages, `bufferedAmount` under a burst), the
+  page as offerer and as answerer, trickle and non-trickle, a TURN-only
+  connection against a fixture TURN server (a small UDP TURN server in the
+  fixture with long-term credentials), an unreachable server's 701s with
+  their timing, ICE restart, close from each side.
+- **`webrtc-media`** (new, `--use-fake-device-for-media-stream`): an audio
+  and a video call against each peer, frames decoded on the far side
+  (werift reports RTP, the native Chrome peer reports `inbound-rtp`
+  `framesDecoded`), `replaceTrack`, a muted track, simulcast layer counts,
+  keyframes on PLI, bitrate following a capped estimate, stats fields.
+- **`webrtc-sdp`** (new, no network): offers and answers recorded from
+  Chrome 152 and 156 for each shape compared with the renderer's output
+  with the identifiers normalised; remote SDP from Chrome, Firefox, Safari
+  and the Node peer accepted; the error cases.
+- **`native-shapes`, `tells`, `error-messages`** gain the WebRTC classes.
+- **`frame-cost`** gates the inject's growth as it does for everything;
+  a new `rtc-cost` measurement (SKIP_MEASUREMENT) reports the worker's
+  startup, the module's compile and instantiate times, and the heap of a
+  document with one connection open, so the lazy promise is checked.
+- **`wasm-artifact`** (the rewriter agent's suite) covers `assets/rtc.wasm`
+  through the same checks, with its own `abi.json`.
+
+## 13. Size, memory and performance
+
+- Nothing loads for a document that never constructs a connection: the
+  stand-in classes are defined in the inject (tens of KB), the worker
+  script and the module are fetched on the first construction.
+- The module compiles once per controller through the loader and is posted
+  compiled to each document's worker.
+- One wasm instance per document, however many connections; its linear
+  memory grows with the SCTP and RTP buffers in use (in the order of a few
+  MB per media connection, measured in phase 3) and is released with the
+  worker.
+- Each RTP packet is one wisp frame, as each QUIC datagram is for HTTP/3,
+  where docs/http3.md measured 5 to 8 MB/s on a loaded edge: a 2.5 Mbit/s
+  video call is a tenth of that. The tunnel adds its round trip to the
+  call's; the edges are near the user.
+- WebCodecs' hardware paths are the same Chrome's `RTCPeerConnection` uses;
+  software VP8 and Opus are cheap. Transfers of `VideoFrame`s between the
+  page and the worker are references.
+
+## 14. Risks
+
+| Risk                                                                                  | Handling                                                                                                                                          |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| the shared toolchain targets `wasm32-unknown-unknown` only                            | the `wasm32-wasip1` request to the rewriter agent (section 4); the custom-backend fallback is written down and costs a week, not a redesign       |
+| std's panic strings or wasi-libc paths in the artifact fail the token check           | `-Zlocation-detail=none`, `-Zfmt-debug=none`, `build-std`, `panic = "abort"`; the check runs in `build.sh`, so nothing that fails it ships        |
+| str0m's SDP parser rejects a real peer's SDP (Firefox, Safari, an SFU)                | the `webrtc-sdp` corpus; a parse error is reported as Chrome reports one, and the corpus grows with each real site that fails                     |
+| the stand-in's state machines differ from Chrome's where a page depends on the timing | event order and state sequences are asserted against native recordings in the suites; timing is matched where a page is found to depend on it     |
+| a page munges SDP in a way the stack cannot apply                                     | the presented description is the page's; what cannot be applied is ignored, which is Chrome's own direction; the limit is documented              |
+| the wisp server refuses UDP, or rate-limits it                                        | TURN over TCP and TLS; the 701 path; `allow-udp` is on for the edges since 2026-11-10                                                             |
+| a TURN server refuses the edge's address, or a service blocks data-center egress      | the same as for the rest of the proxy; reported, not solved                                                                                       |
+| two restrictive NATs with no TURN                                                     | out of reach by design (section 2); the page's own `iceServers` are the answer, as for every user on a symmetric NAT                              |
+| the audio generator's playout timing drifts                                           | measured in phase 2; the AudioWorklet fallback in section 8                                                                                       |
+| werift as a test dependency                                                           | a devDependency only, pure JavaScript, pinned; the native-Chrome peer is the interop check and needs nothing new                                  |
+| other agents land in `src/inject`, `src/transport` and `rust/` continuously           | rebase onto `origin/master` before every phase and before every gate run; the transport RPC additions are two new calls, nothing existing changes |
+| Chrome 156 (CI) differs from 152 (here) in WebCodecs or stream transfer               | the capability probe is a suite precondition; the touched suites run on CI's Chrome before each phase lands                                       |
