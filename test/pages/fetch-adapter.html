@@ -1,0 +1,111 @@
+<!doctype html>
+<title>FETCH ADAPTER</title>
+<script>
+	// An HTTP library (axios 1.x) picks a transport by feature-detecting the
+	// request objects with native-shape predicates. A proxied page must read
+	// of fetch, Request, Response, Headers, ReadableStream and XMLHttpRequest
+	// exactly what the browser reads, or the library concludes it has no
+	// usable adapter. This page runs axios's own adapter-support predicates,
+	// copied verbatim from axios 1.21.1 lib/adapters/fetch.js and lib/utils.js,
+	// plus the brand tag of each object axios inspects, and a real same-origin
+	// request through each of the two browser adapters (xhr, fetch). The suite
+	// (test/suites/fetch-adapter.mjs) compares the record with the page loaded
+	// natively.
+	(async () => {
+		const record = {};
+		// axios utils.kindOf: the lowercased Object.prototype.toString brand
+		const kindOf = (thing) =>
+			Object.prototype.toString.call(thing).slice(8, -1).toLowerCase();
+		const isFunction = (value) => typeof value === 'function';
+		const isReadableStream = (value) => kindOf(value) === 'readablestream';
+		const test = (fn) => {
+			try {
+				return !!fn();
+			} catch (error) {
+				return false;
+			}
+		};
+
+		// --- axios's fetch-adapter support predicates ------------------------
+		const isFetchSupported = typeof fetch === 'function';
+		const isRequestSupported = isFunction(self.Request);
+		const isResponseSupported = isFunction(self.Response);
+		const isReadableStreamSupported =
+			isFetchSupported && isFunction(self.ReadableStream);
+		const supportsRequestStream =
+			isRequestSupported &&
+			isReadableStreamSupported &&
+			test(() => {
+				let duplexAccessed = false;
+				const request = new Request(location.origin, {
+					body: new ReadableStream(),
+					method: 'POST',
+					get duplex() {
+						duplexAccessed = true;
+						return 'half';
+					},
+				});
+				const hasContentType = request.headers.has('Content-Type');
+				if (request.body != null) request.body.cancel();
+				return duplexAccessed && !hasContentType;
+			});
+		const supportsResponseStream =
+			isResponseSupported &&
+			isReadableStreamSupported &&
+			test(() => isReadableStream(new Response('').body));
+
+		record.predicates = {
+			isFetchSupported,
+			isRequestSupported,
+			isResponseSupported,
+			isReadableStreamSupported,
+			supportsRequestStream,
+			supportsResponseStream,
+			typeofXHR: typeof XMLHttpRequest,
+		};
+
+		// the brand tag of each object axios feature-detects
+		record.tags = {
+			responseBody: Object.prototype.toString.call(new Response('').body),
+			request: Object.prototype.toString.call(new Request(location.origin)),
+			response: Object.prototype.toString.call(new Response('')),
+			headers: Object.prototype.toString.call(new Headers()),
+			readableStream: Object.prototype.toString.call(new ReadableStream()),
+			xhr: Object.prototype.toString.call(new XMLHttpRequest()),
+		};
+
+		// axios getAdapter(['xhr', 'http', 'fetch']) in a browser: http is not
+		// in the build, so the first usable is xhr when XMLHttpRequest is there,
+		// else fetch when fetch is supported, else none
+		record.selected =
+			typeof XMLHttpRequest !== 'undefined'
+				? 'xhr'
+				: isFetchSupported
+					? 'fetch'
+					: null;
+
+		// a real same-origin request through each adapter the library would use
+		const target = location.href;
+		try {
+			const response = await fetch(target, { cache: 'no-store' });
+			await response.text();
+			record.fetchStatus = response.status;
+		} catch (error) {
+			record.fetchStatus = `throw ${error.message}`;
+		}
+		record.xhrStatus = await new Promise((resolve) => {
+			try {
+				const xhr = new XMLHttpRequest();
+				xhr.open('GET', target);
+				xhr.onload = () => resolve(xhr.status);
+				xhr.onerror = () => resolve('error');
+				xhr.send();
+			} catch (error) {
+				resolve(`throw ${error.message}`);
+			}
+		});
+
+		record.done = true;
+		window.__adapterRecord = record;
+	})();
+</script>
