@@ -8,6 +8,8 @@
  * 152 and 156 (webrtc suite: the same calls natively and proxied).
  */
 
+import type { CodecCapability } from '../rtc/protocol';
+
 /** an error of the browser's: `name` is TypeError or a DOMException name */
 export class Refusal {
 	constructor(
@@ -802,4 +804,142 @@ export function remoteRefusal(
 			return `${applying}Answerer must use either active or passive value for setup attribute.`;
 	}
 	return null;
+}
+
+// --- RTCRtpTransceiver.setCodecPreferences ---
+
+/** a codec as a page names one, and as a capability is */
+export type CodecWanted = CodecCapability;
+/** a number or a string as V8 converts it, its TypeError a refusal */
+const converted = <T>(convert: () => T): T => {
+	try {
+		return convert();
+	} catch (error) {
+		if (error instanceof TypeError) refuse(error.message);
+		throw error;
+	}
+};
+
+/**
+ * The page's list as Blink converts it: each entry an RTCRtpCodec, its
+ * members read in name order, `clockRate` and `mimeType` required (an
+ * entry that is not an object is refused by its older name)
+ */
+export function codecList(value: unknown): CodecWanted[] {
+	return sequence(value, (item) => {
+		if (!isObject(item))
+			refuse("The provided value is not of type 'RTCRtpCodecCapability'.");
+		const read = reader(item as Record<string, unknown>, 'RTCRtpCodec');
+		const required = <T>(name: string, value: T | undefined): T =>
+			value === undefined
+				? refuse(
+						`Failed to read the '${name}' property from 'RTCRtpCodec': Required member is undefined.`,
+					)
+				: value;
+		const text = (value: unknown) => converted(() => `${value as string}`);
+		const channels = read('channels', (value) =>
+			converted(() => (+(value as number) & 0xffff) >>> 0),
+		);
+		const clockRate = required(
+			'clockRate',
+			read('clockRate', (value) => converted(() => +(value as number) >>> 0)),
+		);
+		const mimeType = required('mimeType', read('mimeType', text));
+		const sdpFmtpLine = read('sdpFmtpLine', text);
+		return {
+			...(channels !== undefined && { channels }),
+			clockRate,
+			mimeType,
+			...(sdpFmtpLine !== undefined && { sdpFmtpLine }),
+		};
+	});
+}
+
+/** a format line's parameters as Blink reads them, or null where it gives up */
+function fmtpParameters(line: string): Map<string, string> | null {
+	const parameters = new Map<string, string>();
+	// a line with no `=` at all is one parameter without a name
+	if (!line.includes('=')) return parameters.set('', line);
+	for (const part of line.split(';')) {
+		if (!part) continue;
+		const at = part.indexOf('=');
+		if (at < 0) return null;
+		const name = part.slice(0, at);
+		if (!parameters.has(name)) parameters.set(name, part.slice(at + 1));
+	}
+	return parameters;
+}
+
+const INVALID_CODEC = 'Invalid codec';
+/** what WebRTC will not take alone */
+const NOT_ALONE = ['rtx', 'red', 'ulpfec', 'flexfec-03', 'cn'];
+
+/**
+ * The checks of setCodecPreferences, in the browser's order: Blink's of
+ * each entry's media type and format line (Chrome 152 takes the type in
+ * lower case only: `legacy`), then WebRTC's of the list against the
+ * transceiver's `capabilities` (what the browser sends and receives of its
+ * kind). The capabilities the list names, in its order; an empty list
+ * puts the browser's own back.
+ */
+export function codecPreferences(
+	list: CodecWanted[],
+	kind: string,
+	capabilities: CodecWanted[],
+	legacy: boolean,
+): CodecWanted[] {
+	const parsed = list.map((codec) => {
+		const slash = codec.mimeType.indexOf('/');
+		if (slash < 0) refuse(INVALID_CODEC, 'InvalidModificationError');
+		const type = codec.mimeType.slice(0, slash);
+		const typed = legacy ? type : type.toLowerCase();
+		if (typed !== 'audio' && typed !== 'video')
+			refuse(INVALID_CODEC, 'InvalidModificationError');
+		const parameters =
+			codec.sdpFmtpLine === undefined
+				? null
+				: fmtpParameters(codec.sdpFmtpLine);
+		if (codec.sdpFmtpLine !== undefined && !parameters)
+			refuse(INVALID_CODEC, 'InvalidModificationError');
+		return {
+			kind: typed,
+			name: codec.mimeType.slice(slash + 1).toLowerCase(),
+			codec,
+			parameters: parameters ?? new Map<string, string>(),
+		};
+	});
+	if (!parsed.length) return [];
+	if (parsed.every((entry) => NOT_ALONE.includes(entry.name)))
+		refuse(
+			'Invalid codec preferences: codec list must have a non RTX, RED, FEC or Comfort Noise entry.',
+			'InvalidModificationError',
+		);
+	const same = (a: Map<string, string>, b: Map<string, string>) =>
+		a.size === b.size && [...a].every(([key, value]) => b.get(key) === value);
+	return parsed.map((entry) => {
+		const found = capabilities.find((capability) => {
+			const slash = capability.mimeType.indexOf('/');
+			return (
+				entry.kind === kind &&
+				capability.mimeType.slice(slash + 1).toLowerCase() === entry.name &&
+				capability.clockRate === entry.codec.clockRate &&
+				capability.channels === entry.codec.channels &&
+				// what retransmission and redundancy name is a payload: not compared
+				(entry.name === 'rtx' ||
+					entry.name === 'red' ||
+					same(
+						(capability.sdpFmtpLine !== undefined &&
+							fmtpParameters(capability.sdpFmtpLine)) ||
+							new Map(),
+						entry.parameters,
+					))
+			);
+		});
+		if (!found)
+			refuse(
+				'Invalid codec preferences: Missing codec from codec capabilities.',
+				'InvalidModificationError',
+			);
+		return found!;
+	});
 }

@@ -13,6 +13,7 @@ import { parseParameters, parsePayloads, type Formats } from './formats';
 import type {
 	CandidateInit,
 	ChannelOptions,
+	CodecCapability,
 	ConnectionConfig,
 	Direction,
 	MediaSection,
@@ -54,6 +55,7 @@ import {
 	MidNames,
 	offerForStack,
 	parseSdp,
+	rejects,
 	renderChrome,
 	stripCandidates,
 	withGroup,
@@ -265,6 +267,11 @@ interface MediaState {
 	paused: boolean;
 	/** the header extensions it last agreed on, by URI; null before it has */
 	exts: Set<string> | null;
+	/** the page's codec preferences (setCodecPreferences); empty for the browser's own */
+	codecs: CodecCapability[];
+	legacyCodecs: boolean;
+	/** the answer this side made rejects it: nothing it prefers was offered */
+	rejected: boolean;
 	sender: AudioSender | null;
 	receiver: AudioReceiver | null;
 }
@@ -619,6 +626,9 @@ export class Connection {
 			everSent: false,
 			stopped: false,
 			paused: false,
+			codecs: [],
+			legacyCodecs: false,
+			rejected: false,
 			exts: null,
 			sender: null,
 			receiver: null,
@@ -786,6 +796,14 @@ export class Connection {
 			if (!section || state.mid === null) continue;
 			const stopped = state.stopped || section.port === '0';
 			let direction = state.wanted;
+			state.rejected =
+				!!answers &&
+				!stopped &&
+				rejects(
+					section,
+					this.#template?.medias.find((media) => media.kind === state.kind),
+					state.codecs,
+				);
 			if (answers) {
 				const offered = midOf(answers, state.mid);
 				const theirs = offered ? remoteOf(offered).direction : 'inactive';
@@ -821,6 +839,9 @@ export class Connection {
 				ssrcs,
 				groups,
 				exts: state.exts,
+				codecs: state.codecs,
+				rejected: state.rejected,
+				legacy: state.legacyCodecs,
 			});
 		}
 		this.#styles = styles;
@@ -1551,6 +1572,14 @@ export class Connection {
 					// transceivers took of it is the sections' direction now.
 					if (request.type === 'answer')
 						for (const state of this.#medias.values()) {
+							// rejected: the peer stops it, and so does this side
+							if (state.rejected) {
+								state.rejected = false;
+								state.answer = null;
+								this.#control({ op: 'stop', index: state.index });
+								this.#stopped(state);
+								continue;
+							}
 							if (state.answer === null) continue;
 							if (state.direction !== state.answer)
 								this.#control({
@@ -1784,6 +1813,14 @@ export class Connection {
 						index: state.index,
 					});
 					this.#stopped(state);
+					reply(null);
+					break;
+				}
+				case 'codecPreferences': {
+					const state = this.#handles.get(request.handle);
+					if (!state) throw 'no such media section';
+					state.codecs = request.codecs;
+					state.legacyCodecs = request.legacy;
 					reply(null);
 					break;
 				}

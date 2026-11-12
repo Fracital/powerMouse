@@ -86,6 +86,14 @@ export interface MediaSection {
 	dtmf?: boolean;
 }
 
+/** a codec as RTCRtpSender.getCapabilities() names one */
+export interface CodecCapability {
+	mimeType: string;
+	clockRate: number;
+	channels?: number;
+	sdpFmtpLine?: string;
+}
+
 /** the answer to setLocal and setRemote: the connection's media sections as they are now */
 export interface Negotiated {
 	medias: MediaSection[];
@@ -138,6 +146,15 @@ export type Request =
 	| { seq: number; op: 'mediaDirection'; handle: number; direction: Direction }
 	| { seq: number; op: 'mediaStreams'; handle: number; streams: string[] }
 	| { seq: number; op: 'stopMedia'; handle: number }
+	/** setCodecPreferences: what the section's descriptions list, in this order; [] for all */
+	| {
+			seq: number;
+			op: 'codecPreferences';
+			handle: number;
+			codecs: CodecCapability[];
+			/** Chrome 152, which keeps redundant audio without the codec it carries */
+			legacy: boolean;
+	  }
 	/** the sender's encoding, as setParameters left it: whether it sends at all */
 	| { seq: number; op: 'mediaEncoding'; handle: number; active: boolean }
 	/** what the section sends: a MediaStreamTrackProcessor's readable (transferred), or null for no track */

@@ -1123,6 +1123,37 @@ offer (the template of the previous section): its payloads, format lines,
 extensions and attribute order, the sender's `a=msid` and `a=ssrc` lines,
 and an answer that names its sources the way the offer did.
 
+`setCodecPreferences` reads the page's list as Blink converts it (an
+`RTCRtpCodec` each, its members in name order) and checks it as Chrome
+does, measured on 152 and 156 (`codecPreferences` in
+`src/inject/rtcValidation.ts`): Blink's check of each media type (152 takes
+`audio` and `video` in lower case only, 156 in any case) and of each format
+line (parameters split at `;` and `=`, a line without `=` one unnamed
+parameter), then WebRTC's: a list of nothing but retransmission,
+redundancy, FEC and comfort noise is refused, and every entry must be one
+of the browser's capabilities for the transceiver's kind (what its own
+`RTCRtpSender` and `RTCRtpReceiver` say, compared by name in any case,
+clock, channels and parameters); an empty list puts the browser's order
+back. The worker writes each section of a description in that order
+(`preferredFormats` in `src/rtc/sdp.ts`): a codec where it is preferred,
+retransmission only when it is preferred and then after each codec it
+repeats, redundant audio where it is preferred (156 drops it without the
+codec it carries, 152 keeps it), a stopped section with every codec. An
+answer lists what was offered in the page's order, and rejects a section
+when it has none of it: port 0, out of the BUNDLE group, its transceiver
+stopped at both ends. What is sent follows the descriptions, as natively:
+each end sends the first codec of the other's description that it can,
+so the offerer's preferences pick the codec both ends send and an
+answerer's only what it receives. For that the stack offers every codec
+again in each offer and takes each negotiation's codecs and order, and an
+offer with nothing new is a negotiation like any other (`renegotiate` and
+the narrowing of str0m 0.25.0, which kept what the first answer left for
+good, in `rust/patches/str0m-0.25.0.patch`). The `webrtc` suite compares
+the errors, offers and answers with Chrome's case by case, and
+`webrtc-media` what each end sends with Chrome's own stack at the far end
+(PCMU, then G.722 after the page prefers it and offers again, then an
+answer).
+
 The template is the one native `RTCPeerConnection` a document makes: with
 no configuration, two transceivers and one `createOffer()`, closed at
 once. It is never given a description, a candidate or a server, so it
@@ -1292,4 +1323,12 @@ the worker sends no comfort noise (Chrome does with G.711 and G.722
 when CN is negotiated: that takes WebRTC's voice detector and CN encoder);
 `getStats()` of a sender or a receiver is empty;
 the far ends in the suite are Chrome's own stack, not werift or a TURN
-relayed proxied page.
+relayed proxied page. With codec preferences: once an answer has taken
+Opus without redundant audio the stack offers no RED again (str0m keeps a
+codec's RED payload from its first negotiation; Chrome offers it again); a
+video codec the browser only receives (VP9 profiles 1 and 3, H.264 High
+4:4:4, AV1 profile 1) is accepted in the list and never offered, where
+Chrome offers it in a `recvonly` section; and a section an answer rejects
+lists the preferred payloads in its `m=` line only, as Chrome's
+`createAnswer()` writes it (its `localDescription` names them in
+`a=rtpmap` lines as well).

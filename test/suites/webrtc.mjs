@@ -335,12 +335,16 @@ async function proxiedPage(browser, mode, base) {
 	return { label: mode, page, frame };
 }
 
-// Known difference (docs/webrtc.md, limits): an offer with a section Chrome
+// Known differences (docs/webrtc.md, limits): an offer with a section Chrome
 // answers as rejected (a protocol it does not know, a second data section)
-// is refused whole by the stack
+// is refused whole by the stack; an offer after an answer that took Opus
+// without RED leaves RED out
 const REJECTED_SECTIONS = new Set([
 	'errors.remote.mediaProtocolBad',
 	'errors.remote.twoSections',
+	// an answer that negotiated Opus without redundant audio: the stack
+	// offers no RED again (docs/webrtc-over-wisp.md, section 16)
+	'codecs.answers.pcmuOpus.again',
 ]);
 
 /** collects garbage in the page's process and in its frame's, where that is another */
@@ -894,6 +898,8 @@ async function suite(name, flags, raw) {
 	const urlTables = await each(all, (fixtures) => window.__rtcUrls(fixtures));
 	await Promise.all(all.map(collect));
 	const answerTables = await each(all, () => window.__rtcAnswers());
+	await Promise.all(all.map(collect));
+	const codecTables = await each(all, () => window.__rtcCodecs());
 	{
 		const flat = (index) => {
 			const out = {};
@@ -906,6 +912,7 @@ async function suite(name, flags, raw) {
 			walk(errorTables[index], 'errors', errorTables[index].result);
 			walk(urlTables[index], 'urls', urlTables[index].result);
 			walk(answerTables[index], 'answers', answerTables[index].result);
+			walk(codecTables[index], 'codecs', codecTables[index].result);
 			return out;
 		};
 		const expected = flat(0);
@@ -913,6 +920,7 @@ async function suite(name, flags, raw) {
 			errorTables[0].result.threw ??
 			urlTables[0].result.threw ??
 			answerTables[0].result.threw ??
+			codecTables[0].result.threw ??
 			'';
 		precondition(
 			`${name}, natively: the tables of bad calls run to their end`,
@@ -926,7 +934,7 @@ async function suite(name, flags, raw) {
 				(key) => got[key] !== expected[key] && !REJECTED_SECTIONS.has(key),
 			);
 			ok(
-				`${run.label}: a bad configuration, remote description, candidate or channel dictionary gets the browser's own error, and a good one reads back as the browser's, case by case`,
+				`${run.label}: a bad configuration, remote description, candidate, channel dictionary or codec preference gets the browser's own error, and a good one reads back as the browser's (codec preferences in the offers and answers too), case by case`,
 				differ.length === 0 && Object.keys(got).length > 500,
 				`${Object.keys(got).length} cases, ${differ.length} differ: ${JSON.stringify(
 					differ.slice(0, 40).map((key) => [key, got[key], expected[key]]),

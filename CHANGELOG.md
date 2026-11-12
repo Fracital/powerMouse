@@ -651,6 +651,19 @@ The first release after a four-year gap. Everything below is breaking.
   DTLS certificate of its own, and ICE says what Chrome's says when it
   says it (never `completed`, `checking` once a pair has formed, gathering
   over once connected). It used to have no candidates or pairs.
+- A proxied page's `RTCRtpTransceiver.setCodecPreferences()` works as
+  Chrome's: the list is read and checked as Chrome 152 and 156 read and
+  check it (the same errors for the same lists, from the browser's own
+  capabilities), and the offers and answers list the codecs in the page's
+  order, with retransmission and redundant audio as Chrome keeps them; an
+  answer with none of them rejects the section. What each end sends
+  follows as natively: the offerer's preferences pick the codec both ends
+  send, an answerer's only what it receives. The stack now offers every
+  codec again in a later offer and takes each negotiation's codecs and
+  their order (a str0m patch): it used to keep what the first answer left
+  for good, and a page's offer with nothing new in it did not reach the
+  stack at all. It used to ignore the preferences (`webrtc` and
+  `webrtc-media` suites).
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

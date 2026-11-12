@@ -1553,3 +1553,261 @@ window.__rtcOneMore = () => {
 		return `${error.name}: ${error.message}`;
 	}
 };
+
+// RTCRtpTransceiver.setCodecPreferences: what it says to each list, and
+// the offers and answers a transceiver with preferences makes. The browser
+// checks the list against its own capabilities, so every case is built
+// from what RTCRtpSender.getCapabilities() says here.
+window.__rtcCodecs = async () => {
+	const out = { errors: {}, offers: {}, answers: {} };
+	const show = (error) =>
+		`${error?.constructor?.name} ${error?.name}: ${error?.message}`;
+	const audio = RTCRtpSender.getCapabilities('audio').codecs;
+	const video = RTCRtpSender.getCapabilities('video').codecs;
+	const find = (list, pattern) =>
+		list.filter((codec) => pattern.test(codec.mimeType));
+	const [opus] = find(audio, /opus/i);
+	const [pcmu] = find(audio, /PCMU/);
+	const [pcma] = find(audio, /PCMA/);
+	const [g722] = find(audio, /G722/);
+	const red = find(audio, /red/);
+	const cn = find(audio, /CN/);
+	const events = find(audio, /telephone-event/);
+	const vp8 = find(video, /VP8/);
+	const rtx = find(video, /rtx/);
+	const pc = new RTCPeerConnection();
+	const sound = pc.addTransceiver('audio');
+	const picture = pc.addTransceiver('video');
+	let negotiations = 0;
+	pc.onnegotiationneeded = () => negotiations++;
+	const read = [];
+	const watched = (codec) =>
+		new Proxy(codec, {
+			get(target, key) {
+				if (typeof key === 'string') read.push(key);
+				return target[key];
+			},
+		});
+	const cases = {
+		none: [],
+		undefined: [undefined],
+		null: [null],
+		number: [5],
+		string: ['audio/opus'],
+		object: [{}],
+		set: [new Set([pcmu])],
+		empty: [[]],
+		emptyEntry: [[{}]],
+		nullEntry: [[null]],
+		stringEntry: [['x']],
+		functionEntry: [[() => 1]],
+		noClock: [[{ mimeType: 'audio/opus' }]],
+		noMime: [[{ clockRate: 48000 }]],
+		symbolClock: [[{ ...pcmu, clockRate: Symbol('x') }]],
+		bigintClock: [[{ ...pcmu, clockRate: 8000n }]],
+		wrappedClock: [[{ ...pcmu, clockRate: 8000 + 2 ** 32 }]],
+		fractionClock: [[{ ...pcmu, clockRate: 8000.7 }]],
+		textClock: [[{ ...pcmu, clockRate: '8000' }]],
+		negativeClock: [[{ ...pcmu, clockRate: -1 }]],
+		wrappedChannels: [[{ ...pcmu, channels: 65537 }]],
+		noChannels: [[{ mimeType: 'audio/PCMU', clockRate: 8000 }]],
+		twoChannels: [[{ ...pcmu, channels: 2 }]],
+		unknown: [[{ mimeType: 'audio/foo', clockRate: 48000 }]],
+		noSlash: [[{ ...opus, mimeType: 'opus' }]],
+		otherType: [[{ ...opus, mimeType: 'foo/opus' }]],
+		upperType: [[{ ...opus, mimeType: 'AUDIO/opus' }]],
+		capitalType: [[{ ...opus, mimeType: 'Audio/opus' }]],
+		upperName: [[{ ...opus, mimeType: 'audio/OPUS' }]],
+		spaceType: [[{ ...opus, mimeType: ' audio/opus' }]],
+		trailingName: [[{ ...opus, mimeType: 'audio/opus/x' }]],
+		videoOnAudio: [[{ mimeType: 'video/VP8', clockRate: 90000 }]],
+		upperThenBad: [
+			[
+				{ ...opus, mimeType: 'AUDIO/opus' },
+				{ mimeType: 'audio/x', clockRate: 1 },
+			],
+		],
+		badThenUpper: [
+			[
+				{ mimeType: 'audio/x', clockRate: 1 },
+				{ ...opus, mimeType: 'AUDIO/opus' },
+			],
+		],
+		fmtpReordered: [[{ ...opus, sdpFmtpLine: 'useinbandfec=1;minptime=10' }]],
+		fmtpSpaced: [[{ ...opus, sdpFmtpLine: 'minptime=10; useinbandfec=1' }]],
+		fmtpTrailing: [[{ ...opus, sdpFmtpLine: 'minptime=10;useinbandfec=1;' }]],
+		fmtpDoubled: [[{ ...opus, sdpFmtpLine: 'minptime=10;;useinbandfec=1' }]],
+		fmtpRepeated: [
+			[{ ...opus, sdpFmtpLine: 'minptime=10;useinbandfec=1;minptime=10' }],
+		],
+		fmtpBare: [[{ ...opus, sdpFmtpLine: 'minptime=10;useinbandfec=1;x' }]],
+		fmtpOther: [[{ ...opus, sdpFmtpLine: 'minptime=10;useinbandfec=0' }]],
+		fmtpEmpty: [[{ ...opus, sdpFmtpLine: '' }]],
+		fmtpMissing: [[{ ...opus, sdpFmtpLine: undefined }]],
+		fmtpWord: [[{ ...pcmu, sdpFmtpLine: 'x' }]],
+		fmtpNull: [[{ ...pcmu, sdpFmtpLine: null }]],
+		mimeNull: [[{ ...pcmu, mimeType: null }]],
+		mimeObject: [[{ ...pcmu, mimeType: { toString: () => 'audio/PCMU' } }]],
+		redFmtp: [[{ ...red[0], sdpFmtpLine: '111/111' }, pcmu]],
+		extraMember: [[{ ...pcmu, payloadType: 99 }]],
+		duplicate: [[pcmu, pcmu]],
+		redAlone: [red],
+		cnAlone: [cn],
+		cnUnknown: [[...cn, { mimeType: 'audio/x', clockRate: 1 }]],
+		redWrongClock: [[{ mimeType: 'audio/red', clockRate: 8000, channels: 2 }]],
+		eventsAlone: [events],
+		every: [audio],
+		throwing: [
+			[
+				{
+					get mimeType() {
+						throw new Error('boom');
+					},
+					clockRate: 8000,
+				},
+			],
+		],
+	};
+	for (const [name, args] of Object.entries(cases))
+		try {
+			out.errors[name] = `ok ${sound.setCodecPreferences(...args)}`;
+		} catch (error) {
+			out.errors[name] = show(error);
+		}
+	for (const [name, list] of Object.entries({
+		rtxAlone: rtx,
+		audioOnVideo: [pcmu],
+		upperVideo: [{ mimeType: 'VIDEO/VP8', clockRate: 90000 }],
+		vp8: vp8,
+	}))
+		try {
+			out.errors[`video.${name}`] = `ok ${picture.setCodecPreferences(list)}`;
+		} catch (error) {
+			out.errors[`video.${name}`] = show(error);
+		}
+	read.length = 0;
+	try {
+		sound.setCodecPreferences([watched({ ...pcmu })]);
+	} catch (error) {
+		// read below
+	}
+	out.errors.read = read.join();
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	out.errors.negotiations = negotiations;
+	const stopped = new RTCPeerConnection();
+	const halted = stopped.addTransceiver('audio');
+	halted.stop();
+	for (const [name, list] of Object.entries({
+		good: [pcmu],
+		bad: [{ mimeType: 'audio/x', clockRate: 1 }],
+	}))
+		try {
+			out.errors[`stopped.${name}`] = `ok ${halted.setCodecPreferences(list)}`;
+		} catch (error) {
+			out.errors[`stopped.${name}`] = show(error);
+		}
+	stopped.close();
+	try {
+		out.errors.closed = `ok ${halted.setCodecPreferences([pcmu])}`;
+	} catch (error) {
+		out.errors.closed = show(error);
+	}
+	pc.close();
+
+	// the payloads a description lists for `kind`: its m=, a=rtpmap and
+	// a=fmtp lines, and the group. (The stack has no format for video red
+	// and ulpfec: docs/webrtc.md, limits. The video cases are VP8's.)
+	const payloads = (sdp, kind = 'audio') => {
+		let section = null;
+		return sdp
+			.split('\r\n')
+			.filter((line) => {
+				if (line.startsWith('m=')) section = line.slice(2, line.indexOf(' '));
+				return (
+					/^a=group/.test(line) ||
+					(section === kind && /^(m=|a=rtpmap|a=fmtp)/.test(line))
+				);
+			})
+			.map((line) => line.replace(/^(m=\w+) [1-9]\d*/, '$1 9'))
+			.join('|');
+	};
+	const offers = {
+		pcmu: [[pcmu]],
+		pcmaOpus: [[pcma, opus]],
+		opusEvents: [[opus, ...events]],
+		g722Red: [[g722, ...red]],
+		redOpus: [[...red, opus]],
+		reversed: [[...audio].reverse()],
+		cleared: [[pcmu], null, []],
+		vp8: [null, vp8],
+		vp8Rtx: [null, [...vp8, ...rtx]],
+		rtxVp8: [null, [...rtx, ...vp8]],
+	};
+	for (const [name, [sounds, pictures, again]] of Object.entries(offers)) {
+		const offerer = new RTCPeerConnection();
+		const a = offerer.addTransceiver('audio');
+		const v = offerer.addTransceiver('video');
+		try {
+			if (sounds) a.setCodecPreferences(sounds);
+			if (pictures) v.setCodecPreferences(pictures);
+			if (again) a.setCodecPreferences(again);
+			out.offers[name] = payloads(
+				(await offerer.createOffer()).sdp,
+				pictures ? 'video' : 'audio',
+			);
+		} catch (error) {
+			out.offers[name] = show(error);
+		}
+		offerer.close();
+	}
+	// the far end offers (with preferences of its own, or none), the
+	// connection answers with its preferences; then the far end reads it.
+	// No candidate goes either way.
+	const answers = {
+		pcmuOpus: [null, [pcmu, opus]],
+		g722: [null, [g722]],
+		reversed: [null, [...audio].reverse()],
+		swapped: [
+			[pcmu, opus],
+			[opus, pcmu],
+		],
+		nothingInCommon: [[opus], [pcmu]],
+	};
+	for (const [name, [theirs, ours]] of Object.entries(answers)) {
+		const far = new RTCPeerConnection();
+		const near = new RTCPeerConnection();
+		const entry = (out.answers[name] = {});
+		try {
+			const offered = far.addTransceiver('audio');
+			far.createDataChannel('x');
+			if (theirs) offered.setCodecPreferences(theirs);
+			await far.setLocalDescription();
+			await near.setRemoteDescription(far.localDescription);
+			const [answering] = near.getTransceivers();
+			answering.setCodecPreferences(ours);
+			const answer = await near.createAnswer();
+			entry.created = [answering.mid, answering.currentDirection];
+			entry.answer = payloads(answer.sdp);
+			await near.setLocalDescription(answer);
+			entry.near = [
+				answering.mid,
+				answering.direction,
+				answering.currentDirection,
+				near.getTransceivers().length,
+			];
+			await far.setRemoteDescription(near.localDescription);
+			entry.far = [
+				offered.mid,
+				offered.direction,
+				offered.currentDirection,
+				far.getTransceivers().length,
+			];
+			entry.again = payloads((await far.createOffer()).sdp);
+		} catch (error) {
+			entry.error = show(error);
+		}
+		far.close();
+		near.close();
+	}
+	return out;
+};

@@ -68,7 +68,26 @@
              if !self.changes.has_mid(mid) {
                  break mid;
              }
-@@ -465,6 +484,19 @@
+@@ -361,6 +380,18 @@
+         mid
+     }
+ 
++    /// Offer again with nothing new: the next [`SdpApi::apply()`] makes an
++    /// offer that states each section as it is (and every codec), and its
++    /// answer is a negotiation like any other, as JSEP has it.
++    pub fn renegotiate(&mut self, mid: Mid) {
++        let Some(dir) = self.rtc.media(mid).map(|media| media.direction()) else {
++            return;
++        };
++        if !self.changes.0.iter().any(requires_negotiation) {
++            self.changes.0.push(Change::Direction(mid, dir));
++        }
++    }
++
+     /// Change the direction of an already existing media.
+     ///
+     /// All media have a direction. The media can be added by this side via
+@@ -465,6 +496,19 @@
              self.changes.0.push(Change::AddApp(mid));
          }
  
@@ -88,7 +107,7 @@
          let id = self.rtc.chan.new_channel(&config);
  
          self.changes.0.push(Change::AddChannel((id, config)));
-@@ -486,7 +518,7 @@
+@@ -486,7 +530,7 @@
          self.changes
              .retain(|c| !matches!(c, Change::IceRestart(_, _)));
  
@@ -97,7 +116,7 @@
          self.changes
              .push(Change::IceRestart(new_creds.clone(), keep_local_candidates));
  
-@@ -708,7 +740,7 @@
+@@ -708,7 +752,7 @@
          } else {
              // The remote OFFER had an ice restart, and we need to respond with
              // new credentials in the ANSWER.
@@ -106,7 +125,67 @@
          };
  
          rtc.ice
-@@ -1693,6 +1725,10 @@
+@@ -834,13 +878,14 @@
+                     ssrcs.extend(pending.ssrcs_for_mid(m.mid()))
+                 }
+ 
++                let offer = params.pending.is_some();
+                 let params: Vec<_> = session
+                     .codec_config
+                     .all_for_kind(m.kind(), false)
+                     .cloned()
+                     .collect();
+ 
+-                m.as_media_line(attrs, &ssrcs, &session.exts, &params)
++                m.as_media_line(attrs, &ssrcs, &session.exts, &params, offer)
+             })
+             .collect::<Vec<_>>();
+ 
+@@ -1396,6 +1441,7 @@
+         ssrcs_tx: &[(Ssrc, Option<Ssrc>)],
+         exts: &ExtensionMap,
+         params: &[PayloadParams],
++        offer: bool,
+     ) -> MediaLine;
+ }
+ 
+@@ -1418,6 +1464,7 @@
+         _ssrcs_tx: &[(Ssrc, Option<Ssrc>)],
+         _exts: &ExtensionMap,
+         _params: &[PayloadParams],
++        _offer: bool,
+     ) -> MediaLine {
+         attrs.push(MediaAttribute::Mid(self.0));
+         attrs.push(MediaAttribute::SctpPort(5000));
+@@ -1452,10 +1499,11 @@
+         ssrcs_tx: &[(Ssrc, Option<Ssrc>)],
+         exts: &ExtensionMap,
+         params: &[PayloadParams],
++        offer: bool,
+     ) -> MediaLine {
+         if self.app_tmp {
+             let app = (self.mid(), self.index());
+-            return app.as_media_line(attrs, ssrcs_tx, exts, params);
++            return app.as_media_line(attrs, ssrcs_tx, exts, params, offer);
+         }
+ 
+         attrs.push(MediaAttribute::Mid(self.mid()));
+@@ -1476,8 +1524,12 @@
+ 
+         // The effective params start from the Session::codec_config to retain the
+         // user's configured preferred order, however they are narrowed only include
+-        // those the remote peer wants.
+-        let effective_params = params.iter().filter(|p| self.remote_pts().contains(&p.pt));
++        // those the remote peer wants. An offer offers every one again, as a
++        // browser's does: what the last answer narrowed to is not what the next
++        // negotiation must keep.
++        let effective_params = params
++            .iter()
++            .filter(|p| offer || self.remote_pts().contains(&p.pt));
+ 
+         let mut pts = vec![];
+ 
+@@ -1693,6 +1745,10 @@
              }
          }
  
@@ -231,6 +310,25 @@
              self.state = RtcState::Closing;
          }
  
+--- a/src/media/mod.rs
++++ b/src/media/mod.rs
+@@ -649,13 +649,9 @@
+     }
+ 
+     pub(crate) fn set_remote_pts(&mut self, pts: Vec<Pt>) {
+-        // Have we already set PTs?
+-        if !self.remote_pts.is_empty() {
+-            return;
+-        }
+-
+-        // TODO: We should verify the remote peer doesn't suddenly change the PT
+-        // order or removes/adds PTs that weren't there from the start.
++        // Each negotiation says anew what the section carries and in which
++        // order (JSEP): a later offer or answer may list other codecs first,
++        // or ones an earlier answer left out.
+         debug!("Mid ({}) remote PT order is: {:?}", self.mid, pts);
+         self.remote_pts = pts;
+     }
 --- a/src/sctp/mod.rs
 +++ b/src/sctp/mod.rs
 @@ -54,6 +54,8 @@

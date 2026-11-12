@@ -12,7 +12,7 @@
 // sources the section has; the template says how Chrome lists them, which
 // feedback each codec names and which lines stand around them; the worker
 // says what the transceiver wants and what its sender is called.
-import type { Direction } from './protocol';
+import type { CodecCapability, Direction } from './protocol';
 
 export interface Media {
 	kind: string;
@@ -171,6 +171,12 @@ export interface SectionStyle {
 	groups: string[];
 	/** the header extensions the section last agreed on, by URI; null before it has */
 	exts: Set<string> | null;
+	/** the transceiver's codec preferences (setCodecPreferences), empty for none */
+	codecs?: CodecCapability[];
+	/** an answer rejects the section: none of the codecs preferred was offered */
+	rejected?: boolean;
+	/** Chrome 152's way with them (protocol.ts, codecPreferences) */
+	legacy?: boolean;
 }
 
 const CRLF = '\r\n';
@@ -192,10 +198,18 @@ export function renderChrome(
 	const mids = parsed.medias.map(
 		(media) => first(media.attributes, 'mid') ?? '',
 	);
-	const group = first(parsed.session, 'group') ?? `BUNDLE ${mids.join(' ')}`;
+	let group = first(parsed.session, 'group') ?? `BUNDLE ${mids.join(' ')}`;
+	// an answer that rejects a section takes it out of the group, and
+	// writes the group when that leaves it empty
+	const rejected = mids.filter((mid) => options.sections?.get(mid)?.rejected);
+	if (rejected.length)
+		group = group
+			.split(' ')
+			.filter((word) => !rejected.includes(word))
+			.join(' ');
 	// no section left in the bundle (none at all, or each one stopped), or
 	// an answer to an offer that had no group: no line
-	if (!parsed.ungrouped && group.trim() !== 'BUNDLE')
+	if (!parsed.ungrouped && (group.trim() !== 'BUNDLE' || rejected.length))
 		lines.push(`a=group:${group}`);
 	if (!parsed.bare) lines.push('a=extmap-allow-mixed');
 	// the streams the description's senders are in, in name order
@@ -240,7 +254,7 @@ export function renderChrome(
 					)
 				: null;
 		lines.push(
-			`m=${media.kind} ${media.port === '0' ? '0' : (preferred?.port ?? media.port)} ${media.protocol} ${(shape?.formats ?? media.formats).join(' ')}`,
+			`m=${media.kind} ${media.port === '0' || style?.rejected ? '0' : (preferred?.port ?? media.port)} ${media.protocol} ${(shape?.formats ?? media.formats).join(' ')}`,
 		);
 		lines.push(
 			preferred
@@ -343,6 +357,123 @@ const SHAPED = new Set([
 ]);
 
 /**
+ * The template's payload for a payload of the stack's: the same number
+ * where the peer did not renumber it, else one of the same codec
+ */
+function twinOf(own: Payloads, browser: Payloads) {
+	const twins = new Map<string, string | undefined>();
+	return (pt: string) => {
+		if (twins.has(pt)) return twins.get(pt);
+		const map = own.map.get(pt)?.toLowerCase();
+		let found: string | undefined;
+		for (const [candidate, value] of browser.map) {
+			if (value.toLowerCase() !== map) continue;
+			if (candidate === pt) {
+				found = candidate;
+				break;
+			}
+			if (
+				found === undefined ||
+				browser.fmtp.get(candidate) === own.fmtp.get(pt)
+			)
+				found = candidate;
+		}
+		twins.set(pt, found);
+		return found;
+	};
+}
+
+/** two format lines' parameters are the same, whatever their order */
+function sameParameters(a: string | undefined, b: string | undefined) {
+	const read = (line = '') =>
+		line
+			.split(';')
+			.filter(Boolean)
+			.map((part) => part.trim())
+			.sort()
+			.join(';');
+	return read(a) === read(b);
+}
+
+/**
+ * The payloads of `formats` a transceiver's codec preferences keep, in
+ * their order, as Chrome writes them (measured on 152 and 156): a codec
+ * where its preference is, retransmission only when one is preferred and
+ * then right after each codec it repeats, redundant audio (in Chrome 156)
+ * only with the codec it carries. Empty when nothing is kept. A payload is matched by
+ * its lines, which the stack took from the template, as the capabilities
+ * were.
+ */
+function preferredFormats(
+	formats: string[],
+	own: Payloads,
+	fmtpOf: (pt: string) => string | undefined,
+	kind: string,
+	codecs: CodecCapability[],
+	legacy = false,
+): string[] {
+	const nameOf = (pt: string) =>
+		(own.map.get(pt) ?? '').split('/')[0].toLowerCase();
+	const subtype = (codec: CodecCapability) =>
+		codec.mimeType.slice(codec.mimeType.indexOf('/') + 1).toLowerCase();
+	const describes = (pt: string, codec: CodecCapability) => {
+		const [name, clock, channels] = (own.map.get(pt) ?? '').split('/');
+		const lower = name.toLowerCase();
+		if (lower !== subtype(codec) || Number(clock) !== codec.clockRate)
+			return false;
+		if (
+			(kind === 'audio' ? Number(channels || 1) : undefined) !== codec.channels
+		)
+			return false;
+		// the capabilities give these no format line: theirs names a payload
+		if (lower === 'rtx' || lower === 'red') return true;
+		return sameParameters(fmtpOf(pt), codec.sdpFmtpLine);
+	};
+	const kept: string[] = [];
+	for (const codec of codecs)
+		for (const pt of formats)
+			if (nameOf(pt) !== 'rtx' && !kept.includes(pt) && describes(pt, codec))
+				kept.push(pt);
+	// Chrome 152 keeps redundant audio whatever it carries; 156 drops it
+	// with the codec it carries
+	const chosen = kept.filter((pt) => {
+		const carried =
+			nameOf(pt) === 'red' ? own.fmtp.get(pt)?.split('/')[0] : undefined;
+		return legacy || carried === undefined || kept.includes(carried);
+	});
+	if (!codecs.some((codec) => subtype(codec) === 'rtx')) return chosen;
+	return chosen.flatMap((pt) => [
+		pt,
+		...formats.filter(
+			(repair) =>
+				nameOf(repair) === 'rtx' &&
+				/(?:^|;)\s*apt=(\d+)/.exec(own.fmtp.get(repair) ?? '')?.[1] === pt,
+		),
+	]);
+}
+
+/**
+ * An answer with these preferences rejects the stack's section: none of
+ * them was offered. `model` is the template's section of its kind.
+ */
+export function rejects(
+	media: Media,
+	model: Media | undefined,
+	codecs: CodecCapability[] | undefined,
+): boolean {
+	if (!codecs?.length) return false;
+	const own = payloadsOf(media);
+	const browser = model ? payloadsOf(model) : own;
+	const twin = twinOf(own, browser);
+	const fmtpOf = (pt: string) => {
+		const like = twin(pt);
+		return like === undefined ? own.fmtp.get(pt) : browser.fmtp.get(like);
+	};
+	return !preferredFormats(media.formats, own, fmtpOf, media.kind, codecs)
+		.length;
+}
+
+/**
  * A media section's payload list and the lines after `a=mid`, as Chrome
  * writes them. `media` is the stack's section, `model` the template's of
  * the same kind, `offered` the section of the offer this one answers.
@@ -422,28 +553,37 @@ function shaped(
 			if (red !== undefined) formats.push(red);
 		}
 	}
-	// the template's payload for the same codec: the same number where
-	// the peer did not renumber it
-	const twins = new Map<string, string | undefined>();
-	const twin = (pt: string) => {
-		if (twins.has(pt)) return twins.get(pt);
-		const map = own.map.get(pt)?.toLowerCase();
-		let found: string | undefined;
-		for (const [candidate, value] of browser.map) {
-			if (value.toLowerCase() !== map) continue;
-			if (candidate === pt) {
-				found = candidate;
-				break;
-			}
-			if (
-				found === undefined ||
-				browser.fmtp.get(candidate) === own.fmtp.get(pt)
-			)
-				found = candidate;
+	const twin = twinOf(own, browser);
+	// What the transceiver prefers, in its order. An answer that has none
+	// of it rejects the section: its m= line lists the preferred codecs as
+	// this browser numbers them, and no line says more of them.
+	let listed = true;
+	// a stopped section is offered with every codec, whatever is preferred
+	if (style.codecs?.length && (media.port !== '0' || style.rejected)) {
+		const chosen = preferredFormats(
+			formats,
+			own,
+			(pt) => {
+				const like = twin(pt);
+				return like === undefined ? own.fmtp.get(pt) : browser.fmtp.get(like);
+			},
+			media.kind,
+			style.codecs,
+			style.legacy,
+		);
+		if (chosen.length) formats = chosen;
+		else if (style.rejected) {
+			formats = preferredFormats(
+				model.formats,
+				browser,
+				(pt) => browser.fmtp.get(pt),
+				media.kind,
+				style.codecs,
+				style.legacy,
+			);
+			listed = false;
 		}
-		twins.set(pt, found);
-		return found;
-	};
+	}
 	const named = (pt: string, value: string) =>
 		!theirs ||
 		[pt, '*'].some(
@@ -451,10 +591,10 @@ function shaped(
 				theirs.lead.get(key)?.includes(value) ||
 				theirs.fb.get(key)?.includes(value),
 		);
-	for (const pt of formats)
+	for (const pt of listed ? formats : [])
 		for (const value of browser.lead.get(twin(pt) ?? '') ?? [])
 			if (named(pt, value)) lines.push(`a=rtcp-fb:${pt} ${value}`);
-	for (const pt of formats) {
+	for (const pt of listed ? formats : []) {
 		const like = twin(pt);
 		const map = like === pt ? browser.map.get(pt) : own.map.get(pt);
 		if (map === undefined) continue;

@@ -701,6 +701,68 @@ fn a_section_paired_and_narrowed_by_the_answerer() {
 }
 
 #[test]
+fn each_negotiation_sets_the_codecs_anew() {
+	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let mut a = Peer::media("10.0.0.1:5000");
+	let mut b = Peer::media("10.0.0.2:5000");
+	a.control(&[("op", "media"), ("kind", "audio")]);
+	// an answer that takes PCMU alone (a peer that prefers it)
+	let offer = get(&a.control(&[("op", "offer")]), "sdp").to_string();
+	let answer = get(&b.control(&[("op", "remote_offer"), ("sdp", &offer), ("dir0", "sendrecv")]), "sdp")
+		.to_string();
+	// the answer (of one section) with these payloads alone, their lines
+	// in this order, as a browser writes them
+	let only = |sdp: &str, pts: &str| -> String {
+		let kept: Vec<&str> = pts.split(' ').collect();
+		let payload = |line: &str| {
+			["a=rtpmap:", "a=fmtp:", "a=rtcp-fb:"]
+				.iter()
+				.find_map(|prefix| line.strip_prefix(prefix))
+				.map(|rest| rest.split(' ').next().unwrap_or("").to_string())
+		};
+		let mut out: Vec<String> = Vec::new();
+		for line in sdp.lines() {
+			if payload(line).is_some() {
+				continue;
+			}
+			if line.starts_with("m=audio") {
+				let head: Vec<&str> = line.split(' ').take(3).collect();
+				out.push(format!("{} {pts}", head.join(" ")));
+			} else {
+				out.push(line.to_string());
+			}
+		}
+		for pt in &kept {
+			for line in sdp.lines() {
+				if payload(line).as_deref() == Some(*pt) {
+					out.push(line.to_string());
+				}
+			}
+		}
+		out.join("\r\n") + "\r\n"
+	};
+	a.control(&[("op", "answer"), ("sdp", &only(&answer, "0"))]);
+	let first = |peer: &mut Peer| {
+		let codecs = get(&peer.control(&[("op", "payloads"), ("index", "0")]), "codecs").to_string();
+		codecs.split(',').nth(1).unwrap_or("").to_string()
+	};
+	assert_eq!(first(&mut a), "PCMU");
+	// offered again with nothing new: a real offer, with every codec
+	let again = get(&a.control(&[("op", "offer")]), "sdp").to_string();
+	let line = again.lines().find(|line| line.starts_with("m=audio")).unwrap_or("").to_string();
+	let pts: Vec<&str> = line.split(' ').skip(3).collect();
+	for pt in ["111", "63", "9", "0", "8", "13", "110", "126"] {
+		assert!(pts.contains(&pt), "{line}");
+	}
+	assert!(again.contains("a=rtpmap:9 G722/8000"), "{again}");
+	// and its answer is a negotiation: G.722 first now
+	let answer = get(&b.control(&[("op", "remote_offer"), ("sdp", &again), ("dir0", "sendrecv")]), "sdp")
+		.to_string();
+	a.control(&[("op", "answer"), ("sdp", &only(&answer, "9 0 111"))]);
+	assert_eq!(first(&mut a), "G722");
+}
+
+#[test]
 fn rollback_keeps_what_was_added() {
 	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let mut a = Peer::media("10.0.0.1:5000");

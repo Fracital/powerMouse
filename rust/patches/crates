@@ -29,6 +29,13 @@
 # before its close_notify (Rtc::close; SCTP's abort is sctp-proto's below):
 # as published it starts a graceful SHUTDOWN and closes DTLS at once, so the
 # SHUTDOWN is dropped and the peer never hears of the close.
+# Every offer lists every codec the host configured, and each negotiation
+# sets anew which codecs a section carries and in which order: as published
+# the first answer narrows a section for good, so a later offer lists only
+# what that answer kept (a browser offers all of its codecs again) and a
+# later negotiation cannot change the codec that is sent. An offer with
+# nothing new can be made all the same (SdpApi::renegotiate), as a browser
+# makes one: as published only a change makes an offer.
 str0m 0.25.0 357c7e453c033c8bb59e912312f9f9ff07c2a9ce7268bcb94f0c828a5b47e58f
 # sctp-proto: Association::abort, an ABORT with a User-Initiated Abort cause
 # and the reason given (as published only a graceful shutdown is offered).

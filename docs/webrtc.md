@@ -202,6 +202,9 @@ those packets are gone too.
   offer over it: `iceGatheringState` returns to `new` and the next
   description has new ICE credentials. Here the transport, its candidates
   and its credentials stay.
+- **Codec preferences.** A later offer leaves out RED once an answer took
+  Opus without it, and a video codec the browser only receives is never
+  offered (docs/webrtc-over-wisp.md section 16).
 - **The real-address case.** With media access the page sees a name where
   the browser would show addresses: what a browser without access shows.
 - **libcurl.** That transport has no datagram streams: a connection gathers

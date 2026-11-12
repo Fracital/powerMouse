@@ -967,6 +967,12 @@ impl Conn {
 							.map(|media| media.direction())
 					})
 					.collect();
+				// a section this offer can state again when it has nothing new
+				let live = self
+					.medias
+					.iter()
+					.filter_map(|slot| slot.mid)
+					.find(|mid| self.rtc.media(*mid).is_some_and(|media| !media.stopped()));
 				let mut api = self.rtc.sdp_api();
 				// `names`: what the sections this offer adds are called, in
 				// the order a browser would name them. A section's name is
@@ -1020,8 +1026,15 @@ impl Conn {
 						}
 					}
 				}
-				// a channel on a negotiated connection needs no offer: it is
-				// opened at once and the description stays as it was
+				// Nothing new: a browser offers all the same, and the answer
+				// is a negotiation (the codecs and their order may change).
+				// A channel on a negotiated connection needs no offer: it is
+				// opened at once and the description stays as it was.
+				if !api.has_changes() {
+					if let Some(mid) = live {
+						api.renegotiate(mid);
+					}
+				}
 				let sdp = match api.apply() {
 					Some((offer, pending)) => {
 						self.pending = Some(pending);

@@ -1,5 +1,6 @@
 import type {
 	ChannelOptions,
+	CodecCapability,
 	ConnectionConfig,
 	Direction,
 	MediaSection,
@@ -19,6 +20,8 @@ import {
 	candidateLine,
 	channelChecked,
 	channelInit,
+	codecList,
+	codecPreferences,
 	configuration,
 	parseDescription,
 	Refusal,
@@ -931,6 +934,42 @@ export default class WebRTCStack {
 			if (!slot) throw illegal();
 			return slot;
 		};
+		/**
+		 * What the browser sends and receives of a kind, as its own
+		 * RTCRtpSender and RTCRtpReceiver tell it (static: no connection)
+		 */
+		const senderCapabilities = (NativeSender as typeof RTCRtpSender | undefined)
+			?.getCapabilities;
+		const receiverCapabilities = (
+			NativeReceiver as typeof RTCRtpReceiver | undefined
+		)?.getCapabilities;
+		const capabilitiesOf = (kind: string): CodecCapability[] => {
+			const out: CodecCapability[] = [];
+			const seen = new Set<string>();
+			for (const [ask, Class] of [
+				[senderCapabilities, NativeSender],
+				[receiverCapabilities, NativeReceiver],
+			] as const) {
+				const told = ask
+					? (Reflect.apply(ask, Class, [kind]) as RTCRtpCapabilities | null)
+					: null;
+				for (const codec of told?.codecs ?? []) {
+					const own: CodecCapability = {
+						mimeType: codec.mimeType,
+						clockRate: codec.clockRate,
+						...(codec.channels !== undefined && { channels: codec.channels }),
+						...(codec.sdpFmtpLine !== undefined && {
+							sdpFmtpLine: codec.sdpFmtpLine,
+						}),
+					};
+					const key = JSON.stringify(own);
+					if (seen.has(key)) continue;
+					seen.add(key);
+					out.push(own);
+				}
+			}
+			return out;
+		};
 		const emptyReport = () =>
 			RealmPromise.resolve(Reflect.construct(MockStatsReport, [new Map()]));
 		const SET_DIRECTION =
@@ -994,9 +1033,33 @@ export default class WebRTCStack {
 				queue(() => endRemote(slot));
 				negotiate(slot.pc);
 			}
-			// every codec the stack has is offered, in the browser's order
-			setCodecPreferences() {
-				slotOf(this);
+			// What the section's descriptions list, in the page's order: the
+			// worker writes them so. What is sent is the first codec of the
+			// peer's description, as natively, whatever the page prefers.
+			setCodecPreferences(...args: any[]) {
+				const slot = slotOf(this);
+				const context =
+					"Failed to execute 'setCodecPreferences' on 'RTCRtpTransceiver'";
+				if (!args.length)
+					throw new RealmTypeError(
+						`${context}: 1 argument required, but only 0 present.`,
+					);
+				const codecs = refusing(context, () =>
+					codecPreferences(
+						codecList(args[0]),
+						slot.kind,
+						capabilitiesOf(slot.kind),
+						isLegacy(),
+					),
+				);
+				slot.pc
+					.call({
+						op: 'codecPreferences',
+						handle: slot.handle,
+						codecs,
+						legacy: isLegacy(),
+					})
+					.catch(() => {});
 			}
 		}
 		class SenderMembers {
@@ -1754,7 +1817,11 @@ export default class WebRTCStack {
 						endRemote(slot);
 					}
 					if (remote || answer) slot.current = 'stopped';
-					if (answer) slot.stopped = true;
+					// out of the connection: it has no name any more
+					if (answer) {
+						slot.stopped = true;
+						slot.mid = null;
+					}
 					slot.receptive = false;
 					for (const stream of slot.remoteStreams) leaves.push([stream, slot]);
 					continue;

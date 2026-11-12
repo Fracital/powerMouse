@@ -354,6 +354,51 @@ async function wideband(own, far) {
 	return record;
 }
 /**
+ * setCodecPreferences on the page: it offers with PCMU first, so both ends
+ * send PCMU; it prefers G.722 and offers again, so both switch to G.722;
+ * then the far end offers (Opus first) and the page answers preferring
+ * PCMU: the page sends the offer's first codec, Opus, and the far end
+ * PCMU, as natively. The codecs are the far end's (Chrome's) own stats.
+ */
+async function preferring(own, far) {
+	const record = { heard: {}, codecs: [], failure: null };
+	const both = async (step) => {
+		await own.call('muted', 0, false);
+		const [mine, theirs] = await Promise.all([
+			own.call('hear', 0, 660, 1500),
+			far.call('hear', 0, 440, 1500),
+		]);
+		record.heard[step] = { own: mine, far: theirs };
+		record.codecs.push(await far.call('codecs'));
+	};
+	try {
+		await own.call('open');
+		await far.call('open');
+		await own.call('tone', 440);
+		await own.call('prefer', 0, 'audio/PCMU');
+		await describe(own, far, 'offer');
+		await far.call('tone', 660);
+		await describe(far, own, 'answer');
+		await own.call('connected');
+		await far.call('connected');
+		await both('pcmu');
+		await own.call('prefer', 0, 'audio/G722');
+		await describe(own, far, 'offer');
+		await describe(far, own, 'answer');
+		await both('g722');
+		await far.call('prefer', 0, 'audio/opus');
+		await own.call('prefer', 0, 'audio/PCMU');
+		await describe(far, own, 'offer');
+		await describe(own, far, 'answer');
+		await both('answered');
+	} catch (error) {
+		record.failure = String(error).slice(0, 400);
+	}
+	await own.call('close').catch(() => {});
+	await far.call('close').catch(() => {});
+	return record;
+}
+/**
  * DTMF: the page offers its tone, the far end answers with its own (listing
  * `prefer` first, so the page sends with it) and notes every
  * telephone-event frame its receiver gets; the page plays tones on its
@@ -478,6 +523,21 @@ for (const [name, record] of Object.entries(natively))
 		record.failure ?? JSON.stringify(record.heard),
 	);
 
+natively.preferring = await preferring(
+	end(control),
+	end(native, 'the far end'),
+);
+ok(
+	"natively: the offerer's codec preferences pick what both ends send, and an answerer's preferences only what it receives",
+	!natively.preferring.failure &&
+		JSON.stringify(natively.preferring.codecs) ===
+			JSON.stringify([
+				{ 'inbound-rtp': 'audio/PCMU', 'outbound-rtp': 'audio/PCMU' },
+				{ 'inbound-rtp': 'audio/G722', 'outbound-rtp': 'audio/G722' },
+				{ 'inbound-rtp': 'audio/opus', 'outbound-rtp': 'audio/PCMU' },
+			]),
+	JSON.stringify([natively.preferring.failure, natively.preferring.codecs]),
+);
 natively.tones = await tones(end(control), end(native, 'the far end'));
 natively.pcmuTones = await tones(
 	end(control),
@@ -716,6 +776,28 @@ for (const proxied of pages) {
 					Math.abs(got.quiet - want.quiet) < 4,
 				`${got.quiet} dB | natively ${want.quiet} dB`,
 			);
+	}
+	// the page's codec preferences decide what flows, as natively
+	{
+		const got = await preferring(end(proxied), end(native, 'the far end'));
+		const want = natively.preferring;
+		// what the far end hears; Chrome's own sender, with G.711 or G.722
+		// and comfort noise negotiated, sends noise packets for its steady
+		// tone instead of speech (see the tones checks below), so what the
+		// page hears from it is not a tone here
+		const heard = (record) =>
+			Object.values(record.heard).every(
+				({ far }) => far?.level > 0.25 && Math.abs(far.pitch - 440) < 20,
+			);
+		ok(
+			`${label}: with the page's codec preferences, each end sends what Chrome's would (PCMU, then G.722 after the page prefers it and offers again, then Opus from the page when it answers an Opus-first offer preferring PCMU), and the far end hears the page`,
+			!got.failure &&
+				!want.failure &&
+				JSON.stringify(got.codecs) === JSON.stringify(want.codecs) &&
+				Object.keys(got.heard).length === 3 &&
+				heard(got),
+			JSON.stringify([got.failure, got.codecs, want.codecs, got.heard]),
+		);
 	}
 	// G.722 both ways with Chrome's own stack
 	{
