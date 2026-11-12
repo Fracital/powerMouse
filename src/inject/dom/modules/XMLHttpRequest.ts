@@ -3,7 +3,6 @@ import StompURL from '../../../StompURL';
 import {
 	ABORT_HEADER,
 	CREDENTIALS_HEADER,
-	ECHO_ROUTE,
 	OPAQUE_HEADER,
 	PREFLIGHT_HEADER,
 } from '../../../transport/messages';
@@ -12,12 +11,10 @@ import {
 	adoptTypeMark,
 	isStompHeader,
 	pageHeaderRecord,
-	reportOnly,
 } from '../../modules/Fetch';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import UnrouteModule, { unrouteURL } from '../../modules/Unroute';
-import { trustedHTML } from '../../trusted';
 import { trackUploadListeners } from '../../uploadListeners';
 import {
 	decodeText,
@@ -29,7 +26,6 @@ import {
 import DocumentClient from '../Client';
 import { responseURLs } from '../responseDocuments';
 import BlobDocumentsModule from './BlobDocuments';
-import DOMAttributesModule from './DOMAttributes';
 import SyncModule from './Sync';
 
 export default class XMLHttpRequestModule extends Module<DocumentClient> {
@@ -156,30 +152,6 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				// a charset that is not a plain token cannot go in the data: URL
 				const parameter =
 					charset && /^[\w.:-]+$/.test(charset) ? `;charset=${charset}` : '';
-				// A document whose policy refuses (or reports) a data: request
-				// (its connect-src, src/csp.ts) would show the page a violation
-				// of the proxy's: the bytes come back from the service worker's
-				// echo instead, the proxy origin's, which the policy allows. A
-				// synchronous request never reaches the worker (nor does one of
-				// a document it does not control): the realm's DOMParser makes
-				// the document.
-				const refused = that.client.browserRefuses('connect-src', 'data:');
-				if (
-					refused &&
-					(sync || that.client.getModule(DOMAttributesModule)?.uncontrolled?.())
-				)
-					return done(parsedText(bytes, essence, charset, asDocument));
-				if (refused) {
-					Reflect.apply(realmOpen, xhr, [
-						'POST',
-						`${that.client.global.location.origin}${that.client.directory}${ECHO_ROUTE}/${encodeURIComponent(`${essence}${parameter}`)}`,
-						true,
-					]);
-					if (asDocument) Reflect.apply(realmSetType, xhr, ['document']);
-					Reflect.apply(realmListen, xhr, ['loadend', read]);
-					Reflect.apply(realmSend, xhr, [bytes]);
-					return;
-				}
 				Reflect.apply(realmOpen, xhr, [
 					'GET',
 					`data:${essence}${parameter};base64,${base64(bytes)}`,
@@ -192,43 +164,6 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				return done(null);
 			}
 			if (sync) read();
-		};
-		const RealmDOMParser = that.client.global.DOMParser;
-		const realmParse = RealmDOMParser.prototype.parseFromString;
-		const realmQuery = that.client.global.Document.prototype.querySelector;
-		/**
-		 * The document of `bytes` the realm's DOMParser makes, as close to
-		 * the browser's response document as it gets (for parseResponse's
-		 * requests that cannot go through a URL): an HTML one for text/html
-		 * (the document type only), an XML one for any XML type, null for XML
-		 * that does not parse
-		 */
-		const parsedText = (
-			bytes: ArrayBuffer,
-			essence: string,
-			charset: string | null,
-			asDocument: boolean,
-		): Document | null => {
-			const html = essence === 'text/html';
-			if (html && !asDocument) return null;
-			try {
-				const text = decodeText(bytes, charset, !html);
-				const document = Reflect.apply(realmParse, new RealmDOMParser(), [
-					trustedHTML(text),
-					html
-						? 'text/html'
-						: ['text/xml', 'application/xhtml+xml', 'image/svg+xml'].includes(
-									essence,
-							  )
-							? essence
-							: 'application/xml',
-				]) as Document;
-				if (!html && Reflect.apply(realmQuery, document, ['parsererror']))
-					return null;
-				return document;
-			} catch (error) {
-				return null;
-			}
 		};
 		// the realm's JSON.parse, before page code can replace it: a json
 		// response is the page realm's value
@@ -770,16 +705,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				// a document whose permissions policy turns `sync-xhr` off (the
 				// browser's, which the service worker gives it) fails a
 				// synchronous request before it starts, as Chrome's does
-				// (and one its connect-src refuses, which no worker sees: the bridge
-				// carries it, so the browser is made to refuse and report it,
-				// src/csp.ts)
-				if (
-					!this.#async &&
-					(!syncAllowed() ||
-						that.client.connectRefusal(
-							new URL(this.#url, that.client.baseURL.toString()),
-						))
-				) {
+				if (!this.#async && !syncAllowed()) {
 					const failed = new URL(this.#url, that.client.baseURL.toString());
 					failed.hash = '';
 					failed.username = '';
@@ -858,7 +784,6 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				const shown = new URL(sent.href);
 				shown.hash = '';
 				this.#sentURL = shown.href;
-				reportOnly(that.client, sent, 1);
 				this.#fetch(routeXHR(new StompURL(sent, that.client.url)), options);
 			}
 			getResponseHeader(header: string) {

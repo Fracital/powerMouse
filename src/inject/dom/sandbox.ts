@@ -11,7 +11,24 @@
  * page's flags (DocumentClient.sandboxFlags).
  */
 
-export { realSandbox, sandboxTokens } from '../../csp';
+/** the flags the inject enforces itself, never left on the real attribute */
+const EMULATED = [
+	'allow-top-navigation',
+	'allow-top-navigation-by-user-activation',
+	'allow-top-navigation-to-custom-protocols',
+];
+/** the flags the real attribute always carries, so the worker serves the frame and the inject runs */
+const NEEDED = ['allow-same-origin', 'allow-scripts'];
+
+/** the tokens of a sandbox value, as the browser parses them (ASCII case-insensitive) */
+export function sandboxTokens(value: string): Set<string> {
+	return new Set(
+		value
+			.split(/[\t\n\f\r ]+/)
+			.filter((token) => token !== '')
+			.map((token) => token.toLowerCase()),
+	);
+}
 
 // taken while the bundle's realm is untouched: the page-facing getAttribute
 // hides the marker
@@ -21,6 +38,14 @@ const nativeMarkerRead = Element.prototype.getAttribute;
 export function pageSandbox(frame: Element, marker: string): string | null {
 	return Reflect.apply(nativeMarkerRead, frame, [`${marker}sandbox`]) as
 		string | null;
+}
+
+/** the real sandbox attribute for the page's `value` */
+export function realSandbox(value: string): string {
+	const tokens = [...sandboxTokens(value)].filter(
+		(token) => !EMULATED.includes(token) && !NEEDED.includes(token),
+	);
+	return [...tokens, ...NEEDED].join(' ');
 }
 
 // taken while the bundle's realm is untouched: the guard is written with

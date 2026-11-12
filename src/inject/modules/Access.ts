@@ -7,7 +7,6 @@ import Client from '../Client';
 import ErrorMessages from '../errorMessages';
 import Module from '../Module';
 import { modifyJS } from '../rewriter';
-import { trustedScript } from '../trusted';
 import ProxyModule from './Proxy';
 import { unrouteText } from './Unroute';
 
@@ -58,27 +57,12 @@ export default class AccessModule extends Module<Client> {
 				.TrustedScript;
 			return typeof Trusted === 'function' && x instanceof Trusted;
 		};
-		/**
-		 * The page's code `x` that an eval runs, rewritten (null where the
-		 * page's Trusted Types refuse it: `refuse`, the native eval of it, threw
-		 * as natively): a trusted value where they are in use (trusted.ts)
-		 */
-		const evaluated = (x: string | object, refuse: () => unknown) => {
-			const page = this.client.trustedValue(x, 'TrustedScript', 'eval', refuse);
-			if (page === null) return null;
-			const code = modifyJS(
-				page,
-				this.client.baseURL,
-				this.client.config,
-				'generic',
+		const globalEval = (x: unknown) => {
+			if (!isCode(x)) return x;
+			return evalSnapshot(
+				modifyJS(String(x), this.client.baseURL, this.client.config, 'generic'),
 			);
-			this.client.noteCodeSample(code, page);
-			return trustedScript(code);
 		};
-		const globalEval = (x: unknown) =>
-			isCode(x)
-				? evalSnapshot(evaluated(x, () => evalSnapshot(x as string))!)
-				: x;
 
 		const globalEvalProxy = proxyModule?.wrapFunction(
 			evalSnapshot,
@@ -778,7 +762,12 @@ export default class AccessModule extends Module<Client> {
 				// `eval(x)` with anything but a string returns x: handed back as it
 				// is, the direct eval then returns it
 				if (!isCode(code)) return code;
-				return evaluated(code, () => evalSnapshot(code as string));
+				return modifyJS(
+					String(code),
+					this.client.baseURL,
+					this.client.config,
+					'generic',
+				);
 			},
 			import: (baseURL: string | undefined, url: string): Promise<unknown> =>
 				imported(

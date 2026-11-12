@@ -711,17 +711,7 @@ export default class UnrouteModule extends Module<Client> {
 			for (const key of REPORT_URL_KEYS)
 				if (Object.hasOwn(json, key) && typeof json[key] === 'string')
 					json[key] = unroute(json[key]);
-			if (typeof json.originalPolicy === 'string')
-				json.originalPolicy = pagePolicy(json.originalPolicy);
 		};
-		// a policy violation names the page's policy as the page wrote it, not
-		// the one the browser was given for it (src/csp.ts)
-		const pagePolicy = (value: unknown) =>
-			typeof value === 'string'
-				? ((
-						this.client as { pagePolicyText?: (text: string) => string | null }
-					).pagePolicyText?.(value) ?? value)
-				: value;
 		// A report that names one of the inject's bundles as its source was
 		// made inside a hook the page called (a deprecated `unload` listener
 		// added through the hooked addEventListener): the browser takes the
@@ -757,17 +747,6 @@ export default class UnrouteModule extends Module<Client> {
 					),
 				});
 			}
-			const policy = Reflect.getOwnPropertyDescriptor(
-				prototype,
-				'originalPolicy',
-			);
-			if (policy?.get)
-				Reflect.defineProperty(prototype, 'originalPolicy', {
-					...policy,
-					get: proxyModule.wrapFunction(policy.get, (target, that, args) =>
-						pagePolicy(Reflect.apply(target, that, args)),
-					),
-				});
 			if (nativeSource)
 				for (const [key, part] of [
 					['lineNumber', 'lineno'],

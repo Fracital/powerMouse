@@ -165,10 +165,6 @@ export async function startMixedServers() {
 			};
 			if (url.searchParams.has('uir'))
 				headers['content-security-policy'] = 'upgrade-insecure-requests';
-			// (which Chrome ignores in a report-only policy)
-			if (url.searchParams.has('uirro'))
-				headers['content-security-policy-report-only'] =
-					'upgrade-insecure-requests';
 			if (url.searchParams.has('bamc'))
 				headers['content-security-policy'] = 'block-all-mixed-content';
 			if (url.searchParams.has('uirmeta'))

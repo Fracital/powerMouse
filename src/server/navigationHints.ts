@@ -1,5 +1,3 @@
-import type { HopPolicy } from '../csp';
-
 // What documents told the worker about the navigations they started
 // (NAVIGATION_HINT): the initiator's origin, as the worker verified it, and
 // whether the page had user activation. Keyed by the destination's real URL
@@ -90,56 +88,4 @@ export async function awaitNavigationHint(
 		waiters.get(key)!.add(wake);
 	});
 	return takeNavigationHint(url);
-}
-
-/**
- * What the documents a navigation concerns told the worker of the page's
- * policies that judge its later hops and the document it ends in
- * (NavigationHintMessage `csp`): kept by the real URL the navigation began
- * at, for as long as a redirect chain may take, and never taken (every hop
- * asks). A form's form-action and its frame's parent's frame-src are told
- * of one navigation by two documents, and kept side by side.
- */
-export interface NavigationChain {
-	policies: {
-		policy: HopPolicy;
-		/** the client that told it, which is told of a report-only refusal */
-		client?: string;
-		/** the policy is the parent's of the frame that told it */
-		parent: boolean;
-	}[];
-	/** a frame's: its real ancestors' origins, nearest first */
-	ancestors?: string[];
-}
-
-const chains = new Map<string, NavigationChain & { at: number }>();
-const CHAIN_TTL_MS = 60_000;
-
-export function recordNavigationChain(
-	url: string,
-	policies: HopPolicy[],
-	ancestors: string[] | undefined,
-	client: string | undefined,
-	parent: boolean,
-) {
-	const key = keyOf(url);
-	const known = navigationChain(url);
-	const directives = new Set(policies.map(([directive]) => directive));
-	chains.delete(key);
-	chains.set(key, {
-		policies: [
-			...(known?.policies.filter(({ policy }) => !directives.has(policy[0])) ??
-				[]),
-			...policies.map((policy) => ({ policy, client, parent })),
-		],
-		ancestors: ancestors ?? known?.ancestors,
-		at: Date.now(),
-	});
-	if (chains.size > KEPT) chains.delete(chains.keys().next().value!);
-}
-
-/** what the documents of a navigation that began at `url` told of it, if they did lately */
-export function navigationChain(url: string): NavigationChain | null {
-	const chain = chains.get(keyOf(url));
-	return chain && Date.now() - chain.at <= CHAIN_TTL_MS ? chain : null;
 }

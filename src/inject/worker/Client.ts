@@ -1,13 +1,9 @@
 import { ParsedConfig } from '../../config';
 import { workerKindPartition } from '../../partition';
-import type { RewriterLib } from '../../rewriterLib';
-import { rewriterLibJS } from '../../routeURL';
 import type { EmulateInfo } from '../../serviceWorkerTypes';
 import { WORKER_PARTITION } from '../../transport/messages';
 import { replayOf } from '../../transport/ports';
-import { LIBRARY_FACTORY, LIGHT_FACTORY } from '../../version';
 import Client, { type HandedModules } from '../Client';
-import { shareRewriter } from '../rewriter';
 import ServiceWorkerGlobalModule from './modules/ServiceWorkerGlobal';
 
 let transportPort: Promise<MessagePort> | undefined;
@@ -85,39 +81,6 @@ export default class WorkerClient extends Client {
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		this.isWorker = true;
-		// a worker whose policy refuses code made from a string (a blob:
-		// worker inherits its document's, src/csp.ts) imports the rewriter
-		// library's file, which its policy lets it import by URL, instead of
-		// evaluating its text
-		if (!this.scriptFacts.evaluates)
-			shareRewriter(() => null, {
-				evaluates: () => false,
-				factory: () => {
-					for (const name of [LIBRARY_FACTORY, LIGHT_FACTORY])
-						Reflect.defineProperty(global, name, {
-							value: undefined,
-							writable: true,
-							configurable: true,
-						});
-					try {
-						(
-							global as unknown as { importScripts: (url: string) => void }
-						).importScripts(rewriterLibJS(this.url, this.config));
-						const made: unknown = Reflect.getOwnPropertyDescriptor(
-							global,
-							LIBRARY_FACTORY,
-						)?.value;
-						return typeof made === 'function'
-							? (made as (realm?: Record<string, unknown>) => RewriterLib)
-							: null;
-					} catch (error) {
-						return null;
-					} finally {
-						for (const name of [LIBRARY_FACTORY, LIGHT_FACTORY])
-							Reflect.deleteProperty(global, name);
-					}
-				},
-			});
 		// read before the worker's own script can change what it reads from
 		void this.partition;
 		// the modules this worker is handed are its own workers' too; one it

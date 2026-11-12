@@ -1,7 +1,6 @@
 import Client from '../Client';
 import Module from '../Module';
 import { modifyJS } from '../rewriter';
-import { trustedFunction, trustedScript } from '../trusted';
 import ProxyModule from './Proxy';
 
 export default class FunctionModule extends Module<Client> {
@@ -22,34 +21,20 @@ export default class FunctionModule extends Module<Client> {
 						return newTarget
 							? Reflect.construct(target, args, newTarget)
 							: Reflect.apply(target, that, args);
-					const given = [...args];
 					const [code] = args.splice(-1, 1);
 					// the browser's shape of the source the page gave: rewritten as
 					// a whole function expression, so `yield` and `await` parse in
 					// their own function, and made by the realm's eval at global
 					// scope, as the constructor would
 					const written = `${prefix} anonymous(${args.map(String).join(',')}\n) {\n${String(code)}\n}`;
-					// (the page's Trusted Types judge that source, as Chrome does)
-					if (
-						this.client.trustedValue(
+					const made = nativeEval(
+						modifyJS(
 							`(${written})`,
-							'TrustedScript',
-							'Function',
-							() =>
-								newTarget
-									? Reflect.construct(target, given, newTarget)
-									: Reflect.apply(target, that, given),
-						) === null
-					)
-						return undefined;
-					const rewritten = modifyJS(
-						`(${written})`,
-						this.client.baseURL,
-						this.client.config,
-						'generic',
+							this.client.baseURL,
+							this.client.config,
+							'generic',
+						),
 					);
-					this.client.noteCodeSample(rewritten, `(${written})`);
-					const made = nativeEval(trustedScript(rewritten));
 					// toString shows the source the page gave, not the rewritten body
 					if (typeof made === 'function')
 						proxyModule.functionStrings.set(made, written);
@@ -63,31 +48,10 @@ export default class FunctionModule extends Module<Client> {
 		// of each kind. A document the page sandboxed without allow-scripts
 		// compiles nothing (its script policy refuses eval, sandbox.ts), and
 		// neither can its page: those stay as they are there
-		// (a document whose policy refuses code made from a string, src/csp.ts:
-		// its own realm's constructors from the bundle's own functions, which
-		// are its realm's, and none for another realm's, whose page cannot
-		// compile either; the browser would report every attempt)
-		const ownRealm = this.client.global.Function === Function;
 		const constructorOf = (source: string): FunctionConstructor | null => {
-			if (!this.client.scriptFacts.evaluates)
-				return ownRealm
-					? (
-							Reflect.getPrototypeOf(
-								{
-									'return async () => {}': async () => {},
-									'return function* () {}': function* () {},
-									'return async function* () {}': async function* () {},
-								}[source] ?? (() => {}),
-							) as { constructor: FunctionConstructor }
-						).constructor
-					: null;
 			try {
-				return (
-					(
-						trustedFunction(this.client.global, [], source) ??
-						new this.client.global.Function(source)
-					)() as () => unknown
-				).constructor as FunctionConstructor;
+				return (new this.client.global.Function(source)() as () => unknown)
+					.constructor as FunctionConstructor;
 			} catch (error) {
 				return null;
 			}

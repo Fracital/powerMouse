@@ -98,24 +98,13 @@ export default class WebSocketModule extends Module<Client> {
 				if (partitionKey !== null)
 					requestHeaders.push([SOCKET_PARTITION, partitionKey]);
 
-				// the page's connect-src (src/csp.ts): no worker sees a
-				// WebSocket, so a socket the page's policy refuses is opened to a
-				// URL the browser's copy of the policy refuses, and the browser
-				// fails it (error, then close 1006) and reports it as natively
-				const refused =
-					(
-						client as {
-							socketRefusal?: (url: URL) => string | null;
-						}
-					).socketRefusal?.(parsed) ?? null;
 				// client.bare is created lazily; a failure there (no transport)
 				// surfaces as an error event like a refused connection would.
-				this.#socket =
-					refused !== null
-						? (Reflect.construct(NativeWebSocket, [
-								refused,
-							]) as unknown as BareCompatibleWebSocket)
-						: client.bare.createWebSocket(parsed, protocol, requestHeaders);
+				this.#socket = client.bare.createWebSocket(
+					parsed,
+					protocol,
+					requestHeaders,
+				);
 
 				this.#opened = new Promise<void>((resolve) => {
 					this.#socket.addEventListener('open', () => resolve(), {
@@ -169,9 +158,7 @@ export default class WebSocketModule extends Module<Client> {
 				// reading CLOSED; the transport reports the error only
 				this.#socket.addEventListener('error', () => {
 					this.dispatchEvent(new Event('error'));
-					// a socket the policy refused fires no close (measured)
-					if (refused === null) dispatchClose(1006, '');
-					else this.#closed = true;
+					dispatchClose(1006, '');
 				});
 
 				this.#socket.addEventListener('close', (event) => {

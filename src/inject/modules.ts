@@ -12,14 +12,12 @@ import ReflectionModule from './modules/Reflection';
 import ResourceTimingModule from './modules/ResourceTiming';
 import StorageEstimateModule from './modules/StorageEstimate';
 import TimersModule from './modules/Timers';
-import TrustedTypesModule from './modules/TrustedTypes';
 import UnrouteModule from './modules/Unroute';
 import WebSocketModule from './modules/WebSocket';
 import WorkerModule from './modules/Worker';
 
 export default function baseModules(client: Client) {
 	client.addModule(ProxyModule);
-	client.addModule(TrustedTypesModule);
 	client.addModule(FetchModule);
 	client.addModule(ObjectURLModule);
 	client.addModule(AccessModule);
