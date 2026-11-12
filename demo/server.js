@@ -537,6 +537,29 @@ const stompFiles = {
 		),
 };
 app.use('/stomp/', express.static(stompPath, stompFiles));
+// A routed script request that reaches this host instead of the service
+// worker comes from a document the worker does not control: an about:blank
+// frame or popup the page built (an ad network's cookie-sync frame is the
+// common one). Chrome hands such a document no controller, so its subresource
+// loads skip the worker and fall through here, where the address names no
+// file and the static handler above has already missed it. Answering a script
+// route with the host's text/html error page makes Chrome refuse the script
+// for its MIME type ("not executable, and strict MIME type checking is
+// enabled") and log it; an empty JavaScript body lets the load fail quietly,
+// as the blocked load it is. A page the worker controls never reaches here:
+// the worker answers its own routes.
+app.use('/stomp/', (req, res, next) => {
+	if (
+		(req.method === 'GET' || req.method === 'HEAD') &&
+		/^\/[^/]+\/js:[^/]+\//.test(req.path)
+	) {
+		res.set('Content-Type', 'text/javascript; charset=utf-8');
+		res.set('Cache-Control', 'no-store');
+		res.end();
+		return;
+	}
+	next();
+});
 app.use(
 	'/examples/',
 	express.static(

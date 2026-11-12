@@ -4,7 +4,7 @@
 // origin, an unreachable origin), with globalThis.stompError describing the
 // failure; the request report carries `kind`. It is never cached: once the
 // rule is gone the real page loads. Same-origin mode, a controller of our own.
-import { done, FIXTURE, launch, ok, PROXY } from '../lib.mjs';
+import { done, FIXTURE, HOST, launch, ok, PROXY } from '../lib.mjs';
 
 const browser = await launch();
 const page = await browser.newPage();
@@ -151,6 +151,45 @@ ok(
 		result.renamed?.renamed?.url === `${FIXTURE}pages/hist-1.html` &&
 		result.renamed?.defaultName === null,
 	JSON.stringify(result.renamed),
+);
+
+// A routed script request that reaches the host instead of the service worker
+// comes from a document the worker does not control (an about:blank frame or
+// popup the page built: an ad network's cookie-sync frame is the common one),
+// whose subresource loads skip the worker. The host answers a script route
+// with an empty JavaScript body, never its text/html error page, so Chrome
+// does not refuse the script for its MIME type ("not executable") and log it.
+// A node fetch has no service worker, so it reaches the host as those loads do.
+const scriptRoute = await fetch(`${HOST}stomp/notacontroller/js:generic/junk`);
+const scriptBody = await scriptRoute.text();
+const moduleRoute = await fetch(
+	`${HOST}stomp/notacontroller/js:genericModule/junk`,
+);
+await moduleRoute.body?.cancel();
+const styleRoute = await fetch(`${HOST}stomp/notacontroller/css/junk`);
+await styleRoute.body?.cancel();
+ok(
+	'a script route the worker never claims is answered as JavaScript, not the host error page',
+	scriptRoute.ok &&
+		/^(?:text|application)\/javascript/.test(
+			scriptRoute.headers.get('content-type') ?? '',
+		) &&
+		scriptBody === '',
+	`${scriptRoute.status} ${scriptRoute.headers.get('content-type')} len=${scriptBody.length}`,
+);
+ok(
+	'a module script route the worker never claims is also answered as JavaScript',
+	moduleRoute.ok &&
+		/^(?:text|application)\/javascript/.test(
+			moduleRoute.headers.get('content-type') ?? '',
+		),
+	`${moduleRoute.status} ${moduleRoute.headers.get('content-type')}`,
+);
+ok(
+	'a non-script route the worker never claims is left as the host 404',
+	styleRoute.status === 404 &&
+		/text\/html/.test(styleRoute.headers.get('content-type') ?? ''),
+	`${styleRoute.status} ${styleRoute.headers.get('content-type')}`,
 );
 
 await done(browser);
