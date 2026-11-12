@@ -118,7 +118,7 @@ errors and the API surface read as natively, and a data channel opens
 between two connections of one page and between two proxied pages in
 frames.
 
-`npm test -- webrtc-peer` (53 checks): a proxied page connects to a peer in
+`npm test -- webrtc-peer` (55 checks): a proxied page connects to a peer in
 the suite's process (werift), to Chrome's own stack in a second browser and
 to another proxied page there through a TURN server, as offerer and as
 answerer, with trickled candidates, relay only, across an ICE restart, with

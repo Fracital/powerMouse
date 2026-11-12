@@ -684,6 +684,50 @@ for (const proxied of pages) {
 		await peer.call('close');
 	}
 
+	// --- an offer rolled back, then made again: its channels are offered
+	// again, one with an id of the page's choosing included (the stack as
+	// published kept the first offer's claim on that id and aborted, which
+	// ended every connection of the document). Chrome 152 and 156 never
+	// offer the section again after such a rollback, so natively these
+	// channels stay connecting (docs/webrtc-over-wisp.md section 15) ---
+	{
+		const own = pageEnd(label, proxied.frame);
+		const peer = nodeEnd('peer');
+		await own.call('open');
+		await peer.call('open');
+		await own.call('channels', [
+			['fixed', { negotiated: true, id: 7 }],
+			['chat', {}],
+		]);
+		await peer.call('channels', [['fixed', { negotiated: true, id: 7 }]]);
+		let failure = null;
+		let state = null;
+		let got = [];
+		try {
+			state = await own.call('rolledBack');
+			await negotiate(own, peer);
+			for (const name of ['fixed', 'chat']) await own.call('opened', name);
+			await carried(own, peer, 'fixed', [{ text: 'after the rollback' }]);
+			await carried(own, peer, 'chat', [{ text: 'this one too' }]);
+			got = [
+				...(await peer.call('received', 'fixed', 1)),
+				...(await peer.call('received', 'chat', 1)),
+			];
+		} catch (error) {
+			failure = String(error).slice(0, 300);
+		}
+		ok(
+			`${label}: an offer that was rolled back does not end the stack, and its channels open with the next offer, a negotiated one too`,
+			!failure &&
+				state === 'stable' &&
+				got.map((message) => message.text).join() ===
+					'after the rollback,this one too',
+			failure ?? JSON.stringify([state, got]),
+		);
+		await own.call('close');
+		await peer.call('close');
+	}
+
 	// --- the peer offers; candidates travel one by one ---
 	{
 		const own = pageEnd(label, proxied.frame);

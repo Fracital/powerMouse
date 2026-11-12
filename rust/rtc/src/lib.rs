@@ -117,9 +117,6 @@ struct Conn {
 	media_to_add: Vec<usize>,
 	/// the directions the pending offer changed, as they were, for a rollback
 	reverted: Vec<(Mid, Direction)>,
-	/// the stream ids of negotiated channels an offer carried and a rollback
-	/// took back: the stack keeps them allocated (see `roll_back`)
-	held_streams: Vec<u16>,
 	/// for each channel, the bytes written to its stream and where in them
 	/// the zero bytes sit that stand for empty messages (RFC 8831 6.6):
 	/// the stack counts those as buffered, a page has sent nothing
@@ -433,12 +430,10 @@ impl Conn {
 	/// Forget the pending offer: the channels and media sections it carried
 	/// wait for the next one, and the directions it changed are as they were.
 	///
-	/// The stack allocates a channel when it is put in an offer and has no
-	/// way to give the allocation back, so a channel that is offered again
-	/// is a new one to it. For a channel negotiated by the page (with an
-	/// `id`) the stream id stays taken by the old allocation and the stack
-	/// panics on a second one: such a channel is not offered again and
-	/// never opens. That needs a change in str0m (`ChannelHandler`).
+	/// A channel that is offered again is a new one to the stack, which
+	/// allocates it only when its offer is answered (the patch of
+	/// rust/patches): one negotiated by the page (with an `id`) keeps its
+	/// stream id through a rollback.
 	fn roll_back(&mut self) {
 		if self.pending.take().is_none() {
 			return;
@@ -453,9 +448,6 @@ impl Conn {
 			{
 				self.channels[index] = None;
 				self.to_add.push(index);
-				if let Some(stream) = self.configs[index].as_ref().and_then(|c| c.negotiated) {
-					self.held_streams.push(stream);
-				}
 			}
 		}
 		for index in 0..self.medias.len() {
@@ -935,9 +927,6 @@ impl Conn {
 					let Some(config) = self.configs.get(index).cloned().flatten() else {
 						continue;
 					};
-					if config.negotiated.is_some_and(|stream| self.held_streams.contains(&stream)) {
-						continue;
-					}
 					let id = api.add_channel_with_config(config);
 					self.channels[index] = Some(id);
 				}
@@ -1178,7 +1167,6 @@ pub unsafe extern "C" fn c(ptr: *mut u8, len: usize) -> i32 {
 		medias: Vec::new(),
 		media_to_add: Vec::new(),
 		reverted: Vec::new(),
-		held_streams: Vec::new(),
 		wire: Vec::new(),
 		low: Vec::new(),
 		queue: VecDeque::new(),

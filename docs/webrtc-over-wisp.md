@@ -672,6 +672,13 @@ TURN server.
   build (deploy/rust/README.md). werift cannot send an empty message (it
   writes a DATA chunk with no user data, which SCTP forbids), so the suite
   takes that direction from Chrome.
+- An offer that is rolled back leaves nothing in the stack: its channels
+  are offered again with the next offer and open. str0m 0.25.0 as published
+  allocates a channel when it is added to an offer and never releases it
+  when the offer is dropped, so a channel with a negotiated id panicked on
+  the next offer (a wasm trap, which ends every connection of the
+  document); the same patch file allocates at the answer instead. Chrome
+  does not behave this way: see the limits below.
 - Closing: the end that closes a channel sees `close`, the other `closing`
   then `close`. `close()` on the connection sends the SCTP shutdown and the
   DTLS close_notify, so the peer's channels close at once. When the peer
@@ -765,7 +772,7 @@ TURN server.
 
 ### Measured
 
-- `assets/rtc.wasm`: 1504781 bytes, 515938 with brotli. This is the budget.
+- `assets/rtc.wasm`: 1504402 bytes, 515619 with brotli. This is the budget.
   `dist/rtcWorker.js`: 31842 bytes (10971 with brotli).
 - A connection to the peer in the suite's process is `connected` about
   210 ms after the page's `createOffer`.
@@ -803,6 +810,11 @@ TURN server.
   peer-connection, transport and data-channel entries and no
   candidate pairs or candidates; `pc.sctp` is null; `candidate.url` is null
   where Chrome gives the server's URL; candidates always say `generation 0`.
+- **After a rollback of the first offer, Chrome never offers the data
+  section again** (152 and 156, measured): `createOffer` gives a
+  description with no `m=` line every time, the channels stay `connecting`
+  and `negotiationneeded` fires after each return to `stable`. Here the
+  next offer carries the section and the channels open.
 - **When a Chrome peer closes its connection**, Chrome's own channels get an
   `error` event (`sctp-failure`, "User-Initiated Abort") between `closing`
   and `close`; here they get `closing` and `close`.
@@ -859,12 +871,10 @@ every section. An offer's sections are in the order their owners were made
 `rollback` puts the sections of the offer back in line for the next one and
 the directions back as they were. An `offer` while one is pending is the
 same offer again when there is nothing new to say (a page that reads a
-draft and then offers), and otherwise replaces it the same way. One limit
-comes with that: the stack allocates a channel when it is put in an offer
-and cannot give the allocation back, and it panics on a second allocation
-of a stream id, so a channel the page negotiated itself (with an `id`)
-that was in a rolled back or replaced offer is not offered again and never
-opens. Lifting it needs a change in str0m's `ChannelHandler`.
+draft and then offers), and otherwise replaces it the same way. A channel
+the page negotiated itself (with an `id`) keeps its stream id through both:
+the stack allocates a channel when its offer is answered, not when it is
+put in one (`rust/patches/str0m-0.25.0.patch`).
 
 Events: `media` (`index`, `mid`, `kind`, `dir`, and `send_rids`,
 `recv_rids` for simulcast) when the stack has a section, for both the

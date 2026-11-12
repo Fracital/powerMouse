@@ -139,6 +139,13 @@
 			if (!trickle) await gathered(entry);
 			return pc.localDescription.sdp;
 		},
+		/** an offer set and rolled back: the state it leaves */
+		async rolledBack(name) {
+			const { pc } = peer(name);
+			await pc.setLocalDescription(await pc.createOffer());
+			await pc.setLocalDescription({ type: 'rollback' });
+			return pc.signalingState;
+		},
 		async answer(name, sdp, { trickle = false } = {}) {
 			const entry = peer(name);
 			const { pc } = entry;

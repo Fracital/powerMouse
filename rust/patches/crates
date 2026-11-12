@@ -5,5 +5,8 @@
 # str0m: an empty data channel message is sent as RFC 8831 6.6 says (one
 # zero byte under the "empty" payload identifier); as published it takes a
 # stream sequence number and writes no chunk, which stalls an ordered
-# channel at the peer.
+# channel at the peer. A channel is allocated when its offer is answered,
+# not when it is added to one: as published, an offer that is dropped
+# (rolled back) leaves its channels' allocations behind, and offering a
+# channel with a negotiated id again panics.
 str0m 0.25.0 357c7e453c033c8bb59e912312f9f9ff07c2a9ce7268bcb94f0c828a5b47e58f

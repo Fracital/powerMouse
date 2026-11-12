@@ -1,3 +1,67 @@
+--- a/src/change/sdp.rs
++++ b/src/change/sdp.rs
+@@ -465,6 +465,19 @@
+             self.changes.0.push(Change::AddApp(mid));
+         }
+ 
++        // The channels of this change set have no allocation yet to be
++        // checked against.
++        if let Some(sctp_stream_id) = config.negotiated {
++            let exists = self.changes.0.iter().any(
++                |c| matches!(c, Change::AddChannel((_, c)) if c.negotiated == Some(sctp_stream_id)),
++            );
++            assert!(
++                !exists,
++                "sctp_stream_id ({}) exists already",
++                sctp_stream_id
++            );
++        }
++
+         let id = self.rtc.chan.new_channel(&config);
+ 
+         self.changes.0.push(Change::AddChannel((id, config)));
+--- a/src/channel.rs
++++ b/src/channel.rs
+@@ -216,27 +216,23 @@
+             );
+         }
+ 
+-        let alloc = ChannelAllocation {
+-            id,
+-            sctp_stream_id: None,
+-            negotiated_stream_id,
+-            // The config is none until we confirm we definitely want this channel.
+-            config: None,
+-        };
+-
+-        debug!("Allocate channel id: {:?}", id);
+-        self.allocations.push(alloc);
++        // Nothing is kept for the channel until it is confirmed: an offer that
++        // is dropped (rolled back) or superseded never confirms its channels,
++        // and an allocation made here would outlive it, holding the stream id
++        // (a negotiated one could then never be offered again).
++        debug!("Issue channel id: {:?}", id);
+ 
+         id
+     }
+ 
+     pub fn confirm(&mut self, id: ChannelId, config: ChannelConfig) {
+-        let a = self
+-            .allocations
+-            .iter_mut()
+-            .find(|a| a.id == id)
+-            .expect("Entry for issued channel id");
+-        a.config = Some(config);
++        debug!("Allocate channel id: {:?}", id);
++        self.allocations.push(ChannelAllocation {
++            id,
++            sctp_stream_id: None,
++            negotiated_stream_id: config.negotiated,
++            config: Some(config),
++        });
+     }
+ 
+     /// For translating sctp stream id to ChannelId. Any event out of sctp goes via this.
 --- a/src/sctp/mod.rs
 +++ b/src/sctp/mod.rs
 @@ -649,6 +649,15 @@
