@@ -553,6 +553,28 @@ The first release after a four-year gap. Everything below is breaking.
   starts its demo servers without the headers except for the two suites
   that need them (`STOMP_ISOLATION=on npm test -- <suite>` runs any suite
   under an isolated host).
+- WebRTC data channels reach real peers, through wisp
+  (docs/webrtc-over-wisp.md). A proxied page's `RTCPeerConnection` and
+  `RTCDataChannel` are STomp's own: a worker next to the page
+  (`rtcWorker.js`) runs ICE, DTLS and SCTP in wasm (`rtc.wasm`) and sends
+  every packet on a wisp UDP stream, so a peer, a STUN server and a TURN
+  server see the wisp server's address, as a site does for a fetch. The
+  page offers or answers, with candidates in the description or trickled;
+  its host candidate is a `.local` name, its `srflx` and `relay` candidates
+  come from the page's own STUN and TURN servers (UDP), and
+  `iceTransportPolicy: 'relay'`, ICE restarts, ordered and unordered
+  channels, `bufferedAmount` and messages up to Chrome's 256 KiB work
+  against werift and against Chrome's own stack (webrtc-peer suite, 49
+  checks). Captured in a network namespace of its own, the browser sends
+  TCP to the proxy and nothing else, where its own stack sent 175 UDP
+  packets to the page's servers and candidates and 52 mDNS packets to the
+  LAN. Hosts serve three more files: `init.assets.rtcStack`,
+  `init.assets.rtcWorker` and `init.assets.rtc` name them (`rtcStack.js`,
+  `rtcWorker.js`, `rtc.wasm`), and they are fetched the first time a
+  document uses WebRTC: what the inject carries in every document is the
+  classes' shapes, and a document that never makes a connection costs what
+  it did (`frame-cost`). Needs epoxy and a
+  wisp server that relays UDP (wisp-js does; holyWisp with `allow-udp`).
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,
@@ -2327,24 +2349,20 @@ sinkId })` and made in a track's settings, capabilities and constraints
   `Isolation` console badge saying why; isolation a deployment asked for
   (`STOMP_PROXY_ORIGIN`) stays an error (storage-blocked suite).
 - WebRTC no longer shows a proxied page the user's address or sends a
-  packet where the page says. The browser's ICE agent sends its own packets,
-  past the proxy: a STUN server the page named heard from the user's address
-  and handed the page a `srflx` candidate with it (browserleaks.com/webrtc
-  showed the real address through the live site and the local demo), a TURN
-  server or a remote candidate the page chose got requests and connectivity
-  checks, and once the proxy origin had camera or microphone access host
-  candidates carried the machine's local addresses. `RTCPeerConnection`
-  stays the browser's own and behaves as on a network that drops UDP: each
-  STUN/TURN server is handed to the browser as `255.255.255.255` (a send the
-  kernel refuses), so it times out as natively, 701 errors and all, and reads
-  back as the page's; a remote candidate is handed over only when it is a
-  host name a connection of this browser showed a page, so two proxied pages
-  still open a data channel; real addresses read as mDNS names everywhere
-  (events, descriptions, `RTCIceTransport`, stats, errors), in every realm the
-  inject covers. A tcpdump of the uplink saw 156 packets to the page's
-  servers and candidates natively and none through either demo mode
-  (webrtc suite, 59 checks against the same pages loaded natively, both
-  modes, with and without media access; docs/webrtc.md).
+  packet from the user's machine. The browser's ICE agent sends its own
+  packets, past the proxy: a STUN server the page named heard from the
+  user's address and handed the page a `srflx` candidate with it
+  (browserleaks.com/webrtc showed the real address through the live site
+  and the local demo), a TURN server or a remote candidate the page chose
+  got requests and connectivity checks, and once the proxy origin had
+  camera or microphone access host candidates carried the machine's local
+  addresses. A proxied page no longer drives the browser's connection at
+  all: its `RTCPeerConnection` is STomp's stack over wisp (above), in every
+  realm the inject covers, so what a server or a peer hears is the wisp
+  server and what the page reads is a `.local` name or the wisp server's
+  address (webrtc suite, 59 checks against the same pages loaded natively,
+  both modes, with and without media access: each packet a fixture gets is
+  attributed to the process that held its source port; docs/webrtc.md).
 - Reading another window (`parent`, `top`, `frames[i]`) costs a few
   microseconds again. The Context module decided whether the reader may
   hold the window as it is by decoding both documents' routed URLs on every
@@ -5223,6 +5241,11 @@ Fixed while testing real sites and a feature fixture:
   the way out is an origin per proxied site (a subdomain of the proxy's),
   which needs the service worker, the cookie jar and the stores, one per
   origin today, shared between those origins.
+- WebRTC carries data channels only so far (docs/webrtc-over-wisp.md
+  section 15): `addTrack` and `addTransceiver` throw, TURN over TCP or TLS
+  and TCP candidates are not carried, an empty message is not sent,
+  `getStats()` has no candidate entries and `pc.sctp` is null. A peer behind
+  a restrictive NAT is reached only through a TURN server the page names.
 - The same-origin policy between proxied sites is simulated by the proxy
   (docs/same-origin-policy.md). Not yet: `crossOriginIsolated` (COOP and
   COEP cannot isolate a proxied frame).

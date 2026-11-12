@@ -196,6 +196,12 @@ export interface Assets {
 	controllerFrameScript?: string;
 	/** the dedicated Worker that hosts a transport given as a descriptor */
 	transportWorker?: string;
+	/** the dedicated Worker a document starts for its WebRTC connections (docs/webrtc-over-wisp.md) */
+	rtcWorker?: string;
+	/** the WebRTC stack's wasm module */
+	rtc?: string;
+	/** what a document's WebRTC classes do, loaded the first time it uses them */
+	rtcStack?: string;
 	/** the dedicated Workers that rewrite scripts for the service worker */
 	rewriteWorker?: string;
 	/**
@@ -225,6 +231,9 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 	controllerFrame: 'controllerFrame.html',
 	controllerFrameScript: 'controllerFrame.js',
 	transportWorker: 'transportWorker.js',
+	rtcWorker: 'rtcWorker.js',
+	rtc: 'rtc.wasm',
+	rtcStack: 'rtcStack.js',
 	rewriteWorker: 'rewriteWorker.js',
 	core: 'core.wasm',
 	blocker: 'blocker.wasm',

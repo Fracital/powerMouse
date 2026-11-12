@@ -297,6 +297,22 @@ const builds = [
 		format: 'iife',
 	},
 	{
+		// a document's WebRTC worker (src/rtc/worker.ts, docs/webrtc-over-wisp.md)
+		entryPoints: { rtcWorker: 'src/rtc/worker.ts' },
+		format: 'iife',
+	},
+	{
+		// what a document's WebRTC classes do (src/inject/dom/rtcStack.ts),
+		// which the inject's WebRTC module evaluates the first time a document
+		// uses them: the file is one function's body, `__stompRtc` a name of
+		// that function's, and its globals are the bundle's
+		// (src/inject/dom/rtcStackGlobals.ts)
+		entryPoints: { rtcStack: 'src/inject/dom/rtcStackEntry.ts' },
+		format: 'iife',
+		globalName: '__stompRtc',
+		inject: [resolve('src/inject/dom/rtcStackGlobals.ts')],
+	},
+	{
 		entryPoints: { SearchBuilder: 'src/bootstrapper/entry.ts' },
 		format: 'iife',
 	},

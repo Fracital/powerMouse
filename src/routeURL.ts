@@ -2,7 +2,7 @@ import GenericCodec from './Codecs';
 import { assetName, type Assets, type Config } from './config';
 import StompURL from './StompURL';
 import { withQuery } from './urlShape';
-import { LIBRARY } from './version';
+import { BUILD, LIBRARY } from './version';
 import { decodeLinkRoute, LINK_SEGMENT } from './visited';
 
 export const ROUTE_PROTOCOLS = ['http:', 'https:'];
@@ -211,6 +211,18 @@ export function rewriterLibJS(url: StompURL, config?: Config) {
 /** the rewriter library's file as it is asked for: its name and its build's hash */
 export function libraryFile(assets?: Assets) {
 	return `${assetName(assets, 'rewriterLib')}?${encodeURIComponent(LIBRARY)}`;
+}
+
+/** the WebRTC worker's script, and the stack's wasm module it loads (docs/webrtc-over-wisp.md) */
+export function rtcWorkerJS(url: StompURL, config?: Config) {
+	return `${assetBase(url, config)}${assetName(config?.assets, 'rtcWorker')}`;
+}
+export function rtcModule(url: StompURL, config?: Config) {
+	return `${assetBase(url, config)}${assetName(config?.assets, 'rtc')}`;
+}
+/** the WebRTC stand-in library (src/inject/dom/rtcStack.ts), asked for by this build */
+export function rtcStackJS(url: StompURL, config?: Config) {
+	return `${assetBase(url, config)}${assetName(config?.assets, 'rtcStack')}?${encodeURIComponent(BUILD)}`;
 }
 
 export function geckoXHR(url: StompURL) {

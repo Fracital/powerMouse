@@ -26,9 +26,12 @@ const blobScript = (url: unknown): string | undefined =>
 	typeof url === 'string' && url.startsWith('blob:') ? url : undefined;
 
 export default class WorkerModule extends Module<Client> {
+	/** the realm's Worker before the hook below: the inject's own workers (the WebRTC worker) start through it */
+	nativeWorker: typeof Worker | undefined;
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const global = this.client.global;
+		this.nativeWorker = global.Worker;
 		// the bootstrap below is our own code: a document's BlobDocuments
 		// module (it applies after this one) would rewrite it once more as a
 		// script blob, and the rewritten preamble then called the access

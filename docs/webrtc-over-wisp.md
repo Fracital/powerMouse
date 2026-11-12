@@ -13,6 +13,10 @@ Nothing here lands at once: the phases in section 11 each pass the full
 suite set and the `webrtc` suite's leak checks, which stay strict
 throughout.
 
+Phase 1 (data channels with real peers) is built. Sections 1 to 14 are the
+plan as it was written; section 15 says what Phase 1 is, what was measured,
+and where it differs from the plan.
+
 ## 1. Why not the browser's stack, and why not an operator TURN server
 
 The browser's ICE agent sends from the network service, from the user's
@@ -469,7 +473,8 @@ own esbuild entry in `build.js`, its own `Assets` key (`rtcWorker`) and
 renamable like every other asset. Its size does not count against
 `injectDocument.js`; the stand-in in the inject does, and stays small
 (the classes are declarative: the budget for the module is 40 KB of the
-850 KB, measured by `frame-cost` as it measures everything).
+850 KB, measured by `frame-cost` as it measures everything). As built, the
+stand-in's code is a file of its own too (section 15).
 
 ## 10. Threat model
 
@@ -636,3 +641,169 @@ native where pages depend on it.
 | werift as a test dependency                                                           | a devDependency only, pure JavaScript, pinned; the native-Chrome peer is the interop check and needs nothing new                                  |
 | other agents land in `src/inject`, `src/transport` and `rust/` continuously           | rebase onto `origin/master` before every phase and before every gate run; the transport RPC additions are two new calls, nothing existing changes |
 | Chrome 156 (CI) differs from 152 (here) in WebCodecs or stream transfer               | the capability probe is a suite precondition; the touched suites run on CI's Chrome before each phase lands                                       |
+
+## 15. Phase 1 as built
+
+A proxied page's `RTCPeerConnection` is STomp's: it negotiates with a real
+peer and carries data channel messages both ways, every packet on a wisp
+stream. The `webrtc-peer` suite holds it to that against three far ends, in
+both demo modes: a peer in the suite's process (werift), Chrome's own stack
+in a second browser, and another proxied page in that browser through a
+TURN server.
+
+### What works
+
+- The page as offerer and as answerer, with candidates in the description or
+  trickled, against werift and against Chrome.
+- Channels: ordered and reliable, unordered with `maxRetransmits`, with
+  `maxPacketLifeTime`, with a `protocol`, negotiated with an `id`; text,
+  `ArrayBuffer`, views and `Blob`s out, `arraybuffer` and `blob` in; messages
+  up to Chrome's 262144 bytes both ways with Chrome, and up to what the peer
+  says it takes otherwise (a larger one is Chrome's `TypeError`).
+- `bufferedAmount` rises with each `send` in a task, drains to zero, and
+  `bufferedamountlow` fires at the threshold.
+- Closing: the end that closes a channel sees `close`, the other `closing`
+  then `close`. `close()` on the connection sends the SCTP shutdown and the
+  DTLS close_notify, so the peer's channels close at once. When the peer
+  closes, the page's channels close at once and the connection reads
+  `disconnected` 5 s later (Chrome: 5.05 s measured).
+- ICE: a host candidate at a `<uuid>.local` name, a `srflx` per STUN or TURN
+  server (UDP) from a Binding request on a wisp stream, a `relay` per TURN
+  server over UDP (long-term credentials, permissions and a channel per
+  peer, refresh), `iceTransportPolicy: 'relay'`, the 701 errors of servers
+  that do not answer with Chrome's texts and timing, `restartIce()` and
+  `createOffer({ iceRestart: true })`.
+- The descriptions a page reads have Chrome's lines in Chrome's order for a
+  data channel section (the suite compares an offer and an answer with
+  Chrome's own, identifiers normalised), with the candidates gathered so
+  far and the default candidate in `m=` and `c=`.
+- Two proxied documents of one browser still connect without the network
+  (section 5.4); two proxied pages in different browsers connect when the
+  page names a TURN server (each is behind the wisp server as behind a
+  symmetric NAT: section 2).
+
+### Where it differs from the plan
+
+- **The boundary.** The exports are `memory`, `_initialize`, `a`, `f`, `c`,
+  `i`, `t`, `o`, `p`, `d`; the imports are `clock_time_get` and `random_get`
+  of `wasi_snapshot_preview1` and nothing else (`rust/rtc/abi.json`). A
+  record is a tag byte and a payload. Datagrams and channel messages are
+  binary; control calls, their results and events are text fields
+  (`key=value`, separated by 0x1f), which is enough while nothing on the
+  path is per packet. The flat binary layout comes with media frames.
+- **STUN and TURN are in the worker**, in TypeScript (`src/rtc/stun.ts`,
+  `turn.ts`, `md5.ts`, HMAC-SHA1 from WebCrypto), not in the crate: they are
+  timers and one stream each, and the worker already owns both. The crate is
+  told a relayed address (`relay_candidate`) and transmits from it; the
+  worker wraps those datagrams for the TURN server and unwraps what comes
+  back.
+- **The stand-ins are loaded when a document first uses them.** What
+  every document carries (`src/inject/dom/modules/WebRTC.ts`) is
+  `RTCPeerConnection`, `RTCDataChannel`, `RTCDataChannelEvent` and
+  `RTCStatsReport` with the browser's prototypes, each member one that
+  reads as the browser's and runs the member of the document that made
+  the object, and those prototypes are proxies dressed the first time
+  anything looks at them. What the classes do is the asset `rtcStack`
+  (`src/inject/dom/rtcStack.ts`, `dist/rtcStack.js`): the first
+  connection a document makes, or the first event of one of its channels,
+  fetches it with a synchronous request (from the HTTP cache after the
+  first) and evaluates it in the bundle's realm with the globals the
+  bundle took when it loaded; the page reads no report and no resource
+  entry of that request. Documents that reach each other share it and
+  install it together. A document that never uses WebRTC pays what it
+  did before (`frame-cost`), and the browser's own `RTCPeerConnection` (the
+  format template of section 16) is made only by a document that does.
+- **The module is loaded per document.** The rtc worker compiles
+  `rtc.wasm` from its URL (`compileModule` of `src/wasm/module.ts`) the
+  first time a document makes a connection; the HTTP cache makes later
+  documents cheap. The shared plumbing hands compiled modules to the
+  service worker and the rewrite workers and does not reach documents, so
+  "once per controller" waits for it to.
+- **The DTLS certificate** is made by the worker with WebCrypto (ECDSA
+  P-256, a self-signed X.509 written by `src/rtc/certificate.ts`) and
+  handed to the stack. str0m's crypto backend makes one with rcgen on
+  aws-lc-rs, which has no wasm build: `rust/vendor/str0m-rust-crypto` is
+  the published crate without that feature.
+- **The browser's `RTCPeerConnection` is still constructed, as a
+  validator.** The errors of a bad configuration and of a bad remote
+  description are the browser's own: the stand-in asks a native connection
+  that never gets a local description (so it gathers nothing and sends
+  nothing) and is closed at once. A pool is never given to it (a pool
+  gathers at construction).
+- **The same-browser bridge** carries the datagrams on the `$stomp$webrtc`
+  BroadcastChannel itself, addressed by the `.local` names, without a
+  brokered MessagePort and without a wait: a name no document of this
+  browser holds is a remote that never answers.
+- **Roles.** An answer to an `actpass` offer says `a=setup:active`, as
+  Chrome's does: the stack would take the passive role, so the crate starts
+  DTLS as the client first. The stack opens the SCTP association only as
+  the DTLS client; RFC 8841 has both sides open it and browsers do, but
+  werift and aiortc go by the ICE role and wait as the answerer, so for an
+  answer that allows messages of 64 KiB or less (what those peers say) the
+  crate opens the association itself. The stack then keeps 64 KiB as that
+  peer's limit, which is the peer's own.
+- **Streams.** A stream stays open until its connection closes; streams of
+  pairs the agent gave up are not closed earlier. One the wisp server
+  refuses or closes is not asked for again for 10 s.
+- **States.** The agent has no "failed": a connection that is disconnected
+  before it ever connected reads `failed`.
+- **The peers in the suite** are signalled by the suite itself (it holds
+  both ends), not by a WebSocket relay in the fixture. werift cannot resolve
+  a `.local` name, so the suite takes those candidates out of what it hands
+  werift, which then learns the page's address from the page's first check,
+  as section 2 describes for every peer.
+
+### Measured
+
+- `assets/rtc.wasm`: 1474162 bytes, 504310 with brotli. This is the budget.
+  `dist/rtcWorker.js`: 31842 bytes (10971 with brotli).
+- A connection to the peer in the suite's process is `connected` about
+  210 ms after the page's `createOffer`.
+- `npm test -- webrtc-peer`: the checks named above, both modes, with the
+  far end's view of the page's address attributed to a process by
+  `test/sockets.mjs`: always a socket of the demo's wisp server (or the
+  TURN fixture's relay socket), never one of the browser's, and natively
+  the browser's own. The TURN fixture hears only the wisp server.
+- `npm test -- webrtc`: the leak checks with their new meaning (section 12),
+  59 checks.
+- Nothing is fetched before a document makes a connection; the first one
+  fetches `rtcWorker.js` and `rtc.wasm`. `createOffer()` on a document's
+  first connection resolves in 50 to 70 ms (the worker, the module, the
+  certificate), on its second in 11 to 13 ms; natively 1 to 2 ms. Measured
+  by hand against the local demo; the `rtc-cost` measurement of section 12
+  is not a suite yet.
+- The packet capture of section 12, with the browser in a network
+  namespace of its own: through the proxy it sends TCP to the proxy and
+  nothing else, no UDP and no mDNS, and the page's servers and candidates
+  hear from the wisp server's namespace (docs/webrtc.md has the table).
+- `dist/injectDocument.js` and a proxied frame's heap are what they were
+  before the stand-in (`frame-cost`, measured side by side); the stand-in's
+  code is `dist/rtcStack.js`, which a document loads when it first uses it.
+
+### Limits of Phase 1
+
+- **An empty message is not sent.** The stack takes a stream sequence
+  number for it and writes no chunk (it should be one zero byte under the
+  "empty" payload identifiers of RFC 8831), which would stall an ordered
+  channel at the peer, so the crate drops the message instead. Fixing it is
+  a two-line change in str0m (`sctp/mod.rs`, `write`), upstream or in a
+  vendored copy. Empty messages from a peer arrive.
+- **TURN over TCP and TLS, and ICE-TCP candidates, are not carried** (Phase
+  4): a `turn:...?transport=tcp` or `turns:` server gets the 701 "Failed to
+  establish connection" at once, where Chrome reports it when the
+  connection fails; a TCP candidate is never paired.
+- **Media is not carried** (Phases 2 and 3): `addTrack` and `addTransceiver`
+  throw `NotSupportedError`, the sender, receiver and transceiver lists are
+  empty.
+- **Stats and transports are thin** (Phase 4): `getStats()` has the
+  peer-connection, transport and data-channel entries and no
+  candidate pairs or candidates; `pc.sctp` is null; `candidate.url` is null
+  where Chrome gives the server's URL; candidates always say `generation 0`.
+- **When a Chrome peer closes its connection**, Chrome's own channels get an
+  `error` event (`sctp-failure`, "User-Initiated Abort") between `closing`
+  and `close`; here they get `closing` and `close`.
+- **A peer behind a restrictive NAT with no TURN server** is out of reach,
+  by design (section 2).
+- **libcurl has no datagram streams**: with that transport a connection
+  gathers its host candidate and nothing else, and never connects.
+- The socket attribution of the two suites needs Linux (`ss -p`, `/proc`).
