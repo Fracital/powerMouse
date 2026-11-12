@@ -286,6 +286,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					return true;
 				},
 				`${new URL(scopePrefix(this.client)).origin}${this.client.directory}${SEALER_ROUTE}`,
+				{
+					worker: this.client.browserRefuses('worker-src', 'blob:'),
+					fetch: this.client.browserRefuses('connect-src', 'blob:'),
+				},
 			);
 			if (dead !== null) {
 				if (state.sound !== false) state.sound = primed;
@@ -1618,6 +1622,19 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.removeAttribute('src');
 						return;
 					}
+					// the page's frame-src (src/csp.ts): a frame its policy
+					// refuses is sent where the browser's copy of the policy
+					// refuses it, and the browser refuses and reports it as natively
+					const refused = this.client.loadRefusal(
+						'frame-src',
+						resource.url,
+						true,
+					);
+					if (refused !== null) {
+						this.client.opaqueFrames.delete(element);
+						element.setAttribute('src', refused);
+						return;
+					}
 					const opaque = opaqueDocument(resource);
 					if (opaque) this.client.opaqueFrames.add(element);
 					else this.client.opaqueFrames.delete(element);
@@ -1720,13 +1737,17 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.getAttribute('content') !== ''
 				)
 					switch (element.getAttribute('http-equiv')?.toLowerCase()) {
-						case 'content-security-policy':
-							element.setAttributeOG(
-								'content',
-								element.getAttribute('content')!,
-							);
-							element.removeAttribute('content');
+						// the page's policy as the browser can apply it to the
+						// proxy's URLs (src/csp.ts); it applies when the meta is
+						// inserted, as natively
+						case 'content-security-policy': {
+							const content = element.getAttribute('content')!;
+							element.setAttributeOG('content', content);
+							const policy = this.client.metaPolicy(content);
+							if (policy === null) element.removeAttribute('content');
+							else element.setAttribute('content', policy);
 							break;
+						}
 						// client hints are the worker's to send for the real
 						// origins (src/server/clientHints.ts, which reads a
 						// page's own metas from its markup): the browser must
@@ -2758,6 +2779,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					false,
 					this.client.childRoute,
 				);
+			// the page's object-src (src/csp.ts): the browser refuses and
+			// reports what it refuses, where the browser's copy of the policy
+			// refuses it too (the copy itself is a blob: URL, which the copy
+			// allows wherever the page allows any load)
+			const refused = this.client.loadRefusal('object-src', resource.url, true);
+			if (refused !== null) {
+				loads.delete(element);
+				element.setAttribute(attribute, refused);
+				return;
+			}
 			let routed = routedOf();
 			if (!ROUTE_PROTOCOLS.includes(resource.url.protocol)) {
 				// data:, blob: and the like: as routeHTML leaves them

@@ -141,11 +141,21 @@ export const OPAQUE_COPY_HEADER = 'x-stomp-copy';
  * its script, made a blob: URL by the inject, and the route under the
  * controller's address where the service worker answers the same script
  * for a document whose policy refuses a blob: worker (the blocker's
- * `$csp=`, which names that route among its worker sources)
+ * `$csp=`, which names that route among its worker sources). Given a URL
+ * instead of a blob, the worker says whether a fetch of it succeeds: a
+ * worker from the route has no policy of the page's, and asks for a
+ * document whose policy refuses blob: requests (src/csp.ts).
  */
 export const SEALER_SOURCE =
-	'onmessage=function(e){postMessage([e.data[0],URL.createObjectURL(e.data[1])])}';
+	"onmessage=function(e){var d=e.data;typeof d[1]=='string'?fetch(d[1]).then(function(){postMessage([d[0],'1'])},function(){postMessage([d[0],''])}):postMessage([d[0],URL.createObjectURL(d[1])])}";
 export const SEALER_ROUTE = 'sealer';
+/**
+ * The service worker's route under an address that answers a POST with
+ * its body, as the type its last segment names: what the inject's XHR
+ * module makes a response document of where the document's policy refuses
+ * a data: URL (src/csp.ts)
+ */
+export const ECHO_ROUTE = 'echo';
 /**
  * A Server-Timing metric the worker adds to a response of another origin
  * whose Timing-Allow-Origin lets the page see its timing: every route is
@@ -272,6 +282,12 @@ export const PREFLIGHT_HEADER = 'x-stomp-preflight';
  * which the inject writes in Chrome's words
  */
 export const MIXED_CONTENT_NOTICE = '$stomp$mixedContent';
+/**
+ * The service worker tells a document of a request it let through that a
+ * report-only policy of the page's refuses (src/server/contentPolicies.ts):
+ * `[directive, url]`, for the inject to report as the browser would have
+ */
+export const CSP_REPORT = '$stomp$cspReport';
 /**
  * SW -> the window that asked for a script the rewrite cache's kept
  * response answered: [the routed URL, when (ms since the epoch), how it

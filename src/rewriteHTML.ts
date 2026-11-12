@@ -2,6 +2,7 @@ import { escapeText } from 'entities';
 import type { AdblockPage } from './blocker/types';
 import type GenericCodec from './Codecs';
 import { Config } from './config';
+import type { PolicyText } from './csp';
 import { helperNames } from './helperNames';
 import type { Prewritten } from './prewrite';
 import type { ReferrerInfo } from './referrerPolicy';
@@ -197,6 +198,19 @@ function referred(client: string, referrer: ReferrerInfo | undefined): string {
 }
 
 /**
+ * The shell's statement that hands the client the policies of its
+ * document's headers the browser applies, each with the page's text it
+ * stands for (none without any)
+ */
+function policyTexts(
+	client: string,
+	policies: PolicyText[] | undefined,
+): string {
+	if (!policies?.length) return '';
+	return `\t${client}.policyTexts = ${JSON.stringify(policies).replace(/</g, '\\u003c')};\n`;
+}
+
+/**
  * What a shell written on this thread says of sites when its caller names
  * none: the inject bundle hands on what it was told (src/inject/sites.ts),
  * the service worker names them with each document it serves
@@ -258,6 +272,8 @@ export function modifyHTML(
 	isolation?: string,
 	/** what the document's Origin-Agent-Cluster asked for (DocumentClient.agentCluster) */
 	agentCluster?: 'site' | 'origin',
+	/** the policies of its headers the browser applies, with the page's texts (src/csp.ts browserHeaders) */
+	policies?: PolicyText[],
 ): string {
 	const { head, tail } = shell(
 		script,
@@ -274,6 +290,7 @@ export function modifyHTML(
 		top,
 		isolation,
 		agentCluster,
+		policies,
 	);
 	return head + tail(prewritten);
 }
@@ -300,6 +317,8 @@ export function modifyHTMLStreamed(
 	isolation?: string,
 	/** what the document's Origin-Agent-Cluster asked for (DocumentClient.agentCluster) */
 	agentCluster?: 'site' | 'origin',
+	/** as modifyHTML's */
+	policies?: PolicyText[],
 ): { head: string; tail: (prewritten: Prewritten | null) => string } {
 	return shell(
 		script,
@@ -316,6 +335,7 @@ export function modifyHTMLStreamed(
 		top,
 		isolation,
 		agentCluster,
+		policies,
 	);
 }
 
@@ -336,6 +356,7 @@ function shell(
 	isolation?: string,
 	/** what the document's Origin-Agent-Cluster asked for (DocumentClient.agentCluster) */
 	agentCluster?: 'site' | 'origin',
+	policies?: PolicyText[],
 ): { head: string; tail: (prewritten?: Prewritten | null) => string } {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	const names = helperNames(config);
@@ -364,7 +385,7 @@ function shell(
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 	else delete globalThis.createClient;
 
-${sited(names.client, sites)}${referred(names.client, referrer)}${
+${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}${
 		upgradeInsecure
 			? `
 	${names.client}.upgradeInsecureRequests = true;`
@@ -467,6 +488,8 @@ export function modifyXML(
 	sites?: SiteFacts[],
 	/** as modifyHTML's */
 	top = false,
+	/** as modifyHTML's */
+	policies?: PolicyText[],
 ): string {
 	// the root start tag, after the prolog, comments and doctype
 	const tags =
@@ -492,7 +515,7 @@ export function modifyXML(
 	if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 	else delete globalThis.createClient;
-${sited(names.client, sites)}${referred(names.client, referrer)}
+${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}
 	if (!${names.client}.applied) ${names.client}.apply();
 	${names.client}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});
 }`;
