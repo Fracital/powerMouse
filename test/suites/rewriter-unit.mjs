@@ -172,6 +172,27 @@ const parses = (code) => {
 }
 
 {
+	// a classic script's top-level bindings reach the window as its globals,
+	// so a later script of the page reads them as `window.<name>`: the
+	// rewriter leaves a top-level function or var declaration where it stands
+	// (it declares a window global natively) and leaves a `window.<name>` read
+	// alone (window is not routed). A page that splits a value's definition and
+	// its use across two scripts (CNN's ad modules do) depends on this.
+	const func = rewrite('function turner_getGuid(){ return 1 }');
+	const varFn = rewrite('var turner_getGuid = function(){ return 1 };');
+	const read = rewrite('console.log(window.turner_getGuid())');
+	ok(
+		'a top-level global from one classic script is readable as window.<name> in a later one',
+		/(?:^|\n|;)\s*function turner_getGuid\s*\(/.test(func) &&
+			parses(func) &&
+			/(?:^|\n|;)\s*var turner_getGuid\s*=/.test(varFn) &&
+			parses(varFn) &&
+			read.includes('window.turner_getGuid('),
+		`${JSON.stringify(func)} | ${JSON.stringify(varFn)} | ${JSON.stringify(read)}`,
+	);
+}
+
+{
 	// an unforgeable reached through an earlier optional link keeps the
 	// chain's short-circuit: get2 gets the flag and the rest stays optional
 	const out = shape('a?.b.location.c; a?.b().top.x; (a?.b).location.c');
