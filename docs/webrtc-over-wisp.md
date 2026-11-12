@@ -807,3 +807,97 @@ TURN server.
 - **libcurl has no datagram streams**: with that transport a connection
   gathers its host candidate and nothing else, and never connects.
 - The socket attribution of the two suites needs Linux (`ss -p`, `/proc`).
+
+## 16. Media as built
+
+Audio and video come in slices; this section grows with them. Sections 8
+and 9 are the plan, and what is written here is what the code does.
+
+### The crate's media records
+
+The stack packetizes and depacketizes, the worker encodes and decodes, so
+what crosses the boundary is whole encoded frames: one Opus packet, one VP8
+frame, one H.264 access unit in Annex B (start codes, the parameter sets
+with a keyframe), which is what `VideoEncoder` gives with
+`avc: { format: 'annexb' }` and what `VideoDecoder` takes without a
+`description`. The crate's tests (`rust/rtc/src/tests.rs`, run by
+`deploy/rust/test.sh -p rtc`) wire two connections back to back and drive
+every record through the exports.
+
+Configuration fields of `c`, all optional (a connection without them is a
+Phase 1 connection):
+
+| Field    | Meaning                                                                                                                                                                                                                                                                                                                                                                                         |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `codecs` | what the host encodes and decodes: entries `pt,name,clock,channels,fmtp` separated by a bar, which are a browser's `a=rtpmap` and `a=fmtp` lines in its order. `rtx` entries name the payload they repeat (`apt=`). The `red` entry over Opus is taken as 63 over 111, the browser's numbering. Payloads the stack has no format for (`ulpfec`, video `red`) are left out and never negotiated. |
+| `exts`   | the header extensions: entries `id:uri` separated by a bar, a browser's `a=extmap` lines. Ones the stack does not know are left out.                                                                                                                                                                                                                                                            |
+| `bwe`    | send-side bandwidth estimation, starting from this many bits a second                                                                                                                                                                                                                                                                                                                           |
+
+So the payload types and extension ids are the browser's and nothing about
+a browser version is compiled into the artifact.
+
+Control calls (text, as in Phase 1):
+
+| `op`           | Fields                                   | Meaning                                                                                                                                                                                                                                                      |
+| -------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `media`        | `kind`, `dir`, `stream`, `track`, `rids` | a section the next offer adds; the result is its `index`, the section's name on both sides of the boundary. `stream` and `track` are its `a=msid`; `rids` are simulcast layers this side sends.                                                              |
+| `direction`    | `index`, `dir`                           | what this side wants of the section. Every offer states it again, whatever the last answer left of it, as a browser offers the transceiver's direction.                                                                                                      |
+| `stop`         | `index`                                  | the next offer stops the section                                                                                                                                                                                                                             |
+| `remote_offer` | `sdp`, `dir0`, `dir1`, ...               | `dir<n>` is what this side wants of the offer's nth section. The stack answers a section with the offer's direction turned around; the crate narrows the offered direction first, so the answer is the browser's (`recvonly` for a section without a track). |
+| `payloads`     | `index`                                  | what the section negotiated: `codecs` in the words of the configuration and in the peer's order (the first is the one to send), `exts`, and `dir`, the direction as negotiated                                                                               |
+| `keyframe`     | `index`, `rid`, `kind` (`pli` or `fir`)  | ask the peer for a keyframe                                                                                                                                                                                                                                  |
+| `bitrate`      | `min`, `desired`, or `reset`             | what the encoders send at least and would like to send, for the estimator's padding and probing                                                                                                                                                              |
+| `red`          | `index`, `on`                            | redundant audio (RFC 2198) for what this side sends. Off until asked: a browser sends it only when the peer lists it first, and reads it always.                                                                                                             |
+
+The results of `offer` and `remote_offer` carry `mids`, `index:mid` for
+every section. An offer's sections are in the order their owners were made
+(a media section before a channel created after it), as a browser's are.
+`rollback` puts the sections of the offer back in line for the next one and
+the directions back as they were. An `offer` while one is pending is the
+same offer again when there is nothing new to say (a page that reads a
+draft and then offers), and otherwise replaces it the same way. One limit
+comes with that: the stack allocates a channel when it is put in an offer
+and cannot give the allocation back, and it panics on a second allocation
+of a stream id, so a channel the page negotiated itself (with an `id`)
+that was in a rolled back or replaced offer is not offered again and never
+opens. Lifting it needs a change in str0m's `ChannelHandler`.
+
+Events: `media` (`index`, `mid`, `kind`, `dir`, and `send_rids`,
+`recv_rids` for simulcast) when the stack has a section, for both the
+offerer and the answerer (str0m reports only the sections of an offer it
+accepted; the crate reports the ones an answer confirmed); `media_changed`
+(`index`, `dir`); `keyframe` (`index`, `rid`, `kind`) when the peer asks
+for one; `bitrate` (`kind` `twcc` or `remb`, `bps`); `paused` (`index`,
+`rid`, `paused`) when a stream the peer sends stops or starts.
+
+Frames are binary. A frame to send is input kind 4:
+
+```
+[media u8][pt u8][flags u8][level u8][orientation u8][age ms u16][time u64][rid len u8][rid][bytes]
+```
+
+and a received frame is output tag 6:
+
+```
+[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][time u64][rid len u8][rid][bytes]
+```
+
+`time` is in units of the payload's clock (48000 for Opus, 90000 for
+video); `age` is how long ago the frame was captured, which makes the
+wallclock the sender reports pair with the RTP time, and so lines audio up
+with video at the peer. `level` is the audio level in -dBov for the
+`ssrc-audio-level` extension, `orientation` the rotation as
+`urn:3gpp:video-orientation` numbers it, 255 for neither. Flags: 1 a
+keyframe (received frames; the stack reads it off the payload), 2 nothing
+was lost before this frame, 4 the first frame after a silence, 8 a voice
+is speaking. `codec` says what the payload type carries so the worker picks
+a decoder without a table of its own. A frame the stack does not take (a
+payload the section did not negotiate, a section that does not send, a
+connection not up yet) is dropped and the call's status says so; frames
+come too often to answer each with a record.
+
+With these records `assets/rtc.wasm` is 1502987 bytes (515313 with brotli):
+28825 bytes more than the Phase 1 artifact (11003 with brotli). The RTP,
+packetizer and estimator code was already in the Phase 1 artifact, since
+the stack reaches it from every datagram it reads; the growth is the
+writer, the codec and extension configuration and the records themselves.
