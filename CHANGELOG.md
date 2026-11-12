@@ -14,6 +14,16 @@ The first release after a four-year gap. Everything below is breaking.
   its top's text, or the file's, as it does the rewriter library's.
   `injectDocument.js` is 434 KB, and frame-cost's budget is 460 KB. The
   worker bundle keeps its own. (frame-cost, rewriter-fallback suites.)
+- The default inject bundles (`injectDocument.js`, `injectWorker.js`) no
+  longer carry crypto-js, which only the aes and base64 codecs read: the
+  common deployment runs the xor codec, so a proxied frame or worker under
+  xor or generic evaluated crypto-js (about 19 KB of the document bundle and
+  18 KB of the worker's, plus its import-time lookup tables) for nothing,
+  measured at about 40 KB of heap and 160 KB of resident memory per frame.
+  The aes and base64 codecs load `injectDocumentFull.js` and
+  `injectWorkerFull.js`, two new assets with crypto-js built in, byte for
+  byte the previous bundles; a host that renames its assets and runs those
+  codecs names them in `init.assets` too. (frame-cost, codec, assets suites.)
 - webpack and swc-loader are replaced by esbuild (`build.js`). Type checking
   (`tsc --noEmit`) and lint (eslint 10, flat config) run as separate scripts.
 - Bundles that expose a classic-script global now define it with
