@@ -1,6 +1,18 @@
 --- a/src/change/direct.rs
 +++ b/src/change/direct.rs
-@@ -180,6 +180,12 @@
+@@ -104,6 +104,11 @@
+         self.rtc.dtls.local_fingerprint()
+     }
+ 
++    /// The certificate the peer showed in the DTLS handshake (DER), once it has.
++    pub fn remote_dtls_certificate(&self) -> Option<&[u8]> {
++        self.rtc.remote_certificate.as_deref()
++    }
++
+     /// Returns a reference to the remote DTLS fingerprint used by this peer connection.
+     pub fn remote_dtls_fingerprint(&self) -> Option<&Fingerprint> {
+         self.rtc.dtls.remote_fingerprint()
+@@ -180,6 +185,12 @@
          id
      }
  
@@ -76,6 +88,35 @@
          let id = self.rtc.chan.new_channel(&config);
  
          self.changes.0.push(Change::AddChannel((id, config)));
+@@ -486,7 +518,7 @@
+         self.changes
+             .retain(|c| !matches!(c, Change::IceRestart(_, _)));
+ 
+-        let new_creds = IceCreds::new();
++        let new_creds = crate::short_ice_creds();
+         self.changes
+             .push(Change::IceRestart(new_creds.clone(), keep_local_candidates));
+ 
+@@ -708,7 +740,7 @@
+         } else {
+             // The remote OFFER had an ice restart, and we need to respond with
+             // new credentials in the ANSWER.
+-            (IceCreds::new(), true)
++            (crate::short_ice_creds(), true)
+         };
+ 
+         rtc.ice
+@@ -1693,6 +1725,10 @@
+             }
+         }
+ 
++        // In the order they were added: they are allocated in this order now,
++        // and the first one made gets the lowest stream id, as a browser's.
++        v.reverse();
++
+         v
+     }
+ 
 --- a/src/channel.rs
 +++ b/src/channel.rs
 @@ -216,27 +216,23 @@
@@ -118,6 +159,61 @@
      }
  
      /// For translating sctp stream id to ChannelId. Any event out of sctp goes via this.
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -924,6 +924,8 @@
+     stats: Option<Stats>,
+     session: Session,
+     remote_fingerprint: Option<Fingerprint>,
++    /// The certificate the peer showed in the DTLS handshake, DER.
++    remote_certificate: Option<Vec<u8>>,
+     remote_addrs: Vec<SocketAddr>,
+     send_addr: Option<SendAddr>,
+     need_init_time: bool,
+@@ -1201,6 +1203,16 @@
+     BweProbeEstimator,
+ }
+ 
++/// ICE credentials of the lengths browsers write: a ufrag of 4 characters and a
++/// password of 24, where [`IceCreds::new()`] makes 16 and 22.
++pub(crate) fn short_ice_creds() -> IceCreds {
++    let creds = IceCreds::new();
++    IceCreds {
++        ufrag: creds.ufrag[..4].to_string(),
++        pass: format!("{}{}", creds.pass, &creds.ufrag[4..6]),
++    }
++}
++
+ impl Rtc {
+     /// Creates a new instance with default settings.
+     ///
+@@ -1247,7 +1259,9 @@
+         // Capture before any partial moves of `config` below.
+         let mtu = config.mtu.clone();
+ 
+-        let local_creds = config.local_ice_credentials.unwrap_or_else(IceCreds::new);
++        let local_creds = config
++            .local_ice_credentials
++            .unwrap_or_else(short_ice_creds);
+         let mut ice = IceAgent::with_hmac(local_creds, crypto_provider.sha1_hmac_provider);
+         if config.ice_lite {
+             ice.set_ice_lite(config.ice_lite);
+@@ -1302,6 +1316,7 @@
+             chan: ChannelHandler::default(),
+             stats: config.stats_interval.map(Stats::new),
+             remote_fingerprint: None,
++            remote_certificate: None,
+             remote_addrs: vec![],
+             send_addr: None,
+             need_init_time: true,
+@@ -1712,6 +1727,7 @@
+                 }
+                 DtlsOutput::PeerCert(der) => {
+                     debug!("DTLS verify remote fingerprint");
++                    self.remote_certificate = Some(der.to_vec());
+                     // Compute the fingerprint of the peer's DER certificate with the hash
+                     // function of the expected one (RFC 8122 §5): sha-256, or sha-1 as some
+                     // endpoints still announce. sha-256 when there is none to compare with.
 --- a/src/sctp/mod.rs
 +++ b/src/sctp/mod.rs
 @@ -54,6 +54,8 @@

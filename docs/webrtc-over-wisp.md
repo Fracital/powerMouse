@@ -677,8 +677,10 @@ TURN server.
   allocates a channel when it is added to an offer and never releases it
   when the offer is dropped, so a channel with a negotiated id panicked on
   the next offer (a wasm trap, which ends every connection of the
-  document); the same patch file allocates at the answer instead. Chrome
-  does not behave this way: see the limits below.
+  document); the same patch file allocates at the answer instead, in the
+  order the channels were made, so that the first has the lowest stream id
+  as in Chrome. Chrome does not offer the section again: see the limits
+  below.
 - Closing: the end that closes a channel sees `close`, the other `closing`
   then `close`. `close()` on the connection sends the SCTP shutdown and the
   DTLS close_notify, so the peer's channels close at once. When the peer
@@ -690,6 +692,36 @@ TURN server.
   peer, refresh), `iceTransportPolicy: 'relay'`, the 701 errors of servers
   that do not answer with Chrome's texts and timing, `restartIce()` and
   `createOffer({ iceRestart: true })`.
+- `getStats()` has Chrome's entries in Chrome's order (by id) with Chrome's
+  members (the `webrtc` suite compares them with the browser's at each
+  stage of a connection): `peer-connection` with the channels opened and
+  closed, `data-channel` with its counters, `transport` with the ICE and
+  DTLS roles and states, the selected pair and its changes, a
+  `certificate` for each end (each connection makes its own, as Chrome
+  does), `local-candidate` once the page could have heard of it (none
+  right after `setLocalDescription`, as natively), `remote-candidate` (a
+  peer reflexive one until the page adds the peer's own, which then takes
+  its place) and `candidate-pair` with the checks, the round trip time and
+  the bytes, all counted by the worker, which carries every datagram
+  (`src/rtc/stats.ts`). The selected pair is the one ICE nominated. Host
+  candidates read `address: ''` and `networkType: 'unknown'`, as Chrome's
+  do behind mDNS names; a reflexive or relayed one is at the wisp server's
+  address as the server saw it, with the server's `url`.
+- `pc.sctp` is an `RTCSctpTransport` once a description has a data
+  section, with its `RTCDtlsTransport` (the peer's certificate from
+  `getRemoteCertificates()`) and `RTCIceTransport` (the gathered
+  candidates, the selected pair, a peer reflexive one at
+  `redacted-ip.invalid` as Chrome writes it), their states and events in
+  Chrome's order, and the values Chrome gives where it gives little
+  (`role` and the parameters null, no remote candidates). A gathered
+  candidate's `url` is its server's (`stun:host:port`,
+  `turn:host:port?transport=udp`), `''` for the host one; a restart's
+  candidates are of the next `generation`.
+- ICE reads as Chrome's: `iceConnectionState` is never `completed`, it is
+  `checking` only once a pair has formed, gathering ends when the
+  connection is up (what a server has not answered by then is never
+  shown) and no sooner than Chrome's last gathering step (120 ms), and
+  `icegatheringstatechange` comes before the end of candidates.
 - The descriptions a page reads have Chrome's lines in Chrome's order for a
   data channel section (the suite compares an offer and an answer with
   Chrome's own, identifiers normalised), with the candidates gathered so
@@ -846,10 +878,21 @@ TURN server.
   connection fails; a TCP candidate is never paired.
 - **Media** came after Phase 1: audio is carried (section 16), video is
   not yet.
-- **Stats and transports are thin** (Phase 4): `getStats()` has the
-  peer-connection, transport and data-channel entries and no
-  candidate pairs or candidates; `pc.sctp` is null; `candidate.url` is null
-  where Chrome gives the server's URL; candidates always say `generation 0`.
+- **The stats report lists only the candidates the page was shown.**
+  Chrome's lists a candidate for every socket it opened, also ones it never
+  signals behind mDNS names (the IPv6 "any" address, TCP active ones at
+  port 9), and which those are depends on the machine; the stack has
+  neither. Media sections have no entries yet (`codec`, `inbound-rtp`,
+  `outbound-rtp` and the rest), and a sender's and a receiver's
+  `transport` are still null.
+- **DTLS 1.2.** The report's `tlsVersion`, `dtlsCipher` and `srtpCipher`
+  are what the stack negotiated: `FEFD`,
+  `TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256` and `SRTP_AEAD_AES_256_GCM`
+  between two of its connections, where two of Chrome's negotiate DTLS 1.3 (`FEFC`, `TLS_AES_128_GCM_SHA256`,
+  `SRTP_AES128_CM_HMAC_SHA1_80`). str0m has no DTLS 1.3.
+- **An ICE restart keeps the host candidate's port.** Chrome opens new
+  sockets for the new generation, so its restarted host candidate has a
+  port of its own; here only the generation and the credentials change.
 - **After a rollback of the first offer, Chrome never offers the data
   section again** (152 and 156, measured): `createOffer` gives a
   description with no `m=` line every time, the channels stay `connecting`

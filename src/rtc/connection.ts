@@ -18,6 +18,7 @@ import type {
 	MediaSection,
 	Negotiated,
 	Request,
+	StatsReply,
 	WorkerEvent,
 	WorkerMessage,
 } from './protocol';
@@ -60,6 +61,7 @@ import {
 	type ParsedSdp,
 	type SectionStyle,
 } from './sdp';
+import { TransportStats } from './stats';
 import {
 	bindingRequest,
 	isAnswerTo,
@@ -99,6 +101,8 @@ export async function loadStack(
 
 /** how long after the peer closed the connection reads disconnected (Chrome: about 5 s) */
 const PEER_GONE_MS = 5000;
+/** Chrome's gathering, its TCP step included, when no server keeps it longer */
+const GATHER_STEPS_MS = 120;
 /** how long a closed connection's stack is driven on, to say goodbye */
 const CLOSE_LINGER_MS = 500;
 /** how many datagrams wait for a stream that is opening */
@@ -321,6 +325,11 @@ function remoteOf(media: Media): NonNullable<MediaSection['remote']> {
 interface Gatherer {
 	done: boolean;
 	stop(): void;
+	/**
+	 * The connection is up and gathering over: what it finds is never shown,
+	 * but it runs its course on the wire, as Chrome's ports do
+	 */
+	quiet(): void;
 }
 
 /** an ICE server URL of the page's, as the worker asks it */
@@ -333,6 +342,16 @@ interface Server {
 	port: number;
 	username: string;
 	credential: string;
+}
+
+/** a server's URL as a candidate that came from it tells it */
+const serverUrl = (server: Server) =>
+	`${server.relay ? (server.tls ? 'turns' : 'turn') : 'stun'}:${joinAddress(server.host, server.port)}${server.relay ? `?transport=${server.transport}` : ''}`;
+
+function base64(bytes: Uint8Array): string {
+	let text = '';
+	for (const byte of bytes) text += String.fromCharCode(byte);
+	return btoa(text);
 }
 
 function parseServers(config: ConnectionConfig): Server[] {
@@ -414,6 +433,8 @@ export class Connection {
 	#remote: ParsedSdp | null = null;
 	#draining = 0;
 	#ufrag = '';
+	/** ICE restarts so far: the generation of the candidates gathered now */
+	#generation = 0;
 	#pwd = '';
 	#fingerprint: string;
 	#sessionId: string;
@@ -449,6 +470,18 @@ export class Connection {
 	#bridgeNames = new Map<string, string>();
 	#bridgeAddresses = new Map<string, string>();
 	#bridge: BroadcastChannel | null = null;
+	/** what getStats() tells of the candidates, the pairs and the handshake */
+	#stats = new TransportStats(
+		(pair) => this.#event({ ev: 'pair', ...pair }),
+		() => {
+			if (!this.#checkingHeld) return;
+			this.#checkingHeld = false;
+			this.#checking();
+		},
+	);
+	/** the agent is checking, but no pair has formed yet */
+	#checkingHeld = false;
+	#remoteUfrag = '';
 
 	constructor(
 		stack: Stack,
@@ -817,6 +850,7 @@ export class Connection {
 
 	#transmit(payload: Uint8Array) {
 		const transmit = decodeTransmit(payload);
+		this.#stats.sent(transmit.source, transmit.destination, transmit.payload);
 		// from a relayed address: through that allocation's TURN server
 		const relay = this.#relays.get(transmit.source);
 		if (relay) {
@@ -876,6 +910,7 @@ export class Connection {
 		bytes: Uint8Array,
 		local = this.#local,
 	) {
+		this.#stats.received(local, remote, bytes);
 		if (this.#ended) return;
 		this.#stack.input(
 			this.#id,
@@ -922,11 +957,18 @@ export class Connection {
 					this.#stackIce(fields.state as RTCIceConnectionState);
 				else this.#heldIce = fields.state as RTCIceConnectionState;
 				break;
-			case 'connected':
+			case 'connected': {
 				this.#connected = true;
+				// the DTLS transport's: the peer's certificate, as the page reads it
+				const der = this.#remoteDer();
+				this.#event(
+					{ ev: 'dtls', state: 'connected', certificate: der?.buffer ?? null },
+					der ? [der.buffer] : [],
+				);
 				this.#setConnection('connected');
 				for (const state of this.#medias.values()) this.#activate(state);
 				break;
+			}
 			// a section the stack has now: one of the page's that an answer
 			// confirmed, or one the peer offered
 			case 'media': {
@@ -1001,6 +1043,7 @@ export class Connection {
 					fields.abort === undefined
 						? undefined
 						: peerAbort(Number(fields.abort), fields.reason ?? '');
+				this.#event({ ev: 'dtls', state: 'closed', certificate: null });
 				for (const channel of this.#channels.keys())
 					this.#event({ ev: 'channelClose', channel, abort });
 				this.#channels.clear();
@@ -1032,18 +1075,34 @@ export class Connection {
 			this.#setConnection('failed');
 			return;
 		}
-		// Chrome's agent is connected before it is completed
-		if (state === 'completed' && this.#iceState !== 'connected')
-			this.#setIce('connected');
+		// Chrome's agent never says "completed" (its ICE transport has no
+		// such state, measured on 152 and 156, end-of-candidates both ways
+		// or not): connected is as far as it goes
+		if (state === 'completed') state = 'connected';
+		// Chrome's agent is checking once it has a pair to check: a remote
+		// candidate added, or a check of the peer's heard
+		if (state === 'checking') {
+			if (this.#stats.paired) this.#checking();
+			else this.#checkingHeld = true;
+			return;
+		}
+		this.#checkingHeld = false;
+		if (state === 'connected') {
+			if (this.#iceState === 'new') this.#checking();
+			// a pair is selected before the agent says it is connected
+			this.#stats.settle();
+		}
 		this.#setIce(state);
-		if (state === 'checking' && this.#connectionState === 'new')
-			this.#setConnection('connecting');
-		else if (state === 'disconnected') this.#setConnection('disconnected');
-		else if (
-			(state === 'connected' || state === 'completed') &&
-			this.#connected
-		)
+		// Chrome stops gathering once a pair of the current credentials is
+		// up: what a server has not answered by then is never shown
+		if (state === 'connected') this.#stopGathering();
+		if (state === 'disconnected') this.#setConnection('disconnected');
+		else if (state === 'connected' && this.#connected)
 			this.#setConnection('connected');
+	}
+	#checking() {
+		this.#setIce('checking');
+		if (this.#connectionState === 'new') this.#setConnection('connecting');
 	}
 	#setIce(state: RTCIceConnectionState) {
 		if (this.#iceState === state || this.#closed) return;
@@ -1109,6 +1168,8 @@ export class Connection {
 		const pwd = own('ice-pwd');
 		if (ufrag && ufrag !== this.#ufrag) {
 			this.#ufrag = ufrag;
+			// each restart's candidates are of the next generation, as Chrome numbers them
+			this.#generation++;
 			this.#resetGathering();
 		}
 		if (pwd) this.#pwd = pwd;
@@ -1135,8 +1196,15 @@ export class Connection {
 			this.#event({ ev: 'local', sdp: this.#render(this.#lastLocal) });
 	}
 
-	#show(candidate: string) {
+	/** `base`: the address the stack sends from for it; `url`: the server it came from */
+	#show(
+		candidate: string,
+		base: string | null,
+		url = '',
+		relayProtocol?: string,
+	) {
 		this.#shown.push(candidate);
+		this.#stats.local(candidate, base, url, relayProtocol);
 		const mid = this.#lastLocal?.medias[0]
 			? (first(this.#lastLocal.medias[0].attributes, 'mid') ?? '0')
 			: '0';
@@ -1145,6 +1213,8 @@ export class Connection {
 			sdpMid: mid,
 			sdpMLineIndex: 0,
 			usernameFragment: this.#ufrag,
+			url,
+			relayProtocol: relayProtocol ?? null,
 		};
 		this.#pushLocal();
 		this.#event({ ev: 'icecandidate', candidate: init });
@@ -1152,7 +1222,14 @@ export class Connection {
 
 	/** the trailing fields Chrome writes on a candidate it shows */
 	#trailer(): string[] {
-		return ['generation', '0', 'ufrag', this.#ufrag, 'network-cost', '999'];
+		return [
+			'generation',
+			String(this.#generation),
+			'ufrag',
+			this.#ufrag,
+			'network-cost',
+			'999',
+		];
 	}
 
 	/** gathering, as Chrome runs it after setLocalDescription: the host candidate, then each server */
@@ -1162,8 +1239,31 @@ export class Connection {
 		const relayOnly = this.#config.iceTransportPolicy === 'relay';
 		// the host candidate: this document's name, which resolves nowhere
 		// but in the bridge between two documents of this browser
-		if (!relayOnly)
-			this.#show(this.#candidate('host', this.#name, this.#localPort, null));
+		if (!relayOnly) {
+			this.#show(
+				this.#candidate('host', this.#name, this.#localPort, null),
+				this.#local,
+			);
+			// another document given the name checks it before this one has
+			// any of its candidates: it is heard, a peer reflexive candidate
+			this.#openBridge();
+		}
+		// Chrome's gathering runs in steps 50 ms apart, the last one for TCP
+		// candidates (which it shows none of behind mDNS names): it is
+		// complete no sooner than that, measured 118 to 144 ms after it began
+		const timer = setTimeout(() => {
+			phases.done = true;
+			this.#gathered();
+		}, GATHER_STEPS_MS);
+		const phases: Gatherer = {
+			done: false,
+			stop: () => {
+				phases.done = true;
+				clearTimeout(timer);
+			},
+			quiet: () => phases.stop(),
+		};
+		this.#gatherers.push(phases);
 		// one Binding request per server address, as Chrome asks it once; a
 		// TURN server is asked as a STUN server too
 		const asked = new Set<string>();
@@ -1187,8 +1287,9 @@ export class Connection {
 	#gathered() {
 		if (this.#gathering !== 'gathering') return;
 		if (!this.#gatherers.every((gatherer) => gatherer.done)) return;
-		this.#event({ ev: 'icecandidate', candidate: null });
+		// Chrome tells the state before the end of candidates
 		this.#setGathering('complete');
+		this.#event({ ev: 'icecandidate', candidate: null });
 	}
 
 	/**
@@ -1221,18 +1322,30 @@ export class Connection {
 		const { bytes, id } = bindingRequest();
 		const timers: ReturnType<typeof setTimeout>[] = [];
 		let stream: Stream | null = null;
+		let over = false;
+		let muted = false;
+		const end = () => {
+			over = true;
+			for (const timer of timers) clearTimeout(timer);
+			stream?.close();
+		};
 		const gatherer: Gatherer = {
 			done: false,
 			stop: () => {
 				gatherer.done = true;
-				for (const timer of timers) clearTimeout(timer);
-				stream?.close();
+				end();
+			},
+			quiet: () => {
+				gatherer.done = true;
+				muted = true;
 			},
 		};
 		this.#gatherers.push(gatherer);
 		const finish = (error?: boolean) => {
-			if (gatherer.done) return;
-			gatherer.stop();
+			if (over) return;
+			gatherer.done = true;
+			end();
+			if (muted) return;
 			if (error)
 				this.#candidateError(
 					`stun:${joinAddress(server.host, server.port)}`,
@@ -1244,7 +1357,11 @@ export class Connection {
 		stream = new WispStream(
 			this.#opener.stream('udp', server.host, server.port),
 			(answer) => {
-				if (gatherer.done || !isAnswerTo(answer, id)) return;
+				if (over || !isAnswerTo(answer, id)) return;
+				if (muted) {
+					finish();
+					return;
+				}
 				const reflexive = reflexiveOf(answer);
 				if (!reflexive || 'error' in reflexive) {
 					finish(true);
@@ -1259,6 +1376,8 @@ export class Connection {
 						['0.0.0.0', 0],
 						joinAddress(server.host, server.port),
 					),
+					null,
+					serverUrl(server),
 				);
 				finish();
 			},
@@ -1274,7 +1393,15 @@ export class Connection {
 
 	/** an allocation on a TURN server, for a relay candidate */
 	#allocate(server: Server) {
-		const gatherer: Gatherer = { done: false, stop: () => {} };
+		let muted = false;
+		const gatherer: Gatherer = {
+			done: false,
+			stop: () => {},
+			quiet: () => {
+				gatherer.done = true;
+				muted = true;
+			},
+		};
 		this.#gatherers.push(gatherer);
 		const url = `${server.tls ? 'turns' : 'turn'}:${joinAddress(server.host, server.port)}?transport=${server.transport}`;
 		if (server.transport !== 'udp') {
@@ -1296,6 +1423,11 @@ export class Connection {
 			credential: server.credential,
 			stream,
 			onAllocated: (address, mapped) => {
+				// gathering ended meanwhile: the relay is not shown, nor kept
+				if (muted) {
+					allocation?.close();
+					return;
+				}
 				relayed = joinAddress(address.address, address.port);
 				const result = this.#control({
 					op: 'relay_candidate',
@@ -1314,6 +1446,9 @@ export class Connection {
 							[mapped?.address ?? '0.0.0.0', mapped?.port ?? 0],
 							joinAddress(server.host, server.port),
 						),
+						relayed,
+						serverUrl(server),
+						server.transport,
 					);
 				}
 				gatherer.done = true;
@@ -1337,6 +1472,14 @@ export class Connection {
 			if (relayed) this.#relays.delete(relayed);
 			allocation?.close();
 		};
+	}
+
+	/** the end of gathering once connected: the gatherers still waiting give up, unheard */
+	#stopGathering() {
+		if (this.#gathering !== 'gathering') return;
+		for (const gatherer of this.#gatherers)
+			if (!gatherer.done) gatherer.quiet();
+		this.#gathered();
 	}
 
 	#resetGathering() {
@@ -1372,6 +1515,7 @@ export class Connection {
 						names: this.#mids.next(unnamed).join(),
 					});
 					if (result.error) throw result.error;
+					this.#stats.offered(true);
 					this.#mids.saw(result.sdp ?? '');
 					this.#lastLocal = parseSdp(result.sdp ?? '');
 					this.#takeMids(result.mids);
@@ -1510,6 +1654,10 @@ export class Connection {
 								// one the stack refuses: dropped, as it would drop it
 							}
 						else this.#heldRemotes.push(candidate);
+					this.#remoteUfrag =
+						/^a=ice-ufrag:(.*)$/m.exec(request.sdp)?.[1].trim() ??
+						this.#remoteUfrag;
+					this.#stats.offered(request.type !== 'offer');
 					this.#remoteSet = true;
 					reply(this.#sections(described));
 					if (this.#heldIce) {
@@ -1679,7 +1827,12 @@ export class Connection {
 							sent: state.sender?.stats ?? null,
 							received: state.receiver?.stats ?? null,
 						})),
-					});
+						transport: this.#stats.report(),
+						ufrag: this.#ufrag,
+						certificate: base64(this.#certificate.certificate),
+						fingerprint: this.#fingerprint,
+						remoteCertificate: this.#remoteCertificate(),
+					} satisfies StatsReply);
 					break;
 				case 'close':
 					reply(null);
@@ -1704,6 +1857,11 @@ export class Connection {
 			candidate: candidateLine(fields),
 		});
 		if (result.error) throw result.error;
+		this.#stats.remote(
+			candidate,
+			joinAddress(fields.address, Number(fields.port)),
+			this.#remoteUfrag,
+		);
 	}
 
 	/** a remote candidate at a name: another document's, reached over the bridge */
@@ -1711,8 +1869,29 @@ export class Connection {
 		const fields = candidateFields(candidate);
 		if (!fields) return;
 		if (!fields.address.endsWith('.local')) return;
-		fields.address = this.#bridgeAddress(fields.address);
+		const address = this.#bridgeAddress(fields.address);
+		this.#stats.remote(
+			candidate,
+			joinAddress(address, Number(fields.port)),
+			this.#remoteUfrag,
+		);
+		fields.address = address;
 		this.#control({ op: 'remote_candidate', candidate: candidateLine(fields) });
+	}
+
+	/** the peer's certificate and its fingerprint, once the handshake showed it */
+	#remoteCertificate(): { base64: string; fingerprint: string } | null {
+		const { fingerprint } = this.#control({ op: 'remote_cert' });
+		const bytes = this.#remoteDer();
+		return bytes && { base64: base64(bytes), fingerprint };
+	}
+	#remoteDer(): Uint8Array<ArrayBuffer> | null {
+		const { der } = this.#control({ op: 'remote_cert' });
+		if (!der) return null;
+		const bytes = new Uint8Array(der.length >> 1);
+		for (let at = 0; at < bytes.length; at++)
+			bytes[at] = parseInt(der.slice(at * 2, at * 2 + 2), 16);
+		return bytes;
 	}
 
 	/**

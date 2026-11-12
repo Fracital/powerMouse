@@ -1132,6 +1132,23 @@ impl Conn {
 					("fingerprint", &fingerprint),
 				]);
 			}
+			"remote_cert" => {
+				// the certificate the peer showed in the handshake (DER, in hex)
+				// and its fingerprint as a description writes one
+				let (der, fingerprint) = {
+					let api = self.rtc.direct_api();
+					let der: String = api
+						.remote_dtls_certificate()
+						.map(|der| der.iter().map(|byte| format!("{byte:02x}")).collect())
+						.unwrap_or_default();
+					let fingerprint = api
+						.remote_dtls_fingerprint()
+						.map(|fingerprint| fingerprint.to_string())
+						.unwrap_or_default();
+					(der, fingerprint)
+				};
+				self.result(&[("der", &der), ("fingerprint", &fingerprint)]);
+			}
 			"ice_restart" => {
 				self.restart = true;
 				self.result(&[]);

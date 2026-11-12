@@ -160,15 +160,34 @@ const leaked = (value, { remote = false } = {}) => {
 		(candidatesOf(value).some(
 			([address, type]) => type === 'host' && !address.endsWith('.local'),
 		) ||
-			/"address":"127\.0\.0\.1","port":\d+,"type":"host"|"type":"local-candidate","address":"127\.0\.0\.1"/.test(
-				text,
-			))
+			[...objectsIn(value)].some(hostAtAddress))
 	)
 		found.push('host candidate at an address');
 	// the address STomp once sent the browser's own connection to
 	if (text.includes('255.255.255.255')) found.push('255.255.255.255');
 	return found;
 };
+/** every object in `value` (something a page read), depth first */
+function* objectsIn(value) {
+	if (!value || typeof value !== 'object') return;
+	yield value;
+	for (const inner of Object.values(value)) yield* objectsIn(inner);
+}
+/**
+ * A host candidate of the page's own at an address, as the page reads one
+ * member by member: a local-candidate entry of getStats() of type host (a
+ * reflexive or relayed one is at the address a server saw), or an
+ * RTCIceCandidate's fields with type host
+ */
+const hostAtAddress = (object) =>
+	((object.type === 'local-candidate' && object.candidateType === 'host') ||
+		(object.type === 'host' && 'port' in object)) &&
+	[object.address, object.ip].some(
+		(address) =>
+			typeof address === 'string' &&
+			address !== '' &&
+			!address.endsWith('.local'),
+	);
 /**
  * A native measurement showing the leak a proxied check guards against. How
  * the browser leaks depends on the machine (its interfaces, media access,
@@ -758,6 +777,109 @@ async function suite(name, flags, raw) {
 				nativeSdp,
 			]),
 		);
+	}
+
+	// getStats() over a connection's life (test/pages/webrtc-stats.js): the
+	// kinds of entries, the members of each and the values that do not vary.
+	// What DTLS negotiated is Chrome's stack's with itself natively and the
+	// proxy's stack's here: shown, not compared. With media access the
+	// browser shows its host candidates at this machine's addresses, one for
+	// each interface, and pairs each with each; what follows from those
+	// addresses (how many candidates and pairs there are, which pair won
+	// after how many changes, the network's type, an interface's priority)
+	// is what the proxy keeps from the page, which reads names as it would
+	// without media access, so it is not compared
+	{
+		const blind = (candidate) =>
+			candidate && {
+				...candidate,
+				address: undefined,
+				ip: undefined,
+				networkType: undefined,
+				priority: undefined,
+			};
+		const unique = (list) =>
+			list && [...new Set(list.map((item) => JSON.stringify(item)))].sort();
+		const told = ({ result }) => {
+			const facts = { ...result.facts, dtls: undefined };
+			if (!raw) return { ...result, facts };
+			return {
+				...result,
+				shown: unique(result.shown),
+				connected: result.connected && {
+					...result.connected,
+					order: undefined,
+				},
+				facts: {
+					...facts,
+					local: blind(facts.local),
+					remote: blind(facts.remote),
+					transport: facts.transport && {
+						...facts.transport,
+						changes: undefined,
+					},
+					selected: facts.selected && { ...facts.selected, bytes: undefined },
+				},
+			};
+		};
+		/** what differs between two results: each value that differs, by its path */
+		const differences = (got, expected, path = '') => {
+			if (
+				got &&
+				expected &&
+				typeof got === 'object' &&
+				typeof expected === 'object' &&
+				Array.isArray(got) === Array.isArray(expected)
+			)
+				return [
+					...new Set([...Object.keys(got), ...Object.keys(expected)]),
+				].flatMap((key) =>
+					differences(got[key], expected[key], `${path}.${key}`),
+				);
+			return JSON.stringify(got) === JSON.stringify(expected)
+				? []
+				: [[path, got, expected]];
+		};
+		const stats = await each(all, (fixtures) => window.__rtcStats(fixtures));
+		const expected = told(stats[0]);
+		precondition(
+			`${name}, natively: getStats() tells of the connected transport, its pair and its candidates`,
+			expected.facts?.selected?.state === 'succeeded' && !stats[0].result.threw,
+			JSON.stringify(stats[0].result).slice(0, 600),
+		);
+		for (const run of stats.slice(1)) {
+			const differ = differences(told(run), expected);
+			ok(
+				`${run.label}: getStats() has the browser's entries in its order, each with the browser's members, and a gathered candidate names its server`,
+				differ.length === 0,
+				`DTLS ${JSON.stringify(run.result.facts?.dtls)}, natively ${JSON.stringify(stats[0].result.facts?.dtls)}; differ: ${JSON.stringify(differ).slice(0, 5000)}`,
+			);
+		}
+
+		// pc.sctp and its transports, the same way, without media access:
+		// with it the browser's candidates are this machine's addresses, one
+		// for each interface, and its gathering waits out a Binding request
+		// from each (40 s here); the proxy's transports read the same either
+		// way, as it gathers the same either way
+		if (!raw) {
+			const transports = await each(all, (fixtures) =>
+				window.__rtcTransports(fixtures),
+			);
+			const native = transports[0].result;
+			precondition(
+				`${name}, natively: pc.sctp, its DTLS transport and its ICE transport tell of the connection`,
+				native?.connected?.sctp?.[0] === 'connected' && !native.threw,
+				JSON.stringify(native).slice(0, 600),
+			);
+			for (const run of transports.slice(1)) {
+				const differ = differences(run.result, native);
+				ok(
+					`${run.label}: pc.sctp, its RTCDtlsTransport and its RTCIceTransport read as the browser's at each stage, fire its events, and a restart's candidates are of the next generation`,
+					differ.length === 0,
+					JSON.stringify(differ).slice(0, 5000),
+				);
+			}
+		}
 	}
 
 	// every bad call of test/pages/webrtc-errors.js: natively the browser's

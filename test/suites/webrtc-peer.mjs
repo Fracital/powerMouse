@@ -560,18 +560,23 @@ for (const proxied of pages) {
 				JSON.stringify(leaks),
 			);
 			const options = [];
-			for (const [name] of CHANNELS.slice(0, 3))
+			const ids = [];
+			for (const [name] of CHANNELS.slice(0, 3)) {
 				options.push(await peer.call('opened', name));
+				ids.push((await own.call('opened', name)).id);
+			}
 			ok(
-				`${label}: the peer gets each channel as the page declared it`,
+				`${label}: the peer gets each channel as the page declared it, and the ones the page did not number are numbered in the order it made them`,
 				options[0].ordered === true &&
 					options[0].maxRetransmits === null &&
 					options[1].ordered === false &&
 					options[1].maxRetransmits === 0 &&
 					options[2].maxPacketLifeTime === 500 &&
 					options[2].protocol === 'timing' &&
-					(await own.call('opened', 'fixed')).id === 7,
-				JSON.stringify(options),
+					(await own.call('opened', 'fixed')).id === 7 &&
+					ids[0] < ids[1] &&
+					ids[1] < ids[2],
+				JSON.stringify([options, ids]),
 			);
 
 			// text and bytes, every way a page sends them, up to the 64 KiB a

@@ -24,6 +24,11 @@ declare const self: DedicatedWorkerGlobalScope;
 
 let stack: Promise<Stack> | null = null;
 let transport: StreamTransport | null = null;
+/**
+ * The next connection's DTLS certificate: each connection has its own, as
+ * Chrome makes one for each, and the next is made while this one is in use
+ * so that a connection does not wait for its own
+ */
 let certificate: Promise<Certificate> | null = null;
 /**
  * This browser's own offer: what the stack negotiates is read from it (its
@@ -55,10 +60,12 @@ self.onmessage = async ({
 	} else if (data?.kind === 'template') templated?.(data.sdp);
 	else if (data?.kind === 'connection') {
 		const { port, config } = data;
+		const own = certificate!;
+		certificate = generateCertificate();
 		try {
 			const [loaded, cert, negotiable] = await Promise.all([
 				stack!,
-				certificate!,
+				own,
 				formats,
 			]);
 			new Connection(

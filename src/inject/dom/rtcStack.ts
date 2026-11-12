@@ -9,6 +9,7 @@ import type {
 	RtcWorkerConnection,
 	RtcWorkerInit,
 	RtcWorkerTemplate,
+	StatsReply,
 	Unsequenced,
 	WorkerEvent,
 	WorkerMessage,
@@ -83,6 +84,8 @@ interface Shared {
 	senders: WeakMap<object, Members>;
 	receivers: WeakMap<object, Members>;
 	trackEvents: WeakMap<object, Members>;
+	/** pc.sctp, its RTCDtlsTransport and their RTCIceTransport */
+	transports: WeakMap<object, Members>;
 	/** a received track as the page reads it: Chrome's id, label and muted state for one */
 	tracks: WeakMap<object, { id?: string; label: string; muted: boolean }>;
 	/** the id of a stream a peer named */
@@ -93,6 +96,8 @@ interface Shared {
 let bundleWorker: (() => Worker) | null = null;
 
 const MAX_MESSAGE_SIZE = 262144;
+/** Chrome numbers a renderer's channels as they are made: their stats ids */
+let channelSerial = 0;
 /** Chrome's: connections a renderer holds at once, closed ones until collected */
 const MAX_CONNECTIONS = 500;
 let weakDeref: typeof WeakRef.prototype.deref;
@@ -144,6 +149,28 @@ export default class WebRTCStack {
 		const RealmWeakRef = global.WeakRef as WeakRefConstructor;
 		const realmClone = global.structuredClone as typeof structuredClone;
 
+		// a candidate the connection gathered tells the server it came from;
+		// one a page makes has none to tell, as the browser's
+		const candidateOrigins = new WeakMap<
+			object,
+			{ url: string; relayProtocol: string | null }
+		>();
+		for (const key of ['url', 'relayProtocol'] as const) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(
+				NativeIceCandidate.prototype,
+				key,
+			);
+			if (!descriptor?.get) continue;
+			descriptor.get = proxyModule.wrapFunction(
+				descriptor.get,
+				(target, that, args) => {
+					const own = candidateOrigins.get(that);
+					return own ? own[key] : Reflect.apply(target, that, args);
+				},
+			);
+			Reflect.defineProperty(NativeIceCandidate.prototype, key, descriptor);
+		}
+
 		const domException = (message: string, name: string) =>
 			withStack(new RealmDOMException(message, name));
 		const rejected = (message: string, name: string) =>
@@ -162,6 +189,7 @@ export default class WebRTCStack {
 		shared.senders ??= new WeakMap();
 		shared.receivers ??= new WeakMap();
 		shared.trackEvents ??= new WeakMap();
+		shared.transports ??= new WeakMap();
 		shared.tracks ??= new WeakMap();
 		shared.streams ??= new WeakMap();
 
@@ -416,6 +444,13 @@ export default class WebRTCStack {
 			unreported: number;
 			bufferedAmountLowThreshold: number;
 			binaryType: BinaryType;
+			/** for getStats(): its id, and what went through it */
+			serial: number;
+			opened: boolean;
+			messagesSent: number;
+			bytesSent: number;
+			messagesReceived: number;
+			bytesReceived: number;
 		}
 		const channelStates = new WeakMap<object, ChannelState>();
 		const channelOf = (that: unknown): ChannelState => {
@@ -446,6 +481,12 @@ export default class WebRTCStack {
 					unreported: 0,
 					bufferedAmountLowThreshold: 0,
 					binaryType: 'arraybuffer',
+					serial: ++channelSerial,
+					opened: false,
+					messagesSent: 0,
+					bytesSent: 0,
+					messagesReceived: 0,
+					bytesReceived: 0,
 				});
 			}
 			get label() {
@@ -519,6 +560,8 @@ export default class WebRTCStack {
 					const size = data.size;
 					if (size > messageLimit(state.pc)) throw tooLarge();
 					state.unreported += size;
+					state.messagesSent++;
+					state.bytesSent += size;
 					const reported = () => {
 						state.unreported -= size;
 					};
@@ -562,6 +605,8 @@ export default class WebRTCStack {
 						: payload.byteLength;
 				if (size > messageLimit(state.pc)) throw tooLarge();
 				state.unreported += size;
+				state.messagesSent++;
+				state.bytesSent += size;
 				const reported = () => {
 					state.unreported -= size;
 				};
@@ -1643,6 +1688,12 @@ export default class WebRTCStack {
 			busy: number;
 			/** the flag was to be updated while operations were under way */
 			updateOnEmpty: boolean;
+			/** channels that opened, and those of them that closed before the connection did */
+			channelsOpened: number;
+			channelsClosed: number;
+			/** the candidates the page has heard of, as their lines read */
+			heard: Set<string>;
+			net: NetState;
 			chain: Promise<unknown>;
 			closed: boolean;
 		}
@@ -1654,6 +1705,216 @@ export default class WebRTCStack {
 		};
 
 		const queue = (fn: () => void) => RealmPromise.resolve().then(fn);
+
+		// --- pc.sctp: the RTCSctpTransport, its RTCDtlsTransport and RTCIceTransport ---
+
+		/**
+		 * What the transports read, kept from the connection's start; their
+		 * objects are made when the page first asks for pc.sctp, as event
+		 * targets on the browser's own prototypes. As measured on Chrome 152
+		 * and 156: the ICE transport's role and parameters are null and it
+		 * lists no remote candidates; the SCTP and DTLS transports say
+		 * closed inside close(), the ICE transport too, without an event.
+		 * Where the two versions differ (the DTLS transport's event on
+		 * close) isLegacy() tells them apart, as for the configuration.
+		 */
+		interface NetState {
+			sctp: EventTarget | null;
+			dtls: EventTarget | null;
+			ice: EventTarget | null;
+			sctpState: RTCSctpTransportState;
+			dtlsState: RTCDtlsTransportState;
+			iceState: RTCIceTransportState;
+			gathering: RTCIceGathererState;
+			maxChannels: number | null;
+			/** the peer's certificate (DER), once the handshake showed it */
+			certificates: ArrayBuffer[];
+			/** the DTLS handshake is done: the transports say so after the connection does */
+			handshaken: boolean;
+			/** the gathered candidates, as getLocalCandidates() lists them */
+			locals: RTCIceCandidate[];
+			pair: { local: RTCIceCandidate; remote: RTCIceCandidate } | null;
+		}
+		const freshNet = (): NetState => ({
+			sctp: null,
+			dtls: null,
+			ice: null,
+			sctpState: 'connecting',
+			dtlsState: 'new',
+			iceState: 'new',
+			gathering: 'new',
+			maxChannels: null,
+			certificates: [],
+			handshaken: false,
+			locals: [],
+			pair: null,
+		});
+		const NativeSctp = global.RTCSctpTransport as Function | undefined;
+		const NativeDtls = global.RTCDtlsTransport as Function | undefined;
+		const NativeIceTransport = global.RTCIceTransport as Function | undefined;
+		const hasTransports = [NativeSctp, NativeDtls, NativeIceTransport].every(
+			(made) => typeof made === 'function',
+		);
+		const netOf = new WeakMap<object, PeerState>();
+		const ownerOf = (that: unknown): PeerState => {
+			const state = netOf.get(that as object);
+			if (!state) throw illegal();
+			return state;
+		};
+		/** a candidate as the transport hands one out: no section, and the server it came from */
+		const transportCandidate = (
+			line: string,
+			usernameFragment: string,
+			url: string,
+			relayProtocol: string | null,
+		) => {
+			const candidate = new NativeIceCandidate({
+				candidate: line,
+				sdpMid: '',
+				sdpMLineIndex: 0,
+				usernameFragment,
+			});
+			candidateOrigins.set(candidate, { url, relayProtocol });
+			return candidate;
+		};
+		const realmList = <T>(items: T[]) => {
+			const list = new RealmArray() as T[];
+			for (const item of items) list[list.length] = item;
+			return list;
+		};
+		class SctpMembers {
+			get transport() {
+				const state = ownerOf(this);
+				return state.net.dtls;
+			}
+			get state() {
+				return ownerOf(this).net.sctpState;
+			}
+			// the peer's limit once both descriptions are there
+			get maxMessageSize() {
+				const state = ownerOf(this);
+				return (state.currentLocal ?? state.pendingLocal) &&
+					(state.currentRemote ?? state.pendingRemote)
+					? messageLimit(state)
+					: null;
+			}
+			get maxChannels() {
+				return ownerOf(this).net.maxChannels;
+			}
+		}
+		class DtlsMembers {
+			get iceTransport() {
+				return ownerOf(this).net.ice;
+			}
+			get state() {
+				return ownerOf(this).net.dtlsState;
+			}
+			getRemoteCertificates() {
+				return realmList(
+					ownerOf(this).net.certificates.map((der) => der.slice(0)),
+				);
+			}
+		}
+		class IceTransportMembers {
+			get role() {
+				ownerOf(this);
+				return null;
+			}
+			get state() {
+				return ownerOf(this).net.iceState;
+			}
+			get gatheringState() {
+				return ownerOf(this).net.gathering;
+			}
+			getLocalCandidates() {
+				return realmList(ownerOf(this).net.locals);
+			}
+			getRemoteCandidates() {
+				ownerOf(this);
+				return new RealmArray();
+			}
+			getLocalParameters() {
+				ownerOf(this);
+				return null;
+			}
+			getRemoteParameters() {
+				ownerOf(this);
+				return null;
+			}
+			getSelectedCandidatePair() {
+				const { pair } = ownerOf(this).net;
+				return pair && { local: pair.local, remote: pair.remote };
+			}
+		}
+		const transportMembers = (
+			Native: Function | undefined,
+			Mock: Function,
+			name: string,
+		) => {
+			if (!hasTransports) return noMembers();
+			const members = adopt(Native!, Mock, shared.transports, name);
+			for (const key of Reflect.ownKeys(Native!.prototype))
+				if (typeof key === 'string' && key.startsWith('on'))
+					members[key] = handlerAttribute(key.slice(2));
+			return members;
+		};
+		const sctpMembers = transportMembers(
+			NativeSctp,
+			SctpMembers,
+			'RTCSctpTransport',
+		);
+		const dtlsMembers = transportMembers(
+			NativeDtls,
+			DtlsMembers,
+			'RTCDtlsTransport',
+		);
+		const iceTransportMembers = transportMembers(
+			NativeIceTransport,
+			IceTransportMembers,
+			'RTCIceTransport',
+		);
+		const transportObject = (
+			state: PeerState,
+			Native: Function,
+			members: Members,
+		) => {
+			const object = Reflect.construct(RealmEventTarget, []) as EventTarget;
+			Reflect.setPrototypeOf(object, Native.prototype);
+			shared.transports.set(object, members);
+			netOf.set(object, state);
+			return object;
+		};
+		/** pc.sctp: there while a description has a data section */
+		const sctpOf = (state: PeerState): EventTarget | null => {
+			const net = state.net;
+			const described = [
+				state.pendingLocal,
+				state.currentLocal,
+				state.pendingRemote,
+				state.currentRemote,
+			].some(
+				(description) =>
+					description && /^m=application /m.test(description.sdp),
+			);
+			if (!hasTransports || !described) {
+				// a rollback of the first offer takes them away
+				net.sctp = net.dtls = net.ice = null;
+				return null;
+			}
+			if (!net.sctp) {
+				net.gathering = state.iceGatheringState;
+				net.ice = transportObject(
+					state,
+					NativeIceTransport!,
+					iceTransportMembers,
+				);
+				net.dtls = transportObject(state, NativeDtls!, dtlsMembers);
+				net.sctp = transportObject(state, NativeSctp!, sctpMembers);
+			}
+			return net.sctp;
+		};
+		const changed = (target: EventTarget | null, type = 'statechange') =>
+			target?.dispatchEvent(new RealmEvent(type));
 
 		class MockPeerConnection extends based(
 			RealmEventTarget,
@@ -1714,6 +1975,10 @@ export default class WebRTCStack {
 					needsNegotiation: false,
 					busy: 0,
 					updateOnEmpty: false,
+					channelsOpened: 0,
+					channelsClosed: 0,
+					heard: new Set(),
+					net: freshNet(),
 					chain: RealmPromise.resolve(),
 					closed: false,
 				};
@@ -1752,8 +2017,7 @@ export default class WebRTCStack {
 				return /^a=ice-options:(?:.* )?trickle(?: |\r?$)/m.test(remote.sdp);
 			}
 			get sctp() {
-				peerOf(this);
-				return null;
+				return sctpOf(peerOf(this));
 			}
 			get localDescription() {
 				const state = peerOf(this);
@@ -2541,14 +2805,14 @@ export default class WebRTCStack {
 					return RealmPromise.resolve(
 						Reflect.construct(MockStatsReport, [statsEntries(state, null)]),
 					);
+				// the candidates gathered by then, as the browser's report has
+				// them: none yet when it is asked as setLocalDescription resolves
+				const heard = new Set(state.heard);
 				return state
 					.call({ op: 'stats' })
 					.then((info) =>
 						Reflect.construct(MockStatsReport, [
-							statsEntries(
-								state,
-								info as { ice: string; connection: string; local: string[] },
-							),
+							statsEntries(state, info as StatsReply, heard),
 						]),
 					);
 			}
@@ -2571,6 +2835,20 @@ export default class WebRTCStack {
 				state.signalingState = 'closed';
 				state.iceConnectionState = 'closed';
 				state.connectionState = 'closed';
+				// the transports close with it, the SCTP one saying so at once
+				// (and the DTLS one in Chrome 152, not in 156), the ICE one not
+				const net = state.net;
+				net.pair = null;
+				net.certificates = [];
+				net.iceState = 'closed';
+				if (net.sctpState !== 'closed') {
+					net.sctpState = 'closed';
+					changed(net.sctp);
+				}
+				if (net.dtlsState !== 'closed') {
+					net.dtlsState = 'closed';
+					if (isLegacy()) changed(net.dtls);
+				}
 				for (const { reject } of state.pending.values())
 					reject(
 						new RealmDOMException(
@@ -2793,54 +3071,147 @@ export default class WebRTCStack {
 		};
 		const statsEntries = (
 			state: PeerState,
-			info: { ice: string; connection: string; local: string[] } | null,
+			info: StatsReply | null,
+			heard = new Set<string>(),
 		) => {
 			const timestamp = performance.timeOrigin + performance.now();
-			const entries = new Map<string, unknown>();
-			let opened = 0;
-			let closed = 0;
-			for (const channel of state.channels.values()) {
-				const channelState = channelStates.get(channel)!;
-				if (
-					channelState.readyState === 'open' ||
-					channelState.readyState === 'closing'
-				)
-					opened++;
-				if (channelState.readyState === 'closed') closed++;
-				if (!info) continue;
-				entries.set(`D${channelState.index}`, {
-					id: `D${channelState.index}`,
-					timestamp,
-					type: 'data-channel',
-					label: channelState.options.label,
-					protocol: channelState.options.protocol,
-					dataChannelIdentifier: channelState.id ?? undefined,
-					state: channelState.readyState,
-				});
+			const list: [string, Record<string, unknown>][] = [];
+			/** an entry as Chrome writes one: id, timestamp, type, then the members it has, by name */
+			const add = (
+				id: string,
+				type: string,
+				members: Record<string, unknown>,
+			) => {
+				const entry: Record<string, unknown> = { id, timestamp, type };
+				for (const key of Reflect.ownKeys(members).sort() as string[])
+					if (members[key] !== undefined && members[key] !== null)
+						entry[key] = members[key];
+				list[list.length] = [id, entry];
+			};
+			add('P', 'peer-connection', {
+				dataChannelsOpened: state.channelsOpened,
+				dataChannelsClosed: state.channelsClosed,
+			});
+			if (info) {
+				for (const channel of state.channels.values()) {
+					const channelState = channelStates.get(channel)!;
+					if (channelState.readyState === 'closed') continue;
+					add(`D${channelState.serial}`, 'data-channel', {
+						label: channelState.options.label,
+						protocol: channelState.options.protocol,
+						dataChannelIdentifier: channelState.id,
+						state: channelState.readyState,
+						messagesSent: channelState.messagesSent,
+						bytesSent: channelState.bytesSent,
+						messagesReceived: channelState.messagesReceived,
+						bytesReceived: channelState.bytesReceived,
+					});
+				}
+				// the transport is there once a description has a section for it
+				const described =
+					state.pendingLocal ??
+					state.currentLocal ??
+					state.pendingRemote ??
+					state.currentRemote;
+				if (described && /^m=/m.test(described.sdp)) {
+					const { transport } = info;
+					const certificateId = (fingerprint: string) =>
+						`CF${fingerprint.slice(fingerprint.indexOf(' ') + 1)}`;
+					const certificate = (fingerprint: string, base64: string) =>
+						add(certificateId(fingerprint), 'certificate', {
+							fingerprint: fingerprint.slice(fingerprint.indexOf(' ') + 1),
+							fingerprintAlgorithm: fingerprint.slice(
+								0,
+								fingerprint.indexOf(' '),
+							),
+							base64Certificate: base64,
+						});
+					certificate(info.fingerprint, info.certificate);
+					if (info.remoteCertificate)
+						certificate(
+							info.remoteCertificate.fingerprint,
+							info.remoteCertificate.base64,
+						);
+					const paired = new Set(transport.pairs.map((pair) => pair.local));
+					const locals = transport.locals.filter(
+						(candidate) =>
+							heard.has(candidate.line) || paired.has(candidate.id),
+					);
+					for (const [candidates, remote] of [
+						[locals, false],
+						[transport.remotes, true],
+					] as const)
+						for (const candidate of candidates)
+							add(
+								candidate.id,
+								remote ? 'remote-candidate' : 'local-candidate',
+								{
+									transportId: 'T01',
+									isRemote: remote,
+									// what a browser behind mDNS names tells of the network
+									networkType: remote ? undefined : 'unknown',
+									address: candidate.address,
+									ip: candidate.address,
+									port: candidate.port,
+									protocol: candidate.protocol,
+									candidateType: candidate.type,
+									priority: candidate.priority,
+									foundation: candidate.foundation,
+									usernameFragment: candidate.usernameFragment,
+									url: candidate.url,
+									relayProtocol: candidate.relayProtocol,
+								},
+							);
+					const pairId = (pair: { local: string; remote: string }) =>
+						`CP${pair.local.slice(1)}_${pair.remote.slice(1)}`;
+					let sent = 0;
+					let received = 0;
+					let packetsSent = 0;
+					let packetsReceived = 0;
+					for (const pair of transport.pairs) {
+						const { local, remote, ...counters } = pair;
+						sent += pair.bytesSent;
+						received += pair.bytesReceived;
+						packetsSent += pair.packetsSent;
+						packetsReceived += pair.packetsReceived;
+						add(pairId(pair), 'candidate-pair', {
+							...counters,
+							transportId: 'T01',
+							localCandidateId: local,
+							remoteCandidateId: remote,
+							bytesDiscardedOnSend: 0,
+							packetsDiscardedOnSend: 0,
+						});
+					}
+					const selected =
+						transport.selected === null
+							? null
+							: transport.pairs[transport.selected];
+					add('T01', 'transport', {
+						bytesSent: sent,
+						bytesReceived: received,
+						packetsSent,
+						packetsReceived,
+						dtlsState: state.net.dtlsState,
+						dtlsRole: transport.dtlsRole,
+						dtlsCipher: transport.dtlsCipher,
+						srtpCipher: transport.srtpCipher,
+						tlsVersion: transport.tlsVersion,
+						iceRole: transport.iceRole,
+						iceState: info.ice,
+						iceLocalUsernameFragment: info.ufrag,
+						localCertificateId: certificateId(info.fingerprint),
+						remoteCertificateId: info.remoteCertificate
+							? certificateId(info.remoteCertificate.fingerprint)
+							: undefined,
+						selectedCandidatePairId: selected ? pairId(selected) : undefined,
+						selectedCandidatePairChanges: transport.selectedChanges,
+					});
+				}
 			}
-			entries.set('P', {
-				id: 'P',
-				timestamp,
-				type: 'peer-connection',
-				dataChannelsOpened: opened,
-				dataChannelsClosed: closed,
-			});
-			if (!info) return entries;
-			entries.set('T01', {
-				id: 'T01',
-				timestamp,
-				type: 'transport',
-				dtlsState:
-					state.connectionState === 'connected'
-						? 'connected'
-						: state.connectionState === 'new'
-							? 'new'
-							: 'connecting',
-				iceState: info.ice,
-				selectedCandidatePairChanges:
-					state.connectionState === 'connected' ? 1 : 0,
-			});
-			return entries;
+			// in the order of their ids, as the browser's report has them
+			list.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+			return new Map<string, unknown>(list);
 		};
 
 		// --- what the worker says ---
@@ -2868,6 +3239,17 @@ export default class WebRTCStack {
 				case 'icecandidate': {
 					if (event.candidate) {
 						const candidate = new NativeIceCandidate(event.candidate);
+						const { url, relayProtocol } = event.candidate;
+						candidateOrigins.set(candidate, { url, relayProtocol });
+						state.heard.add(event.candidate.candidate);
+						state.net.locals.push(
+							transportCandidate(
+								event.candidate.candidate,
+								event.candidate.usernameFragment,
+								url,
+								relayProtocol,
+							),
+						);
 						target.dispatchEvent(
 							new NativeIceEvent('icecandidate', { candidate }),
 						);
@@ -2894,6 +3276,11 @@ export default class WebRTCStack {
 				case 'gathering':
 					if (state.iceGatheringState !== event.state) {
 						state.iceGatheringState = event.state;
+						// the ICE transport's says so first
+						if (state.net.ice) {
+							state.net.gathering = event.state;
+							changed(state.net.ice, 'gatheringstatechange');
+						}
 						target.dispatchEvent(new RealmEvent('icegatheringstatechange'));
 					}
 					break;
@@ -2901,12 +3288,79 @@ export default class WebRTCStack {
 					if (state.iceConnectionState !== event.state) {
 						state.iceConnectionState = event.state;
 						target.dispatchEvent(new RealmEvent('iceconnectionstatechange'));
+						const iceState =
+							event.state === 'completed' ? 'connected' : event.state;
+						if (state.net.iceState !== iceState) {
+							state.net.iceState = iceState;
+							changed(state.net.ice);
+						}
 					}
 					break;
+				case 'pair': {
+					const net = state.net;
+					const origin = (line: string) =>
+						net.locals.find((known) => known.candidate === line);
+					const local = origin(event.local);
+					const from = local && candidateOrigins.get(local);
+					const remoteFields = /\bufrag (\S+)/.exec(event.remote);
+					net.pair = {
+						local: transportCandidate(
+							event.local,
+							local?.usernameFragment ?? '',
+							from?.url ?? '',
+							from?.relayProtocol ?? null,
+						),
+						remote: transportCandidate(
+							event.remote,
+							remoteFields?.[1] ?? '',
+							'',
+							null,
+						),
+					};
+					changed(net.ice, 'selectedcandidatepairchange');
+					if (net.dtlsState === 'new') {
+						net.dtlsState = 'connecting';
+						changed(net.dtls);
+					}
+					break;
+				}
+				case 'dtls': {
+					const net = state.net;
+					if (event.state === 'connected') {
+						net.certificates = event.certificate ? [event.certificate] : [];
+						net.handshaken = true;
+						break;
+					}
+					// the peer closed: the SCTP transport, then the DTLS one
+					net.certificates = [];
+					if (net.sctpState !== 'closed') {
+						net.sctpState = 'closed';
+						changed(net.sctp);
+					}
+					if (net.dtlsState !== 'closed') {
+						net.dtlsState = 'closed';
+						changed(net.dtls);
+					}
+					break;
+				}
 				case 'connection':
 					if (state.connectionState !== event.state) {
 						state.connectionState = event.state;
 						target.dispatchEvent(new RealmEvent('connectionstatechange'));
+					}
+					// the transports say they are connected after the connection does
+					if (event.state === 'connected' && state.net.handshaken) {
+						const net = state.net;
+						net.handshaken = false;
+						if (net.dtlsState !== 'connected') {
+							net.dtlsState = 'connected';
+							changed(net.dtls);
+						}
+						if (net.sctpState === 'connecting') {
+							net.sctpState = 'connected';
+							net.maxChannels = 65535;
+							changed(net.sctp);
+						}
 					}
 					break;
 				case 'datachannel': {
@@ -2933,6 +3387,8 @@ export default class WebRTCStack {
 					if (channelState.readyState !== 'connecting') break;
 					channelState.id = event.id;
 					channelState.readyState = 'open';
+					channelState.opened = true;
+					state.channelsOpened++;
 					channel.dispatchEvent(new RealmEvent('open'));
 					break;
 				}
@@ -2941,6 +3397,10 @@ export default class WebRTCStack {
 					if (!channel) break;
 					const channelState = channelStates.get(channel)!;
 					let data: unknown = event.data;
+					channelState.messagesReceived++;
+					channelState.bytesReceived += event.binary
+						? (event.data as ArrayBuffer).byteLength
+						: utf8Length(event.data as string);
 					if (event.binary && channelState.binaryType === 'blob')
 						data = new RealmBlob([event.data as ArrayBuffer]);
 					channel.dispatchEvent(
@@ -2981,6 +3441,7 @@ export default class WebRTCStack {
 						channel.dispatchEvent(new RealmEvent('closing'));
 					}
 					channelState.readyState = 'closed';
+					if (channelState.opened) state.channelsClosed++;
 					// a peer that aborted the association: each channel hears why
 					// between its closing and its close, already closed
 					if (event.abort)

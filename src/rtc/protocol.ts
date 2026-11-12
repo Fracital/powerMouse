@@ -5,6 +5,8 @@
 // requests (`seq`), the worker answers them and pushes events.
 
 import type { PeerAbort } from './abort';
+import type { ReceiverStats, SenderStats } from './audio';
+import type { TransportReport } from './stats';
 
 /** the worker's first message: where everything comes from */
 export interface RtcWorkerInit {
@@ -170,6 +172,30 @@ export interface CandidateInit {
 	sdpMid: string;
 	sdpMLineIndex: number;
 	usernameFragment: string;
+	/** the STUN or TURN server the candidate came from, as Chrome names it */
+	url: string;
+	relayProtocol: string | null;
+}
+
+/** the worker's answer to `stats` */
+export interface StatsReply {
+	ice: string;
+	connection: string;
+	local: string[];
+	transport: TransportReport;
+	ufrag: string;
+	/** the connection's certificate (DER, base64) and `sha-256 AA:BB...` */
+	certificate: string;
+	fingerprint: string;
+	remoteCertificate: { base64: string; fingerprint: string } | null;
+	/** each media section's sender and receiver as the worker counts them */
+	media: {
+		handle: number;
+		mid: string | null;
+		direction: string | null;
+		sent: SenderStats | null;
+		received: ReceiverStats | null;
+	}[];
 }
 
 export interface CandidateError {
@@ -188,6 +214,17 @@ export type WorkerEvent =
 	| { ev: 'gathering'; state: RTCIceGatheringState }
 	| { ev: 'ice'; state: RTCIceConnectionState }
 	| { ev: 'connection'; state: RTCPeerConnectionState }
+	/**
+	 * The DTLS transport: connected (just before the connection says so),
+	 * with the peer's certificate (DER), or closed by the peer
+	 */
+	| {
+			ev: 'dtls';
+			state: 'connected' | 'closed';
+			certificate: ArrayBuffer | null;
+	  }
+	/** the pair ICE selected now: each candidate as the page's RTCIceCandidate reads */
+	| { ev: 'pair'; local: string; remote: string }
 	/** the local description as the stack renders it now (candidates included) */
 	| { ev: 'local'; sdp: string }
 	| {

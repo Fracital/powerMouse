@@ -611,6 +611,18 @@ The first release after a four-year gap. Everything below is breaking.
   detail `sctp-failure`, cause code 12, "User-Initiated Abort, reason=Close
   called" from a Chrome peer), then `close`. They used to close without
   the error.
+- A proxied page's `getStats()` reads as Chrome's: its candidates, the
+  candidate pairs with their checks, round trip times and bytes, the
+  selected pair, a certificate for each end, the data channels' counters
+  and the transport's roles and states, in Chrome's order with Chrome's
+  members, host candidates without an address as behind mDNS names
+  (`webrtc` suite, compared with the browser's at each stage). `pc.sctp` is
+  an `RTCSctpTransport` with its `RTCDtlsTransport` and `RTCIceTransport`
+  where it was null, a gathered candidate's `url` names its server, a
+  restart's candidates are of the next generation, each connection has a
+  DTLS certificate of its own, and ICE says what Chrome's says when it
+  says it (never `completed`, `checking` once a pair has formed, gathering
+  over once connected). It used to have no candidates or pairs.
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,
@@ -5281,7 +5293,7 @@ Fixed while testing real sites and a feature fixture:
   sections 15 and 16): video sections negotiate and their frames are
   dropped, G.722, comfort noise and DTMF are not carried, a lost Opus packet
   is silence, TURN over TCP or TLS and TCP candidates are not carried,
-  `getStats()` has no candidate entries and `pc.sctp` is null. A peer behind
+  `getStats()` has no media entries. A peer behind
   a restrictive NAT is reached only through a TURN server the page names.
 - The same-origin policy between proxied sites is simulated by the proxy
   (docs/same-origin-policy.md). Not yet: `crossOriginIsolated` (COOP and
