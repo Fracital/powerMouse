@@ -1,0 +1,324 @@
+<!doctype html>
+<title>HELD WINDOWS</title>
+<body>
+	<script>
+		// A page holds the window of a frame of its own origin, then the frame
+		// shows a document of another site, by every way a frame's document
+		// changes (the held-windows suite drives it). What the held window still
+		// reaches of the new document, and what the frame's window read again
+		// gives (reads, identity, a message, a location set)
+		const other = location.origin.replace('127.0.0.1', 'localhost');
+		const own = location.origin;
+		const child = (origin, query = '') =>
+			`${origin}/pages/held-windows-child.html${query}`;
+		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const attempt = (read) => {
+			try {
+				return read();
+			} catch (error) {
+				return error.name;
+			}
+		};
+		const replies = [];
+		addEventListener('message', (event) => replies.push(event.data));
+		const loads = new WeakMap();
+		const frame = (src, name) => {
+			const element = document.createElement('iframe');
+			if (name) element.name = name;
+			loads.set(element, 0);
+			element.addEventListener('load', () =>
+				loads.set(element, loads.get(element) + 1),
+			);
+			if (src !== undefined) element.src = src;
+			document.body.append(element);
+			return element;
+		};
+		const settle = async (element, count) => {
+			for (let i = 0; i < 100 && loads.get(element) < count; i++)
+				await sleep(50);
+			await sleep(150);
+		};
+		/**
+		 * whether a window reaches the other site's document through it: never
+		 * natively (a SecurityError), never through the proxy either (a held
+		 * window there shows what it showed, of this origin)
+		 */
+		const shows = (win) => {
+			try {
+				return win.secret === `child ${new URL(other).host}`
+					? 'the new document'
+					: 'not it';
+			} catch (error) {
+				return 'not it';
+			}
+		};
+		/**
+		 * what a document of this origin that never held the frame's window
+		 * reads of it (a srcdoc frame of this page): SecurityError
+		 */
+		const elsewhere = (index) =>
+			new Promise((resolve) => {
+				const reader = document.createElement('iframe');
+				const listener = (event) => {
+					if (event.data?.elsewhere === undefined) return;
+					removeEventListener('message', listener);
+					reader.remove();
+					resolve(event.data.elsewhere);
+				};
+				addEventListener('message', listener);
+				reader.srcdoc = `<script>
+					let read;
+					try { read = typeof parent.frames[${index}].document; }
+					catch (error) { read = error.name; }
+					parent.postMessage({ elsewhere: read }, '*');
+				<\/script>`;
+				document.body.append(reader);
+				setTimeout(() => resolve('no answer'), 3000);
+			});
+		const after = async (element, held) => {
+			const index = [...document.querySelectorAll('iframe')].indexOf(element);
+			const fresh = frames[index];
+			replies.length = 0;
+			fresh.postMessage('ping', '*');
+			fresh.postMessage('referrer', '*');
+			await sleep(300);
+			const got = [...replies];
+			const out = {
+				// a held window never reaches the next document of another site
+				held: shows(held),
+				// the frame's window read again: as natively
+				fresh: {
+					same: fresh === element.contentWindow,
+					// the window held before is the frame's window still
+					held: held === fresh,
+					closed: attempt(() => held.closed),
+					shows: shows(fresh),
+					document: attempt(() =>
+						element.contentDocument === null
+							? 'null'
+							: element.contentDocument.title,
+					),
+					elsewhere: await elsewhere(index),
+					replies: got,
+					loads: loads.get(element),
+				},
+			};
+			// a location set through the window held before brings it back
+			held.location = child(own, '?back');
+			await settle(element, out.fresh.loads + 1);
+			out.fresh.back = attempt(() => element.contentWindow.secret);
+			element.remove();
+			return out;
+		};
+		window.__run = async (name, tag) => {
+			switch (name) {
+				case 'leave for another site':
+					// the page itself goes to another site: its frame is the
+					// host's (a demo tab), which keeps its browsing context
+					setTimeout(() => (location.href = child(other)), 100);
+					return 'leaving';
+				case 'the page sets the src': {
+					const element = frame(child(own));
+					await settle(element, 1);
+					const held = element.contentWindow;
+					element.src = child(other);
+					await settle(element, 2);
+					return after(element, held);
+				}
+				case 'the frame navigates itself': {
+					const element = frame(
+						child(own, `?go=${encodeURIComponent(child(other))}`),
+					);
+					await settle(element, 1);
+					const held = element.contentWindow;
+					await settle(element, 2);
+					return after(element, held);
+				}
+				case 'a link in the frame': {
+					const element = frame(
+						child(own, `?link=${encodeURIComponent(child(other))}`),
+					);
+					await settle(element, 1);
+					const held = element.contentWindow;
+					await settle(element, 2);
+					return after(element, held);
+				}
+				case 'the held window location set': {
+					const element = frame(child(own));
+					await settle(element, 1);
+					const held = element.contentWindow;
+					held.location = child(other);
+					await settle(element, 2);
+					return after(element, held);
+				}
+				case 'an about:blank frame held, then a src': {
+					const element = frame();
+					await sleep(100);
+					const held = element.contentWindow;
+					held.document.body.textContent = 'written';
+					const before = loads.get(element);
+					element.src = child(other);
+					await settle(element, before + 1);
+					return after(element, held);
+				}
+				case 'an about:blank frame held, then its location set': {
+					const element = frame();
+					await sleep(100);
+					const held = element.contentWindow;
+					const before = loads.get(element);
+					held.location = child(other);
+					await settle(element, before + 1);
+					return after(element, held);
+				}
+				case 'an about:blank frame held, then window.open aimed at it': {
+					const element = frame(undefined, 'heldblank');
+					await sleep(100);
+					const held = element.contentWindow;
+					const before = loads.get(element);
+					open(child(other), 'heldblank');
+					await settle(element, before + 1);
+					return after(element, held);
+				}
+				case 'an about:blank frame held, then a link aimed at it': {
+					const element = frame(undefined, 'heldblanklink');
+					await sleep(100);
+					const held = element.contentWindow;
+					const before = loads.get(element);
+					const link = document.createElement('a');
+					link.href = child(other);
+					link.target = 'heldblanklink';
+					document.body.append(link);
+					link.click();
+					link.remove();
+					await settle(element, before + 1);
+					return after(element, held);
+				}
+				case 'an about:blank frame held, then a form aimed at it': {
+					const element = frame(undefined, 'heldblankform');
+					await sleep(100);
+					const held = element.contentWindow;
+					const before = loads.get(element);
+					const form = document.createElement('form');
+					form.action = child(other);
+					form.target = 'heldblankform';
+					document.body.append(form);
+					form.submit();
+					form.remove();
+					await settle(element, before + 1);
+					return after(element, held);
+				}
+				case 'a frame of another site navigates itself to this one': {
+					// the request the fresh context makes is the frame's own
+					// still: its referrer is the other site's
+					const element = frame(
+						child(other, `?go=${encodeURIComponent(child(own, '?landed'))}`),
+					);
+					await settle(element, 2);
+					const out = {
+						referrer: attempt(() => element.contentDocument.referrer),
+						secret: attempt(() => element.contentWindow.secret),
+						loads: loads.get(element),
+					};
+					element.remove();
+					return out;
+				}
+				case 'a navigation of the same origin': {
+					// natively the same window, reading the next document: no
+					// fresh context for a navigation that stays of the origin
+					const element = frame(child(own));
+					await settle(element, 1);
+					const held = element.contentWindow;
+					element.src = child(own, '?again');
+					await settle(element, 2);
+					return {
+						held: attempt(() => held.location.search),
+						same: held === element.contentWindow,
+						loads: loads.get(element),
+					};
+				}
+				case 'a page that sends the fresh-frame event itself': {
+					// STomp's worker asks a frame's parent for a fresh context by
+					// an event on the frame element (src/freshFrame.ts): a page
+					// that sends it for a URL outside the proxy gets nothing
+					const element = frame(child(own));
+					await settle(element, 1);
+					const held = element.contentWindow;
+					const before = loads.get(element);
+					const sent = element.dispatchEvent(
+						new CustomEvent('$stomp$freshframe', {
+							detail: child(other),
+							cancelable: true,
+						}),
+					);
+					await sleep(500);
+					const out = {
+						sent,
+						loads: loads.get(element) - before,
+						same: held === element.contentWindow,
+						shows: attempt(() => element.contentWindow.secret),
+					};
+					element.remove();
+					return out;
+				}
+				case 'a redirect to another site': {
+					const element = frame(child(own));
+					await settle(element, 1);
+					const held = element.contentWindow;
+					element.src = `${own}/sop/r?k=held-redirect-${tag}&redirect=${encodeURIComponent(child(other))}`;
+					await settle(element, 2);
+					return after(element, held);
+				}
+				case "a form's POST in the frame": {
+					const element = frame(
+						child(
+							own,
+							`?post=${encodeURIComponent(`${other}/sop/r?k=held-post-${tag}&type=text`)}`,
+						),
+					);
+					await settle(element, 1);
+					const held = element.contentWindow;
+					await settle(element, 2);
+					const log = await fetch(`${other}/sop/log?k=held-post-${tag}`, {
+						credentials: 'omit',
+					})
+						.then((response) => response.json())
+						.catch(() => null);
+					element.remove();
+					return {
+						held: (() => {
+							try {
+								return held.location.href.includes('held-post')
+									? 'the new document'
+									: 'not it';
+							} catch (error) {
+								return 'not it';
+							}
+						})(),
+						posted: Array.isArray(log) ? log.map((entry) => entry.method) : log,
+					};
+				}
+				case 'window.open aimed at the frame': {
+					const element = frame(child(own), 'heldtarget');
+					await settle(element, 1);
+					const held = element.contentWindow;
+					open(child(other), 'heldtarget');
+					await settle(element, 2);
+					return after(element, held);
+				}
+				case 'a link of the page with the frame as its target': {
+					const element = frame(child(own), 'heldlink');
+					await settle(element, 1);
+					const held = element.contentWindow;
+					const link = document.createElement('a');
+					link.href = child(other);
+					link.target = 'heldlink';
+					document.body.append(link);
+					link.click();
+					link.remove();
+					await settle(element, 2);
+					return after(element, held);
+				}
+			}
+		};
+	</script>
+</body>

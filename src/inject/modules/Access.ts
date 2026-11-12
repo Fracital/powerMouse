@@ -249,6 +249,23 @@ export default class AccessModule extends Module<Client> {
 				[Symbol.toPrimitive]: { value: () => '[object Object]' },
 			}),
 		) as object;
+		// a window the page held whose frame got a fresh browsing context since
+		// stands for the frame's window now (src/inject/dom/freshContext.ts):
+		// what the page does to it is done to that window as the page has it,
+		// a stand-in when it is of another origin. Its identity is its own
+		// (`self`, `window` and `frames` are it)
+		const live = (target: unknown, key?: unknown): any => {
+			if (
+				(typeof target !== 'object' && typeof target !== 'function') ||
+				target === null ||
+				!this.client.liveWindow ||
+				key === 'self' ||
+				key === 'window' ||
+				key === 'frames'
+			)
+				return target;
+			return this.client.liveWindow(target) ?? target;
+		};
 		const api = {
 			get2: (
 				target: any,
@@ -263,6 +280,7 @@ export default class AccessModule extends Module<Client> {
 				}
 
 				key = keyOf(key);
+				target = live(target, key);
 				return api.get(target[key], key, target);
 			},
 			// `container`: what `object` was read from, when the read is a member
@@ -317,7 +335,10 @@ export default class AccessModule extends Module<Client> {
 			) => {
 				// (a null or undefined target throws before the key is converted,
 				// as natively)
-				if (!nullish(target)) key = keyOf(key);
+				if (!nullish(target)) {
+					key = keyOf(key);
+					target = live(target, key);
+				}
 
 				// the client's global is not the page's to replace (see get)
 				if (key === this.client.names.client) return righthand;
@@ -603,6 +624,7 @@ export default class AccessModule extends Module<Client> {
 			): any => {
 				if (nullish(target)) throw errors.read(target, key);
 				key = keyOf(key);
+				target = live(target, key);
 				const object = api.get(target[key], key, target);
 				if (nullish(object)) throw errors.read(object, name);
 				const method = object[name];
@@ -648,6 +670,7 @@ export default class AccessModule extends Module<Client> {
 					if (optional) return undefined;
 					throw errors.read(target, 'postMessage');
 				}
+				target = live(target);
 				return posted(target.postMessage, target, args, optional, partial);
 			},
 			call2: (
@@ -670,6 +693,7 @@ export default class AccessModule extends Module<Client> {
 				// `w['post' + 'Message'](m)` posts like `w.postMessage(m)`
 				if (key === 'postMessage')
 					return api.post(target, args, !!(links & 2), partial);
+				target = live(target, key);
 
 				const method = api.get(target[key], key);
 
@@ -688,7 +712,7 @@ export default class AccessModule extends Module<Client> {
 			lazy: (target: any): ((key: any) => unknown) | undefined =>
 				target === null || target === undefined
 					? undefined
-					: (key: any) => api.get(target[(key = keyOf(key))], key, target),
+					: (key: any) => api.get2(target, key),
 			method: (
 				target: any,
 				chained: boolean,
@@ -704,17 +728,18 @@ export default class AccessModule extends Module<Client> {
 				}
 				return (key: any) => {
 					key = keyOf(key);
+					const holder = live(target, key);
 					// (`w?.['post' + 'Message'](f())` posts like `w.postMessage`)
 					const post = key === 'postMessage';
-					const method = post ? target[key] : api.get(target[key], key);
+					const method = post ? holder[key] : api.get(holder[key], key);
 					if (optionalCall && nullish(method)) return undefined;
 					if (post)
 						return (...args: any[]) =>
-							posted(method, target, args, optionalCall, partial);
+							posted(method, holder, args, optionalCall, partial);
 					return (...args: any[]) =>
 						typeof method === 'function'
-							? Reflect.apply(method, target, args)
-							: errors.call(method, target, args, partial);
+							? Reflect.apply(method, holder, args)
+							: errors.call(method, holder, args, partial);
 				};
 			},
 			poster: (

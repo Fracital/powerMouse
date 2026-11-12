@@ -360,12 +360,13 @@ for (const [name, value] of Object.entries(native))
  * fails too, so the list stays honest
  */
 const KNOWN = {
-	// a window keeps its identity across documents, and the page holds the
-	// browser's WindowProxy of one it reached while it was of its origin:
-	// nothing in the page can take that back once the window shows another
-	// site (docs/scramjet-parity.md, "needs the deep membrane")
+	// the page holds the browser's WindowProxy of a frame it reached while it
+	// was of its origin: the frame gets a fresh browsing context before the
+	// other site's document arrives (src/inject/dom/freshContext.ts), and the
+	// object the page holds stays the frame's window to it, showing its old
+	// document: its plain reads are of that document, not a SecurityError
 	'a frame of the same origin kept, then sent to another site':
-		'a window held while of the page origin stays the raw window',
+		'the held window reads its old document, of the page origin',
 };
 
 const browser = await launch([features]);

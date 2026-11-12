@@ -253,6 +253,39 @@ Filled in commit by commit; see the CHANGELOG for each.
   the shell of a document the page made named, an about:blank or srcdoc
   document's maker's), and what a URL it writes resolves against is its
   `baseURL`.
+- **A frame that is to show another origin gets a fresh browsing
+  context.** Chrome keeps a frame's WindowProxy across a cross-site
+  navigation (the same object as `frames[i]` and `contentWindow`) and
+  checks every access against the document it shows now: a window the page
+  held while the frame was of its origin throws on every read but `length`,
+  `top`, `parent` and `closed`, and still takes a message, a location set,
+  focus and blur. Every proxied site is the proxy's one origin, so the held
+  window read the next site's document whole, its globals and storage with
+  it (held-windows suite). The inject now takes the frame element out and
+  puts it back where it was (a new browsing context) before such a
+  document commits; the navigation goes on in the fresh context with its
+  request (a POST's body, the referrer it had). Every way a frame's
+  document changes origin is gated: the frame's own document cancels the
+  navigation in its Navigation API `navigate` event, which every
+  navigation a proxied document starts fires (links, forms, location
+  writes, `src`, named targets, `window.open(url, name)`); a frame still on
+  its initial about:blank, which fires none, is swapped by the page's `src`
+  setter, its location setters, `window.open(url, name)` and links and
+  forms aimed at it; and the service worker answers a redirect of a
+  frame's navigation to another origin with a document that asks the
+  frame's parent for the swap (an event on the frame element; the parent
+  goes only to a route of the proxy's scope, so a page that sends it gains
+  nothing). The window the page held shows its old document and stays the
+  frame's window to the page: `contentWindow`, `frames[i]` and
+  `event.source` are that object, and a message, a location set, `closed`,
+  `length`, focus and blur through it reach the frame, as in Chrome.
+  Unlike Chrome, its plain reads (`held.document`, a global) read that old
+  document, of the page's own origin, rather than throw, and the browser
+  makes no history entry for that navigation: the toolbar's Back and
+  Forward (the controller's history of the frame) still step it, the
+  page's own `history.back()` does not. A popup held the same way
+  stays open: a fresh context for it would cut its opener
+  (docs/scramjet-parity.md section 2c).
 - **Where a site ends** (samesite, sop-partitions and site-facts, with
   the names of `test/private-sites.mjs`: `stomp-a`,
   `www.stomp-a` and `stomp-b` under `github.io`, `blogspot.com`,

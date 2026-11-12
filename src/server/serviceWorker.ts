@@ -21,6 +21,8 @@ import {
 	ControllerCloseMessage,
 	ControllerInitMessage,
 	ControllerModulesMessage,
+	FRESH_RETURN,
+	FreshReturnMessage,
 	INIT_PAGE_MODULES,
 	INIT_REMOTE_TRANSPORT,
 	InitPageModulesMessage,
@@ -97,7 +99,7 @@ import {
 } from './requestClients';
 import { RewriteCache } from './rewriteCache';
 import { RewritePool } from './rewritePool';
-import { abortRequest, siteBetween } from './rewrites';
+import { abortRequest, rememberFreshReturn, siteBetween } from './rewrites';
 import { ApiError, serviceWorkers, type WorkerHost } from './serviceWorkers';
 import { claim, vouch } from './srcdocVouches';
 import { rememberVisitedHop, takeVisitedHop } from './visitedHops';
@@ -882,6 +884,26 @@ function handleMessage(event: ExtendableMessageEvent) {
 		} catch (error) {
 			// not a URL: nothing to record
 		}
+	} else if (FRESH_RETURN in data) {
+		// from a routed document of that controller, for a route of it: the
+		// request it names goes on with that document as its referrer
+		const message = data[FRESH_RETURN] as FreshReturnMessage;
+		const source =
+			event.source instanceof Client ? event.source.url : undefined;
+		const prefix =
+			message && typeof message.directory === 'string'
+				? `${location.origin}${message.directory}`
+				: null;
+		if (
+			!prefix ||
+			typeof message.url !== 'string' ||
+			message.url.length > 16384 ||
+			!message.url.startsWith(prefix) ||
+			!source?.startsWith(prefix) ||
+			!controllers.get(message.directory)?.ready
+		)
+			return;
+		rememberFreshReturn(message.url, source);
 	} else if (PERMISSION in data) {
 		// from a routed document of that controller: its site is the proxied
 		// top's real origin, read from its own routed URL (a frame's route

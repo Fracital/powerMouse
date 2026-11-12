@@ -1,0 +1,39 @@
+<!doctype html>
+<title>HELD CHILD</title>
+<body>
+	<script>
+		// a document a held window may show: its secret, and a pong for a ping.
+		// `?go=<url>` navigates itself there once loaded, `?link=<url>` by a link,
+		// `?post=<url>` by a form's POST
+		window.secret = `child ${location.host}`;
+		addEventListener('message', (event) => {
+			if (event.data === 'ping')
+				event.source.postMessage(`pong ${location.host}`, '*');
+			if (event.data === 'referrer')
+				event.source.postMessage(`referrer ${document.referrer}`, '*');
+		});
+		const query = new URLSearchParams(location.search);
+		addEventListener('load', () =>
+			setTimeout(() => {
+				if (query.has('go')) location.href = query.get('go');
+				if (query.has('link')) {
+					const link = document.createElement('a');
+					link.href = query.get('link');
+					document.body.append(link);
+					link.click();
+				}
+				if (query.has('post')) {
+					const form = document.createElement('form');
+					form.method = 'post';
+					form.action = query.get('post');
+					const input = document.createElement('input');
+					input.name = 'field';
+					input.value = 'value';
+					form.append(input);
+					document.body.append(form);
+					form.submit();
+				}
+			}, 50),
+		);
+	</script>
+</body>

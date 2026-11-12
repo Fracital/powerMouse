@@ -440,6 +440,21 @@ export interface BlobMintedMessage {
  * of those.
  */
 export const NAVIGATION_HINT = '$stomp$navigationHint';
+
+/**
+ * A frame's document cancelled a navigation of its own context to another
+ * origin, which its parent makes again in a fresh browsing context
+ * (src/inject/dom/freshContext.ts): the request comes from the parent's
+ * element, with the parent's URL for its referrer. The worker takes this
+ * document's own routed URL as the request's referrer (and so its
+ * initiator), never anything the message says, for the routed URL named.
+ */
+export const FRESH_RETURN = '$stomp$freshReturn';
+export interface FreshReturnMessage {
+	directory: string;
+	/** the routed URL the fresh context asks for */
+	url: string;
+}
 export interface NavigationHintMessage {
 	directory: string;
 	/** where the navigation goes, as the page sees it (the real URL; a routed one is decoded) */

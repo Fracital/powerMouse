@@ -64,6 +64,9 @@ export default class LocationModule extends Module<DocumentClient> {
 		// link route (src/visited.ts), which the browser's history records; a
 		// replacement makes none and goes to the document's address
 		const go = (destination: URL, method: 'assign' | 'replace') => {
+			// a frame still on its initial about:blank fires no navigate event:
+			// one sent to another origin gets a fresh context first (IFrame)
+			if (this.client.freshTo?.(destination)) return;
 			const loading = this.client.global.document.readyState !== 'complete';
 			const how = loading ? 'replace' : method;
 			return Reflect.apply(real[how], real, [

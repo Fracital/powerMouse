@@ -87,6 +87,20 @@ const SEQUENCES = {
 		// entries without loading them, the frame having been made anew)
 		['forward'],
 	],
+	// a frame of the page sent to another site comes in a fresh browsing
+	// context (src/inject/dom/freshContext.ts): Back still goes to its
+	// document before, and Forward to the other site's again
+	'a frame that goes to another site': [
+		['open', page('A')],
+		['link', framed('H', 'tb.html?p=h1')],
+		['child', page('h2', OTHER, '&untitled=1')],
+		['back'],
+		['forward'],
+		['back'],
+		['back'],
+		['forward'],
+		['forward'],
+	],
 	'a frame that redirects itself while loading': [
 		['open', page('A')],
 		['link', framed('G', 'tb-assign.html')],

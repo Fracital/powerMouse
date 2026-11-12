@@ -184,6 +184,12 @@ export default class Client {
 	resolveTop?: (value: unknown) => unknown;
 	/** set by the Context module: a window of another proxied origin, read through the access API (`frames[i]`, `window[name]`), becomes its restricted stand-in */
 	restrictForeign?: (value: unknown, container?: unknown) => unknown;
+	/**
+	 * @internal set by the Context module: the frame's window as this realm
+	 * has it, for a window this realm held whose frame got a fresh browsing
+	 * context since (src/inject/dom/freshContext.ts); undefined for any other
+	 */
+	liveWindow?: (target: unknown) => unknown;
 	/** set by the Reflection module: `key` is a helper name, which the page never finds on `target` */
 	hidesName?: (target: unknown, key: unknown) => boolean;
 	/**

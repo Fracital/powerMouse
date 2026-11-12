@@ -11,7 +11,9 @@
 	// that history call by itself, ?ms= after the load event (300 by
 	// default), without a user activation
 	const query = new URLSearchParams(location.search);
-	document.title = `TB ${query.get('p') ?? ''}`;
+	// `untitled`: a page of another site whose title the host's reads of
+	// its frames find empty, as a cross-origin frame's are natively
+	document.title = query.has('untitled') ? '' : `TB ${query.get('p') ?? ''}`;
 	document.getElementById('name').textContent = query.get('p') ?? '';
 	if (query.get('frame')) {
 		const frame = document.createElement('iframe');

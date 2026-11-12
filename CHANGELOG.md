@@ -945,6 +945,29 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   kits4beats.com had it). The shell now deletes it when a client already
   exists. (tells suite: frames of another site and of the page's own, read
   before they loaded and not, natively against both modes.)
+- A frame that is to show another origin's document gets a fresh browsing
+  context first. Chrome keeps a frame's window across a cross-site
+  navigation and checks every access against the document it shows now;
+  every proxied site is the proxy's one origin, so a window the page held
+  while the frame was of its own origin read the next site's document,
+  globals and storage whole. The frame element is now taken out and put
+  back before such a document commits: the frame's own document cancels the
+  navigation in its `navigate` event (links, forms, location writes, `src`,
+  named targets), a frame still on its initial about:blank is swapped by
+  the page's `src` setter, its location setters, `window.open(url, name)`
+  and links and forms aimed at it, and the service worker answers a
+  redirect of a frame's navigation to another origin with a document that
+  asks the parent for the swap. The window the page held shows its old
+  document and stays the frame's window to it, as in Chrome: the same
+  object as `contentWindow`, `frames[i]` and `event.source`, and a message,
+  a location set, `closed`, `length`, focus and blur through it reach the
+  frame. Its plain reads read that old document rather than throw. The
+  browser makes no history entry for the navigation; the controller's
+  history of the frame records it, so the toolbar's Back and Forward step
+  it as a tab's do, though the page's own `history.back()` does not.
+  (held-windows
+  suite: sixteen scenarios measured in Chrome 152 and 156, natively
+  against both modes.)
 - Windows of one site are another origin to each other unless both set
   `document.domain`, as in Chrome, and `Origin-Agent-Cluster: ?0` is
   honoured. The window membrane compared windows by site: a page and a

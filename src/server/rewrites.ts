@@ -5,6 +5,7 @@ import {
 import { acceptLanguage } from '../acceptLanguage';
 import GenericCodec from '../Codecs';
 import { codecType, Config, ParsedConfig } from '../config';
+import { freshFrameDocument } from '../freshFrame';
 import { rewriteLinkHeader } from '../headers';
 import { helperNames } from '../helperNames';
 import {
@@ -457,17 +458,38 @@ function takeRedirect(
  */
 const returns = new Map<
 	string,
-	{ referrer: string; policy: ReferrerPolicy; url: string; at: number }
+	{
+		referrer: string;
+		policy: ReferrerPolicy;
+		url: string;
+		/** a frame's fresh context asks for a redirect's target (src/freshFrame.ts) */
+		fresh?: boolean;
+		at: number;
+	}
 >();
 
 function rememberReturn(
 	to: string,
-	navigation: { referrer: string; policy: ReferrerPolicy; url: string },
+	navigation: {
+		referrer: string;
+		policy: ReferrerPolicy;
+		url: string;
+		fresh?: boolean;
+	},
 ) {
 	const now = Date.now();
 	for (const [key, entry] of returns)
 		if (now - entry.at > REDIRECT_HOP_TTL) returns.delete(key);
 	returns.set(to, { ...navigation, at: now });
+}
+
+/**
+ * A frame's navigation its document cancelled, made again in a fresh
+ * browsing context (FRESH_RETURN): `referrer` (the document's routed URL)
+ * is its referrer, under the policy the request has
+ */
+export function rememberFreshReturn(url: string, referrer: string) {
+	rememberReturn(url, { referrer, policy: '', url, fresh: true });
 }
 
 function takeReturn(url: string) {
@@ -964,8 +986,9 @@ function genericForward(
 		// its first request with (below) is that first one again
 		const returned = navigation ? takeReturn(serverRequest.url) : undefined;
 		const policy =
-			returned?.policy ??
-			(serverRequest.referrerPolicy || DEFAULT_REFERRER_POLICY);
+			returned?.policy ||
+			serverRequest.referrerPolicy ||
+			DEFAULT_REFERRER_POLICY;
 		const requestReferrer = returned
 			? returned.referrer
 			: serverRequest.referrer;
@@ -987,7 +1010,7 @@ function genericForward(
 			rewriter.isolated &&
 			navigation &&
 			!topLevel &&
-			!returned &&
+			(!returned || returned.fresh) &&
 			serverRequest.method === 'GET'
 		) {
 			const kind = oURL.pathname.slice(rewriter.directory.length).split('/')[0];
@@ -1012,9 +1035,9 @@ function genericForward(
 					}),
 				)}${oURL.pathname.slice(rewriter.directory.length + kind.length)}`;
 				rememberReturn(back.href, {
-					referrer: serverRequest.referrer,
+					referrer: requestReferrer,
 					policy,
-					url: serverRequest.url,
+					url: returned?.url ?? serverRequest.url,
 				});
 				const headers = new Headers({
 					'content-type': 'text/html; charset=utf-8',
@@ -3022,6 +3045,35 @@ function genericForward(
 						crossSiteSet,
 					);
 			}
+		}
+
+		// A frame's navigation the site redirects to another origin: the frame
+		// gets a fresh browsing context for it (src/freshFrame.ts), which asks
+		// for the redirect's target as the navigation's next hop (its
+		// referrer and policy put back from here, as for a return)
+		if (
+			redirect &&
+			navigation &&
+			!topLevel &&
+			(destination === 'iframe' || destination === 'frame') &&
+			crossOriginLocation(response.headers.get('location'), url)
+		) {
+			await response.body?.cancel().catch(() => {});
+			const to = new URL(responseHeaders.get('location')!, serverRequest.url)
+				.href;
+			rememberReturn(to, {
+				// the key the redirect's hop is kept under (rememberRedirect)
+				referrer: serverRequest.referrer,
+				policy,
+				url: to,
+				fresh: true,
+			});
+			const headers = new Headers({
+				'content-type': 'text/html; charset=utf-8',
+				'cache-control': 'no-store',
+			});
+			isolationResponseHeaders(headers, { isolated: false, topLevel: false });
+			return new Response(freshFrameDocument(to), { headers });
 		}
 
 		let body: BodyInit | undefined;

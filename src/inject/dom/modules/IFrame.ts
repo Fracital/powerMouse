@@ -1,8 +1,26 @@
 import { parseConfig } from '../../../config';
+import { FRESH_FRAME_EVENT } from '../../../freshFrame';
+import { routeHTML } from '../../../rewriteHTML';
+import StompURL from '../../../StompURL';
+import {
+	FRESH_RETURN,
+	type FreshReturnMessage,
+} from '../../../transport/messages';
+import { isLinkRoute } from '../../../visited';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { scopePrefix, unrouteURL } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { addClientModules } from '../document';
+import {
+	containerOf,
+	destinationURL,
+	frameDestination,
+	frameWindow,
+	freshFrame,
+	recordFresh,
+	swappingFrames,
+} from '../freshContext';
 import { pageSandbox, sandboxTokens } from '../sandbox';
 import ContextModule, { initialBlank, isStomp } from './Context';
 import { nativeElement } from './DOMHooks';
@@ -105,7 +123,13 @@ export default class IFrameModule extends Module<DocumentClient> {
 			const view = document.defaultView as typeof globalThis | null;
 			if (!view) return document;
 			const reached = windowModule.newRestricted(view);
-			return windowModule.restrictedContexts.has(reached) ? null : document;
+			if (windowModule.restrictedContexts.has(reached)) return null;
+			// a window this page held before the frame got a fresh context
+			// stands for the frame's window, whose document is another
+			// origin's (freshContext.ts)
+			if (reached !== view && isStomp(view, this.client.names.client))
+				return null;
+			return document;
 		};
 		const hookSVGDocument = (prototype: object, native: Function) =>
 			Reflect.defineProperty(prototype, 'getSVGDocument', {
@@ -268,6 +292,13 @@ export default class IFrameModule extends Module<DocumentClient> {
 					const target = event.target;
 					for (const [ctor, get] of nativeContentWindows) {
 						if (!get || !(target instanceof ctor)) continue;
+						// the empty context a frame given a fresh one starts on
+						// (freshContext.ts): its load is the inject's own
+						if (swappingFrames.has(target as Element)) {
+							swappingFrames.delete(target as Element);
+							Reflect.apply(stopImmediate, event, []);
+							return;
+						}
 						try {
 							const child = get.call(target) as Record<string, any> | null;
 							if (child?.[this.client.names.client]?.shellPending === true)
@@ -282,6 +313,198 @@ export default class IFrameModule extends Module<DocumentClient> {
 			);
 		shellLoads();
 		addDocumentOpenListener(global, shellLoads);
+
+		// a frame's navigation its site redirected to another origin: the
+		// worker's document in the frame asks for a fresh context here
+		// (src/freshFrame.ts), for a route of the proxy's scope alone
+		const freshFrameAsked = () =>
+			global.document.addEventListener(
+				FRESH_FRAME_EVENT,
+				(event) => {
+					const target = event.target as Element;
+					if (
+						!(target instanceof global.HTMLIFrameElement) &&
+						!(target instanceof global.HTMLFrameElement)
+					)
+						return;
+					Reflect.apply(stopImmediate, event, []);
+					const to = (event as CustomEvent).detail;
+					if (
+						typeof to === 'string' &&
+						to.startsWith(scopePrefix(this.client)) &&
+						this.client.freshFrame?.(target, to)
+					)
+						event.preventDefault();
+				},
+				true,
+			);
+		freshFrameAsked();
+		addDocumentOpenListener(global, freshFrameAsked);
+
+		// A frame of this document that is to show another origin's document
+		// gets a fresh browsing context first (freshContext.ts): asked by the
+		// frame's own document, which may run another bundle
+		this.client.freshFrame = (element, routed, formData, page) => {
+			const old = frameWindow(element);
+			if (!freshFrame(element, routed, formData)) return false;
+			recordFresh(
+				this.client,
+				element,
+				old,
+				page ??
+					(routed === null ? '' : (unrouteURL(this.client, routed) ?? routed)),
+				(native, hook) =>
+					proxyModule.wrapFunction(native, (target, that, args) => hook(args)),
+			);
+			return true;
+		};
+
+		// This document, when it is a frame still on its initial about:blank
+		// (which fires no navigate event): a navigation of it to another
+		// origin (its location set, window.open or a link or form aimed at
+		// it by name) gets its fresh context here, as the src setter does
+		// (DOMAttributes)
+		this.client.freshTo = (destination, formData, empty) => {
+			if (!/^(https?|data):$/.test(destination.protocol)) return false;
+			if (!initialBlank(global)) return false;
+			const origin =
+				destination.protocol === 'data:' ? null : destination.origin;
+			if (origin === this.client.originKey) return false;
+			const container = containerOf(global, this.client.names.client);
+			if (!container?.parent.freshFrame) return false;
+			return container.parent.freshFrame(
+				container.element,
+				empty
+					? null
+					: routeHTML(
+							new StompURL(destination, this.client.url),
+							this.client.url,
+							this.client.config,
+							false,
+							this.client.nestedRoute,
+						),
+				formData,
+				destination.href,
+			);
+		};
+
+		// a link or form of this document aimed by name at a frame of it still
+		// on its initial about:blank: decided once the page's own listeners
+		// had the event (one may cancel it), as the browser does
+		const blankTarget = (name: string | null) => {
+			if (!name || name.startsWith('_')) return null;
+			const element = this.client.frameNamed(name);
+			const view = element && frameWindow(element);
+			if (!view) return null;
+			try {
+				const client = (view as unknown as Record<string, unknown>)[
+					this.client.names.client
+				] as DocumentClient | undefined;
+				return client?.freshTo ? client : null;
+			} catch (error) {
+				return null;
+			}
+		};
+		const baseTarget = () =>
+			global.document.querySelector('base[target]')?.getAttribute('target') ??
+			null;
+		// the frame gets its fresh context, still empty, and the browser goes
+		// on with the link or form as natively (its ping, its request)
+		const afterPage = (event: Event, then: () => unknown) =>
+			global.addEventListener(
+				event.type,
+				(late) => {
+					if (late === event && !event.defaultPrevented) then();
+				},
+				{ once: true },
+			);
+		const onClick = (event: MouseEvent) => {
+			if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
+			if (event.shiftKey || event.altKey) return;
+			const link = event
+				.composedPath()
+				.find(
+					(node): node is HTMLAnchorElement | HTMLAreaElement =>
+						node instanceof global.Element &&
+						(node.nodeName === 'A' || node.nodeName === 'AREA') &&
+						node.hasAttribute('href'),
+				);
+			if (!link || link.hasAttribute('download')) return;
+			const target = blankTarget(link.getAttribute('target') || baseTarget());
+			if (!target) return;
+			afterPage(event, () =>
+				target.freshTo!(
+					new URL(link.getAttribute('href')!, this.client.baseURL.toString()),
+					null,
+					true,
+				),
+			);
+		};
+		// a form's submission (its submit event, or submit(), which fires none)
+		const submission = (
+			form: HTMLFormElement,
+			submitter: HTMLButtonElement | HTMLInputElement | null,
+		) => {
+			const own = (name: string) => !!submitter?.hasAttribute(name);
+			const target = blankTarget(
+				(own('formtarget')
+					? submitter!.getAttribute('formtarget')
+					: form.getAttribute('target')) || baseTarget(),
+			);
+			if (!target) return null;
+			const method = (
+				(own('formmethod') ? submitter!.formMethod : form.method) || 'get'
+			).toLowerCase();
+			if (method !== 'get' && method !== 'post') return null;
+			return () => {
+				try {
+					const url = new URL(
+						own('formaction') ? submitter!.formAction : form.action,
+					);
+					const data = new global.FormData(form, submitter ?? undefined);
+					if (method === 'get')
+						url.search = new URLSearchParams(
+							data as unknown as Record<string, string>,
+						).toString();
+					return target.freshTo!(url, null, true);
+				} catch (error) {
+					return false;
+				}
+			};
+		};
+		const onSubmit = (event: Event) => {
+			const form = event.target;
+			if (!(form instanceof global.HTMLFormElement)) return;
+			const go = submission(
+				form,
+				(event as SubmitEvent).submitter as
+					HTMLButtonElement | HTMLInputElement | null,
+			);
+			if (go) afterPage(event, go);
+		};
+		const listenTargets = () => {
+			global.addEventListener('click', onClick, true);
+			global.addEventListener('submit', onSubmit, true);
+		};
+		listenTargets();
+		addDocumentOpenListener(global, listenTargets);
+		global.HTMLFormElement.prototype.submit = proxyModule.wrapFunction(
+			global.HTMLFormElement.prototype.submit,
+			(target, that, args) => {
+				if (that instanceof global.HTMLFormElement) submission(that, null)?.();
+				return Reflect.apply(target, that, args);
+			},
+		);
+
+		// This document, when it is a frame: a navigation of its own context
+		// to another origin's document is cancelled before anything of that
+		// document arrives, and its parent gives the frame a fresh context
+		// with the same request (a link, a form, a location write, the
+		// parent's src, another frame's location or named target: every
+		// navigation whose initiator is a proxied document, which is the
+		// proxy's origin, fires `navigate` here first). Heard before any
+		// listener of the page's
+		this.#guardNavigations();
 
 		for (const ctor of embedders) {
 			const getContentWindowDescriptor = Reflect.getOwnPropertyDescriptor(
@@ -323,7 +546,10 @@ export default class IFrameModule extends Module<DocumentClient> {
 					// still on its initial about:blank while the document its src
 					// names is on the way: that document decides
 					const restricted = initialBlank(context)
-						? windowModule.pending(context, Reflect.get(element, 'src'))
+						? windowModule.pending(
+								context,
+								frameDestination(this.client, element),
+							)
 						: windowModule.newRestricted(context);
 					if (
 						!(context as Record<string, any>)[this.client.names.client]!.applied
@@ -364,11 +590,100 @@ export default class IFrameModule extends Module<DocumentClient> {
 						if (!context || windowModule.restrictedContexts.has(context)) {
 							return null;
 						}
+						// the window this page held before the frame got a fresh
+						// context, which stands for the frame's window now: its
+						// document is another origin's (freshContext.ts)
+						if (
+							(context as unknown) !==
+							getContentWindowDescriptor.get!.call(that)
+						)
+							return null;
 
 						return context.document;
 					},
 				),
 			});
 		}
+	}
+	/** the frame element of this document's window in its parent, and the parent's client */
+	#container(): { element: Element; parent: DocumentClient } | null {
+		return containerOf(this.client.global, this.client.names.client);
+	}
+	#guardNavigations() {
+		const global = this.client.global as typeof globalThis & {
+			navigation?: EventTarget;
+		};
+		const navigation = global.navigation;
+		if (!navigation || (global.parent as unknown) === (global as unknown))
+			return;
+		global.EventTarget.prototype.addEventListener.call(
+			navigation,
+			'navigate',
+			(event: Event) => {
+				const navigate = event as Event & {
+					cancelable: boolean;
+					navigationType: string;
+					hashChange: boolean;
+					downloadRequest: string | null;
+					formData: FormData | null;
+					destination: { url: string; sameDocument: boolean };
+				};
+				if (
+					!navigate.cancelable ||
+					navigate.destination.sameDocument ||
+					navigate.hashChange ||
+					navigate.downloadRequest !== null ||
+					navigate.navigationType === 'traverse' ||
+					navigate.navigationType === 'reload'
+				)
+					return;
+				// the page reads the destination unrouted (Readback); the
+				// browser's is the route the navigation goes to
+				let routed = destinationURL(navigate.destination);
+				if (!routed) return;
+				let origin: string;
+				try {
+					const page = new URL(unrouteURL(this.client, routed) ?? routed);
+					if (!/^(https?|data):$/.test(page.protocol)) return;
+					origin = page.origin;
+					// a link route (src/visited.ts) takes its kind of route from
+					// the navigation's referrer, which the fresh context's is not
+					// (its parent's): this frame's own route instead. A fresh
+					// context's first document makes no history entry, so no
+					// visit is recorded either way
+					if (isLinkRoute(routed, scopePrefix(this.client)))
+						routed = routeHTML(
+							new StompURL(page, this.client.url),
+							this.client.url,
+							this.client.config,
+							false,
+							this.client.nestedRoute,
+						);
+				} catch (error) {
+					return;
+				}
+				if (origin === this.client.originKey) return;
+				const container = this.#container();
+				if (!container) return;
+				event.preventDefault();
+				event.stopImmediatePropagation();
+				const formData = navigate.formData;
+				// the request is the parent's element's now: the worker takes
+				// this document for its referrer and initiator, as it was
+				const routedClient = this.client.routedClient();
+				routedClient?.postToWorker({
+					[FRESH_RETURN]: {
+						directory: routedClient.directory,
+						url: routed,
+					} satisfies FreshReturnMessage,
+				});
+				// in the parent's realm, once this event is over: the frame is
+				// taken out of its document, this one with it
+				container.parent.global.setTimeout(() =>
+					container.parent.freshFrame?.(container.element, routed, formData),
+				);
+			},
+			true,
+		);
 	}
 }

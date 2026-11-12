@@ -38,6 +38,7 @@ import { blobLoads, opaqueCopies } from '../blobLoads';
 import DocumentClient, { type StyleElement } from '../Client';
 import { inertDocumentOf } from '../cloneNode';
 import { ELEMENT_STYLE_INTERFACES } from '../cssRules';
+import { forgetDestination, frameWindow } from '../freshContext';
 import { loadFetch, loadSource } from '../loadGrants';
 import { responseURLOf } from '../responseDocuments';
 import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
@@ -1571,6 +1572,29 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// todo: mimes...?
 		// https://www.w3schools.com/tags/tag_embed.asp
 
+		/**
+		 * The origin of the document a frame shows now ('null' for an opaque
+		 * one), or undefined when it has no context yet (not connected) or
+		 * shows a document of another real origin (the host's)
+		 */
+		const frameOrigin = (element: Element): string | undefined => {
+			const shown = frameWindow(element);
+			if (!shown) return undefined;
+			try {
+				const client = (shown as unknown as Record<string, unknown>)[
+					this.client.names.client
+				] as DocumentClient | undefined;
+				if (client?.isDOM) return client.originKey ?? 'null';
+				// its initial about:blank, which nothing injected yet: of this
+				// document's origin
+				if (shown.location.href === 'about:blank')
+					return this.client.originKey ?? 'null';
+			} catch (error) {
+				// a document of another real origin
+			}
+			return undefined;
+		};
+
 		domHooksModule.useAttributes(
 			(element) => {
 				element.restoreAttributesOG('src');
@@ -1612,28 +1636,44 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 									? containerPolicy(element)
 									: undefined,
 							);
-					element.setAttribute(
-						'src',
+					const routed =
 						opaque ??
-							routeHTML(
-								resource,
-								this.client.baseURL,
-								this.client.config,
-								false,
-								// with the host's page cross-origin isolated, the
-								// route says whom the frame's `allow` lets be, and
-								// whether the frame is a credentialless one (the
-								// attribute itself is kept from the browser, below)
-								this.client.hostIsolated
-									? this.client.childRouteFor(
-											element.getAttribute('allow'),
-											resource.url.origin,
-											element.hasAttributeOG('credentialless') ||
-												element.hasAttribute('credentialless'),
-										)
-									: this.client.childRoute,
-							),
-					);
+						routeHTML(
+							resource,
+							this.client.baseURL,
+							this.client.config,
+							false,
+							// with the host's page cross-origin isolated, the
+							// route says whom the frame's `allow` lets be, and
+							// whether the frame is a credentialless one (the
+							// attribute itself is kept from the browser, below)
+							this.client.hostIsolated
+								? this.client.childRouteFor(
+										element.getAttribute('allow'),
+										resource.url.origin,
+										element.hasAttributeOG('credentialless') ||
+											element.hasAttribute('credentialless'),
+									)
+								: this.client.childRoute,
+						);
+					// a frame that shows a document of another origin than the
+					// one it is sent to gets a fresh browsing context first
+					// (freshContext.ts): a window the page reached while the
+					// frame was of its origin must not show the next one. Its
+					// initial about:blank is this document's origin, and fires no
+					// navigate event of its own (IFrame)
+					forgetDestination(this.client, element);
+					const shown = frameOrigin(element);
+					if (
+						shown !== undefined &&
+						shown !== (opaque ? 'null' : resource.url.origin) &&
+						resource.url.protocol !== 'javascript:' &&
+						resource.url.href !== 'about:blank' &&
+						this.client.freshFrame
+					) {
+						if (this.client.freshFrame(element, routed)) return;
+					}
+					element.setAttribute('src', routed);
 				}
 			},
 			[

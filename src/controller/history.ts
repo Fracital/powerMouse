@@ -57,6 +57,8 @@ const entryProto = realm.NavigationHistoryEntry?.prototype;
 const NATIVE = {
 	navigation: getter(globalThis, 'navigation'),
 	length: getter(globalThis, 'length'),
+	closed: getter(globalThis, 'closed'),
+	frameElement: getter(globalThis, 'frameElement'),
 	entries: method(navigationProto, 'entries'),
 	currentEntry: getter(navigationProto, 'currentEntry'),
 	traverseTo: method(navigationProto, 'traverseTo'),
@@ -180,6 +182,13 @@ class FrameHistory {
 	constructor(public win: Window) {}
 	/** reads a document's client (set by the controller) */
 	reader: ((win: Window) => DocumentView | null) | null = null;
+	/**
+	 * the windows a nested frame showed before the fresh browsing contexts
+	 * its page gave it, latest first (set by the controller): one that loads
+	 * another origin's document gets a new navigable (src/inject/dom/
+	 * freshContext.ts), whose first document makes no entry of its own
+	 */
+	earlier: ((win: Window) => Window[]) | null = null;
 	/** the next document of the frame comes from the host (a typed URL, Reload) */
 	browserNavigation = false;
 	documents = new WeakMap<Document, DocumentState>();
@@ -211,6 +220,8 @@ class FrameHistory {
 	alias = new Map<string, string>();
 	/** each live navigable's entry at the last look, by window */
 	known = new Map<Window, Entry>();
+	/** the last entry of each navigable gone since (a frame given a fresh context) */
+	gone = new WeakMap<Window, Entry>();
 	/** a step that has not committed yet: its navigable and the entry id it left */
 	pending: { win: Window; id: string; until: number } | null = null;
 
@@ -329,6 +340,29 @@ class FrameHistory {
 				}
 				this.pending = null;
 			}
+			// a nested frame's fresh browsing context: the navigable it was
+			// before, which a tab's Back steps back to
+			if (!before && node.win !== top && this.earlier) {
+				const last = (win: Window) => this.known.get(win) ?? this.gone.get(win);
+				const prev = this.earlier(node.win).find((win) => !!last(win));
+				const was = prev && last(prev);
+				if (prev && was) {
+					if (this.pending?.win === prev) {
+						// a step of ours, taken there, committed in the new one:
+						// its entry stands for the step's
+						this.pending = null;
+						this.alias.set(node.key, was.key);
+						seen.set(node.win, { key: was.key, url: node.url });
+						continue;
+					}
+					seen.set(node.win, entry);
+					this.steps.length = this.index;
+					this.steps.push(this.make(was, entry, false));
+					this.index = this.steps.length;
+					this.touched = clock;
+					continue;
+				}
+			}
 			seen.set(node.win, entry);
 			if (!before) {
 				// the frame itself, the first time: what it did before is in its
@@ -345,6 +379,8 @@ class FrameHistory {
 			if (this.moved(node, before, entry, node.win === top) && node.win === top)
 				left = index;
 		}
+		for (const [win, entry] of this.known)
+			if (!seen.has(win)) this.gone.set(win, entry);
 		this.known = seen;
 		if (!current) return;
 		if (newDocument) {
@@ -633,6 +669,9 @@ class FrameHistory {
 					call(NATIVE.navigation, node.win),
 				) as object | null;
 				if (current && call(NATIVE.id, current) !== node.id) break;
+				// its frame got a fresh browsing context (the page's own
+				// `closed` of it may answer for the new one)
+				if (call(NATIVE.closed, node.win)) break;
 			} catch (error) {
 				break; // the frame left our origin; nothing more to wait for
 			}
@@ -710,9 +749,42 @@ export async function traverse(
 export function bindHistory(
 	win: Window | null | undefined,
 	reader: (win: Window) => DocumentView | null,
+	earlier?: (win: Window) => Window[],
 ) {
 	if (!win || !supported) return;
-	historyOf(win).reader = reader;
+	const history = historyOf(win);
+	history.reader = reader;
+	if (earlier) history.earlier = earlier;
+}
+
+/**
+ * The windows a nested frame of `top` showed before its page gave it fresh
+ * browsing contexts (src/inject/dom/freshContext.ts), latest first, as the
+ * page's client (the window's `name` global) keeps them
+ */
+export function earlierWindows(
+	top: Window,
+	name: string,
+): (win: Window) => Window[] {
+	return (win) => {
+		try {
+			const element = call(NATIVE.frameElement, win) as Element | null;
+			const client = (top as unknown as Record<string, unknown>)[name] as
+				| {
+						groupClient?: {
+							freshRegistry?: {
+								frames: WeakMap<Element, { windows: Window[] }>;
+							};
+						};
+				  }
+				| undefined;
+			const record =
+				element && client?.groupClient?.freshRegistry?.frames.get(element);
+			return record ? [...record.windows].reverse() : [];
+		} catch (error) {
+			return []; // another origin's, or a window being torn down
+		}
+	};
 }
 
 /**

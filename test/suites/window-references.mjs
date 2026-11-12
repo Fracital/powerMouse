@@ -31,12 +31,9 @@ const ROLES = ['top', 'child', 'sib', 'popup', 'frameset'];
 // shows up here and the list must shrink with it.
 const KNOWN_OPEN = {
 	top: [
-		// a window the page reached while it was of its own origin (the
+		// a popup the page reached while it was of its own origin (the
 		// browser's WindowProxy keeps its identity; the stand-in cannot
 		// replace an object the page already holds)
-		'heldFrame',
-		'heldFrameContentWindow',
-		'heldFrameIndex',
 		'heldPopup',
 		'heldPopupSource',
 		'popupMessageSource',
@@ -50,15 +47,22 @@ const KNOWN_OPEN = {
 	sib: ['parentDocumentKid'],
 };
 
-// The held frame again, handed back by its own realm while it was of this
-// page's origin (its evaluator's `window`, its Function's `this`, its
-// document's defaultView, its own `self` and `frames`, an event's
-// currentTarget): the WindowProxy itself, which shows whatever document the
-// window navigates to. A membrane over the window references the page holds
-// cannot see these; only one over every object crossing between the realms
-// can. Asserted raw on their own, apart from KNOWN_OPEN.
-const EXTRACTION = {
+// The frame the page held while it was of its own origin, read again
+// through its element and frames[], and handed back by its own realm then
+// (its evaluator's `window`, its Function's `this`, its document's
+// defaultView, its own `self` and `frames`, an event's currentTarget): the
+// WindowProxy itself. Natively a window of another origin once the frame
+// shows another site. The frame gets a fresh browsing context before that
+// site's document arrives (src/inject/dom/freshContext.ts): the object stays
+// the frame's window to the page (its identity, its messages and location
+// set: held-windows), and what is read of it plainly is its old document,
+// of the page's own origin: nothing of the other site (its title, its
+// functions, its location).
+const HELD = {
 	top: [
+		'heldFrame',
+		'heldFrameContentWindow',
+		'heldFrameIndex',
 		'extractEval',
 		'extractArray',
 		'extractFunction',
@@ -127,14 +131,18 @@ for (const [mode, base] of [
 				native: nativePaths[path],
 				proxied: proxiedPaths[path],
 			});
-			if (EXTRACTION[role]?.includes(path))
+			if (HELD[role]?.includes(path)) {
+				const value = String(proxiedPaths[path]);
 				ok(
-					`${mode}: ${role} ${path} is still raw (extraction)`,
-					!String(nativePaths[path]).startsWith('RAW') &&
-						String(proxiedPaths[path]).startsWith('RAW'),
+					`${mode}: ${role} ${path} reaches nothing of the other site`,
+					value === 'restricted' ||
+						(value.startsWith('RAW ') &&
+							!value.includes('REFS') &&
+							!value.includes('"href":"read"') &&
+							!value.includes('"call":"read"')),
 					detail,
 				);
-			else if (KNOWN_OPEN[role]?.includes(path))
+			} else if (KNOWN_OPEN[role]?.includes(path))
 				ok(
 					`${mode}: ${role} ${path} is still raw (known open)`,
 					!String(nativePaths[path]).startsWith('RAW') &&
