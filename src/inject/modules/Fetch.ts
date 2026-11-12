@@ -522,6 +522,112 @@ export default class FetchModule extends Module<Client> {
 				return res;
 			},
 		);
+
+		// fetchLater (a deferred fetch, sent when the document goes or once
+		// `activateAfter` has passed): its request went to the address the page
+		// named, past the proxy, to the real site, and Chrome hands no
+		// deferred request to a service worker, so a routed one would reach
+		// nothing. It is made here: the page's own fetch (keepalive, routed
+		// like any) once the time has passed or as the document goes (pagehide,
+		// as it is unloaded or put in the back/forward cache), unless its
+		// signal aborted first. The page gets a FetchLaterResult whose
+		// `activated` says whether it was sent.
+		const global = this.client.global as typeof globalThis & {
+			fetchLater?: (...args: unknown[]) => unknown;
+			FetchLaterResult?: { prototype: object };
+		};
+		const resultPrototype = global.FetchLaterResult?.prototype;
+		const activatedGetter =
+			resultPrototype &&
+			Reflect.getOwnPropertyDescriptor(resultPrototype, 'activated')?.get;
+		if (
+			typeof global.fetchLater === 'function' &&
+			resultPrototype &&
+			activatedGetter
+		) {
+			const hookedFetch = global.fetch;
+			// the browser's own, as the page may replace the window's later
+			const nativeSetTimeout = global.setTimeout;
+			const nativeAdd = global.EventTarget.prototype.addEventListener;
+			const nativeRemove = global.EventTarget.prototype.removeEventListener;
+			const failed = (message: string) =>
+				`Failed to execute 'fetchLater' on 'Window': ${message}`;
+			const deferred = new WeakMap<object, { activated: boolean }>();
+			Reflect.defineProperty(resultPrototype, 'activated', {
+				...Reflect.getOwnPropertyDescriptor(resultPrototype, 'activated'),
+				get: proxyModule.wrapFunction(activatedGetter, (target, that, args) => {
+					const state = deferred.get(that as object);
+					return state ? state.activated : Reflect.apply(target, that, args);
+				}),
+			});
+			global.fetchLater = proxyModule.wrapFunction(
+				global.fetchLater,
+				(target, that, args) => {
+					catchRequiredArguments(args.length, 1, 'Window', 'fetchLater');
+					const request = args[0] instanceof Request ? args[0] : null;
+					let url: URL;
+					try {
+						url = request
+							? new URL(Reflect.apply(nativeRequestURL, request, []) as string)
+							: new URL(String(args[0]), this.client.baseURL.toString());
+					} catch (error) {
+						// the browser's own TypeError for a URL that does not parse
+						return Reflect.apply(target, that, args);
+					}
+					// (no http(s) URL: the browser's own refusal, which sends nothing)
+					if (!ROUTE_PROTOCOLS.includes(url.protocol))
+						return Reflect.apply(target, that, args);
+					const { activateAfter, signal, ...init } = (args[1] ??
+						{}) as RequestInit & { activateAfter?: number };
+					// what the browser refuses before it defers anything
+					if (activateAfter !== undefined && !(Number(activateAfter) >= 0))
+						throw new global.RangeError(
+							failed("fetchLater's activateAfter cannot be negative."),
+						);
+					if (signal?.aborted)
+						throw new global.DOMException(
+							failed('The user aborted a fetchLater request.'),
+							'AbortError',
+						);
+					if (init.body instanceof global.ReadableStream)
+						throw new global.TypeError(
+							failed("fetchLater doesn't support body with unknown length."),
+						);
+					const method = String(
+						init.method ?? (request ? Reflect.get(request, 'method') : 'GET'),
+					).toUpperCase();
+					if (
+						(method === 'GET' || method === 'HEAD') &&
+						init.body !== undefined &&
+						init.body !== null
+					)
+						throw new global.TypeError(
+							failed('Request with GET/HEAD method cannot have body.'),
+						);
+					const state = { activated: false };
+					const result = Object.create(resultPrototype) as object;
+					deferred.set(result, state);
+					const send = () => {
+						if (state.activated || signal?.aborted) return;
+						state.activated = true;
+						Reflect.apply(nativeRemove, global, ['pagehide', send]);
+						const sent = Reflect.apply(hookedFetch, global, [
+							request ?? url.href,
+							{ ...init, keepalive: true },
+						]) as Promise<unknown>;
+						// (what the site answers is no one's: fetchLater has no response)
+						sent.catch(() => {});
+					};
+					Reflect.apply(nativeAdd, global, ['pagehide', send]);
+					if (activateAfter !== undefined)
+						Reflect.apply(nativeSetTimeout, global, [
+							send,
+							Number(activateAfter),
+						]);
+					return result;
+				},
+			);
+		}
 	}
 	/**
 	 * Responses read as their recorded type: `type` itself, and for an

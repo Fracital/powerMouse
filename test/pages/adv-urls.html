@@ -383,5 +383,33 @@
 				setTimeout(() => resolve(u), 1500);
 			}),
 	);
+	// a deferred fetch goes where a fetch goes: through the proxy to the
+	// site, which records it (activateAfter 0 sends it at once)
+	A(
+		'fetchLater arrives through the proxy',
+		async () => {
+			if (typeof fetchLater !== 'function') return 'no fetchLater';
+			const key = `fetch-later-${Math.random().toString(36).slice(2)}`;
+			const result = fetchLater(`/echo-headers?k=${key}`, {
+				method: 'POST',
+				body: 'a deferred body',
+				activateAfter: 0,
+			});
+			for (let i = 0; i < 40; i++) {
+				await new Promise((resolve) => setTimeout(resolve, 100));
+				const recorded = await fetch(`/echo-headers/recorded?k=${key}`).then(
+					(response) => response.json(),
+				);
+				if (recorded)
+					return {
+						arrived: true,
+						method: recorded.method ?? null,
+						activated: result.activated,
+					};
+			}
+			return 'TELL:did not arrive';
+		},
+		6000,
+	);
 	__advFinish(2000);
 </script>
