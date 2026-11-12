@@ -35,8 +35,33 @@ const LOST =
 	/SendRequest|IncompleteMessage|BrokenPipe|broken pipe|connection closed|ConnectionReset|UnexpectedEof/;
 /** sent again when their connection is lost, as Chrome does (no body) */
 const REPLAYABLE = new Set(['GET', 'HEAD', 'OPTIONS']);
-/** a lost connection, a dead multiplexor found on the way, then the new one */
-const ATTEMPTS = 3;
+/**
+ * A lost connection, a dead multiplexor found on the way, then the new one,
+ * with room for a couple of retries against a server throttling a burst
+ * (`backoff` spaces those out).
+ */
+const ATTEMPTS = 5;
+
+/** how long to wait before trying a throttled request again, growing per attempt (ms) */
+const BACKOFF_MS = [50, 120, 250, 500];
+
+/** wait out a throttled retry, resolving early if the request is aborted */
+function backoff(
+	attempt: number,
+	signal: AbortSignal | undefined,
+): Promise<void> {
+	const ms = BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length) - 1];
+	return new Promise((resolve) => {
+		if (signal?.aborted) return resolve();
+		const done = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener('abort', done);
+			resolve();
+		};
+		const timer = setTimeout(done, ms);
+		signal?.addEventListener('abort', done, { once: true });
+	});
+}
 
 /** whether `error` says the transport's wisp connection is gone */
 export const wispGone = (error: unknown): boolean =>
@@ -157,6 +182,13 @@ export default class RevivingTransport implements ProxyTransport {
 				if (!gone && !LOST.test(message)) throw error;
 				if (gone && !(await this.revive(generation))) throw error;
 				if (!(UNSENT.test(message) && resendable) && !replayable) throw error;
+				// The connection is still up and the request never went out (a wisp
+				// server throttling a burst refuses the extra streams: the stream, and
+				// so epoxy's TLS over it, ends before the request is sent). Trying again
+				// at once only meets the same full window, so back off a little first and
+				// let the streams ahead of it finish. A revived request already waited
+				// for the new transport's init, so it is not held up again here.
+				if (!gone) await backoff(attempt, signal);
 			} finally {
 				if (waiting) this.#waiting.delete(waiting);
 			}
