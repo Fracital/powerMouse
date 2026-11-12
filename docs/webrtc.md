@@ -127,9 +127,19 @@ access (`--use-fake-ui-for-media-stream`, real addresses natively). The
 fixtures (a STUN server that answers, sinks that only listen) do hear
 packets through the proxy now, from the demo's wisp server, which shares
 the machine with them. What they must never hear is a socket of the
-browser's: the suite samples which process holds which port while the
-probes run (`ss`, test/sockets.mjs) and attributes each packet a fixture
-got. Nothing a page reads may hold one of the machine's addresses, the 701
+browser's: each fixture asks /proc which process holds the port a packet
+came from as it arrives, and a thread of the suite's samples every UDP
+socket every 2 ms for one that closed before that (test/sockets.mjs); a
+port two processes held in the time the packet can have been sent from
+is 'ambiguous', one nobody was seen holding 'unseen', and both fail the
+check rather than being guessed. The sampler it replaces (`ss` every 50
+ms) missed sockets of the wisp server that lived between two of its
+samples ("N unseen"), and once credited two packets to a browser socket
+that had held their port until just before: with the browser alone in a
+network namespace of its own, 160 runs of that probe through the proxy
+sent no packet out of the browser's namespace but TCP to the proxy.
+
+Nothing a page reads may hold one of the machine's addresses, the 701
 errors and the API surface read as natively, and a data channel opens
 between two connections of one page and between two proxied pages in
 frames.

@@ -186,7 +186,10 @@ async function page(browser, base) {
 
 // TURN over TLS: the fixture's certificate is trusted by its key here,
 // and through the proxy by the test transport (test/turn.mjs)
-const tlsTurn = await startTurn({ transport: 'tls' });
+const tlsTurn = await startTurn({
+	transport: 'tls',
+	arrival: sockets.arrival,
+});
 const browser = await launch([
 	`--ignore-certificate-errors-spki-list=${tlsTurn.spki}`,
 ]);
@@ -369,7 +372,10 @@ const freePort = () =>
 		});
 	});
 
-const tcpTurn = await startTurn({ transport: 'tcp' });
+const tcpTurn = await startTurn({
+	transport: 'tcp',
+	arrival: sockets.arrival,
+});
 const silentTcp = await startTurn({ transport: 'tcp', silent: true });
 const deadTls = await startTurn({ transport: 'tls', handshake: false });
 const good = { username: 'user', credential: 'secret' };

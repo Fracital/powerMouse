@@ -4,24 +4,49 @@
 // is each of its processes (the network service owns WebRTC's sockets); the
 // demo server is the process listening on the proxy's port, and its wisp
 // server, which sends the proxied connections' packets, is that process or
-// a child of it (the demo runs holyWisp as one). `ss` lists each local port
-// with the processes that hold it: sampled while the probes run, it tells
-// which of the two sent a packet a fixture got. A browser's socket lives as
-// long as its connection gathers or checks, far longer than a sample.
-// Linux only: it needs `ss -p` and /proc.
+// a child of it (the demo runs holyWisp as one). Which process holds a
+// socket is read from /proc (the socket's inode in /proc/net, the process
+// whose file descriptors hold it, test/socket-table.mjs):
+//
+// - a fixture asks as each packet or connection arrives (`arrival`), while
+//   the socket that sent it is open, if it still is;
+// - a thread of its own samples every UDP socket every few milliseconds,
+//   for one that sent and closed before the fixture's thread ran (a wisp
+//   server's stream for a STUN request can live a few hundred
+//   milliseconds, and the suite's thread stalls for as long under load);
+//   TCP connections to the fixtures, which outlive any gap, are sampled
+//   with `ss`.
+//
+// A packet is the holder's of its port at the time it can have been sent:
+// from when the fixture's thread last ran before it (it arrived no
+// earlier) to when it was read. Two holders of the port in that time (a
+// port given up and taken again) make it 'ambiguous', none 'unseen': never
+// a guess. Linux only: it needs /proc and `ss -p`.
 import { execFile } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
+import { Worker } from 'node:worker_threads';
 import { PROXY, sleep } from './lib.mjs';
+import { inodeOwners, table } from './socket-table.mjs';
 
 const ss = promisify(execFile);
 
+/** how often the UDP sampler reads the table, ms */
+const PERIOD = 2;
+/** how often the fixtures' thread notes that it ran, ms */
+const TICK = 5;
+/** what the time a packet can have been sent from is widened by: the sampler's period and a tick, ms */
+const SLACK = 2 * PERIOD + TICK;
+const ORDER = ['browser', 'server', 'other', 'suite'];
+
 /**
- * Starts sampling. `senders(packets, protocol)` tells who sent each of
- * `packets` ([{ port, at }], the source port and when it arrived): 'browser',
- * 'server' (the demo's wisp server), 'suite' (this process), 'other' or
- * 'unseen'; `owner(port, protocol)` tells who holds a port now. `stop()`
- * ends the sampling.
+ * Starts sampling. `arrival(port, protocol)` is called by a fixture as a
+ * packet or a connection from `port` arrives, and answers what to keep of
+ * it: `{ port, at, since, who }`. `senders(packets, protocol)` tells who
+ * sent each of `packets` (such arrivals, or `{ port, at }`): 'browser',
+ * 'server' (the demo's wisp server), 'suite' (this process), 'other',
+ * 'unseen' or 'ambiguous'; `owner(port, protocol)` tells who holds a port
+ * now. `stop()` ends the sampling and answers how many packets were
+ * attributed to whom (as `tally` writes it).
  */
 export async function watchSockets(proxy = PROXY) {
 	const serverPid = Number(
@@ -30,55 +55,54 @@ export async function watchSockets(proxy = PROXY) {
 		).stdout.match(/pid=(\d+)/)?.[1],
 	);
 	if (!serverPid) throw new Error('ss does not show the demo server');
-	const owners = new Map();
-	function ownerOf(pid) {
-		if (owners.has(pid)) return owners.get(pid);
-		let owner = 'other';
-		if (pid === serverPid) owner = 'server';
-		else if (pid === process.pid) owner = 'suite';
-		else
-			for (let at = pid, depth = 0; at > 1 && depth < 32; depth++) {
-				try {
-					const stat = readFileSync(`/proc/${at}/stat`, 'utf8');
-					at = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
-				} catch {
-					break;
-				}
-				if (at === serverPid) {
-					owner = 'server';
-					break;
-				}
-				if (at === process.pid) {
-					owner = 'browser';
-					break;
-				}
-			}
-		owners.set(pid, owner);
-		return owner;
-	}
-	// Each protocol is sampled on its own (listing TCP takes several times as
-	// long): `samples` is when each sample started and ended, `held` the runs
-	// of consecutive samples in which a kind of process held a port
-	const samples = { udp: [], tcp: [] };
-	/** `udp:port` or `tcp:port` -> [{ owner, first, last }] (indexes in `samples`) */
-	const held = new Map();
+	const { found, resolve, ownerOf } = inodeOwners(serverPid, process.pid);
+
+	// when this thread last ran: a packet read now arrived no earlier
+	let ran = Date.now();
+	const ticker = setInterval(() => (ran = Date.now()), TICK);
+
+	/** UDP: `port/inode` -> { port, owner, from, to }, from the sampler */
+	const udp = new Map();
+	let udpUntil = 0;
+	const sampler = new Worker(new URL('./socket-table.mjs', import.meta.url), {
+		workerData: {
+			socketSampler: true,
+			serverPid,
+			suitePid: process.pid,
+			period: PERIOD,
+		},
+	});
+	const stopped = new Promise((done) => {
+		sampler.on('message', ({ at, spans, stopped }) => {
+			for (const span of spans) udp.set(`${span.port}/${span.inode}`, span);
+			udpUntil = at;
+			if (stopped) done();
+		});
+		sampler.on('error', done);
+		sampler.on('exit', done);
+	});
+	sampler.unref();
+
+	/** TCP: `port` -> [{ owner, first, last }] (indexes in `taken`), from `ss` */
+	const tcp = new Map();
+	const taken = [];
 	let sampling = true;
-	async function watch(protocol, flags) {
+	const watching = (async () => {
 		while (sampling) {
 			const start = Date.now();
-			const { stdout } = await ss('ss', [flags], {
+			const { stdout } = await ss('ss', ['-Htanp'], {
 				maxBuffer: 1 << 26,
 			}).catch(() => ({ stdout: null }));
 			if (stdout !== null) {
-				const index = samples[protocol].push({ start, end: Date.now() }) - 1;
+				const index = taken.push({ start, end: Date.now() }) - 1;
 				for (const line of stdout.split('\n')) {
 					const local = line.trim().split(/\s+/)[3];
 					if (!local) continue;
-					const key = `${protocol}:${local.slice(local.lastIndexOf(':') + 1)}`;
+					const port = Number(local.slice(local.lastIndexOf(':') + 1));
 					for (const [, pid] of line.matchAll(/pid=(\d+)/g)) {
 						const owner = ownerOf(Number(pid));
-						let spans = held.get(key);
-						if (!spans) held.set(key, (spans = []));
+						let spans = tcp.get(port);
+						if (!spans) tcp.set(port, (spans = []));
 						const last = spans.findLast((span) => span.owner === owner);
 						if (last && last.last >= index - 1) last.last = index;
 						else spans.push({ owner, first: index, last: index });
@@ -87,38 +111,69 @@ export async function watchSockets(proxy = PROXY) {
 			}
 			await sleep(50);
 		}
-	}
-	const samplers = [watch('udp', '-Huanp'), watch('tcp', '-Htanp')];
-	/**
-	 * The port's holder is read from the samples around the packet, from the
-	 * last one that ended before it to the first one that started after it:
-	 * a socket that outlives the gap between two samples is in one of them
-	 * (a fixture that answers at once should wait a little so that every
-	 * socket does).
-	 */
-	const senders = (packets, protocol = 'udp') => {
-		const taken = samples[protocol];
-		return packets.map(({ port, at }) => {
-			const before = taken.findLastIndex((sample) => sample.end <= at);
+	})();
+
+	/** who holds the socket at local `port` this moment */
+	const holder = (port, protocol) => {
+		const inodes = table(protocol).get(port) ?? new Set();
+		resolve(inodes, true);
+		const who = [...inodes].map((inode) => found.get(inode));
+		return ORDER.find((owner) => who.includes(owner)) ?? 'gone';
+	};
+	const arrival = (port, protocol = 'udp') => ({
+		port,
+		at: Date.now(),
+		since: ran,
+		who: holder(port, protocol),
+	});
+
+	/** each packet attributed so far, by verdict, once */
+	const verdicts = new Map();
+	const counted = new WeakSet();
+	const senders = (packets, protocol = 'udp') =>
+		packets.map((packet) => {
+			const verdict = sender(packet, protocol);
+			if (!counted.has(packet)) {
+				counted.add(packet);
+				verdicts.set(verdict, (verdicts.get(verdict) ?? 0) + 1);
+			}
+			return verdict;
+		});
+	const sender = ({ port, at, since = at, who: told }, protocol) => {
+		const who = new Set(told && told !== 'gone' ? [told] : []);
+		if (protocol === 'udp') {
+			for (const span of udp.values())
+				if (
+					span.port === port &&
+					span.from <= at + SLACK &&
+					span.to >= since - SLACK
+				)
+					who.add(span.owner);
+		} else {
+			const before = taken.findLastIndex((sample) => sample.end <= since);
 			let after = taken.findIndex((sample) => sample.start >= at);
 			if (after === -1) after = taken.length - 1;
-			const who = (held.get(`${protocol}:${port}`) ?? [])
-				.filter((span) => span.first <= after && span.last >= before)
-				.map((span) => span.owner);
-			for (const owner of ['browser', 'server', 'other', 'suite'])
-				if (who.includes(owner)) return owner;
-			return 'unseen';
-		});
+			for (const span of tcp.get(port) ?? [])
+				if (span.first <= after && span.last >= before) who.add(span.owner);
+		}
+		if (who.size > 1) return 'ambiguous';
+		return [...who][0] ?? 'unseen';
 	};
+
 	/**
-	 * Who holds `port` now: read once a sample has been taken that started
-	 * after the question, so a socket opened a moment ago is in it
+	 * Who holds `port` now: read once a sample has been taken after the
+	 * question, so a socket opened a moment ago is in it
 	 */
 	const owner = async (port, protocol = 'udp') => {
 		const at = Date.now();
-		while (sampling && !samples[protocol].some((sample) => sample.start >= at))
-			await sleep(25);
-		return senders([{ port, at }], protocol)[0];
+		while (
+			sampling &&
+			(protocol === 'udp'
+				? udpUntil < at
+				: !taken.some((sample) => sample.start >= at))
+		)
+			await sleep(10);
+		return sender({ port, at }, protocol);
 	};
 	/**
 	 * The sockets a kind of process (`server`, `browser`) holds now that are
@@ -144,12 +199,18 @@ export async function watchSockets(proxy = PROXY) {
 		return counts;
 	};
 	return {
+		arrival,
 		senders,
 		owner,
 		connected,
 		async stop() {
 			sampling = false;
-			await Promise.all(samplers);
+			clearInterval(ticker);
+			sampler.postMessage('stop');
+			await Promise.all([watching, stopped]);
+			return tally(
+				[...verdicts].flatMap(([verdict, count]) => Array(count).fill(verdict)),
+			);
 		},
 	};
 }

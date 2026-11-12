@@ -994,7 +994,7 @@ TURN server.
   by design (section 2).
 - **libcurl has no datagram streams**: with that transport a connection
   gathers its host candidate and nothing else, and never connects.
-- The socket attribution of the two suites needs Linux (`ss -p`, `/proc`).
+- The socket attribution of the suites needs Linux (`/proc`, `ss -p`).
 
 ## 16. Media as built
 

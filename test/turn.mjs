@@ -152,7 +152,9 @@ function frames(buffered, each) {
  * `refused` count what it did. `bindingDelay` (ms) holds each Binding
  * answer back, so that the socket that asked lives long enough for a suite
  * to sample it. `port` 0 takes a free one. `onMessage(message, from)` sees
- * every message as it arrives, to log what a browser sends.
+ * every message as it arrives, to log what a browser sends. With
+ * `arrival(port, protocol)` (test/sockets.mjs) each packet and connection
+ * keeps what it says of the socket it came from as it arrived.
  */
 export function startTurn({
 	transport = 'udp',
@@ -167,6 +169,7 @@ export function startTurn({
 	certificate = CERTIFICATE,
 	key = KEY,
 	onMessage = null,
+	arrival = null,
 } = {}) {
 	const nonce = randomBytes(8).toString('hex');
 	const longTermKey = createHash('md5')
@@ -251,7 +254,12 @@ export function startTurn({
 	};
 
 	const handle = (message, from) => {
-		server.packets.push({ from: from.key, port: from.port, at: Date.now() });
+		server.packets.push({
+			from: from.key,
+			port: from.port,
+			at: Date.now(),
+			...arrival?.(from.port, transport === 'udp' ? 'udp' : 'tcp'),
+		});
 		onMessage?.(message, from.key);
 		if (silent) return;
 		const allocation = allocations.get(from.key);
@@ -441,6 +449,7 @@ export function startTurn({
 			from: `${raw.remoteAddress}:${raw.remotePort}`,
 			port: raw.remotePort,
 			at: Date.now(),
+			...arrival?.(raw.remotePort, 'tcp'),
 		};
 		entries.set(entry.from, entry);
 		server.connections.push(entry);

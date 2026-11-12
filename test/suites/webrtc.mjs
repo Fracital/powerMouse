@@ -49,7 +49,7 @@ const RESOLVER =
 
 // whose socket sent a packet: test/sockets.mjs
 const sockets = await watchSockets();
-const { senders } = sockets;
+const { senders, arrival } = sockets;
 const ANSWER_MS = 500;
 /**
  * A fixture on one port: over UDP, a STUN server that answers Binding
@@ -62,7 +62,7 @@ async function fixtureServer({ answers = false, tcp = false } = {}) {
 		const packets = [];
 		let closed = false;
 		socket.on('message', (message, from) => {
-			packets.push({ port: from.port, at: Date.now() });
+			packets.push(arrival(from.port));
 			if (!answers || message.length < 20 || message.readUInt16BE(0) !== 0x0001)
 				return;
 			const attribute = Buffer.alloc(12);
@@ -99,7 +99,7 @@ async function fixtureServer({ answers = false, tcp = false } = {}) {
 		let listener = null;
 		if (tcp) {
 			listener = net.createServer((connection) => {
-				connections.push({ port: connection.remotePort, at: Date.now() });
+				connections.push(arrival(connection.remotePort, 'tcp'));
 				sockets.add(connection);
 				connection.on('error', () => {});
 				connection.on('close', () => sockets.delete(connection));
@@ -1066,5 +1066,5 @@ const errors = [
 		true,
 	)),
 ];
-await sockets.stop();
+console.log(`note: packets attributed: ${await sockets.stop()}`);
 await done(null, errors);

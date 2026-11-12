@@ -39,7 +39,10 @@ import { startTurn } from '../turn.mjs';
 const target = `${FIXTURE}pages/webrtc-peer.html`;
 const sockets = await watchSockets();
 // a Binding answer waits, so that the stream that asked outlives a sample
-const turn = await startTurn({ bindingDelay: 500 });
+const turn = await startTurn({
+	bindingDelay: 500,
+	arrival: sockets.arrival,
+});
 const turnServers = [
 	{
 		urls: `turn:127.0.0.1:${turn.port}`,
