@@ -769,7 +769,16 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				// a document whose permissions policy turns `sync-xhr` off (the
 				// browser's, which the service worker gives it) fails a
 				// synchronous request before it starts, as Chrome's does
-				if (!this.#async && !syncAllowed()) {
+				// (and one its connect-src refuses, which no worker sees: the bridge
+				// carries it, so the browser is made to refuse and report it,
+				// src/csp.ts)
+				if (
+					!this.#async &&
+					(!syncAllowed() ||
+						that.client.connectRefusal(
+							new URL(this.#url, that.client.baseURL.toString()),
+						))
+				) {
 					const failed = new URL(this.#url, that.client.baseURL.toString());
 					failed.hash = '';
 					failed.username = '';

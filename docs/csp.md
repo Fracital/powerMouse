@@ -32,9 +32,8 @@ directive with `'self'` (the proxy origin: every routed load and every
 request of the proxy's own) and the page's local schemes as written. A
 `data:` image, a `blob:` frame or a `fetch('data:,')` is refused, reported
 and seen by the page exactly as natively, by the browser itself. Scripts and
-styles are not among them yet (the shell and every rewritten inline script
-would be judged too); neither are base-uri, form-action, sandbox,
-frame-ancestors or Trusted Types. report-uri and report-to are left out
+styles reach it too (below); base-uri, form-action, sandbox,
+frame-ancestors and Trusted Types do not yet. report-uri and report-to are left out
 (the browser would post the proxy's URLs). A report-only policy goes to the
 browser as one. A meta's content is replaced by the browser policy for it
 (the inject's attribute hook; the page reads its own content back), and it
@@ -53,6 +52,49 @@ sealed copies' worker comes from the worker's route and asks it whether a
 `blob:` URL is gone, and an object's copy (a `blob:` URL in every document)
 is let through by the browser wherever the page lets any object load,
 while the inject refuses the page's own `blob:` objects.
+
+## Scripts and styles
+
+script-src-elem, script-src-attr, style-src-elem and style-src-attr reach
+the browser each for itself (`codeSources`), with the page's keywords,
+nonces, hashes and local schemes as written: the browser itself runs or
+refuses the page's inline code by 'unsafe-inline' and its nonces, runs what
+'strict-dynamic' lets through, and refuses the rest, reporting it as
+natively. The proxy's own scripts (the shell, the inject bundle, the
+rewriter library, the scripts the inject makes) carry a nonce of the
+document's (the worker makes one per document and names it in the shell,
+`CSP_FACTS`), which every browser policy names wherever the page's inline
+code does not run without a nonce (a nonce turns 'unsafe-inline' off);
+where it does, the bundle loads by 'self'. 'self' (every routed script) is
+given where the page's list names URLs and decides by nothing else, and
+the worker applies the hosts (`hostsApply`); where the list also takes
+nonces or hashes, a script the page's policy allows by its host carries
+the document's nonce, given by the inject (`codeNonce`). A worker of the
+document imports the inject by URL, which the browser's policy names
+(importScripts takes no nonce).
+
+The rewrite changes the page's inline code, so the browser's hash of it is
+not the page's: the inject hashes the page's own text (`src/sha.ts`, SHA-256,
+384 and 512 synchronously) and gives an inline script or style the
+document's nonce where every enforced policy of the page's allows it (by a
+hash, by a nonce, by 'unsafe-inline') and the browser's copy of one would
+not; an external script by its `integrity` likewise. The page reads no
+such nonce back (`nonce` is the page's).
+
+script-src (or default-src) itself reaches the browser as the page wrote
+it, since everything else it would govern has a directive of its own: it
+decides eval, `Function`, string timers and WebAssembly compilation, and
+the EvalError and CompileError the browser throws name the page's
+directive. Where it refuses code made from a string, the inject makes
+none of its own (the browser would report each attempt): the shared
+rewriter realm, a frame's library, the host's hooks and the blocker's
+scriptlets are made by scripts that carry the document's nonce, the
+realm holds the whole rewriter library (the light one would make it from
+its text), and a worker imports the library's file. A classic worker of a
+`blob:` URL, which inherits the document's policy, cannot import the page's
+blob where the policy refuses `blob:` scripts: the page's Blob is the
+bootstrap's own text, after its preamble. A violation's `sample`
+('report-sample') is the page's code.
 
 ## Hosts
 
@@ -100,9 +142,22 @@ of them to such a response).
 
 ## Not yet as natively
 
-- Scripts and styles (script-src, style-src and their -elem and -attr
-  forms, nonces, hashes, `'strict-dynamic'`, `'unsafe-eval'`), sandbox,
-  Trusted Types, base-uri, form-action and frame-ancestors are not applied.
+- Sandbox, Trusted Types, base-uri, form-action and frame-ancestors are
+  not applied.
+- 'unsafe-hashes' with the hash of an event handler, a style attribute or a
+  `javascript:` URL: the rewrite changes the text, and the browser refuses
+  it.
+- A stylesheet `<link>` the page's policy allows by its host where the
+  list also takes nonces is refused.
+- A module worker of a `blob:` URL under a policy that refuses `blob:`
+  scripts does not start (its bootstrap imports the page's module).
+- A report-only policy does not report an inline script an enforced one
+  allows by its hash.
+- Under 'strict-dynamic' the inject bundle's script carries the document's
+  nonce (nothing else lets it through), and V8 keys a script's compiled
+  code by its nonce too: each such document compiles its own copy of the
+  bundle (about 770 KB of heap a frame, measured). Elsewhere the bundle
+  loads by its URL, which the browser's policy names.
 - A frame's navigations other than the src its parent sets (a redirect, a
   navigation the frame starts) are not judged by the parent's frame-src.
 - A policy a script inserts as a meta is applied by the browser, but its
@@ -111,5 +166,7 @@ of them to such a response).
   reports for a load the inject made on the page's behalf name no script
   of the page's.
 - A worker's own policy (its script's response headers) is not applied.
+- No report goes to a policy's report-uri or report-to endpoint (the site
+  never sees one; the page sees every violation, as natively).
 - An `<object>` of a page-made `blob:` URL does not load through the proxy,
   with or without a policy.

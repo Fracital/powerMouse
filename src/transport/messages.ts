@@ -289,6 +289,11 @@ export const MIXED_CONTENT_NOTICE = '$stomp$mixedContent';
  */
 export const CSP_REPORT = '$stomp$cspReport';
 /**
+ * The global the shell names its document's script policy in for the
+ * client it makes (src/csp.ts ScriptFacts), taken and deleted by the client
+ */
+export const CSP_FACTS = '$stomp$cspFacts';
+/**
  * SW -> the window that asked for a script the rewrite cache's kept
  * response answered: [the routed URL, when (ms since the epoch), how it
  * was delivered] (src/server/keptLoads.ts), which the response itself

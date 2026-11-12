@@ -196,7 +196,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		const rewriteStyleText = (style: StyleElement) => {
 			const text = style.textContent;
 			if (!text) return;
-			style.textContent = this.client.prepareStyleText(text);
+			const routed = this.client.prepareStyleText(text);
+			// a style the page's policy lets through by the hash of its text,
+			// which the routing changed (src/csp.ts)
+			if (routed !== text) this.client.giveCodeNonce(style, null, text, true);
+			style.textContent = routed;
 			prewritten.add(style);
 		};
 
@@ -420,6 +424,9 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// errors read as an unnamed script's. Rewriting it again changes
 			// nothing
 			if (rewritten !== script.text) rewrittenScripts.set(script, rewritten);
+			// let through by the hash of the page's text where its policy says so
+			if (!script.hasAttribute('src'))
+				this.client.giveCodeNonce(script, null, script.text, false);
 			script.text = rewritten;
 		};
 

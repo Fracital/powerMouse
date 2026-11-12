@@ -2,6 +2,7 @@ import { injectWorkerJS, pageBlobURL, proxyBlobURL } from '../../routeURL';
 import { routeJS } from '../../scriptRoutes';
 import StompURL from '../../StompURL';
 import {
+	CSP_FACTS,
 	WORKER_BASE,
 	WORKER_ERROR,
 	WORKER_PARTITION,
@@ -58,11 +59,22 @@ export default class WorkerModule extends Module<Client> {
 				// (workerBlobs). A URL whose Blob is not known here is imported
 				// as it is
 				const blob = blobsByURL.get(proxyBlobURL(url.href));
+				// a classic worker of a document whose policy refuses a blob:
+				// script (src/csp.ts) cannot import the page's: its Blob is the
+				// bootstrap's own text, after the preamble
+				const inline =
+					!!blob &&
+					!isModule &&
+					!!(
+						this.client as {
+							browserRefuses?: (directive: string, scheme: string) => boolean;
+						}
+					).browserRefuses?.('script-src-elem', 'blob:');
 				let script = url.href;
 				// once the import is done the bootstrap says so, on a message
 				// the hook below takes before any of the page's listeners
 				let loaded = '';
-				if (blob) {
+				if (blob && !inline) {
 					script = lastPrivate = proxyBlobURL(global.URL.createObjectURL(blob));
 					// (a shared worker's scope has no postMessage)
 					loaded = `\nif (typeof postMessage === 'function') postMessage({ [${JSON.stringify(WORKER_LOADED)}]: ${JSON.stringify(script)} });`;
@@ -72,13 +84,32 @@ export default class WorkerModule extends Module<Client> {
 				// and its partition, which the client reads before the page's
 				// script runs (a routed worker's route names it)
 				const partition = this.client.partition;
+				// and its document's script policy, which a blob: worker
+				// inherits (src/csp.ts ScriptFacts)
 				const base =
 					`globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(
 						this.client.url.toString(),
 					)};` +
 					(partition
 						? `globalThis[${JSON.stringify(WORKER_PARTITION)}] = ${JSON.stringify(partition)};`
-						: '');
+						: '') +
+					(this.client.scriptFacts.evaluates
+						? ''
+						: `globalThis[${JSON.stringify(CSP_FACTS)}] = { evaluates: false };`);
+				if (inline)
+					return proxyBlobURL(
+						global.URL.createObjectURL(
+							new NativeBlob(
+								[
+									base +
+										modifyJS('', this.client.url, this.client.config, type) +
+										'\n',
+									blob!,
+								],
+								{ type: 'text/javascript' },
+							),
+						),
+					);
 				const bootstrap =
 					base +
 					(isModule

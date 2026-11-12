@@ -2,7 +2,7 @@ import { escapeText } from 'entities';
 import type { AdblockPage } from './blocker/types';
 import type GenericCodec from './Codecs';
 import { Config } from './config';
-import type { PolicyText } from './csp';
+import type { PolicyText, ScriptFacts } from './csp';
 import { helperNames } from './helperNames';
 import type { Prewritten } from './prewrite';
 import type { ReferrerInfo } from './referrerPolicy';
@@ -17,7 +17,12 @@ import {
 import type { ControlInfo } from './serviceWorkerTypes';
 import type { SiteFacts } from './siteFacts';
 import StompURL from './StompURL';
-import { SHELL_MARKUP, SW_CONTROL, WORKER_BASE } from './transport/messages';
+import {
+	CSP_FACTS,
+	SHELL_MARKUP,
+	SW_CONTROL,
+	WORKER_BASE,
+} from './transport/messages';
 import { dataBody } from './urlShape';
 import { LIBRARY_FACTORY, LIGHT_FACTORY } from './version';
 
@@ -197,6 +202,34 @@ function referred(client: string, referrer: ReferrerInfo | undefined): string {
 	return `\t${client}.setReferrer(document, ${info});`;
 }
 
+/** what a shell written on this thread says of its document's script policy when its caller says nothing: the inject's client's */
+let shellFacts: (() => ScriptFacts | undefined) | null = null;
+export function provideShellFacts(provider: () => ScriptFacts | undefined) {
+	shellFacts = provider;
+}
+
+/**
+ * The shell's statement that names its document's script policy for the
+ * client it makes (src/csp.ts ScriptFacts), when it has one
+ */
+function scriptFacts(facts: ScriptFacts | undefined): string {
+	if (!facts) return '';
+	return `Reflect.defineProperty(globalThis, ${JSON.stringify(CSP_FACTS)}, { value: ${JSON.stringify(facts)}, configurable: true });\n\t`;
+}
+
+/**
+ * The shell's statement that hands the facts to a client the window kept
+ * from its initial document (a frame the parent injected before it
+ * navigated, whose Window the browser keeps for a document of its origin):
+ * the document's own policy is the one its headers name, and the global
+ * goes (the client took it otherwise)
+ */
+function keptFacts(client: string, facts: ScriptFacts | undefined): string {
+	if (!facts) return '';
+	const key = JSON.stringify(CSP_FACTS);
+	return `\n\tif (${key} in globalThis) { ${client}.scriptFacts = globalThis[${key}]; delete globalThis[${key}]; }`;
+}
+
 /**
  * The shell's statement that hands the client the policies of its
  * document's headers the browser applies, each with the page's text it
@@ -274,6 +307,8 @@ export function modifyHTML(
 	agentCluster?: 'site' | 'origin',
 	/** the policies of its headers the browser applies, with the page's texts (src/csp.ts browserHeaders) */
 	policies?: PolicyText[],
+	/** its script policy, for the client (src/csp.ts ScriptFacts); its nonce is the shell's scripts' */
+	facts?: ScriptFacts,
 ): string {
 	const { head, tail } = shell(
 		script,
@@ -291,6 +326,7 @@ export function modifyHTML(
 		isolation,
 		agentCluster,
 		policies,
+		facts,
 	);
 	return head + tail(prewritten);
 }
@@ -319,6 +355,8 @@ export function modifyHTMLStreamed(
 	agentCluster?: 'site' | 'origin',
 	/** as modifyHTML's */
 	policies?: PolicyText[],
+	/** as modifyHTML's */
+	facts?: ScriptFacts,
 ): { head: string; tail: (prewritten: Prewritten | null) => string } {
 	return shell(
 		script,
@@ -336,6 +374,7 @@ export function modifyHTMLStreamed(
 		isolation,
 		agentCluster,
 		policies,
+		facts,
 	);
 }
 
@@ -357,14 +396,20 @@ function shell(
 	/** what the document's Origin-Agent-Cluster asked for (DocumentClient.agentCluster) */
 	agentCluster?: 'site' | 'origin',
 	policies?: PolicyText[],
+	facts?: ScriptFacts,
 ): { head: string; tail: (prewritten?: Prewritten | null) => string } {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
+	// a shell the page realm builds is of a document that inherits the
+	// builder's policy, and its facts with it
+	facts ??= shellFacts?.();
+	nonce ??= facts?.nonce;
 	const names = helperNames(config);
 	const markupKey = JSON.stringify(SHELL_MARKUP);
 	const markup = () => escapeText(JSON.stringify(script));
-	const controlled = control
-		? `globalThis[${JSON.stringify(SW_CONTROL)}] = ${JSON.stringify(control).replace(/</g, '\\u003c')};\n\t`
-		: '';
+	const controlled =
+		(control
+			? `globalThis[${JSON.stringify(SW_CONTROL)}] = ${JSON.stringify(control).replace(/</g, '\\u003c')};\n\t`
+			: '') + scriptFacts(facts);
 	// the blocker's cosmetic rules and scriptlets, handed to the client before
 	// the markup: the scriptlets run before the page's first script, the
 	// rules apply as the markup lands (docs/adblock.md)
@@ -383,7 +428,7 @@ function shell(
 } else {
 	${controlled}if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
-	else delete globalThis.createClient;
+	else delete globalThis.createClient;${keptFacts(names.client, facts)}
 
 ${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}${
 		upgradeInsecure
@@ -426,15 +471,20 @@ ${blocked}
 }`;
 
 	const attribute = nonce ? ` nonce="${nonce.replace(/[^\w+/=-]/g, '')}"` : '';
+	// the scripts that load by URL carry the nonce only where no policy lets
+	// them through by it (ScriptFacts.loadsByNonce), or where the nonce is a
+	// sandbox's (no allow-scripts), which lets nothing else through
+	const loading =
+		facts?.nonce === nonce && !facts?.loadsByNonce ? '' : attribute;
 	const baseScript = base
 		? `<script${attribute}>globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(url.toString()).replace(/</g, '\\u003c')};</script>`
 		: '';
 	const kept = streamed
 		? `<script${attribute}>globalThis[${markupKey}] = ${markup()};</script>`
 		: '';
-	const library = top ? libraryScripts(url, config, attribute) : '';
+	const library = top ? libraryScripts(url, config, attribute, loading) : '';
 	return {
-		head: `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${baseScript}${library}<script${attribute} src="${injectDocumentJS(url, config)}"></script>${kept}`,
+		head: `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${baseScript}${library}<script${loading} src="${injectDocumentJS(url, config)}"></script>${kept}`,
 		tail: (prewritten) =>
 			`<script${attribute}>${inject(prewritten)}</script></body></html>`,
 	};
@@ -456,7 +506,13 @@ ${blocked}
  * of this. `attribute`: what the shell's own scripts carry (a nonce, the
  * XHTML namespace).
  */
-function libraryScripts(url: StompURL, config: Config, attribute: string) {
+function libraryScripts(
+	url: StompURL,
+	config: Config,
+	attribute: string,
+	/** what the script that loads the file carries */
+	loading = attribute,
+) {
 	// the file assigns two names: the library's and the document's light
 	// library's (build.js)
 	const names = [LIBRARY_FACTORY, LIGHT_FACTORY]
@@ -465,7 +521,7 @@ function libraryScripts(url: StompURL, config: Config, attribute: string) {
 				`Reflect.defineProperty(globalThis, ${JSON.stringify(name)}, { writable: true, configurable: true });`,
 		)
 		.join(' ');
-	return `<script${attribute}>${names}</script><script${attribute} src="${rewriterLibJS(url, config)}"></script>`;
+	return `<script${attribute}>${names}</script><script${loading} src="${rewriterLibJS(url, config)}"></script>`;
 }
 
 /** the mimes an XML document is served under and parsed with */
@@ -490,7 +546,10 @@ export function modifyXML(
 	top = false,
 	/** as modifyHTML's */
 	policies?: PolicyText[],
+	/** as modifyHTML's */
+	facts?: ScriptFacts,
 ): string {
+	facts ??= shellFacts?.();
 	// the root start tag, after the prolog, comments and doctype
 	const tags =
 		/<\?[^>]*\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>|<([A-Za-z_][\w.:-]*)(\s[^>]*?)?(\/?)>/g;
@@ -512,15 +571,17 @@ export function modifyXML(
 	const inject = `if (typeof globalThis.createClient !== 'function') {
 	document.documentElement.textContent = "Stomp bundle did not load. See devtools output for more information.";
 } else {
-	if (!(${JSON.stringify(names.client)} in globalThis))
+	${scriptFacts(facts)}if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
-	else delete globalThis.createClient;
+	else delete globalThis.createClient;${keptFacts(names.client, facts)}
 ${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}
 	if (!${names.client}.applied) ${names.client}.apply();
 	${names.client}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});
 }`;
 	const xhtml = 'http://www.w3.org/1999/xhtml';
-	return `<?xml version="1.0" encoding="UTF-8"?>${root}${top ? libraryScripts(url, config, ` xmlns="${xhtml}"`) : ''}<script xmlns="${xhtml}" src="${injectDocumentJS(url, config)}"></script><script xmlns="${xhtml}">${cdata(inject)}</script></${name}>`;
+	const own = ` xmlns="${xhtml}"${facts?.nonce ? ` nonce="${facts.nonce.replace(/[^\w+/=-]/g, '')}"` : ''}`;
+	const loading = facts?.loadsByNonce ? own : ` xmlns="${xhtml}"`;
+	return `<?xml version="1.0" encoding="UTF-8"?>${root}${top ? libraryScripts(url, config, own, loading) : ''}<script${loading} src="${injectDocumentJS(url, config)}"></script><script${own}>${cdata(inject)}</script></${name}>`;
 }
 
 /**

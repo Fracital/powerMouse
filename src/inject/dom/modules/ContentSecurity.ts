@@ -6,6 +6,41 @@ import { unrouteURL } from '../../modules/Unroute';
 import type DocumentClient from '../Client';
 import { addDocumentOpenListener } from '../Client';
 
+/** how much of the code a violation's sample shows (measured) */
+const SAMPLE_LENGTH = 40;
+
+/**
+ * The page's code an inline violation's `sample` (the browser's, of the
+ * rewritten code) stands for: the text the page reads back of the script
+ * or the style element, or of the attribute of `element` whose rewritten
+ * value starts with it (a handler, a style attribute); null for none
+ */
+function pageCode(target: unknown, sample: string): string | null {
+	const element = target as Element;
+	let local: unknown;
+	try {
+		local = Reflect.apply(nativeLocalName, element, []);
+	} catch (error) {
+		// the document, or no node at all
+		return null;
+	}
+	if (local === 'script' || local === 'style')
+		return (element.textContent ?? '').slice(0, SAMPLE_LENGTH);
+	for (const name of nativeAttributeNames.call(element))
+		if (
+			(name === 'style' || name.startsWith('on')) &&
+			(nativeGetAttribute.call(element, name) ?? '').startsWith(sample)
+		)
+			return (element.getAttribute(name) ?? '').slice(0, SAMPLE_LENGTH);
+	return null;
+}
+const nativeAttributeNames = Element.prototype.getAttributeNames;
+const nativeLocalName = Reflect.getOwnPropertyDescriptor(
+	Element.prototype,
+	'localName',
+)!.get!;
+const nativeGetAttribute = Element.prototype.getAttribute;
+
 /** the fields of a violation that name URLs */
 const URL_FIELDS = ['documentURI', 'blockedURI', 'referrer', 'sourceFile'];
 
@@ -130,5 +165,49 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 			'originalPolicy',
 			(value) => this.client.pagePolicyText(value) ?? value,
 		);
+		// the page's code, which the rewriter changed ('report-sample'): what
+		// it evaluated, or the text the page reads back of the element
+		const nativeTarget = Reflect.getOwnPropertyDescriptor(
+			global.Event.prototype,
+			'target',
+		)?.get;
+		const sample = Reflect.getOwnPropertyDescriptor(prototype, 'sample');
+		if (sample?.get && nativeBlocked && nativeTarget)
+			Reflect.defineProperty(prototype, 'sample', {
+				...sample,
+				get: proxyModule.wrapFunction(sample.get, (target, that, args) => {
+					const value = Reflect.apply(target, that, args);
+					if (typeof value !== 'string' || !value) return value;
+					try {
+						const blocked = Reflect.apply(nativeBlocked, that, []);
+						if (blocked === 'eval') return this.client.codeSample(value);
+						if (blocked !== 'inline') return value;
+						return (
+							pageCode(
+								Reflect.apply(nativeTarget, that, []) as unknown,
+								value,
+							) ?? value
+						);
+					} catch (error) {
+						return value;
+					}
+				}),
+			});
+		// the document's nonce on an element of the page's (one its policy
+		// lets through by a hash or a host, which the browser's copy cannot
+		// judge: DocumentClient.codeNonce) is not the page's
+		for (const owner of [global.HTMLElement, global.SVGElement]) {
+			const descriptor = owner
+				? Reflect.getOwnPropertyDescriptor(owner.prototype, 'nonce')
+				: undefined;
+			if (!descriptor?.get) continue;
+			Reflect.defineProperty(owner.prototype, 'nonce', {
+				...descriptor,
+				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
+					const value = Reflect.apply(target, that, args);
+					return value !== '' && value === this.client.scriptNonce ? '' : value;
+				}),
+			});
+		}
 	}
 }

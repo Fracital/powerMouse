@@ -6,10 +6,13 @@ import { acceptLanguage } from '../acceptLanguage';
 import GenericCodec from '../Codecs';
 import { codecType, Config, ParsedConfig } from '../config';
 import {
+	browserPolicy as browserContentPolicy,
 	browserHeaders,
 	parsePolicies,
 	policyMark,
+	policyNonce,
 	REFUSED_URL,
+	scriptFacts,
 	WORKER_DIRECTIVES,
 } from '../csp';
 import { freshFrameDocument } from '../freshFrame';
@@ -76,8 +79,11 @@ import {
 import { modifyJS, RewrittenBy, routeJS, ScriptType } from '../rewriteJS';
 import {
 	formQuery,
+	injectDocumentJS,
+	injectWorkerJS,
 	linkRouteURL,
 	parseRoutedURL,
+	rewriterLibJS,
 	routeBinary,
 	unwrapRoute,
 } from '../routeURL';
@@ -4173,7 +4179,32 @@ export function registerRewrites(
 				// the page's own policies, as far as the browser can apply them
 				// to the proxy's URLs (src/csp.ts); the inject is told which
 				// page policy each one stands for
-				const policies = browserHeaders(response.headers, policyMark());
+				// (the shell's and the inject's own scripts carry the document's
+				// nonce, which the browser's script policies name; a worker of
+				// the document imports the inject by its URL)
+				const nonce = policyNonce();
+				const policies = browserHeaders(response.headers, policyMark(), {
+					nonce,
+					assets: [
+						injectDocumentJS(url, rewriter.config),
+						injectWorkerJS(url, rewriter.config),
+						rewriterLibJS(url, rewriter.config),
+					].map((asset) => asset.split('?')[0]),
+				});
+				// whether code made from a string runs, under the headers' policies
+				// and the metas' of the head (src/csp.ts ScriptFacts)
+				const decoded = decodeDocument(bytes, contentType);
+				const facts = scriptFacts(
+					[
+						...policies.texts.map(([browser]) => browser).filter(Boolean),
+						...metaPolicies(decoded)
+							.map((policy) =>
+								browserContentPolicy(policy, { nonce, assets: [] }),
+							)
+							.filter((text) => text !== null),
+					],
+					nonce,
+				);
 				if (policies.enforce)
 					responseHeaders.append('content-security-policy', policies.enforce);
 				if (policies.report)
@@ -4185,7 +4216,7 @@ export function registerRewrites(
 				// and gets an XML shell: the HTML one is not well-formed XML
 				if (XML_DOCUMENT_MIMES.includes(mime))
 					return modifyXML(
-						decodeDocument(bytes, contentType),
+						decoded,
 						url,
 						rewriter.config,
 						mime,
@@ -4193,13 +4224,14 @@ export function registerRewrites(
 						shellSites(url, request.routed, rewriter.directory),
 						top,
 						policies.texts,
+						facts,
 					);
 				// A Refresh header schedules its navigation on the document the
 				// browser creates for this response, which the shell re-opens to
 				// write the page: the re-open drops it. The same value as a meta
 				// refresh in the markup lands in the written document instead, and
 				// the inject routes it like any meta refresh the page wrote.
-				let markup = decodeDocument(bytes, contentType);
+				let markup = decoded;
 				// a top-level page's Accept-CH and delegate-ch metas count from
 				// its first subresource (the preload scanner's)
 				if (request.navigation) {
@@ -4293,6 +4325,7 @@ export function registerRewrites(
 						note.isolation,
 						note.agentCluster,
 						policies.texts,
+						facts,
 					);
 				// The page does not wait for the rewrite workers: the shell's
 				// first part (the inject bundle's script and the markup) goes out
@@ -4316,6 +4349,7 @@ export function registerRewrites(
 					note.isolation,
 					note.agentCluster,
 					policies.texts,
+					facts,
 				);
 				const first = UTF8.encode(head);
 				return new ReadableStream<Uint8Array>({

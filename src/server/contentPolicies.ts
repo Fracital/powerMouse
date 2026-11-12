@@ -1,6 +1,8 @@
 import {
+	CODE_DIRECTIVES,
 	FALLBACK,
 	governing,
+	hostsApply,
 	parsePolicies,
 	sourcesMatch,
 	type Policy,
@@ -130,6 +132,9 @@ export function refusingPolicies(
 		const governed = governing(policy, directive);
 		return (
 			governed !== null &&
+			// a script or style list that decides by the element too is the
+			// browser's and the inject's (src/csp.ts hostsApply)
+			(!CODE_DIRECTIVES.includes(directive) || hostsApply(governed.sources)) &&
 			!sourcesMatch(governed.sources, url, document.url, redirected)
 		);
 	});
