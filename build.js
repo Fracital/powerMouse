@@ -180,8 +180,11 @@ const LIGHT_FACTORY = '__stompRewriterLight';
 const rewriterLib = {
 	name: 'rewriter-lib',
 	setup(pluginBuild) {
-		// a worker's has no stylesheets and no suffix list
-		const worker = 'injectWorker' in pluginBuild.initialOptions.entryPoints;
+		// a worker's has no stylesheets and no suffix list (injectWorker and
+		// injectWorkerFull, the crypto-free and crypto-js worker bundles)
+		const worker = Object.keys(pluginBuild.initialOptions.entryPoints).some(
+			(name) => name.startsWith('injectWorker'),
+		);
 		pluginBuild.onResolve({ filter: /^stomp:rewriter-lib$/ }, (args) => ({
 			path: args.path,
 			namespace: 'rewriter-lib',
@@ -266,15 +269,46 @@ const rewriterLibrary = {
  *
  * @type {import('esbuild').BuildOptions[]}
  */
+// The default inject bundles (injectDocument, injectWorker) swap crypto-js
+// for a throwing stub (src/cryptoStub.ts), because crypto-js is read only by
+// the aes and base64 codecs (src/Codecs.ts, its four default imports) and the
+// common deployment runs the xor codec. Those two codecs load injectDocumentFull
+// and injectWorkerFull instead, which carry crypto-js (src/routeURL.ts,
+// src/config.ts). So a proxied frame under xor or generic evaluates no crypto-js
+// (about 19 KB of the document bundle and 61 KB of the worker's, plus its
+// import-time lookup tables: roughly 40 KB of heap and 167 KB of resident
+// memory per frame as measured).
+const cryptoStub = resolve('src/cryptoStub.ts');
+const stubCrypto = {
+	'crypto-js/aes': cryptoStub,
+	'crypto-js/enc-base64': cryptoStub,
+	'crypto-js/enc-utf8': cryptoStub,
+	'crypto-js/md5': cryptoStub,
+};
+
 const builds = [
 	{
 		entryPoints: { injectDocument: 'src/inject/dom/entry.ts' },
+		format: 'iife',
+		alias: stubCrypto,
+		inject: [snapshot, domSnapshot],
+		plugins: [rewriterLib],
+	},
+	{
+		entryPoints: { injectDocumentFull: 'src/inject/dom/entry.ts' },
 		format: 'iife',
 		inject: [snapshot, domSnapshot],
 		plugins: [rewriterLib],
 	},
 	{
 		entryPoints: { injectWorker: 'src/inject/worker/entry.ts' },
+		format: 'iife',
+		alias: stubCrypto,
+		inject: [snapshot],
+		plugins: [rewriterLib],
+	},
+	{
+		entryPoints: { injectWorkerFull: 'src/inject/worker/entry.ts' },
 		format: 'iife',
 		inject: [snapshot],
 		plugins: [rewriterLib],

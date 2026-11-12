@@ -210,6 +210,14 @@ export interface Assets {
 	serviceWorker?: string;
 	injectDocument?: string;
 	injectWorker?: string;
+	/**
+	 * the inject bundles that carry crypto-js (build.js), served to the aes
+	 * and base64 codecs, which read it; the xor and generic codecs read none,
+	 * so they load the crypto-free injectDocument/injectWorker instead
+	 * (src/routeURL.ts)
+	 */
+	injectDocumentFull?: string;
+	injectWorkerFull?: string;
 	controllerFrame?: string;
 	/** the script controllerFrame.html loads; told to the frame through `?script=` */
 	controllerFrameScript?: string;
@@ -247,6 +255,8 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 	serviceWorker: 'serviceWorker.js',
 	injectDocument: 'injectDocument.js',
 	injectWorker: 'injectWorker.js',
+	injectDocumentFull: 'injectDocumentFull.js',
+	injectWorkerFull: 'injectWorkerFull.js',
 	controllerFrame: 'controllerFrame.html',
 	controllerFrameScript: 'controllerFrame.js',
 	transportWorker: 'transportWorker.js',
