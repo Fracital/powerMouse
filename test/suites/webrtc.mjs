@@ -804,11 +804,36 @@ async function suite(name, flags, raw) {
 			};
 		const unique = (list) =>
 			list && [...new Set(list.map((item) => JSON.stringify(item)))].sort();
+		// Right after setLocalDescription() Chrome's report lists the host
+		// candidate when its network thread gathered it before the report was
+		// taken and the page heard of it before reading the report: a race
+		// between its threads, measured at 2 runs in 200 on 152 and none in
+		// 200 on 156 in an idle page, more often in a loaded one. The proxy's
+		// lists it on the same condition (the page heard of it) and nearly
+		// never meets it. Either is what a page can read, so the host
+		// candidate is not compared there; anything else at that stage is
+		const settled = (midway) => {
+			if (!midway?.kinds) return midway;
+			const kinds = { ...midway.kinds };
+			delete kinds['local-candidate:host'];
+			// local and remote candidates are one slot of the order
+			const candidates = Object.keys(kinds).some((kind) =>
+				/-candidate:/.test(kind),
+			);
+			return {
+				...midway,
+				kinds,
+				order: candidates
+					? midway.order
+					: midway.order.filter((kind) => kind !== 'candidate'),
+			};
+		};
 		const told = ({ result }) => {
 			const facts = { ...result.facts, dtls: undefined };
-			if (!raw) return { ...result, facts };
+			if (!raw) return { ...result, midway: settled(result.midway), facts };
 			return {
 				...result,
+				midway: settled(result.midway),
 				shown: unique(result.shown),
 				connected: result.connected && {
 					...result.connected,

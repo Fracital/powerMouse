@@ -732,7 +732,11 @@ TURN server.
   DTLS roles and states, the selected pair and its changes, a
   `certificate` for each end (each connection makes its own, as Chrome
   does), `local-candidate` once the page could have heard of it (none
-  right after `setLocalDescription`, as natively), `remote-candidate` (a
+  right after `setLocalDescription`, as natively nearly always: Chrome's
+  lists the host candidate there when its network thread gathered it
+  before the report was taken, 2 times in 200 on 152 and never in 200 on
+  156 in an idle page, so the suite leaves that one out of the
+  comparison at that stage), `remote-candidate` (a
   peer reflexive one until the page adds the peer's own, which then takes
   its place) and `candidate-pair` with the checks, the round trip time and
   the bytes, all counted by the worker, which carries every datagram
