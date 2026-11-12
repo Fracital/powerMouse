@@ -137,6 +137,7 @@ jobs:
         if: steps.head.outputs.superseded != 'true'
         env:
           CHROME: /usr/bin/google-chrome
+          STOMP_REWRITER: wasm
           SKIP_NETWORK: '1'
           SKIP_TIMING: '1'
           SKIP_MEASUREMENT: '1'
