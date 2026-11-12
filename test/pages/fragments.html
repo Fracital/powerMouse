@@ -1,0 +1,154 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>FRAGMENTS</title>
+<style>
+	body {
+		margin: 0;
+	}
+	.tall {
+		height: 2500px;
+	}
+	:target {
+		outline: 3px solid rgb(255, 0, 0);
+	}
+</style>
+<!-- the fragments suite: what a page sees of its fragment, natively and through the proxy -->
+<p>
+	<a id="lalpha" href="#frag-alpha">alpha</a>
+	<a id="lbeta" href="#frag-beta">beta</a>
+	<a id="lnamed" href="#frag-named">named</a>
+	<a id="linside" href="#frag-inside">inside</a>
+	<a id="lempty" href="#">empty</a>
+	<a id="lwide" href="#%E6%97%A5%E6%9C%AC">wide</a>
+	<a id="lother" href="fragments.html?second=1#frag-gamma">other</a>
+</p>
+<form id="fget" action="fragments.html">
+	<input name="field-secret" value="value-secret" />
+	<input name="more" value="a b&c" />
+	<button id="fsubmit">get</button>
+</form>
+<form id="fnoaction"><input name="field-secret" value="value-noaction" /></form>
+<div class="tall"></div>
+<p id="frag-alpha">Alpha</p>
+<div class="tall"></div>
+<p id="frag-beta">Beta</p>
+<div class="tall"></div>
+<a name="frag-named">Named</a>
+<div class="tall"></div>
+<details>
+	<summary>more</summary>
+	<p id="frag-inside">Inside</p>
+</details>
+<div class="tall"></div>
+<p id="日本">Wide</p>
+<div class="tall"></div>
+<p id="frag-gamma">Gamma</p>
+<div class="tall"></div>
+<p>The phrase for a text directive</p>
+<div class="tall"></div>
+<script>
+	const log = [];
+	const target = () => {
+		const element = document.querySelector(':target');
+		return element ? element.id || element.getAttribute('name') : null;
+	};
+	const note = (what, extra = {}) =>
+		log.push({ what, hash: location.hash, target: target(), ...extra });
+	// what the suite does, done by the page's own script (the proxy
+	// rewrites it as it rewrites any page's; the suite's own evaluate is not)
+	const actions = {
+		hash: (value) => {
+			location.hash = value;
+			const element = document.querySelector(':target');
+			return {
+				target: target(),
+				atTop: element
+					? Math.abs(element.getBoundingClientRect().top) < 4
+					: null,
+				hash: location.hash,
+			};
+		},
+		href: (value) => {
+			location.href = value;
+		},
+		replace: (value) => location.replace(value),
+		push: (value) => history.pushState({ pushed: 1 }, '', value),
+		navigate: async (value) => {
+			await navigation.navigate(value, { state: { navigated: 1 } }).finished;
+			return 'finished';
+		},
+		back: () => history.back(),
+		forward: () => history.forward(),
+		reload: (value) => {
+			location.hash = value;
+			setTimeout(() => location.reload(), 50);
+		},
+		click: (id) => {
+			window.__marker = 1;
+			document.getElementById(id).click();
+		},
+		submit: (id) => document.getElementById(id).submit(),
+	};
+	window.__frag = {
+		act: (name, value) => actions[name](value),
+		take: () => log.splice(0),
+		snap: () => {
+			const element = document.querySelector(':target');
+			const link = document.getElementById('lalpha');
+			return {
+				hash: location.hash,
+				href: location.href,
+				url: document.URL,
+				search: location.search,
+				target: target(),
+				// scrolled to it: at the top of the viewport
+				atTop: element
+					? Math.abs(element.getBoundingClientRect().top) < 4
+					: null,
+				scrolled: scrollY > 0,
+				details: document.querySelector('details').open,
+				length: history.length,
+				state: JSON.stringify(history.state),
+				entry: navigation.currentEntry?.url ?? null,
+				entryIndex: navigation.currentEntry?.index ?? null,
+				entryState: JSON.stringify(navigation.currentEntry?.getState()),
+				linkHref: link.href,
+				linkHash: link.hash,
+				resolved: new URL('#q', document.URL).href,
+				marker: window.__marker ?? null,
+				referrer: document.referrer,
+				formdata: sessionStorage.getItem('formdata'),
+			};
+		},
+	};
+	navigation.addEventListener('navigate', (event) =>
+		note('navigate', {
+			type: event.navigationType,
+			url: event.destination.url,
+			same: event.destination.sameDocument,
+			hashChange: event.hashChange,
+			user: event.userInitiated,
+			form: event.formData !== null,
+		}),
+	);
+	navigation.addEventListener('currententrychange', (event) =>
+		note('currententrychange', {
+			type: event.navigationType,
+			from: event.from?.url ?? null,
+		}),
+	);
+	navigation.addEventListener('navigatesuccess', () => note('navigatesuccess'));
+	navigation.addEventListener('navigateerror', () => note('navigateerror'));
+	addEventListener('popstate', (event) =>
+		note('popstate', { state: JSON.stringify(event.state) }),
+	);
+	addEventListener('hashchange', (event) =>
+		note('hashchange', { oldURL: event.oldURL, newURL: event.newURL }),
+	);
+	addEventListener('formdata', (event) =>
+		sessionStorage.setItem(
+			'formdata',
+			JSON.stringify([...event.formData].map(([name]) => name)),
+		),
+	);
+</script>

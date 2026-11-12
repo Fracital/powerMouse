@@ -1,0 +1,10 @@
+{
+	"imports": [],
+	"exports": [
+		"memory:memory",
+		"i:function",
+		"o:function",
+		"e:function",
+		"d:function"
+	]
+}

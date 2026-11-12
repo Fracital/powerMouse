@@ -262,8 +262,13 @@ const similar = (a, b) => {
 const popularity = new Map(FALLBACK_TLDS.map((tld, i) => [tld, i]));
 const rank = (tld) => popularity.get(tld) ?? FALLBACK_TLDS.length;
 
-app.get('/suggestions', (req, res) => {
-	const input = String(req.query.input || '').slice(0, 256);
+// what was typed comes in the body: a URL with it would name the site in
+// the host's own traffic before the proxy sealed anything
+app.post('/suggestions', express.text(), (req, res) => {
+	const input = String(typeof req.body === 'string' ? req.body : '').slice(
+		0,
+		256,
+	);
 	if (!input) return res.status(400).json({ error: 'Invalid domain input' });
 	if (input.endsWith('.')) return res.json(['com', 'net', 'org', 'io', 'dev']);
 	const matched = input.match(/\.[^./?#\s]{1,16}(?:\.[^./?#\s]{1,16})?$/i);

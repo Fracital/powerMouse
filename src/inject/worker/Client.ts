@@ -110,6 +110,7 @@ export default class WorkerClient extends Client {
 				if (pathname.startsWith(this.directory))
 					partition = workerKindPartition(
 						pathname.slice(this.directory.length).split('/')[0],
+						this.codec,
 					);
 			} catch (error) {
 				// no location to read: first-party

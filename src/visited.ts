@@ -20,6 +20,7 @@
 // keeps the link route that a later link of that context will match.
 import type GenericCodec from './Codecs';
 import { siteOf, type PublicSuffix } from './partition';
+import { openFragment, sealFragmentText } from './StompURL';
 import { fragmentOf, queryOf } from './urlShape';
 
 /** the segment under the scope that link routes live in: no controller id can be it */
@@ -83,9 +84,12 @@ export function linkRoute(
 	context: string,
 	url: URL,
 ): string {
+	// the fragment sealed as a document route's is (docs/codec.md), the
+	// same text each time as the rest
+	const fragment = fragmentOf(url);
 	return `${scope}${LINK_SEGMENT}/${codec.encodeStable(
 		`${context} ${url.origin}${url.pathname}${queryOf(url)}`,
-	)}${fragmentOf(url)}`;
+	)}${fragment && `#${sealFragmentText(codec, fragment.slice(1), true)}`}`;
 }
 
 /** whether `routed` (a path, or a whole URL) is a link route under `scope` */
@@ -112,7 +116,10 @@ export function decodeLinkRoute(
 		if (split === -1) return null;
 		const url = new URL(decoded.slice(split + 1));
 		if (!/^https?:$/.test(url.protocol)) return null;
-		url.hash = hashIndex === -1 ? '' : rest.slice(hashIndex);
+		url.hash =
+			hashIndex === -1
+				? ''
+				: `#${openFragment(codec, rest.slice(hashIndex + 1))}`;
 		return { context: decoded.slice(0, split), url };
 	} catch {
 		return null;

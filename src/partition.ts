@@ -10,6 +10,8 @@
 // what every store was keyed by before partitioning, so nothing stored
 // before is lost.
 
+import type GenericCodec from './Codecs';
+
 /**
  * tldts getPublicSuffix with the private list (github.io counts): the public
  * suffix of a host, or null
@@ -71,27 +73,30 @@ export function partitionSite(partition: string): string | null {
 }
 
 /**
- * A worker's route kind names its partition (`js:worker:top:<site>`): the
- * worker reads it from its own location before any of the page's script
- * runs, and the service worker from the client's route (its Partitioned
- * cookies). A first-party worker's route is as it always was.
+ * A worker's route kind names its partition (`js:worker:top:<site>`, the
+ * site as the codec writes a URL): the worker reads it from its own
+ * location before any of the page's script runs, and the service worker
+ * from the client's route (its Partitioned cookies). A first-party worker's
+ * route is as it always was.
  */
 const WORKER_TOP = /^js:(?:worker|workerModule):top:([^/]*)$/;
 
 /** the route kind of a worker of `type` in `partition` */
-export function workerKind(type: string, partition: string): string {
+export function workerKind(
+	type: string,
+	partition: string,
+	codec: GenericCodec,
+): string {
 	const site = partitionSite(partition);
-	return site === null
-		? `js:${type}`
-		: `js:${type}:top:${encodeURIComponent(site)}`;
+	return site === null ? `js:${type}` : `js:${type}:top:${codec.encode(site)}`;
 }
 
 /** the partition a worker's route kind names, '' for none */
-export function workerKindPartition(kind: string): string {
+export function workerKindPartition(kind: string, codec: GenericCodec): string {
 	const match = WORKER_TOP.exec(kind);
 	if (!match) return '';
 	try {
-		const site = decodeURIComponent(match[1]);
+		const site = codec.decode(match[1]);
 		return site ? `^${site}` : '';
 	} catch (error) {
 		return '';
@@ -213,12 +218,13 @@ export function kindPartition(
 	kind: string,
 	origin: string,
 	publicSuffix: PublicSuffix,
+	codec: GenericCodec,
 ): string {
 	const nested = NESTED.exec(kind);
-	if (!nested) return workerKindPartition(kind);
+	if (!nested) return workerKindPartition(kind, codec);
 	let mark: ReturnType<typeof parseNestedMark>;
 	try {
-		mark = parseNestedMark(decodeURIComponent(nested[1]));
+		mark = parseNestedMark(codec.decode(nested[1]));
 	} catch (error) {
 		return '';
 	}

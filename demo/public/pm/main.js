@@ -720,6 +720,7 @@ function showLanding() {
 	document.body.classList.remove('browsing');
 	hideRecents();
 	if (dockRects) slideFrom(homeTiles, dockRects);
+	hashWrites++;
 	history.replaceState(null, '', location.pathname);
 	mainForm.url.focus();
 }
@@ -1329,7 +1330,7 @@ async function navigate(input, { newTab = false } = {}) {
 	setStatus('Loading…');
 	try {
 		await tab.frame.go(url);
-		history.replaceState(null, '', `#${encodeURIComponent(url)}`);
+		writeHash(url);
 		settleGoing(tab);
 		// the frame answered without moving (the leaving document reported, or
 		// nothing came): give the navigation the time a browser would, then
@@ -1376,8 +1377,53 @@ function syncOmnibox(force = false) {
 	syncToolbar();
 	if (!force && document.activeElement === omni.url) return;
 	if (omni.url.value !== url) omni.url.value = url;
-	const hash = `#${encodeURIComponent(url)}`;
-	if (location.hash !== hash) history.replaceState(null, '', hash);
+	writeHash(url);
+}
+
+// The fragment names the active tab's page by its route (`html/<sealed>`,
+// what follows the controller's address), not by its URL: the host's own
+// address, its history entries and a bookmark of it show no more of the
+// page than the proxy's routes do.
+let hashWrites = 0;
+let hashed = { url: '', hash: '' };
+async function writeHash(url) {
+	const write = ++hashWrites;
+	if (hashed.url !== url)
+		try {
+			const route = new URL(await controller.route(url));
+			hashed = {
+				url,
+				hash: `#${route.pathname.split('/').slice(-2).join('/')}${route.hash}`,
+			};
+		} catch {
+			return;
+		}
+	if (write !== hashWrites || browser.classList.contains('hidden')) return;
+	if (location.hash !== hashed.hash)
+		history.replaceState(null, '', hashed.hash);
+}
+
+/** the page the fragment names, '' for none */
+async function readHash() {
+	const text = location.hash.slice(1);
+	if (/^html[^/]*\/[^/]+$/.test(text.split('#')[0]))
+		return (
+			(await controller
+				.unroute(
+					new URL(
+						`${controller.config.directory}${text}`,
+						ISOLATED ? PROXY_ORIGIN : location.origin,
+					).href,
+				)
+				.catch(() => null)) ?? ''
+		);
+	// a fragment written before routes were (the URL itself), in an old
+	// bookmark: it opens as it did
+	try {
+		return decodeURIComponent(text);
+	} catch {
+		return '';
+	}
 }
 // the address bar's Back and Forward are greyed out with nowhere to go: the
 // frame says where it can (Navigation API), else the tab's own list does
@@ -1437,7 +1483,11 @@ function attachSuggestions(input) {
 		let list;
 		try {
 			list = await (
-				await fetch(`/suggestions?input=${encodeURIComponent(value)}`)
+				await fetch('/suggestions', {
+					method: 'POST',
+					headers: { 'content-type': 'text/plain' },
+					body: value,
+				})
 			).json();
 		} catch {
 			return;
@@ -2684,9 +2734,9 @@ renderBookmarks();
 
 const booted = boot();
 booted
-	.then(() => {
+	.then(async () => {
 		// restore a proxied URL from the fragment after a refresh
-		const restore = decodeURIComponent(location.hash.slice(1));
+		const restore = await readHash();
 		if (restore) navigate(restore, { newTab: true });
 		else mainForm.url.focus();
 	})

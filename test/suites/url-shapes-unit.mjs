@@ -52,7 +52,7 @@ const {
 
 const CODECS = {
 	generic: new GenericCodec(),
-	'xor, a random key': new XORCodec(),
+	'xor, a random key': new XORCodec(XORCodec.generateKey()),
 	'xor, key 91': new XORCodec('91'),
 	aes: new AESCodec('a key'),
 	base64: new Base64Codec(''),

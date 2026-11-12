@@ -1,4 +1,5 @@
 import { routeHTML } from '../../../rewriteHTML';
+import { openFragment } from '../../../routeURL';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule, {
@@ -330,7 +331,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		if (value.startsWith(`${routedPrefix(this.client)}inline:`)) {
 			const hash = value.indexOf('#');
 			const url = new URL(this.client.url.toString());
-			url.hash = hash === -1 ? '' : value.slice(hash);
+			url.hash =
+				hash === -1
+					? ''
+					: `#${openFragment(this.client.codec, value.slice(hash + 1))}`;
 			return url.href;
 		}
 		return unrouteURL(this.client, value) ?? value;
