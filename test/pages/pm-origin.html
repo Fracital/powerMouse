@@ -1,0 +1,61 @@
+<!doctype html>
+<title>PM ORIGIN</title>
+<body>
+	<script>
+		// Cross-origin postMessage origins (the pm-origin suite). A top on one
+		// site (A) embeds an iframe on another (B). Each posts the other with an
+		// explicit targetOrigin and records the event.origin it sees and whether
+		// a message with a wrong targetOrigin was withheld, exactly as a
+		// Cloudflare Turnstile widget and its embedder exchange messages. The
+		// values must match the same pages loaded natively: the receiver's
+		// event.origin is the sender's real origin, and targetOrigin gates by
+		// the real origins. `window.__pm` holds this realm's report.
+		const query = new URLSearchParams(location.search);
+		const role = query.get('role') || 'top';
+		const selfOrigin = location.origin;
+		const report = { role, selfOrigin, got: [], done: false };
+		window.__pm = report;
+		// record every message this realm receives: the origin seen and the tag
+		const onmessage = (event) => {
+			const d = event.data;
+			if (!d || typeof d !== 'object' || !d.pm) return;
+			report.got.push({ tag: d.pm, origin: event.origin });
+		};
+		addEventListener('message', onmessage);
+
+		if (role === 'top') {
+			const childOrigin = query.get('child');
+			const frame = document.createElement('iframe');
+			frame.src = `${childOrigin}/pages/pm-origin.html?role=child&parent=${encodeURIComponent(selfOrigin)}`;
+			let posted = false;
+			addEventListener('message', (event) => {
+				if (event.data?.pm !== 'child-ready' || posted) return;
+				posted = true;
+				const w = frame.contentWindow;
+				// to the child's real origin: delivered, origin is ours
+				w.postMessage({ pm: 'to-child-right' }, childOrigin);
+				// to a third origin: withheld natively
+				w.postMessage({ pm: 'to-child-wrong' }, 'https://example.net');
+				// to any origin: delivered
+				w.postMessage({ pm: 'to-child-star' }, '*');
+				setTimeout(() => {
+					report.done = true;
+				}, 1500);
+			});
+			document.body.append(frame);
+		} else if (role === 'child') {
+			const parentOrigin = query.get('parent');
+			// to the parent's real origin: delivered, origin is ours
+			parent.postMessage({ pm: 'to-parent-right' }, parentOrigin);
+			// to a third origin: withheld natively
+			parent.postMessage({ pm: 'to-parent-wrong' }, 'https://example.net');
+			// to any origin: delivered
+			parent.postMessage({ pm: 'to-parent-star' }, '*');
+			// tell the parent we are ready to receive
+			parent.postMessage({ pm: 'child-ready' }, parentOrigin);
+			setTimeout(() => {
+				report.done = true;
+			}, 1500);
+		}
+	</script>
+</body>
