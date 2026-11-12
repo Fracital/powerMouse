@@ -1,13 +1,18 @@
 import {
+	ancestorAllowed,
 	CODE_DIRECTIVES,
 	FALLBACK,
 	governing,
+	hopRefusals,
 	hostsApply,
+	namedRefusal,
 	parsePolicies,
+	REFUSED_URL,
 	sourcesMatch,
 	type Policy,
 } from '../csp';
 import { CSP_REPORT } from '../transport/messages';
+import type { NavigationChain } from './navigationHints';
 
 /**
  * The page's own policies of each document the worker served (src/csp.ts),
@@ -191,13 +196,83 @@ export async function postReport(
 	clientId: string | undefined,
 	directive: string,
 	url: URL,
+	/** a navigation's later hop: what the report names, how often, whether the policy is the client's parent's */
+	hop?: [string, number, boolean],
 ) {
 	if (!clientId || typeof clients === 'undefined') return;
 	try {
 		(await clients.get(clientId))?.postMessage({
-			[CSP_REPORT]: [directive, url.href],
+			[CSP_REPORT]: [directive, url.href, ...(hop ?? [])],
 		});
 	} catch (error) {
 		// the client went away: nobody to tell
 	}
+}
+
+/**
+ * Where a later hop of a navigation to `url` goes instead when a policy
+ * of its chain refuses it (a form's form-action; a frame's parent's
+ * frame-src, for a `frame`'s navigation), or null when it may go on. The
+ * browser reports a form's refused hop by the chain's first URL, so any
+ * refused URL does; a frame's by the URL it refused, which the host of the
+ * one returned names. A report-only policy's refusal is told to the
+ * document whose policy it is.
+ */
+export function hopRefusal(
+	chain: NavigationChain,
+	url: URL,
+	frame: boolean,
+	/** the real URL the navigation began at */
+	first: string,
+): string | null {
+	for (const directive of frame
+		? ['form-action', 'frame-src']
+		: ['form-action']) {
+		const refusing = chain.policies.filter(
+			({ policy }) => hopRefusals([policy], directive, url).length,
+		);
+		if (refusing.some(({ policy }) => policy[2] === 'enforce'))
+			return directive === 'form-action' ? REFUSED_URL : namedRefusal(url.href);
+		for (const { policy, client, parent } of refusing) {
+			let blocked = url.href.replace(/#.*$/s, '');
+			try {
+				if (
+					directive === 'frame-src' &&
+					new URL(policy[3]).origin !== url.origin
+				)
+					blocked = url.origin;
+			} catch (error) {
+				// no such document URL: the whole URL
+			}
+			// (a form's report names the chain's first URL)
+			postReport(client, directive, url, [
+				directive === 'form-action' ? first.replace(/#.*$/s, '') : blocked,
+				directive === 'frame-src' ? 2 : 1,
+				parent,
+			]);
+		}
+	}
+	return null;
+}
+
+/**
+ * Whether the enforced frame-ancestors of a document's response `headers`
+ * (it is at `url`) refuses one of its real `ancestors`' origins
+ */
+export function refusesAncestors(
+	headers: Headers,
+	url: URL,
+	ancestors: string[],
+): boolean {
+	return parsePolicies(
+		headers.get('content-security-policy'),
+		'enforce',
+		'header',
+	).some((policy) => {
+		const sources = policy.directives.get('frame-ancestors');
+		return (
+			sources !== undefined &&
+			ancestors.some((origin) => !ancestorAllowed(sources, origin, url))
+		);
+	});
 }

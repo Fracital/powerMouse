@@ -159,8 +159,10 @@ import {
 } from './clientHints';
 import {
 	directiveOf,
+	hopRefusal,
 	metaPolicies,
 	postReport,
+	refusesAncestors,
 	refusingPolicies,
 	rememberPolicies,
 } from './contentPolicies';
@@ -203,6 +205,8 @@ import { takeLoadGrant } from './loadGrants';
 import { recordCrossedMedia } from './mediaLoads';
 import {
 	awaitNavigationHint,
+	NavigationChain,
+	navigationChain,
 	NavigationHint,
 	takeNavigationHint,
 } from './navigationHints';
@@ -583,6 +587,8 @@ type BodyTransform = (
 		navigation: boolean;
 		/** the document's parent upgrades insecure requests (a nested document inherits it) */
 		upgradeInsecure: boolean;
+		/** a frame's navigation: the real origins of the frame's ancestors, nearest first */
+		ancestors?: string[] | null;
 		/**
 		 * what the rewrite cache keeps this request's output for: its network
 		 * partition (as the HTTP cache's: the top-level site and the site of
@@ -1662,6 +1668,50 @@ function genericForward(
 				return granted !== null
 					? Response.error()
 					: Response.redirect(REFUSED_URL, 302);
+			}
+		}
+		// the chain a navigation is a later hop of, as the documents that
+		// started it told it (NavigationHint): what judges its hops and the
+		// document it ends in
+		let chain: NavigationChain | null = null;
+		let chainStart = url.url.href;
+		if (navigation)
+			try {
+				if (previousHop?.first)
+					chainStart = parseRoutedURL(
+						previousHop.first,
+						rewriter.codec,
+						routedPrefix,
+					).url.url.href;
+				chain = navigationChain(chainStart);
+			} catch (error) {
+				// not a route of this controller's: nothing was told of it
+			}
+		// The page's form-action (a form's) and a frame's parent's frame-src
+		// judge every hop of the navigation natively. A hop one refuses goes
+		// on to a URL the browser's copy refuses too: the browser refuses it
+		// as natively, and reports it as Chrome does, a form's by its first
+		// URL, a frame's by the URL refused (which namedRefusal's host names)
+		if (chain && previousHop) {
+			const refusal = hopRefusal(
+				chain,
+				url.url,
+				nestedRoute !== null,
+				chainStart,
+			);
+			if (refusal !== null) {
+				rewriter.log?.({
+					url: reportURL(url),
+					method: serverRequest.method,
+					destination: serverRequest.destination || 'fetch',
+					status: 0,
+					ms: Date.now() - started,
+					cached: false,
+					bytes: null,
+					error: "refused by the page's policy",
+					client: context?.clientId,
+				});
+				return Response.redirect(refusal, 302);
 			}
 		}
 		const blocker = context?.internal ? undefined : rewriter.blocker;
@@ -3214,6 +3264,12 @@ function genericForward(
 								clientId: context?.clientId,
 								navigation,
 								upgradeInsecure,
+								// a frame's real ancestors (its frame-ancestors'), as told,
+								// else its top as its route names it
+								ancestors:
+									navigation && nestedRoute !== null
+										? (chain?.ancestors ?? [new URL(nestedRoute).origin])
+										: null,
 								partition:
 									frameSite === null
 										? null
@@ -4207,6 +4263,17 @@ export function registerRewrites(
 				);
 				if (policies.enforce)
 					responseHeaders.append('content-security-policy', policies.enforce);
+				// a frame whose own frame-ancestors refuses one of its real
+				// ancestors is refused by the browser, which shows its error page
+				// as natively (no event anywhere)
+				if (
+					request.ancestors &&
+					refusesAncestors(response.headers, url.url, request.ancestors)
+				)
+					responseHeaders.append(
+						'content-security-policy',
+						"frame-ancestors 'none'",
+					);
 				if (policies.report)
 					responseHeaders.append(
 						'content-security-policy-report-only',

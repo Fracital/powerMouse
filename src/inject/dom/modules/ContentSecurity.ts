@@ -88,12 +88,21 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 				if (!entry) return true;
 				const blocked = Reflect.apply(nativeBlocked!, event, []) as string;
 				const refused = this.client.refusedURI(blocked);
+				const directive = Reflect.apply(nativeDirective!, event, []) as string;
+				// a <base> the hooks write for a moment with the page's own URL
+				// (before its route or refusal URL) is none the page made
+				if (
+					directive === 'base-uri' &&
+					!refused &&
+					/^https?:/.test(blocked) &&
+					unrouteURL(this.client, blocked) === blocked
+				)
+					return false;
 				const page =
 					refused?.url ??
 					(blocked.includes(':') ? unrouteURL(this.client, blocked) : null);
 				if (!page || page === blocked) return true;
 				const url = new URL(page);
-				const directive = Reflect.apply(nativeDirective!, event, []) as string;
 				const governed = governing(entry.policy, directive);
 				if (!governed || !sourcesMatch(governed.sources, url, entry.self))
 					return true;
@@ -116,10 +125,19 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 			if (typeof data !== 'object' || data === null) return;
 			const report = (data as Record<string, unknown>)[CSP_REPORT];
 			if (!Array.isArray(report)) return;
+			// (a navigation's later hop: what it names, how often, and whether
+			// the policy is this frame's parent's)
+			const [directive, url, blocked, times, parent] = report;
 			try {
-				this.client.reportRefusal(
-					String(report[0]),
-					new URL(String(report[1])),
+				(parent === true
+					? this.client.parentClient()
+					: this.client
+				)?.reportRefusal(
+					String(directive),
+					new URL(String(url)),
+					false,
+					typeof times === 'number' ? Math.min(times, 2) : 1,
+					typeof blocked === 'string' ? blocked : undefined,
 				);
 			} catch (error) {
 				// not a URL

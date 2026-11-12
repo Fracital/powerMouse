@@ -27,7 +27,19 @@
 //   /csp/manifest.json   a web app manifest
 //   /csp/to?u=<url>      a 302 to `u`
 //   /csp/log?k=<key>     the paths that reached /csp/ under that key
-//                        (`k=` on any of them)
+//                        (`k=` on any of them); `&clear` forgets them
+//
+// The navigation probes (csp-navigation, test/pages/csp-navigation-probes.js):
+//   /csp/doc?s=nav&b=<href>  the navigation probes' script first in the head
+//                        (it runs them once the document is parsed), then
+//                        the metas, then a <base href> for each `b`
+//   /csp/nav-probes.js   the navigation probes
+//   /csp/framed?p=..     a document under the policies p, ro and m name
+//                        (as /csp/doc's) that posts "framed" to its parent
+//   /csp/go?u=<url>&how=<location|link|form>  a document that navigates
+//                        itself to `u` once loaded
+//   /csp/form            a form's destination: posts "arrived <method>
+//                        q=<q>" to its parent and its opener
 //
 // test/fixture.mjs calls `csp(req, res)` first and serves the rest.
 import { createHash } from 'node:crypto';
@@ -82,17 +94,18 @@ export function csp(req, res) {
 	switch (url.pathname) {
 		case '/csp/doc': {
 			const probes = readFileSync(`${pages}csp-probes.js`, 'utf8');
-			for (const policy of query.getAll('p'))
-				res.appendHeader('content-security-policy', policy);
-			for (const policy of query.getAll('ro'))
-				res.appendHeader('content-security-policy-report-only', policy);
-			const metas = query
-				.getAll('m')
-				.map(
-					(policy) =>
-						`<meta http-equiv="Content-Security-Policy" content="${attribute(policy)}">`,
-				)
-				.join('');
+			const metas = policies(res, query);
+			if (query.get('s') === 'nav') {
+				const bases = query
+					.getAll('b')
+					.map((href) => `<base href="${attribute(href)}">`)
+					.join('\n');
+				send(
+					'text/html; charset=utf-8',
+					`<!doctype html><html><head><script src="/csp/nav-probes.js"></script>\n${metas}\n${bases}\n<title>CSP NAVIGATION</title></head><body><p id="after">after</p></body></html>`,
+				);
+				return true;
+			}
 			const how = query.get('h') ?? 'self';
 			const text = `\n${probes}\n`;
 			if (how === 'inline-hash')
@@ -164,7 +177,62 @@ export function csp(req, res) {
 			return true;
 		case '/csp/log':
 			send('application/json', JSON.stringify(logs.get(key) ?? []));
+			if (query.has('clear')) logs.delete(key);
 			return true;
+		case '/csp/nav-probes.js':
+			send(
+				'text/javascript; charset=utf-8',
+				readFileSync(`${pages}csp-navigation-probes.js`),
+			);
+			return true;
+		case '/csp/framed':
+			send(
+				'text/html; charset=utf-8',
+				`<!doctype html><html><head>${policies(res, query)}<title>framed</title></head><body><script>parent.postMessage("framed", "*");</script></body></html>`,
+			);
+			return true;
+		case '/csp/go': {
+			const to = JSON.stringify(query.get('u') ?? '/csp/ok');
+			const how = JSON.stringify(query.get('how') ?? 'location');
+			send(
+				'text/html; charset=utf-8',
+				`<!doctype html><title>go</title><body><script>onload = () => setTimeout(() => { const to = ${to}.replace(/</g, ''); const how = ${how}; if (how === 'link') { const a = document.createElement('a'); a.href = to; document.body.append(a); a.click(); } else if (how === 'form') { const f = document.createElement('form'); f.method = 'post'; f.action = to; document.body.append(f); f.submit(); } else location.href = to; });</script></body>`,
+			);
+			return true;
+		}
+		case '/csp/form': {
+			const arrived = (q) => {
+				send(
+					'text/html; charset=utf-8',
+					`<!doctype html><title>arrived</title><script>for (const w of new Set([parent, opener])) if (w && w !== window) w.postMessage(${JSON.stringify(`arrived ${req.method} q=${q}`).replace(/</g, '\\u003c')}, "*");</script>`,
+				);
+			};
+			if (req.method !== 'POST') {
+				arrived(query.get('q'));
+				return true;
+			}
+			const chunks = [];
+			req.on('data', (chunk) => chunks.push(chunk));
+			req.on('end', () =>
+				arrived(new URLSearchParams(Buffer.concat(chunks).toString()).get('q')),
+			);
+			return true;
+		}
 	}
 	return false;
+}
+
+/** the policies a /csp/ document's query names: its headers set, its metas returned */
+function policies(res, query) {
+	for (const policy of query.getAll('p'))
+		res.appendHeader('content-security-policy', policy);
+	for (const policy of query.getAll('ro'))
+		res.appendHeader('content-security-policy-report-only', policy);
+	return query
+		.getAll('m')
+		.map(
+			(policy) =>
+				`<meta http-equiv="Content-Security-Policy" content="${attribute(policy)}">`,
+		)
+		.join('');
 }

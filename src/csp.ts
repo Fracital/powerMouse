@@ -173,6 +173,17 @@ export function browserSources(
 }
 
 /**
+ * The directives of a document's own navigations that reach the browser
+ * as the fetch directives do ('self' and the page's other schemes; no
+ * fallback): a <base> and a form submission the page's policy refuses are
+ * sent to a refusal URL (DocumentClient.refusalURL), or a form's redirect
+ * to REFUSED_URL by the worker, which the browser refuses and reports as
+ * natively (a javascript: or mailto: action, which names no host, the
+ * browser judges by itself)
+ */
+export const NAVIGATION_DIRECTIVES = ['base-uri', 'form-action'];
+
+/**
  * The policy the browser applies for `policy` (its text), or null when it
  * has nothing the browser can apply. Each directive the browser judges
  * loads by is written out for itself (a page's default-src or child-src
@@ -208,6 +219,17 @@ export function browserPolicy(
 				`${effective} ${codeSources(governed.sources, effective, code).join(' ')}`.trim(),
 			);
 		}
+	for (const name of NAVIGATION_DIRECTIVES) {
+		const sources = policy.directives.get(name);
+		// (one that allows nothing is the browser's as written: it refuses
+		// the proxy's own URLs too, and its <base> or form with them)
+		if (sources)
+			directives.push(
+				sources.every((source) => source.toLowerCase() === "'none'")
+					? `${name} 'none'`
+					: `${name} ${browserSources(sources).join(' ')}`,
+			);
+	}
 	return directives.length ? directives.join('; ') : null;
 }
 
@@ -314,6 +336,106 @@ export function codeSources(
 	if (byURL) kept.push("'self'");
 	else if (directive === 'script-src-elem') kept.push(...assets);
 	return kept;
+}
+
+
+const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
+const NAMED_REFUSAL = '.u.refused.invalid';
+
+/**
+ * A URL like REFUSED_URL whose host names `url` (its origin alone when the
+ * whole does not fit in a host name): where the worker sends a frame's
+ * redirect its parent's frame-src refuses. Chrome names a refused
+ * navigation by the URL it refused, its origin only when it is another
+ * origin than the policy's document's, and the inject reads the host back
+ * (refusalNamed) as the page's URL.
+ */
+export function namedRefusal(url: string): string {
+	const encode = (text: string) => {
+		let bits = 0;
+		let value = 0;
+		let out = '';
+		for (const byte of new TextEncoder().encode(text)) {
+			value = (value << 8) | byte;
+			bits += 8;
+			while (bits >= 5) {
+				out += BASE32[(value >>> (bits - 5)) & 31];
+				bits -= 5;
+			}
+		}
+		if (bits) out += BASE32[(value << (5 - bits)) & 31];
+		return out;
+	};
+	let name = encode(url.replace(/#.*$/s, ''));
+	if (name.length > 220) name = encode(new URL(url).origin);
+	return `https://${name.replace(/.{1,60}/g, '$&.').slice(0, -1)}${NAMED_REFUSAL}:1/`;
+}
+
+/** the URL a host of namedRefusal's names, or null for another host */
+export function refusalNamed(host: string): string | null {
+	if (!host.endsWith(NAMED_REFUSAL)) return null;
+	const name = host.slice(0, -NAMED_REFUSAL.length).replace(/\./g, '');
+	const bytes: number[] = [];
+	let bits = 0;
+	let value = 0;
+	for (const char of name) {
+		const index = BASE32.indexOf(char);
+		if (index === -1) return null;
+		value = (value << 5) | index;
+		bits += 5;
+		if (bits >= 8) {
+			bytes.push((value >>> (bits - 8)) & 255);
+			bits -= 8;
+		}
+	}
+	try {
+		return new URL(new TextDecoder().decode(new Uint8Array(bytes))).href;
+	} catch (error) {
+		return null;
+	}
+}
+
+/**
+ * A policy of a document's that judges the later hops of a navigation it
+ * started (a form's form-action, a frame's parent's frame-src), as the
+ * worker is told it (NavigationHintMessage `csp`): the directive, its
+ * sources, the disposition, and the real URL of the document whose policy
+ * it is ('self')
+ */
+export type HopPolicy = [string, string[], Policy['disposition'], string];
+
+/** whether `url` is refused by the enforced (`enforce`) or report-only policies of `policies` for `directive`, after a redirect */
+export function hopRefusals(
+	policies: HopPolicy[],
+	directive: string,
+	url: URL,
+): HopPolicy[] {
+	return policies.filter(([name, sources, , self]) => {
+		if (name !== directive) return false;
+		try {
+			return !sourcesMatch(sources, url, new URL(self), true);
+		} catch (error) {
+			return false;
+		}
+	});
+}
+
+/**
+ * Whether a frame-ancestors source list lets a document be framed by an
+ * ancestor of `origin` ("null" for an opaque one, which matches nothing);
+ * `self`: the framed document's real URL
+ */
+export function ancestorAllowed(
+	sources: string[],
+	origin: string,
+	self: URL,
+): boolean {
+	if (origin === 'null') return false;
+	try {
+		return sourcesMatch(sources, new URL(`${origin}/`), self);
+	} catch (error) {
+		return false;
+	}
 }
 
 /** the URL's port, or its scheme's default port (null for a scheme without one) */
@@ -459,10 +581,15 @@ export function sourcesMatch(
  * (two page policies can come out the same for the browser)
  */
 export function markedPolicy(text: string, mark: string): string {
-	const end = text.indexOf(';');
-	return end === -1
-		? `${text} ${mark}:`
-		: `${text.slice(0, end)} ${mark}:${text.slice(end)}`;
+	// (in a directive of 'none' the mark would void it, and Chrome says so:
+	// one of sources takes it where there is one)
+	const directives = text.split('; ');
+	const index = Math.max(
+		0,
+		directives.findIndex((directive) => !directive.endsWith(" 'none'")),
+	);
+	directives[index] += ` ${mark}:`;
+	return directives.join('; ');
 }
 
 /**
