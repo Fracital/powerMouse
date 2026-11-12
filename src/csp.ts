@@ -191,12 +191,7 @@ export const NAVIGATION_DIRECTIVES = ['base-uri', 'form-action'];
  * out: report-uri and report-to (the browser would post the proxy's URLs),
  * and what the proxy applies another way.
  */
-export function browserPolicy(
-	policy: Policy,
-	code?: CodeOptions,
-	/** the name of the inject's own Trusted Types policy (ScriptFacts.tt) */
-	tt = code?.tt,
-): string | null {
+export function browserPolicy(policy: Policy): string | null {
 	const directives: string[] = [];
 	for (const effective of BROWSER_DIRECTIVES) {
 		const governed = governing(policy, effective);
@@ -205,22 +200,15 @@ export function browserPolicy(
 				`${effective} ${browserSources(governed.sources, effective).join(' ')}`,
 			);
 	}
-	if (code)
-		for (const effective of CODE_DIRECTIVES) {
-			const governed = governing(policy, effective);
-			if (!governed) continue;
-			// what decides eval is the page's own directive as it wrote it
-			// (script-src, or default-src): the browser names it in the
-			// EvalError and CompileError it throws, and every other load it
-			// would judge is judged by a directive of its own here
-			if (effective === 'script-src') {
-				directives.push([governed.name, ...governed.sources].join(' '));
-				continue;
-			}
-			directives.push(
-				`${effective} ${codeSources(governed.sources, effective, code).join(' ')}`.trim(),
-			);
-		}
+	// The browser never enforces the page's script-src, style-src or Trusted
+	// Types: every proxied document runs STomp's own inject scripts and its
+	// inline bootstrap, and STomp's rewriter and hooks make code from strings
+	// and write HTML and script sinks; a browser policy that governs those
+	// cannot be told to spare STomp's own code from the page's (a nonce or
+	// hash on the real injected element does not hold on the live proxy
+	// origin, and a Trusted Types policy refuses STomp's Function and
+	// outerHTML). The inject enforces the page's script, style and Trusted
+	// Types against the page's code alone (docs/csp.md).
 	for (const name of NAVIGATION_DIRECTIVES) {
 		const sources = policy.directives.get(name);
 		// (one that allows nothing is the browser's as written: it refuses
@@ -230,20 +218,6 @@ export function browserPolicy(
 				sources.every((source) => source.toLowerCase() === "'none'")
 					? `${name} 'none'`
 					: `${name} ${browserSources(sources).join(' ')}`,
-			);
-	}
-	// Trusted Types as the page wrote them: the browser refuses a string at
-	// every sink, and the inject's own writes carry values of a policy of its
-	// own, whose name every list of names allows (the page never learns it)
-	for (const name of TRUSTED_TYPES) {
-		const sources = policy.directives.get(name);
-		if (sources)
-			directives.push(
-				[
-					name,
-					...sources,
-					...(name === 'trusted-types' && tt ? [tt] : []),
-				].join(' '),
 			);
 	}
 	return directives.length ? directives.join('; ') : null;
@@ -666,7 +640,6 @@ export function browserRefuses(
 export function browserHeaders(
 	headers: Headers,
 	mark: string,
-	code?: CodeOptions,
 ): {
 	enforce: string | null;
 	report: string | null;
@@ -683,7 +656,7 @@ export function browserHeaders(
 			disposition,
 			'header',
 		)) {
-			const text = browserPolicy(policy, code);
+			const text = browserPolicy(policy);
 			// a policy the browser gets nothing of is the inject's all the same
 			if (text === null) {
 				texts.push(['', policy.text, disposition]);
@@ -874,22 +847,11 @@ export interface ScriptFacts {
 }
 
 /** the script facts of a document whose browser policies are `texts` and whose nonce is `nonce` */
-export function scriptFacts(texts: string[], nonce: string): ScriptFacts {
-	const named = texts.some((text) => text.includes(`'nonce-${nonce}'`));
-	return {
-		...(named ? { nonce } : {}),
-		...(named &&
-		texts.some((text) =>
-			parsePolicies(text, 'enforce', 'header').some((policy) =>
-				governing(policy, 'script-src-elem')?.sources.some(
-					(source) => source.toLowerCase() === "'strict-dynamic'",
-				),
-			),
-		)
-			? { loadsByNonce: true }
-			: {}),
-		evaluates: browserEvaluates(texts),
-	};
+export function scriptFacts(_texts: string[], _nonce: string): ScriptFacts {
+	// the browser enforces no script policy of the page's (browserPolicy), so
+	// STomp's own scripts carry no nonce and its code always evaluates; the
+	// inject enforces the page's script directives against the page's code
+	return { evaluates: true };
 }
 
 /**

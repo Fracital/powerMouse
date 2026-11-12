@@ -44,10 +44,8 @@ import {
 } from '../../rewriteHTML';
 import type { RewriterLib } from '../../rewriterLib';
 import {
-	injectWorkerJS,
 	parseRoutedURL,
 	proxyBlobURL,
-	rewriterLibJS,
 	ROUTE_PROTOCOLS,
 	unwrapRoute,
 } from '../../routeURL';
@@ -74,7 +72,6 @@ import {
 	trustedHTML,
 	trustedScript,
 	trustedTypesUsed,
-	useTrustedTypes,
 } from '../trusted';
 import cloneRawNode, {
 	inertDocumentOf,
@@ -953,28 +950,12 @@ export default class DocumentClient extends Client {
 		if (known !== undefined) return known.value;
 		this.#policyMark ??= policyMark();
 		const texts: PolicyText[] = [];
-		// (its script and style directives name the document's nonce, and the
-		// inject's files a worker imports, as the headers' do: src/csp.ts)
-		const nonce = this.scriptFacts.nonce;
-		const code = nonce
-			? {
-					nonce,
-					assets: [
-						injectWorkerJS(this.url, this.config),
-						rewriterLibJS(this.url, this.config),
-					].map((asset) => asset.split('?')[0]),
-				}
-			: undefined;
 		for (const policy of parsePolicies(content, 'enforce', 'meta')) {
 			// (with the name of the inject's own Trusted Types policy: trusted.ts)
-			const text = browserPolicy(
-				policy,
-				code,
-				policy.directives.has('trusted-types') ||
-					policy.directives.has('require-trusted-types-for')
-					? (this.scriptFacts.tt ??= useTrustedTypes())
-					: undefined,
-			);
+			// the browser enforces no Trusted Types policy of the page's
+			// (src/csp.ts), so a meta that sets one does not turn STomp's own
+			// Trusted Types on
+			const text = browserPolicy(policy);
 			texts.push([
 				text === null
 					? ''

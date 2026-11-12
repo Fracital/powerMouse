@@ -25,6 +25,12 @@ type Outcome = { value: unknown } | { error: unknown };
  */
 export default class TrustedTypesModule extends Module<Client> {
 	apply() {
+		// the browser enforces no Trusted Types policy of the page's
+		// (src/csp.ts): STomp's own Function, eval and HTML/script sinks must
+		// not be made to take trusted values. The inject emulates the page's
+		// require-trusted-types-for for the page's own sinks only where its
+		// policy sets one (scriptFacts.rtt); with none it installs nothing.
+		if (!this.client.scriptFacts.rtt) return;
 		const global = this.client.global as typeof globalThis;
 		const factory = (global as { trustedTypes?: object }).trustedTypes;
 		const prototype = factory && Reflect.getPrototypeOf(factory);

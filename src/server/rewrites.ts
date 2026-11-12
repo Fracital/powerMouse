@@ -80,11 +80,8 @@ import {
 import { modifyJS, RewrittenBy, routeJS, ScriptType } from '../rewriteJS';
 import {
 	formQuery,
-	injectDocumentJS,
-	injectWorkerJS,
 	linkRouteURL,
 	parseRoutedURL,
-	rewriterLibJS,
 	routeBinary,
 	unwrapRoute,
 } from '../routeURL';
@@ -4243,24 +4240,14 @@ export function registerRewrites(
 				// (and the name of the inject's own Trusted Types policy, which
 				// every list of policy names allows)
 				const tt = `${policyMark()}t`;
-				const policies = browserHeaders(response.headers, policyMark(), {
-					nonce,
-					tt,
-					assets: [
-						injectDocumentJS(url, rewriter.config),
-						injectWorkerJS(url, rewriter.config),
-						rewriterLibJS(url, rewriter.config),
-					].map((asset) => asset.split('?')[0]),
-				});
+				const policies = browserHeaders(response.headers, policyMark());
 				// whether code made from a string runs, under the headers' policies
 				// and the metas' of the head (src/csp.ts ScriptFacts)
 				const decoded = decodeDocument(bytes, contentType);
 				const texts = [
 					...policies.texts.map(([browser]) => browser).filter(Boolean),
 					...metaPolicies(decoded)
-						.map((policy) =>
-							browserContentPolicy(policy, { nonce, assets: [], tt }),
-						)
+						.map((policy) => browserContentPolicy(policy))
 						.filter((text) => text !== null),
 				];
 				const facts = {
