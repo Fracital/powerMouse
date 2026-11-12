@@ -132,11 +132,26 @@ const report = (functions, stage) =>
 
 const fixture = (query = '') => `${FIXTURE}pages/worker-rewrites.html${query}`;
 
-async function native(url, work) {
-	const page = await browser.newPage();
-	await page.goto(url);
-	const result = await work(() => page.mainFrame());
-	await page.close();
+/** whether every worker of the fixture answered */
+const everyWorker = (result) =>
+	[...FIRST, ...AGAIN].every((name) => typeof result?.[name] === 'object');
+
+/**
+ * What `work` reads of a native load of `url`, loaded again (three loads at
+ * most) until `complete` holds of it: now and then Chrome aborts the fetch
+ * of the frame's worker's script as it starts (net::ERR_ABORTED), and that
+ * worker never runs, natively, so it never answers however long the suite
+ * waits. Each load is a page of its own
+ */
+async function native(url, work, complete = () => true) {
+	let result;
+	for (let attempt = 0; attempt < 3; attempt++) {
+		const page = await browser.newPage();
+		await page.goto(url);
+		result = await work(() => page.mainFrame());
+		await page.close();
+		if (complete(result)) break;
+	}
 	return result;
 }
 
@@ -170,10 +185,12 @@ async function proxied(url, work) {
 
 // workers started once the page has loaded
 {
-	const expected = await native(fixture(), (frame) => run(frame, false));
-	const answered = [...FIRST, ...AGAIN].every(
-		(name) => typeof expected[name] === 'object',
+	const expected = await native(
+		fixture(),
+		(frame) => run(frame, false),
+		everyWorker,
 	);
+	const answered = everyWorker(expected);
 	ok(
 		'natively, every worker answers',
 		answered,
@@ -242,7 +259,11 @@ async function proxied(url, work) {
 // module has not reached the page yet, and follows the workers' first
 // message on a port
 {
-	const expected = await native(fixture('?early'), (frame) => run(frame, true));
+	const expected = await native(
+		fixture('?early'),
+		(frame) => run(frame, true),
+		everyWorker,
+	);
 	const { page, result } = await proxied(fixture('?early'), (frame) =>
 		run(frame, true),
 	);

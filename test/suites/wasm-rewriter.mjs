@@ -9,15 +9,38 @@ import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
 const browser = await launch();
 const page = await openDemo(browser, PROXY);
 
-// every routed script response's body, in order
+// every routed script response's body, in the order the responses came
+// (null for one Chrome could not hand over). A body is read after its
+// response event, and the event itself can come after the script has run,
+// so a check waits for the bodies it reads (bodiesWhere) rather than taking
+// what has arrived by then
 const bodies = [];
-page.context().on('response', async (response) => {
+const reads = [];
+page.context().on('response', (response) => {
 	if (!/\/js:\w+\//.test(response.url())) return;
-	bodies.push(await response.text().catch(() => null));
+	const at = bodies.push(undefined) - 1;
+	reads.push(
+		response.text().then(
+			(text) => (bodies[at] = text),
+			() => (bodies[at] = null),
+		),
+	);
 });
-const bodiesOf = (name) =>
-	bodies.filter(
-		(body) => body?.match(/push\(\[\s*['"](\w+)['"]/)?.[1] === name,
+/** the bodies that `match`, once there are `count` of them (or what there is after 15 s) */
+async function bodiesWhere(match, count = 1) {
+	const found = () =>
+		bodies.filter((body) => typeof body === 'string' && match(body));
+	for (let i = 0; i < 300 && found().length < count; i++) {
+		await Promise.all(reads);
+		if (found().length < count) await sleep(50);
+	}
+	return found();
+}
+/** the bodies of the script that pushes `name`, once there are `count` of them */
+const bodiesOf = (name, count) =>
+	bodiesWhere(
+		(body) => body.match(/push\(\[\s*['"](\w+)['"]/)?.[1] === name,
+		count,
 	);
 
 /** a controller of its own (at an address of its own), logging to window.__log */
@@ -120,7 +143,7 @@ ok('every thread holds the rewriter', await settled(1));
 		result.by === 'wasm',
 		show(result.by),
 	);
-	const [body] = bodiesOf('p');
+	const [body] = await bodiesOf('p');
 	ok(
 		'what no rewrite touches comes back as written, and the reads go through the access API',
 		body?.includes('/* kept */ function') &&
@@ -156,7 +179,8 @@ ok('the service worker holds the rewriter', await settled(0));
 		result.by === 'wasm',
 		show(result.by),
 	);
-	const seen = bodiesOf('p');
+	// this controller's and the first one's
+	const seen = await bodiesOf('p', 2);
 	ok(
 		"the worker's output is byte for byte the service worker's",
 		seen.length === 2 && seen[0] !== null && seen[0] === seen[1],
@@ -175,13 +199,15 @@ ok('the service worker holds the rewriter', await settled(0));
 		'd',
 		'/* gone */ const { 1n: half, top: mine } = { 1: "h", top: "t" }; window.__seen = [half, mine];',
 	);
+	// (read before the frame goes elsewhere)
+	const [body] = await bodiesOf('d');
 	// a key that is no integer is the module's, spelled as JavaScript
 	// spells the number
 	const keyed = await load(
 		'k',
 		'/* kept */ const { 1.5: half, 1e21: big, top: mine } = { 1.5: "h", 1e21: "b", top: "t" }; window.__seen = [half, big, mine];',
 	);
-	const [keyedBody] = bodiesOf('k');
+	const [keyedBody] = await bodiesOf('k');
 	ok(
 		'a pattern key that is no integer is rewritten by the module, and runs',
 		keyed.ran &&
@@ -189,7 +215,6 @@ ok('the service worker holds the rewriter', await settled(0));
 			keyedBody?.includes('/* kept */'),
 		show([keyed, keyedBody?.slice(0, 300)]),
 	);
-	const [body] = bodiesOf('d');
 	ok(
 		'a script the module declines is rewritten by the JavaScript rewriter, and runs',
 		declined.ran &&
@@ -209,7 +234,11 @@ ok('the service worker holds the rewriter', await settled(0));
 	const broken = await load('b', 'window.__seen = 1;\nvar 1x;', 40);
 	ok(
 		'a script that does not parse goes out as it came',
-		bodies.some((body) => body?.startsWith('window.__seen = 1;\nvar 1x;')),
+		(
+			await bodiesWhere((body) =>
+				body.startsWith('window.__seen = 1;\nvar 1x;'),
+			)
+		).length > 0,
 		show(broken),
 	);
 }
@@ -219,7 +248,7 @@ ok('the service worker holds the rewriter', await settled(0));
 await controller('wasm-rewriter-js', { rewriteWorkers: 0 });
 {
 	const result = await load('j', SCRIPT);
-	const [body] = bodiesOf('j');
+	const [body] = await bodiesOf('j');
 	ok(
 		"a 'js' controller's script is the JavaScript rewriter's",
 		result.ran &&
