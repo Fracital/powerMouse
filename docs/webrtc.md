@@ -141,6 +141,11 @@ while the connection goes on, and the last one closes with the
 connection. Natively the browser stops checking a candidate that never
 answers after about 15 s; the stack after about 16 s.
 
+It also has the peer restart ICE once messages flow, werift and Chrome's
+own stack in turn: the page answers with new credentials, its events on
+the way and its new candidates are the browser's, the channel goes on, and
+the connection never reads `checking`, `failed` or `closed`.
+
 The same suite holds TURN over TCP and TLS and ICE-TCP to Chrome's: one
 connection names a TCP and a TLS server that work, wrong credentials, a
 TCP and a TLS port nothing listens on, a TCP server that never answers

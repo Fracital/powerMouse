@@ -506,6 +506,8 @@ export class Connection {
 	 */
 	#localSet = false;
 	#heldRemotes: string[] = [];
+	/** what the stack was given of each remote candidate, by its address */
+	#remoteLines = new Map<string, string>();
 	#heldIce: RTCIceConnectionState | null = null;
 	/** the next offer restarts ICE (restartIce, or createOffer's iceRestart) */
 	#restart = false;
@@ -1329,6 +1331,11 @@ export class Connection {
 		// Chrome's agent is checking once it has a pair to check: a remote
 		// candidate added, or a check of the peer's heard
 		if (state === 'checking') {
+			// an ICE restart, of this side's or the peer's: Chrome's
+			// connection reads connected throughout while the old pair
+			// carries on (156 always, 152 most often, measured with werift
+			// and with Chrome as the peer)
+			if (this.#iceState === 'connected') return;
 			if (this.#stats.paired) this.#checking();
 			else this.#checkingHeld = true;
 			return;
@@ -1803,7 +1810,8 @@ export class Connection {
 		try {
 			switch (request.op) {
 				case 'createOffer': {
-					if (request.iceRestart || this.#restart) {
+					const restarting = request.iceRestart || this.#restart;
+					if (restarting) {
 						const restarted = this.#control({ op: 'ice_restart' });
 						if (restarted.error) throw restarted.error;
 						this.#restart = false;
@@ -1819,6 +1827,7 @@ export class Connection {
 						names: this.#mids.next(unnamed).join(),
 					});
 					if (result.error) throw result.error;
+					if (restarting) this.#keepRemotes();
 					this.#stats.offered(true);
 					this.#mids.saw(result.sdp ?? '');
 					this.#lastLocal = parseSdp(result.sdp ?? '');
@@ -1969,9 +1978,10 @@ export class Connection {
 								// one the stack refuses: dropped, as it would drop it
 							}
 						else this.#heldRemotes.push(candidate);
-					this.#remoteUfrag =
-						/^a=ice-ufrag:(.*)$/m.exec(request.sdp)?.[1].trim() ??
-						this.#remoteUfrag;
+					const ufrag = /^a=ice-ufrag:(.*)$/m.exec(request.sdp)?.[1].trim();
+					if (ufrag && this.#remoteUfrag && ufrag !== this.#remoteUfrag)
+						this.#keepRemotes();
+					this.#remoteUfrag = ufrag ?? this.#remoteUfrag;
 					this.#stats.offered(request.type !== 'offer');
 					this.#remoteSet = true;
 					reply(this.#sections(described));
@@ -2193,18 +2203,38 @@ export class Connection {
 			fields.protocol.toLowerCase() !== 'tcp' ||
 			(fields.rest.includes('tcptype') &&
 				(tcptype === 'passive' || tcptype === 'so'));
+		const line = candidateLine(fields);
 		const result = reachable
-			? this.#control({
-					op: 'remote_candidate',
-					candidate: candidateLine(fields),
-				})
+			? this.#control({ op: 'remote_candidate', candidate: line })
 			: {};
+		if (reachable && !result.error)
+			this.#remoteLines.set(
+				`${fields.protocol}/${joinAddress(fields.address, Number(fields.port))}`,
+				line,
+			);
 		if (result.error) throw result.error;
 		this.#stats.remote(
 			candidate,
 			joinAddress(fields.address, Number(fields.port)),
 			this.#remoteUfrag,
 		);
+	}
+
+	/**
+	 * After an ICE restart, of either side: the stack's agent drops every
+	 * remote candidate, and a description read before the new candidates
+	 * were gathered has none (a page that sets it at once). Chrome goes on
+	 * finding the peer where it was (the peer's checks with the new
+	 * credentials make their address a candidate again); the stack is given
+	 * the old ones back, without a ufrag of their own, so that it checks
+	 * them with the new credentials. A candidate given again is ignored.
+	 */
+	#keepRemotes() {
+		for (const line of this.#remoteLines.values())
+			this.#control({
+				op: 'remote_candidate',
+				candidate: line.replace(/ ufrag \S+/, ''),
+			});
 	}
 
 	/** a remote candidate at a name: another document's, reached over the bridge */
@@ -2219,7 +2249,12 @@ export class Connection {
 			this.#remoteUfrag,
 		);
 		fields.address = address;
-		this.#control({ op: 'remote_candidate', candidate: candidateLine(fields) });
+		const line = candidateLine(fields);
+		this.#control({ op: 'remote_candidate', candidate: line });
+		this.#remoteLines.set(
+			`${fields.protocol}/${joinAddress(address, Number(fields.port))}`,
+			line,
+		);
 	}
 
 	/** the peer's certificate and its fingerprint, once the handshake showed it */

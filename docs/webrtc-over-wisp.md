@@ -755,6 +755,24 @@ TURN server.
   connection is up (what a server has not answered by then is never
   shown) and no sooner than Chrome's last gathering step (120 ms), and
   `icegatheringstatechange` comes before the end of candidates.
+- An ICE restart the peer starts: its offer with new credentials is
+  answered with new ones, the page gathers again (`gathering`, the host
+  candidate of the next generation with the new `ufrag`, `complete`, the
+  end of candidates) and the channels go on over the old pair until the
+  new one is chosen. The connection reads `connected` throughout, as
+  Chrome's does (156 in every run, with werift and with Chrome as the
+  peer; 152 sometimes reads `disconnected` for a moment when the offer
+  carries its candidates); the stack's agent says `checking` at a restart,
+  which the page used to read, and is not told while connected. The same
+  holds for a restart of the page's own. The agent drops every remote
+  candidate at a restart, and a description set at once carries none of
+  the new ones yet: the worker gives it the old ones back (without a ufrag
+  of their own), which it checks with the new credentials, as Chrome finds
+  the peer again where it was. Two of the stack's connections that
+  restarted that way used to check nothing more and read `disconnected`
+  once any pair was given up (two connections in one page, with a
+  candidate nobody is at, 25 s on; through the packet capture's probe
+  too, where Chrome's stay connected).
 - The descriptions a page reads have Chrome's lines in Chrome's order for a
   data channel section (the suite compares an offer and an answer with
   Chrome's own, identifiers normalised), with the candidates gathered so

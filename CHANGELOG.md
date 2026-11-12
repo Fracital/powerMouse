@@ -688,6 +688,15 @@ The first release after a four-year gap. Everything below is breaking.
   and 401 errors with their texts, timing and order. They used to fail at
   once with a 701. A TURN server's 401 says "Unauthorized." as Chrome's
   does. The `webrtc-net` suite compares them with the browser's.
+- An ICE restart, the peer's or the page's own, leaves a proxied page's
+  connection reading `connected`, as Chrome's does; it read `checking`
+  until the new pair was up. A restart the peer starts is answered with
+  new credentials and the events and candidates Chrome shows (`webrtc-net`
+  suite, werift and Chrome as the peer). After a restart whose
+  descriptions were set before their candidates were gathered, the stack
+  checks the peer's old candidates with the new credentials; two of its
+  connections used to find no pair and read `disconnected` once any other
+  pair was given up.
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

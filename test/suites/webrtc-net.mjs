@@ -1,7 +1,8 @@
 // The network side of a proxied page's RTCPeerConnection
 // (docs/webrtc-over-wisp.md, sections 5 and 15): what the wisp streams of
 // a connection do over its life, TURN servers over TCP and TLS
-// (test/turn.mjs), and ICE-TCP. test/pages/webrtc-peer.html is the page,
+// (test/turn.mjs), an ICE restart the peer starts, and ICE-TCP.
+// test/pages/webrtc-peer.html is the page,
 // natively (the control) and through the proxy in both demo modes; the far
 // end is a peer in this process (werift, bound to loopback), and the
 // remote candidates nothing answers at are UDP sinks of this process.
@@ -106,6 +107,16 @@ function nodeEnd(options = {}) {
 			await pc.setLocalDescription(await pc.createAnswer());
 			await complete();
 			return pc.localDescription.sdp;
+		},
+		/** an offer of this end's, a restart of ICE with `restart` */
+		async offer({ restart = false } = {}) {
+			if (restart) pc.restartIce();
+			await pc.setLocalDescription(await pc.createOffer());
+			await complete();
+			return pc.localDescription.sdp;
+		},
+		async accept(sdp) {
+			await pc.setRemoteDescription({ type: 'answer', sdp: withoutNames(sdp) });
 		},
 		async opened(name) {
 			await until(
@@ -586,6 +597,189 @@ tcpTurn.close();
 tlsTurn.close();
 silentTcp.close();
 deadTls.close();
+
+// --- an ICE restart the peer starts (section 5.3) ---
+//
+// The page offers, the peer answers, and once messages flow the peer
+// restarts ICE: its new offer has new credentials, the page answers it
+// and gathers again, and the channel goes on. What the page reads on the
+// way (its events, its new candidates and credentials) is what it reads
+// natively, with werift and with Chrome's own stack as the peer; Chrome's
+// connection stays connected throughout (152 sometimes reads disconnected
+// for a moment when the offer carries its candidates, 156 never does).
+
+// the far end's browser: its pages have media access, so its own stack
+// shows its host candidates' addresses
+const far = await launch(['--use-fake-ui-for-media-stream']);
+const farPage = await page(far, null);
+const ufragOf = (sdp) => /a=ice-ufrag:(\S+)/.exec(sdp ?? '')?.[1];
+/** what the page's own log says of a restart, its transitions of ICE and of the connection apart */
+const restartLog = (log) =>
+	log.filter((entry) => !/^(ice|connection):/.test(entry)).join();
+const restarts = {};
+for (const peerKind of ['werift', 'Chrome']) {
+	for (const [label, base] of probes) {
+		const opened = await page(browser, base);
+		pages.push(opened);
+		const own = pageEnd(opened.frame);
+		const peer = peerKind === 'werift' ? nodeEnd() : pageEnd(farPage.frame);
+		let failure = null;
+		let result = null;
+		try {
+			await own.call('open', { iceServers: [] });
+			await own.call('channels', [['chat', {}]]);
+			await peer.call('open', { iceServers: [] });
+			const offer = await own.call('offer');
+			const answer = await peer.call('answer', offer);
+			await own.call('accept', answer);
+			await own.call('opened', 'chat');
+			await own.call('send', 'chat', { text: 'before' });
+			const before = await own.call('read');
+			const shown = (await own.call('candidates')).candidates.length;
+			const restart =
+				peerKind === 'werift'
+					? await peer.call('offer', { restart: true })
+					: (await peer.call('restart'), await peer.call('offer'));
+			const again = await own.call('answer', restart);
+			await peer.call('accept', again);
+			await own.call('send', 'chat', { text: 'after' });
+			await peer.call(
+				'send',
+				'chat',
+				peerKind === 'werift' ? 'and back' : { text: 'and back' },
+			);
+			await own.call('state', 'connected', 10000);
+			const read = await own.call('read');
+			const gathered = (await own.call('candidates')).candidates;
+			result = {
+				log: restartLog(read.log.slice(before.log.length)),
+				transitions: read.log
+					.slice(before.log.length)
+					.filter((entry) => /^(ice|connection):/.test(entry))
+					.join(),
+				connection: read.connection,
+				fresh:
+					ufragOf(again) !== ufragOf(before.local) &&
+					ufragOf(again) === ufragOf(read.local),
+				candidates: gathered.map((candidate) =>
+					candidate.candidate
+						.replace(/^candidate:\d+ /, 'candidate:X ')
+						.replace(/ \S+ \d+ typ/, ' X X typ')
+						.replace(
+							/ ufrag \S+/,
+							` ufrag ${candidate.usernameFragment === ufragOf(again) ? 'new' : 'old'}`,
+						),
+				),
+				earlier: shown,
+				there: (await peer.call('received', 'chat', 2)).map(
+					(message) => message.text ?? message,
+				),
+				here: (await own.call('received', 'chat', 1))[0]?.text,
+			};
+		} catch (error) {
+			failure = String(error).slice(0, 300);
+		}
+		await own.call('close').catch(() => {});
+		await peer.call('close').catch(() => {});
+		await opened.page.close();
+		restarts[`${peerKind} ${label}`] = result;
+		const native = restarts[`${peerKind} natively`];
+		const summary = failure ?? JSON.stringify(result);
+		if (!base) {
+			ok(
+				`natively, with ${peerKind}: the peer restarts ICE, the page answers with new credentials and the channel goes on`,
+				!failure &&
+					result.fresh &&
+					result.connection === 'connected' &&
+					result.here === 'and back',
+				summary,
+			);
+			continue;
+		}
+		ok(
+			`${label}, with ${peerKind}: the peer restarts ICE, the page answers with new credentials, gathers again as natively, and the channel goes on`,
+			!failure &&
+				native &&
+				result.fresh &&
+				result.connection === 'connected' &&
+				result.log === native.log &&
+				JSON.stringify(result.candidates) ===
+					JSON.stringify(native.candidates) &&
+				result.there.join() === 'before,after' &&
+				result.here === 'and back',
+			`${summary} natively ${JSON.stringify(native)}`,
+		);
+		ok(
+			`${label}, with ${peerKind}: the connection stays connected through the peer's restart`,
+			!failure && !/checking|failed|closed/.test(result.transitions),
+			summary,
+		);
+	}
+}
+await far.close();
+
+/**
+ * In the page: two connections of its own (over the bridge between
+ * documents of this browser), the answerer restarts ICE and each side sets
+ * the other's description at once, before it has its new candidates;
+ * then a candidate nobody is at, which the agent gives up on
+ */
+const restartAtOnce = async (ms) => {
+	const wait = (time) => new Promise((resolve) => setTimeout(resolve, time));
+	const connect = async (from, to) => {
+		await from.setLocalDescription();
+		await to.setRemoteDescription(from.localDescription);
+		await to.setLocalDescription();
+		await from.setRemoteDescription(to.localDescription);
+	};
+	const a = new RTCPeerConnection();
+	const b = new RTCPeerConnection();
+	for (const [one, other] of [
+		[a, b],
+		[b, a],
+	])
+		one.onicecandidate = ({ candidate }) =>
+			candidate && other.addIceCandidate(candidate).catch(() => {});
+	const channel = a.createDataChannel('restart');
+	const got = [];
+	b.ondatachannel = ({ channel: theirs }) => {
+		theirs.onmessage = ({ data }) => got.push(data);
+	};
+	await connect(a, b);
+	for (let i = 0; i < 100 && channel.readyState !== 'open'; i++)
+		await wait(100);
+	for (const pc of [a, b]) pc.onicecandidate = null;
+	b.restartIce();
+	await connect(b, a);
+	await a.addIceCandidate({
+		candidate: 'candidate:7 1 udp 2122260223 127.0.0.1 9 typ host',
+		sdpMid: '0',
+		sdpMLineIndex: 0,
+	});
+	await wait(ms);
+	channel.send('still here');
+	await wait(500);
+	const states = [a, b].map((pc) => pc.connectionState).join();
+	a.close();
+	b.close();
+	return { states, got: got.join() };
+};
+for (const [label, base] of probes.slice(1)) {
+	const opened = await page(browser, base);
+	pages.push(opened);
+	const result = await opened
+		.frame()
+		.evaluate(restartAtOnce, 25000)
+		.catch((error) => ({ failure: String(error).slice(0, 300) }));
+	await opened.page.close();
+	ok(
+		`${label}: after a restart whose descriptions carry no candidates yet, both connections stay connected once a pair is given up, and the channel goes on`,
+		!result.failure &&
+			result.states === 'connected,connected' &&
+			result.got === 'still here',
+		JSON.stringify(result),
+	);
+}
 
 // --- ICE-TCP (RFC 6544; section 5.2) ---
 //
