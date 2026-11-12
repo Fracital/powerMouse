@@ -333,6 +333,29 @@ const wanted = (messages) =>
 					},
 		);
 
+/**
+ * An empty string and an empty binary message from `from` on `channel`,
+ * then a marker: what `to` reads after the `seen` messages it has, and what
+ * the sender's channel said it had buffered (and how often it said that was
+ * low). An unordered channel may hand them over in any order.
+ */
+async function emptiesCarried(from, to, channel, seen, ordered = true) {
+	const buffered = await from.call('empties', channel);
+	await from.call('send', channel, { text: 'after the empty ones' });
+	const got = (await to.call('received', channel, seen + 3)).slice(seen);
+	const read = got.map((message) =>
+		'text' in message ? `text:${message.text}` : `bytes:${message.size}`,
+	);
+	if (!ordered) read.sort();
+	return { read: read.join(), buffered };
+}
+/** nothing buffered after them, at once or later, and no bufferedamountlow */
+const QUIET = '0,0,0,0';
+const EMPTIES = {
+	ordered: 'text:,bytes:0,text:after the empty ones',
+	unordered: 'bytes:0,text:,text:after the empty ones',
+};
+
 /** a channel's open and close events, in order */
 const lifeOf = ({ events }) =>
 	events.filter((event) => event !== 'bufferedamountlow').join();
@@ -540,9 +563,6 @@ for (const proxied of pages) {
 			// nothing sent after it overtakes it)
 			const up = [
 				{ text: 'hello' },
-				// not carried (the stack cannot send one: docs/webrtc-over-wisp.md);
-				// what is sent after it still arrives
-				{ text: '', lost: true },
 				{ text: 'h\xe9llo \u{1f600}' },
 				{ bytes: 1, as: 'ArrayBuffer' },
 				{ bytes: 1200, seed: 3, as: 'view' },
@@ -597,6 +617,24 @@ for (const proxied of pages) {
 						]),
 					),
 				JSON.stringify(others),
+			);
+
+			// empty messages: one zero byte under the "empty" identifiers on
+			// the wire (RFC 8831 6.6), an empty string or buffer to whoever
+			// reads them, and nothing in bufferedAmount
+			const emptyUp = [
+				await emptiesCarried(own, peer, 'timed', 1),
+				await emptiesCarried(own, peer, 'lossy', 1, false),
+			];
+			// (not from this peer: werift sends an empty message as a DATA
+			// chunk without user data, which SCTP forbids and the stack
+			// drops; Chrome is the far end for that direction)
+			ok(
+				`${label}: an empty string and an empty binary message reach the peer on an ordered and an unordered channel, in order, and count as nothing buffered`,
+				emptyUp[0].read === EMPTIES.ordered &&
+					emptyUp[1].read === EMPTIES.unordered &&
+					emptyUp.every(({ buffered }) => buffered.join() === QUIET),
+				JSON.stringify(emptyUp),
 			);
 
 			// the amount buffered: what the page sent and the stack has not
@@ -810,6 +848,29 @@ for (const proxied of pages) {
 				]),
 			);
 
+			// empty messages both ways, as Chrome's own stack sends and
+			// reads them
+			const emptyThere = [
+				await emptiesCarried(own, chrome, 'chat', up.length),
+				await emptiesCarried(own, chrome, 'lossy', 0, false),
+			];
+			const emptyBack = [
+				await emptiesCarried(chrome, own, 'chat', down.length),
+				await emptiesCarried(chrome, own, 'lossy', 0, false),
+			];
+			ok(
+				`${label}: empty messages travel both ways with Chrome on an ordered and an unordered channel, and the page's channel says of them what Chrome's does`,
+				[emptyThere, emptyBack].every(
+					(way) =>
+						way[0].read === EMPTIES.ordered &&
+						way[1].read === EMPTIES.unordered &&
+						way.every(({ buffered }) => buffered.join() === QUIET),
+				),
+				JSON.stringify([emptyThere, emptyBack]),
+			);
+			const there = up.length + 3;
+			const here = down.length + 3;
+
 			// an ICE restart: new credentials, new candidates, the same
 			// channels
 			await own.call('restart');
@@ -822,8 +883,8 @@ for (const proxied of pages) {
 				await carried(chrome, own, 'chat', [{ text: 'and back' }]);
 				restarted = {
 					fresh: !!now && now !== before,
-					there: (await chrome.call('received', 'chat', up.length + 1)).at(-1),
-					here: (await own.call('received', 'chat', down.length + 1)).at(-1),
+					there: (await chrome.call('received', 'chat', there + 1)).at(-1),
+					here: (await own.call('received', 'chat', here + 1)).at(-1),
 					state: await own.call('state', 'connected', 20000),
 					seen: await seenAs(chrome),
 				};

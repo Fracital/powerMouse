@@ -20,6 +20,10 @@ case "$version" in
 	;;
 esac
 
+# the crates built from published source plus a patch of ours
+# (rust/patches/): rust/patched/<name>, which rust/Cargo.toml names
+bash /work/patches.sh
+
 # what the artifact is built from, for its provenance (inputs.sh);
 # ONLY_SOURCES=1 stops there, with nothing built
 mkdir -p /work/out

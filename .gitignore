@@ -8,6 +8,8 @@ deploy/epoxy/out/
 deploy/rust/out/
 # a host cargo build of rust/ (the container builds in its own target/)
 rust/target/
+# crates patched for a build (deploy/rust/patches.sh makes them in the container)
+rust/patched/
 # screenshots from SHOTS=1 npm test
 test/out/
 /.claude/

@@ -20,5 +20,10 @@ strip = true
 # generates the DTLS certificate with rcgen on aws-lc-rs (C, no wasm build);
 # the WebRTC worker generates the certificate with WebCrypto instead and
 # hands it to the stack (rust/vendor/str0m-rust-crypto/src/dtls.rs)
+#
+# str0m 0.25.0 as published plus rust/patches/str0m-0.25.0.patch (an empty
+# data channel message is sent, RFC 8831 6.6): deploy/rust/patches.sh makes
+# rust/patched/str0m in the build container from the checked crate
 [patch.crates-io]
 str0m-rust-crypto = { path = "vendor/str0m-rust-crypto" }
+str0m = { path = "patched/str0m" }

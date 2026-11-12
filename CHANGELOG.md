@@ -30,13 +30,18 @@ The first release after a four-year gap. Everything below is breaking.
   compiled `WebAssembly.Module` from a URL, bytes or a module the host
   compiled, never from `import.meta.url`. Nothing uses it yet; the
   `rewriter: 'wasm'` option comes with the rewriter itself.
-- `rtc.wasm` (`rust/rtc`, 1474162 bytes, 504310 with brotli) is the WebRTC
+- `rtc.wasm` (`rust/rtc`, 1504781 bytes, 515938 with brotli) is the WebRTC
   stack: str0m with its pure Rust crypto, built for `wasm32-wasip1` (a
   crate names its target in a `wasm-target` file and extra flags in
   `rustflags`), whose only imports are WASI's clock and randomness.
   `rust/vendor/str0m-rust-crypto` is the published crate without the
   certificate generator that needs a C library; the worker makes the DTLS
   certificate with WebCrypto.
+- A published crate can be built with a patch of STomp's: `rust/patches/crates`
+  names it with the checksum of its `.crate` file, `deploy/rust/patches.sh`
+  unpacks it in the container and applies `rust/patches/<name>-<version>.patch`,
+  and `[patch.crates-io]` points at the result. str0m is the first (an empty
+  data channel message).
 
 ### Transport
 
@@ -563,8 +568,9 @@ The first release after a four-year gap. Everything below is breaking.
   its host candidate is a `.local` name, its `srflx` and `relay` candidates
   come from the page's own STUN and TURN servers (UDP), and
   `iceTransportPolicy: 'relay'`, ICE restarts, ordered and unordered
-  channels, `bufferedAmount` and messages up to Chrome's 256 KiB work
-  against werift and against Chrome's own stack (webrtc-peer suite, 49
+  channels, `bufferedAmount`, empty messages and messages up to Chrome's
+  256 KiB work
+  against werift and against Chrome's own stack (webrtc-peer suite, 53
   checks). Captured in a network namespace of its own, the browser sends
   TCP to the proxy and nothing else, where its own stack sent 175 UDP
   packets to the page's servers and candidates and 52 mDNS packets to the
@@ -5243,7 +5249,7 @@ Fixed while testing real sites and a feature fixture:
   origin today, shared between those origins.
 - WebRTC carries data channels only so far (docs/webrtc-over-wisp.md
   section 15): `addTrack` and `addTransceiver` throw, TURN over TCP or TLS
-  and TCP candidates are not carried, an empty message is not sent,
+  and TCP candidates are not carried,
   `getStats()` has no candidate entries and `pc.sctp` is null. A peer behind
   a restrictive NAT is reached only through a TURN server the page names.
 - The same-origin policy between proxied sites is simulated by the proxy

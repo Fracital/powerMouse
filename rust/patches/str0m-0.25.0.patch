@@ -1,0 +1,18 @@
+--- a/src/sctp/mod.rs
++++ b/src/sctp/mod.rs
+@@ -649,6 +649,15 @@
+             PayloadProtocolIdentifier::String
+         };
+ 
++        // RFC 8831 6.6: SCTP cannot carry an empty user message, so an empty
++        // one is a single zero byte under the "empty" identifier. Without a
++        // chunk the stream sequence number taken for it is never sent, and an
++        // ordered stream stalls at the peer.
++        if buf.is_empty() {
++            stream.write_with_ppi(&[0], ppi)?;
++            return Ok(0);
++        }
++
+         Ok(stream.write_with_ppi(buf, ppi)?)
+     }
+ 

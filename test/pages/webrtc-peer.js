@@ -252,6 +252,26 @@
 				threshold: channel.bufferedAmountLowThreshold,
 			};
 		},
+		/**
+		 * An empty string and an empty binary message: what the channel says
+		 * it has buffered after them, at once and a little later, and how
+		 * often it said that was low
+		 */
+		async empties(name, label) {
+			const state = channelOf(name, label);
+			const { channel } = state;
+			const lows = () =>
+				state.events.filter((e) => e === 'bufferedamountlow').length;
+			const before = lows();
+			channel.send('');
+			channel.send(new ArrayBuffer(0));
+			const amounts = [channel.bufferedAmount];
+			for (const ms of [5, 50]) {
+				await wait(ms);
+				amounts.push(channel.bufferedAmount);
+			}
+			return [...amounts, lows() - before];
+		},
 		closeChannel(name, label) {
 			channelOf(name, label).channel.close();
 		},

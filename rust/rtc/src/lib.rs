@@ -120,6 +120,13 @@ struct Conn {
 	/// the stream ids of negotiated channels an offer carried and a rollback
 	/// took back: the stack keeps them allocated (see `roll_back`)
 	held_streams: Vec<u16>,
+	/// for each channel, the bytes written to its stream and where in them
+	/// the zero bytes sit that stand for empty messages (RFC 8831 6.6):
+	/// the stack counts those as buffered, a page has sent nothing
+	wire: Vec<(u64, VecDeque<u64>)>,
+	/// for each channel, the page's bufferedAmountLowThreshold and whether
+	/// the amount has been above it since the last time it was said low
+	low: Vec<(usize, bool)>,
 	queue: VecDeque<Vec<u8>>,
 }
 
@@ -531,11 +538,35 @@ impl Conn {
 				.channel(id)
 				.map(|mut c| c.buffered_amount())
 				.unwrap_or(0);
+			// less the stand-in bytes still in it: the stream releases its
+			// bytes in the order they were written
+			let amount = match self.wire.get_mut(index) {
+				Some((written, pads)) => {
+					let released = written.saturating_sub(amount as u64);
+					while pads.front().is_some_and(|at| *at <= released) {
+						pads.pop_front();
+					}
+					amount.saturating_sub(pads.len())
+				}
+				None => amount,
+			};
+			let name = index.to_string();
 			if amount != self.buffered[index] {
 				self.buffered[index] = amount;
-				let index = index.to_string();
 				let amount = amount.to_string();
-				self.event(&[("ev", "buffered"), ("index", &index), ("amount", &amount)]);
+				self.event(&[("ev", "buffered"), ("index", &name), ("amount", &amount)]);
+			}
+			// low is said of what the page sent: the stack's own event counts
+			// the stand-in bytes too
+			if self.low.len() <= index {
+				self.low.resize(index + 1, (0, false));
+			}
+			let (threshold, above) = &mut self.low[index];
+			if amount > *threshold {
+				*above = true;
+			} else if *above {
+				*above = false;
+				self.event(&[("ev", "buffered_low"), ("index", &name)]);
 			}
 		}
 	}
@@ -627,10 +658,6 @@ impl Conn {
 			Event::ChannelClose(id) => {
 				let index = self.index_of(id).to_string();
 				self.event(&[("ev", "channel_close"), ("index", &index)]);
-			}
-			Event::ChannelBufferedAmountLow(id) => {
-				let index = self.index_of(id).to_string();
-				self.event(&[("ev", "buffered_low"), ("index", &index)]);
 			}
 			Event::Closed => self.event(&[("ev", "closed")]),
 			Event::MediaAdded(added) => {
@@ -1054,10 +1081,13 @@ impl Conn {
 				let value: usize = field(fields, "value")
 					.and_then(|v| v.parse().ok())
 					.ok_or("no value")?;
-				let id = self.channel_id(fields)?;
-				if let Some(mut channel) = self.rtc.channel(id) {
-					channel.set_buffered_amount_low_threshold(value);
+				let index: usize = field(fields, "index")
+					.and_then(|v| v.parse().ok())
+					.ok_or("no index")?;
+				if self.low.len() <= index {
+					self.low.resize(index + 1, (0, false));
 				}
+				self.low[index].0 = value;
 				self.result(&[]);
 			}
 			// the SCTP shutdown and the DTLS close_notify are queued: the
@@ -1149,6 +1179,8 @@ pub unsafe extern "C" fn c(ptr: *mut u8, len: usize) -> i32 {
 		media_to_add: Vec::new(),
 		reverted: Vec::new(),
 		held_streams: Vec::new(),
+		wire: Vec::new(),
+		low: Vec::new(),
 		queue: VecDeque::new(),
 	};
 	if let Some(index) = state.conns.iter().position(|c| c.is_none()) {
@@ -1203,15 +1235,22 @@ pub unsafe extern "C" fn i(id: i32, kind: u32, ptr: *mut u8, len: usize) -> i32 
 			let index = read_u16(&bytes, 0).map(|n| n as usize);
 			let binary = bytes.get(2).copied().unwrap_or(0) == 1;
 			match index.and_then(|index| conn.channels.get(index).copied().flatten()) {
-				// An empty message is not sent: the stack takes a stream
-				// sequence number for it and writes no chunk (it should be
-				// one zero byte under the "empty" payload identifiers,
-				// RFC 8831 6.6), and an ordered channel's later messages
-				// would wait for it for ever at the peer
-				Some(_) if bytes.len() <= 3 => STATUS_OK,
 				Some(id) => match conn.rtc.channel(id) {
-					Some(mut channel) => match channel.write(binary, &bytes[3..]) {
-						Ok(true) => STATUS_OK,
+					// an empty message travels as one zero byte (the patch
+					// of rust/patches/ to the stack's write)
+					Some(mut channel) => match channel.write(binary, bytes.get(3..).unwrap_or(&[])) {
+						Ok(true) => {
+							let index = index.unwrap_or(0);
+							if conn.wire.len() <= index {
+								conn.wire.resize(index + 1, (0, VecDeque::new()));
+							}
+							let (written, pads) = &mut conn.wire[index];
+							*written += bytes.len().saturating_sub(3).max(1) as u64;
+							if bytes.len() <= 3 {
+								pads.push_back(*written);
+							}
+							STATUS_OK
+						}
 						// more than the send buffer has room for
 						Ok(false) => {
 							conn.result(&[("error", "full")]);

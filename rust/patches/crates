@@ -1,0 +1,9 @@
+# Crates built from their published source with a patch of ours applied
+# (deploy/rust/patches.sh): name, version, sha256 of the .crate file as
+# crates.io serves it. The patch is patches/<name>-<version>.patch.
+#
+# str0m: an empty data channel message is sent as RFC 8831 6.6 says (one
+# zero byte under the "empty" payload identifier); as published it takes a
+# stream sequence number and writes no chunk, which stalls an ordered
+# channel at the peer.
+str0m 0.25.0 357c7e453c033c8bb59e912312f9f9ff07c2a9ce7268bcb94f0c828a5b47e58f

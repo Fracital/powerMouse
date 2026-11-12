@@ -662,6 +662,16 @@ TURN server.
   says it takes otherwise (a larger one is Chrome's `TypeError`).
 - `bufferedAmount` rises with each `send` in a task, drains to zero, and
   `bufferedamountlow` fires at the threshold.
+- An empty string and an empty binary message are delivered, in order on an
+  ordered channel, as Chrome delivers them: one zero byte under the "empty"
+  payload identifiers of RFC 8831 section 6.6, which the page's
+  `bufferedAmount` and `bufferedamountlow` do not count (Chrome's do not).
+  str0m 0.25.0 as published takes a stream sequence number for such a
+  message and writes no chunk, which stalls an ordered channel at the peer;
+  `rust/patches/str0m-0.25.0.patch` is the fix, applied in the container
+  build (deploy/rust/README.md). werift cannot send an empty message (it
+  writes a DATA chunk with no user data, which SCTP forbids), so the suite
+  takes that direction from Chrome.
 - Closing: the end that closes a channel sees `close`, the other `closing`
   then `close`. `close()` on the connection sends the SCTP shutdown and the
   DTLS close_notify, so the peer's channels close at once. When the peer
@@ -755,7 +765,7 @@ TURN server.
 
 ### Measured
 
-- `assets/rtc.wasm`: 1474162 bytes, 504310 with brotli. This is the budget.
+- `assets/rtc.wasm`: 1504781 bytes, 515938 with brotli. This is the budget.
   `dist/rtcWorker.js`: 31842 bytes (10971 with brotli).
 - A connection to the peer in the suite's process is `connected` about
   210 ms after the page's `createOffer`.
@@ -782,12 +792,6 @@ TURN server.
 
 ### Limits of Phase 1
 
-- **An empty message is not sent.** The stack takes a stream sequence
-  number for it and writes no chunk (it should be one zero byte under the
-  "empty" payload identifiers of RFC 8831), which would stall an ordered
-  channel at the peer, so the crate drops the message instead. Fixing it is
-  a two-line change in str0m (`sctp/mod.rs`, `write`), upstream or in a
-  vendored copy. Empty messages from a peer arrive.
 - **TURN over TCP and TLS, and ICE-TCP candidates, are not carried** (Phase
   4): a `turn:...?transport=tcp` or `turns:` server gets the 701 "Failed to
   establish connection" at once, where Chrome reports it when the
