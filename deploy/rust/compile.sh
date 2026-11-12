@@ -41,7 +41,16 @@ if [[ -f "$crate/wasm-target" ]]; then
 	triple=$(tr -d '[:space:]' < "$crate/wasm-target")
 fi
 
-export RUSTFLAGS='-Zlocation-detail=none -Zfmt-debug=none'
+# no panic location, no Debug formatting, plus the flags the crate names in
+# rust/<crate>/rustflags (`-Cpanic=immediate-abort` for one whose
+# dependencies can panic: the panic machinery and its messages, "panicked
+# at", stay out of the bytes and a panic is a plain trap)
+flags='-Zlocation-detail=none -Zfmt-debug=none'
+if [[ -f "$crate/rustflags" ]]; then
+	flags="$flags $(tr '\n' ' ' < "$crate/rustflags")"
+fi
+
+export RUSTFLAGS=$flags
 # shellcheck disable=SC2086
 cargo build $locked --release --target "$triple" \
 	-Z build-std=std,panic_abort -Z build-std-features=optimize_for_size \
