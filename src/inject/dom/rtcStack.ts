@@ -3694,8 +3694,8 @@ export default class WebRTCStack {
 							bytesReceived: inbound.bytes,
 							concealedSamples: played?.concealedSamples ?? 0,
 							concealmentEvents: played?.concealmentEvents ?? 0,
-							fecPacketsDiscarded: 0,
-							fecPacketsReceived: 0,
+							fecPacketsDiscarded: played?.fecPacketsDiscarded ?? 0,
+							fecPacketsReceived: played?.fecPacketsReceived ?? 0,
 							headerBytesReceived: inbound.header,
 							insertedSamplesForDeceleration:
 								played?.insertedSamplesForDeceleration ?? 0,

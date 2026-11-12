@@ -634,6 +634,15 @@ The first release after a four-year gap. Everything below is breaking.
   peer's DTMF events as their two tones at Chrome's levels in place of the
   sound of their time. The worker does not send comfort noise yet, where
   Chrome does with G.711 or G.722 (docs/webrtc-over-wisp.md section 16).
+- A proxied page's lost Opus packet is rebuilt from the FEC copy the next
+  packet carries, as Chrome's receiver rebuilds it: `src/rtc/lbrr.ts`
+  rewrites the copy as a packet WebCodecs decodes (bit for bit libopus's
+  FEC decode for SILK, close to it for hybrid), the receiver holds 20 ms
+  more of an Opus stream for it, a loss is read from the RTP times (Chrome's
+  padding packets hid about a third of them from the sequence numbers), and the
+  stack no longer holds the packets after a loss for 300 ms. The page's
+  receiver reports tell the sender of the loss, so Chrome's encoder makes
+  the copies (docs/webrtc-over-wisp.md section 16).
 - When a peer closes its connection, a proxied page's data channels hear
   what Chrome's own hear: `closing`, an `error` event (an `RTCError` of
   detail `sctp-failure`, cause code 12, "User-Initiated Abort, reason=Close

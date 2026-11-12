@@ -101,6 +101,10 @@
 		const size = Math.round(rate / 200);
 		const phases = [];
 		const levels = [];
+		// windows where what is not the tone is more than a tenth of the
+		// sound: a packet concealed rather than decoded (or rebuilt from
+		// its FEC copy) reads as one or more
+		let distorted = 0;
 		let power = 0;
 		for (let i = start; i < all.length; i++) power += all[i] * all[i];
 		for (let i = start; i + size <= all.length; i += size) {
@@ -112,6 +116,16 @@
 			}
 			phases.push(Math.atan2(im, re));
 			levels.push((2 * Math.hypot(re, im)) / size);
+			let rest = 0;
+			let all2 = 0;
+			for (let k = 0; k < size; k++) {
+				const fit =
+					((2 * re) / size) * Math.cos(turn * (i + k)) +
+					((2 * im) / size) * Math.sin(turn * (i + k));
+				rest += (all[i + k] - fit) ** 2;
+				all2 += all[i + k] ** 2;
+			}
+			if (all2 > 0 && rest > all2 / 10) distorted++;
 		}
 		const sorted = [...levels].sort((a, b) => a - b);
 		const level = sorted[sorted.length >> 1] || 0;
@@ -139,6 +153,7 @@
 				: 0,
 			jumps,
 			dips,
+			distorted,
 		};
 	}
 
@@ -321,7 +336,7 @@
 		 * streams, or with addTransceiver (`direction` given). Resolves with
 		 * the ids a peer will read.
 		 */
-		tone(name, hz, { streams = 1, direction } = {}) {
+		tone(name, hz, { streams = 1, direction, watchFec } = {}) {
 			const entry = peer(name);
 			const source = tone(hz);
 			entry.sources.push(source);
@@ -330,6 +345,9 @@
 			if (direction)
 				entry.pc.addTransceiver(source.track, { direction, streams: made });
 			else entry.pc.addTrack(source.track, ...made);
+			// in the same task, as a receiver's transform must be
+			if (watchFec)
+				window.__media.watchFec(name, entry.pc.getTransceivers().length - 1);
 			return { track: source.track.id, streams: made.map((s) => s.id) };
 		},
 		/** the browser's fake capture device, which gives the origin media access too */
@@ -529,6 +547,92 @@
 				worker,
 				{},
 			);
+		},
+		/**
+		 * The sender of transceiver `at` passes what it encodes through an
+		 * encoded transform that counts the Opus frames carrying an FEC copy
+		 * of the frame before (an LBRR frame, RFC 6716 4.2.4: the second
+		 * bit of a mono 20 ms SILK or hybrid frame), which libopus makes
+		 * only once the peer reports loss (natively only)
+		 */
+		watchFec(name, at) {
+			const entry = peer(name);
+			const source = `const seen = { frames: 0, copies: 0 };
+			addEventListener('rtctransform', (event) => {
+				const { readable, writable } = event.transformer;
+				readable.pipeThrough(new TransformStream({
+					transform(frame, controller) {
+						const bytes = new Uint8Array(frame.data);
+						const config = bytes[0] >> 3;
+						if (bytes.length > 1 && (bytes[0] & 7) === 0 &&
+							(config < 12 ? (config & 3) === 1 : config < 16 && config & 1)) {
+							// libopus's range decoder (celt/entdec.c), two bits in
+							let at = 1;
+							const next = () => (at < bytes.length ? bytes[at++] : 0);
+							let range = 128;
+							let rest = next();
+							let value = range - 1 - (rest >> 1);
+							const normalize = () => {
+								while (range <= 2 ** 23) {
+									range *= 256;
+									const last = rest;
+									rest = next();
+									value = (value * 256 + (255 & ~(((last << 8) | rest) >> 1))) % 2 ** 31;
+								}
+							};
+							normalize();
+							let one = false;
+							for (let bit = 0; bit < 2; bit++) {
+								const half = Math.floor(range / 2);
+								one = value < half;
+								if (!one) value -= half;
+								range = one ? half : range - half;
+								normalize();
+							}
+							if (one) seen.copies++;
+						}
+						seen.frames++;
+						postMessage(seen);
+						controller.enqueue(frame);
+					},
+				})).pipeTo(writable);
+			});`;
+			const worker = new Worker(
+				URL.createObjectURL(new Blob([source], { type: 'text/javascript' })),
+			);
+			entry.fec = { frames: 0, copies: 0 };
+			entry.fecWorker = worker;
+			worker.onmessage = (event) => (entry.fec = event.data);
+			transceiver(name, at).sender.transform = new RTCRtpScriptTransform(
+				worker,
+				{},
+			);
+		},
+		/** what the transform of `watchFec` counted */
+		sentFec(name) {
+			return peer(name).fec;
+		},
+		/** what the peer's receiver reports says of the loss (remote-inbound-rtp) */
+		async reportedLoss(name) {
+			for (const report of (await peer(name).pc.getStats()).values())
+				if (report.type === 'remote-inbound-rtp')
+					return {
+						lost: report.packetsLost,
+						fraction: report.fractionLost,
+					};
+			return null;
+		},
+		/** the browser's own receiver's count of FEC copies and concealment */
+		async lossStats(name) {
+			for (const report of (await peer(name).pc.getStats()).values())
+				if (report.type === 'inbound-rtp')
+					return {
+						lost: report.packetsLost,
+						fec: report.fecPacketsReceived,
+						fecDiscarded: report.fecPacketsDiscarded,
+						concealmentEvents: report.concealmentEvents,
+					};
+			return null;
 		},
 		/**
 		 * The telephone events heard since the last call: for each, its

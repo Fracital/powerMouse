@@ -266,7 +266,13 @@ export interface MediaStats {
 	/** what came in, once a packet has */
 	inbound?: RtpCount & {
 		codec: CodecStats | null;
-		played: (PlayedStats & { packetsDiscarded: number }) | null;
+		played:
+			| (PlayedStats & {
+					packetsDiscarded: number;
+					fecPacketsReceived: number;
+					fecPacketsDiscarded: number;
+			  })
+			| null;
 	};
 	/** the peer's last sender report of what it sends */
 	remoteOutbound?: {

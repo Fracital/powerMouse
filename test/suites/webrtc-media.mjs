@@ -17,6 +17,7 @@
 // address must be a socket of the demo's wisp server and never one of the
 // browser's (test/sockets.mjs), and the proxied page's own candidates are
 // names and never one of this machine's addresses.
+import { createSocket } from 'node:dgram';
 import { networkInterfaces } from 'node:os';
 import {
 	done,
@@ -461,6 +462,134 @@ async function tones(own, far, prefer) {
 	await far.call('close').catch(() => {});
 	return record;
 }
+/**
+ * A relay between the end under test and the far end (the descriptions
+ * each is given name only the relay), which loses a tenth of the far end's
+ * Opus packets, one at a time: each lost packet is one the next one's FEC
+ * copy can rebuild, once the far end's encoder makes copies (libopus makes
+ * them when the receiver's reports say packets are lost).
+ */
+async function lossyRelay() {
+	const near = createSocket('udp4');
+	const toward = createSocket('udp4');
+	await Promise.all(
+		[near, toward].map(
+			(socket) => new Promise((resolve) => socket.bind(0, resolve)),
+		),
+	);
+	const relay = {
+		far: null,
+		own: null,
+		opus: 0,
+		dropped: 0,
+		nearPort: near.address().port,
+		towardPort: toward.address().port,
+		close() {
+			near.close();
+			toward.close();
+		},
+	};
+	near.on('message', (message, from) => {
+		relay.own = { address: from.address, port: from.port };
+		if (relay.far) toward.send(message, relay.far.port, relay.far.address);
+	});
+	toward.on('message', (message, from) => {
+		const far = relay.far;
+		if (!far || from.address !== far.address || from.port !== far.port) return;
+		// an RTP packet of Opus (version 2, no padding, payload 111)
+		if (
+			message.length > 12 &&
+			(message[0] & 0xe0) === 0x80 &&
+			(message[1] & 0x7f) === 111 &&
+			relay.opus++ % 10 === 5
+		) {
+			relay.dropped++;
+			return;
+		}
+		if (relay.own) near.send(message, relay.own.port, relay.own.address);
+	});
+	return relay;
+}
+/** a description whose only candidate is `address`:`port` */
+function through(sdp, address, port) {
+	return sdp
+		.split('\r\n')
+		.filter((line) => !/^a=(candidate:|end-of-candidates)/.test(line))
+		.flatMap((line) =>
+			line.startsWith('a=mid:')
+				? [
+						line,
+						`a=candidate:1 1 udp 2122260223 ${address} ${port} typ host generation 0`,
+					]
+				: [line],
+		)
+		.join('\r\n');
+}
+/**
+ * The far end offers a tone and the page answers, through a relay that
+ * loses some of the far end's packets: the far end's encoder must hear of
+ * the loss from the page's reports (it then makes FEC copies), and the page
+ * must rebuild each lost packet from the next one's copy, as the browser's
+ * own receiver does.
+ */
+async function lossy(own, far) {
+	const record = { failure: null };
+	const relay = await lossyRelay();
+	try {
+		await own.call('open');
+		await far.call('open');
+		await far.call('tone', 660, { watchFec: true });
+		const offer = await far.call('local', 'offer');
+		const [, address, port] =
+			offer.sdp.match(
+				/a=candidate:\S+ 1 udp \d+ ((?!127\.)\d+\.\d+\.\d+\.\d+) (\d+) typ host/,
+			) ?? [];
+		if (!address) throw new Error('the far end has no IPv4 host candidate');
+		relay.far = { address, port: Number(port) };
+		await own.call(
+			'remote',
+			'offer',
+			through(offer.sdp, address, relay.nearPort),
+		);
+		const answer = await own.call('local', 'answer');
+		await far.call(
+			'remote',
+			'answer',
+			through(answer.sdp, address, relay.towardPort),
+		);
+		await own.call('connected');
+		await far.call('connected');
+		await own.call('muted', 0, false);
+		// the far end's encoder makes copies once a report of the loss
+		// reaches it (receiver reports come every five seconds or so)
+		const until = Date.now() + 20000;
+		while (Date.now() < until) {
+			if ((await far.call('sentFec')).copies > 25) break;
+			await sleep(500);
+		}
+		record.before = await far.call('sentFec');
+		const dropped = relay.dropped;
+		record.heard = await own.call('hear', 0, 660, 3000);
+		record.lost = relay.dropped - dropped;
+		record.sent = await far.call('sentFec');
+		record.stats = await own.call('lossStats');
+		record.reported = await far.call('reportedLoss');
+		record.owner = relay.own ? await sockets.owner(relay.own.port) : 'none';
+	} catch (error) {
+		record.failure = String(error).slice(0, 400);
+	}
+	relay.close();
+	await own.call('close').catch(() => {});
+	await far.call('close').catch(() => {});
+	return record;
+}
+/** the receiver's reports told the far end of the loss, and it made FEC copies for most of what was recorded */
+const copied = (record) =>
+	!record.failure &&
+	record.reported?.fraction > 0.05 &&
+	record.before.copies > 25 &&
+	record.sent.copies - record.before.copies >
+		(record.sent.frames - record.before.frames) / 2;
 /** the telephone events of `heard` grouped by RTP time: each event's payloads */
 const events = (heard) => {
 	const out = new Map();
@@ -571,6 +700,14 @@ for (const key of ['tones', 'pcmuTones']) {
 		record.failure ?? JSON.stringify(record.heard),
 	);
 }
+natively.lossy = await lossy(end(control), end(native, 'the far end'));
+ok(
+	"natively: with a tenth of the far end's Opus packets lost, its encoder makes FEC copies and the receiver rebuilds the lost packets from them",
+	copied(natively.lossy) &&
+		natively.lossy.lost > 10 &&
+		natively.lossy.stats?.fecDiscarded < natively.lossy.stats?.fec,
+	JSON.stringify(natively.lossy),
+);
 ok(
 	'natively: with G.722 first in the answer, the offerer sends G.722 and the answerer Opus',
 	g722(natively.wideband),
@@ -843,6 +980,32 @@ for (const proxied of pages) {
 				Object.keys(got.heard).length === 3 &&
 				heard(got),
 			JSON.stringify([got.failure, got.codecs, want.codecs, got.heard]),
+		);
+	}
+	// a tenth of the far end's packets lost on the way
+	{
+		const got = await lossy(end(proxied), end(native, 'the far end'));
+		const want = natively.lossy;
+		ok(
+			`${label}: with a tenth of the far end's Opus packets lost, the page's reports make Chrome's encoder send FEC copies, and the page rebuilds the lost packets from them as Chrome's receiver does, and counts them in getStats()`,
+			copied(got) &&
+				got.lost > 10 &&
+				got.owner === 'server' &&
+				// and its inbound-rtp counts the copies as Chrome's does
+				got.stats?.fec > 0 &&
+				got.stats.fecDiscarded < got.stats.fec &&
+				got.heard.level > 0.25 &&
+				got.heard.purity >= 0.9 &&
+				// Natively the tone breaks in 1 to 8 of its 600 windows of
+				// 5 ms, and on a loaded machine Chrome's own playout
+				// sometimes stretches it out of shape altogether, so the
+				// bar is absolute: a frame late is up to four windows, and
+				// with only the concealment a tenth of the packets lost
+				// dips in 80 or more
+				got.heard.jumps <= 10 &&
+				got.heard.dips <= 16 &&
+				got.heard.distorted <= 6,
+			JSON.stringify([got, want.heard]),
 		);
 	}
 	// G.722 both ways with Chrome's own stack

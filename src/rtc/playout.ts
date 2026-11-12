@@ -26,6 +26,8 @@ export interface PlayoutOptions<T> {
 	initialMs?: number;
 	/** the longest delay in milliseconds */
 	maxMs?: number;
+	/** sound held beyond what the arrivals ask for, in milliseconds (`holdMs`) */
+	holdMs?: number;
 	/** a frame the buffer gives up (late, too many, dropped to shorten the delay) */
 	discard?: (value: T) => void;
 }
@@ -77,6 +79,12 @@ export class Playout<T> {
 	#skipped = new Map<number, number>();
 	/** the length of the last frame played, which a gap is taken to have */
 	frameMs = 20;
+	/**
+	 * Sound held beyond what the arrivals ask for, in milliseconds: for a
+	 * stream whose lost frame is rebuilt from the next one (Opus in-band
+	 * FEC), the time that next one takes to come
+	 */
+	holdMs = 0;
 	stats: PlayoutStats;
 
 	constructor(options: PlayoutOptions<T>) {
@@ -84,6 +92,7 @@ export class Playout<T> {
 		this.#floorMs = options.initialMs ?? 40;
 		this.#maxMs = options.maxMs ?? 500;
 		this.#discard = options.discard ?? (() => {});
+		this.holdMs = options.holdMs ?? 0;
 		this.#targetMs = this.#floorMs;
 		this.stats = {
 			played: 0,
@@ -155,9 +164,9 @@ export class Playout<T> {
 			if (value < low) low = value;
 			if (value > high) high = value;
 		}
-		this.#targetMs = Math.max(
-			this.#floorMs,
-			Math.min(this.#maxMs - this.frameMs, high - low + this.frameMs),
+		this.#targetMs = Math.min(
+			this.#maxMs - this.frameMs,
+			Math.max(this.#floorMs, high - low + this.frameMs) + this.holdMs,
 		);
 		this.stats.targetMs = this.#targetMs;
 	}

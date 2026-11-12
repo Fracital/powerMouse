@@ -1277,22 +1277,66 @@ and writes at RFC 3551's 8000 Hz clock; the receiver decodes it and
 draws it out to 48 kHz. In `webrtc-media` the page sends G.722 to Chrome,
 whose decoder plays it, when Chrome's answer lists G.722 first.
 
-A lost Opus packet is concealed, as Chrome conceals one that no FEC copy
-rebuilds: when a packet
-arrives after a loss (the stack says nothing was lost before a frame, or
-not) of one to five packets, the receiver first hands the decoder a frame
-of one byte for each lost one (the last packet's first byte, code 0),
-which libopus takes for a lost packet, and Chrome's `AudioDecoder` passes
-it to libopus as one. Measured against libopus's own concealment, the
-output is the same; against silence, a single lost packet of a tone
-keeps its level within about 4 dB and its spectrum (0.99 similar), where
-silence was a 20 ms dropout; natively, with the next packet's FEC copy,
-Chrome rebuilds it closer still (33 dB signal to noise against 5). A longer gap is a pause and a talkspurt
-starts anew: neither is concealed. In-band FEC (the copy of a lost packet
-in the next one) is not used yet: WebCodecs cannot decode it, but the
-copy can be rewritten as a packet of its own (a prototype matched
-libopus's FEC decode on SILK streams); a decoder in the crate instead
-would cost 47 KB with brotli.
+A lost Opus packet is rebuilt or concealed, as Chrome's NetEq does it. A
+loss is a hole of one to five packets in the RTP times (not the start of a
+talkspurt; a longer hole is a pause, and an Opus DTX sender sends every
+400 ms). The sequence numbers do not decide it: Chrome sends padding
+packets on the audio's sequence, with the last packet's time, and the
+stack calls the packet after one contiguous whether or not a packet was
+lost before the padding (measured: a tenth of the packets lost, and the
+packet after a lost one read as contiguous a third of the time).
+
+- In-band FEC: a sender with `useinbandfec=1` (Chrome's default) that
+  hears of loss puts a second, coarser copy of each SILK frame (LBRR, RFC
+  6716 4.2.4) into the next packet. NetEq decodes it with libopus's
+  `decode_fec`, which WebCodecs cannot ask for, so `src/rtc/lbrr.ts`
+  rewrites the copy as a packet of its own: an LBRR frame is coded with
+  the syntax of a first frame coded independently, so its symbols are
+  read with libopus's iCDF tables and written again with the same ones
+  behind a header that says "voice, no copy" (the range coder and the
+  tables, 1793 bytes, from libopus 1.5.2). Checked against libopus 1.5.2
+  itself (an encoder with FEC on, every packet with a copy, a decoder
+  given `decode_fec` against one given the rewritten packet, then both
+  given the next four packets): bit for bit the same output for
+  narrowband, mediumband and wideband SILK (voice, noise and a tone:
+  1,656 copies). A hybrid packet (Chrome's voice at 32 kbit/s is
+  fullband hybrid) carries its copy in its SILK layer, and NetEq's FEC
+  decode runs CELT's concealment for the band above it, which no packet
+  can ask for: the rewritten copy is wideband SILK only, 45.7 dB signal
+  to noise against libopus's FEC decode for a voice (7.3 for the
+  concealment), 67.9 for a tone (6.6), 7.1 for white noise (-0.7), and
+  the CELT layer starts again in the packet after it. As in libopus,
+  the copy is used only for the packet just before the one that carries
+  it (the last of a burst; the others are concealed) and not after a
+  CELT-only packet, where `decode_fec` conceals instead.
+- Otherwise the receiver hands the decoder a frame of one byte for each
+  lost packet (the last packet's first byte, code 0), which libopus
+  takes for a lost packet, and Chrome's `AudioDecoder` passes it to
+  libopus as one. Measured against libopus's own concealment, the output
+  is the same.
+
+The copy comes a packet after the packet it rebuilds, so an Opus stream
+is held 20 ms longer in the playout buffer (its delay is 60 ms where the
+arrivals are steady) and the rebuilt packet is there before its time.
+The stack hands a packet after a lost one on at once (str0m would hold
+the packets after a loss until 15 had come, 300 ms of Opus, waiting for
+the lost one: `set_reordering_size_audio(1)`), and drops one that comes
+after a later one was handed on, where NetEq would still play it in
+time.
+
+The stack's receiver reports carry the loss (RFC 3550's fraction lost
+since the last report, every 5 s as Chrome's), which is what has Chrome's
+encoder make copies at all. In `webrtc-media` the far end offers a tone
+through a relay of the suite's that loses every tenth of its Opus packets:
+the far end hears of the loss from the page (its `remote-inbound-rtp`
+reads 10 to 16 percent), makes copies within about five seconds, and the
+page then plays the tone with no break where the packets were lost, as
+the browser's own connection does (with only the concealment the page's
+tone dipped in 83 to 95 of its 5 ms windows over 3 s). The receiver's
+`inbound-rtp` counts the copies as NetEq does: `fecPacketsReceived` the
+packets that carried one, `fecPacketsDiscarded` those whose copy was not
+needed, and a packet rebuilt from its copy is not in `concealedSamples`
+(in that scenario 171 and 152 here, 155 and 133 natively).
 
 ### DTMF
 
@@ -1461,7 +1505,13 @@ encoder (the level and an LPC analysis of order 8, every 100 ms), in the
 worker as G.722 is, and neither is there.
 
 Limits: audio only (video sections negotiate and their frames are
-dropped); no in-band FEC; playout runs on the worker's clock, not the
+dropped); in-band FEC of a hybrid Opus packet is decoded as wideband
+SILK, without the concealment of the band above it that Chrome's FEC
+decode adds, and FEC copies of stereo or 40 and 60 ms packets are not
+used (Chrome sends 20 ms, one channel unless asked); the worker's Opus
+encoder makes no FEC copies of its own (WebCodecs has its
+`packetlossperc` fixed when it is configured, Chrome's sender sets it from
+the peer's reports); playout runs on the worker's clock, not the
 sound card's, so a long call drifts against it by the difference of the
 two clocks and the track's sink absorbs that; Chrome sends its DTMF
 packets with no header extension and the stack gives them the section's

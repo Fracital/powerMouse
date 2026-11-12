@@ -31,6 +31,7 @@ export * from ${from('g722.ts')};
 export { AudioSender, AudioReceiver, levelOf } from ${from('audio.ts')};
 export { ToneSender, eventPayload, TONES } from ${from('dtmf.ts')};
 export { ComfortNoise, parseNoise } from ${from('cn.ts')};
+export { hasLbrr, repackLbrr, silkSymbols } from ${from('lbrr.ts')};
 export { stackFormats, parsePayloads, parseParameters } from ${from('formats.ts')};
 export * as records from ${from('records.ts')};
 export { Stack } from ${from('connection.ts')};
@@ -129,6 +130,23 @@ const holes = (out) => {
 		'frames that swap places on the way play in order',
 		played(out).length === 100 && inOrder(played(out)) && holes(out) === 0,
 		`${played(out).length} played, ${holes(out)} holes`,
+	);
+}
+{
+	// a frame lost on the way is rebuilt from the next one, which comes a
+	// frame later and a little more
+	const arrivals = Array.from({ length: 100 }, (_, i) => i * 20);
+	arrivals[50] = 51 * 20 + 5;
+	const plain = play(arrivals);
+	const held = play(arrivals, { options: { holdMs: 20 } });
+	ok(
+		'a buffer that holds one frame more plays a frame rebuilt from the next one; one that does not has a gap there',
+		holes(plain.out) === 1 &&
+			plain.playout.stats.late === 1 &&
+			played(held.out).length === 100 &&
+			holes(held.out) === 0 &&
+			held.playout.stats.targetMs === plain.playout.stats.targetMs + 20,
+		`${holes(plain.out)} ${JSON.stringify(plain.playout.stats)} ${holes(held.out)} ${JSON.stringify(held.playout.stats)}`,
 	);
 }
 {
@@ -1017,6 +1035,135 @@ function tonePackets(ms, rate, step, { frames = 40, start = 1000 } = {}) {
 				'1140000:75.1.2.3',
 			].join() && receiver.stats.concealed === 2,
 		`${seen.join()} concealed ${receiver.stats.concealed}`,
+	);
+}
+
+// --- Opus in-band FEC ---
+
+{
+	// Packets of libopus 1.5.2 (narrowband, mediumband, wideband: the copy
+	// decodes bit for bit as libopus's decode_fec does, stomp-work's
+	// fecpair harness) and of Chrome 156 (wideband SILK and fullband
+	// hybrid), each with the copy made of its LBRR frame
+	const fixture = JSON.parse(
+		readFileSync(`${root}test/fixtures/rtc/opus-lbrr.json`, 'utf8'),
+	);
+	const bytes = (text) => Uint8Array.from(Buffer.from(text, 'base64'));
+	const wrong = [];
+	for (const [packet, copy] of fixture) {
+		const made = m.repackLbrr(bytes(packet));
+		const text = made && Buffer.from(made).toString('base64');
+		const symbols = m.silkSymbols(bytes(packet), true).join();
+		if (
+			text !== copy ||
+			m.hasLbrr(bytes(packet)) !== (copy !== null) ||
+			(copy && m.silkSymbols(made, false).join() !== symbols) ||
+			(copy && (made[0] & 7) !== 0)
+		)
+			wrong.push(packet.slice(0, 12));
+	}
+	ok(
+		'the LBRR copy a packet carries becomes a packet of its own, with the same symbols (narrowband to fullband hybrid; none from a packet without one or a CELT packet)',
+		fixture.length === 13 && !wrong.length,
+		wrong.join(),
+	);
+
+	const given = [];
+	class FakeDecoder {
+		constructor({ output }) {
+			this.output = output;
+			this.state = 'unconfigured';
+			this.decodeQueueSize = 0;
+		}
+		configure() {
+			this.state = 'configured';
+		}
+		decode(chunk) {
+			given.push(chunk);
+			this.output(
+				new FakeAudioData({
+					format: 'f32-planar',
+					sampleRate: 48000,
+					numberOfFrames: 960,
+					numberOfChannels: 1,
+					timestamp: chunk.timestamp,
+					data: new Float32Array(960),
+				}),
+			);
+		}
+		close() {
+			this.state = 'closed';
+		}
+	}
+	class FakeChunk {
+		constructor({ timestamp, data }) {
+			this.timestamp = timestamp;
+			this.data = new Uint8Array(data);
+		}
+	}
+	globalThis.AudioDecoder = FakeDecoder;
+	globalThis.EncodedAudioChunk = FakeChunk;
+	const receiver = new m.AudioReceiver();
+	receiver.setTrack(new WritableStream({ write() {} }));
+	const silk = bytes(fixture[4][0]);
+	const copy = bytes(fixture[4][1]);
+	const plain = bytes(fixture[11][0]);
+	const celt = bytes(fixture[12][0]);
+	const packet = (time, payload, flags = records.FLAG_CONTIGUOUS) =>
+		receiver.frame({ codec: 'opus', time: BigInt(time), payload, flags });
+	packet(0, silk);
+	packet(960, silk);
+	// one lost: the next one's copy
+	packet(2880, silk, 0);
+	// three lost: the last from the copy, the others concealed
+	packet(6720, silk, 0);
+	// after a CELT-only packet libopus conceals instead
+	packet(7680, celt);
+	packet(9600, silk, 0);
+	// a packet with no copy
+	packet(10560, plain);
+	packet(12480, plain, 0);
+	receiver.close();
+	delete globalThis.AudioDecoder;
+	delete globalThis.EncodedAudioChunk;
+	const name = (data) =>
+		data.length === 1
+			? `lost${data[0]}`
+			: data.every((value, i) => value === copy[i]) &&
+				  data.length === copy.length
+				? 'copy'
+				: data === silk || data.length === silk.length
+					? 'silk'
+					: data.length === celt.length
+						? 'celt'
+						: 'plain';
+	const seen = given.map(
+		(chunk) => `${chunk.timestamp / 20000}:${name(chunk.data)}`,
+	);
+	const want = [
+		'0:silk',
+		'1:silk',
+		'2:copy',
+		'3:silk',
+		`4:lost${silk[0] & 0xfc}`,
+		`5:lost${silk[0] & 0xfc}`,
+		'6:copy',
+		'7:silk',
+		'8:celt',
+		`9:lost${celt[0] & 0xfc}`,
+		'10:silk',
+		'11:plain',
+		`12:lost${plain[0] & 0xfc}`,
+		'13:plain',
+	];
+	const stats = receiver.stats;
+	ok(
+		"a lost Opus packet is decoded from the next one's FEC copy, as Chrome's NetEq does: only the last of a burst, never after a CELT-only packet; the rest is concealed",
+		seen.join() === want.join() &&
+			stats.concealed === 4 &&
+			stats.fecPacketsReceived === 5 &&
+			stats.fecPacketsDiscarded === 3,
+		`${seen.join()} ${JSON.stringify(stats)}`,
 	);
 }
 

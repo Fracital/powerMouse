@@ -11,6 +11,7 @@ import { eventPayload, TONES, ToneSender } from './dtmf';
 import type { Payload } from './formats';
 import { Downsampler, g711Decode, g711Encode } from './g711';
 import { g722Decode, G722Decoder, g722Encode, G722Encoder } from './g722';
+import { hasLbrr, repackLbrr } from './lbrr';
 import {
 	AudioLevel,
 	channelsOf,
@@ -671,6 +672,10 @@ export interface ReceiverStats extends PlayoutStats {
 	written: number;
 	/** lost Opus packets the decoder concealed */
 	concealed: number;
+	/** Opus packets that carried a copy of the one before (in-band FEC), as Chrome counts them */
+	fecPacketsReceived: number;
+	/** of those, the copies not needed: the packet they copy had come */
+	fecPacketsDiscarded: number;
 }
 
 /**
@@ -700,6 +705,8 @@ export class AudioReceiver {
 	#counts = { frames: 0, bytes: 0, written: 0 };
 	/** lost Opus packets the decoder concealed */
 	#concealed = 0;
+	/** Opus packets with an FEC copy, and those whose copy rebuilt a lost one */
+	#fec = { received: 0, used: 0 };
 	/**
 	 * What the sound is being decoded from: the clock comfort noise and
 	 * telephone events are placed on (Chrome's sender stamps them on the
@@ -730,19 +737,32 @@ export class AudioReceiver {
 			...this.#playout.stats,
 			...this.#counts,
 			concealed: this.#concealed,
+			fecPacketsReceived: this.#fec.received,
+			fecPacketsDiscarded: this.#fec.received - this.#fec.used,
 		};
 	}
 
 	/** what was played, as the receiver's stats entries tell it */
 	#played = new PlayedCount();
-	get played(): PlayedStats & { packetsDiscarded: number } {
+	get played(): PlayedStats & {
+		packetsDiscarded: number;
+		fecPacketsReceived: number;
+		fecPacketsDiscarded: number;
+	} {
 		const stats = this.#played.stats;
 		const { dropped, late } = this.#playout.stats;
 		// a frame given up to shorten the delay is 20 ms of the decoder's
 		stats.removedSamplesForAcceleration = Math.round(
 			(dropped * NOISE_RATES[this.#speech]) / 50,
 		);
-		return { ...stats, packetsDiscarded: late };
+		return {
+			...stats,
+			packetsDiscarded: late,
+			// packets that carried an FEC copy, and those whose copy was not
+			// needed, as NetEq counts them
+			fecPacketsReceived: this.#fec.received,
+			fecPacketsDiscarded: this.#fec.received - this.#fec.used,
+		};
 	}
 
 	/** what the section negotiated: the telephone-event payloads' clocks */
@@ -835,6 +855,10 @@ export class AudioReceiver {
 	#speak(codec: 'opus' | 'G711' | 'G722') {
 		if (this.#speech === codec) return;
 		this.#speech = codec;
+		// An Opus packet that is lost is rebuilt from the next one's copy of
+		// it, which comes a packet later: the receiver holds that much more
+		// sound, so the rebuilt one is there before its time
+		this.#playout.holdMs = codec === 'opus' ? FRAME_US / 1000 : 0;
 		this.#noise = new ComfortNoise(NOISE_RATES[codec]);
 	}
 
@@ -911,15 +935,27 @@ export class AudioReceiver {
 			}
 		}
 		if (decoder.decodeQueueSize > MAX_QUEUE) return;
+		const copy = hasLbrr(payload);
+		if (copy) this.#fec.received++;
 		// Packets were lost before this one: the decoder conceals each, as
 		// Chrome's does, rather than leave silence there. A frame of one byte
 		// (the last packet's first byte, one frame of its mode) is what
 		// libopus takes for a lost packet, and Chrome's AudioDecoder hands
-		// it to libopus as one (docs/webrtc-over-wisp.md, section 16).
+		// it to libopus as one (docs/webrtc-over-wisp.md, section 16). The
+		// last of them is rebuilt from this packet's copy of it when it
+		// carries one, as NetEq does with libopus's FEC decode: only the
+		// packet just before (a longer loss is concealed up to it), and not
+		// after a CELT-only packet, where libopus conceals instead. A loss
+		// is a hole in the RTP times, as NetEq reads one, whatever the
+		// sequence numbers say: Chrome's padding packets share the audio's
+		// sequence (with the last packet's time), and the stack calls the
+		// packet after a padding packet contiguous, a lost one before the
+		// padding or not (measured). A longer hole
+		// (an Opus DTX sender sends every 400 ms) and the start of a
+		// talkspurt are silence the sender left out, not a loss.
 		const missing = last ? (time - last.time) / OPUS_FRAME - 1 : 0;
 		if (
 			last &&
-			!(flags & FLAG_CONTIGUOUS) &&
 			!(flags & FLAG_TALKSPURT) &&
 			Number.isInteger(missing) &&
 			missing >= 1 &&
@@ -927,14 +963,21 @@ export class AudioReceiver {
 		)
 			for (let lost = 1; lost <= missing; lost++) {
 				const at = last.time + lost * OPUS_FRAME;
-				this.#waiting.push({ time: at, arrived: now, lost: true });
-				this.#concealed++;
+				const rebuilt =
+					lost === missing && copy && last.toc >> 3 < 16
+						? repackLbrr(payload)
+						: null;
+				// a packet rebuilt from its FEC copy is decoded, not
+				// concealed, in Chrome's counts
+				this.#waiting.push({ time: at, arrived: now, lost: !rebuilt });
+				if (rebuilt) this.#fec.used++;
+				else this.#concealed++;
 				try {
 					decoder.decode(
 						new EncodedAudioChunk({
 							type: 'key',
 							timestamp: Math.round(at / OPUS_UNITS),
-							data: Uint8Array.of(last.toc & 0xfc),
+							data: rebuilt ?? Uint8Array.of(last.toc & 0xfc),
 						}),
 					);
 				} catch (error) {
