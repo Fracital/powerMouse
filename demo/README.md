@@ -245,6 +245,19 @@ holyWisp is started.
     (`stomp-demo:bookmarks-seeded`), so one the user removes stays removed,
     with curated icons and tile colours bundled in `pm/icons/`.
 
+13. **Sign in with token (Discord).** A key button in the address bar, to the
+    left of the status ticker, shows only on a discord.com page (its real
+    host, read from the page's real URL) once that page has handed the host a
+    `MessagePort` (`TOKEN_HOOK`, `hooks.init.post`). The user pastes their own
+    Discord account token and it is written straight into that proxied page's
+    own `localStorage`, so Discord logs in on reload, mirroring the well-known
+    community bookmarklet. The token stays in the page's `localStorage` and
+    never leaves the browser: it travels only over that same-browser
+    `MessagePort` to the proxied Discord document, is stored nowhere else, and
+    is never sent over the network or logged. The hook is a `post` hook so it
+    writes the store the proxied page itself reads, and it runs before
+    Discord's own scripts delete `window.localStorage`.
+
 Errors from any step land in the status line (`Error: ...`) rather than the
 console only.
 

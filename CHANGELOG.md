@@ -99,6 +99,19 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Demo and API
 
+- The demo's browser chrome has a "Sign in with token" button for Discord, to
+  the left of the status ticker in the address bar. It shows only on a
+  discord.com page and writes a Discord account token the user pastes straight
+  into that proxied page's own localStorage, so Discord logs in on reload,
+  mirroring the well-known community bookmarklet. The token stays in the
+  page's localStorage and never leaves the browser: it travels only over a
+  same-browser MessagePort to the proxied Discord document, is stored nowhere
+  else, and is never sent over the network or logged. Everything is gated to
+  the real host discord.com or a subdomain of it, read from the page's real
+  URL, so no other site sees the button or the port. A new demo-token suite
+  covers it in both rewriter modes, including that the token value never
+  appears in any proxied request.
+
 - The demo has HTTP/3 on by default (`npm run demo`, `npm run dev` and every
   test run's demo server): its epoxy descriptor carries `http3`, so a
   proxied page reaches a site that offers h3 over QUIC, as the user's own
