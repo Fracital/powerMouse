@@ -11,6 +11,19 @@ export interface RtcWorkerInit {
 	transport: MessagePort;
 	/** the stack's wasm module: its URL, or the compiled module when the host handed one over */
 	module: string | WebAssembly.Module;
+	/** an RtcWorkerTemplate follows, and connections wait for it */
+	template?: boolean;
+}
+
+/**
+ * What this browser's own RTCPeerConnection offers for audio and video (an
+ * offer of a native connection the page's stand-in made for this and set
+ * nowhere), '' when it would not make one: the codecs and the header
+ * extensions the stack negotiates are read from it (formats.ts)
+ */
+export interface RtcWorkerTemplate {
+	kind: 'template';
+	sdp: string;
 }
 
 /** a new connection on `port`, with the page's configuration as the worker needs it */
@@ -40,6 +53,34 @@ export interface ChannelOptions {
 	protocol: string;
 	negotiated: boolean;
 	id: number | null;
+}
+
+export type Direction = 'sendrecv' | 'sendonly' | 'recvonly' | 'inactive';
+
+/** a media section, as the page's transceiver for it needs it */
+export interface MediaSection {
+	/**
+	 * The transceiver's number: the page's own for one it added, a negative
+	 * one of the worker's for a section the peer offered first
+	 */
+	handle: number;
+	kind: 'audio' | 'video';
+	/** null until an offer carries the section */
+	mid: string | null;
+	/** what the section negotiated, seen from this side; null before it has */
+	direction: Direction | null;
+	/** what the peer's description says of the section, when it has one */
+	remote?: {
+		direction: Direction;
+		/** the `a=msid` streams and track of what the peer sends */
+		streams: string[];
+		track: string | null;
+	};
+}
+
+/** the answer to setLocal and setRemote: the connection's media sections as they are now */
+export interface Negotiated {
+	medias: MediaSection[];
 }
 
 /** what a page sends on a channel: a string, or bytes */
@@ -73,6 +114,32 @@ export type Request =
 	  }
 	| { seq: number; op: 'closeChannel'; channel: number }
 	| { seq: number; op: 'lowThreshold'; channel: number; value: number }
+	/** a transceiver the page added: a media section of the next offer */
+	| {
+			seq: number;
+			op: 'addMedia';
+			handle: number;
+			kind: 'audio' | 'video';
+			direction: Direction;
+			streams: string[];
+			track: string | null;
+	  }
+	| { seq: number; op: 'mediaDirection'; handle: number; direction: Direction }
+	| { seq: number; op: 'stopMedia'; handle: number }
+	/** what the section sends: a MediaStreamTrackProcessor's readable (transferred), or null for no track */
+	| {
+			seq: number;
+			op: 'sendTrack';
+			handle: number;
+			readable: ReadableStream<AudioData> | null;
+	  }
+	/** where the section's received sound goes: a MediaStreamTrackGenerator's writable (transferred) */
+	| {
+			seq: number;
+			op: 'receiveTrack';
+			handle: number;
+			writable: WritableStream<AudioData> | null;
+	  }
 	| { seq: number; op: 'setConfiguration'; config: ConnectionConfig }
 	| { seq: number; op: 'restartIce' }
 	| { seq: number; op: 'stats' }
@@ -130,6 +197,8 @@ export type WorkerEvent =
 	| { ev: 'channelClose'; channel: number }
 	| { ev: 'channelLow'; channel: number }
 	| { ev: 'buffered'; channel: number; amount: number }
+	/** the section's first frame arrived: its track has media now */
+	| { ev: 'unmute'; handle: number }
 	| { ev: 'error'; message: string };
 
 export type WorkerMessage = Reply | WorkerEvent;

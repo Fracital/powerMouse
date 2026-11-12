@@ -6,34 +6,45 @@
 // the opener the worker hands in, which carries wisp streams.
 import { WEBRTC_CHANNEL } from '../transport/messages';
 import { compileModule, type ModuleSource } from '../wasm/module';
+import { AudioReceiver, AudioSender } from './audio';
 import { hex, type Certificate } from './certificate';
+import { parseParameters, parsePayloads, type Formats } from './formats';
 import type {
 	CandidateInit,
 	ChannelOptions,
 	ConnectionConfig,
+	Direction,
+	MediaSection,
+	Negotiated,
 	Request,
 	WorkerEvent,
 	WorkerMessage,
 } from './protocol';
 import {
 	decodeChannelData,
+	decodeMediaData,
 	decodeText,
 	decodeTransmit,
 	encodeChannelSend,
 	encodeDatagram,
+	encodeFrame,
 	encodeText,
 	IN_CHANNEL_SEND,
 	IN_CONTROL,
 	IN_DATAGRAM,
+	IN_MEDIA_WRITE,
 	OUT_CHANNEL_DATA,
 	OUT_EVENT,
+	OUT_MEDIA_DATA,
 	OUT_RESULT,
 	OUT_TIMEOUT,
 	OUT_TRANSMIT,
 	text,
+	type Frame,
 	type StackExports,
 } from './records';
 import {
+	all,
 	candidateFields,
 	candidateLine,
 	first,
@@ -42,6 +53,7 @@ import {
 	parseSdp,
 	renderChrome,
 	stripCandidates,
+	type Media,
 	type ParsedSdp,
 } from './sdp';
 import {
@@ -218,6 +230,53 @@ interface Channel {
 	sent?: boolean;
 }
 
+/** a media section: the page's transceiver, the stack's section and what carries its frames */
+interface MediaState {
+	/** the page's number for it (protocol.ts, MediaSection) */
+	handle: number;
+	/** the stack's */
+	index: number;
+	kind: 'audio' | 'video';
+	/** as the page reads it */
+	mid: string | null;
+	/** what the page's transceiver wants: every offer of this side states it */
+	wanted: Direction;
+	/** what the section negotiated; null before it has */
+	direction: Direction | null;
+	sender: AudioSender | null;
+	receiver: AudioReceiver | null;
+}
+
+const DIRECTIONS: Direction[] = [
+	'sendrecv',
+	'sendonly',
+	'recvonly',
+	'inactive',
+];
+
+/** what a description says of a section's direction and of what it sends */
+function remoteOf(media: Media): NonNullable<MediaSection['remote']> {
+	let direction: Direction = 'sendrecv';
+	for (const [name] of media.attributes)
+		if ((DIRECTIONS as string[]).includes(name)) direction = name as Direction;
+	const streams: string[] = [];
+	let track: string | null = null;
+	// `a=msid:<stream> <track>`, one line a stream; an older peer says it
+	// on its `a=ssrc` lines
+	const ids = all(media.attributes, 'msid');
+	for (const value of all(media.attributes, 'ssrc')) {
+		const at = value.indexOf(' msid:');
+		if (!ids.length && at !== -1) ids.push(value.slice(at + 6));
+	}
+	for (const value of ids) {
+		const [stream, id] = value.split(' ');
+		if (stream && stream !== '-' && !streams.includes(stream))
+			streams.push(stream);
+		if (id) track = id;
+	}
+	return { direction, streams, track };
+}
+
 /** something that gathers a candidate: a Binding request, a TURN allocation */
 interface Gatherer {
 	done: boolean;
@@ -295,6 +354,16 @@ export class Connection {
 	#streams = new Map<string, Stream>();
 	#timer: ReturnType<typeof setTimeout> | null = null;
 	#channels = new Map<number, Channel>();
+	/** the media sections, by the stack's index and by the page's handle */
+	#medias = new Map<number, MediaState>();
+	#handles = new Map<number, MediaState>();
+	/** the handle of the next section the peer offers first */
+	#nextHandle = -1;
+	/** sections whose negotiated state the stack changed, to be read again */
+	#stale = new Set<number>();
+	/** the peer's description, as the page set it last */
+	#remote: ParsedSdp | null = null;
+	#draining = 0;
 	#ufrag = '';
 	#pwd = '';
 	#fingerprint: string;
@@ -338,6 +407,7 @@ export class Connection {
 		opener: StreamOpener,
 		config: ConnectionConfig,
 		certificate: Certificate,
+		formats: Formats | null = null,
 	) {
 		this.#stack = stack;
 		this.#port = port;
@@ -352,12 +422,16 @@ export class Connection {
 		this.#sessionId = String(
 			BigInt.asUintN(63, crypto.getRandomValues(new BigUint64Array(1))[0]),
 		);
-		this.#id = stack.create({
+		const base = {
 			// relay only: the stack has no socket of its own to send from
 			...(config.iceTransportPolicy === 'relay' ? {} : { local: this.#local }),
 			cert: hex(certificate.certificate),
 			key: hex(certificate.privateKey),
-		});
+		};
+		// with the browser's own codecs and header extensions; a list the
+		// stack cannot read leaves it with its own
+		this.#id = stack.create({ ...base, ...formats });
+		if (this.#id < 0 && formats) this.#id = stack.create(base);
 		if (this.#id < 0)
 			throw new Error('the WebRTC stack refused the connection');
 		const creds = this.#control({ op: 'creds' });
@@ -387,6 +461,7 @@ export class Connection {
 	 */
 	#drain(wantResult = false): Record<string, string> | null {
 		let result: Record<string, string> | null = null;
+		this.#draining++;
 		for (;;) {
 			const record = this.#stack.output(this.#id);
 			if (!record) break;
@@ -417,9 +492,149 @@ export class Connection {
 						payload.byteLength,
 					).getUint32(0),
 				);
+			} else if (tag === OUT_MEDIA_DATA) {
+				const frame = decodeMediaData(payload);
+				this.#medias.get(frame.media)?.receiver?.frame(frame);
 			} else if (tag === OUT_RESULT && wantResult) result = decodeText(payload);
 		}
+		// what a section negotiated is asked of the stack once its records
+		// are all read: a control call in the middle would take the result
+		// another is waiting for
+		if (!--this.#draining && this.#stale.size) {
+			const stale = [...this.#stale];
+			this.#stale.clear();
+			for (const index of stale) this.#negotiated(index);
+		}
 		return result;
+	}
+
+	// --- media ---
+
+	#addMedia(
+		index: number,
+		kind: 'audio' | 'video',
+		handle: number,
+		wanted: Direction,
+	) {
+		const state: MediaState = {
+			handle,
+			index,
+			kind,
+			mid: null,
+			wanted,
+			direction: null,
+			sender: null,
+			receiver: null,
+		};
+		if (kind === 'audio') {
+			state.sender = new AudioSender(index, this.#writeFrame);
+			state.receiver = new AudioReceiver();
+			state.receiver.onStart = () => this.#event({ ev: 'unmute', handle });
+		}
+		this.#medias.set(index, state);
+		this.#handles.set(handle, state);
+		return state;
+	}
+
+	/** an encoded frame for the stack to packetize and send */
+	#writeFrame = (frame: Frame, age: number) => {
+		if (this.#closed) return;
+		this.#stack.input(this.#id, IN_MEDIA_WRITE, encodeFrame(frame, age));
+		this.#drain();
+	};
+
+	/** what a section negotiated, as the stack has it now: its direction, and the payload to send */
+	#negotiated(index: number) {
+		const state = this.#medias.get(index);
+		if (!state || this.#ended) return;
+		const result = this.#control({ op: 'payloads', index });
+		// a section no description has settled yet
+		if (result.error) return;
+		state.direction = (result.dir as Direction) ?? null;
+		const payloads = parsePayloads(result.codecs ?? '');
+		// the stack keeps its own parameters for a payload; what the peer
+		// asked for (stereo, a bitrate, silence left out) is in its
+		// description
+		const described = this.#remote?.medias.find(
+			(media) => first(media.attributes, 'mid') === state.mid,
+		);
+		if (described)
+			for (const payload of payloads) {
+				const line = all(described.attributes, 'fmtp').find((value) =>
+					value.startsWith(`${payload.pt} `),
+				);
+				if (line !== undefined)
+					payload.parameters = parseParameters(
+						line.slice(line.indexOf(' ') + 1),
+					);
+			}
+		state.sender?.configure(payloads);
+		this.#activate(state);
+	}
+
+	/** a section sends when its direction says so and the connection is up */
+	#activate(state: MediaState) {
+		state.sender?.setActive(
+			this.#connected &&
+				!this.#closed &&
+				(state.direction === 'sendrecv' || state.direction === 'sendonly'),
+		);
+	}
+
+	/** the sections as they are, for the page's transceivers; `remote` is the peer's description */
+	#sections(remote?: ParsedSdp): Negotiated {
+		const medias: MediaSection[] = [];
+		for (const state of this.#medias.values()) {
+			const section: MediaSection = {
+				handle: state.handle,
+				kind: state.kind,
+				mid: state.mid,
+				direction: state.direction,
+			};
+			const described =
+				state.mid === null
+					? undefined
+					: remote?.medias.find(
+							(media) => first(media.attributes, 'mid') === state.mid,
+						);
+			if (described) section.remote = remoteOf(described);
+			medias.push(section);
+		}
+		return { medias };
+	}
+
+	/**
+	 * A section the peer offered first. The transceiver a browser makes for
+	 * one receives only, until the page gives it something to send: that
+	 * is what a later offer of this side says of it.
+	 */
+	#newFromPeer(index: number, kind: 'audio' | 'video'): MediaState {
+		this.#control({ op: 'direction', index, dir: 'recvonly' });
+		return this.#addMedia(index, kind, this.#nextHandle--, 'recvonly');
+	}
+
+	/**
+	 * The stack's `index:mid` list: the names its sections have now. With
+	 * the peer's offer, a section in it that is new here is one the peer
+	 * offered first: the page gets a transceiver for it.
+	 */
+	#takeMids(list: string | undefined, offer?: ParsedSdp) {
+		for (const entry of (list ?? '').split(',')) {
+			const at = entry.indexOf(':');
+			if (at === -1) continue;
+			const index = Number(entry.slice(0, at));
+			const mid = this.#mids.shown(entry.slice(at + 1));
+			let state = this.#medias.get(index);
+			if (!state) {
+				const kind = offer?.medias.find(
+					(media) => first(media.attributes, 'mid') === mid,
+				)?.kind;
+				if (kind !== 'audio' && kind !== 'video') continue;
+				state = this.#newFromPeer(index, kind);
+			}
+			state.mid = mid;
+			this.#negotiated(index);
+		}
 	}
 
 	#schedule(ms: number) {
@@ -546,6 +761,26 @@ export class Connection {
 			case 'connected':
 				this.#connected = true;
 				this.#setConnection('connected');
+				for (const state of this.#medias.values()) this.#activate(state);
+				break;
+			// a section the stack has now: one of the page's that an answer
+			// confirmed, or one the peer offered
+			case 'media': {
+				const index = Number(fields.index);
+				const state =
+					this.#medias.get(index) ??
+					this.#addMedia(
+						index,
+						fields.kind === 'video' ? 'video' : 'audio',
+						this.#nextHandle--,
+						'recvonly',
+					);
+				state.mid = this.#mids.shown(fields.mid ?? '');
+				this.#stale.add(index);
+				break;
+			}
+			case 'media_changed':
+				this.#stale.add(Number(fields.index));
 				break;
 			case 'channel_open': {
 				const channel = Number(fields.index);
@@ -601,6 +836,8 @@ export class Connection {
 				for (const channel of this.#channels.keys())
 					this.#event({ ev: 'channelClose', channel });
 				this.#channels.clear();
+				for (const state of this.#medias.values())
+					state.sender?.setActive(false);
 				if (!this.#connected) {
 					this.#setIce('failed');
 					this.#setConnection('failed');
@@ -953,6 +1190,7 @@ export class Connection {
 					const result = this.#control({ op: 'offer' });
 					if (result.error) throw result.error;
 					this.#lastLocal = parseSdp(this.#mids.toShown(result.sdp ?? ''));
+					this.#takeMids(result.mids);
 					this.#takeCredentials();
 					this.#version++;
 					reply(this.#render(this.#lastLocal));
@@ -972,7 +1210,7 @@ export class Connection {
 						reply(null);
 						break;
 					}
-					reply(null);
+					reply(this.#sections());
 					this.#localSet = true;
 					for (const candidate of this.#heldRemotes.splice(0))
 						try {
@@ -992,15 +1230,41 @@ export class Connection {
 					const { sdp, candidates } = stripCandidates(
 						this.#mids.toStack(request.sdp),
 					);
-					const result =
-						request.type === 'offer'
-							? this.#control({ op: 'remote_offer', sdp })
-							: this.#control({ op: 'answer', sdp });
-					if (result.error) throw result.error;
-					if (request.type === 'offer')
+					const described = parseSdp(request.sdp);
+					const before = this.#remote;
+					this.#remote = described;
+					let result: Record<string, string>;
+					if (request.type === 'offer') {
+						// What this side wants of each section: a transceiver's
+						// direction for one it has, and all of what is offered
+						// for a new one. The stack tells of a new section only
+						// once its media flows; with a direction named for it,
+						// it numbers the section now.
+						const fields: Record<string, string> = { op: 'remote_offer', sdp };
+						described.medias.forEach((media, at) => {
+							if (media.kind !== 'audio' && media.kind !== 'video') return;
+							const mid = first(media.attributes, 'mid');
+							let wanted: Direction = 'sendrecv';
+							for (const state of this.#medias.values())
+								if (state.mid !== null && state.mid === mid)
+									wanted = state.wanted;
+							fields[`dir${at}`] = wanted;
+						});
+						result = this.#control(fields);
+					} else result = this.#control({ op: 'answer', sdp });
+					if (result.error) {
+						this.#remote = before;
+						throw result.error;
+					}
+					// what the peer asks of a section it already had may have
+					// changed with this description
+					for (const index of this.#medias.keys()) this.#negotiated(index);
+					if (request.type === 'offer') {
 						this.#pendingAnswer = parseSdp(
 							this.#mids.toShown(result.sdp ?? ''),
 						);
+						this.#takeMids(result.mids, described);
+					}
 					// the description's candidates, as if each had been added
 					for (const candidate of candidates)
 						if (this.#localSet)
@@ -1011,7 +1275,7 @@ export class Connection {
 							}
 						else this.#heldRemotes.push(candidate);
 					this.#remoteSet = true;
-					reply(null);
+					reply(this.#sections(described));
 					if (this.#heldIce) {
 						const held = this.#heldIce;
 						this.#heldIce = null;
@@ -1080,6 +1344,62 @@ export class Connection {
 					reply(null);
 					break;
 				}
+				case 'addMedia': {
+					const result = this.#control({
+						op: 'media',
+						kind: request.kind,
+						dir: request.direction,
+						// what the section's `a=msid` names: the track's first
+						// stream, or none ("-")
+						stream: request.streams[0] ?? '-',
+						...(request.track === null ? {} : { track: request.track }),
+					});
+					if (result.error) throw result.error;
+					this.#addMedia(
+						Number(result.index),
+						request.kind,
+						request.handle,
+						request.direction,
+					);
+					reply(null);
+					break;
+				}
+				case 'mediaDirection': {
+					const state = this.#handles.get(request.handle);
+					if (!state) throw 'no such media section';
+					const result = this.#control({
+						op: 'direction',
+						index: state.index,
+						dir: request.direction,
+					});
+					if (result.error) throw result.error;
+					state.wanted = request.direction;
+					reply(null);
+					break;
+				}
+				case 'stopMedia': {
+					const state = this.#handles.get(request.handle);
+					if (!state) throw 'no such media section';
+					this.#control({ op: 'stop', index: state.index });
+					state.sender?.close();
+					state.receiver?.close();
+					reply(null);
+					break;
+				}
+				case 'sendTrack': {
+					const state = this.#handles.get(request.handle);
+					if (!state) throw 'no such media section';
+					state.sender?.setTrack(request.readable);
+					reply(null);
+					break;
+				}
+				case 'receiveTrack': {
+					const state = this.#handles.get(request.handle);
+					if (!state) throw 'no such media section';
+					state.receiver?.setTrack(request.writable);
+					reply(null);
+					break;
+				}
 				case 'setConfiguration':
 					this.#config = request.config;
 					reply(null);
@@ -1093,6 +1413,13 @@ export class Connection {
 						ice: this.#iceState,
 						connection: this.#connectionState,
 						local: this.#shown,
+						media: [...this.#medias.values()].map((state) => ({
+							handle: state.handle,
+							mid: state.mid,
+							direction: state.direction,
+							sent: state.sender?.stats ?? null,
+							received: state.receiver?.stats ?? null,
+						})),
 					});
 					break;
 				case 'close':
@@ -1139,6 +1466,10 @@ export class Connection {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#port.close();
+		for (const state of this.#medias.values()) {
+			state.sender?.close();
+			state.receiver?.close();
+		}
 		this.#control({ op: 'close' });
 		setTimeout(() => this.#end(), CLOSE_LINGER_MS);
 	}

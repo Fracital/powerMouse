@@ -901,3 +901,108 @@ With these records `assets/rtc.wasm` is 1502987 bytes (515313 with brotli):
 packetizer and estimator code was already in the Phase 1 artifact, since
 the stack reaches it from every datagram it reads; the growth is the
 writer, the codec and extension configuration and the records themselves.
+
+### Audio in the worker
+
+The page keeps the tracks and the worker does the rest. For what a section
+sends the page hands over a `MediaStreamTrackProcessor`'s `readable`, for
+what it receives a `MediaStreamTrackGenerator`'s `writable`; both are
+transferred, so the sound never crosses the page's thread again. Neither
+class exists in a worker, and both do in a window, which is why the ends
+are made on the page (measured on Chrome 152 and 156; WebCodecs exists in
+both places).
+
+What the stack may negotiate is read from the browser (`src/rtc/formats.ts`):
+the page asks a native `RTCPeerConnection` it sets nowhere for an offer
+with an audio and a video section, once per document, and posts it to the
+worker (`{kind: 'template', sdp}`; the `init` message says one follows, and
+connections wait for it). Its `a=rtpmap` and `a=fmtp` lines become the
+stack's `codecs` field and its `a=extmap` lines the `exts` field, so the
+payload types, the format parameters and the extension ids are this
+Chrome's and no table of them is shipped. G.722 is left out: WebCodecs has
+neither an encoder nor a decoder for it, and a payload this side could not
+carry must not be offered. Without a template the stack keeps its own
+formats.
+
+The protocol (`src/rtc/protocol.ts`) grew by the requests `addMedia` (a
+transceiver the page added: its handle, kind, direction and the stream and
+track its `a=msid` names), `mediaDirection`, `stopMedia`, `sendTrack` and
+`receiveTrack` (the two streams), by an answer to `setLocal` and
+`setRemote` (the media sections as they are now: handle, mid, the
+direction negotiated, and for `setRemote` what the peer's description says
+of each: its direction and the streams and track of its `a=msid`), and by
+the event `unmute` (a section's first frame arrived). A section the peer
+offers first gets a negative handle from the worker. The stack tells of
+such a section only when its media flows, so the worker names a direction
+for every section of an offer it hands the stack (`dir<n>`, all of what is
+offered), which has the stack number them at once.
+
+Sending (`AudioSender`, `src/rtc/audio.ts`): the track is read whether or
+not anything is sent, and encoded only while the section's negotiated
+direction sends and the connection is up. The payload is the first the
+section negotiated that can be encoded here, with the parameters of the
+peer's own `a=fmtp` line (the stack keeps its own for a payload): Opus
+through an `AudioEncoder` (20 ms frames, `voip`, one channel at 32 kbit/s
+unless the peer's `stereo=1` asks for two at 64, `maxaveragebitrate`,
+`useinbandfec`, `usedtx` and `cbr` as the peer states them), or G.711 by
+hand (`src/rtc/g711.ts`: the track averaged down to 8 kHz, 160 bytes a
+packet). Three things about Chrome's encoder shape the code, each measured:
+it refuses input that is not exactly what it was configured for (so it is
+made for the track's own rate, and channels are mixed here); its
+timestamps are its first input's plus what it has made, whatever the later
+inputs say (so a jump in the track's timestamps starts a new encoder, and
+the RTP time jumps with it); and with `usedtx` it makes nothing during a
+silence and does not count the frames it left out (so there the RTP time
+follows what was fed, once that is five frames past the last frame sent).
+Every frame carries its level (RFC 6464, from the power of what went into
+it), the first after a break is marked as a talkspurt, and `age` is
+counted from when the frame's first sample was read.
+
+Receiving (`AudioReceiver`): Opus through an `AudioDecoder` (one output a
+packet, in order, which is how a decoded frame gets its RTP time back: the
+decoder's own timestamps are a count from its first input), with two
+channels from the first packet whose first byte says stereo; G.711 by hand
+and drawn out to 48 kHz. Decoded frames wait in a playout buffer
+(`src/rtc/playout.ts`): it starts playing once two frames are held, plays
+one frame per 20 ms on the worker's clock (corrected for timers that fire
+late), plays silence for a frame that is not there when it is due, lets the
+time stand still when nothing at all is held (which is how the delay grows
+when arrivals vary more than it covers), jumps over a hole longer than
+200 ms (a sender that left a silence out), drops a frame that comes after
+its time, and, when it has stayed deeper than the spread of the arrival
+times asks for over a hundred frames, gives up the quietest of the next few
+frames without a gap. The track's time is a steady count of what was
+written.
+
+Measured in headless Chrome 152 with two connections of one worker joined
+over the bridge of section 5.4 (a 440 Hz tone written to a generator track
+sample for sample on one side, the receiving track read sample for sample
+on the other): the tone arrives whole in both directions with no break in
+its phase over 12 s, 30 to 60 ms after it starts, frames written every
+20.2 ms (99th percentile 23.5 ms); the same through an `AudioContext`
+(a `MediaStreamAudioSourceNode` recorded by a worklet); from a 44.1 kHz
+track, from a stereo track (mixed to one channel, or sent as two to a peer
+that asked), as PCMU and as PCMA, with `usedtx` across a 1.5 s silence,
+and from the fake microphone device.
+
+The `rtc-media-unit` suite checks these modules in node, without a
+browser: the playout buffer on a clock of its own (a steady stream, a lost
+frame, frames that swap places, a late one, arrivals that vary and settle,
+a pause, a burst), G.711 against what Chrome's decoder gives for the same
+bytes, the level, the formats read from the offers of Chrome 152 and 156
+(`test/fixtures/rtc`), the sender's times against an encoder that behaves
+as Chrome's was measured to (a break in the track, a stereo peer, a track
+at 44.1 kHz, `usedtx`), and a tone sent as G.711 through two stacks back to
+back and written by the receiver.
+
+Limits of this slice. The page's stand-in does not make transceivers yet
+(the next slice), so nothing here is reachable from a page; the SDP the
+page would read still carries the stack's own lines and order (RED before
+Opus, extensions audio does not use); the answer to a section the peer
+offered first is not yet narrowed to what the answering page wants of it
+(a section this side already has is, by its transceiver's direction);
+video sections negotiate and their frames are dropped. A lost Opus packet is silence: WebCodecs has no
+way to ask the decoder for concealment or for the copy in the next
+packet's FEC. Playout runs on the worker's clock, not the sound card's, so
+a long call drifts against it by the difference of the two clocks and the
+track's sink absorbs that. G.722, comfort noise and DTMF are not carried.

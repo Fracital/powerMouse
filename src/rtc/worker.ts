@@ -9,9 +9,11 @@
 import StreamTransport from '../transport/StreamTransport';
 import { generateCertificate, type Certificate } from './certificate';
 import { Connection, loadStack, type Stack } from './connection';
+import { stackFormats, type Formats } from './formats';
 import type {
 	RtcWorkerConnection,
 	RtcWorkerInit,
+	RtcWorkerTemplate,
 	WorkerEvent,
 } from './protocol';
 
@@ -22,11 +24,18 @@ declare const self: DedicatedWorkerGlobalScope;
 let stack: Promise<Stack> | null = null;
 let transport: StreamTransport | null = null;
 let certificate: Promise<Certificate> | null = null;
+/** what the stack negotiates: this browser's own formats, or the stack's when it was told none */
+let formats: Promise<Formats | null> = Promise.resolve(null);
+let templated: ((sdp: string) => void) | null = null;
 
 self.onmessage = async ({
 	data,
-}: MessageEvent<RtcWorkerInit | RtcWorkerConnection>) => {
+}: MessageEvent<RtcWorkerInit | RtcWorkerTemplate | RtcWorkerConnection>) => {
 	if (data?.kind === 'init') {
+		if (data.template)
+			formats = new Promise((resolve) => {
+				templated = (sdp) => resolve(stackFormats(sdp));
+			});
 		transport = new StreamTransport(data.transport);
 		transport.init().catch(() => {});
 		certificate = generateCertificate();
@@ -34,11 +43,16 @@ self.onmessage = async ({
 			console.error('STomp: the WebRTC stack could not load', error);
 			throw error;
 		});
-	} else if (data?.kind === 'connection') {
+	} else if (data?.kind === 'template') templated?.(data.sdp);
+	else if (data?.kind === 'connection') {
 		const { port, config } = data;
 		try {
-			const [loaded, cert] = await Promise.all([stack!, certificate!]);
-			new Connection(loaded, port, transport!, config, cert);
+			const [loaded, cert, negotiable] = await Promise.all([
+				stack!,
+				certificate!,
+				formats,
+			]);
+			new Connection(loaded, port, transport!, config, cert, negotiable);
 		} catch (error) {
 			port.postMessage({
 				ev: 'error',

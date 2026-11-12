@@ -311,6 +311,10 @@ export class MidNames {
 		}
 		return lines.join(CRLF);
 	}
+	/** the name the page reads for the section the stack names `mid` */
+	shown(mid: string): string {
+		return this.#shown.get(mid) ?? mid;
+	}
 	/** the stack's SDP with the names the page reads */
 	toShown(sdp: string): string {
 		return this.#rewrite(sdp, (mid, index) => {
