@@ -52,6 +52,7 @@ import { LINK_SEGMENT } from '../visited';
 import { forbidCodecModule } from '../wasm/codec';
 import Module from './Module';
 import { rewriteCounts, rewriterLibraryAt } from './rewriter';
+import { trustedFunction, useTrustedTypes, type TrustedKind } from './trusted';
 
 export interface ModuleCtor {
 	new (client: any): Module<any>;
@@ -377,7 +378,60 @@ export default class Client {
 	 * string is refused, the inject makes none of its own (the browser would
 	 * report each attempt to the page)
 	 */
-	scriptFacts: ScriptFacts;
+	get scriptFacts(): ScriptFacts {
+		return this.#scriptFacts;
+	}
+	set scriptFacts(facts: ScriptFacts) {
+		this.#scriptFacts = facts;
+		// its writes into Trusted Types sinks carry trusted values (trusted.ts)
+		if (facts.tt) useTrustedTypes(facts.tt, facts.policy);
+	}
+	#scriptFacts!: ScriptFacts;
+	/** set by the TrustedTypes module: the page's value at a sink, as Chrome judges it (trustedValue) */
+	trustedCheck?: (
+		value: unknown,
+		type: TrustedKind,
+		sink: string,
+		refuse: () => unknown,
+		convert: (value: unknown) => string,
+	) => string | null;
+	/**
+	 * What the page's sink named `sink` (Chrome's name: `Element
+	 * innerHTML`) takes of `value`, under the page's Trusted Types: the
+	 * string to go on with, or null where it is refused, after `refuse`
+	 * (the native sink, handed the page's value) threw or reported as
+	 * natively. `convert` makes the string of a value that is not trusted.
+	 */
+	trustedValue(
+		value: unknown,
+		type: TrustedKind,
+		sink: string,
+		refuse: () => unknown,
+		convert: (value: unknown) => string = String,
+	): string | null {
+		return this.trustedCheck
+			? this.trustedCheck(value, type, sink, refuse, convert)
+			: convert(value);
+	}
+	/**
+	 * Set by the TrustedTypes module: whether a javascript: URL whose code
+	 * is `page` may navigate as its rewrite `routed` (the code the browser
+	 * hands a default policy), under the page's Trusted Types; false after
+	 * `refuse` (the native navigation to the page's URL) where it may not
+	 */
+	trustedJavascript?: (
+		page: string,
+		routed: string,
+		refuse: () => unknown,
+	) => boolean;
+	/** set by the TrustedTypes module: a script text of the inject's own the page's default policy is not asked of */
+	trustedApprove?: (value: string) => void;
+	/** how a policy of this context requires Trusted Types of its sinks (src/csp.ts trustedTypesRequired) */
+	trustedTypesRequired(): 'enforce' | 'report' | null {
+		return this.#scriptFacts.rtt ?? null;
+	}
+	/** report a sink's refusal of `value` that only a report-only policy makes (documents dispatch it) */
+	reportTrustedTypes(_sink: string, _value: string) {}
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		this.names = helperNames(init);
 		this.#customNames = !!(init as { names?: unknown }).names;
@@ -388,7 +442,13 @@ export default class Client {
 		Reflect.deleteProperty(global, CSP_FACTS);
 		this.scriptFacts =
 			typeof facts === 'object' && facts !== null
-				? { nonce: facts.nonce, evaluates: facts.evaluates !== false }
+				? {
+						nonce: facts.nonce,
+						evaluates: facts.evaluates !== false,
+						tt: facts.tt,
+						rtt: facts.rtt,
+						policy: facts.policy,
+					}
 				: { evaluates: true };
 		// built now, before any page script runs, from the window's own
 		// Function, over the bundle's snapshot of Reflect.apply: a page that
@@ -405,11 +465,16 @@ export default class Client {
 				: '';
 		try {
 			if (!this.scriptFacts.evaluates) throw new Error('no eval');
-			this.#callIn = new this.#nativeFunction(
-				'apply',
+			// (where Trusted Types are in use, eval makes them: trusted.ts)
+			const made = (parameters: string[], body: string) =>
+				trustedFunction(global, parameters, body) ??
+				new this.#nativeFunction(...parameters, body);
+			this.#callIn = made(
+				['apply'],
 				`return function (method, that, args) { return apply(method, that, args); };${sourceURL}`,
 			)(Reflect.apply) as CallIn;
-			this.#ownCallback = new this.#nativeFunction(
+			this.#ownCallback = made(
+				[],
 				`return function (callback) { return function () { callback(); }; };${sourceURL}`,
 			)() as (callback: () => void) => () => void;
 		} catch (error) {
@@ -1115,8 +1180,9 @@ export default class Client {
 	 * a script that carries its nonce, DocumentClient), else null: the
 	 * realm's own Function makes it
 	 */
-	compile(_parameters: string[], _source: string): Function | null {
-		if (this.scriptFacts.evaluates) return null;
+	compile(parameters: string[], source: string): Function | null {
+		if (this.scriptFacts.evaluates)
+			return trustedFunction(this.global, parameters, source);
 		throw new this.global.EvalError(
 			'Stomp: this context refuses code made from a string',
 		);

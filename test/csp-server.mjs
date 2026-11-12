@@ -9,12 +9,14 @@
 //         (repeatable)
 //     probes: the names of test/pages/csp-probes.js's probes to run
 //     s:  styles in the head, one carrying nonce="probes" (markup-styles)
+//     js: `tt` for test/pages/csp-tt-probes.js's (Trusted Types) instead
 //     h:  how the probe script is included, so that the policy lets it
 //         run: `self` (a script element whose src is /csp/probes.js, the
 //         default), `nonce` (that element with nonce="probes"), `inline`
 //         (its text inline), `inline-nonce`, `inline-hash` (inline, and the
 //         sha256 of its text is in the X-Probe-Hash header)
-//   /csp/probes.js       the probes (test/pages/csp-probes.js)
+//   /csp/probes.js       the probes (test/pages/csp-probes.js; `?js=tt` the
+//                        csp-tt-probes.js ones)
 //   /csp/ok              text "ok", for any origin (CORS *)
 //   /csp/run.js          a script that sets window.__ran to 1
 //   /csp/sse             an event stream of one message, "sse"
@@ -94,7 +96,12 @@ export function csp(req, res) {
 	};
 	switch (url.pathname) {
 		case '/csp/doc': {
-			const probes = readFileSync(`${pages}csp-probes.js`, 'utf8');
+			const tt = query.get('js') === 'tt';
+			const probes = readFileSync(
+				`${pages}${tt ? 'csp-tt-probes.js' : 'csp-probes.js'}`,
+				'utf8',
+			);
+			const src = tt ? '/csp/probes.js?js=tt' : '/csp/probes.js';
 			const metas = policies(res, query);
 			if (query.get('s') === 'nav') {
 				const bases = query
@@ -116,9 +123,9 @@ export function csp(req, res) {
 				);
 			const script =
 				how === 'self'
-					? '<script src="/csp/probes.js"></script>'
+					? `<script src="${src}"></script>`
 					: how === 'nonce'
-						? '<script nonce="probes" src="/csp/probes.js"></script>'
+						? `<script nonce="probes" src="${src}"></script>`
 						: how === 'inline-nonce'
 							? `<script nonce="probes">${text}</script>`
 							: `<script>${text}</script>`;
@@ -135,7 +142,9 @@ export function csp(req, res) {
 		case '/csp/probes.js':
 			send(
 				'text/javascript; charset=utf-8',
-				readFileSync(`${pages}csp-probes.js`),
+				readFileSync(
+					`${pages}${query.get('js') === 'tt' ? 'csp-tt-probes.js' : 'csp-probes.js'}`,
+				),
 			);
 			return true;
 		case '/csp/ok':

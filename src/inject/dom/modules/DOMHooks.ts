@@ -14,6 +14,15 @@ import {
 	unrouteURL,
 } from '../../modules/Unroute';
 import { getPublicSuffix } from '../../rewriter';
+import {
+	isParsed,
+	ownScripts,
+	TRUSTED_KINDS,
+	trustedAttribute,
+	trustedHTML,
+	trustedOf,
+	trustedSink,
+} from '../../trusted';
 import DocumentClient, {
 	addDocumentOpenListener,
 	getGlobalParsingState,
@@ -77,6 +86,8 @@ export function appliedAttribute(
 	if (!appliedTab.has(element)) appliedTab.set(element, new Map());
 	appliedTab.get(element)!.set(attribute, value);
 }
+/** the string an HTML sink makes of a value ([LegacyNullToEmptyString]) */
+const htmlString = (value: unknown) => (value === null ? '' : String(value));
 
 /** a value the hooks' view of `element` holds (null: removed) made real */
 function applyAttribute(
@@ -94,7 +105,11 @@ function applyAttribute(
 			}
 			nativeElement.removeAttribute.call(element, attribute);
 		} else if (nativeElement.hasAttribute.call(element, attribute)) {
-			nativeElement.setAttribute.call(element, attribute, value);
+			nativeElement.setAttribute.call(
+				element,
+				attribute,
+				trustedAttribute(element, attribute, value),
+			);
 		} else {
 			// an SVG element's xlink: attribute the hooks set first (one
 			// the parser made from written markup that a hook held back)
@@ -105,9 +120,16 @@ function applyAttribute(
 				Reflect.get(nativeElement, 'namespaceURI', element) === SVG_NAMESPACE
 					? XLINK_NAMESPACE
 					: '');
+			// (a trusted value where Trusted Types require one: trusted.ts)
+			const given = trustedAttribute(
+				element,
+				attribute,
+				value,
+				namespace || null,
+			);
 			if (namespace)
-				nativeElement.setAttributeNS.call(element, namespace, attribute, value);
-			else nativeElement.setAttribute.call(element, attribute, value);
+				nativeElement.setAttributeNS.call(element, namespace, attribute, given);
+			else nativeElement.setAttribute.call(element, attribute, given);
 		}
 		if (!appliedTab.has(element)) appliedTab.set(element, new Map());
 		appliedTab.get(element)!.set(attribute, value);
@@ -700,6 +722,17 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			proxyModule.wrapFunction(target, (target, that, args) => {
 				let text = '';
 				for (const arg of args) text += String(arg);
+				// (the page's Trusted Types: its joined text, a lone trusted value
+				// as it is, TrustedTypes.ts)
+				const passed = this.client.trustedValue(
+					args.length === 1 ? args[0] : text,
+					'TrustedHTML',
+					newline ? 'Document writeln' : 'Document write',
+					() => Reflect.apply(target, that, args),
+					() => text,
+				);
+				if (passed === null) return;
+				text = passed;
 				if (newline) text += '\n';
 				const document =
 					typeof that === 'object' && that !== null
@@ -727,7 +760,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				}
 				// an empty write still reaches the parser: after the document
 				// has loaded it opens a new one, as the page's own call would
-				Reflect.apply(nativeWrite, that, [markup]);
+				Reflect.apply(nativeWrite, that, [trustedHTML(markup)]);
 				// a frame the written markup made (a script it holds sweeps
 				// first, see prepareScriptText)
 				this.client.sweepFrames?.();
@@ -751,7 +784,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			this.client.global.Document.prototype.close,
 			(target, that, args) => {
 				const tail = stream.take(that);
-				if (tail) Reflect.apply(nativeWrite, that, [tail]);
+				if (tail) Reflect.apply(nativeWrite, that, [trustedHTML(tail)]);
 				const result = Reflect.apply(target, that, args);
 				this.client.writtenLoads?.(that as Document);
 				return result;
@@ -935,13 +968,22 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				set: proxyModule.wrapFunction(
 					scriptTextDescriptor.set!,
 					(target, that: HTMLScriptElement, args) => {
+						// (the page's Trusted Types: DocumentClient.scriptValue)
+						const text = this.client.scriptValue(
+							that,
+							args[0],
+							'HTMLScriptElement text',
+							() => Reflect.apply(target, that, args),
+						);
+						if (text === null || this.client.trustedScriptText(that, text))
+							return;
 						// snapshot: removing while iterating the live list skips every
 						// other node and leaves half the old text in place
 						for (const node of [...that.childNodes]) node.remove();
 
 						that.append(
 							new this.client.global.Text(
-								this.client.prepareScriptText(that, String(args[0])),
+								this.client.prepareScriptText(that, text),
 							),
 						);
 					},
@@ -996,7 +1038,15 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							if (!isScriptElement(that))
 								return Reflect.apply(target, that, args);
 							// null is the empty string, which leaves no child
-							const text = args[0] === null ? '' : String(args[0]);
+							const text = this.client.scriptValue(
+								that,
+								args[0],
+								`HTMLScriptElement ${name}`,
+								() => Reflect.apply(target, that, args),
+								(value) => (value === null ? '' : String(value)),
+							);
+							if (text === null || this.client.trustedScriptText(that, text))
+								return;
 							usePrototype(that, nativeElement, (element) => {
 								for (const node of [...element.childNodes]) node.remove();
 							});
@@ -1139,8 +1189,16 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			set: proxyModule.wrapFunction(
 				innerHTMLDescriptor.set!,
 				(target, that: Element, args) => {
-					// null is the empty string ([LegacyNullToEmptyString])
-					const markup = args[0] === null ? '' : String(args[0]);
+					// null is the empty string ([LegacyNullToEmptyString]), after the
+					// page's Trusted Types judged it
+					const markup = this.client.trustedValue(
+						args[0],
+						'TrustedHTML',
+						'Element innerHTML',
+						() => Reflect.apply(target, that, args),
+						htmlString,
+					);
+					if (markup === null) return;
 					const kind = this.client.styleKind(that);
 					if (kind === 'html') return setStyleText(that, markup);
 					// an SVG <style> parses its markup as markup (measured: an
@@ -1237,6 +1295,18 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			set: proxyModule.wrapFunction(
 				outerHTMLDescriptor.set!,
 				(target, that: Element, args) => {
+					// (the page's Trusted Types judge the markup first; a style's
+					// stand-in writes the inject's own)
+					const markup = ownScripts.has(that)
+						? htmlString(args[0])
+						: this.client.trustedValue(
+								args[0],
+								'TrustedHTML',
+								'Element outerHTML',
+								() => Reflect.apply(target, that, args),
+								htmlString,
+							);
+					if (markup === null) return;
 					// as the browser: nothing without a parent, an error under the
 					// document, and the markup parsed in the parent's context (a
 					// fragment's is the body's)
@@ -1259,7 +1329,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					that.replaceWith(
 						cloneRawNode(
 							parseHTMLFragmentIn(
-								args[0] === null ? '' : String(args[0]),
+								markup,
 								parentType === 1 ? (parent as Element) : null,
 								this.client.global.document,
 							),
@@ -1338,15 +1408,29 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					const command = String(args[0]).toLowerCase();
 					if (args.length < 3 || args[2] === undefined || args[2] === null)
 						return Reflect.apply(target, that, args);
-					const value = String(args[2]);
 					let made: string | null = null;
-					if (command === 'inserthtml')
-						args[2] = rewriteMarkup(value, editingContext(that));
-					else if (command === 'insertimage' && value !== '') {
+					if (command === 'inserthtml') {
+						// (the page's Trusted Types judge the markup first)
+						const value = this.client.trustedValue(
+							args[2],
+							'TrustedHTML',
+							'Document execCommand',
+							() => Reflect.apply(target, that, args),
+						);
+						if (value === null) return false;
+						args[2] = trustedHTML(rewriteMarkup(value, editingContext(that)));
+						const result = Reflect.apply(target, that, args);
+						this.client.sweepFrames?.();
+						return result;
+					}
+					const value = String(args[2]);
+					if (command === 'insertimage' && value !== '') {
 						args[0] = 'insertHTML';
-						args[2] = rewriteMarkup(
-							`<img src="${escapeAttribute(value)}">`,
-							editingContext(that),
+						args[2] = trustedHTML(
+							rewriteMarkup(
+								`<img src="${escapeAttribute(value)}">`,
+								editingContext(that),
+							),
 						);
 					} else if (command === 'createlink' && value !== '') {
 						try {
@@ -1401,6 +1485,15 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			RangeProto.createContextualFragment = proxyModule.wrapFunction(
 				RangeProto.createContextualFragment,
 				(target, that: Range, args) => {
+					if (!args.length) return Reflect.apply(target, that, args);
+					// (the page's Trusted Types judge the markup first)
+					const markup = this.client.trustedValue(
+						args[0],
+						'TrustedHTML',
+						'Range createContextualFragment',
+						() => Reflect.apply(target, that, args),
+					);
+					if (markup === null) return;
 					const start = that.startContainer;
 					const owner = (
 						start.nodeType === 9 ? start : start.ownerDocument
@@ -1420,9 +1513,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						: inert.createElement('body');
 					const range = inert.createRange();
 					range.selectNodeContents(holder);
-					const parsed = Reflect.apply(target, range, args) as DocumentFragment;
+					const parsed = Reflect.apply(target, range, [
+						trustedHTML(markup),
+					]) as DocumentFragment;
 					const fragment = owner.createDocumentFragment();
 					fragment.append(cloneRawNode([...parsed.childNodes], owner));
+					// its scripts are the parser's, which run as they are
+					this.client.parsedScripts(fragment);
 					return fragment;
 				},
 			);
@@ -1444,6 +1541,18 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				proxyModule.wrapFunction(
 					native as (html: string) => void,
 					(target, that, args) => {
+						if (args.length) {
+							// (the page's Trusted Types judge the markup first; what goes
+							// on is the inject's, trusted)
+							const markup = this.client.trustedValue(
+								args[0],
+								'TrustedHTML',
+								`${(that as Node).nodeType === 1 ? 'Element' : 'ShadowRoot'} setHTMLUnsafe`,
+								() => Reflect.apply(target, that, args),
+							);
+							if (markup === null) return;
+							args[0] = trustedHTML(markup);
+						}
 						const kind = args.length ? this.client.styleKind(that) : null;
 						if (kind === 'html')
 							return setStyleText(that as Element, String(args[0]));
@@ -1457,11 +1566,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						if (args.length && isScriptElement(that))
 							return Reflect.apply(hookedInnerHTMLSet, that, [args[0]]);
 						if (args.length)
-							args[0] = rewriteMarkup(
-								args[0],
-								(that as Node).nodeType === 1
-									? (that as Element)
-									: ((that as ShadowRoot).host ?? null),
+							args[0] = trustedHTML(
+								rewriteMarkup(
+									args[0],
+									(that as Node).nodeType === 1
+										? (that as Element)
+										: ((that as ShadowRoot).host ?? null),
+								),
 							);
 						const result = Reflect.apply(target, that, args);
 						this.client.sweepFrames?.();
@@ -1582,8 +1693,16 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				set: proxyModule.wrapFunction(
 					shadowInnerHTML.set,
 					(target, that: ShadowRoot, args) => {
+						const markup = this.client.trustedValue(
+							args[0],
+							'TrustedHTML',
+							'ShadowRoot innerHTML',
+							() => Reflect.apply(target, that, args),
+							htmlString,
+						);
+						if (markup === null) return;
 						Reflect.apply(target, that, [
-							rewriteMarkup(args[0], that.host ?? null),
+							trustedHTML(rewriteMarkup(markup, that.host ?? null)),
 						]);
 						this.client.sweepFrames?.();
 					},
@@ -2184,6 +2303,26 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that: Element, args) =>
 					pageWrite(that, String(args[1]), () => {
 						const name = String(args[1]);
+						// (the page's Trusted Types judge an SVG script's href)
+						const sink =
+							args.length > 2 && !isParsed(that)
+								? trustedSink(
+										that,
+										name.slice(name.indexOf(':') + 1),
+										false,
+										args[0] === null ? null : String(args[0]),
+									)
+								: null;
+						if (sink) {
+							const passed = this.client.trustedValue(
+								args[2],
+								TRUSTED_KINDS[sink[0]],
+								sink[1],
+								() => Reflect.apply(target, that, args),
+							);
+							if (passed === null) return;
+							args[2] = trustedOf(sink[0], passed);
+						}
 						if (
 							args.length < 3 ||
 							!(that instanceof this.client.global.Element) ||
@@ -2260,11 +2399,29 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// toString, a TrustedScriptURL): the hooks compare it with '' and
 					// resolve it, and an object that reads as '' was taken for a URL,
 					// the document's own, which an image then loaded
-					const value = args.length < 2 ? args[1] : `${args[1]}`;
+					let value = args.length < 2 ? args[1] : `${args[1]}`;
 					const attribute =
 						typeof args[0] === 'string'
 							? attributeName(that, args[0])
 							: args[0];
+					// the page's Trusted Types judge a handler, a script's src, a
+					// frame's srcdoc (its value went to a string once, above:
+					// a trusted value's string is its own)
+					const sink =
+						args.length > 1 && typeof attribute === 'string' && !isParsed(that)
+							? trustedSink(that, attribute)
+							: null;
+					if (sink) {
+						const passed = this.client.trustedValue(
+							args[1],
+							TRUSTED_KINDS[sink[0]],
+							sink[1],
+							() => Reflect.apply(target, that, args),
+							() => value as string,
+						);
+						if (passed === null) return;
+						value = passed;
+					}
 
 					pageWrite(that, attribute, () => {
 						// an attribute no hook watches (class, aria-*, data-*) is
@@ -2381,7 +2538,18 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							// forwards to cssText.
 							if (property === 'style') Reflect.apply(target, that, args);
 
-							const written = String(args[0]);
+							// (the page's Trusted Types judge a script's src, a frame's
+							// srcdoc)
+							const sink = trustedSink(that as Element, property, true);
+							const written = sink
+								? this.client.trustedValue(
+										args[0],
+										TRUSTED_KINDS[sink[0]],
+										sink[1],
+										() => Reflect.apply(target, that, args),
+									)
+								: String(args[0]);
+							if (written === null) return;
 							let untouched = false;
 							usePrototype(that, CustomElement.prototype, (element) => {
 								const attribute = propertyAttribute(property);
@@ -2421,7 +2589,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								value !== '' &&
 								ctor !== this.client.global.HTMLBaseElement
 							)
-								Reflect.apply(target, that, [value]);
+								Reflect.apply(target, that, [
+									sink ? trustedOf(sink[0], value) : value,
+								]);
 						}),
 					),
 				});

@@ -13,6 +13,7 @@ import {
 	policyNonce,
 	REFUSED_URL,
 	scriptFacts,
+	trustedFacts,
 	WORKER_DIRECTIVES,
 } from '../csp';
 import { freshFrameDocument } from '../freshFrame';
@@ -4239,8 +4240,12 @@ export function registerRewrites(
 				// nonce, which the browser's script policies name; a worker of
 				// the document imports the inject by its URL)
 				const nonce = policyNonce();
+				// (and the name of the inject's own Trusted Types policy, which
+				// every list of policy names allows)
+				const tt = `${policyMark()}t`;
 				const policies = browserHeaders(response.headers, policyMark(), {
 					nonce,
+					tt,
 					assets: [
 						injectDocumentJS(url, rewriter.config),
 						injectWorkerJS(url, rewriter.config),
@@ -4250,17 +4255,18 @@ export function registerRewrites(
 				// whether code made from a string runs, under the headers' policies
 				// and the metas' of the head (src/csp.ts ScriptFacts)
 				const decoded = decodeDocument(bytes, contentType);
-				const facts = scriptFacts(
-					[
-						...policies.texts.map(([browser]) => browser).filter(Boolean),
-						...metaPolicies(decoded)
-							.map((policy) =>
-								browserContentPolicy(policy, { nonce, assets: [] }),
-							)
-							.filter((text) => text !== null),
-					],
-					nonce,
-				);
+				const texts = [
+					...policies.texts.map(([browser]) => browser).filter(Boolean),
+					...metaPolicies(decoded)
+						.map((policy) =>
+							browserContentPolicy(policy, { nonce, assets: [], tt }),
+						)
+						.filter((text) => text !== null),
+				];
+				const facts = {
+					...scriptFacts(texts, nonce),
+					...trustedFacts(texts, tt),
+				};
 				if (policies.enforce)
 					responseHeaders.append('content-security-policy', policies.enforce);
 				// a frame whose own frame-ancestors refuses one of its real

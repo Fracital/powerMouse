@@ -39,6 +39,8 @@ would be judged too); neither are sandbox or Trusted Types (base-uri,
 form-action and frame-ancestors: Navigations, below). report-uri and report-to are left out
 would be judged too); neither are base-uri, form-action, frame-ancestors
 or Trusted Types (sandbox has a section of its own). report-uri and report-to are left out
+styles reach it too (below), and Trusted Types (below); base-uri,
+form-action, sandbox and frame-ancestors do not yet. report-uri and report-to are left out
 (the browser would post the proxy's URLs). A report-only policy goes to the
 browser as one. A meta's content is replaced by the browser policy for it
 (the inject's attribute hook; the page reads its own content back), and it
@@ -100,6 +102,51 @@ its text), and a worker imports the library's file. A classic worker of a
 blob where the policy refuses `blob:` scripts: the page's Blob is the
 bootstrap's own text, after its preamble. A violation's `sample`
 ('report-sample') is the page's code.
+
+## Trusted Types
+
+`require-trusted-types-for` reaches the browser as the page wrote it, and
+`trusted-types` with the page's names and one more: the name of the
+inject's own policy (`ScriptFacts.tt`, made by the worker for each
+document; a meta's comes from the inject), which no page knows. So the
+browser refuses a string at every sink as natively, and every sink the
+inject does not write for the page (`Document.parseHTMLUnsafe`,
+`DOMParser.parseFromString`, `setAttributeNode`, a script element's text
+that lands as a Text node) is judged by the browser itself, with the
+page's default policy, Chrome's TypeError and a trusted violation.
+Policies are made, refused and reported by the browser (the names, 'none',
+'allow-duplicates', `*`), and `trustedTypes.defaultPolicy` is the page's.
+
+The inject writes strings into these sinks all the time (the page's
+rewritten markup, its rewritten scripts, eval of rewritten code, the
+proxy's own scripts and functions): they carry values of its own policy
+(`src/inject/trusted.ts`), made in the bundle's realm (a trusted value of
+one realm is one in every realm, measured). The Function constructor takes
+no trusted value (only a default policy's identical string, measured), so
+the inject's own functions are made by eval of a trusted value where
+Trusted Types are in use, and a top's rewriter realm holds the rewriter
+library itself. A blob: worker inherits its document's policy: its
+bootstrap makes the inject's policy and hands importScripts trusted URLs.
+
+Where the inject writes for the page (an innerHTML, a script's text or src,
+a handler or srcdoc attribute, document.write, insertAdjacentHTML,
+setHTMLUnsafe, createContextualFragment, execCommand, eval, Function, a
+string timer, a Worker, a javascript: navigation), it judges the page's
+value first, as Chrome does (`src/inject/modules/TrustedTypes.ts`): a
+trusted value of the sink's type passes, a string goes to the page's
+default policy with Chrome's arguments (the value, the type, the sink's
+name: `Element innerHTML`) and what it returns is the value (for eval and
+Function only the identical string). What is left is refused by the
+browser: the native sink is handed the page's own value, and the default
+policy's answer is replayed to it (the page's callbacks are wrapped when it
+makes its default policy), so the TypeError or EvalError, the violation and
+its sample are Chrome's. A script's text the page set through a sink is
+its own; text that reached it otherwise (a Text node, a clone) is judged as
+the script runs (`HTMLScriptElement text`), and the inject's rewrite of
+text that lands as a Text node is let through by the default policy's
+wrapper without asking the page. A report-only policy's refusal of a sink
+the inject writes is the inject's event, with Chrome's fields, but not
+trusted.
 
 ## Hosts
 
@@ -225,8 +272,18 @@ refuses fires a violation, natively either.
 
 ## Not yet as natively
 
-- Sandbox, Trusted Types, base-uri, form-action and frame-ancestors are
-  not applied.
+- Sandbox, base-uri, form-action and frame-ancestors are not applied.
+- Trusted Types: a report-only policy's violation of a sink the inject
+  writes is not trusted and reaches no `ReportingObserver`, and the
+  browser reports a report-only refusal of a script whose text landed as
+  a Text node, or of a javascript: URL, with the rewrite as the sample.
+  A javascript: URL of a link (its href is rewritten when it is set) is
+  judged by the browser with the rewrite's code: the default policy is
+  handed it, and a refusal's sample is it. A worker judges no
+  importScripts of the page's and reports no report-only refusal, and a
+  module worker of a `blob:` URL does not start. An SVG script's
+  rewritten text is let through only by a default policy, as the page's
+  own would be. A violation's sourceFile is not the page's script.
 - 'unsafe-hashes' with the hash of an event handler, a style attribute or a
   `javascript:` URL: the rewrite changes the text, and the browser refuses
   it.

@@ -29,6 +29,7 @@
  * Everything is taken when the bundle loads, before the page runs.
  */
 import { SEALER_SOURCE } from '../../transport/messages';
+import { trustedScriptURL } from '../trusted';
 
 type Post = (message: unknown) => void;
 
@@ -114,7 +115,9 @@ function open(route: string | null): Batch | null {
 			source ??= Reflect.apply(taken.createObjectURL, taken.URL, [
 				new taken.Blob([SEALER_SOURCE], { type: 'text/javascript' }),
 			]) as string;
-		const worker = new taken.Worker(routed ? route : source!);
+		const worker = new taken.Worker(
+			trustedScriptURL(routed ? route! : source!),
+		);
 		let die!: () => void;
 		const made: Batch = {
 			worker,
