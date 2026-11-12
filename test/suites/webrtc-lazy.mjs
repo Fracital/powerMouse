@@ -75,6 +75,14 @@ for (const [label, base] of [
 		JSON.stringify(used),
 	);
 	ok(
+		`${label}: a page that replaced Promise and hooked the channel and worker members before its first connection gets the browser's promises, and its hooks are never called`,
+		natively.browserPromise === true &&
+			natively.seen.length === 0 &&
+			used.browserPromise === true &&
+			used.seen.length === 0,
+		JSON.stringify([used.browserPromise, used.seen, natively.seen]),
+	);
+	ok(
 		`${label}: the library, the worker and the stack's module are fetched once each`,
 		['rtcStack.js', 'rtcWorker.js', 'rtc.wasm'].every(
 			(name) => asked.filter((url) => url.includes(`/${name}`)).length === 1,

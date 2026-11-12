@@ -797,22 +797,38 @@ TURN server.
   told a relayed address (`relay_candidate`) and transmits from it; the
   worker wraps those datagrams for the TURN server and unwraps what comes
   back.
-- **The stand-ins are loaded when a document first uses them.** What
-  every document carries (`src/inject/dom/modules/WebRTC.ts`) is
+- **The stand-ins are loaded when a document first uses them.** What every
+  document carries (`src/inject/dom/modules/WebRTC.ts`) is
   `RTCPeerConnection`, `RTCDataChannel`, `RTCDataChannelEvent` and
   `RTCStatsReport` with the browser's prototypes, each member one that
-  reads as the browser's and runs the member of the document that made
-  the object, and those prototypes are proxies dressed the first time
-  anything looks at them. What the classes do is the asset `rtcStack`
-  (`src/inject/dom/rtcStack.ts`, `dist/rtcStack.js`): the first
-  connection a document makes, or the first event of one of its channels,
-  fetches it with a synchronous request (from the HTTP cache after the
-  first) and evaluates it in the bundle's realm with the globals the
-  bundle took when it loaded; the page reads no report and no resource
-  entry of that request. Documents that reach each other share it and
-  install it together. A document that never uses WebRTC pays what it
-  did before (`frame-cost`), and the browser's own `RTCPeerConnection` (the
-  format template of section 16) is made only by a document that does.
+  reads as the browser's and runs the member of the document that made the
+  object, and those prototypes are proxies dressed the first time anything
+  looks at them. What the classes do is the asset `rtcStack`
+  (`src/inject/dom/rtcStack.ts`, `dist/rtcStack.js`): the first connection
+  a document makes, or the first event of one of its channels, fetches it
+  with a synchronous request (from the HTTP cache after the first) and
+  evaluates it in the bundle's realm with the globals the bundle took when
+  it loaded; the page reads no report and no resource entry of that
+  request. What the library uses of the document is taken before any page
+  script: the module takes the realm's constructors and objects it needs
+  (`Promise`, `Worker`, `MessageEvent`, `setTimeout` and the like) when
+  the document starts, and the members it calls (`postMessage` of ports
+  and workers, `addEventListener`, `performance.now`) when the bundle
+  loads, and the library's channels to its worker are made and heard with
+  `src/transport/ports.ts`. A page that replaced or hooked these before
+  its first connection is never handed a port or a message of STomp's, and
+  its connection's promises are the browser's (`webrtc-lazy`). The WebRTC
+  and media interfaces (`RTCRtpSender`, `MediaStreamTrack` and the rest)
+  are the exception: they are read from the document when the library is
+  installed, since the browser makes an interface's objects the first time
+  it is named and taking them at the start would make them in every frame
+  (about 12 KB of heap a frame for these, `frame-cost`). A page that
+  replaced one of those globals, or one of their members, before its first
+  connection has its own used for the library's objects, which natively it
+  would not. Documents that reach each other share it and install it
+  together. A document that never uses WebRTC pays what it did before
+  (`frame-cost`), and the browser's own `RTCPeerConnection` (the format
+  template of section 16) is made only by a document that does.
 - **The module is loaded per document.** The rtc worker compiles
   `rtc.wasm` from its URL (`compileModule` of `src/wasm/module.ts`) the
   first time a document makes a connection; the HTTP cache makes later

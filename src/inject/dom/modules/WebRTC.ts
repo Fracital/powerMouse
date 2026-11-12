@@ -1,4 +1,5 @@
 import { rtcModule, rtcStackJS, rtcWorkerJS } from '../../../routeURL';
+import { closePort, onPort, privateChannel } from '../../../transport/ports';
 import { BUILD } from '../../../version';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
@@ -65,7 +66,30 @@ const captures: RtcContext['captures'] = {
 	weakDeref: WeakRef.prototype.deref,
 	stringIndexOf: String.prototype.indexOf,
 	stringSlice: String.prototype.slice,
+	addListener: EventTarget.prototype.addEventListener,
+	removeListener: EventTarget.prototype.removeEventListener,
+	portPost: MessagePort.prototype.postMessage,
+	workerPost: Worker.prototype.postMessage,
+	performanceNow: Performance.prototype.now,
 };
+/** the document's globals the library uses: see RtcContext.realm */
+const REALM = [
+	'Array',
+	'Blob',
+	'DOMException',
+	'Event',
+	'EventTarget',
+	'Map',
+	'MessageEvent',
+	'Object',
+	'Promise',
+	'TypeError',
+	'WeakRef',
+	'Worker',
+	'performance',
+	'setTimeout',
+	'structuredClone',
+];
 const NativeWeakRef = WeakRef;
 const NativeProxy = Proxy;
 const setAdd = Set.prototype.add;
@@ -404,8 +428,12 @@ export default class WebRTCModule extends Module<DocumentClient> {
 				true,
 			),
 		};
+		const realm = objectCreate(null) as Record<string, any>;
+		for (const name of REALM) realm[name] = global[name];
 		const context: RtcContext = {
 			client,
+			realm,
+			ports: { privateChannel, onPort, closePort },
 			shared,
 			proxyModule,
 			workerModule: client.getModule(WorkerModule),

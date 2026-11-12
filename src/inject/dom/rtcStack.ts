@@ -127,8 +127,20 @@ export default class WebRTCStack {
 		mapNext = ctx.captures.mapNext;
 		weakDeref = ctx.captures.weakDeref;
 		const withStack = ctx.withStack;
-		const global = client.global as unknown as typeof globalThis &
+		// taken when the document started (RtcContext.realm): this library
+		// runs on the first use, when the page may have replaced them
+		const global = ctx.realm as typeof globalThis & Record<string, any>;
+		// The WebRTC and media interfaces are read now, from the document:
+		// the browser makes an interface's objects the first time it is
+		// named, and taking these when every document starts would make
+		// them in every frame
+		const live = client.global as unknown as typeof globalThis &
 			Record<string, any>;
+		const { captures } = ctx;
+		// the browser's, taken before the page runs: a page that hooks
+		// them never sees ours
+		const { portPost, workerPost } = captures;
+		const { privateChannel, onPort, closePort } = ctx.ports;
 		const NativePeerConnection = ctx.natives
 			.RTCPeerConnection as unknown as typeof RTCPeerConnection;
 		const proxyModule = ctx.proxyModule;
@@ -139,25 +151,25 @@ export default class WebRTCStack {
 		const RealmDOMException = global.DOMException as typeof DOMException;
 		const RealmTypeError = global.TypeError as TypeErrorConstructor;
 		const RealmArray = global.Array as ArrayConstructor;
-		const addListener = RealmEventTarget.prototype.addEventListener;
-		const removeListener = RealmEventTarget.prototype.removeEventListener;
+		const addListener = captures.addListener;
+		const removeListener = captures.removeListener;
 		const RealmMessageEvent = global.MessageEvent as typeof MessageEvent;
 		const RealmBlob = global.Blob as typeof Blob;
-		const NativeIceCandidate = global.RTCIceCandidate as typeof RTCIceCandidate;
+		const NativeIceCandidate = live.RTCIceCandidate as typeof RTCIceCandidate;
 		const NativeSessionDescription =
-			global.RTCSessionDescription as typeof RTCSessionDescription;
+			live.RTCSessionDescription as typeof RTCSessionDescription;
 		const NativeIceEvent =
-			global.RTCPeerConnectionIceEvent as typeof RTCPeerConnectionIceEvent;
+			live.RTCPeerConnectionIceEvent as typeof RTCPeerConnectionIceEvent;
 		const NativeIceErrorEvent =
-			global.RTCPeerConnectionIceErrorEvent as typeof RTCPeerConnectionIceErrorEvent;
+			live.RTCPeerConnectionIceErrorEvent as typeof RTCPeerConnectionIceErrorEvent;
 		const NativeDataChannel = ctx.natives
 			.RTCDataChannel as unknown as typeof RTCDataChannel;
 		const NativeDataChannelEvent = ctx.natives
 			.RTCDataChannelEvent as unknown as typeof RTCDataChannelEvent;
 		const NativeStatsReport = ctx.natives
 			.RTCStatsReport as unknown as typeof RTCStatsReport;
-		const NativeError = global.RTCError as typeof RTCError;
-		const NativeErrorEvent = global.RTCErrorEvent as typeof RTCErrorEvent;
+		const NativeError = live.RTCError as typeof RTCError;
+		const NativeErrorEvent = live.RTCErrorEvent as typeof RTCErrorEvent;
 		const RealmWeakRef = global.WeakRef as WeakRefConstructor;
 		const realmClone = global.structuredClone as typeof structuredClone;
 
@@ -219,7 +231,7 @@ export default class WebRTCStack {
 			const transport = (controlled ?? client).requestTransportPort();
 			const started = new NativeWorker(ctx.workerURL());
 			worker = started;
-			started.postMessage(
+			Reflect.apply(workerPost, started, [
 				{
 					kind: 'init',
 					transport,
@@ -227,7 +239,7 @@ export default class WebRTCStack {
 					template: true,
 				} satisfies RtcWorkerInit,
 				[transport],
-			);
+			]);
 			// What this browser offers for audio and video, from a connection
 			// of its own that is closed with nothing set on it (no socket):
 			// the stack negotiates these formats, and the sections a page
@@ -238,10 +250,9 @@ export default class WebRTCStack {
 			) as RTCPeerConnection;
 			const template = (sdp: string) => {
 				probe.close();
-				started.postMessage({
-					kind: 'template',
-					sdp,
-				} satisfies RtcWorkerTemplate);
+				Reflect.apply(workerPost, started, [
+					{ kind: 'template', sdp } satisfies RtcWorkerTemplate,
+				]);
 			};
 			try {
 				probe.addTransceiver('audio');
@@ -355,9 +366,9 @@ export default class WebRTCStack {
 			(typeof value === 'object' && value !== null) ||
 			typeof value === 'function';
 		const certificateExpires =
-			typeof global.RTCCertificate === 'function'
+			typeof live.RTCCertificate === 'function'
 				? Reflect.getOwnPropertyDescriptor(
-						global.RTCCertificate.prototype,
+						live.RTCCertificate.prototype,
 						'expires',
 					)?.get
 				: undefined;
@@ -705,7 +716,9 @@ export default class WebRTCStack {
 		// a report's iterators are the browser's own kind, not a Map's: a
 		// prototype of their own with `next` and a tag
 		const steps = new WeakMap<object, () => IteratorResult<unknown>>();
-		const mapIterator = Reflect.getPrototypeOf(new global.Map().entries())!;
+		const mapIterator = Reflect.getPrototypeOf(
+			Reflect.apply(mapEntries, new global.Map(), []) as object,
+		)!;
 		const reportIterator = global.Object.create(
 			Reflect.getPrototypeOf(mapIterator),
 			{
@@ -799,37 +812,21 @@ export default class WebRTCStack {
 
 		// --- media: transceivers, senders, receivers and their tracks ---
 
-		const NativeTrack = global.MediaStreamTrack as Function | undefined;
-		const NativeStream = global.MediaStream as Function | undefined;
-		const Processor = global.MediaStreamTrackProcessor as Function | undefined;
-		const Generator = global.MediaStreamTrackGenerator as Function | undefined;
-		const NativeTransceiver = global.RTCRtpTransceiver as Function | undefined;
-		const NativeSender = global.RTCRtpSender as Function | undefined;
-		const NativeReceiver = global.RTCRtpReceiver as Function | undefined;
-		const NativeTrackEvent = global.RTCTrackEvent as Function | undefined;
-		const NativeDtmfSender = global.RTCDTMFSender as Function | undefined;
-		const NativeToneEvent = global.RTCDTMFToneChangeEvent as
+		const NativeTrack = live.MediaStreamTrack as Function | undefined;
+		const NativeStream = live.MediaStream as Function | undefined;
+		const Processor = live.MediaStreamTrackProcessor as Function | undefined;
+		const Generator = live.MediaStreamTrackGenerator as Function | undefined;
+		const NativeTransceiver = live.RTCRtpTransceiver as Function | undefined;
+		const NativeSender = live.RTCRtpSender as Function | undefined;
+		const NativeReceiver = live.RTCRtpReceiver as Function | undefined;
+		const NativeTrackEvent = live.RTCTrackEvent as Function | undefined;
+		const NativeDtmfSender = live.RTCDTMFSender as Function | undefined;
+		const NativeToneEvent = live.RTCDTMFToneChangeEvent as
 			typeof RTCDTMFToneChangeEvent | undefined;
 		const realmTimeout = global.setTimeout as typeof setTimeout;
 		const realmPerformance = global.performance as Performance;
-		const performanceNow = global.Performance?.prototype.now as Function;
-		// taken before the page runs: a page that hooks them never sees ours
-		const RealmChannel = global.MessageChannel as typeof MessageChannel;
-		const portPost = global.MessagePort?.prototype.postMessage as Function;
-		const portHandler = global.MessagePort
-			? Reflect.getOwnPropertyDescriptor(
-					global.MessagePort.prototype,
-					'onmessage',
-				)?.set
-			: undefined;
-		const channelPorts = [1, 2].map(
-			(index) =>
-				Reflect.getOwnPropertyDescriptor(
-					RealmChannel?.prototype ?? {},
-					`port${index}`,
-				)?.get,
-		);
-		const NativeStreamTrackEvent = global.MediaStreamTrackEvent as
+		const performanceNow = captures.performanceNow;
+		const NativeStreamTrackEvent = live.MediaStreamTrackEvent as
 			typeof MediaStreamTrackEvent | undefined;
 		/** the browser has what media through the worker takes */
 		const hasMedia = [
@@ -1345,7 +1342,7 @@ export default class WebRTCStack {
 			return whole < 0 ? whole + 2 ** 32 : whole;
 		};
 		const later = (run: () => void, ms: number) =>
-			Reflect.apply(realmTimeout, global, [run, Math.max(0, ms)]);
+			Reflect.apply(realmTimeout, client.global, [run, Math.max(0, ms)]);
 		const now = (): number =>
 			Reflect.apply(performanceNow, realmPerformance, []);
 		// The first tone plays in a task of its own, ahead of a timer or a
@@ -1355,11 +1352,9 @@ export default class WebRTCStack {
 		let channel: MessagePort | null = null;
 		const soon = (run: () => void) => {
 			if (!channel) {
-				const made = Reflect.construct(RealmChannel, []) as MessageChannel;
-				Reflect.apply(portHandler!, Reflect.apply(channelPorts[0]!, made, []), [
-					() => queued.shift()?.(),
-				]);
-				channel = Reflect.apply(channelPorts[1]!, made, []) as MessagePort;
+				const [heard, sent] = privateChannel();
+				onPort(heard, 'message', () => queued.shift()?.());
+				channel = sent;
 			}
 			queued.push(run);
 			Reflect.apply(portPost, channel, [null]);
@@ -2054,9 +2049,9 @@ export default class WebRTCStack {
 			locals: [],
 			pair: null,
 		});
-		const NativeSctp = global.RTCSctpTransport as Function | undefined;
-		const NativeDtls = global.RTCDtlsTransport as Function | undefined;
-		const NativeIceTransport = global.RTCIceTransport as Function | undefined;
+		const NativeSctp = live.RTCSctpTransport as Function | undefined;
+		const NativeDtls = live.RTCDtlsTransport as Function | undefined;
+		const NativeIceTransport = live.RTCIceTransport as Function | undefined;
 		const hasTransports = [NativeSctp, NativeDtls, NativeIceTransport].every(
 			(made) => typeof made === 'function',
 		);
@@ -2255,7 +2250,10 @@ export default class WebRTCStack {
 							}
 							const seq = ++state.seq;
 							state.pending.set(seq, { resolve, reject });
-							state.port.postMessage({ seq, ...request }, transfer);
+							Reflect.apply(portPost, state.port, [
+								{ seq, ...request },
+								transfer,
+							]);
 						}),
 					config: shown,
 					signalingState: 'stable',
@@ -2288,18 +2286,19 @@ export default class WebRTCStack {
 					closed: false,
 				};
 				peerStates.set(this, state);
-				const channel = new MessageChannel();
-				state.port = channel.port1;
-				channel.port1.onmessage = ({ data }: MessageEvent<WorkerMessage>) =>
-					onWorkerMessage(state, data);
-				startWorker().postMessage(
+				const [kept, handed] = privateChannel();
+				state.port = kept;
+				onPort(kept, 'message', (data) =>
+					onWorkerMessage(state, data as WorkerMessage),
+				);
+				Reflect.apply(workerPost, startWorker(), [
 					{
 						kind: 'connection',
-						port: channel.port2,
+						port: handed,
 						config: forWorker(shown),
 					} satisfies RtcWorkerConnection,
-					[channel.port2],
-				);
+					[handed],
+				]);
 			}
 
 			get signalingState() {
@@ -3184,7 +3183,7 @@ export default class WebRTCStack {
 						),
 					);
 				state.pending.clear();
-				state.port?.close();
+				if (state.port) closePort(state.port);
 				state.port = null;
 			}
 		}

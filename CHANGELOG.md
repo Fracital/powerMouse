@@ -702,6 +702,14 @@ The first release after a four-year gap. Everything below is breaking.
   of the library, the worker and the stack, the first and a later
   `createOffer()`, each file fetched once, the stack's compile and the
   worker's memory, against ceilings above what this build measures.
+- The WebRTC library, loaded on a document's first connection, uses the
+  document's `Promise`, `Worker`, `MessageEvent` and timers as they were
+  when the document started, and the browser's `postMessage`,
+  `addEventListener` and `performance.now` as the bundle took them; its
+  channels to its worker are made and heard with `src/transport/ports.ts`.
+  A page that hooked these before its first connection used to be handed
+  the channel to the worker and the transport port the worker gets, and
+  its connections' promises were its own `Promise`'s (`webrtc-lazy`).
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

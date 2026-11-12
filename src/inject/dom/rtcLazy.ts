@@ -53,6 +53,28 @@ export interface RtcContext {
 		weakDeref: typeof WeakRef.prototype.deref;
 		stringIndexOf: typeof String.prototype.indexOf;
 		stringSlice: typeof String.prototype.slice;
+		/** the browser's members the library calls on its own objects */
+		addListener: Function;
+		removeListener: Function;
+		portPost: Function;
+		workerPost: Function;
+		performanceNow: Function;
+	};
+	/**
+	 * The document's globals the library uses, taken when the document
+	 * started, before any page script: the library is evaluated when the
+	 * page first uses WebRTC, by when the page may have replaced them
+	 */
+	realm: Record<string, any>;
+	/** the inject's channels (src/transport/ports.ts): made and heard as the browser made them */
+	ports: {
+		privateChannel: () => [MessagePort, MessagePort];
+		onPort: (
+			port: MessagePort,
+			type: 'message',
+			listener: (data: unknown) => void,
+		) => void;
+		closePort: (port: MessagePort) => void;
 	};
 	workerURL: () => string;
 	moduleURL: () => string;
