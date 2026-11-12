@@ -316,9 +316,15 @@ and it is the slowest proxy: a real site loads 2.8 to 3.8 times slower than nati
 in-browser rewriter runs at a third to a half of the fastest contender's, and its
 download is about three times the next-heaviest. Much of the load gap is the content
 blocker fetching its filter lists on each fresh context (the `no adblock` column is the
-like-for-like row against the blocker-less proxies); the WebRTC stack is a lazy load on
-the first `RTCPeerConnection` and is not in the download figure. Closing the speed and
-size gaps, without giving up the fidelity, is the ongoing work.
+like-for-like row against the blocker-less proxies). The download total is dominated by
+the transport, not the proxying code: about three quarters of it is the epoxy transport,
+which STomp patches to lift the 16 KiB HTTP/2 header limit (about 470 KB over stock) and
+ships with an HTTP/3-over-wisp stack (about 760 KB) the lighter proxies do not carry.
+STomp's own code, the service worker, the rewriter library, the injects and the two wasm
+modules, is about 580 KB brotli, in line with the others, and the WebRTC stack is a lazy
+load on the first `RTCPeerConnection`, not in the figure. The size is the price of a more
+capable transport; closing the speed gap, without giving up the fidelity, is the ongoing
+work.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="bench/charts/fidelity-dark.png">
