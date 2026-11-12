@@ -24,4 +24,12 @@
 # a peer's restart: as published they are 16 and 22, which a description
 # shows. The certificate the peer showed in the handshake is kept
 # (DirectApi::remote_dtls_certificate): as published only its fingerprint is.
+# A closed connection ends its association with an ABORT whose cause is a
+# User-Initiated Abort ("Close called"), as a browser's does, sent to DTLS
+# before its close_notify (Rtc::close; SCTP's abort is sctp-proto's below):
+# as published it starts a graceful SHUTDOWN and closes DTLS at once, so the
+# SHUTDOWN is dropped and the peer never hears of the close.
 str0m 0.25.0 357c7e453c033c8bb59e912312f9f9ff07c2a9ce7268bcb94f0c828a5b47e58f
+# sctp-proto: Association::abort, an ABORT with a User-Initiated Abort cause
+# and the reason given (as published only a graceful shutdown is offered).
+sctp-proto 0.10.8 28aca56f649fa088cbdda778a5121f2227995ed057e77de462112b2e5890d591

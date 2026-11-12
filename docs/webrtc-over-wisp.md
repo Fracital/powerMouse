@@ -682,10 +682,15 @@ TURN server.
   as in Chrome. Chrome does not offer the section again: see the limits
   below.
 - Closing: the end that closes a channel sees `close`, the other `closing`
-  then `close`. `close()` on the connection sends the SCTP shutdown and the
-  DTLS close_notify, so the peer's channels close at once. When the peer
-  closes, the page's channels close at once and the connection reads
-  `disconnected` 5 s later (Chrome: 5.05 s measured).
+  then `close`. `close()` on the connection ends the association with an
+  SCTP ABORT whose cause is a User-Initiated Abort, "Close called", as
+  Chrome's does, then sends the DTLS close_notify, so the peer's channels
+  close at once. str0m as published started a graceful SHUTDOWN and closed
+  DTLS at once, which dropped the SHUTDOWN: the peer heard only the
+  close_notify, and werift kept its channels open (the str0m and sctp-proto
+  patches of `rust/patches`). When the peer closes, the page's channels
+  close at once and the connection reads `disconnected` 5 s later (Chrome:
+  5.05 s measured).
 - ICE: a host candidate at a `<uuid>.local` name, a `srflx` per STUN or TURN
   server (UDP) from a Binding request on a wisp stream, a `relay` per TURN
   server over UDP (long-term credentials, permissions and a channel per

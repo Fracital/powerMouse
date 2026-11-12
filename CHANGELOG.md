@@ -594,6 +594,13 @@ The first release after a four-year gap. Everything below is breaking.
   way, `getConfiguration()` gives certificates of its own each time,
   `getStats()` answers on a closed connection, and a document's 501st
   connection is refused as Chrome refuses it.
+- A proxied page that closes its WebRTC connection ends the association
+  with an SCTP ABORT ("User-Initiated Abort, reason=Close called"), as
+  Chrome does, before DTLS says goodbye. It used to start a graceful
+  shutdown and close DTLS at once, which dropped the SCTP goodbye: a peer
+  that does not take the DTLS close for the end of its channels (werift)
+  kept them open. sctp-proto joins str0m among the crates built from their
+  published source with a patch of STomp's (`rust/patches`).
 - A proxied page's WebRTC connections carry audio (docs/webrtc-over-wisp.md
   section 16): `addTrack`, `addTransceiver`, `removeTrack`, the
   transceivers, senders and receivers and the `track` event are STomp's,

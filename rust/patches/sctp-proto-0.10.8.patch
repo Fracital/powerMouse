@@ -1,0 +1,29 @@
+--- a/src/association/mod.rs
++++ b/src/association/mod.rs
+@@ -965,6 +965,26 @@
+         Ok(())
+     }
+ 
++    /// Abort ends the association at once with an ABORT chunk whose cause is
++    /// a User-Initiated Abort carrying `reason` (RFC 4960 3.3.10.12), as a
++    /// browser's stack does when its page closes the connection. The packet
++    /// is queued like any other and can be polled once the association is
++    /// closed.
++    pub fn abort(&mut self, reason: &[u8]) {
++        if self.state() == AssociationState::Closed {
++            return;
++        }
++        let _ = self.close_with_reason(AssociationError::AssociationClosed);
++        let abort = ChunkAbort {
++            error_causes: vec![crate::chunk::ErrorCause {
++                code: USER_INITIATED_ABORT,
++                raw: Bytes::copy_from_slice(reason),
++            }],
++        };
++        self.control_queue
++            .push_back(self.create_packet(vec![Box::new(abort)]));
++    }
++
+     /// Close ends the SCTP Association and cleans up any state
+     pub fn close(&mut self) -> Result<()> {
+         self.close_with_reason(AssociationError::AssociationClosed)

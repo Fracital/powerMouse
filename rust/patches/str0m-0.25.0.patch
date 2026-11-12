@@ -214,6 +214,23 @@
                      // Compute the fingerprint of the peer's DER certificate with the hash
                      // function of the expected one (RFC 8122 §5): sha-256, or sha-1 as some
                      // endpoints still announce. sha-256 when there is none to compare with.
+@@ -2064,7 +2080,15 @@
+ 
+         if self.state != RtcState::Closing {
+             self.session.close_rtp();
+-            self.sctp.close()?;
++            // The association ends with an ABORT, as a browser's does, and
++            // it goes to DTLS before the close_notify: DTLS takes no data
++            // after that, so a SHUTDOWN polled later was dropped and the peer
++            // never heard of the close
++            for packet in self.sctp.abort() {
++                if self.dtls.handle_input(&packet).is_err() {
++                    break;
++                }
++            }
+             self.state = RtcState::Closing;
+         }
+ 
 --- a/src/sctp/mod.rs
 +++ b/src/sctp/mod.rs
 @@ -54,6 +54,8 @@
@@ -277,7 +294,36 @@
      pub fn is_inited(&self) -> bool {
          self.state != RtcSctpState::Uninited
      }
-@@ -649,6 +682,15 @@
+@@ -574,6 +607,28 @@
+         }
+     }
+ 
++    /// Abort the association as a browser does when its page closes the
++    /// connection: one ABORT chunk, its cause a User-Initiated Abort with the
++    /// reason "Close called". The packets that carry it are returned at once,
++    /// to be sent before DTLS closes (it takes no data after its
++    /// close_notify, and a graceful shutdown could not finish then).
++    pub fn abort(&mut self) -> VecDeque<Vec<u8>> {
++        let mut out = VecDeque::new();
++        let Some(assoc) = &mut self.assoc else {
++            return out;
++        };
++        if assoc.is_closed() {
++            return out;
++        }
++        assoc.abort(b"Close called");
++        while let Some(t) = self.poll_transmit() {
++            if let Some(buf) = transmit_to_vec(t) {
++                out.extend(buf);
++            }
++        }
++        out
++    }
++
+     pub fn close(&mut self) -> Result<(), SctpError> {
+         let Some(assoc) = &mut self.assoc else {
+             return Ok(());
+@@ -649,6 +704,15 @@
              PayloadProtocolIdentifier::String
          };
  
@@ -293,7 +339,7 @@
          Ok(stream.write_with_ppi(buf, ppi)?)
      }
  
-@@ -675,6 +717,11 @@
+@@ -675,6 +739,11 @@
      pub fn handle_input(&mut self, now: Instant, data: &[u8]) {
          trace!("Handle input: {}", data.len());
  
