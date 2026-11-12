@@ -74,6 +74,7 @@ import {
 	routeBinary,
 	unwrapRoute,
 } from '../routeURL';
+import { MODULE_PREFIX_ROUTE } from '../scriptRoutes';
 import type { ControlInfo } from '../serviceWorkerTypes';
 import { siteFacts, type SiteFacts } from '../siteFacts';
 import StompURL from '../StompURL';
@@ -3961,6 +3962,46 @@ export function registerRewrites(
 	router.routes.set(
 		/^\/js:workerModule(:top:[^/]*)?\//,
 		scriptTypeFactory('workerModule'),
+	);
+
+	// an import map's trailing-slash prefix target (src/scriptRoutes.ts
+	// routeModulePrefix): the path is a codec-sealed prefix URL in one segment
+	// and the suffix the browser appended to it, so the real module URL is the
+	// suffix resolved against the opened prefix. It redirects to the module's
+	// own route, so the browser loads it, names it and resolves its relative
+	// imports exactly as a directly imported module.
+	router.routes.set(
+		new RegExp(`^/${MODULE_PREFIX_ROUTE}/`),
+		async (serverRequest) => {
+			const oURL = new URL(serverRequest.url);
+			const rest = oURL.pathname.slice(
+				`${rewriter.directory}${MODULE_PREFIX_ROUTE}/`.length,
+			);
+			const slash = rest.indexOf('/');
+			const sealed = slash === -1 ? rest : rest.slice(0, slash);
+			const suffix = slash === -1 ? '' : rest.slice(slash + 1);
+			let module: StompURL;
+			try {
+				const prefix = rewriter.codec.decode(sealed);
+				if (!prefix) throw new Error('empty prefix');
+				module = new StompURL(
+					new URL(suffix + oURL.search + fragmentOf(oURL), prefix),
+					rewriter.codec,
+					rewriter.directory,
+				);
+			} catch (error) {
+				// a specifier the browser escaped above the prefix, or no prefix:
+				// the browser reports it as a failed module load, as it would a
+				// bad bare specifier
+				return new Response('bad module specifier', { status: 400 });
+			}
+			return new Response(undefined, {
+				headers: {
+					location: routeJS(module, module, rewriter.config, 'genericModule'),
+				},
+				status: 307,
+			});
+		},
 	);
 
 	router.routes.set(

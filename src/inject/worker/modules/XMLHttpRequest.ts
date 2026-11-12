@@ -159,7 +159,6 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			// the URL send() requested, with its credentials and fragment (a
 			// synchronous request's TimeoutError names it)
 			#sentURL = '';
-			#responseXML: Document | null = null;
 			#response: unknown = null;
 			// the response's bytes once it is done (json is parsed from them)
 			#body: ArrayBuffer | null = null;
@@ -247,16 +246,6 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					);
 
 				return this.#responseText;
-			}
-			get responseXML() {
-				if (this.responseType !== '' && this.responseType !== 'document')
-					throw new DOMException(
-						"Failed to read the 'responseXML' property from 'XMLHttpRequest': The value is only accessible if the object's 'responseType' is '' or 'document' (was '" +
-							this.responseType +
-							"').",
-						'InvalidStateError',
-					);
-				return this.#responseXML;
 			}
 			get responseType() {
 				return this.#responseType;
@@ -554,7 +543,6 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				this.#response = null;
 				this.#body = null;
 				this.#responseText = '';
-				this.#responseXML = null;
 				this.#method = String(method).toUpperCase();
 
 				this.#url = String(url);
