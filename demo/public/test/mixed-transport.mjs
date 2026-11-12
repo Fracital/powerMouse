@@ -19,12 +19,18 @@
 // - the visited suite's: v<port>.test and www.v<port>.test, sites on their
 //   scheme's default port (Chrome's self-links need one), go to the fixture
 //   on 127.0.0.1:<port>.
+// - the demo-token suite's: discord.com and *.discord.com, a real host the
+//   "Sign in with token" gate matches, with the fixture's port in the URL
+//   (https://discord.com:<port>/...), go in plain http to the fixture on
+//   127.0.0.1:<port>. No real credentials are used; it exercises the
+//   write-and-navigate path with a dummy token.
 import EpoxyTransport from '../epoxy/index.mjs';
 
 const MIXED_HOST = /^(?:[\w-]+\.)*mixed\.test$/;
 const PLAIN_MIXED_HOST = /^(?:[\w-]+\.h3\.)?mixed\.test$/;
 const PRIVATE_SITE_HOST =
 	/^(?:(?:[\w-]+\.)*stomp-a|stomp-b)\.(?:github\.io|blogspot\.com|s3\.eu-west-1\.amazonaws\.com|cloudfront\.net|co\.uk)$/;
+const DISCORD_HOST = /^(?:[\w-]+\.)*discord\.com$/;
 const PLAIN = { 'https:': 'http:', 'wss:': 'ws:' };
 const PORT_HOST = /^(?:www\.)?v(\d+)\.test$/;
 
@@ -37,7 +43,11 @@ function fixtureURL(url) {
 		target.port = port;
 		return target;
 	}
-	if (PRIVATE_SITE_HOST.test(hostname) || PLAIN_MIXED_HOST.test(hostname))
+	if (
+		PRIVATE_SITE_HOST.test(hostname) ||
+		PLAIN_MIXED_HOST.test(hostname) ||
+		DISCORD_HOST.test(hostname)
+	)
 		target.protocol = PLAIN[target.protocol] ?? target.protocol;
 	else if (!MIXED_HOST.test(hostname)) return target;
 	target.hostname = '127.0.0.1';
