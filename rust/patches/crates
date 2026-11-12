@@ -36,6 +36,9 @@
 # later negotiation cannot change the codec that is sent. An offer with
 # nothing new can be made all the same (SdpApi::renegotiate), as a browser
 # makes one: as published only a change makes an offer.
+# A stream keeps what the peer's RTCP last said of it, for a browser's
+# stats (StreamTx::remote_report, StreamRx::sender_report): as published
+# the reports' times, counts and round trip times are not to be had.
 str0m 0.25.0 357c7e453c033c8bb59e912312f9f9ff07c2a9ce7268bcb94f0c828a5b47e58f
 # sctp-proto: Association::abort, an ABORT with a User-Initiated Abort cause
 # and the reason given (as published only a graceful shutdown is offered).

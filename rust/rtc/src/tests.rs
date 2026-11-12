@@ -763,6 +763,43 @@ fn each_negotiation_sets_the_codecs_anew() {
 }
 
 #[test]
+fn the_peers_reports_for_the_stats() {
+	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let mut a = Peer::media("10.0.0.1:5000");
+	let mut b = Peer::media("10.0.0.2:5000");
+	a.control(&[("op", "media"), ("kind", "audio"), ("dir", "sendrecv")]);
+	negotiate(&mut a, &mut b, &["sendrecv"]);
+	pump(&mut a, &mut b, "the connection", |a, b| a.connected() && b.connected());
+	// nothing heard yet: the streams, and no report of either
+	let first = a.control(&[("op", "rtcp"), ("index", "0")]);
+	assert!(get(&first, "tx").parse::<u32>().is_ok(), "{first:?}");
+	assert!(!first.iter().any(|(key, _)| key.starts_with("rr_") || key.starts_with("sr_")), "{first:?}");
+	// sound both ways until each side has the other's reports
+	let deadline = Instant::now() + Duration::from_secs(15);
+	let mut time = 0u64;
+	let report = loop {
+		a.write(0, 111, 0, media::ABSENT, media::ABSENT, time, "", &[0xfc, 1, 2, 3]);
+		b.write(0, 111, 0, media::ABSENT, media::ABSENT, time, "", &[0xfc, 4, 5, 6]);
+		time += 960;
+		pump(&mut a, &mut b, "a step", |_, _| true);
+		let report = a.control(&[("op", "rtcp"), ("index", "0")]);
+		let has = |key: &str| report.iter().any(|(name, _)| name == key);
+		if has("rr_age") && has("sr_age") {
+			break report;
+		}
+		assert!(Instant::now() < deadline, "no reports: {report:?}");
+		std::thread::sleep(Duration::from_millis(20));
+	};
+	assert!(get(&report, "rx").parse::<u32>().is_ok(), "{report:?}");
+	assert_eq!(get(&report, "rr_lost"), "0", "{report:?}");
+	assert!(get(&report, "rr_age").parse::<u64>().is_ok(), "{report:?}");
+	assert!(get(&report, "sr_count").parse::<u64>().is_ok_and(|n| n >= 1), "{report:?}");
+	assert!(get(&report, "sr_packets").parse::<u32>().is_ok_and(|n| n >= 1), "{report:?}");
+	// the sender's wallclock, in microseconds since 1970: this year's
+	assert!(get(&report, "sr_ntp").parse::<u64>().is_ok_and(|us| us > 1_700_000_000_000_000), "{report:?}");
+}
+
+#[test]
 fn rollback_keeps_what_was_added() {
 	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let mut a = Peer::media("10.0.0.1:5000");

@@ -449,3 +449,193 @@
          // TODO, remove Bytes in sctp and just use &[u8].
          let data = data.to_vec().into();
          let r = self.endpoint.handle(now, self.fake_addr, None, None, data);
+--- a/src/streams/mod.rs
++++ b/src/streams/mod.rs
+@@ -19,7 +19,9 @@
+ use crate::util::already_happened;
+ 
+ pub use self::receive::StreamRx;
++pub use self::receive::RemoteSenderReport;
+ pub use self::send::{RtpWrite, StreamTx, StreamTxQueueInfo};
++pub use self::send_stats::RemoteReceiverReport;
+ 
+ mod receive;
+ pub(crate) mod register;
+--- a/src/streams/receive.rs
++++ b/src/streams/receive.rs
+@@ -121,6 +121,25 @@
+     pause_threshold: Duration,
+ }
+ 
++/// The peer's last sender report of a stream this side receives.
++#[derive(Debug, Clone, Copy)]
++pub struct RemoteSenderReport {
++    /// When it came.
++    pub received: Instant,
++    /// The sender's wallclock when it was made.
++    pub ntp_time: std::time::SystemTime,
++    /// What the sender had sent then: packets, and payload octets.
++    pub packets: u32,
++    pub octets: u32,
++    /// The sender reports received in all.
++    pub reports: u64,
++    /// The round trip time the last DLRR block gave, the blocks that gave
++    /// one and the sum of those times.
++    pub rtt: Option<Duration>,
++    pub rtt_measurements: u64,
++    pub rtt_total: Duration,
++}
++
+ /// The last sender info we recieved.
+ #[derive(Debug)]
+ pub(crate) struct LastSenderInfo {
+@@ -149,6 +168,11 @@
+     jitter: u32,
+     /// round trip time from the last DLRR, if any
+     rtt: Option<Duration>,
++    /// the DLRR blocks that gave a round trip time, and the sum of those times
++    rtt_measurements: u64,
++    rtt_total: Duration,
++    /// the sender reports received
++    sender_reports: u64,
+     /// fraction of packets lost from the last RR, if any
+     loss: Option<f32>,
+ }
+@@ -213,6 +237,22 @@
+         self.midrid.rid()
+     }
+ 
++    /// The peer's last sender report of this stream, as a browser's stats
++    /// tell it (remote-outbound-rtp), if one came.
++    pub fn sender_report(&self) -> Option<RemoteSenderReport> {
++        let last = self.sender_info.as_ref()?;
++        Some(RemoteSenderReport {
++            received: last.received_at,
++            ntp_time: last.info.ntp_time,
++            packets: last.info.sender_packet_count,
++            octets: last.info.sender_octet_count,
++            reports: self.stats.sender_reports,
++            rtt: self.stats.rtt,
++            rtt_measurements: self.stats.rtt_measurements,
++            rtt_total: self.stats.rtt_total,
++        })
++    }
++
+     /// CNAME as sent by remote peer in a Sdes.
+     ///
+     /// The value is None until we receive a first report with the value set.
+@@ -327,12 +367,17 @@
+             info,
+             emitted: false,
+         });
++        self.stats.sender_reports += 1;
+     }
+ 
+     fn set_dlrr_item(&mut self, now: Instant, dlrr: DlrrItem) {
+         let ntp_time = now.to_ntp_duration();
+         let rtt = calculate_rtt(ntp_time, dlrr.last_rr_delay, dlrr.last_rr_time);
+         self.stats.rtt = rtt;
++        if let Some(rtt) = rtt {
++            self.stats.rtt_measurements += 1;
++            self.stats.rtt_total += rtt;
++        }
+     }
+ 
+     pub(crate) fn paused_at(&self) -> Option<Instant> {
+--- a/src/streams/send.rs
++++ b/src/streams/send.rs
+@@ -435,6 +435,11 @@
+         self.midrid.rid()
+     }
+ 
++    /// The peer's last reception report of this stream, if one came.
++    pub fn remote_report(&self) -> Option<super::send_stats::RemoteReceiverReport> {
++        self.stats.remote_report()
++    }
++
+     /// Information sampled during the latest pacer update for this stream's send queue.
+     ///
+     /// This is `None` until the pacer has observed the stream for the first time.
+--- a/src/streams/send_stats.rs
++++ b/src/streams/send_stats.rs
+@@ -8,6 +8,24 @@
+ 
+ use super::MidRid;
+ 
++/// The peer's last reception report of a stream this side sends.
++#[derive(Debug, Clone, Copy)]
++pub struct RemoteReceiverReport {
++    /// When it came.
++    pub received: Instant,
++    /// The fraction lost since the report before, in 256ths.
++    pub fraction_lost: u8,
++    /// The packets lost in all (24 bits).
++    pub packets_lost: u32,
++    /// The interarrival jitter, in RTP timestamp units.
++    pub jitter: u32,
++    /// The round trip time the last report with a sender report's time gave.
++    pub rtt: Option<Duration>,
++    /// The reports that gave a round trip time, and the sum of those times.
++    pub rtt_measurements: u64,
++    pub rtt_total: Duration,
++}
++
+ /// Holder of stats.
+ #[derive(Debug)]
+ pub(crate) struct StreamTxStats {
+@@ -37,6 +55,11 @@
+     /// The SeqNo is the extended max_seq of the reception report, extended
+     /// using the last sent sequence number.
+     last_rr: Option<(SeqNo, ReceptionReport)>,
++    /// When the last reception report came, and the round trip times
++    /// the reports gave so far (how many, and their sum)
++    last_rr_at: Option<Instant>,
++    rtt_measurements: u64,
++    rtt_total: Duration,
+ 
+     /// `None` if `rtx_ratio_cap` is `None`.
+     pub bytes_transmitted: Option<ValueHistory<u64>>,
+@@ -58,6 +81,9 @@
+             rtt: None,
+             losses: Losses::new(enable_stats),
+             last_rr: None,
++            last_rr_at: None,
++            rtt_measurements: 0,
++            rtt_total: Duration::ZERO,
+             bytes_transmitted: Some(Default::default()),
+             bytes_retransmitted: Some(Default::default()),
+         }
+@@ -88,6 +114,11 @@
+         let ntp_time = now.to_ntp_duration();
+         let rtt = calculate_rtt(ntp_time, r.last_sr_delay, r.last_sr_time);
+         self.rtt = rtt;
++        self.last_rr_at = Some(now);
++        if let Some(rtt) = rtt {
++            self.rtt_measurements += 1;
++            self.rtt_total += rtt;
++        }
+ 
+         // The last_sent_seq_no should be in the vicinity of the rr.max_seq.
+         let ext_seq = extend_u32(Some(*last_sent_seq_no), r.max_seq).into();
+@@ -98,6 +129,21 @@
+             .push((*ext_seq, r.fraction_lost as f32 / u8::MAX as f32));
+     }
+ 
++    /// The peer's last reception report of the stream, as a browser's
++    /// stats tell it (remote-inbound-rtp).
++    pub(crate) fn remote_report(&self) -> Option<RemoteReceiverReport> {
++        let (_, report) = self.last_rr?;
++        Some(RemoteReceiverReport {
++            received: self.last_rr_at?,
++            fraction_lost: report.fraction_lost,
++            packets_lost: report.packets_lost,
++            jitter: report.jitter,
++            rtt: self.rtt,
++            rtt_measurements: self.rtt_measurements,
++            rtt_total: self.rtt_total,
++        })
++    }
++
+     pub(crate) fn fill(&mut self, snapshot: &mut StatsSnapshot, midrid: MidRid, now: Instant) {
+         if self.bytes == 0 {
+             return;

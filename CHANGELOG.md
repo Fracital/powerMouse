@@ -664,6 +664,17 @@ The first release after a four-year gap. Everything below is breaking.
   for good, and a page's offer with nothing new in it did not reach the
   stack at all. It used to ignore the preferences (`webrtc` and
   `webrtc-media` suites).
+- A proxied page's `getStats()` has Chrome's entries for the sound of a
+  call: `codec`, `inbound-rtp`, `outbound-rtp`, `remote-inbound-rtp`,
+  `remote-outbound-rtp`, `media-source` and `media-playout`, when Chrome
+  has them, with its ids and its members in its order, the packets, bytes
+  and header bytes counted off the wire, the peer's RTCP reports from the
+  stack (a str0m patch keeps them) and the levels, energies and sample
+  counts as WebRTC counts them; a sender's and a receiver's `getStats()`
+  and `getStats(track)` hold what Chrome's hold. They used to have none,
+  and the sender's and the receiver's reports were empty (`webrtc-media`
+  suite, compared with Chrome 152's and 156's; docs/webrtc-over-wisp.md
+  section 16 has what differs).
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

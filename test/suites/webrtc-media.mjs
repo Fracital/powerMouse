@@ -358,7 +358,8 @@ async function wideband(own, far) {
  * send PCMU; it prefers G.722 and offers again, so both switch to G.722;
  * then the far end offers (Opus first) and the page answers preferring
  * PCMU: the page sends the offer's first codec, Opus, and the far end
- * PCMU, as natively. The codecs are the far end's (Chrome's) own stats.
+ * PCMU, as natively. The codecs are each end's stats, the far end's
+ * (Chrome's) first.
  */
 async function preferring(own, far) {
 	const record = { heard: {}, codecs: [], failure: null };
@@ -370,6 +371,8 @@ async function preferring(own, far) {
 		]);
 		record.heard[step] = { own: mine, far: theirs };
 		record.codecs.push(await far.call('codecs'));
+		// and as the page's own stats tell it
+		record.codecs.push(await own.call('codecs'));
 	};
 	try {
 		await own.call('open');
@@ -533,10 +536,26 @@ ok(
 		JSON.stringify(natively.preferring.codecs) ===
 			JSON.stringify([
 				{ 'inbound-rtp': 'audio/PCMU', 'outbound-rtp': 'audio/PCMU' },
+				{ 'inbound-rtp': 'audio/PCMU', 'outbound-rtp': 'audio/PCMU' },
+				{ 'inbound-rtp': 'audio/G722', 'outbound-rtp': 'audio/G722' },
 				{ 'inbound-rtp': 'audio/G722', 'outbound-rtp': 'audio/G722' },
 				{ 'inbound-rtp': 'audio/opus', 'outbound-rtp': 'audio/PCMU' },
+				{ 'inbound-rtp': 'audio/PCMU', 'outbound-rtp': 'audio/opus' },
 			]),
 	JSON.stringify([natively.preferring.failure, natively.preferring.codecs]),
+);
+// getStats() of a call with sound between two connections of one page
+// (test/pages/webrtc-media.js, __mediaStats), natively in the far browser
+natively.stats = await control
+	.frame()
+	.evaluate(() => window.__mediaStats())
+	.catch((error) => ({ failure: String(error).slice(0, 400) }));
+ok(
+	"natively: getStats() tells of the call's sound both ways, the peers' reports included",
+	!natively.stats.failure &&
+		natively.stats.values?.inbound?.samples > 0 &&
+		natively.stats.values?.remoteOutbound?.reports === true,
+	JSON.stringify(natively.stats).slice(0, 600),
 );
 natively.tones = await tones(end(control), end(native, 'the far end'));
 natively.pcmuTones = await tones(
@@ -776,6 +795,33 @@ for (const proxied of pages) {
 					Math.abs(got.quiet - want.quiet) < 4,
 				`${got.quiet} dB | natively ${want.quiet} dB`,
 			);
+	}
+	// getStats() of a call of the page's own, as natively: the entries of
+	// each kind in their order, their members in Chrome's, what does not
+	// vary and the rates of what counts. Two of Chrome's counts are its
+	// output device's, which the worker does not have: the playout's
+	// samples (the fake device's 44.1 kHz) are only held to counting.
+	{
+		let got;
+		try {
+			got = await proxied.frame().evaluate(() => window.__mediaStats());
+		} catch (error) {
+			got = { failure: String(error).slice(0, 400) };
+		}
+		const differ = [];
+		const compare = (path, have, want) => {
+			if (JSON.stringify(have) === JSON.stringify(want)) return;
+			if (have && want && typeof have === 'object' && typeof want === 'object')
+				for (const key of new Set([...Object.keys(have), ...Object.keys(want)]))
+					compare(`${path}.${key}`, have[key], want[key]);
+			else differ.push([path, have, want]);
+		};
+		compare('', got, natively.stats);
+		ok(
+			`${label}: getStats() of a call with sound has Chrome's media entries (codec, inbound-rtp, outbound-rtp, remote-inbound-rtp, remote-outbound-rtp, media-source, media-playout) in its order with its members and values, and a sender's and a receiver's own reports hold what Chrome's hold`,
+			differ.length === 0,
+			JSON.stringify(differ).slice(0, 5000),
+		);
 	}
 	// the page's codec preferences decide what flows, as natively
 	{

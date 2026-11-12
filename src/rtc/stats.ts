@@ -65,6 +65,45 @@ export interface TransportReport {
 	srtpCipher?: string;
 }
 
+/**
+ * An RTP stream as the wire shows it: SRTP leaves the header in the clear,
+ * so the worker counts each stream's packets, header and payload bytes,
+ * and for one it receives the losses and the jitter, as RFC 3550 counts
+ * them (A.3, A.8)
+ */
+export interface RtpCount {
+	ssrc: number;
+	/** the payload type of its last sound (not an event or comfort noise) */
+	pt: number | null;
+	packets: number;
+	/** what the packets carried: less the header and SRTP's tag */
+	bytes: number;
+	header: number;
+	/** when the last packet went or came (ms since 1970) */
+	last: number;
+	/** received: packets expected and not received */
+	lost?: number;
+	/** received: the interarrival jitter, in seconds */
+	jitter?: number;
+}
+
+interface Received extends RtpCount {
+	/** the extended highest sequence number, and the first */
+	highest: number;
+	base: number;
+	/** the last packet's arrival less its RTP time, in seconds */
+	transit: number | null;
+}
+
+/** what a payload type is: its clock, and whether it is sound */
+export interface PayloadKind {
+	clock: number;
+	sound: boolean;
+}
+
+/** SRTP's authentication tag, by the profile DTLS negotiated */
+const TAGS: Record<number, number> = { 1: 10, 2: 4, 7: 16, 8: 16 };
+
 interface Candidate extends CandidateReport {
 	remote: boolean;
 }
@@ -246,6 +285,9 @@ export class TransportStats {
 	#iceRole: TransportReport['iceRole'] = 'unknown';
 	#dtlsRole: TransportReport['dtlsRole'] = 'unknown';
 	#hello: ReturnType<typeof readServerHello> = null;
+	#sentRtp = new Map<number, RtpCount>();
+	#receivedRtp = new Map<number, Received>();
+	#payloads = new Map<number, PayloadKind>();
 
 	/** `onSelect`: ICE selected another pair; `onPair`: the first pair formed */
 	constructor(
@@ -407,6 +449,7 @@ export class TransportStats {
 		// what is not a check travels on the pair the stack chose
 		this.#select(pair);
 		this.#dtls(bytes, 'server');
+		this.#rtp(bytes, true);
 	}
 
 	/**
@@ -482,6 +525,95 @@ export class TransportStats {
 		pair.bytesReceived += bytes.length;
 		pair.lastPacketReceivedTimestamp = Date.now();
 		this.#dtls(bytes, 'client');
+		this.#rtp(bytes, false);
+	}
+
+	/** what the payload types of the sections are now (their clocks, and which are sound) */
+	payloads(kinds: Map<number, PayloadKind>) {
+		for (const [pt, kind] of kinds) this.#payloads.set(pt, kind);
+	}
+
+	/** what went out or came in on an RTP stream (RTCP is left out, as Chrome leaves it out) */
+	#rtp(bytes: Uint8Array, sent: boolean) {
+		// RFC 7983: 128 to 191 is RTP or RTCP; RTCP's types are 192 to 223
+		if (bytes.length < 12 || bytes[0] < 128 || bytes[0] > 191) return;
+		if (bytes[1] >= 192 && bytes[1] <= 223) return;
+		const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+		let header = 12 + (bytes[0] & 0x0f) * 4;
+		if (bytes[0] & 0x10 && header + 4 <= bytes.length)
+			header += 4 + view.getUint16(header + 2) * 4;
+		const tag = TAGS[this.#hello?.srtp ?? 7] ?? 16;
+		const payload = bytes.length - header - tag;
+		if (payload < 0) return;
+		const pt = bytes[1] & 0x7f;
+		const ssrc = view.getUint32(8);
+		const kind = this.#payloads.get(pt);
+		const now = Date.now();
+		if (sent) {
+			let count = this.#sentRtp.get(ssrc);
+			if (!count) {
+				count = { ssrc, pt: null, packets: 0, bytes: 0, header: 0, last: now };
+				this.#sentRtp.set(ssrc, count);
+			}
+			count.packets++;
+			count.bytes += payload;
+			count.header += header;
+			count.last = now;
+			if (kind?.sound !== false) count.pt = pt;
+			return;
+		}
+		const sequence = view.getUint16(2);
+		let count = this.#receivedRtp.get(ssrc);
+		if (!count) {
+			count = {
+				ssrc,
+				pt: null,
+				packets: 0,
+				bytes: 0,
+				header: 0,
+				last: now,
+				lost: 0,
+				jitter: 0,
+				highest: sequence,
+				base: sequence,
+				transit: null,
+			};
+			this.#receivedRtp.set(ssrc, count);
+		}
+		count.packets++;
+		count.bytes += payload;
+		count.header += header;
+		count.last = now;
+		if (kind?.sound !== false) count.pt = pt;
+		// the sequence number extended past its wraps (RFC 3550 A.1, simplified)
+		const near = count.highest & 0xffff;
+		let delta = sequence - near;
+		if (delta < -0x8000) delta += 0x10000;
+		else if (delta > 0x8000) delta -= 0x10000;
+		const extended = count.highest + delta;
+		if (extended > count.highest) count.highest = extended;
+		count.lost = count.highest - count.base + 1 - count.packets;
+		// the jitter, on the payload's clock (RFC 3550 A.8), kept in seconds
+		if (kind) {
+			const transit = performance.now() / 1000 - view.getUint32(4) / kind.clock;
+			if (count.transit !== null) {
+				let d = Math.abs(transit - count.transit);
+				// a jump of the RTP time (a new talkspurt's) is not jitter
+				if (d > 1) d = 0;
+				count.jitter! += (d - count.jitter!) / 16;
+			}
+			count.transit = transit;
+		}
+	}
+
+	/** the RTP streams counted so far, by the side that sent them */
+	rtp(): { sent: RtpCount[]; received: RtpCount[] } {
+		return {
+			sent: [...this.#sentRtp.values()].map((count) => ({ ...count })),
+			received: [...this.#receivedRtp.values()].map(
+				({ highest: _h, base: _b, transit: _t, ...count }) => count,
+			),
+		};
 	}
 
 	/** the ServerHello tells the parameters, and its sender is the server */

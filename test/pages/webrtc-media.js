@@ -829,5 +829,283 @@
 			return out;
 		},
 	};
+
+	// getStats() of a call with sound both ways between two connections of
+	// the page (a tone each, written sample for sample; each end plays what
+	// it receives in an <audio>, which the fake output device takes): the entries of each kind, their
+	// members in the browser's order, the values that do not vary and the
+	// rates of the ones that count, at each stage; and what a sender's and a
+	// receiver's own getStats() hold. The suite compares a proxied page's
+	// with the browser's (webrtc-media suite).
+	window.__mediaStats = async () => {
+		const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const until = async (test, ms, what) => {
+			const end = Date.now() + ms;
+			while (!(await test())) {
+				if (Date.now() > end) throw new Error(`timed out: ${what}`);
+				await wait(200);
+			}
+		};
+		const tone = (hz) => {
+			const generator = new MediaStreamTrackGenerator({ kind: 'audio' });
+			const writer = generator.writable.getWriter();
+			let frames = 0;
+			const started = performance.now();
+			const timer = setInterval(() => {
+				const target = Math.floor((performance.now() - started) / 10);
+				while (frames < target) {
+					const data = new Float32Array(480);
+					for (let i = 0; i < 480; i++)
+						data[i] =
+							0.5 * Math.sin((2 * Math.PI * hz * (frames * 480 + i)) / 48000);
+					writer
+						.write(
+							new AudioData({
+								format: 'f32-planar',
+								sampleRate: 48000,
+								numberOfFrames: 480,
+								numberOfChannels: 1,
+								timestamp: frames * 10000,
+								data,
+							}),
+						)
+						.catch(() => {});
+					frames++;
+				}
+			}, 5);
+			return { track: generator, stop: () => clearInterval(timer) };
+		};
+		const read = async (source, selector) => {
+			const entries = [];
+			(await source.getStats(selector)).forEach((value, key) =>
+				entries.push([key, value]),
+			);
+			return entries;
+		};
+		const MEDIA = new Set([
+			'codec',
+			'inbound-rtp',
+			'outbound-rtp',
+			'remote-inbound-rtp',
+			'remote-outbound-rtp',
+			'media-source',
+			'media-playout',
+		]);
+		/**
+		 * The kinds in the report's order and each media entry's members in
+		 * their order. Left out of the order: candidates and pairs (their
+		 * ids are random, and which candidates there are depends on the
+		 * machine) and certificates (the two ends of one page have a
+		 * certificate each here, and share one on GitHub's runner)
+		 */
+		const kept = (type) => !/candidate|certificate/.test(type);
+		const shape = (entries) => ({
+			order: entries.map(([, entry]) => entry.type).filter(kept),
+			members: Object.fromEntries(
+				entries
+					.filter(([, entry]) => MEDIA.has(entry.type))
+					.map(([, entry]) => [
+						entry.type,
+						Object.keys(entry)
+							// told once a report gave one, which varies from run to run
+							.filter(
+								(key) =>
+									!/^remote-/.test(entry.type) || key !== 'roundTripTime',
+							)
+							.join(),
+					]),
+			),
+		});
+		const of = (entries, type) =>
+			entries.filter(([, entry]) => entry.type === type).map(([, e]) => e);
+		const out = {};
+		const sources = [tone(440), tone(660)];
+		const a = new RTCPeerConnection();
+		const b = new RTCPeerConnection();
+		a.onicecandidate = ({ candidate }) =>
+			candidate && b.addIceCandidate(candidate).catch(() => {});
+		b.onicecandidate = ({ candidate }) =>
+			candidate && a.addIceCandidate(candidate).catch(() => {});
+		const players = [];
+		for (const pc of [a, b])
+			pc.ontrack = ({ track }) => {
+				const player = document.createElement('audio');
+				player.srcObject = new MediaStream([track]);
+				players.push(player);
+				player.play().catch(() => {});
+			};
+		const sender = a.addTrack(sources[0].track, new MediaStream());
+		b.addTrack(sources[1].track, new MediaStream());
+		out.added = [shape(await read(a)), shape(await read(b))];
+		await a.setLocalDescription();
+		out.offered = shape(await read(a));
+		await b.setRemoteDescription(a.localDescription);
+		await b.setLocalDescription();
+		await a.setRemoteDescription(b.localDescription);
+		const reported = async (pc) => {
+			const types = (await read(pc)).map(([, entry]) => entry.type);
+			return (
+				types.includes('remote-inbound-rtp') &&
+				types.includes('remote-outbound-rtp')
+			);
+		};
+		await until(
+			async () => (await reported(a)) && (await reported(b)),
+			20000,
+			'the peers reports',
+		);
+		const first = await read(a);
+		const started = performance.now();
+		await wait(2000);
+		const second = await read(a);
+		const seconds = (performance.now() - started) / 1000;
+		out.reported = [shape(second), shape(await read(b))];
+		const rate = (type, key, round = 1) => {
+			const [x] = of(first, type);
+			const [y] = of(second, type);
+			return Math.round((y?.[key] - x?.[key]) / seconds / round) * round;
+		};
+		const [outbound] = of(second, 'outbound-rtp');
+		const [inbound] = of(second, 'inbound-rtp');
+		const [source] = of(second, 'media-source');
+		const [remoteIn] = of(second, 'remote-inbound-rtp');
+		const [remoteOut] = of(second, 'remote-outbound-rtp');
+		const [playout] = of(second, 'media-playout');
+		const now = performance.timeOrigin + performance.now();
+		out.values = {
+			codecs: of(second, 'codec').map((entry) => ({
+				...entry,
+				timestamp: undefined,
+			})),
+			outbound: outbound && {
+				id: outbound.id === `OT01A${outbound.ssrc}`,
+				codec: outbound.codecId?.startsWith('COT01_'),
+				kind: [outbound.kind, outbound.mediaType, outbound.mid],
+				active: outbound.active,
+				packets: rate('outbound-rtp', 'packetsSent', 5),
+				header: Math.round(outbound.headerBytesSent / outbound.packetsSent),
+				bytes:
+					outbound.bytesSent / outbound.packetsSent > 40 &&
+					outbound.bytesSent / outbound.packetsSent < 200,
+				source: outbound.mediaSourceId === source?.id,
+				remote: outbound.remoteId === remoteIn?.id,
+				zero: [
+					outbound.nackCount,
+					outbound.packetsSentWithEct1,
+					outbound.retransmittedBytesSent,
+					outbound.retransmittedPacketsSent,
+					outbound.totalPacketSendDelay,
+				],
+				target: outbound.targetBitrate,
+			},
+			inbound: inbound && {
+				id: inbound.id === `IT01A${inbound.ssrc}`,
+				codec: inbound.codecId?.startsWith('CIT01_'),
+				kind: [inbound.kind, inbound.mediaType, inbound.mid, inbound.playoutId],
+				packets: rate('inbound-rtp', 'packetsReceived', 5),
+				header: Math.round(
+					inbound.headerBytesReceived / inbound.packetsReceived,
+				),
+				lost: inbound.packetsLost,
+				samples: rate('inbound-rtp', 'totalSamplesReceived', 4000),
+				duration: rate('inbound-rtp', 'totalSamplesDuration', 0.25),
+				emitted: rate('inbound-rtp', 'jitterBufferEmittedCount', 4000),
+				energy: rate('inbound-rtp', 'totalAudioEnergy', 0.05),
+				level: inbound.audioLevel > 0.4 && inbound.audioLevel < 0.6,
+				delay:
+					inbound.jitterBufferDelay / inbound.jitterBufferEmittedCount >
+						0.005 &&
+					inbound.jitterBufferDelay / inbound.jitterBufferEmittedCount < 0.25,
+				track: inbound.trackIdentifier === a.getReceivers()[0].track.id,
+				last: Math.abs(inbound.lastPacketReceivedTimestamp - now) < 1000,
+				remote: inbound.remoteId === remoteOut?.id,
+				zero: [
+					inbound.packetsReceivedWithCe,
+					inbound.packetsReceivedWithEct1,
+					inbound.fecPacketsDiscarded,
+					inbound.fecPacketsReceived,
+				],
+			},
+			source: source && {
+				id: /^SA\d+$/.test(source.id),
+				kind: source.kind,
+				track: source.trackIdentifier === sources[0].track.id,
+				level: source.audioLevel,
+				energy: rate('media-source', 'totalAudioEnergy', 0.05),
+				duration: rate('media-source', 'totalSamplesDuration', 0.25),
+			},
+			remoteInbound: remoteIn && {
+				id: remoteIn.id === `RIA${outbound?.ssrc}`,
+				codec: remoteIn.codecId === outbound?.codecId,
+				local: remoteIn.localId === outbound?.id,
+				lost: [remoteIn.packetsLost, remoteIn.fractionLost],
+				jitter: remoteIn.jitter < 0.02,
+				measurements: remoteIn.roundTripTimeMeasurements >= 0,
+				time: Math.abs(remoteIn.timestamp - now) < 15000,
+			},
+			remoteOutbound: remoteOut && {
+				id: remoteOut.id === `ROA${inbound?.ssrc}`,
+				codec: remoteOut.codecId === inbound?.codecId,
+				local: remoteOut.localId === inbound?.id,
+				reports: remoteOut.reportsSent >= 1,
+				counts:
+					remoteOut.packetsSent > 0 &&
+					remoteOut.packetsSent <= inbound.packetsReceived + 100,
+				remote:
+					Math.abs(remoteOut.remoteTimestamp - remoteOut.timestamp) < 1000,
+				time: Math.abs(remoteOut.timestamp - now) < 15000,
+			},
+			playout: playout && {
+				id: playout.id,
+				kind: playout.kind,
+				counting: rate('media-playout', 'totalSamplesCount') > 0,
+				synthesized: [
+					playout.synthesizedSamplesDuration,
+					playout.synthesizedSamplesEvents,
+				],
+			},
+		};
+		// a sender's and a receiver's own reports, and the connection's for a track
+		// (a candidate's id is random: where it sorts among the others varies)
+		const ids = (entries) =>
+			entries
+				.map(([, entry]) => entry.type)
+				.filter((type) => type === 'candidate-pair' || kept(type));
+		const sent = await read(sender);
+		const received = await read(a.getReceivers()[0]);
+		const certified = (entries) =>
+			entries.some(([, entry]) => entry.type === 'certificate');
+		out.selected = {
+			sender: ids(sent),
+			receiver: ids(received),
+			certificates: [certified(sent), certified(received)],
+			bySenderTrack:
+				ids(await read(a, sources[0].track)).join() === ids(sent).join(),
+			byReceiverTrack:
+				ids(await read(a, a.getReceivers()[0].track)).join() ===
+				ids(received).join(),
+		};
+		try {
+			await a.getStats(sources[1].track);
+			out.selected.otherTrack = 'resolved';
+		} catch (error) {
+			out.selected.otherTrack = `${error.name}: ${error.message}`;
+		}
+		await sender.replaceTrack(null);
+		await wait(500);
+		const replaced = await read(a);
+		out.replaced = {
+			shape: shape(replaced),
+			source: of(replaced, 'outbound-rtp')[0]?.mediaSourceId,
+			sender: ids(await read(sender)),
+		};
+		a.close();
+		out.closed = shape(await read(a));
+		b.close();
+		for (const source of sources) source.stop();
+		for (const player of players) player.srcObject = null;
+		return out;
+	};
+
 	window.__mediaReady = true;
 })();

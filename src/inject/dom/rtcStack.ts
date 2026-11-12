@@ -1,9 +1,11 @@
 import type {
 	ChannelOptions,
 	CodecCapability,
+	CodecStats,
 	ConnectionConfig,
 	Direction,
 	MediaSection,
+	MediaStats,
 	Negotiated,
 	Reply,
 	Request,
@@ -102,6 +104,8 @@ let bundleWorker: (() => Worker) | null = null;
 const MAX_MESSAGE_SIZE = 262144;
 /** Chrome numbers a renderer's channels as they are made: their stats ids */
 let channelSerial = 0;
+/** and the tracks its senders are given, as they are given them: their media-source ids */
+let sourceSerial = 0;
 /** Blink's: a tone's default length and gap, and the pause a ',' is, in ms */
 const DTMF_DURATION = 100;
 const DTMF_GAP = 70;
@@ -927,6 +931,8 @@ export default class WebRTCStack {
 			events: boolean;
 			/** the sender's RTCDTMFSender, once it is read */
 			dtmf: object | null;
+			/** its track's media-source number in the stats (SA<n>), 0 for none */
+			source: number;
 		}
 		const mediaSlots = new WeakMap<object, MediaSlot>();
 		const slotOf = (that: unknown): MediaSlot => {
@@ -972,6 +978,19 @@ export default class WebRTCStack {
 		};
 		const emptyReport = () =>
 			RealmPromise.resolve(Reflect.construct(MockStatsReport, [new Map()]));
+		/** a sender's or a receiver's own report (statsEntries, `picked`) */
+		const pickedReport = (slot: MediaSlot, side: 'sender' | 'receiver') => {
+			const state = slot.pc;
+			if (state.closed || slot.stopped) return emptyReport();
+			const heard = new Set(state.heard);
+			return state
+				.call({ op: 'stats' })
+				.then((info) =>
+					Reflect.construct(MockStatsReport, [
+						statsEntries(state, info as StatsReply, heard, { slot, side }),
+					]),
+				);
+		};
 		const SET_DIRECTION =
 			"Failed to set the 'direction' property on 'RTCRtpTransceiver': ";
 		const onSender = (name: string, what: string) =>
@@ -1178,6 +1197,7 @@ export default class WebRTCStack {
 							onSender('replaceTrack', 'Track kind does not match Sender kind'),
 						),
 					);
+				if (track !== slot.track) slot.source = track ? ++sourceSerial : 0;
 				slot.track = track;
 				return new RealmPromise<void>((resolve) => {
 					const done = () => resolve();
@@ -1185,8 +1205,7 @@ export default class WebRTCStack {
 				});
 			}
 			getStats() {
-				slotOf(this);
-				return emptyReport();
+				return pickedReport(slotOf(this), 'sender');
 			}
 			setStreams(...streams: unknown[]) {
 				const slot = slotOf(this);
@@ -1231,8 +1250,7 @@ export default class WebRTCStack {
 				};
 			}
 			getStats() {
-				slotOf(this);
-				return emptyReport();
+				return pickedReport(slotOf(this), 'receiver');
 			}
 			getContributingSources() {
 				slotOf(this);
@@ -1643,6 +1661,7 @@ export default class WebRTCStack {
 				jitter: null,
 				events: false,
 				dtmf: null,
+				source: track ? ++sourceSerial : 0,
 			};
 			mediaSlots.set(slot.transceiver, slot);
 			mediaSlots.set(slot.sender, slot);
@@ -2902,6 +2921,7 @@ export default class WebRTCStack {
 				);
 				if (slot) {
 					slot.track = track;
+					slot.source = ++sourceSerial;
 					state
 						.call({ op: 'mediaStreams', handle: slot.handle, streams })
 						.catch(() => {});
@@ -3019,6 +3039,7 @@ export default class WebRTCStack {
 					);
 				if (!slot.track || slot.stopping) return;
 				slot.track = null;
+				slot.source = 0;
 				sendTrack(slot).catch(() => {});
 				if (sends(slot.direction))
 					setDirection(slot, directionOf(false, receives(slot.direction)));
@@ -3077,7 +3098,26 @@ export default class WebRTCStack {
 			}
 			getStats(...args: any[]) {
 				const state = peerOf(this);
-				if (args.length && args[0] !== null && args[0] !== undefined)
+				if (args.length && args[0] !== null && args[0] !== undefined) {
+					// a track: the report of its sender or its receiver
+					const track = args[0];
+					if (kindOf(track) && !state.closed) {
+						const slot = state.slots.find(
+							(known) => known.track === track || known.remote === track,
+						);
+						if (slot)
+							return pickedReport(
+								slot,
+								slot.track === track ? 'sender' : 'receiver',
+							);
+						return rejected(
+							method(
+								'getStats',
+								'There is no sender or receiver for the track.',
+							),
+							'InvalidAccessError',
+						);
+					}
 					return rejected(
 						method(
 							'getStats',
@@ -3085,6 +3125,7 @@ export default class WebRTCStack {
 						),
 						'InvalidAccessError',
 					);
+				}
 				// a closed connection still answers, with its own entry alone
 				if (state.closed)
 					return RealmPromise.resolve(
@@ -3354,24 +3395,35 @@ export default class WebRTCStack {
 				},
 			);
 		};
+		/** a stats selector: the sender's or the receiver's streams of one transceiver */
+		interface StatsPick {
+			slot: MediaSlot;
+			side: 'sender' | 'receiver';
+		}
 		const statsEntries = (
 			state: PeerState,
 			info: StatsReply | null,
 			heard = new Set<string>(),
+			pick: StatsPick | null = null,
 		) => {
 			const timestamp = performance.timeOrigin + performance.now();
 			const list: [string, Record<string, unknown>][] = [];
-			/** an entry as Chrome writes one: id, timestamp, type, then the members it has, by name */
+			/**
+			 * An entry as Chrome writes one: id, timestamp, type, then the
+			 * members it has, each dictionary's (the base's first) by name
+			 */
 			const add = (
 				id: string,
 				type: string,
-				members: Record<string, unknown>,
+				...levels: Record<string, unknown>[]
 			) => {
 				const entry: Record<string, unknown> = { id, timestamp, type };
-				for (const key of Reflect.ownKeys(members).sort() as string[])
-					if (members[key] !== undefined && members[key] !== null)
-						entry[key] = members[key];
+				for (const members of levels)
+					for (const key of Reflect.ownKeys(members).sort() as string[])
+						if (members[key] !== undefined && members[key] !== null)
+							entry[key] = members[key];
 				list[list.length] = [id, entry];
+				return entry;
 			};
 			add('P', 'peer-connection', {
 				dataChannelsOpened: state.channelsOpened,
@@ -3494,9 +3546,243 @@ export default class WebRTCStack {
 					});
 				}
 			}
+			if (info) mediaEntries(state, info, add);
 			// in the order of their ids, as the browser's report has them
 			list.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-			return new Map<string, unknown>(list);
+			if (!pick) return new Map<string, unknown>(list);
+			return new Map<string, unknown>(picked(list, pick));
+		};
+
+		/**
+		 * The sound's entries (docs/webrtc-over-wisp.md, section 16), as
+		 * Chrome 152 and 156 write them for audio: for each sending
+		 * section its `outbound-rtp` (once both descriptions are applied),
+		 * the `codec` it sends and the peer's `remote-inbound-rtp` (once
+		 * its first report came); for each receiving one its `inbound-rtp`
+		 * (once a packet came), its codec and `remote-outbound-rtp`; a
+		 * `media-source` for each sender's track and one `media-playout`
+		 * for the connection.
+		 */
+		const mediaEntries = (
+			state: PeerState,
+			info: StatsReply,
+			add: (
+				id: string,
+				type: string,
+				...levels: Record<string, unknown>[]
+			) => Record<string, unknown>,
+		) => {
+			const codecs = new Set<string>();
+			const codec = (direction: 'I' | 'O', stats: CodecStats | null) => {
+				if (!stats) return undefined;
+				const id = `C${direction}T01_${stats.payloadType}${stats.sdpFmtpLine === undefined ? '' : `_${stats.sdpFmtpLine}`}`;
+				if (!codecs.has(id)) {
+					codecs.add(id);
+					add(id, 'codec', { ...stats, transportId: 'T01' });
+				}
+				return id;
+			};
+			const stream = (codecId: string | undefined, ssrc: number) => ({
+				codecId,
+				kind: 'audio',
+				mediaType: 'audio',
+				ssrc,
+				transportId: 'T01',
+			});
+			let playout: NonNullable<
+				NonNullable<MediaStats['inbound']>['played']
+			>['playout'] = {
+				totalSamplesCount: 0,
+				totalSamplesDuration: 0,
+				totalPlayoutDelay: 0,
+			};
+			let playing = false;
+			for (const slot of state.slots) {
+				if (slot.kind !== 'audio' || slot.stopped) continue;
+				// Chrome 152 has the playout once a transceiver of sound is
+				// there, 156 once one receives
+				if (
+					isLegacy() ||
+					(slot.current !== null &&
+						slot.current !== 'stopped' &&
+						receives(slot.current))
+				)
+					playing = true;
+				const media = info.media.find((entry) => entry.handle === slot.handle);
+				if (slot.track && slot.source && !slot.stopping)
+					add(
+						`SA${slot.source}`,
+						'media-source',
+						{
+							kind: 'audio',
+							trackIdentifier: Reflect.apply(trackId!, slot.track, []),
+						},
+						{ ...media?.source },
+					);
+				if (!media) continue;
+				const { outbound, remoteInbound, inbound, remoteOutbound } = media;
+				if (outbound) {
+					const id = `OT01A${outbound.ssrc}`;
+					const codecId = codec('O', outbound.codec);
+					add(
+						id,
+						'outbound-rtp',
+						stream(codecId, outbound.ssrc),
+						{ bytesSent: outbound.bytes, packetsSent: outbound.packets },
+						{
+							active: outbound.active,
+							headerBytesSent: outbound.header,
+							mediaSourceId: `SA${slot.track ? slot.source : 0}`,
+							mid: slot.mid,
+							nackCount: 0,
+							packetsSentWithEct1: 0,
+							remoteId: remoteInbound ? `RIA${outbound.ssrc}` : undefined,
+							retransmittedBytesSent: 0,
+							retransmittedPacketsSent: 0,
+							targetBitrate: outbound.bitrate,
+							totalPacketSendDelay: 0,
+						},
+					);
+					if (remoteInbound)
+						add(
+							`RIA${outbound.ssrc}`,
+							'remote-inbound-rtp',
+							stream(codecId, outbound.ssrc),
+							{
+								jitter:
+									remoteInbound.jitter / (outbound.codec?.clockRate ?? 48000),
+								packetsLost: remoteInbound.packetsLost,
+							},
+							{
+								fractionLost: remoteInbound.fractionLost,
+								localId: id,
+								roundTripTime: remoteInbound.roundTripTime,
+								roundTripTimeMeasurements: remoteInbound.measurements,
+								totalRoundTripTime: remoteInbound.totalRoundTripTime,
+							},
+						).timestamp = remoteInbound.at;
+				}
+				if (inbound) {
+					const id = `IT01A${inbound.ssrc}`;
+					const codecId = codec('I', inbound.codec);
+					const played = inbound.played;
+					if (played) {
+						playout = {
+							totalSamplesCount:
+								playout.totalSamplesCount + played.playout.totalSamplesCount,
+							totalSamplesDuration:
+								playout.totalSamplesDuration +
+								played.playout.totalSamplesDuration,
+							totalPlayoutDelay:
+								playout.totalPlayoutDelay + played.playout.totalPlayoutDelay,
+						};
+					}
+					const shown = shared.tracks.get(slot.remote)?.id;
+					add(
+						id,
+						'inbound-rtp',
+						stream(codecId, inbound.ssrc),
+						{
+							jitter: inbound.jitter,
+							packetsLost: inbound.lost,
+							packetsReceived: inbound.packets,
+							packetsReceivedWithCe: 0,
+							packetsReceivedWithEct1: 0,
+						},
+						{
+							audioLevel: played?.audioLevel ?? 0,
+							bytesReceived: inbound.bytes,
+							concealedSamples: played?.concealedSamples ?? 0,
+							concealmentEvents: played?.concealmentEvents ?? 0,
+							fecPacketsDiscarded: 0,
+							fecPacketsReceived: 0,
+							headerBytesReceived: inbound.header,
+							insertedSamplesForDeceleration:
+								played?.insertedSamplesForDeceleration ?? 0,
+							jitterBufferDelay: played?.jitterBufferDelay ?? 0,
+							jitterBufferEmittedCount: played?.jitterBufferEmittedCount ?? 0,
+							jitterBufferMinimumDelay: played?.jitterBufferMinimumDelay ?? 0,
+							jitterBufferTargetDelay: played?.jitterBufferTargetDelay ?? 0,
+							lastPacketReceivedTimestamp: inbound.last,
+							mid: slot.mid,
+							packetsDiscarded: played?.packetsDiscarded ?? 0,
+							playoutId: 'AP',
+							remoteId: remoteOutbound ? `ROA${inbound.ssrc}` : undefined,
+							removedSamplesForAcceleration:
+								played?.removedSamplesForAcceleration ?? 0,
+							silentConcealedSamples: played?.silentConcealedSamples ?? 0,
+							totalAudioEnergy: played?.totalAudioEnergy ?? 0,
+							totalProcessingDelay: played?.totalProcessingDelay ?? 0,
+							totalSamplesDuration: played?.totalSamplesDuration ?? 0,
+							totalSamplesReceived: played?.totalSamplesReceived ?? 0,
+							trackIdentifier:
+								shown ?? Reflect.apply(trackId!, slot.remote, []),
+						},
+					);
+					if (remoteOutbound)
+						add(
+							`ROA${inbound.ssrc}`,
+							'remote-outbound-rtp',
+							stream(codecId, inbound.ssrc),
+							{
+								bytesSent: remoteOutbound.bytes,
+								packetsSent: remoteOutbound.packets,
+							},
+							{
+								localId: id,
+								remoteTimestamp: remoteOutbound.remoteTimestamp,
+								reportsSent: remoteOutbound.reports,
+								roundTripTime: remoteOutbound.roundTripTime,
+								roundTripTimeMeasurements: remoteOutbound.measurements,
+								totalRoundTripTime: remoteOutbound.totalRoundTripTime,
+							},
+						).timestamp = remoteOutbound.at;
+				}
+			}
+			if (playing)
+				add('AP', 'media-playout', {
+					kind: 'audio',
+					synthesizedSamplesDuration: 0,
+					synthesizedSamplesEvents: 0,
+					...playout,
+				});
+		};
+
+		/**
+		 * What a sender's or a receiver's getStats() has of the report: its
+		 * stream, the stream's codec and the peer's report of it, its
+		 * track's source or the playout, and the transport with its
+		 * certificates and selected pair (none of it when the stream is not
+		 * there yet)
+		 */
+		const picked = (
+			list: [string, Record<string, unknown>][],
+			{ slot, side }: StatsPick,
+		) => {
+			const type = side === 'sender' ? 'outbound-rtp' : 'inbound-rtp';
+			const own = list.find(
+				([, entry]) => entry.type === type && entry.mid === slot.mid,
+			)?.[1];
+			if (!own) return [];
+			const transport = list.find(([id]) => id === 'T01')?.[1];
+			const pair = list.find(
+				([id]) => id === transport?.selectedCandidatePairId,
+			)?.[1];
+			const wanted = new Set(
+				[
+					own.id,
+					own.codecId,
+					own.remoteId,
+					side === 'sender' ? own.mediaSourceId : own.playoutId,
+					transport?.id,
+					transport?.localCertificateId,
+					transport?.remoteCertificateId,
+					pair?.id,
+					pair?.localCandidateId,
+					pair?.remoteCandidateId,
+				].filter((id) => typeof id === 'string'),
+			);
+			return list.filter(([id]) => wanted.has(id));
 		};
 
 		// --- what the worker says ---

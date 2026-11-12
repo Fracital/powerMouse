@@ -173,11 +173,12 @@ those packets are gone too.
 ## Limits
 
 - **What is not carried yet**: video, sending comfort noise (a page plays
-  a peer's, and DTMF goes both ways), TURN over TCP and TLS, ICE-TCP, the
-  media entries of `getStats()` (its candidates, pairs, transport,
-  certificates and data channels are Chrome's, and `pc.sctp` with its
-  transports reads as Chrome's). docs/webrtc-over-wisp.md sections 15 and
-  16 list them.
+  a peer's, and DTMF goes both ways), TURN over TCP and TLS, ICE-TCP.
+  `getStats()` has Chrome's entries for the sound, its candidates, pairs,
+  transport, certificates and data channels, and `pc.sctp` with its
+  transports reads as Chrome's; docs/webrtc-over-wisp.md sections 15 and
+  16 list what differs (no `roundTripTime` from the peer's sender reports,
+  the playout counted at 48 kHz, no entries for video).
 - **A peer behind a restrictive NAT, with no TURN server.** The page's
   packets leave from a socket the wisp server connected to one address, so
   only peers that answer where they are asked connect directly (servers,

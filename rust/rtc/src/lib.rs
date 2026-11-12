@@ -876,6 +876,50 @@ impl Conn {
 				let rtx = rtx.map(|rtx| rtx.to_string()).unwrap_or_default();
 				self.result(&[("ssrc", &ssrc), ("rtx", &rtx)]);
 			}
+			// What the peer's RTCP said of a section's streams, for the
+			// page's stats: its last reception report of what this side
+			// sends (remote-inbound-rtp) and its last sender report of what
+			// it sends (remote-outbound-rtp). Every time is in microseconds
+			// (whole numbers keep float formatting out of the artifact): an
+			// age before now, a round trip, `sr_ntp` the sender's wallclock
+			// since 1970.
+			"rtcp" => {
+				let mid = self.media_mid(fields)?;
+				let now = Instant::now();
+				let micros = |time: Duration| (time.as_micros() as u64).to_string();
+				let age = |at: Instant| micros(now.saturating_duration_since(at));
+				let rtt = |rtt: Option<Duration>| rtt.map(micros).unwrap_or_default();
+				let mut out: Vec<(&str, String)> = Vec::new();
+				let mut api = self.rtc.direct_api();
+				if let Some(stream) = api.stream_tx_by_mid(mid, None) {
+					out.push(("tx", stream.ssrc().to_string()));
+					if let Some(report) = stream.remote_report() {
+						out.push(("rr_age", age(report.received)));
+						out.push(("rr_fraction", report.fraction_lost.to_string()));
+						out.push(("rr_lost", report.packets_lost.to_string()));
+						out.push(("rr_jitter", report.jitter.to_string()));
+						out.push(("rr_rtt", rtt(report.rtt)));
+						out.push(("rr_rtts", report.rtt_measurements.to_string()));
+						out.push(("rr_rtt_total", micros(report.rtt_total)));
+					}
+				}
+				if let Some(stream) = api.stream_rx_by_mid(mid, None) {
+					out.push(("rx", stream.ssrc().to_string()));
+					if let Some(report) = stream.sender_report() {
+						let ntp = report.ntp_time.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+						out.push(("sr_age", age(report.received)));
+						out.push(("sr_ntp", micros(ntp)));
+						out.push(("sr_packets", report.packets.to_string()));
+						out.push(("sr_octets", report.octets.to_string()));
+						out.push(("sr_count", report.reports.to_string()));
+						out.push(("sr_rtt", rtt(report.rtt)));
+						out.push(("sr_rtts", report.rtt_measurements.to_string()));
+						out.push(("sr_rtt_total", micros(report.rtt_total)));
+					}
+				}
+				let pairs: Vec<(&str, &str)> = out.iter().map(|(key, value)| (*key, value.as_str())).collect();
+				self.result(&pairs);
+			}
 			// ask the peer for a keyframe: a decoder that lost a picture
 			"keyframe" => {
 				let mid = self.media_mid(fields)?;

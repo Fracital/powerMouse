@@ -6,7 +6,8 @@
 
 import type { PeerAbort } from './abort';
 import type { ReceiverStats, SenderStats } from './audio';
-import type { TransportReport } from './stats';
+import type { PlayedStats, SourceStats } from './level';
+import type { RtpCount, TransportReport } from './stats';
 
 /** the worker's first message: where everything comes from */
 export interface RtcWorkerInit {
@@ -216,13 +217,65 @@ export interface StatsReply {
 	fingerprint: string;
 	remoteCertificate: { base64: string; fingerprint: string } | null;
 	/** each media section's sender and receiver as the worker counts them */
-	media: {
+	media: ({
 		handle: number;
 		mid: string | null;
 		direction: string | null;
 		sent: SenderStats | null;
 		received: ReceiverStats | null;
-	}[];
+	} & MediaStats)[];
+}
+
+/** a payload as a codec stats entry tells it */
+export interface CodecStats {
+	payloadType: number;
+	mimeType: string;
+	clockRate: number;
+	channels?: number;
+	sdpFmtpLine?: string;
+}
+
+/** a section's RTP streams for getStats() (connection.ts: #mediaStats); times in ms since 1970 */
+export interface MediaStats {
+	/** what this side sends, once the section is negotiated to send */
+	outbound?: {
+		ssrc: number;
+		codec: CodecStats | null;
+		packets: number;
+		bytes: number;
+		header: number;
+		/** what the encoder aims at, in bits a second */
+		bitrate: number;
+		active: boolean;
+	};
+	/** the peer's last reception report of it; jitter in RTP units */
+	remoteInbound?: {
+		at: number;
+		fractionLost: number;
+		packetsLost: number;
+		jitter: number;
+		roundTripTime?: number;
+		measurements: number;
+		totalRoundTripTime: number;
+	};
+	/** what came in, once a packet has */
+	inbound?: RtpCount & {
+		codec: CodecStats | null;
+		played: (PlayedStats & { packetsDiscarded: number }) | null;
+	};
+	/** the peer's last sender report of what it sends */
+	remoteOutbound?: {
+		at: number;
+		remoteTimestamp: number;
+		packets: number;
+		bytes: number;
+		reports: number;
+		roundTripTime?: number;
+		measurements: number;
+		totalRoundTripTime: number;
+	};
+	/** the sender's track, measured since a local description had the section */
+	source?: SourceStats;
 }
 
 export interface CandidateError {

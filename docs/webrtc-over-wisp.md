@@ -890,9 +890,8 @@ TURN server.
   Chrome's lists a candidate for every socket it opened, also ones it never
   signals behind mDNS names (the IPv6 "any" address, TCP active ones at
   port 9), and which those are depends on the machine; the stack has
-  neither. Media sections have no entries yet (`codec`, `inbound-rtp`,
-  `outbound-rtp` and the rest), and a sender's and a receiver's
-  `transport` are still null.
+  neither. The entries of the sound are section 16's; video sections have
+  none yet, and a sender's and a receiver's `transport` are still null.
 - **DTLS 1.2.** The report's `tlsVersion`, `dtlsCipher` and `srtpCipher`
   are what the stack negotiated: `FEFD`,
   `TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256` and `SRTP_AEAD_AES_256_GCM`
@@ -1275,6 +1274,67 @@ counted at 48 kHz). Where nothing else arrives (a pause in the audio, or
 comfort noise) Chrome plays an event for 40 ms at most; here it plays all
 of it.
 
+### Statistics of the sound
+
+`getStats()` has Chrome's entries of an audio call, measured on 152 and 156
+with two connections of a page and a tone each way (the `webrtc-media`
+suite compares a proxied page's report with the browser's member for
+member): `outbound-rtp` once both descriptions are applied and the
+section sends (before any packet), `inbound-rtp` once a packet came, a
+`codec` for each stream (`C{I|O}T01_{pt}[_{fmtp}]`, the browser's lines for
+the payload) and no other, `remote-inbound-rtp` and `remote-outbound-rtp`
+once the peer's first report of each came (stamped with its arrival), a
+`media-source` (`SA<n>`, numbered across the page as tracks are given to
+senders) for each sender's track, and the connection's `media-playout`
+(`AP`: in Chrome 152 once it has a transceiver of sound, in 156 once one
+receives). Each entry's members are in Chrome's order (each dictionary's
+own by name, the base's first), with Chrome's ids and the values it
+gives. A sender's and a receiver's `getStats()`, and the connection's for
+one of their tracks, hold their stream, its codec and the peer's report
+of it, the track's source or the playout, the transport, its
+certificates and its selected pair with the pair's candidates; nothing
+before the stream is there; another track is Chrome's
+`InvalidAccessError`. `replaceTrack(null)` leaves the stream and drops
+the source (`mediaSourceId` reads `SA0`, as Chrome's), `close()` leaves the
+connection's own entry alone.
+
+Where the numbers come from:
+
+- The packets and bytes of each stream, its header bytes, the losses and
+  the jitter of a received one are counted off the wire: SRTP leaves the
+  RTP header in the clear, so the worker reads each packet's as it
+  carries it (`src/rtc/stats.ts`), and the payload is what is left after
+  the header and the SRTP tag, as Chrome counts it.
+- The peer's reception and sender reports are the stack's: a patch of
+  str0m keeps each stream's last ones, when they came, how many came and
+  the round trip times they gave (`StreamTx::remote_report`,
+  `StreamRx::sender_report`), and the crate's `rtcp` call tells them
+  (times as whole microseconds, so no float formatting goes into the
+  artifact).
+- The sound is the worker's (`src/rtc/level.ts`): the level, energy and
+  duration of a sender's track from its first local description on, and
+  of what a receiver plays, as WebRTC's `AudioLevel` counts them (the
+  loudest 16-bit sample of each 10 ms, the level updated every eleventh
+  block: a tone of amplitude 0.5 reads 0.500015 and adds 0.25 a second);
+  what the receiver writes to its track at the decoder's rate (48 kHz for
+  Opus, 8 kHz for G.711, 16 kHz for G.722), concealment included, with how
+  long each frame waited in the playout buffer, what it aimed at, and
+  what it gave up or came too late.
+
+Limits: the stack sends no RTCP XR receiver reference time, so the peer
+never answers it and `remote-outbound-rtp` has no `roundTripTime` (Chrome's
+has one once its own report was answered); the reports come as the stack
+sends them, not on Chrome's schedule (its first after about 2.5 s); the
+playout is counted at 48 kHz, where Chrome counts at its output device's
+rate (44.1 kHz with the fake device); what a receiver plays is counted as
+long as its track takes the sound, whether or not anything plays it
+(Chrome counts nothing for a track no element or context plays, and reads
+no level behind a muted element), with no samples inserted to slow down
+and the processing delay taken as the buffer's; a video section has no
+entries yet; and after the only media section is stopped and
+renegotiated Chrome drops the transport from the report and the
+connection reads `new` again, where here the transport stays.
+
 ### Comfort noise
 
 Chrome's sender, with G.711 or G.722 and CN (13) in the peer's description,
@@ -1321,7 +1381,6 @@ page's own `dispatchEvent` of a `tonechange`, as every event the stand-ins
 fire, is untrusted and runs no microtask checkpoint between listeners;
 the worker sends no comfort noise (Chrome does with G.711 and G.722
 when CN is negotiated: that takes WebRTC's voice detector and CN encoder);
-`getStats()` of a sender or a receiver is empty;
 the far ends in the suite are Chrome's own stack, not werift or a TURN
 relayed proxied page. With codec preferences: once an answer has taken
 Opus without redundant audio the stack offers no RED again (str0m keeps a

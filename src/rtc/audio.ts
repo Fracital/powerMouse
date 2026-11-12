@@ -11,6 +11,13 @@ import { eventPayload, TONES, ToneSender } from './dtmf';
 import type { Payload } from './formats';
 import { Downsampler, g711Decode, g711Encode } from './g711';
 import { g722Decode, G722Decoder, g722Encode, G722Encoder } from './g722';
+import {
+	AudioLevel,
+	channelsOf,
+	PlayedCount,
+	type PlayedStats,
+	type SourceStats,
+} from './level';
 import { Playout, type PlayoutStats } from './playout';
 import {
 	ABSENT,
@@ -173,11 +180,55 @@ export class AudioSender {
 	}
 
 	/** the track's frames (a MediaStreamTrackProcessor's readable), or null for no track */
+	/**
+	 * The track as its stats entry (media-source) tells it: measured from
+	 * when a description of this side has the section (Chrome's counts
+	 * start there), and anew for each track
+	 */
+	#source: AudioLevel | null = null;
+	#measuring = false;
+
+	/** a local description has the section: the track is measured from now */
+	measure() {
+		if (this.#measuring) return;
+		this.#measuring = true;
+		this.#source = new AudioLevel();
+	}
+
+	get source(): SourceStats | null {
+		const level = this.#source;
+		return (
+			level && {
+				audioLevel: level.level,
+				totalAudioEnergy: level.energy,
+				totalSamplesDuration: level.duration,
+			}
+		);
+	}
+
+	/** what is sent: its payload type and, for Opus, the encoder's bitrate */
+	get sending(): { pt: number; bitrate: number } | null {
+		const payload = this.#payload;
+		if (!payload) return null;
+		const name = payload.name.toLowerCase();
+		const limit = Number(payload.parameters.maxaveragebitrate);
+		const bitrate =
+			name !== 'opus'
+				? 64000
+				: limit >= 6000 && limit <= 510000
+					? limit
+					: payload.parameters.stereo === '1'
+						? 64000
+						: 32000;
+		return { pt: payload.pt, bitrate };
+	}
+
 	setTrack(readable: ReadableStream<AudioData> | null) {
 		const old = this.#reader;
 		this.#reader = null;
 		old?.cancel().catch(() => {});
 		this.#restart();
+		if (this.#measuring) this.#source = new AudioLevel();
 		if (!readable) return;
 		const reader = readable.getReader();
 		this.#reader = reader;
@@ -229,7 +280,14 @@ export class AudioSender {
 				const { value, done } = await reader.read();
 				if (done) break;
 				try {
-					if (this.#reader === reader) this.#input(value);
+					if (this.#reader === reader) {
+						this.#source?.add(
+							channelsOf(value),
+							value.numberOfFrames,
+							value.sampleRate,
+						);
+						this.#input(value);
+					}
 				} finally {
 					value.close();
 				}
@@ -544,6 +602,9 @@ interface Sound {
 	samples: Float32Array<ArrayBuffer>;
 	frames: number;
 	channels: number;
+	/** when its packet came (performance.now()), and whether it stands for a lost one */
+	arrived?: number;
+	lost?: boolean;
 	/** a comfort noise packet: from its time on, noise plays until speech does */
 	noise?: NoiseDescription;
 }
@@ -622,7 +683,7 @@ export class AudioReceiver {
 	#writer: WritableStreamDefaultWriter<AudioData> | null = null;
 	#decoder: AudioDecoder | null = null;
 	/** the frames the decoder has not answered yet: it answers in order */
-	#waiting: { time: number; arrived: number }[] = [];
+	#waiting: { time: number; arrived: number; lost?: boolean }[] = [];
 	/** a frame with two channels was seen: the track carries two from then on */
 	#stereo = false;
 	#timer: ReturnType<typeof setTimeout> | null = null;
@@ -670,6 +731,18 @@ export class AudioReceiver {
 			...this.#counts,
 			concealed: this.#concealed,
 		};
+	}
+
+	/** what was played, as the receiver's stats entries tell it */
+	#played = new PlayedCount();
+	get played(): PlayedStats & { packetsDiscarded: number } {
+		const stats = this.#played.stats;
+		const { dropped, late } = this.#playout.stats;
+		// a frame given up to shorten the delay is 20 ms of the decoder's
+		stats.removedSamplesForAcceleration = Math.round(
+			(dropped * NOISE_RATES[this.#speech]) / 50,
+		);
+		return { ...stats, packetsDiscarded: late };
 	}
 
 	/** what the section negotiated: the telephone-event payloads' clocks */
@@ -854,7 +927,7 @@ export class AudioReceiver {
 		)
 			for (let lost = 1; lost <= missing; lost++) {
 				const at = last.time + lost * OPUS_FRAME;
-				this.#waiting.push({ time: at, arrived: now });
+				this.#waiting.push({ time: at, arrived: now, lost: true });
 				this.#concealed++;
 				try {
 					decoder.decode(
@@ -892,6 +965,7 @@ export class AudioReceiver {
 				planes(data, channels),
 				channels,
 				waiting.arrived,
+				waiting.lost,
 			);
 		}
 		data.close();
@@ -915,6 +989,7 @@ export class AudioReceiver {
 		samples: Float32Array<ArrayBuffer>,
 		channels: number,
 		arrived: number,
+		lost = false,
 	) {
 		const frames = samples.length / channels;
 		if (!frames) return;
@@ -924,7 +999,7 @@ export class AudioReceiver {
 		this.#playout.push(
 			time,
 			frames,
-			{ samples, frames, channels },
+			{ samples, frames, channels, arrived, lost },
 			arrived,
 			power(samples) / samples.length,
 		);
@@ -943,15 +1018,24 @@ export class AudioReceiver {
 			else if (sound) this.#noise.stop();
 			const channels = this.#stereo ? 2 : 1;
 			if (sound && !sound.noise)
-				this.#emit(writer, sound.samples, sound.frames, sound.channels);
+				this.#emit(writer, sound.samples, sound.frames, sound.channels, {
+					concealed: !!sound.lost,
+					waited: now - (sound.arrived ?? now),
+				});
 			// the peer said what its silence sounds like: that, until it
 			// speaks again (as Chrome's NetEq plays comfort noise)
 			else if (this.#noise.active)
-				this.#emit(writer, this.#noiseOf(ms, channels), ms * 48, channels);
+				this.#emit(writer, this.#noiseOf(ms, channels), ms * 48, channels, {
+					concealed: true,
+					waited: 0,
+				});
 			// a frame that is missing while the stream plays is silence of
 			// its length; a stream that is not playing writes nothing
 			else if (this.#playout.running)
-				this.#emit(writer, null, Math.round(ms * 48), channels);
+				this.#emit(writer, null, Math.round(ms * 48), channels, {
+					concealed: true,
+					waited: 0,
+				});
 			this.#due += ms;
 		}
 		// a stream that went quiet stops the clock until it is heard again
@@ -984,9 +1068,21 @@ export class AudioReceiver {
 		samples: Float32Array<ArrayBuffer> | null,
 		frames: number,
 		channels: number,
+		played: { concealed: boolean; waited: number },
 	) {
 		// nobody takes them (a track without a sink keeps none): not piled up
 		if ((writer.desiredSize ?? 0) < -BACKLOG) return;
+		this.#played.wrote(
+			frames,
+			samples &&
+				Array.from({ length: channels }, (_, at) =>
+					samples.subarray(at * frames, (at + 1) * frames),
+				),
+			played.concealed,
+			NOISE_RATES[this.#speech],
+			played.waited,
+			this.#playout.stats.targetMs,
+		);
 		this.#clock ??= performance.now() * 1000;
 		const data = new AudioData({
 			format: 'f32-planar',

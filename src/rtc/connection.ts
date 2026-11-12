@@ -14,9 +14,11 @@ import type {
 	CandidateInit,
 	ChannelOptions,
 	CodecCapability,
+	CodecStats,
 	ConnectionConfig,
 	Direction,
 	MediaSection,
+	MediaStats,
 	Negotiated,
 	Request,
 	StatsReply,
@@ -675,7 +677,121 @@ export class Connection {
 			}
 		state.sender?.configure(payloads);
 		state.receiver?.configure(payloads);
+		// what the wire's payload types are, for the streams' counts: G.722
+		// is stamped at 8000 Hz whatever the stack counts it at
+		this.#stats.payloads(
+			new Map(
+				payloads.map((payload) => {
+					const name = payload.name.toLowerCase();
+					return [
+						payload.pt,
+						{
+							clock: name === 'g722' ? 8000 : payload.clock,
+							sound: !['telephone-event', 'cn', 'red'].includes(name),
+						},
+					];
+				}),
+			),
+		);
 		this.#activate(state);
+	}
+
+	/** a payload of the browser's (the template's line for it), as a codec stats entry tells it */
+	#codecOf(kind: string, pt: number | null): CodecStats | null {
+		if (pt === null) return null;
+		const model = this.#template?.medias.find((media) => media.kind === kind);
+		const map = model
+			? all(model.attributes, 'rtpmap').find((value) =>
+					value.startsWith(`${pt} `),
+				)
+			: undefined;
+		if (!map) return null;
+		const [name, clock, channels] = map.slice(map.indexOf(' ') + 1).split('/');
+		const fmtp = all(model!.attributes, 'fmtp').find((value) =>
+			value.startsWith(`${pt} `),
+		);
+		return {
+			payloadType: pt,
+			mimeType: `${kind}/${name}`,
+			clockRate: Number(clock),
+			...(kind === 'audio' && { channels: Number(channels || 1) }),
+			...(fmtp !== undefined && {
+				sdpFmtpLine: fmtp.slice(fmtp.indexOf(' ') + 1),
+			}),
+		};
+	}
+
+	/**
+	 * A section's streams for getStats(): what goes out once both
+	 * descriptions are applied and the section sends, what came in once
+	 * a packet has, what the peer's RTCP last said of each, and the sound
+	 * as the worker measured it
+	 */
+	#mediaStats(state: MediaState, rtp: ReturnType<TransportStats['rtp']>) {
+		const stats: MediaStats = {};
+		if (state.mid === null || state.stopped || state.kind !== 'audio')
+			return stats;
+		const source = state.sender?.source;
+		if (source) stats.source = source;
+		// the streams are the stack's once a negotiation has the section
+		const reports = this.#control({ op: 'rtcp', index: state.index });
+		if (reports.error) return stats;
+		const number = (key: string) =>
+			reports[key] === undefined || reports[key] === ''
+				? undefined
+				: Number(reports[key]);
+		const when = (key: string) => Date.now() - number(key)! / 1000;
+		const seconds = (key: string) =>
+			number(key) === undefined ? undefined : number(key)! / 1e6;
+		const tx = number('tx');
+		const sending = state.sender?.sending ?? null;
+		if (
+			tx !== undefined &&
+			state.direction !== null &&
+			sends(state.direction)
+		) {
+			const count = rtp.sent.find((entry) => entry.ssrc === tx);
+			stats.outbound = {
+				ssrc: tx,
+				codec: this.#codecOf(state.kind, count?.pt ?? sending?.pt ?? null),
+				packets: count?.packets ?? 0,
+				bytes: count?.bytes ?? 0,
+				header: count?.header ?? 0,
+				bitrate: sending?.bitrate ?? 0,
+				active: !state.paused,
+			};
+			if (number('rr_age') !== undefined)
+				stats.remoteInbound = {
+					at: when('rr_age'),
+					fractionLost: number('rr_fraction')! / 256,
+					packetsLost: number('rr_lost')!,
+					jitter: number('rr_jitter')!,
+					roundTripTime: seconds('rr_rtt'),
+					measurements: number('rr_rtts')!,
+					totalRoundTripTime: seconds('rr_rtt_total')!,
+				};
+		}
+		const rx = number('rx');
+		const heard = rtp.received.find((entry) => entry.ssrc === rx);
+		if (heard) {
+			stats.inbound = {
+				...heard,
+				codec: this.#codecOf(state.kind, heard.pt),
+				played: state.receiver?.played ?? null,
+			};
+			if (number('sr_age') !== undefined)
+				stats.remoteOutbound = {
+					at: when('sr_age'),
+					remoteTimestamp: number('sr_ntp')! / 1000,
+					packets: number('sr_packets')!,
+					bytes: number('sr_octets')!,
+					reports: number('sr_count')!,
+					roundTripTime: seconds('sr_rtt'),
+					measurements: number('sr_rtts')!,
+					totalRoundTripTime: seconds('sr_rtt_total')!,
+				};
+		}
+		return stats;
 	}
 
 	/** a section sends when its direction says so and the connection is up */
@@ -1567,6 +1683,9 @@ export class Connection {
 						reply(this.#sections());
 						break;
 					}
+					// a sender's track is measured from its first local description
+					for (const state of this.#medias.values())
+						if (midOf(this.#lastLocal, state.mid)) state.sender?.measure();
 					// The answer takes effect: the stack answered when it read
 					// the offer, with all the offer gave; what the page's
 					// transceivers took of it is the sections' direction now.
@@ -1861,7 +1980,8 @@ export class Connection {
 					this.#restart = true;
 					reply(null);
 					break;
-				case 'stats':
+				case 'stats': {
+					const rtp = this.#stats.rtp();
 					reply({
 						ice: this.#iceState,
 						connection: this.#connectionState,
@@ -1872,6 +1992,7 @@ export class Connection {
 							direction: state.direction,
 							sent: state.sender?.stats ?? null,
 							received: state.receiver?.stats ?? null,
+							...this.#mediaStats(state, rtp),
 						})),
 						transport: this.#stats.report(),
 						ufrag: this.#ufrag,
@@ -1880,6 +2001,7 @@ export class Connection {
 						remoteCertificate: this.#remoteCertificate(),
 					} satisfies StatsReply);
 					break;
+				}
 				case 'close':
 					reply(null);
 					this.close();
