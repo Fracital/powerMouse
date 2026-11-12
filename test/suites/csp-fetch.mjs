@@ -35,6 +35,7 @@ const CASES = {
 			'fetch-blob',
 			'fetch-self',
 			'xhr-data',
+			'xhr-sync-data',
 			'xhr-blob',
 			'xhr-self',
 			'img-data',

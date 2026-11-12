@@ -1425,17 +1425,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					shouldRewriteScript(element)
 				) {
 					element.setAttributeOG('src', element.getAttribute('src')!);
+					const url = new URL(
+						element.getAttribute('src')!,
+						this.client.baseURL.toString(),
+					);
+					// let through by its host or its integrity where the page's
+					// policy says so and the browser's copy would not (src/csp.ts)
+					this.client.giveCodeNonce(element, url, null, false);
 					placeLoad(
 						element,
 						'src',
 						routeJS(
-							new StompURL(
-								new URL(
-									element.getAttribute('src')!,
-									this.client.baseURL.toString(),
-								),
-								this.client.baseURL,
-							),
+							new StompURL(url, this.client.baseURL),
 							this.client.baseURL,
 							this.client.config,
 							scriptType(element),

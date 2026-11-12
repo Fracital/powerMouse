@@ -8,6 +8,7 @@
 //     m:  a <meta http-equiv="Content-Security-Policy"> in the head
 //         (repeatable)
 //     probes: the names of test/pages/csp-probes.js's probes to run
+//     s:  styles in the head, one carrying nonce="probes" (markup-styles)
 //     h:  how the probe script is included, so that the policy lets it
 //         run: `self` (a script element whose src is /csp/probes.js, the
 //         default), `nonce` (that element with nonce="probes"), `inline`
@@ -107,9 +108,13 @@ export function csp(req, res) {
 						: how === 'inline-nonce'
 							? `<script nonce="probes">${text}</script>`
 							: `<script>${text}</script>`;
+			// `s=1`: styles in the markup, one with the nonce, one without
+			const styles = query.has('s')
+				? '<style nonce="probes">:root { --csp-markup-nonce: yes; }</style><style>:root { --csp-markup-plain: yes; }</style>'
+				: '';
 			send(
 				'text/html; charset=utf-8',
-				`<!doctype html><html><head>${metas}<title>CSP PROBES</title></head><body>${script}</body></html>`,
+				`<!doctype html><html><head>${metas}<title>CSP PROBES</title>${styles}</head><body>${script}</body></html>`,
 			);
 			return true;
 		}

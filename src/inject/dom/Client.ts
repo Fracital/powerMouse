@@ -5,6 +5,10 @@ import {
 	browserPolicy,
 	browserRefuses,
 	governing,
+	hashMatches,
+	hostsApply,
+	inlineAllowed,
+	integrityMatches,
 	markedPolicy,
 	parsePolicies,
 	policyMark,
@@ -28,11 +32,18 @@ import {
 	type Prewritten,
 } from '../../prewrite';
 import { refererFor, type ReferrerInfo } from '../../referrerPolicy';
-import { modifyHTML, nestedMarkOf, routeHTML } from '../../rewriteHTML';
+import {
+	modifyHTML,
+	nestedMarkOf,
+	provideShellFacts,
+	routeHTML,
+} from '../../rewriteHTML';
 import type { RewriterLib } from '../../rewriterLib';
 import {
+	injectWorkerJS,
 	parseRoutedURL,
 	proxyBlobURL,
+	rewriterLibJS,
 	ROUTE_PROTOCOLS,
 	unwrapRoute,
 } from '../../routeURL';
@@ -86,12 +97,16 @@ import { siteKeyOf } from './site';
 type OpenCallback = () => void;
 
 // taken when the bundle loads, before any hook
+const nativeSetAttribute = Element.prototype.setAttribute;
 const nativeQuerySelectorAll = Element.prototype.querySelectorAll;
 const nativeGetAttribute = Element.prototype.getAttribute;
 const nativeParent = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
 	'parentNode',
 )!.get!;
+
+/** the name a function compile() makes is assigned to while its script runs */
+const COMPILED = '$stomp$compiled';
 
 const onDocumentOpen = new WeakMap<typeof globalThis, OpenCallback[]>();
 
@@ -362,6 +377,9 @@ export default class DocumentClient extends Client {
 		)?.get as (() => Element | null) | undefined;
 		this.#inheritedFlags = this.#openerFlags();
 		this.sandboxFlags = this.#sandbox();
+		// what the shells this realm builds say of their documents' script
+		// policy: this document's, which they inherit (src/csp.ts)
+		provideShellFacts(() => this.scriptFacts);
 		this.isDOM = true;
 		// read while the shell's own script makes this client, never later: a
 		// script running then could be the page's
@@ -384,11 +402,17 @@ export default class DocumentClient extends Client {
 					return top === this ? null : top.rewriterLightText(BUILD);
 				},
 				factory: (text, name) => {
-					const nonce = documentNonce(this.global.document);
+					// only where the document refuses eval: a document without
+					// allow-scripts (its guard's nonce), or one whose policy refuses
+					// code made from a string (its own nonce, src/csp.ts)
+					const nonce = this.scriptFacts.evaluates
+						? documentNonce(this.global.document)
+						: this.scriptNonce;
 					return nonce === null
 						? null
 						: libraryFactoryFromScript(this.global.document, text, nonce, name);
 				},
+				evaluates: () => this.scriptFacts.evaluates,
 			}) &&
 			!this.sandboxedOpaque &&
 			this.#topClient() === this
@@ -397,9 +421,16 @@ export default class DocumentClient extends Client {
 			// itself, made from the file this top's shell loaded; with
 			// `'wasm'` the light library, which is handed that file's text
 			// when a call needs it
+			// (in a document whose policy refuses code made from a string the
+			// realm is made by a script with the document's nonce, and holds
+			// the rewriter library itself whatever the option: the light one
+			// would make it from its text)
 			this.#rewriter = createRewriterRealm(
 				this.global.document,
-				this.wasmRewriter ? undefined : (givenLibrary() ?? undefined),
+				this.wasmRewriter && this.scriptFacts.evaluates
+					? undefined
+					: (givenLibrary() ?? undefined),
+				this.scriptFacts.evaluates ? null : this.scriptNonce,
 			);
 		// with `rewriter: 'wasm'` the library a top shares rewrites in the
 		// module the controller compiled, once it has arrived: the realm
@@ -873,8 +904,20 @@ export default class DocumentClient extends Client {
 		if (known !== undefined) return known.value;
 		this.#policyMark ??= policyMark();
 		const texts: PolicyText[] = [];
+		// (its script and style directives name the document's nonce, and the
+		// inject's files a worker imports, as the headers' do: src/csp.ts)
+		const nonce = this.scriptFacts.nonce;
+		const code = nonce
+			? {
+					nonce,
+					assets: [
+						injectWorkerJS(this.url, this.config),
+						rewriterLibJS(this.url, this.config),
+					].map((asset) => asset.split('?')[0]),
+				}
+			: undefined;
 		for (const policy of parsePolicies(content, 'enforce', 'meta')) {
-			const text = browserPolicy(policy);
+			const text = browserPolicy(policy, code);
 			texts.push([
 				text === null
 					? ''
@@ -1026,6 +1069,31 @@ export default class DocumentClient extends Client {
 					: url.href.replace(/#.*$/s, '');
 		return this.refusalURL('https', url.href, blocked);
 	}
+	/**
+	 * Whether the page's enforced connect-src refuses a request for `url`
+	 * that no worker sees as the page's (a synchronous XMLHttpRequest, which
+	 * the bridge carries): the browser is made to refuse and report it, by a
+	 * request to a refusal URL that reads as `url`
+	 */
+	connectRefusal(url: URL): boolean {
+		if (!/^(https?|data|blob|filesystem|mediastream):$/.test(url.protocol))
+			return false;
+		const refusing = this.pageRefusals('connect-src', url).some(
+			({ policy }) => policy.disposition === 'enforce',
+		);
+		if (!refusing) return false;
+		// make the browser fire its own connect-src refusal (a synchronous
+		// request the sync bridge would route to the proxy origin otherwise,
+		// which 'self' allows): an http(s) URL through a refusal URL (its
+		// route is the proxy's), a local scheme (data:, blob:) fetched as
+		// written, which the browser refuses by its scheme as natively
+		this.nativeFetch(
+			/^https?:$/.test(url.protocol)
+				? this.refusalURL('https', url.href, url.href.replace(/#.*$/s, ''))
+				: url.href,
+		).catch(() => {});
+		return true;
+	}
 	/** where a WebSocket to `url` goes instead when the page's enforced connect-src refuses it, or null */
 	socketRefusal(url: URL): string | null {
 		const refusing = this.pageRefusals('connect-src', url).some(
@@ -1088,6 +1156,93 @@ export default class DocumentClient extends Client {
 					}),
 				]);
 	}
+	/**
+	 * The nonce a script or style element of the page's (`directive`
+	 * script-src-elem or style-src-elem) gets to be let through by the
+	 * browser where every enforced policy of the page's allows it natively
+	 * but the browser's copy of one would not (src/csp.ts codeSources): an
+	 * inline one by the hash of its text (`text`, the page's, which the
+	 * rewrite changed), an external one (`url`, the real URL) by its host
+	 * where the policy also takes nonces, or by its integrity. Null where
+	 * the browser decides as natively. `parser`: the element is the parser's
+	 * (the page's markup, a document.write), which 'strict-dynamic' does
+	 * not let through.
+	 */
+	codeNonce(
+		element: Element,
+		directive: 'script-src-elem' | 'style-src-elem',
+		url: URL | null,
+		text: string | null,
+		parser: boolean,
+	): string | null {
+		const nonce = this.scriptNonce;
+		if (nonce === null) return null;
+		const enforced = this.pagePolicies().filter(
+			({ policy }) => policy.disposition === 'enforce',
+		);
+		if (!enforced.length) return null;
+		let own: string | null = null;
+		try {
+			own = (element as HTMLElement).nonce || element.getAttribute('nonce');
+		} catch (error) {
+			// an element of another kind
+		}
+		// (the page's integrity, which the browser never gets: the rewritten
+		// body is not the one it names)
+		const integrity =
+			url &&
+			((
+				element as Element & {
+					getAttributeOG?: (name: string) => string | null;
+				}
+			).getAttributeOG?.('integrity') ??
+				element.getAttribute('integrity'));
+		let needed = false;
+		for (const { policy, self } of enforced) {
+			const governed = governing(policy, directive);
+			if (!governed) continue;
+			const { sources } = governed;
+			const lower = sources.map((source) => source.toLowerCase());
+			const dynamic =
+				directive === 'script-src-elem' && lower.includes("'strict-dynamic'");
+			if (own && sources.includes(`'nonce-${own}'`)) continue;
+			if (dynamic && !parser) continue;
+			if (url === null) {
+				if (inlineAllowed(sources, directive)) continue;
+				if (text !== null && hashMatches(sources, text)) {
+					needed = true;
+					continue;
+				}
+				return null;
+			}
+			if (integrity && integrityMatches(sources, integrity)) {
+				needed = true;
+				continue;
+			}
+			if (!dynamic && sourcesMatch(sources, url, self)) {
+				// the browser lets it through by 'self', and the worker applies the hosts
+				if (!hostsApply(sources)) needed = true;
+				continue;
+			}
+			return null;
+		}
+		return needed ? nonce : null;
+	}
+	/** give `element` the nonce codeNonce says it needs (a script's or a style's) */
+	giveCodeNonce(
+		element: Element,
+		url: URL | null,
+		text: string | null,
+		parser: boolean,
+	) {
+		const directive =
+			(element.localName || '').toLowerCase() === 'script'
+				? 'script-src-elem'
+				: 'style-src-elem';
+		const nonce = this.codeNonce(element, directive, url, text, parser);
+		if (nonce !== null)
+			Reflect.apply(nativeSetAttribute, element, ['nonce', nonce]);
+	}
 	/** the URLs refusalURL made, by their host: the URL each stands for, and what a report names it by */
 	readonly refusals = new Map<string, { url: string; blocked: string }>();
 	/**
@@ -1140,11 +1295,31 @@ export default class DocumentClient extends Client {
 		}
 		return this.#creatorClient();
 	}
-	/** the nonce the inject's own scripts carry in a document without allow-scripts, else null */
+	/**
+	 * The nonce the inject's own scripts carry: the document's (its shell's,
+	 * which the browser's copy of the page's script policy names, src/csp.ts),
+	 * or the policy's of a document without allow-scripts; null for none
+	 */
 	get scriptNonce(): string | null {
 		return this.allows('allow-scripts')
-			? null
+			? (this.scriptFacts.nonce ?? null)
 			: documentNonce(this.global.document);
+	}
+	/** a function of this realm made by a script with the document's nonce, where its policy refuses code made from a string */
+	override compile(parameters: string[], source: string): Function | null {
+		if (this.scriptFacts.evaluates) return null;
+		const nonce = this.scriptNonce;
+		const made =
+			nonce === null
+				? null
+				: libraryFactoryFromScript(
+						this.global.document,
+						`${COMPILED}=function(${parameters.join(',')}){${source}\n};`,
+						nonce,
+						COMPILED,
+					);
+		if (typeof made !== 'function') return super.compile(parameters, source);
+		return made as Function;
 	}
 	/**
 	 * A document without allow-scripts runs no script of the page: the real
@@ -1681,7 +1856,9 @@ export default class DocumentClient extends Client {
 				undefined,
 				this.scriptNonce,
 			);
-		return `<!doctype html><script>location.replace(${JSON.stringify(route).replace(/</g, '\\u003c')})</script>`;
+		// (with the nonce of the policy the document inherits from this one)
+		const nonce = this.scriptNonce;
+		return `<!doctype html><script${nonce ? ` nonce="${nonce.replace(/[^\w+/=-]/g, '')}"` : ''}>location.replace(${JSON.stringify(route).replace(/</g, '\\u003c')})</script>`;
 	}
 
 	postToHost(message: object): boolean {
@@ -1959,6 +2136,10 @@ export default class DocumentClient extends Client {
 			// the client's own (a style's stand-in, DOMContentHooks)
 			if (isHTMLScript && this.rewrittenScripts.get(script) === source)
 				continue;
+			// let through by the hash of its text where the page's policy says
+			// so: the rewrite is not that text (src/csp.ts)
+			if (!script.hasAttribute('src'))
+				this.giveCodeNonce(script, null, source, true);
 			const isModule = scriptKind(script) === 'module';
 			// the restore runs after the script's directive prologue, so a strict
 			// script stays strict
@@ -2053,6 +2234,8 @@ export default class DocumentClient extends Client {
 			return text;
 		}
 		if (!this.isConnected(script) || !shouldRewriteScript(script)) return text;
+		if (!script.hasAttribute('src'))
+			this.giveCodeNonce(script, null, text, false);
 		const module = scriptKind(script) === 'module';
 		const rewritten =
 			this.prewrittenScript(module, text, true) ??

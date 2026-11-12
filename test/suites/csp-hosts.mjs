@@ -26,6 +26,7 @@ const CASES = {
 			'fetch-redirect-other',
 			'xhr-self',
 			'xhr-other',
+			'xhr-sync-other',
 			'es-self',
 			'ws-other',
 			'beacon-other',

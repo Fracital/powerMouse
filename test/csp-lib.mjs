@@ -19,12 +19,13 @@ export const OTHER = FIXTURE.includes('127.0.0.1')
 	: FIXTURE.replace('localhost', '127.0.0.1');
 
 /** the page of a case named `name` */
-export function caseURL(name, { p = [], ro = [], m = [], h, probes }) {
+export function caseURL(name, { p = [], ro = [], m = [], h, s, probes }) {
 	const query = new URLSearchParams();
 	for (const policy of [].concat(p)) query.append('p', policy);
 	for (const policy of [].concat(ro)) query.append('ro', policy);
 	for (const policy of [].concat(m)) query.append('m', policy);
 	if (h) query.set('h', h);
+	if (s) query.set('s', '1');
 	query.set('probes', probes.join(','));
 	query.set('case', name);
 	return `${FIXTURE}csp/doc?${query}`;
@@ -71,6 +72,20 @@ function without(list, other) {
 		left.splice(index, 1);
 		return false;
 	});
+}
+
+/** a compared violation as a failure names it: what tells it apart */
+function brief(text) {
+	const event = JSON.parse(text);
+	return [
+		event.effectiveDirective,
+		event.blockedURI,
+		event.disposition,
+		event.sample,
+		event.target,
+		event.originalPolicy?.slice(0, 60),
+		event.documentURI?.slice(-40),
+	].join(' | ');
 }
 
 /** the fields of a violation compared by default */
@@ -136,9 +151,9 @@ export async function compareCases(browser, cases, { fields = FIELDS } = {}) {
 					wanted.length === got.length &&
 					wanted.every((event, index) => event === got[index]),
 				JSON.stringify({
-					missing: without(wanted, got),
-					extra: without(got, wanted),
-				}).slice(0, 2500),
+					missing: without(wanted, got).map(brief),
+					extra: without(got, wanted).map(brief),
+				}).slice(0, 3000),
 			);
 		}
 		await page.close();

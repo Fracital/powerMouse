@@ -160,6 +160,7 @@ export function lightFactory(): Factory {
 	}
 	let made: unknown;
 	try {
+		if (sharing.evaluates?.() === false) throw new Error('no eval');
 		made = (
 			Reflect.construct(realm.Function, [
 				LIGHT_FACTORY,
@@ -236,6 +237,12 @@ export interface RewriterSharing {
 		text: string,
 		name?: string,
 	) => ((realm?: Record<string, unknown>) => RewriterLib) | null;
+	/**
+	 * Whether this realm may make code from a string: where its policy
+	 * refuses it (src/csp.ts), the factory makes the library at once, since
+	 * the browser reports every refused attempt to the page
+	 */
+	evaluates?: () => boolean;
 }
 
 let own: RewriterLib | null = null;

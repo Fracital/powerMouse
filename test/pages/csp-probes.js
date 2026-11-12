@@ -243,6 +243,26 @@
 		'xhr-blob': () => xhr(blob('blob')),
 		'xhr-self': () => xhr('/csp/ok'),
 		'xhr-other': () => xhr(`${other}/csp/ok`),
+		'xhr-sync-data': () => {
+			const request = new XMLHttpRequest();
+			try {
+				request.open('GET', 'data:,x', false);
+				request.send();
+				return `sent ${request.status}`;
+			} catch (e) {
+				return `threw ${error(e)}`;
+			}
+		},
+		'xhr-sync-other': () => {
+			const request = new XMLHttpRequest();
+			try {
+				request.open('GET', `${other}/csp/ok`, false);
+				request.send();
+				return `sent ${request.status}`;
+			} catch (e) {
+				return `threw ${error(e)}`;
+			}
+		},
 		'ws-other': () => socket(`${other.replace(/^http/, 'ws')}/ws-echo`),
 		// a policy in a meta the page never inserts applies to nothing
 		'ws-other-detached-meta': () => {
@@ -386,6 +406,15 @@
 			const value = getComputedStyle(node).getPropertyValue('--csp-probe');
 			node.remove();
 			return value.trim() || 'none';
+		},
+		'markup-styles': () => {
+			const root = getComputedStyle(document.documentElement);
+			return ['nonce', 'plain']
+				.map(
+					(kind) =>
+						`${kind} ${root.getPropertyValue(`--csp-markup-${kind}`).trim() || 'none'}`,
+				)
+				.join(', ');
 		},
 		'style-self': () => sheet('/csp/style.css'),
 		'style-other': () => sheet(`${other}/csp/style.css`),
