@@ -141,6 +141,15 @@ while the connection goes on, and the last one closes with the
 connection. Natively the browser stops checking a candidate that never
 answers after about 15 s; the stack after about 16 s.
 
+The same suite holds TURN over TCP and TLS and ICE-TCP to Chrome's: one
+connection names a TCP and a TLS server that work, wrong credentials, a
+TCP and a TLS port nothing listens on, a TCP server that never answers
+and a TLS one that never handshakes, and the relay candidates, their stats
+entries and the errors (in their order) read as natively; a connection
+that may only relay reaches werift through each, the TURN server hearing
+only the wisp server; and a peer whose only candidate is a passive TCP
+one is reached over TCP, from the wisp server's socket.
+
 `npm test -- webrtc-peer` (57 checks): a proxied page connects to a peer in
 the suite's process (werift), to Chrome's own stack in a second browser and
 to another proxied page there through a TURN server, as offerer and as
@@ -180,10 +189,9 @@ those packets are gone too.
 ## Limits
 
 - **What is not carried yet**: video, sending comfort noise (a page plays
-  a peer's, and DTMF goes both ways), TURN over TCP and TLS, ICE-TCP.
-  `getStats()` has Chrome's entries for the sound, its candidates, pairs,
-  transport, certificates and data channels, and `pc.sctp` with its
-  transports reads as Chrome's; docs/webrtc-over-wisp.md sections 15 and
+  a peer's, and DTMF goes both ways). `getStats()` has Chrome's entries
+  for the sound, its candidates, pairs, transport, certificates and data
+  channels, and `pc.sctp` with its transports reads as Chrome's; docs/webrtc-over-wisp.md sections 15 and
   16 list what differs (no `roundTripTime` from the peer's sender reports,
   the playout counted at 48 kHz, no entries for video).
 - **A peer behind a restrictive NAT, with no TURN server.** The page's
@@ -193,8 +201,9 @@ those packets are gone too.
   answer, as for every user behind a symmetric NAT.
 - **Timing differences.** A STUN host name that does not resolve fails
   quickly natively; here the wisp server resolves it and the request times
-  out at 40 s when it does not. TCP TURN fails at once here; natively it
-  waits for the connection to fail, which depends on the network.
+  out at 40 s when it does not. A TURN server over TCP or TLS that
+  refuses the connection is told when the wisp server hears of it, which
+  is as Chrome hears of its own refusal on the same network.
 - **An offer with a section Chrome rejects.** Chrome answers an offer
   whose section names a protocol it does not know, or that has a second
   data section, with that section rejected (port 0) and keeps the rejected

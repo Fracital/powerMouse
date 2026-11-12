@@ -48,6 +48,11 @@ export interface ConnectionConfig {
 	iceServers: IceServer[];
 	iceTransportPolicy: 'all' | 'relay';
 	iceCandidatePoolSize: number;
+	/**
+	 * The errors of TURN servers over TLS are told as gathering ends, as
+	 * those over TCP are (Chrome 156; 152 tells them as they come)
+	 */
+	tlsErrorsAtEnd?: boolean;
 }
 
 export interface ChannelOptions {

@@ -434,6 +434,7 @@ export default class WebRTCStack {
 			})),
 			iceTransportPolicy: config.iceTransportPolicy as 'all' | 'relay',
 			iceCandidatePoolSize: config.iceCandidatePoolSize,
+			tlsErrorsAtEnd: !isLegacy(),
 		});
 
 		// --- RTCDataChannel ---
@@ -3840,7 +3841,14 @@ export default class WebRTCStack {
 							url: event.error.url,
 							errorCode: event.error.errorCode,
 							errorText: event.error.errorText,
-							hostCandidate: event.error.hostCandidate,
+							// Chrome 152 writes a TLS connection that failed as
+							// on the address it hides, 156 as on none
+							hostCandidate:
+								event.error.url.startsWith('turns:') &&
+								event.error.errorText === 'Failed to establish connection' &&
+								isLegacy()
+									? '0.0.0.x:0'
+									: event.error.hostCandidate,
 						} as RTCPeerConnectionIceErrorEventInit),
 					);
 					break;

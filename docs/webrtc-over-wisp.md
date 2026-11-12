@@ -693,10 +693,38 @@ TURN server.
   5.05 s measured).
 - ICE: a host candidate at a `<uuid>.local` name, a `srflx` per STUN or TURN
   server (UDP) from a Binding request on a wisp stream, a `relay` per TURN
-  server over UDP (long-term credentials, permissions and a channel per
-  peer, refresh), `iceTransportPolicy: 'relay'`, the 701 errors of servers
-  that do not answer with Chrome's texts and timing, `restartIce()` and
-  `createOffer({ iceRestart: true })`.
+  server over UDP, TCP or TLS (long-term credentials, permissions and a
+  channel per peer, refresh), `iceTransportPolicy: 'relay'`, the 701
+  errors of servers that do not answer with Chrome's texts and timing,
+  `restartIce()` and `createOffer({ iceRestart: true })`.
+- TURN over TCP and TLS: the allocation travels on a wisp TCP stream to
+  the server (`turns:` through epoxy's `connect_tls`, the TLS stack HTTPS
+  uses, which checks the server's certificate as Chrome does), the
+  messages framed as RFC 8656 section 12.5 says; the relayed address is
+  UDP either way. What the page reads is Chrome's, measured on 152 and 156
+  against the suites' TURN fixture over each: a `relay` candidate whose
+  line says `udp`, `relayProtocol` `tcp` or `tls`, the server's URL
+  (`turns:host:port?transport=tcp` for TLS), and Chrome's priority (type
+  preference 3 for a UDP relay, 1 over TCP, 0 over TLS; local preference
+  31 for the last TURN URL of the configuration and one more for each
+  before it); errors with no local address (`hostCandidate` `:0`, and
+  `0.0.0.x:0` for a TLS connection that failed on 152): a connection that
+  fails is a 701 "Failed to establish connection", one that never comes up
+  over TLS too after 30 s, one that never answers "TURN allocate request
+  timed out." after 40 s, and refused credentials a 401 "Unauthorized."
+  (over UDP as well; the stack wrote "Unauthorized"). Chrome tells the
+  errors of TCP servers as gathering ends, however early they failed, those
+  of TLS servers so too on 156 and as they come on 152, and those of UDP
+  servers as they come; so does the stack. Through
+  the proxy the TURN server hears the wisp server.
+- ICE-TCP (RFC 6544): Chrome gathers a TCP candidate that connects out
+  (`tcptype active`, port 9) and never signals it behind mDNS names, and
+  connects to a peer's passive TCP candidate (an SFU's ICE-TCP; measured
+  with werift offering nothing else, 152 and 156). The stack has one too,
+  listed only in the stats report as Chrome's is, and its pair with a
+  passive candidate is a wisp TCP stream with RFC 4571 framing. A
+  candidate that only connects out (`tcptype active`) is given to no one,
+  as Chrome connects to none.
 - `getStats()` has Chrome's entries in Chrome's order (by id) with Chrome's
   members (the `webrtc` suite compares them with the browser's at each
   stage of a connection): `peer-connection` with the channels opened and
@@ -895,10 +923,10 @@ TURN server.
 
 ### Limits of Phase 1
 
-- **TURN over TCP and TLS, and ICE-TCP candidates, are not carried** (Phase
-  4): a `turn:...?transport=tcp` or `turns:` server gets the 701 "Failed to
-  establish connection" at once, where Chrome reports it when the
-  connection fails; a TCP candidate is never paired.
+- **The local end of a TCP pair.** Chrome's report shows the selected
+  pair of an ICE-TCP connection from a peer reflexive local candidate at
+  the port its socket got; here it is the TCP candidate at port 9, as the
+  stack has no socket of its own.
 - **Media** came after Phase 1: audio is carried (section 16), video is
   not yet.
 - **The stats report lists only the candidates the page was shown.**

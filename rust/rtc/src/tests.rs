@@ -977,14 +977,17 @@ fn a_remote_whose_pair_is_given_up_leaves_the_list() {
 		}
 		a.tick();
 		b.tick();
-		if lists(&a).last().map(String::as_str) == Some("udp/10.0.0.2:5000") && checks > 0 {
+		// (the descriptions carry the TCP candidates str0m writes, which
+		// the worker never hands on: here they pair too)
+		let last = lists(&a).last().cloned().unwrap_or_default();
+		if last.starts_with("udp/10.0.0.2:5000") && !last.contains("10.0.0.9") && checks > 0 {
 			break;
 		}
 		assert!(Instant::now() < deadline, "the unanswered pair stayed: {:?} after {checks} checks", lists(&a));
 		std::thread::sleep(Duration::from_millis(2));
 	}
 	let seen = lists(&a);
-	assert!(seen.iter().any(|list| list == "udp/10.0.0.2:5000,udp/10.0.0.9:5000"), "{seen:?}");
+	assert!(seen.iter().any(|list| list.starts_with("udp/10.0.0.2:5000,udp/10.0.0.9:5000")), "{seen:?}");
 	assert!(a.connected() && b.connected());
 	// nothing more goes to it
 	let before = checks;
@@ -1005,7 +1008,42 @@ fn a_remote_whose_pair_is_given_up_leaves_the_list() {
 	}
 	assert_eq!(checks, before, "checks went on to the given up remote");
 	// b was told of a by a's checks alone (a peer reflexive candidate)
-	assert_eq!(lists(&b).last().map(String::as_str), Some("udp/10.0.0.1:5000"));
+	assert!(lists(&b).last().is_some_and(|list| list.starts_with("udp/10.0.0.1:5000")), "{:?}", lists(&b));
+}
+
+#[test]
+fn a_passive_tcp_candidate_is_checked_over_tcp_from_port_9() {
+	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let mut a = Peer::new("10.0.0.1:5000", &[]);
+	let mut b = Peer::new("10.0.0.2:5000", &[]);
+	a.control(&[("op", "channel"), ("label", "data")]);
+	negotiate(&mut a, &mut b, &[]);
+	a.control(&[("op", "remote_candidate"), ("candidate", "candidate:3 1 tcp 1518280447 10.0.0.9 443 typ host tcptype passive")]);
+	let deadline = Instant::now() + Duration::from_secs(5);
+	let mut over_tcp = None;
+	while over_tcp.is_none() {
+		for datagram in std::mem::take(&mut a.outbox) {
+			if destination(&datagram) == "10.0.0.9:443" {
+				over_tcp = Some(datagram);
+			} else {
+				b.receive(&datagram);
+			}
+		}
+		for datagram in std::mem::take(&mut b.outbox) {
+			a.receive(&datagram);
+		}
+		a.tick();
+		b.tick();
+		assert!(Instant::now() < deadline, "no check to the passive candidate");
+		std::thread::sleep(Duration::from_millis(2));
+	}
+	let datagram = over_tcp.unwrap();
+	// TCP, from the active candidate at port 9
+	assert_eq!(datagram[0], 2);
+	let src = u16::from_be_bytes([datagram[1], datagram[2]]) as usize;
+	assert_eq!(std::str::from_utf8(&datagram[3..3 + src]).unwrap(), "10.0.0.1:9");
+	let lists: Vec<String> = a.events_named("remotes").iter().map(|e| get(e, "list").to_string()).collect();
+	assert!(lists.iter().any(|list| list.contains("tcp/10.0.0.9:443")), "{lists:?}");
 }
 
 #[test]

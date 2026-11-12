@@ -41,7 +41,7 @@ use str0m::config::DtlsCert;
 use str0m::media::{
 	Direction, KeyframeRequestKind, MediaKind, MediaTime, Mid, Simulcast, SimulcastLayer,
 };
-use str0m::net::{Protocol, Receive};
+use str0m::net::{Protocol, Receive, TcpType};
 use str0m::rtp::VideoOrientation;
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 
@@ -124,9 +124,10 @@ struct Conn {
 	/// for each channel, the page's bufferedAmountLowThreshold and whether
 	/// the amount has been above it since the last time it was said low
 	low: Vec<(usize, bool)>,
-	/// the host candidate's address, None when the connection relays only
-	host: Option<SocketAddr>,
-	/// the remotes the agent has a pair from the host candidate with, as
+	/// the host candidates' addresses (UDP, and TCP active at port 9);
+	/// none when the connection relays only
+	hosts: Vec<SocketAddr>,
+	/// the remotes the agent has a pair from a host candidate with, as
 	/// last said (`ev=remotes`)
 	remotes: Vec<(Protocol, SocketAddr)>,
 	queue: VecDeque<Vec<u8>>,
@@ -581,21 +582,23 @@ impl Conn {
 	/// pair it gave up on from its checklist without an event, and drops
 	/// them all at an ICE restart.
 	fn report_remotes(&mut self) {
-		let Some(host) = self.host else { return };
+		if self.hosts.is_empty() {
+			return;
+		}
 		let mut live = Vec::new();
 		{
 			let api = self.rtc.direct_api();
 			let ice = api.ice_agent();
 			// a remote's pairs come highest priority first, so its first one
-			// is from the host candidate when it has one from there; the host
-			// candidate is the first local one and never discarded, so the
+			// is from a host candidate when it has one from there; the host
+			// candidates are the first local ones and never discarded, so the
 			// pair's index is its place in the list
 			let locals: Vec<Candidate> = ice.local_candidates().collect();
 			for remote in ice.remote_candidates() {
 				let from_host = ice
 					.find_pair_for_equivalent_remote_candidate(&remote)
 					.and_then(|pair| locals.get(pair.local_idx()))
-					.is_some_and(|local| local.addr() == host);
+					.is_some_and(|local| self.hosts.contains(&local.addr()));
 				let key = (remote.proto(), remote.addr());
 				if from_host && !live.contains(&key) {
 					live.push(key);
@@ -1340,7 +1343,7 @@ pub unsafe extern "C" fn c(ptr: *mut u8, len: usize) -> i32 {
 	let mut rtc = builder.build(Instant::now());
 	// the host's own address for its sockets: every stream is one pair of
 	// this and a remote (docs/webrtc-over-wisp.md, section 5)
-	let mut host = None;
+	let mut hosts = Vec::new();
 	if let Some(local) = field(&fields, "local") {
 		let Ok(addr) = local.parse::<SocketAddr>() else {
 			return -1;
@@ -1348,7 +1351,19 @@ pub unsafe extern "C" fn c(ptr: *mut u8, len: usize) -> i32 {
 		match Candidate::host(addr, "udp") {
 			Ok(candidate) => {
 				rtc.add_local_candidate(candidate);
-				host = Some(addr);
+				hosts.push(addr);
+			}
+			Err(_) => return -1,
+		}
+		// and a TCP one that connects out (`tcptype active`, port 9), as
+		// Chrome gathers behind mDNS names and never shows: it pairs with a
+		// peer's passive TCP candidates (ICE-TCP, RFC 6544), each pair a
+		// TCP stream the host opens and frames (RFC 4571)
+		let tcp = SocketAddr::new(addr.ip(), 9);
+		match Candidate::builder().tcp().host(tcp).tcptype(TcpType::Active).build() {
+			Ok(candidate) => {
+				rtc.add_local_candidate(candidate);
+				hosts.push(tcp);
 			}
 			Err(_) => return -1,
 		}
@@ -1367,7 +1382,7 @@ pub unsafe extern "C" fn c(ptr: *mut u8, len: usize) -> i32 {
 		reverted: Vec::new(),
 		wire: Vec::new(),
 		low: Vec::new(),
-		host,
+		hosts,
 		remotes: Vec::new(),
 		queue: VecDeque::new(),
 	};

@@ -680,6 +680,14 @@ The first release after a four-year gap. Everything below is breaking.
   unanswered check (Chrome stops checking one after about 15 s), instead of
   keeping it until the connection closes. The `webrtc-net` suite counts the
   wisp server's sockets for each remote over a connection's life.
+- A proxied page's WebRTC connections use TURN servers over TCP and over
+  TLS (`turn:...?transport=tcp`, `turns:`), on wisp TCP streams with TLS by
+  epoxy, and reach peers whose only candidates are passive TCP ones
+  (ICE-TCP, as an SFU offers): what Chrome does on 152 and 156, the
+  candidates, their priorities, `relayProtocol` and stats entries, the 701
+  and 401 errors with their texts, timing and order. They used to fail at
+  once with a 701. A TURN server's 401 says "Unauthorized." as Chrome's
+  does. The `webrtc-net` suite compares them with the browser's.
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

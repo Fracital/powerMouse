@@ -1,6 +1,9 @@
-// A TURN client (RFC 8656) over UDP, for the relay candidate of each TURN
-// server the page named: one stream to the server carries every peer's
-// traffic. An allocation with the long-term credential flow (401, realm,
+// A TURN client (RFC 8656) over UDP, TCP or TLS, for the relay candidate
+// of each TURN server the page named: one stream to the server carries
+// every peer's traffic. Over TCP and TLS (a wisp TCP stream, TLS by the
+// transport's own stack) the messages are framed as section 12.5 says:
+// back to back, ChannelData padded to a multiple of four; the relayed
+// address is UDP either way, as a browser asks for it. An allocation with the long-term credential flow (401, realm,
 // nonce, MESSAGE-INTEGRITY keyed with MD5(username:realm:password)), kept
 // alive by Refresh; a channel bound for each peer the agent sends to (the
 // binding installs the permission too, and its ChannelData framing costs
@@ -67,6 +70,8 @@ export interface TurnOptions {
 	credential: string;
 	/** the stream to the server; what it reads is given to `receive` */
 	stream: TurnStream;
+	/** the stream is TCP or TLS: a byte stream, framed */
+	framed?: boolean;
 	/** the allocation is made: the relayed address, and this client's as the server saw it */
 	onAllocated(relayed: Address, mapped: Address | null): void;
 	/** the allocation could not be made (no answer, refused), or was lost */
@@ -100,6 +105,8 @@ export class TurnAllocation {
 	#refresh: ReturnType<typeof setTimeout> | null = null;
 	#closed = false;
 	#allocated = false;
+	/** what a framed stream has read of a message not whole yet */
+	#partial: Uint8Array | null = null;
 
 	constructor(options: TurnOptions) {
 		this.#options = options;
@@ -241,9 +248,38 @@ export class TurnAllocation {
 		return message;
 	}
 
-	/** what the stream to the server read */
+	/** what the stream to the server read: a datagram, or (framed) the next bytes of the stream */
 	receive(bytes: Uint8Array) {
-		if (this.#closed || bytes.length < 4) return;
+		if (this.#closed) return;
+		if (!this.#options.framed) {
+			this.#message(bytes);
+			return;
+		}
+		let buffered = bytes;
+		if (this.#partial) {
+			buffered = new Uint8Array(this.#partial.length + bytes.length);
+			buffered.set(this.#partial);
+			buffered.set(bytes, this.#partial.length);
+			this.#partial = null;
+		}
+		let at = 0;
+		while (buffered.length - at >= 4) {
+			const length = (buffered[at + 2] << 8) | buffered[at + 3];
+			const kind = buffered[at] & 0xc0;
+			// a STUN message, or ChannelData with its padding; anything
+			// else leaves nothing after it to read
+			const size =
+				kind === 0x40 ? 4 + ((length + 3) & ~3) : kind === 0 ? 20 + length : -1;
+			if (size === -1) return;
+			if (buffered.length - at < size) break;
+			this.#message(buffered.subarray(at, at + size));
+			at += size;
+		}
+		if (at < buffered.length) this.#partial = buffered.slice(at);
+	}
+
+	#message(bytes: Uint8Array) {
+		if (bytes.length < 4) return;
 		const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 		// ChannelData: the channel, the length, the datagram
 		if ((bytes[0] & 0xc0) === 0x40) {
@@ -292,7 +328,11 @@ export class TurnAllocation {
 				binding.queue.push(bytes.slice());
 			return;
 		}
-		const framed = new Uint8Array(4 + bytes.length);
+		// over TCP and TLS each ChannelData message is padded to four bytes
+		const padded = this.#options.framed
+			? (bytes.length + 3) & ~3
+			: bytes.length;
+		const framed = new Uint8Array(4 + padded);
 		const view = new DataView(framed.buffer);
 		view.setUint16(0, binding.channel);
 		view.setUint16(2, bytes.length);

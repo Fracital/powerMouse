@@ -189,6 +189,7 @@ class WispStream implements Stream {
 		opening: Promise<MessagePort>,
 		onData: (bytes: Uint8Array) => void,
 		onClose: (reason?: string) => void,
+		onOpen?: () => void,
 	) {
 		opening.then(
 			(port) => {
@@ -198,6 +199,7 @@ class WispStream implements Stream {
 					return;
 				}
 				this.#port = port;
+				onOpen?.();
 				port.onmessage = ({ data }) => {
 					if (data?.type === 'data') onData(new Uint8Array(data.data));
 					else if (data?.type === 'close') {
@@ -397,12 +399,27 @@ function parseServers(config: ConnectionConfig): Server[] {
 	return servers;
 }
 
-/** Chrome's candidate priorities: type preference 126, 100 and 2 (a UDP relay) */
+/** Chrome's candidate priorities: type preference 126 and 100 */
 const CANDIDATE_PRIORITY = {
 	host: '2113937151',
 	srflx: '1677729535',
-	relay: '41885695',
 };
+
+/**
+ * A relay candidate's priority as Chrome gives it (152 and 156, measured):
+ * type preference 3 for a UDP relay, 1 over TCP, 0 over TLS; the local
+ * preference 31 for the last TURN URL of the configuration and one more
+ * for each before it
+ */
+function relayPriority(server: Server, servers: Server[]): string {
+	const relays = servers.filter((one) => one.relay);
+	const local = 31 + relays.length - 1 - relays.indexOf(server);
+	const type = server.tls ? 0 : server.transport === 'tcp' ? 1 : 3;
+	return String(type * 2 ** 24 + local * 2 ** 8 + 255);
+}
+
+/** how long a TCP or TLS connection to a TURN server may take to come up (Chrome: 30 s for TLS, measured) */
+const CONNECT_MS = 30000;
 
 /** how long a remote whose stream was refused or lost is left alone */
 const REFUSED_MS = 10000;
@@ -417,6 +434,8 @@ export class Connection {
 	/** the stack's own address: every stream is a pair of this and a remote */
 	#local: string;
 	#localPort: number;
+	/** its TCP candidate's, which connects out (port 9, as Chrome writes one) */
+	#tcpLocal: string;
 	/** the mDNS-style name the page sees for the host candidate */
 	#name: string;
 	#streams = new Map<string, Stream>();
@@ -462,6 +481,14 @@ export class Connection {
 	#shown: string[] = [];
 	#gathering: RTCIceGatheringState = 'new';
 	#gatherers: Gatherer[] = [];
+	/**
+	 * The errors of TURN servers over TCP, which Chrome tells as gathering
+	 * ends, however early the connection failed (152 and 156, measured:
+	 * one refused at once is told with the last server's timeout, 40 s
+	 * later); 156 tells those of servers over TLS so too, 152 as they come,
+	 * and both those over UDP as they come
+	 */
+	#lateErrors: (() => void)[] = [];
 	/** the TURN allocations, by the relayed address the stack sends from */
 	#relays = new Map<string, TurnAllocation>();
 	/** remotes a stream was refused to, and until when */
@@ -520,6 +547,7 @@ export class Connection {
 		const octets = crypto.getRandomValues(new Uint8Array(2));
 		this.#localPort = 49152 + (octets[1] << 6) + (octets[0] & 63);
 		this.#local = `${LOCAL_NET}${1 + (octets[0] % 250)}:${this.#localPort}`;
+		this.#tcpLocal = `${LOCAL_NET}${1 + (octets[0] % 250)}:9`;
 		this.#name = `${uuid()}.local`;
 		this.#sessionId = String(
 			BigInt.asUintN(63, crypto.getRandomValues(new BigUint64Array(1))[0]),
@@ -1065,17 +1093,58 @@ export class Connection {
 				close: () => {},
 			};
 		}
-		return new WispStream(
-			this.#opener.stream(proto, host, port),
-			(bytes) => this.#receive(proto, remote, bytes),
-			() => {
-				// a stream the server refused or closed: the stack's checks to
-				// this remote time out as to an unreachable one, and it is not
-				// asked again for every retransmission
-				this.#streams.delete(`${proto}/${remote}`);
-				this.#refused.set(`${proto}/${remote}`, Date.now() + REFUSED_MS);
+		// a stream the server refused or closed: the stack's checks to this
+		// remote time out as to an unreachable one, and it is not asked
+		// again for every retransmission
+		const lost = () => {
+			this.#streams.delete(`${proto}/${remote}`);
+			this.#refused.set(`${proto}/${remote}`, Date.now() + REFUSED_MS);
+		};
+		if (proto === 'udp')
+			return new WispStream(
+				this.#opener.stream(proto, host, port),
+				(bytes) => this.#receive(proto, remote, bytes),
+				lost,
+			);
+		// ICE-TCP (RFC 6544): a TCP stream to a passive candidate, each
+		// packet after its length in two bytes (RFC 4571)
+		let partial: Uint8Array | null = null;
+		const stream = new WispStream(
+			this.#opener.stream('tcp', host, port),
+			(bytes) => {
+				let buffered = bytes;
+				if (partial) {
+					buffered = new Uint8Array(partial.length + bytes.length);
+					buffered.set(partial);
+					buffered.set(bytes, partial.length);
+					partial = null;
+				}
+				let at = 0;
+				while (buffered.length - at >= 2) {
+					const length = (buffered[at] << 8) | buffered[at + 1];
+					if (buffered.length - at - 2 < length) break;
+					this.#receive(
+						'tcp',
+						remote,
+						buffered.subarray(at + 2, at + 2 + length),
+						this.#tcpLocal,
+					);
+					at += 2 + length;
+				}
+				if (at < buffered.length) partial = buffered.slice(at);
 			},
+			lost,
 		);
+		return {
+			send: (bytes) => {
+				const framed = new Uint8Array(2 + bytes.length);
+				framed[0] = bytes.length >> 8;
+				framed[1] = bytes.length & 0xff;
+				framed.set(bytes, 2);
+				stream.send(framed);
+			},
+			close: () => stream.close(),
+		};
 	}
 
 	/** a datagram from `remote`, received at `local` (the stack's own address, or a relayed one) */
@@ -1313,6 +1382,7 @@ export class Connection {
 		port: number | string,
 		related: [string, number | string] | null,
 		server = '',
+		priority = type === 'relay' ? '' : CANDIDATE_PRIORITY[type],
 	): string {
 		// FNV-1a of what Chrome's foundation covers: the type, the base and
 		// the server
@@ -1323,7 +1393,7 @@ export class Connection {
 			`candidate:${hash}`,
 			'1',
 			'udp',
-			CANDIDATE_PRIORITY[type],
+			priority,
 			address,
 			port,
 			'typ',
@@ -1422,6 +1492,14 @@ export class Connection {
 				this.#candidate('host', this.#name, this.#localPort, null),
 				this.#local,
 			);
+			// the TCP candidate that connects out, which Chrome gathers and
+			// never signals behind mDNS names: only the stats report lists it
+			this.#stats.local(
+				this.#candidate('host', this.#name, 9, null, 'tcp')
+					.replace(' udp 2113937151 ', ' tcp 1509957375 ')
+					.replace(' typ host ', ' typ host tcptype active '),
+				this.#tcpLocal,
+			);
 			// another document given the name checks it before this one has
 			// any of its candidates: it is heard, a peer reflexive candidate
 			this.#openBridge();
@@ -1445,7 +1523,8 @@ export class Connection {
 		// one Binding request per server address, as Chrome asks it once; a
 		// TURN server is asked as a STUN server too
 		const asked = new Set<string>();
-		for (const server of parseServers(this.#config)) {
+		const servers = parseServers(this.#config);
+		for (const server of servers) {
 			const address = joinAddress(server.host, server.port);
 			if (!relayOnly && server.transport === 'udp' && !asked.has(address)) {
 				asked.add(address);
@@ -1456,7 +1535,7 @@ export class Connection {
 				server.relay &&
 				(server.port >= 1024 || [53, 80, 443].includes(server.port))
 			)
-				this.#allocate(server);
+				this.#allocate(server, relayPriority(server, servers));
 		}
 		this.#gathered();
 	}
@@ -1465,6 +1544,7 @@ export class Connection {
 	#gathered() {
 		if (this.#gathering !== 'gathering') return;
 		if (!this.#gatherers.every((gatherer) => gatherer.done)) return;
+		for (const late of this.#lateErrors.splice(0)) late();
 		// Chrome tells the state before the end of candidates
 		this.#setGathering('complete');
 		this.#event({ ev: 'icecandidate', candidate: null });
@@ -1569,8 +1649,16 @@ export class Connection {
 		timers.push(setTimeout(() => finish(true), STUN_GIVE_UP_MS));
 	}
 
-	/** an allocation on a TURN server, for a relay candidate */
-	#allocate(server: Server) {
+	/**
+	 * An allocation on a TURN server, for a relay candidate: over UDP, or
+	 * over a TCP stream (TLS by the transport's own stack for `turns:`).
+	 * What Chrome tells of a server it cannot use, measured on 152 and
+	 * 156: a connection that fails (refused, a certificate it does not
+	 * take, no TLS within 30 s) is a 701 "Failed to establish connection"
+	 * with no local address; one that never answers is the allocate
+	 * timeout, as over UDP; refused credentials are a 401.
+	 */
+	#allocate(server: Server, priority: string) {
 		let muted = false;
 		const gatherer: Gatherer = {
 			done: false,
@@ -1582,24 +1670,58 @@ export class Connection {
 		};
 		this.#gatherers.push(gatherer);
 		const url = `${server.tls ? 'turns' : 'turn'}:${joinAddress(server.host, server.port)}?transport=${server.transport}`;
-		if (server.transport !== 'udp') {
-			// TURN over TCP and TLS is not carried yet: as a server that
-			// refuses the connection
-			gatherer.done = true;
-			this.#candidateError(url, 701, 'Failed to establish connection', false);
-			return;
-		}
+		// over TCP the error has no local address: the socket is the
+		// connection's, and Chrome tells none of it
+		const overUdp = server.transport === 'udp';
 		let relayed: string | null = null;
 		let allocation: TurnAllocation | null = null;
+		let connecting: ReturnType<typeof setTimeout> | null = null;
+		const report = (code: number, text: string) => {
+			const tell = () => this.#candidateError(url, code, text, overUdp);
+			if (
+				server.transport === 'tcp' &&
+				(!server.tls || this.#config.tlsErrorsAtEnd)
+			)
+				this.#lateErrors.push(tell);
+			else tell();
+		};
+		const unconnected = () => {
+			if (connecting !== null) clearTimeout(connecting);
+			connecting = null;
+			if (gatherer.done) return;
+			gatherer.done = true;
+			allocation?.close();
+			if (!muted) report(701, 'Failed to establish connection');
+			this.#gathered();
+		};
 		const stream = new WispStream(
-			this.#opener.stream('udp', server.host, server.port),
+			this.#opener.stream(
+				server.transport,
+				server.host,
+				server.port,
+				server.tls,
+			),
 			(bytes) => allocation?.receive(bytes),
-			() => {},
+			() => {
+				// a UDP stream the server refused is a server that never answers
+				if (overUdp) return;
+				// a connection that went away takes its allocation along
+				if (relayed) {
+					this.#relays.delete(relayed);
+					allocation?.close();
+				} else unconnected();
+			},
+			() => {
+				if (connecting !== null) clearTimeout(connecting);
+				connecting = null;
+			},
 		);
+		if (!overUdp) connecting = setTimeout(unconnected, CONNECT_MS);
 		allocation = new TurnAllocation({
 			username: server.username,
 			credential: server.credential,
 			stream,
+			framed: !overUdp,
 			onAllocated: (address, mapped) => {
 				// gathering ended meanwhile: the relay is not shown, nor kept
 				if (muted) {
@@ -1622,11 +1744,12 @@ export class Connection {
 							address.address,
 							address.port,
 							[mapped?.address ?? '0.0.0.0', mapped?.port ?? 0],
-							joinAddress(server.host, server.port),
+							serverUrl(server),
+							priority,
 						),
 						relayed,
 						serverUrl(server),
-						server.transport,
+						server.tls ? 'tls' : server.transport,
 					);
 				}
 				gatherer.done = true;
@@ -1636,9 +1759,10 @@ export class Connection {
 				if (relayed) this.#relays.delete(relayed);
 				if (gatherer.done) return;
 				gatherer.done = true;
+				if (connecting !== null) clearTimeout(connecting);
 				if (reason === 'timeout')
-					this.#candidateError(url, 701, 'TURN allocate request timed out.');
-				else this.#candidateError(url, 401, 'Unauthorized');
+					report(701, 'TURN allocate request timed out.');
+				else report(401, 'Unauthorized.');
 				this.#gathered();
 			},
 			onData: (peer, bytes) => {
@@ -1647,6 +1771,7 @@ export class Connection {
 		});
 		gatherer.stop = () => {
 			gatherer.done = true;
+			if (connecting !== null) clearTimeout(connecting);
 			if (relayed) this.#relays.delete(relayed);
 			allocation?.close();
 		};
@@ -1663,6 +1788,7 @@ export class Connection {
 	#resetGathering() {
 		for (const gatherer of this.#gatherers) gatherer.stop();
 		this.#gatherers = [];
+		this.#lateErrors = [];
 		this.#shown = [];
 		this.#gathering = 'new';
 	}
@@ -2059,10 +2185,20 @@ export class Connection {
 			this.#addNamed(candidate);
 			return;
 		}
-		const result = this.#control({
-			op: 'remote_candidate',
-			candidate: candidateLine(fields),
-		});
+		// a TCP candidate that only connects out (`tcptype active`) is one
+		// no side connects to: the stack is not given it, and Chrome checks
+		// it no more
+		const tcptype = fields.rest[fields.rest.indexOf('tcptype') + 1];
+		const reachable =
+			fields.protocol.toLowerCase() !== 'tcp' ||
+			(fields.rest.includes('tcptype') &&
+				(tcptype === 'passive' || tcptype === 'so'));
+		const result = reachable
+			? this.#control({
+					op: 'remote_candidate',
+					candidate: candidateLine(fields),
+				})
+			: {};
 		if (result.error) throw result.error;
 		this.#stats.remote(
 			candidate,
