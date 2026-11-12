@@ -772,16 +772,18 @@ The first release after a four-year gap. Everything below is breaking.
   URL-safe base64, where it XORed one character in four (none at all with
   one key in fifteen) and left the rest as written. The route kinds that
   named a site in clear (`html:nested:<origin>`, `js:worker:top:<site>`)
-  and the storage bridge's `origin` and `key` are sealed too, and a GET
-  form without an action lands at its sealed address instead of keeping
-  its fields after the route. The codec is a wasm
+  and the storage bridge's `origin` and `key` are sealed too, a GET form
+  without an action lands at its sealed address instead of keeping its
+  fields after the route, and the demo keeps its tab in its fragment as
+  the tab's route and posts its suggestions' input. The codec is a wasm
   module (`rust/codec`, `codec.wasm`, 1,449 bytes) carried in each bundle
   as text and compiled where it runs, a frame using its top's instance, with
   a JavaScript fallback that writes the same text (`rust/host/codec.mjs`:
   101,022 texts, no differences). Sealing a URL takes about 2.2 us where it
   took 10 to 11. A stored key of the old codec is replaced, so a route
-  written before (an open page, a link kept from one) no longer opens. A
-  URL's fragment stays in clear.
+  written before (an open page, a link kept from one) no longer opens; the
+  demo's old fragments, which held the URL itself, still do. A URL's
+  fragment stays in clear.
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

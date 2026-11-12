@@ -52,6 +52,11 @@ site begin alike; nothing of either reads as the site.
   request with a redirect to the sealed address. A form with an action goes
   through `html:form`, which does the same. The fields are in clear for that
   one request, as the browser wrote them.
+- The demo keeps its active tab in its own fragment as the tab's route
+  (`#html/<sealed>`, from `controller.route()`), read back with
+  `controller.unroute()`; a fragment holding the URL itself, as the demo
+  wrote it before, still opens. Its address-bar suggestions post what was
+  typed in the body.
 
 Not sealed: a URL's fragment. It stays after the route as the page wrote
 it, because the browser itself reads it there (scrolling to an anchor,

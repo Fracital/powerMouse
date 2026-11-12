@@ -154,14 +154,18 @@ holyWisp is started.
    `?swdelay=<ms>` makes its events reach the pages that much later (both
    for the suites).
    `onRequest` feeds the request viewer (below).
-4. **Autocomplete.** Each keystroke in an address bar asks
-   `/suggestions?input=...` for public suffixes matching what was typed after
+4. **Autocomplete.** Each keystroke in an address bar posts what was typed
+   to `/suggestions` (in the body, so no URL names the site) for public
+   suffixes matching what was typed after
    the last dot (the server loads the public suffix list at startup, with a
    built-in fallback). Suffixes that start with the typed text come first,
    most common first; clicking one swaps it into the address bar.
 5. **Navigate** with `frame.go(url)` on the active tab. Input goes through `SearchBuilder`, so
-   anything that doesn't look like a host becomes a search. The proxied URL is
-   mirrored into `location.hash`, so a refresh restores the page. Focus moves
+   anything that doesn't look like a host becomes a search. The proxied page
+   is mirrored into `location.hash` by its route (`#html/<sealed>`, from
+   `controller.route()`, read back with `controller.unroute()`), so a refresh
+   restores the page and the host's address does not name it; a fragment
+   holding the URL itself (an older bookmark) still opens. Focus moves
    from the address bar into the tab's frame, as a browser gives the page it
    navigates to focus (`document.hasFocus()`, the keys typed next).
 6. **Keep the address bar honest.** `frame.url` reads the real location of the
