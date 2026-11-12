@@ -625,6 +625,12 @@
 					};
 			return null;
 		},
+		/** the receiver's whole inbound-rtp entry */
+		async inbound(name) {
+			for (const report of (await peer(name).pc.getStats()).values())
+				if (report.type === 'inbound-rtp') return report;
+			return null;
+		},
 		/** the browser's own receiver's count of FEC copies and concealment */
 		async lossStats(name) {
 			for (const report of (await peer(name).pc.getStats()).values())

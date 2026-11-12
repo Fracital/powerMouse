@@ -469,7 +469,8 @@ async function tones(own, far, prefer) {
  * copy can rebuild, once the far end's encoder makes copies (libopus makes
  * them when the receiver's reports say packets are lost). Without `lossy`
  * it loses nothing, and `pause(ms)` holds what the far end sends for `ms`
- * and then lets it all through: a delay the jitter buffer has to ride out.
+ * and then lets it all through: a delay the jitter buffer has to ride out;
+ * `dropNext` packets of Opus from now on are lost.
  */
 async function lossyRelay(lossy) {
 	const near = createSocket('udp4');
@@ -492,7 +493,18 @@ async function lossyRelay(lossy) {
 		},
 	};
 	near.on('message', (message, from) => {
-		relay.own = { address: from.address, port: from.port };
+		// The browser's own connection checks from each of its sockets: the
+		// end is the socket its first DTLS, RTP or RTCP packet comes from
+		// (a STUN message starts with 0 or 1), not whichever checked last,
+		// or its packets would go to sockets it does not read
+		if (!relay.locked) {
+			relay.own = { address: from.address, port: from.port };
+			if (message[0] > 1) relay.locked = true;
+		} else if (
+			from.address !== relay.own.address ||
+			from.port !== relay.own.port
+		)
+			return;
 		if (relay.far) toward.send(message, relay.far.port, relay.far.address);
 	});
 	toward.on('message', (message, from) => {
@@ -503,8 +515,8 @@ async function lossyRelay(lossy) {
 			message.length > 12 &&
 			(message[0] & 0xe0) === 0x80 &&
 			(message[1] & 0x7f) === 111 &&
-			relay.opus++ % 10 === 5 &&
-			lossy
+			((relay.opus++ % 10 === 5 && lossy) ||
+				(relay.dropNext > 0 && relay.dropNext--))
 		) {
 			relay.dropped++;
 			return;
@@ -514,6 +526,7 @@ async function lossyRelay(lossy) {
 		else near.send(message, relay.own.port, relay.own.address);
 	});
 	relay.held = null;
+	relay.dropNext = 0;
 	relay.pause = (ms) => {
 		relay.held ??= [];
 		setTimeout(() => {
@@ -594,6 +607,67 @@ async function lossy(own, far, spikes = false) {
 		record.stats = await own.call('lossStats');
 		record.reported = await far.call('reportedLoss');
 		record.owner = relay.own ? await sockets.owner(relay.own.port) : 'none';
+	} catch (error) {
+		record.failure = String(error).slice(0, 400);
+	}
+	relay.close();
+	await own.call('close').catch(() => {});
+	await far.call('close').catch(() => {});
+	return record;
+}
+/**
+ * What the receiver's inbound-rtp counts of packets that come after their
+ * time and of packets that never come: the far end's tone through the
+ * relay, held up for 150 ms, then for 300 ms, then one packet lost, the
+ * entry read before and 2.5 s after each
+ */
+async function late(own, far) {
+	const record = { failure: null, steps: [] };
+	const relay = await lossyRelay(false);
+	try {
+		await own.call('open');
+		await far.call('open');
+		await far.call('tone', 660);
+		const offer = await far.call('local', 'offer');
+		const [, address, port] =
+			offer.sdp.match(
+				/a=candidate:\S+ 1 udp \d+ ((?!127\.)\d+\.\d+\.\d+\.\d+) (\d+) typ host/,
+			) ?? [];
+		if (!address) throw new Error('the far end has no IPv4 host candidate');
+		relay.far = { address, port: Number(port) };
+		await own.call(
+			'remote',
+			'offer',
+			through(offer.sdp, address, relay.nearPort),
+		);
+		const answer = await own.call('local', 'answer');
+		await far.call(
+			'remote',
+			'answer',
+			through(answer.sdp, address, relay.towardPort),
+		);
+		await own.call('connected');
+		await far.call('connected');
+		await own.call('muted', 0, false);
+		await sleep(2000);
+		for (const step of ['hold150', 'hold300', 'drop1']) {
+			const before = await own.call('inbound');
+			if (step.startsWith('hold')) relay.pause(Number(step.slice(4)));
+			else relay.dropNext = 1;
+			await sleep(2500);
+			const after = await own.call('inbound');
+			const delta = { step };
+			for (const key of [
+				'packetsLost',
+				'packetsDiscarded',
+				'concealmentEvents',
+				'concealedSamples',
+				'silentConcealedSamples',
+				'totalSamplesReceived',
+			])
+				delta[key] = after[key] - before[key];
+			record.steps.push(delta);
+		}
 	} catch (error) {
 		record.failure = String(error).slice(0, 400);
 	}
@@ -801,6 +875,19 @@ for (const prefer of ['audio/PCMU', 'audio/G722']) {
 }
 natively.lossy = await lossy(end(control), end(native, 'the far end'));
 natively.spikes = await lossy(end(control), end(native, 'the far end'), true);
+natively.late = await late(end(control), end(native, 'the far end'));
+ok(
+	"natively: a packet that comes after its time is played late, not lost or discarded, and one that never comes is lost: each is one concealment event, and the track's sound goes on",
+	!natively.late.failure &&
+		natively.late.steps.map((step) => step.packetsLost).join() === '0,0,1' &&
+		natively.late.steps.every(
+			(step) =>
+				step.packetsDiscarded === 0 &&
+				step.concealmentEvents === 1 &&
+				Math.abs(step.totalSamplesReceived - 120000) <= 2400,
+		),
+	JSON.stringify(natively.late),
+);
 ok(
 	"natively: the far end's tone held up four times for 80 ms plays on with no break (NetEq makes up what is missing)",
 	!natively.spikes.failure && natively.spikes.heard.level > 0.25,
@@ -1109,6 +1196,32 @@ for (const proxied of pages) {
 				quietRuns(control.frames),
 				got.owner,
 			]),
+		);
+	}
+	// what the receiver counts of late and of lost packets, as natively
+	{
+		const got = await late(end(proxied), end(native, 'the far end'));
+		const want = natively.late;
+		const counts = (record) =>
+			JSON.stringify(
+				record.steps?.map((step) => [
+					step.step,
+					step.packetsLost,
+					step.packetsDiscarded,
+					step.concealmentEvents,
+				]),
+			);
+		ok(
+			`${label}: inbound-rtp counts packets held up 150 and 300 ms as received and played late (not lost, not discarded) and a packet that never comes as lost, each one concealment event, and the track's sound goes on through them, as Chrome's receiver counts them`,
+			!got.failure &&
+				counts(got) === counts(want) &&
+				got.steps.every(
+					(step) =>
+						Math.abs(step.totalSamplesReceived - 120000) <= 2400 &&
+						step.concealedSamples > 0 &&
+						step.silentConcealedSamples === 0,
+				),
+			JSON.stringify([got, want]),
 		);
 	}
 	// the far end's packets held up on the way four times

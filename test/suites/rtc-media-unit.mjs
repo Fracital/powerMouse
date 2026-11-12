@@ -184,11 +184,9 @@ const holes = (out) => {
 	const loud = (index) => (index % 7 === 3 ? 0.001 : 1);
 	const { out, playout, given } = play(arrivals, { energy: loud });
 	const late = out.slice(0, 300 / 1).filter((v) => v === null).length;
-	// while the buffer learns the spread a frame that comes after its time
-	// is made up by the caller and dropped when it comes, as NetEq does
 	ok(
 		'arrivals that vary are held longer: the delay follows their spread',
-		playout.stats.dropped > 0 && late < 20 && playout.stats.late <= late,
+		playout.stats.dropped > 0 && late < 12,
 		`${late} pulls with no frame while they varied, ${JSON.stringify(playout.stats)}`,
 	);
 	// (the first 60 frames are while the buffer learns the spread)
@@ -1536,9 +1534,10 @@ ok(
 		(value) => Math.abs(value - 0.5) > 0.05,
 	).length;
 	// a machine that stalls the test for a moment has the receiver make up
-	// a frame for one that had not come (and drop it late): each is up to
-	// four windows weak and a break either side, and there are few
-	const stalls = sounding.filter(silent).length + receiver.stats.late;
+	// a frame for one that had not come: each is up to four windows weak
+	// and a break either side, and there are few
+	const stalls =
+		sounding.filter(silent).length + receiver.played.concealmentEvents;
 	ok(
 		'the receiver writes the tone to its track at 48 kHz, whole and unbroken',
 		started === 1 &&

@@ -1155,10 +1155,11 @@ channels from the first packet whose first byte says stereo; G.711 by hand
 and drawn out to 48 kHz. Decoded frames wait in a playout buffer
 (`src/rtc/playout.ts`): it starts playing once two frames are held, plays
 one frame per 20 ms on the worker's clock (corrected for timers that fire
-late), makes up a frame that is not there when it is due (below), jumps
-over a hole longer than 200 ms (a sender that left a silence out), drops a
-frame that comes after its time, grows its delay with the spread of the
-arrival times, and, when it has stayed deeper than that spread asks for
+late), makes up sound while the frame due is not there (below) and lets
+its time stand still, so the frame plays when it comes and the delay grows
+by what was made up (with the spread of the arrival times too), jumps over
+a hole longer than 200 ms (a sender that left a silence out), drops a
+frame that comes after one later than it has played, and, when it has stayed deeper than that spread asks for
 over a hundred frames, gives up the quietest of the next few frames
 without a gap. The track's time is a steady count of what was written.
 
@@ -1166,11 +1167,28 @@ A frame that has not come when it is due (a delay longer than the buffer
 covers: the wisp server or the worker held up on a loaded machine) is made
 up as NetEq's expand makes it up, not left silent: the last period of what
 was played (the lag between 10 and 20 ms its repeats correlate best at) is
-repeated, in phase, fading by a tenth a frame where it repeats well and
-by nearly half where it does not, and the frame that comes next fades in
-from it over 2.5 ms; the late frame is dropped when it comes, and its time
-has passed. After a telephone event what is missing stays silent, and
-after three frames with nothing held the stream is taken to have paused.
+repeated, in phase, fading by a twentieth a frame where it repeats well
+and by nearly half where it does not, to silence; the frame that comes
+then starts where it fits the made-up sound best (skipping up to one of
+its periods) and fades in from it over 2.5 ms, as NetEq merges. Once the
+stream has played, the track has a frame every 20 ms, made up or silent,
+until the stream has been quiet for 2 s, as NetEq hands the sound card
+sound every 10 ms. After a telephone event what is missing stays silent.
+
+The receiver's stats follow NetEq's counts, measured on 152 and 156 with
+the far end's packets held up for 60, 150 and 300 ms and with 1 and 3
+lost: a packet that comes after its time is received and played late, not
+lost and not discarded (`packetsLost` and `packetsDiscarded` stay 0, the
+jitter buffer's delay grows), one that never comes is lost; each hold-up
+and each loss is one concealment event; and the track's samples go on at
+the rate they would have (`totalSamplesReceived` grows by 2.5 s worth in
+2.5 s either way). Chrome made up 9 to 97 ms of sound for a 150 ms
+hold-up, depending on how deep its buffer was then, and 141 to 164 ms for
+a 300 ms one; the worker, whose buffer holds 60 ms of Opus where the
+arrivals are steady, 120 to 140 ms and 160 ms. Chrome's NetEq also
+stretches and squeezes sound to move its delay (`insertedSamplesForDeceleration`,
+`removedSamplesForAcceleration`), where the worker gives
+up a quiet frame now and then and inserts nothing.
 Measured with the far end's tone held up four times for 80 ms on its way
 (a relay of the suite's in `webrtc-media`): Chrome's receiver plays it on
 with 0 to 1 dips of its 5 ms windows and 0 to 6 breaks of phase, and so

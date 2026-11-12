@@ -720,6 +720,17 @@ const LAG_LOW = 480;
 const LAG_HIGH = 960;
 /** a frame played after made-up sound fades in over this many samples */
 const MERGE = 120;
+/** where a frame played after made-up sound starts is found over this many samples */
+const ALIGN = 240;
+
+/**
+ * How much of its level made-up sound loses a frame: little for a sound
+ * that repeats well (Chrome's goes on unmuted through 300 ms of packets
+ * held up, measured), nearly half for one that does not
+ */
+function fadeOf(alike: number): number {
+	return alike > 0.7 ? 0.05 : 0.45;
+}
 
 /**
  * How long a period of the last sound played is (`LAG_LOW` to `LAG_HIGH`
@@ -835,6 +846,12 @@ export class AudioReceiver {
 		frames: number;
 		alike: number;
 	} | null = null;
+	/**
+	 * Sound has been played since the stream started: from then on the
+	 * track has a frame every 20 ms, made up or silent where none came, as
+	 * NetEq hands the sound card a frame every 10 ms
+	 */
+	#playing = false;
 	/** the first frame arrived: the track has sound now */
 	onStart: (() => void) | null = null;
 	/** the next frame heard is a start again (the section had stopped receiving) */
@@ -1167,32 +1184,28 @@ export class AudioReceiver {
 		if (now - this.#due > LAG_MS) this.#due = now;
 		while (this.#due <= now) {
 			const sound = this.#playout.pull(now);
-			const ms = sound ? sound.frames / 48 : this.#playout.frameMs;
+			let ms = sound ? sound.frames / 48 : this.#playout.frameMs;
 			if (sound?.noise) this.#noise.update(sound.noise);
 			else if (sound) this.#noise.stop();
 			const channels = this.#stereo ? 2 : 1;
-			// made-up sound ends where comfort noise or a pause takes over
-			if (
-				sound?.noise ||
-				(!sound && (this.#noise.active || !this.#playout.running))
-			)
+			// made-up sound ends where comfort noise takes over
+			if (sound?.noise || (!sound && this.#noise.active))
 				this.#expansion = null;
-			if (sound && !sound.noise)
-				this.#emit(
-					writer,
-					this.#merge(
-						sound.samples,
-						sound.frames,
-						sound.channels,
-						!!sound.tone,
-					),
+			if (sound && !sound.noise) {
+				const merged = this.#merge(
+					sound.samples,
 					sound.frames,
 					sound.channels,
-					{
-						concealed: !!sound.lost,
-						waited: now - (sound.arrived ?? now),
-					},
+					!!sound.tone,
 				);
+				const frames = merged.length / sound.channels;
+				this.#emit(writer, merged, frames, sound.channels, {
+					concealed: !!sound.lost,
+					waited: now - (sound.arrived ?? now),
+				});
+				this.#playing = true;
+				ms = frames / 48;
+			}
 			// the peer said what its silence sounds like: that, until it
 			// speaks again (as Chrome's NetEq plays comfort noise)
 			else if (this.#noise.active)
@@ -1200,11 +1213,11 @@ export class AudioReceiver {
 					concealed: true,
 					waited: 0,
 				});
-			// a frame that has not come while the stream plays (late, from a
-			// delay the buffer did not cover) is made up from the sound
-			// before it, as NetEq's expand makes it up, not left silent; a
-			// stream that is not playing writes nothing
-			else if (this.#playout.running)
+			// A frame that has not come once the stream plays (late, from a
+			// delay the buffer did not cover, or a pause) is made up from
+			// the sound before it, as NetEq's expand makes it up, fading to
+			// silence; before anything has played nothing is written.
+			else if (this.#playing)
 				this.#emit(
 					writer,
 					this.#expand(Math.round(ms * 48), channels),
@@ -1219,8 +1232,11 @@ export class AudioReceiver {
 			now - this.#heard > IDLE_MS &&
 			!this.#playout.running &&
 			!this.#noise.active
-		)
+		) {
+			this.#playing = false;
+			this.#expansion = null;
 			return;
+		}
 		this.#timer = setTimeout(
 			this.#tick,
 			Math.max(0, this.#due - performance.now()),
@@ -1233,7 +1249,7 @@ export class AudioReceiver {
 	 * phase), fading slowly where the sound repeats well and fast where it
 	 * does not, to nothing after a few frames
 	 */
-	#expand(frames: number, channels: number): Float32Array<ArrayBuffer> {
+	#expand(frames: number, channels: number): Float32Array<ArrayBuffer> | null {
 		if (!this.#expansion) {
 			const { lag, alike } = periodOf(this.#history[0]);
 			this.#expansion = {
@@ -1245,7 +1261,15 @@ export class AudioReceiver {
 		}
 		const out = this.#continue(frames, channels);
 		this.#expansion.frames++;
-		return out;
+		// faded out: silence, which NetEq counts as silent concealment
+		return this.#faded() ? null : out;
+	}
+
+	/** the sound being made up has faded to nothing */
+	#faded(): boolean {
+		const expansion = this.#expansion;
+		if (!expansion) return true;
+		return fadeOf(expansion.alike) * expansion.frames >= 1;
 	}
 
 	/** the next `frames` samples of the sound being made up */
@@ -1253,9 +1277,9 @@ export class AudioReceiver {
 		const expansion = this.#expansion!;
 		const out = new Float32Array(frames * channels);
 		const lag = expansion.period[0].length;
-		// a frame's worth of fading: a tenth a frame for a sound that
+		// a frame's worth of fading: a twentieth a frame for a sound that
 		// repeats, nearly half for one that does not
-		const step = expansion.alike > 0.7 ? 0.1 : 0.45;
+		const step = fadeOf(expansion.alike);
 		for (let at = 0; at < frames; at++) {
 			const gain = Math.max(0, 1 - step * (expansion.frames + at / frames));
 			const from = (expansion.at + at) % lag;
@@ -1269,8 +1293,9 @@ export class AudioReceiver {
 	}
 
 	/**
-	 * A frame played after made-up sound fades in from it (NetEq merges
-	 * the two), so the sound does not click where the frames meet
+	 * A frame played after made-up sound: it starts where it fits the
+	 * made-up sound best (within one of its periods, so a voice or a tone
+	 * goes on in phase) and fades in from it, as NetEq merges the two
 	 */
 	#merge(
 		samples: Float32Array<ArrayBuffer>,
@@ -1278,19 +1303,47 @@ export class AudioReceiver {
 		channels: number,
 		tone: boolean,
 	): Float32Array<ArrayBuffer> {
-		if (this.#expansion) {
-			const tail = this.#continue(Math.min(MERGE, frames), channels);
-			const length = tail.length / channels;
-			const out = samples.slice();
-			for (let channel = 0; channel < channels; channel++)
-				for (let at = 0; at < length; at++) {
-					const weight = at / length;
-					out[channel * frames + at] =
-						samples[channel * frames + at] * weight +
-						tail[channel * length + at] * (1 - weight);
+		const expansion = this.#expansion;
+		if (expansion) {
+			let skip = 0;
+			const period = expansion.period[0];
+			const lag = period.length;
+			if (!this.#faded() && expansion.alike > 0.7) {
+				let best = -Infinity;
+				for (let at = 0; at < lag && at + ALIGN <= frames; at++) {
+					let cross = 0;
+					let power = 0;
+					for (let k = 0; k < ALIGN; k++) {
+						const made = period[(expansion.at + k) % lag];
+						cross += samples[at + k] * made;
+						power += samples[at + k] * samples[at + k];
+					}
+					const score = power ? cross / Math.sqrt(power) : 0;
+					if (score > best) {
+						best = score;
+						skip = at;
+					}
 				}
+			}
+			const length = frames - skip;
+			const fade = Math.min(MERGE, length);
+			const tail = this.#continue(fade, channels);
+			const out = new Float32Array(length * channels);
+			for (let channel = 0; channel < channels; channel++) {
+				out.set(
+					samples.subarray(channel * frames + skip, (channel + 1) * frames),
+					channel * length,
+				);
+				for (let at = 0; at < fade; at++) {
+					const weight = at / fade;
+					out[channel * length + at] =
+						out[channel * length + at] * weight +
+						tail[channel * fade + at] * (1 - weight);
+				}
+			}
 			this.#expansion = null;
 			samples = out;
+			frames = length;
 		}
 		this.#remember(samples, frames, channels);
 		// a telephone event's tones are not made longer: what is missing

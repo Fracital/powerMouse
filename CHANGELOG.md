@@ -638,6 +638,13 @@ The first release after a four-year gap. Everything below is breaking.
   Chrome's NetEq does, instead of playing 20 ms of silence: the last period
   repeated in phase and fading, the next frame faded in from it
   (docs/webrtc-over-wisp.md section 16).
+- A proxied page's audio receiver plays a packet that comes after its time
+  late, as Chrome's NetEq does, rather than dropping it: its time stands
+  still while sound is made up, the late frame starts where it fits the
+  made-up sound, and the track's sound goes on through a hold-up. Its
+  `inbound-rtp` counts such a packet as received (not lost, not
+  discarded) and each hold-up as one concealment event, as Chrome's does
+  (docs/webrtc-over-wisp.md section 16).
 - A proxied page sends comfort noise where Chrome does: with G.711 or G.722
   and CN negotiated, WebRTC's voice detector, comfort noise encoder and
   AudioEncoderCng framing, ported bit for bit (`src/rtc/vad.ts`,
