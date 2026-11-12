@@ -697,6 +697,11 @@ The first release after a four-year gap. Everything below is breaking.
   checks the peer's old candidates with the new credentials; two of its
   connections used to find no pair and read `disconnected` once any other
   pair was given up.
+- The `rtc-cost` suite is a gate on what a document's first use of WebRTC
+  costs through the proxy, as `frame-cost` is for every frame: the sizes
+  of the library, the worker and the stack, the first and a later
+  `createOffer()`, each file fetched once, the stack's compile and the
+  worker's memory, against ceilings above what this build measures.
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

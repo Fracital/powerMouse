@@ -926,11 +926,19 @@ TURN server.
 - `npm test -- webrtc`: the leak checks with their new meaning (section 12),
   77 checks.
 - Nothing is fetched before a document makes a connection; the first one
-  fetches `rtcWorker.js` and `rtc.wasm`. `createOffer()` on a document's
-  first connection resolves in 50 to 70 ms (the worker, the module, the
-  certificate), on its second in 11 to 13 ms; natively 1 to 2 ms. Measured
-  by hand against the local demo; the `rtc-cost` measurement of section 12
-  is not a suite yet.
+  fetches `rtcWorker.js` and `rtc.wasm`. `npm test -- rtc-cost` holds what
+  that costs to ceilings, as `frame-cost` does for every frame: the sizes
+  of `rtcStack.js`, `rtcWorker.js` and `rtc.wasm`; a document's first
+  `createOffer()`, timed from its first `new RTCPeerConnection()` (the
+  library, the worker, the module and the certificate), and a later one;
+  each file fetched once; the compile of `rtc.wasm`; the worker's JS heap
+  once it holds a connection, and what the renderer grew by. Measured on
+  Chrome 152 and 156 at loads of 15 to 50: the first offer in 55 to 172
+  ms (natively 3 to 188 ms: Chrome's own first offer starts its WebRTC
+  threads), a later one in 10 to 60 ms (natively 0.7 to 4), the three
+  files fetched in 3 to 60 ms from the local demo, the compile in 2 to 5 ms
+  (V8 compiles lazily), the worker's heap 680 to 760 KB and the renderers
+  23 to 28 MB more with one connection.
 - The packet capture of section 12, with the browser in a network
   namespace of its own: through the proxy it sends TCP to the proxy and
   nothing else, no UDP and no mDNS, and the page's servers and candidates

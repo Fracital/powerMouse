@@ -155,6 +155,9 @@ that may only relay reaches werift through each, the TURN server hearing
 only the wisp server; and a peer whose only candidate is a passive TCP
 one is reached over TCP, from the wisp server's socket.
 
+`npm test -- rtc-cost` is the gate on what a document pays when it first
+uses WebRTC through the proxy (docs/webrtc-over-wisp.md section 15).
+
 `npm test -- webrtc-peer` (57 checks): a proxied page connects to a peer in
 the suite's process (werift), to Chrome's own stack in a second browser and
 to another proxied page there through a TURN server, as offerer and as
