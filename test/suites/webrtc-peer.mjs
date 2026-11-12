@@ -356,6 +356,19 @@ const EMPTIES = {
 	unordered: 'bytes:0,text:,text:after the empty ones',
 };
 
+/** what Chrome's channel says when a Chrome peer closes its connection */
+const CHROME_ABORT = JSON.stringify({
+	event: 'RTCErrorEvent',
+	state: 'closed',
+	error: {
+		class: 'RTCError',
+		name: 'OperationError',
+		message: 'User-Initiated Abort, reason=Close called',
+		errorDetail: 'sctp-failure',
+		sctpCauseCode: 12,
+	},
+});
+
 /** a channel's open and close events, in order */
 const lifeOf = ({ events }) =>
 	events.filter((event) => event !== 'bufferedamountlow').join();
@@ -450,6 +463,7 @@ const pages = [
 // addresses a wisp server can send to when its origin has media access;
 // where they are names all the same, it cannot be a far end here
 let reachable = false;
+let nativeGone = null;
 {
 	const peer = nodeEnd('peer', {
 		iceAdditionalHostAddresses: undefined,
@@ -468,6 +482,9 @@ let reachable = false;
 			);
 		await own.call('opened', 'chat', 20000);
 		seen = await seenAs(peer);
+		// the peer closes its connection: what the browser's channel hears
+		await peer.call('close');
+		nativeGone = await own.call('channelState', 'chat', 'closed', 20000);
 	} catch (error) {
 		seen = { owner: String(error).slice(0, 200) };
 	}
@@ -678,6 +695,19 @@ for (const proxied of pages) {
 					farClosed,
 					after.at(-1),
 				]),
+			);
+		}
+		if (!failure && nativeGone) {
+			// the peer closes its connection: the channel left open hears what
+			// the browser's own hears from this peer
+			await peer.call('close');
+			const gone = await own.call('channelState', 'chat', 'closed', 20000);
+			ok(
+				`${label}: when the peer closes its connection the page's channel closes with the events and the error the browser's own has`,
+				gone.state === 'closed' &&
+					lifeOf(gone) === lifeOf(nativeGone) &&
+					JSON.stringify(gone.error) === JSON.stringify(nativeGone.error),
+				`${JSON.stringify(gone)}, natively ${JSON.stringify(nativeGone)}`,
 			);
 		}
 		await own.call('close');
@@ -952,10 +982,13 @@ for (const proxied of pages) {
 			const gone = await own.call('channelState', 'chat', 'closed', 20000);
 			const early = (await own.call('read')).connection;
 			const later = await own.call('state', 'disconnected', 20000);
+			// natively (Chrome 152 and 156): closing, then an RTCErrorEvent on a
+			// channel that already reads closed, then close
 			ok(
-				`${label}: when Chrome closes its connection the page's channels close, and its connection is disconnected a while later, as natively`,
+				`${label}: when Chrome closes its connection the page's channels close, each told of the abort as natively, and its connection is disconnected a while later`,
 				gone.state === 'closed' &&
-					/^open,closing,(error,)?close$/.test(lifeOf(gone)) &&
+					lifeOf(gone) === 'open,closing,error,close' &&
+					JSON.stringify(gone.error) === CHROME_ABORT &&
 					early === 'connected' &&
 					later === 'disconnected',
 				JSON.stringify([gone, early, later]),

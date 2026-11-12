@@ -763,6 +763,17 @@ TURN server.
   references shared by the documents that share the tables), and the next
   is refused as Chrome refuses it ("Cannot create so many
   PeerConnections").
+- **A peer that aborts.** When the peer ends the SCTP association with an
+  ABORT chunk (what Chrome sends when a page closes its connection, and
+  werift), each open channel gets `closing`, then an `error` event, then
+  `close`, and reads `closed` already when the error is told, as Chrome's
+  own does. The event is the browser's `RTCErrorEvent` with an `RTCError`
+  of detail `sctp-failure`, `sctpCauseCode` 12 whatever the chunk's cause
+  (as Chrome's stack reports it) and a message that words the cause:
+  "User-Initiated Abort, reason=Close called" from Chrome, an empty one
+  from werift (`src/rtc/abort.ts`). The stack reports the lost association
+  without its cause, so the str0m patch keeps the first cause of an ABORT
+  chunk as it arrives (`DirectApi::sctp_abort_cause`).
 - **Offers Chrome takes and would not write.** An offer of no section is
   not the stack's to answer: the worker answers it with the session's
   lines alone, gathers nothing for it, and the next offer is the stack's
@@ -800,7 +811,7 @@ TURN server.
 
 ### Measured
 
-- `assets/rtc.wasm`: 1504402 bytes, 515619 with brotli. This is the budget.
+- `assets/rtc.wasm`: 1505320 bytes, 516411 with brotli. This is the budget.
   `dist/rtcWorker.js`: 31842 bytes (10971 with brotli).
 - A connection to the peer in the suite's process is `connected` about
   210 ms after the page's `createOffer`.
@@ -843,9 +854,6 @@ TURN server.
   description with no `m=` line every time, the channels stay `connecting`
   and `negotiationneeded` fires after each return to `stable`. Here the
   next offer carries the section and the channels open.
-- **When a Chrome peer closes its connection**, Chrome's own channels get an
-  `error` event (`sctp-failure`, "User-Initiated Abort") between `closing`
-  and `close`; here they get `closing` and `close`.
 - **A peer behind a restrictive NAT with no TURN server** is out of reach,
   by design (section 2).
 - **libcurl has no datagram streams**: with that transport a connection

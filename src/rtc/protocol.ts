@@ -4,6 +4,8 @@
 // URL; each connection then gets a MessagePort of its own: the page sends
 // requests (`seq`), the worker answers them and pushes events.
 
+import type { PeerAbort } from './abort';
+
 /** the worker's first message: where everything comes from */
 export interface RtcWorkerInit {
 	kind: 'init';
@@ -194,7 +196,8 @@ export type WorkerEvent =
 			binary: boolean;
 	  }
 	| { ev: 'channelClosing'; channel: number }
-	| { ev: 'channelClose'; channel: number }
+	// `abort`: the peer ended the association with an SCTP ABORT
+	| { ev: 'channelClose'; channel: number; abort?: PeerAbort }
 	| { ev: 'channelLow'; channel: number }
 	| { ev: 'buffered'; channel: number; amount: number }
 	/** the section's first frame arrived: its track has media now */

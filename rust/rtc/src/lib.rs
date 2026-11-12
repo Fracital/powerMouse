@@ -651,7 +651,20 @@ impl Conn {
 				let index = self.index_of(id).to_string();
 				self.event(&[("ev", "channel_close"), ("index", &index)]);
 			}
-			Event::Closed => self.event(&[("ev", "closed")]),
+			Event::Closed => {
+				// the cause the peer gave, if it ended the association with an
+				// ABORT chunk: the cause's code, and its value in hex
+				let abort = self.rtc.direct_api().sctp_abort_cause().map(|(code, value)| {
+					let hex: String = value.iter().map(|byte| format!("{byte:02x}")).collect();
+					(code.to_string(), hex)
+				});
+				match abort {
+					Some((code, reason)) => {
+						self.event(&[("ev", "closed"), ("abort", &code), ("reason", &reason)])
+					}
+					None => self.event(&[("ev", "closed")]),
+				}
+			}
 			Event::MediaAdded(added) => {
 				let index = self.media_index(added.mid, added.kind);
 				let rids = |layers: &[SimulcastLayer]| {

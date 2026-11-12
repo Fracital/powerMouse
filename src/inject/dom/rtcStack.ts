@@ -116,6 +116,8 @@ export default class WebRTCStack {
 			.RTCDataChannelEvent as unknown as typeof RTCDataChannelEvent;
 		const NativeStatsReport = ctx.natives
 			.RTCStatsReport as unknown as typeof RTCStatsReport;
+		const NativeError = global.RTCError as typeof RTCError;
+		const NativeErrorEvent = global.RTCErrorEvent as typeof RTCErrorEvent;
 		const RealmWeakRef = global.WeakRef as WeakRefConstructor;
 		const realmClone = global.structuredClone as typeof structuredClone;
 
@@ -1841,6 +1843,20 @@ export default class WebRTCStack {
 						channel.dispatchEvent(new RealmEvent('closing'));
 					}
 					channelState.readyState = 'closed';
+					// a peer that aborted the association: each channel hears why
+					// between its closing and its close, already closed
+					if (event.abort)
+						channel.dispatchEvent(
+							new NativeErrorEvent('error', {
+								error: new NativeError(
+									{
+										errorDetail: 'sctp-failure',
+										sctpCauseCode: event.abort.cause,
+									},
+									event.abort.message,
+								),
+							}),
+						);
 					channel.dispatchEvent(new RealmEvent('close'));
 					break;
 				}

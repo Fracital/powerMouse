@@ -1,3 +1,18 @@
+--- a/src/change/direct.rs
++++ b/src/change/direct.rs
+@@ -180,6 +180,12 @@
+         id
+     }
+ 
++    /// Why the peer aborted the SCTP association, if it did so with an ABORT chunk: the
++    /// code and the value of that chunk's first error cause (code 0 without one).
++    pub fn sctp_abort_cause(&self) -> Option<(u16, &[u8])> {
++        self.rtc.sctp.abort_cause()
++    }
++
+     /// Close a data channel.
+     pub fn close_data_channel(&mut self, channel_id: ChannelId) {
+         // One arming deref, then split-borrow the real `&mut Rtc`.
 --- a/src/change/sdp.rs
 +++ b/src/change/sdp.rs
 @@ -465,6 +465,19 @@
@@ -64,7 +79,68 @@
      /// For translating sctp stream id to ChannelId. Any event out of sctp goes via this.
 --- a/src/sctp/mod.rs
 +++ b/src/sctp/mod.rs
-@@ -649,6 +649,15 @@
+@@ -54,6 +54,8 @@
+     // Used to guarantee emission ordering, ResetComplete must
+     // be sent after Close.
+     reset_complete: VecDeque<u16>,
++    /// The first error cause of an ABORT chunk the peer sent: its code and value.
++    abort_cause: Option<(u16, Vec<u8>)>,
+     pushed_back_transmit: Option<VecDeque<Vec<u8>>>,
+     last_now: Instant,
+     client: bool,
+@@ -166,6 +168,30 @@
+     AssociationLost,
+ }
+ 
++/// The first error cause of the ABORT chunk in an SCTP packet, if it has such a chunk.
++fn abort_cause(packet: &[u8]) -> Option<(u16, Vec<u8>)> {
++    const CT_ABORT: u8 = 6;
++    // The common header, then chunks of type, flags, length and a padded value.
++    let mut at = 12;
++    while at + 4 <= packet.len() {
++        let length = u16::from_be_bytes([packet[at + 2], packet[at + 3]]) as usize;
++        if length < 4 || at + length > packet.len() {
++            return None;
++        }
++        if packet[at] == CT_ABORT {
++            let causes = &packet[at + 4..at + length];
++            if causes.len() < 4 {
++                return Some((0, Vec::new()));
++            }
++            let code = u16::from_be_bytes([causes[0], causes[1]]);
++            let end = (u16::from_be_bytes([causes[2], causes[3]]) as usize).clamp(4, causes.len());
++            return Some((code, causes[4..end].to_vec()));
++        }
++        at += (length + 3) & !3;
++    }
++    None
++}
++
+ /// These are the possible paths:
+ /// ```text
+ /// local inited, in-band                                     AwaitOpen -> AwaitDcepAck -> Open
+@@ -314,6 +340,7 @@
+             entries: Vec::new(),
+             reset_pending: HashSet::new(),
+             reset_complete: VecDeque::new(),
++            abort_cause: None,
+             pushed_back_transmit: None,
+             last_now: Instant::now(), // placeholder until init()
+             client: false,
+@@ -332,6 +359,12 @@
+         self.max_payload_size
+     }
+ 
++    /// Why the peer aborted the association, if it sent an ABORT chunk: the code and
++    /// the value of the chunk's first error cause (code 0 for a chunk without one).
++    pub fn abort_cause(&self) -> Option<(u16, &[u8])> {
++        self.abort_cause.as_ref().map(|(code, value)| (*code, value.as_slice()))
++    }
++
+     pub fn is_inited(&self) -> bool {
+         self.state != RtcSctpState::Uninited
+     }
+@@ -649,6 +682,15 @@
              PayloadProtocolIdentifier::String
          };
  
@@ -80,3 +156,15 @@
          Ok(stream.write_with_ppi(buf, ppi)?)
      }
  
+@@ -675,6 +717,11 @@
+     pub fn handle_input(&mut self, now: Instant, data: &[u8]) {
+         trace!("Handle input: {}", data.len());
+ 
++        // sctp-proto reports an abort without its cause.
++        if self.abort_cause.is_none() {
++            self.abort_cause = abort_cause(data);
++        }
++
+         // TODO, remove Bytes in sctp and just use &[u8].
+         let data = data.to_vec().into();
+         let r = self.endpoint.handle(now, self.fake_addr, None, None, data);

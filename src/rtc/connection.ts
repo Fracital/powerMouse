@@ -6,6 +6,7 @@
 // the opener the worker hands in, which carries wisp streams.
 import { WEBRTC_CHANNEL } from '../transport/messages';
 import { compileModule, type ModuleSource } from '../wasm/module';
+import { peerAbort } from './abort';
 import { AudioReceiver, AudioSender } from './audio';
 import { hex, type Certificate } from './certificate';
 import { parseParameters, parsePayloads, type Formats } from './formats';
@@ -833,9 +834,13 @@ export class Connection {
 			// every channel closes at once, and the connection reads
 			// disconnected when the browser's would, once its checks have
 			// gone unanswered for a while
-			case 'closed':
+			case 'closed': {
+				const abort =
+					fields.abort === undefined
+						? undefined
+						: peerAbort(Number(fields.abort), fields.reason ?? '');
 				for (const channel of this.#channels.keys())
-					this.#event({ ev: 'channelClose', channel });
+					this.#event({ ev: 'channelClose', channel, abort });
 				this.#channels.clear();
 				for (const state of this.#medias.values())
 					state.sender?.setActive(false);
@@ -849,6 +854,7 @@ export class Connection {
 						this.#setConnection('disconnected');
 					}, PEER_GONE_MS);
 				break;
+			}
 			case 'error':
 				this.#event({ ev: 'error', message: fields.message ?? '' });
 				break;

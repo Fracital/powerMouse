@@ -41,7 +41,22 @@
 			'error',
 			'bufferedamountlow',
 		])
-			channel.addEventListener(type, () => state.events.push(type));
+			channel.addEventListener(type, (event) => {
+				state.events.push(type);
+				// what an error event says, and the channel's state as it says it
+				if (type === 'error')
+					state.error = {
+						event: event.constructor.name,
+						state: channel.readyState,
+						error: event.error && {
+							class: event.error.constructor.name,
+							name: event.error.name,
+							message: event.error.message,
+							errorDetail: event.error.errorDetail,
+							sctpCauseCode: event.error.sctpCauseCode,
+						},
+					};
+			});
 		channel.addEventListener('message', (event) => {
 			// in arrival order, whatever a Blob takes to read
 			const slot = { done: false };
@@ -289,7 +304,11 @@
 				ms,
 				`${label} ${state} on ${name}`,
 			).catch(() => {});
-			return { state: found.channel.readyState, events: found.events };
+			return {
+				state: found.channel.readyState,
+				events: found.events,
+				error: found.error ?? null,
+			};
 		},
 		async state(name, state, ms = 30000) {
 			const { pc } = peer(name);
