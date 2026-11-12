@@ -7,6 +7,7 @@ import {
 	parseConfig,
 	ParsedConfig,
 } from '../config';
+import type { ScriptFacts } from '../csp';
 import { HelperNames, helperNames } from '../helperNames';
 import type {
 	HookContext,
@@ -25,6 +26,7 @@ import {
 import StompURL from '../StompURL';
 import {
 	ABORT_REQUEST,
+	CSP_FACTS,
 	INIT_PAGE_MODULES,
 	INIT_REMOTE_TRANSPORT,
 	INLINE_DOCUMENT,
@@ -340,11 +342,25 @@ export default class Client {
 	readonly hooks?: ResolvedHooks;
 	/** the realm's Function before the Function module wraps it: a hook is host code, not rewritten */
 	readonly #nativeFunction: FunctionConstructor;
+	/**
+	 * What the document's (or worker's) policy says of scripts, as its
+	 * shell named it (src/csp.ts ScriptFacts): where code made from a
+	 * string is refused, the inject makes none of its own (the browser would
+	 * report each attempt to the page)
+	 */
+	scriptFacts: ScriptFacts;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		this.names = helperNames(init);
 		this.#customNames = !!(init as { names?: unknown }).names;
 		this.hooks = init.hooks;
 		this.#nativeFunction = global.Function;
+		const facts = Reflect.getOwnPropertyDescriptor(global, CSP_FACTS)?.value as
+			ScriptFacts | undefined;
+		Reflect.deleteProperty(global, CSP_FACTS);
+		this.scriptFacts =
+			typeof facts === 'object' && facts !== null
+				? { nonce: facts.nonce, evaluates: facts.evaluates !== false }
+				: { evaluates: true };
 		// built now, before any page script runs, from the window's own
 		// Function, over the bundle's snapshot of Reflect.apply: a page that
 		// later replaces Reflect.apply or Function never sees the method, the
@@ -359,6 +375,7 @@ export default class Client {
 				? `\n//# sourceURL=${realmOrigin}${init.scope || init.directory}`
 				: '';
 		try {
+			if (!this.scriptFacts.evaluates) throw new Error('no eval');
 			this.#callIn = new this.#nativeFunction(
 				'apply',
 				`return function (method, that, args) { return apply(method, that, args); };${sourceURL}`,
@@ -1016,7 +1033,8 @@ export default class Client {
 		};
 		try {
 			const result: unknown = Reflect.apply(
-				new this.#nativeFunction('stomp', source),
+				this.compile(['stomp'], source) ??
+					new this.#nativeFunction('stomp', source),
 				this.global,
 				[context],
 			);
@@ -1029,6 +1047,48 @@ export default class Client {
 		} catch (error) {
 			report(error);
 		}
+	}
+	/**
+	 * The page's code behind the code a violation's sample shows (the
+	 * first 40 characters, with 'report-sample'): what the rewriter made of
+	 * the last strings the page evaluated, by the start of each
+	 */
+	readonly #codeSamples = new Map<string, string>();
+	/** note that the page's code `page` was evaluated as `native` (codeSample) */
+	noteCodeSample(native: string, page: string) {
+		if (native === page) return;
+		// the rewritten code's start, long enough that a violation's sample
+		// (the browser's own truncation of the same string) is a prefix of it
+		const key = native.slice(0, SAMPLE_LENGTH + 8);
+		this.#codeSamples.delete(key);
+		this.#codeSamples.set(key, page.slice(0, SAMPLE_LENGTH));
+		if (this.#codeSamples.size > 16)
+			this.#codeSamples.delete(this.#codeSamples.keys().next().value!);
+	}
+	/**
+	 * The page's sample for a violation's `sample` of code it evaluated, or
+	 * the sample as it is. The browser reports its own truncation of the
+	 * rewritten string (the first 40 code units, trailing whitespace
+	 * trimmed), which is a prefix of the key stored for it (noteCodeSample).
+	 */
+	codeSample(sample: string): string {
+		const direct = this.#codeSamples.get(sample);
+		if (direct !== undefined) return direct;
+		for (const [key, page] of this.#codeSamples)
+			if (key.startsWith(sample)) return page;
+		return sample;
+	}
+	/**
+	 * A function of the realm's made from `source` with `parameters`, where
+	 * its policy refuses code made from a string (a document makes it with
+	 * a script that carries its nonce, DocumentClient), else null: the
+	 * realm's own Function makes it
+	 */
+	compile(_parameters: string[], _source: string): Function | null {
+		if (this.scriptFacts.evaluates) return null;
+		throw new this.global.EvalError(
+			'Stomp: this context refuses code made from a string',
+		);
 	}
 	/** what a hook is handed; documents add what they know (DocumentClient) */
 	protected hookContext(phase: HookPhase): HookContext {
@@ -1063,6 +1123,9 @@ export default class Client {
 		return <InstanceType<T>>this.modules.get(Module);
 	}
 }
+
+/** how much of the code a violation's sample shows (measured) */
+const SAMPLE_LENGTH = 40;
 
 export function createClientFactory<T>(
 	Client: {
