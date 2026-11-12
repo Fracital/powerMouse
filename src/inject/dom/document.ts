@@ -27,6 +27,7 @@ import IsolationModule from './modules/Isolation';
 import LocationModule from './modules/Location';
 import MediaSessionModule from './modules/MediaSession';
 import MediaTaintModule from './modules/MediaTaint';
+import MemoryModule from './modules/Memory';
 import MutationObserverModule from './modules/MutationObserver';
 import NavigateModule from './modules/Navigate';
 import NavigationHintModule from './modules/NavigationHint';
@@ -87,6 +88,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(MediaTaintModule);
 	client.addModule(MediaSessionModule);
 	client.addModule(IsolationModule);
+	client.addModule(MemoryModule);
 	client.addModule(WebRTCModule);
 	client.addModule(AnimationFramesModule);
 	client.addModule(NavigateModule);
