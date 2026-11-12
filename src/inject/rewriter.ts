@@ -42,6 +42,7 @@ import type { ScriptType } from '../scriptRoutes';
 import type StompURL from '../StompURL';
 import { LIBRARY_FACTORY, LIGHT_FACTORY } from '../version';
 import { knownSite } from './sites';
+import { trustedFunction } from './trusted';
 
 // the globals a copy of the library made here reads, as they were when the
 // bundle loaded (URL, Reflect and Function are the inject's snapshots)
@@ -161,11 +162,14 @@ export function lightFactory(): Factory {
 	let made: unknown;
 	try {
 		if (sharing.evaluates?.() === false) throw new Error('no eval');
+		const body = `${text}\n;return ${LIGHT_FACTORY};`;
+		// (eval of a trusted value where Trusted Types are in use: trusted.ts)
 		made = (
-			Reflect.construct(realm.Function, [
-				LIGHT_FACTORY,
-				`${text}\n;return ${LIGHT_FACTORY};`,
-			]) as () => unknown
+			(trustedFunction(globalThis, [LIGHT_FACTORY], body) ??
+				Reflect.construct(realm.Function, [
+					LIGHT_FACTORY,
+					body,
+				])) as () => unknown
 		)();
 	} catch (error) {
 		// a document whose script policy refuses eval: a script of its own

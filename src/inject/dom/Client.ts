@@ -16,6 +16,7 @@ import {
 	refusalNamed,
 	sourcesMatch,
 	type HopPolicy,
+	trustedTypesRequired,
 	type Policy,
 	type PolicyText,
 } from '../../csp';
@@ -69,6 +70,12 @@ import {
 	shareRewriter,
 } from '../rewriter';
 import { learnSites, siteAnswers } from '../sites';
+import {
+	trustedHTML,
+	trustedScript,
+	trustedTypesUsed,
+	useTrustedTypes,
+} from '../trusted';
 import cloneRawNode, {
 	inertDocumentOf,
 	nativeAttributes,
@@ -101,6 +108,8 @@ type OpenCallback = () => void;
 
 // taken when the bundle loads, before any hook
 const nativeSetAttribute = Element.prototype.setAttribute;
+const nativeSetTimeout = setTimeout;
+const nativeFragmentQuery = DocumentFragment.prototype.querySelectorAll;
 const nativeQuerySelectorAll = Element.prototype.querySelectorAll;
 const nativeGetAttribute = Element.prototype.getAttribute;
 const nativeParent = Reflect.getOwnPropertyDescriptor(
@@ -349,7 +358,8 @@ export default class DocumentClient extends Client {
 			this.global.HTMLScriptElement.prototype,
 			'text',
 		)!.set!;
-		this.scriptText = (script, text) => Reflect.apply(textSet, script, [text]);
+		this.scriptText = (script, text) =>
+			Reflect.apply(textSet, script, [trustedScript(text)]);
 		const isConnectedGet = Reflect.getOwnPropertyDescriptor(
 			this.global.Node.prototype,
 			'isConnected',
@@ -432,7 +442,9 @@ export default class DocumentClient extends Client {
 			// would make it from its text)
 			this.#rewriter = createRewriterRealm(
 				this.global.document,
-				this.wasmRewriter && this.scriptFacts.evaluates
+				// (or under Trusted Types, where the light one's Function
+				// would be refused)
+				this.wasmRewriter && this.scriptFacts.evaluates && !trustedTypesUsed()
 					? undefined
 					: (givenLibrary() ?? undefined),
 				this.scriptFacts.evaluates ? null : this.scriptNonce,
@@ -954,7 +966,15 @@ export default class DocumentClient extends Client {
 				}
 			: undefined;
 		for (const policy of parsePolicies(content, 'enforce', 'meta')) {
-			const text = browserPolicy(policy, code);
+			// (with the name of the inject's own Trusted Types policy: trusted.ts)
+			const text = browserPolicy(
+				policy,
+				code,
+				policy.directives.has('trusted-types') ||
+					policy.directives.has('require-trusted-types-for')
+					? (this.scriptFacts.tt ??= useTrustedTypes())
+					: undefined,
+			);
 			texts.push([
 				text === null
 					? ''
@@ -1195,6 +1215,41 @@ export default class DocumentClient extends Client {
 						sample: '',
 					}),
 				]);
+	}
+	override trustedTypesRequired(): 'enforce' | 'report' | null {
+		return trustedTypesRequired(
+			this.pagePolicies().map(({ policy }) => policy),
+		);
+	}
+	/**
+	 * A sink's refusal of the page's `value` that only report-only policies
+	 * make: an event for each, with Chrome's fields, after the call (the
+	 * browser cannot report it itself: it judges the inject's own value)
+	 */
+	override reportTrustedTypes(sink: string, value: string) {
+		const global = this.global as typeof globalThis;
+		const Event = global.SecurityPolicyViolationEvent;
+		if (typeof Event !== 'function') return;
+		const document = global.document;
+		for (const { policy } of this.pagePolicies())
+			if (policy.disposition === 'report' && trustedTypesRequired([policy]))
+				nativeSetTimeout(() =>
+					Reflect.apply(global.EventTarget.prototype.dispatchEvent, document, [
+						new Event('securitypolicyviolation', {
+							bubbles: true,
+							composed: true,
+							blockedURI: 'trusted-types-sink',
+							documentURI: this.url.url.href.replace(/#.*$/s, ''),
+							violatedDirective: 'require-trusted-types-for',
+							effectiveDirective: 'require-trusted-types-for',
+							originalPolicy: policy.text,
+							disposition: 'report',
+							statusCode: 200,
+							// (Function's without the source's head, measured)
+							sample: `${sink}|${value.replace(/^\([^(]*anonymous/, '').slice(0, 40)}`,
+						}),
+					]),
+				);
 	}
 	/**
 	 * The nonce a script or style element of the page's (`directive`
@@ -1440,7 +1495,7 @@ export default class DocumentClient extends Client {
 	}
 	/** a function of this realm made by a script with the document's nonce, where its policy refuses code made from a string */
 	override compile(parameters: string[], source: string): Function | null {
-		if (this.scriptFacts.evaluates) return null;
+		if (this.scriptFacts.evaluates) return super.compile(parameters, source);
 		const nonce = this.scriptNonce;
 		const made =
 			nonce === null
@@ -2369,6 +2424,76 @@ export default class DocumentClient extends Client {
 	 * preamble restoring the source the page wrote) is already started: both
 	 * keep what they are given.
 	 */
+	/**
+	 * The text of each script the page set through a Trusted Types sink
+	 * (scriptValue): natively the script's own, which runs as it is, where
+	 * text that reached it any other way (a Text node it was given, a clone)
+	 * is judged as it runs (scriptPrepared)
+	 */
+	readonly #scriptSlots = new WeakMap<Element, string>();
+	/**
+	 * What a script's text sink named `sink` takes of the page's `value`,
+	 * under the page's Trusted Types (Client.trustedValue), or null where it
+	 * is refused. The running script setting its own text is the inject's
+	 * preamble (prepareScriptText).
+	 */
+	scriptValue(
+		script: Element,
+		value: unknown,
+		sink: string,
+		refuse: () => unknown,
+		convert: (value: unknown) => string = String,
+	): string | null {
+		if (!trustedTypesUsed() || script === this.global.document.currentScript)
+			return convert(value);
+		const text = this.trustedValue(
+			value,
+			'TrustedScript',
+			sink,
+			refuse,
+			convert,
+		);
+		if (text !== null) this.#scriptSlots.set(script, text);
+		return text;
+	}
+	/** the scripts of a fragment the parser made of the page's markup, whose text is the parser's (scriptValue) */
+	parsedScripts(root: DocumentFragment) {
+		if (trustedTypesUsed())
+			for (const script of Reflect.apply(nativeFragmentQuery, root, [
+				'script',
+			]) as Iterable<Element>)
+				this.#scriptSlots.set(script, script.textContent ?? '');
+	}
+	/**
+	 * Under Trusted Types, set a script's text (the page's, which passed
+	 * scriptValue) as a trusted value, rewritten where it runs now: text
+	 * that lands as a Text node is judged again as the script runs. False
+	 * where nothing requires it.
+	 */
+	trustedScriptText(script: HTMLScriptElement, text: string): boolean {
+		if (!trustedTypesUsed()) return false;
+		this.scriptText(script, this.prepareScriptText(script, text));
+		return true;
+	}
+	/**
+	 * The text a script that is about to run runs (the page's, or what its
+	 * default policy made of it), or null where the page's Trusted Types
+	 * refuse it: text that did not reach it through a sink (scriptValue),
+	 * judged as Chrome judges it as the script runs. Refused, the script
+	 * keeps the page's text, which the browser refuses and reports itself.
+	 */
+	scriptPrepared(
+		script: Element,
+		text: string,
+		sink = 'HTMLScriptElement text',
+	): string | null {
+		// (a script's own text is empty until a sink sets it)
+		if (!trustedTypesUsed() || (this.#scriptSlots.get(script) ?? '') === text)
+			return text;
+		const passed = this.trustedValue(text, 'TrustedScript', sink, () => {});
+		if (passed !== null) this.#scriptSlots.set(script, passed);
+		return passed;
+	}
 	prepareScriptText(script: HTMLScriptElement, text: string): string {
 		// the running script setting its own text is the preamble of a
 		// parser-inserted inline script: a frame the parser made before it
@@ -2380,18 +2505,23 @@ export default class DocumentClient extends Client {
 			return text;
 		}
 		if (!this.isConnected(script) || !shouldRewriteScript(script)) return text;
+		const passed = this.scriptPrepared(script, text);
+		if (passed === null) return text;
 		if (!script.hasAttribute('src'))
-			this.giveCodeNonce(script, null, text, false);
+			this.giveCodeNonce(script, null, passed, false);
 		const module = scriptKind(script) === 'module';
 		const rewritten =
-			this.prewrittenScript(module, text, true) ??
+			this.prewrittenScript(module, passed, true) ??
 			modifyJS(
-				text,
+				passed,
 				this.baseURL,
 				this.config,
 				module ? 'genericModule' : 'generic',
 			);
 		this.rewrittenScripts.set(script, rewritten);
+		// (what runs is the inject's, which the page's default policy is not
+		// asked of again where it lands as a Text node: TrustedTypes.ts)
+		this.trustedApprove?.(rewritten);
 		return rewritten;
 	}
 	/**
@@ -2630,7 +2760,7 @@ export default class DocumentClient extends Client {
 			// (the shell asked apply() to leave it to us), before the first
 			// script of the page
 			this.runHook('post');
-			this.write.call(this.global.document, newDocument);
+			this.write.call(this.global.document, trustedHTML(newDocument));
 			{
 				// what the write parsed now; what comes after a script it waits
 				// for, once the parser is through (a copy is not made twice):

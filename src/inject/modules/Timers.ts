@@ -1,6 +1,7 @@
 import Client from '../Client';
 import Module from '../Module';
 import { modifyJS } from '../rewriter';
+import { trustedScript } from '../trusted';
 import ProxyModule from './Proxy';
 
 /**
@@ -17,13 +18,24 @@ export default class TimersModule extends Module<Client> {
 			global[name] = proxyModule.wrapFunction(
 				global[name],
 				(target, that, args) => {
-					if (args.length && typeof args[0] !== 'function')
-						args[0] = modifyJS(
-							String(args[0]),
-							this.client.baseURL,
-							this.client.config,
-							'generic',
+					if (args.length && typeof args[0] !== 'function') {
+						// (the page's Trusted Types judge the code first: trusted.ts)
+						const code = this.client.trustedValue(
+							args[0],
+							'TrustedScript',
+							`${this.client.isWorker ? 'WorkerGlobalScope' : 'Window'} ${name}`,
+							() => Reflect.apply(target, that, args),
 						);
+						if (code === null) return 0;
+						args[0] = trustedScript(
+							modifyJS(
+								code,
+								this.client.baseURL,
+								this.client.config,
+								'generic',
+							),
+						);
+					}
 					return Reflect.apply(target, that, args);
 				},
 			);

@@ -1,6 +1,7 @@
 import type { RewriterLib } from '../../rewriterLib';
 import { LIBRARY_FACTORY } from '../../version';
 import { lightFactory } from '../rewriter';
+import { trustedScript } from '../trusted';
 
 /** the name the realm's factory is assigned to while its script runs */
 const REALM_FACTORY = '$stomp$realm';
@@ -24,6 +25,12 @@ const setAttribute = Element.prototype.setAttribute;
 const textContentSet = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
 	'textContent',
+)!.set!;
+// an HTML script's own: under Trusted Types the text it is given as a
+// trusted value is what the script runs (Node's leaves it refused)
+const scriptTextSet = Reflect.getOwnPropertyDescriptor(
+	HTMLScriptElement.prototype,
+	'text',
 )!.set!;
 
 /**
@@ -71,7 +78,7 @@ export function createRewriterRealm(
 		const source = `(${Reflect.apply(toSource, factory, [])})`;
 		const make =
 			nonce === null
-				? realm.eval(source)
+				? realm.eval(trustedScript(source))
 				: libraryFactoryFromScript(
 						realm.document,
 						`${REALM_FACTORY}=${source};`,
@@ -122,7 +129,12 @@ export function libraryFactoryFromScript(
 		if (!root) return null;
 		script = Reflect.apply(createElement, document, ['script']) as Element;
 		Reflect.apply(setAttribute, script, ['nonce', nonce]);
-		Reflect.apply(textContentSet, script, [text]);
+		try {
+			Reflect.apply(scriptTextSet, script, [trustedScript(text)]);
+		} catch (error) {
+			// an XML document's script
+			Reflect.apply(textContentSet, script, [text]);
+		}
 		Reflect.defineProperty(global, name, {
 			value: undefined,
 			writable: true,

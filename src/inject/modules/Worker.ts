@@ -11,6 +11,12 @@ import Client from '../Client';
 import Module from '../Module';
 import { failsToParse, withStack } from '../nativeErrors';
 import { modifyJS } from '../rewriter';
+import {
+	trustedScriptURL,
+	trustedTypesUsed,
+	trustedWorker,
+	useTrustedTypes,
+} from '../trusted';
 import { blobsByURL, PRIVATE_URL_MS, WORKER_LOADED } from '../workerBlobs';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
 import { reportedLocations, unrouteURL, type ErrorLocation } from './Unroute';
@@ -93,9 +99,19 @@ export default class WorkerModule extends Module<Client> {
 					(partition
 						? `globalThis[${JSON.stringify(WORKER_PARTITION)}] = ${JSON.stringify(partition)};`
 						: '') +
-					(this.client.scriptFacts.evaluates
-						? ''
-						: `globalThis[${JSON.stringify(CSP_FACTS)}] = { evaluates: false };`);
+					// (and its Trusted Types, which a worker's own code meets too)
+					(this.client.trustedTypesRequired() && trustedTypesUsed()
+						? trustedWorker(
+								JSON.stringify(CSP_FACTS),
+								JSON.stringify({
+									evaluates: this.client.scriptFacts.evaluates,
+									tt: useTrustedTypes(),
+									rtt: this.client.trustedTypesRequired(),
+								}),
+							)
+						: this.client.scriptFacts.evaluates
+							? ''
+							: `globalThis[${JSON.stringify(CSP_FACTS)}] = { evaluates: false };`);
 				if (inline)
 					return proxyBlobURL(
 						global.URL.createObjectURL(
@@ -306,12 +322,20 @@ export default class WorkerModule extends Module<Client> {
 				(target, that, args, newTarget) => {
 					if (!newTarget) throw new TypeError(WORKER_CTOR_ERROR('Worker'));
 					catchRequiredArguments(args.length, 1, 'Worker', 'constructor');
-					const source = String(args[0]);
+					// (the page's Trusted Types judge the URL first)
+					const source = this.client.trustedValue(
+						args[0],
+						'TrustedScriptURL',
+						'Worker constructor',
+						() => Reflect.construct(target, args, newTarget),
+					);
+					if (source === null) return undefined;
 					// the browser's own SyntaxError
 					if (failsToParse(this.client, source))
 						return Reflect.construct(target, args, newTarget);
 					checkOrigin('Worker', source);
-					args[0] = workerURL(source, isModuleOptions(args[1]));
+					const url = workerURL(source, isModuleOptions(args[1]));
+					args[0] = trustedScriptURL(url);
 					const own = lastPrivate;
 					const worker: Worker = Reflect.construct(target, args, newTarget);
 					watchErrors(
@@ -319,7 +343,7 @@ export default class WorkerModule extends Module<Client> {
 						own,
 						new URL(source, this.client.baseURL.toString()).href,
 					);
-					this.client.provisionWorkerTransport(worker, blobScript(args[0]));
+					this.client.provisionWorkerTransport(worker, blobScript(url));
 					if (own) releaseOnLoad(worker, own);
 					return worker;
 				},
@@ -334,11 +358,19 @@ export default class WorkerModule extends Module<Client> {
 					if (!newTarget)
 						throw new TypeError(WORKER_CTOR_ERROR('SharedWorker'));
 					catchRequiredArguments(args.length, 1, 'SharedWorker', 'constructor');
-					const source = String(args[0]);
+					// (the page's Trusted Types judge the URL first)
+					const source = this.client.trustedValue(
+						args[0],
+						'TrustedScriptURL',
+						'SharedWorker constructor',
+						() => Reflect.construct(target, args, newTarget),
+					);
+					if (source === null) return undefined;
 					if (failsToParse(this.client, source))
 						return Reflect.construct(target, args, newTarget);
 					checkOrigin('SharedWorker', source);
-					args[0] = workerURL(source, isModuleOptions(args[1]));
+					const url = workerURL(source, isModuleOptions(args[1]));
+					args[0] = trustedScriptURL(url);
 					// a shared worker has no postMessage to say it took its
 					// private URL: that one goes after PRIVATE_URL_MS
 					const own = lastPrivate;
@@ -356,7 +388,7 @@ export default class WorkerModule extends Module<Client> {
 						args,
 						newTarget,
 					);
-					this.client.provisionPortTransport(worker.port, blobScript(args[0]));
+					this.client.provisionPortTransport(worker.port, blobScript(url));
 					return worker;
 				},
 				true,

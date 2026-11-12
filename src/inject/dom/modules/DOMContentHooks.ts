@@ -7,6 +7,7 @@ import ProxyModule, {
 } from '../../modules/Proxy';
 import { unrouteCSS } from '../../modules/Unroute';
 import { modifyCSS, modifyJS } from '../../rewriter';
+import { ownScripts, trustedScript } from '../../trusted';
 import DocumentClient, {
 	getGlobalParsingState,
 	type StyleElement,
@@ -280,9 +281,13 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 						usePrototype(script, nativeHTMLScriptElement, (script) => {
 							if (nonce) script.setAttribute('nonce', nonce);
-							script.textContent = `document.currentScript.outerHTML=${JSON.stringify(
-								style.outerHTML,
-							)}`;
+							script.textContent = trustedScript(
+								`document.currentScript.outerHTML=${JSON.stringify(
+									style.outerHTML,
+								)}`,
+							);
+							// (its outerHTML is the inject's, which no Trusted Types judge)
+							ownScripts.add(script);
 							// the client's own code, nothing of the page's to rewrite: the
 							// insertion and the written page's pass leave it as it is
 							// (rewriting a 3 MB stylesheet as a string literal took CNN
@@ -358,13 +363,21 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					getGlobalParsingState(this.client.global) !== 'parsingBeforeWrite')
 			)
 				return;
-			const rewritten = modifyJS(
+			// (the page's Trusted Types judge its text as it runs)
+			const passed = this.client.scriptPrepared(
+				script,
 				source,
+				'SVGScriptElement text',
+			);
+			if (passed === null) return;
+			const rewritten = modifyJS(
+				passed,
 				this.client.baseURL,
 				this.client.config,
 				scriptType(script),
 			);
 			rewrittenScripts.set(script as HTMLScriptElement, rewritten);
+			this.client.trustedApprove?.(rewritten);
 			script.textContent = rewritten;
 		};
 		// the kind is read natively: an HTML script gets the script prototype,
@@ -385,10 +398,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			if (script.type.trim().toLowerCase() === 'importmap') {
 				if (rewrittenScripts.has(script)) return;
 				rewrittenScripts.set(script, script.text);
-				script.text = rewriteImportMap(
-					script.text,
-					this.client.baseURL,
-					this.client.config,
+				script.text = trustedScript(
+					rewriteImportMap(
+						script.text,
+						this.client.baseURL,
+						this.client.config,
+					),
 				);
 				return;
 			}
@@ -406,16 +421,16 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			/*document.currentScript.textContent = ${JSON.stringify(
 				script.textContent
 			)};*/
+			// what the page's Trusted Types let run of it: refused, it keeps the
+			// page's text, which the browser refuses
+			const passed = this.client.scriptPrepared(script, script.text);
+			if (passed === null) return;
 			// a script of the document's own markup the page inserts again (it
 			// read the text back and made a script of it): the worker's rewrite
 			const type = scriptType(script);
 			const rewritten =
-				this.client.prewrittenScript(
-					type === 'genericModule',
-					script.text,
-					true,
-				) ??
-				modifyJS(script.text, this.client.baseURL, this.client.config, type);
+				this.client.prewrittenScript(type === 'genericModule', passed, true) ??
+				modifyJS(passed, this.client.baseURL, this.client.config, type);
 			// a rewrite that changed nothing leaves no mark. The mark is the
 			// rewritten text, and a script of the document's markup whose text
 			// is its own rewrite (nothing in it to rewrite, and written as the
@@ -426,8 +441,8 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			if (rewritten !== script.text) rewrittenScripts.set(script, rewritten);
 			// let through by the hash of the page's text where its policy says so
 			if (!script.hasAttribute('src'))
-				this.client.giveCodeNonce(script, null, script.text, false);
-			script.text = rewritten;
+				this.client.giveCodeNonce(script, null, passed, false);
+			script.text = trustedScript(rewritten);
 		};
 
 		function cdUpdated(element: CharacterData, parent?: Element | null) {
@@ -578,11 +593,24 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						this.client.config,
 					);
 				if (!shouldRewriteScript(element)) return null;
-				const type = scriptType(element);
-				return (
-					this.client.prewrittenScript(type === 'genericModule', text, true) ??
-					modifyJS(text, this.client.baseURL, this.client.config, type)
+				// (the page's Trusted Types judge the text as the script runs)
+				const passed = this.client.scriptPrepared(
+					script,
+					text,
+					element.namespaceURI === 'http://www.w3.org/1999/xhtml'
+						? undefined
+						: 'SVGScriptElement text',
 				);
+				if (passed === null) return null;
+				const type = scriptType(element);
+				const output =
+					this.client.prewrittenScript(
+						type === 'genericModule',
+						passed,
+						true,
+					) ?? modifyJS(passed, this.client.baseURL, this.client.config, type);
+				this.client.trustedApprove?.(output);
+				return output;
 			});
 		/**
 		 * The script `node` is when a child landing in it can run it: connected,
@@ -1053,6 +1081,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						'Element',
 						'insertAdjacentHTML',
 					);
+					// (the page's Trusted Types judge the markup first)
+					const markup = this.client.trustedValue(
+						args[1],
+						'TrustedHTML',
+						'Element insertAdjacentHTML',
+						() => Reflect.apply(target, that, args),
+					);
+					if (markup === null) return;
 					const position = adjacentPosition(args[0], 'insertAdjacentHTML');
 					let context: Node | null = that;
 					if (position === 'beforebegin' || position === 'afterend') {
@@ -1066,7 +1102,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					const document = this.client.global.document;
 					const fragment = cloneRawNode(
 						parseHTMLFragmentIn(
-							String(args[1]),
+							markup,
 							nodeTypeOf(context) === 1 &&
 								!(
 									(context as Element).localName === 'html' &&

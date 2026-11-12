@@ -194,6 +194,8 @@ export const NAVIGATION_DIRECTIVES = ['base-uri', 'form-action'];
 export function browserPolicy(
 	policy: Policy,
 	code?: CodeOptions,
+	/** the name of the inject's own Trusted Types policy (ScriptFacts.tt) */
+	tt = code?.tt,
 ): string | null {
 	const directives: string[] = [];
 	for (const effective of BROWSER_DIRECTIVES) {
@@ -230,7 +232,45 @@ export function browserPolicy(
 					: `${name} ${browserSources(sources).join(' ')}`,
 			);
 	}
+	// Trusted Types as the page wrote them: the browser refuses a string at
+	// every sink, and the inject's own writes carry values of a policy of its
+	// own, whose name every list of names allows (the page never learns it)
+	for (const name of TRUSTED_TYPES) {
+		const sources = policy.directives.get(name);
+		if (sources)
+			directives.push(
+				[
+					name,
+					...sources,
+					...(name === 'trusted-types' && tt ? [tt] : []),
+				].join(' '),
+			);
+	}
 	return directives.length ? directives.join('; ') : null;
+}
+
+/** the Trusted Types directives (browserPolicy) */
+const TRUSTED_TYPES = ['require-trusted-types-for', 'trusted-types'];
+
+/**
+ * How the page's `policies` require Trusted Types of a sink: `enforce`
+ * where one enforced policy does, `report` where only report-only ones
+ * do, else null
+ */
+export function trustedTypesRequired(
+	policies: Policy[],
+): Policy['disposition'] | null {
+	let found: Policy['disposition'] | null = null;
+	for (const policy of policies)
+		if (
+			policy.directives
+				.get('require-trusted-types-for')
+				?.some((source) => source.toLowerCase() === "'script'")
+		) {
+			if (policy.disposition === 'enforce') return 'enforce';
+			found = 'report';
+		}
+	return found;
 }
 
 /** what the browser's script and style directives name of the proxy's own (codeSources) */
@@ -239,6 +279,8 @@ export interface CodeOptions {
 	nonce: string;
 	/** the URLs a worker of the document imports the inject from (importScripts takes no nonce) */
 	assets: string[];
+	/** the name of the inject's own Trusted Types policy (ScriptFacts.tt) */
+	tt?: string;
 }
 
 /**
@@ -821,6 +863,15 @@ export interface ScriptFacts {
 	loadsByNonce?: boolean;
 	/** false when a policy refuses code made from a string (browserEvaluates) */
 	evaluates: boolean;
+	/**
+	 * The name of the inject's own Trusted Types policy, where a policy has
+	 * Trusted Types directives (browserPolicy), and whether one requires
+	 * them of a sink
+	 */
+	tt?: string;
+	rtt?: Policy['disposition'];
+	/** a worker's: the policy of that name its bootstrap made (src/inject/trusted.ts) */
+	policy?: unknown;
 }
 
 /** the script facts of a document whose browser policies are `texts` and whose nonce is `nonce` */
@@ -840,4 +891,26 @@ export function scriptFacts(texts: string[], nonce: string): ScriptFacts {
 			: {}),
 		evaluates: browserEvaluates(texts),
 	};
+}
+
+/**
+ * What the shell tells the client of Trusted Types (ScriptFacts.tt, rtt)
+ * under `texts` (browser policies): the name of its own policy where one
+ * of them has a Trusted Types directive, and whether one requires them
+ */
+export function trustedFacts(
+	texts: string[],
+	tt: string,
+): Pick<ScriptFacts, 'tt' | 'rtt'> {
+	const policies = texts.flatMap((text) =>
+		parsePolicies(text, 'enforce', 'header'),
+	);
+	if (
+		!policies.some((policy) =>
+			TRUSTED_TYPES.some((name) => policy.directives.has(name)),
+		)
+	)
+		return {};
+	const rtt = trustedTypesRequired(policies);
+	return rtt ? { tt, rtt } : { tt };
 }

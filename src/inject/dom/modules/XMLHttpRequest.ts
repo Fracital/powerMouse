@@ -17,6 +17,7 @@ import {
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import UnrouteModule, { unrouteURL } from '../../modules/Unroute';
+import { trustedHTML } from '../../trusted';
 import { trackUploadListeners } from '../../uploadListeners';
 import {
 	decodeText,
@@ -213,7 +214,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			try {
 				const text = decodeText(bytes, charset, !html);
 				const document = Reflect.apply(realmParse, new RealmDOMParser(), [
-					text,
+					trustedHTML(text),
 					html
 						? 'text/html'
 						: ['text/xml', 'application/xhtml+xml', 'image/svg+xml'].includes(

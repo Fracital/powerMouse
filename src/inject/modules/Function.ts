@@ -1,6 +1,7 @@
 import Client from '../Client';
 import Module from '../Module';
 import { modifyJS } from '../rewriter';
+import { trustedFunction, trustedScript } from '../trusted';
 import ProxyModule from './Proxy';
 
 export default class FunctionModule extends Module<Client> {
@@ -21,12 +22,26 @@ export default class FunctionModule extends Module<Client> {
 						return newTarget
 							? Reflect.construct(target, args, newTarget)
 							: Reflect.apply(target, that, args);
+					const given = [...args];
 					const [code] = args.splice(-1, 1);
 					// the browser's shape of the source the page gave: rewritten as
 					// a whole function expression, so `yield` and `await` parse in
 					// their own function, and made by the realm's eval at global
 					// scope, as the constructor would
 					const written = `${prefix} anonymous(${args.map(String).join(',')}\n) {\n${String(code)}\n}`;
+					// (the page's Trusted Types judge that source, as Chrome does)
+					if (
+						this.client.trustedValue(
+							`(${written})`,
+							'TrustedScript',
+							'Function',
+							() =>
+								newTarget
+									? Reflect.construct(target, given, newTarget)
+									: Reflect.apply(target, that, given),
+						) === null
+					)
+						return undefined;
 					const rewritten = modifyJS(
 						`(${written})`,
 						this.client.baseURL,
@@ -34,7 +49,7 @@ export default class FunctionModule extends Module<Client> {
 						'generic',
 					);
 					this.client.noteCodeSample(rewritten, `(${written})`);
-					const made = nativeEval(rewritten);
+					const made = nativeEval(trustedScript(rewritten));
 					// toString shows the source the page gave, not the rewritten body
 					if (typeof made === 'function')
 						proxyModule.functionStrings.set(made, written);
@@ -67,8 +82,12 @@ export default class FunctionModule extends Module<Client> {
 						).constructor
 					: null;
 			try {
-				return (new this.client.global.Function(source)() as () => unknown)
-					.constructor as FunctionConstructor;
+				return (
+					(
+						trustedFunction(this.client.global, [], source) ??
+						new this.client.global.Function(source)
+					)() as () => unknown
+				).constructor as FunctionConstructor;
 			} catch (error) {
 				return null;
 			}
