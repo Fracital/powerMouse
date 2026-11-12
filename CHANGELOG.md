@@ -912,6 +912,28 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 - `meriyah-loose` (a 4.x fork) is dropped; scripts that fail to parse are
   rewritten to `throw new SyntaxError(...)` as before.
 
+### Fidelity
+
+- `performance.memory` is each proxied site's own, as a renderer process of
+  its own would report it (`src/inject/dom/modules/Memory.ts`). Every
+  proxied site shares the proxy's one process, so `usedJSHeapSize` is the
+  whole process's heap and a frame reads the same figure as the page that
+  embeds it; natively, each site its own process, they never match, and
+  Cloudflare Turnstile rejects a challenge frame whose heap equals its
+  embedder's (measured: emulating this alone turns the native
+  no-site-isolation checkbox into a pass, docs/process-model.md). Each
+  site's figure is its own baseline (a small floor derived from the site,
+  the same on every reload so it is no new fingerprint) plus what the real
+  shared heap has grown since the site's first realm started; every realm
+  of a site (its frames, their about:blank and srcdoc children) reads the
+  same figure, two sites differ, and a frame and its embedder of another
+  site differ, as natively. The figure is exact and updates at most every
+  50 ms, as Chrome reports in a renderer locked to one site;
+  `jsHeapSizeLimit` is left as the browser's, since a separate process on
+  the same machine reports the same limit (memory suite). It is necessary
+  but not sufficient to pass Turnstile through the proxy: the remaining
+  differences are being closed one at a time.
+
 ### Fixes
 
 - `navigator.permissions.query({ name: 'storage-access' })` reads granted
