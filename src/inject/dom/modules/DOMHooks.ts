@@ -582,7 +582,24 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					destination !== null && /^https?:$/.test(destination.protocol);
 				// the proxied parent or top, named from a frame under the top:
 				// the URL is routed as that window's document
-				const aimed = this.client.targetWindow(name);
+				let aimed = this.client.targetWindow(name);
+				// from a sandboxed document, the one it may navigate (else the
+				// browser opens nothing and the page gets null)
+				const keyword = name.toLowerCase();
+				if (
+					this.client.sandboxFlags !== null &&
+					['_top', '_parent', '_unfencedtop'].includes(keyword)
+				) {
+					const window =
+						keyword === '_parent' ? this.client.parent : this.client.proxiedTop;
+					if (window !== this.client.global) {
+						if (!this.client.mayNavigate(window)) return null;
+						const client = (window as Record<string, any>)[
+							this.client.names.client
+						] as DocumentClient | undefined;
+						if (client) aimed = { window, client };
+					}
+				}
 				// a javascript: URL runs in the opened window: rewritten, like a
 				// javascript: link (routeHTML rewrites its body)
 				if (destination !== null && destination.protocol === 'javascript:')
@@ -821,6 +838,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that: Document, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
+					// an opaque origin has no domain
+					if (this.client.sandboxedOpaque) return '';
 					return this.client.documentDomain ?? this.client.url.url.hostname;
 				},
 			),
@@ -836,6 +855,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							`Failed to set the 'domain' property on 'Document': ${reason}`,
 							'SecurityError',
 						);
+					// a sandboxed document never sets it, allow-same-origin or not
+					if (this.client.sandboxFlags !== null)
+						throw refuse('Assignment is forbidden for sandboxed iframes.');
 					if (value === '') throw refuse("'' is an empty domain.");
 					let parsed: string | null = null;
 					try {

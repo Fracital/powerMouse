@@ -37,6 +37,8 @@ frame-ancestors and Trusted Types do not yet. report-uri and report-to are left 
 styles are not among them yet (the shell and every rewritten inline script
 would be judged too); neither are sandbox or Trusted Types (base-uri,
 form-action and frame-ancestors: Navigations, below). report-uri and report-to are left out
+would be judged too); neither are base-uri, form-action, frame-ancestors
+or Trusted Types (sandbox has a section of its own). report-uri and report-to are left out
 (the browser would post the proxy's URLs). A report-only policy goes to the
 browser as one. A meta's content is replaced by the browser policy for it
 (the inject's attribute hook; the page reads its own content back), and it
@@ -199,6 +201,28 @@ policy as it wrote it (originalPolicy); a report body
 reads a response's policy headers as natively (the browser applies none
 of them to such a response).
 
+## Sandbox
+
+A header policy's `sandbox` directive sandboxes its document as a frame's
+`sandbox` attribute does (several policies' directives narrow each other,
+and a frame's attribute narrows them all); a meta's and a report-only
+policy's are ignored, as natively. It reaches the browser the way the
+attribute does (`realSandbox`): as a policy of its own with the page's
+flags but the top navigation ones, and with allow-same-origin and
+allow-scripts, which the service worker and the inject need (an opaque
+origin's navigations never reach the worker, and the inject rewrites the
+document). So the browser itself refuses modal dialogs, forms, popups,
+downloads and pointer lock where the page's flags do, and a popup or a
+frame inherits them. The rest is the inject's, from the flags the shell's
+`policyTexts` carry (`DocumentClient.sandboxFlags`, decided again when
+the shell sets them, before the page runs): the opaque origin
+(`self.origin` "null", storage, cookies, IndexedDB and Cache Storage
+refused, its frames and popups of another origin), the scripts that do not
+run (the nonce policy of `src/inject/dom/sandbox.ts`), the windows it may
+navigate, and `document.domain`, whose setter throws in any sandboxed
+document and whose getter reads `""` in an opaque one. Nothing a sandbox
+refuses fires a violation, natively either.
+
 ## Not yet as natively
 
 - Sandbox, Trusted Types, base-uri, form-action and frame-ancestors are
@@ -217,6 +241,14 @@ of them to such a response).
   code by its nonce too: each such document compiles its own copy of the
   bundle (about 770 KB of heap a frame, measured). Elsewhere the bundle
   loads by its URL, which the browser's policy names.
+- Scripts and styles (script-src, style-src and their -elem and -attr
+  forms, nonces, hashes, `'strict-dynamic'`, `'unsafe-eval'`), Trusted
+  Types, base-uri, form-action and frame-ancestors are not applied.
+- A sandbox's console messages name the proxy's URLs (a refused form's,
+  a refused popup's), and a meta's or a report-only policy's `sandbox`
+  is ignored without Chrome's console error for it. An external script of
+  a document without allow-scripts is not fetched (natively it is, and
+  not run).
 - A frame's navigations other than the src its parent sets (a redirect, a
   navigation the frame starts) are not judged by the parent's frame-src.
 - Scripts and styles (script-src, style-src and their -elem and -attr

@@ -79,6 +79,7 @@ const attribute = (value) =>
 export function csp(req, res) {
 	const url = new URL(req.url, 'http://x');
 	if (!url.pathname.startsWith('/csp/')) return false;
+	if (url.pathname.startsWith('/csp/sbx')) return sandboxed(url, res);
 	const query = url.searchParams;
 	const key = query.get('k');
 	if (key !== null && url.pathname !== '/csp/log') {
@@ -235,4 +236,90 @@ function policies(res, query) {
 				`<meta http-equiv="Content-Security-Policy" content="${attribute(policy)}">`,
 		)
 		.join('');
+}
+
+// The `sandbox` directive's pages (csp-sandbox suite):
+//
+//   /csp/sbx?p=<policy>&ro=..&m=..&k=<key>&role=<name>&probes=<a,b>
+//            &b=noscript&frame=<url>&fs=<sandbox>
+//     a document under those policies (as /csp/doc's) that runs the
+//     probe groups of test/pages/csp-sandbox-probes.js and sends what
+//     each did to /csp/sbx-put under `role`; `b=noscript` adds markup
+//     whose loads say which of its scripts ran; `frame` an iframe of that
+//     URL, sandboxed by `fs` when given
+//   /csp/sbx-probes.js       the probes
+//   /csp/sbx-run.js?k&n      a script that puts `n` = "ran"
+//   /csp/sbx-put?k&n&v       keeps `v` as `n` under `k` (a 1x1 PNG)
+//   /csp/sbx-get?k           what was kept under `k`, as JSON
+const kept = new Map();
+function sandboxed(url, res) {
+	const query = url.searchParams;
+	const key = query.get('k') ?? 'x';
+	res.setHeader('cache-control', 'no-store');
+	res.setHeader('access-control-allow-origin', '*');
+	const send = (type, body) => {
+		res.setHeader('content-type', type);
+		res.end(body);
+	};
+	const put = (name, value = '1') =>
+		`/csp/sbx-put?${new URLSearchParams({ k: key, n: name, v: value })}`;
+	switch (url.pathname) {
+		case '/csp/sbx': {
+			for (const policy of query.getAll('p'))
+				res.appendHeader('content-security-policy', policy);
+			for (const policy of query.getAll('ro'))
+				res.appendHeader('content-security-policy-report-only', policy);
+			const role = query.get('role') ?? 'top';
+			const metas = query
+				.getAll('m')
+				.map(
+					(policy) =>
+						`<meta http-equiv="Content-Security-Policy" content="${attribute(policy)}">`,
+				)
+				.join('');
+			const noscript =
+				query.get('b') === 'noscript'
+					? `<img src="${attribute(put(`${role} parsed`))}">` +
+						`<script>new Image().src = ${JSON.stringify(put(`${role} inline script`))};</script>` +
+						`<script src="${attribute(`/csp/sbx-run.js?${new URLSearchParams({ k: key, n: `${role} external script` })}`)}"></script>` +
+						`<img src="/csp/sbx-none.png" onerror="${attribute(`new Image().src = ${JSON.stringify(put(`${role} onerror`))}`)}">` +
+						`<noscript><img src="${attribute(put(`${role} noscript`))}"></noscript>`
+					: '';
+			const frame = query.get('frame');
+			const sandbox = query.get('fs');
+			const iframe =
+				frame === null
+					? ''
+					: `<iframe id="f" src="${attribute(frame)}"${sandbox === null ? '' : ` sandbox="${attribute(sandbox)}"`}></iframe>`;
+			send(
+				'text/html; charset=utf-8',
+				`<!doctype html><html><head>${metas}<title>CSP SANDBOX</title></head><body data-k="${attribute(key)}" data-role="${attribute(role)}">${noscript}${iframe}<script src="/csp/sbx-probes.js"></script><img src="${attribute(put(`${role} end`))}"></body></html>`,
+			);
+			return true;
+		}
+		case '/csp/sbx-probes.js':
+			send(
+				'text/javascript; charset=utf-8',
+				readFileSync(`${pages}csp-sandbox-probes.js`),
+			);
+			return true;
+		case '/csp/sbx-run.js':
+			send(
+				'text/javascript',
+				`new Image().src = ${JSON.stringify(put(query.get('n') ?? 'script', 'ran'))};`,
+			);
+			return true;
+		case '/csp/sbx-put': {
+			if (!kept.has(key)) kept.set(key, {});
+			kept.get(key)[query.get('n') ?? ''] = query.get('v') ?? '';
+			send('image/png', PNG);
+			return true;
+		}
+		case '/csp/sbx-get':
+			send('application/json', JSON.stringify(kept.get(key) ?? {}));
+			return true;
+	}
+	res.statusCode = 404;
+	res.end();
+	return true;
 }
