@@ -2,13 +2,21 @@
 // 16). The page hands over the two ends of a track as streams (a
 // MediaStreamTrackProcessor's readable for what it sends, a
 // MediaStreamTrackGenerator's writable for what it receives); here the
-// sound is encoded and decoded (WebCodecs for Opus, G.711 by hand) and the
+// sound is encoded and decoded (WebCodecs for Opus, G.711 and G.722 by
+// hand) and the
 // stack packetizes and depacketizes. What crosses to the stack is whole
 // encoded frames with their RTP time.
 import type { Payload } from './formats';
 import { Downsampler, g711Decode, g711Encode } from './g711';
+import { g722Decode, G722Decoder, g722Encode, G722Encoder } from './g722';
 import { Playout, type PlayoutStats } from './playout';
-import { ABSENT, FLAG_TALKSPURT, FLAG_VOICE, type Frame } from './records';
+import {
+	ABSENT,
+	FLAG_CONTIGUOUS,
+	FLAG_TALKSPURT,
+	FLAG_VOICE,
+	type Frame,
+} from './records';
 
 /** hands an encoded frame to the stack; `age` is how long ago it was captured, in ms */
 export type FrameWriter = (frame: Frame, age: number) => void;
@@ -26,8 +34,19 @@ const FRAME_US = 20000;
 const OPUS_FRAME = 960;
 /** frames an encoder that leaves silence out must have skipped before its time is moved on */
 const DTX_RESUME = 5;
+/**
+ * The longest run of lost Opus packets the decoder conceals: past it the
+ * gap is a pause (a sender that left silence out), not a loss
+ */
+const CONCEAL_FRAMES = 5;
 /** a G.711 packet: 20 ms at 8 kHz */
 const G711_FRAME = 160;
+/**
+ * A G.722 packet: 20 ms at 16 kHz, 160 bytes. The stack counts G.722's
+ * time at 16 kHz and writes half of it on the wire, the 8000 Hz clock RFC
+ * 3551 gave the payload by mistake and every implementation keeps.
+ */
+const G722_FRAME = 320;
 
 /**
  * The audio level a packet states (RFC 6464): how far below full scale
@@ -137,7 +156,8 @@ export class AudioSender {
 	#sentRate = 0;
 	#sentAt = 0;
 	#down: Downsampler | null = null;
-	#pcm = new Float32Array(G711_FRAME);
+	#pcm = new Float32Array(G722_FRAME);
+	#g722: G722Encoder | null = null;
 	#fill = 0;
 	#made = 0;
 	stats: SenderStats = { frames: 0, bytes: 0 };
@@ -163,7 +183,7 @@ export class AudioSender {
 	configure(payloads: Payload[]) {
 		const payload =
 			payloads.find((candidate) =>
-				['opus', 'pcmu', 'pcma'].includes(candidate.name.toLowerCase()),
+				['opus', 'g722', 'pcmu', 'pcma'].includes(candidate.name.toLowerCase()),
 			) ?? null;
 		if (JSON.stringify(payload) === JSON.stringify(this.#payload)) return;
 		this.#payload = payload;
@@ -208,6 +228,7 @@ export class AudioSender {
 		this.#last = null;
 		this.#placed = false;
 		this.#down = null;
+		this.#g722 = null;
 		this.#fill = 0;
 		this.#made = 0;
 		this.#squares = 0;
@@ -226,9 +247,10 @@ export class AudioSender {
 		)
 			this.#restart();
 		this.#expected = data.timestamp + duration;
-		if (payload.name.toLowerCase() === 'opus')
-			this.#opus(data, payload, duration);
-		else this.#g711(data, payload, duration);
+		const name = payload.name.toLowerCase();
+		if (name === 'opus') this.#opus(data, payload, duration);
+		else if (name === 'g722') this.#narrow(data, payload, duration, 16000);
+		else this.#narrow(data, payload, duration, 8000);
 	}
 
 	#opus(data: AudioData, payload: Payload, duration: number) {
@@ -357,8 +379,9 @@ export class AudioSender {
 		);
 	}
 
-	#g711(data: AudioData, payload: Payload, duration: number) {
-		if (data.sampleRate < 8000) return;
+	/** G.711 at 8 kHz or G.722 at 16 kHz, both encoded here: WebCodecs has neither encoder */
+	#narrow(data: AudioData, payload: Payload, duration: number, rate: number) {
+		if (data.sampleRate < rate) return;
 		if (this.#epoch === null || this.#rate !== data.sampleRate || !this.#down) {
 			const expected = this.#expected;
 			this.#restart();
@@ -366,28 +389,32 @@ export class AudioSender {
 			this.#rate = data.sampleRate;
 			this.#epoch = data.timestamp;
 			this.#fedUs = data.timestamp;
-			this.#down = new Downsampler(data.sampleRate, 8000);
+			this.#down = new Downsampler(data.sampleRate, rate);
+			// G.722 predicts from what it sent before: one state per run
+			if (rate === 16000) this.#g722 = new G722Encoder();
 		}
 		const samples = planes(data, 1);
 		this.#squares += power(samples);
 		this.#count += samples.length;
 		const narrow = this.#down.push(samples);
 		const law = payload.name.toUpperCase() === 'PCMA' ? 'PCMA' : 'PCMU';
+		const frame = rate === 16000 ? G722_FRAME : G711_FRAME;
+		const pcm = this.#pcm.subarray(0, frame);
 		for (let at = 0; at < narrow.length;) {
-			const take = Math.min(G711_FRAME - this.#fill, narrow.length - at);
-			this.#pcm.set(narrow.subarray(at, at + take), this.#fill);
+			const take = Math.min(frame - this.#fill, narrow.length - at);
+			pcm.set(narrow.subarray(at, at + take), this.#fill);
 			this.#fill += take;
 			at += take;
-			if (this.#fill < G711_FRAME) break;
+			if (this.#fill < frame) break;
 			this.#fill = 0;
 			this.#send(
 				payload.pt,
-				8000,
-				Math.round(this.#epoch * 0.008) + this.#made++ * G711_FRAME,
-				G711_FRAME,
-				g711Encode(law, this.#pcm),
+				rate,
+				Math.round((this.#epoch * rate) / 1e6) + this.#made++ * frame,
+				frame,
+				this.#g722 ? g722Encode(this.#g722, pcm) : g711Encode(law, pcm),
 				// the packet's first sample was read 20 ms before its last
-				20 + (narrow.length - at) / 8,
+				20 + ((narrow.length - at) * 1000) / rate,
 			);
 		}
 		this.#fedUs += duration;
@@ -482,6 +509,8 @@ export interface Received {
 	codec: string;
 	time: bigint;
 	payload: Uint8Array;
+	/** FLAG_CONTIGUOUS: nothing was lost before it; FLAG_TALKSPURT: it starts a talkspurt */
+	flags?: number;
 }
 
 export interface ReceiverStats extends PlayoutStats {
@@ -490,6 +519,8 @@ export interface ReceiverStats extends PlayoutStats {
 	bytes: number;
 	/** frames written to the track, silence among them */
 	written: number;
+	/** lost Opus packets the decoder concealed */
+	concealed: number;
 }
 
 /**
@@ -512,9 +543,13 @@ export class AudioReceiver {
 	#clock: number | null = null;
 	#heard = 0;
 	#started = false;
-	/** the last G.711 sample, which the next packet's first is drawn from */
+	/** the last G.711 or G.722 sample, which the next packet's first is drawn from */
 	#previous = 0;
+	/** G.722 decodes from its own reconstruction: one state for the stream */
+	#g722 = new G722Decoder();
 	#counts = { frames: 0, bytes: 0, written: 0 };
+	/** lost Opus packets the decoder concealed */
+	#concealed = 0;
 	/** the first frame arrived: the track has sound now */
 	onStart: (() => void) | null = null;
 	/** the next frame heard is a start again (the section had stopped receiving) */
@@ -523,7 +558,11 @@ export class AudioReceiver {
 	}
 
 	get stats(): ReceiverStats {
-		return { ...this.#playout.stats, ...this.#counts };
+		return {
+			...this.#playout.stats,
+			...this.#counts,
+			concealed: this.#concealed,
+		};
 	}
 
 	/** the track's sink (a MediaStreamTrackGenerator's writable), or null */
@@ -559,12 +598,21 @@ export class AudioReceiver {
 		}
 		if (!this.#writer) return;
 		const time = Number(frame.time);
-		if (frame.codec === 'opus') this.#opus(frame.payload, time, now);
+		if (frame.codec === 'opus')
+			this.#opus(frame.payload, time, now, frame.flags ?? FLAG_CONTIGUOUS);
 		else if (frame.codec === 'PCMU' || frame.codec === 'PCMA')
 			// 8 kHz on the wire, 48 kHz on the track
 			this.#hold(
 				time * 6,
-				this.#widen(g711Decode(frame.codec, frame.payload)),
+				this.#widen(g711Decode(frame.codec, frame.payload), 6),
+				1,
+				now,
+			);
+		else if (frame.codec === 'G722')
+			// 16 kHz (the stack's count of it), 48 kHz on the track
+			this.#hold(
+				time * 3,
+				this.#widen(g722Decode(this.#g722, frame.payload), 3),
 				1,
 				now,
 			);
@@ -576,8 +624,13 @@ export class AudioReceiver {
 		}
 	}
 
-	#opus(payload: Uint8Array, time: number, now: number) {
+	/** the last Opus packet decoded: its time and its first byte */
+	#lastOpus: { time: number; toc: number } | null = null;
+
+	#opus(payload: Uint8Array, time: number, now: number, flags: number) {
 		if (!payload.length) return;
+		const last = this.#lastOpus;
+		this.#lastOpus = { time, toc: payload[0] };
 		// the stereo bit of the packet's first byte (RFC 6716, 3.1)
 		if (payload[0] & 4 && !this.#stereo) {
 			this.#stereo = true;
@@ -603,6 +656,37 @@ export class AudioReceiver {
 			}
 		}
 		if (decoder.decodeQueueSize > MAX_QUEUE) return;
+		// Packets were lost before this one: the decoder conceals each, as
+		// Chrome's does, rather than leave silence there. A frame of one byte
+		// (the last packet's first byte, one frame of its mode) is what
+		// libopus takes for a lost packet, and Chrome's AudioDecoder hands
+		// it to libopus as one (docs/webrtc-over-wisp.md, section 16).
+		const missing = last ? (time - last.time) / OPUS_FRAME - 1 : 0;
+		if (
+			last &&
+			!(flags & FLAG_CONTIGUOUS) &&
+			!(flags & FLAG_TALKSPURT) &&
+			Number.isInteger(missing) &&
+			missing >= 1 &&
+			missing <= CONCEAL_FRAMES
+		)
+			for (let lost = 1; lost <= missing; lost++) {
+				const at = last.time + lost * OPUS_FRAME;
+				this.#waiting.push({ time: at, arrived: now });
+				this.#concealed++;
+				try {
+					decoder.decode(
+						new EncodedAudioChunk({
+							type: 'key',
+							timestamp: Math.round(at / OPUS_UNITS),
+							data: Uint8Array.of(last.toc & 0xfc),
+						}),
+					);
+				} catch (error) {
+					this.#closeDecoder();
+					return;
+				}
+			}
 		this.#waiting.push({ time, arrived: now });
 		try {
 			decoder.decode(
@@ -632,12 +716,12 @@ export class AudioReceiver {
 	}
 
 	/** a G.711 packet's samples at six times their rate, drawn in straight lines */
-	#widen(samples: Float32Array): Float32Array<ArrayBuffer> {
-		const out = new Float32Array(samples.length * 6);
+	#widen(samples: Float32Array, by: number): Float32Array<ArrayBuffer> {
+		const out = new Float32Array(samples.length * by);
 		let previous = this.#previous;
 		for (let at = 0; at < samples.length; at++) {
-			const step = (samples[at] - previous) / 6;
-			for (let k = 0; k < 6; k++) out[at * 6 + k] = previous + step * (k + 1);
+			const step = (samples[at] - previous) / by;
+			for (let k = 0; k < by; k++) out[at * by + k] = previous + step * (k + 1);
 			previous = samples[at];
 		}
 		this.#previous = previous;

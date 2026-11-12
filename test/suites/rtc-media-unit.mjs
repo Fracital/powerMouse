@@ -3,8 +3,9 @@
 // G.711 against what Chrome's decoder gives, the audio level, the stack's
 // formats read from the offers of two Chrome versions, the sender's times
 // (an encoder that behaves as Chrome's was measured to), and sound sent
-// through two stacks back to back (assets/rtc.wasm) as G.711, which needs
-// no WebCodecs. The browser's part (Opus, tracks) is the webrtc-media
+// through two stacks back to back (assets/rtc.wasm) as G.711 and as G.722,
+// which need no WebCodecs; G.722 also against the output of the ITU-T
+// reference codec (G.191 STL) for one signal. The browser's part (Opus, tracks) is the webrtc-media
 // suite's. Skips when esbuild is not installed, as rewriter-unit does.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +26,7 @@ writeFileSync(
 	entry,
 	`export { Playout } from ${from('playout.ts')};
 export * from ${from('g711.ts')};
+export * from ${from('g722.ts')};
 export { AudioSender, AudioReceiver, levelOf } from ${from('audio.ts')};
 export { stackFormats, parsePayloads, parseParameters } from ${from('formats.ts')};
 export * as records from ${from('records.ts')};
@@ -337,15 +339,15 @@ for (const version of ['152', '156']) {
 	const formats = m.stackFormats(template(version));
 	const codecs = formats.codecs.split('|');
 	ok(
-		`Chrome ${version}'s offer gives its audio payloads in its order, less G.722`,
-		codecs.slice(0, 7).join('|') ===
-			'111,opus,48000,2,minptime=10;useinbandfec=1|63,red,48000,2,111/111|0,PCMU,8000,,|8,PCMA,8000,,|13,CN,8000,,|110,telephone-event,48000,,|126,telephone-event,8000,,',
-		codecs.slice(0, 7).join('|'),
+		`Chrome ${version}'s offer gives its audio payloads in its order`,
+		codecs.slice(0, 8).join('|') ===
+			'111,opus,48000,2,minptime=10;useinbandfec=1|63,red,48000,2,111/111|9,G722,8000,,|0,PCMU,8000,,|8,PCMA,8000,,|13,CN,8000,,|110,telephone-event,48000,,|126,telephone-event,8000,,',
+		codecs.slice(0, 8).join('|'),
 	);
 	ok(
 		`and its video payloads, each with the one that repeats it (${version})`,
-		codecs[7] === '96,VP8,90000,,' &&
-			codecs[8] === '97,rtx,90000,,apt=96' &&
+		codecs[8] === '96,VP8,90000,,' &&
+			codecs[9] === '97,rtx,90000,,apt=96' &&
 			codecs.some((entry) =>
 				/^\d+,H264,90000,,.*profile-level-id=42e01f/.test(entry),
 			) &&
@@ -688,11 +690,152 @@ const talkspurts = (frames) =>
 			frames[10].level === 9,
 		`${frames.length} frames, rms ${Math.sqrt(power / 160).toFixed(3)}, level ${frames[10].level}`,
 	);
+	const wide = await send(
+		Array.from({ length: 100 }, (_, i) => sound(i, { rate: 44100 })),
+		m.parsePayloads('9,G722,8000,,|0,PCMU,8000,,'),
+	);
+	const decoded = m
+		.g722Decode(
+			new m.G722Decoder(),
+			new Uint8Array(wide.slice(0, 11).flatMap((frame) => [...frame.payload])),
+		)
+		.subarray(320 * 10);
+	let squares = 0;
+	for (const value of decoded) squares += value * value;
+	ok(
+		'G.722 before G.711 is sent as G.722: 160 bytes of 16 kHz sound every 320 of the stack count',
+		wide.length >= 49 &&
+			wide.every((frame) => frame.pt === 9 && frame.payload.length === 160) &&
+			steps(wide).every((step) => step === 320) &&
+			Math.abs(Math.sqrt(squares / 320) - 0.5 / Math.SQRT2) < 0.03,
+		`${wide.length} frames, steps ${[...new Set(steps(wide))]}, rms ${Math.sqrt(squares / 320).toFixed(3)}`,
+	);
 	const none = await send(
 		Array.from({ length: 20 }, (_, i) => sound(i)),
-		m.parsePayloads('9,G722,16000,,|13,CN,8000,,'),
+		m.parsePayloads('13,CN,8000,,|126,telephone-event,8000,,'),
 	);
 	ok('and nothing where no payload can be encoded here', none.length === 0);
+}
+
+// --- G.722 against the ITU-T reference ---
+
+{
+	// a sweep across the whole band at -3 dBFS, 4 s of it at 16 kHz; the
+	// hashes are of what the G.191 STL's encg722 and decg722 (mode 1) make
+	// of it
+	const pcm = new Int16Array(4 * 16000);
+	for (let at = 0; at < pcm.length; at++) {
+		const t = at / 16000;
+		const value = Math.round(
+			32767 *
+				Math.pow(10, -3 / 20) *
+				Math.sin(2 * Math.PI * (20 * t + ((8000 - 20) / 8) * t * t)),
+		);
+		pcm[at] = Math.max(-32768, Math.min(32767, value));
+	}
+	const { createHash } = await import('node:crypto');
+	const sha = (bytes) =>
+		createHash('sha256')
+			.update(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength))
+			.digest('hex');
+	const encoder = new m.G722Encoder();
+	const codes = new Uint8Array(pcm.length / 2);
+	for (let at = 0; at < pcm.length; at += 320)
+		codes.set(encoder.encode(pcm.subarray(at, at + 320)), at / 2);
+	const decoder = new m.G722Decoder();
+	const out = new Int16Array(pcm.length);
+	for (let at = 0; at < codes.length; at += 160)
+		out.set(decoder.decode(codes.subarray(at, at + 160)), at * 2);
+	ok(
+		'G.722 encodes and decodes a sweep, packet by packet, as the ITU-T reference does, bit for bit',
+		sha(codes) ===
+			'd53e90016beb4c02ad41d20797a97b9f21087af3bfdfcf201ba5fc7fbe456c7c' &&
+			sha(out) ===
+				'c00bc4c4842a9fa10ae8aa127c297474a25eddbd5940bc7e73e2eb083e569e6d',
+		`${sha(codes)} ${sha(out)}`,
+	);
+}
+
+// --- a lost Opus packet ---
+
+{
+	// A decoder that answers each chunk with 20 ms, as Chrome's does, and
+	// keeps what it was given
+	const given = [];
+	class FakeDecoder {
+		constructor({ output }) {
+			this.output = output;
+			this.state = 'unconfigured';
+			this.decodeQueueSize = 0;
+		}
+		configure() {
+			this.state = 'configured';
+		}
+		decode(chunk) {
+			given.push(chunk);
+			this.output(
+				new FakeAudioData({
+					format: 'f32-planar',
+					sampleRate: 48000,
+					numberOfFrames: 960,
+					numberOfChannels: 1,
+					timestamp: chunk.timestamp,
+					data: new Float32Array(960).fill(
+						chunk.data.length === 1 ? 0.25 : 0.5,
+					),
+				}),
+			);
+		}
+		close() {
+			this.state = 'closed';
+		}
+	}
+	class FakeChunk {
+		constructor({ timestamp, data }) {
+			this.timestamp = timestamp;
+			this.data = new Uint8Array(data);
+		}
+	}
+	globalThis.AudioDecoder = FakeDecoder;
+	globalThis.EncodedAudioChunk = FakeChunk;
+	const receiver = new m.AudioReceiver();
+	receiver.setTrack(new WritableStream({ write() {} }));
+	const packet = (time, flags = records.FLAG_CONTIGUOUS) =>
+		receiver.frame({
+			codec: 'opus',
+			time: BigInt(time),
+			// SILK wideband, 20 ms, one frame (RFC 6716, 3.1)
+			payload: Uint8Array.of(0x4b, 1, 2, 3),
+			flags,
+		});
+	packet(0);
+	packet(960);
+	// two lost
+	packet(3840, 0);
+	// a pause of a second: a sender that left silence out
+	packet(51840, 0);
+	// a talkspurt after a short gap
+	packet(54720, records.FLAG_TALKSPURT);
+	receiver.close();
+	delete globalThis.AudioDecoder;
+	delete globalThis.EncodedAudioChunk;
+	const seen = given.map(
+		(chunk) => `${chunk.timestamp}:${[...chunk.data].join('.')}`,
+	);
+	ok(
+		'a lost Opus packet is concealed by the decoder (a frame of one byte, the last first byte of one frame), not left silent; a pause and a talkspurt are not',
+		seen.join() ===
+			[
+				'0:75.1.2.3',
+				'20000:75.1.2.3',
+				'40000:72',
+				'60000:72',
+				'80000:75.1.2.3',
+				'1080000:75.1.2.3',
+				'1140000:75.1.2.3',
+			].join() && receiver.stats.concealed === 2,
+		`${seen.join()} concealed ${receiver.stats.concealed}`,
+	);
 }
 
 // --- two stacks back to back ---
@@ -792,9 +935,9 @@ const audio =
 ok(
 	"its offer lists the browser's audio payloads, by the browser's numbers",
 	audio.split(' ').slice(3).sort().join() ===
-		['111', '63', '0', '8', '13', '110', '126'].sort().join() &&
+		['111', '63', '9', '0', '8', '13', '110', '126'].sort().join() &&
 		offer.sdp.includes('a=rtpmap:111 opus/48000/2') &&
-		!offer.sdp.includes('G722'),
+		offer.sdp.includes('a=rtpmap:9 G722/8000'),
 	audio,
 );
 const answer = b.control({
@@ -971,6 +1114,102 @@ ok(
 	);
 }
 receiver.close();
+
+// the same as G.722, which the stack counts at 16 kHz and writes at 8000
+{
+	const wideSender = new m.AudioSender(index, (frame, age) => {
+		a.engine.input(
+			a.id,
+			records.IN_MEDIA_WRITE,
+			records.encodeFrame(frame, age),
+		);
+		a.drain();
+	});
+	wideSender.configure(
+		m
+			.parsePayloads(negotiated.codecs ?? '')
+			.filter((payload) => payload.name === 'G722'),
+	);
+	wideSender.setActive(true);
+	const heard = [];
+	const wideReceiver = new m.AudioReceiver();
+	wideReceiver.setTrack(
+		new WritableStream({
+			write(data) {
+				heard.push(data);
+			},
+		}),
+	);
+	const first = b.frames.length;
+	b.onFrame = (frame) => {
+		if (frame.media === remote) wideReceiver.frame(frame);
+	};
+	let wideSource = null;
+	wideSender.setTrack(
+		new ReadableStream({
+			start(controller) {
+				wideSource = controller;
+			},
+		}),
+	);
+	const start = performance.now();
+	for (let n = 0; n < 150;) {
+		while (n < 150 && n * 10 <= performance.now() - start)
+			wideSource.enqueue(sound(n++));
+		a.tick();
+		b.tick();
+		await sleep(2);
+	}
+	await sleep(150);
+	wideSource.close();
+	wideSender.close();
+	wideReceiver.close();
+	// (the last G.711 frames of the run before may still come in)
+	const frames = b.frames
+		.slice(first)
+		.filter((frame) => frame.codec !== 'PCMU');
+	const sounding = heard.filter((data) => data.data.some((value) => value));
+	const samples = new Float32Array(
+		sounding.reduce((sum, data) => sum + data.numberOfFrames, 0),
+	);
+	let at = 0;
+	for (const data of sounding) {
+		samples.set(data.data.subarray(0, data.numberOfFrames), at);
+		at += data.numberOfFrames;
+	}
+	// the tone's strength, 5 ms at a time, past the first frames
+	const w = (2 * Math.PI * 440) / 48000;
+	const amplitudes = [];
+	for (let i = 4800; i + 240 <= samples.length - 4800; i += 240) {
+		let I = 0;
+		let Q = 0;
+		for (let k = 0; k < 240; k++) {
+			I += samples[i + k] * Math.cos(w * (i + k));
+			Q += samples[i + k] * Math.sin(w * (i + k));
+		}
+		amplitudes.push(Math.hypot(I, Q) / 120);
+	}
+	const strong = amplitudes.filter((value) => Math.abs(value - 0.5) < 0.05);
+	ok(
+		'G.722 frames come out on the other side at 16 kHz on the stack count, and the receiver writes the tone',
+		frames.length >= 70 &&
+			frames.every(
+				(frame) =>
+					frame.codec === 'G722' &&
+					frame.pt === 9 &&
+					frame.payload.length === 160,
+			) &&
+			frames
+				.slice(1)
+				.every((frame, i) => frame.time - frames[i].time === 320n) &&
+			heard.every(
+				(data) => data.sampleRate === 48000 && data.numberOfFrames === 960,
+			) &&
+			amplitudes.length > 100 &&
+			strong.length >= amplitudes.length - 8,
+		`${frames.length} frames, ${strong.length} of ${amplitudes.length} windows at the tone's strength`,
+	);
+}
 a.engine.destroy(a.id);
 b.engine.destroy(b.id);
 

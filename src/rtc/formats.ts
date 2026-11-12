@@ -9,9 +9,10 @@ import { all, parseSdp } from './sdp';
 
 /**
  * Audio the worker can neither encode nor decode, which is therefore not
- * offered: WebCodecs has no G.722.
+ * offered. None of this browser's: WebCodecs has Opus, and G.711 and G.722
+ * are written by hand (g711.ts, g722.ts).
  */
-const NOT_CARRIED = new Set(['g722']);
+const NOT_CARRIED = new Set<string>();
 
 /** the stack's `codecs` and `exts` configuration fields */
 export interface Formats {

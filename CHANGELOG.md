@@ -605,7 +605,13 @@ The first release after a four-year gap. Everything below is breaking.
   as streams. The `webrtc-media` suite holds a call with Chrome's own stack
   to what the browser's own connection reads at every step, in both demo
   modes, with the tone unbroken both ways and every packet from the wisp
-  server. Video, G.722, comfort noise and DTMF are not carried yet.
+  server. Video, comfort noise and DTMF are not carried yet.
+- WebRTC audio carries G.722, written by hand in the worker
+  (`src/rtc/g722.ts`, bit-exact against the ITU-T reference codec and its
+  test sequences), so a proxied page offers every audio payload Chrome
+  offers, in Chrome's order, and sends G.722 to a peer that lists it first.
+  A lost Opus packet is concealed by the decoder, as natively, instead of
+  being 20 ms of silence (docs/webrtc-over-wisp.md section 16).
 - When a peer closes its connection, a proxied page's data channels hear
   what Chrome's own hear: `closing`, an `error` event (an `RTCError` of
   detail `sctp-failure`, cause code 12, "User-Initiated Abort, reason=Close
@@ -5291,8 +5297,9 @@ Fixed while testing real sites and a feature fixture:
   origin today, shared between those origins.
 - WebRTC carries data channels and audio so far (docs/webrtc-over-wisp.md
   sections 15 and 16): video sections negotiate and their frames are
-  dropped, G.722, comfort noise and DTMF are not carried, a lost Opus packet
-  is silence, TURN over TCP or TLS and TCP candidates are not carried,
+  dropped, comfort noise and DTMF are not carried, a lost Opus packet's
+  in-band FEC copy is not used, TURN over TCP or TLS and TCP candidates are
+  not carried,
   `getStats()` has no media entries. A peer behind
   a restrictive NAT is reached only through a TURN server the page names.
 - The same-origin policy between proxied sites is simulated by the proxy

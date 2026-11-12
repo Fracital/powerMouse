@@ -172,7 +172,7 @@ those packets are gone too.
 
 ## Limits
 
-- **What is not carried yet**: video, G.722, comfort noise and DTMF, TURN
+- **What is not carried yet**: video, comfort noise and DTMF, TURN
   over TCP and TLS, ICE-TCP, the media entries of `getStats()` (its
   candidates, pairs, transport, certificates and data channels are
   Chrome's, and `pc.sctp` with its transports reads as Chrome's).

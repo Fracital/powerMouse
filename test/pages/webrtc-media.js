@@ -408,6 +408,23 @@
 		direction(name, at, direction) {
 			transceiver(name, at).direction = direction;
 		},
+		/** transceiver `at` lists `mime` first among the browser's own codecs */
+		prefer(name, at, mime) {
+			const { codecs } = RTCRtpReceiver.getCapabilities('audio');
+			transceiver(name, at).setCodecPreferences([
+				...codecs.filter((codec) => codec.mimeType === mime),
+				...codecs.filter((codec) => codec.mimeType !== mime),
+			]);
+		},
+		/** the codec each RTP stream of the connection sends or receives with */
+		async codecs(name) {
+			const stats = await peer(name).pc.getStats();
+			const out = {};
+			for (const report of stats.values())
+				if (report.type === 'inbound-rtp' || report.type === 'outbound-rtp')
+					out[report.type] = stats.get(report.codecId)?.mimeType ?? null;
+			return out;
+		},
 		stop(name, at) {
 			transceiver(name, at).stop();
 		},

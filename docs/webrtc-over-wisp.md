@@ -1013,10 +1013,10 @@ worker (`{kind: 'template', sdp}`; the `init` message says one follows, and
 connections wait for it). Its `a=rtpmap` and `a=fmtp` lines become the
 stack's `codecs` field and its `a=extmap` lines the `exts` field, so the
 payload types, the format parameters and the extension ids are this
-Chrome's and no table of them is shipped. G.722 is left out: WebCodecs has
-neither an encoder nor a decoder for it, and a payload this side could not
-carry must not be offered. Without a template the stack keeps its own
-formats.
+Chrome's and no table of them is shipped. Every audio payload of Chrome's
+is offered, in its order: G.722, which WebCodecs has neither an encoder nor
+a decoder for, is written by hand (below). Without a template the stack
+keeps its own formats.
 
 The protocol (`src/rtc/protocol.ts`) grew by the requests `addMedia` (a
 transceiver the page added: its handle, kind, direction and the stream and
@@ -1134,12 +1134,44 @@ replaced track is what is sent; the far end hears the page from a socket
 of the wisp server, and nothing the page reads holds an address of this
 machine.
 
+### G.722 and a lost Opus packet
+
+G.722 (payload 9) is `src/rtc/g722.ts`: the ITU-T G.191 reference codec
+(STL `funcg722.c`) in integer arithmetic, operator for operator, so it is
+bit-exact both ways. Checked against the ITU-T G.722 Appendix II test
+sequences (17,216 codes, 67,264 sub-band samples), the STL's own vectors
+(48,768 codes, 97,536 samples) and its encoder and decoder on 15 signals
+and random code streams: no difference; `rtc-media-unit` keeps a sweep's
+hashes from the reference. ffmpeg's encoder differs from the reference on
+clipped full-scale input only (it leaves out a clamp of the band
+signals). The sender sends it when the peer lists it before Opus: 320
+samples at 16 kHz a packet, 160 bytes, which the stack counts at 16 kHz
+and writes at RFC 3551's 8000 Hz clock; the receiver decodes it and
+draws it out to 48 kHz. In `webrtc-media` the page sends G.722 to Chrome,
+whose decoder plays it, when Chrome's answer lists G.722 first.
+
+A lost Opus packet is concealed, as Chrome conceals one that no FEC copy
+rebuilds: when a packet
+arrives after a loss (the stack says nothing was lost before a frame, or
+not) of one to five packets, the receiver first hands the decoder a frame
+of one byte for each lost one (the last packet's first byte, code 0),
+which libopus takes for a lost packet, and Chrome's `AudioDecoder` passes
+it to libopus as one. Measured against libopus's own concealment, the
+output is the same; against silence, a single lost packet of a tone
+keeps its level within about 4 dB and its spectrum (0.99 similar), where
+silence was a 20 ms dropout; natively, with the next packet's FEC copy,
+Chrome rebuilds it closer still (33 dB signal to noise against 5). A longer gap is a pause and a talkspurt
+starts anew: neither is concealed. In-band FEC (the copy of a lost packet
+in the next one) is not used yet: WebCodecs cannot decode it, but the
+copy can be rewritten as a packet of its own (a prototype matched
+libopus's FEC decode on SILK streams); a decoder in the crate instead
+would cost 47 KB with brotli.
+
 Limits: audio only (video sections negotiate and their frames are
-dropped); a lost Opus packet is silence (WebCodecs has no way to ask the
-decoder for concealment or for the copy in the next packet's FEC);
-playout runs on the worker's clock, not the sound card's, so a long call
-drifts against it by the difference of the two clocks and the track's
-sink absorbs that; G.722, comfort noise and DTMF are not carried, and
-`sender.dtmf` is null; `getStats()` of a sender or a receiver is empty;
+dropped); no in-band FEC; playout runs on the worker's clock, not the
+sound card's, so a long call drifts against it by the difference of the
+two clocks and the track's sink absorbs that; comfort noise and DTMF are
+negotiated as Chrome offers them but not carried, and `sender.dtmf` is
+null; `getStats()` of a sender or a receiver is empty;
 the far ends in the suite are Chrome's own stack, not werift or a TURN
 relayed proxied page.

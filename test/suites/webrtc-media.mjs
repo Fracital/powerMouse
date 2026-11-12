@@ -317,6 +317,51 @@ async function answering(own, far) {
 	return record;
 }
 
+/**
+ * The page offers its tone and the far end answers with its own, listing
+ * G.722 first: each end sends the first codec of the other's description,
+ * so the page sends G.722 (the codec written by hand in the worker,
+ * src/rtc/g722.ts) to Chrome's decoder, and Chrome sends Opus.
+ */
+async function wideband(own, far) {
+	const record = { heard: {}, codecs: null, failure: null };
+	try {
+		await own.call('open');
+		await far.call('open');
+		await own.call('tone', 440);
+		await describe(own, far, 'offer');
+		await far.call('tone', 660);
+		await far.call('prefer', 0, 'audio/G722');
+		await describe(far, own, 'answer');
+		await own.call('connected');
+		await far.call('connected');
+		await own.call('muted', 0, false);
+		await far.call('muted', 0, false);
+		[record.heard.own, record.heard.far] = await Promise.all([
+			own.call('hear', 0, 660),
+			far.call('hear', 0, 440),
+		]);
+		record.codecs = await far.call('codecs');
+		record.seen = await far.call('far');
+		record.owner = record.seen?.remote
+			? await sockets.owner(record.seen.remote.port)
+			: 'no pair';
+	} catch (error) {
+		record.failure = String(error).slice(0, 400);
+	}
+	await own.call('close').catch(() => {});
+	await far.call('close').catch(() => {});
+	return record;
+}
+const g722 = (record) =>
+	!record.failure &&
+	record.codecs?.['inbound-rtp'] === 'audio/G722' &&
+	record.codecs?.['outbound-rtp'] === 'audio/opus' &&
+	record.heard.own?.level > 0.25 &&
+	record.heard.far?.level > 0.25 &&
+	Math.abs(record.heard.own.pitch - 660) < 20 &&
+	Math.abs(record.heard.far.pitch - 440) < 20;
+
 // --- pages ---
 
 const browser = await launch(FAKE);
@@ -340,6 +385,7 @@ const natively = {
 	offering: await offering(end(control), end(native, 'the far end')),
 	answering: await answering(end(control), end(native, 'the far end')),
 };
+natively.wideband = await wideband(end(control), end(native, 'the far end'));
 for (const [name, record] of Object.entries(natively))
 	ok(
 		`natively: the ${name} scenario runs to its end, with sound both ways`,
@@ -348,6 +394,12 @@ for (const [name, record] of Object.entries(natively))
 			record.heard.far?.level > 0.25,
 		record.failure ?? JSON.stringify(record.heard),
 	);
+
+ok(
+	'natively: with G.722 first in the answer, the offerer sends G.722 and the answerer Opus',
+	g722(natively.wideband),
+	JSON.stringify([natively.wideband.codecs, natively.wideband.heard]),
+);
 
 for (const proxied of pages) {
 	const { label } = proxied;
@@ -509,6 +561,15 @@ for (const proxied of pages) {
 			`${label}, ${name}: the page's own descriptions and candidates hold no address of this machine`,
 			leaks.length === 0 && /typ host/.test(JSON.stringify(got.read)),
 			JSON.stringify(leaks),
+		);
+	}
+	// G.722 both ways with Chrome's own stack
+	{
+		const got = await wideband(end(proxied), end(native, 'the far end'));
+		ok(
+			`${label}: with G.722 first in the far end's answer, the page sends G.722, Chrome's decoder plays it, and each end hears the other's tone from a socket of the wisp server`,
+			g722(got) && got.owner === 'server',
+			JSON.stringify([got.failure, got.codecs, got.heard, got.owner]),
 		);
 	}
 }
