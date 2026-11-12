@@ -12,6 +12,7 @@ import {
 	markedPolicy,
 	parsePolicies,
 	policyMark,
+	policySandbox,
 	refusalNamed,
 	sourcesMatch,
 	type HopPolicy,
@@ -326,6 +327,8 @@ export default class DocumentClient extends Client {
 	} | null = null;
 	/** the window's native frameElement getter (the Framing module hooks it) */
 	#frameElementGet: (() => Element | null) | undefined;
+	/** whether this window's opener was an opaque origin when it was created */
+	#openerOpaque = false;
 	/** the flags a popup inherited from its opener when it was created */
 	#inheritedFlags: Set<string> | null = null;
 	/** the nonce the shell script that made this client carried, in its document (guardScripts) */
@@ -654,6 +657,9 @@ export default class DocumentClient extends Client {
 			)?.get;
 			const opener = openerGet && Reflect.apply(openerGet, this.global, []);
 			if (!opener || opener === this.global) return null;
+			const client = (opener as Record<string, unknown>)[this.names.client] as
+				DocumentClient | undefined;
+			this.#openerOpaque = client?.sandboxedOpaque === true;
 			const flags = this.#flagsOf(opener);
 			if (!flags || flags.has('allow-popups-to-escape-sandbox')) return null;
 			return flags;
@@ -670,6 +676,9 @@ export default class DocumentClient extends Client {
 				? new Set([...flags].filter((token) => other.has(token)))
 				: new Set(other);
 		};
+		// its own policies' sandbox (a header's: the browser gets only what it
+		// can enforce of it, src/csp.ts)
+		narrow(this.#policyFlags);
 		try {
 			const frame =
 				this.#frameElementGet &&
@@ -678,9 +687,14 @@ export default class DocumentClient extends Client {
 					this.global,
 					[],
 				) as Element | null);
+			this.#frameTopNavigation = false;
 			if (frame) {
 				const sandbox = pageSandbox(frame, MARKER);
-				if (sandbox !== null) narrow(sandboxTokens(sandbox));
+				if (sandbox !== null) {
+					const tokens = sandboxTokens(sandbox);
+					narrow(tokens);
+					this.#frameTopNavigation = tokens.has('allow-top-navigation');
+				}
 			}
 			const parent = this.parent;
 			if (parent !== this.global) narrow(this.#flagsOf(parent));
@@ -698,6 +712,8 @@ export default class DocumentClient extends Client {
 			return null;
 		}
 	}
+	/** whether this document's frame's sandbox attribute grants allow-top-navigation */
+	#frameTopNavigation = false;
 	/** decide this document's sandbox again: a new document of this window starts */
 	refreshSandbox() {
 		this.sandboxFlags = this.#sandbox();
@@ -893,7 +909,26 @@ export default class DocumentClient extends Client {
 	 * (src/csp.ts): its headers' (the shell's) and its metas', each browser
 	 * policy's text with the page's text it stands for
 	 */
-	policyTexts: PolicyText[] = [];
+	get policyTexts(): PolicyText[] {
+		return this.#policyTexts;
+	}
+	/**
+	 * Set by the shell before the page runs, with its headers' policies:
+	 * their `sandbox` directives sandbox the document (sandboxFlags), which
+	 * is decided again now
+	 */
+	set policyTexts(texts: PolicyText[]) {
+		this.#policyTexts = texts;
+		this.#policyFlags = policySandbox(
+			texts.flatMap(([, page, disposition]) =>
+				parsePolicies(page, disposition, 'header'),
+			),
+		);
+		this.refreshSandbox();
+	}
+	#policyTexts: PolicyText[] = [];
+	/** the flags of the `sandbox` directives of this document's header policies, or null */
+	#policyFlags: Set<string> | null = null;
 	/** the mark this document's meta policies share (markedPolicy) */
 	#policyMark: string | null = null;
 	/**
@@ -1717,11 +1752,18 @@ export default class DocumentClient extends Client {
 			context = parent;
 		}
 		if (target !== this.proxiedTop) return false;
-		if (this.allows('allow-top-navigation')) return true;
-		return (
-			this.allows('allow-top-navigation-by-user-activation') &&
-			this.global.navigator.userActivation?.isActive === true
-		);
+		const activated = this.global.navigator.userActivation?.isActive === true;
+		// a document of another origin than its top's (an opaque one) needs
+		// a user activation all the same, unless its frame's attribute grants
+		// the flag: a policy's sandbox does not lift Chrome's framebusting
+		// intervention (csp-sandbox suite, measured)
+		if (this.allows('allow-top-navigation'))
+			return (
+				activated ||
+				this.#frameTopNavigation ||
+				(!this.sandboxedOpaque && this.origin === this.topOrigin)
+			);
+		return this.allows('allow-top-navigation-by-user-activation') && activated;
 	}
 	/**
 	 * The SecurityError a sandboxed document gets for navigating a window it
@@ -1838,6 +1880,12 @@ export default class DocumentClient extends Client {
 	 * initiator is taken to be its parent, the one proxied page it can see.
 	 */
 	setReferrer(document: Document, info: ReferrerInfo) {
+		// a document an opaque origin made (a sandboxed document's frame or
+		// popup) has none: an opaque origin sends no referrer, natively
+		if (this.#openerOpaque || this.#creatorClient()?.sandboxedOpaque) {
+			this.#referrers.set(document, '');
+			return;
+		}
 		if ('referrer' in info) {
 			this.#referrers.set(document, info.referrer);
 			return;

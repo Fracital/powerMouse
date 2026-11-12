@@ -652,11 +652,79 @@ export function browserHeaders(
 			texts.push([marked, policy.text, disposition]);
 			values[disposition].push(marked);
 		}
+	// A policy's sandbox reaches the browser as a frame's attribute does
+	// (realSandbox): what it can enforce while the worker still serves the
+	// document and the inject runs in it (modal dialogs, forms, popups,
+	// downloads, pointer lock...), each as a policy of its own, which the
+	// browser never reports against. The inject emulates the rest
+	// (DocumentClient.sandboxFlags).
+	for (const policy of parsePolicies(
+		headers.get('content-security-policy'),
+		'enforce',
+		'header',
+	)) {
+		const tokens = policy.directives.get('sandbox');
+		if (tokens) values.enforce.push(`sandbox ${realSandbox(tokens.join(' '))}`);
+	}
 	return {
 		enforce: values.enforce.length ? values.enforce.join(', ') : null,
 		report: values.report.length ? values.report.join(', ') : null,
 		texts,
 	};
+}
+
+/**
+ * The sandbox flags of `policies`' `sandbox` directives (lower case), each
+ * narrowing the others, or null when none has one. Only an enforced header
+ * policy sandboxes its document: Chrome ignores the directive in a meta and
+ * in a report-only policy.
+ */
+export function policySandbox(policies: Policy[]): Set<string> | null {
+	let flags: Set<string> | null = null;
+	for (const policy of policies) {
+		if (policy.disposition !== 'enforce' || policy.source !== 'header')
+			continue;
+		const tokens = policy.directives.get('sandbox');
+		if (!tokens) continue;
+		const own = sandboxTokens(tokens.join(' '));
+		const known: Set<string> | null = flags;
+		flags = known
+			? new Set([...known].filter((token: string) => own.has(token)))
+			: own;
+	}
+	return flags;
+}
+
+/** the tokens of a sandbox value, as the browser parses them (ASCII case-insensitive) */
+export function sandboxTokens(value: string): Set<string> {
+	return new Set(
+		value
+			.split(/[\t\n\f\r ]+/)
+			.filter((token) => token !== '')
+			.map((token) => token.toLowerCase()),
+	);
+}
+
+/** the flags the inject enforces itself, never left to the browser (src/inject/dom/sandbox.ts) */
+const EMULATED = [
+	'allow-top-navigation',
+	'allow-top-navigation-by-user-activation',
+	'allow-top-navigation-to-custom-protocols',
+];
+/** the flags the browser's sandbox always has, so the worker serves the document and the inject runs */
+const NEEDED = ['allow-same-origin', 'allow-scripts'];
+
+/**
+ * The sandbox the browser applies for a page's `value` (a frame's
+ * attribute, a policy's directive): the page's flags but the top
+ * navigation ones, with allow-same-origin and allow-scripts
+ * (src/inject/dom/sandbox.ts)
+ */
+export function realSandbox(value: string): string {
+	const tokens = [...sandboxTokens(value)].filter(
+		(token) => !EMULATED.includes(token) && !NEEDED.includes(token),
+	);
+	return [...tokens, ...NEEDED].join(' ');
 }
 
 /** a prefix for the marks of one document's policies (markedPolicy): a scheme name no page uses */
