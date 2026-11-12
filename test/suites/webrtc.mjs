@@ -1,22 +1,31 @@
-// WebRTC sends its packets itself, outside the proxy (docs/webrtc.md). A
-// proxied page must never learn this machine's addresses and never make the
-// browser send a packet to a STUN/TURN server or a remote candidate it chose,
-// while RTCPeerConnection stays the browser's own, as on a network that drops
-// UDP. test/pages/webrtc.html runs the probes natively (the control: the
-// fixture STUN server answers and hands the page a srflx candidate, a remote
-// candidate gets connectivity checks) and through the proxy in both demo
-// modes, in a browser that shows host candidates as mDNS names and in one
-// that shows their real addresses (the proxy origin granted media access):
-// - the UDP fixtures (a STUN server that answers, a TURN server and a remote
-//   candidate that only listen) receive nothing, whatever the page does: a
-//   pool, setConfiguration, relay only, every realm it can reach;
+// WebRTC through the proxy is STomp's own stack over wisp
+// (docs/webrtc-over-wisp.md): a page's RTCPeerConnection is a stand-in, and
+// every packet of its connections leaves from the wisp server, as the page's
+// fetches do. The browser's own RTCPeerConnection sends its packets itself,
+// from the user's address, so a proxied page must never get one to send
+// anything, and must never learn this machine's addresses.
+// test/pages/webrtc.html runs the probes natively (the control: the browser's
+// own sockets reach the fixtures) and through the proxy in both demo modes,
+// in a browser that shows host candidates as mDNS names and in one that
+// shows their real addresses (the proxy origin granted media access):
+// - the fixtures (a STUN server that answers, a TURN server and a remote
+//   candidate that only listen) do hear packets now, from the demo's wisp
+//   server, which shares this machine with them. What they must never hear
+//   is a socket of the browser's: the suite samples which process owns
+//   which local port while the probes run (ss), and a packet from a port
+//   the browser owned fails the check, whatever the page does: a pool,
+//   setConfiguration, relay only, every realm it can reach;
 // - nothing the page reads (candidate events, descriptions, stats, the ICE
-//   transport, icecandidateerror) holds one of this machine's addresses;
+//   transport, icecandidateerror) holds one of this machine's addresses. Its
+//   own host candidates are names; a reflexive candidate is the wisp
+//   server's address as the STUN server saw it (loopback here, the edge's in
+//   a deployment); remote candidates read back as the page gave them;
 // - the configuration, the icecandidateerror for an unreachable server, the
 //   errors of bad calls and the API surface read as they do natively;
 // - a data channel still opens between two connections of one page and
 //   between two proxied pages in frames of their own.
 import dgram from 'node:dgram';
+import net from 'node:net';
 import { networkInterfaces } from 'node:os';
 import {
 	done,
@@ -29,6 +38,7 @@ import {
 	sleep,
 	submitLanding,
 } from '../lib.mjs';
+import { tally, watchSockets } from '../sockets.mjs';
 
 const target = `${FIXTURE}pages/webrtc.html`;
 const child = `${FIXTURE}pages/webrtc-child.html`;
@@ -37,50 +47,106 @@ const child = `${FIXTURE}pages/webrtc-child.html`;
 const RESOLVER =
 	'--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE *.localhost, EXCLUDE 127.0.0.1, EXCLUDE *.local';
 
-/** a UDP fixture: `answers` makes it a STUN server that answers Binding Requests */
-function udpServer(answers = false) {
-	const socket = dgram.createSocket('udp4');
-	const packets = [];
-	socket.on('message', (message, from) => {
-		packets.push(`${from.address}:${from.port}`);
-		if (!answers || message.length < 20 || message.readUInt16BE(0) !== 0x0001)
-			return;
-		const attribute = Buffer.alloc(12);
-		attribute.writeUInt16BE(0x0020, 0); // XOR-MAPPED-ADDRESS
-		attribute.writeUInt16BE(8, 2);
-		attribute.writeUInt8(1, 5);
-		attribute.writeUInt16BE(from.port ^ 0x2112, 6);
-		const cookie = [0x21, 0x12, 0xa4, 0x42];
-		from.address
-			.split('.')
-			.forEach((octet, i) =>
-				attribute.writeUInt8(Number(octet) ^ cookie[i], 8 + i),
-			);
-		const head = Buffer.alloc(20);
-		head.writeUInt16BE(0x0101, 0);
-		head.writeUInt16BE(attribute.length, 2);
-		head.writeUInt32BE(0x2112a442, 4);
-		message.copy(head, 8, 8, 20);
-		socket.send(Buffer.concat([head, attribute]), from.port, from.address);
-	});
-	return new Promise((resolve) =>
-		socket.bind(0, '0.0.0.0', () =>
-			resolve({
-				port: socket.address().port,
-				packets,
-				close: () => socket.close(),
-			}),
-		),
-	);
+// whose socket sent a packet: test/sockets.mjs
+const sockets = await watchSockets();
+const { senders, arrival } = sockets;
+const ANSWER_MS = 500;
+/**
+ * A fixture on one port: over UDP, a STUN server that answers Binding
+ * Requests when `answers`, else one that only listens; with `tcp`, a TCP
+ * server on the same port that accepts and says nothing
+ */
+async function fixtureServer({ answers = false, tcp = false } = {}) {
+	for (let attempt = 0; ; attempt++) {
+		const socket = dgram.createSocket('udp4');
+		const packets = [];
+		let closed = false;
+		socket.on('message', (message, from) => {
+			packets.push(arrival(from.port));
+			if (!answers || message.length < 20 || message.readUInt16BE(0) !== 0x0001)
+				return;
+			const attribute = Buffer.alloc(12);
+			attribute.writeUInt16BE(0x0020, 0); // XOR-MAPPED-ADDRESS
+			attribute.writeUInt16BE(8, 2);
+			attribute.writeUInt8(1, 5);
+			attribute.writeUInt16BE(from.port ^ 0x2112, 6);
+			const cookie = [0x21, 0x12, 0xa4, 0x42];
+			from.address
+				.split('.')
+				.forEach((octet, i) =>
+					attribute.writeUInt8(Number(octet) ^ cookie[i], 8 + i),
+				);
+			const head = Buffer.alloc(20);
+			head.writeUInt16BE(0x0101, 0);
+			head.writeUInt16BE(attribute.length, 2);
+			head.writeUInt32BE(0x2112a442, 4);
+			message.copy(head, 8, 8, 20);
+			// not at once: the socket that asked stays open for the answer,
+			// long enough to be sampled
+			setTimeout(() => {
+				if (!closed)
+					socket.send(
+						Buffer.concat([head, attribute]),
+						from.port,
+						from.address,
+					);
+			}, ANSWER_MS);
+		});
+		await new Promise((resolve) => socket.bind(0, '0.0.0.0', resolve));
+		const { port } = socket.address();
+		const connections = [];
+		const sockets = new Set();
+		let listener = null;
+		if (tcp) {
+			listener = net.createServer((connection) => {
+				connections.push(arrival(connection.remotePort, 'tcp'));
+				sockets.add(connection);
+				connection.on('error', () => {});
+				connection.on('close', () => sockets.delete(connection));
+			});
+			const listening = await new Promise((resolve) => {
+				listener.once('error', () => resolve(false));
+				listener.listen(port, '0.0.0.0', () => resolve(true));
+			});
+			if (!listening) {
+				// the port is taken over TCP: another one
+				socket.close();
+				if (attempt > 20) throw new Error('no port free over UDP and TCP');
+				continue;
+			}
+		}
+		return {
+			port,
+			packets,
+			connections,
+			close() {
+				closed = true;
+				socket.close();
+				for (const connection of sockets) connection.destroy();
+				listener?.close();
+			},
+		};
+	}
 }
 
 // this machine's own addresses (loopback is in every SDP's origin line, and
-// the fixture servers sit on it: it is checked as a candidate address only)
+// the fixture servers and the wisp server sit on it: see `leaked`)
 const ADDRESSES = Object.values(networkInterfaces())
 	.flat()
 	.filter((entry) => !entry.internal)
 	.map((entry) => entry.address.replace(/%.*$/, ''));
-const leaked = (value, { loopback = true } = {}) => {
+/**
+ * What `value` (something a page read) gives away. An address of one of
+ * this machine's interfaces always does, whole or redacted. Loopback is
+ * what the fixtures and the wisp server share, so it is legitimate in two
+ * places: a reflexive or relayed candidate (the wisp server's address as a
+ * server saw it; the checks pin its port to a packet the fixture got from
+ * the wisp server) and, with `remote`, the remote candidates the page chose
+ * itself. A host candidate of the page's own is a name, never an address:
+ * one at loopback, or anywhere else, is the browser's own gathering
+ * showing through.
+ */
+const leaked = (value, { remote = false } = {}) => {
 	const text = JSON.stringify(value);
 	const found = ADDRESSES.filter((address) => text.includes(address));
 	// a partly redacted one, as the browser writes it in icecandidateerror
@@ -89,12 +155,39 @@ const leaked = (value, { loopback = true } = {}) => {
 			const prefix = `${address.split('.').slice(0, 3).join('.')}.x`;
 			if (text.includes(prefix)) found.push(prefix);
 		}
-	// a candidate on loopback, or the address STomp sends the browser to
-	if (loopback && / 127\.0\.0\.1 \d+ typ |"address":"127\.0\.0\.1"/.test(text))
-		found.push('127.0.0.1 candidate');
+	if (
+		!remote &&
+		(candidatesOf(value).some(
+			([address, type]) => type === 'host' && !address.endsWith('.local'),
+		) ||
+			[...objectsIn(value)].some(hostAtAddress))
+	)
+		found.push('host candidate at an address');
+	// the address STomp once sent the browser's own connection to
 	if (text.includes('255.255.255.255')) found.push('255.255.255.255');
 	return found;
 };
+/** every object in `value` (something a page read), depth first */
+function* objectsIn(value) {
+	if (!value || typeof value !== 'object') return;
+	yield value;
+	for (const inner of Object.values(value)) yield* objectsIn(inner);
+}
+/**
+ * A host candidate of the page's own at an address, as the page reads one
+ * member by member: a local-candidate entry of getStats() of type host (a
+ * reflexive or relayed one is at the address a server saw), or an
+ * RTCIceCandidate's fields with type host
+ */
+const hostAtAddress = (object) =>
+	((object.type === 'local-candidate' && object.candidateType === 'host') ||
+		(object.type === 'host' && 'port' in object)) &&
+	[object.address, object.ip].some(
+		(address) =>
+			typeof address === 'string' &&
+			address !== '' &&
+			!address.endsWith('.local'),
+	);
 /**
  * A native measurement showing the leak a proxied check guards against. How
  * the browser leaks depends on the machine (its interfaces, media access,
@@ -106,12 +199,30 @@ function precondition(name, holds, detail) {
 	if (holds) ok(name, true, detail);
 	else console.log(`note: ${name}: not so on this machine - ${detail}`);
 }
-const candidatesOf = (value) =>
-	[
+/** every candidate in `value`: [address, type, port] */
+function candidatesOf(value) {
+	return [
 		...JSON.stringify(value).matchAll(
-			/candidate:\S+ \d \w+ \d+ (\S+) \d+ typ (\w+)/g,
+			/candidate:\S+ \d \w+ \d+ (\S+) (\d+) typ (\w+)/g,
 		),
-	].map(([, address, type]) => [address, type]);
+	].map(([, address, port, type]) => [address, type, Number(port)]);
+}
+const NAME =
+	/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.local$/;
+/**
+ * The candidates a proxied page may gather in `run`: host candidates at
+ * mDNS-style names, and reflexive ones at the wisp server's address and
+ * port as the run's STUN fixture saw them (it answers each request with
+ * where the request came from)
+ */
+const foreign = (run, value = run.result) => {
+	const mapped = new Set(run.stun.map(({ port }) => port));
+	return candidatesOf(value).filter(
+		([address, type, port]) =>
+			!(type === 'host' && NAME.test(address)) &&
+			!(type === 'srflx' && address === '127.0.0.1' && mapped.has(port)),
+	);
+};
 
 /** `value` as JSON with the run's own fixture ports written PORT, to compare runs */
 const portless = (run, value) =>
@@ -122,8 +233,83 @@ const portless = (run, value) =>
 // how the browser shows a host address in icecandidateerror without media access
 const REDACTED = /^(?:0\.0\.0\.x|\[0:0:0:x:x:x:x:x\])(?::\d+)?$/;
 
+/**
+ * Run in every document before any script of it (the inject's included):
+ * the browser's RTCPeerConnection reports each connection it really makes,
+ * whether it was given a configuration, and every call that could make it
+ * gather or send (a description, a candidate, a configuration, an ICE
+ * restart, a channel). The stand-in is built on what it finds there, so a
+ * connection of the browser's made on a proxied page's behalf is counted;
+ * one the constructor refuses is not. The one such connection a document
+ * may make is the stand-in's format template (docs/webrtc-over-wisp.md,
+ * section 16): made with no configuration, asked for one offer and closed,
+ * so it never gathers, has no server and sends nothing.
+ */
+const NATIVE_MADE = 'native RTCPeerConnection made';
+const NATIVE_CONFIGURED = 'native RTCPeerConnection made with a configuration';
+const NATIVE_USED = 'native RTCPeerConnection used';
+const countNative = ([mark, configured, used]) => {
+	const Native = window.RTCPeerConnection;
+	if (typeof Native !== 'function') return;
+	const debug = console.debug.bind(console);
+	const Counting = new Proxy(Native, {
+		construct(target, args, newTarget) {
+			const made = Reflect.construct(
+				target,
+				args,
+				newTarget === Counting ? target : newTarget,
+			);
+			debug(args[0] === undefined || args[0] === null ? mark : configured);
+			return made;
+		},
+	});
+	for (const name of [
+		'setLocalDescription',
+		'setRemoteDescription',
+		'addIceCandidate',
+		'setConfiguration',
+		'restartIce',
+		'createDataChannel',
+	]) {
+		const original = Native.prototype[name];
+		if (typeof original !== 'function') continue;
+		Native.prototype[name] = {
+			[name](...args) {
+				debug(used);
+				return Reflect.apply(original, this, args);
+			},
+		}[name];
+	}
+	Native.prototype.constructor = Counting;
+	window.RTCPeerConnection = Counting;
+	if ('webkitRTCPeerConnection' in window)
+		window.webkitRTCPeerConnection = Counting;
+};
+/**
+ * counts them for `page`'s context from here on: `page.nativeMade` (all of
+ * them), `page.nativeConfigured` (those given a configuration) and
+ * `page.nativeUsed` (the calls on any of them that could gather)
+ */
+async function watchNative(page) {
+	page.nativeMade = 0;
+	page.nativeConfigured = 0;
+	page.nativeUsed = 0;
+	page.context().on('console', (message) => {
+		const text = message.text();
+		if (text === NATIVE_MADE) page.nativeMade++;
+		else if (text === NATIVE_CONFIGURED) {
+			page.nativeMade++;
+			page.nativeConfigured++;
+		} else if (text === NATIVE_USED) page.nativeUsed++;
+	});
+	await page
+		.context()
+		.addInitScript(countNative, [NATIVE_MADE, NATIVE_CONFIGURED, NATIVE_USED]);
+}
+
 async function nativePage(browser) {
 	const page = await (await browser.newContext()).newPage();
+	await watchNative(page);
 	page.errors = [];
 	page.on('pageerror', (error) => page.errors.push(error.message));
 	await page.goto(target);
@@ -133,6 +319,7 @@ async function nativePage(browser) {
 
 async function proxiedPage(browser, mode, base) {
 	const page = await openDemo(browser, base);
+	await watchNative(page);
 	await submitLanding(page, target);
 	const frame = () =>
 		page.frames().findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
@@ -148,12 +335,38 @@ async function proxiedPage(browser, mode, base) {
 	return { label: mode, page, frame };
 }
 
-/** `probe` in each page at once, with fresh UDP fixtures for each */
-async function each(pages, probe, arg = () => ({})) {
+// Known differences (docs/webrtc.md, limits): an offer with a section Chrome
+// answers as rejected (a protocol it does not know, a second data section)
+// is refused whole by the stack; an offer after an answer that took Opus
+// without RED leaves RED out
+const REJECTED_SECTIONS = new Set([
+	'errors.remote.mediaProtocolBad',
+	'errors.remote.twoSections',
+	// an answer that negotiated Opus without redundant audio: the stack
+	// offers no RED again (docs/webrtc-over-wisp.md, section 16)
+	'codecs.answers.pcmuOpus.again',
+]);
+
+/** collects garbage in the page's process and in its frame's, where that is another */
+async function collect(entry) {
+	await entry.page.requestGC();
+	const frame = entry.frame();
+	if (frame === entry.page.mainFrame()) return;
+	const session = await entry.page
+		.context()
+		.newCDPSession(frame)
+		.catch(() => null);
+	if (!session) return;
+	await session.send('HeapProfiler.collectGarbage');
+	await session.detach();
+}
+
+/** `probe` in each page at once, with fresh fixtures for each (`tcp`: the sink listens over TCP too) */
+async function each(pages, probe, arg = () => ({}), { tcp = false } = {}) {
 	return Promise.all(
 		pages.map(async (entry) => {
-			const stun = await udpServer(true);
-			const sink = await udpServer();
+			const stun = await fixtureServer({ answers: true });
+			const sink = await fixtureServer({ tcp });
 			const fixtures = { stun: stun.port, sink: sink.port, child };
 			let result;
 			try {
@@ -163,7 +376,7 @@ async function each(pages, probe, arg = () => ({})) {
 			} catch (error) {
 				result = { threw: String(error).slice(0, 300) };
 			}
-			// late retransmissions
+			// late retransmissions, and a sample after the last packet
 			await sleep(1000);
 			stun.close();
 			sink.close();
@@ -172,6 +385,7 @@ async function each(pages, probe, arg = () => ({})) {
 				result,
 				stun: stun.packets,
 				sink: sink.packets,
+				connections: sink.connections,
 				ports: [stun.port, sink.port],
 			};
 		}),
@@ -189,8 +403,8 @@ async function suite(name, flags, raw) {
 
 	// unreachable servers, the slow probe, in every page at once: STUN, TURN
 	// over UDP and TCP and, on a connection of its own, TURN on a system port
-	// (which the browser never allocates on; natively its closed loopback
-	// port also keeps the browser from sending anything else)
+	// (which the browser never allocates on: it only asks it as a STUN
+	// server, and its closed loopback port hears nothing here either way)
 	const unreachable = await each(all, async ({ sink }) => {
 		const [servers, system] = await Promise.all([
 			window.__rtc.gather(
@@ -254,12 +468,12 @@ async function suite(name, flags, raw) {
 			),
 		);
 	precondition(
-		`${name}, natively: unreachable STUN and TURN servers get requests and each fails with 701 when gathering completes`,
-		unreachable[0].sink.length > 0 &&
+		`${name}, natively: unreachable STUN and TURN servers get requests from the browser's own sockets and each fails with 701 when gathering completes`,
+		senders(unreachable[0].sink).includes('browser') &&
 			errorsOf(unreachable[0]).some((error) => /^TURN/.test(error.errorText)) &&
 			errorsOf(unreachable[0]).some((error) => /^STUN/.test(error.errorText)),
 		JSON.stringify([
-			unreachable[0].sink.length,
+			tally(senders(unreachable[0].sink)),
 			errorShape(unreachable[0]),
 			completeAt(unreachable[0]),
 		]),
@@ -267,20 +481,26 @@ async function suite(name, flags, raw) {
 	for (const run of unreachable.slice(1)) {
 		const errors = errorsOf(run);
 		const unique = hosts(run) !== hosts(unreachable[0]);
+		// the requests are retransmitted for as long as natively, on streams
+		// the wisp server keeps open meanwhile: every one of them is seen to
+		// be its own. A connection that never came up (TURN over TCP) has
+		// no local address in its error, natively either: null, and ":0"
 		ok(
-			`${run.label}: unreachable servers hear nothing, and the page sees the same 701s as natively, as late, with the host redacted`,
-			run.sink.length === 0 &&
+			`${run.label}: unreachable servers hear the wisp server and never the browser, and the page sees the same 701s as natively, as late, with the host redacted`,
+			run.sink.length > 0 &&
+				senders(run.sink).every((who) => who === 'server') &&
 				JSON.stringify(errorShape(run, unique)) ===
 					JSON.stringify(errorShape(unreachable[0], unique)) &&
-				errors.every(
-					(error) =>
-						(error.address === null || REDACTED.test(error.address)) &&
-						REDACTED.test(error.hostCandidate),
+				errors.every((error) =>
+					error.address === null
+						? error.port === null && error.hostCandidate === ':0'
+						: REDACTED.test(error.address) &&
+							REDACTED.test(error.hostCandidate),
 				) &&
 				Math.abs(completeAt(run) - completeAt(unreachable[0])) < 5000 &&
 				leaked(run.result).length === 0,
 			JSON.stringify([
-				run.sink.length,
+				tally(senders(run.sink)),
 				errorShape(run, unique),
 				errorShape(unreachable[0], unique),
 				errors.map(({ address, hostCandidate }) => [address, hostCandidate]),
@@ -310,10 +530,11 @@ async function suite(name, flags, raw) {
 	);
 	const nativeTypes = candidatesOf(gathered[0].result).map(([, type]) => type);
 	precondition(
-		`${name}, natively: the STUN server hears the browser and answers (a srflx candidate)`,
+		`${name}, natively: the STUN server hears the browser's own sockets and answers (a srflx candidate)`,
 		// with real host addresses the browser drops a srflx that repeats one
-		gathered[0].stun.length > 0 && (raw || nativeTypes.includes('srflx')),
-		JSON.stringify([gathered[0].stun.length, nativeTypes]),
+		senders(gathered[0].stun).includes('browser') &&
+			(raw || nativeTypes.includes('srflx')),
+		JSON.stringify([tally(senders(gathered[0].stun)), nativeTypes]),
 	);
 	if (raw) {
 		const shown = leaked(gathered[0].result).filter(
@@ -327,23 +548,27 @@ async function suite(name, flags, raw) {
 	}
 	for (const run of gathered.slice(1)) {
 		const candidates = candidatesOf(run.result);
+		const heard = [...senders(run.stun), ...senders(run.sink)];
+		// each on a stream the wisp server keeps open until the answer, or
+		// for as long as the allocation is retried
 		ok(
-			`${run.label}: the page's STUN and TURN servers hear nothing, with a candidate pool too`,
-			run.stun.length === 0 && run.sink.length === 0,
-			JSON.stringify([run.stun, run.sink]),
+			`${run.label}: the page's STUN and TURN servers hear the wisp server and never the browser, with a candidate pool too`,
+			run.stun.length > 0 &&
+				run.sink.length > 0 &&
+				heard.every((who) => who === 'server'),
+			JSON.stringify([tally(senders(run.stun)), tally(senders(run.sink))]),
 		);
+		// a reflexive candidate is where the STUN server saw the request
+		// come from: the wisp server (on loopback here, with the fixtures),
+		// at the very port the fixture answered. No relay candidate: the TURN
+		// fixture never answers
 		ok(
-			`${run.label}: only mDNS host candidates, and no address of this machine anywhere the page reads`,
-			candidates.length > 0 &&
-				candidates.every(
-					([address, type]) =>
-						type === 'host' &&
-						/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.local$/.test(
-							address,
-						),
-				) &&
+			`${run.label}: only mDNS host candidates and the wisp server's address as the STUN server saw it, and no address of this machine anywhere the page reads`,
+			candidates.some(([, type]) => type === 'host') &&
+				candidates.some(([, type]) => type === 'srflx') &&
+				foreign(run).length === 0 &&
 				leaked(run.result).length === 0,
-			JSON.stringify([candidates, leaked(run.result)]),
+			JSON.stringify([candidates, foreign(run), leaked(run.result)]),
 		);
 		ok(
 			`${run.label}: getConfiguration reads back the page's servers and pool as natively`,
@@ -385,47 +610,67 @@ async function suite(name, flags, raw) {
 		pc.close();
 		return { relay: relay.log, candidates, configured };
 	});
-	for (const run of later.slice(1))
+	for (const run of later.slice(1)) {
+		const heard = [...senders(run.stun), ...senders(run.sink)];
+		// relay only: the TURN server (which never answers) is asked by the
+		// wisp server and the page gets no candidate; the STUN server given
+		// later answers it, as in the check above
 		ok(
-			`${run.label}: relay-only and setConfiguration (then an ICE restart) reach no server either`,
-			run.stun.length === 0 &&
-				run.sink.length === 0 &&
-				!candidatesOf(run.result).some(([, type]) => type !== 'host') &&
+			`${run.label}: relay-only and setConfiguration (then an ICE restart) reach the servers from the wisp server and never from the browser`,
+			run.stun.length > 0 &&
+				run.sink.length > 0 &&
+				heard.every((who) => who === 'server') &&
+				candidatesOf(run.result.relay).length === 0 &&
+				foreign(run).length === 0 &&
+				leaked(run.result).length === 0 &&
 				portless(run, run.result.configured) ===
 					portless(later[0], later[0].result.configured),
 			JSON.stringify([
-				run.stun.length,
-				run.sink.length,
+				tally(senders(run.stun)),
+				tally(senders(run.sink)),
 				candidatesOf(run.result),
 				run.result.configured,
 			]),
 		);
+	}
 
-	// remote candidates the page chose
-	const remotes = await each(all, ({ sink }) =>
-		window.__rtc.pair(
-			{},
-			{
-				remote: [
-					`candidate:11 1 udp 2122260223 127.0.0.1 ${sink} typ host generation 0`,
-					`candidate:12 1 udp 2122260223 example.com ${sink} typ host generation 0`,
-					`candidate:13 1 udp 2122260223 0b5a0e4a-1111-4000-8000-000000000000.local ${sink} typ host generation 0`,
-					`candidate:14 1 tcp 1518280447 127.0.0.1 ${sink} typ host tcptype passive generation 0`,
-				],
-			},
-		),
+	// remote candidates the page chose; the fixture listens over TCP too
+	const remotes = await each(
+		all,
+		({ sink }) =>
+			window.__rtc.pair(
+				{},
+				{
+					remote: [
+						`candidate:11 1 udp 2122260223 127.0.0.1 ${sink} typ host generation 0`,
+						`candidate:12 1 udp 2122260223 example.com ${sink} typ host generation 0`,
+						`candidate:13 1 udp 2122260223 0b5a0e4a-1111-4000-8000-000000000000.local ${sink} typ host generation 0`,
+						`candidate:14 1 tcp 1518280447 127.0.0.1 ${sink} typ host tcptype passive generation 0`,
+					],
+				},
+			),
+		undefined,
+		{ tcp: true },
 	);
 	precondition(
-		`${name}, natively: a remote candidate on the fixture gets connectivity checks`,
-		remotes[0].sink.length > 0,
-		JSON.stringify(remotes[0].sink.length),
+		`${name}, natively: a remote candidate on the fixture gets connectivity checks from the browser's own sockets`,
+		senders(remotes[0].sink).includes('browser'),
+		JSON.stringify([
+			tally(senders(remotes[0].sink)),
+			tally(senders(remotes[0].connections, 'tcp')),
+		]),
 	);
 	for (const run of remotes.slice(1)) {
 		const sdp = run.result.remote?.sdp ?? '';
 		const connection = (text) => text.match(/^c=.*$/m)?.[0];
+		// the checks go on for as long as the connection lives, on one
+		// stream of the wisp server's: each is seen to be its own. Over TCP
+		// the browser must not connect either (the stack may, or may not)
 		ok(
-			`${run.label}: remote candidates the page chose get no packet, and read back as the page gave them`,
-			run.sink.length === 0 &&
+			`${run.label}: remote candidates the page chose get their checks from the wisp server and never from the browser, and read back as the page gave them`,
+			run.sink.length > 0 &&
+				senders(run.sink).every((who) => who === 'server') &&
+				!senders(run.connections, 'tcp').includes('browser') &&
 				/ 127\.0\.0\.1 \d+ typ host/.test(sdp) &&
 				sdp.includes('example.com') &&
 				JSON.stringify(run.result.added) ===
@@ -436,7 +681,8 @@ async function suite(name, flags, raw) {
 					leaked(connection(remotes[0].result.remote?.sdp ?? '')).length > 0) &&
 				!JSON.stringify(run.result).includes('255.255.255.255'),
 			JSON.stringify([
-				run.sink,
+				tally(senders(run.sink)),
+				tally(senders(run.connections, 'tcp')),
 				run.result.added,
 				remotes[0].result.added,
 				sdp.split('\r\n').filter((l) => /cand|^c=/.test(l)),
@@ -447,11 +693,11 @@ async function suite(name, flags, raw) {
 			`${run.label}: a data channel between two connections of the page opens, with nothing of this machine in its stats`,
 			run.result.open === 'open' &&
 				run.result.message === 'hello' &&
-				leaked(run.result, { loopback: false }).length === 0,
+				leaked(run.result, { remote: true }).length === 0,
 			JSON.stringify([
 				run.result.open,
 				run.result.message,
-				leaked(run.result, { loopback: false }),
+				leaked(run.result, { remote: true }),
 			]),
 		);
 	}
@@ -464,6 +710,7 @@ async function suite(name, flags, raw) {
 			`${run.label}: a data channel opens with another proxied page in a frame of its own`,
 			run.result.open === 'open' &&
 				run.result.message === 'pong:ping' &&
+				// no server and no remote candidate names the fixtures here
 				run.stun.length + run.sink.length === 0 &&
 				leaked(run.result).length === 0,
 			JSON.stringify([run.result.open, run.result.message, leaked(run.result)]),
@@ -477,29 +724,34 @@ async function suite(name, flags, raw) {
 	);
 	const nativeRealms = realms[0].result;
 	precondition(
-		`${name}, natively: a connection in every realm reaches the STUN server`,
-		realms[0].stun.length > 0,
-		JSON.stringify(Object.keys(nativeRealms)),
+		`${name}, natively: a connection in every realm reaches the STUN server from the browser's own sockets`,
+		senders(realms[0].stun).includes('browser'),
+		JSON.stringify([tally(senders(realms[0].stun)), Object.keys(nativeRealms)]),
 	);
 	for (const run of realms.slice(1)) {
 		const bad = Object.entries(run.result).filter(([realm, value]) => {
 			if (realm === 'worker')
 				return JSON.stringify(value) !== JSON.stringify(nativeRealms.worker);
+			// in every realm the stand-in, over wisp: a name for the host
+			// candidate, the wisp server's address from the STUN server
 			return (
 				!value?.candidates ||
-				candidatesOf(value).some(([, type]) => type !== 'host') ||
+				!candidatesOf(value).some(([, type]) => type === 'host') ||
+				!candidatesOf(value).some(([, type]) => type === 'srflx') ||
+				foreign(run, value).length > 0 ||
 				leaked(value).length > 0 ||
 				(value.source !== undefined &&
 					value.source !== nativeRealms[realm]?.source)
 			);
 		});
 		ok(
-			`${run.label}: about:blank frames (by contentWindow and frames[i]), srcdoc, nested, blob:, data: and sandboxed frames and popups reach no server; workers still have no RTCPeerConnection`,
-			run.stun.length === 0 &&
+			`${run.label}: about:blank frames (by contentWindow and frames[i]), srcdoc, nested, blob:, data: and sandboxed frames and popups reach the server from the wisp server and never from the browser; workers still have no RTCPeerConnection`,
+			run.stun.length > 0 &&
+				senders(run.stun).every((who) => who === 'server') &&
 				bad.length === 0 &&
 				Object.keys(run.result).length === Object.keys(nativeRealms).length,
 			JSON.stringify([
-				run.stun.length,
+				tally(senders(run.stun)),
 				bad.map(([realm, value]) => [
 					realm,
 					JSON.stringify(value).slice(0, 200),
@@ -515,17 +767,234 @@ async function suite(name, flags, raw) {
 		const differ = Object.keys(expected).filter(
 			(key) => portless(run, rest[key]) !== portless(edges[0], expected[key]),
 		);
+		// these connections never get a local description: natively nothing
+		// is sent to the candidate at the fixture, and nothing is here
 		ok(
 			`${run.label}: bad calls, unawaited ones and constructed candidates answer as natively`,
 			differ.length === 0 &&
 				portless(run, remoteSdp) === portless(edges[0], nativeSdp) &&
 				run.sink.length === 0,
 			JSON.stringify([
+				tally(senders(run.sink)),
 				differ.map((key) => [key, rest[key], expected[key]]),
 				remoteSdp,
 				nativeSdp,
 			]),
 		);
+	}
+
+	// getStats() over a connection's life (test/pages/webrtc-stats.js): the
+	// kinds of entries, the members of each and the values that do not vary.
+	// What DTLS negotiated is Chrome's stack's with itself natively and the
+	// proxy's stack's here: shown, not compared. With media access the
+	// browser shows its host candidates at this machine's addresses, one for
+	// each interface, and pairs each with each; what follows from those
+	// addresses (how many candidates and pairs there are, which pair won
+	// after how many changes, the network's type, an interface's priority)
+	// is what the proxy keeps from the page, which reads names as it would
+	// without media access, so it is not compared
+	{
+		const blind = (candidate) =>
+			candidate && {
+				...candidate,
+				address: undefined,
+				ip: undefined,
+				networkType: undefined,
+				priority: undefined,
+			};
+		const unique = (list) =>
+			list && [...new Set(list.map((item) => JSON.stringify(item)))].sort();
+		// Right after setLocalDescription() Chrome's report lists the host
+		// candidate when its network thread gathered it before the report was
+		// taken and the page heard of it before reading the report: a race
+		// between its threads, measured at 2 runs in 200 on 152 and none in
+		// 200 on 156 in an idle page, more often in a loaded one. The proxy's
+		// lists it on the same condition (the page heard of it) and nearly
+		// never meets it. Either is what a page can read, so the host
+		// candidate is not compared there; anything else at that stage is
+		const settled = (midway) => {
+			if (!midway?.kinds) return midway;
+			const kinds = { ...midway.kinds };
+			delete kinds['local-candidate:host'];
+			// local and remote candidates are one slot of the order
+			const candidates = Object.keys(kinds).some((kind) =>
+				/-candidate:/.test(kind),
+			);
+			return {
+				...midway,
+				kinds,
+				order: candidates
+					? midway.order
+					: midway.order.filter((kind) => kind !== 'candidate'),
+			};
+		};
+		const told = ({ result }) => {
+			const facts = { ...result.facts, dtls: undefined };
+			if (!raw) return { ...result, midway: settled(result.midway), facts };
+			return {
+				...result,
+				midway: settled(result.midway),
+				shown: unique(result.shown),
+				connected: result.connected && {
+					...result.connected,
+					order: undefined,
+				},
+				facts: {
+					...facts,
+					local: blind(facts.local),
+					remote: blind(facts.remote),
+					transport: facts.transport && {
+						...facts.transport,
+						changes: undefined,
+					},
+					selected: facts.selected && { ...facts.selected, bytes: undefined },
+				},
+			};
+		};
+		/** what differs between two results: each value that differs, by its path */
+		const differences = (got, expected, path = '') => {
+			if (
+				got &&
+				expected &&
+				typeof got === 'object' &&
+				typeof expected === 'object' &&
+				Array.isArray(got) === Array.isArray(expected)
+			)
+				return [
+					...new Set([...Object.keys(got), ...Object.keys(expected)]),
+				].flatMap((key) =>
+					differences(got[key], expected[key], `${path}.${key}`),
+				);
+			return JSON.stringify(got) === JSON.stringify(expected)
+				? []
+				: [[path, got, expected]];
+		};
+		const stats = await each(all, (fixtures) => window.__rtcStats(fixtures));
+		const expected = told(stats[0]);
+		precondition(
+			`${name}, natively: getStats() tells of the connected transport, its pair and its candidates`,
+			expected.facts?.selected?.state === 'succeeded' && !stats[0].result.threw,
+			JSON.stringify(stats[0].result).slice(0, 600),
+		);
+		for (const run of stats.slice(1)) {
+			const differ = differences(told(run), expected);
+			ok(
+				`${run.label}: getStats() has the browser's entries in its order, each with the browser's members, and a gathered candidate names its server`,
+				differ.length === 0,
+				`DTLS ${JSON.stringify(run.result.facts?.dtls)}, natively ${JSON.stringify(stats[0].result.facts?.dtls)}; differ: ${JSON.stringify(differ).slice(0, 5000)}`,
+			);
+		}
+
+		// pc.sctp and its transports, the same way, without media access:
+		// with it the browser's candidates are this machine's addresses, one
+		// for each interface, and its gathering waits out a Binding request
+		// from each (40 s here); the proxy's transports read the same either
+		// way, as it gathers the same either way
+		if (!raw) {
+			const transports = await each(all, (fixtures) =>
+				window.__rtcTransports(fixtures),
+			);
+			const native = transports[0].result;
+			precondition(
+				`${name}, natively: pc.sctp, its DTLS transport and its ICE transport tell of the connection`,
+				native?.connected?.sctp?.[0] === 'connected' && !native.threw,
+				JSON.stringify(native).slice(0, 600),
+			);
+			for (const run of transports.slice(1)) {
+				const differ = differences(run.result, native);
+				ok(
+					`${run.label}: pc.sctp, its RTCDtlsTransport and its RTCIceTransport read as the browser's at each stage, fire its events, and a restart's candidates are of the next generation`,
+					differ.length === 0,
+					JSON.stringify(differ).slice(0, 5000),
+				);
+			}
+		}
+	}
+
+	// every bad call of test/pages/webrtc-errors.js: natively the browser's
+	// connection answers, here STomp's own reading of the configuration, the
+	// description, the candidate and the channel dictionary does
+	const errorTables = await each(all, (fixtures) =>
+		window.__rtcErrors(fixtures),
+	);
+	// Chrome refuses a renderer its 501st connection until the closed ones
+	// are collected, and so does the stand-in
+	await Promise.all(all.map(collect));
+	const urlTables = await each(all, (fixtures) => window.__rtcUrls(fixtures));
+	await Promise.all(all.map(collect));
+	const answerTables = await each(all, () => window.__rtcAnswers());
+	await Promise.all(all.map(collect));
+	const codecTables = await each(all, () => window.__rtcCodecs());
+	{
+		const flat = (index) => {
+			const out = {};
+			const walk = (run, path, value) => {
+				if (value && typeof value === 'object' && !Array.isArray(value))
+					for (const [key, inner] of Object.entries(value))
+						walk(run, `${path}.${key}`, inner);
+				else out[path] = portless(run, value);
+			};
+			walk(errorTables[index], 'errors', errorTables[index].result);
+			walk(urlTables[index], 'urls', urlTables[index].result);
+			walk(answerTables[index], 'answers', answerTables[index].result);
+			walk(codecTables[index], 'codecs', codecTables[index].result);
+			return out;
+		};
+		const expected = flat(0);
+		const threw =
+			errorTables[0].result.threw ??
+			urlTables[0].result.threw ??
+			answerTables[0].result.threw ??
+			codecTables[0].result.threw ??
+			'';
+		precondition(
+			`${name}, natively: the tables of bad calls run to their end`,
+			Object.keys(expected).length > 500 && !threw,
+			`${Object.keys(expected).length} cases ${threw}`,
+		);
+		for (const [at, run] of errorTables.entries()) {
+			if (at === 0) continue;
+			const got = flat(at);
+			const differ = Object.keys({ ...expected, ...got }).filter(
+				(key) => got[key] !== expected[key] && !REJECTED_SECTIONS.has(key),
+			);
+			ok(
+				`${run.label}: a bad configuration, remote description, candidate, channel dictionary or codec preference gets the browser's own error, and a good one reads back as the browser's (codec preferences in the offers and answers too), case by case`,
+				differ.length === 0 && Object.keys(got).length > 500,
+				`${Object.keys(got).length} cases, ${differ.length} differ: ${JSON.stringify(
+					differ.slice(0, 40).map((key) => [key, got[key], expected[key]]),
+				).slice(0, 6000)}`,
+			);
+		}
+	}
+
+	// 500 connections to a renderer, the closed ones too until collected
+	{
+		await Promise.all(all.map(collect));
+		const many = await each(all, () => window.__rtcMany());
+		await Promise.all(all.map(collect));
+		const after = await each(all, () => window.__rtcOneMore());
+		// a connection or two of the steps above may still be held
+		const told = ({ made, ...rest }, after) =>
+			JSON.stringify([made > 490 && made <= 500, rest, after]);
+		const seen = (index) =>
+			`${JSON.stringify(many[index].result)} then ${after[index].result}`;
+		const expected = told(many[0].result, after[0].result);
+		precondition(
+			`${name}, natively: the 501st connection is refused until the closed ones are collected`,
+			many[0].result.made > 490 &&
+				many[0].result.made <= 500 &&
+				many[0].result.closed === 'UnknownError' &&
+				after[0].result === 'made',
+			seen(0),
+		);
+		for (const [at, run] of many.entries())
+			if (at)
+				ok(
+					`${run.label}: a document holds as many connections as the browser lets it, and a closed one is let go of`,
+					told(run.result, after[at].result) === expected,
+					`${seen(at)}, natively ${seen(0)}`,
+				);
 	}
 
 	// a hostile page: its own events, another document's members (that
@@ -534,26 +1003,37 @@ async function suite(name, flags, raw) {
 		window.__rtc.attacks(fixtures),
 	);
 	precondition(
-		`${name}, natively: a remote candidate added through another document's member gets checks`,
-		attacked[0].sink.length > 0 && attacked[0].stun.length > 0,
-		JSON.stringify([attacked[0].sink.length, attacked[0].stun.length]),
+		`${name}, natively: a remote candidate added through another document's member gets checks from the browser's own sockets`,
+		senders(attacked[0].sink).includes('browser') &&
+			senders(attacked[0].stun).includes('browser'),
+		JSON.stringify([
+			tally(senders(attacked[0].sink)),
+			tally(senders(attacked[0].stun)),
+		]),
 	);
 	for (const run of attacked.slice(1))
+		// another document's members work on this document's objects, as
+		// natively, and what they reach, they reach through the wisp server
 		ok(
-			`${run.label}: forged events, another document's members and swapped prototypes reach no server and read no address of this machine`,
-			run.sink.length === 0 &&
-				run.stun.length === 0 &&
+			`${run.label}: forged events, another document's members and swapped prototypes reach the fixtures from the wisp server and never from the browser, and read no address of this machine`,
+			run.sink.length > 0 &&
+				senders(run.sink).every((who) => who === 'server') &&
+				run.stun.length > 0 &&
+				senders(run.stun).every((who) => who === 'server') &&
+				run.result.borrowedAdd === 'added' &&
+				portless(run, run.result.borrowedConfiguration) ===
+					portless(attacked[0], attacked[0].result.borrowedConfiguration) &&
 				portless(run, run.result.forged) ===
 					portless(attacked[0], attacked[0].result.forged) &&
 				run.result.tampered?.watched === true &&
 				!Object.values(run.result).some(
 					(value) => typeof value === 'string' && value.startsWith('threw'),
 				) &&
-				leaked(run.result, { loopback: false }).length === 0,
+				leaked(run.result, { remote: true }).length === 0,
 			JSON.stringify([
-				run.sink.length,
-				run.stun.length,
-				leaked(run.result, { loopback: false }),
+				tally(senders(run.sink)),
+				tally(senders(run.stun)),
+				leaked(run.result, { remote: true }),
 				run.result,
 			]).slice(0, 1500),
 		);
@@ -579,6 +1059,23 @@ async function suite(name, flags, raw) {
 		);
 	}
 
+	// every probe above is behind this one
+	precondition(
+		`${name}, natively: the page's connections are the browser's own`,
+		native.page.nativeMade > 0,
+		String(native.page.nativeMade),
+	);
+	for (const entry of proxied)
+		ok(
+			`${entry.label}: no native RTCPeerConnection is given a configuration, a description, a candidate or a channel, in any realm, by any call above (the format template aside, none is made)`,
+			entry.page.nativeConfigured === 0 && entry.page.nativeUsed === 0,
+			JSON.stringify({
+				made: entry.page.nativeMade,
+				configured: entry.page.nativeConfigured,
+				used: entry.page.nativeUsed,
+			}),
+		);
+
 	const errors = proxied.flatMap((entry) => entry.page.errors);
 	await browser.close();
 	return errors;
@@ -594,4 +1091,5 @@ const errors = [
 		true,
 	)),
 ];
+console.log(`note: packets attributed: ${await sockets.stop()}`);
 await done(null, errors);

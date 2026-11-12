@@ -81,6 +81,15 @@ its `lib.rs` documents; it depends on nothing.
   tag and does not check its downloads; this one does both, because the
   artifact's bytes are committed and must be reproducible.)
 - `rust/Cargo.lock`, committed, and `--locked` builds.
+- a crate built with a patch of STomp's (`rust/patches/crates`: name,
+  version, sha256 of the `.crate` file crates.io serves, which is the
+  checksum `Cargo.lock` had for it). `patches.sh` runs in the container
+  before cargo: it downloads the crate once into the registry volume, checks
+  it, unpacks it to `rust/patched/<name>` (not committed) and applies
+  `rust/patches/<name>-<version>.patch`; `rust/Cargo.toml` points
+  `[patch.crates-io]` there. A patch that no longer applies fails the build,
+  and the patched crate is a path dependency, so its files, patch applied,
+  are among the crate's in the `sources` line of `UPSTREAM`.
 
 ## How a crate is built
 

@@ -19,6 +19,9 @@
 // - the visited suite's: v<port>.test and www.v<port>.test, sites on their
 //   scheme's default port (Chrome's self-links need one), go to the fixture
 //   on 127.0.0.1:<port>.
+//
+// It also gives epoxy the certificate authority of the WebRTC suites' TURN
+// server over TLS (test/turn.mjs, the certificate in turn-ca.pem here).
 import EpoxyTransport from '../epoxy/index.mjs';
 
 const MIXED_HOST = /^(?:[\w-]+\.)*mixed\.test$/;
@@ -44,7 +47,16 @@ function fixtureURL(url) {
 	return target;
 }
 
+// The certificate authority of the WebRTC suites' TURN server over TLS
+// (test/turn.mjs), which epoxy takes besides its own roots: the suites'
+// turns: servers are reached as the real ones are, through epoxy's TLS
+const TURN_CA = new URL('./turn-ca.pem', import.meta.url);
+
 export default class MixedTestTransport extends EpoxyTransport {
+	async init() {
+		this.opts.pem_files ??= [await (await fetch(TURN_CA)).text()];
+		return super.init();
+	}
 	request(remote, ...rest) {
 		return super.request(fixtureURL(remote), ...rest);
 	}

@@ -20,8 +20,11 @@ export const TOKENS = [
 	'bare-mux',
 	'ultraviolet',
 	'fracital',
-	// the build's own: a panic location, a source path, the compiler
-	'rustc',
+	// the build's own: a panic location, a source path, the compiler (as a
+	// standard library path names it: `/rustc/<commit>/library/...`; the
+	// bare word is also inside "RustCrypto", a type name the DTLS stack's
+	// trait objects keep)
+	'/rustc/',
 	'library/',
 	'.rs',
 	'panicked',

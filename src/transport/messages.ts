@@ -879,8 +879,27 @@ export type WireResponse =
 	| TransferrableResponse
 	| (Omit<TransferrableResponse, 'body'> & { body: PortBody });
 
+/**
+ * A raw stream over wisp (a UDP stream to one remote, one datagram per
+ * message; a TCP or TLS connection, one chunk per message) on a port of its
+ * own, for the WebRTC worker (docs/webrtc-over-wisp.md). `data` carries an
+ * ArrayBuffer, transferred; `close` ends it from either side.
+ */
+export type StreamMessage =
+	{ type: 'data'; data: ArrayBuffer } | { type: 'close'; reason?: string };
+
 /** implemented by the transport host, called by RemoteTransport */
 export type TransportToHost = {
+	/** a wisp UDP stream to `host:port` on `port`; fails when the transport has no UDP (libcurl) or the server refuses it */
+	udp: [
+		{ host: string; port: number; stream: MessagePort },
+		{ result: 'success' } | { result: 'failure'; error: string },
+	];
+	/** a wisp TCP stream to `host:port` (TLS through the transport's own stack when `tls`) on `port` */
+	tcp: [
+		{ host: string; port: number; tls: boolean; stream: MessagePort },
+		{ result: 'success' } | { result: 'failure'; error: string },
+	];
 	request: [
 		{
 			remote: string;

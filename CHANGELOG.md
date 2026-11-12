@@ -30,6 +30,19 @@ The first release after a four-year gap. Everything below is breaking.
   compiled `WebAssembly.Module` from a URL, bytes or a module the host
   compiled, never from `import.meta.url`. Nothing uses it yet; the
   `rewriter: 'wasm'` option comes with the rewriter itself.
+- `rtc.wasm` (`rust/rtc`, 1505320 bytes, 516411 with brotli) is the WebRTC
+  stack: str0m with its pure Rust crypto, built for `wasm32-wasip1` (a
+  crate names its target in a `wasm-target` file and extra flags in
+  `rustflags`), whose only imports are WASI's clock and randomness.
+  `rust/vendor/str0m-rust-crypto` is the published crate without the
+  certificate generator that needs a C library; the worker makes the DTLS
+  certificate with WebCrypto.
+- A published crate can be built with a patch of STomp's: `rust/patches/crates`
+  names it with the checksum of its `.crate` file, `deploy/rust/patches.sh`
+  unpacks it in the container and applies `rust/patches/<name>-<version>.patch`,
+  and `[patch.crates-io]` points at the result. str0m is the first (an empty
+  data channel message; a channel of an offer that was rolled back; the
+  cause of a peer's SCTP abort).
 
 ### Transport
 
@@ -96,6 +109,11 @@ The first release after a four-year gap. Everything below is breaking.
   reported. docs/http3.md has the rule (5) and
   what each wisp server sends (http3-fallback and demo-http3 suites, with
   `test/wisp-gate.mjs`, a relay that refuses UDP per name).
+- The transport RPC opens raw streams: `udp(host, port)` and
+  `tcp(host, port, tls)` each answer a MessagePort that carries one datagram
+  or chunk per message, on epoxy's `connect_udp`, `connect_tcp` and
+  `connect_tls`. A proxied page's WebRTC connections travel on them;
+  libcurl has none.
 
 ### Demo and API
 
@@ -515,6 +533,191 @@ The first release after a four-year gap. Everything below is breaking.
   starts its demo servers without the headers except for the two suites
   that need them (`STOMP_ISOLATION=on npm test -- <suite>` runs any suite
   under an isolated host).
+- WebRTC data channels reach real peers, through wisp
+  (docs/webrtc-over-wisp.md). A proxied page's `RTCPeerConnection` and
+  `RTCDataChannel` are STomp's own: a worker next to the page
+  (`rtcWorker.js`) runs ICE, DTLS and SCTP in wasm (`rtc.wasm`) and sends
+  every packet on a wisp UDP stream, so a peer, a STUN server and a TURN
+  server see the wisp server's address, as a site does for a fetch. The
+  page offers or answers, with candidates in the description or trickled;
+  its host candidate is a `.local` name, its `srflx` and `relay` candidates
+  come from the page's own STUN and TURN servers (UDP), and
+  `iceTransportPolicy: 'relay'`, ICE restarts, ordered and unordered
+  channels, `bufferedAmount`, empty messages and messages up to Chrome's
+  256 KiB work
+  against werift and against Chrome's own stack (webrtc-peer suite, 57
+  checks). Captured in a network namespace of its own, the browser sends
+  TCP to the proxy and nothing else, where its own stack sent 175 UDP
+  packets to the page's servers and candidates and 52 mDNS packets to the
+  LAN. Hosts serve three more files: `init.assets.rtcStack`,
+  `init.assets.rtcWorker` and `init.assets.rtc` name them (`rtcStack.js`,
+  `rtcWorker.js`, `rtc.wasm`), and they are fetched the first time a
+  document uses WebRTC: what the inject carries in every document is the
+  classes' shapes, and a document that never makes a connection costs what
+  it did (`frame-cost`). Needs epoxy and a
+  wisp server that relays UDP (wisp-js does; holyWisp with `allow-udp`).
+- A proxied page's bad WebRTC calls fail as Chrome's do, and no connection
+  of the browser's is made to find out how: a bad configuration, remote
+  description, candidate or channel dictionary gets Chrome's error name and
+  message from STomp's own reading of it (`src/inject/rtcValidation.ts`,
+  some 700 cases compared with the browser's in the webrtc suite, under
+  Chrome 152 and 156 where the two differ). The offers Chrome takes and
+  would not write are taken (no section, a section without a name, no
+  BUNDLE group, a remote offer over the connection's own), every offer says
+  `a=setup:actpass`, `negotiationneeded` waits for the operations under
+  way, `getConfiguration()` gives certificates of its own each time,
+  `getStats()` answers on a closed connection, and a document's 501st
+  connection is refused as Chrome refuses it.
+- A proxied page that closes its WebRTC connection ends the association
+  with an SCTP ABORT ("User-Initiated Abort, reason=Close called"), as
+  Chrome does, before DTLS says goodbye. It used to start a graceful
+  shutdown and close DTLS at once, which dropped the SCTP goodbye: a peer
+  that does not take the DTLS close for the end of its channels (werift)
+  kept them open. sctp-proto joins str0m among the crates built from their
+  published source with a patch of STomp's (`rust/patches`).
+- A proxied page's WebRTC connections carry audio (docs/webrtc-over-wisp.md
+  section 16): `addTrack`, `addTransceiver`, `removeTrack`, the
+  transceivers, senders and receivers and the `track` event are STomp's,
+  over its own stack on wisp streams, and the descriptions a page makes
+  read line for line as Chrome's (its payloads, format lines, extensions
+  and section names, taken from an offer the browser's own connection
+  writes once per document and never sets). Opus is encoded and decoded in
+  the worker with WebCodecs, G.711 by hand, on tracks the page hands over
+  as streams. The `webrtc-media` suite holds a call with Chrome's own stack
+  to what the browser's own connection reads at every step, in both demo
+  modes, with the tone unbroken both ways and every packet from the wisp
+  server. Video is not carried yet.
+- WebRTC audio carries G.722, written by hand in the worker
+  (`src/rtc/g722.ts`, bit-exact against the ITU-T reference codec and its
+  test sequences), so a proxied page offers every audio payload Chrome
+  offers, in Chrome's order, and sends G.722 to a peer that lists it first.
+  A lost Opus packet is concealed by the decoder, as natively, instead of
+  being 20 ms of silence (docs/webrtc-over-wisp.md section 16).
+- A proxied page's audio senders have Chrome's `RTCDTMFSender`
+  (`sender.dtmf`): `insertDTMF` with Chrome's checks, clamps and messages,
+  `toneBuffer`, `canInsertDTMF` and `tonechange` events at Chrome's times
+  (duration + 2 x gap apart), and each tone goes on the wire as Chrome's
+  sender puts it there: RFC 4733 events on the negotiated telephone-event
+  payload of the lowest clock, in place of the audio frames of its time,
+  the end report three times. The `webrtc-media` suite has Chrome's own
+  receiver see the same packets from a proxied page as from Chrome, with
+  Opus and with PCMU (docs/webrtc-over-wisp.md section 16).
+- A proxied page plays what Chrome's receiver plays for a peer's comfort
+  noise (RFC 3389): noise at the packet's level (2.6 dB below it, measured)
+  and in its shape, until speech comes again, instead of silence; and a
+  peer's DTMF events as their two tones at Chrome's levels in place of the
+  sound of their time (docs/webrtc-over-wisp.md section 16).
+- A proxied page's audio receiver makes up a frame that comes too late
+  (a delay the jitter buffer did not cover) from the sound before it, as
+  Chrome's NetEq does, instead of playing 20 ms of silence: the last period
+  repeated in phase and fading, the next frame faded in from it
+  (docs/webrtc-over-wisp.md section 16).
+- A proxied page that is busy keeps the sound it sends: the track's
+  processor (which the page's own thread runs) keeps 2 s of frames instead
+  of its default 100 ms, so with the page busy 150 ms of every 170 a call's
+  peer plays everything from packets, as with Chrome's own connection,
+  where it made up a quarter to a third of what it played. Stats entries
+  carry the time the worker took their counts, as Chrome's do
+  (docs/webrtc-over-wisp.md section 16).
+- A proxied page's audio receiver plays a packet that comes after its time
+  late, as Chrome's NetEq does, rather than dropping it: its time stands
+  still while sound is made up, the late frame starts where it fits the
+  made-up sound, and the track's sound goes on through a hold-up. Its
+  `inbound-rtp` counts such a packet as received (not lost, not
+  discarded) and each hold-up as one concealment event, as Chrome's does
+  (docs/webrtc-over-wisp.md section 16).
+- A proxied page sends comfort noise where Chrome does: with G.711 or G.722
+  and CN negotiated, WebRTC's voice detector, comfort noise encoder and
+  AudioEncoderCng framing, ported bit for bit (`src/rtc/vad.ts`,
+  `src/rtc/cng.ts`), decide each 20 ms packet, so after 150 to 180 ms of
+  silence a peer gets an RFC 3389 packet every 100 ms instead of encoded
+  silence, unmarked, and marked speech after it (docs/webrtc-over-wisp.md
+  section 16).
+- A proxied page's lost Opus packet is rebuilt from the FEC copy the next
+  packet carries, as Chrome's receiver rebuilds it: `src/rtc/lbrr.ts`
+  rewrites the copy as a packet WebCodecs decodes (bit for bit libopus's
+  FEC decode for SILK, close to it for hybrid), the receiver holds 20 ms
+  more of an Opus stream for it, a loss is read from the RTP times (Chrome's
+  padding packets hid about a third of them from the sequence numbers), and the
+  stack no longer holds the packets after a loss for 300 ms. The page's
+  receiver reports tell the sender of the loss, so Chrome's encoder makes
+  the copies (docs/webrtc-over-wisp.md section 16).
+- When a peer closes its connection, a proxied page's data channels hear
+  what Chrome's own hear: `closing`, an `error` event (an `RTCError` of
+  detail `sctp-failure`, cause code 12, "User-Initiated Abort, reason=Close
+  called" from a Chrome peer), then `close`. They used to close without
+  the error.
+- A proxied page's `getStats()` reads as Chrome's: its candidates, the
+  candidate pairs with their checks, round trip times and bytes, the
+  selected pair, a certificate for each end, the data channels' counters
+  and the transport's roles and states, in Chrome's order with Chrome's
+  members, host candidates without an address as behind mDNS names
+  (`webrtc` suite, compared with the browser's at each stage). `pc.sctp` is
+  an `RTCSctpTransport` with its `RTCDtlsTransport` and `RTCIceTransport`
+  where it was null, a gathered candidate's `url` names its server, a
+  restart's candidates are of the next generation, each connection has a
+  DTLS certificate of its own, and ICE says what Chrome's says when it
+  says it (never `completed`, `checking` once a pair has formed, gathering
+  over once connected). It used to have no candidates or pairs.
+- A proxied page's `RTCRtpTransceiver.setCodecPreferences()` works as
+  Chrome's: the list is read and checked as Chrome 152 and 156 read and
+  check it (the same errors for the same lists, from the browser's own
+  capabilities), and the offers and answers list the codecs in the page's
+  order, with retransmission and redundant audio as Chrome keeps them; an
+  answer with none of them rejects the section. What each end sends
+  follows as natively: the offerer's preferences pick the codec both ends
+  send, an answerer's only what it receives. The stack now offers every
+  codec again in a later offer and takes each negotiation's codecs and
+  their order (a str0m patch): it used to keep what the first answer left
+  for good, and a page's offer with nothing new in it did not reach the
+  stack at all. It used to ignore the preferences (`webrtc` and
+  `webrtc-media` suites).
+- A proxied page's `getStats()` has Chrome's entries for the sound of a
+  call: `codec`, `inbound-rtp`, `outbound-rtp`, `remote-inbound-rtp`,
+  `remote-outbound-rtp`, `media-source` and `media-playout`, when Chrome
+  has them, with its ids and its members in its order, the packets, bytes
+  and header bytes counted off the wire, the peer's RTCP reports from the
+  stack (a str0m patch keeps them) and the levels, energies and sample
+  counts as WebRTC counts them; a sender's and a receiver's `getStats()`
+  and `getStats(track)` hold what Chrome's hold. They used to have none,
+  and the sender's and the receiver's reports were empty (`webrtc-media`
+  suite, compared with Chrome 152's and 156's; docs/webrtc-over-wisp.md
+  section 16 has what differs).
+- A proxied page's WebRTC connection closes the wisp stream to a remote
+  candidate once ICE has given up on its pair, about 16 s after the first
+  unanswered check (Chrome stops checking one after about 15 s), instead of
+  keeping it until the connection closes. The `webrtc-net` suite counts the
+  wisp server's sockets for each remote over a connection's life.
+- A proxied page's WebRTC connections use TURN servers over TCP and over
+  TLS (`turn:...?transport=tcp`, `turns:`), on wisp TCP streams with TLS by
+  epoxy, and reach peers whose only candidates are passive TCP ones
+  (ICE-TCP, as an SFU offers): what Chrome does on 152 and 156, the
+  candidates, their priorities, `relayProtocol` and stats entries, the 701
+  and 401 errors with their texts, timing and order. They used to fail at
+  once with a 701. A TURN server's 401 says "Unauthorized." as Chrome's
+  does. The `webrtc-net` suite compares them with the browser's.
+- An ICE restart, the peer's or the page's own, leaves a proxied page's
+  connection reading `connected`, as Chrome's does; it read `checking`
+  until the new pair was up. A restart the peer starts is answered with
+  new credentials and the events and candidates Chrome shows (`webrtc-net`
+  suite, werift and Chrome as the peer). After a restart whose
+  descriptions were set before their candidates were gathered, the stack
+  checks the peer's old candidates with the new credentials; two of its
+  connections used to find no pair and read `disconnected` once any other
+  pair was given up.
+- The `rtc-cost` suite is a gate on what a document's first use of WebRTC
+  costs through the proxy, as `frame-cost` is for every frame: the sizes
+  of the library, the worker and the stack, the first and a later
+  `createOffer()`, each file fetched once, the stack's compile and the
+  worker's memory, against ceilings above what this build measures.
+- The WebRTC library, loaded on a document's first connection, uses the
+  document's `Promise`, `Worker`, `MessageEvent` and timers as they were
+  when the document started, and the browser's `postMessage`,
+  `addEventListener` and `performance.now` as the bundle took them; its
+  channels to its worker are made and heard with `src/transport/ports.ts`.
+  A page that hooked these before its first connection used to be handed
+  the channel to the worker and the transport port the worker gets, and
+  its connections' promises were its own `Promise`'s (`webrtc-lazy`).
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,
@@ -2203,24 +2406,20 @@ sinkId })` and made in a track's settings, capabilities and constraints
   `Isolation` console badge saying why; isolation a deployment asked for
   (`STOMP_PROXY_ORIGIN`) stays an error (storage-blocked suite).
 - WebRTC no longer shows a proxied page the user's address or sends a
-  packet where the page says. The browser's ICE agent sends its own packets,
-  past the proxy: a STUN server the page named heard from the user's address
-  and handed the page a `srflx` candidate with it (browserleaks.com/webrtc
-  showed the real address through the live site and the local demo), a TURN
-  server or a remote candidate the page chose got requests and connectivity
-  checks, and once the proxy origin had camera or microphone access host
-  candidates carried the machine's local addresses. `RTCPeerConnection`
-  stays the browser's own and behaves as on a network that drops UDP: each
-  STUN/TURN server is handed to the browser as `255.255.255.255` (a send the
-  kernel refuses), so it times out as natively, 701 errors and all, and reads
-  back as the page's; a remote candidate is handed over only when it is a
-  host name a connection of this browser showed a page, so two proxied pages
-  still open a data channel; real addresses read as mDNS names everywhere
-  (events, descriptions, `RTCIceTransport`, stats, errors), in every realm the
-  inject covers. A tcpdump of the uplink saw 156 packets to the page's
-  servers and candidates natively and none through either demo mode
-  (webrtc suite, 59 checks against the same pages loaded natively, both
-  modes, with and without media access; docs/webrtc.md).
+  packet from the user's machine. The browser's ICE agent sends its own
+  packets, past the proxy: a STUN server the page named heard from the
+  user's address and handed the page a `srflx` candidate with it
+  (browserleaks.com/webrtc showed the real address through the live site
+  and the local demo), a TURN server or a remote candidate the page chose
+  got requests and connectivity checks, and once the proxy origin had
+  camera or microphone access host candidates carried the machine's local
+  addresses. A proxied page no longer drives the browser's connection at
+  all: its `RTCPeerConnection` is STomp's stack over wisp (above), in every
+  realm the inject covers, so what a server or a peer hears is the wisp
+  server and what the page reads is a `.local` name or the wisp server's
+  address (webrtc suite, 77 checks against the same pages loaded natively,
+  both modes, with and without media access: each packet a fixture gets is
+  attributed to the process that held its source port; docs/webrtc.md).
 - Reading another window (`parent`, `top`, `frames[i]`) costs a few
   microseconds again. The Context module decided whether the reader may
   hold the window as it is by decoding both documents' routed URLs on every
@@ -5077,6 +5276,13 @@ Fixed while testing real sites and a feature fixture:
 
 ### Known limitations
 
+- WebRTC carries data channels and audio so far (docs/webrtc-over-wisp.md
+  sections 15 and 16): video sections negotiate and their frames are
+  dropped, comfort noise is not sent (a peer's is played), a lost Opus packet's
+  in-band FEC copy is not used, TURN over TCP or TLS and TCP candidates are
+  not carried,
+  `getStats()` has no media entries. A peer behind
+  a restrictive NAT is reached only through a TURN server the page names.
 - The same-origin policy between proxied sites is simulated by the proxy
   (docs/same-origin-policy.md). Not yet: `crossOriginIsolated` (COOP and
   COEP cannot isolate a proxied frame).

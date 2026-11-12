@@ -20,6 +20,10 @@ case "$version" in
 	;;
 esac
 
+# the crates built from published source plus a patch of ours
+# (rust/patches/): rust/patched/<name>, which rust/Cargo.toml names
+bash /work/patches.sh
+
 # what the artifact is built from, for its provenance (inputs.sh);
 # ONLY_SOURCES=1 stops there, with nothing built
 mkdir -p /work/out
@@ -41,7 +45,16 @@ if [[ -f "$crate/wasm-target" ]]; then
 	triple=$(tr -d '[:space:]' < "$crate/wasm-target")
 fi
 
-export RUSTFLAGS='-Zlocation-detail=none -Zfmt-debug=none'
+# no panic location, no Debug formatting, plus the flags the crate names in
+# rust/<crate>/rustflags (`-Cpanic=immediate-abort` for one whose
+# dependencies can panic: the panic machinery and its messages, "panicked
+# at", stay out of the bytes and a panic is a plain trap)
+flags='-Zlocation-detail=none -Zfmt-debug=none'
+if [[ -f "$crate/rustflags" ]]; then
+	flags="$flags $(tr '\n' ' ' < "$crate/rustflags")"
+fi
+
+export RUSTFLAGS=$flags
 # shellcheck disable=SC2086
 cargo build $locked --release --target "$triple" \
 	-Z build-std=std,panic_abort -Z build-std-features=optimize_for_size \

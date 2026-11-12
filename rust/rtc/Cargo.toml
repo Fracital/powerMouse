@@ -1,0 +1,19 @@
+[package]
+name = "rtc"
+version = "0.1.0"
+edition = "2024"
+description = "the WebRTC stack of STomp, run over wisp streams the host supplies (docs/webrtc-over-wisp.md)"
+license = "GPL-3.0-only"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# sans-IO WebRTC: ICE, DTLS (dimpl, pure Rust), SRTP, SCTP, RTP; the pure
+# Rust crypto backend needs no C compiler and builds for wasm32
+str0m = { version = "=0.25.0", default-features = false, features = ["rust-crypto"] }
+# the stack and its crates log through these; compiled out, so no log text
+# (type names, Debug output) reaches the artifact
+log = { version = "0.4", features = ["release_max_level_off"] }
+tracing = { version = "0.1", default-features = false, features = ["release_max_level_off"] }

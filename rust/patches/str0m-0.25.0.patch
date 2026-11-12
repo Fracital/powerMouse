@@ -1,0 +1,648 @@
+--- a/src/change/direct.rs
++++ b/src/change/direct.rs
+@@ -104,6 +104,18 @@
+         self.rtc.dtls.local_fingerprint()
+     }
+ 
++    /// The certificate the peer showed in the DTLS handshake (DER), once it has.
++    pub fn remote_dtls_certificate(&self) -> Option<&[u8]> {
++        self.rtc.remote_certificate.as_deref()
++    }
++
++    /// The ICE agent, to read its remote candidates and which of them still have a
++    /// candidate pair (`IceAgent::find_pair_for_equivalent_remote_candidate`): a pair
++    /// the agent gave up on is pruned from its checklist without an event.
++    pub fn ice_agent(&self) -> &crate::ice::IceAgent {
++        &self.rtc.ice
++    }
++
+     /// Returns a reference to the remote DTLS fingerprint used by this peer connection.
+     pub fn remote_dtls_fingerprint(&self) -> Option<&Fingerprint> {
+         self.rtc.dtls.remote_fingerprint()
+@@ -180,6 +192,12 @@
+         id
+     }
+ 
++    /// Why the peer aborted the SCTP association, if it did so with an ABORT chunk: the
++    /// code and the value of that chunk's first error cause (code 0 without one).
++    pub fn sctp_abort_cause(&self) -> Option<(u16, &[u8])> {
++        self.rtc.sctp.abort_cause()
++    }
++
+     /// Close a data channel.
+     pub fn close_data_channel(&mut self, channel_id: ChannelId) {
+         // One arming deref, then split-borrow the real `&mut Rtc`.
+--- a/src/change/sdp.rs
++++ b/src/change/sdp.rs
+@@ -37,6 +37,8 @@
+     // `RtcMut` arms the readiness on mutable deref only; see [`crate::poll`].
+     rtc: RtcMut<'a>,
+     changes: Changes,
++    // The names the next m-sections of this change set take.
++    names: std::collections::VecDeque<Mid>,
+ }
+ 
+ impl<'a> SdpApi<'a> {
+@@ -44,12 +46,29 @@
+         SdpApi {
+             rtc: RtcMut::new(rtc),
+             changes: Changes::default(),
++            names: std::collections::VecDeque::new(),
+         }
+     }
+ 
+-    fn new_mid(&self) -> Mid {
++    /// Names for the m-sections this change set adds (media, and the one
++    /// for data channels), taken in the order the sections are added. A
++    /// name the session or the change set already has is passed over, and
++    /// a section added once the names are used up gets a random one.
++    ///
++    /// A section's name is what its packets carry (the MID header
++    /// extension), so an application that shows its peer other names than
++    /// the stack's own has to give them here.
++    pub fn name_mids(&mut self, names: impl IntoIterator<Item = Mid>) {
++        self.names.extend(names);
++    }
++
++    fn new_mid(&mut self) -> Mid {
+         loop {
+-            let mid = self.rtc.new_mid();
++            let mid = match self.names.pop_front() {
++                Some(mid) if self.rtc.session.has_mid(mid) => continue,
++                Some(mid) => mid,
++                None => self.rtc.new_mid(),
++            };
+             if !self.changes.has_mid(mid) {
+                 break mid;
+             }
+@@ -361,6 +380,18 @@
+         mid
+     }
+ 
++    /// Offer again with nothing new: the next [`SdpApi::apply()`] makes an
++    /// offer that states each section as it is (and every codec), and its
++    /// answer is a negotiation like any other, as JSEP has it.
++    pub fn renegotiate(&mut self, mid: Mid) {
++        let Some(dir) = self.rtc.media(mid).map(|media| media.direction()) else {
++            return;
++        };
++        if !self.changes.0.iter().any(requires_negotiation) {
++            self.changes.0.push(Change::Direction(mid, dir));
++        }
++    }
++
+     /// Change the direction of an already existing media.
+     ///
+     /// All media have a direction. The media can be added by this side via
+@@ -465,6 +496,19 @@
+             self.changes.0.push(Change::AddApp(mid));
+         }
+ 
++        // The channels of this change set have no allocation yet to be
++        // checked against.
++        if let Some(sctp_stream_id) = config.negotiated {
++            let exists = self.changes.0.iter().any(
++                |c| matches!(c, Change::AddChannel((_, c)) if c.negotiated == Some(sctp_stream_id)),
++            );
++            assert!(
++                !exists,
++                "sctp_stream_id ({}) exists already",
++                sctp_stream_id
++            );
++        }
++
+         let id = self.rtc.chan.new_channel(&config);
+ 
+         self.changes.0.push(Change::AddChannel((id, config)));
+@@ -486,7 +530,7 @@
+         self.changes
+             .retain(|c| !matches!(c, Change::IceRestart(_, _)));
+ 
+-        let new_creds = IceCreds::new();
++        let new_creds = crate::short_ice_creds();
+         self.changes
+             .push(Change::IceRestart(new_creds.clone(), keep_local_candidates));
+ 
+@@ -708,7 +752,7 @@
+         } else {
+             // The remote OFFER had an ice restart, and we need to respond with
+             // new credentials in the ANSWER.
+-            (IceCreds::new(), true)
++            (crate::short_ice_creds(), true)
+         };
+ 
+         rtc.ice
+@@ -834,13 +878,14 @@
+                     ssrcs.extend(pending.ssrcs_for_mid(m.mid()))
+                 }
+ 
++                let offer = params.pending.is_some();
+                 let params: Vec<_> = session
+                     .codec_config
+                     .all_for_kind(m.kind(), false)
+                     .cloned()
+                     .collect();
+ 
+-                m.as_media_line(attrs, &ssrcs, &session.exts, &params)
++                m.as_media_line(attrs, &ssrcs, &session.exts, &params, offer)
+             })
+             .collect::<Vec<_>>();
+ 
+@@ -1396,6 +1441,7 @@
+         ssrcs_tx: &[(Ssrc, Option<Ssrc>)],
+         exts: &ExtensionMap,
+         params: &[PayloadParams],
++        offer: bool,
+     ) -> MediaLine;
+ }
+ 
+@@ -1418,6 +1464,7 @@
+         _ssrcs_tx: &[(Ssrc, Option<Ssrc>)],
+         _exts: &ExtensionMap,
+         _params: &[PayloadParams],
++        _offer: bool,
+     ) -> MediaLine {
+         attrs.push(MediaAttribute::Mid(self.0));
+         attrs.push(MediaAttribute::SctpPort(5000));
+@@ -1452,10 +1499,11 @@
+         ssrcs_tx: &[(Ssrc, Option<Ssrc>)],
+         exts: &ExtensionMap,
+         params: &[PayloadParams],
++        offer: bool,
+     ) -> MediaLine {
+         if self.app_tmp {
+             let app = (self.mid(), self.index());
+-            return app.as_media_line(attrs, ssrcs_tx, exts, params);
++            return app.as_media_line(attrs, ssrcs_tx, exts, params, offer);
+         }
+ 
+         attrs.push(MediaAttribute::Mid(self.mid()));
+@@ -1476,8 +1524,12 @@
+ 
+         // The effective params start from the Session::codec_config to retain the
+         // user's configured preferred order, however they are narrowed only include
+-        // those the remote peer wants.
+-        let effective_params = params.iter().filter(|p| self.remote_pts().contains(&p.pt));
++        // those the remote peer wants. An offer offers every one again, as a
++        // browser's does: what the last answer narrowed to is not what the next
++        // negotiation must keep.
++        let effective_params = params
++            .iter()
++            .filter(|p| offer || self.remote_pts().contains(&p.pt));
+ 
+         let mut pts = vec![];
+ 
+@@ -1693,6 +1745,10 @@
+             }
+         }
+ 
++        // In the order they were added: they are allocated in this order now,
++        // and the first one made gets the lowest stream id, as a browser's.
++        v.reverse();
++
+         v
+     }
+ 
+--- a/src/channel.rs
++++ b/src/channel.rs
+@@ -216,27 +216,23 @@
+             );
+         }
+ 
+-        let alloc = ChannelAllocation {
+-            id,
+-            sctp_stream_id: None,
+-            negotiated_stream_id,
+-            // The config is none until we confirm we definitely want this channel.
+-            config: None,
+-        };
+-
+-        debug!("Allocate channel id: {:?}", id);
+-        self.allocations.push(alloc);
++        // Nothing is kept for the channel until it is confirmed: an offer that
++        // is dropped (rolled back) or superseded never confirms its channels,
++        // and an allocation made here would outlive it, holding the stream id
++        // (a negotiated one could then never be offered again).
++        debug!("Issue channel id: {:?}", id);
+ 
+         id
+     }
+ 
+     pub fn confirm(&mut self, id: ChannelId, config: ChannelConfig) {
+-        let a = self
+-            .allocations
+-            .iter_mut()
+-            .find(|a| a.id == id)
+-            .expect("Entry for issued channel id");
+-        a.config = Some(config);
++        debug!("Allocate channel id: {:?}", id);
++        self.allocations.push(ChannelAllocation {
++            id,
++            sctp_stream_id: None,
++            negotiated_stream_id: config.negotiated,
++            config: Some(config),
++        });
+     }
+ 
+     /// For translating sctp stream id to ChannelId. Any event out of sctp goes via this.
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -924,6 +924,8 @@
+     stats: Option<Stats>,
+     session: Session,
+     remote_fingerprint: Option<Fingerprint>,
++    /// The certificate the peer showed in the DTLS handshake, DER.
++    remote_certificate: Option<Vec<u8>>,
+     remote_addrs: Vec<SocketAddr>,
+     send_addr: Option<SendAddr>,
+     need_init_time: bool,
+@@ -1201,6 +1203,16 @@
+     BweProbeEstimator,
+ }
+ 
++/// ICE credentials of the lengths browsers write: a ufrag of 4 characters and a
++/// password of 24, where [`IceCreds::new()`] makes 16 and 22.
++pub(crate) fn short_ice_creds() -> IceCreds {
++    let creds = IceCreds::new();
++    IceCreds {
++        ufrag: creds.ufrag[..4].to_string(),
++        pass: format!("{}{}", creds.pass, &creds.ufrag[4..6]),
++    }
++}
++
+ impl Rtc {
+     /// Creates a new instance with default settings.
+     ///
+@@ -1247,7 +1259,9 @@
+         // Capture before any partial moves of `config` below.
+         let mtu = config.mtu.clone();
+ 
+-        let local_creds = config.local_ice_credentials.unwrap_or_else(IceCreds::new);
++        let local_creds = config
++            .local_ice_credentials
++            .unwrap_or_else(short_ice_creds);
+         let mut ice = IceAgent::with_hmac(local_creds, crypto_provider.sha1_hmac_provider);
+         if config.ice_lite {
+             ice.set_ice_lite(config.ice_lite);
+@@ -1302,6 +1316,7 @@
+             chan: ChannelHandler::default(),
+             stats: config.stats_interval.map(Stats::new),
+             remote_fingerprint: None,
++            remote_certificate: None,
+             remote_addrs: vec![],
+             send_addr: None,
+             need_init_time: true,
+@@ -1712,6 +1727,7 @@
+                 }
+                 DtlsOutput::PeerCert(der) => {
+                     debug!("DTLS verify remote fingerprint");
++                    self.remote_certificate = Some(der.to_vec());
+                     // Compute the fingerprint of the peer's DER certificate with the hash
+                     // function of the expected one (RFC 8122 §5): sha-256, or sha-1 as some
+                     // endpoints still announce. sha-256 when there is none to compare with.
+@@ -2064,7 +2080,15 @@
+ 
+         if self.state != RtcState::Closing {
+             self.session.close_rtp();
+-            self.sctp.close()?;
++            // The association ends with an ABORT, as a browser's does, and
++            // it goes to DTLS before the close_notify: DTLS takes no data
++            // after that, so a SHUTDOWN polled later was dropped and the peer
++            // never heard of the close
++            for packet in self.sctp.abort() {
++                if self.dtls.handle_input(&packet).is_err() {
++                    break;
++                }
++            }
+             self.state = RtcState::Closing;
+         }
+ 
+--- a/src/media/mod.rs
++++ b/src/media/mod.rs
+@@ -649,13 +649,9 @@
+     }
+ 
+     pub(crate) fn set_remote_pts(&mut self, pts: Vec<Pt>) {
+-        // Have we already set PTs?
+-        if !self.remote_pts.is_empty() {
+-            return;
+-        }
+-
+-        // TODO: We should verify the remote peer doesn't suddenly change the PT
+-        // order or removes/adds PTs that weren't there from the start.
++        // Each negotiation says anew what the section carries and in which
++        // order (JSEP): a later offer or answer may list other codecs first,
++        // or ones an earlier answer left out.
+         debug!("Mid ({}) remote PT order is: {:?}", self.mid, pts);
+         self.remote_pts = pts;
+     }
+--- a/src/sctp/mod.rs
++++ b/src/sctp/mod.rs
+@@ -54,6 +54,8 @@
+     // Used to guarantee emission ordering, ResetComplete must
+     // be sent after Close.
+     reset_complete: VecDeque<u16>,
++    /// The first error cause of an ABORT chunk the peer sent: its code and value.
++    abort_cause: Option<(u16, Vec<u8>)>,
+     pushed_back_transmit: Option<VecDeque<Vec<u8>>>,
+     last_now: Instant,
+     client: bool,
+@@ -166,6 +168,30 @@
+     AssociationLost,
+ }
+ 
++/// The first error cause of the ABORT chunk in an SCTP packet, if it has such a chunk.
++fn abort_cause(packet: &[u8]) -> Option<(u16, Vec<u8>)> {
++    const CT_ABORT: u8 = 6;
++    // The common header, then chunks of type, flags, length and a padded value.
++    let mut at = 12;
++    while at + 4 <= packet.len() {
++        let length = u16::from_be_bytes([packet[at + 2], packet[at + 3]]) as usize;
++        if length < 4 || at + length > packet.len() {
++            return None;
++        }
++        if packet[at] == CT_ABORT {
++            let causes = &packet[at + 4..at + length];
++            if causes.len() < 4 {
++                return Some((0, Vec::new()));
++            }
++            let code = u16::from_be_bytes([causes[0], causes[1]]);
++            let end = (u16::from_be_bytes([causes[2], causes[3]]) as usize).clamp(4, causes.len());
++            return Some((code, causes[4..end].to_vec()));
++        }
++        at += (length + 3) & !3;
++    }
++    None
++}
++
+ /// These are the possible paths:
+ /// ```text
+ /// local inited, in-band                                     AwaitOpen -> AwaitDcepAck -> Open
+@@ -314,6 +340,7 @@
+             entries: Vec::new(),
+             reset_pending: HashSet::new(),
+             reset_complete: VecDeque::new(),
++            abort_cause: None,
+             pushed_back_transmit: None,
+             last_now: Instant::now(), // placeholder until init()
+             client: false,
+@@ -332,6 +359,12 @@
+         self.max_payload_size
+     }
+ 
++    /// Why the peer aborted the association, if it sent an ABORT chunk: the code and
++    /// the value of the chunk's first error cause (code 0 for a chunk without one).
++    pub fn abort_cause(&self) -> Option<(u16, &[u8])> {
++        self.abort_cause.as_ref().map(|(code, value)| (*code, value.as_slice()))
++    }
++
+     pub fn is_inited(&self) -> bool {
+         self.state != RtcSctpState::Uninited
+     }
+@@ -574,6 +607,28 @@
+         }
+     }
+ 
++    /// Abort the association as a browser does when its page closes the
++    /// connection: one ABORT chunk, its cause a User-Initiated Abort with the
++    /// reason "Close called". The packets that carry it are returned at once,
++    /// to be sent before DTLS closes (it takes no data after its
++    /// close_notify, and a graceful shutdown could not finish then).
++    pub fn abort(&mut self) -> VecDeque<Vec<u8>> {
++        let mut out = VecDeque::new();
++        let Some(assoc) = &mut self.assoc else {
++            return out;
++        };
++        if assoc.is_closed() {
++            return out;
++        }
++        assoc.abort(b"Close called");
++        while let Some(t) = self.poll_transmit() {
++            if let Some(buf) = transmit_to_vec(t) {
++                out.extend(buf);
++            }
++        }
++        out
++    }
++
+     pub fn close(&mut self) -> Result<(), SctpError> {
+         let Some(assoc) = &mut self.assoc else {
+             return Ok(());
+@@ -649,6 +704,15 @@
+             PayloadProtocolIdentifier::String
+         };
+ 
++        // RFC 8831 6.6: SCTP cannot carry an empty user message, so an empty
++        // one is a single zero byte under the "empty" identifier. Without a
++        // chunk the stream sequence number taken for it is never sent, and an
++        // ordered stream stalls at the peer.
++        if buf.is_empty() {
++            stream.write_with_ppi(&[0], ppi)?;
++            return Ok(0);
++        }
++
+         Ok(stream.write_with_ppi(buf, ppi)?)
+     }
+ 
+@@ -675,6 +739,11 @@
+     pub fn handle_input(&mut self, now: Instant, data: &[u8]) {
+         trace!("Handle input: {}", data.len());
+ 
++        // sctp-proto reports an abort without its cause.
++        if self.abort_cause.is_none() {
++            self.abort_cause = abort_cause(data);
++        }
++
+         // TODO, remove Bytes in sctp and just use &[u8].
+         let data = data.to_vec().into();
+         let r = self.endpoint.handle(now, self.fake_addr, None, None, data);
+--- a/src/streams/mod.rs
++++ b/src/streams/mod.rs
+@@ -19,7 +19,9 @@
+ use crate::util::already_happened;
+ 
+ pub use self::receive::StreamRx;
++pub use self::receive::RemoteSenderReport;
+ pub use self::send::{RtpWrite, StreamTx, StreamTxQueueInfo};
++pub use self::send_stats::RemoteReceiverReport;
+ 
+ mod receive;
+ pub(crate) mod register;
+--- a/src/streams/receive.rs
++++ b/src/streams/receive.rs
+@@ -121,6 +121,25 @@
+     pause_threshold: Duration,
+ }
+ 
++/// The peer's last sender report of a stream this side receives.
++#[derive(Debug, Clone, Copy)]
++pub struct RemoteSenderReport {
++    /// When it came.
++    pub received: Instant,
++    /// The sender's wallclock when it was made.
++    pub ntp_time: std::time::SystemTime,
++    /// What the sender had sent then: packets, and payload octets.
++    pub packets: u32,
++    pub octets: u32,
++    /// The sender reports received in all.
++    pub reports: u64,
++    /// The round trip time the last DLRR block gave, the blocks that gave
++    /// one and the sum of those times.
++    pub rtt: Option<Duration>,
++    pub rtt_measurements: u64,
++    pub rtt_total: Duration,
++}
++
+ /// The last sender info we recieved.
+ #[derive(Debug)]
+ pub(crate) struct LastSenderInfo {
+@@ -149,6 +168,11 @@
+     jitter: u32,
+     /// round trip time from the last DLRR, if any
+     rtt: Option<Duration>,
++    /// the DLRR blocks that gave a round trip time, and the sum of those times
++    rtt_measurements: u64,
++    rtt_total: Duration,
++    /// the sender reports received
++    sender_reports: u64,
+     /// fraction of packets lost from the last RR, if any
+     loss: Option<f32>,
+ }
+@@ -213,6 +237,22 @@
+         self.midrid.rid()
+     }
+ 
++    /// The peer's last sender report of this stream, as a browser's stats
++    /// tell it (remote-outbound-rtp), if one came.
++    pub fn sender_report(&self) -> Option<RemoteSenderReport> {
++        let last = self.sender_info.as_ref()?;
++        Some(RemoteSenderReport {
++            received: last.received_at,
++            ntp_time: last.info.ntp_time,
++            packets: last.info.sender_packet_count,
++            octets: last.info.sender_octet_count,
++            reports: self.stats.sender_reports,
++            rtt: self.stats.rtt,
++            rtt_measurements: self.stats.rtt_measurements,
++            rtt_total: self.stats.rtt_total,
++        })
++    }
++
+     /// CNAME as sent by remote peer in a Sdes.
+     ///
+     /// The value is None until we receive a first report with the value set.
+@@ -327,12 +367,17 @@
+             info,
+             emitted: false,
+         });
++        self.stats.sender_reports += 1;
+     }
+ 
+     fn set_dlrr_item(&mut self, now: Instant, dlrr: DlrrItem) {
+         let ntp_time = now.to_ntp_duration();
+         let rtt = calculate_rtt(ntp_time, dlrr.last_rr_delay, dlrr.last_rr_time);
+         self.stats.rtt = rtt;
++        if let Some(rtt) = rtt {
++            self.stats.rtt_measurements += 1;
++            self.stats.rtt_total += rtt;
++        }
+     }
+ 
+     pub(crate) fn paused_at(&self) -> Option<Instant> {
+--- a/src/streams/send.rs
++++ b/src/streams/send.rs
+@@ -435,6 +435,11 @@
+         self.midrid.rid()
+     }
+ 
++    /// The peer's last reception report of this stream, if one came.
++    pub fn remote_report(&self) -> Option<super::send_stats::RemoteReceiverReport> {
++        self.stats.remote_report()
++    }
++
+     /// Information sampled during the latest pacer update for this stream's send queue.
+     ///
+     /// This is `None` until the pacer has observed the stream for the first time.
+--- a/src/streams/send_stats.rs
++++ b/src/streams/send_stats.rs
+@@ -8,6 +8,24 @@
+ 
+ use super::MidRid;
+ 
++/// The peer's last reception report of a stream this side sends.
++#[derive(Debug, Clone, Copy)]
++pub struct RemoteReceiverReport {
++    /// When it came.
++    pub received: Instant,
++    /// The fraction lost since the report before, in 256ths.
++    pub fraction_lost: u8,
++    /// The packets lost in all (24 bits).
++    pub packets_lost: u32,
++    /// The interarrival jitter, in RTP timestamp units.
++    pub jitter: u32,
++    /// The round trip time the last report with a sender report's time gave.
++    pub rtt: Option<Duration>,
++    /// The reports that gave a round trip time, and the sum of those times.
++    pub rtt_measurements: u64,
++    pub rtt_total: Duration,
++}
++
+ /// Holder of stats.
+ #[derive(Debug)]
+ pub(crate) struct StreamTxStats {
+@@ -37,6 +55,11 @@
+     /// The SeqNo is the extended max_seq of the reception report, extended
+     /// using the last sent sequence number.
+     last_rr: Option<(SeqNo, ReceptionReport)>,
++    /// When the last reception report came, and the round trip times
++    /// the reports gave so far (how many, and their sum)
++    last_rr_at: Option<Instant>,
++    rtt_measurements: u64,
++    rtt_total: Duration,
+ 
+     /// `None` if `rtx_ratio_cap` is `None`.
+     pub bytes_transmitted: Option<ValueHistory<u64>>,
+@@ -58,6 +81,9 @@
+             rtt: None,
+             losses: Losses::new(enable_stats),
+             last_rr: None,
++            last_rr_at: None,
++            rtt_measurements: 0,
++            rtt_total: Duration::ZERO,
+             bytes_transmitted: Some(Default::default()),
+             bytes_retransmitted: Some(Default::default()),
+         }
+@@ -88,6 +114,11 @@
+         let ntp_time = now.to_ntp_duration();
+         let rtt = calculate_rtt(ntp_time, r.last_sr_delay, r.last_sr_time);
+         self.rtt = rtt;
++        self.last_rr_at = Some(now);
++        if let Some(rtt) = rtt {
++            self.rtt_measurements += 1;
++            self.rtt_total += rtt;
++        }
+ 
+         // The last_sent_seq_no should be in the vicinity of the rr.max_seq.
+         let ext_seq = extend_u32(Some(*last_sent_seq_no), r.max_seq).into();
+@@ -98,6 +129,21 @@
+             .push((*ext_seq, r.fraction_lost as f32 / u8::MAX as f32));
+     }
+ 
++    /// The peer's last reception report of the stream, as a browser's
++    /// stats tell it (remote-inbound-rtp).
++    pub(crate) fn remote_report(&self) -> Option<RemoteReceiverReport> {
++        let (_, report) = self.last_rr?;
++        Some(RemoteReceiverReport {
++            received: self.last_rr_at?,
++            fraction_lost: report.fraction_lost,
++            packets_lost: report.packets_lost,
++            jitter: report.jitter,
++            rtt: self.rtt,
++            rtt_measurements: self.rtt_measurements,
++            rtt_total: self.rtt_total,
++        })
++    }
++
+     pub(crate) fn fill(&mut self, snapshot: &mut StatsSnapshot, midrid: MidRid, now: Instant) {
+         if self.bytes == 0 {
+             return;

@@ -54,10 +54,11 @@ id=$("$engine" create --network host -e "RUST_NIGHTLY=$RUST_NIGHTLY" \
 trap '"$engine" rm -f "$id" >/dev/null' EXIT
 tmp=$(mktemp -d)
 mkdir -p "$tmp/rust"
-(cd "$root/rust" && tar --exclude=./target -cf - .) | tar -xf - -C "$tmp/rust"
+(cd "$root/rust" && tar --exclude=./target --exclude=./patched -cf - .) | tar -xf - -C "$tmp/rust"
 "$engine" cp "$tmp/rust" "$id:/work/rust"
 "$engine" cp "$here/compile.sh" "$id:/work/compile.sh"
 "$engine" cp "$here/inputs.sh" "$id:/work/inputs.sh"
+"$engine" cp "$here/patches.sh" "$id:/work/patches.sh"
 rm -rf "$tmp"
 "$engine" start -a "$id"
 

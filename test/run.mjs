@@ -60,6 +60,8 @@ const SUITE_TIMEOUT_MINUTES = {
 };
 // what a suite's demo server needs beyond the defaults
 const SUITE_ENV = {
+	// epoxy that takes the TURN fixture's certificate authority (TURN over TLS)
+	'webrtc-net': { STOMP_TEST_TRANSPORT: '1' },
 	// epoxy plus the fixture hosts of test/mixed-servers.mjs
 	'mixed-content': { STOMP_TEST_TRANSPORT: '1' },
 	// and the default-port sites of the visited suite

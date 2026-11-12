@@ -24,11 +24,12 @@ tag="stomp-rust-toolchain:$(cat "$here/Dockerfile" "$here/pins.env" | sha256sum 
 
 id=$("$engine" create --network host \
 	-v stomp-cargo-registry:/usr/local/cargo/registry "$tag" \
-	bash -c "cd /work/rust && cargo test --locked $*")
+	bash -c "bash /work/patches.sh && cd /work/rust && cargo test --locked $*")
 trap '"$engine" rm -f "$id" >/dev/null' EXIT
 tmp=$(mktemp -d)
 mkdir -p "$tmp/rust"
-(cd "$root/rust" && tar --exclude=./target -cf - .) | tar -xf - -C "$tmp/rust"
+(cd "$root/rust" && tar --exclude=./target --exclude=./patched -cf - .) | tar -xf - -C "$tmp/rust"
 "$engine" cp "$tmp/rust" "$id:/work/rust"
+"$engine" cp "$here/patches.sh" "$id:/work/patches.sh"
 rm -rf "$tmp"
 "$engine" start -a "$id"

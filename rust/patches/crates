@@ -1,0 +1,48 @@
+# Crates built from their published source with a patch of ours applied
+# (deploy/rust/patches.sh): name, version, sha256 of the .crate file as
+# crates.io serves it. The patch is patches/<name>-<version>.patch.
+#
+# str0m: an empty data channel message is sent as RFC 8831 6.6 says (one
+# zero byte under the "empty" payload identifier); as published it takes a
+# stream sequence number and writes no chunk, which stalls an ordered
+# channel at the peer. A channel is allocated when its offer is answered,
+# not when it is added to one: as published, an offer that is dropped
+# (rolled back) leaves its channels' allocations behind, and offering a
+# channel with a negotiated id again panics. The channels of an offer are
+# allocated in the order they were added, so the first one made has the
+# lowest stream id.
+# The first error cause of an ABORT chunk the peer sends is kept
+# (DirectApi::sctp_abort_cause): as published, the association is reported
+# lost without a word of why.
+# The m-sections an offer adds take the names the host gives
+# (SdpApi::name_mids). As published a new section is named at random, and
+# that name is what its packets carry (the MID header extension): a peer
+# shown the browser's names ("0", "1", ...) for the sections drops every
+# packet of an offer's media as one for a section it does not know.
+# ICE credentials have the lengths browsers write (a ufrag of 4 characters,
+# a password of 24), at the start, at an ICE restart and in the answer to
+# a peer's restart: as published they are 16 and 22, which a description
+# shows. The certificate the peer showed in the handshake is kept
+# (DirectApi::remote_dtls_certificate): as published only its fingerprint is.
+# A closed connection ends its association with an ABORT whose cause is a
+# User-Initiated Abort ("Close called"), as a browser's does, sent to DTLS
+# before its close_notify (Rtc::close; SCTP's abort is sctp-proto's below):
+# as published it starts a graceful SHUTDOWN and closes DTLS at once, so the
+# SHUTDOWN is dropped and the peer never hears of the close.
+# Every offer lists every codec the host configured, and each negotiation
+# sets anew which codecs a section carries and in which order: as published
+# the first answer narrows a section for good, so a later offer lists only
+# what that answer kept (a browser offers all of its codecs again) and a
+# later negotiation cannot change the codec that is sent. An offer with
+# nothing new can be made all the same (SdpApi::renegotiate), as a browser
+# makes one: as published only a change makes an offer.
+# A stream keeps what the peer's RTCP last said of it, for a browser's
+# stats (StreamTx::remote_report, StreamRx::sender_report): as published
+# the reports' times, counts and round trip times are not to be had.
+# The ICE agent can be read (DirectApi::ice_agent), for which remote
+# candidates still have a pair: the agent prunes a pair it gave up on
+# without an event, and the host closes the stream to that remote.
+str0m 0.25.0 357c7e453c033c8bb59e912312f9f9ff07c2a9ce7268bcb94f0c828a5b47e58f
+# sctp-proto: Association::abort, an ABORT with a User-Initiated Abort cause
+# and the reason given (as published only a graceful shutdown is offered).
+sctp-proto 0.10.8 28aca56f649fa088cbdda778a5121f2227995ed057e77de462112b2e5890d591
