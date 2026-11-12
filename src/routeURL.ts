@@ -222,12 +222,25 @@ function assetBase(url: StompURL, config?: Config): string {
 	return `${directory.slice(0, -config.directory.length)}${config.scope}`;
 }
 
+/**
+ * Only the aes and base64 codecs read crypto-js, so only they load the full
+ * inject bundle, which carries it (build.js, src/cryptoStub.ts); the xor and
+ * generic codecs load the crypto-free injectDocument/injectWorker. A call
+ * with no config takes the crypto-free bundle: the controller defaults to the
+ * xor codec, and a document a shell makes always carries its config.
+ */
+function cryptoInject(config?: Config): boolean {
+	return config?.codec === 'aes' || config?.codec === 'base64';
+}
+
 export function injectDocumentJS(url: StompURL, config?: Config) {
-	return `${assetBase(url, config)}${assetName(config?.assets, 'injectDocument')}`;
+	const key = cryptoInject(config) ? 'injectDocumentFull' : 'injectDocument';
+	return `${assetBase(url, config)}${assetName(config?.assets, key)}`;
 }
 
 export function injectWorkerJS(url: StompURL, config?: Config) {
-	return `${assetBase(url, config)}${assetName(config?.assets, 'injectWorker')}`;
+	const key = cryptoInject(config) ? 'injectWorkerFull' : 'injectWorker';
+	return `${assetBase(url, config)}${assetName(config?.assets, key)}`;
 }
 
 /**

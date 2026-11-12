@@ -201,7 +201,9 @@ const exact = (text: string) =>
 function registerAssets(router: Router, scope: string, assets?: Assets) {
 	for (const key of [
 		'injectDocument',
+		'injectDocumentFull',
 		'injectWorker',
+		'injectWorkerFull',
 		'transportWorker',
 		'rewriterLib',
 	] as const) {
