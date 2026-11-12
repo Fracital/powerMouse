@@ -942,6 +942,72 @@ fn a_connection_without_media_is_as_it_was() {
 	assert!(a.event("media").is_none() && b.event("media").is_none());
 }
 
+/// the destination of a transmit record as it sits in the outbox
+fn destination(datagram: &[u8]) -> String {
+	let src = u16::from_be_bytes([datagram[1], datagram[2]]) as usize;
+	let at = 3 + src;
+	let dst = u16::from_be_bytes([datagram[at], datagram[at + 1]]) as usize;
+	String::from_utf8(datagram[at + 2..at + 2 + dst].to_vec()).unwrap()
+}
+
+#[test]
+fn a_remote_whose_pair_is_given_up_leaves_the_list() {
+	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let mut a = Peer::new("10.0.0.1:5000", &[]);
+	let mut b = Peer::new("10.0.0.2:5000", &[]);
+	a.control(&[("op", "channel"), ("label", "data")]);
+	negotiate(&mut a, &mut b, &[]);
+	// a candidate of b's that nothing answers at
+	a.control(&[("op", "remote_candidate"), ("candidate", "candidate:2 1 udp 2130706430 10.0.0.9 5000 typ host")]);
+	let lists = |peer: &Peer| -> Vec<String> {
+		peer.events_named("remotes").iter().map(|e| get(e, "list").to_string()).collect()
+	};
+	let deadline = Instant::now() + Duration::from_secs(40);
+	let mut checks = 0;
+	loop {
+		for datagram in std::mem::take(&mut a.outbox) {
+			if destination(&datagram) == "10.0.0.9:5000" {
+				checks += 1;
+			} else {
+				b.receive(&datagram);
+			}
+		}
+		for datagram in std::mem::take(&mut b.outbox) {
+			a.receive(&datagram);
+		}
+		a.tick();
+		b.tick();
+		if lists(&a).last().map(String::as_str) == Some("udp/10.0.0.2:5000") && checks > 0 {
+			break;
+		}
+		assert!(Instant::now() < deadline, "the unanswered pair stayed: {:?} after {checks} checks", lists(&a));
+		std::thread::sleep(Duration::from_millis(2));
+	}
+	let seen = lists(&a);
+	assert!(seen.iter().any(|list| list == "udp/10.0.0.2:5000,udp/10.0.0.9:5000"), "{seen:?}");
+	assert!(a.connected() && b.connected());
+	// nothing more goes to it
+	let before = checks;
+	for _ in 0..200 {
+		for datagram in std::mem::take(&mut a.outbox) {
+			if destination(&datagram) == "10.0.0.9:5000" {
+				checks += 1;
+			} else {
+				b.receive(&datagram);
+			}
+		}
+		for datagram in std::mem::take(&mut b.outbox) {
+			a.receive(&datagram);
+		}
+		a.tick();
+		b.tick();
+		std::thread::sleep(Duration::from_millis(5));
+	}
+	assert_eq!(checks, before, "checks went on to the given up remote");
+	// b was told of a by a's checks alone (a peer reflexive candidate)
+	assert_eq!(lists(&b).last().map(String::as_str), Some("udp/10.0.0.1:5000"));
+}
+
 #[test]
 fn narrowed_offers() {
 	let offer = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\na=sendrecv\r\n\

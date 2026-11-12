@@ -675,6 +675,11 @@ The first release after a four-year gap. Everything below is breaking.
   and the sender's and the receiver's reports were empty (`webrtc-media`
   suite, compared with Chrome 152's and 156's; docs/webrtc-over-wisp.md
   section 16 has what differs).
+- A proxied page's WebRTC connection closes the wisp stream to a remote
+  candidate once ICE has given up on its pair, about 16 s after the first
+  unanswered check (Chrome stops checking one after about 15 s), instead of
+  keeping it until the connection closes. The `webrtc-net` suite counts the
+  wisp server's sockets for each remote over a connection's life.
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

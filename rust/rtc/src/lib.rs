@@ -124,6 +124,11 @@ struct Conn {
 	/// for each channel, the page's bufferedAmountLowThreshold and whether
 	/// the amount has been above it since the last time it was said low
 	low: Vec<(usize, bool)>,
+	/// the host candidate's address, None when the connection relays only
+	host: Option<SocketAddr>,
+	/// the remotes the agent has a pair from the host candidate with, as
+	/// last said (`ev=remotes`)
+	remotes: Vec<(Protocol, SocketAddr)>,
 	queue: VecDeque<Vec<u8>>,
 }
 
@@ -566,6 +571,48 @@ impl Conn {
 	fn drive(&mut self) {
 		self.drive_stack();
 		self.report_buffered();
+		self.report_remotes();
+	}
+
+	/// The remotes the agent still has a candidate pair from the host
+	/// candidate with, said whenever that list changes: the host keeps a
+	/// stream open to each of them and closes the one to a remote that left
+	/// the list (docs/webrtc-over-wisp.md, section 5.2). The agent prunes a
+	/// pair it gave up on from its checklist without an event, and drops
+	/// them all at an ICE restart.
+	fn report_remotes(&mut self) {
+		let Some(host) = self.host else { return };
+		let mut live = Vec::new();
+		{
+			let api = self.rtc.direct_api();
+			let ice = api.ice_agent();
+			// a remote's pairs come highest priority first, so its first one
+			// is from the host candidate when it has one from there; the host
+			// candidate is the first local one and never discarded, so the
+			// pair's index is its place in the list
+			let locals: Vec<Candidate> = ice.local_candidates().collect();
+			for remote in ice.remote_candidates() {
+				let from_host = ice
+					.find_pair_for_equivalent_remote_candidate(&remote)
+					.and_then(|pair| locals.get(pair.local_idx()))
+					.is_some_and(|local| local.addr() == host);
+				let key = (remote.proto(), remote.addr());
+				if from_host && !live.contains(&key) {
+					live.push(key);
+				}
+			}
+		}
+		live.sort_by_key(|(proto, addr)| (*proto == Protocol::Tcp, *addr));
+		if live == self.remotes {
+			return;
+		}
+		let list = live
+			.iter()
+			.map(|(proto, addr)| format!("{}/{}", if *proto == Protocol::Udp { "udp" } else { "tcp" }, addr))
+			.collect::<Vec<_>>()
+			.join(",");
+		self.remotes = live;
+		self.event(&[("ev", "remotes"), ("list", &list)]);
 	}
 
 	fn drive_stack(&mut self) {
@@ -1293,6 +1340,7 @@ pub unsafe extern "C" fn c(ptr: *mut u8, len: usize) -> i32 {
 	let mut rtc = builder.build(Instant::now());
 	// the host's own address for its sockets: every stream is one pair of
 	// this and a remote (docs/webrtc-over-wisp.md, section 5)
+	let mut host = None;
 	if let Some(local) = field(&fields, "local") {
 		let Ok(addr) = local.parse::<SocketAddr>() else {
 			return -1;
@@ -1300,6 +1348,7 @@ pub unsafe extern "C" fn c(ptr: *mut u8, len: usize) -> i32 {
 		match Candidate::host(addr, "udp") {
 			Ok(candidate) => {
 				rtc.add_local_candidate(candidate);
+				host = Some(addr);
 			}
 			Err(_) => return -1,
 		}
@@ -1318,6 +1367,8 @@ pub unsafe extern "C" fn c(ptr: *mut u8, len: usize) -> i32 {
 		reverted: Vec::new(),
 		wire: Vec::new(),
 		low: Vec::new(),
+		host,
+		remotes: Vec::new(),
 		queue: VecDeque::new(),
 	};
 	if let Some(index) = state.conns.iter().position(|c| c.is_none()) {

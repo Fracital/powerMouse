@@ -120,9 +120,33 @@ export async function watchSockets(proxy = PROXY) {
 			await sleep(25);
 		return senders([{ port, at }], protocol)[0];
 	};
+	/**
+	 * The sockets a kind of process (`server`, `browser`) holds now that are
+	 * connected to one of `peers` (`address:port`), by peer: a wisp
+	 * server's stream is a socket connected to its remote, so this counts
+	 * the streams open to each
+	 */
+	const connected = async (peers, owner = 'server', protocol = 'udp') => {
+		const { stdout } = await ss('ss', [
+			protocol === 'udp' ? '-Huanp' : '-Htanp',
+		]);
+		const counts = Object.fromEntries(peers.map((peer) => [peer, 0]));
+		for (const line of stdout.split('\n')) {
+			const peer = line.trim().split(/\s+/)[4];
+			if (!(peer in counts)) continue;
+			if (
+				[...line.matchAll(/pid=(\d+)/g)].some(
+					([, pid]) => ownerOf(Number(pid)) === owner,
+				)
+			)
+				counts[peer]++;
+		}
+		return counts;
+	};
 	return {
 		senders,
 		owner,
+		connected,
 		async stop() {
 			sampling = false;
 			await Promise.all(samplers);

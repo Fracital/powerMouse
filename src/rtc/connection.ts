@@ -420,6 +420,13 @@ export class Connection {
 	/** the mDNS-style name the page sees for the host candidate */
 	#name: string;
 	#streams = new Map<string, Stream>();
+	/**
+	 * The remotes the agent has a pair with (`proto/host:port`, as the
+	 * stack last said), and the one it sends DTLS and media to: a stream
+	 * to any other is closed
+	 */
+	#live = new Set<string>();
+	#sendPath: string | null = null;
 	#timer: ReturnType<typeof setTimeout> | null = null;
 	#channels = new Map<number, Channel>();
 	/** the media sections, by the stack's index and by the page's handle */
@@ -997,6 +1004,15 @@ export class Connection {
 			return;
 		}
 		const key = `${transmit.proto}/${transmit.destination}`;
+		// what is not a STUN message is the connection's own traffic: it
+		// goes on the nominated pair's stream, which stays while it does
+		// even when the agent has dropped that pair (an ICE restart drops
+		// them all, and DTLS goes on where it was until the next is chosen)
+		if (transmit.payload[0] > 3 && this.#sendPath !== key) {
+			const before = this.#sendPath;
+			this.#sendPath = key;
+			if (before !== null && !this.#live.has(before)) this.#drop(before);
+		}
 		let stream = this.#streams.get(key);
 		if (!stream) {
 			const until = this.#refused.get(key);
@@ -1008,6 +1024,26 @@ export class Connection {
 			this.#streams.set(key, stream);
 		}
 		stream.send(transmit.payload);
+	}
+
+	/**
+	 * The agent gave up on every pair with this remote: its stream is
+	 * closed, as the browser stops checking it (the wisp server closes
+	 * the socket it opened for it). Should the agent pair with it again,
+	 * the next transmit opens another.
+	 */
+	#drop(key: string) {
+		const stream = this.#streams.get(key);
+		if (!stream) return;
+		this.#streams.delete(key);
+		stream.close();
+	}
+
+	/** what the agent pairs with now: the streams to the others go */
+	#remotes(list: string) {
+		this.#live = new Set(list ? list.split(',') : []);
+		for (const key of [...this.#streams.keys()])
+			if (!this.#live.has(key) && key !== this.#sendPath) this.#drop(key);
 	}
 
 	/** a stream to `remote` (`host:port`), a wisp one or the bridge to another document */
@@ -1161,6 +1197,9 @@ export class Connection {
 				break;
 			// the stack counts a channel's own open handshake as buffered
 			// bytes; a page sees only what it sent
+			case 'remotes':
+				this.#remotes(fields.list ?? '');
+				break;
 			case 'buffered':
 				if (this.#channels.get(Number(fields.index))?.sent)
 					this.#event({

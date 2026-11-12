@@ -134,6 +134,13 @@ errors and the API surface read as natively, and a data channel opens
 between two connections of one page and between two proxied pages in
 frames.
 
+`npm test -- webrtc-net`: the wisp streams of a connection over its life.
+A stream opens to each remote the stack checks (a socket of the wisp
+server connected to it), the streams of the pairs ICE gave up are closed
+while the connection goes on, and the last one closes with the
+connection. Natively the browser stops checking a candidate that never
+answers after about 15 s; the stack after about 16 s.
+
 `npm test -- webrtc-peer` (57 checks): a proxied page connects to a peer in
 the suite's process (werift), to Chrome's own stack in a second browser and
 to another proxied page there through a TURN server, as offerer and as

@@ -840,9 +840,18 @@ TURN server.
   answer that allows messages of 64 KiB or less (what those peers say) the
   crate opens the association itself. The stack then keeps 64 KiB as that
   peer's limit, which is the peer's own.
-- **Streams.** A stream stays open until its connection closes; streams of
-  pairs the agent gave up are not closed earlier. One the wisp server
-  refuses or closes is not asked for again for 10 s.
+- **Streams.** A stream to a remote is closed when the agent has no pair
+  with it any more: str0m prunes a pair it gave up on from its checklist
+  without an event, so after each step the crate reads which remote
+  candidates still have a pair from the host candidate
+  (`DirectApi::ice_agent`, a line of the str0m patch) and says the list
+  when it changes (`ev=remotes`); the worker closes the streams to the
+  others. The stream DTLS travels on stays until DTLS moves, also when its
+  pair is gone (an ICE restart drops them all). A remote that never
+  answers is given up about 16 s after its first check (Chrome: 15 s,
+  measured with the same three silent candidates), and the wisp server's
+  socket for it closes then rather than with the connection. One the wisp
+  server refuses or closes is not asked for again for 10 s.
 - **States.** The agent has no "failed": a connection that is disconnected
   before it ever connected reads `failed`.
 - **The peers in the suite** are signalled by the suite itself (it holds
@@ -857,6 +866,12 @@ TURN server.
   `dist/rtcWorker.js`: 31842 bytes (10971 with brotli).
 - A connection to the peer in the suite's process is `connected` about
   210 ms after the page's `createOffer`.
+- `npm test -- webrtc-net`: the streams over a connection's life, counted
+  as the wisp server's sockets connected to each remote: a connection to
+  werift that is given three more candidates at UDP sinks that never
+  answer has a stream to each (1 + 3), the sinks' three close about 19 s
+  in while the channel goes on (1 + 0), and the last closes with the
+  connection (0 + 0), in both modes.
 - `npm test -- webrtc-peer`: the checks named above, both modes, with the
   far end's view of the page's address attributed to a process by
   `test/sockets.mjs`: always a socket of the demo's wisp server (or the

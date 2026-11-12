@@ -1,6 +1,6 @@
 --- a/src/change/direct.rs
 +++ b/src/change/direct.rs
-@@ -104,6 +104,11 @@
+@@ -104,6 +104,18 @@
          self.rtc.dtls.local_fingerprint()
      }
  
@@ -9,10 +9,17 @@
 +        self.rtc.remote_certificate.as_deref()
 +    }
 +
++    /// The ICE agent, to read its remote candidates and which of them still have a
++    /// candidate pair (`IceAgent::find_pair_for_equivalent_remote_candidate`): a pair
++    /// the agent gave up on is pruned from its checklist without an event.
++    pub fn ice_agent(&self) -> &crate::ice::IceAgent {
++        &self.rtc.ice
++    }
++
      /// Returns a reference to the remote DTLS fingerprint used by this peer connection.
      pub fn remote_dtls_fingerprint(&self) -> Option<&Fingerprint> {
          self.rtc.dtls.remote_fingerprint()
-@@ -180,6 +185,12 @@
+@@ -180,6 +192,12 @@
          id
      }
  
