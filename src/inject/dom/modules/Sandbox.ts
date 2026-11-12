@@ -284,6 +284,14 @@ export default class SandboxModule extends Module<DocumentClient> {
 					form.getAttribute('action') ??
 					'',
 			);
+			// what the form's document's form-action refuses is left to the
+			// browser, which refuses it as natively (NavigationHint)
+			if (
+				client
+					.pageRefusals('form-action', destination)
+					.some(({ policy }) => policy.disposition === 'enforce')
+			)
+				return false;
 			if (destination.protocol === 'javascript:') {
 				aimed.client.callIn(nativeAssign, aimed.window.location, [
 					routeHTML(

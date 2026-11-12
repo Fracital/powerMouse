@@ -34,6 +34,9 @@ request of the proxy's own) and the page's local schemes as written. A
 and seen by the page exactly as natively, by the browser itself. Scripts and
 styles reach it too (below); base-uri, form-action, sandbox,
 frame-ancestors and Trusted Types do not yet. report-uri and report-to are left out
+styles are not among them yet (the shell and every rewritten inline script
+would be judged too); neither are sandbox or Trusted Types (base-uri,
+form-action and frame-ancestors: Navigations, below). report-uri and report-to are left out
 (the browser would post the proxy's URLs). A report-only policy goes to the
 browser as one. A meta's content is replaced by the browser policy for it
 (the inject's attribute hook; the page reads its own content back), and it
@@ -130,6 +133,62 @@ beacon and a frame twice, measured), but not trusted. The worker tells the
 document of the ones only it sees (`CSP_REPORT`); the fetch,
 XMLHttpRequest, EventSource, beacon and WebSocket hooks report their own.
 
+## Navigations
+
+base-uri and form-action reach the browser as the fetch directives do,
+with `'self'` and the page's other schemes (`'none'` as written), with no
+fallback: default-src governs neither, natively. A javascript: or mailto:
+action names no host, and the browser refuses it as natively (even under
+`form-action *`).
+
+- **base-uri.** A `<base>` whose real URL the page's enforced policy
+  refuses (its headers', its metas', the metas before it in the markup
+  being rewritten) gets a refusal URL as its href. The browser refuses it,
+  the document's URL stays the base URL, and the browser's events are
+  Chrome's, as many as Chrome fires (every insertion of a base checks the
+  first one again). A base the markup rewrite reads (loadHTML's base URL)
+  is the document's URL then. A report-only refusal is the inject's
+  event: once, for the first base, a task after the hook (for the markup's
+  own base, at DOMContentLoaded). A violation of a base the hooks wrote
+  for a moment with the page's own URL is stopped.
+- **form-action.** A submission (a submit event, at the window's capture,
+  or `submit()`) whose URL the page's enforced policy refuses goes to a
+  refusal URL: the element's action (or the submitter's formaction) is
+  that URL until the next task (to the end of `submit()`). The browser
+  refuses it before anything is sent, opens no window for `_blank`, and
+  reports it with the form's query, as natively. A form aimed at a proxied
+  parent or top (Sandbox) is left to the browser when refused. The document
+  tells the worker its form-action with the navigation's hint, and the
+  worker judges every later hop of the chain by it (paths not compared): a
+  hop it refuses is redirected to `REFUSED_URL`, which the browser refuses
+  and reports by the chain's first URL, as Chrome does. A report-only
+  refusal is the inject's event, the worker's for a hop (CSP_REPORT).
+- **A frame's navigations.** Natively the parent's frame-src judges every
+  navigation of a frame and every hop. The src a parent sets the parent
+  judges (above). A navigation of the frame's own, or one another document
+  starts in it, its document judges in its navigate event by its parent's
+  policies: a refused one is cancelled and goes to a refusal URL of the
+  parent's, which the parent's browser frame-src refuses (the frame shows
+  the error page, the parent gets Chrome's event). Both documents tell the
+  worker the parent's frame-src with the navigation's hint, and a hop it
+  refuses goes to a URL whose host names the refused URL (`namedRefusal`):
+  Chrome names a refused navigation by the URL refused, its origin alone
+  for another origin than the parent's, and the inject reads the host
+  back.
+- **frame-ancestors.** A framed document's own frame-ancestors (headers
+  only; a meta's is ignored, natively) is judged against the real origins
+  of its ancestors, the proxied top the outermost (the host's page is no
+  ancestor a page knows of natively, and the proxy's own
+  `frame-ancestors 'self' <host origins>` stays). The document that
+  navigates the frame tells the worker the ancestors with the hint; without
+  one, the top the route names is the only ancestor. A refused document
+  gets `frame-ancestors 'none'` besides: the browser shows its error page
+  as natively (one load event, no document, no event anywhere).
+- **upgrade-insecure-requests** is applied by the worker from an enforced
+  header or a meta in the markup's head, and not from a report-only policy,
+  as natively (mixed-content suite).
+- **navigate-to** is not implemented in Chrome, and does nothing here.
+
 ## What the page reads
 
 `SecurityPolicyViolationEvent`'s getters (`src/inject/dom/modules/ContentSecurity.ts`)
@@ -160,6 +219,22 @@ of them to such a response).
   loads by its URL, which the browser's policy names.
 - A frame's navigations other than the src its parent sets (a redirect, a
   navigation the frame starts) are not judged by the parent's frame-src.
+- Scripts and styles (script-src, style-src and their -elem and -attr
+  forms, nonces, hashes, `'strict-dynamic'`, `'unsafe-eval'`), sandbox and
+  Trusted Types are not applied.
+- A report-only base-uri or form-action refusal, and one of a frame's own
+  navigation, is the inject's event (untrusted, no source position); a
+  same-frame one may go with the document, as natively it may.
+- A navigation's hop refused by one of two policies is reported by both
+  (the browser refuses `REFUSED_URL` under every policy it has).
+- A history traversal of a frame is not judged by its parent's frame-src;
+  a frame on its initial about:blank that a link or form of another
+  document navigates tells the worker no ancestors (its top is the one
+  judged).
+- frame-ancestors applies to HTML and XML documents only; X-Frame-Options
+  is still dropped.
+- A meta with upgrade-insecure-requests that a script inserts does not
+  upgrade anything.
 - A policy a script inserts as a meta is applied by the browser, but its
   hosts are not (the worker reads the metas of the markup it serves).
 - sourceFile, lineNumber and columnNumber of a violation the browser

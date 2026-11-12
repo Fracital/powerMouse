@@ -19,11 +19,17 @@ export const OTHER = FIXTURE.includes('127.0.0.1')
 	: FIXTURE.replace('localhost', '127.0.0.1');
 
 /** the page of a case named `name` */
-export function caseURL(name, { p = [], ro = [], m = [], h, s, probes }) {
+export function caseURL(
+	name,
+	{ p = [], ro = [], m = [], b = [], h, s, probes },
+) {
 	const query = new URLSearchParams();
 	for (const policy of [].concat(p)) query.append('p', policy);
 	for (const policy of [].concat(ro)) query.append('ro', policy);
 	for (const policy of [].concat(m)) query.append('m', policy);
+	// (the navigation probes: their script, and the markup's <base> elements)
+	if (s) query.set('s', s);
+	for (const href of [].concat(b)) query.append('b', href);
 	if (h) query.set('h', h);
 	if (s) query.set('s', '1');
 	query.set('probes', probes.join(','));

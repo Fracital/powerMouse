@@ -285,7 +285,11 @@ export const MIXED_CONTENT_NOTICE = '$stomp$mixedContent';
 /**
  * The service worker tells a document of a request it let through that a
  * report-only policy of the page's refuses (src/server/contentPolicies.ts):
- * `[directive, url]`, for the inject to report as the browser would have
+ * `[directive, url]`, for the inject to report as the browser would have.
+ * A navigation's later hop adds what the report names (`blocked`), how
+ * many times the browser fires it, and whether the policy is the parent's
+ * of the document told (a frame's, which told the worker of its own
+ * navigation): `[directive, url, blocked, times, parent]`.
  */
 export const CSP_REPORT = '$stomp$cspReport';
 /**
@@ -493,6 +497,18 @@ export interface NavigationHintMessage {
 	 * another document, in another frame
 	 */
 	own?: boolean;
+	/**
+	 * The page's policies that judge the navigation's later hops (a form's
+	 * form-action, a frame's parent's frame-src; src/csp.ts HopPolicy), and
+	 * a frame's real ancestors' origins, nearest first (the frame-ancestors
+	 * of the document it ends in). `parent`: the policies are the parent's,
+	 * and the frame that navigates sends them
+	 */
+	csp?: {
+		policies: [string, string[], 'enforce' | 'report', string][];
+		ancestors?: string[];
+		parent?: boolean;
+	};
 }
 /**
  * What a proxied document (or the controller) sees that its requests'

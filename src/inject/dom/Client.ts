@@ -12,7 +12,9 @@ import {
 	markedPolicy,
 	parsePolicies,
 	policyMark,
+	refusalNamed,
 	sourcesMatch,
+	type HopPolicy,
 	type Policy,
 	type PolicyText,
 } from '../../csp';
@@ -1118,9 +1120,11 @@ export default class DocumentClient extends Client {
 		navigation = false,
 		/** how many events the browser fires for one (a fetch is judged twice, measured) */
 		times = 1,
+		/** a navigation's later hop: what the report names (Chrome's choice, the worker's to make) */
+		hop?: string,
 	) {
 		if (!/^(https?|wss?):$/.test(url.protocol)) return;
-		const refusals = this.pageRefusals(directive, url);
+		const refusals = this.pageRefusals(directive, url, hop !== undefined);
 		// an enforced refusal is the browser's to report, every policy's
 		if (refusals.some(({ policy }) => policy.disposition === 'enforce')) return;
 		const reporting = refusals.filter(
@@ -1131,9 +1135,10 @@ export default class DocumentClient extends Client {
 		const Event = global.SecurityPolicyViolationEvent;
 		if (typeof Event !== 'function') return;
 		const blocked =
-			navigation && url.origin !== this.url.url.origin
+			hop ??
+			(navigation && url.origin !== this.url.url.origin
 				? url.origin
-				: url.href.replace(/#.*$/s, '');
+				: url.href.replace(/#.*$/s, ''));
 		const document = global.document;
 		for (const { policy } of reporting)
 			for (let time = 0; time < times; time++)
@@ -1266,11 +1271,104 @@ export default class DocumentClient extends Client {
 		if (!host) return null;
 		const known = this.refusals.get(host);
 		if (known !== undefined) return known;
+		// one the worker sent a frame's refused redirect to (namedRefusal),
+		// named as Chrome names a refused navigation
+		const named = refusalNamed(host);
+		if (named !== null) {
+			const url = new URL(named);
+			return {
+				url: named,
+				blocked:
+					url.origin === this.url.url.origin
+						? named.replace(/#.*$/s, '')
+						: url.origin,
+			};
+		}
 		try {
 			return this.#policyCreator()?.refusedURI(value) ?? null;
 		} catch (error) {
 			return null;
 		}
+	}
+	/**
+	 * The page's policies of this document that judge the later hops of a
+	 * navigation it starts or lets a frame of its make (`directive`:
+	 * form-action, frame-src), as the worker is told them (src/csp.ts
+	 * HopPolicy), or null for none
+	 */
+	hopPolicies(directive: string): HopPolicy[] | null {
+		const policies: HopPolicy[] = [];
+		for (const { policy, self } of this.pagePolicies()) {
+			const governed = governing(policy, directive);
+			if (governed)
+				policies.push([
+					directive,
+					governed.sources,
+					policy.disposition,
+					self.href,
+				]);
+		}
+		return policies.length ? policies : null;
+	}
+	/**
+	 * Whether the page's enforced base-uri refuses `url` for a <base>
+	 * (`base`): its headers' and its metas', those before it in its
+	 * document too (markup the hooks rewrite before its metas apply;
+	 * src/csp.ts). Its hook names a refusal URL in its place, and the
+	 * document's URL stays the base URL.
+	 */
+	baseRefused(url: URL, base: Element): boolean {
+		if (
+			this.pageRefusals('base-uri', url).some(
+				({ policy }) => policy.disposition === 'enforce',
+			)
+		)
+			return true;
+		for (const meta of base.ownerDocument.querySelectorAll(
+			'head meta[http-equiv]',
+		)) {
+			if (
+				!(meta.compareDocumentPosition(base) & 4) ||
+				meta.getAttribute('http-equiv')!.toLowerCase() !==
+					'content-security-policy'
+			)
+				continue;
+			for (const policy of parsePolicies(
+				meta.getAttribute('content'),
+				'enforce',
+				'meta',
+			)) {
+				const sources = policy.directives.get('base-uri');
+				if (sources && !sourcesMatch(sources, url, this.url.url)) return true;
+			}
+		}
+		return false;
+	}
+	/** the client of the proxied document this one is a frame of, or null at the proxied top */
+	parentClient(): DocumentClient | null {
+		try {
+			const parent = this.parent as unknown as Record<string, unknown>;
+			if (parent === (this.global as unknown)) return null;
+			const client = parent[this.names.client] as DocumentClient | undefined;
+			return client && client !== this && client.isDOM ? client : null;
+		} catch (error) {
+			return null;
+		}
+	}
+	/**
+	 * The real origins of this document's ancestors up to the proxied top,
+	 * nearest first ("null" for an opaque one): what a framed document's
+	 * frame-ancestors judges (the host's page is none of the page's)
+	 */
+	ancestorOrigins(): string[] {
+		const origins: string[] = [];
+		for (
+			let client = this.parentClient();
+			client && origins.length < 64;
+			client = client.parentClient()
+		)
+			origins.push(client.origin);
+		return origins;
 	}
 	/**
 	 * Whether the browser refuses (or reports) a URL of `scheme` for
@@ -2422,11 +2520,15 @@ export default class DocumentClient extends Client {
 		// the first <base href> is the base URL of everything in the page; its
 		// own href resolves against the document's URL, and one that does not
 		// parse or names no web URL leaves the document's URL in place
-		const baseHref = parsed.querySelector('base[href]')?.getAttribute('href');
+		const baseElement = parsed.querySelector('base[href]');
+		const baseHref = baseElement?.getAttribute('href');
 		if (baseHref !== null && baseHref !== undefined)
 			try {
 				const base = new URL(baseHref, this.url.toString());
-				if (ROUTE_PROTOCOLS.includes(base.protocol))
+				if (
+					ROUTE_PROTOCOLS.includes(base.protocol) &&
+					!this.baseRefused(base, baseElement!)
+				)
 					this.#parseBase = new StompURL(base, this.url);
 			} catch (error) {
 				// not a URL: the document's own stands

@@ -69,6 +69,7 @@ const CASES = {
 			'frame-self',
 			'frame-other',
 			'frame-other-path',
+			'frame-redirect-other',
 		],
 	},
 	'frames of the other host': {

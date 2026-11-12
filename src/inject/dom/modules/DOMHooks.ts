@@ -2391,7 +2391,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							// nor one a hook removed (a load whose proxied copy is still on
 							// its way): written back it would be an empty URL, which a
 							// script reports as an error and never loads again
-							if (typeof value === 'string' && written !== '' && value !== '')
+							// A base's href took effect with its attribute, and written
+							// again it is judged again (base-uri, a violation each time)
+							if (
+								typeof value === 'string' &&
+								written !== '' &&
+								value !== '' &&
+								ctor !== this.client.global.HTMLBaseElement
+							)
 								Reflect.apply(target, that, [value]);
 						}),
 					),
